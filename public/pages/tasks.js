@@ -15,6 +15,7 @@ import { esc, renderMarkdownLight } from '/utils/html.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
+import { openQuickAdd } from '/components/activity-automation.js';
 import { resolveReminderPreset, parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { isPreviewable } from '/utils/document-preview.js';
@@ -566,7 +567,7 @@ function renderTaskCard(task, opts = {}) {
         ${renderAvatarStack(task.assigned_users ?? [], { size: 28 })}
 
         ${canEdit && !(task.subtask_total > 0) && !archived && !task.parent_task_id ? `
-        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action" data-action="add-subtask" data-parent="${task.id}"
+        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action task-card__add-subtask" data-action="add-subtask" data-parent="${task.id}"
                 aria-label="${t('tasks.subtaskAdd')}" title="${t('tasks.subtaskAdd')}">
           <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
         </button>` : ''}
@@ -3676,6 +3677,15 @@ function wireNewTaskBtn(container) {
   findPageFab('fab-new-task')?.addEventListener('click', handler);
 }
 
+function wireQuickAddBtn(container) {
+  container.querySelector('#btn-quick-add')?.addEventListener('click', () => {
+    openQuickAdd({
+      isAdmin: state.isAdmin,
+      onCreated: async () => loadTasks(container),
+    });
+  });
+}
+
 function updateBulkActionsBar(container) {
   const bar = container.querySelector('#bulk-actions-bar');
   const count = container.querySelector('#bulk-count');
@@ -3954,6 +3964,10 @@ export async function render(container, { user }) {
                   aria-label="${t('tasks.manageTags')}" title="${t('tasks.manageTags')}">
             <i data-lucide="tags" class="icon-lg" aria-hidden="true"></i>
           </button>
+          <button class="btn btn--icon btn--ghost" id="btn-quick-add"
+                  aria-label="Quick Add" title="Quick Add">
+            <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
+          </button>
           <button class="btn btn--primary toolbar-new-btn" id="btn-new-task" style="gap:var(--space-1)"
                   aria-label="${t('tasks.newTask')}">
             <i data-lucide="plus" class="icon-lg" aria-hidden="true"></i> <span class="toolbar-new-btn__label">${t('newLabel.tasks')}</span>
@@ -4073,6 +4087,7 @@ export async function render(container, { user }) {
   wireViewToggle(container);
   wireGroupToggle(container);
   wireNewTaskBtn(container);
+  wireQuickAddBtn(container);
   wireTaskList(container);
   wireBulkSelect(container);
   wireBulkCheckboxes(container);

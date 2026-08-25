@@ -10,6 +10,7 @@ import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion } from '../services/recurrence.js';
 import { syncTaskRewards } from '../services/rewards.js';
+import { unresolvedDependencies, syncWorkflowInstanceForTask } from '../services/activity-workflows.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
 import { normalizeVisibility, visibilityWhere } from '../services/visibility.js';
 import {
@@ -1176,6 +1177,15 @@ router.put('/:id', (req, res) => {
       ? task.status
       : req.body.status;
 
+    if (status === 'done' && task.status !== 'done') {
+      const blockedBy = unresolvedDependencies(db.get(), task.id);
+      if (blockedBy.length) {
+        return res.status(409).json({
+          error: 'Complete required earlier activities first.', code: 409, dependencies: blockedBy,
+        });
+      }
+    }
+
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
     const rotationBefore = loadRotationUserIds(db.get(), task.id);
@@ -1341,6 +1351,7 @@ router.put('/:id', (req, res) => {
       syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
       // Punkte erst nach setAssignments: die Zuständigen werden daraus abgeleitet.
       syncTaskRewards(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
+      syncWorkflowInstanceForTask(db.get(), task.id);
 
       // Auch über das Bearbeiten-Formular lässt sich ein Abhaken zurücknehmen -
       // die Folgeinstanz muss dann genauso verschwinden wie beim Klick auf die
@@ -1681,6 +1692,15 @@ router.patch('/:id/status', (req, res) => {
       return res.json({ data: { id: Number(req.params.id), status: prev.status, archived_at: archivedAt } });
     }
 
+    if (status === 'done' && prev.status !== 'done') {
+      const blockedBy = unresolvedDependencies(db.get(), Number(req.params.id));
+      if (blockedBy.length) {
+        return res.status(409).json({
+          error: 'Complete required earlier activities first.', code: 409, dependencies: blockedBy,
+        });
+      }
+    }
+
     // Statuswechsel und die Serien-Bewegung, die daraus folgt, sind eine Einheit:
     // scheitert das Nachlegen oder das Zurücknehmen der Folgeinstanz, darf die
     // Aufgabe nicht trotzdem umgeschaltet zurückbleiben. Sonst endete die Serie
@@ -1696,6 +1716,7 @@ router.patch('/:id/status', (req, res) => {
       syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
       // Punkte-Gutschrift/Storno an den Aufgaben-Statuswechsel koppeln.
       syncTaskRewards(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
+      syncWorkflowInstanceForTask(db.get(), Number(req.params.id));
 
       // Zurückgenommenes Abhaken macht auch die Folgeinstanz rückgängig (#650).
       // Sonst stünde die beim Erledigen erzeugte nächste Instanz neben der wieder

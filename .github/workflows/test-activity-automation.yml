@@ -25,7 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --experimental-sqlite --test test/test-activity-automation.js
-      - run: node --experimental-sqlite --test test/test-activity-automation-routes.js
+      - run: SESSION_SECRET=test-session-secret-at-least-32-characters-long node --experimental-sqlite --test test/test-activity-automation-routes.js
       - run: npm run test:tasks-routes
       - run: npm run test:tasks-recurrence
       - run: npm run test:task-round-robin

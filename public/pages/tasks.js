@@ -14,6 +14,7 @@ import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, 
 import { esc, renderMarkdownLight } from '/utils/html.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
+import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
 import { resolveReminderPreset, parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { isPreviewable } from '/utils/document-preview.js';
@@ -887,6 +888,8 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
   const isEdit = !!task;
 
   const selectedIds = task?.assigned_users?.map((u) => u.id) ?? (task?.assigned_to ? [task.assigned_to] : []);
+  const rotationIds = task?.rotation_user_ids ?? [];
+  const assignmentMode = task?.assignment_mode || 'fixed';
   const visibility  = task?.visibility || 'all';
 
   const selectedCat = task?.category ?? FALLBACK_CATEGORY;
@@ -1043,7 +1046,20 @@ ${syncTargetFieldHtml(task)}
            behaelt seinen Wert, es wird nur verborgen - der Absende-Pfad liest
            es unveraendert (utils/household.js). -->
       <div class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
+        <label class="label" for="task-assignment-mode">Assignment mode</label>
+        <select class="input" id="task-assignment-mode" name="assignment_mode">
+          <option value="fixed" ${assignmentMode === 'fixed' ? 'selected' : ''}>Fixed</option>
+          <option value="round_robin" ${assignmentMode === 'round_robin' ? 'selected' : ''}>Round robin</option>
+        </select>
+        <p class="task-field-hint">Round robin assigns each recurring occurrence to the next person in the ordered list.</p>
+      </div>
+
+      <div id="task-fixed-assignment" class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         ${renderUserMultiSelect(users, selectedIds, 'task_assigned', 'tasks.assignedLabel')}
+      </div>
+
+      <div id="task-round-robin-assignment" class="form-group" style="margin-top:var(--space-4)"${assignmentMode === 'round_robin' && !isSoloHousehold() ? '' : ' hidden'}>
+        ${renderUserRotationOrder(users, rotationIds)}
       </div>
 
       <!-- EINE QUELLE, NICHT ZWEI: die Bedingung war "users.length > 1" und
@@ -1345,12 +1361,32 @@ function wireVisibilityWarning(panel, selectSel, msName, warnSel) {
   const warn   = panel.querySelector(warnSel);
   if (!select || !warn) return;
   const ms = panel.querySelector(`.user-ms[data-ms-name="${msName}"]`);
+  const rotation = panel.querySelector('#task-round-robin-assignment');
+  const mode = panel.querySelector('#task-assignment-mode');
   const update = () => {
-    const count = getSelectedUserIds(panel, msName).length;
+    const count = mode?.value === 'round_robin'
+      ? getRotationUserIds(panel).length
+      : getSelectedUserIds(panel, msName).length;
     warn.hidden = !(select.value === 'assignees' && count === 0);
   };
   select.addEventListener('change', update);
+  mode?.addEventListener('change', update);
   ms?.addEventListener('click', () => setTimeout(update, 0));
+  rotation?.addEventListener('input', update);
+  update();
+}
+
+function wireAssignmentMode(panel) {
+  const mode = panel.querySelector('#task-assignment-mode');
+  const fixed = panel.querySelector('#task-fixed-assignment');
+  const rotation = panel.querySelector('#task-round-robin-assignment');
+  if (!mode || !fixed || !rotation) return;
+  const update = () => {
+    const roundRobin = mode.value === 'round_robin';
+    fixed.hidden = roundRobin;
+    rotation.hidden = !roundRobin;
+  };
+  mode.addEventListener('change', update);
   update();
 }
 
@@ -1428,6 +1464,7 @@ function wireTaskForm(panel, { task = null, container }) {
   // RRULE-Events binden
   bindRRuleEvents(document, 'task');
   bindUserMultiSelect(panel, 'task_assigned');
+  wireAssignmentMode(panel);
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
   wireCountdownGate(panel);
 
@@ -1460,7 +1497,9 @@ function wireTaskForm(panel, { task = null, container }) {
     // laedt eine zugewiesene Person eine Datei hoch, und der Ersteller - der die
     // Aufgabe oeffnen darf - findet dort eine Zeile weniger als vorhanden ist.
     allowedMemberIds: () => {
-      const ids = getSelectedUserIds(panel, 'task_assigned').map(Number);
+      const ids = (panel.querySelector('#task-assignment-mode')?.value === 'round_robin'
+        ? getRotationUserIds(panel).slice(0, 1)
+        : getSelectedUserIds(panel, 'task_assigned')).map(Number);
       const creator = Number(task?.created_by ?? state.currentUserId);
       if (Number.isInteger(creator) && !ids.includes(creator)) ids.push(creator);
       return ids;
@@ -2373,6 +2412,8 @@ async function handleFormSubmit(e, container) {
   // direkt speichert, hat ihn gemeint.
   const pendingTag = form.querySelector('#task-tag-input')?.value ?? '';
   const tags = normalizeTagList([...modalTags, ...pendingTag.split(',')]);
+  const assignmentMode = form.querySelector('#task-assignment-mode')?.value || 'fixed';
+  const rotationUserIds = getRotationUserIds(form);
 
   const body = {
     title:           form.title.value.trim(),
@@ -2382,7 +2423,9 @@ async function handleFormSubmit(e, container) {
     tags,
     start_date:      startDate || null,
     due_date:        dueDate || null,
-    assigned_to:     getSelectedUserIds(form, 'task_assigned'),
+    assigned_to:     assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
+    assignment_mode: assignmentMode,
+    rotation_user_ids: assignmentMode === 'round_robin' ? rotationUserIds : [],
     visibility:      form.querySelector('#task-visibility')?.value || 'all',
     is_recurring:    rrule.is_recurring ? 1 : 0,
     recurrence_rule: rrule.recurrence_rule,
@@ -2407,6 +2450,10 @@ async function handleFormSubmit(e, container) {
   if (dueTimeRaw && !dueTime) { resetSubmit(t('calendar.invalidDate')); return; }
   body.due_time = dueTime || null;
   if (form.status) body.status = form.status.value;
+  if (assignmentMode === 'round_robin') {
+    if (!rrule.is_recurring) { resetSubmit('Round robin requires a recurring task.'); return; }
+    if (rotationUserIds.length < 2) { resetSubmit('Choose at least two members for the round-robin rotation.'); return; }
+  }
 
   // Erinnerungs-Vorbedingungen VOR dem Speichern prüfen — verhindert den
   // widersprüchlichen Zustand "Aufgabe gespeichert (Erfolgs-Toast) + roter

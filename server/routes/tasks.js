@@ -80,6 +80,7 @@ const router = express.Router();
 // --------------------------------------------------------
 
 const VALID_PRIORITIES = ['none', 'low', 'medium', 'high', 'urgent'];
+const VALID_ASSIGNMENT_MODES = ['fixed', 'round_robin'];
 
 // Die drei Zustände, die eine Aufgabe im Lauf durchläuft. Mehr steht nicht im
 // Statusfeld.
@@ -196,6 +197,9 @@ const ASSIGNED_USERS_SQL = `(
 function addAssignedUsers(task) {
   task.assigned_users = task.assigned_users_json ? JSON.parse(task.assigned_users_json) : [];
   delete task.assigned_users_json;
+  task.rotation_user_ids = task.assignment_mode === 'round_robin'
+    ? loadRotationUserIds(db.get(), task.id)
+    : [];
   return task;
 }
 
@@ -239,6 +243,48 @@ function setAssignments(d, taskId, userIds) {
   d.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
   const ins = d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)');
   for (const uid of userIds) ins.run(taskId, uid);
+}
+
+function parseRotationUserIds(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of value) {
+    const id = Number(raw);
+    if (!Number.isInteger(id) || id <= 0 || seen.has(id)) continue;
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+function loadRotationUserIds(d, taskId) {
+  return d.prepare(
+    'SELECT user_id FROM task_rotation_members WHERE task_id = ? ORDER BY sort_order ASC'
+  ).all(taskId).map((row) => row.user_id);
+}
+
+function setRotationMembers(d, taskId, userIds) {
+  d.prepare('DELETE FROM task_rotation_members WHERE task_id = ?').run(taskId);
+  const insert = d.prepare(
+    'INSERT INTO task_rotation_members (task_id, user_id, sort_order) VALUES (?, ?, ?)'
+  );
+  userIds.forEach((userId, index) => insert.run(taskId, userId, index));
+}
+
+function sameIdOrder(a, b) {
+  return a.length === b.length && a.every((id, index) => id === b[index]);
+}
+
+function roundRobinConfigError(d, { assignmentMode, isRecurring, recurrenceRule, parentTaskId, rotationUserIds }) {
+  if (assignmentMode !== 'round_robin') return null;
+  if (parentTaskId) return 'Round-robin assignment is only available for top-level tasks.';
+  if (!isRecurring || !recurrenceRule) return 'Round-robin assignment requires a recurring task.';
+  if (rotationUserIds.length < 2) return 'Round-robin assignment requires at least two household members.';
+  const placeholders = rotationUserIds.map(() => '?').join(',');
+  const found = d.prepare(`SELECT COUNT(*) AS n FROM users WHERE id IN (${placeholders})`).get(...rotationUserIds).n;
+  if (found !== rotationUserIds.length) return 'Round-robin assignment contains an unknown household member.';
+  return null;
 }
 
 function syncHousekeepingPaymentStatus(d, taskId, status) {
@@ -397,6 +443,7 @@ function validateTaskInput(body, isCreate = true, currentRule = undefined) {
     v.str(body.description, 'description', { required: false, max: v.MAX_TEXT }),
     v.oneOf(body.priority,  VALID_PRIORITIES, 'priority'),
     v.oneOf(body.status,    VALID_STATUSES,   'status'),
+    v.oneOf(body.assignment_mode, VALID_ASSIGNMENT_MODES, 'assignment_mode'),
     v.oneOf(body.category,  validTaskCategoryKeys(), 'category'),
     v.date(body.start_date, 'start_date'),
     v.date(body.due_date,   'due_date'),
@@ -907,8 +954,18 @@ router.post('/', (req, res) => {
       : clampPoints(req.body.points);
     const visibility = normalizeVisibility(req.body.visibility);
 
-    const userIds  = parseAssignedTo(req.body.assigned_to);
+    const assignmentMode = req.body.assignment_mode ?? 'fixed';
+    const rotationUserIds = parseRotationUserIds(req.body.rotation_user_ids);
+    const rotationError = roundRobinConfigError(db.get(), {
+      assignmentMode, isRecurring: !!is_recurring, recurrenceRule: recurrence_rule,
+      parentTaskId: parent_task_id, rotationUserIds,
+    });
+    if (rotationError) return res.status(400).json({ error: rotationError, code: 400 });
+
+    const requestedUserIds = parseAssignedTo(req.body.assigned_to);
+    const userIds = assignmentMode === 'round_robin' ? [rotationUserIds[0]] : requestedUserIds;
     const firstUid = userIds[0] ?? null;
+    const rotationIndex = 0;
 
     // Sync-Ziel (#695). Unteraufgaben bekommen keines: sie gehören zu ihrer
     // Elternaufgabe, und als eigenständiges VTODO stünden sie gleichrangig
@@ -939,15 +996,16 @@ router.post('/', (req, res) => {
         INSERT INTO tasks
           (title, description, category, priority, start_date, due_date, due_time,
            assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
-           recurrence_from_completion, points, visibility, countdown, locked)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           recurrence_from_completion, assignment_mode, rotation_index, points, visibility, countdown, locked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         title.trim(), description, category, priority,
         start_date, due_date, due_time, firstUid, req.authUserId || req.session.userId, parent_task_id,
-        is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0, points, visibility,
-        countdown ? 1 : 0, req.body.locked ? 1 : 0
+        is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
+        assignmentMode, rotationIndex, points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
+      setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), result.lastInsertRowid, req.body.tags);
       if (syncTarget) {
         db.get().prepare(
@@ -1024,9 +1082,32 @@ router.put('/:id', (req, res) => {
 
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
-    const userIds  = req.body.assigned_to !== undefined
+    const rotationBefore = loadRotationUserIds(db.get(), task.id);
+    const assignmentMode = req.body.assignment_mode !== undefined
+      ? req.body.assignment_mode
+      : (task.assignment_mode || 'fixed');
+    const rotationUserIds = req.body.rotation_user_ids !== undefined
+      ? parseRotationUserIds(req.body.rotation_user_ids)
+      : rotationBefore;
+    const rotationError = roundRobinConfigError(db.get(), {
+      assignmentMode, isRecurring: !!is_recurring, recurrenceRule: recurrence_rule,
+      parentTaskId: task.parent_task_id, rotationUserIds,
+    });
+    if (rotationError) return res.status(400).json({ error: rotationError, code: 400 });
+
+    const requestedUserIds = req.body.assigned_to !== undefined
       ? parseAssignedTo(req.body.assigned_to)
       : assignedBefore;
+    let rotationIndex = 0;
+    let userIds;
+    if (assignmentMode === 'round_robin') {
+      const oldCurrent = Number(task.assigned_to);
+      const oldPosition = rotationUserIds.indexOf(oldCurrent);
+      rotationIndex = task.assignment_mode === 'round_robin' && oldPosition >= 0 ? oldPosition : 0;
+      userIds = [rotationUserIds[rotationIndex]];
+    } else {
+      userIds = requestedUserIds;
+    }
     const firstUid = userIds[0] ?? null;
 
     // Sperre der Aufgabe (#830). Nicht mitgeschickt heisst "nicht angefasst".
@@ -1063,12 +1144,14 @@ router.put('/:id', (req, res) => {
         start_date, due_date, due_time,
         is_recurring: is_recurring ? 1 : 0, recurrence_rule,
         recurrence_from_completion: recurrence_from_completion ? 1 : 0,
+        assignment_mode: assignmentMode,
         countdown: countdown ? 1 : 0, points, visibility,
       };
       let touchesDefinition = Object.keys(wanted).some((k) => !sameFieldValue(wanted[k], task[k]));
 
       if (req.body.tags !== undefined
           && tagsKey(normalizeTags(req.body.tags)) !== tagsKey(tagsBefore)) touchesDefinition = true;
+      if (!sameIdOrder(rotationUserIds, rotationBefore)) touchesDefinition = true;
 
       if (syncTarget !== undefined
           && (!sameFieldValue(syncTarget?.accountId ?? null, task.target_caldav_account_id)
@@ -1107,13 +1190,14 @@ router.put('/:id', (req, res) => {
           title = ?, description = ?, category = ?, priority = ?,
           status = ?, start_date = ?, due_date = ?, due_time = ?, assigned_to = ?,
           is_recurring = ?, recurrence_rule = ?, recurrence_from_completion = ?,
-          points = ?, visibility = ?, countdown = ?, locked = ?
+          assignment_mode = ?, rotation_index = ?, points = ?, visibility = ?, countdown = ?, locked = ?
         WHERE id = ?
       `).run(title.trim(), description, category, priority,
              status, start_date, due_date, due_time, firstUid,
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
-             points, visibility, countdown ? 1 : 0, locked, req.params.id);
+             assignmentMode, rotationIndex, points, visibility, countdown ? 1 : 0, locked, req.params.id);
       setAssignments(db.get(), task.id, userIds);
+      setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), task.id, req.body.tags);
       if (syncTarget !== undefined) {
         db.get().prepare(
@@ -1305,6 +1389,15 @@ function spawnRecurrenceFollowup(task) {
   const existingAssignments = db.get()
     .prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
     .all(task.id).map((r) => r.user_id);
+  const rotationUserIds = loadRotationUserIds(db.get(), task.id);
+  const roundRobin = task.assignment_mode === 'round_robin' && rotationUserIds.length > 0;
+  const nextRotationIndex = roundRobin
+    ? (Number(task.rotation_index || 0) + 1) % rotationUserIds.length
+    : Number(task.rotation_index || 0);
+  const nextAssignedTo = roundRobin
+    ? rotationUserIds[nextRotationIndex]
+    : (task.assigned_to ?? existingAssignments[0] ?? null);
+  const followupAssignments = roundRobin ? [nextAssignedTo] : existingAssignments;
   // Die Tags gehören zur Aufgabe, nicht zum einzelnen Durchlauf (#586).
   // Ohne das Mitnehmen verlöre eine wöchentliche Aufgabe ihre Etiketten
   // beim ersten Abhaken - und zwar lautlos, weil die Folgeinstanz sonst
@@ -1320,13 +1413,13 @@ function spawnRecurrenceFollowup(task) {
     const newTask = db.get().prepare(`
       INSERT INTO tasks (title, description, category, priority, status,
         start_date, due_date, due_time, assigned_to, created_by, is_recurring, recurrence_rule,
-        points, visibility, recurrence_from_completion, countdown, recurrence_origin_id)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+        assignment_mode, rotation_index, points, visibility, recurrence_from_completion, countdown, recurrence_origin_id)
+      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.title, task.description, task.category, task.priority,
       shiftedStartDate(task.start_date, task.due_date, nextDate),
-      nextDate, task.due_time, task.assigned_to, task.created_by,
-      task.recurrence_rule, task.points, task.visibility,
+      nextDate, task.due_time, nextAssignedTo, task.created_by,
+      task.recurrence_rule, task.assignment_mode || 'fixed', nextRotationIndex, task.points, task.visibility,
       // Ohne das Mitnehmen fiele die Serie ab der zweiten Instanz auf die
       // Fälligkeitsrechnung zurück - lautlos, weil die Folgeinstanz sonst
       // vollständig aussieht (wie bei den Tags oben).
@@ -1339,7 +1432,8 @@ function spawnRecurrenceFollowup(task) {
       task.countdown ? 1 : 0,
       task.id
     );
-    setAssignments(db.get(), newTask.lastInsertRowid, existingAssignments);
+    setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
+    setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);
 
     for (const sub of existingSubtasks) {

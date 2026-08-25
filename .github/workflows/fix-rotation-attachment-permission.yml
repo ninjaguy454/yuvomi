@@ -1,0 +1,72 @@
+name: Fix rotation attachment permission
+
+on:
+  push:
+    branches:
+      - feat/round-robin-task-assignment
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: github.event.head_commit.message == 'build: fix rotation attachment permission'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/round-robin-task-assignment
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+      - name: Patch active assignee for restricted attachments
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('public/pages/tasks.js')
+          text = path.read_text()
+          old = """    allowedMemberIds: () => {
+      const ids = (panel.querySelector('#task-assignment-mode')?.value === 'round_robin'
+        ? getRotationUserIds(panel).slice(0, 1)
+        : getSelectedUserIds(panel, 'task_assigned')).map(Number);
+      const creator = Number(task?.created_by ?? state.currentUserId);
+"""
+          new = """    allowedMemberIds: () => {
+      let ids;
+      if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {
+        const rotationIds = getRotationUserIds(panel).map(Number);
+        const persistedAssignee = Number(task?.assigned_to);
+        if (Number.isInteger(persistedAssignee) && persistedAssignee > 0) {
+          ids = [persistedAssignee];
+        } else {
+          const grouped = !!panel.querySelector('#task-rotation-group')?.value.trim();
+          const position = Number(panel.querySelector('#task-rotation-position')?.value || 1);
+          const slot = grouped && Number.isInteger(position) && position > 0 ? position - 1 : 0;
+          const active = rotationIds[slot];
+          ids = Number.isInteger(active) && active > 0 ? [active] : [];
+        }
+      } else {
+        ids = getSelectedUserIds(panel, 'task_assigned').map(Number);
+      }
+      const creator = Number(task?.created_by ?? state.currentUserId);
+"""
+          if old not in text:
+              raise SystemExit('attachment permission anchor missing')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - run: npm ci
+      - name: Run focused compatibility tests
+        run: |
+          npm run test:task-round-robin
+          npm run test:task-documents
+          npm run test:tasks-recurrence
+          npm run test:multi-assignment
+          npm run test:sw-precache
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/pages/tasks.js
+          git commit -m "fix(tasks): keep round-robin attachments with active assignee"
+          git push origin HEAD:feat/round-robin-task-assignment

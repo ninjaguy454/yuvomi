@@ -29,7 +29,7 @@ function buildTestDb() {
 const db = buildTestDb();
 _setTestDatabase(db);
 
-function addUser(username, displayName, role = 'user') {
+function addUser(username, displayName, role = 'member') {
   return Number(db.prepare(`
     INSERT INTO users (username, display_name, password_hash, role)
     VALUES (?, ?, '$2b$12$x', ?)

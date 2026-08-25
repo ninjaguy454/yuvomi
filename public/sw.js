@@ -93,6 +93,7 @@ const APP_SHELL = [
   '/components/modal.js',
   '/components/photo-screensaver.js',
   '/components/user-multi-select.js',
+  '/components/user-rotation-order.js',
   '/utils/birthday-event.js',
   '/utils/bulk-pill.js',
   '/utils/category-labels.js',

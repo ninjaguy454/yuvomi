@@ -1511,9 +1511,22 @@ function wireTaskForm(panel, { task = null, container }) {
     // laedt eine zugewiesene Person eine Datei hoch, und der Ersteller - der die
     // Aufgabe oeffnen darf - findet dort eine Zeile weniger als vorhanden ist.
     allowedMemberIds: () => {
-      const ids = (panel.querySelector('#task-assignment-mode')?.value === 'round_robin'
-        ? getRotationUserIds(panel).slice(0, 1)
-        : getSelectedUserIds(panel, 'task_assigned')).map(Number);
+      let ids;
+      if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {
+        const rotationIds = getRotationUserIds(panel).map(Number);
+        const persistedAssignee = Number(task?.assigned_to);
+        if (Number.isInteger(persistedAssignee) && persistedAssignee > 0) {
+          ids = [persistedAssignee];
+        } else {
+          const grouped = !!panel.querySelector('#task-rotation-group')?.value.trim();
+          const position = Number(panel.querySelector('#task-rotation-position')?.value || 1);
+          const slot = grouped && Number.isInteger(position) && position > 0 ? position - 1 : 0;
+          const active = rotationIds[slot];
+          ids = Number.isInteger(active) && active > 0 ? [active] : [];
+        }
+      } else {
+        ids = getSelectedUserIds(panel, 'task_assigned').map(Number);
+      }
       const creator = Number(task?.created_by ?? state.currentUserId);
       if (Number.isInteger(creator) && !ids.includes(creator)) ids.push(creator);
       return ids;

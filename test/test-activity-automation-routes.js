@@ -6,6 +6,7 @@ import Database from 'better-sqlite3-multiple-ciphers';
 
 process.env.DB_PATH = ':memory:';
 process.env.TZ = 'UTC';
+process.env.SESSION_SECRET ??= 'test-session-secret-at-least-32-characters-long';
 
 const { MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: automationRouter } = await import('../server/routes/automation.js');

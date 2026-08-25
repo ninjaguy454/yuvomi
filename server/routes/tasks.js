@@ -840,10 +840,16 @@ router.get('/', (req, res) => {
            AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_total,
         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.status = 'done'
            AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_done,
-        (SELECT json_group_array(json_object('id', s.id, 'title', s.title, 'status', s.status))
-           FROM (SELECT s.id, s.title, s.status FROM tasks s WHERE s.parent_task_id = t.id
-                   AND ${visibilityWhere('s', 'task_assignments', 'task_id')}
-                 ORDER BY s.created_at ASC) s) AS subtasks
+        (SELECT json_group_array(json_object(
+                  'id', s.id, 'title', s.title, 'status', s.status,
+                  'assigned_to', s.assigned_to, 'assigned_name', s.assigned_name
+                ))
+           FROM (SELECT s.id, s.title, s.status, s.assigned_to, su.display_name AS assigned_name
+                   FROM tasks s
+                   LEFT JOIN users su ON su.id = s.assigned_to
+                  WHERE s.parent_task_id = t.id
+                    AND ${visibilityWhere('s', 'task_assignments', 'task_id')}
+                  ORDER BY s.created_at ASC) s) AS subtasks
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
       WHERE ${taskScopeWhere('t', { includeFuture: !!include_future })}

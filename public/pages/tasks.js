@@ -511,6 +511,7 @@ function renderTaskCard(task, opts = {}) {
             ${s.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
           </button>
           <span class="subtask-item__title">${esc(s.title)}</span>
+          ${s.assigned_name ? `<span class="subtask-item__assignee">${esc(s.assigned_name)}</span>` : ''}
           ${canEditTaskDefinition(s, task) ? `
           <div class="subtask-item__actions">
             <button class="btn btn--ghost btn--icon btn--icon-sm subtask-item__action"

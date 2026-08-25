@@ -1106,6 +1106,16 @@
   color: var(--color-text-secondary);
 }
 
+.subtask-item__assignee {
+  flex-shrink: 0;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+
 /* Umbenennen und Löschen eines Teilschritts (#748). Dieselbe Zielgröße und
  * derselbe zurückgenommene Ton wie die Inline-Aktionen der Aufgabenzeile
  * darüber - der Teilschritt ist eine Zeile derselben Liste, keine eigene

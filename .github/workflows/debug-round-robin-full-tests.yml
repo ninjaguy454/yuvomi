@@ -22,7 +22,7 @@ jobs:
       - name: Extract and apply rotation-group patch
         if: contains(github.event.head_commit.message, 'execute rotation group patch')
         run: |
-          awk 'BEGIN{f=0} /python3 <<.PY./{f=1;next} /^          PY$/{f=0} f{sub(/^          /,""); print}' .github/workflows/apply-rotation-groups.yml > /tmp/rotation-group-patch.py
+          python3 .github/scripts/extract_rotation_group_patch.py
           python3 /tmp/rotation-group-patch.py
       - run: npm ci
       - name: Run focused compatibility tests

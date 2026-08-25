@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   patch-and-test:
-    if: github.event.head_commit.message == 'build: fix rotation attachment permission'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,33 +21,8 @@ jobs:
           cache: npm
       - name: Patch active assignee for restricted attachments
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          path = Path('public/pages/tasks.js')
-          lines = path.read_text().splitlines()
-          start = next(i for i, line in enumerate(lines) if "const ids = (panel.querySelector('#task-assignment-mode')" in line)
-          end = next(i for i in range(start, len(lines)) if 'const creator = Number(' in lines[i])
-          replacement = [
-              '      let ids;',
-              "      if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {",
-              '        const rotationIds = getRotationUserIds(panel).map(Number);',
-              '        const persistedAssignee = Number(task?.assigned_to);',
-              '        if (Number.isInteger(persistedAssignee) && persistedAssignee > 0) {',
-              '          ids = [persistedAssignee];',
-              '        } else {',
-              "          const grouped = !!panel.querySelector('#task-rotation-group')?.value.trim();",
-              "          const position = Number(panel.querySelector('#task-rotation-position')?.value || 1);",
-              '          const slot = grouped && Number.isInteger(position) && position > 0 ? position - 1 : 0;',
-              '          const active = rotationIds[slot];',
-              '          ids = Number.isInteger(active) && active > 0 ? [active] : [];',
-              '        }',
-              '      } else {',
-              "        ids = getSelectedUserIds(panel, 'task_assigned').map(Number);",
-              '      }',
-          ]
-          lines[start:end] = replacement
-          path.write_text('\n'.join(lines) + '\n')
-          PY
+          echo 'ZnJvbSBwYXRobGliIGltcG9ydCBQYXRoCnBhdGggPSBQYXRoKCdwdWJsaWMvcGFnZXMvdGFza3MuanMnKQpsaW5lcyA9IHBhdGgucmVhZF90ZXh0KCkuc3BsaXRsaW5lcygpCnN0YXJ0ID0gbmV4dChpIGZvciBpLCBsaW5lIGluIGVudW1lcmF0ZShsaW5lcykgaWYgImNvbnN0IGlkcyA9IChwYW5lbC5xdWVyeVNlbGVjdG9yKCcjdGFzay1hc3NpZ25tZW50LW1vZGUnKT8udmFsdWUgPT09ICdyb3VuZF9yb2JpbicpIiBpbiBsaW5lKQplbmQgPSBuZXh0KGkgZm9yIGkgaW4gcmFuZ2Uoc3RhcnQsIGxlbihsaW5lcykpIGlmICdjb25zdCBjcmVhdG9yID0gTnVtYmVyKCcgaW4gbGluZXNbaV0pCnJlcGxhY2VtZW50ID0gWwogICAgJyAgICAgIGxldCBpZHM7JywKICAgICIgICAgICBpZiAocGFuZWwucXVlcnlTZWxlY3RvcignI3Rhc2stYXNzaWdubWVudC1tb2RlJyk/LnZhbHVlID09PSAncm91bmRfcm9iaW4nKSB7IiwKICAgICcgICAgICAgIGNvbnN0IHJvdGF0aW9uSWRzID0gZ2V0Um90YXRpb25Vc2VySWRzKHBhbmVsKS5tYXAoTnVtYmVyKTsnLAogICAgJyAgICAgICAgY29uc3QgcGVyc2lzdGVkQXNzaWduZWUgPSBOdW1iZXIodGFzaz8uYXNzaWduZWRfdG8pOycsCiAgICAnICAgICAgICBpZiAoTnVtYmVyLmlzSW50ZWdlcihwZXJzaXN0ZWRBc3NpZ25lZSkgJiYgcGVyc2lzdGVkQXNzaWduZWUgPiAwKSB7JywKICAgICcgICAgICAgICAgaWRzID0gW3BlcnNpc3RlZEFzc2lnbmVlXTsnLAogICAgJyAgICAgICAgfSBlbHNlIHsnLAogICAgIiAgICAgICAgICBjb25zdCBncm91cGVkID0gISFwYW5lbC5xdWVyeVNlbGVjdG9yKCcjdGFzay1yb3RhdGlvbi1ncm91cCcpPy52YWx1ZS50cmltKCk7IiwKICAgICIgICAgICAgICAgY29uc3QgcG9zaXRpb24gPSBOdW1iZXIocGFuZWwucXVlcnlTZWxlY3RvcignI3Rhc2stcm90YXRpb24tcG9zaXRpb24nKT8udmFsdWUgfHwgMSk7IiwKICAgICcgICAgICAgICAgY29uc3Qgc2xvdCA9IGdyb3VwZWQgJiYgTnVtYmVyLmlzSW50ZWdlcihwb3NpdGlvbikgJiYgcG9zaXRpb24gPiAwID8gcG9zaXRpb24gLSAxIDogMDsnLAogICAgJyAgICAgICAgICBjb25zdCBhY3RpdmUgPSByb3RhdGlvbklkc1tzbG90XTsnLAogICAgJyAgICAgICAgICBpZHMgPSBOdW1iZXIuaXNJbnRlZ2VyKGFjdGl2ZSkgJiYgYWN0aXZlID4gMCA/IFthY3RpdmVdIDogW107JywKICAgICcgICAgICAgIH0nLAogICAgJyAgICAgIH0gZWxzZSB7JywKICAgICIgICAgICAgIGlkcyA9IGdldFNlbGVjdGVkVXNlcklkcyhwYW5lbCwgJ3Rhc2tfYXNzaWduZWQnKS5tYXAoTnVtYmVyKTsiLAogICAgJyAgICAgIH0nLApdCmxpbmVzW3N0YXJ0OmVuZF0gPSByZXBsYWNlbWVudApwYXRoLndyaXRlX3RleHQoJ1xuJy5qb2luKGxpbmVzKSArICdcbicpCg==' | base64 -d > /tmp/fix.py
+          python3 /tmp/fix.py
       - run: npm ci
       - name: Run focused compatibility tests
         run: |

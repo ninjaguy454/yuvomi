@@ -6171,6 +6171,36 @@ const MIGRATIONS = [
       CREATE INDEX IF NOT EXISTS idx_recovery_codes_user ON user_recovery_codes(user_id);
     `,
   },
+  {
+    version: 160,
+    description: 'Tasks: ordered round-robin assignment for recurring tasks',
+    up: `
+      ALTER TABLE tasks ADD COLUMN assignment_mode TEXT NOT NULL DEFAULT 'fixed'
+        CHECK(assignment_mode IN ('fixed', 'round_robin'));
+      ALTER TABLE tasks ADD COLUMN rotation_index INTEGER NOT NULL DEFAULT 0;
+
+      CREATE TABLE IF NOT EXISTS task_rotation_members (
+        task_id    INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        sort_order INTEGER NOT NULL CHECK(sort_order >= 0),
+        PRIMARY KEY (task_id, user_id),
+        UNIQUE (task_id, sort_order)
+      );
+      CREATE INDEX idx_task_rotation_members_user ON task_rotation_members(user_id);
+    `,
+  },
+  {
+    version: 161,
+    description: 'Tasks: synchronized rotation groups for recurring round-robin cohorts',
+    up: `
+      ALTER TABLE tasks ADD COLUMN rotation_group TEXT;
+      ALTER TABLE tasks ADD COLUMN rotation_slot INTEGER NOT NULL DEFAULT 0 CHECK(rotation_slot >= 0);
+      ALTER TABLE tasks ADD COLUMN rotation_cycle INTEGER NOT NULL DEFAULT 0 CHECK(rotation_cycle >= 0);
+      CREATE INDEX idx_tasks_rotation_group_cycle
+        ON tasks(rotation_group COLLATE NOCASE, rotation_cycle)
+        WHERE rotation_group IS NOT NULL;
+    `,
+  },
 ];
 
 /**

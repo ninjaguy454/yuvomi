@@ -19,14 +19,22 @@ jobs:
         with:
           node-version: 22.x
           cache: npm
-      - name: Extract and apply rotation-group patch
-        if: contains(github.event.head_commit.message, 'execute rotation group patch')
+      - name: Add rotation component to service-worker precache
         run: |
-          python3 .github/scripts/extract_rotation_group_patch.py
-          python3 /tmp/rotation-group-patch.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('public/sw.js')
+          text = path.read_text()
+          entry = "  '/components/user-rotation-order.js',\n"
+          if entry not in text:
+              anchor = "  '/components/user-multi-select.js',\n"
+              if anchor not in text:
+                  raise SystemExit('precache anchor missing')
+              text = text.replace(anchor, anchor + entry, 1)
+              path.write_text(text)
+          PY
       - run: npm ci
-      - name: Run focused compatibility tests
-        if: contains(github.event.head_commit.message, 'execute rotation group patch')
+      - name: Run focused rotation and compatibility tests
         run: |
           npm run test:task-round-robin
           npm run test:tasks-recurrence
@@ -34,15 +42,17 @@ jobs:
           npm run test:migrations-append-only
           npm run test:schema-reconcile
           npm run test:schema-mirror
-      - name: Commit rotation-group implementation
-        if: contains(github.event.head_commit.message, 'execute rotation group patch')
+          npm run test:sw-precache
+      - name: Commit precache compatibility fix
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/db.js server/routes/tasks.js public/pages/tasks.js test/test-task-round-robin.js package.json docs/ROUND_ROBIN_TASKS.md
-          git commit -m "feat(tasks): add synchronized rotation groups"
-          git push origin HEAD:feat/round-robin-task-assignment
-      - name: Run full tests and capture log
+          if ! git diff --quiet -- public/sw.js; then
+            git add public/sw.js
+            git commit -m "fix(pwa): precache rotation order component"
+            git push origin HEAD:feat/round-robin-task-assignment
+          fi
+      - name: Run full upstream test suite
         id: tests
         shell: bash
         run: |
@@ -53,7 +63,7 @@ jobs:
           exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: full-test-log
+          name: final-full-test-log
           path: full-test.log
       - name: Preserve failure status
         if: steps.tests.outputs.status != '0'

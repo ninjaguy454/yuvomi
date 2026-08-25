@@ -13,7 +13,7 @@ jobs:
     if: github.event.head_commit.message == 'build: fix rotation attachment permission'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           ref: feat/round-robin-task-assignment
       - uses: actions/setup-node@v4
@@ -25,35 +25,29 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           path = Path('public/pages/tasks.js')
-          text = path.read_text()
-          old = """    allowedMemberIds: () => {
-      const ids = (panel.querySelector('#task-assignment-mode')?.value === 'round_robin'
-        ? getRotationUserIds(panel).slice(0, 1)
-        : getSelectedUserIds(panel, 'task_assigned')).map(Number);
-      const creator = Number(task?.created_by ?? state.currentUserId);
-"""
-          new = """    allowedMemberIds: () => {
-      let ids;
-      if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {
-        const rotationIds = getRotationUserIds(panel).map(Number);
-        const persistedAssignee = Number(task?.assigned_to);
-        if (Number.isInteger(persistedAssignee) && persistedAssignee > 0) {
-          ids = [persistedAssignee];
-        } else {
-          const grouped = !!panel.querySelector('#task-rotation-group')?.value.trim();
-          const position = Number(panel.querySelector('#task-rotation-position')?.value || 1);
-          const slot = grouped && Number.isInteger(position) && position > 0 ? position - 1 : 0;
-          const active = rotationIds[slot];
-          ids = Number.isInteger(active) && active > 0 ? [active] : [];
-        }
-      } else {
-        ids = getSelectedUserIds(panel, 'task_assigned').map(Number);
-      }
-      const creator = Number(task?.created_by ?? state.currentUserId);
-"""
-          if old not in text:
-              raise SystemExit('attachment permission anchor missing')
-          path.write_text(text.replace(old, new, 1))
+          lines = path.read_text().splitlines()
+          start = next(i for i, line in enumerate(lines) if "const ids = (panel.querySelector('#task-assignment-mode')" in line)
+          end = next(i for i in range(start, len(lines)) if 'const creator = Number(' in lines[i])
+          replacement = [
+              '      let ids;',
+              "      if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {",
+              '        const rotationIds = getRotationUserIds(panel).map(Number);',
+              '        const persistedAssignee = Number(task?.assigned_to);',
+              '        if (Number.isInteger(persistedAssignee) && persistedAssignee > 0) {',
+              '          ids = [persistedAssignee];',
+              '        } else {',
+              "          const grouped = !!panel.querySelector('#task-rotation-group')?.value.trim();",
+              "          const position = Number(panel.querySelector('#task-rotation-position')?.value || 1);",
+              '          const slot = grouped && Number.isInteger(position) && position > 0 ? position - 1 : 0;',
+              '          const active = rotationIds[slot];',
+              '          ids = Number.isInteger(active) && active > 0 ? [active] : [];',
+              '        }',
+              '      } else {',
+              "        ids = getSelectedUserIds(panel, 'task_assigned').map(Number);",
+              '      }',
+          ]
+          lines[start:end] = replacement
+          path.write_text('\n'.join(lines) + '\n')
           PY
       - run: npm ci
       - name: Run focused compatibility tests

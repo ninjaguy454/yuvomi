@@ -276,6 +276,80 @@ function sameIdOrder(a, b) {
   return a.length === b.length && a.every((id, index) => id === b[index]);
 }
 
+function normalizeRotationGroup(value) {
+  if (value === undefined || value === null) return null;
+  const group = String(value).trim();
+  return group || null;
+}
+
+function parseRotationSlot(value) {
+  const slot = Number(value ?? 0);
+  return Number.isInteger(slot) && slot >= 0 ? slot : null;
+}
+
+function currentRotationGroupState(d, rotationGroup, taskId = null) {
+  if (!rotationGroup) return { rotationIndex: 0, rotationCycle: 0, peers: [] };
+
+  let anchor = null;
+  if (taskId) {
+    const candidate = d.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (candidate?.rotation_group
+        && candidate.rotation_group.localeCompare(rotationGroup, undefined, { sensitivity: 'accent' }) === 0) {
+      anchor = candidate;
+    }
+  }
+  if (!anchor) {
+    anchor = d.prepare(`
+      SELECT * FROM tasks
+       WHERE rotation_group = ? COLLATE NOCASE AND parent_task_id IS NULL
+       ORDER BY rotation_cycle DESC, id DESC LIMIT 1
+    `).get(rotationGroup);
+  }
+
+  const rotationCycle = Number(anchor?.rotation_cycle || 0);
+  const rotationIndex = Number(anchor?.rotation_index || 0);
+  const params = [rotationGroup, rotationCycle];
+  let sql = `SELECT * FROM tasks
+              WHERE rotation_group = ? COLLATE NOCASE
+                AND rotation_cycle = ? AND parent_task_id IS NULL`;
+  if (taskId) { sql += ' AND id != ?'; params.push(Number(taskId)); }
+  sql += ' ORDER BY rotation_slot ASC, id ASC';
+  const peers = d.prepare(sql).all(...params);
+  return { rotationIndex, rotationCycle, peers };
+}
+
+function rotationGroupConfigError(d, {
+  taskId = null, joining = false, assignmentMode, rotationGroup, rotationSlot,
+  rotationUserIds, recurrenceRule, recurrenceFromCompletion, dueDate, dueTime,
+}) {
+  if (!rotationGroup) return null;
+  if (assignmentMode !== 'round_robin') return 'Rotation groups require round-robin assignment.';
+  if (rotationGroup.length > 80) return 'Rotation group names are limited to 80 characters.';
+  if (rotationSlot === null || rotationSlot >= rotationUserIds.length) {
+    return 'Rotation group position must refer to a member in the round-robin list.';
+  }
+
+  const state = currentRotationGroupState(d, rotationGroup, taskId);
+  if (joining && state.peers.some((peer) => peer.status !== 'open')) {
+    return 'Cannot join a rotation group after its current cycle has started.';
+  }
+  for (const peer of state.peers) {
+    if (!sameIdOrder(loadRotationUserIds(d, peer.id), rotationUserIds)) {
+      return 'Every task in a rotation group must use the same ordered member list.';
+    }
+    if (peer.recurrence_rule !== recurrenceRule
+        || Number(peer.recurrence_from_completion || 0) !== Number(recurrenceFromCompletion ? 1 : 0)
+        || (peer.due_date ?? null) !== (dueDate ?? null)
+        || (peer.due_time ?? null) !== (dueTime ?? null)) {
+      return 'Every task in a rotation group must use the same recurrence schedule and due time.';
+    }
+    if (Number(peer.rotation_slot || 0) === rotationSlot) {
+      return 'That position is already used in this rotation group.';
+    }
+  }
+  return null;
+}
+
 function roundRobinConfigError(d, { assignmentMode, isRecurring, recurrenceRule, parentTaskId, rotationUserIds }) {
   if (assignmentMode !== 'round_robin') return null;
   if (parentTaskId) return 'Round-robin assignment is only available for top-level tasks.';
@@ -962,10 +1036,30 @@ router.post('/', (req, res) => {
     });
     if (rotationError) return res.status(400).json({ error: rotationError, code: 400 });
 
+    const rotationGroup = assignmentMode === 'round_robin'
+      ? normalizeRotationGroup(req.body.rotation_group)
+      : null;
+    const rotationSlot = rotationGroup ? parseRotationSlot(req.body.rotation_slot) : 0;
+    const groupState = currentRotationGroupState(db.get(), rotationGroup);
+    const groupError = rotationGroupConfigError(db.get(), {
+      joining: !!rotationGroup && groupState.peers.length > 0,
+      assignmentMode, rotationGroup, rotationSlot, rotationUserIds,
+      recurrenceRule: recurrence_rule,
+      recurrenceFromCompletion: recurrence_from_completion,
+      dueDate: due_date, dueTime: due_time,
+    });
+    if (groupError) return res.status(400).json({ error: groupError, code: 400 });
+
     const requestedUserIds = parseAssignedTo(req.body.assigned_to);
-    const userIds = assignmentMode === 'round_robin' ? [rotationUserIds[0]] : requestedUserIds;
+    const rotationIndex = rotationGroup ? groupState.rotationIndex : 0;
+    const rotationCycle = rotationGroup ? groupState.rotationCycle : 0;
+    const activeRotationPosition = assignmentMode === 'round_robin'
+      ? (rotationIndex + (rotationGroup ? rotationSlot : 0)) % rotationUserIds.length
+      : 0;
+    const userIds = assignmentMode === 'round_robin'
+      ? [rotationUserIds[activeRotationPosition]]
+      : requestedUserIds;
     const firstUid = userIds[0] ?? null;
-    const rotationIndex = 0;
 
     // Sync-Ziel (#695). Unteraufgaben bekommen keines: sie gehören zu ihrer
     // Elternaufgabe, und als eigenständiges VTODO stünden sie gleichrangig
@@ -996,13 +1090,15 @@ router.post('/', (req, res) => {
         INSERT INTO tasks
           (title, description, category, priority, start_date, due_date, due_time,
            assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
-           recurrence_from_completion, assignment_mode, rotation_index, points, visibility, countdown, locked)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           recurrence_from_completion, assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
+           points, visibility, countdown, locked)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         title.trim(), description, category, priority,
         start_date, due_date, due_time, firstUid, req.authUserId || req.session.userId, parent_task_id,
         is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
-        assignmentMode, rotationIndex, points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0
+        assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
+        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
       setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
@@ -1095,16 +1191,50 @@ router.put('/:id', (req, res) => {
     });
     if (rotationError) return res.status(400).json({ error: rotationError, code: 400 });
 
+    const requestedRotationGroup = req.body.rotation_group !== undefined
+      ? normalizeRotationGroup(req.body.rotation_group)
+      : normalizeRotationGroup(task.rotation_group);
+    const rotationGroup = assignmentMode === 'round_robin' ? requestedRotationGroup : null;
+    if (task.rotation_group && rotationGroup
+        && task.rotation_group.localeCompare(rotationGroup, undefined, { sensitivity: 'accent' }) !== 0) {
+      return res.status(400).json({ error: 'Move a grouped task by removing it from the group first.', code: 400 });
+    }
+    const rotationSlot = rotationGroup
+      ? (req.body.rotation_slot !== undefined ? parseRotationSlot(req.body.rotation_slot) : Number(task.rotation_slot || 0))
+      : 0;
+    const joiningGroup = !!rotationGroup && !task.rotation_group;
+    const groupState = currentRotationGroupState(db.get(), rotationGroup, task.rotation_group ? task.id : null);
+    const groupError = rotationGroupConfigError(db.get(), {
+      taskId: task.rotation_group ? task.id : null,
+      joining: joiningGroup,
+      assignmentMode, rotationGroup, rotationSlot, rotationUserIds,
+      recurrenceRule: recurrence_rule,
+      recurrenceFromCompletion: recurrence_from_completion,
+      dueDate: due_date, dueTime: due_time,
+    });
+    if (groupError) return res.status(400).json({ error: groupError, code: 400 });
+    if (task.rotation_group && Number(task.rotation_slot || 0) !== rotationSlot
+        && groupState.peers.some((peer) => peer.status !== 'open')) {
+      return res.status(409).json({ error: 'Cannot change a rotation-group position after its current cycle has started.', code: 409 });
+    }
+
     const requestedUserIds = req.body.assigned_to !== undefined
       ? parseAssignedTo(req.body.assigned_to)
       : assignedBefore;
     let rotationIndex = 0;
+    let rotationCycle = 0;
     let userIds;
     if (assignmentMode === 'round_robin') {
-      const oldCurrent = Number(task.assigned_to);
-      const oldPosition = rotationUserIds.indexOf(oldCurrent);
-      rotationIndex = task.assignment_mode === 'round_robin' && oldPosition >= 0 ? oldPosition : 0;
-      userIds = [rotationUserIds[rotationIndex]];
+      if (rotationGroup) {
+        rotationIndex = groupState.rotationIndex;
+        rotationCycle = groupState.rotationCycle;
+        userIds = [rotationUserIds[(rotationIndex + rotationSlot) % rotationUserIds.length]];
+      } else {
+        const oldCurrent = Number(task.assigned_to);
+        const oldPosition = rotationUserIds.indexOf(oldCurrent);
+        rotationIndex = task.assignment_mode === 'round_robin' && oldPosition >= 0 ? oldPosition : 0;
+        userIds = [rotationUserIds[rotationIndex]];
+      }
     } else {
       userIds = requestedUserIds;
     }
@@ -1145,6 +1275,7 @@ router.put('/:id', (req, res) => {
         is_recurring: is_recurring ? 1 : 0, recurrence_rule,
         recurrence_from_completion: recurrence_from_completion ? 1 : 0,
         assignment_mode: assignmentMode,
+        rotation_group: rotationGroup, rotation_slot: rotationSlot || 0,
         countdown: countdown ? 1 : 0, points, visibility,
       };
       let touchesDefinition = Object.keys(wanted).some((k) => !sameFieldValue(wanted[k], task[k]));
@@ -1190,12 +1321,14 @@ router.put('/:id', (req, res) => {
           title = ?, description = ?, category = ?, priority = ?,
           status = ?, start_date = ?, due_date = ?, due_time = ?, assigned_to = ?,
           is_recurring = ?, recurrence_rule = ?, recurrence_from_completion = ?,
-          assignment_mode = ?, rotation_index = ?, points = ?, visibility = ?, countdown = ?, locked = ?
+          assignment_mode = ?, rotation_index = ?, rotation_group = ?, rotation_slot = ?, rotation_cycle = ?,
+          points = ?, visibility = ?, countdown = ?, locked = ?
         WHERE id = ?
       `).run(title.trim(), description, category, priority,
              status, start_date, due_date, due_time, firstUid,
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
-             assignmentMode, rotationIndex, points, visibility, countdown ? 1 : 0, locked, req.params.id);
+             assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
+             points, visibility, countdown ? 1 : 0, locked, req.params.id);
       setAssignments(db.get(), task.id, userIds);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), task.id, req.body.tags);
@@ -1324,7 +1457,7 @@ function isFollowupSubtasksTouched(followup) {
  * Arbeit, die ein Klick auf die Vorgängerin nicht wegwerfen darf.
  * Rückgabe: Anzahl vorgemerkter CalDAV-Löschungen.
  */
-function discardRecurrenceFollowup(taskId) {
+function discardRecurrenceFollowupSingle(taskId) {
   const followup = recurrenceFollowupOf(taskId);
   if (!followup || followup.status !== 'open') return 0;
 
@@ -1334,6 +1467,30 @@ function discardRecurrenceFollowup(taskId) {
   // weg. Lokal erzeugte Folgeinstanzen sind nicht gespiegelt, dann ist das ein No-op.
   const queued = queueTodoDeletion('tasks', followup) ? 1 : 0;
   db.get().prepare('DELETE FROM tasks WHERE id = ?').run(followup.id);
+  return queued;
+}
+
+function discardRecurrenceFollowup(taskId) {
+  const source = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  if (!source?.rotation_group) return discardRecurrenceFollowupSingle(taskId);
+
+  const cohort = db.get().prepare(`
+    SELECT * FROM tasks
+     WHERE rotation_group = ? COLLATE NOCASE AND rotation_cycle = ? AND parent_task_id IS NULL
+     ORDER BY rotation_slot ASC, id ASC
+  `).all(source.rotation_group, source.rotation_cycle);
+  const followups = cohort.map((member) => recurrenceFollowupOf(member.id));
+  // Group deletion is all-or-nothing. A missing or touched next occurrence means
+  // the whole generated cohort is preserved.
+  if (!cohort.length || followups.some((f) => !f || f.status !== 'open')) return 0;
+  if (followups.some((f) => isFollowupSubtasksTouched(f) || recurrenceFollowupOf(f.id))) return 0;
+
+  let queued = 0;
+  db.get().transaction(() => {
+    for (const followup of followups) queued += queueTodoDeletion('tasks', followup) ? 1 : 0;
+    const placeholders = followups.map(() => '?').join(',');
+    db.get().prepare(`DELETE FROM tasks WHERE id IN (${placeholders})`).run(...followups.map((f) => f.id));
+  })();
   return queued;
 }
 
@@ -1369,7 +1526,7 @@ function shiftedStartDate(startDate, dueDate, nextDue) {
  * Savepoint. Sie bleibt trotzdem stehen: sie hält Aufgabe, Zuweisungen und Tags
  * auch dann zusammen, wenn später jemand von außerhalb einer Transaktion ruft.
  */
-function spawnRecurrenceFollowup(task) {
+function spawnRecurrenceFollowupSingle(task) {
   if (!task?.is_recurring || !task.recurrence_rule || task.parent_task_id) return;
   // Höchstens eine Folgeinstanz je Erledigung - sonst legt doppeltes Abhaken nach.
   if (recurrenceFollowupOf(task.id)) return;
@@ -1395,7 +1552,7 @@ function spawnRecurrenceFollowup(task) {
     ? (Number(task.rotation_index || 0) + 1) % rotationUserIds.length
     : Number(task.rotation_index || 0);
   const nextAssignedTo = roundRobin
-    ? rotationUserIds[nextRotationIndex]
+    ? rotationUserIds[(nextRotationIndex + Number(task.rotation_group ? task.rotation_slot || 0 : 0)) % rotationUserIds.length]
     : (task.assigned_to ?? existingAssignments[0] ?? null);
   const followupAssignments = roundRobin ? [nextAssignedTo] : existingAssignments;
   // Die Tags gehören zur Aufgabe, nicht zum einzelnen Durchlauf (#586).
@@ -1413,13 +1570,17 @@ function spawnRecurrenceFollowup(task) {
     const newTask = db.get().prepare(`
       INSERT INTO tasks (title, description, category, priority, status,
         start_date, due_date, due_time, assigned_to, created_by, is_recurring, recurrence_rule,
-        assignment_mode, rotation_index, points, visibility, recurrence_from_completion, countdown, recurrence_origin_id)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+        assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
+        points, visibility, recurrence_from_completion, countdown, recurrence_origin_id)
+      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.title, task.description, task.category, task.priority,
       shiftedStartDate(task.start_date, task.due_date, nextDate),
       nextDate, task.due_time, nextAssignedTo, task.created_by,
-      task.recurrence_rule, task.assignment_mode || 'fixed', nextRotationIndex, task.points, task.visibility,
+      task.recurrence_rule, task.assignment_mode || 'fixed', nextRotationIndex,
+      task.rotation_group || null, Number(task.rotation_slot || 0),
+      Number(task.rotation_cycle || 0) + (task.rotation_group ? 1 : 0),
+      task.points, task.visibility,
       // Ohne das Mitnehmen fiele die Serie ab der zweiten Instanz auf die
       // Fälligkeitsrechnung zurück - lautlos, weil die Folgeinstanz sonst
       // vollständig aussieht (wie bei den Tags oben).
@@ -1459,6 +1620,37 @@ function spawnRecurrenceFollowup(task) {
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);
     }
+  })();
+}
+
+function spawnRecurrenceFollowup(task) {
+  if (!task?.rotation_group) return spawnRecurrenceFollowupSingle(task);
+
+  const cohort = db.get().prepare(`
+    SELECT * FROM tasks
+     WHERE rotation_group = ? COLLATE NOCASE AND rotation_cycle = ? AND parent_task_id IS NULL
+     ORDER BY rotation_slot ASC, id ASC
+  `).all(task.rotation_group, task.rotation_cycle);
+  if (!cohort.length || cohort.some((member) => member.status !== 'done')) return;
+  if (cohort.some((member) => recurrenceFollowupOf(member.id))) return;
+
+  const roster = loadRotationUserIds(db.get(), cohort[0].id);
+  if (roster.length < 2) throw new Error('Rotation group has no valid member roster.');
+  for (const member of cohort) {
+    if (!sameIdOrder(loadRotationUserIds(db.get(), member.id), roster)
+        || member.recurrence_rule !== cohort[0].recurrence_rule
+        || Number(member.recurrence_from_completion || 0) !== Number(cohort[0].recurrence_from_completion || 0)
+        || (member.due_date ?? null) !== (cohort[0].due_date ?? null)
+        || (member.due_time ?? null) !== (cohort[0].due_time ?? null)
+        || Number(member.rotation_index || 0) !== Number(cohort[0].rotation_index || 0)) {
+      throw new Error('Rotation group cohort is inconsistent; refusing a partial advance.');
+    }
+  }
+
+  // Nested transaction becomes a savepoint when called from PUT/PATCH. Either
+  // every next position is generated or none are.
+  db.get().transaction(() => {
+    for (const member of cohort) spawnRecurrenceFollowupSingle(member);
   })();
 }
 

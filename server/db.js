@@ -6189,6 +6189,18 @@ const MIGRATIONS = [
       CREATE INDEX idx_task_rotation_members_user ON task_rotation_members(user_id);
     `,
   },
+  {
+    version: 161,
+    description: 'Tasks: synchronized rotation groups for recurring round-robin cohorts',
+    up: `
+      ALTER TABLE tasks ADD COLUMN rotation_group TEXT;
+      ALTER TABLE tasks ADD COLUMN rotation_slot INTEGER NOT NULL DEFAULT 0 CHECK(rotation_slot >= 0);
+      ALTER TABLE tasks ADD COLUMN rotation_cycle INTEGER NOT NULL DEFAULT 0 CHECK(rotation_cycle >= 0);
+      CREATE INDEX idx_tasks_rotation_group_cycle
+        ON tasks(rotation_group COLLATE NOCASE, rotation_cycle)
+        WHERE rotation_group IS NOT NULL;
+    `,
+  },
 ];
 
 /**

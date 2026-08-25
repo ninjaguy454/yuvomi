@@ -156,3 +156,101 @@ test('round robin requires a recurring top-level task and at least two members',
   });
   assert.equal(oneMember.status, 400);
 });
+
+
+test('rotation group advances the whole cohort atomically and preserves slot offsets', async () => {
+  const due = new Date().toISOString().slice(0, 10);
+  const group = `Shower order ${Date.now()}`;
+  const common = {
+    due_date: due,
+    is_recurring: 1,
+    recurrence_rule: 'FREQ=DAILY',
+    assignment_mode: 'round_robin',
+    rotation_user_ids: [grace, eleanor, frank],
+    rotation_group: group,
+  };
+
+  const first = await call('POST', '', { ...common, title: 'Shower - 1st', rotation_slot: 0 });
+  const second = await call('POST', '', { ...common, title: 'Shower - 2nd', rotation_slot: 1 });
+  const third = await call('POST', '', { ...common, title: 'Shower - 3rd', rotation_slot: 2 });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(second.status, 201, JSON.stringify(second.body));
+  assert.equal(third.status, 201, JSON.stringify(third.body));
+  assert.equal(first.body.data.assigned_to, grace);
+  assert.equal(second.body.data.assigned_to, eleanor);
+  assert.equal(third.body.data.assigned_to, frank);
+
+  await call('PATCH', `/${first.body.data.id}/status`, { status: 'done' });
+  assert.equal(followupOf(first.body.data.id), undefined);
+  await call('PATCH', `/${second.body.data.id}/status`, { status: 'done' });
+  assert.equal(followupOf(second.body.data.id), undefined);
+  await call('PATCH', `/${third.body.data.id}/status`, { status: 'done' });
+
+  const nextFirst = followupOf(first.body.data.id);
+  const nextSecond = followupOf(second.body.data.id);
+  const nextThird = followupOf(third.body.data.id);
+  assert.ok(nextFirst && nextSecond && nextThird);
+  assert.equal(nextFirst.rotation_cycle, 1);
+  assert.equal(nextSecond.rotation_cycle, 1);
+  assert.equal(nextThird.rotation_cycle, 1);
+  assert.equal(nextFirst.rotation_index, 1);
+  assert.equal(nextFirst.assigned_to, eleanor);
+  assert.equal(nextSecond.assigned_to, frank);
+  assert.equal(nextThird.assigned_to, grace);
+
+  // Reopening any source member removes the whole untouched generated cohort.
+  const reopened = await call('PATCH', `/${second.body.data.id}/status`, { status: 'open' });
+  assert.equal(reopened.status, 200);
+  assert.equal(followupOf(first.body.data.id), undefined);
+  assert.equal(followupOf(second.body.data.id), undefined);
+  assert.equal(followupOf(third.body.data.id), undefined);
+});
+
+test('rotation group rejects roster mismatch and duplicate positions', async () => {
+  const due = new Date().toISOString().slice(0, 10);
+  const group = `Validation group ${Date.now()}`;
+  const first = await call('POST', '', {
+    title: 'Grouped first', due_date: due, is_recurring: 1, recurrence_rule: 'FREQ=DAILY',
+    assignment_mode: 'round_robin', rotation_user_ids: [grace, eleanor, frank],
+    rotation_group: group, rotation_slot: 0,
+  });
+  assert.equal(first.status, 201);
+
+  const duplicate = await call('POST', '', {
+    title: 'Duplicate slot', due_date: due, is_recurring: 1, recurrence_rule: 'FREQ=DAILY',
+    assignment_mode: 'round_robin', rotation_user_ids: [grace, eleanor, frank],
+    rotation_group: group, rotation_slot: 0,
+  });
+  assert.equal(duplicate.status, 400);
+
+  const mismatch = await call('POST', '', {
+    title: 'Mismatched roster', due_date: due, is_recurring: 1, recurrence_rule: 'FREQ=DAILY',
+    assignment_mode: 'round_robin', rotation_user_ids: [eleanor, grace, frank],
+    rotation_group: group, rotation_slot: 1,
+  });
+  assert.equal(mismatch.status, 400);
+});
+
+test('rotation group undo preserves the entire next cohort when one followup is touched', async () => {
+  const due = new Date().toISOString().slice(0, 10);
+  const group = `Touched group ${Date.now()}`;
+  const common = {
+    due_date: due, is_recurring: 1, recurrence_rule: 'FREQ=DAILY', assignment_mode: 'round_robin',
+    rotation_user_ids: [grace, eleanor], rotation_group: group,
+  };
+  const a = await call('POST', '', { ...common, title: 'A', rotation_slot: 0 });
+  const b = await call('POST', '', { ...common, title: 'B', rotation_slot: 1 });
+  await call('PATCH', `/${a.body.data.id}/status`, { status: 'done' });
+  await call('PATCH', `/${b.body.data.id}/status`, { status: 'done' });
+  const nextA = followupOf(a.body.data.id);
+  const nextB = followupOf(b.body.data.id);
+  assert.ok(nextA && nextB);
+
+  // An added subtask is user work according to Yuvomi's existing safe-undo rule.
+  db.prepare(`INSERT INTO tasks (title, category, priority, status, created_by, parent_task_id, visibility)
+              VALUES ('Touched child', 'misc', 'none', 'open', ?, ?, 'all')`).run(admin, nextA.id);
+
+  await call('PATCH', `/${a.body.data.id}/status`, { status: 'open' });
+  assert.ok(db.prepare('SELECT id FROM tasks WHERE id = ?').get(nextA.id));
+  assert.ok(db.prepare('SELECT id FROM tasks WHERE id = ?').get(nextB.id));
+});

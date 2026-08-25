@@ -21,3 +21,12 @@ Each task advances one position when its current occurrence is completed.
 ## Current scope
 
 Round robin is intentionally limited to recurring top-level tasks and requires at least two household members. Automatic skipping of unavailable members and manual rotation reseeding are not included in the first version.
+
+
+## Rotation groups
+
+Recurring round-robin tasks can optionally share a **Rotation group**. Give each task in the group the same ordered member list and recurrence schedule, then assign each one a unique **Group position**. The group waits until every task in the current cycle is complete, then creates the entire next cycle atomically and shifts every position to the next member.
+
+For a shower order with Grace, Eleanor, and Frank, create three daily tasks in the same group with positions 1, 2, and 3. The assignments advance as a cohort: `Grace / Eleanor / Frank`, then `Eleanor / Frank / Grace`, then `Frank / Grace / Eleanor`.
+
+Reopening a task from the completed source cycle removes the entire generated next cycle only when all of those generated tasks are still safe to discard. If any generated task contains work under Yuvomi's existing recurrence safety checks, none of the group is deleted.

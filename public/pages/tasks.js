@@ -890,6 +890,8 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
   const selectedIds = task?.assigned_users?.map((u) => u.id) ?? (task?.assigned_to ? [task.assigned_to] : []);
   const rotationIds = task?.rotation_user_ids ?? [];
   const assignmentMode = task?.assignment_mode || 'fixed';
+  const rotationGroup = task?.rotation_group || '';
+  const rotationPosition = Number(task?.rotation_slot ?? 0) + 1;
   const visibility  = task?.visibility || 'all';
 
   const selectedCat = task?.category ?? FALLBACK_CATEGORY;
@@ -1060,6 +1062,18 @@ ${syncTargetFieldHtml(task)}
 
       <div id="task-round-robin-assignment" class="form-group" style="margin-top:var(--space-4)"${assignmentMode === 'round_robin' && !isSoloHousehold() ? '' : ' hidden'}>
         ${renderUserRotationOrder(users, rotationIds)}
+        <div style="margin-top:var(--space-3)">
+          <label class="label" for="task-rotation-group">Rotation group <span class="text-muted">(optional)</span></label>
+          <input class="input" id="task-rotation-group" name="rotation_group" maxlength="80"
+                 value="${esc(rotationGroup)}" placeholder="e.g. Shower order">
+          <p class="task-field-hint">Tasks with the same group advance together only after every position in the current cycle is complete.</p>
+        </div>
+        <div style="margin-top:var(--space-3)">
+          <label class="label" for="task-rotation-position">Group position</label>
+          <input class="input" id="task-rotation-position" name="rotation_position" type="number" min="1"
+                 value="${rotationPosition}">
+          <p class="task-field-hint">Position 1 uses the first person, position 2 the second, and so on. Each new cycle shifts all positions by one.</p>
+        </div>
       </div>
 
       <!-- EINE QUELLE, NICHT ZWEI: die Bedingung war "users.length > 1" und
@@ -2414,6 +2428,8 @@ async function handleFormSubmit(e, container) {
   const tags = normalizeTagList([...modalTags, ...pendingTag.split(',')]);
   const assignmentMode = form.querySelector('#task-assignment-mode')?.value || 'fixed';
   const rotationUserIds = getRotationUserIds(form);
+  const rotationGroup = form.querySelector('#task-rotation-group')?.value.trim() || '';
+  const rotationPosition = Number(form.querySelector('#task-rotation-position')?.value || 1);
 
   const body = {
     title:           form.title.value.trim(),
@@ -2426,6 +2442,8 @@ async function handleFormSubmit(e, container) {
     assigned_to:     assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
     assignment_mode: assignmentMode,
     rotation_user_ids: assignmentMode === 'round_robin' ? rotationUserIds : [],
+    rotation_group: assignmentMode === 'round_robin' && rotationGroup ? rotationGroup : null,
+    rotation_slot: assignmentMode === 'round_robin' && rotationGroup ? rotationPosition - 1 : 0,
     visibility:      form.querySelector('#task-visibility')?.value || 'all',
     is_recurring:    rrule.is_recurring ? 1 : 0,
     recurrence_rule: rrule.recurrence_rule,
@@ -2453,6 +2471,9 @@ async function handleFormSubmit(e, container) {
   if (assignmentMode === 'round_robin') {
     if (!rrule.is_recurring) { resetSubmit('Round robin requires a recurring task.'); return; }
     if (rotationUserIds.length < 2) { resetSubmit('Choose at least two members for the round-robin rotation.'); return; }
+    if (rotationGroup && (!Number.isInteger(rotationPosition) || rotationPosition < 1 || rotationPosition > rotationUserIds.length)) {
+      resetSubmit('Rotation group position must be between 1 and the number of rotation members.'); return;
+    }
   }
 
   // Erinnerungs-Vorbedingungen VOR dem Speichern prüfen — verhindert den

@@ -5,6 +5,7 @@ on:
     branches: [feat/activity-templates-skills-quick-add]
     paths:
       - 'test/test-activity-automation.js'
+      - 'test/test-activity-automation-routes.js'
       - '.github/workflows/test-activity-automation.yml'
   workflow_dispatch:
 
@@ -24,6 +25,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --experimental-sqlite --test test/test-activity-automation.js
+      - run: node --experimental-sqlite --test test/test-activity-automation-routes.js
       - run: npm run test:tasks-routes
       - run: npm run test:tasks-recurrence
       - run: npm run test:task-round-robin

@@ -442,8 +442,12 @@ async function renderWorkflowsManager(body) {
   });
 }
 
+let workflowDraftStepSequence = 0;
+
 function workflowStepHtml(step, index, activities) {
-  return `<div data-workflow-step style="border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-2)">
+  const workflowKey = step?.step_key || `draft_${++workflowDraftStepSequence}`;
+  const initialDependency = step?.depends_on?.[0] || '';
+  return `<div data-workflow-step data-workflow-key="${h(workflowKey)}" data-initial-dependency="${h(initialDependency)}" style="border:1px solid var(--color-border);border-radius:var(--radius-md);padding:var(--space-3);margin-bottom:var(--space-2)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:var(--space-2)"><strong>Step ${index + 1}</strong><button type="button" class="btn btn--ghost btn--sm" data-remove-step>Remove</button></div>
     <select class="input" data-step-activity required>${activities.map((activity) => `<option value="${activity.id}" ${Number(step?.activity_template_id) === Number(activity.id) ? 'selected' : ''}>${h(activity.name)}</option>`).join('')}</select>
     <input class="input" style="margin-top:var(--space-2)" data-step-title placeholder="Optional task title override" value="${h(step?.title_override || '')}">
@@ -490,18 +494,21 @@ function openWorkflowForm(workflow, context) {
       const questions = panel.querySelector('#workflow-questions');
 
       const refreshStepDependencies = () => {
-        const rows = [...steps.querySelectorAll('[data-workflow-step]')];
-        rows.forEach((row, index) => {
-          row.querySelector('strong').textContent = `Step ${index + 1}`;
-          const select = row.querySelector('[data-step-dependency]');
-          const old = select.value;
-          const existing = workflow?.steps?.[index]?.depends_on?.[0] || '';
-          select.innerHTML = '<option value="">No dependency</option>' + rows.slice(0, index).map((_, prior) => `<option value="step_${prior + 1}">After step ${prior + 1}</option>`).join('');
-          const wanted = old || existing;
-          if ([...select.options].some((option) => option.value === wanted)) select.value = wanted;
-        });
-      };
-      refreshStepDependencies();
+  const rows = [...steps.querySelectorAll('[data-workflow-step]')];
+  rows.forEach((row, index) => {
+    row.querySelector('strong').textContent = `Step ${index + 1}`;
+    const select = row.querySelector('[data-step-dependency]');
+    const old = select.value;
+    const existing = row.dataset.initialDependency || '';
+    select.innerHTML = '<option value="">No dependency</option>' + rows.slice(0, index).map((priorRow, prior) =>
+      `<option value="${h(priorRow.dataset.workflowKey)}">After step ${prior + 1}</option>`
+    ).join('');
+    const wanted = old || existing;
+    if ([...select.options].some((option) => option.value === wanted)) select.value = wanted;
+    delete row.dataset.initialDependency;
+  });
+};
+refreshStepDependencies();
 
       panel.querySelector('#workflow-add-step')?.addEventListener('click', () => {
         steps.insertAdjacentHTML('beforeend', workflowStepHtml({}, steps.children.length, context.activities));
@@ -531,20 +538,25 @@ function openWorkflowForm(workflow, context) {
           };
         }).filter((question) => question.key && question.label);
 
-        const stepPayload = [...steps.querySelectorAll('[data-workflow-step]')].map((row, index) => {
-          const conditionKey = row.querySelector('[data-step-condition-key]').value.trim();
-          const conditionValue = row.querySelector('[data-step-condition-value]').value;
-          const dependency = row.querySelector('[data-step-dependency]').value;
-          return {
-            step_key: `step_${index + 1}`,
-            activity_template_id: Number(row.querySelector('[data-step-activity]').value),
-            title_override: row.querySelector('[data-step-title]').value.trim() || null,
-            depends_on: dependency ? [dependency] : [],
-            condition: conditionKey ? { input: conditionKey, equals: parseEquals(conditionValue) } : null,
-          };
-        });
+        const stepRows = [...steps.querySelectorAll('[data-workflow-step]')];
+  const savedKeyByDraftKey = new Map(
+    stepRows.map((row, index) => [row.dataset.workflowKey, `step_${index + 1}`])
+  );
+  const stepPayload = stepRows.map((row, index) => {
+    const conditionKey = row.querySelector('[data-step-condition-key]').value.trim();
+    const conditionValue = row.querySelector('[data-step-condition-value]').value;
+    const dependencyDraftKey = row.querySelector('[data-step-dependency]').value;
+    const dependency = dependencyDraftKey ? savedKeyByDraftKey.get(dependencyDraftKey) : null;
+    return {
+      step_key: `step_${index + 1}`,
+      activity_template_id: Number(row.querySelector('[data-step-activity]').value),
+      title_override: row.querySelector('[data-step-title]').value.trim() || null,
+      depends_on: dependency ? [dependency] : [],
+      condition: conditionKey ? { input: conditionKey, equals: parseEquals(conditionValue) } : null,
+    };
+  });
 
-        const payload = {
+  const payload = {
           name: data.get('name'), description: data.get('description'), category: data.get('category'),
           subject_required: data.has('subject_required'), quick_add_enabled: data.has('quick_add_enabled'),
           active: true, input_schema: inputSchema, steps: stepPayload,

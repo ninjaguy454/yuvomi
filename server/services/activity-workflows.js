@@ -305,6 +305,19 @@ export function instantiateWorkflow(d, workflowId, {
       }
     }
 
+    // The top-level event must survive "Assigned to me" and person filters even
+    // though the actual work lives on its subtasks. Treat every generated
+    // assignee as a participant on the parent without setting the legacy
+    // single-assignee column. This keeps filtering useful while the child rows
+    // remain the authoritative individual assignments.
+    const parentParticipant = d.prepare(
+      'INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)'
+    );
+    const participantIds = new Set(
+      generated.map((item) => Number(item.assigned_to?.id)).filter((id) => Number.isInteger(id) && id > 0)
+    );
+    for (const userId of participantIds) parentParticipant.run(parentTaskId, userId);
+
     // The parent is an event container, not an independently completable piece
     // of work. Reuse the existing dependency guard so a user cannot manually
     // mark the event complete while generated activities are still open. The

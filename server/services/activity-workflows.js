@@ -123,6 +123,31 @@ function conditionMatches(condition, inputs) {
   throw new Error('Invalid workflow condition.');
 }
 
+/**
+ * Resolve dependencies through conditional steps that were skipped.
+ * If C depends on optional B, and B is skipped but B depended on A,
+ * C still waits for A instead of becoming accidentally unblocked.
+ */
+function activeDependencyKeys(workflow, activeStepKeys, step) {
+  const byKey = new Map(workflow.steps.map((candidate) => [candidate.step_key, candidate]));
+  const resolved = [];
+  const visited = new Set();
+
+  const visit = (key) => {
+    if (!key || visited.has(key)) return;
+    visited.add(key);
+    if (activeStepKeys.has(key)) {
+      resolved.push(key);
+      return;
+    }
+    const skipped = byKey.get(key);
+    for (const predecessor of skipped?.depends_on ?? []) visit(predecessor);
+  };
+
+  for (const predecessor of step.depends_on ?? []) visit(predecessor);
+  return [...new Set(resolved)];
+}
+
 function userById(d, id) {
   if (id == null) return null;
   return d.prepare('SELECT id, display_name, family_role FROM users WHERE id = ?').get(id) ?? null;
@@ -174,7 +199,7 @@ export function previewWorkflow(d, workflowId, {
       supervisor: resolution.supervisor,
       supervisor_title: resolution.supervisor ? supervisorTitle(activity, subject) : null,
       subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
-      depends_on: step.depends_on.filter((key) => activeStepKeys.has(key)),
+      depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
       category: activity.category,
     });
   }
@@ -245,6 +270,7 @@ export function instantiateWorkflow(d, workflowId, {
   const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
   const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
   if (!activeSteps.length) throw new Error('No activities apply to these answers.');
+  const activeStepKeys = new Set(activeSteps.map((step) => step.step_key));
 
   return d.transaction(() => {
     const instance = d.prepare(`
@@ -326,7 +352,7 @@ export function instantiateWorkflow(d, workflowId, {
       }
 
       generatedByStep.set(step.step_key, stepTaskIds);
-      for (const predecessorKey of step.depends_on) {
+      for (const predecessorKey of activeDependencyKeys(workflow, activeStepKeys, step)) {
         for (const currentTaskId of stepTaskIds) {
           for (const predecessorTaskId of generatedByStep.get(predecessorKey) ?? []) {
             d.prepare(`

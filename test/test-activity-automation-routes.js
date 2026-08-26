@@ -238,17 +238,18 @@ test('workflow branching validates question references and skips inactive branch
   });
   assert.equal(falsePreview.status, 200, JSON.stringify(falsePreview.body));
   assert.deepEqual(falsePreview.body.data.steps.map((step) => step.step_key), ['start', 'finish']);
-  assert.deepEqual(falsePreview.body.data.steps.find((step) => step.step_key === 'finish').depends_on, []);
+  assert.deepEqual(falsePreview.body.data.steps.find((step) => step.step_key === 'finish').depends_on, ['start']);
 
   const falseCreated = await call('POST', `/automation/quick-add/${workflowId}/create`, {
     inputs: { mattress_soiled: false },
   });
   assert.equal(falseCreated.status, 201, JSON.stringify(falseCreated.body));
   assert.deepEqual(falseCreated.body.data.tasks.map((task) => task.step_key), ['start', 'finish']);
+  const falseStart = falseCreated.body.data.tasks.find((task) => task.step_key === 'start');
   const falseFinish = falseCreated.body.data.tasks.find((task) => task.step_key === 'finish');
   assert.deepEqual(
     db.prepare('SELECT depends_on_task_id FROM workflow_task_dependencies WHERE task_id = ?').all(falseFinish.task_id),
-    [],
+    [{ depends_on_task_id: falseStart.task_id }],
   );
 
   const truePreview = await call('POST', `/automation/quick-add/${workflowId}/preview`, {

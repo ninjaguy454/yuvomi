@@ -84,15 +84,43 @@ export function listWorkflowTemplates(d, { quickAddOnly = false, activeOnly = fa
   }));
 }
 
+function normalizeRuntimeInputs(workflow, inputs) {
+  if (inputs == null) return {};
+  if (typeof inputs !== 'object' || Array.isArray(inputs)) {
+    throw new Error('Workflow inputs must be an object.');
+  }
+  const questions = new Map((workflow.input_schema ?? []).map((question) => [question.key, question]));
+  for (const key of Object.keys(inputs)) {
+    if (!questions.has(key)) throw new Error(`Unknown workflow input: ${key}.`);
+  }
+  const normalized = {};
+  for (const question of workflow.input_schema ?? []) {
+    if (!Object.hasOwn(inputs, question.key)) continue;
+    const value = inputs[question.key];
+    if (question.type === 'boolean') {
+      if (value === true || value === false) normalized[question.key] = value;
+      else if (value === 'true' || value === 'false') normalized[question.key] = value === 'true';
+      else throw new Error(`Workflow input ${question.key} must be Yes or No.`);
+    } else if (question.type === 'select') {
+      const selected = value == null ? '' : String(value);
+      const options = (question.options ?? []).map(String);
+      if (!options.includes(selected)) {
+        throw new Error(`Workflow input ${question.key} must use one of its configured choices.`);
+      }
+      normalized[question.key] = selected;
+    } else {
+      normalized[question.key] = value == null ? '' : String(value);
+    }
+  }
+  return normalized;
+}
+
 function conditionMatches(condition, inputs) {
   if (!condition) return true;
-  if (condition.input && Object.hasOwn(condition, 'equals')) {
-    return inputs?.[condition.input] === condition.equals;
-  }
-  if (condition.input && Array.isArray(condition.in)) {
-    return condition.in.includes(inputs?.[condition.input]);
-  }
-  return true;
+  if (!condition.input) throw new Error('Invalid workflow condition.');
+  if (Object.hasOwn(condition, 'equals')) return inputs?.[condition.input] === condition.equals;
+  if (Array.isArray(condition.in)) return condition.in.includes(inputs?.[condition.input]);
+  throw new Error('Invalid workflow condition.');
 }
 
 function userById(d, id) {
@@ -124,10 +152,13 @@ export function previewWorkflow(d, workflowId, {
   if (!workflow || !workflow.active) throw new Error('Workflow template not found.');
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
+  const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
+  const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
+  if (!activeSteps.length) throw new Error('No activities apply to these answers.');
+  const activeStepKeys = new Set(activeSteps.map((step) => step.step_key));
 
   const output = [];
-  for (const step of workflow.steps) {
-    if (!conditionMatches(step.condition, inputs)) continue;
+  for (const step of activeSteps) {
     const activity = getActivityTemplate(d, step.activity_template_id);
     if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
     const resolution = resolveActivityAssignment(d, activity, {
@@ -143,7 +174,7 @@ export function previewWorkflow(d, workflowId, {
       supervisor: resolution.supervisor,
       supervisor_title: resolution.supervisor ? supervisorTitle(activity, subject) : null,
       subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
-      depends_on: step.depends_on,
+      depends_on: step.depends_on.filter((key) => activeStepKeys.has(key)),
       category: activity.category,
     });
   }
@@ -156,7 +187,7 @@ export function previewWorkflow(d, workflowId, {
       subject_required: workflow.subject_required,
     },
     subject,
-    inputs,
+    inputs: runtimeInputs,
     steps: output,
   };
 }
@@ -211,13 +242,16 @@ export function instantiateWorkflow(d, workflowId, {
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
   if (!createdBy) throw new Error('A creator is required.');
+  const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
+  const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
+  if (!activeSteps.length) throw new Error('No activities apply to these answers.');
 
   return d.transaction(() => {
     const instance = d.prepare(`
       INSERT INTO workflow_instances (
         workflow_template_id, subject_user_id, status, input_json, created_by
       ) VALUES (?, ?, 'open', ?, ?)
-    `).run(workflow.id, subject?.id ?? null, JSON.stringify(inputs ?? {}), createdBy);
+    `).run(workflow.id, subject?.id ?? null, JSON.stringify(runtimeInputs), createdBy);
     const instanceId = Number(instance.lastInsertRowid);
 
     const parentTitle = subject
@@ -236,8 +270,7 @@ export function instantiateWorkflow(d, workflowId, {
     const generatedByStep = new Map();
     const generated = [];
 
-    for (const step of workflow.steps) {
-      if (!conditionMatches(step.condition, inputs)) continue;
+    for (const step of activeSteps) {
       const activity = getActivityTemplate(d, step.activity_template_id);
       if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
       const resolution = resolveActivityAssignment(d, activity, {

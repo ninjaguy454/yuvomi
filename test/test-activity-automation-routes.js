@@ -192,3 +192,99 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   assert.equal(parent.status, 'done');
   assert.equal(instance.status, 'done');
 });
+
+
+test('workflow branching validates question references and skips inactive branches safely', async () => {
+  const activity = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Branch Test Activity', title_template: 'Branch Test Activity', category: 'misc',
+    assignment_strategy: 'fixed', subject_required: false, fixed_user_id: admin, skill_ids: [],
+  });
+  assert.equal(activity.status, 201, JSON.stringify(activity.body));
+  const activityId = activity.body.data.id;
+
+  const invalidQuestionReference = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Invalid condition reference', category: 'misc', subject_required: false, quick_add_enabled: false,
+    input_schema: [{ key: 'mattress_soiled', label: 'Mattress soiled?', type: 'boolean' }],
+    steps: [{ step_key: 'clean', activity_template_id: activityId,
+      condition: { input: 'mattres_soiled', equals: true }, depends_on: [] }],
+  });
+  assert.equal(invalidQuestionReference.status, 400, JSON.stringify(invalidQuestionReference.body));
+  assert.match(invalidQuestionReference.body.error, /unknown question/i);
+
+  const invalidSelectCondition = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Invalid select branch', category: 'misc', subject_required: false, quick_add_enabled: false,
+    input_schema: [{ key: 'severity', label: 'Severity', type: 'select', options: ['light', 'heavy'] }],
+    steps: [{ step_key: 'clean', activity_template_id: activityId,
+      condition: { input: 'severity', equals: 'medium' }, depends_on: [] }],
+  });
+  assert.equal(invalidSelectCondition.status, 400, JSON.stringify(invalidSelectCondition.body));
+  assert.match(invalidSelectCondition.body.error, /configured choices/i);
+
+  const workflow = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Conditional dependency test', category: 'misc', subject_required: false, quick_add_enabled: true,
+    input_schema: [{ key: 'mattress_soiled', label: 'Mattress soiled?', type: 'boolean' }],
+    steps: [
+      { step_key: 'start', activity_template_id: activityId, depends_on: [] },
+      { step_key: 'clean', activity_template_id: activityId,
+        condition: { input: 'mattress_soiled', equals: true }, depends_on: ['start'] },
+      { step_key: 'finish', activity_template_id: activityId, depends_on: ['clean'] },
+    ],
+  });
+  assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+  const workflowId = workflow.body.data.id;
+
+  const falsePreview = await call('POST', `/automation/quick-add/${workflowId}/preview`, {
+    inputs: { mattress_soiled: false },
+  });
+  assert.equal(falsePreview.status, 200, JSON.stringify(falsePreview.body));
+  assert.deepEqual(falsePreview.body.data.steps.map((step) => step.step_key), ['start', 'finish']);
+  assert.deepEqual(falsePreview.body.data.steps.find((step) => step.step_key === 'finish').depends_on, []);
+
+  const falseCreated = await call('POST', `/automation/quick-add/${workflowId}/create`, {
+    inputs: { mattress_soiled: false },
+  });
+  assert.equal(falseCreated.status, 201, JSON.stringify(falseCreated.body));
+  assert.deepEqual(falseCreated.body.data.tasks.map((task) => task.step_key), ['start', 'finish']);
+  const falseFinish = falseCreated.body.data.tasks.find((task) => task.step_key === 'finish');
+  assert.deepEqual(
+    db.prepare('SELECT depends_on_task_id FROM workflow_task_dependencies WHERE task_id = ?').all(falseFinish.task_id),
+    [],
+  );
+
+  const truePreview = await call('POST', `/automation/quick-add/${workflowId}/preview`, {
+    inputs: { mattress_soiled: true },
+  });
+  assert.equal(truePreview.status, 200, JSON.stringify(truePreview.body));
+  assert.deepEqual(truePreview.body.data.steps.map((step) => step.step_key), ['start', 'clean', 'finish']);
+  assert.deepEqual(truePreview.body.data.steps.find((step) => step.step_key === 'finish').depends_on, ['clean']);
+
+  const unknownRuntimeInput = await call('POST', `/automation/quick-add/${workflowId}/preview`, {
+    inputs: { mattress_soiled: false, mattres_soiled: true },
+  });
+  assert.equal(unknownRuntimeInput.status, 400, JSON.stringify(unknownRuntimeInput.body));
+  assert.match(unknownRuntimeInput.body.error, /unknown workflow input/i);
+
+  const allConditional = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'All conditional', category: 'misc', subject_required: false, quick_add_enabled: true,
+    input_schema: [{ key: 'run_it', label: 'Run it?', type: 'boolean' }],
+    steps: [{ step_key: 'only', activity_template_id: activityId,
+      condition: { input: 'run_it', equals: true }, depends_on: [] }],
+  });
+  assert.equal(allConditional.status, 201, JSON.stringify(allConditional.body));
+  const beforeInstances = db.prepare('SELECT COUNT(*) AS n FROM workflow_instances').get().n;
+  const beforeTasks = db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;
+
+  const emptyPreview = await call('POST', `/automation/quick-add/${allConditional.body.data.id}/preview`, {
+    inputs: { run_it: false },
+  });
+  assert.equal(emptyPreview.status, 400, JSON.stringify(emptyPreview.body));
+  assert.match(emptyPreview.body.error, /no activities apply/i);
+
+  const emptyCreate = await call('POST', `/automation/quick-add/${allConditional.body.data.id}/create`, {
+    inputs: { run_it: false },
+  });
+  assert.equal(emptyCreate.status, 400, JSON.stringify(emptyCreate.body));
+  assert.match(emptyCreate.body.error, /no activities apply/i);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM workflow_instances').get().n, beforeInstances);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, beforeTasks);
+});

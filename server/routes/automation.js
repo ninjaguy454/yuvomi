@@ -31,6 +31,7 @@ const log = createLogger('Automation');
 const VALID_PROFICIENCY = new Set(Object.values(PROFICIENCY));
 const VALID_AGE_PROMOTION = new Set([PROFICIENCY.SUPERVISED, PROFICIENCY.NORMAL]);
 const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);
+const VALID_WORKFLOW_INPUT_TYPES = new Set(['boolean', 'text', 'select']);
 
 function text(value, { required = false, max = 200 } = {}) {
   const out = value == null ? '' : String(value).trim();
@@ -149,13 +150,86 @@ function saveActivitySkills(d, activityId, skillIds) {
   skillIds.forEach((skillId, index) => insert.run(activityId, skillId, index));
 }
 
+function normalizeWorkflowInputSchema(raw) {
+  if (!Array.isArray(raw)) throw new Error('input_schema must be an array.');
+  const questions = raw.map((question, index) => {
+    if (!question || typeof question !== 'object' || Array.isArray(question)) {
+      throw new Error(`Workflow question ${index + 1} must be an object.`);
+    }
+    const key = text(question.key, { required: true, max: 80 });
+    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(key)) {
+      throw new Error(`Workflow question ${index + 1} has an invalid key.`);
+    }
+    const label = text(question.label ?? key, { required: true, max: 200 });
+    const type = question.type ?? 'text';
+    if (!VALID_WORKFLOW_INPUT_TYPES.has(type)) {
+      throw new Error(`Workflow question ${key} has an unsupported type.`);
+    }
+    const options = type === 'select'
+      ? [...new Set((Array.isArray(question.options) ? question.options : [])
+          .map((value) => String(value).trim()).filter(Boolean))]
+      : [];
+    if (type === 'select' && !options.length) {
+      throw new Error(`Workflow question ${key} needs at least one choice.`);
+    }
+    return { key, label, type, options };
+  });
+  if (new Set(questions.map((question) => question.key)).size !== questions.length) {
+    throw new Error('Workflow question keys must be unique.');
+  }
+  return questions;
+}
+
+function normalizeWorkflowConditionValue(question, value) {
+  if (question.type === 'boolean') {
+    if (value === true || value === false) return value;
+    if (value === 'true') return true;
+    if (value === 'false') return false;
+    throw new Error(`Condition for ${question.key} must be Yes or No.`);
+  }
+  const normalized = value == null ? '' : String(value);
+  if (question.type === 'select' && !question.options.includes(normalized)) {
+    throw new Error(`Condition for ${question.key} must use one of its configured choices.`);
+  }
+  return normalized;
+}
+
+function normalizeWorkflowCondition(condition, questionsByKey, stepKey) {
+  if (condition == null) return null;
+  if (!condition || typeof condition !== 'object' || Array.isArray(condition)) {
+    throw new Error(`Workflow step ${stepKey} has an invalid condition.`);
+  }
+  const input = text(condition.input, { required: true, max: 80 });
+  const question = questionsByKey.get(input);
+  if (!question) {
+    throw new Error(`Workflow step ${stepKey} references unknown question "${input}".`);
+  }
+  const hasEquals = Object.hasOwn(condition, 'equals');
+  const hasIn = Array.isArray(condition.in);
+  if ((hasEquals ? 1 : 0) + (hasIn ? 1 : 0) !== 1) {
+    throw new Error(`Workflow step ${stepKey} condition must use exactly one comparison.`);
+  }
+  if (hasEquals) {
+    return { input, equals: normalizeWorkflowConditionValue(question, condition.equals) };
+  }
+  if (!condition.in.length) {
+    throw new Error(`Workflow step ${stepKey} condition cannot have an empty choice list.`);
+  }
+  return {
+    input,
+    in: [...new Set(condition.in.map((value) => normalizeWorkflowConditionValue(question, value)))],
+  };
+}
+
 function normalizeWorkflowInput(body, existing = null) {
   const name = text(body.name ?? existing?.name, { required: true, max: 120 });
   const description = text(body.description ?? existing?.description, { max: 2000 });
   const category = text(body.category ?? existing?.category ?? 'misc', { required: true, max: 80 });
-  const inputSchema = Array.isArray(body.input_schema)
+  const rawInputSchema = body.input_schema !== undefined
     ? body.input_schema
     : (existing?.input_schema ?? []);
+  const inputSchema = normalizeWorkflowInputSchema(rawInputSchema);
+  const questionsByKey = new Map(inputSchema.map((question) => [question.key, question]));
   const steps = Array.isArray(body.steps)
     ? body.steps
     : (existing?.steps ?? []);
@@ -181,6 +255,9 @@ function normalizeWorkflowInput(body, existing = null) {
   }
   const keys = new Set(normalizedSteps.map((step) => step.stepKey));
   const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
+  for (const step of normalizedSteps) {
+    step.condition = normalizeWorkflowCondition(step.condition, questionsByKey, step.stepKey);
+  }
   for (const [index, step] of normalizedSteps.entries()) {
     if (step.dependsOn.some((key) => !keys.has(key) || key === step.stepKey)) {
       throw new Error(`Invalid dependency on workflow step ${step.stepKey}.`);

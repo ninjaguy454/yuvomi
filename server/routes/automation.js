@@ -93,6 +93,7 @@ function validHouseholdUser(d, id) {
     SELECT 1 FROM users u
      WHERE u.id = ?
        AND NOT EXISTS (SELECT 1 FROM split_expense_guest_users g WHERE g.user_id = u.id)
+       AND NOT EXISTS (SELECT 1 FROM housekeeping_workers hw WHERE hw.user_id = u.id)
   `).get(id);
 }
 
@@ -179,9 +180,13 @@ function normalizeWorkflowInput(body, existing = null) {
     throw new Error('Workflow step keys must be unique.');
   }
   const keys = new Set(normalizedSteps.map((step) => step.stepKey));
-  for (const step of normalizedSteps) {
+  const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
+  for (const [index, step] of normalizedSteps.entries()) {
     if (step.dependsOn.some((key) => !keys.has(key) || key === step.stepKey)) {
       throw new Error(`Invalid dependency on workflow step ${step.stepKey}.`);
+    }
+    if (step.dependsOn.some((key) => positions.get(key) >= index)) {
+      throw new Error(`Workflow step ${step.stepKey} may only depend on an earlier step.`);
     }
   }
 
@@ -455,8 +460,10 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
 router.delete('/admin/activity-templates/:id', requireAdmin, (req, res) => {
   try {
     const d = db.get();
-    const inUse = d.prepare('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
-    if (inUse) return res.status(409).json({ error: 'This activity is used by a workflow template.', code: 409 });
+    const workflowUse = d.prepare('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
+    if (workflowUse) return res.status(409).json({ error: 'This activity is used by a workflow template.', code: 409 });
+    const taskUse = d.prepare('SELECT COUNT(*) AS n FROM task_activity_bindings WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
+    if (taskUse) return res.status(409).json({ error: 'This activity is attached to a scheduled task.', code: 409 });
     const result = d.prepare('DELETE FROM activity_templates WHERE id = ?').run(req.params.id);
     if (!result.changes) return res.status(404).json({ error: 'Activity template not found.', code: 404 });
     res.status(204).end();

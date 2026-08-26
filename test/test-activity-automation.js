@@ -60,6 +60,7 @@ const frank = addUser('frank', 'Frank', 'child', '2020-08-25');
 const mom = addUser('mom', 'Mom', 'mom', '1990-01-01');
 const worker = addUser('worker', 'Housekeeper', 'other', '1990-01-01');
 db.prepare('INSERT INTO housekeeping_workers (user_id) VALUES (?)').run(worker);
+const dad = addUser('dad', 'Dad', 'dad', '1990-01-01');
 
 function addSkill(name, { minimumAge = 0, promotion = 'supervised', adultOnly = 0 } = {}) {
   return Number(db.prepare(`
@@ -131,6 +132,7 @@ test('non-household worker accounts are excluded from household assignment', () 
   const ids = householdMembers(db).map((member) => member.id);
   assert.ok(ids.includes(grace));
   assert.ok(ids.includes(mom));
+  assert.ok(ids.includes(dad));
   assert.ok(!ids.includes(worker));
 });
 
@@ -225,6 +227,37 @@ test('eligible round robin is derived from Normal proficiency and preview does n
   const second = resolveActivityAssignment(db, template, { subjectUserId: frank, commitRotation: true });
   assert.notEqual(first.primary.id, second.primary.id);
   assert.deepEqual(new Set([first.primary.id, second.primary.id]), new Set([grace, mom]));
+});
+
+test('round robin continues after the prior assignee when that member becomes ineligible', () => {
+  const skill = addSkill('Eligibility-change rotation', { minimumAge: 10, promotion: 'normal' });
+  const rotatingActivity = addActivity({
+    name: 'Eligibility-change activity',
+    title: 'Eligibility-change activity',
+    strategy: 'eligible_round_robin',
+    subjectRequired: 0,
+    skillIds: [skill],
+  });
+
+  const first = resolveActivityAssignment(db, activity(rotatingActivity), {
+    commitRotation: true,
+    dateKey: '2026-08-25',
+  });
+  const second = resolveActivityAssignment(db, activity(rotatingActivity), {
+    commitRotation: true,
+    dateKey: '2026-08-25',
+  });
+  assert.equal(first.primary.id, grace);
+  assert.equal(second.primary.id, mom);
+
+  // Removing Mom from eligibility should not reset the cursor to Grace. Dad is
+  // next in stable household order after Mom, so the rotation continues there.
+  setProficiency(mom, skill, 'excluded');
+  const third = resolveActivityAssignment(db, activity(rotatingActivity), {
+    commitRotation: true,
+    dateKey: '2026-08-25',
+  });
+  assert.equal(third.primary.id, dad);
 });
 
 test('Soiled Sheets-style workflow expands activities, supervision, and dependencies', () => {

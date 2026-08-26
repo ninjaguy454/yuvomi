@@ -328,3 +328,57 @@ test('Soiled Sheets-style workflow expands activities, supervision, and dependen
   assert.deepEqual(unresolvedDependencies(db, makeBed.task_id), []);
   assert.deepEqual(unresolvedDependencies(db, supervise.task_id), []);
 });
+
+
+test('workflow preview simulates repeated Activity Template rotation without consuming the cursor', () => {
+  const skill = addSkill('Preview sequence skill', { minimumAge: 0, promotion: 'supervised' });
+  setProficiency(grace, skill, 'normal');
+  setProficiency(mom, skill, 'normal');
+  const rotatingActivity = addActivity({
+    name: 'Preview sequence activity',
+    title: 'Preview sequence activity',
+    strategy: 'eligible_round_robin',
+    subjectRequired: 0,
+    skillIds: [skill],
+  });
+
+  const workflowId = Number(db.prepare(`
+    INSERT INTO workflow_templates (
+      name, description, category, quick_add_enabled, subject_required,
+      input_schema_json, active, created_by
+    ) VALUES ('Preview sequence', NULL, 'misc', 1, 0, '[]', 1, ?)
+  `).run(admin).lastInsertRowid);
+  db.prepare(`
+    INSERT INTO workflow_template_steps (
+      workflow_template_id, activity_template_id, step_key, sort_order
+    ) VALUES (?, ?, ?, ?)
+  `).run(workflowId, rotatingActivity, 'first', 0);
+  db.prepare(`
+    INSERT INTO workflow_template_steps (
+      workflow_template_id, activity_template_id, step_key, sort_order
+    ) VALUES (?, ?, ?, ?)
+  `).run(workflowId, rotatingActivity, 'second', 1);
+
+  const before = db.prepare(`
+    SELECT last_user_id FROM activity_rotation_state
+     WHERE activity_template_id = ? AND purpose = 'primary'
+  `).get(rotatingActivity)?.last_user_id ?? null;
+  assert.equal(before, null);
+
+  const preview = previewWorkflow(db, workflowId);
+  assert.deepEqual(preview.steps.map((step) => step.assigned_to.id), [grace, mom]);
+
+  const afterPreview = db.prepare(`
+    SELECT last_user_id FROM activity_rotation_state
+     WHERE activity_template_id = ? AND purpose = 'primary'
+  `).get(rotatingActivity)?.last_user_id ?? null;
+  assert.equal(afterPreview, null, 'preview must roll back its simulated cursor changes');
+
+  const created = instantiateWorkflow(db, workflowId, { createdBy: admin });
+  assert.deepEqual(created.tasks.map((task) => task.assigned_to.id), [grace, mom]);
+  const afterCreate = db.prepare(`
+    SELECT last_user_id FROM activity_rotation_state
+     WHERE activity_template_id = ? AND purpose = 'primary'
+  `).get(rotatingActivity)?.last_user_id ?? null;
+  assert.equal(afterCreate, mom);
+});

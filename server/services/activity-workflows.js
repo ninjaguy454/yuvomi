@@ -182,26 +182,39 @@ export function previewWorkflow(d, workflowId, {
   if (!activeSteps.length) throw new Error('No activities apply to these answers.');
   const activeStepKeys = new Set(activeSteps.map((step) => step.step_key));
 
+  // Simulate the same sequence of rotation writes that Create will perform,
+  // then roll them all back. This matters when one workflow uses the same
+  // round-robin Activity Template more than once: a read-only resolution
+  // would show the same person for every step even though Create advances
+  // the cursor between those steps.
   const output = [];
-  for (const step of activeSteps) {
-    const activity = getActivityTemplate(d, step.activity_template_id);
-    if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
-    const resolution = resolveActivityAssignment(d, activity, {
-      subjectUserId: subject?.id ?? null,
-      commitRotation: false,
-    });
-    output.push({
-      step_key: step.step_key,
-      activity_template_id: activity.id,
-      activity_name: activity.name,
-      title: stepTitle(activity, subject, step.title_override),
-      assigned_to: resolution.primary,
-      supervisor: resolution.supervisor,
-      supervisor_title: resolution.supervisor ? supervisorTitle(activity, subject) : null,
-      subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
-      depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
-      category: activity.category,
-    });
+  const rollbackPreview = new Error('ROLLBACK_WORKFLOW_PREVIEW');
+  try {
+    d.transaction(() => {
+      for (const step of activeSteps) {
+        const activity = getActivityTemplate(d, step.activity_template_id);
+        if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
+        const resolution = resolveActivityAssignment(d, activity, {
+subjectUserId: subject?.id ?? null,
+commitRotation: true,
+        });
+        output.push({
+step_key: step.step_key,
+activity_template_id: activity.id,
+activity_name: activity.name,
+title: stepTitle(activity, subject, step.title_override),
+assigned_to: resolution.primary,
+supervisor: resolution.supervisor,
+supervisor_title: resolution.supervisor ? supervisorTitle(activity, subject) : null,
+subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
+depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
+category: activity.category,
+        });
+      }
+      throw rollbackPreview;
+    })();
+  } catch (err) {
+    if (err !== rollbackPreview) throw err;
   }
 
   return {

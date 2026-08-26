@@ -7,6 +7,7 @@ process.env.TZ = 'UTC';
 
 const { MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const {
+  householdMembers,
   effectiveSkillProficiency,
   effectiveActivityProficiency,
   resolveActivityAssignment,
@@ -57,6 +58,8 @@ const admin = Number(db.prepare(`
 const grace = addUser('grace', 'Grace', 'child', '2016-01-01');
 const frank = addUser('frank', 'Frank', 'child', '2020-08-25');
 const mom = addUser('mom', 'Mom', 'mom', '1990-01-01');
+const worker = addUser('worker', 'Housekeeper', 'other', '1990-01-01');
+db.prepare('INSERT INTO housekeeping_workers (user_id) VALUES (?)').run(worker);
 
 function addSkill(name, { minimumAge = 0, promotion = 'supervised', adultOnly = 0 } = {}) {
   return Number(db.prepare(`
@@ -108,6 +111,8 @@ setProficiency(grace, makeBedSkill, 'normal');
 setProficiency(grace, laundrySkill, 'normal');
 setProficiency(mom, makeBedSkill, 'normal');
 setProficiency(mom, laundrySkill, 'normal');
+setProficiency(worker, makeBedSkill, 'normal');
+setProficiency(worker, laundrySkill, 'normal');
 
 const makeBedActivity = addActivity({
   name: 'Make Bed',
@@ -120,6 +125,13 @@ const laundryActivity = addActivity({
   title: 'Wash & Dry {subject}\'s Bedding',
   strategy: 'eligible_round_robin',
   skillIds: [laundrySkill],
+});
+
+test('non-household worker accounts are excluded from household assignment', () => {
+  const ids = householdMembers(db).map((member) => member.id);
+  assert.ok(ids.includes(grace));
+  assert.ok(ids.includes(mom));
+  assert.ok(!ids.includes(worker));
 });
 
 test('age establishes the automatic proficiency baseline and manual proficiency overrides it', () => {
@@ -207,6 +219,7 @@ test('eligible round robin is derived from Normal proficiency and preview does n
   const previewA = resolveActivityAssignment(db, template, { subjectUserId: frank, commitRotation: false });
   const previewB = resolveActivityAssignment(db, template, { subjectUserId: frank, commitRotation: false });
   assert.equal(previewA.primary.id, previewB.primary.id);
+  assert.ok([grace, mom].includes(previewA.primary.id));
 
   const first = resolveActivityAssignment(db, template, { subjectUserId: frank, commitRotation: true });
   const second = resolveActivityAssignment(db, template, { subjectUserId: frank, commitRotation: true });

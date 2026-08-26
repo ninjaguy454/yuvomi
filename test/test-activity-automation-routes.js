@@ -155,6 +155,15 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   const supervisorTask = created.body.data.tasks.find((row) => row.step_key === 'make_bed' && row.role === 'supervisor');
   assert.ok(washTask && bedTask && supervisorTask);
 
+  // The workflow parent is an event container. It cannot be manually completed
+  // while any generated activity remains unfinished.
+  const blockedParent = await call('PATCH', `/tasks/${created.body.data.parent_task_id}/status`, { status: 'done' });
+  assert.equal(blockedParent.status, 409, JSON.stringify(blockedParent.body));
+  assert.deepEqual(
+    new Set(blockedParent.body.dependencies.map((row) => row.id)),
+    new Set(created.body.data.tasks.map((row) => row.task_id)),
+  );
+
   // Dependency graph is enforced by the ordinary task status endpoint.
   const blocked = await call('PATCH', `/tasks/${bedTask.task_id}/status`, { status: 'done' });
   assert.equal(blocked.status, 409, JSON.stringify(blocked.body));

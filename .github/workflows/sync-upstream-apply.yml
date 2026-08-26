@@ -1,0 +1,319 @@
+name: Sync upstream 2.45 apply
+
+on:
+  push:
+    paths:
+      - '.github/workflows/sync-upstream-apply.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: sync/upstream-2.45
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Merge upstream and resolve fork integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/ulsklyc/yuvomi.git
+          git fetch upstream main
+
+          set +e
+          git merge --no-commit --no-ff upstream/main
+          merge_code=$?
+          set -e
+          if [ "$merge_code" -ne 0 ]; then
+            conflicts="$(git diff --name-only --diff-filter=U | sort)"
+            expected=$'package.json\nserver/db.js\nserver/routes/tasks.js'
+            if [ "$conflicts" != "$expected" ]; then
+              echo "Unexpected conflict set:"
+              printf '%s\n' "$conflicts"
+              exit 1
+            fi
+          fi
+
+          # package.json: take the upstream 2.45 package/test chain, then add our
+          # fork-only test suites without dropping any upstream suites.
+          git checkout --theirs package.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          p = Path('package.json')
+          data = json.loads(p.read_text())
+          scripts = data['scripts']
+          scripts['test:task-round-robin'] = 'node --experimental-sqlite --test test/test-task-round-robin.js'
+          scripts['test:activity-automation'] = 'node --experimental-sqlite --test test/test-activity-automation.js'
+          scripts['test:activity-automation-routes'] = 'node --experimental-sqlite --test test/test-activity-automation-routes.js'
+          scripts['test:task-activity-bindings'] = 'node --experimental-sqlite --test test/test-task-activity-bindings.js'
+          scripts['test:fork-migration-remap'] = 'node --experimental-sqlite --test test/test-fork-migration-remap.js'
+
+          chain = scripts['test']
+          marker = 'npm run test:migrations-append-only && '
+          if 'npm run test:fork-migration-remap' not in chain:
+              chain = chain.replace(marker, marker + 'npm run test:fork-migration-remap && ', 1)
+          marker = 'npm run test:tasks-recurrence && '
+          fork_task_tests = (
+              'npm run test:task-round-robin && '
+              'npm run test:activity-automation && '
+              'npm run test:activity-automation-routes && '
+              'npm run test:task-activity-bindings && '
+          )
+          if 'npm run test:task-round-robin' not in chain:
+              chain = chain.replace(marker, marker + fork_task_tests, 1)
+          scripts['test'] = chain
+          p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+          PY
+          git add package.json
+
+          # server/db.js: keep the canonical upstream migration sequence intact
+          # and move fork-only migrations into a separate high-number namespace.
+          git checkout --theirs server/db.js
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          p = Path('server/db.js')
+          upstream = p.read_text()
+          ours = subprocess.check_output(['git', 'show', 'HEAD:server/db.js'], text=True)
+
+          first_desc = "description: 'Tasks: ordered round-robin assignment for recurring tasks'"
+          descs = [
+              "Tasks: ordered round-robin assignment for recurring tasks",
+              "Tasks: synchronized rotation groups for recurring round-robin cohorts",
+              "Household automation: skills, activity templates, workflows and Quick Add",
+              "Tasks: bind scheduled and recurring work to Activity Templates",
+          ]
+          start = ours.index('  {\n    version: 160,\n    ' + first_desc)
+          end = ours.index('\n];', start)
+          fork_body = ours[start:end]
+          for old, new in [(160, 10000), (161, 10001), (162, 10002), (163, 10003)]:
+              fork_body = fork_body.replace(f'version: {old},', f'version: {new},', 1)
+
+          migrations_start = upstream.index('const MIGRATIONS = [')
+          migrations_end = upstream.index('\n];', migrations_start) + 3
+          support = '''
+
+// Fork-only migrations live outside the canonical upstream sequence so future
+// upstream releases can continue using their normal contiguous version numbers.
+const FORK_MIGRATIONS = [
+''' + fork_body + '''
+];
+
+const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
+
+const FORK_MIGRATION_REMAPS = [
+  [160, 10000, 'Tasks: ordered round-robin assignment for recurring tasks'],
+  [161, 10001, 'Tasks: synchronized rotation groups for recurring round-robin cohorts'],
+  [162, 10002, 'Household automation: skills, activity templates, workflows and Quick Add'],
+  [163, 10003, 'Tasks: bind scheduled and recurring work to Activity Templates'],
+];
+
+/**
+ * Older builds of this fork used upstream migration numbers 160-163 before
+ * upstream assigned those numbers independently. Move only exact fork records
+ * into the fork namespace before calculating pending migrations. Stock Yuvomi
+ * rows with the same numeric versions have different descriptions and are left
+ * untouched.
+ */
+function remapForkMigrationVersions(database) {
+  const read = database.prepare('SELECT description FROM schema_migrations WHERE version = ?');
+  const move = database.prepare(
+    'UPDATE schema_migrations SET version = ? WHERE version = ? AND description = ?'
+  );
+  const tx = database.transaction(() => {
+    for (const [oldVersion, newVersion, description] of FORK_MIGRATION_REMAPS) {
+      const oldRow = read.get(oldVersion);
+      if (oldRow?.description !== description) continue;
+      const newRow = read.get(newVersion);
+      if (newRow && newRow.description !== description) {
+        throw new Error(
+          `[DB] Fork migration remap collision at version ${newVersion}: ${newRow.description}`
+        );
+      }
+      if (newRow) {
+        database.prepare('DELETE FROM schema_migrations WHERE version = ? AND description = ?')
+          .run(oldVersion, description);
+      } else {
+        move.run(newVersion, oldVersion, description);
+      }
+    }
+  });
+  tx();
+}
+'''
+          text = upstream[:migrations_end] + support + upstream[migrations_end:]
+
+          schema_marker = '''  db.exec(`\n    CREATE TABLE IF NOT EXISTS schema_migrations (\n      version     INTEGER PRIMARY KEY,\n      description TEXT    NOT NULL,\n      applied_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))\n    );\n  `);\n'''
+          if schema_marker not in text:
+              raise SystemExit('schema_migrations marker not found')
+          text = text.replace(
+              schema_marker,
+              schema_marker + '\n  remapForkMigrationVersions(db);\n',
+              1,
+          )
+          text = text.replace(
+              'const pending = MIGRATIONS.filter((m) => !applied.has(m.version));',
+              'const pending = ALL_MIGRATIONS.filter((m) => !applied.has(m.version));',
+              1,
+          )
+          old_export = 'export { init, get, transaction, currentVersion, getPath, backupToFile, restoreFromFile, MIGRATIONS, reconcileCriticalSchema, _setTestDatabase, _resetTestDatabase };'
+          new_export = 'export { init, get, transaction, currentVersion, getPath, backupToFile, restoreFromFile, MIGRATIONS, FORK_MIGRATIONS, ALL_MIGRATIONS, remapForkMigrationVersions, reconcileCriticalSchema, _setTestDatabase, _resetTestDatabase };'
+          if old_export not in text:
+              raise SystemExit('db export marker not found')
+          text = text.replace(old_export, new_export, 1)
+          p.write_text(text)
+          PY
+          git add server/db.js
+
+          # The task-route conflicts are additive: upstream records completion
+          # history while the fork synchronizes workflow instances. Preserve both.
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('server/routes/tasks.js')
+          text = p.read_text()
+          pattern = re.compile(r'<<<<<<< HEAD\n(.*?)=======\n(.*?)>>>>>>> upstream/main\n', re.S)
+
+          def resolve(match):
+              ours, theirs = match.group(1), match.group(2)
+              combined = ours + theirs
+              if 'activity-workflows.js' in ours and 'task-completions.js' in theirs:
+                  return ours + theirs
+              if 'syncWorkflowInstanceForTask' in ours and 'syncTaskCompletion' in theirs:
+                  return theirs + ours
+              raise RuntimeError('Unexpected tasks.js conflict block:\n' + combined[:1000])
+
+          text, count = pattern.subn(resolve, text)
+          if count != 3:
+              raise SystemExit(f'Expected 3 tasks.js conflict blocks, resolved {count}')
+          if any(marker in text for marker in ('<<<<<<<', '=======', '>>>>>>>')):
+              raise SystemExit('Conflict markers remain in tasks.js')
+          p.write_text(text)
+          PY
+          git add server/routes/tasks.js
+
+          # Fork tests need the combined canonical + fork migration list.
+          python - <<'PY'
+          from pathlib import Path
+          for name in [
+              'test/test-task-round-robin.js',
+              'test/test-activity-automation.js',
+              'test/test-activity-automation-routes.js',
+              'test/test-task-activity-bindings.js',
+          ]:
+              p = Path(name)
+              text = p.read_text().replace('MIGRATIONS', 'ALL_MIGRATIONS')
+              p.write_text(text)
+          PY
+
+          cat > test/test-fork-migration-remap.js <<'EOF'
+          import { test } from 'node:test';
+          import assert from 'node:assert/strict';
+          import Database from 'better-sqlite3-multiple-ciphers';
+
+          process.env.DB_PATH = ':memory:';
+          process.env.TZ = 'UTC';
+
+          const { remapForkMigrationVersions } = await import('../server/db.js');
+
+          const forkRows = [
+            [160, 10000, 'Tasks: ordered round-robin assignment for recurring tasks'],
+            [161, 10001, 'Tasks: synchronized rotation groups for recurring round-robin cohorts'],
+            [162, 10002, 'Household automation: skills, activity templates, workflows and Quick Add'],
+            [163, 10003, 'Tasks: bind scheduled and recurring work to Activity Templates'],
+          ];
+
+          function database() {
+            const d = new Database(':memory:');
+            d.exec(`CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              description TEXT NOT NULL,
+              applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+            )`);
+            return d;
+          }
+
+          test('legacy fork migration records move into the fork namespace', () => {
+            const d = database();
+            const insert = d.prepare('INSERT INTO schema_migrations(version, description) VALUES (?, ?)');
+            for (const [oldVersion, , description] of forkRows) insert.run(oldVersion, description);
+            remapForkMigrationVersions(d);
+            for (const [oldVersion, newVersion, description] of forkRows) {
+              assert.equal(d.prepare('SELECT 1 FROM schema_migrations WHERE version = ?').get(oldVersion), undefined);
+              assert.equal(d.prepare('SELECT description FROM schema_migrations WHERE version = ?').get(newVersion)?.description, description);
+            }
+            d.close();
+          });
+
+          test('stock upstream rows with colliding numeric versions are untouched', () => {
+            const d = database();
+            const stock = [
+              [160, 'Quick links: household links as a tile row on the overview (#469)'],
+              [161, 'Task completions: erledigen wird ein Ereignis, nicht nur ein Zustand (#791)'],
+              [162, 'Pantry: widen reminders for pantry_item so a best-before date can notify (#811)'],
+              [163, 'Quick links: a built-in symbol as a third face, next to image and monogram (#873)'],
+            ];
+            const insert = d.prepare('INSERT INTO schema_migrations(version, description) VALUES (?, ?)');
+            for (const row of stock) insert.run(...row);
+            remapForkMigrationVersions(d);
+            assert.deepEqual(
+              d.prepare('SELECT version, description FROM schema_migrations ORDER BY version').all(),
+              stock.map(([version, description]) => ({ version, description })),
+            );
+            d.close();
+          });
+          EOF
+
+          git add test/test-task-round-robin.js test/test-activity-automation.js \
+            test/test-activity-automation-routes.js test/test-task-activity-bindings.js \
+            test/test-fork-migration-remap.js
+
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            echo 'Unresolved merge conflicts remain:'
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused compatibility tests
+        run: |
+          npm run test:migrations-append-only
+          npm run test:fork-migration-remap
+          npm run test:schema-reconcile
+          npm run test:schema-mirror
+          npm run test:tasks-recurrence
+          npm run test:task-round-robin
+          npm run test:task-completions
+          npm run test:activity-automation
+          npm run test:activity-automation-routes
+          npm run test:task-activity-bindings
+          npm run test:tasks-routes
+          npm run test:frontend-audit
+          npm run test:mobile-scroll-layout
+          npm run test:suite-chain
+
+      - name: Run full repository suite
+        run: npm test
+
+      - name: Commit merged upstream
+        shell: bash
+        run: |
+          git status --short
+          git commit -m "Merge upstream Yuvomi v2.45 with fork automation"
+          git push origin HEAD:sync/upstream-2.45

@@ -73,11 +73,15 @@ function definitelyAdult(member, age) {
 }
 
 export function loadSkillRequirements(d, activityTemplateId) {
+  // `skills.active` controls whether an admin can choose a skill for NEW
+  // configuration. It must not erase a requirement already attached to an
+  // activity: deactivating an adult-only or age-gated skill must never make an
+  // existing activity silently unrestricted.
   return d.prepare(`
     SELECT s.*, ats.sort_order
       FROM activity_template_skills ats
       JOIN skills s ON s.id = ats.skill_id
-     WHERE ats.activity_template_id = ? AND s.active = 1
+     WHERE ats.activity_template_id = ?
      ORDER BY ats.sort_order ASC, s.id ASC
   `).all(activityTemplateId);
 }
@@ -224,6 +228,13 @@ export function resolveActivityAssignment(d, activity, {
   if (activity.assignment_strategy === 'fixed') {
     const fixed = members.find((member) => Number(member.id) === Number(activity.fixed_user_id));
     if (!fixed) throw new Error('The fixed assignee is no longer available.');
+    // Fixed means "this specific qualified person", not "ignore the skill
+    // engine". Otherwise an adult-only requirement could be bypassed simply by
+    // selecting a child as the fixed assignee.
+    const fixedProficiency = effectiveActivityProficiency(d, activity.id, fixed, dateKey);
+    if (fixedProficiency.proficiency !== PROFICIENCY.NORMAL) {
+      throw new Error('The fixed assignee is not independently qualified for this activity.');
+    }
     return {
       primary: fixed,
       supervisor: null,

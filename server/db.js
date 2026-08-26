@@ -6335,6 +6335,32 @@ const MIGRATIONS = [
         ON workflow_task_dependencies(depends_on_task_id);
     `,
   },
+  {
+    version: 163,
+    description: 'Tasks: bind scheduled and recurring work to Activity Templates',
+    up: `
+      CREATE TABLE IF NOT EXISTS task_activity_bindings (
+        task_id              INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        activity_template_id INTEGER NOT NULL REFERENCES activity_templates(id) ON DELETE RESTRICT,
+        subject_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_task_activity_bindings_activity
+        ON task_activity_bindings(activity_template_id);
+      CREATE INDEX idx_task_activity_bindings_subject
+        ON task_activity_bindings(subject_user_id);
+
+      CREATE TABLE IF NOT EXISTS task_activity_support_tasks (
+        source_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        task_id        INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        role           TEXT NOT NULL DEFAULT 'supervisor' CHECK(role IN ('supervisor')),
+        UNIQUE(source_task_id, role)
+      );
+      CREATE INDEX idx_task_activity_support_source
+        ON task_activity_support_tasks(source_task_id);
+    `,
+  },
 ];
 
 /**

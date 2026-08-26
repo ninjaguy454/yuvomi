@@ -232,6 +232,24 @@ function replaceWorkflowSteps(d, workflowId, steps) {
 // Runtime endpoints
 // ---------------------------------------------------------------------------
 
+// Minimal reusable Activity Template catalogue for ordinary Task scheduling.
+// Assignment still resolves server-side; the client only chooses the reusable
+// definition and, when required, its subject.
+router.get('/activity-options', (_req, res) => {
+  try {
+    const activities = listActivityTemplates(db.get(), { activeOnly: true }).map((activity) => ({
+      id: activity.id,
+      name: activity.name,
+      assignment_strategy: activity.assignment_strategy,
+      subject_required: activity.subject_required,
+    }));
+    res.json({ data: { activities } });
+  } catch (err) {
+    log.error('GET /activity-options:', err);
+    res.status(500).json({ error: 'Could not load activity templates.', code: 500 });
+  }
+});
+
 router.get('/quick-add', (req, res) => {
   try {
     const d = db.get();

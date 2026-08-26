@@ -182,22 +182,50 @@ export function eligibleNormalMembers(d, activityTemplateId, { excludeUserIds = 
   });
 }
 
-function chooseRoundRobin(d, activityTemplateId, purpose, eligible, { commit = false } = {}) {
+/**
+ * Pick the next eligible member without letting an eligibility change reset the
+ * rotation to the first person. `orderedMembers` is the stable household order;
+ * an excluded/supervised previous assignee still provides a place to continue
+ * scanning from, while only members in `eligible` can actually be selected.
+ */
+function chooseRoundRobin(d, activityTemplateId, purpose, eligible, {
+  commit = false,
+  orderedMembers = eligible,
+} = {}) {
   if (!eligible.length) return null;
-  const ids = eligible.map((member) => Number(member.id));
+  const eligibleById = new Map(eligible.map((member) => [Number(member.id), member]));
+  const order = orderedMembers
+    .map((member) => Number(member.id))
+    .filter((id, index, ids) => Number.isInteger(id) && ids.indexOf(id) === index);
+  // Defensive fallback for a caller that supplied a partial order.
+  for (const member of eligible) {
+    const id = Number(member.id);
+    if (!order.includes(id)) order.push(id);
+  }
+
   const state = d.prepare(`
     SELECT last_user_id
       FROM activity_rotation_state
      WHERE activity_template_id = ? AND purpose = ?
   `).get(activityTemplateId, purpose);
 
-  let index = 0;
+  let selected = null;
   if (state?.last_user_id != null) {
-    const previous = ids.indexOf(Number(state.last_user_id));
-    if (previous >= 0) index = (previous + 1) % ids.length;
+    const previous = order.indexOf(Number(state.last_user_id));
+    if (previous >= 0) {
+      for (let offset = 1; offset <= order.length; offset += 1) {
+        const candidate = eligibleById.get(order[(previous + offset) % order.length]);
+        if (candidate) {
+          selected = candidate;
+          break;
+        }
+      }
+    }
+  }
+  if (!selected) {
+    selected = order.map((id) => eligibleById.get(id)).find(Boolean) ?? eligible[0];
   }
 
-  const selected = eligible[index];
   if (commit && selected) {
     d.prepare(`
       INSERT INTO activity_rotation_state (activity_template_id, purpose, last_user_id, updated_at)
@@ -252,8 +280,13 @@ export function resolveActivityAssignment(d, activity, {
   }
 
   if (activity.assignment_strategy === 'eligible_round_robin') {
-    const eligible = eligibleNormalMembers(d, activity.id, { dateKey });
-    const primary = chooseRoundRobin(d, activity.id, 'primary', eligible, { commit: commitRotation });
+    const eligible = members.filter((member) =>
+      effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
+    );
+    const primary = chooseRoundRobin(d, activity.id, 'primary', eligible, {
+      commit: commitRotation,
+      orderedMembers: members,
+    });
     if (!primary) throw new Error('No household member is currently qualified for this activity.');
     return {
       primary,
@@ -275,12 +308,15 @@ export function resolveActivityAssignment(d, activity, {
     return { primary: subject, supervisor: null, subject, subjectProficiency, eligible: [subject] };
   }
 
-  const eligibleHelpers = eligibleNormalMembers(d, activity.id, {
-    excludeUserIds: [subject.id],
-    dateKey,
-  });
+  const eligibleHelpers = members.filter((member) =>
+    Number(member.id) !== Number(subject.id)
+    && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
+  );
   const purpose = subjectProficiency.proficiency === PROFICIENCY.SUPERVISED ? 'supervisor' : 'primary';
-  const helper = chooseRoundRobin(d, activity.id, purpose, eligibleHelpers, { commit: commitRotation });
+  const helper = chooseRoundRobin(d, activity.id, purpose, eligibleHelpers, {
+    commit: commitRotation,
+    orderedMembers: members,
+  });
   if (!helper) throw new Error('No qualified household member is available to help with this activity.');
 
   if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED) {

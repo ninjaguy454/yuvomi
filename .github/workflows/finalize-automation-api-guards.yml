@@ -1,0 +1,89 @@
+name: Finalize automation API guards
+
+on:
+  push:
+    paths:
+      - '.github/workflows/finalize-automation-api-guards.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/activity-templates-skills-quick-add
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Apply API guard fixes
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('server/routes/automation.js')
+          s = p.read_text()
+
+          old = """function validHouseholdUser(d, id) {
+            if (!id) return false;
+            return !!d.prepare(`
+              SELECT 1 FROM users u
+               WHERE u.id = ?
+                 AND NOT EXISTS (SELECT 1 FROM split_expense_guest_users g WHERE g.user_id = u.id)
+            `).get(id);
+          }"""
+          new = """function validHouseholdUser(d, id) {
+            if (!id) return false;
+            return !!d.prepare(`
+              SELECT 1 FROM users u
+               WHERE u.id = ?
+                 AND NOT EXISTS (SELECT 1 FROM split_expense_guest_users g WHERE g.user_id = u.id)
+                 AND NOT EXISTS (SELECT 1 FROM housekeeping_workers hw WHERE hw.user_id = u.id)
+            `).get(id);
+          }"""
+          assert old in s, 'validHouseholdUser block not found'
+          s = s.replace(old, new, 1)
+
+          old = """  const keys = new Set(normalizedSteps.map((step) => step.stepKey));
+            for (const step of normalizedSteps) {
+              if (step.dependsOn.some((key) => !keys.has(key) || key === step.stepKey)) {
+                throw new Error(`Invalid dependency on workflow step ${step.stepKey}.`);
+              }
+            }"""
+          new = """  const keys = new Set(normalizedSteps.map((step) => step.stepKey));
+            const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
+            for (const [index, step] of normalizedSteps.entries()) {
+              if (step.dependsOn.some((key) => !keys.has(key) || key === step.stepKey)) {
+                throw new Error(`Invalid dependency on workflow step ${step.stepKey}.`);
+              }
+              if (step.dependsOn.some((key) => positions.get(key) >= index)) {
+                throw new Error(`Workflow step ${step.stepKey} may only depend on an earlier step.`);
+              }
+            }"""
+          assert old in s, 'workflow dependency validation block not found'
+          s = s.replace(old, new, 1)
+
+          old = """    const inUse = d.prepare('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
+              if (inUse) return res.status(409).json({ error: 'This activity is used by a workflow template.', code: 409 });
+              const result = d.prepare('DELETE FROM activity_templates WHERE id = ?').run(req.params.id);"""
+          new = """    const workflowUse = d.prepare('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
+              if (workflowUse) return res.status(409).json({ error: 'This activity is used by a workflow template.', code: 409 });
+              const taskUse = d.prepare('SELECT COUNT(*) AS n FROM task_activity_bindings WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
+              if (taskUse) return res.status(409).json({ error: 'This activity is attached to a scheduled task.', code: 409 });
+              const result = d.prepare('DELETE FROM activity_templates WHERE id = ?').run(req.params.id);"""
+          assert old in s, 'activity delete guard block not found'
+          s = s.replace(old, new, 1)
+
+          p.write_text(s)
+      - run: npm ci
+      - run: npm run test:activity-automation
+      - run: npm run test:activity-automation-routes
+      - run: npm run test:task-activity-bindings
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add server/routes/automation.js
+          git diff --cached --quiet || git commit -m "fix(automation): tighten template API guards"
+          git push origin HEAD:feat/activity-templates-skills-quick-add

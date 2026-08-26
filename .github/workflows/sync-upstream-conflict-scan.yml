@@ -1,0 +1,32 @@
+name: Sync upstream conflict scan
+
+on:
+  push:
+    paths:
+      - '.github/workflows/sync-upstream-conflict-scan.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: sync/upstream-2.45
+          fetch-depth: 0
+      - name: Scan merge conflicts
+        shell: bash
+        run: |
+          git remote add upstream https://github.com/ulsklyc/yuvomi.git
+          git fetch upstream main
+          set +e
+          git merge --no-commit --no-ff upstream/main
+          code=$?
+          echo "MERGE_EXIT=$code"
+          echo '--- conflicts ---'
+          git diff --name-only --diff-filter=U || true
+          echo '--- status ---'
+          git status --short
+          exit $code

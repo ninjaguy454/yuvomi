@@ -29,6 +29,10 @@ jobs:
           echo "MERGE_EXIT=$code"
           echo '--- conflicts ---'
           git diff --name-only --diff-filter=U || true
-          echo '--- status ---'
-          git status --short
+          echo '--- package conflict ---'
+          git diff --cc -- package.json || true
+          echo '--- db conflict ---'
+          git diff --cc -- server/db.js || true
+          echo '--- task route conflict ---'
+          git diff --cc -- server/routes/tasks.js || true
           exit $code

@@ -19,6 +19,8 @@ jobs:
       - name: Scan merge conflicts
         shell: bash
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote add upstream https://github.com/ulsklyc/yuvomi.git
           git fetch upstream main
           set +e

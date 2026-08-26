@@ -305,6 +305,16 @@ export function instantiateWorkflow(d, workflowId, {
       }
     }
 
+    // The parent is an event container, not an independently completable piece
+    // of work. Reuse the existing dependency guard so a user cannot manually
+    // mark the event complete while generated activities are still open. The
+    // sync function below will complete/reopen the parent as its children move.
+    const parentDependency = d.prepare(`
+      INSERT OR IGNORE INTO workflow_task_dependencies (task_id, depends_on_task_id)
+      VALUES (?, ?)
+    `);
+    for (const item of generated) parentDependency.run(parentTaskId, item.task_id);
+
     return {
       id: instanceId,
       workflow_template_id: workflow.id,

@@ -116,6 +116,20 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   });
   assert.equal(makeBed.status, 201, JSON.stringify(makeBed.body));
 
+  const invalidForwardDependency = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Invalid Forward Dependency',
+    category: 'misc',
+    subject_required: true,
+    quick_add_enabled: false,
+    input_schema: [],
+    steps: [
+      { step_key: 'first', activity_template_id: wash.body.data.id, depends_on: ['later'] },
+      { step_key: 'later', activity_template_id: makeBed.body.data.id, depends_on: [] },
+    ],
+  });
+  assert.equal(invalidForwardDependency.status, 400, JSON.stringify(invalidForwardDependency.body));
+  assert.match(invalidForwardDependency.body.error, /earlier step/i);
+
   const workflow = await call('POST', '/automation/admin/workflow-templates', {
     name: 'Soiled Sheets',
     description: 'Clean and remake soiled bedding.',

@@ -88,6 +88,7 @@ const APP_SHELL = [
   // Dateisystem; Fetch-Routing für diese Pfade → SHELL_CACHE (isMutableAppResource).
   '/nav-icons.js',
   '/permissions.js',
+  '/components/activity-automation.js',
   '/components/detail-view.js',
   '/components/document-attach.js',
   '/components/modal.js',

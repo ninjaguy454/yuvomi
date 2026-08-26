@@ -937,6 +937,12 @@
   .task-card__inline-action {
     display: none;
   }
+
+  /* Adding checklist work is a content action, not card chrome. Keep it
+   * reachable on touch while edit/archive stay behind the detail/swipe UI. */
+  .task-card__inline-action.task-card__add-subtask {
+    display: inline-flex;
+  }
 }
 
 /* ── PRIORITAET: EINE RANGMARKE, KEIN GETOENTES FELD ──
@@ -1097,6 +1103,16 @@
 
 .subtask-item--done .subtask-item__title {
   text-decoration: line-through;
+  color: var(--color-text-secondary);
+}
+
+.subtask-item__assignee {
+  flex-shrink: 0;
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-xs);
   color: var(--color-text-secondary);
 }
 

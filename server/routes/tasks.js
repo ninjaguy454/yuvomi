@@ -10,6 +10,18 @@ import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion } from '../services/recurrence.js';
 import { syncTaskRewards } from '../services/rewards.js';
+import { unresolvedDependencies, syncWorkflowInstanceForTask } from '../services/activity-workflows.js';
+import {
+  TaskActivityBindingError,
+  activitySupportTasks,
+  applyTaskActivityBinding,
+  attachTaskActivityBindings,
+  clearTaskActivityBinding,
+  copyTaskActivityBinding,
+  getTaskActivityBinding,
+  ordinaryActivitySubtasks,
+  previewTaskActivityBinding,
+} from '../services/task-activity-bindings.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
 import { normalizeVisibility, visibilityWhere } from '../services/visibility.js';
 import {
@@ -243,6 +255,61 @@ function setAssignments(d, taskId, userIds) {
   d.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
   const ins = d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)');
   for (const uid of userIds) ins.run(taskId, uid);
+}
+
+function parseTaskActivityBinding(body, existing = null) {
+  const hasTemplate = Object.prototype.hasOwnProperty.call(body, 'activity_template_id');
+  const hasSubject = Object.prototype.hasOwnProperty.call(body, 'activity_subject_user_id');
+  if (!hasTemplate && !hasSubject) {
+    return {
+      specified: false,
+      binding: existing ? {
+        activityTemplateId: Number(existing.activity_template_id),
+        subjectUserId: existing.subject_user_id == null ? null : Number(existing.subject_user_id),
+      } : null,
+    };
+  }
+
+  const rawTemplate = hasTemplate ? body.activity_template_id : existing?.activity_template_id;
+  if (rawTemplate === null || rawTemplate === undefined || rawTemplate === '') {
+    return { specified: true, binding: null };
+  }
+  const activityTemplateId = Number(rawTemplate);
+  if (!Number.isInteger(activityTemplateId) || activityTemplateId <= 0) {
+    return { specified: true, error: 'activity_template_id must be a positive integer or null.' };
+  }
+
+  const rawSubject = hasSubject ? body.activity_subject_user_id : existing?.subject_user_id;
+  let subjectUserId = null;
+  if (rawSubject !== null && rawSubject !== undefined && rawSubject !== '') {
+    subjectUserId = Number(rawSubject);
+    if (!Number.isInteger(subjectUserId) || subjectUserId <= 0) {
+      return { specified: true, error: 'activity_subject_user_id must be a positive integer or null.' };
+    }
+  }
+  return { specified: true, binding: { activityTemplateId, subjectUserId } };
+}
+
+function sameTaskActivityBinding(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return Number(a.activityTemplateId ?? a.activity_template_id) === Number(b.activityTemplateId ?? b.activity_template_id)
+    && Number(a.subjectUserId ?? a.subject_user_id ?? 0) === Number(b.subjectUserId ?? b.subject_user_id ?? 0);
+}
+
+function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false } = {}) {
+  if (!binding) return null;
+  try {
+    previewTaskActivityBinding(db.get(), {
+      activityTemplateId: binding.activityTemplateId,
+      subjectUserId: binding.subjectUserId,
+      dateKey,
+      allowInactive,
+    });
+    return null;
+  } catch (err) {
+    return err.message;
+  }
 }
 
 function parseRotationUserIds(value) {
@@ -839,10 +906,16 @@ router.get('/', (req, res) => {
            AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_total,
         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.status = 'done'
            AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_done,
-        (SELECT json_group_array(json_object('id', s.id, 'title', s.title, 'status', s.status))
-           FROM (SELECT s.id, s.title, s.status FROM tasks s WHERE s.parent_task_id = t.id
-                   AND ${visibilityWhere('s', 'task_assignments', 'task_id')}
-                 ORDER BY s.created_at ASC) s) AS subtasks
+        (SELECT json_group_array(json_object(
+                  'id', s.id, 'title', s.title, 'status', s.status,
+                  'assigned_to', s.assigned_to, 'assigned_name', s.assigned_name
+                ))
+           FROM (SELECT s.id, s.title, s.status, s.assigned_to, su.display_name AS assigned_name
+                   FROM tasks s
+                   LEFT JOIN users su ON su.id = s.assigned_to
+                  WHERE s.parent_task_id = t.id
+                    AND ${visibilityWhere('s', 'task_assignments', 'task_id')}
+                  ORDER BY s.created_at ASC) s) AS subtasks
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
       WHERE ${taskScopeWhere('t', { includeFuture: !!include_future })}
@@ -950,6 +1023,7 @@ router.get('/', (req, res) => {
     `;
 
     const rows = db.get().prepare(sql).all(...params).map(task => ({ ...task, subtasks: JSON.parse(task.subtasks || '[]') })).map(addAssignedUsers);
+    attachTaskActivityBindings(db.get(), rows);
     res.json({ data: attachTags(attachDocumentCounts(rows, me)) });
   } catch (err) {
     log.error('GET / error:', err);
@@ -986,6 +1060,7 @@ router.get('/:id', (req, res) => {
     // derselben Funktion wie GET /:id/documents, also mit derselben
     // Sichtbarkeitsprüfung.
     task.documents = loadTaskDocuments(task.id, me);
+    attachTaskActivityBindings(db.get(), [task]);
     attachTags([task]);
     res.json({ data: task });
   } catch (err) {
@@ -1028,8 +1103,17 @@ router.post('/', (req, res) => {
       : clampPoints(req.body.points);
     const visibility = normalizeVisibility(req.body.visibility);
 
-    const assignmentMode = req.body.assignment_mode ?? 'fixed';
-    const rotationUserIds = parseRotationUserIds(req.body.rotation_user_ids);
+    const bindingRequest = parseTaskActivityBinding(req.body);
+    if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
+    const activityBinding = bindingRequest.binding;
+    if (activityBinding && parent_task_id) {
+      return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
+    }
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone());
+    if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
+
+    const assignmentMode = activityBinding ? 'fixed' : (req.body.assignment_mode ?? 'fixed');
+    const rotationUserIds = activityBinding ? [] : parseRotationUserIds(req.body.rotation_user_ids);
     const rotationError = roundRobinConfigError(db.get(), {
       assignmentMode, isRecurring: !!is_recurring, recurrenceRule: recurrence_rule,
       parentTaskId: parent_task_id, rotationUserIds,
@@ -1050,7 +1134,7 @@ router.post('/', (req, res) => {
     });
     if (groupError) return res.status(400).json({ error: groupError, code: 400 });
 
-    const requestedUserIds = parseAssignedTo(req.body.assigned_to);
+    const requestedUserIds = activityBinding ? [] : parseAssignedTo(req.body.assigned_to);
     const rotationIndex = rotationGroup ? groupState.rotationIndex : 0;
     const rotationCycle = rotationGroup ? groupState.rotationCycle : 0;
     const activeRotationPosition = assignmentMode === 'round_robin'
@@ -1103,6 +1187,14 @@ router.post('/', (req, res) => {
       setAssignments(db.get(), result.lastInsertRowid, userIds);
       setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), result.lastInsertRowid, req.body.tags);
+      if (activityBinding) {
+        applyTaskActivityBinding(db.get(), Number(result.lastInsertRowid), {
+          activityTemplateId: activityBinding.activityTemplateId,
+          subjectUserId: activityBinding.subjectUserId,
+          commitRotation: true,
+          dateKey: due_date || todayInHouseholdZone(),
+        });
+      }
       if (syncTarget) {
         db.get().prepare(
           'UPDATE tasks SET target_caldav_account_id = ?, target_caldav_list_url = ? WHERE id = ?'
@@ -1119,10 +1211,14 @@ router.post('/', (req, res) => {
     `).get(taskId);
 
     addAssignedUsers(task);
+    attachTaskActivityBindings(db.get(), [task]);
     attachTags([task]);
     res.status(201).json({ data: task });
     if (syncTarget) pushToCalDAV('Neue Aufgabe');
   } catch (err) {
+    if (err instanceof TaskActivityBindingError) {
+      return res.status(400).json({ error: err.message, code: 400 });
+    }
     log.error('POST / error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1176,15 +1272,39 @@ router.put('/:id', (req, res) => {
       ? task.status
       : req.body.status;
 
+    if (status === 'done' && task.status !== 'done') {
+      const blockedBy = unresolvedDependencies(db.get(), task.id);
+      if (blockedBy.length) {
+        return res.status(409).json({
+          error: 'Complete required earlier activities first.', code: 409, dependencies: blockedBy,
+        });
+      }
+    }
+
+    const existingActivityBinding = getTaskActivityBinding(db.get(), task.id);
+    const bindingRequest = parseTaskActivityBinding(req.body, existingActivityBinding);
+    if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
+    const desiredActivityBinding = bindingRequest.binding;
+    const bindingChanged = !sameTaskActivityBinding(desiredActivityBinding, existingActivityBinding);
+    if (bindingChanged && desiredActivityBinding && task.rotation_group) {
+      return res.status(409).json({
+        error: 'Remove this task from its rotation group before attaching an Activity Template.', code: 409,
+      });
+    }
+    if (bindingChanged && desiredActivityBinding) {
+      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone());
+      if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
+    }
+
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
     const rotationBefore = loadRotationUserIds(db.get(), task.id);
-    const assignmentMode = req.body.assignment_mode !== undefined
-      ? req.body.assignment_mode
-      : (task.assignment_mode || 'fixed');
-    const rotationUserIds = req.body.rotation_user_ids !== undefined
-      ? parseRotationUserIds(req.body.rotation_user_ids)
-      : rotationBefore;
+    const assignmentMode = desiredActivityBinding
+      ? 'fixed'
+      : (req.body.assignment_mode !== undefined ? req.body.assignment_mode : (task.assignment_mode || 'fixed'));
+    const rotationUserIds = desiredActivityBinding
+      ? []
+      : (req.body.rotation_user_ids !== undefined ? parseRotationUserIds(req.body.rotation_user_ids) : rotationBefore);
     const rotationError = roundRobinConfigError(db.get(), {
       assignmentMode, isRecurring: !!is_recurring, recurrenceRule: recurrence_rule,
       parentTaskId: task.parent_task_id, rotationUserIds,
@@ -1218,13 +1338,15 @@ router.put('/:id', (req, res) => {
       return res.status(409).json({ error: 'Cannot change a rotation-group position after its current cycle has started.', code: 409 });
     }
 
-    const requestedUserIds = req.body.assigned_to !== undefined
-      ? parseAssignedTo(req.body.assigned_to)
-      : assignedBefore;
+    const requestedUserIds = desiredActivityBinding
+      ? assignedBefore
+      : (req.body.assigned_to !== undefined ? parseAssignedTo(req.body.assigned_to) : assignedBefore);
     let rotationIndex = 0;
     let rotationCycle = 0;
     let userIds;
-    if (assignmentMode === 'round_robin') {
+    if (desiredActivityBinding) {
+      userIds = assignedBefore;
+    } else if (assignmentMode === 'round_robin') {
       if (rotationGroup) {
         rotationIndex = groupState.rotationIndex;
         rotationCycle = groupState.rotationCycle;
@@ -1283,6 +1405,7 @@ router.put('/:id', (req, res) => {
       if (req.body.tags !== undefined
           && tagsKey(normalizeTags(req.body.tags)) !== tagsKey(tagsBefore)) touchesDefinition = true;
       if (!sameIdOrder(rotationUserIds, rotationBefore)) touchesDefinition = true;
+      if (bindingChanged) touchesDefinition = true;
 
       if (syncTarget !== undefined
           && (!sameFieldValue(syncTarget?.accountId ?? null, task.target_caldav_account_id)
@@ -1332,6 +1455,18 @@ router.put('/:id', (req, res) => {
       setAssignments(db.get(), task.id, userIds);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), task.id, req.body.tags);
+      if (bindingChanged) {
+        if (desiredActivityBinding) {
+          applyTaskActivityBinding(db.get(), task.id, {
+            activityTemplateId: desiredActivityBinding.activityTemplateId,
+            subjectUserId: desiredActivityBinding.subjectUserId,
+            commitRotation: true,
+            dateKey: due_date || todayInHouseholdZone(),
+          });
+        } else {
+          clearTaskActivityBinding(db.get(), task.id);
+        }
+      }
       if (syncTarget !== undefined) {
         db.get().prepare(
           'UPDATE tasks SET target_caldav_account_id = ?, target_caldav_list_url = ? WHERE id = ?'
@@ -1341,6 +1476,7 @@ router.put('/:id', (req, res) => {
       syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
       // Punkte erst nach setAssignments: die Zuständigen werden daraus abgeleitet.
       syncTaskRewards(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
+      syncWorkflowInstanceForTask(db.get(), task.id);
 
       // Auch über das Bearbeiten-Formular lässt sich ein Abhaken zurücknehmen -
       // die Folgeinstanz muss dann genauso verschwinden wie beim Klick auf die
@@ -1377,12 +1513,16 @@ router.put('/:id', (req, res) => {
     })();
 
     addAssignedUsers(updated);
+    attachTaskActivityBindings(db.get(), [updated]);
     updated.subtasks = loadSubtasks(updated.id, req.authUserId || req.session.userId);
 
     res.json({ data: updated });
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
+    if (err instanceof TaskActivityBindingError) {
+      return res.status(400).json({ error: err.message, code: 400 });
+    }
     log.error('PUT /:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1405,14 +1545,29 @@ function recurrenceFollowupOf(taskId) {
  */
 function isFollowupSubtasksTouched(followup) {
   const originTaskId = followup.recurrence_origin_id;
-  const originSubtasks = originTaskId
-    ? db.get().prepare('SELECT * FROM tasks WHERE parent_task_id = ?').all(originTaskId)
-    : [];
-  const currentSubtasks = db.get()
-    .prepare('SELECT * FROM tasks WHERE parent_task_id = ?')
-    .all(followup.id);
+  const originSubtasks = originTaskId ? ordinaryActivitySubtasks(db.get(), originTaskId) : [];
+  const currentSubtasks = ordinaryActivitySubtasks(db.get(), followup.id);
 
   if (currentSubtasks.length !== originSubtasks.length) return true;
+
+  // Supervision is regenerated from current proficiency for each occurrence.
+  // It therefore must not be compared by assignee against the previous cycle,
+  // but completed/edited generated work still makes undo conservative.
+  for (const support of activitySupportTasks(db.get(), followup.id)) {
+    if (support.status !== 'open') return true;
+    if (!support.recurrence_origin_id) continue;
+    const origin = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(support.recurrence_origin_id);
+    if (!origin) return true;
+    if (
+      support.title !== origin.title ||
+      (support.description || '') !== (origin.description || '') ||
+      support.category !== origin.category ||
+      support.priority !== origin.priority ||
+      support.points !== origin.points ||
+      support.visibility !== origin.visibility ||
+      support.due_time !== origin.due_time
+    ) return true;
+  }
 
   const originDueDate = originTaskId
     ? db.get().prepare('SELECT due_date FROM tasks WHERE id = ?').get(originTaskId)?.due_date
@@ -1562,9 +1717,8 @@ function spawnRecurrenceFollowupSingle(task) {
   const existingTags = loadTags(db.get(), task.id);
   // Unteraufgaben gehören ebenfalls zur Aufgabenstruktur (#742).
   // Beim Folgedurchlauf werden sie mit zurückgesetztem Status ('open') kopiert.
-  const existingSubtasks = db.get()
-    .prepare('SELECT * FROM tasks WHERE parent_task_id = ? ORDER BY id ASC')
-    .all(task.id);
+  const taskActivityBinding = getTaskActivityBinding(db.get(), task.id);
+  const existingSubtasks = ordinaryActivitySubtasks(db.get(), task.id);
 
   db.get().transaction(() => {
     const newTask = db.get().prepare(`
@@ -1619,6 +1773,13 @@ function spawnRecurrenceFollowupSingle(task) {
       );
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);
+    }
+
+    if (taskActivityBinding) {
+      copyTaskActivityBinding(db.get(), task.id, Number(newTask.lastInsertRowid), {
+        commitRotation: true,
+        dateKey: nextDate,
+      });
     }
   })();
 }
@@ -1681,6 +1842,15 @@ router.patch('/:id/status', (req, res) => {
       return res.json({ data: { id: Number(req.params.id), status: prev.status, archived_at: archivedAt } });
     }
 
+    if (status === 'done' && prev.status !== 'done') {
+      const blockedBy = unresolvedDependencies(db.get(), Number(req.params.id));
+      if (blockedBy.length) {
+        return res.status(409).json({
+          error: 'Complete required earlier activities first.', code: 409, dependencies: blockedBy,
+        });
+      }
+    }
+
     // Statuswechsel und die Serien-Bewegung, die daraus folgt, sind eine Einheit:
     // scheitert das Nachlegen oder das Zurücknehmen der Folgeinstanz, darf die
     // Aufgabe nicht trotzdem umgeschaltet zurückbleiben. Sonst endete die Serie
@@ -1696,6 +1866,7 @@ router.patch('/:id/status', (req, res) => {
       syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
       // Punkte-Gutschrift/Storno an den Aufgaben-Statuswechsel koppeln.
       syncTaskRewards(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
+      syncWorkflowInstanceForTask(db.get(), Number(req.params.id));
 
       // Zurückgenommenes Abhaken macht auch die Folgeinstanz rückgängig (#650).
       // Sonst stünde die beim Erledigen erzeugte nächste Instanz neben der wieder

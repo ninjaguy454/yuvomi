@@ -68,6 +68,7 @@ import emailRouter from './routes/email.js';
 import notificationsRouter from './routes/notifications.js';
 import healthRouter from './routes/health.js';
 import rewardsRouter from './routes/rewards.js';
+import automationRouter from './routes/automation.js';
 import permissionsRouter from './routes/permissions.js';
 import changelogRouter from './routes/changelog.js';
 import mcpRouter from './mcp/server.js';
@@ -486,6 +487,7 @@ app.use('/api/v1/email', emailRouter);
 app.use('/api/v1/notifications', notificationsRouter);
 app.use('/api/v1/health', healthRouter);
 app.use('/api/v1/rewards', rewardsRouter);
+app.use('/api/v1/automation', automationRouter);
 app.use('/api/v1/permissions', permissionsRouter);
 
 // --------------------------------------------------------

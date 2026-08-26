@@ -6201,6 +6201,166 @@ const MIGRATIONS = [
         WHERE rotation_group IS NOT NULL;
     `,
   },
+  {
+    version: 162,
+    description: 'Household automation: skills, activity templates, workflows and Quick Add',
+    up: `
+      CREATE TABLE IF NOT EXISTS skills (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        name          TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        description   TEXT,
+        minimum_age   INTEGER CHECK(minimum_age IS NULL OR minimum_age >= 0),
+        age_promotion TEXT    NOT NULL DEFAULT 'supervised'
+                              CHECK(age_promotion IN ('supervised', 'normal')),
+        adult_only    INTEGER NOT NULL DEFAULT 0 CHECK(adult_only IN (0, 1)),
+        active        INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS user_skill_proficiency (
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        skill_id      INTEGER NOT NULL REFERENCES skills(id) ON DELETE CASCADE,
+        proficiency   TEXT    NOT NULL CHECK(proficiency IN ('excluded', 'supervised', 'normal')),
+        source        TEXT    NOT NULL DEFAULT 'manual' CHECK(source IN ('automatic', 'manual')),
+        updated_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at    TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY (user_id, skill_id)
+      );
+      CREATE INDEX idx_user_skill_proficiency_skill ON user_skill_proficiency(skill_id);
+
+      CREATE TABLE IF NOT EXISTS activity_templates (
+        id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+        name                       TEXT    NOT NULL,
+        title_template             TEXT    NOT NULL,
+        description                TEXT,
+        category                   TEXT    NOT NULL DEFAULT 'misc',
+        assignment_strategy        TEXT    NOT NULL DEFAULT 'subject_skill'
+                                           CHECK(assignment_strategy IN ('subject_skill', 'eligible_round_robin', 'fixed')),
+        subject_required           INTEGER NOT NULL DEFAULT 1 CHECK(subject_required IN (0, 1)),
+        fixed_user_id              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        supervision_title_template TEXT,
+        active                     INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by                 INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at                 TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at                 TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_activity_templates_active ON activity_templates(active);
+
+      CREATE TABLE IF NOT EXISTS activity_template_skills (
+        activity_template_id INTEGER NOT NULL REFERENCES activity_templates(id) ON DELETE CASCADE,
+        skill_id              INTEGER NOT NULL REFERENCES skills(id) ON DELETE RESTRICT,
+        sort_order            INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0),
+        PRIMARY KEY (activity_template_id, skill_id),
+        UNIQUE (activity_template_id, sort_order)
+      );
+      CREATE INDEX idx_activity_template_skills_skill ON activity_template_skills(skill_id);
+
+      CREATE TABLE IF NOT EXISTS activity_rotation_state (
+        activity_template_id INTEGER NOT NULL REFERENCES activity_templates(id) ON DELETE CASCADE,
+        purpose              TEXT    NOT NULL CHECK(purpose IN ('primary', 'supervisor')),
+        last_user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY (activity_template_id, purpose)
+      );
+
+      CREATE TABLE IF NOT EXISTS workflow_templates (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        name              TEXT    NOT NULL,
+        description       TEXT,
+        category          TEXT    NOT NULL DEFAULT 'misc',
+        quick_add_enabled INTEGER NOT NULL DEFAULT 1 CHECK(quick_add_enabled IN (0, 1)),
+        subject_required  INTEGER NOT NULL DEFAULT 1 CHECK(subject_required IN (0, 1)),
+        input_schema_json TEXT,
+        active            INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at        TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_workflow_templates_quick_add
+        ON workflow_templates(quick_add_enabled, active);
+
+      CREATE TABLE IF NOT EXISTS workflow_template_steps (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_template_id INTEGER NOT NULL REFERENCES workflow_templates(id) ON DELETE CASCADE,
+        activity_template_id INTEGER NOT NULL REFERENCES activity_templates(id) ON DELETE RESTRICT,
+        step_key             TEXT    NOT NULL,
+        sort_order           INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0),
+        title_override       TEXT,
+        condition_json       TEXT,
+        UNIQUE (workflow_template_id, step_key),
+        UNIQUE (workflow_template_id, sort_order)
+      );
+      CREATE INDEX idx_workflow_steps_activity ON workflow_template_steps(activity_template_id);
+
+      CREATE TABLE IF NOT EXISTS workflow_step_dependencies (
+        step_id            INTEGER NOT NULL REFERENCES workflow_template_steps(id) ON DELETE CASCADE,
+        depends_on_step_id INTEGER NOT NULL REFERENCES workflow_template_steps(id) ON DELETE CASCADE,
+        PRIMARY KEY (step_id, depends_on_step_id),
+        CHECK(step_id != depends_on_step_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS workflow_instances (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_template_id INTEGER REFERENCES workflow_templates(id) ON DELETE SET NULL,
+        subject_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        parent_task_id       INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        status               TEXT    NOT NULL DEFAULT 'open' CHECK(status IN ('open', 'done', 'cancelled')),
+        input_json           TEXT,
+        created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_workflow_instances_subject ON workflow_instances(subject_user_id);
+      CREATE INDEX idx_workflow_instances_parent ON workflow_instances(parent_task_id);
+
+      CREATE TABLE IF NOT EXISTS workflow_instance_tasks (
+        workflow_instance_id INTEGER NOT NULL REFERENCES workflow_instances(id) ON DELETE CASCADE,
+        workflow_step_id     INTEGER REFERENCES workflow_template_steps(id) ON DELETE SET NULL,
+        task_id              INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        role                 TEXT    NOT NULL DEFAULT 'primary' CHECK(role IN ('primary', 'supervisor')),
+        PRIMARY KEY (workflow_instance_id, task_id),
+        UNIQUE (task_id)
+      );
+      CREATE INDEX idx_workflow_instance_tasks_step ON workflow_instance_tasks(workflow_step_id);
+
+      CREATE TABLE IF NOT EXISTS workflow_task_dependencies (
+        task_id            INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        depends_on_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        PRIMARY KEY (task_id, depends_on_task_id),
+        CHECK(task_id != depends_on_task_id)
+      );
+      CREATE INDEX idx_workflow_task_dependencies_predecessor
+        ON workflow_task_dependencies(depends_on_task_id);
+    `,
+  },
+  {
+    version: 163,
+    description: 'Tasks: bind scheduled and recurring work to Activity Templates',
+    up: `
+      CREATE TABLE IF NOT EXISTS task_activity_bindings (
+        task_id              INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        activity_template_id INTEGER NOT NULL REFERENCES activity_templates(id) ON DELETE RESTRICT,
+        subject_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_task_activity_bindings_activity
+        ON task_activity_bindings(activity_template_id);
+      CREATE INDEX idx_task_activity_bindings_subject
+        ON task_activity_bindings(subject_user_id);
+
+      CREATE TABLE IF NOT EXISTS task_activity_support_tasks (
+        source_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        task_id        INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        role           TEXT NOT NULL DEFAULT 'supervisor' CHECK(role IN ('supervisor')),
+        UNIQUE(source_task_id, role)
+      );
+      CREATE INDEX idx_task_activity_support_source
+        ON task_activity_support_tasks(source_task_id);
+    `,
+  },
 ];
 
 /**

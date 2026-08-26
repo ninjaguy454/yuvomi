@@ -15,6 +15,7 @@ import { esc, renderMarkdownLight } from '/utils/html.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
+import { openQuickAdd } from '/components/activity-automation.js';
 import { resolveReminderPreset, parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { isPreviewable } from '/utils/document-preview.js';
@@ -510,6 +511,7 @@ function renderTaskCard(task, opts = {}) {
             ${s.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
           </button>
           <span class="subtask-item__title">${esc(s.title)}</span>
+          ${s.assigned_name ? `<span class="subtask-item__assignee">${esc(s.assigned_name)}</span>` : ''}
           ${canEditTaskDefinition(s, task) ? `
           <div class="subtask-item__actions">
             <button class="btn btn--ghost btn--icon btn--icon-sm subtask-item__action"
@@ -566,7 +568,7 @@ function renderTaskCard(task, opts = {}) {
         ${renderAvatarStack(task.assigned_users ?? [], { size: 28 })}
 
         ${canEdit && !(task.subtask_total > 0) && !archived && !task.parent_task_id ? `
-        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action" data-action="add-subtask" data-parent="${task.id}"
+        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action task-card__add-subtask" data-action="add-subtask" data-parent="${task.id}"
                 aria-label="${t('tasks.subtaskAdd')}" title="${t('tasks.subtaskAdd')}">
           <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
         </button>` : ''}
@@ -893,6 +895,23 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
   const rotationGroup = task?.rotation_group || '';
   const rotationPosition = Number(task?.rotation_slot ?? 0) + 1;
   const visibility  = task?.visibility || 'all';
+  const activityTemplateId = task?.activity_template_id ? Number(task.activity_template_id) : null;
+  const activitySubjectUserId = task?.activity_subject_user_id ? Number(task.activity_subject_user_id) : null;
+  const activityTemplates = [...(state.activityTemplates ?? [])];
+  if (activityTemplateId && !activityTemplates.some((item) => Number(item.id) === activityTemplateId)) {
+    activityTemplates.push({
+      id: activityTemplateId,
+      name: task?.activity_template_name || `Activity ${activityTemplateId}`,
+      subject_required: task?.activity_subject_required ? 1 : 0,
+      inactive: true,
+    });
+  }
+  const activityOptions = activityTemplates.map((activity) =>
+    `<option value="${activity.id}" data-subject-required="${activity.subject_required ? '1' : '0'}" ${activityTemplateId === Number(activity.id) ? 'selected' : ''}>${esc(activity.name)}${activity.inactive ? ' (inactive)' : ''}</option>`
+  ).join('');
+  const activitySubjectOptions = users.map((user) =>
+    `<option value="${user.id}" ${activitySubjectUserId === Number(user.id) ? 'selected' : ''}>${esc(user.display_name)}</option>`
+  ).join('');
 
   const selectedCat = task?.category ?? FALLBACK_CATEGORY;
   const categoryOptions = state.categories.map((c) =>
@@ -1047,7 +1066,25 @@ ${syncTargetFieldHtml(task)}
            und „- Niemand -" (Critique 2026-08-10). Das Feld bleibt im DOM und
            behaelt seinen Wert, es wird nur verborgen - der Absende-Pfad liest
            es unveraendert (utils/household.js). -->
-      <div class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
+      <div class="form-group" style="margin-top:var(--space-4)">
+        <label class="label" for="task-activity-template">Activity template</label>
+        <select class="input" id="task-activity-template" name="activity_template_id">
+          <option value="">Manual assignment</option>
+          ${activityOptions}
+        </select>
+        <p class="task-field-hint">When selected, skills and proficiency determine who owns each occurrence. Manual fixed and round-robin assignment are bypassed.</p>
+      </div>
+
+      <div class="form-group" id="task-activity-subject" style="margin-top:var(--space-4)" hidden>
+        <label class="label" for="task-activity-subject-user">Activity subject</label>
+        <select class="input" id="task-activity-subject-user" name="activity_subject_user_id">
+          <option value="">Choose a household member</option>
+          ${activitySubjectOptions}
+        </select>
+        <p class="task-field-hint">The subject is the household member this activity is being performed for or by.</p>
+      </div>
+
+      <div class="form-group" id="task-manual-assignment-mode" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-assignment-mode">Assignment mode</label>
         <select class="input" id="task-assignment-mode" name="assignment_mode">
           <option value="fixed" ${assignmentMode === 'fixed' ? 'selected' : ''}>Fixed</option>
@@ -1377,29 +1414,43 @@ function wireVisibilityWarning(panel, selectSel, msName, warnSel) {
   const ms = panel.querySelector(`.user-ms[data-ms-name="${msName}"]`);
   const rotation = panel.querySelector('#task-round-robin-assignment');
   const mode = panel.querySelector('#task-assignment-mode');
+  const activity = panel.querySelector('#task-activity-template');
   const update = () => {
-    const count = mode?.value === 'round_robin'
-      ? getRotationUserIds(panel).length
-      : getSelectedUserIds(panel, msName).length;
+    const count = activity?.value
+      ? 1
+      : (mode?.value === 'round_robin'
+        ? getRotationUserIds(panel).length
+        : getSelectedUserIds(panel, msName).length);
     warn.hidden = !(select.value === 'assignees' && count === 0);
   };
   select.addEventListener('change', update);
   mode?.addEventListener('change', update);
+  activity?.addEventListener('change', update);
   ms?.addEventListener('click', () => setTimeout(update, 0));
   rotation?.addEventListener('input', update);
   update();
 }
 
 function wireAssignmentMode(panel) {
+  const activity = panel.querySelector('#task-activity-template');
+  const subject = panel.querySelector('#task-activity-subject');
+  const modeWrap = panel.querySelector('#task-manual-assignment-mode');
   const mode = panel.querySelector('#task-assignment-mode');
   const fixed = panel.querySelector('#task-fixed-assignment');
   const rotation = panel.querySelector('#task-round-robin-assignment');
   if (!mode || !fixed || !rotation) return;
   const update = () => {
-    const roundRobin = mode.value === 'round_robin';
-    fixed.hidden = roundRobin;
+    const managed = !!activity?.value;
+    const requiresSubject = managed
+      && activity.selectedOptions?.[0]?.dataset.subjectRequired === '1';
+    const manualVisible = !managed && !isSoloHousehold();
+    if (subject) subject.hidden = !requiresSubject;
+    if (modeWrap) modeWrap.hidden = !manualVisible;
+    const roundRobin = manualVisible && mode.value === 'round_robin';
+    fixed.hidden = !manualVisible || roundRobin;
     rotation.hidden = !roundRobin;
   };
+  activity?.addEventListener('change', update);
   mode.addEventListener('change', update);
   update();
 }
@@ -1512,7 +1563,10 @@ function wireTaskForm(panel, { task = null, container }) {
     // Aufgabe oeffnen darf - findet dort eine Zeile weniger als vorhanden ist.
     allowedMemberIds: () => {
       let ids;
-      if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {
+      if (panel.querySelector('#task-activity-template')?.value) {
+        const persistedAssignee = Number(task?.assigned_to);
+        ids = Number.isInteger(persistedAssignee) && persistedAssignee > 0 ? [persistedAssignee] : [];
+      } else if (panel.querySelector('#task-assignment-mode')?.value === 'round_robin') {
         const rotationIds = getRotationUserIds(panel).map(Number);
         const persistedAssignee = Number(task?.assigned_to);
         if (Number.isInteger(persistedAssignee) && persistedAssignee > 0) {
@@ -2107,6 +2161,9 @@ function renderTaskDetail(task, reminders = [], container = null) {
     { icon: 'calendar-clock', label: t('tasks.startDateLabel'), value: task.start_date ? formatDate(task.start_date) : '' },
     recurrenceRow(task.recurrence_rule, { fromCompletion: !!task.recurrence_from_completion }),
     { icon: 'folder', label: t('tasks.categoryLabel'), value: task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category) : '' },
+    { icon: 'sparkles', label: 'Activity template', value: task.activity_template_name
+      ? `${task.activity_template_name}${task.activity_subject_name ? ` · ${task.activity_subject_name}` : ''}`
+      : '' },
     assignedRow(task.assigned_users, t('tasks.assignedLabel')),
     { icon: 'award', label: t('tasks.pointsLabel'), value: task.points ? String(task.points) : '' },
     { icon: 'tag', label: t('tasks.tagsLabel'), node: tagChipsNode(task.tags) },
@@ -2439,9 +2496,17 @@ async function handleFormSubmit(e, container) {
   // direkt speichert, hat ihn gemeint.
   const pendingTag = form.querySelector('#task-tag-input')?.value ?? '';
   const tags = normalizeTagList([...modalTags, ...pendingTag.split(',')]);
-  const assignmentMode = form.querySelector('#task-assignment-mode')?.value || 'fixed';
-  const rotationUserIds = getRotationUserIds(form);
-  const rotationGroup = form.querySelector('#task-rotation-group')?.value.trim() || '';
+  const activitySelect = form.querySelector('#task-activity-template');
+  const activityTemplateId = activitySelect?.value ? Number(activitySelect.value) : null;
+  const activityRequiresSubject = !!activityTemplateId
+    && activitySelect?.selectedOptions?.[0]?.dataset.subjectRequired === '1';
+  const activitySubjectUserId = activityRequiresSubject
+    ? Number(form.querySelector('#task-activity-subject-user')?.value || 0) || null
+    : null;
+  const managedActivity = Number.isInteger(activityTemplateId) && activityTemplateId > 0;
+  const assignmentMode = managedActivity ? 'fixed' : (form.querySelector('#task-assignment-mode')?.value || 'fixed');
+  const rotationUserIds = managedActivity ? [] : getRotationUserIds(form);
+  const rotationGroup = managedActivity ? '' : (form.querySelector('#task-rotation-group')?.value.trim() || '');
   const rotationPosition = Number(form.querySelector('#task-rotation-position')?.value || 1);
 
   const body = {
@@ -2452,9 +2517,11 @@ async function handleFormSubmit(e, container) {
     tags,
     start_date:      startDate || null,
     due_date:        dueDate || null,
-    assigned_to:     assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
+    assigned_to:     !managedActivity && assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
+    activity_template_id: managedActivity ? activityTemplateId : null,
+    activity_subject_user_id: managedActivity ? activitySubjectUserId : null,
     assignment_mode: assignmentMode,
-    rotation_user_ids: assignmentMode === 'round_robin' ? rotationUserIds : [],
+    rotation_user_ids: !managedActivity && assignmentMode === 'round_robin' ? rotationUserIds : [],
     rotation_group: assignmentMode === 'round_robin' && rotationGroup ? rotationGroup : null,
     rotation_slot: assignmentMode === 'round_robin' && rotationGroup ? rotationPosition - 1 : 0,
     visibility:      form.querySelector('#task-visibility')?.value || 'all',
@@ -2481,7 +2548,10 @@ async function handleFormSubmit(e, container) {
   if (dueTimeRaw && !dueTime) { resetSubmit(t('calendar.invalidDate')); return; }
   body.due_time = dueTime || null;
   if (form.status) body.status = form.status.value;
-  if (assignmentMode === 'round_robin') {
+  if (managedActivity && activityRequiresSubject && !activitySubjectUserId) {
+    resetSubmit('Choose a household member for this Activity Template.'); return;
+  }
+  if (!managedActivity && assignmentMode === 'round_robin') {
     if (!rrule.is_recurring) { resetSubmit('Round robin requires a recurring task.'); return; }
     if (rotationUserIds.length < 2) { resetSubmit('Choose at least two members for the round-robin rotation.'); return; }
     if (rotationGroup && (!Number.isInteger(rotationPosition) || rotationPosition < 1 || rotationPosition > rotationUserIds.length)) {
@@ -3676,6 +3746,15 @@ function wireNewTaskBtn(container) {
   findPageFab('fab-new-task')?.addEventListener('click', handler);
 }
 
+function wireQuickAddBtn(container) {
+  container.querySelector('#btn-quick-add')?.addEventListener('click', () => {
+    openQuickAdd({
+      isAdmin: state.isAdmin,
+      onCreated: async () => loadTasks(container),
+    });
+  });
+}
+
 function updateBulkActionsBar(container) {
   const bar = container.querySelector('#bulk-actions-bar');
   const count = container.querySelector('#bulk-count');
@@ -3954,6 +4033,10 @@ export async function render(container, { user }) {
                   aria-label="${t('tasks.manageTags')}" title="${t('tasks.manageTags')}">
             <i data-lucide="tags" class="icon-lg" aria-hidden="true"></i>
           </button>
+          <button class="btn btn--icon btn--ghost" id="btn-quick-add"
+                  aria-label="Quick Add" title="Quick Add">
+            <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
+          </button>
           <button class="btn btn--primary toolbar-new-btn" id="btn-new-task" style="gap:var(--space-1)"
                   aria-label="${t('tasks.newTask')}">
             <i data-lucide="plus" class="icon-lg" aria-hidden="true"></i> <span class="toolbar-new-btn__label">${t('newLabel.tasks')}</span>
@@ -4036,12 +4119,15 @@ export async function render(container, { user }) {
 
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
-    const [tasksData, metaData, preferencesData] = await Promise.all([
+    const [tasksData, metaData, preferencesData, activityData] = await Promise.all([
       api.get(`/tasks${taskQuery()}`),
       api.get('/tasks/meta/options'),
       // Reine Anzeigepräferenz: ein Fehler hier darf die Aufgabenliste nicht
       // mit in den Ladefehler ziehen, deshalb eigener Fallback.
       api.get('/preferences').catch(() => ({ data: {} })),
+      // Activity Templates augment assignment; a catalogue failure must not
+      // make the ordinary task list look unavailable.
+      api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } })),
     ]);
     state.loadError = null;
     state.tasks = tasksData.data ?? [];
@@ -4049,6 +4135,7 @@ export async function render(container, { user }) {
     state.categories = metaData.categories ?? [];
     state.allTags = metaData.tags ?? [];
     state.defaultPoints = Number(metaData.default_points) || 0;
+    state.activityTemplates = activityData.data?.activities ?? [];
     state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
     state.defaultSyncTarget = preferencesData.data?.tasks_default_target || '';
   } catch (err) {
@@ -4065,6 +4152,7 @@ export async function render(container, { user }) {
     state.categories = [];
     state.allTags = [];
     state.defaultPoints = 0;
+    state.activityTemplates = [];
     state.subtasksExpandedByDefault = false;
     state.defaultSyncTarget = '';
   }
@@ -4073,6 +4161,7 @@ export async function render(container, { user }) {
   wireViewToggle(container);
   wireGroupToggle(container);
   wireNewTaskBtn(container);
+  wireQuickAddBtn(container);
   wireTaskList(container);
   wireBulkSelect(container);
   wireBulkCheckboxes(container);

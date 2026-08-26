@@ -65,7 +65,6 @@ jobs:
           scripts['test'] = chain
           p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
           PY
-          git add package.json
 
           git checkout --theirs server/db.js
           python - <<'PY'
@@ -126,7 +125,6 @@ jobs:
           text = text.replace(old_export, new_export, 1)
           p.write_text(text)
           PY
-          git add server/db.js
 
           python - <<'PY'
           from pathlib import Path
@@ -146,7 +144,6 @@ jobs:
               raise SystemExit(f'Expected 3 tasks.js conflict blocks, resolved {count}')
           p.write_text(text)
           PY
-          git add server/routes/tasks.js
 
           python - <<'PY'
           from pathlib import Path
@@ -155,11 +152,6 @@ jobs:
               p.write_text(p.read_text().replace('MIGRATIONS', 'ALL_MIGRATIONS'))
           PY
 
-          # Upstream task-router integration tests build in-memory databases from
-          # MIGRATIONS. The merged task router also depends on fork-only schema, so
-          # those fixtures must include ALL_MIGRATIONS. Keep the append-only guard
-          # on canonical MIGRATIONS because it intentionally checks upstream's
-          # contiguous sequence.
           python - <<'PY'
           from pathlib import Path
           import re
@@ -216,7 +208,8 @@ jobs:
             d.close();
           });
           EOF
-          git add test
+
+          git add -A
           if git diff --name-only --diff-filter=U | grep -q .; then
             git diff --name-only --diff-filter=U
             exit 1
@@ -245,6 +238,11 @@ jobs:
       - name: Commit merged upstream
         shell: bash
         run: |
+          git add -A
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
           git status --short
           git commit -m "Merge upstream Yuvomi v2.45 with fork automation"
           git push origin HEAD:sync/upstream-2.45

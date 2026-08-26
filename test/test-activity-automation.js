@@ -266,6 +266,13 @@ test('Soiled Sheets-style workflow expands activities, supervision, and dependen
   assert.equal(makeBed.assigned_to.id, frank);
   assert.ok([grace, mom].includes(supervise.assigned_to.id));
 
+  const parentBlocked = unresolvedDependencies(db, instance.parent_task_id);
+  assert.deepEqual(
+    new Set(parentBlocked.map((row) => row.id)),
+    new Set(instance.tasks.map((row) => row.task_id)),
+    'workflow parent stays dependent on every generated activity',
+  );
+
   const blockedPrimary = unresolvedDependencies(db, makeBed.task_id);
   const blockedSupervisor = unresolvedDependencies(db, supervise.task_id);
   assert.deepEqual(blockedPrimary.map((row) => row.id), [wash.task_id]);

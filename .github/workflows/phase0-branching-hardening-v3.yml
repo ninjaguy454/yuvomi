@@ -1,0 +1,362 @@
+name: Phase 0 branching hardening v3
+
+on:
+  push:
+    paths:
+      - '.github/workflows/phase0-branching-hardening-v3.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/activity-templates-skills-quick-add
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Apply branching hardening
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              assert count == 1, f'{label}: expected one exact match, got {count}'
+              return text.replace(old, new, 1)
+
+          def sub_once(text, pattern, replacement_fn, label, flags=0):
+              out, count = re.subn(pattern, replacement_fn, text, count=1, flags=flags)
+              assert count == 1, f'{label}: expected one regex match, got {count}'
+              return out
+
+          # --------------------------------------------------------------
+          # server/routes/automation.js
+          # --------------------------------------------------------------
+          p = Path('server/routes/automation.js')
+          s = p.read_text()
+
+          s = replace_once(
+              s,
+              "const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);",
+              "const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);\nconst VALID_WORKFLOW_INPUT_TYPES = new Set(['boolean', 'text', 'select']);",
+              'workflow input type constants',
+          )
+
+          marker = 'function normalizeWorkflowInput(body, existing = null) {'
+          helpers = r'''function normalizeWorkflowInputSchema(raw) {
+            if (!Array.isArray(raw)) throw new Error('input_schema must be an array.');
+            const questions = raw.map((question, index) => {
+              if (!question || typeof question !== 'object' || Array.isArray(question)) {
+                throw new Error(`Workflow question ${index + 1} must be an object.`);
+              }
+              const key = text(question.key, { required: true, max: 80 });
+              if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(key)) {
+                throw new Error(`Workflow question ${index + 1} has an invalid key.`);
+              }
+              const label = text(question.label ?? key, { required: true, max: 200 });
+              const type = question.type ?? 'text';
+              if (!VALID_WORKFLOW_INPUT_TYPES.has(type)) {
+                throw new Error(`Workflow question ${key} has an unsupported type.`);
+              }
+              const options = type === 'select'
+                ? [...new Set((Array.isArray(question.options) ? question.options : [])
+                    .map((value) => String(value).trim()).filter(Boolean))]
+                : [];
+              if (type === 'select' && !options.length) {
+                throw new Error(`Workflow question ${key} needs at least one choice.`);
+              }
+              return { key, label, type, options };
+            });
+            if (new Set(questions.map((question) => question.key)).size !== questions.length) {
+              throw new Error('Workflow question keys must be unique.');
+            }
+            return questions;
+          }
+
+          function normalizeWorkflowConditionValue(question, value) {
+            if (question.type === 'boolean') {
+              if (value === true || value === false) return value;
+              if (value === 'true') return true;
+              if (value === 'false') return false;
+              throw new Error(`Condition for ${question.key} must be Yes or No.`);
+            }
+            const normalized = value == null ? '' : String(value);
+            if (question.type === 'select' && !question.options.includes(normalized)) {
+              throw new Error(`Condition for ${question.key} must use one of its configured choices.`);
+            }
+            return normalized;
+          }
+
+          function normalizeWorkflowCondition(condition, questionsByKey, stepKey) {
+            if (condition == null) return null;
+            if (!condition || typeof condition !== 'object' || Array.isArray(condition)) {
+              throw new Error(`Workflow step ${stepKey} has an invalid condition.`);
+            }
+            const input = text(condition.input, { required: true, max: 80 });
+            const question = questionsByKey.get(input);
+            if (!question) {
+              throw new Error(`Workflow step ${stepKey} references unknown question "${input}".`);
+            }
+            const hasEquals = Object.hasOwn(condition, 'equals');
+            const hasIn = Array.isArray(condition.in);
+            if ((hasEquals ? 1 : 0) + (hasIn ? 1 : 0) !== 1) {
+              throw new Error(`Workflow step ${stepKey} condition must use exactly one comparison.`);
+            }
+            if (hasEquals) {
+              return { input, equals: normalizeWorkflowConditionValue(question, condition.equals) };
+            }
+            if (!condition.in.length) {
+              throw new Error(`Workflow step ${stepKey} condition cannot have an empty choice list.`);
+            }
+            return {
+              input,
+              in: [...new Set(condition.in.map((value) => normalizeWorkflowConditionValue(question, value)))],
+            };
+          }
+
+          '''
+          s = replace_once(s, marker, helpers + marker, 'workflow normalization helpers')
+
+          s = sub_once(
+              s,
+              r"  const inputSchema = Array\.isArray\(body\.input_schema\)\s*\? body\.input_schema\s*:\s*\(existing\?\.input_schema \?\? \[\]\);",
+              lambda _m: "  const rawInputSchema = body.input_schema !== undefined\n    ? body.input_schema\n    : (existing?.input_schema ?? []);\n  const inputSchema = normalizeWorkflowInputSchema(rawInputSchema);\n  const questionsByKey = new Map(inputSchema.map((question) => [question.key, question]));",
+              'workflow input schema normalization',
+              re.S,
+          )
+
+          validation_prefix = """  const keys = new Set(normalizedSteps.map((step) => step.stepKey));
+            const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
+            for (const [index, step] of normalizedSteps.entries()) {
+          """
+          validation_replacement = """  const keys = new Set(normalizedSteps.map((step) => step.stepKey));
+            const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
+            for (const step of normalizedSteps) {
+              step.condition = normalizeWorkflowCondition(step.condition, questionsByKey, step.stepKey);
+            }
+            for (const [index, step] of normalizedSteps.entries()) {
+          """
+          # YAML indentation is stripped from the embedded Python source, so
+          # normalize the accidental leading spaces in these literals before matching.
+          validation_prefix = '\n'.join(line[10:] if line.startswith('          ') else line for line in validation_prefix.splitlines()) + '\n'
+          validation_replacement = '\n'.join(line[10:] if line.startswith('          ') else line for line in validation_replacement.splitlines()) + '\n'
+          s = replace_once(s, validation_prefix, validation_replacement, 'workflow condition normalization loop')
+          p.write_text(s)
+
+          # --------------------------------------------------------------
+          # server/services/activity-workflows.js
+          # --------------------------------------------------------------
+          p = Path('server/services/activity-workflows.js')
+          s = p.read_text()
+
+          s = sub_once(
+              s,
+              r"function conditionMatches\(condition, inputs\) \{.*?\n\}",
+              lambda _m: r'''function normalizeRuntimeInputs(workflow, inputs) {
+            if (inputs == null) return {};
+            if (typeof inputs !== 'object' || Array.isArray(inputs)) {
+              throw new Error('Workflow inputs must be an object.');
+            }
+            const questions = new Map((workflow.input_schema ?? []).map((question) => [question.key, question]));
+            for (const key of Object.keys(inputs)) {
+              if (!questions.has(key)) throw new Error(`Unknown workflow input: ${key}.`);
+            }
+            const normalized = {};
+            for (const question of workflow.input_schema ?? []) {
+              if (!Object.hasOwn(inputs, question.key)) continue;
+              const value = inputs[question.key];
+              if (question.type === 'boolean') {
+                if (value === true || value === false) normalized[question.key] = value;
+                else if (value === 'true' || value === 'false') normalized[question.key] = value === 'true';
+                else throw new Error(`Workflow input ${question.key} must be Yes or No.`);
+              } else if (question.type === 'select') {
+                const selected = value == null ? '' : String(value);
+                const options = (question.options ?? []).map(String);
+                if (!options.includes(selected)) {
+                  throw new Error(`Workflow input ${question.key} must use one of its configured choices.`);
+                }
+                normalized[question.key] = selected;
+              } else {
+                normalized[question.key] = value == null ? '' : String(value);
+              }
+            }
+            return normalized;
+          }
+
+          function conditionMatches(condition, inputs) {
+            if (!condition) return true;
+            if (!condition.input) throw new Error('Invalid workflow condition.');
+            if (Object.hasOwn(condition, 'equals')) return inputs?.[condition.input] === condition.equals;
+            if (Array.isArray(condition.in)) return condition.in.includes(inputs?.[condition.input]);
+            throw new Error('Invalid workflow condition.');
+          }''',
+              'runtime input validator and condition matcher',
+              re.S,
+          )
+
+          preview_tail = """  if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
+
+            const output = [];
+            for (const step of workflow.steps) {
+              if (!conditionMatches(step.condition, inputs)) continue;
+          """
+          preview_new = """  if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
+            const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
+            const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
+            if (!activeSteps.length) throw new Error('No activities apply to these answers.');
+            const activeStepKeys = new Set(activeSteps.map((step) => step.step_key));
+
+            const output = [];
+            for (const step of activeSteps) {
+          """
+          preview_tail = '\n'.join(line[10:] if line.startswith('          ') else line for line in preview_tail.splitlines()) + '\n'
+          preview_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in preview_new.splitlines()) + '\n'
+          s = replace_once(s, preview_tail, preview_new, 'preview branch filtering')
+          s = replace_once(s, '      depends_on: step.depends_on,', '      depends_on: step.depends_on.filter((key) => activeStepKeys.has(key)),', 'preview active dependency display')
+          s = replace_once(s, '    inputs,\n    steps: output,', '    inputs: runtimeInputs,\n    steps: output,', 'preview normalized runtime inputs')
+
+          instantiate_tail = """  if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
+            if (!createdBy) throw new Error('A creator is required.');
+
+            return d.transaction(() => {
+          """
+          instantiate_new = """  if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
+            if (!createdBy) throw new Error('A creator is required.');
+            const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
+            const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
+            if (!activeSteps.length) throw new Error('No activities apply to these answers.');
+
+            return d.transaction(() => {
+          """
+          instantiate_tail = '\n'.join(line[10:] if line.startswith('          ') else line for line in instantiate_tail.splitlines()) + '\n'
+          instantiate_new = '\n'.join(line[10:] if line.startswith('          ') else line for line in instantiate_new.splitlines()) + '\n'
+          s = replace_once(s, instantiate_tail, instantiate_new, 'instantiate branch filtering')
+          s = replace_once(s, 'JSON.stringify(inputs ?? {})', 'JSON.stringify(runtimeInputs)', 'instance normalized input storage')
+          s = replace_once(
+              s,
+              "    for (const step of workflow.steps) {\n      if (!conditionMatches(step.condition, inputs)) continue;",
+              "    for (const step of activeSteps) {",
+              'instantiate active step loop',
+          )
+          p.write_text(s)
+
+          # --------------------------------------------------------------
+          # test/test-activity-automation-routes.js
+          # --------------------------------------------------------------
+          p = Path('test/test-activity-automation-routes.js')
+          s = p.read_text()
+          assert 'workflow branching validates question references' not in s
+          s += r'''
+
+          test('workflow branching validates question references and skips inactive branches safely', async () => {
+            const activity = await call('POST', '/automation/admin/activity-templates', {
+              name: 'Branch Test Activity', title_template: 'Branch Test Activity', category: 'misc',
+              assignment_strategy: 'fixed', subject_required: false, fixed_user_id: admin, skill_ids: [],
+            });
+            assert.equal(activity.status, 201, JSON.stringify(activity.body));
+            const activityId = activity.body.data.id;
+
+            const invalidQuestionReference = await call('POST', '/automation/admin/workflow-templates', {
+              name: 'Invalid condition reference', category: 'misc', subject_required: false, quick_add_enabled: false,
+              input_schema: [{ key: 'mattress_soiled', label: 'Mattress soiled?', type: 'boolean' }],
+              steps: [{ step_key: 'clean', activity_template_id: activityId,
+                condition: { input: 'mattres_soiled', equals: true }, depends_on: [] }],
+            });
+            assert.equal(invalidQuestionReference.status, 400, JSON.stringify(invalidQuestionReference.body));
+            assert.match(invalidQuestionReference.body.error, /unknown question/i);
+
+            const invalidSelectCondition = await call('POST', '/automation/admin/workflow-templates', {
+              name: 'Invalid select branch', category: 'misc', subject_required: false, quick_add_enabled: false,
+              input_schema: [{ key: 'severity', label: 'Severity', type: 'select', options: ['light', 'heavy'] }],
+              steps: [{ step_key: 'clean', activity_template_id: activityId,
+                condition: { input: 'severity', equals: 'medium' }, depends_on: [] }],
+            });
+            assert.equal(invalidSelectCondition.status, 400, JSON.stringify(invalidSelectCondition.body));
+            assert.match(invalidSelectCondition.body.error, /configured choices/i);
+
+            const workflow = await call('POST', '/automation/admin/workflow-templates', {
+              name: 'Conditional dependency test', category: 'misc', subject_required: false, quick_add_enabled: true,
+              input_schema: [{ key: 'mattress_soiled', label: 'Mattress soiled?', type: 'boolean' }],
+              steps: [
+                { step_key: 'start', activity_template_id: activityId, depends_on: [] },
+                { step_key: 'clean', activity_template_id: activityId,
+                  condition: { input: 'mattress_soiled', equals: true }, depends_on: ['start'] },
+                { step_key: 'finish', activity_template_id: activityId, depends_on: ['clean'] },
+              ],
+            });
+            assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+            const workflowId = workflow.body.data.id;
+
+            const falsePreview = await call('POST', `/automation/quick-add/${workflowId}/preview`, {
+              inputs: { mattress_soiled: false },
+            });
+            assert.equal(falsePreview.status, 200, JSON.stringify(falsePreview.body));
+            assert.deepEqual(falsePreview.body.data.steps.map((step) => step.step_key), ['start', 'finish']);
+            assert.deepEqual(falsePreview.body.data.steps.find((step) => step.step_key === 'finish').depends_on, []);
+
+            const falseCreated = await call('POST', `/automation/quick-add/${workflowId}/create`, {
+              inputs: { mattress_soiled: false },
+            });
+            assert.equal(falseCreated.status, 201, JSON.stringify(falseCreated.body));
+            assert.deepEqual(falseCreated.body.data.tasks.map((task) => task.step_key), ['start', 'finish']);
+            const falseFinish = falseCreated.body.data.tasks.find((task) => task.step_key === 'finish');
+            assert.deepEqual(
+              db.prepare('SELECT depends_on_task_id FROM workflow_task_dependencies WHERE task_id = ?').all(falseFinish.task_id),
+              [],
+            );
+
+            const truePreview = await call('POST', `/automation/quick-add/${workflowId}/preview`, {
+              inputs: { mattress_soiled: true },
+            });
+            assert.equal(truePreview.status, 200, JSON.stringify(truePreview.body));
+            assert.deepEqual(truePreview.body.data.steps.map((step) => step.step_key), ['start', 'clean', 'finish']);
+            assert.deepEqual(truePreview.body.data.steps.find((step) => step.step_key === 'finish').depends_on, ['clean']);
+
+            const unknownRuntimeInput = await call('POST', `/automation/quick-add/${workflowId}/preview`, {
+              inputs: { mattress_soiled: false, mattres_soiled: true },
+            });
+            assert.equal(unknownRuntimeInput.status, 400, JSON.stringify(unknownRuntimeInput.body));
+            assert.match(unknownRuntimeInput.body.error, /unknown workflow input/i);
+
+            const allConditional = await call('POST', '/automation/admin/workflow-templates', {
+              name: 'All conditional', category: 'misc', subject_required: false, quick_add_enabled: true,
+              input_schema: [{ key: 'run_it', label: 'Run it?', type: 'boolean' }],
+              steps: [{ step_key: 'only', activity_template_id: activityId,
+                condition: { input: 'run_it', equals: true }, depends_on: [] }],
+            });
+            assert.equal(allConditional.status, 201, JSON.stringify(allConditional.body));
+            const beforeInstances = db.prepare('SELECT COUNT(*) AS n FROM workflow_instances').get().n;
+            const beforeTasks = db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n;
+
+            const emptyPreview = await call('POST', `/automation/quick-add/${allConditional.body.data.id}/preview`, {
+              inputs: { run_it: false },
+            });
+            assert.equal(emptyPreview.status, 400, JSON.stringify(emptyPreview.body));
+            assert.match(emptyPreview.body.error, /no activities apply/i);
+
+            const emptyCreate = await call('POST', `/automation/quick-add/${allConditional.body.data.id}/create`, {
+              inputs: { run_it: false },
+            });
+            assert.equal(emptyCreate.status, 400, JSON.stringify(emptyCreate.body));
+            assert.match(emptyCreate.body.error, /no activities apply/i);
+            assert.equal(db.prepare('SELECT COUNT(*) AS n FROM workflow_instances').get().n, beforeInstances);
+            assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, beforeTasks);
+          });
+          '''
+          p.write_text(s)
+      - run: npm ci
+      - run: npm run test:activity-automation
+      - run: npm run test:activity-automation-routes
+      - run: npm run test:task-activity-bindings
+      - name: Commit hardening changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add server/routes/automation.js server/services/activity-workflows.js test/test-activity-automation-routes.js
+          git diff --cached --quiet || git commit -m "fix(automation): harden workflow branching"
+          git push origin HEAD:feat/activity-templates-skills-quick-add

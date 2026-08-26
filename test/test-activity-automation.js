@@ -74,13 +74,20 @@ function setProficiency(userId, skillId, proficiency) {
   `).run(userId, skillId, proficiency, admin);
 }
 
-function addActivity({ name, title, strategy = 'subject_skill', subjectRequired = 1, skillIds = [] }) {
+function addActivity({
+  name,
+  title,
+  strategy = 'subject_skill',
+  subjectRequired = 1,
+  skillIds = [],
+  fixedUserId = null,
+}) {
   const id = Number(db.prepare(`
     INSERT INTO activity_templates (
       name, title_template, category, assignment_strategy, subject_required,
-      supervision_title_template, active, created_by
-    ) VALUES (?, ?, 'misc', ?, ?, 'Supervise {subject}: {activity}', 1, ?)
-  `).run(name, title, strategy, subjectRequired, admin).lastInsertRowid);
+      fixed_user_id, supervision_title_template, active, created_by
+    ) VALUES (?, ?, 'misc', ?, ?, ?, 'Supervise {subject}: {activity}', 1, ?)
+  `).run(name, title, strategy, subjectRequired, fixedUserId, admin).lastInsertRowid);
   const insert = db.prepare(`
     INSERT INTO activity_template_skills (activity_template_id, skill_id, sort_order)
     VALUES (?, ?, ?)
@@ -139,6 +146,34 @@ test('adult-only safety rule cannot be bypassed by a manual child proficiency', 
   const result = effectiveSkillProficiency(db, skill, frankRow, '2026-08-25');
   assert.equal(result.proficiency, 'excluded');
   assert.equal(result.reason, 'adult_only');
+});
+
+test('inactive skills remain enforced by activities that already require them', () => {
+  db.prepare('UPDATE skills SET active = 0 WHERE id = ?').run(laundrySkill);
+  const frankRow = db.prepare(`SELECT u.*, b.birth_date FROM users u LEFT JOIN birthdays b ON b.family_user_id = u.id WHERE u.id = ?`).get(frank);
+  const result = effectiveActivityProficiency(db, laundryActivity, frankRow, '2026-08-25');
+  assert.equal(result.proficiency, 'excluded');
+  assert.equal(result.skills.length, 1);
+  assert.equal(result.skills[0].skill.id, laundrySkill);
+  db.prepare('UPDATE skills SET active = 1 WHERE id = ?').run(laundrySkill);
+});
+
+test('fixed assignment cannot bypass skill or adult-only eligibility', () => {
+  const fixedAdultActivity = addActivity({
+    name: 'Adult-only fixed work',
+    title: 'Adult-only fixed work',
+    strategy: 'fixed',
+    subjectRequired: 0,
+    skillIds: [adultSkill],
+    fixedUserId: frank,
+  });
+  assert.throws(
+    () => resolveActivityAssignment(db, activity(fixedAdultActivity), {
+      commitRotation: false,
+      dateKey: '2026-08-25',
+    }),
+    /not independently qualified/i,
+  );
 });
 
 test('subject-skill assignment creates a supervisor only while the subject is supervised', () => {

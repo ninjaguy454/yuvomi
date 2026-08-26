@@ -45,13 +45,18 @@ export function ageOnDate(birthDate, dateKey) {
 }
 
 export function householdMembers(d) {
-  // Shared-expense guest accounts are not household chore participants.
+  // Guest and housekeeping-worker accounts are real login users but are not
+  // household chore participants. Keep them out of subject pickers and every
+  // automatically derived eligible rotation.
   return d.prepare(`
     SELECT u.id, u.display_name, u.family_role, b.birth_date
       FROM users u
       LEFT JOIN birthdays b ON b.family_user_id = u.id
      WHERE NOT EXISTS (
        SELECT 1 FROM split_expense_guest_users g WHERE g.user_id = u.id
+     )
+       AND NOT EXISTS (
+       SELECT 1 FROM housekeeping_workers hw WHERE hw.user_id = u.id
      )
      ORDER BY u.id ASC
   `).all();

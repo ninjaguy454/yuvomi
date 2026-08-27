@@ -223,6 +223,7 @@ export const SETTINGS_LEAVES = freezeEntries([
     path: '/settings/modules/automation',
     labelKey: 'settings.pageHouseholdAutomation',
     descriptionKey: 'settings.pageHouseholdAutomationDescription',
+    descriptionInContent: true,
     icon: 'workflow',
     module: 'tasks',
     adminOnly: true,

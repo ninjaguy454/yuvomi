@@ -131,7 +131,7 @@ test('die Blätter verteilen sich wie beschlossen auf die vier Domänen', () => 
   // Zugangsdaten des Haushalts.
   const perDomain = {};
   for (const leaf of SETTINGS_LEAVES) perDomain[leaf.domainId] = (perDomain[leaf.domainId] ?? 0) + 1;
-  assert.deepEqual(perDomain, { personal: 11, modules: 5, sync: 5, admin: 8 });
+  assert.deepEqual(perDomain, { personal: 11, modules: 6, sync: 5, admin: 8 });
   // Jedes Blatt hängt an einer existierenden Domäne.
   const domainIds = new Set(SETTINGS_DOMAINS.map((domain) => domain.id));
   for (const leaf of SETTINGS_LEAVES) {
@@ -250,6 +250,33 @@ test('das Blatt der aktiven Module liegt adminOnly in der Modul-Domaene', () => 
   assert.equal(leaf.adminOnly, true);
   assert.equal(findSettingsLeaf('/settings/modules/active', admin)?.id, 'modules-active');
   assert.equal(findSettingsLeaf('/settings/modules/active', member), null);
+});
+
+test('household automation is an admin Settings leaf and Quick Add stays execution-only', async () => {
+  const leaf = SETTINGS_LEAVES.find((entry) => entry.id === 'modules-automation');
+  assert.ok(leaf, 'modules-automation leaf is missing from the registry');
+  assert.equal(leaf.domainId, 'modules');
+  assert.equal(leaf.module, 'tasks');
+  assert.equal(leaf.adminOnly, true);
+  assert.equal(findSettingsLeaf('/settings/modules/automation', admin)?.id, 'modules-automation');
+  assert.equal(findSettingsLeaf('/settings/modules/automation', member), null);
+
+  const page = await readFile(
+    new URL('../public/settings/pages/modules-automation.js', import.meta.url),
+    'utf8',
+  );
+  const component = await readFile(
+    new URL('../public/components/activity-automation.js', import.meta.url),
+    'utf8',
+  );
+  const styles = await readFile(
+    new URL('../public/styles/settings.css', import.meta.url),
+    'utf8',
+  );
+  assert.match(page, /renderAutomationManager/);
+  assert.match(component, /export async function renderAutomationManager/);
+  assert.doesNotMatch(component, /automation-manage-from-quick/);
+  assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.automation-question-row/);
 });
 
 test('navigation settings leaf reuses the canonical module-order helpers', async () => {

@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "चक्र दृश्य सहेजा गया।",
         "pageRewardsModule": "पुरस्कार",
         "pageRewardsModuleDescription": "पुरस्कार मॉड्यूल सक्षम करें और अनुमोदन नियंत्रित करें।",
+        "pageHouseholdAutomation": "घरेलू स्वचालन",
+        "pageHouseholdAutomationDescription": "दोबारा उपयोग किए जा सकने वाले कौशल, गतिविधियाँ और क्विक ऐड टेम्पलेट प्रबंधित करें।",
         "rewardsEnableTitle": "दृश्यता",
         "rewardsEnableLabel": "पुरस्कार सक्षम करें",
         "rewardsEnableHint": "नेविगेशन में पुरस्कार मॉड्यूल दिखाता है। अक्षम करने पर सभी डेटा बना रहता है।",

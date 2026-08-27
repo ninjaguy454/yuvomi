@@ -218,6 +218,17 @@ export const SETTINGS_LEAVES = freezeEntries([
     loader: () => import('/settings/pages/modules-rewards.js'),
   },
   {
+    id: 'modules-automation',
+    domainId: 'modules',
+    path: '/settings/modules/automation',
+    labelKey: 'settings.pageHouseholdAutomation',
+    descriptionKey: 'settings.pageHouseholdAutomationDescription',
+    icon: 'workflow',
+    module: 'tasks',
+    adminOnly: true,
+    loader: () => import('/settings/pages/modules-automation.js'),
+  },
+  {
     id: 'sync-calendar',
     domainId: 'sync',
     path: '/settings/sync/calendar',

@@ -9,6 +9,7 @@
 
 import { todayKey } from '../utils/timezone.js';
 import {
+  householdMembers,
   loadSkillRequirements,
   resolveActivityAssignment,
   renderActivityTitle,
@@ -84,32 +85,70 @@ export function listWorkflowTemplates(d, { quickAddOnly = false, activeOnly = fa
   }));
 }
 
-function normalizeRuntimeInputs(workflow, inputs) {
+function workflowVariableId(question) {
+  return question?.id ?? question?.key ?? null;
+}
+
+function normalizeRuntimeInputs(d, workflow, inputs) {
   if (inputs == null) return {};
   if (typeof inputs !== 'object' || Array.isArray(inputs)) {
     throw new Error('Workflow inputs must be an object.');
   }
-  const questions = new Map((workflow.input_schema ?? []).map((question) => [question.key, question]));
+  const questions = new Map((workflow.input_schema ?? []).map((question) => [workflowVariableId(question), question]));
   for (const key of Object.keys(inputs)) {
     if (!questions.has(key)) throw new Error(`Unknown workflow input: ${key}.`);
   }
   const normalized = {};
   for (const question of workflow.input_schema ?? []) {
-    if (!Object.hasOwn(inputs, question.key)) continue;
-    const value = inputs[question.key];
+    const variableId = workflowVariableId(question);
+    if (!Object.hasOwn(inputs, variableId)) continue;
+    const value = inputs[variableId];
     if (question.type === 'boolean') {
-      if (value === true || value === false) normalized[question.key] = value;
-      else if (value === 'true' || value === 'false') normalized[question.key] = value === 'true';
-      else throw new Error(`Workflow input ${question.key} must be Yes or No.`);
-    } else if (question.type === 'select') {
+      if (value === true || value === false) normalized[variableId] = value;
+      else if (value === 'true' || value === 'false') normalized[variableId] = value === 'true';
+      else throw new Error(`Workflow input ${variableId} must be Yes or No.`);
+    } else if (question.type === 'select' || question.type === 'choice') {
       const selected = value == null ? '' : String(value);
       const options = (question.options ?? []).map(String);
       if (!options.includes(selected)) {
-        throw new Error(`Workflow input ${question.key} must use one of its configured choices.`);
+        throw new Error(`Workflow input ${variableId} must use one of its configured choices.`);
       }
-      normalized[question.key] = selected;
+      normalized[variableId] = selected;
+    } else if (question.type === 'household_member') {
+      const memberId = Number(value);
+      const validMember = householdMembers(d).some((member) => Number(member.id) === memberId);
+      if (!Number.isInteger(memberId) || !validMember) {
+        throw new Error(`Workflow input ${variableId} must be a valid household member.`);
+      }
+      normalized[variableId] = memberId;
+    } else if (question.type === 'number') {
+      const number = Number(value);
+      if (!Number.isFinite(number) || value === '') {
+        throw new Error(`Workflow input ${variableId} must be a number.`);
+      }
+      normalized[variableId] = number;
+    } else if (question.type === 'date') {
+      const date = value == null ? '' : String(value);
+      const [year, month, day] = date.split('-').map(Number);
+      const parsedDate = new Date(Date.UTC(year, month - 1, day));
+      const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date)
+        && parsedDate.getUTCFullYear() === year
+        && parsedDate.getUTCMonth() === month - 1
+        && parsedDate.getUTCDate() === day;
+      if (!validDate) {
+        throw new Error(`Workflow input ${variableId} must be a date.`);
+      }
+      normalized[variableId] = date;
+    } else if (question.type === 'time') {
+      const time = value == null ? '' : String(value);
+      if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+        throw new Error(`Workflow input ${variableId} must be a time.`);
+      }
+      normalized[variableId] = time;
     } else {
-      normalized[question.key] = value == null ? '' : String(value);
+      const string = value == null ? '' : String(value);
+      if (string.length > 2000) throw new Error(`Workflow input ${variableId} is too long.`);
+      normalized[variableId] = string;
     }
   }
   return normalized;
@@ -117,9 +156,10 @@ function normalizeRuntimeInputs(workflow, inputs) {
 
 function conditionMatches(condition, inputs) {
   if (!condition) return true;
-  if (!condition.input) throw new Error('Invalid workflow condition.');
-  if (Object.hasOwn(condition, 'equals')) return inputs?.[condition.input] === condition.equals;
-  if (Array.isArray(condition.in)) return condition.in.includes(inputs?.[condition.input]);
+  const variableId = condition.variable_id ?? condition.input;
+  if (!variableId) throw new Error('Invalid workflow condition.');
+  if (Object.hasOwn(condition, 'equals')) return inputs?.[variableId] === condition.equals;
+  if (Array.isArray(condition.in)) return condition.in.includes(inputs?.[variableId]);
   throw new Error('Invalid workflow condition.');
 }
 
@@ -150,22 +190,51 @@ function activeDependencyKeys(workflow, activeStepKeys, step) {
 
 function userById(d, id) {
   if (id == null) return null;
-  return d.prepare('SELECT id, display_name, family_role FROM users WHERE id = ?').get(id) ?? null;
+  return householdMembers(d).find((member) => Number(member.id) === Number(id)) ?? null;
 }
 
-function stepTitle(activity, subject, override = null) {
-  if (override) {
-    return String(override).replaceAll('{subject}', subject?.display_name || '').trim();
+function workflowVariableLabels(d, workflow, inputs) {
+  const labels = {};
+  for (const question of workflow.input_schema ?? []) {
+    const variableId = workflowVariableId(question);
+    if (!Object.hasOwn(inputs, variableId)) continue;
+    const value = inputs[variableId];
+    if (question.type === 'household_member') labels[variableId] = userById(d, value)?.display_name ?? '';
+    else if (question.type === 'boolean') labels[variableId] = value ? 'Yes' : 'No';
+    else labels[variableId] = String(value ?? '');
   }
-  return renderActivityTitle(activity, subject);
+  return labels;
 }
 
-function supervisorTitle(activity, subject) {
+function substituteWorkflowVariables(value, labels) {
+  if (value == null) return null;
+  return String(value).replace(/\{\{([A-Za-z][A-Za-z0-9_-]*)\}\}/g, (_match, variableId) => (
+    Object.hasOwn(labels, variableId) ? labels[variableId] : ''
+  ));
+}
+
+function stepTitle(activity, subject, override = null, variableLabels = {}) {
+  const title = override
+    ? String(override).replaceAll('{subject}', subject?.display_name || '').trim()
+    : renderActivityTitle(activity, subject);
+  return substituteWorkflowVariables(title, variableLabels)?.trim();
+}
+
+function stepDescription(activity, override = null, variableLabels = {}) {
+  return substituteWorkflowVariables(override ?? activity.description, variableLabels);
+}
+
+function supervisorTitle(activity, subject, variableLabels = {}) {
   const template = activity.supervision_title_template || 'Supervise {subject}: {activity}';
-  return String(template)
+  return substituteWorkflowVariables(String(template)
     .replaceAll('{subject}', subject?.display_name || '')
     .replaceAll('{activity}', activity.name || 'activity')
-    .trim();
+    .trim(), variableLabels);
+}
+
+function stepSubject(d, step, defaultSubject, inputs) {
+  if (!step.subject_variable_id) return defaultSubject;
+  return userById(d, inputs[step.subject_variable_id]);
 }
 
 /** Pure preview. It intentionally does not advance any rotation cursor. */
@@ -177,7 +246,8 @@ export function previewWorkflow(d, workflowId, {
   if (!workflow || !workflow.active) throw new Error('Workflow template not found.');
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
-  const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
+  const runtimeInputs = normalizeRuntimeInputs(d, workflow, inputs);
+  const variableLabels = workflowVariableLabels(d, workflow, runtimeInputs);
   const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
   if (!activeSteps.length) throw new Error('No activities apply to these answers.');
   const activeStepKeys = new Set(activeSteps.map((step) => step.step_key));
@@ -194,21 +264,24 @@ export function previewWorkflow(d, workflowId, {
       for (const step of activeSteps) {
         const activity = getActivityTemplate(d, step.activity_template_id);
         if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
+        const activitySubject = stepSubject(d, step, subject, runtimeInputs);
         const resolution = resolveActivityAssignment(d, activity, {
-subjectUserId: subject?.id ?? null,
-commitRotation: true,
+          subjectUserId: activitySubject?.id ?? null,
+          commitRotation: true,
         });
         output.push({
-step_key: step.step_key,
-activity_template_id: activity.id,
-activity_name: activity.name,
-title: stepTitle(activity, subject, step.title_override),
-assigned_to: resolution.primary,
-supervisor: resolution.supervisor,
-supervisor_title: resolution.supervisor ? supervisorTitle(activity, subject) : null,
-subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
-depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
-category: activity.category,
+          step_key: step.step_key,
+          activity_template_id: activity.id,
+          activity_name: activity.name,
+          title: stepTitle(activity, activitySubject, step.title_override, variableLabels),
+          description: stepDescription(activity, step.description_override, variableLabels),
+          subject: activitySubject,
+          assigned_to: resolution.primary,
+          supervisor: resolution.supervisor,
+          supervisor_title: resolution.supervisor ? supervisorTitle(activity, activitySubject, variableLabels) : null,
+          subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
+          depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
+          category: activity.category,
         });
       }
       throw rollbackPreview;
@@ -220,8 +293,8 @@ category: activity.category,
   return {
     workflow: {
       id: workflow.id,
-      name: workflow.name,
-      description: workflow.description,
+      name: substituteWorkflowVariables(workflow.name, variableLabels),
+      description: substituteWorkflowVariables(workflow.description, variableLabels),
       subject_required: workflow.subject_required,
     },
     subject,
@@ -280,7 +353,8 @@ export function instantiateWorkflow(d, workflowId, {
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
   if (!createdBy) throw new Error('A creator is required.');
-  const runtimeInputs = normalizeRuntimeInputs(workflow, inputs);
+  const runtimeInputs = normalizeRuntimeInputs(d, workflow, inputs);
+  const variableLabels = workflowVariableLabels(d, workflow, runtimeInputs);
   const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
   if (!activeSteps.length) throw new Error('No activities apply to these answers.');
   const activeStepKeys = new Set(activeSteps.map((step) => step.step_key));
@@ -293,12 +367,11 @@ export function instantiateWorkflow(d, workflowId, {
     `).run(workflow.id, subject?.id ?? null, JSON.stringify(runtimeInputs), createdBy);
     const instanceId = Number(instance.lastInsertRowid);
 
-    const parentTitle = subject
-      ? `${workflow.name}: ${subject.display_name}`
-      : workflow.name;
+    const workflowName = substituteWorkflowVariables(workflow.name, variableLabels);
+    const parentTitle = subject ? `${workflowName}: ${subject.display_name}` : workflowName;
     const parentTaskId = insertTask(d, {
       title: parentTitle,
-      description: workflow.description,
+      description: substituteWorkflowVariables(workflow.description, variableLabels),
       category: workflow.category || 'misc',
       createdBy,
       dueDate: todayKey(d),
@@ -312,14 +385,15 @@ export function instantiateWorkflow(d, workflowId, {
     for (const step of activeSteps) {
       const activity = getActivityTemplate(d, step.activity_template_id);
       if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
+      const activitySubject = stepSubject(d, step, subject, runtimeInputs);
       const resolution = resolveActivityAssignment(d, activity, {
-        subjectUserId: subject?.id ?? null,
+        subjectUserId: activitySubject?.id ?? null,
         commitRotation: true,
       });
 
       const primaryTaskId = insertTask(d, {
-        title: stepTitle(activity, subject, step.title_override),
-        description: activity.description,
+        title: stepTitle(activity, activitySubject, step.title_override, variableLabels),
+        description: stepDescription(activity, step.description_override, variableLabels),
         category: activity.category,
         assignedTo: resolution.primary?.id ?? null,
         createdBy,
@@ -338,12 +412,13 @@ export function instantiateWorkflow(d, workflowId, {
         role: 'primary',
         step_key: step.step_key,
         assigned_to: resolution.primary,
+        subject: activitySubject,
       });
 
       if (resolution.supervisor) {
         const supervisionTaskId = insertTask(d, {
-          title: supervisorTitle(activity, subject),
-          description: `Supervise ${subject?.display_name || 'the household member'} while they complete: ${activity.name}`,
+          title: supervisorTitle(activity, activitySubject, variableLabels),
+          description: `Supervise ${activitySubject?.display_name || 'the household member'} while they complete: ${activity.name}`,
           category: activity.category,
           assignedTo: resolution.supervisor.id,
           createdBy,

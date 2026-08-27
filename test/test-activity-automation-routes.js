@@ -209,7 +209,7 @@ test('workflow branching validates question references and skips inactive branch
       condition: { input: 'mattres_soiled', equals: true }, depends_on: [] }],
   });
   assert.equal(invalidQuestionReference.status, 400, JSON.stringify(invalidQuestionReference.body));
-  assert.match(invalidQuestionReference.body.error, /unknown question/i);
+  assert.match(invalidQuestionReference.body.error, /unknown variable/i);
 
   const invalidSelectCondition = await call('POST', '/automation/admin/workflow-templates', {
     name: 'Invalid select branch', category: 'misc', subject_required: false, quick_add_enabled: false,
@@ -288,4 +288,113 @@ test('workflow branching validates question references and skips inactive branch
   assert.match(emptyCreate.body.error, /no activities apply/i);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM workflow_instances').get().n, beforeInstances);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n, beforeTasks);
+});
+
+test('typed variables use stable IDs for member subjects, conditions, and substitutions', async () => {
+  const activity = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Typed Variable Activity',
+    title_template: 'Prepare for {subject}',
+    description: 'Default preparation for {{traveler}}',
+    category: 'misc',
+    assignment_strategy: 'fixed',
+    subject_required: true,
+    fixed_user_id: admin,
+    skill_ids: [],
+  });
+  assert.equal(activity.status, 201, JSON.stringify(activity.body));
+
+  const inputSchema = [
+    { id: 'traveler', label: 'Who is traveling?', type: 'household_member' },
+    { id: 'include_packing', label: 'Include packing?', type: 'boolean' },
+    { id: 'meal', label: 'Meal', type: 'choice', options: ['regular', 'vegetarian'] },
+    { id: 'bags', label: 'Number of bags', type: 'number' },
+    { id: 'depart_date', label: 'Departure date', type: 'date' },
+    { id: 'depart_time', label: 'Departure time', type: 'time' },
+    { id: 'note', label: 'Note', type: 'text' },
+  ];
+  const workflow = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Trip for {{traveler}}',
+    description: '{{note}}',
+    category: 'misc',
+    subject_required: false,
+    quick_add_enabled: true,
+    input_schema: inputSchema,
+    steps: [{
+      step_key: 'pack',
+      activity_template_id: activity.body.data.id,
+      subject_variable_id: 'traveler',
+      title_override: 'Pack {{bags}} bags for {subject}',
+      description_override: '{{note}} on {{depart_date}} at {{depart_time}} ({{meal}})',
+      condition: { variable_id: 'include_packing', equals: true },
+      depends_on: [],
+    }],
+  });
+  assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+  assert.equal(workflow.body.data.input_schema[0].id, 'traveler');
+  assert.equal(workflow.body.data.steps[0].subject_variable_id, 'traveler');
+  assert.equal(workflow.body.data.steps[0].condition.variable_id, 'include_packing');
+
+  const inputs = {
+    traveler: frank,
+    include_packing: true,
+    meal: 'vegetarian',
+    bags: 3,
+    depart_date: '2026-09-01',
+    depart_time: '08:30',
+    note: 'Bring hats',
+  };
+  const preview = await call('POST', `/automation/quick-add/${workflow.body.data.id}/preview`, { inputs });
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  assert.equal(preview.body.data.workflow.name, 'Trip for Frank');
+  assert.equal(preview.body.data.steps[0].subject.id, frank);
+  assert.equal(preview.body.data.steps[0].title, 'Pack 3 bags for Frank');
+  assert.equal(preview.body.data.steps[0].description, 'Bring hats on 2026-09-01 at 08:30 (vegetarian)');
+
+  const created = await call('POST', `/automation/quick-add/${workflow.body.data.id}/create`, { inputs });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const primaryTask = db.prepare('SELECT title, description FROM tasks WHERE id = ?')
+    .get(created.body.data.tasks[0].task_id);
+  assert.deepEqual(primaryTask, {
+    title: 'Pack 3 bags for Frank',
+    description: 'Bring hats on 2026-09-01 at 08:30 (vegetarian)',
+  });
+
+  const invalidMember = await call('POST', `/automation/quick-add/${workflow.body.data.id}/preview`, {
+    inputs: { ...inputs, traveler: 999999 },
+  });
+  assert.equal(invalidMember.status, 400, JSON.stringify(invalidMember.body));
+  assert.match(invalidMember.body.error, /valid household member/i);
+
+  const invalidDate = await call('POST', `/automation/quick-add/${workflow.body.data.id}/preview`, {
+    inputs: { ...inputs, depart_date: '2026-02-31' },
+  });
+  assert.equal(invalidDate.status, 400, JSON.stringify(invalidDate.body));
+  assert.match(invalidDate.body.error, /must be a date/i);
+
+  const invalidTemplateReference = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Trip for {{missing_variable}}',
+    category: 'misc',
+    subject_required: false,
+    quick_add_enabled: false,
+    input_schema: inputSchema,
+    steps: [{ step_key: 'pack', activity_template_id: activity.body.data.id, depends_on: [] }],
+  });
+  assert.equal(invalidTemplateReference.status, 400, JSON.stringify(invalidTemplateReference.body));
+  assert.match(invalidTemplateReference.body.error, /unknown variable/i);
+
+  const invalidSubjectType = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Invalid typed subject',
+    category: 'misc',
+    subject_required: false,
+    quick_add_enabled: false,
+    input_schema: inputSchema,
+    steps: [{
+      step_key: 'pack',
+      activity_template_id: activity.body.data.id,
+      subject_variable_id: 'bags',
+      depends_on: [],
+    }],
+  });
+  assert.equal(invalidSubjectType.status, 400, JSON.stringify(invalidSubjectType.body));
+  assert.match(invalidSubjectType.body.error, /Household Member variable/i);
 });

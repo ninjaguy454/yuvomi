@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Cyclusweergave opgeslagen.",
         "pageRewardsModule": "Beloningen",
         "pageRewardsModuleDescription": "De beloningenmodule inschakelen en goedkeuringen beheren.",
+        "pageHouseholdAutomation": "Huishoudautomatisering",
+        "pageHouseholdAutomationDescription": "Herbruikbare vaardigheden, activiteiten en sjablonen voor Snel toevoegen beheren.",
         "rewardsEnableTitle": "Zichtbaarheid",
         "rewardsEnableLabel": "Beloningen inschakelen",
         "rewardsEnableHint": "Toont de beloningenmodule in de navigatie. Bij uitschakelen blijven alle gegevens behouden.",

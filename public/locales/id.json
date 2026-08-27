@@ -1437,6 +1437,8 @@
         "healthCyclePersonalSaved": "Tampilan siklus disimpan.",
         "pageRewardsModule": "Hadiah",
         "pageRewardsModuleDescription": "Aktifkan modul hadiah dan kelola persetujuan.",
+        "pageHouseholdAutomation": "Otomatisasi rumah tangga",
+        "pageHouseholdAutomationDescription": "Kelola keterampilan, aktivitas, dan templat Tambah Cepat yang dapat digunakan kembali.",
         "rewardsEnableTitle": "Visibilitas",
         "rewardsEnableLabel": "Aktifkan hadiah",
         "rewardsEnableHint": "Menampilkan modul hadiah di navigasi. Menonaktifkan tetap menyimpan semua data.",

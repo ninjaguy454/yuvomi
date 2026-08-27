@@ -31,7 +31,9 @@ const log = createLogger('Automation');
 const VALID_PROFICIENCY = new Set(Object.values(PROFICIENCY));
 const VALID_AGE_PROMOTION = new Set([PROFICIENCY.SUPERVISED, PROFICIENCY.NORMAL]);
 const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);
-const VALID_WORKFLOW_INPUT_TYPES = new Set(['boolean', 'text', 'select']);
+const VALID_WORKFLOW_INPUT_TYPES = new Set([
+  'household_member', 'boolean', 'choice', 'select', 'text', 'number', 'date', 'time',
+]);
 
 function text(value, { required = false, max = 200 } = {}) {
   const out = value == null ? '' : String(value).trim();
@@ -156,53 +158,66 @@ function normalizeWorkflowInputSchema(raw) {
     if (!question || typeof question !== 'object' || Array.isArray(question)) {
       throw new Error(`Workflow question ${index + 1} must be an object.`);
     }
-    const key = text(question.key, { required: true, max: 80 });
-    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(key)) {
-      throw new Error(`Workflow question ${index + 1} has an invalid key.`);
+    const variableId = text(question.id ?? question.key, { required: true, max: 80 });
+    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(variableId)) {
+      throw new Error(`Workflow question ${index + 1} has an invalid variable ID.`);
     }
-    const label = text(question.label ?? key, { required: true, max: 200 });
-    const type = question.type ?? 'text';
+    const label = text(question.label ?? variableId, { required: true, max: 200 });
+    const requestedType = question.type ?? 'text';
+    const type = requestedType === 'select' ? 'choice' : requestedType;
     if (!VALID_WORKFLOW_INPUT_TYPES.has(type)) {
-      throw new Error(`Workflow question ${key} has an unsupported type.`);
+      throw new Error(`Workflow question ${variableId} has an unsupported type.`);
     }
-    const options = type === 'select'
+    const options = type === 'choice'
       ? [...new Set((Array.isArray(question.options) ? question.options : [])
           .map((value) => String(value).trim()).filter(Boolean))]
       : [];
-    if (type === 'select' && !options.length) {
-      throw new Error(`Workflow question ${key} needs at least one choice.`);
+    if (type === 'choice' && !options.length) {
+      throw new Error(`Workflow question ${variableId} needs at least one choice.`);
     }
-    return { key, label, type, options };
+    return { id: variableId, label, type, options };
   });
-  if (new Set(questions.map((question) => question.key)).size !== questions.length) {
-    throw new Error('Workflow question keys must be unique.');
+  if (new Set(questions.map((question) => question.id)).size !== questions.length) {
+    throw new Error('Workflow variable IDs must be unique.');
   }
   return questions;
 }
 
-function normalizeWorkflowConditionValue(question, value) {
+function normalizeWorkflowConditionValue(d, question, value) {
   if (question.type === 'boolean') {
     if (value === true || value === false) return value;
     if (value === 'true') return true;
     if (value === 'false') return false;
-    throw new Error(`Condition for ${question.key} must be Yes or No.`);
+    throw new Error(`Condition for ${question.id} must be Yes or No.`);
   }
   const normalized = value == null ? '' : String(value);
-  if (question.type === 'select' && !question.options.includes(normalized)) {
-    throw new Error(`Condition for ${question.key} must use one of its configured choices.`);
+  if (question.type === 'choice' && !question.options.includes(normalized)) {
+    throw new Error(`Condition for ${question.id} must use one of its configured choices.`);
+  }
+  if (question.type === 'number') {
+    const number = Number(value);
+    if (!Number.isFinite(number)) throw new Error(`Condition for ${question.id} must be a number.`);
+    return number;
+  }
+  if (question.type === 'household_member') {
+    const memberId = Number(value);
+    if (!Number.isInteger(memberId) || memberId <= 0 || !validHouseholdUser(d, memberId)) {
+      throw new Error(`Condition for ${question.id} must be a household member.`);
+    }
+    return memberId;
   }
   return normalized;
 }
 
-function normalizeWorkflowCondition(condition, questionsByKey, stepKey) {
+function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
   if (condition == null) return null;
   if (!condition || typeof condition !== 'object' || Array.isArray(condition)) {
     throw new Error(`Workflow step ${stepKey} has an invalid condition.`);
   }
-  const input = text(condition.input, { required: true, max: 80 });
-  const question = questionsByKey.get(input);
+  const variableId = text(condition.variable_id ?? condition.input, { required: true, max: 80 });
+  const question = questionsByKey.get(variableId);
   if (!question) {
-    throw new Error(`Workflow step ${stepKey} references unknown question "${input}".`);
+    throw new Error(`Workflow step ${stepKey} references unknown variable "${variableId}".`);
   }
   const hasEquals = Object.hasOwn(condition, 'equals');
   const hasIn = Array.isArray(condition.in);
@@ -210,18 +225,27 @@ function normalizeWorkflowCondition(condition, questionsByKey, stepKey) {
     throw new Error(`Workflow step ${stepKey} condition must use exactly one comparison.`);
   }
   if (hasEquals) {
-    return { input, equals: normalizeWorkflowConditionValue(question, condition.equals) };
+    return { variable_id: variableId, equals: normalizeWorkflowConditionValue(d, question, condition.equals) };
   }
   if (!condition.in.length) {
     throw new Error(`Workflow step ${stepKey} condition cannot have an empty choice list.`);
   }
   return {
-    input,
-    in: [...new Set(condition.in.map((value) => normalizeWorkflowConditionValue(question, value)))],
+    variable_id: variableId,
+    in: [...new Set(condition.in.map((value) => normalizeWorkflowConditionValue(d, question, value)))],
   };
 }
 
-function normalizeWorkflowInput(body, existing = null) {
+function validateVariableTemplate(value, questionsById, field) {
+  if (!value) return;
+  for (const match of String(value).matchAll(/\{\{([A-Za-z][A-Za-z0-9_-]*)\}\}/g)) {
+    if (!questionsById.has(match[1])) {
+      throw new Error(`${field} references unknown variable "${match[1]}".`);
+    }
+  }
+}
+
+function normalizeWorkflowInput(d, body, existing = null) {
   const name = text(body.name ?? existing?.name, { required: true, max: 120 });
   const description = text(body.description ?? existing?.description, { max: 2000 });
   const category = text(body.category ?? existing?.category ?? 'misc', { required: true, max: 80 });
@@ -229,7 +253,9 @@ function normalizeWorkflowInput(body, existing = null) {
     ? body.input_schema
     : (existing?.input_schema ?? []);
   const inputSchema = normalizeWorkflowInputSchema(rawInputSchema);
-  const questionsByKey = new Map(inputSchema.map((question) => [question.key, question]));
+  const questionsByKey = new Map(inputSchema.map((question) => [question.id, question]));
+  validateVariableTemplate(name, questionsByKey, 'Workflow name');
+  validateVariableTemplate(description, questionsByKey, 'Workflow description');
   const steps = Array.isArray(body.steps)
     ? body.steps
     : (existing?.steps ?? []);
@@ -240,10 +266,24 @@ function normalizeWorkflowInput(body, existing = null) {
     if (!activityTemplateId) throw new Error(`Step ${index + 1} needs an activity template.`);
     const stepKey = text(step.step_key || step.key || `step_${index + 1}`, { required: true, max: 80 })
       .replace(/[^a-zA-Z0-9_-]+/g, '_');
+    const subjectVariableId = text(step.subject_variable_id, { max: 80 });
+    if (subjectVariableId) {
+      const subjectQuestion = questionsByKey.get(subjectVariableId);
+      if (!subjectQuestion) throw new Error(`Workflow step ${stepKey} references unknown subject variable "${subjectVariableId}".`);
+      if (subjectQuestion.type !== 'household_member') {
+        throw new Error(`Workflow step ${stepKey} subject must use a Household Member variable.`);
+      }
+    }
+    const titleOverride = text(step.title_override, { max: 200 });
+    const descriptionOverride = text(step.description_override, { max: 2000 });
+    validateVariableTemplate(titleOverride, questionsByKey, `Workflow step ${stepKey} title`);
+    validateVariableTemplate(descriptionOverride, questionsByKey, `Workflow step ${stepKey} description`);
     return {
       stepKey,
       activityTemplateId,
-      titleOverride: text(step.title_override, { max: 200 }),
+      titleOverride,
+      descriptionOverride,
+      subjectVariableId,
       condition: step.condition && typeof step.condition === 'object' ? step.condition : null,
       dependsOn: Array.isArray(step.depends_on)
         ? [...new Set(step.depends_on.map(String).filter(Boolean))]
@@ -253,10 +293,25 @@ function normalizeWorkflowInput(body, existing = null) {
   if (new Set(normalizedSteps.map((step) => step.stepKey)).size !== normalizedSteps.length) {
     throw new Error('Workflow step keys must be unique.');
   }
+  for (const step of normalizedSteps) {
+    const activity = d.prepare(`
+      SELECT name, title_template, description, supervision_title_template
+        FROM activity_templates
+       WHERE id = ?
+    `).get(step.activityTemplateId);
+    if (!activity) throw new Error('A workflow step references an unknown activity template.');
+    validateVariableTemplate(activity.title_template, questionsByKey, `Activity ${activity.name} title`);
+    validateVariableTemplate(activity.description, questionsByKey, `Activity ${activity.name} description`);
+    validateVariableTemplate(
+      activity.supervision_title_template,
+      questionsByKey,
+      `Activity ${activity.name} supervision title`,
+    );
+  }
   const keys = new Set(normalizedSteps.map((step) => step.stepKey));
   const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
   for (const step of normalizedSteps) {
-    step.condition = normalizeWorkflowCondition(step.condition, questionsByKey, step.stepKey);
+    step.condition = normalizeWorkflowCondition(d, step.condition, questionsByKey, step.stepKey);
   }
   for (const [index, step] of normalizedSteps.entries()) {
     if (step.dependsOn.some((key) => !keys.has(key) || key === step.stepKey)) {
@@ -282,10 +337,10 @@ function normalizeWorkflowInput(body, existing = null) {
 function replaceWorkflowSteps(d, workflowId, steps) {
   d.prepare('DELETE FROM workflow_template_steps WHERE workflow_template_id = ?').run(workflowId);
   const insert = d.prepare(`
-    INSERT INTO workflow_template_steps (
-      workflow_template_id, activity_template_id, step_key, sort_order,
-      title_override, condition_json
-    ) VALUES (?, ?, ?, ?, ?, ?)
+      INSERT INTO workflow_template_steps (
+        workflow_template_id, activity_template_id, step_key, sort_order,
+        title_override, description_override, subject_variable_id, condition_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const ids = new Map();
   steps.forEach((step, index) => {
@@ -295,6 +350,8 @@ function replaceWorkflowSteps(d, workflowId, steps) {
       step.stepKey,
       index,
       step.titleOverride,
+      step.descriptionOverride,
+      step.subjectVariableId,
       step.condition ? JSON.stringify(step.condition) : null,
     );
     ids.set(step.stepKey, Number(result.lastInsertRowid));
@@ -556,6 +613,7 @@ router.get('/admin/workflow-templates', requireAdmin, (req, res) => {
     res.json({
       data: workflows,
       activities: listActivityTemplates(d, { activeOnly: true }),
+      members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
     });
   } catch (err) {
@@ -566,7 +624,7 @@ router.get('/admin/workflow-templates', requireAdmin, (req, res) => {
 router.post('/admin/workflow-templates', requireAdmin, (req, res) => {
   try {
     const d = db.get();
-    const input = normalizeWorkflowInput(req.body);
+    const input = normalizeWorkflowInput(d, req.body);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     for (const step of input.steps) {
       if (!d.prepare('SELECT 1 FROM activity_templates WHERE id = ?').get(step.activityTemplateId)) {
@@ -598,7 +656,7 @@ router.put('/admin/workflow-templates/:id', requireAdmin, (req, res) => {
     const d = db.get();
     const existing = getWorkflowTemplate(d, Number(req.params.id));
     if (!existing) return res.status(404).json({ error: 'Workflow template not found.', code: 404 });
-    const input = normalizeWorkflowInput(req.body, existing);
+    const input = normalizeWorkflowInput(d, req.body, existing);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     d.transaction(() => {
       d.prepare(`

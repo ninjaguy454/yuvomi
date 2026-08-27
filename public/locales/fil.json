@@ -1437,6 +1437,8 @@
         "healthCyclePersonalSaved": "Na-save ang view ng siklo.",
         "pageRewardsModule": "Mga Gantimpala",
         "pageRewardsModuleDescription": "I-enable ang modyul ng gantimpala at kontrolin ang mga pag-apruba.",
+        "pageHouseholdAutomation": "Awtomasyon ng sambahayan",
+        "pageHouseholdAutomationDescription": "Pamahalaan ang mga reusable na kasanayan, aktibidad, at template ng Quick Add.",
         "rewardsEnableTitle": "Pagiging nakikita",
         "rewardsEnableLabel": "I-enable ang mga gantimpala",
         "rewardsEnableHint": "Ipinapakita ang modyul ng gantimpala sa nabigasyon. Nananatili ang lahat ng datos kapag na-disable.",

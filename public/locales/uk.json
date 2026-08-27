@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Вигляд циклу збережено.",
         "pageRewardsModule": "Нагороди",
         "pageRewardsModuleDescription": "Увімкнути модуль нагород і керувати підтвердженнями.",
+        "pageHouseholdAutomation": "Автоматизація дому",
+        "pageHouseholdAutomationDescription": "Керуйте багаторазовими навичками, діями та шаблонами швидкого додавання.",
         "rewardsEnableTitle": "Видимість",
         "rewardsEnableLabel": "Увімкнути нагороди",
         "rewardsEnableHint": "Показує модуль нагород у навігації. Після вимкнення всі дані зберігаються.",

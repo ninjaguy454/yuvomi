@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Vista del ciclo guardada.",
         "pageRewardsModule": "Recompensas",
         "pageRewardsModuleDescription": "Activar el módulo de recompensas y controlar las aprobaciones.",
+        "pageHouseholdAutomation": "Automatización del hogar",
+        "pageHouseholdAutomationDescription": "Gestiona habilidades, actividades y plantillas de adición rápida reutilizables.",
         "rewardsEnableTitle": "Visibilidad",
         "rewardsEnableLabel": "Activar recompensas",
         "rewardsEnableHint": "Muestra el módulo de recompensas en la navegación. Al desactivarlo se conservan todos los datos.",

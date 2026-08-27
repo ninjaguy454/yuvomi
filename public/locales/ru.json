@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Вид цикла сохранён.",
         "pageRewardsModule": "Награды",
         "pageRewardsModuleDescription": "Включить модуль наград и управлять подтверждениями.",
+        "pageHouseholdAutomation": "Домашняя автоматизация",
+        "pageHouseholdAutomationDescription": "Управляйте многоразовыми навыками, действиями и шаблонами быстрого добавления.",
         "rewardsEnableTitle": "Видимость",
         "rewardsEnableLabel": "Включить награды",
         "rewardsEnableHint": "Показывает модуль наград в навигации. При отключении все данные сохраняются.",

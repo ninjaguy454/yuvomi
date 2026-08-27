@@ -260,6 +260,7 @@ const PAGE_MODULES = [
   '/settings/pages/modules-calendar.js',
   '/settings/pages/modules-options.js',
   '/settings/pages/modules-rewards.js',
+  '/settings/pages/modules-automation.js',
   '/settings/pages/sync-calendar.js',
   '/settings/pages/sync-contacts.js',
   '/settings/pages/sync-reminders.js',

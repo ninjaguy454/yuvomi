@@ -9,11 +9,92 @@ import express from 'express';
 import * as db from '../db.js';
 import * as v from '../middleware/validate.js';
 import { syncAllBirthdayReminders } from '../services/birthdays.js';
+import { deniedModules } from '../permissions.js';
+import { tokenAllows } from '../scopes.js';
 
 const log    = createLogger('Reminders');
 const router = express.Router();
 
-const VALID_ENTITY_TYPES = ['task', 'event', 'subscription', 'inventory_item', 'inventory_tracked_date'];
+const VALID_ENTITY_TYPES = ['task', 'event', 'subscription', 'inventory_item', 'inventory_tracked_date', 'pantry_item'];
+
+/**
+ * HERKÜNFTE, DIE EIN LAUF LAUFEND HERSTELLT und die deshalb keine Handeingabe
+ * annehmen: `pantry_item` stellt server/services/pantry-reminders.js in JEDEM
+ * Benachrichtigungsdurchgang wieder her. Ein von Hand gesetzter Termin ist dort
+ * binnen einer Minute weg, und zwar spurlos - ihn anzunehmen wäre eine Zusage,
+ * die niemand hält. Ein ehrliches 400 sagt es sofort.
+ *
+ * WARUM NICHT AUCH `subscription`, `inventory_item`, `inventory_tracked_date`.
+ * Auch sie werden abgeleitet, aber nur beim SCHREIBEN ihres Objekts: dort hält
+ * ein handgesetzter Termin bis zur nächsten Änderung des Abos oder Geräts, und
+ * das ist eine Halbwertszeit, mit der man arbeiten kann. Sie mitzusperren wäre
+ * die geradere Regel und ein rückwirkender Bruch an einer zugesagten
+ * `/api/v1`-Oberfläche, für den es keinen Anlass gibt. Die Unterscheidung ist
+ * nicht Bequemlichkeit, sondern der Unterschied zwischen "hält bis du es
+ * änderst" und "ist in sechzig Sekunden weg" (Entscheidung 2026-08-26).
+ *
+ * Die LESEWEGE (GET) kennen alle Typen weiter: der Erinnerungs-Toast muss eine
+ * abgeleitete Meldung anzeigen und wegwischen können.
+ */
+const DERIVED_ENTITY_TYPES = ['pantry_item'];
+
+/* DIESER ROUTER IST EINE MISCHSTELLE, UND SEIN PFAD SAGT DAS NICHT.
+ *
+ * `/api/v1/reminders` löst über `moduleForPath()` auf `calendar` auf - der
+ * Router teilt sich das Scope-Modul mit Kalender und Geburtstagen (scopes.js).
+ * Die Zeilen, die er ausliefert, stammen aber aus SECHS Modulen: er nennt
+ * Aufgabentitel, Abo-Namen, Inventar-Gegenstände und seit #811 auch
+ * Vorratsartikel.
+ *
+ * Damit reichte ein Token mit `calendar:read`, um über `/reminders/pending` den
+ * Namen eines Vorratsartikels zu lesen, und `calendar:write`, um die Meldung zu
+ * verwerfen - ohne je einen `pantry`- oder `budget`-Scope zu besitzen. Dasselbe
+ * gilt für ein Mitglied, dem ein Modul per `access_permissions` entzogen ist:
+ * der Pfad-Guard in server/index.js fragt nach `calendar` und lässt es durch.
+ *
+ * Genau die Lage, für die es `deniedModules()` gibt (siehe dessen Kommentarkopf
+ * zu /dashboard): wo ein Endpunkt Inhalte aus mehreren Modulen trägt, muss das
+ * Aussortieren in der Route passieren. Eine Rechteregel darf nicht in einer
+ * Middleware wohnen.
+ *
+ * Der Befund kam aus der PR-Review zu #811 und ist älter als dieses Feature -
+ * er betraf fünf Herkünfte, bevor die sechste dazukam. Deshalb steht hier eine
+ * Karte über alle und keine Ausnahme für die neue.
+ */
+const ORIGIN_MODULE = Object.freeze({
+  task:                   'tasks',
+  event:                  'calendar',
+  subscription:           'budget',
+  inventory_item:         'inventory',
+  inventory_tracked_date: 'inventory',
+  pantry_item:            'pantry',
+});
+
+/**
+ * Darf dieser Aufrufer eine Erinnerung dieser Herkunft sehen bzw. anfassen?
+ * Beide Achsen, wie überall: Token-Scopes (Allowlist) und Mitgliedsrechte
+ * (Denylist).
+ */
+function mayTouchOrigin(req, entityType, access = 'read') {
+  const moduleKey = ORIGIN_MODULE[entityType];
+  // Eine unbekannte Herkunft ist keine, die dieser Router ausliefern soll.
+  if (!moduleKey) return false;
+  if (deniedModules(req.sessionModuleAccess).has(moduleKey)) return false;
+  return tokenAllows(req.authScopes, moduleKey, access);
+}
+
+/** Die Herkünfte, die dieser Aufrufer lesen darf - als SQL-taugliche Liste. */
+function readableOrigins(req) {
+  return Object.keys(ORIGIN_MODULE).filter((type) => mayTouchOrigin(req, type, 'read'));
+}
+
+/** Herkünfte, die ein Schreibweg annehmen darf: alle ausser den abgeleiteten. */
+const SETTABLE_ENTITY_TYPES = VALID_ENTITY_TYPES.filter((t) => !DERIVED_ENTITY_TYPES.includes(t));
+
+/** Fehlertext, wenn ein Schreibweg eine abgeleitete Herkunft von Hand setzen will. */
+function derivedTypeError(entityType) {
+  return `Reminders for ${entityType} are derived from the item itself and cannot be set here.`;
+}
 
 // Obergrenze für mehrere Erinnerungen je Entität (z. B. Kalender-Termin, #436).
 const MAX_REMINDERS_PER_ENTITY = 5;
@@ -30,6 +111,11 @@ router.get('/pending', (req, res) => {
     const now    = new Date().toISOString();
     syncAllBirthdayReminders(db.get(), userId, new Date());
 
+    // Nur die Herkünfte, die dieser Aufrufer sehen darf - der Pfad-Guard fragt
+    // für den ganzen Router nach `calendar` und deckt die anderen fünf nicht.
+    const origins = readableOrigins(req);
+    if (!origins.length) return res.json({ data: [] });
+
     const rows = db.get().prepare(`
       SELECT
         r.*,
@@ -43,13 +129,15 @@ router.get('/pending', (req, res) => {
             FROM inventory_item_dates d JOIN inventory_items ii ON ii.id = d.item_id
             WHERE d.id = r.entity_id
           )
+          WHEN 'pantry_item' THEN (SELECT name FROM pantry_items WHERE id = r.entity_id)
         END AS entity_title
       FROM reminders r
       WHERE r.created_by  = ?
         AND r.dismissed   = 0
         AND r.remind_at  <= ?
+        AND r.entity_type IN (${origins.map(() => '?').join(', ')})
       ORDER BY r.remind_at ASC
-    `).all(userId, now);
+    `).all(userId, now, ...origins);
 
     res.json({ data: rows });
   } catch (err) {
@@ -73,6 +161,9 @@ router.get('/all', (req, res) => {
 
     if (!VALID_ENTITY_TYPES.includes(entityType) || !entityId) {
       return res.status(400).json({ error: 'entity_type und entity_id sind erforderlich.', code: 400 });
+    }
+    if (!mayTouchOrigin(req, entityType)) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
     }
 
     const rows = db.get().prepare(`
@@ -102,6 +193,9 @@ router.get('/', (req, res) => {
     if (!VALID_ENTITY_TYPES.includes(entityType) || !entityId) {
       return res.status(400).json({ error: 'entity_type und entity_id sind erforderlich.', code: 400 });
     }
+    if (!mayTouchOrigin(req, entityType)) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
+    }
 
     const row = db.get().prepare(`
       SELECT * FROM reminders
@@ -128,17 +222,25 @@ router.post('/', (req, res) => {
     const { entity_type, entity_id, remind_at } = req.body;
 
     const errors = v.collectErrors([
-      v.oneOf(entity_type,     VALID_ENTITY_TYPES, 'entity_type'),
       v.id(entity_id,          'entity_id'),
       v.datetime(remind_at,    'remind_at', true),
     ]);
 
-    if (!entity_type || !VALID_ENTITY_TYPES.includes(entity_type)) {
-      errors.push('entity_type must be task, event, subscription, inventory_item, or inventory_tracked_date.');
+    // Der `v.oneOf` gegen VALID_ENTITY_TYPES stand hier zusätzlich und sagte
+    // dasselbe ein zweites Mal - seit die abgeleiteten Herkünfte abgewiesen
+    // werden, sagte er sogar etwas anderes: eine Liste, aus der vier Einträge
+    // im nächsten Zweig doch scheitern. Ein Check, eine Antwort.
+    if (!entity_type || !SETTABLE_ENTITY_TYPES.includes(entity_type)) {
+      errors.push(DERIVED_ENTITY_TYPES.includes(entity_type)
+        ? derivedTypeError(entity_type)
+        : `entity_type must be one of: ${SETTABLE_ENTITY_TYPES.join(', ')}.`);
     }
 
     if (errors.length) {
       return res.status(400).json({ error: errors.join(' '), code: 400 });
+    }
+    if (!mayTouchOrigin(req, entity_type, 'write')) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
     }
 
     const entityId = parseInt(entity_id, 10);
@@ -177,6 +279,17 @@ router.put('/', (req, res) => {
 
     if (!VALID_ENTITY_TYPES.includes(entityType) || !entityId) {
       return res.status(400).json({ error: 'entity_type und entity_id sind erforderlich.', code: 400 });
+    }
+    // DERSELBE RIEGEL WIE IN POST. Er fehlte hier zunächst, und das war der
+    // teurere Weg: PUT ersetzt die ganze Menge und darf bis zu fünf Termine
+    // schreiben. Für eine abgeleitete Herkunft zieht der Modul-Sync sie
+    // anschliessend alle auf denselben Zeitpunkt - fünf identische Meldungen
+    // für einen Artikel, statt einer.
+    if (DERIVED_ENTITY_TYPES.includes(entityType)) {
+      return res.status(400).json({ error: derivedTypeError(entityType), code: 400 });
+    }
+    if (!mayTouchOrigin(req, entityType, 'write')) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
     }
     if (!Array.isArray(remindAts)) {
       return res.status(400).json({ error: 'remind_ats muss ein Array sein.', code: 400 });
@@ -242,6 +355,12 @@ router.patch('/:id/dismiss', (req, res) => {
     if (!reminder) {
       return res.status(404).json({ error: 'Erinnerung nicht gefunden.', code: 404 });
     }
+    // Verwerfen ist ein Schreibvorgang am fremden Modul: ein Token mit
+    // `calendar:write` durfte hier bis zur Review von #811 eine Vorrats- oder
+    // Abo-Meldung wegwischen, ohne den Scope dieses Moduls zu besitzen.
+    if (!mayTouchOrigin(req, reminder.entity_type, 'write')) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
+    }
 
     db.get().prepare('UPDATE reminders SET dismissed = 1 WHERE id = ?').run(reminderId);
     res.json({ data: { id: reminderId } });
@@ -266,11 +385,19 @@ router.delete('/:id', (req, res) => {
     }
 
     const reminder = db.get().prepare(
-      'SELECT id FROM reminders WHERE id = ? AND created_by = ?'
+      'SELECT id, entity_type FROM reminders WHERE id = ? AND created_by = ?'
     ).get(reminderId, userId);
 
     if (!reminder) {
       return res.status(404).json({ error: 'Erinnerung nicht gefunden.', code: 404 });
+    }
+    if (!mayTouchOrigin(req, reminder.entity_type, 'write')) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
+    }
+    // Dieselbe Sperre wie beim Filter-Weg daneben: ohne sie bliebe eine
+    // Hintertuer mit exakt derselben folgenlosen Wirkung.
+    if (DERIVED_ENTITY_TYPES.includes(reminder.entity_type)) {
+      return res.status(400).json({ error: derivedTypeError(reminder.entity_type), code: 400 });
     }
 
     db.get().prepare('DELETE FROM reminders WHERE id = ?').run(reminderId);
@@ -294,6 +421,18 @@ router.delete('/', (req, res) => {
 
     if (!VALID_ENTITY_TYPES.includes(entityType) || !entityId) {
       return res.status(400).json({ error: 'entity_type und entity_id sind erforderlich.', code: 400 });
+    }
+    if (!mayTouchOrigin(req, entityType, 'write')) {
+      return res.status(403).json({ error: 'You do not have access to this module.', code: 403 });
+    }
+    // AUCH HIER, aus demselben Grund wie bei POST und PUT - und mit derselben
+    // Wirkungslosigkeit: die geloeschte Zeile legt der naechste Modul-Sync
+    // wieder an, beim Vorrat binnen einer Minute und mit zurueckgesetztem
+    // `pushed_at`, also als frische Meldung. Wer eine abgeleitete Erinnerung
+    // loswerden will, verwirft sie (PATCH /:id/dismiss): das haelt, weil die
+    // Zeile bestehen bleibt.
+    if (DERIVED_ENTITY_TYPES.includes(entityType)) {
+      return res.status(400).json({ error: derivedTypeError(entityType), code: 400 });
     }
 
     db.get().prepare(`

@@ -33,6 +33,13 @@ const SERVER_DIR = path.join(ROOT, 'server');
  * aus `public/` importieren darf. Reine Funktionen, front- und backend-identisch.
  */
 const SHARED_ISOMORPHIC = new Set([
+  // #469: Was aus einem Adressfeld eine Adresse macht - oder eine Absage. Das
+  // Ergebnis landet als `href` einer Kachel auf der Startseite; die Route
+  // prueft es, weil eine Client-Pruefung keine Grenze ist, und das Formular
+  // prueft es, damit es sofort widerspricht statt nach dem Absenden. Zwei
+  // Fassungen liefen hier nicht bei einem Tippfehler auseinander, sondern bei
+  // genau dem Wert, den jemand sucht, der sie auseinanderlaufen sehen will.
+  'public/utils/quick-link-url.js',
   'public/utils/recipe-meal-types.js',
   'public/utils/contact-name.js',
   'public/utils/pantry-units.js',
@@ -61,6 +68,13 @@ const SHARED_ISOMORPHIC = new Set([
   // Haushalt einstellbar und in zwei Modulen nicht waehlbar war (KRW, IDR,
   // IRR waren genau so gestrandet). Eine reine Konstante, sonst nichts.
   'public/utils/currency-codes.js',
+  // #704: Was eine Checklisten-Zeile ist. Der Renderer im Browser entscheidet
+  // damit, welche Zeile ein antippbares Kaestchen bekommt, und die Route
+  // entscheidet damit, welche Zeile einen Haken aendern darf. Zwei Fassungen
+  // hiessen: eine Zeile wird als Kaestchen gezeichnet und beim Antippen mit
+  // 409 abgewiesen - oder, schlimmer, eine Zeile ohne Kaestchen laesst sich
+  // ueber die Route umschreiben. Reine Textfunktionen, kein DOM, kein Node.
+  'public/utils/markdown-checklist.js',
 ]);
 
 const SOURCE_EXT = /\.(js|mjs)$/;

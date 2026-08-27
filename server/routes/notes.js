@@ -8,6 +8,7 @@ import { createLogger } from '../logger.js';
 import express from 'express';
 import * as db from '../db.js';
 import { str, color, collectErrors, MAX_TEXT, MAX_TITLE } from '../middleware/validate.js';
+import { toggleChecklistLine } from '../../public/utils/markdown-checklist.js';
 
 const log = createLogger('Notes');
 
@@ -127,6 +128,69 @@ router.patch('/:id/pin', (req, res) => {
     const newPinned = note.pinned ? 0 : 1;
     db.get().prepare('UPDATE notes SET pinned = ? WHERE id = ?').run(newPinned, id);
     res.json({ data: { id, pinned: newPinned } });
+  } catch (err) {
+    log.error('', err);
+    res.status(500).json({ error: 'Interner Fehler', code: 500 });
+  }
+});
+
+/**
+ * PATCH /api/v1/notes/:id/check
+ * Einen Checklisten-Eintrag ab- oder anhaken, ohne den Rest des Textes zu
+ * berühren (#704).
+ *
+ * Warum das nicht über PUT läuft: PUT schreibt den ganzen `content`. Zwei
+ * Mitglieder, die im selben Moment verschiedene Einträge derselben Notiz
+ * abhaken, hätten damit den letzten Schreiber gewinnen lassen - der andere
+ * Haken verschwände still. Hier ändert der Server genau eine Zeile des
+ * gespeicherten Standes, also gehen zwei Haken in zwei Zeilen beide durch.
+ *
+ * Adressiert wird über die Zeilennummer, die der Renderer am Kästchen
+ * hinterlässt, nicht über den Eintragstext: zwei Zeilen „Milch" sind sonst
+ * nicht auseinanderzuhalten. `expect` ist die Gegenprobe dazu - stimmt die
+ * Zeile nicht mehr mit der überein, die der Client gesehen hat, hat jemand den
+ * Text bearbeitet und der Index zeigt woanders hin. Dann lieber 409 als ein
+ * Haken in der falschen Zeile.
+ *
+ * Body: { line: number, checked: boolean, expect?: string }
+ * Response: { data: Note } | 409 { code: 409, reason }
+ */
+router.patch('/:id/check', (req, res) => {
+  try {
+    const id   = parseInt(req.params.id, 10);
+    const note = db.get().prepare('SELECT * FROM notes WHERE id = ?').get(id);
+    if (!note) return res.status(404).json({ error: 'Notiz nicht gefunden', code: 404 });
+
+    const { line, checked, expect } = req.body;
+    if (!Number.isInteger(line) || line < 0)
+      return res.status(400).json({ error: 'Ungültige Zeilennummer.', code: 400 });
+    if (typeof checked !== 'boolean')
+      return res.status(400).json({ error: 'Ungültiger Zustand.', code: 400 });
+    if (expect !== undefined && expect !== null && typeof expect !== 'string')
+      return res.status(400).json({ error: 'Ungültige Zeilenprüfung.', code: 400 });
+
+    const result = toggleChecklistLine(note.content, line, checked, expect);
+    if (!result.ok) {
+      return res.status(409).json({
+        error: 'Die Notiz hat sich inzwischen geändert.',
+        code:  409,
+        reason: result.reason,
+      });
+    }
+
+    // `changed: false` heißt, der Eintrag stand schon so - dann bleibt auch
+    // `updated_at` unangetastet, sonst sortierte ein folgenloser Tap die
+    // Pinnwand um.
+    if (result.changed) {
+      db.get().prepare('UPDATE notes SET content = ? WHERE id = ?').run(result.content, id);
+    }
+
+    const updated = db.get().prepare(`
+      SELECT n.*, u.display_name AS creator_name, u.avatar_color AS creator_color, u.avatar_data AS creator_avatar
+      FROM notes n LEFT JOIN users u ON u.id = n.created_by WHERE n.id = ?
+    `).get(id);
+
+    res.json({ data: updated });
   } catch (err) {
     log.error('', err);
     res.status(500).json({ error: 'Interner Fehler', code: 500 });

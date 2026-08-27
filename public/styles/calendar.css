@@ -1413,20 +1413,6 @@
   transform: scale(1.1);
 }
 
-/* Color Picker deaktiviert: Assignee-Avatar-Farbe hat Vorrang */
-.color-picker--disabled .color-picker {
-  opacity: 0.35;
-  pointer-events: none;
-  user-select: none;
-  filter: grayscale(0.4);
-}
-
-.color-picker__assignee-hint {
-  margin-top: var(--space-2);
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
 .reminder-section__group {
   margin: 0;
 }

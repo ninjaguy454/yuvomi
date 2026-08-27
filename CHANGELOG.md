@@ -7,6 +7,470 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.45.0] - 2026-08-26
+
+### Added
+
+- **Ein Vorratsartikel meldet sich, bevor sein Mindesthaltbarkeitsdatum erreicht ist** (#811). Der
+  Vorrat kennt das Datum seit #596 und hat es nie angekündigt: Erinnerungen hingen an einer Liste
+  von Herkünften (`task`, `event`, `subscription`, `inventory_item`, `inventory_tracked_date`), und
+  der Vorrat stand nicht darin. Das war die einzige fehlende Zeile - kein neuer Mechanismus, die
+  vierte Anwendung eines bereits dreifach vorhandenen.
+
+  **Das Datum selbst ist der Schalter.** Es gibt nichts abzuwählen: wer bei Salz und Reis kein MHD
+  einträgt, hört nichts, und wer eines einträgt, wird erinnert. Dasselbe Prinzip wie Kaufdatum plus
+  Garantiemonate am Inventar-Gegenstand.
+
+  **Der Vorlauf ist die Schwelle, die die Zeile ohnehin gelb färbt** - sieben Tage, dieselbe Zahl
+  wie der Chip "läuft bald ab". Ein eigener Vorlauf je Artikel wäre die Alternative gewesen und die
+  falsche: eine Frist am Inventar wird einzeln gepflegt, ein Vorrat ist Massenware, und ein Feld,
+  das niemand pro Joghurt pflegt, ist ein halb gefülltes Feld. Zwei Zahlen für dieselbe Frage wären
+  außerdem zwei Wahrheiten - die Meldung käme an einem Tag, an dem in der Liste nichts markiert ist.
+  Ein Guard hält beide Definitionen jetzt zusammen; er deckt auch die Garantiefrist im Inventar,
+  deren Kommentar die Gleichheit seit jeher behauptet, ohne dass sie jemand geprüft hätte.
+
+  **Eine leere Packung meldet nicht.** Der Chip zeigt "läuft bald ab" auch bei Menge 0, und das ist
+  dort richtig - eine Liste ist passiv, man sieht sie, wenn man hinsieht. Eine Meldung unterbricht,
+  und für Verbrauchtes gibt es nichts mehr zu retten. Wer nachkauft, bekommt die Erinnerung
+  zurück: jeder Schreibweg, auch der ±-Stepper und die Übernahme aus der Einkaufsliste, führt durch
+  dieselbe Stelle.
+
+  **Der Bestand zieht nach, nicht erst beim nächsten Anfassen.** Der Vorrat, der schon vor diesem
+  Update im Regal stand, wurde nie gespeichert - ohne einen Nachlauf hätte genau das unberührte Glas
+  hinten im Regal nie gemeldet, also der Fall, für den die Frage überhaupt gestellt wurde. Der
+  Benachrichtigungslauf ergänzt deshalb fehlende Erinnerungen und räumt gegenstandslose ab. Was
+  schon zugestellt oder weggewischt wurde, lässt er in Ruhe: sonst käme dieselbe Meldung bei jedem
+  Durchgang wieder.
+
+  **Frisch gekaufte Ware ist hier der Hauptfall, nicht der Ausreisser.** Milch, Joghurt und Salat
+  haben beim Einkauf fast immer weniger als sieben Tage - ihr Vorlauf liegt beim Eintragen schon
+  hinter uns. Die Regel aus dem Inventar hätte sie ersatzlos verworfen: der Chip färbte sich gelb,
+  und die Meldung, für die dieses Feature gebaut ist, wäre für genau diese Artikel nie gekommen.
+  Beim Eintragen wird der Termin deshalb auf den nächsten Morgen gezogen statt fallengelassen - eine
+  Ablaufwarnung ist eine Morgenfrage ("was muss heute weg"), kein Alarm eine Minute nach dem
+  Eintippen. Was die Frist schon gerissen hat, meldet nicht mehr; das sagt der Chip "abgelaufen".
+
+  Der Nachlauf über den Bestand zieht dagegen nichts nach vorne: sonst käme am ersten Morgen nach
+  dem Update jede bald ablaufende Zeile des Vorrats auf einmal, für die niemand etwas getan hat.
+
+### Changed
+
+- **Eine Vorrats-Erinnerung lässt sich nicht von Hand setzen oder löschen.** `POST`, `PUT` und beide
+  `DELETE`-Wege auf `/api/v1/reminders` antworten für `pantry_item` mit 400. Der Grund ist, dass es
+  nie gehalten hätte: der Benachrichtigungslauf stellt diese Erinnerungen in jedem Durchgang wieder
+  her, ein eigener Termin wäre binnen einer Minute weg und eine gelöschte Zeile wieder da - ohne
+  dass irgendwo gestanden hätte, warum. Ein ehrliches 400 sagt es sofort. **Verwerfen**
+  (`PATCH /:id/dismiss`) ist der Weg, der hält, weil die Zeile dabei bestehen bleibt.
+
+  Abo-, Garantie- und Fristen-Erinnerungen bleiben bewusst setzbar, obwohl auch sie abgeleitet sind:
+  dort schreibt nur das jeweilige Modul beim Speichern, ein handgesetzter Termin hält also bis zur
+  nächsten Änderung des Abos oder Geräts. Das ist eine Halbwertszeit, mit der man arbeiten kann -
+  und kein Anlass, eine zugesagte Schnittstelle rückwirkend zu schliessen.
+
+- **Der Vorlauf einer Erinnerung wird nur noch an einer Stelle gerechnet.** Dieselben vier Zeilen
+  ("N Tage vor diesem Datum, morgens, ohne Zeitzonen-Suffix") standen zweimal im Baum - einmal für
+  Abos, einmal für Garantien. Mit dem Vorrat wäre es die dritte Kopie geworden, also gibt es sie
+  jetzt einmal; die beiden Module behalten ihre sprechenden Namen als Fassade. Kein Verhalten
+  ändert sich, die Termine bleiben auf die Sekunde dieselben.
+
+### Fixed
+
+- **Die Übernahme aus der Einkaufsliste prüft das Mindesthaltbarkeitsdatum jetzt gegen den
+  Kalender.** Sie sah bisher nur nach der Form, ein `2027-02-30` kam durch. Das blieb folgenlos,
+  solange niemand mit dem Datum rechnete - eine unsinnige Zeile im Vorrat, mehr nicht. Beide
+  Prüfungen sind jetzt dieselbe Funktion, die auch das Formular benutzt. Der Artikel kommt trotzdem
+  im Vorrat an, nur ohne Datum: er selbst ist in Ordnung, kaputt ist allein das MHD - und ihn ganz
+  zu verwerfen hiesse, dass jemand den Joghurt abhakt, Übernehmen drückt und der Joghurt fehlt.
+
+### Security
+
+- **Eine Erinnerung verrät nicht mehr, was ihr Modul verschweigt.** `/api/v1/reminders` liefert
+  Titel aus sechs Modulen - Aufgaben, Kalender, Abos, Inventar, Inventar-Fristen und seit dieser
+  Version dem Vorrat -, sein Pfad wird aber komplett dem Kalender zugeordnet. Ein API-Token mit nur
+  `calendar:read` konnte damit über die fällige Erinnerung den Namen eines Abos oder eines
+  Inventar-Gegenstands lesen, `calendar:write` konnte die Meldung wegwischen, und einem Mitglied,
+  dem ein Modul entzogen ist, ging es genauso: der Zugriffs-Guard fragte nach dem Kalender und liess
+  alles andere durch. Die Route sortiert jetzt selbst aus, für beide Rechtearten. Das war schon vor
+  dieser Version so, für fünf Herkünfte - deshalb steht hier eine Regel über alle und keine Ausnahme
+  für die neue.
+
+  **Für Drittmodule** (MODULES.md): ein gescoptes Token bekommt aus `/reminders/pending` nur noch
+  die Herkünfte, deren Modul es lesen darf, und auf den typbezogenen Wegen eine 403 statt einer
+  Antwort. Wer bisher mit einem Kalender-Token mitgelesen hat, braucht den Scope des Moduls, um das
+  es geht.
+
+## [2.44.0] - 2026-08-25
+
+### Added
+
+- **The tasks module keeps a history of what was completed** (#791). Ticking a task off was a state,
+  not an event: a task carried `done`, and nothing recorded when that happened or who did it. So the
+  four questions in the thread - what did I finish today, what yesterday, when was this chore last
+  done, and who did it - had no answer anywhere, and the reason was not a missing view but data that
+  was never written down.
+
+  There is now a third view beside List and Board. It shows occurrences rather than tasks, grouped by
+  day, newest first, with the member who ticked it off and the time. Search, filters, grouping and
+  bulk select disappear there, because they all ask about tasks - a status filter over a list of
+  completions would be a choice that cannot change anything. Tapping an entry opens its task. A
+  recurring task additionally shows **Last completed** in its detail view, across the whole
+  repetition chain rather than just the instance currently open - which is precisely the "when was
+  this last done" case, and the one a single `completed_at` column could not have answered: a
+  completed recurring task spawns a follow-up instance, so its history is spread over a chain of
+  rows.
+
+  **The entry carries no copy of the task.** No title, no category, no member name, and above all no
+  copy of the visibility level. Both read paths join the task and apply the same visibility rule as
+  every other task list, so a task set to private *after* the fact disappears from the history too.
+  A snapshot would have kept giving away what was just locked away. The price for that single truth
+  is deliberate: deleting a task deletes its completions with it.
+
+  **It records who ticked it off, which is not necessarily who it was assigned to.** The rewards
+  ledger decides that differently on purpose - points go to the assignees and can be shared, because
+  they are a merit. A completion is an occurrence: it happens once, through one click. Subtasks are
+  never recorded, since a checklist item is part of its parent instruction, and filing a task away is
+  not a status change (#688) and writes nothing either.
+
+  **The history starts empty, and says so.** Recording begins with this release; what a household
+  ticked off before it was never written down, and the empty state explains that instead of claiming
+  nothing was ever done.
+
+  Paging uses a `(completed_at, id)` cursor rather than an offset: a bulk action puts several
+  completions in the same second, and an offset would skip a row that arrived while somebody was
+  paging. There is no date range in the query, because which calendar day an instant belongs to is a
+  question for the display timezone - a server taking a `from` day would have to keep a second clock
+  for it.
+
+  One boundary is stated rather than inherited: the inbound CalDAV sync writes the status straight
+  into the row, so ticking a mirrored task off in Apple Reminders does not reach the history. That
+  run has no acting person - it uses the household's credentials, not a member's - which is the same
+  reason the reward ledger has the same gap.
+
+### Fixed
+
+- **The automated pull request review went silent** and left four runs in a row without a finding
+  (#865). It was not blocked and it did not crash: the review plugin works almost entirely through
+  subagents, and those now start **asynchronously**. In an interactive session the notification that
+  an agent finished arrives as a new turn. A CI run has no next turn - the main session says "I'll
+  wait for both background agents" and is done, so it dies together with its agents before any
+  finding exists. Every one of the four result objects carried that same sentence, with turn counts
+  of 5, 56 and 7, which is why re-running never helped: the cause is structural, not flaky.
+
+  The prompt now tells the review to run its agents synchronously. A guard
+  (`test:claude-review-workflow`) holds that instruction, along with the three earlier conditions
+  that each cost several attempts to find - `--comment`, `Skill` and `Task` in the allowed tools, and
+  write permission on pull requests. Each of them is invisible when reading the file and produces the
+  same symptom: a review that runs and says nothing.
+
+  Worth knowing while this is on its way: a pull request that touches the review workflow makes the
+  action skip itself, so this fix cannot be measured in its own pull request. It has to land on
+  `main` first.
+
+## [2.43.0] - 2026-08-25
+
+### Added
+
+- **The overview can carry a row of household links** (#469). A family that uses Yuvomi as its home
+  page needs the way to Jellyfin, Immich or the router to be *there* - not in a note two clicks away.
+  Four people asked for it from two directions, and #759 was closed in favour of this one, so what
+  ships is the small version both ends agreed on: a tile row, not a module. Name, address, picture,
+  and who sees it.
+
+  **No catalogue of known apps.** Anything keyed to a list of supported services is wrong the day
+  somebody runs one that is not on it, so a shortcut is just an address. Typing
+  `192.168.1.5:8096` is enough - `https://` is filled in where no scheme is given, which is how
+  anybody actually writes down a machine on their own network.
+
+  **The picture is uploaded, never fetched.** A favicon would mean the household reaches out to
+  every linked host each time the overview is drawn, which is precisely the quiet outbound traffic
+  this app does not do. Without a picture the tile carries the first letter of its name on a colour
+  from the same palette a member without a photo gets - twelve identical globes distinguish nothing,
+  "J" on blue does. The letter picks its own text colour, because white on a light tile measured
+  2.7:1 and that is the same finding the avatar initials cost once already.
+
+  Each link is shared with the household or private to whoever made it, and private means private:
+  an admin does not see it either, and it is not in the payload. The row itself starts hidden and is
+  fetched from the customise tray - on day one it would have nothing to show, and a tile that only
+  asks to be set up is not worth putting on every existing dashboard unasked.
+
+  Both the picture and the number of tiles are capped (128 KB, 24), because these images travel
+  differently than an avatar does: they sit in the row as a data URL and go out with *every* build
+  of the overview, all at once. A generous cap times an unbounded count is a home page that loads
+  megabytes before it shows anything.
+
+  What lands in the `href` is checked on the server and not only in the form, with the same function
+  the browser uses (`/utils/quick-link-url.js`): only `http` and `https` pass. A `javascript:` value
+  is recognised as a scheme and refused with that as the reason, rather than being quietly turned
+  into something that merely fails to parse.
+
+- **`CONTRIBUTING.md` states what part AI agents play in this project** (#687). Yuvomi holds a
+  household's calendar, health notes, documents and finances, so it is fair to ask who - or what -
+  wrote the code that handles them. The new section says plainly that coding agents are used here
+  extensively, that two of them review pull requests automatically, and that contributors should
+  mention it in one line when one drafted their patch.
+
+  It deliberately does not promise that a human has read and understood every merged line. For a
+  one-person project shipping several releases a week that is not a promise anybody could keep, and
+  a promise that cannot be kept invites exactly the trust it does not earn. What it states instead
+  is verifiable: every merge is performed by the maintainer, there is no path by which an agent
+  merges its own work, the suite runs on every pull request, the Hard Constraints are enforced by
+  tests rather than intentions, and anything touching authentication, permissions, storage or the
+  network is reviewed line by line.
+
+
+## [2.42.0] - 2026-08-25
+
+### Added
+
+- **Task notes get the formatting toolbar the notes module has always had** (#731). Task notes have
+  rendered as Markdown since v2.7.0, through the same renderer the notes module uses - but there was
+  no way to write it except by typing the syntax. On a phone, `- [ ]` is a detour nobody should have
+  to know about.
+
+  The toolbar is not a copy: it moved out of the notes module into a shared component both now draw
+  from, along with its insertion rules. Two versions of thirteen buttons would only have drifted, and
+  the checklist button in particular had to behave identically on both sides - a checkbox written in
+  a task should be the same characters as one written in a note.
+
+  Its labels moved with it, from `notes.format*` to `markdown.*`, because they no longer belong to
+  one module.
+
+  Both new pieces are ordinary browser libraries under `/utils/`, so a third-party module can import
+  them the same way it imports `/api.js`: `markdown-toolbar.js` for the toolbar and its insertion
+  rules, `markdown-checklist.js` for the one definition of what a checklist line is - the same file
+  the server validates against.
+
+- **A rendered checkbox can be ticked by tapping it** (#704). Notes drew `- [ ]` as a styled box that
+  was deliberately inert. To tick something off you opened the note, changed `[ ]` into `[x]` in the
+  text and saved - three steps for what looks like a one-tap control, and on a wall tablet with a
+  shopping list that is the whole feature. The box is now a real control on the card and in the
+  reader.
+
+  Ticking rewrites exactly one line of the stored text and leaves the rest byte for byte alone,
+  through a route of its own (`PATCH /api/v1/notes/:id/check`) rather than through the full-body
+  save. That is not tidiness: notes are shared, and two members ticking different items in the same
+  minute would otherwise have had the later save drop the earlier tick without a word.
+
+  Which line is meant comes from the source line number the renderer leaves on the box, never from
+  the item's text - two entries reading "Milk" are otherwise indistinguishable. The client sends the
+  line it saw along with the tick, and if somebody has edited the note in between, the tick is
+  refused rather than landing in the wrong row.
+
+  Boxes stay decorative wherever a tick could not be written back honestly: on the dashboard, which
+  shows a truncated excerpt whose line numbers are not the note's, in task notes, and in the reader
+  while the editor holds unsaved text.
+
+### Fixed
+
+- **Two buttons had no icon at all.** "Remove tags" in the task bulk bar and "Find logo" in the
+  subscription form asked for `tag-off` and `image-search`, neither of which is in the bundled Lucide
+  build. `createIcons()` leaves an unknown name alone rather than failing, so both buttons simply
+  stood there empty, with the only trace a browser console warning. They now use icons that exist,
+  and a guard checks every icon name against the bundle - which is also the net under the next
+  Lucide update, since it drops renamed aliases and the app still uses some of them.
+
+- **The formatting toolbar wrote German into every language** (#731). Clicking "Link" inserted
+  `[Linktext](url)` and clicking "Bold" without a selection inserted `Text` - both fixed in the
+  source rather than translated. That text lands in the note itself, so it is interface text like
+  any other, and 23 of 24 languages got the German word. It now comes from the translation.
+
+## [2.41.2] - 2026-08-25
+
+### Fixed
+
+- **An instalment on a loan the household had taken on could not be corrected** (#859). Tick off an
+  instalment on a borrowed loan, then open that booking in the budget and change the amount: saving
+  failed with "Loan repayment entries must remain income." Nothing the dialog could send was
+  accepted, because the dialog was right and the check was wrong. There was no way around it either
+  - deleting the instalment and booking it again was the only remedy.
+
+  The rule dates from a time when every loan was money lent out, where a repayment coming back
+  really is income. Loan direction arrived in v1.77.0 (#638): an instalment on a loan you took on
+  leaves the household and is booked as an expense, so it is negative by design. The loans routes
+  learned that; the entry route kept the old rule and rejected exactly the sign it had itself
+  written.
+
+  The sign of a repayment booking now belongs to the loan rather than to the request, and it is
+  derived from the same rule everywhere - booking an instalment, re-booking after a change of
+  direction, and editing the booking afterwards. That rule lived inside the loans routes, which is
+  why the entry route could contradict it; it is now shared between them.
+
+  Two things the old check had been hiding come with it. The cap against paying off more than the
+  loan still owes compared a signed amount against a positive remainder, so on a borrowed loan it
+  was always satisfied and never stopped anything. And an amount of zero, previously caught by the
+  income rule as a side effect, is now refused on its own terms rather than reaching a database
+  constraint.
+
+  In the budget dialog, the income/expense switch is now inert on a loan instalment and says so.
+  Which of the two it is follows from the loan, is changed there, and any other answer was going to
+  be silently overruled on save.
+
+  Two further faults surfaced once this path could be walked at all, and both are fixed here. Opening
+  an instalment for editing from the loan list filled the dialog from the instalment rather than from
+  the budget entry it belongs to. On a foreign-currency loan that meant the loan-currency figure went
+  in where the budget-currency one belongs, so saving converted it a second time - 100 USD at 0.50
+  became a 200 USD instalment. And because that stand-in carries no account, the dialog offered "no
+  account" and saving unlinked the instalment from the account it was charged to, moving that
+  account's balance. Both happened even if all you touched was the title.
+
+  Editing now loads the actual entry instead of assembling a second, partial copy of it. The
+  assembled one still describes the row in the list, where the loan currency is the right figure to
+  show - it was never an editing record, and now nothing treats it as one.
+- **A booked loan instalment was titled in English, whatever the household language** (found while
+  verifying #859). Ticking off an instalment writes a budget entry called `Loan repayment: <name>`,
+  and that string was fixed in the source. In 23 of the 24 languages it has read as English ever
+  since - in the entry list, in the CSV export, in search results and over the API.
+
+  There is a translated title, and it has been there for a while, but it only ever applied when the
+  stored title was empty. Regular instalments always have one, so it never got a turn. Where it did
+  work was instalments backdated on an existing loan, which carry no budget entry at all - so the
+  same list could show a translated title next to an English one, for two instalments of the same
+  loan.
+
+  The title is now written in the household's data language, the same way birthday events have been
+  since v1.x (#524, #631, #632), and for the same reason: that row is what the REST API, the CSV
+  export, the search index and MCP read, and none of those paths pass through the translation that
+  happens in the browser. The translated fallback stays where it earns its keep - on backdated
+  instalments.
+
+  Existing entries keep their titles. The title of a budget entry is yours to edit, and rewriting
+  one on a language change would overwrite a decision somebody may well have made on purpose.
+
+
+## [2.41.1] - 2026-08-25
+
+### Fixed
+
+- **WebDAV backup rotation deleted the newest backup instead of the oldest** (#853). On a Synology -
+  and on anything else running Apache `mod_dav` - the file listing was read back without a single
+  timestamp, and the rotation then removed from the wrong end. Every scheduled run uploaded a fresh
+  backup and deleted it seconds later, while the seven oldest stayed. A household could keep the
+  feature switched on for months and never hold a recent remote backup.
+
+  The namespace prefix in a WebDAV answer is the server's to choose. Nextcloud writes
+  `<d:getlastmodified>`; `mod_dav` publishes live properties under a prefix of its own, as
+  `<lp1:getlastmodified>`. The parser insisted on `D:` or `d:`, found no date, and substituted "now"
+  for **every** file - which did not fail, it tied. A tie sorts to nothing, so what was left was the
+  server's own order: by name, oldest first. `slice(keep)` then cut the newest end off.
+
+  Three things changed, and the first one is the fix: the prefix is now read as whatever the server
+  sent, including none. Second, a missing timestamp stays missing instead of becoming "now" - an
+  invented date is worse than an absent one, because it quietly turns a sort into an equality.
+  Third, ordering leans on the timestamp Yuvomi itself wrote into the filename, which no server
+  quirk can touch, and falls back to `getlastmodified` only for files it did not name.
+
+  On top of that the rotation will no longer delete the file it just uploaded, whatever the sort
+  says. Should a server ever confuse the ordering again, that now costs one surplus old backup
+  rather than the only fresh one.
+
+  Also fixed along the way: a server answering with absolute `href`s (which RFC 4918 allows) had its
+  paths pasted onto the base URL, so those `DELETE`s went nowhere and the folder grew without bound.
+
+- **Editing an event repainted it in a colour nobody picked** (#856). Open an event, change the
+  assignee or just the title, save - and the event came back in the palette's first blue. Nothing had
+  touched the colour. It happened to every event whose colour was not literally one of the ten swatch
+  values: an assignee's avatar colour, an `RFC 7986 COLOR` from a CalDAV server, or the `#007AFF`
+  that events carried before the OKLCH palette arrived.
+
+  The colour picker matched the stored colour against its ten swatches to decide which one to mark
+  active. The two palettes involved share **no value at all** - avatar colours are the old iOS system
+  set (`#007AFF`, `#34C759`, …), event colours the OKLCH set (`#587DCE`, `#3CA368`, …) - so for those
+  events no swatch lit up. The picker looked as though no colour was set. Saving then read the active
+  swatch, found none, and fell back to `EVENT_COLORS[0]`.
+
+  Two things changed. The picker now **shows the colour the event actually has**, as an extra swatch
+  in front of the palette, so it stops claiming nothing is set. And saving follows one rule: a save
+  that did not touch the colour does not change it - without an active swatch the event keeps the
+  colour it already had, and only a genuinely new event falls back to the palette.
+
+  Swatch matching is also no longer case-sensitive. `#587dce` and `#587DCE` are the same colour, and
+  CalDAV servers routinely send the lower-case form.
+
+### Changed
+
+- **The colour picker no longer greys itself out when someone is assigned.** It used to, with the
+  note "colour is overridden by the assigned person(s)" - and that had been untrue since 2.35.0.
+  Since #815 the event's own colour comes **first** in the priority order, and because
+  `calendar_events.color` is `NOT NULL` and rejects an empty string too, an event always has one.
+  The assignee's colour has not tinted anything since; the note promised what the code had stopped
+  doing, and the greyed-out picker took a choice away to keep that promise. Both are gone. Who an
+  event belongs to is still shown, by the avatar stack beside it.
+
+## [2.41.0] - 2026-08-25
+
+### Fixed
+
+- **Seven more places still asked the browser what time it is** (#851). Found by widening the guard
+  that was supposed to prevent exactly this. It matched `new Date(x).getHours()` - the getters
+  written straight onto the expression - and missed the far more common `const now = new Date();
+  now.getFullYear()`. Green and blind.
+
+  What it had been letting through: the day the date picker rings as **today**; the running month in
+  **Budget** and in **Inventory**; the "Today"/"Tomorrow" label on dashboard rows, which is handed
+  real instants and so was converting them into the wrong zone; which medication windows count as
+  **still open today**; and the date a new **shared expense** is pre-filled with. On a device in
+  another zone every one of them could be a day out.
+
+  Two more surfaced while fixing those. `toDateString()` is the same clock under another name -
+  three places in the dashboard compared calendar days with it, and it sits outside the guard's
+  pattern because it uses no getter at all. And the sort key that decides whether the next Outlook
+  item is an event or a task read the browser's hour off a value that may or may not carry a zone.
+
+  All of them now ask `nowFields()` / `todayKey()`, or compare day keys. The guard reads bindings as well as expressions,
+  and it stays a rule rather than an allowlist: `getSeconds`/`getMilliseconds` are excluded because
+  they are the same in every zone, and only `utils/timezone.js` (which answers the question) and
+  `theme-init.js` (which runs before any zone is known, and decides something about the device
+  anyway) are exempt.
+
+- **A task's due label followed the browser's clock, not the household's** (#851). `due_date` and
+  `due_time` are zoneless wall-clock time: whoever typed "21:00" meant 21:00, whichever zone the
+  household keeps. Both due labels - the one on the dashboard and the one in the Tasks module - ran
+  that through `new Date(...)`, which turns it into an instant in the **browser's** zone; the
+  formatters then converted that instant into the display zone. With the household on Honolulu and
+  the browser in Berlin, a task entered for 21:00 read 9:00.
+
+  The same clock decided "today" and "tomorrow". In the Tasks module that put two clocks in one
+  view: the grouping has followed `todayKey()` since #829, so a task could sit under **Tomorrow**
+  and be labelled **Due today** in the same list.
+
+  Both now read the wall-clock stamp as what it is and ask the display zone what day it is. This was
+  the seventh clock; #829 part 3 unified six.
+
+- **The weather forecast was off by a day** (#851). The server already keeps the running day out of
+  `forecast` so it is not shown twice - but the display kept labelling `forecast[0]` "Today"
+  regardless. What stood there was tomorrow, so the row read as though a day were missing, and every
+  column after it named the wrong weekday. Both surfaces carried the same copied line: the card on a
+  phone and the wall-tablet view.
+
+  A forecast day is now named from **its own date**, never from its position. The reference is the
+  calendar day **at the weather location**, which the payload states explicitly - neither the
+  browser's zone nor the household zone can answer it, because a household may well watch the
+  weather somewhere else. Where that reference is missing, the day keeps its weekday: no label at
+  all beats a wrong one.
+
+  The response cache now expires at the weather location's midnight as well as after its usual 30
+  minutes. Cached in the last half hour of a day, it would otherwise still be served after
+  midnight, with `today` naming yesterday.
+
+  The legacy OpenWeatherMap branch bundled its three-hour steps into **UTC** days. That only held
+  near the prime meridian: far west of it the running day was dropped by the wrong key in the
+  evening and the forecast began at the day after tomorrow, far east of it a single UTC day fell
+  across two local days and blended their readings into a high and low that existed on neither. The
+  buckets are local days now, the symbol comes from whichever step is closest to **local** noon, and
+  only days after today enter the row.
+
+### Added
+
+- **Today's high and low on the weather card** (#851). The card carried a temperature span for every
+  forecast day and, for today, only the momentary reading - the one day you can actually still plan
+  around was the one without a range. It now sits under the current temperature in the same
+  vocabulary as the row below it, on the card and on the wall tablet.
+
+  Open-Meteo only. The legacy OpenWeatherMap provider has no daily aggregate to give: its
+  three-hour list starts at the next step, so by the afternoon today's bucket is missing the
+  morning and its maximum can fall below the current reading standing right beside it. A range
+  that is sometimes a range is worse than none.
+
 ## [2.40.0] - 2026-08-25
 
 ### Added

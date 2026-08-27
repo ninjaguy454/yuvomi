@@ -375,6 +375,35 @@
   border: 1.5px solid color-mix(in srgb, currentColor 50%, transparent);
   border-radius: var(--radius-xs);
 }
+/* Antippbares Kaestchen (#704). Ein <button role="checkbox"> statt des
+   dekorativen <span>: sichtbar ist es dasselbe Quadrat, es tilgt nur die
+   Browser-Vorgaben des Buttons und bekommt eine Trefferflaeche, die nicht bei
+   1em endet - auf dem Wandtablett ist das der Unterschied zwischen benutzbar
+   und daneben. Fuer die dekorative Fassung aendert sich nichts. */
+button.note-md-box {
+  appearance: none;
+  padding: 0;
+  margin: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+button.note-md-box::before {
+  content: '';
+  position: absolute;
+  /* Waagerecht bis an den Eintragstext (der Abstand ist genau --space-2),
+     senkrecht nur bis an die Zeilengrenze. Weiter waere kontraproduktiv: zwei
+     uebergreifende Flaechen liessen den Nachbareintrag den Tap gewinnen, und
+     ein Haken in der falschen Zeile ist schlimmer als ein knapper Treffer. */
+  inset-block:  -0.25em;
+  inset-inline: calc(var(--space-2) * -1);
+}
+button.note-md-box:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
 .note-md-check.is-checked > span:last-child {
   text-decoration: line-through;
   opacity: 0.65;

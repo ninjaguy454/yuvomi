@@ -28,6 +28,7 @@ import {
   getTimeFormat,
 } from '/i18n.js';
 import { esc } from '/utils/html.js';
+import { todayKey } from '/utils/date.js';
 
 // ── lokale Datums-Helfer (kanonisches ISO, lokale Zeitzone) ──────────────
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -39,9 +40,14 @@ function parseIso(iso) {
   return { y: Number(m[1]), m: Number(m[2]) - 1, d: Number(m[3]) };
 }
 
+// Der Tag, den das Raster als „heute" markiert, folgt der ANZEIGEZONE. Die
+// Browser-Wanduhr taugt dafuer nicht: auf einem Geraet in einer anderen Zone
+// staende der Ring einen Tag daneben - und zwar genau an dem Tag, an dem
+// jemand hinsieht, weil er wissen will, welcher heute ist (#829, Nachlese #851).
+// Das uebrige Raster bleibt Browser-Wanduhr: es sind reine Kalenderfelder ohne
+// Uhrzeit, und `parseLocalDateKey`/`isoOf` bilden dort ein Paar.
 function todayIso() {
-  const now = new Date();
-  return isoOf(now.getFullYear(), now.getMonth(), now.getDate());
+  return todayKey();
 }
 
 // Wochentagskürzel (Montag-first) und Monats-/Jahres-Label rein aus Intl —

@@ -25,8 +25,13 @@ const MOCK_PORT = 39871;
  * - PUT       → 201 Created
  * - DELETE    → 204 No Content
  * - GET/HEAD  → 200 (for client.exists())
+ *
+ * `liveProp` waehlt das Namespace-Praefix der Live-Properties. Default `D:`
+ * ist der Nextcloud-Stil; `lp1:` ist der von Apache mod_dav und damit der einer
+ * Synology. Beide sind gueltiges WebDAV - der Unterschied ist genau der, an dem
+ * die Rotation in #853 blind wurde, also muss der Mock ihn abbilden koennen.
  */
-function createMockServer({ failAuth = false, failPropfind = false } = {}) {
+function createMockServer({ failAuth = false, failPropfind = false, liveProp = 'D:', absoluteHrefs = false } = {}) {
   // In-memory "filesystem"
   const files = new Map(); // remotePath → { lastmod, size }
 
@@ -47,15 +52,20 @@ function createMockServer({ failAuth = false, failPropfind = false } = {}) {
         return;
       }
 
-      // List files that match the path prefix
+      // List files that match the path prefix. Die Reihenfolge ist die der
+      // Uploads und damit chronologisch aufsteigend - genau wie ein echter
+      // Server sie liefert, der nach Namen sortiert (die Namen tragen ISO-
+      // Stempel). Nur so kann der Test sehen, ob die Sortierung im Modul
+      // wirklich arbeitet oder nur die Serverreihenfolge durchreicht.
       const fileEntries = [...files.entries()].filter(([k]) => k.startsWith(url));
+      const hrefOf = (p) => (absoluteHrefs ? `http://localhost:${MOCK_PORT}${p}` : p);
       const fileXml = fileEntries.map(([filePath, info]) => `
         <D:response>
-          <D:href>${xmlEsc(filePath)}</D:href>
+          <D:href>${xmlEsc(hrefOf(filePath))}</D:href>
           <D:propstat>
             <D:prop>
-              <D:resourcetype/>
-              <D:getlastmodified>${info.lastmod}</D:getlastmodified>
+              <${liveProp}resourcetype/>
+              <${liveProp}getlastmodified>${info.lastmod}</${liveProp}getlastmodified>
               <D:getcontentlength>${info.size}</D:getcontentlength>
             </D:prop>
             <D:status>HTTP/1.1 200 OK</D:status>
@@ -63,12 +73,12 @@ function createMockServer({ failAuth = false, failPropfind = false } = {}) {
         </D:response>`).join('');
 
       const xml = `<?xml version="1.0" encoding="utf-8"?>
-        <D:multistatus xmlns:D="DAV:">
+        <D:multistatus xmlns:D="DAV:" xmlns:lp1="DAV:">
           <D:response>
-            <D:href>${xmlEsc(url)}</D:href>
+            <D:href>${xmlEsc(hrefOf(url))}</D:href>
             <D:propstat>
               <D:prop>
-                <D:resourcetype><D:collection/></D:resourcetype>
+                <${liveProp}resourcetype><D:collection/></${liveProp}resourcetype>
               </D:prop>
               <D:status>HTTP/1.1 200 OK</D:status>
             </D:propstat>
@@ -267,6 +277,117 @@ describe('WebDAV Backup — service module', async () => {
       assert.ok(
         remoteFiles.length <= 3,
         `Should keep at most 3 files, got ${remoteFiles.length}`
+      );
+      // Die Zahl allein war jahrelang gruen, waehrend die falschen Dateien
+      // verschwanden. Ab hier zaehlt, WELCHE bleiben.
+      assert.ok(
+        remoteFiles.some((k) => k.endsWith('oikos-backup-2099-01-04T00-00-00-000Z.db')),
+        'the newest backup must survive rotation'
+      );
+      assert.ok(
+        !remoteFiles.some((k) => k.endsWith('oikos-backup-2099-01-01T00-00-00-000Z.db')),
+        'the oldest backup is the one that goes'
+      );
+    });
+  });
+
+  // #853: Auf einer Synology (Apache mod_dav) kamen die Live-Properties als
+  // `lp1:getlastmodified`. Der Parser bestand auf `D:`/`d:`, las also gar kein
+  // Datum, setzte fuer JEDE Datei ersatzweise "jetzt" ein - und damit sortierte
+  // sich nichts mehr. Uebrig blieb die Reihenfolge des Servers, aufsteigend nach
+  // Namen, und die Rotation loeschte vom falschen Ende: das gerade hochgeladene
+  // Backup, jedes Mal.
+  describe('rotation on an Apache mod_dav server (#853)', async () => {
+    let mockCtx;
+    before(() => new Promise((resolve) => {
+      mockCtx = createMockServer({ liveProp: 'lp1:' });
+      mockCtx.server.listen(MOCK_PORT, resolve);
+    }));
+    after(() => new Promise((resolve) => mockCtx.server.close(resolve)));
+
+    const remoteDbFiles = () => [...mockCtx.files.keys()]
+      .filter((k) => k.startsWith('/oikos/backups/') && k.endsWith('.db'))
+      .map((k) => path.basename(k));
+
+    it('should keep the newest backups and delete the oldest', async () => {
+      const names = [
+        'yuvomi-backup-2099-03-01T00-00-00-000Z.db',
+        'yuvomi-backup-2099-03-02T00-00-00-000Z.db',
+        'yuvomi-backup-2099-03-03T00-00-00-000Z.db',
+        'yuvomi-backup-2099-03-04T00-00-00-000Z.db',
+        'yuvomi-backup-2099-03-05T00-00-00-000Z.db',
+      ];
+      for (const name of names) {
+        await webdav.uploadBackup(await createTempBackup(name));
+      }
+
+      const remaining = remoteDbFiles();
+      assert.deepStrictEqual(
+        remaining.sort(),
+        [
+          'yuvomi-backup-2099-03-03T00-00-00-000Z.db',
+          'yuvomi-backup-2099-03-04T00-00-00-000Z.db',
+          'yuvomi-backup-2099-03-05T00-00-00-000Z.db',
+        ],
+        'keep=3 must leave the three newest, not the three oldest'
+      );
+    });
+
+    it('should never delete the file it just uploaded', async () => {
+      const fresh = 'yuvomi-backup-2099-03-06T00-00-00-000Z.db';
+      await webdav.uploadBackup(await createTempBackup(fresh));
+      assert.ok(
+        remoteDbFiles().includes(fresh),
+        'the freshly uploaded backup must still be there after rotation'
+      );
+    });
+
+    it('should read the timestamp from a mod_dav-prefixed listing', async () => {
+      const listed = await webdav.getRemoteFiles();
+      assert.ok(listed.length > 0, 'listing is not empty');
+      assert.ok(
+        listed.every((f) => typeof f.lastmod === 'string' && !Number.isNaN(Date.parse(f.lastmod))),
+        'every entry carries a parsable getlastmodified, whatever the namespace prefix'
+      );
+      // Neueste zuerst - darauf verlaesst sich die Rotation.
+      const names = listed.map((f) => f.filename);
+      assert.deepStrictEqual(names, [...names].sort().reverse(), 'sorted newest first');
+    });
+  });
+
+  // Ein href darf laut RFC 4918 auch absolut sein. joinUrl() haengt an die
+  // Basis-URL an - unnormalisiert entstuende daraus `http://host/http://host/…`,
+  // und die DELETE-Anfrage ginge ins Leere statt aufs Ziel.
+  describe('rotation on a server that answers with absolute hrefs', async () => {
+    let mockCtx;
+    before(() => new Promise((resolve) => {
+      mockCtx = createMockServer({ absoluteHrefs: true });
+      mockCtx.server.listen(MOCK_PORT, resolve);
+    }));
+    after(() => new Promise((resolve) => mockCtx.server.close(resolve)));
+
+    it('should still delete the oldest file', async () => {
+      const names = [
+        'yuvomi-backup-2099-04-01T00-00-00-000Z.db',
+        'yuvomi-backup-2099-04-02T00-00-00-000Z.db',
+        'yuvomi-backup-2099-04-03T00-00-00-000Z.db',
+        'yuvomi-backup-2099-04-04T00-00-00-000Z.db',
+      ];
+      for (const name of names) {
+        await webdav.uploadBackup(await createTempBackup(name));
+      }
+      const remaining = [...mockCtx.files.keys()]
+        .filter((k) => k.endsWith('.db'))
+        .map((k) => path.basename(k))
+        .sort();
+      assert.deepStrictEqual(
+        remaining,
+        [
+          'yuvomi-backup-2099-04-02T00-00-00-000Z.db',
+          'yuvomi-backup-2099-04-03T00-00-00-000Z.db',
+          'yuvomi-backup-2099-04-04T00-00-00-000Z.db',
+        ],
+        'an absolute href must resolve to the same target as a relative one'
       );
     });
   });

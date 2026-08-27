@@ -288,12 +288,50 @@ reviewed", not "every run reviewed it".
 
 User-facing changes should be reflected in [`CHANGELOG.md`](CHANGELOG.md). If your PR adds a feature, fixes a bug, or changes behavior, add an entry under `[Unreleased]` in the appropriate category (`Added`, `Changed`, `Fixed`, `Removed`, `Security`).
 
-Format: imperative mood, one line per change, user-oriented language. Use `-` rather than `—` or `–`: an entry does not stay in this file, it ships as the GitHub release notes and feeds the app store listings.
+**Every entry opens with a bolded sentence naming the change.** Prose about the reasoning is welcome underneath it - this file says *why* things were decided the way they were, and that is not written down anywhere else. But somebody who just updated wants to know what changed without reading three paragraphs to find out. The first line answers that; everything after it is for whoever wants the story.
 
 ```markdown
 ### Added
-- Add CSV import for budget entries
+- **Budget entries can be imported from CSV.** The importer maps columns by
+  header name rather than by position, because an export from a bank rarely
+  puts them in the same order twice ...
 ```
+
+`npm run test:changelog` enforces the bolded lead-in for `[Unreleased]` and every version from 2.41.0 on. Earlier entries are left as they are: a published changelog does not get rewritten.
+
+Otherwise: user-oriented language, and `-` rather than `—` or `–`. An entry does not stay in this file - it ships as the GitHub release notes and feeds the app store listings.
+
+---
+
+## AI Assistance
+
+Asked for in [#687](https://github.com/ulsklyc/yuvomi/discussions/687). Yuvomi holds a household's calendar, health notes, documents and finances, so it is fair to ask who - or what - wrote the code that handles them.
+
+### How this project is built
+
+**AI coding agents are used here, extensively and openly.** Much of the code in this repository was drafted with them. Two of them also review pull requests automatically, and you will see their comments on yours: a Claude Code workflow and an OpenAI Codex connector.
+
+That is worth stating plainly rather than leaving to inference. An automated review comment on your PR is not a maintainer's verdict; it is a second pair of eyes with no authority to merge anything.
+
+### What a human guarantees
+
+**Nothing reaches `main` without a human deciding that it should.** Every merge in this repository is performed by the maintainer, including automated dependency updates and contributions from others. There is no path by which an agent merges its own work.
+
+Beyond that decision, three things are mechanical and hold for every change regardless of who or what wrote it:
+
+- The full test suite runs on every pull request, and a red build is not merged.
+- The [Hard Constraints](#hard-constraints) above are enforced by tests, not by good intentions - a framework import or an `innerHTML` call fails the build.
+- Behaviour that is claimed to be fixed carries a test that fails against the state before the fix. A guard that was never seen red is not evidence.
+
+**On "a human has read and understood every merged line":** for a one-person project shipping several releases a week, that sentence would be a promise nobody could keep, and a promise that cannot be kept is worse than none - it invites exactly the trust it does not earn. What is true instead: the maintainer reviews every change before merging it, decides whether it goes in, and is answerable for it either way. Where a change touches something sensitive - authentication, permissions, storage, anything reaching the network - that review goes line by line.
+
+### If you contribute
+
+**Say so if an agent wrote it.** One line in the PR description is enough ("drafted with Claude Code", "Copilot-assisted"). It is not a mark against the contribution and it will not slow the review down.
+
+The reason is practical rather than moral: it tells the reviewer where to look. Generated code fails in different places than hand-written code does - plausible-looking APIs that do not exist, tests that assert what the implementation happens to do rather than what it should, an edge case handled in the comment but not in the branch. Knowing to check for that is worth more than any policy about it.
+
+What is expected of the contribution itself does not change: you understand what you are submitting, you can explain why it works, and you can answer questions about it in review. If you cannot, the tool you used is not the problem.
 
 ---
 

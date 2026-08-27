@@ -15,6 +15,7 @@ process.env.DB_PATH = ':memory:';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import { readFileSync } from 'node:fs';
 
 const dbmod = await import('../server/db.js');
 const { default: loansRouter } = await import('../server/routes/budget/loans.js');
@@ -824,6 +825,100 @@ test('#813: unbrauchbare Werte werden abgewiesen', async () => {
   const ok = await call('POST', '/loans', { as: AA, body: { ...base, paid_installments: '' } });
   assert.equal(ok.status, 201);
   assert.equal(ok.body.data.paid_installments, 0);
+});
+
+// ── Titel einer gebuchten Rate: Datensprache des Haushalts ───────────────────────
+//
+// Der Titel in budget_entries ist das, was REST-API, CSV-Export, FTS-Suchindex und
+// MCP zu sehen bekommen - keiner dieser Kanäle durchläuft die Client-Übersetzung.
+// Genau dieselbe Begründung wie bei Geburtstagsterminen (#524/#631/#632).
+//
+// Der übersetzte Fallback in public/pages/budget.js greift nur bei LEEREM Titel und
+// kam deshalb nie zum Zug; er bleibt für nachgetragene Raten (#813), die gar keinen
+// Budget-Eintrag haben.
+
+function setLanguage(value) {
+  if (value === null) {
+    db.prepare("DELETE FROM sync_config WHERE key = 'language'").run();
+    return;
+  }
+  db.prepare(`INSERT INTO sync_config (key, value) VALUES ('language', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(value);
+}
+
+function setRegion(value) {
+  if (value === null) {
+    db.prepare("DELETE FROM sync_config WHERE key = 'region'").run();
+    return;
+  }
+  db.prepare(`INSERT INTO sync_config (key, value) VALUES ('region', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(value);
+}
+
+async function titleOfBookedInstalment(loanBody = {}) {
+  const id = await createDirectedLoan({ borrower: 'Sparkasse', ...loanBody });
+  const r = await call('POST', `/loans/${id}/payments`, {
+    as: AA, body: { installment_number: 1, amount: 100, paid_date: '2026-01-15' },
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  const entryId = r.body.data.payment.budget_entry_id;
+  return db.prepare('SELECT title FROM budget_entries WHERE id = ?').get(entryId).title;
+}
+
+/** Erwarteter Titel aus DER Locale-Datei, die auch der Server liest. Ein zweites
+ *  Mal hingeschriebene Übersetzung wäre eine zweite Wahrheit: sie bricht bei jeder
+ *  Korrektur am Wortlaut, ohne dass am Verhalten etwas falsch wäre. Geprüft wird,
+ *  dass der Titel AUS der Locale kommt - nicht, wie sie gerade formuliert ist. */
+function expectedTitle(locale, borrower) {
+  const dict = JSON.parse(readFileSync(new URL(`../public/locales/${locale}.json`, import.meta.url), 'utf8'));
+  return dict.budget.loanPaymentTitle.replace('{{borrower}}', borrower);
+}
+
+test('der gespeicherte Titel folgt der Datensprache des Haushalts', async () => {
+  setLanguage('de');
+  const de = await titleOfBookedInstalment();
+  assert.equal(de, expectedTitle('de', 'Sparkasse'));
+  assert.doesNotMatch(de, /Loan repayment/, 'der englische Titel steht noch in der Zeile');
+
+  setLanguage('fr');
+  const fr = await titleOfBookedInstalment();
+  assert.equal(fr, expectedTitle('fr', 'Sparkasse'));
+  assert.notEqual(fr, de, 'die Sprache wirkt sich auf den gespeicherten Titel nicht aus');
+});
+
+test('ohne gesetzte Sprache leitet die Region sie ab', async () => {
+  setLanguage(null);
+  setRegion('es-ES');
+  assert.equal(await titleOfBookedInstalment(), expectedTitle('es', 'Sparkasse'));
+});
+
+test('ohne Sprache und ohne Region gilt Englisch, nicht die Referenz-Locale', async () => {
+  // de ist die Referenz-Locale der Übersetzungsdateien, aber nicht der Default
+  // eines Haushalts, der nie etwas eingestellt hat. Diese eine Erwartung steht
+  // absichtlich wörtlich da: sie ist die Aussage, nicht die Übersetzung.
+  setLanguage(null);
+  setRegion(null);
+  assert.equal(await titleOfBookedInstalment(), 'Loan repayment: Sparkasse');
+});
+
+test('der Währungszusatz bleibt am übersetzten Titel', async () => {
+  setLanguage('de');
+  setBudgetCurrency('EUR');
+  const title = await titleOfBookedInstalment({ currency: 'USD', exchange_rate: 0.92 });
+  assert.equal(title, 'Darlehensrückzahlung: Sparkasse (USD)',
+    'die Währung sagt, in welcher Einheit die Rate geführt wird - sie darf mit der Übersetzung nicht wegfallen');
+  setLanguage(null);
+  setRegion(null);
+});
+
+test('kein fest verdrahteter Anzeigetext mehr im Loans-Router', () => {
+  // Ein Literal hier wäre wieder in 23 von 24 Sprachen falsch, und keiner der
+  // Kanäle, die diese Zeile lesen, könnte es nachträglich übersetzen.
+  const source = readFileSync(new URL('../server/routes/budget/loans.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /'Loan repayment|`Loan repayment/,
+    'der englische Titel steht wieder im Quelltext');
+  assert.match(source, /translate\(resolveHouseholdLocale\(/,
+    'der Titel läuft nicht mehr über die Haushaltssprache');
 });
 
 test('teardown: Server schließen', async () => {

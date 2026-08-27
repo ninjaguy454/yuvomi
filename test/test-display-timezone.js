@@ -324,6 +324,101 @@ test('ausser utils/timezone.js liest kein Modul eine Uhrzeit aus einem Instant',
   assert.deepEqual(offenders, [], 'Uhrzeit/Tag aus der Browser-Zone eines Instants abgeleitet');
 });
 
+/* DIE UHR STEHT AUCH DANN DA, WENN SIE EINEN NAMEN HAT.
+ *
+ * Der Guard darueber trifft `new Date(x).getHours()` - die Getter direkt am
+ * Ausdruck. Die haeufigere Schreibweise ist aber
+ *
+ *     const now = new Date();
+ *     now.getFullYear()
+ *
+ * und die sah er nicht. Sieben Stellen standen so im Baum, darunter beide
+ * Faelligkeits-Beschriftungen (#851): eine Aufgabe konnte im Aufgabenmodul unter
+ * „Morgen" stehen und „Heute faellig" heissen, weil die Gruppierung daneben
+ * laengst `todayKey()` fragte. Der Guard war gruen und blind.
+ *
+ * Gesucht wird deshalb der ARGUMENTLOSE `new Date()` - das ist "jetzt", also
+ * eine Frage an die Uhr, und die hat genau eine Antwort: `nowFields()` bzw.
+ * `todayKey()`. `new Date(wert)` bleibt unberuehrt; einen gespeicherten Wert zu
+ * lesen ist etwas anderes als die Uhr zu fragen.
+ *
+ * `getSeconds`/`getMilliseconds` stehen NICHT im Muster: sie sind in jeder Zone
+ * dieselben. Wer sie liest, misst eine Dauer und fragt keinen Kalender - der
+ * Minutentakt der Uhr-Kachel etwa. `getMinutes` dagegen steht drin, denn es gibt
+ * Zonen mit halben und viertel Stunden (Indien +05:30, Nepal +05:45).
+ *
+ * Ohne Ausnahmeliste, mit zwei Ausnahmen, die keine sind:
+ *   - utils/timezone.js beantwortet die Frage, es darf sie stellen.
+ *   - theme-init.js laeuft als erstes Skript im <head>, vor jedem Modul und vor
+ *     der gespiegelten Zone. Es hat keine Anzeigezone, die es fragen koennte,
+ *     und was es entscheidet (Nachtthema) haengt an dem Geraet, vor dem jemand
+ *     sitzt - nicht am Haushalt.
+ */
+test('kein Frontend-Modul baut sich sein eigenes "jetzt" aus der Browser-Uhr', () => {
+  const allowed = new Set([
+    path.join('utils', 'timezone.js'),
+    'theme-init.js',
+  ]);
+
+  const offenders = [];
+  for (const s of SOURCES) {
+    if (allowed.has(s.rel)) continue;
+    const lines = s.code.split('\n');
+    lines.forEach((line, i) => {
+      // `new Date()` ohne Argument, einer Bindung zugewiesen oder direkt gelesen.
+      const bound = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new Date\(\s*\)/.exec(line);
+      if (bound) {
+        const window = lines.slice(i, i + 12).join('\n');
+        const getter = new RegExp(`\\b${bound[1]}\\.get(?:Hours|Minutes|Date|Day|FullYear|Month)\\(`);
+        if (getter.test(window)) offenders.push(`${s.rel}:${i + 1} (${bound[1]})`);
+        return;
+      }
+      if (/new Date\(\s*\)\s*\.\s*get(?:Hours|Minutes|Date|Day|FullYear|Month)\(/.test(line)) {
+        offenders.push(`${s.rel}:${i + 1}`);
+      }
+    });
+  }
+
+  assert.deepEqual(offenders, [],
+    'ein "jetzt" aus der Browser-Uhr statt aus der Anzeigezone - `nowFields()` bzw. `todayKey()` fragen');
+});
+
+/* `toDateString()` ist dieselbe Uhr unter anderem Namen.
+ *
+ * Sie kam beim Aufraeumen der sieben Uhren mit heraus und stand nicht im Muster
+ * darueber, weil sie keinen Getter benutzt:
+ *
+ *     const today = new Date().toDateString();
+ *     if (d.toDateString() === today) ...
+ *
+ * Das ist ein Kalendertagsvergleich in der BROWSER-Zone, und er stand an drei
+ * Stellen im Dashboard - einmal fuer „ist dieser Termin heute", einmal fuer die
+ * Auswahl der heutigen Termine, einmal im Heute/Morgen-Label. Wer Kalendertage
+ * vergleicht, vergleicht Keys: `zonedDateKey()` bzw. `todayKey()`.
+ */
+test('kein Frontend-Modul vergleicht Kalendertage ueber toDateString()', () => {
+  const offenders = [];
+  for (const s of SOURCES) {
+    if (s.rel === path.join('utils', 'timezone.js')) continue;
+    s.code.split('\n').forEach((line, i) => {
+      if (/\.toDateString\(\s*\)/.test(line)) offenders.push(`${s.rel}:${i + 1}`);
+    });
+  }
+  assert.deepEqual(offenders, [],
+    'Kalendertage ueber toDateString() verglichen - das ist die Browser-Zone, `zonedDateKey()`/`todayKey()` nehmen');
+});
+
+test('der Guard erkennt die Schreibweise, an der er vorbeigesehen hat', () => {
+  // Die Gegenprobe zum Guard selbst: er ist auf eine BINDUNG gebaut, und genau
+  // die hat ihm gefehlt. Ein Guard ohne diese Zeile behauptet nur, er koenne es.
+  const bound = /(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*new Date\(\s*\)/;
+  assert.ok(bound.test('const now = new Date();'));
+  assert.ok(bound.test('  let today = new Date()'));
+  // Ein Wert im Konstruktor ist kein "jetzt".
+  assert.equal(bound.test('const d = new Date(iso);'), false);
+  assert.equal(bound.test('const d = new Date(y, m, 1);'), false);
+});
+
 test('utils/timezone.js ist die einzige Stelle mit einem zonenbehafteten Formatter', () => {
   // Ein zweiter `Intl.DateTimeFormat` mit eigenem `timeZone` waere eine zweite
   // Uhr. Erlaubt ist `timeZone: 'UTC'` - das ist keine Zone, sondern die

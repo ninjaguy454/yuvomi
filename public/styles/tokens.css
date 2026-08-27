@@ -1737,7 +1737,7 @@
      * (subtle 1.28:1, border 1.47:1 gegen #2B2825 - vorher 1.23 / 1.51).
      * Die Standardkante bleibt dabei unter #48423C: zwei Bestandsstellen
      * fuellen mit --color-border eine Flaeche UNTER Sekundaertext
-     * (.note-format-btn--sep:hover, .user-ms__avatar--none), und der Guard
+     * (.md-toolbar__sep:hover, .user-ms__avatar--none), und der Guard
      * verlangt dort zu Recht 4.5 - #47423B traegt 4.52. */
     --color-border-subtle: #3E3933;  /* Trenner, ruhige Kartenkante */
     --color-border:        #47423B;  /* Standardkante, Formfelder */

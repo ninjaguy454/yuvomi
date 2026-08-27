@@ -162,3 +162,68 @@ test('die Faelligkeits-Rechnung vergleicht Kalendertage, keine Zeitpunkte', () =
     'die Gruppierung fragt nicht `todayKey()` - damit folgt sie nicht der Haushaltszone (#829)',
   );
 });
+
+// ── Die Beschriftung geht nach derselben Uhr wie die Gruppierung ────────────
+/* Die Gruppierung folgt seit #829 `todayKey()` und damit der Anzeigezone. Die
+ * Beschriftung daneben tat es nicht: sie baute aus `due_date`/`due_time` ein
+ * `new Date(...)` und las dessen Browser-Getter. Dieselbe Ansicht ging damit
+ * nach zwei Uhren - eine Aufgabe konnte unter "Morgen" stehen und "Heute
+ * faellig" heissen (Nachlese aus #851).
+ *
+ * Zwei Dinge sind zu pruefen, und nur das erste faellt in diesem Kontext auf:
+ * dass "heute"/"morgen" der Anzeigezone folgen, und dass die eingetippte
+ * Wanduhrzeit als STEMPEL an die Formatierer geht statt als Zeitpunkt der
+ * Browser-Zone. Die fertige Schreibweise laesst sich hier nicht pruefen - i18n
+ * ist im Node-Kontext nicht die echte Implementierung. */
+
+const tzModule = await import('/utils/timezone.js');
+
+test('die Faelligkeits-Beschriftung folgt der Anzeigezone, nicht dem Browser', () => {
+  const p2 = (n) => String(n).padStart(2, '0');
+  try {
+    for (const zone of ['Pacific/Honolulu', 'Pacific/Kiritimati']) {
+      tzModule.setDisplayTimeZone(zone);
+      const now = tzModule.nowFields();
+      const today = `${now.year}-${p2(now.month)}-${p2(now.day)}`;
+      const shift = (days) => {
+        const [y, m, d] = today.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+      };
+
+      assert.match(tasks.formatDueDate(today, '21:00:00').label, /tasks\.(dueToday|overdue)/,
+        `${zone}: der heutige Tag der Anzeigezone muss als heute gelten`);
+      assert.match(tasks.formatDueDate(shift(1), '09:30:00').label, /tasks\.dueTomorrow/,
+        `${zone}: der Folgetag der Anzeigezone ist morgen`);
+      assert.match(tasks.formatDueDate(shift(-1), '21:00:00').label, /tasks\.overdue/,
+        `${zone}: gestern ist ueberfaellig`);
+
+      // Und die Gruppierung sagt fuer dieselben Tage dasselbe.
+      const groups = tasks.groupBy([
+        task({ id: 1, due_date: today }),
+        task({ id: 2, due_date: shift(1) }),
+        task({ id: 3, due_date: shift(-1) }),
+      ], 'due');
+      assert.ok(groups.some((g) => g.id === 'today'), `${zone}: Gruppe "heute" fehlt`);
+      assert.ok(groups.some((g) => g.id === 'overdue'), `${zone}: Gruppe "ueberfaellig" fehlt`);
+    }
+  } finally {
+    tzModule.setDisplayTimeZone(null);
+  }
+});
+
+test('die Wanduhrzeit geht als Stempel an die Formatierer, nicht als Date', () => {
+  try {
+    tzModule.setDisplayTimeZone('Pacific/Honolulu');
+    const now = tzModule.nowFields();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const [y, m, d] = [now.year, now.month, now.day];
+    const yesterday = new Date(Date.UTC(y, m - 1, d) - 86400000).toISOString().slice(0, 10);
+    const label = tasks.formatDueDate(yesterday, '21:00:00').label;
+    assert.match(label, new RegExp(`${yesterday}T21:00|21:00`),
+      `die eingetippte Uhrzeit muss erhalten bleiben, erhalten: ${label}`);
+    assert.ok(!/GMT/.test(label),
+      `ein Date-Umweg friert die Zeit in der Browser-Zone ein, erhalten: ${label}`);
+  } finally {
+    tzModule.setDisplayTimeZone(null);
+  }
+});

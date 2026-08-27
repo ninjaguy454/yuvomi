@@ -36,7 +36,11 @@ const SCOPE_MODULES = [
   { key: 'housekeeping', prefixes: ['housekeeping'] },
   { key: 'weather',      prefixes: ['weather'] },
   { key: 'family',       prefixes: ['family'] },
-  { key: 'dashboard',    prefixes: ['dashboard'] },
+  // `quick-links` teilt sich den Schluessel mit `dashboard`: die Kachelreihe ist
+  // kein eigenes Modul (#469), aber ihre Route braucht eine Zuordnung - ohne
+  // eine waere sie fuer JEDES gescopte Token gesperrt (tokenAllows verweigert
+  // unbekannte Module) und damit auch fuer das, das die Uebersicht lesen darf.
+  { key: 'dashboard',    prefixes: ['dashboard', 'quick-links'] },
   { key: 'search',       prefixes: ['search'] },
 ];
 

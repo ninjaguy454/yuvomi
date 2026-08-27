@@ -20,7 +20,7 @@ process.env.SESSION_SECRET = 'countdown-test-secret';
 // die Suite laeuft. `serverTimeZone()` liest genau diese Variable.
 process.env.TZ = 'Europe/Berlin';
 
-const { MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
 const { getCountdowns, nextEventDate, daysBetween } = await import('../server/services/countdowns.js');
 const { MIRRORED_FIELDS } = await import('../server/services/calendar-outbound.js');
 const { countdownPhrase, countdownRank, daysBetweenDateKeys } = await import('../public/utils/countdown.js');
@@ -30,7 +30,7 @@ const { countdownPhrase, countdownRank, daysBetweenDateKeys } = await import('..
 const cd = (opts) => getCountdowns(get(), opts).items;
 
 const moduleDatabase = get();
-const suiteDatabase = buildMigratedDatabase(MIGRATIONS);
+const suiteDatabase = buildMigratedDatabase(ALL_MIGRATIONS);
 _setTestDatabase(suiteDatabase);
 moduleDatabase.close();
 

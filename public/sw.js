@@ -15,7 +15,7 @@
  *   → bypassCacheUntil (in-memory + Cache API für SW-Restart-Robustheit)
  */
 
-const APP_RELEASE   = '2.40.0';
+const APP_RELEASE   = '2.45.0';
 const SHELL_CACHE   = `yuvomi-shell-${APP_RELEASE}`;
 const PAGES_CACHE   = `yuvomi-pages-${APP_RELEASE}`;
 const LOCALES_CACHE = `yuvomi-locales-${APP_RELEASE}`;
@@ -69,6 +69,7 @@ const APP_SHELL = [
   '/styles/shopping.css',
   '/styles/meals.css',
   '/styles/calendar.css',
+  '/styles/markdown-toolbar.css',
   '/styles/notes.css',
   '/styles/contacts.css',
   '/styles/birthdays.css',
@@ -93,6 +94,7 @@ const APP_SHELL = [
   '/components/document-attach.js',
   '/components/modal.js',
   '/components/photo-screensaver.js',
+  '/components/quick-links-manager.js',
   '/components/user-multi-select.js',
   '/components/user-rotation-order.js',
   '/utils/birthday-event.js',
@@ -124,6 +126,8 @@ const APP_SHELL = [
   '/utils/inventory-warranty.js',
   '/utils/kitchen-tabs.js',
   '/utils/kitchen-transfer.js',
+  '/utils/markdown-checklist.js',
+  '/utils/markdown-toolbar.js',
   '/utils/mentions.js',
   '/utils/module-accent.js',
   '/utils/metric-card.js',
@@ -134,6 +138,7 @@ const APP_SHELL = [
   '/utils/pantry-units.js',
   '/utils/phone.js',
   '/utils/popover-menu.js',
+  '/utils/quick-link-url.js',
   '/utils/pwa-install.js',
   '/utils/recipe-meal-types.js',
   '/utils/recipe-to-meal.js',

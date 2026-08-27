@@ -26,14 +26,14 @@ import express from 'express';
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'task-tags-test-secret';
 
-const { MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
 const { normalizeTags, tagsKey, setTags, loadTags, allTags, setItemTags, loadItemTags,
   MAX_TAGS, MAX_TAG_LEN } = await import('../server/utils/task-tags.js');
 const { runSearch } = await import('../server/services/search.js');
 
 const moduleDatabase = get();
-const suiteDatabase = buildMigratedDatabase(MIGRATIONS);
+const suiteDatabase = buildMigratedDatabase(ALL_MIGRATIONS);
 _setTestDatabase(suiteDatabase);
 moduleDatabase.close();
 
@@ -856,7 +856,7 @@ test('v114 nimmt den AUTOINCREMENT-Hochstand über den Rebuild mit', () => {
   //
   // Deshalb eine eigene Datenbank, die bei v113 anhält, Aufgaben anlegt, die
   // höchste löscht und erst dann weitermigriert.
-  const db = buildMigratedDatabase(MIGRATIONS.filter((m) => m.version <= 113));
+  const db = buildMigratedDatabase(ALL_MIGRATIONS.filter((m) => m.version <= 113));
   db.prepare(`INSERT INTO users (username, display_name, password_hash, role)
               VALUES ('seq', 'Seq', 'h', 'admin')`).run();
   const insert = db.prepare('INSERT INTO tasks (title, created_by) VALUES (?, 1)');
@@ -864,7 +864,7 @@ test('v114 nimmt den AUTOINCREMENT-Hochstand über den Rebuild mit', () => {
   const hoechste = Number(insert.run('zwei').lastInsertRowid);
   db.prepare('DELETE FROM tasks WHERE id = ?').run(hoechste);
 
-  for (const migration of MIGRATIONS.filter((m) => m.version > 113)) {
+  for (const migration of ALL_MIGRATIONS.filter((m) => m.version > 113)) {
     if (!migration.foreignKeysOff) { applyMigration(db, migration); continue; }
     db.pragma('foreign_keys = OFF');
     try { applyMigration(db, migration); } finally { db.pragma('foreign_keys = ON'); }
@@ -907,7 +907,7 @@ test('v114 rettet den Hochstand auch, wenn keine Aufgabe überlebt', () => {
   // trägt: eine Kopie mit null Zeilen legt für die neue Tabelle trotzdem einen
   // sqlite_sequence-Eintrag an (seq = 0), den das RENAME mitnimmt - erst
   // dadurch findet das UPDATE etwas vor, das es anheben kann.
-  const db = buildMigratedDatabase(MIGRATIONS.filter((m) => m.version <= 113));
+  const db = buildMigratedDatabase(ALL_MIGRATIONS.filter((m) => m.version <= 113));
   db.prepare(`INSERT INTO users (username, display_name, password_hash, role)
               VALUES ('leer', 'Leer', 'h', 'admin')`).run();
   const insert = db.prepare('INSERT INTO tasks (title, created_by) VALUES (?, 1)');
@@ -915,7 +915,7 @@ test('v114 rettet den Hochstand auch, wenn keine Aufgabe überlebt', () => {
   const hoechste = Number(insert.run('zwei').lastInsertRowid);
   db.prepare('DELETE FROM tasks').run();          // ALLE, nicht nur die höchste
 
-  for (const migration of MIGRATIONS.filter((m) => m.version > 113)) {
+  for (const migration of ALL_MIGRATIONS.filter((m) => m.version > 113)) {
     if (!migration.foreignKeysOff) { applyMigration(db, migration); continue; }
     db.pragma('foreign_keys = OFF');
     try { applyMigration(db, migration); } finally { db.pragma('foreign_keys = ON'); }

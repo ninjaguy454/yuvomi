@@ -55,6 +55,7 @@ const WIDGET_LABEL_KEYS = {
   // „Kennzahlen", und zwei Woerter fuer dieselbe Kachel waeren zwei Namen.
   metrics: 'dashboard.metrics',
   countdown: 'dashboard.countdownTitle',
+  quicklinks: 'dashboard.quickLinksTitle',
 };
 
 // Icon je Zugriffsstufe (Icon-Segmente statt langer Textlabels). Tooltip/aria

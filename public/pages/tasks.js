@@ -12,6 +12,7 @@ import { stagger, vibrate, scheduleUndoableDelete } from '/utils/ux.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
 import { esc, renderMarkdownLight } from '/utils/html.js';
+import { renderMarkdownToolbar, wireMarkdownToolbar } from '/utils/markdown-toolbar.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
@@ -26,7 +27,8 @@ import '/components/category-manager.js';
 import '/components/tag-manager.js';
 import { findPageFab } from '/utils/fab.js';
 import { isSoloHousehold } from '/utils/household.js';
-import { todayKey, parseLocalDateKey } from '/utils/date.js';
+import { todayKey, parseLocalDateKey, addLocalDays } from '/utils/date.js';
+import { nowFields, zonedDateKey, zonedUTCProxy } from '/utils/timezone.js';
 import { isNavModuleReadOnly } from '/permissions.js';
 
 // --------------------------------------------------------
@@ -171,15 +173,33 @@ function renderVisibilityBadge(visibility) {
 
 function formatDueDate(dateStr, timeStr, isDone = false) {
   if (!dateStr) return null;
-  const dueDate = timeStr ? new Date(`${dateStr}T${timeStr}`) : new Date(`${dateStr}T23:59:59`);
-  if (isNaN(dueDate)) return null;
 
-  const now    = new Date();
-  const today  = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const dueDay = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-  const calDayDiff = Math.round((dueDay - today) / (1000 * 60 * 60 * 24));
+  // Zonenlose WANDUHRZEIT, nicht Zeitpunkt. `new Date(`${dateStr}T${timeStr}`)`
+  // machte aus "21:00" einen Zeitpunkt der BROWSER-Zone, den formatTime
+  // anschliessend in die Anzeigezone umrechnete - mit Haushalt auf Honolulu und
+  // Browser in Berlin stand an einer fuer 21:00 eingetragenen Aufgabe 9:00.
+  // Dieselbe Uhr entschied ueber "heute"/"morgen", und die Gruppierung nebenan
+  // folgt seit #829 laengst `todayKey()`: dieselbe Ansicht ging damit nach zwei
+  // Uhren, eine Aufgabe konnte unter "Morgen" stehen und "Heute faellig" heissen.
+  const dayKey = String(dateStr).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return null;
+  const dueTime = timeStr ? String(timeStr).slice(0, 5) : null;
+  if (timeStr && !/^\d{2}:\d{2}$/.test(dueTime)) return null;
+  const dueStamp = `${dayKey}T${dueTime ?? '23:59'}`;
 
-  const timeLabel = timeStr ? ` – ${formatTime(dueDate)}` : '';
+  const now = nowFields();
+  if (!now) return null;
+  const p2 = (n) => String(n).padStart(2, '0');
+  const todayDay = `${now.year}-${p2(now.month)}-${p2(now.day)}`;
+  const nowStamp = `${todayDay}T${p2(now.hour)}:${p2(now.minute)}`;
+
+  // Kalendertage, nicht Millisekunden: ueber eine Sommerzeitgrenze liegen zwei
+  // Tage nicht 24h auseinander, ihre Keys aber immer genau einen.
+  const calDayDiff = Math.round(
+    (parseLocalDateKey(dayKey) - parseLocalDateKey(todayDay)) / (1000 * 60 * 60 * 24),
+  );
+
+  const timeLabel = dueTime ? ` – ${formatTime(dueStamp)}` : '';
 
   /* DAS JAHR STEHT NUR DA, WO ES ETWAS UNTERSCHEIDET.
    *
@@ -192,17 +212,18 @@ function formatDueDate(dateStr, timeStr, isDone = false) {
    * Über `formatDayMonth` und nicht per slice: die Reihenfolge und das
    * Trennzeichen hängen an der Datumsformat-Präferenz (dmy, mdy, ymd), und ein
    * abgeschnittener String hätte sie in drei von sieben Formaten verdreht. */
-  const dateLabel = dueDay.getFullYear() === today.getFullYear()
-    ? formatDayMonth(dueDate)
-    : formatDate(dueDate);
-  const fullLabel = timeStr ? `${dateLabel}, ${formatTime(dueDate)}` : dateLabel;
+  const dateLabel = dayKey.slice(0, 4) === todayDay.slice(0, 4)
+    ? formatDayMonth(dayKey)
+    : formatDate(dayKey);
+  const fullLabel = dueTime ? `${dateLabel}, ${formatTime(dueStamp)}` : dateLabel;
 
   // Erledigte/archivierte Aufgaben können nicht überfällig sein - neutrales Datum.
   if (isDone) {
     return { label: fullLabel, cls: '' };
   }
 
-  if (dueDate < now) {
+  // Beide Seiten sind Wanduhrzeit DERSELBEN Zone und damit als Text vergleichbar.
+  if (dueStamp < nowStamp) {
     return { label: `${t('tasks.overdue')} – ${fullLabel}`, cls: 'due-date--overdue' };
   }
   if (calDayDiff === 0) {
@@ -1043,6 +1064,7 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
            darueber das Gegenteil begruendet. -->
       <div class="form-group">
         <label class="label" for="task-description">${t('tasks.descriptionLabel')}</label>
+        ${renderMarkdownToolbar()}
         <textarea class="input" id="task-description" name="description"
                   rows="6" placeholder="${t('tasks.descriptionPlaceholder')}"
                  >${esc(task?.description)}</textarea>
@@ -1240,7 +1262,11 @@ let state = {
   // Achse wirken sie ODER, zwischen den Achsen UND. Tags bleiben UND-verknüpft.
   filters:         { status: ['open'], priority: [], assigned_to: [], tags: [] },
   groupMode:       'category',   // 'category' | 'due'
-  viewMode:        'list',       // 'list' | 'kanban' (resolved at render time)
+  viewMode:        'list',       // 'list' | 'kanban' | 'history' (resolved at render time)
+  // Der Verlauf (#791) hat einen eigenen Bestand, weil er etwas anderes zeigt
+  // als `tasks`: nicht Aufgaben, sondern Vorgänge. Er wird geblättert statt
+  // gefiltert - deshalb ein Cursor und kein Seitenindex.
+  history:         { entries: [], hasMore: false, cursor: null, userId: null, loading: null, error: null },
   showFuture:      false,
   subtasksExpandedByDefault: false,
   // Persönliche Standard-Erinnerungsliste für neue Aufgaben (#695), leer = nur
@@ -1536,6 +1562,12 @@ function wireTaskForm(panel, { task = null, container }) {
   // Tag-Editor (#586)
   renderTagChips(panel);
   wireTagEditor(panel);
+
+  // Formatierungsleiste ueber der Notiz (#731). Die Leseansicht rendert sie
+  // seit v2.7.0 als Markdown, geschrieben werden musste sie aber von Hand -
+  // dieselbe Leiste, die die Notizen seit jeher haben, dieselbe Datei.
+  const description = panel.querySelector('#task-description');
+  if (description) wireMarkdownToolbar(panel, description);
 
   // Verknüpfte Dokumente: hochladen oder ein abgelegtes wählen (#503, #733).
   // Die Vorbelegung steckt bereits im Markup (task.documents aus GET /tasks/:id),
@@ -2182,6 +2214,13 @@ function renderTaskDetail(task, reminders = [], container = null) {
     // Der Riegel steht jetzt trotzdem auch dort (`wireCountdownGate`).
     { icon: 'hourglass', label: t('dashboard.countdownTitle'), value: task.countdown && task.due_date ? t('tasks.countdownDetail') : '' },
     { icon: 'align-left', label: t('tasks.descriptionLabel'), node: descriptionNode(task.description), multiline: true },
+    // „Wann war das zuletzt dran" - nur bei wiederkehrenden Aufgaben (#791).
+    // Eine einmalige Aufgabe beantwortet die Frage schon mit ihrem Status: sie
+    // ist erledigt oder nicht, und ein Verlauf mit genau einer Zeile darin
+    // wiederholte nur, was zwei Zeilen weiter oben steht.
+    task.is_recurring
+      ? { icon: 'history', label: t('tasks.historySeriesTitle'), node: seriesHistoryNode(task), multiline: true }
+      : null,
     // Ganz unten und immer sichtbar: die Unterhaltung ist der einzige Abschnitt,
     // der auch dann etwas anbietet, wenn er leer ist - nämlich das Eingabefeld.
     { icon: 'message-square', label: t('tasks.commentsLabel'), node: commentsNode(task), multiline: true },
@@ -3103,10 +3142,326 @@ function wireKanbanTouch(container) {
 }
 
 // --------------------------------------------------------
+// Verlauf (#791)
+//
+// Die dritte Ansicht neben Liste und Board, und die einzige, die keine Aufgaben
+// zeigt, sondern Vorgänge: wer wann was abgehakt hat. Sie hängt an demselben
+// `#task-list` wie die beiden anderen - eine zweite Fläche daneben hieße, dass
+// jede Änderung am Seitenlayout an zwei Stellen nachgezogen werden muss.
+//
+// SIE BEGINNT LEER. Aufgezeichnet wird seit der Migration, und was davor
+// abgehakt wurde, hat niemand aufgeschrieben. Der Leerzustand sagt das, statt
+// „nichts erledigt" zu behaupten - das wäre für einen Haushalt, der seit Monaten
+// Aufgaben abhakt, schlicht gelogen.
+// --------------------------------------------------------
+
+/**
+ * Die Tages-Überschrift zu einem Datums-Key der Anzeigezone.
+ *
+ * DREI FALLEN AUF ENGEM RAUM, jede davon hier einmal eingebaut gewesen:
+ *
+ * 1. „Gestern" kommt aus `addLocalDays(today, -1)`, also aus Arithmetik auf dem
+ *    KEY. Ein `Date` minus 86400000 ms trifft an der Sommerzeitgrenze den
+ *    vorletzten Tag - und sobald die Anzeigezone von der des Browsers abweicht,
+ *    liegt es ohnehin daneben, weil `parseLocalDateKey` seine Mitternacht in
+ *    der Browserzone baut.
+ * 2. Der Key geht ROH an `formatDate`. Ein Umweg über ein `Date` macht aus dem
+ *    zonenlosen Kalendertag einen Zeitpunkt, den die Anzeigezone anschließend
+ *    wieder umrechnet - und die Überschrift kann auf dem Nachbartag landen,
+ *    während die Zeilen darunter alle vom richtigen stammen.
+ * 3. `formatDate` nimmt genau EIN Argument (public/i18n.js). Ein
+ *    Optionsobjekt daneben wird stillschweigend verworfen, und die als
+ *    „Montag, 24. August" gedachte Zeile stand als „24.08.2026" da. Der
+ *    Wochentag kommt deshalb über den `zonedUTCProxy`-Weg, wie im Dashboard.
+ */
+function historyDayLabel(dayKey) {
+  const today = todayKey();
+  if (dayKey === today) return t('common.today');
+  if (dayKey === addLocalDays(today, -1)) return t('common.yesterday');
+  const proxy = zonedUTCProxy(`${dayKey}T12:00:00`);
+  if (!proxy) return formatDate(dayKey);
+  return new Intl.DateTimeFormat(getLocale(), {
+    weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC',
+  }).format(proxy);
+}
+
+/**
+ * Einträge nach dem Kalendertag der Anzeigezone bündeln.
+ *
+ * Über `zonedDateKey` und nicht über `completed_at.slice(0, 10)`: der
+ * gespeicherte Zeitpunkt ist UTC, und ein Haken um 23:30 Ortszeit landete damit
+ * westlich von UTC unter dem Tag danach - dieselbe Falle, gegen die
+ * `toLocalDateKey()` in der ganzen App steht.
+ */
+function groupHistoryByDay(entries) {
+  const groups = [];
+  const index = new Map();
+  for (const entry of entries) {
+    const day = zonedDateKey(entry.completed_at);
+    if (!index.has(day)) {
+      index.set(day, { day, entries: [] });
+      groups.push(index.get(day));
+    }
+    index.get(day).entries.push(entry);
+  }
+  return groups;
+}
+
+/**
+ * Ein Vorgang: wer, was, wann.
+ *
+ * Auf der geteilten Zeilen-Grammatik (styles/list-row.css) und mit demselben
+ * Avatar wie ueberall sonst - `renderAvatarStack` traegt schon die Frage, ob
+ * Bild oder Initialen, und welche Textfarbe auf dieser Nutzerfarbe lesbar ist.
+ * Ein eigener Avatar hier haette dieselbe Kontrastrechnung ein zweites Mal
+ * anstellen muessen, und die erste hat sie beim Avatar der Mitglieder bereits
+ * einmal falsch gehabt.
+ */
+function renderHistoryEntry(entry) {
+  const name = entry.user_name || t('tasks.historyUnknownMember');
+  const avatar = renderAvatarStack(
+    [{ display_name: name, color: entry.user_color, avatar_data: entry.user_avatar }],
+    { size: 32, maxVisible: 1 },
+  );
+  // Der Avatar traegt hier NICHTS bei, was nicht daneben stuende: der Name
+  // steht als Text in der Metazeile. Ohne aria-hidden liest die Sprachausgabe
+  // „AJ ... Alex Johnson" - derselbe Mensch zweimal, einmal als Kuerzel.
+  return `
+    <button type="button" class="list-row history-row" data-history-task="${entry.task_id}">
+      <span class="history-row__avatar" aria-hidden="true">${avatar}</span>
+      <span class="list-row__main history-row__main">
+        <span class="list-row__name">${esc(entry.title)}</span>
+        <span class="list-row__meta">
+          ${esc(name)}${entry.is_recurring
+            ? ` <i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i>` : ''}
+        </span>
+      </span>
+      <time class="history-row__time" datetime="${esc(entry.completed_at)}">${esc(formatTime(entry.completed_at))}</time>
+    </button>`;
+}
+
+/** Die Personenauswahl - „Alle" plus je ein Mitglied. */
+function renderHistoryPeople() {
+  const chip = (id, label) => {
+    const on = state.history.userId === id;
+    return `<button type="button" class="group-toggle__btn${on ? ' group-toggle__btn--active' : ''}"
+            data-history-user="${id === null ? '' : id}" aria-pressed="${on}">
+      <span class="group-toggle__label">${esc(label)}</span>
+    </button>`;
+  };
+  // Nur wer wirklich etwas beisteuern kann: die Housekeeping-Konten sind aus
+  // /meta/options schon heraus, und ein Haushalt aus einer Person braucht die
+  // Auswahl gar nicht.
+  if (isSoloHousehold()) return '';
+  return `
+    <div class="group-toggle history-people" role="group" aria-label="${t('tasks.historyPersonFilter')}">
+      ${chip(null, t('common.all'))}
+      ${state.users.map((u) => chip(u.id, u.display_name)).join('')}
+    </div>`;
+}
+
+/** Die Personen-Chips verdrahten - beide Zweige von renderHistory zeigen sie. */
+function wireHistoryPeople(root, container) {
+  root.querySelectorAll('[data-history-user]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const raw = btn.dataset.historyUser;
+      state.history.userId = raw === '' ? null : Number(raw);
+      loadHistory(container);
+    });
+  });
+}
+
+function renderHistory(container) {
+  const listEl = container.querySelector('#task-list');
+  if (!listEl) return;
+
+  if (state.history.error) {
+    // Die Personenauswahl bleibt STEHEN. Ohne sie war ein Fehler unter einem
+    // aktiven Personenfilter eine Sackgasse: „Erneut versuchen" schickte
+    // dieselbe scheiternde Abfrage los, und es gab kein „Alle", auf das man
+    // haette ausweichen koennen.
+    listEl.replaceChildren();
+    listEl.insertAdjacentHTML('beforeend', renderHistoryPeople());
+    const errorBox = document.createElement('div');
+    listEl.appendChild(errorBox);
+    mountLoadError(errorBox, {
+      title: t('tasks.historyLoadError'),
+      description: t('common.loadErrorDescription'),
+      error: state.history.error,
+      retryLabel: t('common.retry'),
+      onRetry: () => loadHistory(container),
+    });
+    wireHistoryPeople(listEl, container);
+    if (window.lucide) window.lucide.createIcons({ el: listEl });
+    return;
+  }
+
+  const { entries, hasMore } = state.history;
+  const body = entries.length
+    ? groupHistoryByDay(entries).map(({ day, entries: dayEntries }) => `
+        <div class="task-group list-group">
+          <h2 class="list-group__title">
+            <span>${esc(historyDayLabel(day))}</span>
+            <span class="list-group__count">${dayEntries.length}</span>
+          </h2>
+          <div class="list-rows">${dayEntries.map(renderHistoryEntry).join('')}</div>
+        </div>`).join('')
+    // Ein Leerzustand ohne Anlegen-Knopf: „erledige etwas" ist keine Handlung,
+    // die dieser Bildschirm anbieten kann, und der Hinweis erklärt stattdessen,
+    // warum hier auch in einem gut geführten Haushalt nichts stehen kann.
+    : emptyStateHTML({
+      icon: 'history',
+      title: state.history.userId === null ? t('tasks.historyEmptyTitle') : t('tasks.historyEmptyPersonTitle'),
+      description: t('tasks.historyEmptyDescription'),
+      // Der Hinweis erklaert, warum der Verlauf des HAUSHALTS leer sein kann,
+      // obwohl seit Monaten abgehakt wird. Unter einem Personenfilter erklaert
+      // er die falsche Sache: dort ist die Antwort schlicht, dass diese Person
+      // nichts abgehakt hat.
+      hint: state.history.userId === null ? t('tasks.historyEmptyHint') : undefined,
+    });
+
+  listEl.replaceChildren();
+  listEl.insertAdjacentHTML('beforeend', `
+    ${renderHistoryPeople()}
+    ${body}
+    ${hasMore ? `<div class="history-more">
+      <button type="button" class="btn btn--secondary" id="history-more">${t('tasks.historyLoadMore')}</button>
+    </div>` : ''}
+  `);
+  if (window.lucide) window.lucide.createIcons({ el: listEl });
+  stagger(listEl.querySelectorAll('.history-row'));
+
+  wireHistoryPeople(listEl, container);
+  listEl.querySelector('#history-more')?.addEventListener('click', (e) => {
+    // Kein Zuruecksetzen noetig und keins moeglich: `loadHistory` faengt seinen
+    // Fehler selbst ab und wirft nie, und danach baut `renderHistory` die
+    // Flaeche samt diesem Knopf neu auf - der Spinner geht mit ihm.
+    btnLoading(e.currentTarget);
+    loadHistory(container, { append: true });
+  });
+  listEl.querySelectorAll('[data-history-task]').forEach((row) => {
+    row.addEventListener('click', () => openTaskFromHistory(row.dataset.historyTask, container));
+  });
+}
+
+/** Ein Verlaufseintrag führt zu seiner Aufgabe - der einzige Weg von hier weg. */
+async function openTaskFromHistory(id, container) {
+  try {
+    const [task, reminder] = await Promise.all([loadTaskForEdit(id), loadReminderForTask(id)]);
+    openTaskDetail({ task, users: state.users, reminder }, container);
+  } catch (err) {
+    window.yuvomi.showToast(err.message ?? t('common.errorGeneric'), 'danger');
+  }
+}
+
+/**
+ * Verlauf laden. `append` hängt die nächste Seite an, alles andere fängt vorn
+ * an - ein Personenwechsel darf keine Mischung aus zwei Abfragen stehen lassen.
+ */
+async function loadHistory(container, { append = false } = {}) {
+  // Ein zweiter Aufruf, waehrend einer laeuft, WARTET auf den ersten und faehrt
+  // dann selbst - er wird nicht verworfen. Ein blosses `return` hier hatte den
+  // Klick auf ein Personen-Chip stillschweigend geschluckt: `userId` war schon
+  // umgestellt, geladen wurde nichts, und ohne ein abschliessendes Zeichnen
+  // blieb die alte Liste unter dem neu markierten Chip stehen.
+  while (state.history.loading) {
+    // eslint-disable-next-line no-await-in-loop
+    await state.history.loading;
+  }
+  let release;
+  state.history.loading = new Promise((r) => { release = r; });
+  const params = new URLSearchParams({ limit: '50' });
+  if (state.history.userId !== null) params.set('user_id', String(state.history.userId));
+  if (append && state.history.cursor) {
+    params.set('before_at', state.history.cursor.before_at);
+    params.set('before_id', String(state.history.cursor.before_id));
+  }
+  try {
+    const res = await api.get(`/tasks/completions?${params}`);
+    state.history.entries = append ? [...state.history.entries, ...(res.data ?? [])] : (res.data ?? []);
+    state.history.hasMore = !!res.has_more;
+    state.history.cursor = res.next_cursor ?? null;
+    state.history.error = null;
+  } catch (err) {
+    console.error('[Tasks] Verlauf-Ladefehler:', err.message);
+    state.history.error = err;
+    if (!append) { state.history.entries = []; state.history.hasMore = false; state.history.cursor = null; }
+  } finally {
+    state.history.loading = null;
+    release();
+    renderHistory(container);
+  }
+}
+
+/**
+ * „Zuletzt erledigt" für die Detailansicht - über die ganze Wiederholungskette,
+ * nicht nur für die Instanz, die gerade offen daliegt.
+ *
+ * Nachgeladen statt mitgeliefert: die Aufgabenliste holt Dutzende Zeilen, und
+ * eine Historie an jeder davon wäre Ladearbeit für eine Zeile, die man erst
+ * beim Öffnen sieht.
+ */
+function seriesHistoryNode(task) {
+  // Ohne eigene Ueberschrift: die Detailzeile traegt ihr Label schon, und eine
+  // zweite daneben saehe aus wie ein zweiter Abschnitt.
+  const list = document.createElement('div');
+  list.className = 'detail-history';
+  const placeholder = document.createElement('p');
+  placeholder.className = 'detail-history__empty';
+  placeholder.textContent = t('common.loading');
+  list.appendChild(placeholder);
+
+  api.get(`/tasks/${task.id}/completions?limit=10`).then((res) => {
+    const entries = res.data ?? [];
+    list.replaceChildren();
+    if (!entries.length) {
+      const none = document.createElement('p');
+      none.className = 'detail-history__empty';
+      none.textContent = t('tasks.historySeriesEmpty');
+      list.appendChild(none);
+      return;
+    }
+    for (const entry of entries) {
+      const row = document.createElement('p');
+      row.className = 'detail-history__row';
+      const when = document.createElement('span');
+      when.className = 'detail-history__when';
+      when.textContent = `${historyDayLabel(zonedDateKey(entry.completed_at))}, ${formatTime(entry.completed_at)}`;
+      const who = document.createElement('span');
+      who.className = 'detail-history__who';
+      who.textContent = entry.user_name || t('tasks.historyUnknownMember');
+      row.append(when, who);
+      list.appendChild(row);
+    }
+  }).catch(() => {
+    list.replaceChildren();
+    const failed = document.createElement('p');
+    failed.className = 'detail-history__empty';
+    failed.textContent = t('tasks.historySeriesLoadError');
+    list.appendChild(failed);
+  });
+
+  return list;
+}
+
+// --------------------------------------------------------
 // Partielle DOM-Updates
 // --------------------------------------------------------
 
 function renderTaskList(container) {
+  // VOR dem Ladefehler der Aufgaben: der Verlauf hat seinen eigenen Bestand und
+  // seinen eigenen Fehler. Ein gescheitertes `/tasks` sagt nichts darüber, ob
+  // die Vorgänge zu haben sind - stünde die Weiche danach, zeigte der Verlauf
+  // den Fehler einer Abfrage, die er gar nicht braucht.
+  if (state.viewMode === 'history') {
+    // NEU LADEN, nicht den zwischengespeicherten Bestand neu malen. Jeder
+    // schreibende Weg endet auf `loadTasks() -> renderTaskList()`, und genau
+    // dort aendert sich der Verlauf mit: ein wieder geoeffneter Haken loescht
+    // seinen Eintrag serverseitig. Ohne das Nachladen blieb die zurueckgenommene
+    // Erledigung stehen, bis jemand die Ansicht verliess.
+    loadHistory(container);
+    return;
+  }
   // VOR der Kanban-Weiche: nach einem Ladefehler ist `state.tasks` ebenfalls
   // leer, und beide Ansichten haengen an demselben `#task-list`. Nur die
   // Reihenfolge trennt hier „nichts angelegt" von „nicht geladen".
@@ -3662,60 +4017,105 @@ function wireFilterChips(container) {
   });
 }
 
+/**
+ * Alles am Seitenkopf, was von der gewaehlten Ansicht abhaengt - an EINER
+ * Stelle.
+ *
+ * Vorher stand dieselbe Bedingung zweimal da: einmal als Interpolation im
+ * Anfangs-Markup, einmal im Klick-Handler des Umschalters. Mit zwei Ansichten
+ * ging das gerade noch gut; mit der dritten waeren es zwei Listen gewesen, die
+ * auseinanderlaufen koennen, und eine davon haette den Verlauf vergessen.
+ *
+ * Sichtbarkeit ueber [hidden] statt style.display: ein Zustand, den auch
+ * assistive Technik als „nicht vorhanden" liest.
+ */
+function syncViewChrome(container) {
+  const mode = state.viewMode;
+  const isList = mode === 'list';
+  const isHistory = mode === 'history';
+
+  container.querySelectorAll('#view-toggle [data-view]').forEach((b) => {
+    const on = b.dataset.view === mode;
+    b.classList.toggle('group-toggle__btn--active', on);
+    b.setAttribute('aria-pressed', String(on));
+  });
+
+  // Der Kopf fluchtet mit dem Koerper, den er ueberschreibt - und der wechselt
+  // hier die Breite. Liste und Verlauf sind aufs Lesemass gekappt (720px), das
+  // Kanban-Board nimmt die volle Content-Spalte (gemessen 1156px bei 1440px
+  // Fensterbreite); ein fester Modifier im Markup stimmte in genau einer der
+  // Ansichten (Critique 2026-08-13).
+  container.querySelector('.tasks-toolbar')?.classList.toggle('page-toolbar--narrow', !isKanbanMode());
+
+  // Suche, Filterleiste, Gruppierung und Sammelauswahl fragen alle nach
+  // AUFGABEN. Der Verlauf zeigt Vorgaenge - ein Statusfilter darueber waere
+  // eine Auswahl, die nichts veraendern kann.
+  const search = container.querySelector('.tasks-toolbar__search');
+  if (search) search.hidden = isHistory;
+  const filtersRow = container.querySelector('.tasks-filters-row');
+  if (filtersRow) filtersRow.hidden = isHistory;
+  // Das aufgeklappte Filter-Panel ist ein GESCHWISTER der Zeile, kein Kind -
+  // die Zeile zu verstecken laesst es stehen, und dann schwebten Status- und
+  // Prioritaets-Chips ueber einer Liste von Vorgaengen.
+  const filterPanel = container.querySelector('#filter-panel');
+  if (filterPanel && isHistory) filterPanel.hidden = true;
+  const groupToggle = container.querySelector('#group-mode-toggle');
+  if (groupToggle) groupToggle.hidden = !isList;
+  const bulkSelectBtn = container.querySelector('#btn-bulk-select');
+  if (bulkSelectBtn) {
+    bulkSelectBtn.hidden = !isList;
+    if (!isList) {
+      state.bulkSelectMode = false;
+      state.selectedTaskIds.clear();
+      bulkSelectBtn.classList.remove('btn--active');
+      bulkSelectBtn.setAttribute('aria-pressed', 'false');
+    }
+  }
+  // Die Auswahl zu LEEREN raeumt die Leiste nicht weg: sie haengt an
+  // `bar.hidden`, das nur updateBulkActionsBar setzt. Ohne diesen Aufruf blieb
+  // „Als erledigt markieren / Ablegen / Loeschen" ueber dem Verlauf stehen -
+  // mit leerer Auswahl, also Knoepfe ohne Gegenstand.
+  updateBulkActionsBar(container);
+}
+
+/** Nimmt die Ansicht die volle Content-Spalte ein? */
+function isKanbanMode() {
+  return state.viewMode === 'kanban';
+}
+
 function wireViewToggle(container) {
   const toggle = container.querySelector('#view-toggle');
   if (!toggle) return;
-  // Der Kopf fluchtet mit dem Körper, den er überschreibt - und der wechselt
-  // hier die Breite. Die Liste ist aufs Lesemaß gekappt (720px), das
-  // Kanban-Board nimmt die volle Content-Spalte (gemessen 1156px bei 1440px
-  // Fensterbreite); ein fester Modifier im Markup stimmte in genau einer der
-  // beiden Ansichten (Critique 2026-08-13).
-  //
-  // Der Anfangswert steht hier und NICHT als Interpolation im class-Attribut:
-  // zwei Guards lesen die Rail-Aliasse per Regex aus `class="..."`, und ein
-  // `${...}` darin macht aus `?`, `===` und `'list'` je einen Klassennamen -
-  // `.?` als Rail traf danach jeden Selektor der App. Ein Markup-Attribut, das
-  // statisch gelesen wird, bleibt statisch geschrieben.
-  const toolbarEl = container.querySelector('.tasks-toolbar');
-  const syncToolbarWidth = () =>
-    toolbarEl?.classList.toggle('page-toolbar--narrow', state.viewMode === 'list');
-  syncToolbarWidth();
+  syncViewChrome(container);
   toggle.querySelectorAll('[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
       state.viewMode = btn.dataset.view;
       localStorage.setItem('yuvomi-tasks-view', state.viewMode);
       renderFilters(container);
-      toggle.querySelectorAll('[data-view]').forEach((b) => {
-        const on = b.dataset.view === state.viewMode;
-        b.classList.toggle('group-toggle__btn--active', on);
-        b.setAttribute('aria-pressed', String(on));
-      });
-      syncToolbarWidth();
-      // Sichtbarkeit über [hidden] statt style.display: ein Zustand, den auch
-      // assistive Technik als „nicht vorhanden" liest.
-      const groupToggle = container.querySelector('#group-mode-toggle');
-      if (groupToggle) groupToggle.hidden = state.viewMode !== 'list';
-      const bulkSelectBtn = container.querySelector('#btn-bulk-select');
-      if (bulkSelectBtn) {
-        bulkSelectBtn.hidden = state.viewMode !== 'list';
-        if (state.viewMode === 'kanban') {
-          state.bulkSelectMode = false;
-          state.selectedTaskIds.clear();
-          bulkSelectBtn.classList.remove('btn--active');
-          bulkSelectBtn.setAttribute('aria-pressed', 'false');
-        }
-      }
+      syncViewChrome(container);
+
       // Skeleton-Flash: einen Frame Render-Feedback geben, dann Ansicht aufbauen
       const listEl = container.querySelector('#task-list');
       if (listEl) listEl.style.opacity = '0.4';
+      const restore = () => {
+        const el = container.querySelector('#task-list');
+        if (el) { el.style.transition = 'opacity 0.15s'; el.style.opacity = ''; }
+      };
       requestAnimationFrame(() => {
+        // Der Verlauf holt Vorgaenge, die beiden anderen Ansichten Aufgaben -
+        // zwei Abfragen, und der Umschalter darf nicht die falsche fahren. Ein
+        // gemeinsames loadTasks() haette den Verlauf mit einer Aufgabenliste
+        // befuellt, die er gar nicht anzeigt.
+        if (state.viewMode === 'history') {
+          loadHistory(container).finally(restore);
+          return;
+        }
         // Task-Menge neu laden: der Kanban lädt alle Stati (kein status-Param),
         // die Liste wendet den Statusfilter wieder an (Audit A1-07/P3). Fällt bei
         // Netzfehler auf ein reines Re-Render der vorhandenen Aufgaben zurück.
         loadTasks(container).catch(() => renderTaskList(container)).finally(() => {
           updateBulkActionsBar(container);
-          const el = container.querySelector('#task-list');
-          if (el) { el.style.transition = 'opacity 0.15s'; el.style.opacity = ''; }
+          restore();
         });
       });
     });
@@ -3984,14 +4384,19 @@ export async function render(container, { user }) {
   // View-Mode: URL-Parameter > localStorage > Default 'list'
   const urlView = new URLSearchParams(window.location.search).get('view');
   const savedView = localStorage.getItem('yuvomi-tasks-view');
-  state.viewMode = (urlView === 'kanban' || urlView === 'list') ? urlView
-    : (savedView === 'kanban' || savedView === 'list') ? savedView
+  const KNOWN_VIEWS = ['list', 'kanban', 'history'];
+  state.viewMode = KNOWN_VIEWS.includes(urlView) ? urlView
+    : KNOWN_VIEWS.includes(savedView) ? savedView
     : 'list';
 
   // showFuture aus localStorage wiederherstellen
   try { state.showFuture = localStorage.getItem(SHOW_FUTURE_KEY) === '1'; } catch {}
 
   const isKanban = state.viewMode === 'kanban';
+  // Was nur die Aufgabenliste betrifft, blendet `syncViewChrome` gleich nach
+  // dem Einhängen aus - hier steht bewusst keine zweite Fassung derselben
+  // Bedingung. `isHistory` traegt nur den Anfangszustand des Umschalters.
+  const isHistory = state.viewMode === 'history';
 
   // Initiales Skeleton (all values are from i18n keys or hardcoded constants, no user data)
   container.replaceChildren();
@@ -4009,16 +4414,20 @@ export async function render(container, { user }) {
         })}
         <div class="page-toolbar__actions">
           <div class="group-toggle group-toggle--icons" id="view-toggle" role="group" aria-label="${t('tasks.viewToggleLabel')}">
-            <button type="button" class="group-toggle__btn ${isKanban ? '' : 'group-toggle__btn--active'}" data-view="list"
-                    title="${t('tasks.listView')}" aria-label="${t('tasks.listView')}" aria-pressed="${!isKanban}">
+            <button type="button" class="group-toggle__btn ${isKanban || isHistory ? '' : 'group-toggle__btn--active'}" data-view="list"
+                    title="${t('tasks.listView')}" aria-label="${t('tasks.listView')}" aria-pressed="${!isKanban && !isHistory}">
               <i data-lucide="list" class="icon-md" aria-hidden="true"></i>
             </button>
             <button type="button" class="group-toggle__btn ${isKanban ? 'group-toggle__btn--active' : ''}" data-view="kanban"
                     title="${t('tasks.kanbanView')}" aria-label="${t('tasks.kanbanView')}" aria-pressed="${isKanban}">
               <i data-lucide="columns" class="icon-md" aria-hidden="true"></i>
             </button>
+            <button type="button" class="group-toggle__btn ${isHistory ? 'group-toggle__btn--active' : ''}" data-view="history"
+                    title="${t('tasks.historyView')}" aria-label="${t('tasks.historyView')}" aria-pressed="${isHistory}">
+              <i data-lucide="history" class="icon-md" aria-hidden="true"></i>
+            </button>
           </div>
-          <button class="btn btn--ghost btn--icon" id="btn-bulk-select" ${isKanban ? 'hidden' : ''}
+          <button class="btn btn--ghost btn--icon" id="btn-bulk-select"
                   title="${t('tasks.bulkSelect')}" aria-label="${t('tasks.bulkSelect')}" aria-pressed="false">
             <i data-lucide="list-checks" class="icon-lg" aria-hidden="true"></i>
           </button>
@@ -4053,7 +4462,7 @@ export async function render(container, { user }) {
                  Icon allein. Das aria-label steht deshalb IMMER da - der
                  zugaengliche Name darf nicht an einer Media-Query haengen. -->
             <div class="group-toggle" id="group-mode-toggle" role="group"
-                 aria-label="${t('tasks.groupToggleLabel')}" ${isKanban ? 'hidden' : ''}>
+                 aria-label="${t('tasks.groupToggleLabel')}">
               <button type="button" class="group-toggle__btn group-toggle__btn--active"
                       data-mode="category" aria-pressed="true"
                       aria-label="${t('tasks.categoryLabel')}">
@@ -4090,7 +4499,11 @@ export async function render(container, { user }) {
               ${t('tasks.bulkTagAdd')}
             </button>
             <button class="btn btn--secondary btn--sm" id="bulk-tag-remove">
-              <i data-lucide="tag-off" class="icon-md" aria-hidden="true"></i>
+              <!-- Nicht "tag-off": das Icon gibt es im gebuendelten Lucide nicht,
+                   der Knopf stand deshalb leer da. "eraser" traegt das Wegnehmen
+                   und laesst sich vom "tag" des Nachbarknopfs unterscheiden -
+                   zweimal dasselbe Icon nebeneinander waere keine Wahl. -->
+              <i data-lucide="eraser" class="icon-md" aria-hidden="true"></i>
               ${t('tasks.bulkTagRemove')}
             </button>
             <button class="btn btn--danger btn--sm" id="bulk-delete">
@@ -4172,6 +4585,8 @@ export async function render(container, { user }) {
   container.querySelector('#btn-manage-tags')
     ?.addEventListener('click', () => openTagManager(container));
   renderFilters(container);
+  // Im Verlauf holt renderTaskList den Bestand selbst nach - er steckt nicht in
+  // `/tasks`, und sein Ladefehler ist ein eigener.
   renderTaskList(container);
 
   wirePageSearch(container, {
@@ -4196,4 +4611,4 @@ export async function render(container, { user }) {
 }
 
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.
-export const __test = { groupBy, groupKey };
+export const __test = { groupBy, groupKey, formatDueDate };

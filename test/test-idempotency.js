@@ -22,12 +22,12 @@ import express from 'express';
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'idempotency-test-secret';
 
-const { MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
 const { default: idempotencyMiddleware, canonicalize, fingerprint } = await import('../server/middleware/idempotency.js');
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
 
 const moduleDatabase = get();
-const db = buildMigratedDatabase(MIGRATIONS);
+const db = buildMigratedDatabase(ALL_MIGRATIONS);
 _setTestDatabase(db);
 moduleDatabase.close();
 

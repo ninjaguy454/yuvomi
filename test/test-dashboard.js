@@ -252,6 +252,224 @@ test('formatDueDate: „Morgen fällig" erfindet ohne due_time keine Uhrzeit', a
   nodeAssert.match(withTime.text, /09:30/, 'eine echte Uhrzeit bleibt sichtbar');
 });
 
+/* Die Faelligkeit folgt der ANZEIGEZONE, nicht dem Browser (#829 Teil 3, Nachlese
+ * aus #851).
+ *
+ * `due_date`/`due_time` sind zonenlose Wanduhrzeit. Hier stand ein Umweg ueber
+ * `new Date(`${date}T${time}`)`, und der machte daraus einen Zeitpunkt der
+ * BROWSER-Zone - den formatDate/formatTime anschliessend in die Anzeigezone
+ * umrechneten. Mit Haushalt auf Honolulu und Browser in Berlin wurde aus einer
+ * fuer 21:00 eingetragenen Aufgabe eine fuer 9:00, und dieselbe Uhr entschied
+ * ueber "heute"/"morgen".
+ *
+ * Der Test setzt die Zone ueber DENSELBEN Spezifizierer, den dashboard.js
+ * benutzt (`/utils/timezone.js`) - ueber den Repo-Pfad importiert waere es eine
+ * zweite Modulinstanz mit eigenem Zonen-Cache, und der Test liefe an seinem
+ * eigenen Gegenstand vorbei. */
+test('formatDueDate liest due_date/due_time in der Anzeigezone, nicht im Browser', async () => {
+  const tz = await import('/utils/timezone.js');
+  const { __test } = await import('../public/pages/dashboard.js');
+  const p2 = (n) => String(n).padStart(2, '0');
+  const stamp = (f) => `${f.year}-${p2(f.month)}-${p2(f.day)}`;
+
+  const ZONES = ['Pacific/Honolulu', 'Pacific/Kiritimati'];
+  try {
+    for (const zone of ZONES) {
+      tz.setDisplayTimeZone(zone);
+      const today = stamp(tz.nowFields());
+
+      // Die eingetippte Uhrzeit bleibt die eingetippte Uhrzeit.
+      //
+      // Geprueft wird der STEMPEL, nicht die fertige Schreibweise: `/i18n.js` ist
+      // in diesem Kontext ein Stub, der `String(d)` zurueckgibt und deshalb gar
+      // nicht umrechnet - eine Assertion auf "steht 21:00 drin" waere hier gruen,
+      // egal was uebergeben wird. Die Eigenschaft, an der es haengt, ist, dass
+      // die zonenlose Wanduhrzeit als Stempel weitergereicht wird statt als Date
+      // der Browser-Zone; nur die kann dieser Kontext sehen.
+      const withTime = __test.formatDueDate(today, '21:00:00');
+      nodeAssert.match(withTime.text, /\d{4}-\d{2}-\d{2}T21:00/,
+        `${zone}: die Wanduhrzeit muss als Stempel an den Formatierer gehen, erhalten: ${withTime.text}`);
+      nodeAssert.ok(!/GMT/.test(withTime.text),
+        `${zone}: ein Date-Umweg wuerde die Zeit in der Browser-Zone einfrieren, erhalten: ${withTime.text}`);
+
+      // Und "heute" ist der Tag der Anzeigezone, nicht der des Browsers.
+      nodeAssert.match(withTime.text, /dashboard\.(dueToday|overdue)/,
+        `${zone}: der heutige Tag der Anzeigezone muss als heute gelten, erhalten: ${withTime.text}`);
+
+      const shiftDay = (key, days) => {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+      };
+      nodeAssert.match(__test.formatDueDate(shiftDay(today, 1), null).text, /dashboard\.dueTomorrow/,
+        `${zone}: der Folgetag der Anzeigezone ist morgen`);
+
+      // JEDER Ausgabepfad, der eine Uhrzeit zeigt - nicht nur der heutige. Der
+      // ueberfaellige und der Bald-Zweig bauen ihre Beschriftung ueber eine eigene
+      // Zeile (`fullLabel`), und die blieb bei einer ersten Fassung dieses Tests
+      // ungeprueft: sie kommt bei "heute faellig" gar nicht vor.
+      const paths = [
+        [shiftDay(today, -1), '21:00:00', /dashboard\.overdue/, 'gestern 21:00 ist ueberfaellig'],
+        [shiftDay(today, 1), '23:30:00', /dashboard\.(dueSoon|dueTomorrow)/, 'morgen spaet'],
+        [shiftDay(today, 1), '09:30:00', /dashboard\.dueTomorrow/, 'morgen frueh'],
+        [shiftDay(today, 4), '14:00:00', /\d/, 'in vier Tagen'],
+      ];
+      for (const [day, time, expect, what] of paths) {
+        const res = __test.formatDueDate(day, time);
+        nodeAssert.match(res.text, expect, `${zone}: ${what}, erhalten: ${res.text}`);
+        nodeAssert.match(res.text, new RegExp(`${day}T${time.slice(0, 5)}`),
+          `${zone}: ${what} - die Wanduhrzeit muss als Stempel weitergereicht werden, erhalten: ${res.text}`);
+        nodeAssert.ok(!/GMT/.test(res.text),
+          `${zone}: ${what} - ein Date-Umweg friert die Zeit in der Browser-Zone ein, erhalten: ${res.text}`);
+      }
+    }
+  } finally {
+    tz.setDisplayTimeZone(null);
+  }
+});
+
+test('formatDueDate: eine Faelligkeit spaeter am Tag ist nicht schon ueberfaellig', async () => {
+  const tz = await import('/utils/timezone.js');
+  const { __test } = await import('../public/pages/dashboard.js');
+  try {
+    tz.setDisplayTimeZone('Pacific/Honolulu');
+    const now = tz.nowFields();
+    const p2 = (n) => String(n).padStart(2, '0');
+    const today = `${now.year}-${p2(now.month)}-${p2(now.day)}`;
+    // Eine Minute in der Zukunft, in der Zone gerechnet, in der die Anzeige liest.
+    const later = new Date(Date.UTC(now.year, now.month - 1, now.day, now.hour, now.minute) + 60000);
+    const res = __test.formatDueDate(today, `${p2(later.getUTCHours())}:${p2(later.getUTCMinutes())}`);
+    nodeAssert.equal(res.overdue, false, `nicht ueberfaellig, erhalten: ${res.text}`);
+  } finally {
+    tz.setDisplayTimeZone(null);
+  }
+});
+
+/* „Heute"/„Morgen" an einem echten ZEITPUNKT (#829, Nachlese #851).
+ *
+ * Hier stand `d.toDateString() === new Date().toDateString()` - beide Seiten in
+ * der Browser-Zone. `d` ist an dieser Stelle oft ein synchronisierter Termin,
+ * also ein Instant mit eigener Zone: ein Geraet in einer anderen Zone nannte
+ * denselben Termin „Heute", waehrend er im Haushalt morgen liegt. Anders als bei
+ * `formatDueDate` wird hier wirklich UMGERECHNET, denn ein Instant traegt seine
+ * Zone selbst - das ist der Unterschied, den utils/timezone.js fuehrt.
+ *
+ * Geprueft wird die EIGENSCHAFT ueber ein Raster, nicht ein konstruierter
+ * Einzelfall: „das Label heisst genau dann heute, wenn der Tag des Zeitpunkts in
+ * der Anzeigezone der heutige ist". Eine erste Fassung setzte einen einzelnen
+ * Zeitpunkt und war gruen und blind - er fiel zufaellig in BEIDEN Zonen auf
+ * heute, also unterschied er die Fassungen nicht. Ein Raster ueber zwei Tage
+ * trifft die Abweichung zwangslaeufig, sobald die Zonen auseinanderliegen. */
+test('relativeDateLabel benennt einen Zeitpunkt in der Anzeigezone', async () => {
+  const tz = await import('/utils/timezone.js');
+  const { __test } = await import('../public/pages/dashboard.js');
+  const shiftDay = (key, days) => {
+    const [y, m, d] = key.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+  };
+
+  try {
+    for (const zone of ['Pacific/Honolulu', 'Pacific/Kiritimati']) {
+      tz.setDisplayTimeZone(zone);
+      const n = tz.nowFields();
+      const p2 = (x) => String(x).padStart(2, '0');
+      const today = `${n.year}-${p2(n.month)}-${p2(n.day)}`;
+
+      let sawToday = 0;
+      let sawTomorrow = 0;
+      // Alle zwei Stunden ueber zwei Tage, ab jetzt.
+      for (let h = 0; h < 48; h += 2) {
+        const d = new Date(Date.now() + h * 3600000);
+        const dayInZone = tz.zonedDateKey(d);
+        const label = __test.relativeDateLabel(d);
+
+        if (dayInZone === today) {
+          nodeAssert.equal(label, 'common.today',
+            `${zone}: +${h}h faellt in der Anzeigezone auf heute (${dayInZone}), heisst aber "${label}"`);
+          sawToday += 1;
+        } else if (dayInZone === shiftDay(today, 1)) {
+          nodeAssert.equal(label, 'common.tomorrow',
+            `${zone}: +${h}h faellt auf morgen (${dayInZone}), heisst aber "${label}"`);
+          sawTomorrow += 1;
+        } else {
+          nodeAssert.ok(label !== 'common.today' && label !== 'common.tomorrow',
+            `${zone}: +${h}h faellt auf ${dayInZone}, traegt aber "${label}"`);
+        }
+      }
+      // Sonst haette das Raster nichts geprueft.
+      nodeAssert.ok(sawToday > 0 && sawTomorrow > 0,
+        `${zone}: das Raster traf weder heute noch morgen - es prueft nichts`);
+    }
+  } finally {
+    tz.setDisplayTimeZone(null);
+  }
+});
+
+/* Ein DATUMS-KEY wird gelesen, ein ZEITPUNKT umgerechnet - und ein Date, das aus
+ * einem Key gebaut wurde, ist die gefaehrliche Mitte.
+ *
+ * Die erste Fassung dieses Fixes schickte alles durch `zonedDateKey()`. Fuer
+ * einen echten Instant und fuer einen Key-STRING ist das richtig - `zonedFields`
+ * liest zonenlose Strings, statt sie zu rechnen. Fuer
+ * `parseLocalDateKey('2026-08-25')` aber, also Mitternacht der BROWSER-Zone, ist
+ * es einen Tag daneben: damit war derselbe Fehler wieder da, gegen den dieser PR
+ * angetreten ist, nur ueber einen anderen Weg.
+ *
+ * Die Pflicht liegt deshalb beim AUFRUFER, und genau dort setzt dieser Test an:
+ * nicht an `relativeDateLabel` (das war nie kaputt, wenn man ihm einen String
+ * gab), sondern an den Stellen, die vorher ein Date daraus bauten. Ein Test auf
+ * die Funktion allein waere gruen und blind gewesen - gemessen, nicht vermutet. */
+test('die Termin-Auswahl "heute" folgt der Anzeigezone, nicht dem Browser', async () => {
+  const tz = await import('/utils/timezone.js');
+  const { __test } = await import('../public/pages/dashboard.js');
+  try {
+    for (const zone of ['Pacific/Honolulu', 'Pacific/Kiritimati']) {
+      tz.setDisplayTimeZone(zone);
+      const n = tz.nowFields();
+      const p2 = (x) => String(x).padStart(2, '0');
+      const today = `${n.year}-${p2(n.month)}-${p2(n.day)}`;
+      const shift = (days) => {
+        const [y, m, d] = today.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+      };
+
+      const res = __test.buildTodayHighlights({
+        events: [
+          { id: 1, title: 'Heute', start_datetime: `${today}T10:00` },
+          { id: 2, title: 'Morgen', start_datetime: `${shift(1)}T10:00` },
+          { id: 3, title: 'Gestern', start_datetime: `${shift(-1)}T10:00` },
+        ],
+      });
+      nodeAssert.equal(res.nextEvent?.title, 'Heute',
+        `${zone}: nur der Termin am heutigen Tag DER ANZEIGEZONE zaehlt, bekam: ${res.nextEvent?.title}`);
+    }
+  } finally {
+    tz.setDisplayTimeZone(null);
+  }
+});
+
+test('relativeDateLabel benennt einen Datums-Key ohne ihn umzurechnen', async () => {
+  const tz = await import('/utils/timezone.js');
+  const { __test } = await import('../public/pages/dashboard.js');
+  try {
+    for (const zone of ['Pacific/Honolulu', 'Pacific/Kiritimati']) {
+      tz.setDisplayTimeZone(zone);
+      const n = tz.nowFields();
+      const p2 = (x) => String(x).padStart(2, '0');
+      const today = `${n.year}-${p2(n.month)}-${p2(n.day)}`;
+      const shift = (days) => {
+        const [y, m, d] = today.split('-').map(Number);
+        return new Date(Date.UTC(y, m - 1, d) + days * 86400000).toISOString().slice(0, 10);
+      };
+      nodeAssert.equal(__test.relativeDateLabel(today), 'common.today', zone);
+      nodeAssert.equal(__test.relativeDateLabel(shift(1)), 'common.tomorrow', zone);
+      nodeAssert.ok(!['common.today', 'common.tomorrow'].includes(__test.relativeDateLabel(shift(3))), zone);
+      nodeAssert.equal(__test.relativeDateLabel(null), '', 'kein Wert, kein Label');
+    }
+  } finally {
+    tz.setDisplayTimeZone(null);
+  }
+});
+
 test('Tagesprogramm: Ausblick kennt die nächste fällige Aufgabe über heute hinaus', async () => {
   const { __test } = await import('../public/pages/dashboard.js');
   const todayStr = toLocalDateKey(new Date());
@@ -1544,8 +1762,12 @@ function layoutOhne(missing) {
 }
 
 test('Widget-Merge: eine fehlende Id landet an ihrer Default-Position, nicht hinten', () => {
+  // Die Zahl steht hier fest und wird bei jedem neuen Widget von Hand
+  // nachgezogen - das ist der Zweck: ein Selektor, der aus derselben Liste
+  // abgeleitet waere, koennte nie melden, dass die Liste sich geaendert hat.
+  // Zuletzt nachgezogen fuer `quicklinks` (#469).
   const geprueft = widgets.WIDGET_IDS.length;
-  assert(geprueft === 16, `Reichweite: ${geprueft} Ids geprueft, nicht die erwarteten 16`);
+  assert(geprueft === 17, `Reichweite: ${geprueft} Ids geprueft, nicht die erwarteten 17`);
   const falsch = widgets.WIDGET_IDS.filter((id) => {
     const merged = widgets.normalizeDashboardConfig(layoutOhne(id));
     return merged.map((w) => w.id).join(',') !== widgets.WIDGET_IDS.join(',');
@@ -1971,6 +2193,101 @@ test('die Route zieht ihren Kalendertag lokal, nicht aus toISOString()', () => {
     `server/routes/dashboard.js zieht an ${treffer.length} Stelle(n) einen Kalendertag aus `
     + 'toISOString() - das ist der UTC-Tag. Fuer alles, was der Nutzer als Kalendertag '
     + 'eingegeben hat, gilt todayLocalKey.',
+  );
+});
+
+// --------------------------------------------------------
+// Wetter: welcher Tag heisst "Heute" (#851)
+// --------------------------------------------------------
+/* Ein Vorhersagetag wird an seinem DATUM benannt, nie an seiner Position.
+ *
+ * Die Position war die Falle: der Server trennt den laufenden Tag aus
+ * `forecast` heraus, `forecast[0]` ist also morgen - hart als „Heute"
+ * beschriftet las sich die Reihe, als fehle ein Tag. Auf einem Wandtablet und
+ * auf dem Handy stand derselbe Fehler zweimal, weil beide Fassungen dieselbe
+ * Zeile kopiert hatten.
+ *
+ * Bezugsgroesse ist `weather.today.date`, der Kalendertag AM WETTERORT. Fehlt
+ * er, gibt es kein „Heute" - lieber kein Label als ein falsches. */
+
+const WEATHER_FIXTURE = {
+  units: 'metric',
+  city: 'Honolulu',
+  current: { temp: 26, feels_like: 27, humidity: 70, icon: 'sun', desc: 'wmo.0', wind_speed: 8 },
+  today: { date: '2026-08-24', temp_min: 22, temp_max: 29, icon: 'sun', desc: 'wmo.0' },
+  forecast: [
+    { date: '2026-08-25', temp_min: 21, temp_max: 28, icon: 'cloud', desc: 'wmo.3' },
+    { date: '2026-08-26', temp_min: 20, temp_max: 27, icon: 'cloud-rain', desc: 'wmo.61' },
+    { date: '2026-08-27', temp_min: 22, temp_max: 30, icon: 'sun', desc: 'wmo.0' },
+  ],
+};
+
+test('Wetter: der erste Vorhersagetag heisst nicht "Heute"', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  const label = __test.weatherDayLabel(WEATHER_FIXTURE, WEATHER_FIXTURE.forecast[0].date);
+  assert(label !== 'common.today', 'forecast[0] ist morgen und darf nicht "Heute" heissen');
+  assert(label === 'Di', `Wochentag erwartet, bekam: ${label}`);
+});
+
+test('Wetter: ein Tag, der wirklich heute ist, heisst "Heute"', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  assert(
+    __test.weatherDayLabel(WEATHER_FIXTURE, WEATHER_FIXTURE.today.date) === 'common.today',
+    'der laufende Tag traegt das Heute-Label',
+  );
+});
+
+test('Wetter: ohne Bezugstag gibt es kein "Heute"', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  const blind = { ...WEATHER_FIXTURE, today: null };
+  for (const d of WEATHER_FIXTURE.forecast) {
+    assert(
+      __test.weatherDayLabel(blind, d.date) !== 'common.today',
+      'ohne today.date darf kein Tag geraten werden',
+    );
+  }
+});
+
+test('Wetter-Karte: die Reihe beginnt beschriftet mit morgen, nicht mit "Heute"', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  const html = __test.renderWeatherWidget(WEATHER_FIXTURE);
+  const labels = [...html.matchAll(/class="weather-forecast__label[^"]*">([^<]*)</g)].map((m) => m[1]);
+  assert(labels.length === 3, `drei Vorhersagetage erwartet, bekam ${labels.length}`);
+  assert(labels[0] !== 'common.today', 'die Karte beschriftet morgen als "Heute"');
+  assert(!html.includes('weather-forecast__label--today'), 'kein Tag der Reihe ist heute');
+});
+
+test('Wetter-Wand: dieselbe Regel, nicht nur auf der Karte', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  const html = __test.renderWallWeather(WEATHER_FIXTURE);
+  const labels = [...html.matchAll(/class="wall-weather__day-label">([^<]*)</g)].map((m) => m[1]);
+  assert(labels.length === 3, `drei Vorhersagetage erwartet, bekam ${labels.length}`);
+  assert(labels[0] !== 'common.today', 'die Wand beschriftet morgen als "Heute"');
+});
+
+/* Hoch und Tief des laufenden Tages: die Karte trug fuer jeden Folgetag eine
+ * Spanne, fuer heute aber nur den Momentanwert - genau die Luecke aus #851. */
+test('Wetter: der Hauptblock traegt Hoch und Tief des laufenden Tages', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  const html = __test.renderWeatherWidget(WEATHER_FIXTURE);
+  assert(html.includes('weather-widget__range-high'), 'Hoechstwert fehlt im Hauptblock');
+  assert(/weather-widget__range-high"[^>]*>29°/.test(html), 'falscher Hoechstwert');
+  assert(/weather-widget__range-low"[^>]*>22°/.test(html), 'falscher Tiefstwert');
+  assert(html.includes('dashboard.weatherHighLow'), 'die Zahlenpaarung braucht eine Vorlesehilfe');
+  assert(/class="weather-widget__range" role="img"/.test(html),
+    'die Vorlesehilfe braucht eine Rolle - auf einem rollenlosen span mit aria-hidden-Kindern haengt sie an nichts');
+});
+
+test('Wetter: ohne Tageswerte bleibt die Hoch/Tief-Zeile weg statt leer zu stehen', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  const ohne = { ...WEATHER_FIXTURE, today: { date: '2026-08-24', temp_min: null, temp_max: null } };
+  assert(
+    !__test.renderWeatherWidget(ohne).includes('weather-widget__range'),
+    'ohne Zahlen darf die Zeile nicht erscheinen',
+  );
+  assert(
+    !__test.renderWeatherWidget({ ...WEATHER_FIXTURE, today: null }).includes('weather-widget__range'),
+    'ohne today darf die Zeile nicht erscheinen',
   );
 });
 

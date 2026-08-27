@@ -24,7 +24,7 @@ process.env.TZ = 'UTC';
 const {
   nextOccurrence, nextOccurrenceAfter, nextDueAfterCompletion,
 } = await import('../server/services/recurrence.js');
-const { MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
 
 // --------------------------------------------------------
@@ -158,7 +158,7 @@ function buildTestDb() {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY, description TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
-  for (const m of MIGRATIONS) {
+  for (const m of ALL_MIGRATIONS) {
     if (typeof m.up === 'function') m.up(db); else db.exec(m.up);
     if (typeof m.afterUp === 'function') m.afterUp(db);
     db.prepare('INSERT INTO schema_migrations (version, description) VALUES (?, ?)').run(m.version, m.description);

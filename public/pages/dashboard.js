@@ -12,7 +12,7 @@ import { esc, fmtLocation, renderMarkdownLight } from '/utils/html.js';
 // `todayKey` heisst hier schon ein Parameter (bzw. eine lokale Bindung), der den
 // Bezugstag traegt - der Import kommt deshalb unter eigenem Namen herein.
 import { toLocalDateKey, parseLocalDateKey, addLocalDays, todayKey as householdToday } from '/utils/date.js';
-import { nowFields, zonedUTCProxy } from '/utils/timezone.js';
+import { nowFields, zonedUTCProxy, zonedDateKey, zonedTimeKey } from '/utils/timezone.js';
 import { predictCycle, PHASE } from '/utils/health-cycle.js';
 import { localizeBirthdayEvent } from '/utils/birthday-event.js';
 import { countdownPhrase, countdownRank } from '/utils/countdown.js';
@@ -31,6 +31,9 @@ import { MODULE_ICON, moduleIconHTML } from '/nav-icons.js';
 import { exitWallMode, isWallActive, syncWallMode } from '/utils/wall-mode.js';
 import { rememberLayoutHint, layoutHintSizes, layoutHintQuery } from '/utils/dashboard-layout-hint.js';
 import { emptyHintHTML } from '/utils/empty-state.js';
+import { quickLinkHost } from '/utils/quick-link-url.js';
+import { prefersInkText } from '/utils/contrast.js';
+import { openQuickLinksManager } from '/components/quick-links-manager.js';
 
 // Hält den AbortController des aktuellen FAB-Listeners - wird bei jedem render() erneuert.
 let _fabController = null;
@@ -330,6 +333,7 @@ function widgetLabel(id) {
     clock:    () => t('dashboard.clock'),
     metrics:  () => t('dashboard.metrics'),
     countdown: () => t('dashboard.countdownTitle'),
+    quicklinks: () => t('dashboard.quickLinksTitle'),
   };
   return (map[id] ?? (() => id))();
 }
@@ -413,62 +417,121 @@ function mastheadDateLabel(now = new Date()) {
 // Eigene Funktion, damit Aufrufer nur den Datumsteil brauchen, ohne ein
 // zusammengesetztes „Datum, Zeit" per Komma zu zerschneiden (locale-fragil:
 // manche Locales setzen selbst ein Komma ins Datum).
-function relativeDateLabel(d) {
-  const today = new Date();
-  const tomorrow = new Date(today);
-  tomorrow.setDate(today.getDate() + 1);
-  if (d.toDateString() === today.toDateString()) return t('common.today');
-  if (d.toDateString() === tomorrow.toDateString()) return t('common.tomorrow');
-  return formatDate(d);
+/**
+ * „Heute"/„Morgen", sonst das Datum in Locale-Schreibweise.
+ *
+ * NIMMT EINEN DATUMS-KEY ODER EINEN ZEITPUNKT, und der Unterschied ist genau
+ * der, den utils/timezone.js fuehrt: ein Key ('2026-08-25') ist zonenlos und
+ * wird GELESEN, ein Zeitpunkt traegt seine Zone und wird UMGERECHNET.
+ *
+ * DIE PFLICHT LIEGT BEIM AUFRUFER. Ein `Date`, das jemand aus einem Key gebaut
+ * hat, ist die gefaehrliche Mitte: `parseLocalDateKey('2026-08-25')` ist
+ * Mitternacht der BROWSER-Zone und sieht damit aus wie ein Zeitpunkt, meint aber
+ * einen Kalendertag. Durch die Anzeigezone gerechnet ist es einen Tag daneben -
+ * derselbe Fehler, gegen den dieser Fix angetreten ist, nur ueber einen anderen
+ * Weg. Wer einen Key hat, gibt den KEY her und baut kein Date daraus (#851).
+ *
+ * `zonedDateKey` unterscheidet die beiden Formen selbst: einen zonenlosen String
+ * liest es, einen Zeitpunkt rechnet es um. Ein zweiter Zweig hier waere ein
+ * Duplikat dieser Regel und wuerde beim naechsten Mal auseinanderlaufen.
+ *
+ * Vorher stand hier `d.toDateString() === new Date().toDateString()` - beide
+ * Seiten in der Browser-Zone, also fuer jeden Betrachter ein anderes „heute".
+ */
+function relativeDateLabel(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const day = zonedDateKey(value);
+  if (!day) return formatDate(value);
+  const today = householdToday();
+  if (day === today) return t('common.today');
+  if (day === addLocalDays(today, 1)) return t('common.tomorrow');
+  return formatDate(value);
 }
 
 function formatDateTime(isoString) {
   if (!isoString) return '';
-  const d = new Date(isoString);
-  const dateStr = relativeDateLabel(d);
-  const timeStr = formatTime(d);
+  // Der Wert geht als STRING weiter. In `start_datetime` liegen zwei Formen in
+  // einer Spalte: zonenlose Wanduhrzeit ('2026-08-21T19:00') und echte Instants
+  // ('...Z'). `new Date(...)` haette die erste in einen Zeitpunkt der
+  // Browser-Zone verwandelt; beide Formatierer unterscheiden sie selbst.
+  const dateStr = relativeDateLabel(isoString);
+  const timeStr = formatTime(isoString);
   const suffix = timeSuffix();
   return `${dateStr}, ${timeStr}${suffix ? ' ' + suffix : ''}`.trim();
 }
 
+/** 'YYYY-MM-DDTHH:mm' als Millisekunden - reine Feldarithmetik, kein Zeitpunkt. */
+function wallStampMs(stamp) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(stamp);
+  if (!m) return NaN;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]));
+}
+
+/**
+ * Die Faelligkeit einer Aufgabe als Beschriftung.
+ *
+ * `due_date`/`due_time` sind zonenlose WANDUHRZEIT: wer „21:00" eingetippt hat,
+ * meinte 21:00, in welcher Zone der Haushalt auch steht. Hier stand ein Umweg
+ * ueber `new Date(\`${dateStr}T${timeStr}\`)`, und der machte daraus einen
+ * Zeitpunkt der BROWSER-Zone, den `formatDate`/`formatTime` anschliessend in die
+ * Anzeigezone umrechneten - mit Haushalt auf Honolulu und Browser in Berlin
+ * wurde aus 21:00 ein 9:00. utils/timezone.js fuehrt die Regel dazu: umgerechnet
+ * wird nur, was seine Zone SELBST traegt.
+ *
+ * Dieselbe Uhr entschied ueber „heute"/„morgen". Sie war die des Browsers, nicht
+ * die des Haushalts - die siebte Uhr, die #829 Teil 3 uebersehen hat.
+ */
 function formatDueDate(dateStr, timeStr) {
   if (!dateStr) return null;
 
-  const dueDate = timeStr
-    ? new Date(`${dateStr}T${timeStr}`)
-    : new Date(`${dateStr}T23:59:59`);
+  const dayKey = String(dateStr).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dayKey)) return null;
 
-  if (isNaN(dueDate)) return null;
+  const dueTime = timeStr ? String(timeStr).slice(0, 5) : null;
+  if (timeStr && !/^\d{2}:\d{2}$/.test(dueTime)) return null;
+  // Ohne due_time laeuft der Tag bis zu seinem Ende. Das ist die interne
+  // Sortier-Kruecke und wird unten nie als Uhrzeit angezeigt.
+  const dueStamp = `${dayKey}T${dueTime ?? '23:59'}`;
 
-  const now = new Date();
-  const diffMs = dueDate - now;
-  const diffH = diffMs / (1000 * 60 * 60);
+  const now = nowFields();
+  if (!now) return null;
+  const p2 = (n) => String(n).padStart(2, '0');
+  const todayKey = `${now.year}-${p2(now.month)}-${p2(now.day)}`;
+  const nowStamp = `${todayKey}T${p2(now.hour)}:${p2(now.minute)}`;
 
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const dueDay = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
-  const calDayDiff = Math.round((dueDay - today) / (1000 * 60 * 60 * 24));
+  // Beide Seiten sind Wanduhrzeit DERSELBEN Zone und damit als Text vergleichbar.
+  const overdue = dueStamp < nowStamp;
+  const diffH = (wallStampMs(dueStamp) - wallStampMs(nowStamp)) / (1000 * 60 * 60);
 
-  const fullLabel = timeStr
-    ? `${formatDate(dueDate)}, ${formatTime(dueDate)}` // beide aus i18n.js
-    : formatDate(dueDate);
+  // Kalendertage, nicht Millisekunden: ueber eine Sommerzeitgrenze liegen zwei
+  // aufeinanderfolgende Tage nicht 24h auseinander, ihre Keys aber immer genau
+  // einen.
+  const dayMs = (key) => wallStampMs(`${key}T00:00`);
+  const calDayDiff = Math.round((dayMs(dayKey) - dayMs(todayKey)) / (1000 * 60 * 60 * 24));
 
-  if (diffMs < 0) {
+  // Die Stempel gehen als STRING an die Formatierer, nicht als Date: nur so
+  // bleibt die Wanduhrzeit, was sie ist (siehe oben).
+  const fullLabel = dueTime
+    ? `${formatDate(dueStamp)}, ${formatTime(dueStamp)}` // beide aus i18n.js
+    : formatDate(dayKey);
+
+  if (overdue) {
     return { text: `${t('dashboard.overdue')} – ${fullLabel}`, overdue: true };
   }
 
-  if (calDayDiff === 1 && dueDate.getHours() >= 22 && diffH < 24) {
+  if (calDayDiff === 1 && Number(dueTime?.slice(0, 2)) >= 22 && diffH < 24) {
     return { text: `${t('dashboard.dueSoon')} – ${fullLabel}`, overdue: false, soon: true };
   }
 
   if (calDayDiff === 0) {
-    return { text: timeStr ? `${t('dashboard.dueToday')} – ${formatTime(dueDate)}` : t('dashboard.dueToday'), overdue: false, soon: true };
+    return { text: dueTime ? `${t('dashboard.dueToday')} – ${formatTime(dueStamp)}` : t('dashboard.dueToday'), overdue: false, soon: true };
   }
 
   if (calDayDiff === 1) {
     // Nur eine ECHTE Uhrzeit anhängen: ohne due_time ist 23:59:59 die interne
     // Sortier-Krücke - „Morgen fällig – 23:59" behauptete eine Deadline, die
     // niemand gesetzt hat (Critique P1). Der Heute-Zweig darüber macht es vor.
-    return { text: timeStr ? `${t('dashboard.dueTomorrow')} – ${formatTime(dueDate)}` : t('dashboard.dueTomorrow'), overdue: false };
+    return { text: dueTime ? `${t('dashboard.dueTomorrow')} – ${formatTime(dueStamp)}` : t('dashboard.dueTomorrow'), overdue: false };
   }
 
   return { text: fullLabel, overdue: false };
@@ -643,11 +706,11 @@ function buildTodayHighlights(data) {
 
   const urgentTask = tasks.find((task) => task.priority === 'urgent') ?? tasks[0] ?? null;
 
-  const today = new Date().toDateString();
+  const today = householdToday();
   const todayEvents = events.filter((e) => {
     if (!e.start_datetime) return true;
-    const d = eventStartDate(e);
-    return d ? d.toDateString() === today : true;
+    const dayKey = eventOccurrenceDateKey(e);
+    return dayKey ? dayKey === today : true;
   });
   const nextEvent = todayEvents[0] ?? null;
 
@@ -857,10 +920,13 @@ function renderUpcomingEvents(events) {
     </div>`;
   }
 
-  const today = new Date().toDateString();
+  // Der Tagesvergleich ueber KEYS, nicht ueber `toDateString()`: das las die
+  // Browser-Zone und machte „heute" zu einer Frage an das Geraet (#851).
+  const today = householdToday();
   const items = events.map((e) => {
     const d = eventStartDate(e) ?? new Date(e.start_datetime);
-    const isToday = d.toDateString() === today;
+    const dayKey = eventOccurrenceDateKey(e);
+    const isToday = dayKey === today;
     const _suffix = timeSuffix();
     const timeStr = e.all_day ? t('dashboard.allDay') : `${formatTime(d)}${_suffix ? ' ' + _suffix : ''}`.trim();
     return `
@@ -869,7 +935,7 @@ function renderUpcomingEvents(events) {
         <div class="event-item__content">
           <div class="event-item__title">${esc(e.title)}</div>
           <div class="event-item__time">
-            <span class="event-time-badge ${isToday ? 'event-time-badge--today' : ''}">${isToday ? t('common.today') : relativeDateLabel(d)}</span>
+            <span class="event-time-badge ${isToday ? 'event-time-badge--today' : ''}">${isToday ? t('common.today') : relativeDateLabel(dayKey)}</span>
             ${timeStr}
             ${e.location ? ` · ${esc(fmtLocation(e.location))}` : ''}
             ${e.cal_name ? `<span class="event-item__cal">${esc(e.cal_name)}</span>` : ''}
@@ -1121,6 +1187,98 @@ function renderPinnedNotes(notes) {
   </div>`;
 }
 
+/* DIE KACHELREIHE (#469) - was sie ist und was sie bewusst nicht ist.
+ *
+ * Vier Melder wollten dasselbe: von der Startseite des Haushalts zu den anderen
+ * Diensten im Haus, ohne zwei Klicks Umweg über eine Notiz. Die Diskussion lief
+ * zweimal über die Frage, ob daraus eine Lesezeichen-Bibliothek wird (#759), und
+ * ist zweimal dagegen ausgegangen. Was hier steht, ist deshalb eine ZEILE aus
+ * Kacheln und kein Modul: Name, Adresse, Bild, und wer sie sieht.
+ *
+ * KEIN VORDEFINIERTER APP-KATALOG. radicchiodev hat den Grund geliefert: eine
+ * Liste bekannter Dienste ist an dem Tag falsch, an dem jemand einen betreibt,
+ * der nicht darauf steht. Was hier zählt, ist eine Adresse.
+ *
+ * KEIN FAVICON. Das Bild wird hochgeladen und liegt in der Zeile - ein
+ * geholtes Favicon hiesse, dass die Startseite bei jedem Aufbau jeden
+ * verlinkten Host anspricht. Wer keins hochlädt, bekommt den Anfangsbuchstaben
+ * auf seiner Farbe, dieselbe Antwort wie ein Mitglied ohne Foto: zwölf gleiche
+ * Weltkugeln unterscheiden nichts, "J" auf Violett schon.
+ */
+function quickLinkMonogram(name) {
+  // Der erste BUCHSTABE, nicht das erste Zeichen: ein Name wie "🎬 Jellyfin"
+  // ergäbe sonst eine Kachel, die auf jedem Gerät anders aussieht.
+  const match = String(name ?? '').match(/\p{L}|\p{N}/u);
+  return (match ? match[0] : '?').toUpperCase();
+}
+
+function renderQuickLinkTile(s) {
+  const name = String(s.name ?? '');
+  const host = quickLinkHost(s.url);
+  const face = s.icon_data
+    ? `<img src="${esc(s.icon_data)}" alt="" loading="lazy">`
+    : `<span class="quick-link-tile__monogram" aria-hidden="true">${esc(quickLinkMonogram(name))}</span>`;
+  // WEISS AUF EINER FREI GEWAEHLTEN FARBE IST NICHT IMMER LESBAR - dieselbe
+  // Messung, die die Avatar-Initialen einmal gekostet hat (utils/contrast.js).
+  // CSS kann das nicht entscheiden: die Farbe kommt aus der Datenbank.
+  const ink = prefersInkText(s.color) ? ' quick-link-tile__face--ink' : '';
+  // Die Farbe steht nur da, wenn es eine gibt - eine leere CSS-Variable ist
+  // keine Farbe, sondern ein kaputtes Rezept (dieselbe Falle wie bei den
+  // Notizen, siehe renderPinnedNotes).
+  const tint = s.color ? ` style="--quick-link-color:${esc(s.color)};"` : '';
+  // `rel` und `referrerpolicy` sind hier keine Formalie: ein Ziel im Heimnetz
+  // hat nichts davon zu erfahren, von welcher Adresse aus dieser Haushalt
+  // seine Yuvomi-Instanz betreibt, und `noopener` nimmt der geöffneten Seite
+  // den Griff auf das Fenster, aus dem sie kam.
+  // Name und volle Adresse stehen im `title`: die Host-Zeile darunter ist
+  // einzeilig und kuerzt, und eine gekuerzte Adresse darf nicht die einzige
+  // Auskunft darueber sein, wohin die Kachel fuehrt.
+  return `<a class="quick-link-tile" href="${esc(s.url)}" target="_blank"
+             title="${esc(`${name} - ${s.url}`)}"
+             rel="noopener noreferrer" referrerpolicy="no-referrer"${tint}>
+    <span class="quick-link-tile__face${ink}">${face}</span>
+    <span class="quick-link-tile__name">${esc(name)}</span>
+    ${host ? `<span class="quick-link-tile__host">${esc(host)}</span>` : ''}
+    ${s.visibility === 'private'
+      ? `<i data-lucide="lock" class="quick-link-tile__private" aria-label="${esc(t('quickLinks.privateBadge'))}"></i>`
+      : ''}
+  </a>`;
+}
+
+function renderQuickLinks(items) {
+  const list = Array.isArray(items) ? items : [];
+  const header = widgetHeader('quicklinks', t('dashboard.quickLinksTitle'), list.length, null, null, 'dashboard');
+
+  if (!list.length) {
+    // Der Leerzustand ist hier der WICHTIGSTE Zustand: das Widget kommt
+    // ausgeblendet ins Haus, wer es holt, hat noch nichts angelegt, und es gibt
+    // keine zweite Seite, auf der er anfangen könnte. Deshalb nicht der stumme
+    // Hinweis der anderen Kacheln, sondern der Weg selbst.
+    return `<div class="widget widget--quicklinks">
+      ${header}
+      <div class="widget__empty">
+        <i data-lucide="compass" class="empty-state__icon" aria-hidden="true"></i>
+        <div>${t('quickLinks.emptyTitle')}</div>
+        <button type="button" class="widget__empty-cta" data-quick-links-manage>
+          <i data-lucide="plus" aria-hidden="true"></i>
+          <span>${esc(t('quickLinks.addFirst'))}</span>
+        </button>
+      </div>
+    </div>`;
+  }
+
+  return `<div class="widget widget--quicklinks">
+    ${header}
+    <div class="quick-link-row">
+      ${list.map(renderQuickLinkTile).join('')}
+      <button type="button" class="quick-link-tile quick-link-tile--add" data-quick-links-manage>
+        <span class="quick-link-tile__face"><i data-lucide="pencil" aria-hidden="true"></i></span>
+        <span class="quick-link-tile__name">${esc(t('quickLinks.manage'))}</span>
+      </button>
+    </div>
+  </div>`;
+}
+
 function renderFamilyWidget(users, data) {
   // IM SOLO-HAUSHALT GIBT ES DIESES WIDGET NICHT - entschieden in
   // `isWidgetModuleEnabled`, damit es auch aus der „Anpassen"-Ablage faellt.
@@ -1163,8 +1321,7 @@ function renderFamilyWidget(users, data) {
     } else {
       const upcoming = events.find((e) => eventOccurrenceDateKey(e) > todayKey && assignedTo(e));
       if (upcoming) {
-        const start = eventStartDate(upcoming);
-        status = `${esc(relativeDateLabel(start))} · ${esc(upcoming.title)}`;
+        status = `${esc(relativeDateLabel(eventOccurrenceDateKey(upcoming)))} · ${esc(upcoming.title)}`;
       } else {
         status = esc(t('dashboard.todayFree'));
         free = true;
@@ -1910,23 +2067,30 @@ function buildTodayCockpitModel(data, cfg = [], { cap = PROGRAM_ROW_CAP } = {}) 
   if (outlookEvent || outlookTask) {
     const eventStart = outlookEvent ? eventStartDate(outlookEvent) : null;
     const eventTimed = outlookEvent && !outlookEvent.all_day && eventStart && String(outlookEvent.start_datetime).length > 10;
+    // Die Uhrzeit ueber die Anzeigezone, nicht ueber die Browser-Getter des
+    // Dates: in `start_datetime` liegen zonenlose Wanduhrzeit und echte Instants
+    // in einer Spalte, und fuer die zweite Sorte kippte der Vergleich mit
+    // `taskKey` um den Zonenoffset (#851).
     const eventKey = outlookEvent
-      ? `${eventOccurrenceDateKey(outlookEvent)}T${eventTimed ? `${String(eventStart.getHours()).padStart(2, '0')}:${String(eventStart.getMinutes()).padStart(2, '0')}` : '00:00'}`
+      ? `${eventOccurrenceDateKey(outlookEvent)}T${eventTimed ? zonedTimeKey(outlookEvent.start_datetime) : '00:00'}`
       : null;
     const taskKey = outlookTask
       ? `${outlookTask.due_date}T${outlookTask.due_time ? String(outlookTask.due_time).slice(0, 5) : '23:59'}`
       : null;
     if (eventKey && (!taskKey || eventKey <= taskKey)) {
-      const when = eventTimed ? formatDateTime(outlookEvent.start_datetime) : relativeDateLabel(eventStart);
+      const when = eventTimed
+        ? formatDateTime(outlookEvent.start_datetime)
+        : relativeDateLabel(eventOccurrenceDateKey(outlookEvent));
       outlook = {
         sub: t('dashboard.todayNextUp', { event: `${when} · ${outlookEvent.title}` }),
         route: calendarEventRoute(outlookEvent),
       };
     } else {
-      const dueDay = parseLocalDateKey(outlookTask.due_date);
-      const dueTime = outlookTask.due_time ? new Date(`${outlookTask.due_date}T${outlookTask.due_time}`) : null;
-      const when = dueTime && !Number.isNaN(dueTime.getTime())
-        ? `${relativeDateLabel(dueDay)}, ${formatTime(dueTime)}`
+      // Faelligkeit ist zonenlose Wanduhrzeit: Key und Stempel, kein Date.
+      const dueDay = String(outlookTask.due_date).slice(0, 10);
+      const dueTime = outlookTask.due_time ? String(outlookTask.due_time).slice(0, 5) : null;
+      const when = dueTime
+        ? `${relativeDateLabel(dueDay)}, ${formatTime(`${dueDay}T${dueTime}`)}`
         : relativeDateLabel(dueDay);
       outlook = {
         sub: t('dashboard.todayNextUp', { event: `${when} · ${outlookTask.title}` }),
@@ -2344,6 +2508,7 @@ function renderDashboardLayout(cfg, data, weather, currency, { editing = false, 
     shopping: () => renderShoppingLists(data.shoppingLists ?? []),
     weather: () => (weather ? renderWeatherWidget(weather) : ''),
     clock: () => renderClockWidget(),
+    quicklinks: () => renderQuickLinks(data.quicklinks ?? []),
     // Die Kachelreihe braucht als einziges Widget zu wissen, wer sonst noch
     // dasteht - sie ist die einzige, die fremde Zahlen zeigt. Gerechnet aus
     // DERSELBEN Bedingung, nach der die Kacheln gleich gefiltert werden, damit
@@ -2685,6 +2850,53 @@ function mastheadWeatherHtml(weather) {
 }
 
 /**
+ * Wie heisst dieser Vorhersagetag?
+ *
+ * Aus dem DATUM, nie aus der Position. Die Position war die Falle (#851): der
+ * Server trennt den laufenden Tag aus `forecast` heraus, `forecast[0]` ist also
+ * morgen - hart als „Heute" beschriftet las sich die Reihe, als fehle ein Tag.
+ *
+ * Bezugsgroesse ist `weather.today.date`, der Kalendertag AM WETTERORT. Weder die
+ * Browser- noch die Haushaltszone taugt dafuer: ein Wetterort darf in einer
+ * dritten Zone liegen, und welcher Tag dort gerade laeuft, weiss nur der
+ * Provider. Fehlt die Angabe, bleibt es beim Wochentag - lieber kein „Heute" als
+ * ein falsches.
+ */
+function weatherIsToday(weather, dateKey) {
+  const ref = weather?.today?.date;
+  return Boolean(ref) && dateKey === ref;
+}
+
+function weatherDayLabel(weather, dateKey) {
+  if (weatherIsToday(weather, dateKey)) return t('common.today');
+  return new Intl.DateTimeFormat(getLocale(), { weekday: 'short' })
+    .format(new Date(`${dateKey}T12:00:00`));
+}
+
+/**
+ * Hoch und Tief des laufenden Tages, in demselben Vokabular wie die Reihe
+ * darunter (semibold Hoch, gedaempftes Tief). Sie stehen im Hauptblock, weil der
+ * Hauptblock heute IST - ohne sie trug die Karte fuer jeden Folgetag eine
+ * Spanne, fuer heute aber nur den Momentanwert (#851).
+ */
+function weatherTodayRange(weather, cls) {
+  const hi = weatherNumber(weather?.today?.temp_max);
+  const lo = weatherNumber(weather?.today?.temp_min);
+  if (hi === null || lo === null) return '';
+  // Zwei nackte Zahlen nebeneinander sagen vorgelesen nichts - die Auszeichnung
+  // traegt die Bedeutung, die das Schriftbild optisch schon hat.
+  const aria = esc(t('dashboard.weatherHighLow', { max: hi, min: lo }));
+  // `role="img"` und nicht nur `aria-label`: auf einem rollenlosen <span> mit
+  // ausschliesslich aria-hidden-Kindern haengt die Auszeichnung an nichts und
+  // wird stellenweise gar nicht angesagt (dasselbe Paar wie beim Dosen-Balken
+  // und beim Zyklus-Ring weiter oben).
+  return `<span class="${cls}" role="img" aria-label="${aria}">
+      <span class="${cls}-high" aria-hidden="true">${esc(String(hi))}°</span>
+      <span class="${cls}-low" aria-hidden="true">${esc(String(lo))}°</span>
+    </span>`;
+}
+
+/**
  * Die Tagesspanne der Verlaufszeile, normiert auf die Spanne der GANZEN
  * Vorhersage. Erst dadurch sagt der Balken etwas: eine Zeile aus fünf gleich
  * langen Balken wäre Dekoration, eine Zeile, in der der Mittwoch nach oben
@@ -2734,10 +2946,7 @@ function renderWeatherWidget(weather) {
   const spanOf = weatherSpanModel(forecast);
 
   const forecastHtml = forecast.map((d, i) => {
-    const date = new Date(d.date + 'T12:00:00');
-    const label = i === 0
-      ? t('common.today')
-      : new Intl.DateTimeFormat(getLocale(), { weekday: 'short' }).format(date);
+    const label = weatherDayLabel(weather, d.date);
     const extraCls = i >= 3 ? ' weather-forecast__day--extended' : '';
     // Der Balken trägt das Band der HÖCHSTtemperatur: sie ist die Zahl, nach
     // der ein Tag eingeschätzt wird ("wird es warm?"), und sie steht daneben.
@@ -2749,7 +2958,7 @@ function renderWeatherWidget(weather) {
       : '';
     return `
       <div class="weather-forecast__day${extraCls}">
-        <div class="weather-forecast__label${i === 0 ? ' weather-forecast__label--today' : ''}">${esc(label)}</div>
+        <div class="weather-forecast__label${weatherIsToday(weather, d.date) ? ' weather-forecast__label--today' : ''}">${esc(label)}</div>
         ${iconHtml(d.icon, 'weather-forecast__icon', 32, descText(d.desc))}
         <div class="weather-forecast__temps">
           <span class="weather-forecast__high">${d.temp_max}°</span>
@@ -2769,6 +2978,7 @@ function renderWeatherWidget(weather) {
         <div class="weather-widget__main">
           <div class="weather-widget__left">
             <div class="weather-widget__temp">${esc(current.temp)}${unitSymbol}</div>
+            ${weatherTodayRange(weather, 'weather-widget__range')}
             <div class="weather-widget__desc">${esc(descText(current.desc))}</div>
             <div class="weather-widget__city">${esc(city)}</div>
             <div class="weather-widget__meta">
@@ -3032,11 +3242,8 @@ function renderWallWeather(weather) {
   if (!weather?.current) return '';
   const { city, current, forecast, units } = weather;
   const desc = weatherDescText(weather, current.desc);
-  const days = (Array.isArray(forecast) ? forecast : []).slice(0, 4).map((d, i) => {
-    const date = new Date(`${d.date}T12:00:00`);
-    const label = i === 0
-      ? t('common.today')
-      : new Intl.DateTimeFormat(getLocale(), { weekday: 'short' }).format(date);
+  const days = (Array.isArray(forecast) ? forecast : []).slice(0, 4).map((d) => {
+    const label = weatherDayLabel(weather, d.date);
     return `
       <li class="wall-weather__day"${weatherToneAttr(d.icon)}>
         <span class="wall-weather__day-label">${esc(label)}</span>
@@ -3055,6 +3262,7 @@ function renderWallWeather(weather) {
         ${weatherIconHtml(weather, current.icon, 'wall-weather__icon', 64, desc)}
         <span class="wall-weather__body">
           <span class="wall-weather__temp">${esc(String(current.temp))}${weatherUnitSymbol(units)}</span>
+          ${weatherTodayRange(weather, 'wall-weather__range')}
           <span class="wall-weather__desc">${esc(desc)}${city ? ` · ${esc(city)}` : ''}</span>
         </span>
       </div>
@@ -3358,6 +3566,15 @@ function wireLinks(container, rerender, { editing = false } = {}) {
       });
     }
   });
+
+  // Der Weg zur Pflege der Schnellzugriffe geht von der Kachel aus (#469): die
+  // Reihe hat keine Seite, weil sie kein Modul ist. Im Anpassen-Modus nicht -
+  // dort zieht man Kacheln, man bearbeitet ihren Inhalt nicht.
+  if (!editing) {
+    container.querySelectorAll('[data-quick-links-manage]').forEach((el) => {
+      el.addEventListener('click', () => openQuickLinksManager({ onChange: rerender }));
+    });
+  }
 
   // Task-Items öffnen Quick-Action-Modal statt direkt zu navigieren
   if (editing) return;
@@ -4090,7 +4307,7 @@ export async function render(container, { user }) {
   }
 }
 
-export const __test = { buildTodayHighlights, buildTodayProgram, buildTodayCockpitModel, renderTodayCockpit, renderPinnedNotes, renderFamilyWidget, formatDueDate, normalizeVisibleMealTypes, renderTodayMeals, calendarEventRoute, eventOccurrenceDateKey, eventStartDate, renderWallSurface, renderWallWho, selectMetricTiles, METRIC_TILE_ORDER, PROGRAM_ROW_CAP, WALL_ROW_CAP, weatherToneKey, weatherMotionAttr, weatherTempBand, weatherSpanModel };
+export const __test = { buildTodayHighlights, buildTodayProgram, buildTodayCockpitModel, renderTodayCockpit, renderPinnedNotes, renderFamilyWidget, formatDueDate, normalizeVisibleMealTypes, renderTodayMeals, calendarEventRoute, eventOccurrenceDateKey, eventStartDate, renderWallSurface, renderWallWho, selectMetricTiles, METRIC_TILE_ORDER, PROGRAM_ROW_CAP, WALL_ROW_CAP, weatherToneKey, weatherMotionAttr, weatherTempBand, weatherSpanModel, weatherDayLabel, weatherTodayRange, renderWeatherWidget, renderWallWeather, relativeDateLabel };
 
 function wireWeatherRefresh(container, onUpdated = null) {
   const refreshBtn = container.querySelector('#weather-refresh-btn');

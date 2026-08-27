@@ -15,7 +15,7 @@ import {
   generateRecurringInstances, RECURRENCE_INTERVAL_KEYS, MAX_INTERVAL_COUNT,
   normalizeIntervalCount, effectiveMonthly,
   validCategoryKeys, defaultCategory, validateSubcategory, validateAccountRef,
-  entryWithLoanMeta, refreshLoanStatus, fromBudgetAmount,
+  entryWithLoanMeta, refreshLoanStatus, fromBudgetAmount, bookingFor,
 } from './helpers.js';
 
 const log = createLogger('Budget');
@@ -493,20 +493,29 @@ router.put('/:id', (req, res) => {
     const linkedPayment = db.get().prepare(`
       SELECT * FROM budget_loan_payments WHERE budget_entry_id = ?
     `).get(id);
-    if (linkedPayment && amount !== undefined && Number(amount) <= 0) {
-      return res.status(400).json({ error: 'Loan repayment entries must remain income.', code: 400 });
-    }
     // Währung je Darlehen (#582): Der Budget-Eintrag steht in Budget-Währung, die
     // gekoppelte Rate dagegen in Darlehenswährung. Beide Richtungen unten rechnen
     // deshalb über den festen Kurs des Darlehens um - sonst würde ein Edit des
     // Eintrags die Restschuld eines Fremdwährungs-Darlehens verfälschen.
     const linkedLoan = linkedPayment
-      ? db.get().prepare('SELECT total_amount, currency, exchange_rate FROM budget_loans WHERE id = ?').get(linkedPayment.loan_id)
+      ? db.get().prepare('SELECT total_amount, currency, exchange_rate, direction FROM budget_loans WHERE id = ?').get(linkedPayment.loan_id)
       : null;
+    // Richtung (#638/#859): Das Vorzeichen des Eintrags gehört dem Darlehen, nicht
+    // dem Request. Eine Rate auf einen aufgenommenen Kredit ist eine Ausgabe und
+    // kommt folglich negativ herein - die frühere Prüfung "muss Einkommen bleiben"
+    // stammte aus der Zeit, als jedes Darlehen ein verliehenes war, und sperrte
+    // jede Korrektur an einer solchen Rate. Statt abzuweisen wird der Betrag jetzt
+    // nach derselben Regel gebucht wie beim Anlegen und beim Richtungswechsel.
+    // Die Rate selbst bleibt vorzeichenlos: budget_loan_payments.amount trägt einen
+    // CHECK(amount > 0) und wird gegen die Restschuld gerechnet.
+    const linkedSign = linkedPayment ? bookingFor(linkedLoan?.direction).sign : 1;
     const linkedPaymentAmount = linkedPayment && amount !== undefined
-      ? fromBudgetAmount(amount, linkedLoan)
+      ? Math.abs(fromBudgetAmount(amount, linkedLoan))
       : null;
     if (linkedPayment && amount !== undefined) {
+      if (!(linkedPaymentAmount > 0)) {
+        return res.status(400).json({ error: 'Amount must be greater than zero.', code: 400 });
+      }
       const otherPaid = db.get().prepare(`
         SELECT COALESCE(SUM(amount), 0) AS total
         FROM budget_loan_payments
@@ -550,8 +559,11 @@ router.put('/:id', (req, res) => {
       : entry.recurrence_confirm;
     if (!finalRecurring) finalConfirm = 0;
     // Konfigurierter Periodenbetrag (vorzeichenbehaftet): neue Eingabe, sonst bisheriger Vollbetrag.
+    // Bei einer gekoppelten Rate setzt die Darlehensrichtung das Vorzeichen (#638/#859):
+    // Ein Client, der den Typ-Umschalter umgeht, darf eine Ausgabe nicht zur Einnahme
+    // machen - daran hängen Monatsbilanz, Statistik und der Kontosaldo.
     const configuredFull = amount !== undefined
-      ? Number(amount)
+      ? (linkedPayment ? linkedSign * Math.abs(Number(amount)) : Number(amount))
       : (entry.recurrence_full_amount != null ? entry.recurrence_full_amount : entry.amount);
     const nextAmount = finalVirtual ? effectiveMonthly(configuredFull, finalInterval, finalCount) : cents(configuredFull);
     const nextFull   = finalVirtual ? cents(configuredFull) : null;

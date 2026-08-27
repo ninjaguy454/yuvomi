@@ -22,6 +22,7 @@ import {
   ordinaryActivitySubtasks,
   previewTaskActivityBinding,
 } from '../services/task-activity-bindings.js';
+import { completionFeed, seriesHistory, syncTaskCompletion } from '../services/task-completions.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
 import { normalizeVisibility, visibilityWhere } from '../services/visibility.js';
 import {
@@ -639,6 +640,44 @@ router.get('/sync-targets', (_req, res) => {
   } catch (err) {
     log.error('GET /sync-targets error:', err);
     res.status(500).json({ error: 'Failed to list sync targets.', code: 500 });
+  }
+});
+
+// --------------------------------------------------------
+// GET /api/v1/tasks/completions
+// Der Verlauf der erledigten Aufgaben, neueste zuerst (#791).
+// Query: limit? (1..200, Default 50), user_id?, before_at? + before_id? (Cursor)
+// Response: { data: [Eintrag], has_more, next_cursor }
+//
+// Muss wie /categories und /tags vor den /:id-Routen stehen, sonst matcht
+// „completions" als :id.
+//
+// Kein Datumsbereich in der Abfrage: welcher Kalendertag ein Zeitpunkt ist,
+// entscheidet die Anzeigezone (public/utils/timezone.js), und die liest die
+// Oberfläche. Der Server liefert Zeitpunkte und blättert über einen Cursor;
+// gruppiert wird dort, wo die Uhr steht.
+// --------------------------------------------------------
+router.get('/completions', (req, res) => {
+  try {
+    const me = req.authUserId || req.session.userId;
+    const { entries, hasMore } = completionFeed(db.get(), {
+      me,
+      limit: req.query.limit,
+      userId: req.query.user_id ? Number(req.query.user_id) : null,
+      beforeAt: req.query.before_at || null,
+      beforeId: req.query.before_id || null,
+    });
+    const last = entries[entries.length - 1];
+    res.json({
+      data: entries,
+      has_more: hasMore,
+      // Der Cursor kommt vom Server, damit die Oberfläche nicht wissen muss,
+      // woraus er sich zusammensetzt - er ist ein Paar, kein Zeitstempel.
+      next_cursor: hasMore && last ? { before_at: last.completed_at, before_id: last.id } : null,
+    });
+  } catch (err) {
+    log.error('GET /completions error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });
 
@@ -1476,6 +1515,11 @@ router.put('/:id', (req, res) => {
       syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
       // Punkte erst nach setAssignments: die Zuständigen werden daraus abgeleitet.
       syncTaskRewards(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
+      // Derselbe Übergang, ein zweiter Vorgang: der Verlauf hält fest, DASS
+      // abgehakt wurde (#791). Bewusst neben der Punktevergabe statt in ihr -
+      // Punkte gehen an die Zuständigen und nur bei eingeschaltetem Modul, ein
+      // Verlaufseintrag gilt für jede Aufgabe und nennt die handelnde Person.
+      syncTaskCompletion(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
       syncWorkflowInstanceForTask(db.get(), task.id);
 
       // Auch über das Bearbeiten-Formular lässt sich ein Abhaken zurücknehmen -
@@ -1866,6 +1910,9 @@ router.patch('/:id/status', (req, res) => {
       syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
       // Punkte-Gutschrift/Storno an den Aufgaben-Statuswechsel koppeln.
       syncTaskRewards(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
+      // Der Verlauf hängt am selben Übergang (#791). Dieser Weg trägt ihn
+      // dreifach: Checkbox, Swipe und die Sammelaktion gehen alle hier durch.
+      syncTaskCompletion(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
       syncWorkflowInstanceForTask(db.get(), Number(req.params.id));
 
       // Zurückgenommenes Abhaken macht auch die Folgeinstanz rückgängig (#650).
@@ -1991,6 +2038,31 @@ function loadTaskDocuments(taskId, me) {
     ORDER BY d.name COLLATE NOCASE ASC
   `).all({ taskId, me });
 }
+
+// --------------------------------------------------------
+// GET /api/v1/tasks/:id/completions
+// Wann diese Aufgabe zuletzt erledigt wurde - über die ganze Wiederholungskette
+// hinweg, nicht nur für die Instanz, die gerade offen daliegt (#791).
+// Query: limit? (1..100, Default 20)
+// Response: { data: [Eintrag] }
+//
+// Erst die Aufgabe selbst prüfen, dann ihre Serie: die Einträge tragen den
+// Titel der Aufgabe, und eine geratene ID darf darüber nichts verraten - 404
+// statt 403, weil die bloße Existenz schon eine Auskunft ist (Muster aus #769).
+// --------------------------------------------------------
+router.get('/:id/completions', (req, res) => {
+  try {
+    const me = req.authUserId || req.session.userId;
+    const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
+    if (!task || !mayAccessTask(task, me)) {
+      return res.status(404).json({ error: 'Task not found.', code: 404 });
+    }
+    res.json({ data: seriesHistory(db.get(), { me, taskId: Number(req.params.id), limit: req.query.limit }) });
+  } catch (err) {
+    log.error('GET /:id/completions error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
 
 // GET /api/v1/tasks/:id/documents → { data: LinkedDocument[] }
 router.get('/:id/documents', (req, res) => {

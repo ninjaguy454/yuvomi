@@ -12836,6 +12836,52 @@ test('die Herkuenfte des Erinnerungs-Toasts sind die entity_type des Servers', (
     'Herkunft ohne Ziel - der Titel nennt das Modul und der Tipp landet woanders.');
 });
 
+// --------------------------------------------------------------------------
+// EINE SCHWELLE, ZWEI DATEIEN - UND EINE ZAHL
+//
+// Zwei Module kuendigen eine Frist an, und in beiden steht die Zahl zweimal:
+// einmal im Client, wo sie die Zeile faerbt ("laeuft bald ab"), und einmal im
+// Server, wo sie den Erinnerungstermin bestimmt. Sie MUESSEN gleich sein - der
+// Nutzer sieht sonst eine gelbe Zeile an einem Tag und bekommt die Meldung an
+// einem anderen, und keiner der beiden Tage ist erklaerbar.
+//
+// Geteilt werden koennen sie nicht: public/utils/pantry-status.js und
+// public/utils/inventory-warranty.js importieren `/utils/date.js` als
+// Browser-Wurzelpfad und laufen in Node nicht. Beide Kommentarkoepfe behaupten
+// die Gleichheit ("identisch zum server-seitigen Erinnerungs-Vorlauf") - bis zu
+// diesem Guard hat sie niemand geprueft.
+// --------------------------------------------------------------------------
+test('der Vorlauf einer Fristmeldung ist die Schwelle, die die Zeile faerbt', () => {
+  const PAIRS = [
+    {
+      what: 'Vorrat: Mindesthaltbarkeit',
+      client: ['../public/utils/pantry-status.js', /EXPIRY_SOON_DAYS\s*=\s*(\d+)/],
+      server: ['../server/services/pantry-reminders.js', /EXPIRY_REMINDER_OFFSET_DAYS\s*=\s*(\d+)/],
+    },
+    {
+      what: 'Inventar: Garantieende',
+      client: ['../public/utils/inventory-warranty.js', /WARRANTY_ALERT_DAYS\s*=\s*(\d+)/],
+      server: ['../server/routes/inventory/items.js', /WARRANTY_REMINDER_OFFSET_DAYS\s*=\s*(\d+)/],
+    },
+  ];
+
+  for (const pair of PAIRS) {
+    const read2 = ([file, re], side) => {
+      const match = read(file).match(re);
+      // LAUT SCHEITERN, NICHT STILL DURCHWINKEN: eine umbenannte Konstante
+      // wuerde den Vergleich sonst auf "beide undefined" reduzieren, und der
+      // Guard waere gruen und blind.
+      assert.ok(match, `${pair.what}: die ${side}-Konstante steht nicht mehr in ${file.replace(/^\.\.\//, '')}.`);
+      return Number(match[1]);
+    };
+    const client = read2(pair.client, 'Client');
+    const server = read2(pair.server, 'Server');
+    assert.equal(server, client,
+      `${pair.what}: der Server meldet ${server} Tage vorher, die Liste faerbt ab ${client} Tagen - `
+      + 'der Nutzer bekommt die Nachricht an einem Tag, an dem nichts markiert ist.');
+  }
+});
+
 test('jedes Push-Ziel zeigt auf eine Route, die es gibt', () => {
   // DER BEFUND, DEN DIESER GUARD SCHLIESST (Critique 2026-08-10): `url` stand
   // im Reminder-Payload fest auf `/reminders`, und diese Route hat es nie

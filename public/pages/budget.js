@@ -294,9 +294,11 @@ function addMonths(ym, n) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// Der Monat, in dem der HAUSHALT gerade lebt. Aus der Browser-Uhr gelesen
+// sprang das Budget in der Nacht zum Monatsersten in einer anderen Zone einen
+// Monat zu frueh oder zu spaet um (#829, Nachlese #851).
 function currentMonth() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return todayKey().slice(0, 7);
 }
 
 // Tagesanker für einen Monat: im laufenden Monat der heutige Tag, sonst der
@@ -406,8 +408,7 @@ async function loadBudgetMeta() {
 export async function render(container, { user }) {
   _container = container;
   _user = user;
-  const today = new Date();
-  state.month = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+  state.month = currentMonth();
   // `state` ist ein Modul-Singleton und überlebt den Seitenwechsel. Filter sind
   // aber an eine Sitzung mit dem Modul gebunden: sonst zeigt das Budget nach
   // einer Woche noch den Kontoauszug von damals — beim Darlehens-Statusfilter
@@ -1523,6 +1524,15 @@ function isBorrowedLoan(loan) {
   return loan?.direction === 'borrowed';
 }
 
+/**
+ * Rate als Zeilen-Ansicht: Betrag in DARLEHENSWÄHRUNG, Vorzeichen aus der Richtung.
+ *
+ * Nur zum Anzeigen. Der gekoppelte Budget-Eintrag steht in Budget-Währung und trägt
+ * Felder, die hier nicht vorkommen - Konto, Sichtbarkeit, Belege. Wer dieses Objekt
+ * bearbeiten liesse, schriebe den Ratenbetrag als Budget-Betrag zurück und räumte
+ * nebenbei jedes Feld ab, das der Nachbau nicht kennt. Das Bearbeiten lädt deshalb
+ * den echten Eintrag, siehe openLoanPaymentEntry().
+ */
 function loanPaymentToEntry(loan, payment) {
   if (!payment.budget_entry_id) return null;
   return {
@@ -1532,8 +1542,8 @@ function loanPaymentToEntry(loan, payment) {
     // falsch — und die Kategorie ist längst ein Key, kein Anzeigename.
     title: payment.entry_title || t('budget.loanPaymentTitle', { borrower: loan.borrower }),
     // budget_loan_payments.amount ist per CHECK immer positiv (Betrag der Rate);
-    // das Vorzeichen trägt der gekoppelte Budget-Eintrag, und genau den bearbeitet
-    // das Edit-Modal - ohne die Spiegelung stünde dort eine Ausgabe als Einnahme.
+    // das Vorzeichen trägt der gekoppelte Budget-Eintrag - ohne die Spiegelung
+    // stünde eine Ausgabe in der Zeile als Einnahme.
     amount: (isBorrowedLoan(loan) ? -1 : 1) * Number(payment.amount || 0),
     category: payment.entry_category || '',
     subcategory: payment.entry_subcategory || '',
@@ -1648,10 +1658,7 @@ function wireLoansPage() {
   });
   _container.querySelectorAll('[data-action="loan-payment-edit"]').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const loan = state.loans.loans.find((item) => item.id === parseInt(btn.dataset.loanId, 10));
-      const payment = loan?.payments?.find((item) => item.id === parseInt(btn.dataset.paymentId, 10));
-      const entry = loan && payment ? loanPaymentToEntry(loan, payment) : null;
-      if (entry) openBudgetModal({ mode: 'edit', entry });
+      openLoanPaymentEntry(parseInt(btn.dataset.loanId, 10), parseInt(btn.dataset.paymentId, 10));
     });
   });
   _container.querySelectorAll('[data-action="loan-payment-delete"]').forEach((btn) => {
@@ -1659,6 +1666,28 @@ function wireLoansPage() {
       await deleteLoanPayment(parseInt(btn.dataset.loanId, 10), parseInt(btn.dataset.paymentId, 10));
     });
   });
+}
+
+/**
+ * Öffnet den Bearbeiten-Dialog einer Rate mit dem ECHTEN Budget-Eintrag.
+ *
+ * Der Drilldown liefert dieselbe Zeile, die auch die Eintragsliste bearbeitet: Betrag
+ * in Budget-Währung, Konto, Sichtbarkeit, Belege, Darlehens-Kopplung. Aus der Rate ein
+ * Eintragsobjekt zu bauen hiesse, denselben Datensatz ein zweites Mal und unvollständig
+ * zu führen, und jedes dabei fehlende Feld wird beim Speichern stillschweigend geleert.
+ */
+async function openLoanPaymentEntry(loanId, paymentId) {
+  try {
+    const res = await api.get(`/budget?loan_id=${loanId}`);
+    const entry = (res.data ?? []).find((e) => e.loan_payment_id === paymentId);
+    if (!entry) {
+      window.yuvomi?.showToast(t('common.unknownError'), 'danger');
+      return;
+    }
+    openBudgetModal({ mode: 'edit', entry });
+  } catch (err) {
+    window.yuvomi?.showToast(err.data?.error ?? t('common.unknownError'), 'danger');
+  }
 }
 
 function openLoanReport(loan) {
@@ -1913,6 +1942,11 @@ function openBudgetModal({ mode, entry = null, initialType = '' }) {
   const defaultDate = defaultDateInPeriod(from, to, today);
 
   const isExpense  = isEdit ? entry.amount < 0 : true;
+  // Rate eines Darlehens (#638/#859): Ob sie Einnahme oder Ausgabe ist, entscheidet
+  // die Richtung des Darlehens, nicht dieser Dialog. Der Umschalter bleibt sichtbar,
+  // damit die Zuordnung ablesbar ist, nimmt hier aber keine Eingabe entgegen - der
+  // Server bucht ohnehin nach der Richtung und würde eine Umkehr still zurückdrehen.
+  const isLoanPayment = isEdit && (entry.loan_payment_id != null || entry.loan_id != null);
   // Bei virtuellen Serien hält amount nur den Monatsanteil; im Formular den eingegebenen Periodenbetrag zeigen.
   const editAmount = isEdit && entry.recurrence_virtual && entry.recurrence_full_amount != null
     ? entry.recurrence_full_amount
@@ -1952,12 +1986,13 @@ function openBudgetModal({ mode, entry = null, initialType = '' }) {
   const content = `
     <div class="amount-type-toggle ${isEdit ? 'amount-type-toggle--entry-only' : ''}">
       <button class="amount-type-btn amount-type-btn--expenses ${isExpense ? 'amount-type-btn--active' : ''}"
-              id="type-expense" type="button">${t('budget.typeExpense')}</button>
+              id="type-expense" type="button" ${isLoanPayment ? 'disabled' : ''}>${t('budget.typeExpense')}</button>
       <button class="amount-type-btn amount-type-btn--income ${!isExpense ? 'amount-type-btn--active' : ''}"
-              id="type-income" type="button">${t('budget.typeIncome')}</button>
+              id="type-income" type="button" ${isLoanPayment ? 'disabled' : ''}>${t('budget.typeIncome')}</button>
       ${!isEdit ? `<button class="amount-type-btn amount-type-btn--loan"
               id="type-loan" type="button">${t('budget.typeLoan')}</button>` : ''}
     </div>
+    ${isLoanPayment ? `<p class="budget-type-locked-hint">${t('budget.loanPaymentTypeLocked')}</p>` : ''}
 
     <div class="form-group js-entry-field">
       <label class="form-label" for="bm-title">${t('budget.titleLabel')}<span class="required-marker" aria-hidden="true"> *</span></label>

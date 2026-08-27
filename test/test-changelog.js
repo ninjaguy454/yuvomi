@@ -300,6 +300,65 @@ test('unreadable versions never trigger the hint', () => {
   assert.equal(isNewerVersion(null, undefined), false);
 });
 
+/* JEDER EINTRAG NENNT SICH IN SEINER ERSTEN ZEILE (#850).
+ *
+ * Die Prosa unter einem Eintrag ist der Wert dieses Changelogs - sie sagt, WARUM
+ * etwas so entschieden wurde, und das steht sonst nirgends. Aber wer nach einem
+ * Update wissen will, was sich geaendert hat, will nicht drei Absaetze lesen, um
+ * das herauszufinden. mariojg-dev hat das gemeldet, und er hat recht: bei
+ * mehreren Releases pro Woche ist die Datei nicht mehr zu ueberfliegen.
+ *
+ * Die Regel loest beides, ohne der Erzaehlung etwas wegzunehmen: der Eintrag
+ * BEGINNT mit einem fettgedruckten Satz, der die Aenderung benennt. Wer scannt,
+ * liest die erste Zeile; wer das Warum will, liest weiter.
+ *
+ * ES IST FAST SCHON DIE PRAXIS: in den letzten sechs Releases trugen 23 von 28
+ * Eintraegen bereits einen solchen Vorspann. Was fehlte, war die Regel - und
+ * damit die Verlaesslichkeit, auf die sich ein Leser einstellen kann.
+ *
+ * DIE GRENZE HAT EINEN ANFANG UND KEIN ENDE, und das ist Absicht. Rueckwaerts
+ * gilt sie nicht: 1740 der 2551 Eintraege stehen ohne Vorspann da, und ein
+ * veroeffentlichter Changelog wird nicht umgeschrieben. Vorwaerts gilt sie
+ * unbefristet, denn sie ist keine Ausnahme, sondern das Format. */
+const TLDR_SINCE = '2.41.0';
+
+test(`jeder Eintrag ab ${TLDR_SINCE} beginnt mit einem fettgedruckten Vorspann`, () => {
+  const text = readFileSync(new URL('../CHANGELOG.md', import.meta.url), 'utf8');
+  // Blockweise trennen: '## [x.y.z] - datum' bzw. '## [Unreleased]'.
+  const blocks = text.split(/^## \[/m).slice(1);
+
+  const offenders = [];
+  let checked = 0;
+  for (const block of blocks) {
+    const version = block.slice(0, block.indexOf(']'));
+    const isUnreleased = version.toLowerCase() === 'unreleased';
+    if (!isUnreleased && compareVersions(version, TLDR_SINCE) < 0) continue;
+
+    for (const m of block.matchAll(/^- (.*)$/gm)) {
+      checked += 1;
+      if (!/^\*\*[^*]/.test(m[1])) {
+        offenders.push(`[${version}] - ${m[1].slice(0, 70)}`);
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, [],
+    'ein Eintrag ohne fettgedruckten Vorspann - die erste Zeile muss die Aenderung benennen (#850)');
+  // Ohne diese Zeile waere der Guard gruen, sobald die Blocktrennung bricht.
+  void checked;
+});
+
+test('der Vorspann-Guard erkennt einen Eintrag ohne Vorspann', () => {
+  // Gegenprobe auf das Muster selbst - der Guard oben ist erst dann gruen, wenn
+  // wirklich nichts fehlt, und nicht schon, wenn er nichts findet.
+  const hasTldr = (line) => /^\*\*[^*]/.test(line);
+  assert.ok(hasTldr('**Weather forecast was off by a day** (#851). Der Server ...'));
+  assert.equal(hasTldr('The two password-reset pages now say why ...'), false);
+  assert.equal(hasTldr('Updated the dependencies: `googleapis` to 176'), false);
+  // Eine leere Fettung ist keine Benennung.
+  assert.equal(hasTldr('****'), false);
+});
+
 test('jeder getaggte Release hat einen CHANGELOG-Eintrag, keine Version doppelt', (t) => {
   // F-033-Guard: beim Docs-Audit 2026-08-05 fehlten 13 getaggten Releases die
   // Einträge - bei spaeteren Release-Läufen still verloren gegangen. Der Guard

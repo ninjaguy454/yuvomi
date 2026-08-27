@@ -321,6 +321,7 @@ export const MODULE_ICON = {
   clock:            'clock',
   metrics:          'layout-grid',
   countdown:        'hourglass',
+  quicklinks:        'compass',
 };
 
 /**

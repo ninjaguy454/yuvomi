@@ -139,11 +139,17 @@ function createBellSvg() {
  * selbstverstaendlich - also traegt jede Meldung ihr Siegel (Herkunfts-Regel,
  * .impeccable/block2-brief.md).
  *
- * ERHOBEN, NICHT GERATEN: durch `/reminders/pending` laufen exakt drei
- * `entity_type`-Werte, und alle drei sind an ihrer Schreibstelle im Server
- * belegt - `VALID_ENTITY_TYPES` in server/routes/reminders.js deckt `task` und
- * `event` (die der Nutzer selbst setzt), server/routes/subscriptions.js legt
- * `subscription` automatisch an. Medikamente laufen NICHT hierueber.
+ * ERHOBEN, NICHT GERATEN: durch `/reminders/pending` laufen genau die
+ * `entity_type`-Werte aus `VALID_ENTITY_TYPES` (server/routes/reminders.js),
+ * und jeder ist an seiner Schreibstelle im Server belegt. Zwei setzt der
+ * Nutzer selbst (`task`, `event`), die uebrigen leitet ihr Modul ab:
+ * subscriptions.js, inventory/items.js, inventory/item-dates.js und
+ * services/pantry-reminders.js. Medikamente laufen NICHT hierueber.
+ *
+ * KEINE ZAHL MEHR AN DIESER STELLE: hier stand "exakt drei", waehrend die
+ * Tabelle unten laengst mehr trug - dieselbe Drift, gegen die die Modulliste
+ * in CLAUDE.md bewusst keine Zahl nennt. Die Vollstaendigkeit haelt ein Guard
+ * in test/test-frontend-audit.js, nicht dieser Satz.
  *
  * GEBURTSTAGE SPRECHEN MIT DER STIMME DES KALENDERS, und das ist richtig:
  * `syncBirthdayReminder` (server/services/birthdays.js) haengt die Erinnerung an
@@ -153,8 +159,8 @@ function createBellSvg() {
  * als das Markierte - jeder Termin darf dieses Icon tragen.
  *
  * WER HIER FEHLT, FAELLT AUF DIE GLOCKE ZURUECK statt zu verschwinden: ein
- * kuenftiger vierter `entity_type` zeigt den Erinnerungs-Ton und das
- * Glocken-Zeichen, bis er hier eingetragen ist.
+ * kuenftiger `entity_type` zeigt den Erinnerungs-Ton und das Glocken-Zeichen,
+ * bis er hier eingetragen ist.
  */
 const REMINDER_ORIGINS = {
   task:                   { accent: 'var(--module-tasks)',     icon: 'check-square', labelKey: 'nav.tasks' },
@@ -162,6 +168,7 @@ const REMINDER_ORIGINS = {
   subscription:           { accent: 'var(--module-budget)',    icon: 'wallet',       labelKey: 'subscriptions.tabLabel' },
   inventory_item:         { accent: 'var(--module-inventory)', icon: 'package',      labelKey: 'nav.inventory' },
   inventory_tracked_date: { accent: 'var(--module-inventory)', icon: 'package',      labelKey: 'nav.inventory' },
+  pantry_item:            { accent: 'var(--module-pantry)',    icon: 'archive',      labelKey: 'nav.pantry' },
 };
 
 function createOriginSeal(entityType) {

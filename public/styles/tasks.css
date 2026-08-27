@@ -64,6 +64,15 @@
   display: none;
 }
 
+/* Und die Zeile selbst. Im Verlauf (#791) faellt die ganze Filterleiste weg,
+ * und `display: flex` weiter unten schlaegt das `[hidden] { display: none }`
+ * des Browsers per Spezifitaet - die Zeile stand mit `hidden` im DOM weiter
+ * sichtbar da. Dieselbe Falle, gegen die die Regel darueber schon einmal
+ * geschrieben wurde; sie deckte nur die KINDER ab. */
+.tasks-filters-row[hidden] {
+  display: none;
+}
+
 /* Filterzeile: Chips links, Gruppierungswahl rechts — dieselbe Aufteilung wie
  * .documents-filters (Chips + .documents-filters__end). */
 .tasks-filters-row {
@@ -1723,4 +1732,111 @@
  * Zeile, und die Notiz ist die letzte im Panel. */
 .task-detail__note > :last-child {
   margin-bottom: 0;
+}
+
+/* --------------------------------------------------------
+ * Verlauf (#791)
+ *
+ * Die dritte Ansicht liegt auf der geteilten Zeilen-Grammatik (list-row.css):
+ * Gruppe, Trennlinien, Textspalte und Metazeile sind dieselben wie im Einkauf
+ * und im Vorrat. Hier steht nur, was ein Vorgang anders hat als ein Bestand -
+ * er ist ganzflaechig anklickbar, und er traegt rechts eine Uhrzeit.
+ * -------------------------------------------------------- */
+
+/* Die ganze Zeile ist der Weg zur Aufgabe, also ist sie ein Knopf. Ein
+ * anklickbares div waere fuer die Tastatur nicht vorhanden - dieselbe
+ * Entscheidung wie beim Gruppenkopf (#812). */
+.history-row {
+  width: 100%;
+  background: none;
+  border: 0;
+  font: inherit;
+  color: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.history-row:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: calc(var(--focus-ring-offset) * -1);
+  border-radius: var(--radius-xs);
+}
+
+/* Der Avatar sitzt in einem eigenen Traeger, weil er per aria-hidden aus der
+ * Vorlesereihenfolge faellt - der Name steht daneben. */
+.history-row__avatar {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* Name und Wiederholungszeichen NEBENEINANDER, also eine Flex-Zeile.
+ * `svg { display: block }` aus dem Reset macht aus einem Icon im Textfluss
+ * sonst einen eigenen Absatz: das Wiederholungszeichen stand unter dem Namen
+ * statt hinter ihm, und die Zeile war dreizeilig. */
+.history-row .list-row__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* Tabellarisch, damit die Uhrzeiten untereinander fluchten: die Ziffern einer
+ * Spalte sollen eine Spalte ergeben und nicht ausfransen. */
+.history-row__time {
+  flex: 0 0 auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Die Personenauswahl steht ueber der Liste und traegt deren Lesemass - sonst
+ * liefe sie bis an die Traegerkante, waehrend die Zeilen darunter bei 720px
+ * enden. */
+.history-people {
+  max-width: var(--page-measure, var(--content-max-width-narrow));
+  margin-bottom: var(--space-3);
+  overflow-x: auto;
+}
+
+/* „Mehr anzeigen" schliesst die Liste ab, mittig unter ihr. */
+.history-more {
+  display: flex;
+  justify-content: center;
+  max-width: var(--page-measure, var(--content-max-width-narrow));
+  margin-top: var(--space-4);
+}
+
+/* --------------------------------------------------------
+ * „Zuletzt erledigt" in der Detailansicht (#791)
+ * -------------------------------------------------------- */
+
+.detail-history {
+  display: grid;
+  gap: var(--space-1);
+}
+
+/* Zeitpunkt und Person stehen NEBENEINANDER, nicht an den beiden Kanten.
+ * `justify-content: space-between` war hier ohne Wirkung - die Zeile hat die
+ * Breite ihres Inhalts, nicht die des Panels - und waere mit Wirkung falsch
+ * gewesen: dieselbe Beobachtung wie beim Gruppenkopf, wo ein an die rechte
+ * Kante geschobener Wert sich als unverbunden las (Critique 2026-07-30). Wer
+ * es gemacht hat, gehoert zu wann. */
+.detail-history__row {
+  display: flex;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+.detail-history__when {
+  color: var(--color-text-primary);
+}
+
+.detail-history__who {
+  color: var(--color-text-secondary);
+}
+
+.detail-history__empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-sm);
 }

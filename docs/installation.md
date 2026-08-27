@@ -239,9 +239,9 @@ docker compose up -d
 Docker pulls `ghcr.io/ulsklyc/yuvomi:latest` automatically. No build step, no Node.js installation needed.
 
 > **Pinning a version.** Every release is also published under immutable tags:
-> `2.40.0` (exact version), `2.40` (latest patch of that minor), plus a moving `main`
+> `2.45.0` (exact version), `2.44` (latest patch of that minor), plus a moving `main`
 > tag for the current development state. To pin production to a known-good release,
-> set `image: ghcr.io/ulsklyc/yuvomi:2.40.0` in your compose file and bump it
+> set `image: ghcr.io/ulsklyc/yuvomi:2.45.0` in your compose file and bump it
 > deliberately; `latest` always points at the newest release.
 
 Continue with [Step 4 — Verify](#4-verify-the-container-is-running).
@@ -287,7 +287,7 @@ docker compose logs -f
 You should see output like:
 
 ```
-yuvomi  | [Yuvomi] Server running on port 3000 | Version 2.40.0
+yuvomi  | [Yuvomi] Server running on port 3000 | Version 2.45.0
 yuvomi  | [Yuvomi] Environment: production
 yuvomi  | [Sync] Auto-sync active every 15 minutes.
 ```
@@ -732,7 +732,7 @@ The weather widget defaults to **Open-Meteo** — free, ECMWF-backed, and requir
 | `WEATHER_CITY` | Display name shown on the widget (e.g. `Berlin`) | - | No |
 | `WEATHER_UNITS` | Unit system (`metric` or `imperial`) | `metric` | No |
 
-**OpenWeatherMap (legacy, optional).** Existing setups using an OpenWeatherMap API key keep working — these variables are still read when the Open-Meteo coordinates above are not set:
+**OpenWeatherMap (legacy, optional).** Existing setups using an OpenWeatherMap API key keep working — these variables are still read when the Open-Meteo coordinates above are not set. One difference is visible on the dashboard: the card shows today's high and low under the current temperature on Open-Meteo only. OpenWeatherMap returns a three-hour list rather than daily aggregates, and that list starts at the next step - by the afternoon today's bucket is missing the morning, so its maximum can fall below the current reading standing right beside it. The line is left off rather than filled with a range that is only sometimes a range.
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|

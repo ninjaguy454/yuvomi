@@ -16,8 +16,14 @@ function makeDb() {
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys = ON;');
   db.exec(`
-    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL);
+    CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member', family_role TEXT);
     CREATE TABLE sync_config (key TEXT PRIMARY KEY, value TEXT);
+    -- Zweite Rechte-Achse des Vorrats-Voll-Syncs (#467).
+    CREATE TABLE access_permissions (
+      subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, resource_type TEXT NOT NULL,
+      resource_key TEXT NOT NULL, access TEXT NOT NULL,
+      PRIMARY KEY (subject_type, subject_id, resource_type, resource_key));
     CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
       created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE);
     CREATE TABLE calendar_events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
@@ -27,9 +33,11 @@ function makeDb() {
       purchase_date TEXT, warranty_months INTEGER);
     CREATE TABLE inventory_item_dates (id INTEGER PRIMARY KEY AUTOINCREMENT, item_id INTEGER NOT NULL,
       label TEXT NOT NULL, date TEXT NOT NULL);
+    CREATE TABLE pantry_items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 1, expires_on TEXT, created_by INTEGER REFERENCES users(id) ON DELETE SET NULL);
     CREATE TABLE reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_type TEXT NOT NULL CHECK(entity_type IN ('task','event','subscription','inventory_item','inventory_tracked_date')),
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('task','event','subscription','inventory_item','inventory_tracked_date','pantry_item')),
       entity_id INTEGER NOT NULL,
       remind_at TEXT NOT NULL,
       dismissed INTEGER NOT NULL DEFAULT 0,

@@ -7,6 +7,19 @@
 export const AVATAR_FALLBACK_COLOR = '#8E8E93';
 
 /**
+ * Die Farben, die ein Objekt ohne Bild bekommt - Mitglieder seit jeher, und
+ * seit #469 auch die Kacheln der Schnellzugriffe.
+ *
+ * SIE STEHT HIER UND NICHT MEHR IN admin-family.js, weil sie ab jetzt zwei
+ * Aufrufer hat. Eine zweite Palette daneben hätte ausgesehen wie eine
+ * Entscheidung und wäre eine Abschrift gewesen: eine Kachel neben einem
+ * Mitgliedsbild spricht dieselbe Sprache oder sie fällt auf. Die Kalenderfarben
+ * bleiben davon unberührt - sie beantworten eine andere Frage (#856) und teilen
+ * mit dieser Liste bewusst keinen Wert.
+ */
+export const AVATAR_COLORS = ['#007AFF', '#34C759', '#FF9500', '#FF3B30', '#AF52DE', '#FF2D55'];
+
+/**
  * Returns the design-system text token with the stronger WCAG contrast
  * against an arbitrary six-digit hex background.
  */

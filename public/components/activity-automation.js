@@ -187,7 +187,8 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
     <button type="button" class="btn btn--primary automation-preview-create" id="quick-add-create">
       Create activities
     </button>`;
-  form.querySelector('button[type="submit"]').textContent = 'Refresh preview';
+  const submitButton = panel.querySelector('button[type="submit"]');
+  if (submitButton) submitButton.textContent = 'Refresh preview';
   if (window.lucide) window.lucide.createIcons({ el: target });
 
   target.querySelector('#quick-add-create')?.addEventListener('click', async () => {

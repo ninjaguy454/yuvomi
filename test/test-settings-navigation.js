@@ -276,6 +276,10 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
   assert.match(page, /renderAutomationManager/);
   assert.match(component, /export async function renderAutomationManager/);
   assert.doesNotMatch(component, /automation-manage-from-quick/);
+  assert.match(component, /panel\.querySelector\('button\[type="submit"\]'\)/,
+    'the modal owns the submit button after its footer is mounted');
+  assert.doesNotMatch(component, /form\.querySelector\('button\[type="submit"\]'\)\.textContent/,
+    'Quick Add must not dereference a submit button that was moved into the modal footer');
   assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.automation-question-row/);
 });
 

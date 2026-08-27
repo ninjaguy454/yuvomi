@@ -289,7 +289,7 @@ function withoutComments(text) {
 }
 
 const SOURCES = jsFiles(PUBLIC).map((file) => {
-  const text = readFileSync(file, 'utf8');
+  const text = readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
   return { file, rel: path.relative(PUBLIC, file), text, code: withoutComments(text) };
 });
 

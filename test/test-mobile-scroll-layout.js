@@ -100,7 +100,8 @@ test('mobile tab indicator stays a capsule behind the icon, clear of the bar edg
   // Rundung gekappt wurde (#569-Nachtrag). Die Geometrie kommt aus dem
   // Icon-Well-Rect plus seitlichem Inset, nicht aus der reinen Slot-Breite.
   const fn = routerJs.slice(routerJs.indexOf('function positionTabIndicator'));
-  const body = fn.slice(0, fn.indexOf('\n}\n') + 2);
+  const end = fn.search(/\r?\n}\r?\n/);
+  const body = end >= 0 ? fn.slice(0, end + 2) : '';
 
   assert.match(body, /querySelector\('\.nav-item__icon-well'\)/);
   assert.match(body, /Math\.min\(ar\.width - TAB_INDICATOR_INSET \* 2, TAB_INDICATOR_MAX_WIDTH\)/);

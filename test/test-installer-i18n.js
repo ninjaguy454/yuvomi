@@ -36,7 +36,8 @@ function flattenKeys(obj, prefix = '', out = new Set()) {
 test('jede Installer-Locale ist Zeile für Zeile 2-Leerzeichen-formatiert', () => {
   const wrong = [];
   for (const locale of SUPPORTED_LOCALES) {
-    const raw = readFileSync(new URL(`${locale}.json`, LOCALES_DIR), 'utf8');
+    const raw = readFileSync(new URL(`${locale}.json`, LOCALES_DIR), 'utf8')
+      .replace(/\r\n/g, '\n');
     const canonical = `${JSON.stringify(JSON.parse(raw), null, 2)}\n`;
     if (raw === canonical) continue;
     const a = raw.split('\n');

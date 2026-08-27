@@ -58,7 +58,8 @@ const DOCS = resolve(ROOT, 'docs');
 const SHOTS = resolve(DOCS, 'screenshots');
 const PAGES = ['index.html', 'install.html', 'datenschutz.html', 'impressum.html', 'privacy.html'];
 
-const read = (p) => readFileSync(resolve(DOCS, p), 'utf8');
+const normalizeNewlines = (text) => text.replace(/\r\n/g, '\n');
+const read = (p) => normalizeNewlines(readFileSync(resolve(DOCS, p), 'utf8'));
 /**
  * Entities aufloesen und Woerterbuch-Bloecke schneiden - beides aus
  * `docs-dict.js`, weil `test-readme-consistency.js` dieselben Bloecke liest.
@@ -147,7 +148,7 @@ test('der Kommentar-Guard erkennt den Schaden, gegen den er gebaut ist', () => {
 
 /** Die zehn Zeilen aus der README-Tabelle "Instead of juggling… | Yuvomi gives you". */
 function readmeSwapRows() {
-  const readme = readFileSync(resolve(ROOT, 'README.md'), 'utf8');
+  const readme = normalizeNewlines(readFileSync(resolve(ROOT, 'README.md'), 'utf8'));
   return readme.split('\n')
     .map((l) => l.match(/^\| (.+?) \| \*\*(.+?)\*\* - (.+?) \|$/))
     .filter(Boolean)

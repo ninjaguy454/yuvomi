@@ -42,7 +42,7 @@ import { dictBlock, dictKeysMatching, dictValue, stripTags } from './docs-dict.j
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const READMES = { en: 'README.md', de: 'README.de.md' };
 
-const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8');
+const read = (rel) => readFileSync(resolve(ROOT, rel), 'utf8').replace(/\r\n/g, '\n');
 const readme = (lang) => read(READMES[lang]);
 
 /**
@@ -316,7 +316,7 @@ for (const lang of Object.keys(READMES)) {
     const dead = [];
     let scanned = 0;
     for (const file of readdirSync(ROOT).filter((f) => f.endsWith('.md') && f !== target)) {
-      const src = readFileSync(resolve(ROOT, file), 'utf8');
+      const src = read(file);
       for (const m of src.matchAll(new RegExp(`${target.replace('.', '\\.')}#([\\w-]+)`, 'gu'))) {
         scanned++;
         if (!headings.has(decodeURIComponent(m[1]))) dead.push(`${file} -> #${m[1]}`);

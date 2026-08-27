@@ -1,4 +1,5 @@
 import { renderAutomationManager } from '/components/activity-automation.js';
+import { t } from '/i18n.js';
 
 const AUTOMATION_TABS = new Set(['skills', 'activities', 'workflows']);
 
@@ -14,7 +15,7 @@ export async function render(container, { user, query } = {}) {
     <section class="settings-section">
       <div class="settings-card settings-card--automation">
         <p class="form-hint automation-settings-intro">
-          Build the reusable skills, activities, and workflows that power Quick Add for your household.
+          ${t('settings.pageHouseholdAutomationDescription')}
         </p>
         <div id="settings-automation-manager"></div>
       </div>

@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "تم حفظ عرض الدورة.",
         "pageRewardsModule": "المكافآت",
         "pageRewardsModuleDescription": "تفعيل وحدة المكافآت والتحكم في الموافقات.",
+        "pageHouseholdAutomation": "أتمتة المنزل",
+        "pageHouseholdAutomationDescription": "إدارة المهارات والأنشطة وقوالب الإضافة السريعة القابلة لإعادة الاستخدام.",
         "rewardsEnableTitle": "الظهور",
         "rewardsEnableLabel": "تفعيل المكافآت",
         "rewardsEnableHint": "يعرض وحدة المكافآت في شريط التنقل. عند التعطيل تبقى جميع البيانات.",

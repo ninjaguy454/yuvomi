@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "已保存周期视图设置。",
         "pageRewardsModule": "奖励",
         "pageRewardsModuleDescription": "启用奖励模块并管理审批。",
+        "pageHouseholdAutomation": "家庭自动化",
+        "pageHouseholdAutomationDescription": "管理可重复使用的技能、活动和快速添加模板。",
         "rewardsEnableTitle": "显示",
         "rewardsEnableLabel": "启用奖励",
         "rewardsEnableHint": "在导航中显示奖励模块。停用后将保留所有数据。",

@@ -545,11 +545,13 @@ function createLeafHeader(leaf) {
   heading.className = 'settings-leaf-header__title';
   heading.textContent = t(leaf.labelKey);
 
-  const description = document.createElement('p');
-  description.className = 'settings-leaf-header__description';
-  description.textContent = t(leaf.descriptionKey);
-
-  header.append(heading, description);
+  header.appendChild(heading);
+  if (!leaf.descriptionInContent) {
+    const description = document.createElement('p');
+    description.className = 'settings-leaf-header__description';
+    description.textContent = t(leaf.descriptionKey);
+    header.appendChild(description);
+  }
   return header;
 }
 

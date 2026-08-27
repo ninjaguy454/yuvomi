@@ -6527,6 +6527,14 @@ const FORK_MIGRATIONS = [
         ON task_activity_support_tasks(source_task_id);
     `,
   },
+  {
+    version: 10004,
+    description: 'Household automation: typed workflow variables and per-step subjects',
+    up: `
+      ALTER TABLE workflow_template_steps ADD COLUMN description_override TEXT;
+      ALTER TABLE workflow_template_steps ADD COLUMN subject_variable_id TEXT;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Zobrazení cyklu uloženo.",
         "pageRewardsModule": "Odměny",
         "pageRewardsModuleDescription": "Povolit modul odměn a řídit schvalování.",
+        "pageHouseholdAutomation": "Automatizace domácnosti",
+        "pageHouseholdAutomationDescription": "Správa opakovaně použitelných dovedností, aktivit a šablon Rychlého přidání.",
         "rewardsEnableTitle": "Viditelnost",
         "rewardsEnableLabel": "Povolit odměny",
         "rewardsEnableHint": "Zobrazí modul odměn v navigaci. Při vypnutí zůstanou všechna data zachována.",

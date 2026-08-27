@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Cykelvyn sparad.",
         "pageRewardsModule": "Belöningar",
         "pageRewardsModuleDescription": "Aktivera belöningsmodulen och hantera godkännanden.",
+        "pageHouseholdAutomation": "Hushållsautomation",
+        "pageHouseholdAutomationDescription": "Hantera återanvändbara färdigheter, aktiviteter och Snabbtillägg-mallar.",
         "rewardsEnableTitle": "Synlighet",
         "rewardsEnableLabel": "Aktivera belöningar",
         "rewardsEnableHint": "Visar belöningsmodulen i navigeringen. Vid inaktivering behålls alla data.",

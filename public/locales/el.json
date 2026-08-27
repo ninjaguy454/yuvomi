@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Η προβολή κύκλου αποθηκεύτηκε.",
         "pageRewardsModule": "Επιβραβεύσεις",
         "pageRewardsModuleDescription": "Ενεργοποίηση της μονάδας επιβραβεύσεων και έλεγχος εγκρίσεων.",
+        "pageHouseholdAutomation": "Αυτοματισμοί νοικοκυριού",
+        "pageHouseholdAutomationDescription": "Διαχείριση επαναχρησιμοποιήσιμων δεξιοτήτων, δραστηριοτήτων και προτύπων Γρήγορης προσθήκης.",
         "rewardsEnableTitle": "Ορατότητα",
         "rewardsEnableLabel": "Ενεργοποίηση επιβραβεύσεων",
         "rewardsEnableHint": "Εμφανίζει τη μονάδα επιβραβεύσεων στην πλοήγηση. Η απενεργοποίηση διατηρεί όλα τα δεδομένα.",

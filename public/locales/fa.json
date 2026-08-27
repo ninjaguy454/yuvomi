@@ -1437,6 +1437,8 @@
         "healthCyclePersonalSaved": "نمای چرخه ذخیره شد.",
         "pageRewardsModule": "پاداش‌ها",
         "pageRewardsModuleDescription": "فعال‌سازی ماژول پاداش‌ها و مدیریت تأییدها.",
+        "pageHouseholdAutomation": "خودکارسازی خانه",
+        "pageHouseholdAutomationDescription": "مهارت‌ها، فعالیت‌ها و الگوهای افزودن سریع قابل استفاده مجدد را مدیریت کنید.",
         "rewardsEnableTitle": "نمایان‌بودن",
         "rewardsEnableLabel": "فعال‌سازی پاداش‌ها",
         "rewardsEnableHint": "ماژول پاداش‌ها را در ناوبری نشان می‌دهد. با غیرفعال‌کردن، همهٔ داده‌ها حفظ می‌شوند.",

@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Cycle view saved.",
         "pageRewardsModule": "Rewards",
         "pageRewardsModuleDescription": "Enable the rewards module and control approvals.",
+        "pageHouseholdAutomation": "Household automation",
+        "pageHouseholdAutomationDescription": "Manage reusable skills, activities, and Quick Add templates.",
         "rewardsEnableTitle": "Visibility",
         "rewardsEnableLabel": "Enable rewards",
         "rewardsEnableHint": "Shows the rewards module in the navigation. Disabling keeps all data.",

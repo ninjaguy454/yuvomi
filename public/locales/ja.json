@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "周期の表示を保存しました。",
         "pageRewardsModule": "ごほうび",
         "pageRewardsModuleDescription": "ごほうびモジュールを有効にし、承認を管理します。",
+        "pageHouseholdAutomation": "家庭内オートメーション",
+        "pageHouseholdAutomationDescription": "再利用できるスキル、アクティビティ、クイック追加テンプレートを管理します。",
         "rewardsEnableTitle": "表示",
         "rewardsEnableLabel": "ごほうびを有効にする",
         "rewardsEnableHint": "ナビゲーションにごほうびモジュールを表示します。無効にしてもすべてのデータは保持されます。",

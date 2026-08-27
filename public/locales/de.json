@@ -1437,6 +1437,8 @@
         "healthCyclePersonalSaved": "Zyklus-Ansicht gespeichert.",
         "pageRewardsModule": "Belohnungen",
         "pageRewardsModuleDescription": "Belohnungsmodul aktivieren und Freigaben steuern.",
+        "pageHouseholdAutomation": "Haushaltsautomatisierung",
+        "pageHouseholdAutomationDescription": "Wiederverwendbare Fähigkeiten, Aktivitäten und Schnellvorlagen verwalten.",
         "rewardsEnableTitle": "Sichtbarkeit",
         "rewardsEnableLabel": "Belohnungen aktivieren",
         "rewardsEnableHint": "Zeigt das Belohnungsmodul in der Navigation. Beim Deaktivieren bleiben alle Daten erhalten.",

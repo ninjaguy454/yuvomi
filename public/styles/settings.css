@@ -798,6 +798,267 @@
  * Liste ist EINE Spalte - nebeneinander gestellt bräuchte jede Zeile wieder
  * ihren eigenen Rand und wäre damit wieder eine Karte pro Zeile. */
 
+/* --------------------------------------------------------
+   Household automation
+   -------------------------------------------------------- */
+
+.settings-card--automation,
+.automation-manager,
+.automation-manager__body,
+.automation-list-row__copy,
+.automation-list-button > span,
+.automation-preview__step > div {
+  min-width: 0;
+}
+
+.automation-settings-intro,
+.automation-form-intro,
+.automation-manager__hint {
+  margin-bottom: var(--space-4);
+}
+
+.automation-quick-list,
+.automation-list,
+.automation-skill-grid {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.automation-quick-template {
+  width: 100%;
+  min-height: var(--target-lg);
+  justify-content: flex-start;
+  text-align: left;
+  white-space: normal;
+}
+
+.automation-quick-template > span,
+.automation-list-button > span {
+  overflow-wrap: anywhere;
+}
+
+.automation-quick-preview {
+  margin-top: var(--space-4);
+}
+
+.automation-preview {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.automation-preview__step {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2);
+  align-items: start;
+}
+
+.automation-preview-create {
+  width: 100%;
+  margin-top: var(--space-3);
+}
+
+.automation-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-0h);
+  max-width: 100%;
+  padding: var(--space-0h);
+  margin-bottom: var(--space-4);
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+  background-color: var(--color-surface-raised);
+  border: var(--space-px) solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.automation-tabs .group-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-height: var(--target-lg);
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.automation-tabs .group-toggle__btn:hover:not(.group-toggle__btn--active) {
+  color: var(--color-text-primary);
+}
+
+.automation-tabs .group-toggle__btn--active {
+  background-color: var(--seg-active-bg);
+  box-shadow: var(--seg-active-shadow);
+  color: color-mix(in srgb, var(--module-accent, var(--color-accent)) var(--tint-ink), var(--color-text-primary));
+}
+
+.automation-manager__header,
+.automation-workflow-step__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.automation-workflow-step__header {
+  margin-bottom: var(--space-2);
+}
+
+.automation-workflow-step__header--section {
+  margin-top: var(--space-4);
+}
+
+.automation-list-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.automation-list-row__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: var(--space-1);
+}
+
+.automation-list-button {
+  width: 100%;
+  min-height: var(--target-lg);
+  justify-content: space-between;
+  text-align: left;
+  white-space: normal;
+}
+
+.automation-check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.automation-check-row--section-end {
+  margin-bottom: var(--space-4);
+}
+
+.automation-check-row input {
+  flex: 0 0 auto;
+}
+
+.automation-fieldset {
+  padding: 0;
+  margin: 0 0 var(--space-3);
+  border: 0;
+}
+
+.automation-skill-grid .automation-check-row {
+  margin-bottom: 0;
+}
+
+.automation-workflow-step {
+  padding: var(--space-3);
+  margin-bottom: var(--space-2);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.automation-workflow-step__control {
+  margin-top: var(--space-2);
+}
+
+.automation-workflow-condition {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.automation-question-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.5fr) auto auto;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.automation-question-options {
+  grid-column: 2 / -1;
+}
+
+.automation-variable-token {
+  display: block;
+  max-width: 100%;
+  padding: var(--space-2);
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  background: var(--color-fill-well);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: all;
+}
+
+@media (max-width: 640px) {
+  .settings-card--automation {
+    padding-inline: var(--space-3);
+  }
+
+  .automation-manager__header,
+  .automation-list-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .automation-manager__header .btn {
+    width: 100%;
+  }
+
+  .automation-list-row__actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .automation-list-row__actions .btn {
+    width: 100%;
+  }
+
+  .automation-question-row {
+    grid-template-columns: minmax(0, 1fr);
+    padding: var(--space-3);
+    border: var(--space-px) solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+
+  .automation-question-options {
+    grid-column: auto;
+  }
+
+  .automation-workflow-condition {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .automation-workflow-step__header {
+    flex-wrap: wrap;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .settings-shell__navigation-link,
   .settings-overview-link,

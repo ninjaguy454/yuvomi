@@ -1437,6 +1437,8 @@
         "healthCyclePersonalSaved": "Widok cyklu zapisany.",
         "pageRewardsModule": "Nagrody",
         "pageRewardsModuleDescription": "Włącz moduł nagród i zarządzaj zatwierdzeniami.",
+        "pageHouseholdAutomation": "Automatyzacja gospodarstwa domowego",
+        "pageHouseholdAutomationDescription": "Zarządzaj umiejętnościami, aktywnościami i szablonami szybkiego dodawania wielokrotnego użytku.",
         "rewardsEnableTitle": "Widoczność",
         "rewardsEnableLabel": "Włącz nagrody",
         "rewardsEnableHint": "Pokazuje moduł nagród w nawigacji. Wyłączenie zachowuje wszystkie dane.",

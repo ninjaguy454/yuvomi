@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Döngü görünümü kaydedildi.",
         "pageRewardsModule": "Ödüller",
         "pageRewardsModuleDescription": "Ödül modülünü etkinleştir ve onayları yönet.",
+        "pageHouseholdAutomation": "Ev otomasyonu",
+        "pageHouseholdAutomationDescription": "Yeniden kullanılabilir becerileri, etkinlikleri ve Hızlı Ekle şablonlarını yönetin.",
         "rewardsEnableTitle": "Görünürlük",
         "rewardsEnableLabel": "Ödülleri etkinleştir",
         "rewardsEnableHint": "Ödül modülünü gezinmede gösterir. Devre dışı bırakıldığında tüm veriler korunur.",

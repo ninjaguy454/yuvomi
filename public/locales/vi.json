@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Đã lưu hiển thị chu kỳ.",
         "pageRewardsModule": "Phần thưởng",
         "pageRewardsModuleDescription": "Bật mô-đun phần thưởng và kiểm soát phê duyệt.",
+        "pageHouseholdAutomation": "Tự động hóa gia đình",
+        "pageHouseholdAutomationDescription": "Quản lý kỹ năng, hoạt động và mẫu Thêm nhanh có thể tái sử dụng.",
         "rewardsEnableTitle": "Hiển thị",
         "rewardsEnableLabel": "Bật phần thưởng",
         "rewardsEnableHint": "Hiển thị mô-đun phần thưởng trong điều hướng. Khi tắt, mọi dữ liệu vẫn được giữ.",

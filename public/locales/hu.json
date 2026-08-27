@@ -1425,6 +1425,8 @@
         "healthCyclePersonalSaved": "Ciklusnézet mentve.",
         "pageRewardsModule": "Jutalmak",
         "pageRewardsModuleDescription": "A jutalmak modul engedélyezése és a jóváhagyások kezelése.",
+        "pageHouseholdAutomation": "Háztartási automatizálás",
+        "pageHouseholdAutomationDescription": "Újrahasználható készségek, tevékenységek és Gyors hozzáadás sablonok kezelése.",
         "rewardsEnableTitle": "Láthatóság",
         "rewardsEnableLabel": "Jutalmak engedélyezése",
         "rewardsEnableHint": "Megjeleníti a jutalmak modult a navigációban. Kikapcsoláskor minden adat megmarad.",

@@ -18,6 +18,7 @@ import { CHART, chartScales, chartGridMarkup, chartXLabelsMarkup } from '/utils/
 import { wireScrollFade, scheduleUndoableDelete } from '/utils/ux.js';
 import { toLocalDateKey, parseLocalDateKey, addLocalDays, todayKey} from '/utils/date.js';
 import { zonedDateKey } from '/utils/timezone.js';
+import { nowFields } from '/utils/timezone.js';
 import { trendMarkup } from '/utils/metric-card.js';
 import { openModal, closeModal, confirmModal, confirmOverModal, reportFieldError } from '/components/modal.js';
 import { createPageFab, setPageFabAction } from '/utils/fab.js';
@@ -3887,9 +3888,15 @@ function overviewVitalCardMarkup(metric, series) {
 // --- Nächste Erinnerungen (heute noch offene Zeitfenster, reine Anzeige) ---
 
 function overviewUpcomingMarkup() {
-  const now = new Date();
-  const today = toLocalDateKey(now);
-  const nowTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  // „Welche Dosis steht heute noch aus" ist eine Frage an die Uhr, also an die
+  // Anzeigezone. `toLocalDateKey(new Date())` war der Browser-Tag und
+  // `getHours()` die Browser-Stunde: auf einem Geraet in einer anderen Zone
+  // wurden Zeitfenster als verstrichen gefuehrt, die es noch gar nicht waren
+  // (#829, Nachlese #851).
+  const now = nowFields();
+  const p2 = (n) => String(n).padStart(2, '0');
+  const today = `${now.year}-${p2(now.month)}-${p2(now.day)}`;
+  const nowTime = `${p2(now.hour)}:${p2(now.minute)}`;
   const up = upcomingDoses(overviewAllSchedules(), overviewAllLogs(), { today, nowTime, limit: 5 });
   if (!up.length) {
     return `<div class="health-overview__reminders-empty">${esc(t('health.overview.reminders.empty'))}</div>`;

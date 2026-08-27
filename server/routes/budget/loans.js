@@ -9,9 +9,11 @@ import * as db from '../../db.js';
 import { str, num, date as validateDate, month as validateMonth, collectErrors, MAX_TITLE, MAX_SHORT } from '../../middleware/validate.js';
 import { normalizeObjectVisibility } from '../../services/budget-visibility.js';
 import { computeLoanSchedule, MAX_LOAN_MONTHS } from '../../services/loan-amortization.js';
+import { translate, resolveHouseholdLocale } from '../../utils/i18n.js';
 import {
   budgetFilter, mayEdit, getBudgetMode, loanSummaryRow, loadLoan, refreshLoanStatus, cents,
   budgetCurrency, toBudgetAmount, CURRENCY_RE, validateAccountRef, addMonths,
+  LOAN_DIRECTIONS, bookingFor,
 } from './helpers.js';
 
 const log = createLogger('Budget');
@@ -20,24 +22,6 @@ const router = express.Router();
 // 'variable' = Darlehen ganz ohne Zinsbindung (#569-Nachtrag): rechnet einphasig
 // wie 'fixed', der Satz gilt aber nur als aktueller Wert (Prognose).
 const INTEREST_MODES = ['none', 'fixed', 'variable', 'fixed_then_variable'];
-
-// Richtung (#638): Das Modul war ursprünglich nur für verliehenes Geld gedacht -
-// die Rate wurde deshalb immer als Einnahme gebucht. Ein aufgenommener Kredit
-// zahlt aber raus, seine Rate ist eine Ausgabe.
-const LOAN_DIRECTIONS = ['lent', 'borrowed'];
-
-// Wie eine Rate ins Budget gebucht wird. Vorzeichen UND Kategorie hängen an der
-// Richtung: stats.js liest den Typ am Vorzeichen ab (amount > 0 = Einnahme), die
-// Kategorie muss dazu passen, sonst steht eine Ausgabe unter einer income-Kategorie.
-const REPAYMENT_BOOKING = {
-  lent: { sign: 1, category: 'Geschenke & Transfers', subcategory: '' },
-  borrowed: { sign: -1, category: 'financial_other', subcategory: 'loans_interest' },
-};
-
-/** Buchungsregel eines Darlehens; unbekannte/fehlende Richtung fällt auf 'lent' zurück. */
-function bookingFor(direction) {
-  return REPAYMENT_BOOKING[direction] || REPAYMENT_BOOKING.lent;
-}
 
 /**
  * Richtung aus dem Request (#638).
@@ -558,6 +542,15 @@ router.post('/loans/:id/payments', (req, res) => {
     // angewandt: eine spätere Kursänderung lässt gebuchte Raten unberührt.
     const budgetAmount = toBudgetAmount(paymentAmount, loan);
     const foreign = loan.is_foreign_currency ? ` (${loan.currency})` : '';
+    // Der Titel wird in der Datensprache des Haushalts gespeichert, wie schon bei
+    // Geburtstagsterminen (#524/#631/#632). Grund ist derselbe: die Zeile in
+    // budget_entries ist das, was REST-API, CSV-Export, FTS-Suchindex und MCP zu
+    // sehen bekommen - keiner dieser Kanäle durchläuft die Client-Übersetzung.
+    // Vorher stand hier ein fest englischer Titel; der übersetzte Fallback in
+    // public/pages/budget.js kam nie zum Zug, weil er nur bei LEEREM Titel greift.
+    // Er bleibt trotzdem, denn nachgetragene Raten (#813) haben gar keinen
+    // Budget-Eintrag - genau dort trägt er.
+    const title = translate(resolveHouseholdLocale(db.get()), 'budget.loanPaymentTitle', { borrower: loan.borrower }) + foreign;
     // Richtung (#638): Bei einem aufgenommenen Kredit verlässt die Rate den Haushalt -
     // negativer Betrag und eine expense-Kategorie. Beides muss zusammen wechseln,
     // sonst steht eine Ausgabe unter „Geschenke & Transfers" (income).
@@ -570,7 +563,7 @@ router.post('/loans/:id/payments', (req, res) => {
         INSERT INTO budget_entries (title, amount, category, subcategory, date, is_recurring, created_by, owner_id, visibility, account_id)
         VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?)
       `).run(
-        `Loan repayment: ${loan.borrower}${foreign}`,
+        title,
         booking.sign * budgetAmount,
         booking.category,
         booking.subcategory,

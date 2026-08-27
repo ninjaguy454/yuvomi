@@ -1,3 +1,5 @@
+import { reminderDateBefore } from '../utils/reminder-schedule.js';
+
 const BILLING_CYCLES = ['daily', 'weekly', 'monthly', 'yearly'];
 const CURRENCY_RE = /^[A-Z]{3}$/;
 
@@ -104,10 +106,10 @@ function convertAmount(amount, fromCurrency, toCurrency, rates) {
   return Number(amount) * rate;
 }
 
+/** Sprechende Fassade ueber der geteilten Rechnung in
+ *  server/utils/reminder-schedule.js - dort steht, warum sie geteilt ist. */
 function reminderDate(nextPaymentDate, reminderDays) {
-  const date = parseDateKey(nextPaymentDate);
-  date.setUTCDate(date.getUTCDate() - Math.max(0, Number(reminderDays) || 0));
-  return `${dateKey(date)}T09:00`;
+  return reminderDateBefore(nextPaymentDate, reminderDays);
 }
 
 export {

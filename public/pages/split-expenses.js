@@ -11,6 +11,7 @@ import { esc } from '/utils/html.js';
 import { stagger } from '/utils/ux.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { formatMoney, amountPlaceholder, toDecimalString, amountIsSavable, smallestUnitLabel } from '/utils/money.js';
+import { todayKey } from '/utils/date.js';
 import { wireTablist } from '/utils/tablist.js';
 import { findPageFab } from '/utils/fab.js';
 import { emptyStateHTML } from '/utils/empty-state.js';
@@ -914,7 +915,10 @@ function openExpenseModal(expense = null) {
   const method = isEdit ? (expense.split_method || 'equal') : (group.default_split_method || 'equal');
   const selectedIds = isEdit ? (expense.splits || []).map((s) => s.user_id) : null;
   const splitValues = isEdit ? deriveSplitValues(expense) : defaultSplitValues(group);
-  const today = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
+  // Der vorbelegte Tag ist „heute" und geht deshalb nach der Anzeigezone - aus
+  // der Browser-Uhr gebaut trug eine neue Ausgabe abends in einer anderen Zone
+  // den Nachbartag (#829, Nachlese #851).
+  const today = todayKey();
   const methodOption = (value, label) => `<option value="${value}" ${value === method ? 'selected' : ''}>${label}</option>`;
   openSharedModal({
     title: isEdit ? t('splitExpenses.editExpense') : t('splitExpenses.addExpense'),

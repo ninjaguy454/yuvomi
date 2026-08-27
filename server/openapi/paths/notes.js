@@ -13,5 +13,14 @@ export function notesPaths() {
     '/api/v1/notes/{id}/pin': {
       patch: op({ summary: 'Toggle note pin state', tag: 'Notes', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
     },
+    '/api/v1/notes/{id}/check': {
+      patch: op({
+        summary: 'Tick one checklist item, addressed by its source line',
+        tag: 'Notes',
+        params: [idParam()],
+        stateChanging: true,
+        requestBody: jsonBody(null),
+      }),
+    },
   };
 }

@@ -18,6 +18,8 @@ import * as db from '../db.js';
 import { createLogger } from '../logger.js';
 import { str, oneOf, num, date, id as idParam, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT } from '../middleware/validate.js';
 import { normalizePantryUnit, normalizePantryQuantity } from '../../public/utils/pantry-units.js';
+import { syncPantryExpiryReminder, resolvePantryAccess } from '../services/pantry-reminders.js';
+import { todayKey as householdToday } from '../utils/timezone.js';
 
 const log = createLogger('Pantry');
 const router = express.Router();
@@ -40,6 +42,19 @@ function validCategoryNames() {
 
 function getItem(itemId) {
   return db.get().prepare('SELECT * FROM pantry_items WHERE id = ?').get(itemId);
+}
+
+/**
+ * Kurze Fassade auf server/services/pantry-reminders.js: die Regel, WANN ein
+ * Artikel meldet, steht dort - sie wird auch vom Push-Lauf gebraucht, der den
+ * ganzen Bestand nachzieht, und darf deshalb nicht im Router wohnen.
+ */
+function syncReminder(item, access = null, today = null) {
+  // `clampToNextMorning`: auf DIESEM Weg hat gerade jemand gehandelt. Ein
+  // frisch gekaufter Joghurt mit fünf Tagen MHD bekäme sonst nie eine Meldung,
+  // weil sein Vorlauf schon verstrichen ist - die Begründung steht am
+  // Vergangenheits-Riegel in server/services/pantry-reminders.js.
+  syncPantryExpiryReminder(db.get(), item, new Date(), access, { clampToNextMorning: true, today });
 }
 
 /**
@@ -312,6 +327,16 @@ router.post('/import-shopping', (req, res) => {
     const categoryNames = validCategoryNames();
     const fallbackCategory = categoryNames[categoryNames.length - 1] ?? 'Sonstiges';
 
+    // Die Rechte EINMAL fuer den ganzen Import aufloesen, nicht je Zeile: die
+    // Schleife laeuft synchron in einer Transaktion, und bei vierzig Eintraegen
+    // und vier Mitgliedern waeren das ein paar hundert Abfragen, die alle
+    // dieselbe Antwort geben.
+    const access = resolvePantryAccess(db.get());
+    // `today` genauso EINMAL wie die Rechte: es kostet sonst je Importzeile
+    // eine sync_config-Abfrage plus zwei Intl.DateTimeFormat-Konstruktionen,
+    // und die Schleife laeuft synchron in einer Transaktion.
+    const today = householdToday(db.get());
+
     const result = db.get().transaction(() => {
       const findMatch = db.get().prepare(`
         SELECT id, quantity FROM pantry_items
@@ -337,7 +362,20 @@ router.post('/import-shopping', (req, res) => {
         const quantity = normalizePantryQuantity(entry.quantity, { fallback: 1 });
         const unit = normalizePantryUnit(entry.unit);
         const locationId = entry.location_id ? Number(entry.location_id) || null : null;
-        const expiresOn = /^\d{4}-\d{2}-\d{2}$/.test(String(entry.expires_on ?? '')) ? String(entry.expires_on) : null;
+        // KALENDARISCH prüfen, nicht nur die Form: `date()` ist dieselbe
+        // Funktion, die POST/PUT/PATCH benutzen. Die rohe Regex liess ein
+        // '2027-02-30' durch - vorher nur eine unsinnige Zeile, seit die
+        // Erinnerung mit dem Datum RECHNET ein Fehler mitten in der
+        // Transaktion, der den ganzen Import zurückrollt.
+        //
+        // DER ARTIKEL KOMMT TROTZDEM AN, nur ohne MHD. Er selbst ist in
+        // Ordnung - Name, Menge und Kategorie stammen aus der Einkaufsliste,
+        // kaputt ist allein das Datum. Die Zeile zu verwerfen hiesse: jemand
+        // hakt den Joghurt ab, drückt Übernehmen, und der Joghurt fehlt im
+        // Vorrat. Ein Artikel ohne Ablaufdatum ist der kleinere Verlust, und
+        // es ist der Zustand, den der Vorrat für die Mehrheit seiner Zeilen
+        // ohnehin kennt.
+        const expiresOn = date(entry.expires_on, 'Mindesthaltbarkeitsdatum').value;
         const category = categoryNames.includes(source.category) ? source.category : fallbackCategory;
 
         // Gleicher Name, gleiche Einheit, gleicher Ort UND gleiches MHD →
@@ -346,9 +384,13 @@ router.post('/import-shopping', (req, res) => {
         const match = findMatch.get(source.name, unit, locationId, expiresOn);
         if (match) {
           bump.run(normalizePantryQuantity(Number(match.quantity) + quantity, { fallback: quantity }), match.id);
+          // Eine aufgefüllte Charge kann von Menge 0 zurückkommen - dann ist die
+          // Erinnerung wieder fällig, die das Ausbuchen abgeräumt hat.
+          syncReminder(getItem(match.id), access, today);
           merged += 1;
         } else {
-          insert.run(source.name, quantity, unit, locationId, category, expiresOn, userId);
+          const inserted = insert.run(source.name, quantity, unit, locationId, category, expiresOn, userId);
+          syncReminder(getItem(inserted.lastInsertRowid), access, today);
           added += 1;
         }
       }
@@ -389,17 +431,25 @@ router.post('/', (req, res) => {
     const { values, errors } = validateItemFields(req.body);
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
-    const result = db.get().prepare(`
-      INSERT INTO pantry_items
-        (name, quantity, unit, location_id, category, expires_on, min_quantity, notes, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      values.name, values.quantity, values.unit, values.location_id,
-      values.category, values.expires_on, values.min_quantity, values.notes,
-      req.authUserId || req.session.userId
-    );
+    // Schreiben und Erinnerung in EINER Transaktion, wie in
+    // server/routes/inventory/items.js: sonst kann der Artikel stehen und die
+    // Erinnerung fehlen, ohne dass die Antwort davon erzählt.
+    const created = db.get().transaction(() => {
+      const result = db.get().prepare(`
+        INSERT INTO pantry_items
+          (name, quantity, unit, location_id, category, expires_on, min_quantity, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        values.name, values.quantity, values.unit, values.location_id,
+        values.category, values.expires_on, values.min_quantity, values.notes,
+        req.authUserId || req.session.userId
+      );
+      const item = getItem(result.lastInsertRowid);
+      syncReminder(item);
+      return item;
+    })();
 
-    res.status(201).json({ data: getItem(result.lastInsertRowid) });
+    res.status(201).json({ data: created });
   } catch (err) {
     log.error('POST / error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -422,17 +472,22 @@ router.put('/:itemId', (req, res) => {
     const { values, errors } = validateItemFields(req.body, { current: item });
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
-    db.get().prepare(`
-      UPDATE pantry_items
-      SET name = ?, quantity = ?, unit = ?, location_id = ?, category = ?,
-          expires_on = ?, min_quantity = ?, notes = ?
-      WHERE id = ?
-    `).run(
-      values.name, values.quantity, values.unit, values.location_id,
-      values.category, values.expires_on, values.min_quantity, values.notes, item.id
-    );
+    const updated = db.get().transaction(() => {
+      db.get().prepare(`
+        UPDATE pantry_items
+        SET name = ?, quantity = ?, unit = ?, location_id = ?, category = ?,
+            expires_on = ?, min_quantity = ?, notes = ?
+        WHERE id = ?
+      `).run(
+        values.name, values.quantity, values.unit, values.location_id,
+        values.category, values.expires_on, values.min_quantity, values.notes, item.id
+      );
+      const fresh = getItem(item.id);
+      syncReminder(fresh);
+      return fresh;
+    })();
 
-    res.json({ data: getItem(item.id) });
+    res.json({ data: updated });
   } catch (err) {
     log.error('PUT /:itemId error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -461,11 +516,19 @@ router.patch('/:itemId', (req, res) => {
     const fields = Object.keys(values);
     if (!fields.length) return res.json({ data: item });
 
-    db.get().prepare(`
-      UPDATE pantry_items SET ${fields.map((f) => `${f} = ?`).join(', ')} WHERE id = ?
-    `).run(...fields.map((f) => values[f]), item.id);
+    const updated = db.get().transaction(() => {
+      db.get().prepare(`
+        UPDATE pantry_items SET ${fields.map((f) => `${f} = ?`).join(', ')} WHERE id = ?
+      `).run(...fields.map((f) => values[f]), item.id);
 
-    res.json({ data: getItem(item.id) });
+      // Auch der ±-Stepper landet hier: wer den letzten Joghurt ausbucht, soll
+      // nicht in fünf Tagen an sein Ablaufdatum erinnert werden.
+      const fresh = getItem(item.id);
+      syncReminder(fresh);
+      return fresh;
+    })();
+
+    res.json({ data: updated });
   } catch (err) {
     log.error('PATCH /:itemId error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -481,8 +544,17 @@ router.delete('/:itemId', (req, res) => {
     const vId = idParam(req.params.itemId, 'Artikel-ID');
     if (vId.error) return res.status(400).json({ error: vId.error, code: 400 });
 
-    const result = db.get().prepare('DELETE FROM pantry_items WHERE id = ?').run(vId.value);
-    if (result.changes === 0) return res.status(404).json({ error: 'Item not found.', code: 404 });
+    const removed = db.get().transaction(() => {
+      const result = db.get().prepare('DELETE FROM pantry_items WHERE id = ?').run(vId.value);
+      if (result.changes === 0) return false;
+
+      // `reminders` hat keinen Fremdschlüssel auf die Entität - entity_id ist
+      // über sechs Tabellen hinweg polymorph, ein FK könnte nur auf eine davon
+      // zeigen. Aufräumen ist deshalb Sache des Routers, wie im Inventar auch.
+      db.get().prepare("DELETE FROM reminders WHERE entity_type = 'pantry_item' AND entity_id = ?").run(vId.value);
+      return true;
+    })();
+    if (!removed) return res.status(404).json({ error: 'Item not found.', code: 404 });
 
     res.status(204).end();
   } catch (err) {

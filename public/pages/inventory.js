@@ -22,6 +22,7 @@ import { renderSkeletonList } from '/utils/skeleton.js';
 import { emptyStateEl } from '/utils/empty-state.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { formatMoney } from '/utils/money.js';
+import { todayKey } from '/utils/date.js';
 import { formatDate, getLocale } from '/i18n.js';
 import { renderDocumentAttachField, bindDocumentAttachField } from '/components/document-attach.js';
 import { warrantyStatus, hasUpcomingDeadline, dateStatus, countUpcomingDeadlines } from '/utils/inventory-warranty.js';
@@ -854,9 +855,10 @@ function addMonths(ym, n) {
   return `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// Der laufende Monat der ANZEIGEZONE, nicht der des Browsers - dasselbe wie in
+// budget.js (#829, Nachlese #851).
 function currentMonthStr() {
-  const now = new Date();
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+  return todayKey().slice(0, 7);
 }
 
 // Gleiche Liste wie public/pages/documents.js#CATEGORIES - dort hardcodiert

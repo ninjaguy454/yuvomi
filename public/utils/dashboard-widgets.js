@@ -39,7 +39,7 @@
  * „Bestandslayout ohne genau eine Id liest sich nicht als umsortiert", über
  * JEDE Id dieser Liste. Wer hier umsortiert, prüft ihn - er ist der Ort, an dem
  * ein Fehler auffällt. */
-export const WIDGET_IDS = ['tasks', 'calendar', 'meals', 'shopping', 'birthdays', 'countdown', 'budget', 'rewards', 'health', 'cycle', 'housekeeping', 'family', 'notes', 'weather', 'clock', 'metrics'];
+export const WIDGET_IDS = ['tasks', 'calendar', 'meals', 'shopping', 'birthdays', 'countdown', 'budget', 'rewards', 'health', 'cycle', 'housekeeping', 'family', 'notes', 'weather', 'clock', 'metrics', 'quicklinks'];
 
 // Vier kuratierte Formen statt sechs: über vier Auswahlmöglichkeiten pro Widget
 // (× bis zu 12 Widgets) kippt der Anpassen-Modus in Mikro-Entscheidungs-Overhead
@@ -98,7 +98,10 @@ export function defaultWidgetSize(id) {
   if (['tasks', 'calendar', 'rewards', 'budget', 'family', 'notes', 'birthdays', 'countdown'].includes(id)) return '1x2';
   // Die Uhr startet breit statt quadratisch: Uhrzeit und darunter der ausgeschriebene
   // Wochentag brauchen Zeile, nicht Höhe - auf 1x1 bräche das Datum um (#651).
-  if (['weather', 'shopping', 'health', 'cycle', 'meals', 'clock'].includes(id)) return '2x1';
+  // `quicklinks` steht bei der Uhr und nicht bei den Listen: es ist eine ZEILE
+  // aus Kacheln (#469), keine Liste aus Zeilen. Auf 1x1 passten zwei davon
+  // nebeneinander, und eine Startrampe mit zwei Plaetzen ist keine.
+  if (['weather', 'shopping', 'health', 'cycle', 'meals', 'clock', 'quicklinks'].includes(id)) return '2x1';
   // DIE KENNZAHLREIHE IST EINE ZEILE, KEIN BLOCK (Critique 2026-08-13, P1).
   //
   // Hier stand '2x2' mit der Begruendung, das Raster sei der Vergleich, fuer den
@@ -133,7 +136,12 @@ export const COCKPIT_COVERED_WIDGETS = new Set(['tasks', 'calendar', 'shopping',
 // Gruß; die große Karte mit Vorhersage ist der Wandtablet-Opt-in im Tray.
 // Bestandslayouts behalten ihre gespeicherte Sichtbarkeit - dort entfällt
 // stattdessen die Masthead-Zeile (kein Echo).
-export const DEFAULT_HIDDEN_WIDGETS = new Set([...COCKPIT_COVERED_WIDGETS, 'rewards', 'health', 'cycle', 'housekeeping', 'clock', 'weather']);
+// `quicklinks` reiht sich bei den Opt-ins ein, und zwar aus dem staerksten der
+// hier genannten Gruende: die Reihe ist am ersten Tag LEER. Sichtbar ab Werk
+// haette jeder Haushalt - auch jeder bestehende, denn eine neu bekannte Id erbt
+// diesen Default - eine Kachel bekommen, die nichts zeigt und um Einrichtung
+// bittet. Sie steht im Anpassen-Tray und kommt, wenn jemand sie holt.
+export const DEFAULT_HIDDEN_WIDGETS = new Set([...COCKPIT_COVERED_WIDGETS, 'rewards', 'health', 'cycle', 'housekeeping', 'clock', 'weather', 'quicklinks']);
 
 export function defaultWidgetVisible(id) {
   return !DEFAULT_HIDDEN_WIDGETS.has(id);

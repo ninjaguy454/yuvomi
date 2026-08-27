@@ -21,7 +21,22 @@ function makeDb({ withNotificationTables = true } = {}) {
     CREATE TABLE users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       username TEXT UNIQUE NOT NULL,
-      role TEXT NOT NULL DEFAULT 'member'
+      role TEXT NOT NULL DEFAULT 'member',
+      -- resolvePermissions() liest das Rollen-Profil ueber family_role.
+      family_role TEXT
+    );
+    -- Der Vorrats-Voll-Sync fragt beide Rechte-Achsen (#467): sync_config fuer
+    -- die haushaltweite Abschaltung, access_permissions je Empfaenger. Fehlt
+    -- eine der Tabellen, scheitert er still im try/catch von
+    -- processDueNotifications - genau deshalb prueft der Test die WIRKUNG.
+    CREATE TABLE IF NOT EXISTS sync_config (key TEXT PRIMARY KEY, value TEXT);
+    CREATE TABLE IF NOT EXISTS access_permissions (
+      subject_type  TEXT NOT NULL,
+      subject_id    TEXT NOT NULL,
+      resource_type TEXT NOT NULL,
+      resource_key  TEXT NOT NULL,
+      access        TEXT NOT NULL,
+      PRIMARY KEY (subject_type, subject_id, resource_type, resource_key)
     );
     CREATE TABLE tasks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -52,9 +67,16 @@ function makeDb({ withNotificationTables = true } = {}) {
       date TEXT NOT NULL,
       reminder_offset_days INTEGER NOT NULL DEFAULT 30
     );
+    CREATE TABLE pantry_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      quantity REAL NOT NULL DEFAULT 1,
+      expires_on TEXT,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL
+    );
     CREATE TABLE reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_type TEXT NOT NULL CHECK(entity_type IN ('task','event','subscription','inventory_item','inventory_tracked_date')),
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('task','event','subscription','inventory_item','inventory_tracked_date','pantry_item')),
       entity_id INTEGER NOT NULL,
       remind_at TEXT NOT NULL,
       dismissed INTEGER NOT NULL DEFAULT 0,
@@ -464,7 +486,8 @@ test('a notification names its origin in the title, in the household language', 
   const store = createNotificationChannelStore({ db });
   store.createChannel({ provider: 'ntfy', name: 'ntfy', enabled: true, config: { baseUrl: 'https://ntfy.test', topic: 'family' }, secrets: {} });
   // Die Datensprache des Haushalts, wie sie auch der Geburtstags-Titel liest.
-  db.exec('CREATE TABLE sync_config (key TEXT PRIMARY KEY, value TEXT);');
+  // `sync_config` legt inzwischen makeDb() an - der Vorrats-Voll-Sync liest
+  // dort die haushaltweite Modul-Abschaltung.
   db.prepare("INSERT INTO sync_config (key, value) VALUES ('language', 'de')").run();
   db.prepare("INSERT INTO tasks (id, title, created_by) VALUES (1, 'Müll rausbringen', 1)").run();
   db.prepare("INSERT INTO calendar_events (id, title) VALUES (2, 'Zahnarzt')").run();
@@ -577,6 +600,94 @@ test('inventory tracked-date reminders carry item name, label and date as body',
   // Title-Herkunfts-Regel (v2.6.0): der Titel nennt das Modul, nicht mehr
   // pauschal den App-Namen (vgl. task/event/subscription oben).
   assert.equal(payloads[0].title, 'Inventory');
+});
+
+// --------------------------------------------------------------------------
+// DER PUSH-LAUF ZIEHT DEN VORRAT NACH
+//
+// Der Router legt die Erinnerung beim Speichern an - aber ein Vorrat, der schon
+// vor #811 im Regal stand, wurde nie gespeichert. Ohne diesen Test prueft nichts,
+// dass processDueNotifications den Voll-Sync ueberhaupt AUFRUFT: die Suite in
+// test-pantry-expiry-reminders.js ruft ihn selbst auf und bliebe gruen, waehrend
+// der Bestand im Betrieb nie meldet.
+//
+// Der Fehler ist hier zusaetzlich still: der Aufruf steht in try/catch, damit
+// eine kaputte Zeile die Zustellung nicht verliert. Genau deshalb muss ein Test
+// die WIRKUNG pruefen und nicht das Ausbleiben eines Fehlers - der Voll-Sync
+// scheiterte in dieser Suite eine Weile an einer unvollstaendigen Fixture, ohne
+// dass ein einziger Haken rot wurde.
+// --------------------------------------------------------------------------
+test('processDueNotifications legt fehlende Vorrats-Erinnerungen nach', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+
+  // Direkt in die Tabelle: die Lage nach einem Update, ohne Router-Schreibweg.
+  db.prepare("INSERT INTO pantry_items (id, name, quantity, expires_on, created_by) VALUES (1, 'Marmelade', 2, '2099-06-01', 1)").run();
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM reminders WHERE entity_type = 'pantry_item'").get().c, 0);
+
+  await processDueNotifications({ database: db, channelStore: store, pushService: { sendPushToUser: async () => 0 }, providers: {}, now: new Date() });
+
+  const reminder = db.prepare("SELECT * FROM reminders WHERE entity_type = 'pantry_item' AND entity_id = 1").get();
+  assert.ok(reminder, 'der Bestand meldet sonst nie - der Lauf legt nichts nach');
+  // Sieben Tage vor dem MHD, dieselbe Schwelle wie der Chip in der Liste.
+  assert.equal(reminder.remind_at, '2099-05-25T09:00');
+});
+
+test('pantry reminders carry the item name and its best-before date as body', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+  store.createChannel({ provider: 'ntfy', name: 'ntfy', enabled: true, config: { baseUrl: 'https://ntfy.test', topic: 'family' }, secrets: {} });
+  // FESTES `now`, UND MHD/remind_at PASSEN EXAKT ZUSAMMEN. Beides ist noetig:
+  // der Voll-Sync raeumt eine Vorwarnung ab, deren Artikel laengst abgelaufen
+  // ist, und er zieht einen abweichenden Termin gerade. Nur wenn
+  // `expires_on - 7 Tage` genau dem gesetzten remind_at entspricht, laesst er
+  // die Zeile in Ruhe - und dann haengt der Test auch an keiner Wanduhr.
+  db.prepare("INSERT INTO pantry_items (id, name, quantity, expires_on, created_by) VALUES (1, 'Joghurt', 2, '2026-08-27', 1)").run();
+  db.prepare("INSERT INTO reminders (id, entity_type, entity_id, remind_at, created_by) VALUES (1, 'pantry_item', 1, ?, 1)")
+    .run('2026-08-20T09:00');
+  const payloads = [];
+  const providers = {
+    ntfy: { id: 'ntfy', send: async ({ payload }) => { payloads.push(payload); return { ok: true, status: 200 }; } },
+  };
+  const pushService = { sendPushToUser: async () => 0 };
+
+  await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date('2026-08-20T10:00:00Z') });
+  assert.equal(payloads.length, 1);
+  // Regression: ohne den pantry_item-Zweig im entity_title-CASE kaeme hier der
+  // Fallback-Body 'Reminder' an - eine Meldung, die nicht sagt, welcher Artikel.
+  assert.equal(payloads[0].body, 'Joghurt - 2026-08-27');
+  // Herkunfts-Regel: der Titel nennt das Modul, und das Ziel fuehrt dorthin -
+  // beides steht in EINEM Eintrag, damit es nicht auseinanderlaufen kann.
+  assert.equal(payloads[0].title, 'Pantry');
+  assert.equal(payloads[0].url, '/pantry');
+});
+
+test('eine Vorrats-Erinnerung ohne Artikel wird abgeraeumt statt inhaltslos zugestellt', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+  store.createChannel({ provider: 'ntfy', name: 'ntfy', enabled: true, config: { baseUrl: 'https://ntfy.test', topic: 'family' }, secrets: {} });
+  // Zeigt auf einen Artikel, den es nicht (mehr) gibt. Der Router raeumt beim
+  // Loeschen auf; eine Zeile, die das umgangen hat, faengt der Voll-Sync ab.
+  db.prepare("INSERT INTO reminders (id, entity_type, entity_id, remind_at, created_by) VALUES (1, 'pantry_item', 99, ?, 1)")
+    .run('2026-06-19T09:59:00.000Z');
+  const payloads = [];
+  const providers = {
+    ntfy: { id: 'ntfy', send: async ({ payload }) => { payloads.push(payload); return { ok: true, status: 200 }; } },
+  };
+  const pushService = { sendPushToUser: async () => 0 };
+
+  await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
+
+  // Vorher waere hier eine Meldung mit dem Ersatztext 'Reminder' rausgegangen -
+  // eine Unterbrechung, die nicht sagen kann, worum es geht.
+  assert.equal(payloads.length, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS c FROM reminders WHERE entity_type = 'pantry_item'").get().c, 0);
 });
 
 test('inventory tracked-date reminders degrade to the bare title without a date', async () => {

@@ -2,7 +2,7 @@
  * Modul: Inventar-Garantiefristen — reine Datumsrechnung
  * Zweck: warranty_end = purchase_date + warranty_months, nie gespeichert,
  *        bei jedem Bedarf neu berechnet (Erinnerungs-Lebenszyklus, ICS-Feed).
- * Abhängigkeiten: keine externen.
+ * Abhängigkeiten: server/utils/reminder-schedule.js.
  *
  * Monats-Addition mit Tages-Klemmung spiegelt server/services/subscriptions.js
  * #addBillingCycle (monthly-Zweig): auf den 1. setzen, Monate addieren, dann auf
@@ -10,6 +10,8 @@
  * der 31. Januar + 1 Monat in den März überlaufen statt auf den 28./29. Februar
  * zu klemmen.
  */
+
+import { reminderDateBefore } from '../utils/reminder-schedule.js';
 
 function dateKey(date) {
   return [
@@ -38,11 +40,11 @@ function warrantyEndDate(purchaseDate, warrantyMonths) {
   return dateKey(date);
 }
 
-/** Erinnerungstermin: warrantyEnd minus offsetDays, fixe Uhrzeit 09:00 (kein TZ-Suffix, wie server/services/subscriptions.js#reminderDate). */
+/** Erinnerungstermin: warrantyEnd minus offsetDays, fixe Uhrzeit 09:00.
+ *  Sprechende Fassade ueber der geteilten Rechnung in
+ *  server/utils/reminder-schedule.js - dort steht auch, warum sie geteilt ist. */
 function reminderDateForWarranty(warrantyEnd, offsetDays = 30) {
-  const date = parseDateKey(warrantyEnd);
-  date.setUTCDate(date.getUTCDate() - Math.max(0, Number(offsetDays) || 0));
-  return `${dateKey(date)}T09:00`;
+  return reminderDateBefore(warrantyEnd, offsetDays);
 }
 
 export { warrantyEndDate, reminderDateForWarranty };

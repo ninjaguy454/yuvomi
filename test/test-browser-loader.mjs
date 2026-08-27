@@ -69,6 +69,7 @@ const STUBS = {
     export const openModal = () => {};
     export const closeModal = () => {};
     export const confirmModal = async () => true;
+    export const confirmOverModal = async () => true;
     export const selectModal = async () => null;
     export const advancedSection = (inner = '') => String(inner);
     export const wireBlurValidation = () => {};

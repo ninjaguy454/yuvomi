@@ -941,7 +941,7 @@ export function openSubscriptionModal(subscription = null) {
             <input id="subscription-logo" type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
           </label>
           <button class="btn btn--secondary subscription-find-logo-btn" type="button" id="subscription-find-logo">
-            <i data-lucide="image-search" aria-hidden="true"></i>${t('subscriptions.findLogo')}
+            <i data-lucide="scan-search" aria-hidden="true"></i>${t('subscriptions.findLogo')}
           </button>
         </div>
         <div class="subscription-form__identity-fields">

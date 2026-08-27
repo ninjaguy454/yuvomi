@@ -9,7 +9,8 @@
  *          - GET / (month-400, category-/account_id-Filter, loan_id-Drilldown)
  *          - POST / (subcategory-400, account-not-found-400, virtuelles Budget)
  *          - PUT /:id (404, subcategory-400, Konto setzen/entfernen, virtuelles
- *            Budget, Loan-Payment-Kopplung: income-Zwang + Rest-Grenze + Sync)
+ *            Budget, Loan-Payment-Kopplung: Richtung setzt das Vorzeichen (#859),
+ *            Rest-Grenze + Sync)
  *          - DELETE /:id (404, Loan-Payment-Cascade + refreshLoanStatus,
  *            Skip-Markierung bei Instanz-Löschung)
  *          - PUT /:id/series (404, not-recurring-400, Parent-Update, Sichtbarkeits-
@@ -296,15 +297,83 @@ test('PUT /:id: Sichtbarkeit umschalten (owner_id bleibt fix)', async () => {
 });
 
 // ── PUT /:id: Loan-Payment-Kopplung ──────────────────────────────────────────────
-test('PUT /:id: verknüpfte Rückzahlung muss Einkommen bleiben (Betrag ≤ 0 → 400)', async () => {
-  const loan = db.prepare(`INSERT INTO budget_loans (title, borrower, total_amount, installment_count, start_month, created_by)
-                           VALUES ('L1','Bo',1000,10,'2033-01',?)`).run(A).lastInsertRowid;
-  const eid = insertEntry({ title: 'pay', amount: 100, category: 'Sonstiges Einkommen', date: '2033-06-01' });
-  db.prepare(`INSERT INTO budget_loan_payments (loan_id, installment_number, amount, paid_date, budget_entry_id, created_by)
-              VALUES (?,1,100,'2033-06-01',?,?)`).run(loan, eid, A);
+
+/**
+ * Legt ein Darlehen samt bezahlter Rate und gekoppeltem Budget-Eintrag an (#638/#859).
+ * Das Vorzeichen des Eintrags folgt der Richtung - genau so, wie der Loans-Router
+ * bucht; die Rate selbst bleibt positiv (CHECK amount > 0).
+ */
+function loanWithPayment({ direction = 'lent', amount = 100, date, total = 1000, currency = null, rate = null } = {}) {
+  const loan = db.prepare(`INSERT INTO budget_loans (title, borrower, total_amount, installment_count, start_month, created_by, direction, currency, exchange_rate)
+                           VALUES ('L','Bo',?,10,'2033-01',?,?,?,?)`)
+    .run(total, A, direction, currency, rate ?? 1).lastInsertRowid;
+  const borrowed = direction === 'borrowed';
+  const eid = insertEntry({
+    title: 'pay',
+    amount: (borrowed ? -1 : 1) * amount,
+    category: borrowed ? 'financial_other' : 'Sonstiges Einkommen',
+    subcategory: borrowed ? 'loans_interest' : '',
+    date,
+  });
+  const pid = db.prepare(`INSERT INTO budget_loan_payments (loan_id, installment_number, amount, paid_date, budget_entry_id, created_by)
+              VALUES (?,1,?,?,?,?)`).run(loan, amount, date, eid, A).lastInsertRowid;
+  return { loan, eid, pid };
+}
+
+test('PUT /:id: Rate eines aufgenommenen Kredits bleibt korrigierbar (#859)', async () => {
+  // Der gemeldete Bug: Seit die Richtung existiert (#638), bucht eine Rate auf einen
+  // aufgenommenen Kredit als Ausgabe - also negativ. Die alte Prüfung "muss Einkommen
+  // bleiben" wies damit jede Korrektur ab, die das Edit-Modal überhaupt senden kann.
+  const { eid, pid } = loanWithPayment({ direction: 'borrowed', date: '2033-06-01' });
   const r = await call('PUT', `/${eid}`, { body: { amount: -50 } });
+  assert.equal(r.status, 200, 'Korrektur wird angenommen');
+  assert.equal(r.body.data.amount, -50, 'Eintrag bleibt eine Ausgabe');
+  assert.equal(db.prepare('SELECT amount FROM budget_loan_payments WHERE id = ?').get(pid).amount, 50,
+    'die Rate selbst bleibt vorzeichenlos (CHECK amount > 0)');
+});
+
+test('PUT /:id: das Vorzeichen gehört dem Darlehen, nicht dem Request', async () => {
+  // Ein Client, der den Typ-Umschalter umgeht, darf die Buchungsrichtung nicht kippen -
+  // daran hängen Monatsbilanz, Statistik und Kontosaldo.
+  const borrowedCase = loanWithPayment({ direction: 'borrowed', date: '2033-06-02' });
+  const up = await call('PUT', `/${borrowedCase.eid}`, { body: { amount: 70 } });
+  assert.equal(up.status, 200);
+  assert.equal(up.body.data.amount, -70, 'positiv gesendet, als Ausgabe gebucht');
+
+  const lentCase = loanWithPayment({ direction: 'lent', date: '2033-06-03' });
+  const down = await call('PUT', `/${lentCase.eid}`, { body: { amount: -70 } });
+  assert.equal(down.status, 200);
+  assert.equal(down.body.data.amount, 70, 'negativ gesendet, als Einnahme gebucht');
+});
+
+test('PUT /:id: Betrag null wird abgewiesen, in beide Richtungen', async () => {
+  // Vorher deckte die income-Prüfung das mit ab. Fällt sie weg, muss die Null
+  // eigens abgefangen werden - sonst verletzt sie CHECK(amount > 0) als 500er.
+  for (const [direction, day] of [['borrowed', '2033-06-04'], ['lent', '2033-06-05']]) {
+    const { eid } = loanWithPayment({ direction, date: day });
+    const r = await call('PUT', `/${eid}`, { body: { amount: 0 } });
+    assert.equal(r.status, 400, `${direction}: 0 abgewiesen`);
+    assert.match(r.body.error, /greater than zero/i);
+  }
+});
+
+test('PUT /:id: die Rest-Grenze greift auch bei einem aufgenommenen Kredit', async () => {
+  // Der Restschuld-Vergleich lief gegen den vorzeichenbehafteten Betrag: bei einer
+  // Ausgabe war er damit immer erfüllt und die Grenze wirkungslos.
+  const { eid } = loanWithPayment({ direction: 'borrowed', date: '2033-06-06' });
+  const r = await call('PUT', `/${eid}`, { body: { amount: -5000 } });
   assert.equal(r.status, 400);
-  assert.match(r.body.error, /income/i);
+  assert.match(r.body.error, /remaining loan/i);
+});
+
+test('PUT /:id: aufgenommener Kredit in Fremdwährung - Kurs und Vorzeichen greifen zusammen', async () => {
+  // 1 USD = 0,50 EUR. 100 EUR Ausgabe entsprechen 200 USD Rate.
+  const { eid, pid } = loanWithPayment({ direction: 'borrowed', date: '2033-06-07', currency: 'USD', rate: 0.5 });
+  const r = await call('PUT', `/${eid}`, { body: { amount: -100 } });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.data.amount, -100, 'Eintrag bleibt eine Ausgabe in Budget-Währung');
+  assert.equal(db.prepare('SELECT amount FROM budget_loan_payments WHERE id = ?').get(pid).amount, 200,
+    '100 EUR / 0,50 = 200 USD, positiv geführt');
 });
 
 test('PUT /:id: Rückzahlung über dem Restbetrag → 400', async () => {

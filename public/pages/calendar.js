@@ -81,6 +81,54 @@ const EVENT_COLOR_NAMES = () => ({
   '#279EA4': t('calendar.colorCyan'),
 });
 
+/**
+ * Hex-Vergleich ohne Ruecksicht auf Gross-/Kleinschreibung. Die Palette steht
+ * hier in Grossbuchstaben, ein CalDAV-Server schickt `#34c759` genauso gern -
+ * derselbe Farbwert, und ein `===` haelt die beiden fuer verschieden.
+ */
+const sameColor = (a, b) =>
+  typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+
+/**
+ * Die Farben, die der Picker eines Termins zeigt.
+ *
+ * Ein Termin traegt nicht zwangslaeufig eine Farbe AUS DIESER PALETTE. Sie kann
+ * als RFC-7986-`COLOR` von einem CalDAV-Server kommen, sie kann die Avatar-Farbe
+ * einer Person sein (deren Palette teilt mit dieser hier keinen einzigen Wert)
+ * oder schlicht das alte `#007AFF` aus der Zeit vor der OKLCH-Palette.
+ *
+ * Ohne einen eigenen Swatch dafuer stand der Picker leer da, obwohl der Termin
+ * eine Farbe trug - und weil der Speicherpfad auf die erste Palettenfarbe
+ * zurueckfiel, schrieb der naechste Klick auf "Speichern" sie darueber. Die
+ * Farbe wechselte also genau beim Bearbeiten, ohne dass jemand sie angefasst
+ * hatte (#856).
+ */
+// Spiegelt COLOR_RE aus server/middleware/validate.js. Die Route prueft das
+// bereits, aber die Sync-Dienste schreiben ihre Farben direkt in die Tabelle -
+// was von dort kommt, hat diese Pruefung nie gesehen. Und der Wert landet gleich
+// in einem style-Attribut, wo esc() zwar das Ausbrechen verhindert, nicht aber
+// eine zweite CSS-Deklaration dahinter.
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+function pickerColors(event) {
+  const own = event?.color;
+  if (!own || !HEX_COLOR_RE.test(own)) return EVENT_COLORS;
+  if (EVENT_COLORS.some((c) => sameColor(c, own))) return EVENT_COLORS;
+  return [own, ...EVENT_COLORS];
+}
+
+/**
+ * Welche Farbe ein Speichern schreibt.
+ *
+ * Die Regel dahinter ist eine einzige: ein Speichern, bei dem niemand die Farbe
+ * angefasst hat, darf sie nicht veraendern. Steht kein Swatch auf aktiv, gilt
+ * also die Farbe, die der Termin schon traegt - erst wenn auch die fehlt (neuer
+ * Termin), die erste der Palette.
+ */
+function colorToSave(activeSwatchColor, event) {
+  return activeSwatchColor || event?.color || EVENT_COLORS[0];
+}
+
 const EVENT_ICON_ALIASES = {
   drill: 'tooth',
 };
@@ -2435,6 +2483,10 @@ export const __test = {
   clickedTime,
   hourOffset,
   monthDayClasses,
+  pickerColors,
+  colorToSave,
+  sameColor,
+  EVENT_COLORS,
 };
 
 function renderAgendaEvent(ev, dayStr) {
@@ -3046,28 +3098,13 @@ function wireEventForm(panel, { mode, event = null, reminder = null }) {
   bindUserMultiSelect(panel, 'cal_assigned');
   wireVisibilityWarning(panel, '#modal-visibility', 'cal_assigned', '#modal-visibility-warning');
 
-  // Color-Picker ausgrauen wenn Assignees gesetzt sind (Avatar-Farbe hat Vorrang)
-  function syncColorPickerState() {
-    const hasAssignees = getSelectedUserIds(panel, 'cal_assigned').length > 0;
-    const group  = panel.querySelector('.js-color-picker-group');
-    const hint   = panel.querySelector('#color-picker-assignee-hint');
-    const picker = panel.querySelector('#event-color-picker');
-    if (group)  group.classList.toggle('color-picker--disabled', hasAssignees);
-    if (hint)   hint.hidden = !hasAssignees;
-    if (picker) {
-      picker.setAttribute('aria-disabled', hasAssignees ? 'true' : 'false');
-      picker.querySelectorAll('.color-swatch').forEach((s) => {
-        if (hasAssignees) {
-          s.setAttribute('tabindex', '-1');
-        } else {
-          s.setAttribute('tabindex', s.classList.contains('color-swatch--active') ? '0' : '-1');
-        }
-      });
-    }
-  }
-  const msWidget = panel.querySelector('.user-ms[data-ms-name="cal_assigned"]');
-  msWidget?.addEventListener('change', syncColorPickerState);
-  syncColorPickerState();
+  // Der Farbwaehler war ausgegraut, sobald jemand zugewiesen war, mit dem
+  // Hinweis, die Farbe der Person schlage sie ohnehin. Das galt bis v2.35.0.
+  // Seit #815 steht die Terminfarbe in resolveEventColor VORN, und weil
+  // calendar_events.color NOT NULL ist und auch den Leerstring ablehnt, ist sie
+  // immer gesetzt: die Zuweisung faerbt seither nie mehr. Die Sperre nahm dem
+  // Nutzer also eine Wahl ab, um ein Versprechen zu halten, das der Code nicht
+  // mehr gab. Wer der Termin ist, sagt weiterhin der Avatar-Stack daneben.
 
   const selectedColor = isEdit ? (event?.color || EVENT_COLORS[0]) : EVENT_COLORS[0];
 
@@ -3083,7 +3120,7 @@ function wireEventForm(panel, { mode, event = null, reminder = null }) {
     target.setAttribute('tabindex', '0');
   }
   panel.querySelectorAll('.color-swatch').forEach((sw) => {
-    if (sw.dataset.color === selectedColor) selectSwatch(sw);
+    if (sameColor(sw.dataset.color, selectedColor)) selectSwatch(sw);
     sw.addEventListener('click', () => { selectSwatch(sw); sw.focus(); });
     sw.addEventListener('keydown', (e) => {
       const swatches = [...panel.querySelectorAll('.color-swatch')];
@@ -3368,18 +3405,17 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
     && (!!event.description || hasAttachment(event));
 
   const advancedFieldsHtml = `
-    <div class="form-group js-color-picker-group">
+    <div class="form-group">
       <label class="form-label" id="event-color-label">${t('calendar.colorLabel')}</label>
       <div class="color-picker" id="event-color-picker" role="radiogroup" aria-labelledby="event-color-label">
-        ${EVENT_COLORS.map((c, i) => `
-          <div class="color-swatch" data-color="${c}" style="background-color:${c};"
+        ${pickerColors(isEdit ? event : null).map((c, i) => `
+          <div class="color-swatch" data-color="${esc(c)}" style="background-color:${esc(c)};"
                role="radio"
                tabindex="${i === 0 ? '0' : '-1'}"
                aria-checked="false"
-               aria-label="${EVENT_COLOR_NAMES()[c] ?? c}"></div>
+               aria-label="${esc(EVENT_COLOR_NAMES()[c] ?? t('calendar.colorCurrent'))}"></div>
         `).join('')}
       </div>
-      <p class="form-hint color-picker__assignee-hint" id="color-picker-assignee-hint" hidden>${t('calendar.colorOverriddenByAssignee')}</p>
     </div>
 
     <div class="form-group">
@@ -3570,7 +3606,7 @@ async function saveEvent(overlay, mode, event, existingReminder = null, attachme
   }
 
   const allday  = overlay.querySelector('#modal-allday').checked;
-  const color   = overlay.querySelector('.color-swatch--active')?.dataset.color || EVENT_COLORS[0];
+  const color   = colorToSave(overlay.querySelector('.color-swatch--active')?.dataset.color, event);
   const icon    = eventIconName(overlay.querySelector('#modal-icon')?.value);
   const location    = overlay.querySelector('#modal-location').value.trim() || null;
   const assigned_to = getSelectedUserIds(overlay, 'cal_assigned');

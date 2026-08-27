@@ -1,0 +1,68 @@
+/**
+ * Komponente: Markdown-Formatierungsleiste (.md-toolbar)
+ * Die Leiste ueber jedem Textfeld, dessen Inhalt als Markdown gelesen wird -
+ * Notizen und Aufgaben-Notizen (#731). Global eingebunden wie die anderen
+ * geteilten Komponenten (.sub-tab, .list-row), weil sie zu keiner Seite
+ * gehoert; Verhalten und Beschriftungen in /utils/markdown-toolbar.js.
+ */
+
+.md-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1.5px solid var(--color-border);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background-color: var(--color-surface-2);
+}
+
+.md-toolbar + .form-input,
+.md-toolbar + .input {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+.md-toolbar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Nicht schrumpfen: bei 12 Buttons in einem ~340px-Modal bricht die Leiste
+   * jetzt um (flex-wrap), statt die Buttons unter die Fingergröße zu quetschen. */
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+  font-size: var(--text-sm);
+  padding: 0;
+}
+
+/* Touch: volle 44px-Targets (iOS-Minimum, --target-base) */
+@media (pointer: coarse) {
+  .md-toolbar__btn {
+    width: var(--target-base);
+    height: var(--target-base);
+  }
+}
+
+.md-toolbar__btn:hover {
+  background-color: var(--color-accent-light);
+  color: var(--color-accent);
+}
+
+.md-toolbar__sep {
+  width: 1px;
+  background-color: var(--color-border);
+  margin: var(--space-1) var(--space-1);
+  cursor: default;
+}
+
+.md-toolbar__sep:hover {
+  background-color: var(--color-border);
+  color: var(--color-text-secondary);
+}

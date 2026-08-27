@@ -11,6 +11,7 @@ import { hydrateBirthday } from '../services/birthdays.js';
 import { getUpcomingEvents } from '../services/calendar-events.js';
 import { taskScopeWhere, taskCategoryWhere, categoryBindings, normalizeCategoryFilter } from '../services/task-scope.js';
 import { getCountdowns } from '../services/countdowns.js';
+import { listQuickLinksFor } from './quick-links.js';
 import { visibilityWhere } from '../services/visibility.js';
 import { resolveBudgetMode } from '../services/budget-visibility.js';
 import { deniedModules } from '../permissions.js';
@@ -121,6 +122,7 @@ const router = express.Router();
  *   memberTodayTasks: {user_id, open_count}[], // Heute fällige/überfällige offene Aufgaben je Mitglied
  *   tasksDoneToday: number,            // Heute fällige, bereits erledigte Aufgaben
  *   countdowns:     Countdown[]        // Als Countdown markierte Termine + Aufgaben (#647)
+ *   quicklinks:      QuickLink[]        // Haushaltslinks der Kachelreihe (#469)
  * }
  */
 router.get('/', (req, res) => {
@@ -439,6 +441,22 @@ router.get('/', (req, res) => {
     log.error('countdowns error:', err.message);
     result.countdowns = [];
     result.countdownTotal = 0;
+  }
+
+  // Schnellzugriffe (#469): die Kachelreihe kommt mit der Uebersichts-Antwort
+  // mit, statt einen zweiten Request beim Seitenaufbau zu kosten - es ist eine
+  // kurze Liste, die genau hier gebraucht wird.
+  //
+  // KEINE ZEILE IN DENIED_PAYLOAD, und das ist kein Vergessen: ein Schnellzugriff
+  // gehoert keinem Modul (siehe PERMISSION_WIDGETS). Die Achse, die er hat, ist
+  // geteilt gegen privat, und die setzt `listQuickLinksFor` ueber die anfragende
+  // Person durch - eine fremde private Kachel liegt also auch dann nicht auf der
+  // Leitung, wenn der Browser sie nie zeichnen wuerde.
+  try {
+    result.quicklinks = listQuickLinksFor(userId, req.authRole === 'admin');
+  } catch (err) {
+    log.error('quick links error:', err.message);
+    result.quicklinks = [];
   }
 
   if (allows('budget')) try {

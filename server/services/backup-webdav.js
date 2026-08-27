@@ -35,6 +35,23 @@ function isBackupFile(name) {
     && name.endsWith(BACKUP_FILE_SUFFIX);
 }
 
+// backupFileName() in backup-scheduler.js baut den Namen aus
+// `new Date().toISOString().replace(/[:.]/g, '-')`, also
+// `yuvomi-backup-2026-08-25T05-31-04-624Z.db`. Der Stempel im Namen ist die
+// verlaesslichste Altersquelle, die es gibt: er kommt von uns, ueberlebt jedes
+// Kopieren und haengt an keiner Server-Eigenheit. `getlastmodified` ist nur der
+// Rueckfall fuer Dateien, deren Namen wir nicht gebaut haben.
+const BACKUP_NAME_STAMP_RE =
+  /^(?:yuvomi|oikos)-backup-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z\.db$/;
+
+/** Zeitpunkt (ms) aus dem Dateinamen, oder null wenn der Name keinen traegt. */
+function timestampFromName(name) {
+  const m = BACKUP_NAME_STAMP_RE.exec(name);
+  if (!m) return null;
+  const ms = Date.parse(`${m[1]}T${m[2]}:${m[3]}:${m[4]}.${m[5]}Z`);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 // ─── DB-Helpers ───────────────────────────────────────────────────────────────
 
 function cfgGet(key) {
@@ -172,31 +189,83 @@ async function davFetch(method, url, { username, password, headers = {}, body } 
   });
 }
 
+// Das Namespace-Praefix in einer WebDAV-Antwort ist frei waehlbar, und Server
+// nutzen das auch: Nextcloud liefert `<d:getlastmodified>`, Apache mod_dav -
+// und damit der WebDAV-Server einer Synology - liefert Live-Properties unter
+// einem eigenen Praefix als `<lp1:getlastmodified>`. Ein Parser, der auf `D:`
+// oder `d:` besteht, liest bei mod_dav KEINEN Zeitstempel; genau daran wurde
+// die Rotation blind und loeschte das frisch hochgeladene Backup (#853).
+// Darum: Praefix beliebig, auch gar keins.
+const NS = '(?:[A-Za-z0-9._-]+:)?';
+const RESPONSE_RE = new RegExp(`<${NS}response[^>]*>([\\s\\S]*?)</${NS}response>`, 'gi');
+const COLLECTION_RE = new RegExp(`<${NS}collection\\s*/?>`, 'i');
+const HREF_RE = new RegExp(`<${NS}href[^>]*>\\s*([\\s\\S]*?)\\s*</${NS}href>`, 'i');
+const LASTMOD_RE = new RegExp(`<${NS}getlastmodified[^>]*>\\s*([\\s\\S]*?)\\s*</${NS}getlastmodified>`, 'i');
+
+/**
+ * Ein href darf laut RFC 4918 relativ ODER absolut sein. joinUrl() haengt aber
+ * an die Basis-URL an - eine absolute Antwort ergaebe `https://host/https://…`.
+ * Also hier einmal auf den Pfad normalisieren, damit der Rest des Moduls es mit
+ * nur einer Form zu tun hat.
+ */
+function hrefToPath(href) {
+  if (/^https?:\/\//i.test(href)) {
+    try { return new URL(href).pathname; } catch { /* fällt unten durch */ }
+  }
+  return href;
+}
+
+/**
+ * Sortierschluessel: der Zeitpunkt aus dem Dateinamen, sonst `getlastmodified`,
+ * sonst null. Bewusst KEIN Ersatzwert "jetzt" - ein erfundenes Datum ist
+ * schlimmer als ein fehlendes, weil es die Sortierung still in eine Gleichheit
+ * kippt statt sie erkennbar scheitern zu lassen.
+ */
+function backupAge(entry) {
+  const fromName = timestampFromName(entry.filename);
+  if (fromName !== null) return fromName;
+  if (!entry.lastmod) return null;
+  const parsed = Date.parse(entry.lastmod);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/** Neueste zuerst; undatierte ans Ende, Gleichstand ueber den Namen. */
+function byNewestFirst(a, b) {
+  const ka = backupAge(a);
+  const kb = backupAge(b);
+  if (ka !== null && kb !== null && ka !== kb) return kb - ka;
+  // Eine Datei ohne erkennbares Alter darf keine datierte verdraengen: unser
+  // Scheduler baut den Stempel immer in den Namen, undatiert ist also fremd.
+  if ((ka === null) !== (kb === null)) return ka === null ? 1 : -1;
+  // Letzter Anker, damit die Reihenfolge nie von der Server-Reihenfolge abhaengt.
+  return b.filename.localeCompare(a.filename);
+}
+
 /**
  * Parse a WebDAV PROPFIND Multi-Status XML response.
  * Returns only plain files whose basename matches the backup pattern.
  */
 function parsePropfindXml(xml) {
   const results = [];
-  const responseRe = /<[Dd](?:av)?:response[^>]*>([\s\S]*?)<\/[Dd](?:av)?:response>/g;
+  RESPONSE_RE.lastIndex = 0;
   let m;
-  while ((m = responseRe.exec(xml)) !== null) {
+  while ((m = RESPONSE_RE.exec(xml)) !== null) {
     const block = m[1];
-    if (/<[Dd](?:av)?:collection\s*\/?>/.test(block)) continue; // skip directories
+    if (COLLECTION_RE.test(block)) continue; // skip directories
 
-    const hrefMatch    = block.match(/<[Dd](?:av)?:href[^>]*>\s*(.*?)\s*<\/[Dd](?:av)?:href>/);
-    const lastmodMatch = block.match(/<[Dd](?:av)?:getlastmodified[^>]*>\s*(.*?)\s*<\/[Dd](?:av)?:getlastmodified>/);
+    const hrefMatch    = block.match(HREF_RE);
+    const lastmodMatch = block.match(LASTMOD_RE);
     if (!hrefMatch) continue;
 
-    const href     = decodeURIComponent(hrefMatch[1].trim());
+    const href     = hrefToPath(decodeURIComponent(hrefMatch[1].trim()));
     const basename = href.split('/').filter(Boolean).pop() ?? '';
-    const lastmod  = lastmodMatch ? lastmodMatch[1].trim() : new Date().toUTCString();
+    const lastmod  = lastmodMatch ? lastmodMatch[1].trim() : null;
 
     if (isBackupFile(basename)) {
       results.push({ filename: basename, lastmod, remotePath: href });
     }
   }
-  return results.sort((a, b) => new Date(b.lastmod) - new Date(a.lastmod));
+  return results.sort(byNewestFirst);
 }
 
 /**
@@ -279,7 +348,7 @@ export async function uploadBackup(localFilePath) {
     cfgSet('webdav_backup_last_upload', new Date().toISOString());
     cfgDelete('webdav_backup_last_error');
 
-    await rotateRemoteBackups(cfg);
+    await rotateRemoteBackups(cfg, { protect: fileName });
   } catch (err) {
     log.error('WebDAV upload failed:', err);
     cfgSet('webdav_backup_last_error', err.message ?? String(err));
@@ -290,14 +359,23 @@ export async function uploadBackup(localFilePath) {
 /**
  * Delete oldest remote backups, keeping only the last cfg.keep files.
  * @param {object} [existingCfg]  Pass already-loaded config to avoid a second read
+ * @param {{ protect?: string }} [opts]  Dateiname, der nie rotiert werden darf
  */
-export async function rotateRemoteBackups(existingCfg) {
+export async function rotateRemoteBackups(existingCfg, opts = {}) {
   const cfg = existingCfg ?? getConfig();
+  const { protect } = opts;
   try {
     const files = await listRemoteBackups(cfg);
     if (files.length <= cfg.keep) return;
 
-    for (const f of files.slice(cfg.keep)) {
+    // Zweiter Boden unter der Sortierung: was gerade hochgeladen wurde, ist per
+    // Definition das juengste Backup und darf denselben Lauf nicht mehr
+    // verlassen. Sortiert die Rotation je wieder falsch - weil ein Server ein
+    // Feld anders schreibt, als wir es erwarten -, kostet das dann einen
+    // ueberzaehligen alten Stand und nicht den einzigen frischen (#853).
+    const candidates = files.slice(cfg.keep).filter((f) => f.filename !== protect);
+
+    for (const f of candidates) {
       try {
         const delUrl = joinUrl(cfg.url, f.remotePath);
         const res    = await davFetch('DELETE', delUrl, { username: cfg.username, password: cfg.password });

@@ -6173,6 +6173,172 @@ const MIGRATIONS = [
   },
   {
     version: 160,
+    description: 'Quick links: household links as a tile row on the overview (#469)',
+    up: `
+      -- EINE KACHELREIHE, KEIN MODUL - und deshalb auch keine zweite Tabelle
+      -- fuer Sammlungen, Tags oder Ordner. Der Thread zu #469 lief ueber beide
+      -- Ambitionen: Schnellzugriff auf die anderen Dienste im Haus (#469) und
+      -- eine Lesezeichen-Bibliothek (#759). Die zweite ist zugunsten der ersten
+      -- geschlossen worden, weil vier Melder dasselbe wollten: Name, Adresse,
+      -- Bild, und der Weg dorthin von der Startseite aus.
+      --
+      -- Wer spaeter doch eine Bibliothek will, findet hier die Zeilen, die er
+      -- braucht - eine Sammlung waere eine Spalte, kein Umbau.
+      CREATE TABLE IF NOT EXISTS quick_links (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT    NOT NULL,
+        url         TEXT    NOT NULL,
+
+        -- WARUM EIN BILD UND KEIN FAVICON. Ein Favicon zu holen hiesse, dass
+        -- der Haushalt bei jedem Aufbau der Startseite jeden verlinkten Host
+        -- anspricht - also genau der leise Aussenverkehr, den diese App nicht
+        -- macht. Ein hochgeladenes Bild bleibt hier liegen und spricht mit
+        -- niemandem. Es steht als Data-URL in der Zeile, wie users.avatar_data
+        -- schon seit v58: ein zweiter Dateispeicher fuer ein paar Kilobyte
+        -- Kachelbild waere Betriebsaufwand ohne Gegenwert.
+        icon_data   TEXT,
+
+        -- Ohne Bild traegt die Kachel den Anfangsbuchstaben ihres Namens auf
+        -- dieser Farbe - dieselbe Antwort, die ein Mitglied ohne Foto bekommt.
+        -- Ein generisches Symbol waere die schlechtere: zwoelf gleiche Weltkugeln
+        -- unterscheiden nichts, "J" auf Violett schon.
+        color       TEXT,
+
+        -- all | private. Die dritte Stufe der Aufgaben und Termine
+        -- ("assignees") fehlt hier mit Absicht: ein Link wird niemandem
+        -- zugewiesen, und eine Stufe, die nichts bedeuten kann, waere ein
+        -- Versprechen, das die Oberflaeche nicht einloest.
+        visibility  TEXT    NOT NULL DEFAULT 'all',
+
+        created_by  INTEGER REFERENCES users(id),
+
+        -- Die Reihenfolge ist Haushaltssache und wird gezogen, nicht sortiert:
+        -- welcher Dienst zuerst steht, weiss nur die Familie.
+        position    INTEGER NOT NULL DEFAULT 0,
+
+        created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      -- Der Lesepfad sortiert immer nach position und filtert ueber visibility
+      -- plus created_by; das ist der eine Index, den er braucht.
+      CREATE INDEX IF NOT EXISTS idx_quick_links_position ON quick_links(position);
+    `,
+  },
+  {
+    version: 161,
+    description: 'Task completions: erledigen wird ein Ereignis, nicht nur ein Zustand (#791)',
+    up: `
+      -- WARUM EINE TABELLE UND NICHT ZWEI SPALTEN. Eine Aufgabe traegt heute
+      -- 'done' - und 'done' ist ein Zustand, kein Ereignis. Es beantwortet
+      -- "steht das noch an", aber keine der vier Fragen aus #791: was habe ich
+      -- heute erledigt, was gestern, wann war eine wiederkehrende Sache zuletzt
+      -- dran, und wer hat sie gemacht.
+      --
+      -- Zwei Spalten (completed_at, completed_by) am Datensatz waeren die
+      -- billigere Antwort und die falsche: eine wiederkehrende Aufgabe legt
+      -- beim Abhaken eine Folgeinstanz an (recurrence_origin_id), und die
+      -- Historie einer Serie verteilt sich damit ueber eine Kette von Zeilen,
+      -- deren Glieder einzeln geloescht werden koennen. Genau die Frage "wann
+      -- war das zuletzt dran" haengt an dieser Kette.
+      --
+      -- WAS HIER NICHT STEHT: kein Titel, keine Kategorie, kein Name. Ein
+      -- Schnappschuss waere eine zweite Wahrheit neben der Aufgabe - und die
+      -- gefaehrliche davon, weil auch die SICHTBARKEIT eine ist. Wer eine
+      -- Aufgabe nachtraeglich auf privat stellt, hat sie versteckt; ein
+      -- Verlaufseintrag, der seine eigene Kopie der alten Stufe mitbringt,
+      -- verriete sie weiter. Der Lesepfad joint deshalb immer die Aufgabe und
+      -- haengt dasselbe visibilityWhere an wie jede andere Aufgabenliste.
+      --
+      -- DER PREIS, bewusst bezahlt: ON DELETE CASCADE. Wer eine Aufgabe
+      -- loescht, loescht ihre Erledigungen mit. Das ist die Kehrseite der einen
+      -- Wahrheit, und sie ist die richtige Seite - eine Zeile, die ueberlebt,
+      -- was sie beschreibt, muesste ihre eigene Antwort auf "wer darf das
+      -- sehen" mitbringen.
+      CREATE TABLE IF NOT EXISTS task_completions (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+
+        -- Die Wurzel der Wiederholungskette, sonst die Aufgabe selbst. Einmal
+        -- beim Schreiben ermittelt statt bei jedem Lesen: der Wert ist ab dann
+        -- stabil, auch wenn spaeter ein Glied der Kette wegfaellt und die
+        -- rekursive Suche eine andere Wurzel faende. Kein Fremdschluessel - die
+        -- Wurzel darf verschwinden, ohne die spaeteren Eintraege mitzureissen.
+        series_id    INTEGER NOT NULL,
+
+        -- WER ABGEHAKT HAT, nicht wer zustaendig war. Der reward_ledger
+        -- entscheidet das bewusst anders (rewardTargets: die Zustaendigen, sonst
+        -- die handelnde Person), weil Punkte ein Verdienst sind und sich teilen
+        -- lassen. Eine Erledigung ist ein Vorgang: sie passiert einmal, und sie
+        -- passiert durch genau einen Klick. SET NULL statt CASCADE, damit das
+        -- Ausscheiden eines Mitglieds nicht den Verlauf des Haushalts loescht.
+        user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+
+        completed_at TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      -- Eine Aufgabe ist einmal erledigt. Das Zuruecknehmen loescht die Zeile,
+      -- statt eine Gegenbuchung zu schreiben - dasselbe Muster wie
+      -- reverseTaskEarnings, und aus demselben Grund: ein Haken, der dreimal
+      -- hin und her geht, ist kein Verlauf, sondern Rauschen. Der Index ist
+      -- zugleich das Idempotenz-Netz, falls derselbe Statuswechsel zweimal
+      -- ankommt.
+      CREATE UNIQUE INDEX IF NOT EXISTS uniq_task_completion ON task_completions(task_id);
+
+      -- Der Verlauf liest absteigend nach Zeit; die Serienansicht liest eine
+      -- Serie, ebenfalls nach Zeit. Zwei Lesepfade, zwei Indizes.
+      CREATE INDEX IF NOT EXISTS idx_task_completions_at     ON task_completions(completed_at);
+      CREATE INDEX IF NOT EXISTS idx_task_completions_series ON task_completions(series_id, completed_at);
+    `,
+  },
+  {
+    version: 162,
+    description: 'Pantry: widen reminders for pantry_item so a best-before date can notify (#811)',
+    foreignKeysOff: true,
+    up: `
+      -- DIE VIERTE ERWEITERUNG DERSELBEN SPALTE, und deshalb keine neue Mechanik.
+      -- entity_type ist gewachsen: ('task','event') -> +'subscription' (v137)
+      -- -> +'inventory_item','inventory_tracked_date' (v141). Ein Vorratsartikel
+      -- traegt sein Mindesthaltbarkeitsdatum seit #596; gefehlt hat nur der
+      -- Eintrag in dieser Liste.
+      --
+      -- KEINE eigene Tabelle und KEIN Vorlauf je Artikel: inventory_item_dates
+      -- traegt reminder_offset_days, weil eine Frist dort einzeln gepflegt wird
+      -- (TUEV, Service - eine Handvoll je Haushalt). Ein Vorrat ist Massenware;
+      -- ein Feld, das niemand pro Joghurt pflegt, waere ein halb gefuelltes
+      -- Feld. Der Vorlauf ist stattdessen die Schwelle, die der Haushalt schon
+      -- kennt: EXPIRY_SOON_DAYS aus public/utils/pantry-status.js, dieselbe
+      -- Zahl, die den Chip "laeuft bald ab" gelb faerbt. Die Meldung sagt genau
+      -- diesen Zustandswechsel an; zwei Zahlen dafuer waeren zwei Wahrheiten.
+      --
+      -- foreignKeysOff bleibt Pflicht - gleicher Grund wie v137 und v141:
+      -- notification_deliveries.reminder_id haengt mit ON DELETE CASCADE an
+      -- dieser Tabelle und wuerde beim DROP TABLE leerlaufen.
+      CREATE TABLE reminders_new (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT    NOT NULL CHECK(entity_type IN ('task', 'event', 'subscription', 'inventory_item', 'inventory_tracked_date', 'pantry_item')),
+        entity_id   INTEGER NOT NULL,
+        remind_at   TEXT    NOT NULL,
+        dismissed   INTEGER NOT NULL DEFAULT 0,
+        created_by  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        pushed_at   TEXT
+      );
+      INSERT INTO reminders_new (id, entity_type, entity_id, remind_at, dismissed, created_by, created_at, pushed_at)
+        SELECT id, entity_type, entity_id, remind_at, dismissed, created_by, created_at, pushed_at FROM reminders;
+      DROP TABLE reminders;
+      ALTER TABLE reminders_new RENAME TO reminders;
+      CREATE INDEX idx_reminders_entity ON reminders(entity_type, entity_id);
+      CREATE INDEX idx_reminders_remind ON reminders(remind_at);
+      CREATE INDEX idx_reminders_user ON reminders(created_by);
+    `,
+  },
+];
+
+// Fork-only migrations use a separate namespace so upstream can keep its canonical sequence.
+const FORK_MIGRATIONS = [
+  {
+    version: 10000,
     description: 'Tasks: ordered round-robin assignment for recurring tasks',
     up: `
       ALTER TABLE tasks ADD COLUMN assignment_mode TEXT NOT NULL DEFAULT 'fixed'
@@ -6190,7 +6356,7 @@ const MIGRATIONS = [
     `,
   },
   {
-    version: 161,
+    version: 10001,
     description: 'Tasks: synchronized rotation groups for recurring round-robin cohorts',
     up: `
       ALTER TABLE tasks ADD COLUMN rotation_group TEXT;
@@ -6202,7 +6368,7 @@ const MIGRATIONS = [
     `,
   },
   {
-    version: 162,
+    version: 10002,
     description: 'Household automation: skills, activity templates, workflows and Quick Add',
     up: `
       CREATE TABLE IF NOT EXISTS skills (
@@ -6336,7 +6502,7 @@ const MIGRATIONS = [
     `,
   },
   {
-    version: 163,
+    version: 10003,
     description: 'Tasks: bind scheduled and recurring work to Activity Templates',
     up: `
       CREATE TABLE IF NOT EXISTS task_activity_bindings (
@@ -6363,6 +6529,34 @@ const MIGRATIONS = [
   },
 ];
 
+const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
+
+const FORK_MIGRATION_REMAPS = [
+  [160, 10000, 'Tasks: ordered round-robin assignment for recurring tasks'],
+  [161, 10001, 'Tasks: synchronized rotation groups for recurring round-robin cohorts'],
+  [162, 10002, 'Household automation: skills, activity templates, workflows and Quick Add'],
+  [163, 10003, 'Tasks: bind scheduled and recurring work to Activity Templates'],
+];
+
+function remapForkMigrationVersions(database) {
+  const read = database.prepare('SELECT description FROM schema_migrations WHERE version = ?');
+  const move = database.prepare('UPDATE schema_migrations SET version = ? WHERE version = ? AND description = ?');
+  const remove = database.prepare('DELETE FROM schema_migrations WHERE version = ? AND description = ?');
+  database.transaction(() => {
+    for (const [oldVersion, newVersion, description] of FORK_MIGRATION_REMAPS) {
+      const oldRow = read.get(oldVersion);
+      if (oldRow?.description !== description) continue;
+      const newRow = read.get(newVersion);
+      if (newRow && newRow.description !== description) {
+        throw new Error(`[DB] Fork migration remap collision at version ${newVersion}: ${newRow.description}`);
+      }
+      if (newRow) remove.run(oldVersion, description);
+      else move.run(newVersion, oldVersion, description);
+    }
+  })();
+}
+
+
 /**
  * Führt alle ausstehenden Migrations in einer Transaktion aus.
  */
@@ -6376,11 +6570,13 @@ function migrate() {
     );
   `);
 
+  remapForkMigrationVersions(db);
+
   const applied = new Set(
     db.prepare('SELECT version FROM schema_migrations').all().map((r) => r.version)
   );
 
-  const pending = MIGRATIONS.filter((m) => !applied.has(m.version));
+  const pending = ALL_MIGRATIONS.filter((m) => !applied.has(m.version));
 
   if (pending.length === 0) return;
 
@@ -6654,4 +6850,4 @@ function _resetTestDatabase() {
 
 init();   // auto-initialise when module is first imported
 
-export { init, get, transaction, currentVersion, getPath, backupToFile, restoreFromFile, MIGRATIONS, reconcileCriticalSchema, _setTestDatabase, _resetTestDatabase };
+export { init, get, transaction, currentVersion, getPath, backupToFile, restoreFromFile, MIGRATIONS, FORK_MIGRATIONS, ALL_MIGRATIONS, remapForkMigrationVersions, reconcileCriticalSchema, _setTestDatabase, _resetTestDatabase };

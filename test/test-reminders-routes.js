@@ -88,9 +88,16 @@ const FUTURE = '2099-12-31T23:59:59';  // immer >  jetzt  -> nicht faellig
 let currentUid = freshUser('admin');
 const app = express();
 app.use(express.json());
+// Token-Scopes und Mitgliedsrechte pro Aufruf setzbar: der Router ist eine
+// MISCHSTELLE (sein Pfad loest auf `calendar` auf, seine Zeilen stammen aus
+// sechs Modulen) und muss die Rechte deshalb selbst stellen.
+let currentScopes = null;          // null = ungescopte Session
+let currentModuleAccess = null;    // null = Admin / unbeschraenkt
 app.use((req, _res, next) => {
   req.authUserId = currentUid;
   req.session = { userId: currentUid, role: 'admin' };
+  req.authScopes = currentScopes;
+  req.sessionModuleAccess = currentModuleAccess;
   next();
 });
 app.use('/api/v1/reminders', remindersRouter);
@@ -226,7 +233,16 @@ test('POST / lehnt ungültigen entity_type ab (400)', async () => {
   currentUid = owner;
   const res = await call('POST', '', { entity_type: 'bogus', entity_id: makeTask(owner), remind_at: at(9, 0) });
   assert.equal(res.status, 400);
-  assert.match(res.body.error, /task, event, subscription, inventory_item, or inventory_tracked_date/);
+  // Die Meldung zaehlt VALID_ENTITY_TYPES auf, statt die Liste ein zweites Mal
+  // von Hand zu fuehren: sie stand hier schon einmal veraltet da, waehrend die
+  // Route laengst mehr Typen kannte. Deshalb prueft der Test die Form und die
+  // Enden, nicht den ausgeschriebenen Satz.
+  assert.match(res.body.error, /^entity_type must be one of: task, event, subscription, inventory_item, inventory_tracked_date\.$/m);
+  // `pantry_item` steht bewusst NICHT im Text: derselbe Endpunkt weist es im
+  // naechsten Zweig ab, weil ein Lauf es minuetlich wieder herstellt. Die drei
+  // uebrigen abgeleiteten Herkuenfte bleiben setzbar - dort haelt ein
+  // handgesetzter Termin bis zur naechsten Aenderung ihres Objekts.
+  assert.doesNotMatch(res.body.error, /pantry_item/);
 });
 
 test('POST / lehnt fehlenden entity_type ab (400)', async () => {
@@ -354,4 +370,95 @@ test('DELETE /?entity löscht alle eigenen Erinnerungen der Entität, fremde ble
   ).get('event', eventId, anna).c;
   assert.equal(annaLeft, 0, 'Annas Erinnerungen sind weg');
   assert.ok(db.prepare('SELECT id FROM reminders WHERE id = ?').get(bobRid), 'Bobs Erinnerung bleibt unberührt');
+});
+
+// --------------------------------------------------------------------------
+// DER PFAD SAGT `calendar`, DIE ZEILEN KOMMEN AUS SECHS MODULEN
+//
+// Befund aus der PR-Review zu #811, aelter als das Feature: `moduleForPath()`
+// bildet den ganzen Reminders-Router auf `calendar` ab (scopes.js), der
+// Pfad-Guard in server/index.js fragt also nur danach. Ausgeliefert werden aber
+// Aufgabentitel, Abo-Namen, Inventar-Gegenstaende und Vorratsartikel.
+// --------------------------------------------------------------------------
+test('ein calendar-Token liest ueber /pending keine fremden Modultitel', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  insertReminder(owner, 'subscription', makeSubscription(owner, 'Spotify'), PAST);
+  insertReminder(owner, 'inventory_item', makeInventoryItem(owner, 'Herd'), PAST);
+  insertReminder(owner, 'event', makeEvent(owner, 'Elternabend'), PAST);
+
+  currentScopes = ['calendar:read'];
+  try {
+    const res = await call('GET', '/pending');
+    assert.equal(res.status, 200);
+    const types = res.body.data.map((r) => r.entity_type);
+    assert.deepEqual([...new Set(types)], ['event'],
+      'ein calendar-Token bekam Abo- und Inventarnamen, ohne je diese Scopes zu besitzen');
+  } finally {
+    currentScopes = null;
+  }
+});
+
+test('ein calendar-Token verwirft keine fremde Modul-Erinnerung', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  const id = insertReminder(owner, 'subscription', makeSubscription(owner, 'Disney'), PAST);
+
+  currentScopes = ['calendar:write'];
+  try {
+    const res = await call('PATCH', `/${id}/dismiss`);
+    assert.equal(res.status, 403);
+    assert.equal(db.prepare('SELECT dismissed FROM reminders WHERE id = ?').get(id).dismissed, 0);
+  } finally {
+    currentScopes = null;
+  }
+});
+
+test('ein entzogenes Modul verschwindet auch aus /pending', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  insertReminder(owner, 'pantry_item', 1, PAST);
+  insertReminder(owner, 'task', makeTask(owner, 'Kehrwoche'), PAST);
+
+  // access_permissions-Achse: dieselbe Frage, andere Herkunft der Antwort.
+  currentModuleAccess = { pantry: 'none' };
+  try {
+    const res = await call('GET', '/pending');
+    assert.equal(res.status, 200);
+    assert.ok(!res.body.data.some((r) => r.entity_type === 'pantry_item'),
+      'der Pfad-Guard fragt nach `calendar` und laesst pantry durch - die Route muss selbst filtern');
+    assert.ok(res.body.data.some((r) => r.entity_type === 'task'), 'und nichts anderes wegnehmen');
+  } finally {
+    currentModuleAccess = null;
+  }
+});
+
+test('ein Token ohne jeden lesbaren Scope bekommt eine leere Liste, keinen Fehler', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  insertReminder(owner, 'task', makeTask(owner, 'Allein'), PAST);
+
+  currentScopes = ['weather:read'];
+  try {
+    const res = await call('GET', '/pending');
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.data, [], 'ein leeres IN () waere ein SQL-Fehler statt einer Antwort');
+  } finally {
+    currentScopes = null;
+  }
+});
+
+test('GET /?entity_type= antwortet 403 statt den Titel zu verraten', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  const sub = makeSubscription(owner, 'Netflix Family');
+  insertReminder(owner, 'subscription', sub, FUTURE);
+
+  currentScopes = ['calendar:read'];
+  try {
+    const res = await call('GET', `/?entity_type=subscription&entity_id=${sub}`);
+    assert.equal(res.status, 403);
+  } finally {
+    currentScopes = null;
+  }
 });

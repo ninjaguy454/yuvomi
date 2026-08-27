@@ -85,6 +85,12 @@ export const PERMISSION_WIDGETS = Object.freeze([
   // beiden. Was aus einem gesperrten Modul stammt, filtert die Kachel schon
   // selbst - hier steht die Sperre auf das Widget als solches.
   { id: 'countdown',    module: null },
+  // `module: null` wie Familie, Wetter und Uhr: eine Reihe Haushaltslinks
+  // (#469) gehoert keinem Modul. Die private Achse setzt die Route selbst
+  // durch; hier steht die Sperre auf die REIHE - ein Haushalt, der seinen
+  // Kindern die Startseite nicht zur Startrampe machen will, hat damit einen
+  // Schalter.
+  { id: 'quicklinks',    module: null },
 ]);
 
 export const MODULE_ACCESS_LEVELS = Object.freeze(['none', 'read', 'write']);

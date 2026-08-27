@@ -220,6 +220,58 @@ is case-insensitive, and a word character before the `@` disqualifies it, so `in
 a mention. A mentioned member is only notified if they may see the task: a mention is not a way to
 deliver the title of a private task.
 
+### Task Completions (migration v161, #791)
+
+Ticking a task off is an **event**, not just a state. `status = 'done'` answers "is this still
+outstanding"; it cannot answer what was completed today, what yesterday, when a recurring chore was
+last done, or who did it. This table records the transition.
+
+| Column | Type | Constraint |
+|--------|------|-----------|
+| task_id | INTEGER | FK → Tasks (CASCADE delete), NOT NULL, UNIQUE |
+| series_id | INTEGER | NOT NULL — root of the repetition chain, or the task itself. No FK: the root may be deleted without taking later entries with it |
+| user_id | INTEGER | FK → Users (SET NULL) — **who ticked it off** |
+| completed_at | TEXT | ISO 8601 UTC, default now |
+
+**Why a table and not two columns.** A completed recurring task spawns a follow-up instance
+(`recurrence_origin_id`), so the history of one series is spread across a chain of rows whose links
+can be deleted individually. "When was this last done" hangs on exactly that chain, which is why
+`series_id` is resolved once on write (walking the chain to its root) rather than on every read: an
+entry stays with its series even if the chain later breaks.
+
+**No snapshot of title, category or member.** A copy would be a second truth beside the task — and
+the dangerous one, because **visibility** is a truth too. Someone who sets a task to private later
+has hidden it; an entry carrying its own copy of the old level would keep giving it away. Both read
+paths join `tasks` and apply the same `visibilityWhere` as every other task list. The price, paid
+deliberately, is `ON DELETE CASCADE`: deleting a task deletes its completions.
+
+**Who, not whom.** `user_id` is the acting person, which is deliberately different from
+`reward_ledger`, where points go to the *assignees* (`rewardTargets`). Points are a merit and can be
+shared; a completion is an occurrence — it happens once, through one click.
+
+**Subtasks are never recorded.** A subtask is a checklist item of the same instruction; the event of
+the series is the parent being ticked off. Filing a task away (`archived`) is not a status change
+(#688) and writes nothing either.
+
+Reverting deletes the row rather than posting a counter-entry — the same decision as
+`reverseTaskEarnings`, for the same reason: a checkbox toggled three times is noise, not history.
+The UNIQUE index on `task_id` is also the idempotency net if the same transition arrives twice.
+
+**Known boundary:** the inbound CalDAV sync writes `status` straight into the row and does not pass
+through this path, so ticking a mirrored task off in Apple Reminders does not appear in the history.
+The reward ledger has the same gap for the same reason: that run has no acting person - it uses the
+household's credentials, not a member's. An entry without a person is possible (the column allows
+NULL) but needs its own presentation, since "no longer in the household" would be the wrong answer
+for a sync. Stated here as a decision rather than inherited silently.
+
+API: `GET /api/v1/tasks/completions` (household feed, newest first, cursor-paged over
+`(completed_at, id)` because a bulk action puts several completions in the same second), and
+`GET /api/v1/tasks/{id}/completions` (the whole series behind one task). No date range on either:
+which calendar day an instant belongs to is a question for the display timezone
+(`public/utils/timezone.js`), and a server taking a `from` day would have to keep a second clock for
+it. **The history starts empty** — recording began with this migration, and nothing wrote down what
+was completed before it.
+
 ### Rewards (migration v70)
 
 Points-and-rewards system. A member earns a task's `points` when the task is marked done (awarded to its assigned members; if unassigned, to the acting user — useful for a wall-mounted kiosk tablet on a single account). Participation is **opt-in per member**; redemptions require **parent/admin approval** by default — an admin can disable this household-wide (`rewards_require_approval` preference, Settings → Modules → Rewards) so redemptions are granted immediately. The Rewards module itself is toggleable in Settings → Modules → Rewards (nav visibility). A member's balance is always `SUM(delta)` over `reward_ledger` — there is no separately stored balance that could drift. Point award is idempotent (partial unique index) and reversed when a task leaves the `done` state.
@@ -463,6 +515,34 @@ dates are two rows, which keeps the model flat instead of nesting batches under 
 Expiry and stock status are derived in the client, not stored: "expired" depends on the user's local
 calendar day, and the server reasons in UTC. The threshold for "expiring soon" is seven days.
 
+**Best-before notification (#811, v2.45.0).** A `pantry_item` reminder is created for every item
+that carries an `expires_on`, has a `created_by` who may see the pantry, and holds a quantity above
+zero. The lead time is the same seven days that turn the row yellow - two numbers for one question
+would put the notification on a day when nothing is marked; a guard in `test/test-frontend-audit.js`
+keeps both definitions together, and the same guard covers the inventory warranty threshold. There
+is no per-item lead time on purpose: an inventory deadline is maintained one at a time, a pantry is
+bulk goods.
+
+The date itself is the switch - salt and rice stay silent without one. An empty pack does not
+notify: the chip may show "expiring soon" at quantity 0 because a list is passive, but a
+notification interrupts, and there is nothing left to save. Refilling brings the reminder back,
+because every write path goes through `syncPantryExpiryReminder()`.
+
+**Fresh produce is the main case here, not the exception.** Milk and yoghurt usually have fewer
+than seven days left when bought, so their lead time has already passed at entry. Discarding such a
+reminder - which is what inventory warranties do, where it only happens for a back-dated appliance -
+would silence the feature for exactly the items it exists for. On a write the reminder is therefore
+**clamped** to the next 09:00 that still falls on or before the best-before date, computed in
+calendar days of the household time zone; what has already expired does not notify at all.
+
+The notification run reconciles the whole pantry once per pass (`syncAllPantryExpiryReminders()`):
+stock that predates the feature was never saved through the app and would otherwise never notify.
+That pass only **adds and clears** - it never replaces a delivered or dismissed row, and it does not
+clamp, so an upgrade cannot fire every soon-expiring item at once on the first morning.
+
+`pantry_item` reminders are **derived, not entered**: `POST`, `PUT` and both `DELETE` paths reject
+them with 400 (see the Reminders section), because the run would recreate them within a minute.
+
 ### Calendar Events
 | Column | Type | Constraint |
 |--------|------|-----------|
@@ -472,7 +552,7 @@ calendar day, and the server reasons in UTC. The threshold for "expiring soon" i
 | end_datetime | TEXT | DATETIME |
 | all_day | INTEGER | 0/1 |
 | location | TEXT | |
-| color | TEXT | HEX |
+| color | TEXT | HEX, **NOT NULL**, default `#007AFF` (empty string rejected). There is no "no colour of its own" state - which is why the assignee/calendar fallbacks in `resolveEventColor()` are unreachable, see the colour-sync section |
 | icon | TEXT | Lucide icon name, default 'calendar' |
 | assigned_to | INTEGER | FK → Users (legacy single-user field, kept for backwards compat) |
 | created_by | INTEGER | FK → Users, NOT NULL |
@@ -1260,23 +1340,38 @@ Planned/estimated budget (Budget → Plan). A **steady monthly plan**: one amoun
 
 ### Reminders
 
-Per-user reminders attached to tasks, calendar events, subscriptions, or inventory items.
+Per-user reminders attached to tasks, calendar events, subscriptions, inventory items, inventory tracked dates, or pantry items.
 
 | Column | Type | Constraint |
 |--------|------|-----------|
-| entity_type | TEXT | `task`, `event`, `subscription`, `inventory_item`, or `inventory_tracked_date`, NOT NULL |
+| entity_type | TEXT | `task`, `event`, `subscription`, `inventory_item`, `inventory_tracked_date`, or `pantry_item`, NOT NULL |
 | entity_id | INTEGER | Entity identifier, NOT NULL |
 | remind_at | TEXT | ISO 8601 datetime, NOT NULL |
 | dismissed | INTEGER | 0/1, default 0 |
 | pushed_at | TEXT | ISO 8601 datetime, nullable — set once all active notification targets have been sent, skipped, or exhausted, so the reminder is not processed indefinitely |
 | created_by | INTEGER | FK → Users (CASCADE delete), NOT NULL |
 
+All types except `pantry_item` can be set and deleted through `POST`/`PUT`/`DELETE
+/api/v1/reminders`. Four of them are **derived** - their module recreates the reminder whenever the
+underlying object is written (renewal date, warranty end, inventory deadline, best-before date) - but
+only the pantry is additionally rebuilt on **every notification run**. A hand-set `pantry_item`
+reminder is therefore gone within a minute and a deleted one is back, so all four write paths
+(`POST`, `PUT`, `DELETE /:id`, `DELETE` by filter) answer 400 for it; for the other three derived types a hand-set date survives until the next change to
+their object, which is a half-life you can work with, and closing them would break a published
+`/api/v1` surface for no reason.
+
+Reading and **dismissing** (`PATCH /:id/dismiss`) stay open for all six - the reminder toast has to
+show a derived notification and let the user wave it away, and dismissing holds precisely because
+the row stays.
+
 Calendar events support **multiple reminders** (e.g. "15 minutes before" *and* "1 day before").
 Each reminder is an independent row and is delivered separately by the notification scheduler.
 Every delivery carries the linked entity's title as the notification body (task title, event title,
-or subscription name), so the reminder is identifiable without opening the app; the fallback text
-only applies once the linked entity has been deleted. Subscription reminders additionally carry the
-amount and the renewal date, as `Name - 12.99 EUR - 2026-08-03`. That line is deliberately data
+subscription name, inventory item, `item · label` for a tracked date, pantry item), so the reminder
+is identifiable without opening the app; the fallback text only applies once the linked entity has
+been deleted. Some origins add the date the reminder is about: subscription reminders carry amount
+and renewal date as `Name - 12.99 EUR - 2026-08-03`, warranty reminders the warranty end, tracked
+dates and pantry items their date as `Name - 2026-09-01`. That line is deliberately data
 only, with no sentence around it: the notification is assembled on the server, which has no way to
 know the **recipient's** language, since locale, date and number formats live in the client's
 local storage. The household data language (#631, #632) does not close this gap — it governs what the
@@ -1561,9 +1656,13 @@ Instalment-based loans with per-payment tracking. Active loans show remaining ba
 
 **Outstanding principal vs. remaining payments (v1.48.0):** for an interest loan these are two different figures and only the first is what a bank reports as the open amount. `remaining_amount` is the sum of the outstanding instalments (`total_amount` minus what has been paid) and therefore still contains the interest of the remaining term. `remaining_principal` is the open capital, read off the amortisation schedule at the current instalment count, and is the figure the loan cards and the summary card lead with, set against the `principal` as the reference figure so numerator and denominator match. The loan report shows both side by side (*Outstanding balance* and *Still to pay*). The value is a **plan** figure: it assumes every instalment was paid at the annuity amount and in its due month, deliberately not tracking deviating booked amounts, so it belongs to the same forecast as the monthly payment, total interest and term. Interest-free loans have no interest component, so both values are identical and their display is unchanged.
 
-**Own currency per loan (migration v102, #582):** a loan can run in a currency other than the household budget currency. Every monetary field of the loan (`total_amount`, `principal`, and `budget_loan_payments.amount`) stays stored **in that currency**, so the amortisation schedule and the remaining balance stay exact. `currency = NULL` means "follows the budget currency" and is both the legacy state and the normal case; selecting the current budget currency in the UI is stored as NULL rather than the code, so a later household currency change cannot turn the loan into a foreign-currency one at rate 1. `exchange_rate` is a **fixed, manually maintained** rate (1 unit of loan currency = `exchange_rate` units of budget currency), not a daily quote: a 30-year schedule must not move its remaining balance every day, and the live-rate path of the Subscriptions module needs a `FIXER_API_KEY` most installations do not set. Only two places convert: the cross-loan summary card (valued at the stored rate) and the budget entry written for an instalment, which is converted **at booking time** so a later rate change leaves booked instalments untouched. Editing that coupled budget entry converts back into the loan currency, including the remaining-balance check.
+**Own currency per loan (migration v102, #582):** a loan can run in a currency other than the household budget currency. Every monetary field of the loan (`total_amount`, `principal`, and `budget_loan_payments.amount`) stays stored **in that currency**, so the amortisation schedule and the remaining balance stay exact. `currency = NULL` means "follows the budget currency" and is both the legacy state and the normal case; selecting the current budget currency in the UI is stored as NULL rather than the code, so a later household currency change cannot turn the loan into a foreign-currency one at rate 1. `exchange_rate` is a **fixed, manually maintained** rate (1 unit of loan currency = `exchange_rate` units of budget currency), not a daily quote: a 30-year schedule must not move its remaining balance every day, and the live-rate path of the Subscriptions module needs a `FIXER_API_KEY` most installations do not set. Only two places convert: the cross-loan summary card (valued at the stored rate) and the budget entry written for an instalment, which is converted **at booking time** so a later rate change leaves booked instalments untouched. Editing that coupled budget entry converts back into the loan currency, including the remaining-balance check; the instalment stays positive there and takes its sign from the direction (see below). Editing an instalment from the loan list loads that budget entry rather than deriving one from the payment row, because the two carry different currencies - a stand-in built from the payment would put the loan-currency figure where the budget-currency one belongs and convert it a second time on save (v2.41.2).
 
 **Lending direction (migration v126, #638):** the module was originally built for money the household *lends out*, so an instalment was always booked as income — a positive amount under an income category. The interest fields of #569 made a mortgage expressible, but the booking logic never followed, and a mortgage payment showed up as income in the monthly balance. `direction` now decides sign and category together: `lent` (the default, unchanged for existing rows) writes the instalment as a positive amount under `Geschenke & Transfers`, `borrowed` writes it as a negative amount under `financial_other` / `loans_interest`. Both have to switch together, because the statistics read the type off the sign (`amount > 0` = income) while `budget_categories` carries its own `type` — turning only one of them would file an expense under an income category. Switching an existing loan's direction **re-books the instalments already recorded** (sign and category): a wrong sign is never legitimate history, and this is the repair path for rows the migration defaulted to `lent`. `account_id` gives the loan a default account which every new instalment inherits, so a payment can charge an account at all — the coupled budget entry carried none before. A later account change applies to new instalments only, since re-booking the old ones would falsify historical account balances.
+
+**The sign belongs to the loan, not to the request (v2.41.2, #859).** Booking, re-booking and *editing* all derive it from the same rule. Until v2.41.2 the entry route enforced the pre-#638 rule instead - a coupled entry had to stay positive - which made an instalment of a borrowed loan uneditable: it is negative by design, so every amount the dialog could send was rejected. Editing now normalises the amount to the direction rather than refusing it, and two checks that the old rule had masked came into effect with it: the cap against paying off more than the loan still owes compares the **absolute** amount (against a signed one it was always satisfied on a borrowed loan and stopped nothing), and an amount of zero is refused on its own terms instead of reaching `CHECK(amount > 0)` as a 500. In the entry dialog the income/expense switch is inert on a coupled instalment and says why: the direction is a property of the loan and is changed there.
+
+**The instalment title follows the household data language (v2.41.2).** `budget.loanPaymentTitle`, resolved server-side via `resolveHouseholdLocale`, exactly as birthday events are (#524/#631/#632) and for the same reason: the `budget_entries` row is what the REST API, the CSV export, the search index and MCP read, and none of those paths pass through the browser's translation. It was a fixed English string before, and the translated client-side fallback only ever applied to entries with an empty title - which is why it worked for backfilled instalments (#813, no coupled entry at all) and never for booked ones. Existing titles are **not** rewritten on a language change: unlike a birthday event, the title of a budget entry is a field the household edits.
 
 | Column | Type | Constraint |
 |--------|------|-----------|
@@ -1735,7 +1834,7 @@ One row per owned belonging.
 |--------|------|-----------|
 | name | TEXT | NOT NULL |
 | brand / model / serial_number | TEXT | all nullable |
-| category | TEXT | NOT NULL (default 'other') — see [Inventory Categories](#inventory-categories-migration-v136) |
+| category | TEXT | NOT NULL (default 'other') — see [Inventory Categories](#inventory-categories-migrations-v136-v142) |
 | location_id | INTEGER | FK → Inventory Locations (SET NULL) |
 | purchase_date | TEXT | nullable, `YYYY-MM-DD` |
 | purchase_price | REAL | nullable, CHECK `>= 0` |
@@ -2259,6 +2358,58 @@ never see express — therefore had no module check at all (#823).
 
 Primary key: `(subject_type, subject_id, resource_type, resource_key)`.
 
+### Quick Links (migration v160, #469)
+| Column | Type | Constraint |
+|--------|------|-----------|
+| name | TEXT | NOT NULL - what the tile is called; also the source of its monogram when no picture is set |
+| url | TEXT | NOT NULL - normalised `http`/`https` address (see below) |
+| icon_data | TEXT | nullable - the tile picture as a data URL (`image/png\|jpeg\|webp`), capped at **128 KB** |
+| color | TEXT | nullable - HEX; the ground the monogram sits on |
+| visibility | TEXT | NOT NULL DEFAULT `all` - `all` \| `private` |
+| created_by | INTEGER | FK → Users |
+| position | INTEGER | NOT NULL DEFAULT 0 - household-wide order, dragged rather than sorted |
+| created_at / updated_at | TEXT | ISO 8601 |
+
+A household may hold at most **24** quick links.
+
+**A row, not a module (#469).** The thread ran twice over the question of whether this becomes a
+bookmark library, and #759 was closed in favour of the small version four people had converged on:
+a tile row on the overview with a name, an address, a picture and the question of who sees it.
+There is deliberately no table for collections, tags or folders - a collection would be one more
+column here, not a rebuild.
+
+**No catalogue of known apps.** Anything keyed to a list of supported services is wrong the day
+somebody runs one that is not on it, so a quick link is only an address. `192.168.1.5:8096` is a
+valid entry: a missing scheme is filled in with `https://`, which is how anybody actually writes
+down a machine on their own network.
+
+**Only `http` and `https` reach an `href`.** The check lives in `public/utils/quick-link-url.js`
+and is called by **both** sides - the form, so it objects immediately, and the route, because a
+client-side check is not a boundary (it is on the `test:layer-boundary` allowlist for exactly that
+reason). The actual guard is the protocol allowlist *after* parsing; the scheme detection in front
+of it decides the **reason**: a `javascript:` value is recognised as a scheme and refused as such
+rather than being turned into `https://javascript:…` and merely failing to parse, and `vbscript:1`
+is refused instead of being stored as a valid `https://vbscript:1/` nobody meant.
+
+**The picture is uploaded, never fetched.** A favicon would mean the household reaches out to every
+linked host on every build of the overview - the quiet outbound traffic this app does not do. It is
+stored inline as a data URL like `users.avatar_data`, and both caps exist because these pictures
+travel differently than an avatar: they ship with *every* overview response, all at once. Without a
+picture the tile carries the first letter of its name on `color`, and that letter picks its own text
+colour via `prefersInkText` (`utils/contrast.js`) - white on a light tile measures 2.7:1.
+
+**`private` means private.** A quick link that is not shared is visible to its author alone; the
+admin is expressly not an exception, and it is not merely hidden in the browser - `listQuickLinksFor`
+filters it out of the payload, including the aggregated `/dashboard` response. Editing follows the
+same rule and ships with the row: `can_edit` is computed on the server by the same function that
+draws the boundary (`mayEdit`), so the client does not restate the rule from its own idea of who it
+is. A foreign private link answers `404` rather than `403` - the latter would confirm it exists.
+
+API: `GET/POST /api/v1/quick-links`, `PUT/DELETE /api/v1/quick-links/:id`, `PUT /api/v1/quick-links/order`.
+The scope key is `dashboard` (`scopes.js`), not one of its own: the row is not a permissions module,
+but without a mapping the route would be locked for *every* scoped token, since `tokenAllows`
+refuses unknown modules.
+
 ---
 
 ## Modules
@@ -2331,7 +2482,7 @@ tone): light 3.65-5.18:1, dark 7.42-12.24:1, all above the 3:1 asked of graphics
 
 **Widgets:**
 - Greeting: "Good [morning/afternoon/evening], [Name]" + date; auto-refreshes on `visibilitychange` so the greeting stays current during long sessions. Since v2.4.0 a quiet weather line ("25° Mostly clear") sits under the greeting whenever the weather card is not visible in the grid; since v2.21.0 its glyph carries the condition's tone (and nothing else - the line stays incidental context, without light or movement), so the two displays never name the same weather in two colours
-- Weather: server-side proxy with two providers — **Open-Meteo** (default, no API key, WMO codes mapped to Lucide icons and translated via `wmo.*` i18n keys) and **OpenWeatherMap** (legacy, via `OPENWEATHER_*`). Provider resolves from DB preferences (Settings → Administration → Household weather) first, then env vars. 5-day preview, refresh every 30 min, hide widget on API error. **Default-hidden since v2.4.0:** the masthead line carries the current weather; the card with its forecast is the wall-tablet opt-in in Customize. **Weather-derived tone and motion (v2.21.0):** the widget's colour comes from the condition instead of `--module-dashboard` - six tones (clear, night, cloud, rain, snow, storm) derived from the **icon key**, not from the description (that one is localised and, in the OWM branch, free prose), so both providers resolve through one map. A parallel domain family, not a tenth family tone: no condition shares a family tone's value and none appears outside a weather surface. All twelve values (light + dark) are measured to **4.5:1** against their three real grounds rather than the 3:1 an icon would need, because the same tone also carries the forecast's high temperature. A soft radial light sits behind the glyph in that tone (`--tint-surface` core, `--tint-wash` field); it belongs to the backdrop-blob family and shares its switches (`--weather-glow-opacity`, 0 under `prefers-reduced-transparency` / `prefers-contrast`), and it is anchored to the glyph rather than to the card because above 860px container width the glyph moves into the middle of the card. Four gaits keyed on the **icon** and not on the tone (`sun` and `cloud-sun` share a tone and move oppositely): rays rotate, clouds drift, precipitation falls, a storm flashes the light instead of the symbol. All motion lives inside a `prefers-reduced-motion: no-preference` block instead of being switched off by a `reduce` counter-rule - the counter-rule lost on specificity against the `:not(:first-child)` in the precipitation selector and left the rain falling while the sun stood still. The forecast row carries a **temperature-span bar** normalised across the whole forecast (position = where the day falls in the week, length = its swing, colour = one of five named bands; five bands rather than an interpolated ramp, because an interpolated mix would have needed its value at the element and would then sit outside the tint scale's guard), and the first column reads "Today" instead of its weekday
+- Weather: server-side proxy with two providers — **Open-Meteo** (default, no API key, WMO codes mapped to Lucide icons and translated via `wmo.*` i18n keys) and **OpenWeatherMap** (legacy, via `OPENWEATHER_*`). Provider resolves from DB preferences (Settings → Administration → Household weather) first, then env vars. 5-day preview, refresh every 30 min, hide widget on API error. **Default-hidden since v2.4.0:** the masthead line carries the current weather; the card with its forecast is the wall-tablet opt-in in Customize. **Weather-derived tone and motion (v2.21.0):** the widget's colour comes from the condition instead of `--module-dashboard` - six tones (clear, night, cloud, rain, snow, storm) derived from the **icon key**, not from the description (that one is localised and, in the OWM branch, free prose), so both providers resolve through one map. A parallel domain family, not a tenth family tone: no condition shares a family tone's value and none appears outside a weather surface. All twelve values (light + dark) are measured to **4.5:1** against their three real grounds rather than the 3:1 an icon would need, because the same tone also carries the forecast's high temperature. A soft radial light sits behind the glyph in that tone (`--tint-surface` core, `--tint-wash` field); it belongs to the backdrop-blob family and shares its switches (`--weather-glow-opacity`, 0 under `prefers-reduced-transparency` / `prefers-contrast`), and it is anchored to the glyph rather than to the card because above 860px container width the glyph moves into the middle of the card. Four gaits keyed on the **icon** and not on the tone (`sun` and `cloud-sun` share a tone and move oppositely): rays rotate, clouds drift, precipitation falls, a storm flashes the light instead of the symbol. All motion lives inside a `prefers-reduced-motion: no-preference` block instead of being switched off by a `reduce` counter-rule - the counter-rule lost on specificity against the `:not(:first-child)` in the precipitation selector and left the rain falling while the sun stood still. The forecast row carries a **temperature-span bar** normalised across the whole forecast (position = where the day falls in the week, length = its swing, colour = one of five named bands; five bands rather than an interpolated ramp, because an interpolated mix would have needed its value at the element and would then sit outside the tint scale's guard), and every column is named from **its own date** rather than its position (#851). The server hands the running day over as its own `today` field - the calendar day **at the weather location**, which neither the browser nor the household zone can know - and `forecast` holds only the days after it. Naming the first column "Today" regardless was therefore off by a day: the row started at tomorrow and read as though a day were missing. `today` also carries that day's high and low, which the main block now shows beside the current reading; without them the card carried a span for every day except the one it was actually describing
 - Upcoming events: next 3–5, color-coded by person; each row navigates to `/calendar?open=<id>&date=YYYY-MM-DD` so the event detail popup opens on the displayed occurrence, including recurring series instances
 - Urgent tasks: priority urgent/high + due_date ≤48h
 - Today's meals: meals for the current day
@@ -2346,6 +2497,7 @@ tone): light 3.65-5.18:1, dark 7.42-12.24:1, all above the 3:1 asked of graphics
 - Cycle (v0.98.0): **owner-only, opt-in** prediction glance — current phase, cycle day in a mini progress ring, and the next period as a countdown + date. Unlike the family-visible widgets, cycle data is **never aggregated into the shared `/dashboard` payload**: the tile fetches the signed-in user's own `/health/cycle` data client-side, and only when the tile is enabled. Default-hidden, offered as an opt-in in Customize; hidden when the Health module is disabled
 - Clock (v1.84.0 · #651): time and weekday + date, built for a wall tablet without a system bar. The digits scale with the tile width (container query on the existing `dashboard-widget` container, capped by row count so a one-row tile does not blow the date off the card), follow the user's 12h/24h and date-format preferences, and tick on the minute rather than the second (the display has no seconds). A `visibilitychange` refresh catches up after a throttled background tab. **Default-hidden:** on a device with a system clock a second one is duplication, so it is offered as an opt-in in Customize
 - Metrics row: up to four module tiles in one row, each carrying a count and a jump target, for the modules that are reachable only through "More". The row shows what is **not already on the screen**: a module the "Heute" panel already summarises is skipped, and so is one whose own widget is visible, so it follows the current layout instead of holding its own idea of it. In practice it leads with the modules a standard dashboard has no widget for at all - rewards, health and the housekeeping log. Where a household does not use those, no tile appears and the widget renders nothing. Counts come from the shared `/dashboard` payload (`openTaskCount` and the per-module figures beside it), not from one request per module. It is a widget like any other: it moves, hides and resizes in Customize, and it can be locked for a member. Its `permissions.js` entry carries `module: null`, like Family, Weather and Clock - it belongs to no single module, and it does not need to, because **each tile checks its own module** and a locked budget therefore never produces a budget tile. What the row-level lock adds is the ability to take away the row as such
+- Quick links (#469): a row of household links - name, address, picture, and who sees it. Not a module and therefore without a page of its own: managing them starts from the tile, because whoever sees the row is already where it belongs. Each tile opens in a new tab with `rel="noopener noreferrer"` and `referrerpolicy="no-referrer"`, so a target on the home network learns nothing about where this household runs its Yuvomi. A private link carries a lock mark. **Default-hidden:** on day one the row has nothing to show, and a tile that only asks to be set up is not worth adding to every existing dashboard unasked - it is offered as an opt-in in Customize. Its `permissions.js` entry carries `module: null`, like Family, Weather and Clock
 - FAB (quick actions): + Task, + Event, + Shopping list item, + Note
 
 The three newer modules (Rewards, Health, Housekeeping) start **hidden** by default — they are specialised and not active in every household, so they are offered as opt-ins in **Customize** rather than adding empty tiles to a fresh dashboard. Existing saved layouts are untouched.
@@ -2379,7 +2531,16 @@ The surface carries four things, in this order: **the time**, large (this is whe
 - List view (default): grouped by category or due date (toggleable), filter: person, priority, status. **Category groups follow the managed order (v2.39.0, #845):** their sequence is the position in the category list the server returns, i.e. the `sort_order` set by dragging in **Manage categories** - not the alphabet. Until then the groups were sorted with `localeCompare(b, 'de')`, which ignored that order, compared the internal key rather than the visible label (`misc` sorts under M while the page shows "Sonstiges"), and applied German collation to every language. A category missing from the list sorts last, and only among those does the label decide, in the active locale. **Each of those three axes takes several values at once (v1.78.1, #671)** and combines them with OR — "high or medium" is a question worth asking, while AND across two priorities would always be empty, since a task carries exactly one. The axes still combine with AND among themselves, so every row narrows the list. Tags stay AND-combined (see [Task Tags](#task-tags-migration-v115-586)); there a task really can carry both. `GET /api/v1/tasks` takes each value as its own parameter (`?priority=high&priority=medium`) and keeps accepting a single one
 - **Collapsible groups (v2.28.0, #812):** each group header is a button (`aria-expanded`, keyboard-reachable) that folds its rows away; the count stays on the collapsed header, so the size of a folded group is still readable. Collapsed groups are stored per device in `localStorage` (`yuvomi:taskCollapsedGroups`) as `<mode>:<id>` — the mode belongs in the key because a category may be named like a due-date group, and the id is the category key or a fixed name (`overdue`/`today`/`thisWeek`/`nextWeek`/`later`/`noDate`), never the translated label: `groupBy()` returns `{ id, label, tasks }` for exactly that reason, otherwise "Heute" and "Today" would be two groups and every language switch would unfold everything. Only collapsed state is stored, so a newly created category appears open.
 - Kanban: columns Open → In Progress → Done, drag & drop
-- View mode persisted in localStorage; URL parameter `?view=kanban` overrides (useful for tablet kiosk setups)
+- **History (v2.44.0, #791):** the third view, and the only one that does not show tasks but
+  occurrences: who ticked off what, and when. Grouped by calendar day in the display timezone
+  (`zonedDateKey`, not `completed_at.slice(0, 10)` — the stored instant is UTC, so a tick at 23:30
+  local time would land under the next day west of it), newest first, with an optional filter by
+  person and a "Show more" cursor. Search, the filter bar, grouping and bulk select disappear here:
+  they all ask about tasks, and a status filter over a list of completions would be a choice that
+  cannot change anything. See [Task Completions](#task-completions-migration-v161-791) for the data
+  model and why the view starts empty. A recurring task additionally carries **Last completed** in
+  its detail view, across the whole repetition chain rather than just the instance currently open.
+- View mode persisted in localStorage; URL parameter `?view=kanban` (or `?view=history`) overrides (useful for tablet kiosk setups)
 
 **Features:**
 - CRUD + subtasks (max 2 levels, checkbox list, progress bar). Subtasks are tickable **wherever they are visible** — on the task card and, since v1.78.1 (#671), in the detail view too. Read-only rows there had assumed the list next door would carry the interaction, but that list keeps them behind a collapsed progress bar, so a freshly created subtask could end up visible and unreachable at the same time
@@ -2408,7 +2569,7 @@ The surface carries four things, in this order: **the time**, large (this is whe
 - **Operable controls (v1.36.0):** filter chips are `<button aria-pressed>` (the same markup Documents and Contacts already used for the shared `.filter-chip` class), the task title and the Kanban card title are buttons that open the task, and the subtask progress bar is a button with `aria-expanded`. All of these were previously `<div>`s reachable by pointer only — the subtask list (`display: none`) had no keyboard opener at all.
 - **Mobile swipe (sides swapped in this release):** swiping towards the row's **start** (right in LTR, left in RTL) marks the task done or reopens it; swiping towards its **end** opens the task. The panels are addressed as `leading`/`trailing` in `public/utils/swipe-row.js`, not as left/right, so the gesture mirrors correctly in RTL. Existing users are told once via `common.swipeSidesSwapped`.
 - **Sync target on a new task (#695):** the task dialog carries a "sync target" field, the same shape the event dialog has had since #620, listing only the reminder lists the household enabled *for tasks*. Prefilled from `tasks_default_target`. It is absent for subtasks (they carry no target of their own) and replaced by a sentence on a task that is already mirrored — moving a task between lists is deliberately not offered, so a dropdown there would promise something the sync does not do. `GET /api/v1/tasks/sync-targets` serves the options to every logged-in member, with no credentials or server URLs in the payload.
-- **The note is a note (#731):** the free-text field is six rows, not two, and the read view renders it as Markdown through the same `renderMarkdownLight()` the notes module and the dashboard use — so a checklist, a heading or a bold word looks the same wherever it appears. The editor stays plain text; the notes module's toolbar is not (yet) duplicated here.
+- **The note is a note (#731):** the free-text field is six rows, not two, and the read view renders it as Markdown through the same `renderMarkdownLight()` the notes module and the dashboard use — so a checklist, a heading or a bold word looks the same wherever it appears. The editor carries the same `.md-toolbar` the notes module does — not a copy of it but the shared component both draw from, so a checkbox written in a task is the same characters as one written in a note.
 - Badge for overdue tasks
 
 ### Shopping Lists (`/shopping`)
@@ -2518,7 +2679,11 @@ Related hardening: the inbound `cancelled` delete is scoped to the reporting cal
 - **One-time import (Discussion #437):** Settings → Personal → Calendar subscriptions → "Kalender importieren" imports events from an uploaded `.ics` file or a shared calendar feed URL as **editable local events** (`external_source='local'`, no subscription) — the migration path when moving from another calendar. Unlike a subscription the events are owned by the importing user and never auto-synced; recurring events are kept as a series (RRULE reduced to the locally supported FREQ/INTERVAL/BYDAY/UNTIL subset), and the source UID is stored in `external_calendar_id` to skip duplicate re-imports of the same feed. The URL path reuses the subscription fetch (SSRF-protected, 10 MB / 15 s limits); `POST /api/v1/calendar/import` returns `{ imported, skipped, total }`.
 - **Read-only export feed (Discussion #387):** Settings → Personal → Feed subscriptions → "Kalender-Feed exportieren" exposes the user's own visible events (own events, assigned events, and shared/own ICS subscriptions) as a `webcal://`/`https://` ICS feed for subscribing in Apple Calendar, Google Calendar, Thunderbird, etc. Backed by a per-user secret token (`users.calendar_feed_token`); enabling generates the token, "Neuen Link erzeugen" rotates it (invalidating the old URL), "Feed deaktivieren" clears it. The feed itself is served by a public, unauthenticated `GET /feed/calendar/:token.ics` route outside `/api/v1` (no session/CSRF — the token in the URL is the secret), rate-limited to 30 requests/minute per IP, recomputed on every request (no caching). The feed URL uses `BASE_URL` when set, falling back to the request's protocol/host. Token management (`GET/POST regenerate/DELETE /api/v1/calendar/feed`) requires authentication. An opt-in toggle "Zugewiesene Personen im Titel anzeigen" (default off, persisted in `users.calendar_feed_show_assignees` via `PUT /api/v1/calendar/feed`, Discussion #482) appends the assigned members to each event's title in the feed, e.g. `Poolparty (Mama, Papa)` — names are ordered alphabetically and RFC-5545-escaped. Existing subscribers' titles stay unchanged until enabled. **Times carry their zone (v2.24.3 · #818):** locally created events store bare wall-clock time with no offset, and the feed used to export them as RFC-5545 *floating* local time — valid, and meant to be read on the viewer's own clock. In practice Google Calendar, Apple Calendar, Thunderbird, Outlook and Home Assistant all resolve floating values to UTC, so a 16:00 appointment in `TZ=Europe/Madrid` showed up at 18:00. The digits are now anchored instead of left open: `DTSTART;TZID=<household zone>:20260820T160000` plus a matching `VTIMEZONE` component and an `X-WR-TIMEZONE` calendar header, with the zone taken from `serverTimeZone()` (the `TZ` env var, then the system zone). Events that already carry an explicit offset — anything synced in from Google or CalDAV — keep their unambiguous UTC `…Z` form, and all-day events stay `VALUE=DATE`. When the household zone *is* UTC (or cannot be resolved), the naive values get a plain `Z` rather than a `VTIMEZONE` over a zone many clients do not carry: it says the same thing in a form everyone reads. `EXDATE` follows the same anchoring, otherwise an exception would no longer land on its own occurrence.
 - **External calendar names & colors:** Google and Apple sync stores each calendar's display name and background color in the `external_calendars` table (migration v14). A colored `event-cal-label` badge appears in event popups, agenda, month, week, and day views when `cal_name` is present.
-- **Event color sync (Discussion #427):** Each provider preserves per-event colors, not just the calendar color. Inbound, Google's `colorId` is resolved to a hex value via the event color palette (`colors.get`, cached 24 h), and the iCalendar `COLOR` property (RFC 7986 — CSS3 name or hex) is read for CalDAV, Apple, and ICS subscriptions; an event without its own color inherits its calendar's color. Outbound to Google, a local event's hex color is mapped to the nearest of Google's 11 event `colorId`s (perceptual redmean distance). Locally recolored events are protected across syncs by the unified `user_modified` flag: a resync overwrites an event's color only while `user_modified = 0`, so remote color changes still flow in until the user picks their own color, after which it stays fixed. The `COLOR`↔hex mapping lives in `server/utils/ical-color.js`. **Which of the available colours is actually drawn (v2.36.0 · #815):** `resolveEventColor()` resolves the appointment's own colour first, then the first assignee's, then the calendar's, then a neutral grey. Until v2.35.0 the assignee came first, which treated an *inherited* calendar colour and an *explicit* per-event one as equally overridable - so a CalDAV appointment that brought its own `COLOR` was invisible the moment its calendar was assigned to someone, and the sync described above looked broken when it was not. An assigned appointment without its own colour still takes the person's; who it belongs to is carried by the avatar stack regardless, which is how *multiple* assignees have always been shown. `test:calendar` pins the order behaviourally, including the counter-check that assignment still colours when no event colour is set.
+- **Event color sync (Discussion #427):** Each provider preserves per-event colors, not just the calendar color. Inbound, Google's `colorId` is resolved to a hex value via the event color palette (`colors.get`, cached 24 h), and the iCalendar `COLOR` property (RFC 7986 — CSS3 name or hex) is read for CalDAV, Apple, and ICS subscriptions; an event without its own color inherits its calendar's color. Outbound to Google, a local event's hex color is mapped to the nearest of Google's 11 event `colorId`s (perceptual redmean distance). Locally recolored events are protected across syncs by the unified `user_modified` flag: a resync overwrites an event's color only while `user_modified = 0`, so remote color changes still flow in until the user picks their own color, after which it stays fixed. The `COLOR`↔hex mapping lives in `server/utils/ical-color.js`. **Which of the available colours is actually drawn (v2.36.0 · #815):** `resolveEventColor()` resolves the appointment's own colour first, then the first assignee's, then the calendar's, then a neutral grey. Until v2.35.0 the assignee came first, which treated an *inherited* calendar colour and an *explicit* per-event one as equally overridable - so a CalDAV appointment that brought its own `COLOR` was invisible the moment its calendar was assigned to someone, and the sync described above looked broken when it was not. Who an appointment belongs to is carried by the avatar stack regardless, which is how *multiple* assignees have always been shown. `test:calendar` pins the order behaviourally.
+
+  **The lower two branches are unreachable in practice (#856).** `calendar_events.color` is `NOT NULL` and rejects an empty string, so an appointment read from the database always carries a colour and the first branch always wins - the assignee's colour and the calendar's have not tinted anything since v2.36.0. They stay in the function because they keep the order complete, and would apply again if the column ever gained a "no colour of its own" state; the test that covers them describes the function, not the app, and says so.
+
+  Two consequences were fixed with #856. The colour picker used to grey itself out whenever someone was assigned, with a note that the assignee's colour would override - a promise the code had stopped keeping; both the note and the greying are gone, and the picker is always usable. And because the picker matched the stored colour against its ten palette swatches to find the active one, any colour from outside that palette - an avatar colour, an `RFC 7986 COLOR` from a server, the pre-OKLCH `#007AFF` - matched nothing, so saving fell back to the first swatch and silently repainted the event. The picker now shows a colour outside its palette as an extra swatch of its own, matching is case-insensitive (CalDAV sends lower-case hex), and `colorToSave()` holds the rule that a save which did not touch the colour does not change it.
 - **Event location:** Event popup and dashboard display the location field with RFC 5545 backslash-escape normalization (`\n`, `\,`, `\;`, `\\`) via `fmtLocation()` in `public/utils/html.js`.
 - **Custom event icons:** Each event can have an icon chosen from a visual picker; the server validates against a fixed allow-list (`VALID_EVENT_ICONS` in `server/routes/calendar/helpers.js`, currently 104 entries — Lucide names plus the custom `tooth` glyph). Birthday events are automatically assigned the `cake` icon. Icon stored in `calendar_events.icon`.
 - **Birthday layer (v2.28.0, #778):** birthdays reach the calendar from the contacts and, with a large address book, fill it with entries nobody planned as appointments; deleting one did not help because the next sync recreated it. A toolbar toggle hides them, alongside the public- and school-holiday toggles, remembered per device in `localStorage` (`yuvomi:calendar:layer:birthdays`). The marker is the `birthday_name` field the read route attaches, not the title - an appointment of the user's own that mentions a birthday is unaffected. The toggle only appears while birthdays are in the loaded range or the layer is off, so it can never hide the control that would bring them back.
@@ -2539,6 +2704,8 @@ Responsive grid with colored sticky notes. Phones use one readable column; wider
 - Pin → appears at top + on dashboard
 - Creator shown (profile photo if set, else coloured avatar with initials)
 - Markdown rendering: the card renders the full set the editor toolbar offers — headings (`#`–`###`), ordered/unordered lists, checklists (`- [ ]` / `- [x]`), blockquotes, dividers, inline code, links (safe schemes only), **bold**, *italic*, ~~strikethrough~~, and underline. Shared renderer (`renderMarkdownLight`), so the dashboard pinboard preview shows the same formatting
+- **Shared formatting toolbar (#731):** the toolbar above the content field is `.md-toolbar`, a shared component (`public/utils/markdown-toolbar.js`, `public/styles/markdown-toolbar.css`) rather than part of this module, because task notes carry the same one. Its labels live under `markdown.*` for the same reason. The placeholder text a button inserts on an empty selection — `Text`, `Code`, `Link text`, `url` — is translated: it lands in the note itself, so it is interface text like any other
+- **Tappable checklists (#704):** a rendered `- [ ]` box is a real control on the card and in the reader, not decoration. Ticking one rewrites exactly its own source line via `PATCH /api/v1/notes/:id/check`, so two members ticking different items in the same minute both keep their tick — a full-body `PUT` would have let the later save drop the earlier one silently. The box is addressed by the source line number the renderer leaves on it (`data-md-line`), never by its text, because two items reading "Milk" are otherwise indistinguishable; the client sends the line it saw as `expect`, and a mismatch is answered with `409` instead of a tick in the wrong row. The renderer keeps the inert `aria-hidden` box unless a caller opts in, so the dashboard — which shows a truncated excerpt whose line numbers are not the note's — stays decorative, and so does the reader while the editor holds unsaved text. The box names itself after its item (markers stripped) rather than wrapping it: an item may contain a link, and an `<a>` inside a `<button>` is not valid HTML. The route states a target rather than a toggle, so a repeated request is a no-op rather than a second flip - relevant because `PATCH` is deliberately outside the `Idempotency-Key` mechanism (see [Retry-safe writes](#retry-safe-writes-idempotency-key-822))
 - Reader mode (v1.25.0): opening an existing note shows a rendered Markdown reader by default; a Read/Edit toggle (segmented control) switches to the editor and back within the same modal. New notes open directly in the editor. Both panes stay mounted, so the toggle never discards unsaved input and the reader reflects live edits. Cancel/Save are hidden in read mode, while **Delete stays available in both modes (v1.36.0)** — previously the whole footer disappeared, leaving an opened note without a single object action
 - Full-text search: client-side filter bar, filters instantly by title + content, with a clear (×) control
 - **Creator filter (v1.36.0):** a chip row below the module head narrows the board to one author's notes. Shown only when at least two people have written notes; clicking the active chip clears the filter again
@@ -2784,7 +2951,7 @@ The shape stays stable in every case — a blocked module yields an empty list, 
 
 - **Household time zone (Settings → Personal → Appearance → Region, admin-only, v2.34.0 · #829):** the one zone this household lives in. Resolution order: `sync_config.household_timezone`, else the `TZ` env var, else the host zone, else UTC - so an installation that never touches the setting keeps behaving exactly as before. It exists as a setting because `TZ` is the wrong home for it: `TZ` lives in the compose file, which is out of reach on Umbrel, TrueNAS and Unraid, it is lost by a redeploy that drops the environment, and it also drives log timestamps and the backup cron, which have nothing to do with the family calendar. `GET /api/v1/preferences` returns two views - `timezone` (what is chosen, `null` for automatic) and `timezone_effective` (what applies), which is never null because the "Automatic (…)" option has to be able to name it. Validation is against ICU (`isValidTimeZone`, a `new Intl.DateTimeFormat({timeZone})` probe) rather than `Intl.supportedValuesOf('timeZone')`, which lists canonical names only and would reject a valid alias like `Europe/Kiev`; the dropdown is built from the **browser's** ICU so several hundred option strings stay out of every settings response. Admin-gated like region and data language, for the same reason: the zone decides which calendar day server-side jobs call "today", which zone subscribers read the exported ICS feed in, and what clock time an appointment arrives with in Google and Outlook.
 
-  **Before this there were five answers to "which clock applies here", and three of them were wrong most of the time.** Display followed the browser; the feed, VTODO due times and the Google outbound fallback followed `TZ` via `serverTimeZone()`; the upcoming-events widget, the recurring-split-expense scheduler, budget account balances and the calendar's default month derived "today" from `new Date().toISOString().slice(0, 10)`, which is **always UTC regardless of `TZ`**; the dashboard's date basis used the container's local getters; and the Outlook push carried a hard-coded `Europe/Berlin`. Server-side these are now one: `householdTimeZone(database)` and `todayKey(database)` in `server/utils/timezone.js`; the display joined them in v2.36.0 (see below). The connection is **passed in** rather than imported, because `server/db.js` connects and migrates on import and this module hangs off the ICS parser and the recurrence expansion - the same injection `resolveHouseholdLocale(database)` uses. Three guards in `test:household-timezone` keep the count at one: no server module outside `timezone.js` calls `serverTimeZone()` directly, none derives "today" from `new Date().toISOString()` (the named `utcDateKey()` stays allowed - the OpenWeatherMap forecast really is keyed in UTC days, and a name states that intent where an allowlist would only record an exception), and the Outlook push carries no fixed zone.
+  **Before this there were five answers to "which clock applies here", and three of them were wrong most of the time.** Display followed the browser; the feed, VTODO due times and the Google outbound fallback followed `TZ` via `serverTimeZone()`; the upcoming-events widget, the recurring-split-expense scheduler, budget account balances and the calendar's default month derived "today" from `new Date().toISOString().slice(0, 10)`, which is **always UTC regardless of `TZ`**; the dashboard's date basis used the container's local getters; and the Outlook push carried a hard-coded `Europe/Berlin`. Server-side these are now one: `householdTimeZone(database)` and `todayKey(database)` in `server/utils/timezone.js`; the display joined them in v2.36.0 (see below). **The seventh clock, found in the wake of #851:** both due-date labels - `formatDueDate` on the dashboard and its namesake in the Tasks module - built a `new Date()` out of `due_date`/`due_time` and read its browser getters. Two errors in one: a zoneless wall-clock time became an instant in the *browser's* zone, which the formatters then converted into the display zone (household on Honolulu, browser in Berlin: a task entered for 21:00 read 9:00), and the same clock decided "today"/"tomorrow". In the Tasks module that put two clocks in one view, because the grouping beside it has followed `todayKey()` since #829 - a task could sit under "Tomorrow" and read "Due today". Both now compare wall-clock stamps as text and pass the stamp, not a `Date`, to the formatters. The guard in `test:display-timezone` did not catch it: it matched `new Date(x).getHours()`, and a getter on a variable (`const now = new Date(); now.getHours()`) reads differently. **Widening it turned up seven more**, all fixed alongside: the date picker's "today" ring, the running month in Budget and Inventory, `relativeDateLabel` on the dashboard (which is handed real instants and therefore converted them into the wrong zone), the open-medication window in Health, and the pre-filled date of a new shared expense. The widened guard looks for the **argument-less** `new Date()` - that is a question to the clock, and it has one answer - whether its getters sit on the expression or on a binding. It stays a rule rather than an allowlist: `getSeconds`/`getMilliseconds` are outside the pattern because they read the same in every zone, and the only two exempt files are `utils/timezone.js`, which answers the question, and `theme-init.js`, which runs in the `<head>` before any zone has been mirrored and decides something about the device rather than the household. A second guard covers `toDateString()`, which is the same clock under another name and slips past the first because it uses no getter at all. **`relativeDateLabel` is the cautionary case of the whole sweep:** its first fix routed everything through `zonedDateKey()`, which is right for a real instant and right for a zoneless key *string* - but wrong for `parseLocalDateKey('2026-08-25')`, a browser-midnight `Date` that looks like an instant and means a calendar day. Converting that reintroduced the very off-by-one the sweep was closing. The obligation therefore sits with the **caller**: whoever holds a day key passes the key, and does not build a `Date` out of it first. The connection is **passed in** rather than imported, because `server/db.js` connects and migrates on import and this module hangs off the ICS parser and the recurrence expansion - the same injection `resolveHouseholdLocale(database)` uses. Three guards in `test:household-timezone` keep the count at one: no server module outside `timezone.js` calls `serverTimeZone()` directly, none derives "today" from `new Date().toISOString()` (the named `utcDateKey()` stays allowed - the OpenWeatherMap forecast really is keyed in UTC days, and a name states that intent where an allowlist would only record an exception; since #851 the OWM branch shifts the instant by the location's own offset before taking that key, because the *day* it needs to drop is the one at the weather location, not the one in UTC - far west of it the UTC day dropped the wrong entry and the forecast began at the day after tomorrow), and the Outlook push carries no fixed zone.
 
   **The sixth clock: the display (v2.36.0 · #829).** The zone above governed the server; the browser still read every value in its own. That only shows up where the two storage forms of `calendar_events.start_datetime` meet: a locally created appointment is bare wall-clock time, a synced one is an instant, and a browser leaves the first alone while converting the second - so outside the household's zone the same clock time rendered two different ways depending on the appointment's origin. `public/utils/timezone.js` is the client-side counterpart and states the deciding rule once: **only a value that carries its own zone is converted.** Wall-clock strings and bare dates are parsed, never routed through `new Date()`, which would first turn them into an instant of the browser's zone and then convert that. Two separations hold the design up. `todayKey()` is a **question to the clock** and follows the household zone; `toLocalDateKey`/`parseLocalDateKey` remain a **converter pair** and must not see it, because the round trip key → Date → key only returns its key unchanged while both directions read the same clock - moving both would have shifted every date key in the app by a day. And the value mirrored into the browser is `timezone` (the choice), not `timezone_effective` (the resolution chain, which is never empty): mirroring the latter would silently move an existing installation's display onto its container's `TZ`. Six guards in `test:display-timezone` keep the count at one, among them that no module outside `timezone.js` derives a day or a time from the browser getters of an instant, and that no second zone-bearing `Intl` formatter exists (`timeZone: 'UTC'` stays allowed - that is not a zone but the assurance *not* to convert). The guards read the source with comments stripped; the first run reported the sentence explaining why `timeZone: 'UTC'` is allowed as a violation.
 
@@ -2863,7 +3030,7 @@ Personal birthday tracker with automatic calendar integration.
 Time-based reminders attached to tasks, calendar events, subscriptions, or inventory items.
 
 - **Tasks and subscriptions keep one reminder per entity** (upsert — creating a new one replaces the previous). **Calendar events carry up to five**, each an independent row delivered separately; the event dialog manages them as a row list (see [Reminders data model](#reminders))
-- **Inventory items** derive one reminder from their warranty end date (30 days before, if purchase date and warranty length are both set) and one **per custom tracked date** (see [Inventory Item Dates](#inventory-item-dates)), each with its own configurable lead time. Both are recomputed whenever the item is saved — deleting the underlying date or clearing the warranty fields removes the reminder too
+- **Inventory items** derive one reminder from their warranty end date (30 days before, if purchase date and warranty length are both set) and one **per custom tracked date** (see [Inventory Item Dates](#inventory-item-dates-migration-v140)), each with its own configurable lead time. Both are recomputed whenever the item is saved — deleting the underlying date or clearing the warranty fields removes the reminder too
 - Reminder time set via the shared `yuvomi-datepicker` in the task or event modal, usually as an offset from the due date/start
 - **Pending reminders:** polled on page load and at a fixed interval; displayed as an in-app notification badge/toast
 - **Birthday reminders** auto-synced from the Birthdays module (configurable offset per birthday, default 1 day before each occurrence)

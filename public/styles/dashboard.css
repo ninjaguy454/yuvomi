@@ -1189,6 +1189,27 @@
   white-space: nowrap;
 }
 
+/* Hoch und Tief des laufenden Tages (#851). Dasselbe Vokabular wie die
+ * Vorhersagereihe darunter - semibold Hoch, gedaempftes Tief - damit die Karte
+ * eine Zahlensprache spricht und nicht zwei. */
+.weather-widget__range {
+  display: flex;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  margin-bottom: var(--space-0h);
+  white-space: nowrap;
+}
+
+.weather-widget__range-high {
+  font-weight: var(--font-weight-semibold);
+}
+
+.weather-widget__range-low {
+  color: var(--color-text-secondary);
+}
+
 .weather-widget__desc {
   font-size: var(--text-sm);
   font-weight: var(--font-weight-medium);
@@ -1492,6 +1513,7 @@ svg.weather-forecast__icon {
 /* Tiny weather keeps the current conditions readable instead of forcing
  * forecast rows into a 1x1 tile. */
 .widget-size--1x1 > .weather-widget .weather-widget__meta,
+.widget-size--1x1 > .weather-widget .weather-widget__range,
 .widget-size--1x1 > .weather-widget .weather-widget__glyph,
 .widget-size--1x1 > .weather-widget .weather-forecast {
   display: none;
@@ -4327,6 +4349,21 @@ svg.weather-forecast__icon {
   color: var(--color-text-primary);
 }
 
+.wall-weather__range {
+  display: flex;
+  gap: var(--space-1);
+  font-size: var(--wall-row-sub);
+  font-variant-numeric: tabular-nums;
+}
+
+.wall-weather__range-high {
+  color: var(--color-text-primary);
+}
+
+.wall-weather__range-low {
+  color: var(--color-text-tertiary);
+}
+
 .wall-weather__desc {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4518,6 +4555,7 @@ svg.weather-forecast__icon {
 
 [data-wall-night] .wall-row__title,
 [data-wall-night] .wall-weather__temp,
+[data-wall-night] .wall-weather__range-high,
 [data-wall-night] .wall-weather__day-high {
   color: var(--color-text-secondary);
 }
@@ -4589,4 +4627,261 @@ svg.weather-forecast__icon {
 
 .widget-options__choice input {
   flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------
+ * Schnellzugriffe (#469)
+ *
+ * EINE ZEILE, DIE UMBRICHT - kein Raster mit fester Spaltenzahl. Die Reihe
+ * steht in einer 2x1-Kachel, deren Breite vom Fenster abhaengt; eine feste
+ * Spaltenzahl waere auf dem Telefon zu eng und am Wandtablet zu leer. Die
+ * Kacheln haben ihre eigene Mindestbreite und der Umbruch folgt daraus.
+ * -------------------------------------------------------- */
+.widget--quicklinks { --widget-accent: var(--module-dashboard); }
+
+.quick-link-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  padding-top: 0;
+}
+
+/* Das Gesicht einer Kachel - Bild oder Buchstabe auf der gewaehlten Farbe.
+ * Als eigene Klasse, weil es an vier Stellen auftritt: auf der Uebersicht, in
+ * der Verwaltungsliste, als Vorschau im Formular und dort noch einmal gross. */
+/* DIE SCHRIFTFARBE IST `--color-ink-on-vivid` UND NICHT `--color-text-on-accent`.
+ * Der zweite ist Weiss und traegt auf einem hellen Ton nicht: derselbe Befund,
+ * der die Avatar-Initialen einmal gekostet hat (utils/contrast.js), und den der
+ * Farbpaar-Guard hier beim ersten Anlauf mit gemessenen 2,72:1 gemeldet hat.
+ * Wo eine GEWAEHLTE Farbe im Spiel ist, entscheidet ohnehin `prefersInkText`
+ * im JS und setzt `--ink`; diese Zeile deckt den Fall ohne Farbe ab, in dem der
+ * App-Akzent einspringt. */
+.quick-link-face {
+  display: grid;
+  place-items: center;
+  inline-size: 40px;
+  block-size: 40px;
+  flex: none;
+  border-radius: var(--radius-md);
+  background: var(--quick-link-color, var(--color-accent));
+  color: var(--color-ink-on-vivid);
+  overflow: hidden;
+}
+
+.quick-link-face--ink,
+.quick-link-tile__face--ink { color: var(--color-ink-on-bright); }
+
+.quick-link-face img {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.quick-link-face__monogram {
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+}
+
+.quick-link-face--lg {
+  inline-size: 72px;
+  block-size: 72px;
+  border-radius: var(--radius-lg);
+  border: none;
+  cursor: pointer;
+}
+
+.quick-link-face--lg .quick-link-face__monogram { font-size: var(--text-3xl); }
+
+.quick-link-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  /* 96px und nicht 84: darunter bricht genau die Auskunft ab, fuer die die
+   * Zeile da ist - "192.168.1.5:8096" endete als "192.168.1.5:8…", also ohne
+   * den Port, und damit ohne die Haelfte, die den Dienst benennt. Sechs
+   * Kacheln passen weiterhin in eine 2x1-Kachel auf dem Desktop. */
+  inline-size: 96px;
+  padding: var(--space-2) var(--space-1);
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  position: relative;
+  transition: background var(--transition-fast);
+}
+
+.quick-link-tile:hover,
+.quick-link-tile:focus-visible { background: var(--color-surface-hover); }
+
+.quick-link-tile__face {
+  display: grid;
+  place-items: center;
+  inline-size: 44px;
+  block-size: 44px;
+  border-radius: var(--radius-md);
+  background: var(--quick-link-color, var(--color-accent));
+  color: var(--color-ink-on-vivid);
+  overflow: hidden;
+}
+
+.quick-link-tile__face img {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.quick-link-tile__monogram {
+  font-size: var(--text-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+}
+
+/* Name und Host bleiben einzeilig: eine Kachelreihe, in der eine Kachel drei
+ * Zeilen hoch ist, weil ihr Name lang ist, ist keine Reihe mehr. */
+.quick-link-tile__name,
+.quick-link-tile__host {
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.quick-link-tile__name {
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.quick-link-tile__host {
+  font-size: var(--text-2xs);
+  color: var(--color-text-secondary);
+}
+
+.quick-link-tile__private {
+  position: absolute;
+  inset-block-start: var(--space-1);
+  inset-inline-end: var(--space-1);
+  inline-size: 12px;
+  block-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* Der Weg zur Verwaltung sitzt am Ende der Reihe und sieht aus wie eine Kachel,
+ * ohne eine zu sein - gestrichelt statt gefuellt, damit niemand ihn fuer einen
+ * Dienst haelt. */
+.quick-link-tile--add .quick-link-tile__face {
+  background: transparent;
+  border: 1px dashed var(--color-border-strong);
+  color: var(--color-text-secondary);
+}
+
+/* --------------------------------------------------------
+ * Verwaltung
+ * -------------------------------------------------------- */
+.quick-link-manage-list {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.quick-link-manage-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.quick-link-manage-row__handle {
+  display: grid;
+  place-items: center;
+  color: var(--color-text-quaternary);
+  cursor: grab;
+  touch-action: none;
+}
+
+.quick-link-manage-row__body {
+  display: flex;
+  flex-direction: column;
+  min-inline-size: 0;
+  flex: 1;
+}
+
+.quick-link-manage-row__name,
+.quick-link-manage-row__host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.quick-link-manage-row__name { font-weight: var(--font-weight-medium); }
+
+.quick-link-manage-row__host {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+}
+
+.quick-link-manage-row__private {
+  inline-size: 14px;
+  block-size: 14px;
+  color: var(--color-text-secondary);
+}
+
+.quick-link-manage-row__locked {
+  font-size: var(--text-xs);
+  color: var(--color-text-quaternary);
+}
+
+.quick-link-manage-empty {
+  margin: 0 0 var(--space-3);
+  color: var(--color-text-secondary);
+}
+
+.quick-link-manage-add { inline-size: 100%; }
+
+/* --------------------------------------------------------
+ * Formular
+ * -------------------------------------------------------- */
+.quick-link-form__face {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-end: var(--space-4);
+}
+
+.quick-link-form__face-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.quick-link-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.quick-link-swatch {
+  inline-size: 32px;
+  block-size: 32px;
+  border-radius: var(--radius-full);
+  border: 2px solid transparent;
+  background: var(--swatch);
+  cursor: pointer;
+  padding: 0;
+}
+
+.quick-link-swatch--active {
+  border-color: var(--color-text-primary);
+  box-shadow: var(--shadow-sm);
 }

@@ -74,11 +74,11 @@ Schalte an, was dein Haushalt braucht; der Rest bleibt aus dem Weg.
 
 | Modul | In einer Zeile |
 |---|---|
-| **Aufgaben** | Kanban-Board mit Fristen, Prioritäten, Unteraufgaben, Tags, Wiederholungen und Mehrfachzuweisung. Dokumente anhängen und in Kommentaren besprechen. Eine Aufgabe lässt sich sperren, sodass nur Ersteller:in und Admins sie umschreiben, alle anderen sie aber weiter abhaken können. |
+| **Aufgaben** | Kanban-Board mit Fristen, Prioritäten, Unteraufgaben, Tags, Wiederholungen und Mehrfachzuweisung. Dokumente anhängen und in Kommentaren besprechen. Ein Verlauf zeigt nach Tagen, was erledigt wurde und wer abgehakt hat - und wann eine wiederkehrende Aufgabe zuletzt dran war. Eine Aufgabe lässt sich sperren, sodass nur Ersteller:in und Admins sie umschreiben, alle anderen sie aber weiter abhaken können. |
 | **Einkauf** | Geteilte Listen nach Gang gruppiert und in der Reihenfolge deines Ladens, mit Wischgesten und Ein-Tipp-Import aus dem Essensplan. |
 | **Mahlzeiten** | Wochenplaner per Drag-and-drop mit Rezept-Seitenleiste und direktem Export in die Einkaufsliste. |
 | **Rezepte** | Rezepte anlegen, duplizieren und skalieren, Mahlzeiten damit vorbelegen oder die Zutaten auf eine Einkaufsliste schicken. Eine Mealie- oder Tandoor-Instanz lässt sich lesend spiegeln. |
-| **Vorrat** | Was wirklich im Haus ist: Menge, Lagerort und Mindesthaltbarkeit, mit Filtern für Ablauf und knappe Bestände. |
+| **Vorrat** | Was wirklich im Haus ist: Menge, Lagerort und Mindesthaltbarkeit, mit Filtern für Ablauf und knappe Bestände und einer Meldung, bevor ein Datum erreicht ist. |
 | **Kalender** | Zwei-Wege-Sync mit Google und CalDAV, einseitiger Outlook-Push via Microsoft Graph, Kalender-Abos, Wiederholungen, Feiertage und Sichtbarkeit je Termin. |
 | **Dokumente** | Familiendateien hochladen, taggen, ansehen und ordnen, optional auf WebDAV oder Google Drive. |
 | **Inventar** | Was dir gehört: Kaufpreis, Garantie, Zustand und Lagerort, mit verknüpften Belegen und Erinnerungen vor Fristablauf. Standardmäßig aus; Haushalte schalten es an. |
@@ -86,10 +86,10 @@ Schalte an, was dein Haushalt braucht; der Rest bleibt aus dem Weg.
 | **Hauswirtschaft** | Haushaltshilfen: Dienstpläne, Ein- und Ausstempeln, Tages- oder Stundenabrechnung, Aufgaben und Materialwünsche. |
 | **Belohnungen** | Punkte auf Aufgaben schreiben der zugewiesenen Person gut, mit elterlich freigegebenem Katalog und nachvollziehbarem Konto. |
 | **Gesundheit** | Vitalwerte, Medikamente, Laborwerte, Aktivität und Zyklus je Mitglied, mit Verlaufsdiagrammen. |
-| **Notizen &amp; Kontakte** | Farbige Markdown-Haftnotizen plus ein Kontaktverzeichnis mit CardDAV-Sync und vCard-Import/-Export. |
+| **Notizen &amp; Kontakte** | Farbige Markdown-Haftnotizen mit Checklisten, die man antippt statt zu bearbeiten, plus ein Kontaktverzeichnis mit CardDAV-Sync und vCard-Import/-Export. |
 | **Geburtstage** | Geburtstagsliste mit automatischen Kalendereinträgen, Altersanzeige und Erinnerungen. |
 | **Familie** | Mitgliedsprofile mit Rollen, Fotos und Kontaktdaten. Neue Mitglieder kommen über einen Einladungslink und wählen ihr Passwort selbst. |
-| **Erinnerungen** | Erinnerungen an Aufgaben und Termine per In-App-Kennzeichen, optionalem Push und Gotify-, ntfy- oder Webhook-Kanälen des Haushalts. |
+| **Erinnerungen** | Erinnerungen an Aufgaben, Termine, Abo-Verlängerungen, Garantien, Inventar-Fristen und Mindesthaltbarkeit, per In-App-Kennzeichen, optionalem Push und Gotify-, ntfy- oder Webhook-Kanälen des Haushalts. |
 | **API-Token** | Bearer- / X-API-Key-Token mit OpenAPI-3.0-Spezifikation und eingebautem MCP-Endpunkt für KI-Agenten. Schreibende Aufrufe sind über einen optionalen `Idempotency-Key`-Header wiederholbar. |
 | **Backup** | Manuelle und geplante Sicherung und Wiederherstellung mit Rollback davor und optionalem Cloud-Upload. |
 

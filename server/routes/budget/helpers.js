@@ -573,6 +573,34 @@ export function fromBudgetAmount(amount, loan) {
   return cents(Number(amount || 0) / loanRate(loan));
 }
 
+// --------------------------------------------------------
+// Richtung eines Darlehens (#638)
+// --------------------------------------------------------
+
+// Das Modul war ursprünglich nur für verliehenes Geld gedacht - die Rate wurde
+// deshalb immer als Einnahme gebucht. Ein aufgenommener Kredit zahlt aber raus,
+// seine Rate ist eine Ausgabe.
+export const LOAN_DIRECTIONS = ['lent', 'borrowed'];
+
+// Wie eine Rate ins Budget gebucht wird. Vorzeichen UND Kategorie hängen an der
+// Richtung: stats.js liest den Typ am Vorzeichen ab (amount > 0 = Einnahme), die
+// Kategorie muss dazu passen, sonst steht eine Ausgabe unter einer income-Kategorie.
+//
+// Diese Regel steht hier und nicht im Loans-Router, weil sie an DREI Stellen gilt:
+// beim Buchen einer Rate, beim Umbuchen nach einem Richtungswechsel und beim
+// Bearbeiten des gekoppelten Budget-Eintrags. Solange sie nur der Loans-Router
+// kannte, erzwang der Eintrags-Router weiter das alte "Rate = Einnahme" und
+// sperrte damit jede Korrektur an der Rate eines aufgenommenen Kredits (#859).
+export const REPAYMENT_BOOKING = {
+  lent: { sign: 1, category: 'Geschenke & Transfers', subcategory: '' },
+  borrowed: { sign: -1, category: 'financial_other', subcategory: 'loans_interest' },
+};
+
+/** Buchungsregel eines Darlehens; unbekannte/fehlende Richtung fällt auf 'lent' zurück. */
+export function bookingFor(direction) {
+  return REPAYMENT_BOOKING[direction] || REPAYMENT_BOOKING.lent;
+}
+
 export function loanSummaryRow(loan, baseCurrency = budgetCurrency()) {
   const payments = db.get().prepare(`
     SELECT p.*, u.display_name AS creator_name,

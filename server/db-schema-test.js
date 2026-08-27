@@ -980,6 +980,24 @@ const MIGRATIONS_SQL = {
     CREATE INDEX IF NOT EXISTS idx_invites_open ON invites(expires_at)
       WHERE accepted_at IS NULL AND revoked_at IS NULL;
   `,
+
+  // SQL-String für Migration v160 (gespiegelt aus db.js MIGRATIONS):
+  // Schnellzugriffe als Kachelreihe auf der Übersicht (#469).
+  160: `
+    CREATE TABLE IF NOT EXISTS quick_links (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      name        TEXT    NOT NULL,
+      url         TEXT    NOT NULL,
+      icon_data   TEXT,
+      color       TEXT,
+      visibility  TEXT    NOT NULL DEFAULT 'all',
+      created_by  INTEGER REFERENCES users(id),
+      position    INTEGER NOT NULL DEFAULT 0,
+      created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+      updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_quick_links_position ON quick_links(position);
+  `,
 };
 
 export { MIGRATIONS_SQL };

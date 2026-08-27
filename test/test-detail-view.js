@@ -316,13 +316,16 @@ test('die Weiterleitung für Haushaltshilfe-Besuche greift vor der Detailansicht
 // Aufgaben
 // --------------------------------------------------------
 
-test('alle fünf Aufgaben-Einstiege führen in die Detailansicht', async () => {
+test('jeder Weg zu einer bestehenden Aufgabe führt in die Detailansicht', async () => {
   const src = await tasksJs();
   assert.match(src, /function openTaskDetail\(\{ task, users = \[\], reminder = null \}, container\)/);
 
   // Nur Aufrufe zählen, nicht die Definition darüber.
+  // Die Zahl steht hier als BUCHFÜHRUNG, nicht als Obergrenze: ein neuer
+  // Einstieg soll diesen Test rot machen, damit jemand entscheidet, wohin er
+  // führt. Beim Verlauf (#791) hat er genau das getan.
   const detailCalls = [...src.matchAll(/openTaskDetail\(\{ task, users: state\.users, reminder \}, container\)/g)];
-  assert.equal(detailCalls.length, 4, 'Listenzeile/Stift, Kanban, Wischen und Deep-Link');
+  assert.equal(detailCalls.length, 5, 'Listenzeile/Stift, Kanban, Wischen, Deep-Link und Verlauf');
 
   // Übrig bleibt genau ein openTaskModal-Aufruf: der FAB für neue Aufgaben.
   // Die Definition darüber trägt Defaults (`= {}`) und zählt nicht mit.

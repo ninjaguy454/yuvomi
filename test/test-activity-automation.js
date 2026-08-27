@@ -5,7 +5,7 @@ import Database from 'better-sqlite3-multiple-ciphers';
 process.env.DB_PATH = ':memory:';
 process.env.TZ = 'UTC';
 
-const { MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const {
   householdMembers,
   effectiveSkillProficiency,
@@ -24,7 +24,7 @@ function buildTestDb() {
   database.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY, description TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
-  for (const migration of MIGRATIONS) {
+  for (const migration of ALL_MIGRATIONS) {
     if (typeof migration.up === 'function') migration.up(database);
     else database.exec(migration.up);
     if (typeof migration.afterUp === 'function') migration.afterUp(database);

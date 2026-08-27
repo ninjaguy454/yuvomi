@@ -32,6 +32,19 @@ export function tasksPaths() {
       post: op({ summary: 'Create task', tag: 'Tasks', stateChanging: true, requestBody: jsonBody(null), description: 'Body accepts `locked: true` to close the task definition to everyone but its creator and administrators (#830). A subtask under a locked parent inherits the lock, and adding one requires the same rights.' }),
     },
     '/api/v1/tasks/meta/options': { get: op({ summary: 'Get task metadata', tag: 'Tasks' }) },
+    '/api/v1/tasks/completions': {
+      get: op({
+        summary: 'List completed tasks, newest first',
+        tag: 'Tasks',
+        description: 'The household history of who ticked off which task, and when (#791). Recording started with the release that introduced it, so nothing before that appears. Timestamps are UTC instants; which calendar day one belongs to is a question for the display timezone, which is why there is no date range here. Only tasks the caller may see are returned, evaluated live against the task - a task later set to private disappears from the history too. Subtasks are never recorded: a checklist item is part of its parent instruction, and the completion of the parent is the event.',
+        params: [
+          { name: 'limit',     in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
+          { name: 'user_id',   in: 'query', required: false, schema: { type: 'integer' }, description: 'Only completions by this member - who ticked it off, which is not necessarily who it was assigned to.' },
+          { name: 'before_at', in: 'query', required: false, schema: { type: 'string' }, description: 'Cursor, taken from `next_cursor` of the previous page. Paired with before_id because several completions can share a second.' },
+          { name: 'before_id', in: 'query', required: false, schema: { type: 'integer' }, description: 'Cursor, taken from `next_cursor` of the previous page.' },
+        ],
+      }),
+    },
     '/api/v1/tasks/points/affected': {
       get: op({ summary: 'Count unfinished tasks on a given point value', tag: 'Tasks', description: 'Admin only. Preview for the default-points rebase: top-level tasks that are not done and whose points equal the query value.' }),
     },
@@ -80,6 +93,14 @@ export function tasksPaths() {
     '/api/v1/tasks/{id}/documents': {
       get: op({ summary: 'List documents linked to a task', tag: 'Tasks', params: [idParam()], description: 'Returns family documents linked to the task that are visible to the current user.' }),
       put: op({ summary: 'Set documents linked to a task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Replace-set of document_ids; only documents visible to the user are linked. Attachments are part of the task definition, so a locked task answers 403 for anyone but its creator and administrators.' }),
+    },
+    '/api/v1/tasks/{id}/completions': {
+      get: op({
+        summary: 'List completions of this task and its repetition chain',
+        tag: 'Tasks',
+        params: [idParam(), { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }],
+        description: 'Answers "when was this last done" for a recurring task (#791). A completed repeating task spawns a follow-up instance, so its history is spread across a chain of rows; this walks the chain to its root and returns the whole series, newest first. A task the caller cannot see answers 404.',
+      }),
     },
     '/api/v1/tasks/{id}/comments': {
       get: op({ summary: 'List comments on a task', tag: 'Tasks', params: [idParam()], description: 'Oldest first. Anyone who may see the task may read its comments; a task the caller cannot see answers 404.' }),

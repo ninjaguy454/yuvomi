@@ -41,12 +41,18 @@ function mentionOptions(panel, field) {
   const context = field.dataset.variableMentions;
   const variables = context?.startsWith('workflow') ? workflowMentionOptions(panel) : [];
   const builtIns = [];
-  if (context === 'activity-title' || context === 'activity-supervision'
-      || context === 'workflow-step-title') {
-    builtIns.push({ id: 'subject', label: 'Subject', detail: 'Household member', token: '{subject}' });
+  if (['activity-title', 'activity-description', 'activity-supervision',
+    'workflow-step-title', 'workflow-step-description'].includes(context)) {
+    builtIns.push({
+      id: 'subject',
+      label: 'Person this activity is for',
+      detail: 'Activity subject',
+      token: '{subject}',
+    });
   }
-  if (context === 'activity-supervision') {
-    builtIns.push({ id: 'activity', label: 'Activity', detail: 'Activity template name', token: '{activity}' });
+  if (['activity-title', 'activity-description', 'activity-supervision',
+    'workflow-step-title', 'workflow-step-description'].includes(context)) {
+    builtIns.push({ id: 'activity', label: 'Activity name', detail: 'Template name', token: '{activity}' });
   }
   return [...builtIns, ...variables];
 }
@@ -71,9 +77,14 @@ function activeMention(field) {
 function wireVariableMentions(panel) {
   const menu = document.createElement('div');
   menu.className = 'automation-mention-menu';
+  menu.id = 'automation-mention-menu';
   menu.setAttribute('role', 'listbox');
   menu.hidden = true;
-  panel.appendChild(menu);
+  // A fixed-position child of .modal-panel is positioned against that panel
+  // because the modal animation establishes a containing block. Mount the
+  // picker on the full-screen overlay instead, whose origin matches the
+  // viewport coordinates returned by getBoundingClientRect().
+  (panel.closest('.modal-overlay') || document.body).appendChild(menu);
   let active = { field: null, mention: null, options: [], index: 0 };
 
   const close = () => {
@@ -100,9 +111,20 @@ function wireVariableMentions(panel) {
   const position = () => {
     if (!active.field) return;
     const rect = active.field.getBoundingClientRect();
-    menu.style.left = `${rect.left}px`;
-    menu.style.top = `${rect.bottom + 4}px`;
-    menu.style.width = `${Math.max(220, rect.width)}px`;
+    const gutter = 12;
+    const gap = 4;
+    const width = Math.min(Math.max(220, rect.width), window.innerWidth - (2 * gutter));
+    const left = Math.min(Math.max(gutter, rect.left), window.innerWidth - width - gutter);
+    menu.style.left = `${left}px`;
+    menu.style.width = `${width}px`;
+
+    const menuHeight = menu.offsetHeight;
+    const below = rect.bottom + gap;
+    const above = rect.top - gap - menuHeight;
+    const top = below + menuHeight <= window.innerHeight - gutter || above < gutter
+      ? Math.min(below, window.innerHeight - menuHeight - gutter)
+      : above;
+    menu.style.top = `${Math.max(gutter, top)}px`;
   };
 
   const open = (field, mention) => {
@@ -111,10 +133,11 @@ function wireVariableMentions(panel) {
     ));
     if (!options.length) { close(); return; }
     active = { field, mention, options, index: 0 };
-    position();
-    menu.hidden = false;
     field.setAttribute('aria-expanded', 'true');
+    field.setAttribute('aria-controls', menu.id);
     paint();
+    menu.hidden = false;
+    position();
   };
 
   const choose = (index = active.index) => {
@@ -632,21 +655,21 @@ function openActivityForm(activity, context, manager = null) {
   const selectedSkills = new Set((activity?.skills ?? []).map((skill) => Number(skill.id)));
   const strategy = activity?.assignment_strategy || 'subject_skill';
   const content = `<form id="automation-activity-form">
-    ${inputRow('Activity name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`)}
-    ${inputRow('Task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}">`, 'Type @ to insert the selected household member.')}
-    ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3">${h(activity?.description || '')}</textarea>`)}
+    ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
+    ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}">`, 'The title created on the actual task. Type @ to insert the person or Activity Template name.')}
+    ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3" data-variable-mentions="activity-description" aria-autocomplete="list" aria-expanded="false">${h(activity?.description || '')}</textarea>`, 'Type @ to insert the person or Activity Template name.')}
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
-      <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Subject, based on proficiency</option>
+      <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper, based on proficiency</option>
       <option value="eligible_round_robin" ${strategy === 'eligible_round_robin' ? 'selected' : ''}>Eligible round robin</option>
       <option value="fixed" ${strategy === 'fixed' ? 'selected' : ''}>Fixed household member</option>
     </select>`)}
-    <label class="automation-check-row"><input type="checkbox" name="subject_required" ${activity?.subject_required !== 0 ? 'checked' : ''}> Requires a subject</label>
+    <label class="automation-check-row"><input type="checkbox" name="subject_required" ${activity?.subject_required !== 0 ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed assignee', `<select class="input" name="fixed_user_id">${memberOptions(context.members, activity?.fixed_user_id)}</select>`)}</div>
     <fieldset class="automation-fieldset"><legend class="label">Required skills</legend>
       <div class="automation-skill-grid">${context.skills.map((skill) => `<label class="automation-check-row"><input type="checkbox" name="skill" value="${skill.id}" ${selectedSkills.has(Number(skill.id)) ? 'checked' : ''}> ${h(skill.name)}</label>`).join('') || '<small class="form-hint">Create skills first if this activity requires proficiency checks.</small>'}</div>
     </fieldset>
-    ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" data-variable-mentions="activity-supervision" aria-autocomplete="list" aria-expanded="false" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Type @ to insert the subject or activity name. Used only when the subject is Supervised.')}
+    ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" data-variable-mentions="activity-supervision" aria-autocomplete="list" aria-expanded="false" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Type @ to insert the person or Activity Template name. Used only when the person requires supervision.')}
     ${footer(activity ? 'Save activity' : 'Create activity')}
   </form>`;
   openModal({
@@ -730,7 +753,52 @@ let workflowDraftVariableSequence = 0;
 
 function newWorkflowVariableId() {
   workflowDraftVariableSequence += 1;
-  return `variable_${Date.now().toString(36)}_${workflowDraftVariableSequence}`;
+  return workflowDraftVariableSequence === 1 ? 'new_variable' : `new_variable_${workflowDraftVariableSequence}`;
+}
+
+function workflowVariableSlug(label) {
+  const normalized = String(label ?? '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 64)
+    .replace(/_+$/g, '');
+  if (!normalized) return 'new_variable';
+  return /^[a-z]/.test(normalized) ? normalized : `value_${normalized}`;
+}
+
+function uniqueWorkflowVariableId(questions, currentRow, label) {
+  const base = workflowVariableSlug(label);
+  const used = new Set(
+    [...questions.querySelectorAll('[data-workflow-question]')]
+      .filter((row) => row !== currentRow)
+      .map((row) => row.dataset.variableId),
+  );
+  if (!used.has(base)) return base;
+  let suffix = 2;
+  while (used.has(`${base}_${suffix}`)) suffix += 1;
+  return `${base}_${suffix}`;
+}
+
+function renameWorkflowDraftVariable(panel, row, nextId) {
+  const previousId = row.dataset.variableId;
+  if (!previousId || previousId === nextId) return;
+  row.dataset.variableId = nextId;
+  const token = row.querySelector('[data-variable-token]');
+  if (token) token.textContent = `{{${nextId}}}`;
+
+  panel.querySelectorAll('[data-variable-mentions]').forEach((field) => {
+    const previousToken = `{{${previousId}}}`;
+    if (!field.value.includes(previousToken)) return;
+    field.value = field.value.replaceAll(previousToken, `{{${nextId}}}`);
+  });
+  panel.querySelectorAll('[data-step-subject-variable], [data-step-condition-variable]').forEach((select) => {
+    [...select.options].forEach((option) => {
+      if (option.value === previousId) option.value = nextId;
+    });
+  });
 }
 
 function workflowVariableOptions(questions, selected = '', { memberOnly = false } = {}) {
@@ -780,11 +848,12 @@ function workflowStepHtml(step, index, activities, questions, members) {
 }
 
 function questionHtml(question = {}) {
-  const variableId = workflowVariableId(question) || newWorkflowVariableId();
+  const existingVariableId = workflowVariableId(question);
+  const variableId = existingVariableId || newWorkflowVariableId();
   const type = question.type === 'select' ? 'choice' : (question.type || 'text');
-  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}">
-    <code class="automation-variable-token" title="Use this token in workflow titles and descriptions">{{${h(variableId)}}}</code>
-    <input class="input" data-question-label placeholder="Question label" value="${h(question.label || '')}">
+  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}">
+    <code class="automation-variable-token" data-variable-token title="Stable ID used by this workflow">{{${h(variableId)}}}</code>
+    <input class="input" data-question-label placeholder="Question or variable name" aria-label="Question or variable name" value="${h(question.label || '')}">
     <select class="input" data-question-type>
       <option value="household_member" ${type === 'household_member' ? 'selected' : ''}>Household Member</option>
       <option value="boolean" ${type === 'boolean' ? 'selected' : ''}>Yes/No</option>
@@ -807,7 +876,8 @@ function openWorkflowForm(workflow, context, manager = null) {
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${workflow?.subject_required !== 0 ? 'checked' : ''}> Ask which household member this is for</label>
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${workflow?.quick_add_enabled !== 0 ? 'checked' : ''}> Show in Quick Add</label>
 
-    <div class="automation-workflow-step__header"><strong>Workflow variables</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add variable</button></div>
+    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add variable</button></div>
+    <p class="form-hint automation-manager__hint">New IDs are generated from the variable name (for example, Day of Week becomes day_of_week). Duplicate names receive _2, _3, and so on. Once saved, IDs remain stable when display wording changes.</p>
     <div id="workflow-questions">${(workflow?.input_schema || []).map(questionHtml).join('')}</div>
 
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>Activities</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-step">Add activity</button></div>
@@ -904,7 +974,17 @@ function openWorkflowForm(workflow, context, manager = null) {
         refreshStepVariables();
       });
       questions.addEventListener('input', (event) => {
-        if (event.target.matches('[data-question-label]')) refreshStepVariables();
+        if (event.target.matches('[data-question-label]')) {
+          const row = event.target.closest('[data-workflow-question]');
+          if (row?.dataset.variableIdAuto === 'true') {
+            renameWorkflowDraftVariable(
+              panel,
+              row,
+              uniqueWorkflowVariableId(questions, row, event.target.value),
+            );
+          }
+          refreshStepVariables();
+        }
       });
       steps.addEventListener('change', (event) => {
         const select = event.target.closest('[data-step-condition-variable]');

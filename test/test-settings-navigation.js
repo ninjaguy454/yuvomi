@@ -284,7 +284,15 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'Quick Add should offer individual Activity Templates as well as workflows');
   assert.match(component, /data-variable-mentions="workflow-step-title"/,
     'workflow fields should expose the @ variable picker');
+  assert.match(component, /data-variable-mentions="activity-description"/,
+    'Activity Template descriptions should expose the @ variable picker');
   assert.match(component, /function wireVariableMentions/);
+  assert.match(component, /panel\.closest\('\.modal-overlay'\)[\s\S]*?appendChild\(menu\)/,
+    'the fixed picker must mount outside the positioned modal panel');
+  assert.match(component, /function workflowVariableSlug[\s\S]*?replace\(\/\[\^a-z0-9\]\+\/g, '_'\)/,
+    'new workflow variable IDs should be readable slugs derived from their names');
+  assert.match(component, /class="automation-variable-token" data-variable-token/,
+    'the readable stable variable ID should remain visible while authoring');
   assert.match(component, /data-delete-skill/,
     'skills need a visible guarded delete action');
   assert.match(component, /data-delete-activity/,

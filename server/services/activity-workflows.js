@@ -215,13 +215,19 @@ function substituteWorkflowVariables(value, labels) {
 
 function stepTitle(activity, subject, override = null, variableLabels = {}) {
   const title = override
-    ? String(override).replaceAll('{subject}', subject?.display_name || '').trim()
+    ? String(override)
+      .replaceAll('{subject}', subject?.display_name || '')
+      .replaceAll('{activity}', activity.name || 'Activity')
+      .trim()
     : renderActivityTitle(activity, subject);
   return substituteWorkflowVariables(title, variableLabels)?.trim();
 }
 
-function stepDescription(activity, override = null, variableLabels = {}) {
-  return substituteWorkflowVariables(override ?? activity.description, variableLabels);
+function stepDescription(activity, subject, override = null, variableLabels = {}) {
+  const description = String(override ?? activity.description ?? '')
+    .replaceAll('{subject}', subject?.display_name || '')
+    .replaceAll('{activity}', activity.name || 'Activity');
+  return substituteWorkflowVariables(description, variableLabels);
 }
 
 function supervisorTitle(activity, subject, variableLabels = {}) {
@@ -274,7 +280,7 @@ export function previewWorkflow(d, workflowId, {
           activity_template_id: activity.id,
           activity_name: activity.name,
           title: stepTitle(activity, activitySubject, step.title_override, variableLabels),
-          description: stepDescription(activity, step.description_override, variableLabels),
+          description: stepDescription(activity, activitySubject, step.description_override, variableLabels),
           subject: activitySubject,
           assigned_to: resolution.primary,
           supervisor: resolution.supervisor,
@@ -393,7 +399,7 @@ export function instantiateWorkflow(d, workflowId, {
 
       const primaryTaskId = insertTask(d, {
         title: stepTitle(activity, activitySubject, step.title_override, variableLabels),
-        description: stepDescription(activity, step.description_override, variableLabels),
+        description: stepDescription(activity, activitySubject, step.description_override, variableLabels),
         category: activity.category,
         assignedTo: resolution.primary?.id ?? null,
         createdBy,

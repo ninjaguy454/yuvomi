@@ -109,6 +109,7 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   const makeBed = await call('POST', '/automation/admin/activity-templates', {
     name: 'Make Bed',
     title_template: "Make {subject}'s Bed",
+    description: 'Help {subject} finish {activity}.',
     category: 'misc',
     assignment_strategy: 'subject_skill',
     subject_required: true,
@@ -157,6 +158,7 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   assert.equal(preview.status, 200, JSON.stringify(preview.body));
   assert.equal(preview.body.data.steps.length, 2);
   assert.equal(preview.body.data.steps[1].subject_proficiency, 'supervised');
+  assert.equal(preview.body.data.steps[1].description, 'Help Frank finish Make Bed.');
   assert.ok(preview.body.data.steps[1].supervisor);
 
   const created = await call('POST', `/automation/quick-add/${workflow.body.data.id}/create`, {

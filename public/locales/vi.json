@@ -59,7 +59,8 @@
             "private": "Chỉ mình tôi",
             "hint": "Kiểm soát ai có thể xem mục này trong Yuvomi.",
             "assigneesNobodyHint": "Nếu không giao cho ai, chỉ bạn thấy mục này."
-        }
+        },
+        "toShoppingListNamed": "Thêm {{title}} vào danh sách mua sắm"
     },
     "kitchen": {
         "noShoppingLists": "Chưa có danh sách mua sắm.",
@@ -112,7 +113,8 @@
         "health": "Sức khỏe",
         "rewards": "Phần thưởng",
         "pantry": "Kho dự trữ",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Tổng quan",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Mục này và tất cả các mục sau",
         "deleteScopeSeries": "Toàn bộ chuỗi (tất cả các tuần)",
         "seriesEndedToast": "Đã kết thúc chuỗi từ ngày này.",
-        "seriesDeletedToast": "Đã xóa chuỗi."
+        "seriesDeletedToast": "Đã xóa chuỗi.",
+        "deleteMealNamed": "Xóa {{title}}",
+        "openRecipeNamed": "Mở công thức {{title}}"
     },
     "calendar": {
         "searchOpen": "Tìm sự kiện",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Ảnh hưởng đến toàn bộ chuỗi.",
         "detailWhen": "Thời gian",
         "detailCalendar": "Lịch",
-        "colorCurrent": "Màu hiện tại"
+        "colorCurrent": "Màu hiện tại",
+        "deleteExternalSeriesTitle": "Xóa toàn bộ chuỗi?",
+        "deleteExternalSeriesDetail": "\"{{title}}\" đến từ một lịch đã đồng bộ. Không thể loại trừ từng sự kiện riêng lẻ ở đó - toàn bộ chuỗi sẽ bị xóa, cùng mọi lần lặp của nó.",
+        "deleteExternalSeriesConfirm": "Xóa chuỗi",
+        "deleteBirthdayEventTitle": "Xóa sự kiện sinh nhật?",
+        "deleteBirthdayEventDetail": "\"{{title}}\" là bản sao của một mục sinh nhật. Sự kiện sẽ biến mất, nhưng lần đồng bộ tiếp theo sẽ tạo lại - chỉ có thể xóa hẳn thông qua chính mục sinh nhật.",
+        "deleteBirthdayEventConfirm": "Vẫn xóa",
+        "deleteSubscribedSeriesTitle": "Xóa chuỗi đã đăng ký?",
+        "deleteSubscribedSeriesDetail": "\"{{title}}\" đến từ một lịch đã đăng ký. Yuvomi không thể xóa gì ở đó - chuỗi chỉ biến mất cho đến lần đồng bộ tiếp theo; để xóa hẳn, hãy hủy đăng ký lịch đó.",
+        "deleteSubscribedSeriesConfirm": "Vẫn xóa",
+        "colorInherit": "Màu của người được giao",
+        "colorInheritHint": "Sự kiện không có màu riêng mà lấy màu của người được giao. Nếu không giao cho ai, màu của lịch sẽ được áp dụng.",
+        "filters": "Bộ lọc",
+        "filtersOpen": "Mở bộ lọc",
+        "filtersLayers": "Lớp",
+        "filtersPeople": "Mọi người",
+        "filtersActive": "{{count}} bộ lọc đang bật",
+        "filtersActive_one": "1 bộ lọc đang bật",
+        "filtersReset": "Xóa tất cả bộ lọc",
+        "filtersDisplay": "Hiển thị"
     },
     "notes": {
         "title": "Bảng ghi chú",
@@ -1708,6 +1731,7 @@
             "shopping": "Mua sắm",
             "meals": "Bữa ăn",
             "calendar": "Lịch",
+            "schedule": "Schedule",
             "notes": "Bảng ghi chú",
             "contacts": "Liên hệ",
             "budget": "Ngân sách",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} lần",
         "fromCompletionLabel": "Lặp lại từ ngày hoàn thành",
         "fromCompletionHint": "Khoảng thời gian bắt đầu từ ngày bạn đánh dấu hoàn thành, không phải từ ngày đến hạn.",
-        "summaryFromCompletion": "từ ngày hoàn thành"
+        "summaryFromCompletion": "từ ngày hoàn thành",
+        "intervalHint": "Sau khi chọn, bạn có thể đặt khoảng lặp tùy ý - ví dụ mỗi 2 tuần hoặc mỗi 3 tháng."
     },
     "reminders": {
         "sectionTitle": "Nhắc nhở",
@@ -2706,7 +2731,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Gốc",
         "sourceAll": "Tất cả",
-        "sourceFilterLabel": "Lọc theo nguồn"
+        "sourceFilterLabel": "Lọc theo nguồn",
+        "plannedThisWeek": "Đã lên kế hoạch tuần này"
     },
     "search": {
         "emptyHint": "Nhập ít nhất 2 ký tự để tìm trong công việc, sự kiện, ghi chú, danh bạ, mua sắm và sức khỏe.",
@@ -2731,7 +2757,8 @@
         "done": "Bắt đầu",
         "skip": "Bỏ qua",
         "step2BodyDesktop": "Thanh bên trái đưa bạn đến mọi phân hệ - từ lịch và công việc đến bếp, tài liệu và cài đặt.",
-        "step3BodyDesktop": "Nút + ở góc dưới tạo mục mới ở mọi nơi."
+        "step3BodyDesktop": "Nút + ở góc dưới tạo mục mới ở mọi nơi.",
+        "stepProgress": "Bước {{current}}/{{total}}"
     },
     "offline": {
         "banner": "Ngoại tuyến - đang kết nối lại…",
@@ -2774,7 +2801,7 @@
         "colorOption": "Màu {{color}}",
         "iconPick": "Chọn hình ảnh",
         "iconClear": "Xóa hình ảnh",
-        "iconHint": "Không có hình thì chữ cái đầu hiện trên màu đã chọn.",
+        "iconHint": "Chọn một biểu tượng có sẵn hoặc hình ảnh của bạn. Không có cả hai thì chữ cái đầu hiện trên màu đã chọn.",
         "iconTypeError": "Vui lòng chọn hình PNG, JPEG hoặc WebP.",
         "iconReadError": "Không đọc được hình ảnh.",
         "iconTooLarge": "Hình ảnh quá lớn.",
@@ -2790,7 +2817,9 @@
         "saved": "Đã lưu liên kết nhanh",
         "deleted": "Đã xóa liên kết nhanh",
         "loadError": "Không tải được các liên kết nhanh.",
-        "orderError": "Không lưu được thứ tự."
+        "orderError": "Không lưu được thứ tự.",
+        "iconSymbol": "Chọn biểu tượng",
+        "iconChoose": "Chọn biểu tượng hoặc hình ảnh"
     },
     "emptyHint": {
         "tasks": "Chạm vào + để tạo nhiệm vụ đầu tiên của bạn. Vuốt thẻ sang trái để hoàn thành, sang phải để xem.",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "Chứng từ",
         "splitExpensesFolder": "Chi phí chung",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Công việc"
+        "tasksFolder": "Công việc",
+        "newSubfolder": "Thư mục con mới",
+        "moveFolder": "Di chuyển thư mục",
+        "moveFolderTo": "Di chuyển \"{{name}}\" đến",
+        "folderMovedToast": "Đã di chuyển thư mục",
+        "folderParentLabel": "Thư mục cha",
+        "folderRootLevel": "Cấp cao nhất",
+        "folderPathLabel": "Đường dẫn thư mục",
+        "folderExpand": "Mở \"{{name}}\"",
+        "folderCollapse": "Thu gọn \"{{name}}\"",
+        "deleteFolderSubtreeDetail": "{{count}} thư mục con bên trong cũng sẽ bị xóa. Tài liệu vẫn còn và vẫn tìm được qua bộ lọc tài liệu không có thư mục.",
+        "deleteFolderSubtreeDetail_one": "Thư mục con bên trong cũng sẽ bị xóa. Tài liệu vẫn còn và vẫn tìm được qua bộ lọc tài liệu không có thư mục."
     },
     "housekeeping": {
         "title": "Dọn dẹp",
@@ -3534,7 +3574,8 @@
         "completed": "Đã hoàn tất",
         "completedOn": "Hoàn tất vào {{date}}",
         "completedToast": "Đã hoàn tất gói đăng ký.",
-        "endsAfter": "Còn {{count}} lần thanh toán"
+        "endsAfter": "Còn {{count}} lần thanh toán",
+        "logoTypeError": "Sử dụng ảnh PNG, JPEG, WebP hoặc SVG."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Ảnh vẫn quá lớn sau khi thay đổi kích thước."
     },
     "documentAttach": {
         "label": "Tệp đính kèm",
@@ -4435,5 +4477,90 @@
         "recipes": "Công thức",
         "shopping": "Mục",
         "splitExpenses": "Chi phí"
+    },
+    "iconPicker": {
+        "title": "Chọn biểu tượng",
+        "searchLabel": "Tìm biểu tượng",
+        "searchPlaceholder": "Tìm bằng tiếng Anh, ví dụ film",
+        "resultsLabel": "Biểu tượng",
+        "noResults": "Không tìm thấy biểu tượng.",
+        "clear": "Không có biểu tượng",
+        "unavailable": "Hiện chưa dùng được biểu tượng."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

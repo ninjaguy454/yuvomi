@@ -59,7 +59,8 @@
             "private": "Ako lamang",
             "hint": "Kinokontrol kung sino ang makakakita ng entry na ito sa Yuvomi.",
             "assigneesNobodyHint": "Kung walang naatasan, ikaw lang ang makakakita ng entry na ito."
-        }
+        },
+        "toShoppingListNamed": "Idagdag ang {{title}} sa listahan ng pamimili"
     },
     "kitchen": {
         "noShoppingLists": "Wala pang listahan ng pamimili.",
@@ -112,7 +113,8 @@
         "health": "Kalusugan",
         "rewards": "Mga Gantimpala",
         "pantry": "Paminggalan",
-        "inventory": "Imbentaryo"
+        "inventory": "Imbentaryo",
+        "schedule": "Schedule"
     },
     "search": {
         "emptyHint": "Mag-type ng hindi bababa sa 2 karakter para maghanap ng mga gawain, kaganapan, tala, kontak, pamimili at kalusugan.",
@@ -669,7 +671,9 @@
         "deleteScopeFuture": "Ito at lahat ng kasunod",
         "deleteScopeSeries": "Buong serye (lahat ng linggo)",
         "seriesEndedToast": "Natapos ang serye mula sa petsang ito.",
-        "seriesDeletedToast": "Natanggal ang serye."
+        "seriesDeletedToast": "Natanggal ang serye.",
+        "deleteMealNamed": "Tanggalin ang {{title}}",
+        "openRecipeNamed": "Buksan ang resipe ng {{title}}"
     },
     "calendar": {
         "searchOpen": "Maghanap ng kaganapan",
@@ -896,7 +900,26 @@
         "recurringScopeHintSeries": "Naaapektuhan ang buong serye.",
         "detailWhen": "Oras",
         "detailCalendar": "Kalendaryo",
-        "colorCurrent": "Kasalukuyang kulay"
+        "colorCurrent": "Kasalukuyang kulay",
+        "deleteExternalSeriesTitle": "Tanggalin ang buong serye?",
+        "deleteExternalSeriesDetail": "Nagmula ang \"{{title}}\" sa isang naka-sync na kalendaryo. Hindi maibubukod doon ang mga indibidwal na pangyayari - matatanggal ang buong serye, kasama ang lahat ng pangyayari nito.",
+        "deleteExternalSeriesConfirm": "Tanggalin ang serye",
+        "deleteBirthdayEventTitle": "Tanggalin ang kaganapan ng kaarawan?",
+        "deleteBirthdayEventDetail": "Salamin ng isang kaarawan ang \"{{title}}\". Mawawala ang kaganapan, ngunit muli itong gagawin sa susunod na pag-sync - matatanggal lamang ito nang tuluyan sa pamamagitan ng mismong kaarawan.",
+        "deleteBirthdayEventConfirm": "Tanggalin pa rin",
+        "deleteSubscribedSeriesTitle": "Tanggalin ang naka-subscribe na serye?",
+        "deleteSubscribedSeriesDetail": "Nagmula ang \"{{title}}\" sa isang naka-subscribe na kalendaryo. Walang matatanggal ang Yuvomi doon - mawawala lamang ang serye hanggang sa susunod na pag-sync; upang tuluyang matanggal, mag-unsubscribe sa kalendaryo.",
+        "deleteSubscribedSeriesConfirm": "Tanggalin pa rin",
+        "colorInherit": "Kulay ng taong itinalaga",
+        "colorInheritHint": "Walang sariling kulay ang kaganapan at kinukuha nito ang kulay ng taong itinalaga. Kung walang itinalaga, ang kulay ng kalendaryo ang iiral.",
+        "filters": "Mga filter",
+        "filtersOpen": "Buksan ang mga filter",
+        "filtersLayers": "Mga layer",
+        "filtersPeople": "Mga tao",
+        "filtersActive": "{{count}} aktibong filter",
+        "filtersActive_one": "1 aktibong filter",
+        "filtersReset": "Alisin ang lahat ng filter",
+        "filtersDisplay": "Pagpapakita"
     },
     "notes": {
         "title": "Board",
@@ -1761,6 +1784,7 @@
             "shopping": "Pamimili",
             "meals": "Mga Pagkain",
             "calendar": "Kalendaryo",
+            "schedule": "Schedule",
             "notes": "Mga Tala",
             "contacts": "Mga Kontak",
             "budget": "Badyet",
@@ -2596,7 +2620,8 @@
         "summaryCount_one": "{{count}} pagkakataon",
         "fromCompletionLabel": "Ulitin mula sa araw ng pagkumpleto",
         "fromCompletionHint": "Magsisimula ang agwat sa araw na markahan mong tapos ang gawain, hindi sa takdang petsa nito.",
-        "summaryFromCompletion": "mula sa pagkumpleto"
+        "summaryFromCompletion": "mula sa pagkumpleto",
+        "intervalHint": "Pagkatapos pumili, malaya mong maitatakda ang agwat - halimbawa tuwing 2 linggo o tuwing 3 buwan."
     },
     "reminders": {
         "sectionTitle": "Paalala",
@@ -2718,7 +2743,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Katutubo",
         "sourceAll": "Lahat",
-        "sourceFilterLabel": "I-filter ayon sa pinagmulan"
+        "sourceFilterLabel": "I-filter ayon sa pinagmulan",
+        "plannedThisWeek": "Nakaplano ngayong linggo"
     },
     "onboarding": {
         "step1Title": "Maligayang pagdating sa {{name}}",
@@ -2731,7 +2757,8 @@
         "done": "Magsimula",
         "skip": "Laktawan",
         "step2BodyDesktop": "Ang sidebar sa kaliwa ang magdadala sa iyo sa bawat module - mula sa kalendaryo at mga gawain hanggang sa kusina, mga dokumento at mga setting.",
-        "step3BodyDesktop": "Ang + na button sa ibabang sulok ay gumagawa ng bagong entry kahit saan."
+        "step3BodyDesktop": "Ang + na button sa ibabang sulok ay gumagawa ng bagong entry kahit saan.",
+        "stepProgress": "Hakbang {{current}} ng {{total}}"
     },
     "offline": {
         "banner": "Offline - muling kumokonekta…",
@@ -2786,7 +2813,7 @@
         "colorOption": "Kulay {{color}}",
         "iconPick": "Pumili ng larawan",
         "iconClear": "Alisin ang larawan",
-        "iconHint": "Kapag walang larawan, ang unang titik ang lalabas sa napiling kulay.",
+        "iconHint": "Pumili ng built-in na icon o sarili mong larawan. Kapag wala ang dalawa, ang unang titik ang lalabas sa napiling kulay.",
         "iconTypeError": "Pumili ng larawang PNG, JPEG o WebP.",
         "iconReadError": "Hindi mabasa ang larawan.",
         "iconTooLarge": "Masyadong malaki ang larawan.",
@@ -2802,7 +2829,9 @@
         "saved": "Na-save ang mabilisang link",
         "deleted": "Nabura ang mabilisang link",
         "loadError": "Hindi ma-load ang mga mabilisang link.",
-        "orderError": "Hindi ma-save ang pagkakasunod-sunod."
+        "orderError": "Hindi ma-save ang pagkakasunod-sunod.",
+        "iconSymbol": "Pumili ng icon",
+        "iconChoose": "Pumili ng icon o larawan"
     },
     "documents": {
         "title": "Mga Dokumento",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "Mga Resibo",
         "splitExpensesFolder": "Mga hinating gastos",
         "inventoryFolder": "Imbentaryo",
-        "tasksFolder": "Mga gawain"
+        "tasksFolder": "Mga gawain",
+        "newSubfolder": "Bagong subfolder",
+        "moveFolder": "Ilipat ang folder",
+        "moveFolderTo": "Ilipat ang \"{{name}}\" sa",
+        "folderMovedToast": "Nailipat ang folder",
+        "folderParentLabel": "Pangunahing folder",
+        "folderRootLevel": "Pinakamataas na antas",
+        "folderPathLabel": "Landas ng folder",
+        "folderExpand": "Palawakin ang \"{{name}}\"",
+        "folderCollapse": "Itiklop ang \"{{name}}\"",
+        "deleteFolderSubtreeDetail": "Buburahin din ang {{count}} na subfolder sa loob. Mananatili ang mga dokumento at maaabot pa rin sa filter para sa mga dokumentong walang folder.",
+        "deleteFolderSubtreeDetail_one": "Buburahin din ang subfolder sa loob. Mananatili ang mga dokumento at maaabot pa rin sa filter para sa mga dokumentong walang folder."
     },
     "userMultiSelect": {
         "nobody": "- Wala -",
@@ -3534,7 +3574,8 @@
         "completed": "Natapos",
         "completedOn": "Natapos noong {{date}}",
         "completedToast": "Natapos ang subscription.",
-        "endsAfter": "{{count}} bayad na lang ang natitira"
+        "endsAfter": "{{count}} bayad na lang ang natitira",
+        "logoTypeError": "Gumamit ng larawang PNG, JPEG, WebP o SVG."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Masyado pa ring malaki ang larawan pagkatapos bawasan ang laki."
     },
     "documentAttach": {
         "label": "Mga kalakip",
@@ -4435,5 +4477,90 @@
         "recipes": "Resipe",
         "shopping": "Item",
         "splitExpenses": "Gastos"
+    },
+    "iconPicker": {
+        "title": "Pumili ng icon",
+        "searchLabel": "Maghanap ng icon",
+        "searchPlaceholder": "Maghanap sa Ingles, hal. film",
+        "resultsLabel": "Mga icon",
+        "noResults": "Walang nahanap na icon.",
+        "clear": "Walang icon",
+        "unavailable": "Hindi available ang mga icon ngayon."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

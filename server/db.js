@@ -6333,6 +6333,361 @@ const MIGRATIONS = [
       CREATE INDEX idx_reminders_user ON reminders(created_by);
     `,
   },
+  {
+    version: 163,
+    description: 'Quick links: a built-in symbol as a third face, next to image and monogram (#873)',
+    up: `
+      -- DAS DRITTE GESICHT EINER KACHEL (#873).
+      --
+      -- Gemeldet war: "It's just an icon and as heavy self-hoster I don't want
+      -- to search and fetch icons from somewhere, I would like to have it just
+      -- built-in Yuvomi." Bisher gab es zwei Gesichter - ein hochgeladenes Bild
+      -- (icon_data, v160) oder den Anfangsbuchstaben auf der gewaehlten Farbe.
+      -- Wer weder das eine wollte noch das andere, hatte keine dritte Wahl.
+      --
+      -- WARUM EIN NAME UND KEIN ZWEITES BILD. Hier steht der Lucide-Name des
+      -- Symbols ("film", "server", "cloud"), nicht seine Zeichnung: den Vorrat
+      -- bringt public/lucide.min.js ohnehin mit, auf jeder Seite, fuer die
+      -- ganze App. Ein Symbol kostet damit die Laenge seines Namens statt der
+      -- zwanzig bis vierzig Kilobyte einer Data-URL - und es bleibt scharf,
+      -- faerbt mit und folgt dem Hell/Dunkel-Wechsel, was ein Rasterbild nicht
+      -- kann.
+      --
+      -- KEIN CHECK AUF EINE NAMENSLISTE. Der Server kennt den Lucide-Vorrat
+      -- nicht und soll ihn nicht kennen: eine Liste von 1743 Namen in der
+      -- Datenbank waere eine zweite Wahrheit, die bei jedem Lucide-Update
+      -- veraltet. Ein unbekannter Name bricht nichts - die Kachel zeigt dann
+      -- ihren Buchstaben, genau wie ohne Eintrag. Geprueft wird nur die FORM
+      -- (Kleinbuchstaben, Ziffern, Bindestriche), und die ist die
+      -- Sicherheitsgrenze; siehe iconName() in server/routes/quick-links.js.
+      --
+      -- WELCHES GESICHT GEWINNT, wenn beide Spalten gefuellt sind, entscheidet
+      -- der Lesepfad und nicht das Schema: das Bild. Wer eines hochgeladen hat,
+      -- hat die aufwendigere Wahl getroffen. Ein CHECK, der nur eine der beiden
+      -- Spalten zulaesst, waere strenger als noetig und machte aus dem Wechsel
+      -- zwischen den Gesichtern zwei Schreibvorgaenge statt einem.
+      ALTER TABLE quick_links ADD COLUMN icon_name TEXT;
+    `,
+  },
+  {
+    version: 164,
+    description: 'Document folders: a folder may live inside a folder (#785)',
+    foreignKeysOff: true,
+    up: `
+      -- AUS ZWEI FLACHEN FILTERREIHEN WIRD EIN BAUM (#785).
+      --
+      -- Das Dokumentenmodul fuehrt zwei Achsen nebeneinander: category (eine
+      -- feste Liste von 14 uebersetzten Schluesseln, als Spalte am Dokument)
+      -- und folder_id (diese Tabelle). Beide filtern dieselbe flache Liste,
+      -- und nichts in der Oberflaeche zeigt, wie sie zueinander stehen -
+      -- gemeldet als "zwei getrennte UI-Zonen, die man beide kennen muss".
+      --
+      -- Der Vorschlag war, die Ordner UNTER die Kategorien zu haengen. Das geht
+      -- nicht: die beiden Achsen sind unabhaengig. Ein Ordner "Wohnung" haelt
+      -- Dokumente der Kategorien home, insurance und legal gleichzeitig; unter
+      -- einer Kategorie aufgehaengt stuende er entweder dreimal da oder truege
+      -- eine Zugehoerigkeit, die es nicht gibt und die beim Migrieren erfunden
+      -- werden muesste.
+      --
+      -- Also die Hierarchie dort, wo sie hingehoert: Ordner in Ordnern. Die
+      -- Kategorie bleibt, was sie ist - ein Querschnitts-Etikett am Dokument,
+      -- das ueber den ganzen Baum hinweg filtert.
+      --
+      -- ── WARUM EIN TABELLEN-NEUBAU UND KEIN ALTER TABLE ────────────────────
+      --
+      -- name traegt seit Migration 60 ein globales UNIQUE. In einem Baum ist
+      -- das genau die falsche Zusicherung: "Rechnungen" unter "Auto" und
+      -- "Rechnungen" unter "Wohnung" sind zwei verschiedene Ordner, und ein
+      -- Baum, in dem jeder Name nur einmal im ganzen Haushalt vorkommen darf,
+      -- ist keiner. Ein Constraint laesst sich in SQLite nicht loesen, ohne die
+      -- Tabelle neu zu bauen.
+      --
+      -- DIE MIGRATION KANN AN BESTANDSDATEN NICHT SCHEITERN, und das ist keine
+      -- Hoffnung, sondern eine Ableitung: alle uebernommenen Zeilen bekommen
+      -- parent_id NULL, also COALESCE(parent_id, 0) = 0 fuer alle. Der neue
+      -- Index prueft damit exakt dieselbe Bedingung wie das alte globale
+      -- UNIQUE - was vorher hineinpasste, passt weiter hinein. Der Index ist
+      -- deshalb auch bewusst NICHT COLLATE NOCASE: das waere strenger als
+      -- bisher und koennte an einem Bestand mit "Auto" neben "auto" brechen.
+      --
+      -- COALESCE UND KEIN SCHLICHTES UNIQUE(parent_id, name): SQLite behandelt
+      -- NULL in einem UNIQUE als jeweils verschieden. Ein UNIQUE(parent_id,
+      -- name) liesse also beliebig viele Wurzelordner desselben Namens zu -
+      -- also genau auf der Ebene keine Zusicherung, auf der es sie heute gibt.
+      --
+      -- ── ON DELETE CASCADE, UND WARUM DAS HIER NICHTS VERLIERT ─────────────
+      --
+      -- Ein geloeschter Ordner nimmt seine Unterordner mit, wie in jedem
+      -- Dateibrowser. Die DOKUMENTE darin bleiben: family_documents.folder_id
+      -- traegt seit jeher ON DELETE SET NULL, sie landen also unter "ohne
+      -- Ordner" statt im Nichts. Diese Zusicherung ist aelter als dieser Baum
+      -- und bleibt seine Untergrenze - kein Loeschen in diesem Modul kann ein
+      -- Dokument kosten.
+      --
+      -- foreignKeysOff ist Pflicht (gleicher Grund wie v137, v141, v162):
+      -- family_documents.folder_id haengt an dieser Tabelle und liefe beim
+      -- DROP TABLE leer.
+      --
+      -- module_key bleibt unangetastet. Er traegt die IDENTITAET eines
+      -- Modulordners (v157), nicht seine Position - ein Modulordner darf
+      -- deshalb verschoben werden, ohne dass die sechs Module ihn verlieren.
+      CREATE TABLE family_document_folders_new (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        name        TEXT    NOT NULL,
+        parent_id   INTEGER REFERENCES family_document_folders_new(id) ON DELETE CASCADE,
+        module_key  TEXT,
+        created_by  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      INSERT INTO family_document_folders_new (id, name, module_key, created_by, created_at, updated_at)
+        SELECT id, name, module_key, created_by, created_at, updated_at FROM family_document_folders;
+
+      DROP TABLE family_document_folders;
+      ALTER TABLE family_document_folders_new RENAME TO family_document_folders;
+
+      CREATE UNIQUE INDEX idx_family_document_folders_sibling_name
+        ON family_document_folders(COALESCE(parent_id, 0), name);
+
+      -- Unveraendert aus v157 uebernommen: der Schluessel bleibt haushaltsweit
+      -- eindeutig, egal wo im Baum der Ordner haengt.
+      CREATE UNIQUE INDEX idx_family_document_folders_module_key
+        ON family_document_folders(module_key) WHERE module_key IS NOT NULL;
+
+      -- Der Lesepfad holt die Kinder eines Ordners; das ist der eine Index,
+      -- den der Baum braucht.
+      CREATE INDEX idx_family_document_folders_parent
+        ON family_document_folders(parent_id);
+
+      CREATE TRIGGER trg_family_document_folders_updated_at
+        AFTER UPDATE ON family_document_folders FOR EACH ROW
+        BEGIN UPDATE family_document_folders SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = OLD.id; END;
+    `,
+  },
+  {
+    version: 165,
+    description: 'Schedule: cycle patterns and per-day overrides (#786)',
+    up: `
+      CREATE TABLE IF NOT EXISTS schedule_shift_types (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, short_code TEXT,
+        start_time TEXT, end_time TEXT, color TEXT NOT NULL DEFAULT '#6C3AED',
+        created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK ((start_time IS NULL) = (end_time IS NULL))
+      );
+      CREATE TABLE IF NOT EXISTS schedule_patterns (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL, anchor_date TEXT NOT NULL,
+        cycle_length INTEGER NOT NULL CHECK (cycle_length BETWEEN 1 AND 366),
+        valid_from TEXT, valid_until TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE TABLE IF NOT EXISTS schedule_pattern_days (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        pattern_id INTEGER NOT NULL REFERENCES schedule_patterns(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL CHECK (position >= 0),
+        shift_type_id INTEGER REFERENCES schedule_shift_types(id) ON DELETE RESTRICT,
+        UNIQUE (pattern_id, position)
+      );
+      CREATE TABLE IF NOT EXISTS schedule_overrides (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        date_key TEXT NOT NULL, shift_type_id INTEGER REFERENCES schedule_shift_types(id) ON DELETE RESTRICT,
+        note TEXT, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE (user_id, date_key)
+      );
+      CREATE INDEX idx_schedule_patterns_user ON schedule_patterns(user_id);
+      CREATE INDEX idx_schedule_overrides_user ON schedule_overrides(user_id, date_key);
+      CREATE TRIGGER trg_schedule_shift_types_updated_at AFTER UPDATE ON schedule_shift_types FOR EACH ROW BEGIN
+        UPDATE schedule_shift_types SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = OLD.id; END;
+      CREATE TRIGGER trg_schedule_patterns_updated_at AFTER UPDATE ON schedule_patterns FOR EACH ROW BEGIN
+        UPDATE schedule_patterns SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = OLD.id; END;
+    `,
+    afterUp(db) {
+      const row = db.prepare("SELECT value FROM sync_config WHERE key = 'disabled_modules'").get();
+      let disabled = [];
+      try { const parsed = JSON.parse(row?.value || '[]'); if (Array.isArray(parsed)) disabled = parsed.filter((key) => typeof key === 'string'); } catch { /* replace invalid legacy value */ }
+      if (!disabled.includes('schedule')) disabled.push('schedule');
+      db.prepare("INSERT INTO sync_config (key, value) VALUES ('disabled_modules', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')").run(JSON.stringify(disabled));
+    },
+  },
+  {
+    version: 166,
+    description: 'Calendar: an event may have no colour of its own, so the assignee can lend theirs (#891)',
+    // WARUM DIE SPALTE NULLABLE WIRD. `resolveEventColor` faellt seit jeher auf
+    // die Farbe der zugewiesenen Person zurueck - nur konnte der Zweig nie
+    // erreicht werden: `color` war NOT NULL DEFAULT '#007AFF' und lehnte auch
+    // den Leerstring ab, jeder Termin trug also immer eine eigene Farbe. Seit
+    // #815 die Eigenfarbe VOR die abgeleitete stellt, hat das die Personenfarbe
+    // und `cal_color` zu totem Code gemacht (#856). NULL ist der Zustand, der
+    // gefehlt hat: "dieser Termin hat keine eigene Farbe".
+    //
+    // SQLite kennt kein DROP NOT NULL, deshalb das Rebuild-Muster wie v98/v137.
+    // foreignKeysOff ist Pflicht: vier Tabellen zeigen auf calendar_events, zwei
+    // davon (event_assignments, calendar_event_exceptions) mit ON DELETE CASCADE
+    // - ein DROP TABLE bei aktiver Durchsetzung wuerde ihre Zeilen mitnehmen.
+    //
+    // BESTANDSDATEN BLEIBEN UNVERAENDERT. Verlockend waere, '#007AFF' als "nie
+    // gewaehlt" zu lesen - der Wert steht heute in keiner Palette. Er stand aber
+    // bis zum OKLCH-Wechsel an erster Stelle von EVENT_COLORS, ein Termin aus der
+    // v1-Zeit kann ihn also bewusst tragen. Eine Migration, die eine bewusste
+    // Wahl wegwirft, ist teurer als eine, die nichts tut: synchronisierte Termine
+    // normalisieren sich beim naechsten Sync von selbst (der Import schreibt die
+    // geerbte Farbe nicht mehr in die Eigenfarb-Spalte), und lokale Termine
+    // bekommen im Dialog die ausdrueckliche Wahl "Farbe der zugewiesenen Person".
+    foreignKeysOff: true,
+    // WARUM HIER EINE FUNKTION STEHT UND NICHT NUR SQL. Der Rebuild liest unten
+    // eine feste Liste von 36 Spalten. Genau eine davon ist nicht garantiert:
+    // `tzid` steht in CRITICAL_COLUMNS, weil es DBs gibt, auf denen Migration 97
+    // als angewendet gilt, die Spalte aber fehlt (#549 - derselbe Fall wie
+    // reminders.pushed_at in #538). `reconcileCriticalSchema()` repariert das,
+    // laeuft aber NACH `migrate()` - auf so einer DB waere dieser Rebuild also
+    // schon an `no such column: tzid` gescheitert, und zwar beim Update einer
+    // Bestandsinstallation. Die Absicherung gehoert deshalb VOR das SQL.
+    up(db) {
+      const spalten = new Set(db.prepare('PRAGMA table_info(calendar_events)').all().map((c) => c.name));
+      if (!spalten.has('tzid')) db.exec('ALTER TABLE calendar_events ADD COLUMN tzid TEXT');
+
+      db.exec(`
+      CREATE TABLE calendar_events_new (
+        id                           INTEGER PRIMARY KEY AUTOINCREMENT,
+        title                        TEXT    NOT NULL,
+        description                  TEXT,
+        start_datetime               TEXT    NOT NULL,
+        end_datetime                 TEXT,
+        all_day                      INTEGER NOT NULL DEFAULT 0,
+        location                     TEXT,
+        color                        TEXT,
+        assigned_to                  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_by                   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        external_calendar_id         TEXT,
+        external_source              TEXT    NOT NULL DEFAULT 'local'
+                                             CHECK(external_source IN ('local', 'google', 'apple', 'ics', 'caldav')),
+        recurrence_rule              TEXT,
+        subscription_id              INTEGER REFERENCES ics_subscriptions(id) ON DELETE CASCADE,
+        user_modified                INTEGER NOT NULL DEFAULT 0,
+        calendar_ref_id              INTEGER REFERENCES external_calendars(id) ON DELETE SET NULL,
+        icon                         TEXT    NOT NULL DEFAULT 'calendar',
+        attachment_name              TEXT,
+        attachment_mime              TEXT,
+        attachment_size              INTEGER,
+        attachment_data              TEXT,
+        target_caldav_account_id     INTEGER,
+        target_caldav_calendar_url   TEXT,
+        created_at                   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at                   TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        attachment_document_id       INTEGER REFERENCES family_documents(id) ON DELETE SET NULL,
+        target_google_calendar_id    TEXT,
+        visibility                   TEXT    NOT NULL DEFAULT 'all',
+        tzid                         TEXT,
+        outbound_dirty               INTEGER NOT NULL DEFAULT 0,
+        outbound_attempts            INTEGER NOT NULL DEFAULT 0,
+        outbound_move_to             TEXT,
+        external_object_url          TEXT,
+        countdown                    INTEGER NOT NULL DEFAULT 0,
+        target_outlook_account_id    INTEGER,
+        target_outlook_calendar_id   TEXT
+      );
+
+      INSERT INTO calendar_events_new
+        (id, title, description, start_datetime, end_datetime, all_day, location, color,
+         assigned_to, created_by, external_calendar_id, external_source, recurrence_rule,
+         subscription_id, user_modified, calendar_ref_id, icon,
+         attachment_name, attachment_mime, attachment_size, attachment_data,
+         target_caldav_account_id, target_caldav_calendar_url, created_at, updated_at,
+         attachment_document_id, target_google_calendar_id, visibility, tzid,
+         outbound_dirty, outbound_attempts, outbound_move_to, external_object_url,
+         countdown, target_outlook_account_id, target_outlook_calendar_id)
+      SELECT id, title, description, start_datetime, end_datetime, all_day, location, color,
+             assigned_to, created_by, external_calendar_id, external_source, recurrence_rule,
+             subscription_id, user_modified, calendar_ref_id, icon,
+             attachment_name, attachment_mime, attachment_size, attachment_data,
+             target_caldav_account_id, target_caldav_calendar_url, created_at, updated_at,
+             attachment_document_id, target_google_calendar_id, visibility, tzid,
+             outbound_dirty, outbound_attempts, outbound_move_to, external_object_url,
+             countdown, target_outlook_account_id, target_outlook_calendar_id
+      FROM calendar_events;
+
+      -- Die Trigger haengen an der alten Tabelle und gehen mit ihr; der
+      -- Suchindex bleibt dabei unberuehrt, weil DROP TABLE keinen DELETE-Trigger
+      -- ausloest und der INSERT oben auf der noch triggerlosen neuen Tabelle lief.
+      DROP TRIGGER IF EXISTS trg_calendar_events_updated_at;
+      DROP TRIGGER IF EXISTS trg_search_events_ai;
+      DROP TRIGGER IF EXISTS trg_search_events_au;
+      DROP TRIGGER IF EXISTS trg_search_events_ad;
+      DROP TABLE calendar_events;
+      ALTER TABLE calendar_events_new RENAME TO calendar_events;
+
+      CREATE TRIGGER trg_calendar_events_updated_at
+        AFTER UPDATE ON calendar_events FOR EACH ROW
+        BEGIN UPDATE calendar_events SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = OLD.id; END;
+
+      CREATE TRIGGER trg_search_events_ai AFTER INSERT ON calendar_events BEGIN
+        INSERT INTO search_index (entity, entity_id, title, body)
+        VALUES ('event', NEW.id,
+                COALESCE(NEW.title, ''),
+                TRIM(COALESCE(NEW.description, '') || ' ' || COALESCE(NEW.location, '')));
+      END;
+
+      CREATE TRIGGER trg_search_events_au AFTER UPDATE ON calendar_events BEGIN
+        DELETE FROM search_index WHERE entity = 'event' AND entity_id = OLD.id;
+        INSERT INTO search_index (entity, entity_id, title, body)
+        VALUES ('event', NEW.id,
+                COALESCE(NEW.title, ''),
+                TRIM(COALESCE(NEW.description, '') || ' ' || COALESCE(NEW.location, '')));
+      END;
+
+      CREATE TRIGGER trg_search_events_ad AFTER DELETE ON calendar_events BEGIN
+        DELETE FROM search_index WHERE entity = 'event' AND entity_id = OLD.id;
+      END;
+
+      CREATE INDEX idx_calendar_start ON calendar_events(start_datetime);
+      CREATE INDEX idx_calendar_assigned ON calendar_events(assigned_to);
+      CREATE INDEX idx_calendar_external_id ON calendar_events(external_calendar_id);
+      CREATE INDEX idx_calendar_sub ON calendar_events(subscription_id);
+      CREATE INDEX idx_cal_events_ref ON calendar_events(calendar_ref_id);
+      CREATE UNIQUE INDEX idx_calendar_sub_extid ON calendar_events (subscription_id, external_calendar_id);
+      CREATE INDEX idx_calendar_attachment_document ON calendar_events(attachment_document_id);
+      CREATE INDEX idx_calendar_recurring ON calendar_events(start_datetime) WHERE recurrence_rule IS NOT NULL;
+      CREATE INDEX idx_calendar_outbound_dirty ON calendar_events(outbound_dirty) WHERE outbound_dirty = 1;
+      `);
+    },
+  },
+  {
+    version: 167,
+    description: 'Calendar: color_modified tells a local recolour apart from any other edit (#899)',
+    // WARUM EINE ZWEITE SPALTE UND NICHT WEITER user_modified. Das Flag wird bei
+    // JEDER Bearbeitung eines gespiegelten Termins gesetzt (routes/calendar/
+    // crud.js), der Inbound aller drei Anbieter liest es aber als "die Farbe
+    // wird ab jetzt lokal gefuehrt". Wer den Titel aendert, friert damit die
+    // Farbspalte dauerhaft ein: faerbt danach jemand denselben Termin auf dem
+    // Server, erfaehrt Yuvomi es nie mehr (#899).
+    //
+    // Und weil dadurch "keine eigene Farbe" (#891) nicht von "wir haben nie eine
+    // gelernt" zu unterscheiden war, konnte der Ausgang das Leeren einer Farbe
+    // nicht spiegeln - ein hinausgeschicktes null haette die Farbe eines anderen
+    // Clients abgeraeumt (#897/#898). Mit einem eigenen Zustand ist
+    // `color IS NULL AND color_modified = 1` eindeutig "geleert".
+    //
+    // DER BACKFILL IST BEWUSST KONSERVATIV. `color_modified = user_modified`
+    // uebernimmt die bisherige Bedeutung wortwoertlich: jede Zeile, deren Farbe
+    // heute geschuetzt ist, bleibt geschuetzt. Ein pauschales 0 waere
+    // verlockend - es nimmt genau den Fehler zurueck, um den es hier geht -,
+    // ueberschriebe beim naechsten Sync aber auch jede Farbe, die jemand
+    // absichtlich gesetzt hat. Die beiden sind in Bestandsdaten nicht
+    // auseinanderzuhalten, und die absichtliche wegzuwerfen ist der teurere
+    // Fehler: sie kommt von selbst nicht zurueck, die eingefrorene schon, sobald
+    // der Termin einmal umgefaerbt wird.
+    up: `
+      ALTER TABLE calendar_events ADD COLUMN color_modified INTEGER NOT NULL DEFAULT 0;
+      UPDATE calendar_events SET color_modified = user_modified;
+    `,
+  },
 ];
 
 // Fork-only migrations use a separate namespace so upstream can keep its canonical sequence.

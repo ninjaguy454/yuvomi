@@ -10,6 +10,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { withoutHtmlComments } from './source-text.js';
+import { eachRule } from './css-rules.js';
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), 'utf8').replace(/\r/g, '');
 
@@ -908,6 +909,75 @@ test('Panel-Fläche und Kopfleiste sind geteilt, nicht pro Tab gebaut', () => {
       `${rule[1]} setzt Scroll-Achse oder Padding selbst - beides gehört .budget-tab-panel`,
     );
   }
+});
+
+test('die Transaktionsliste bleibt auf kurzen Desktop-Viewports erreichbar (#904)', () => {
+  // Der feste Teil des Budget-Tabs (Zusammenfassung + Kategorie-Chart) wächst
+  // mit den Kategorien. Zwei Regeln zusammen hielten die Liste gefangen: das
+  // Panel clippte mit `overflow: hidden`, und die Sektion durfte per
+  // `min-height: 0` bis auf Kopfzeilenhöhe kollabieren - bei neun Kategorien
+  // auf 1512x747 lag die Liste vollständig unterhalb des Viewports, und weil
+  // das Panel nicht scrollte, führte kein Weg zu ihr (#904, gemessen: Sektion
+  // 32px hoch, Liste ab y=648 bei 620px Viewport). Beide Hälften einzeln
+  // gepinnt: jede allein genügt, um den Defekt wiederzubeleben.
+  // Vier Fluchtwege aus dem Review, jeder mit Gegenprobe belegt:
+  // 1. Ausgenommen ist NUR der benannte Mobil-Reflow (max-width: 640px), nicht
+  //    jeder At-Block - #904 ist ein Kurz-Viewport-Defekt, eine max-height-
+  //    Query wäre der wahrscheinlichste Rückweg gewesen und blieb unsichtbar.
+  // 2. Geprüft wird jede Regel, deren SUBJEKT (letzter Compound) das Element
+  //    trifft - `.budget-page .budget-tab-panel--budget` clippt genauso, war
+  //    aber am exakten Selektorvergleich vorbei.
+  // 3. Bei min-height zählt die LETZTE Deklaration der Regel (Kaskade
+  //    innerhalb des Blocks; die Falle aus dem css-rules.js-Kopf).
+  // 4. Die Untergrenze muss eine nutzbare px-Länge tragen: die Sektion clippt
+  //    (`overflow: hidden`), ihr automatisches Minimum ist damit 0 - ein
+  //    `min-height: auto` oder `1px` kollabiert exakt wie das alte `0`,
+  //    bestand aber den reinen Nicht-Null-Test.
+  const subjectIs = (selector, cls) => selector.split(',').some((einzel) => {
+    const compounds = einzel.trim().split(/[\s>+~]+/).filter(Boolean);
+    return compounds.length > 0 && compounds[compounds.length - 1].includes(cls);
+  });
+
+  let panelSeen = false;
+  let floorSeen = false;
+  for (const { selector, body, at } of eachRule(budgetCss)) {
+    if (at.some((a) => /max-width:\s*640px/.test(a))) continue;
+    if (subjectIs(selector, '.budget-tab-panel--budget')) {
+      panelSeen = true;
+      // `clip` kappt wie `hidden`, nur ohne Scrollport - und die Block-Achse
+      // lässt sich auch als Langform oder als zweiter Shorthand-Wert setzen.
+      // Der Grund für die Zusicherung ist das Abschneiden, nicht die eine
+      // Schreibweise dafür (dieselbe Regel wie in test-frontend-audit.js).
+      for (const [, prop, value] of body.matchAll(/(?:^|;)\s*(overflow(?:-y|-block)?)\s*:\s*([^;]+)/g)) {
+        assert.ok(
+          !/\b(?:hidden|clip)\b/.test(value),
+          `"${selector.trim()}" clippt das Budget-Panel (${prop}: ${value.trim()}): wächst `
+          + 'der feste Teil über den Viewport, ist die Transaktionsliste '
+          + 'unerreichbar (#904) - die Scroll-Achse der Basisregel muss offen bleiben',
+        );
+      }
+    }
+    if (subjectIs(selector, '.budget-list-section')) {
+      const decls = [...body.matchAll(/min-height\s*:\s*([^;]+)/g)];
+      if (decls.length === 0) continue;
+      const value = decls[decls.length - 1][1].trim();
+      const px = value.match(/(\d+(?:\.\d+)?)px/);
+      assert.ok(
+        px && Number(px[1]) >= 200,
+        `"${selector.trim()}" setzt min-height: ${value} - die Sektion braucht eine `
+        + 'nutzbare px-Untergrenze (>= 200px, ggf. per min() ans Panel gekappt): '
+        + 'auto, 0 oder Kleinstwerte kollabieren sie neben dem inhaltshohen '
+        + 'Kategorie-Chart wieder auf Kopfzeilenhöhe (#904)',
+      );
+      floorSeen = true;
+    }
+  }
+  assert.ok(panelSeen, '.budget-tab-panel--budget fehlt in budget.css');
+  assert.ok(
+    floorSeen,
+    '.budget-list-section deklariert ausserhalb des Mobil-Reflows keine '
+    + 'min-height-Untergrenze mehr (#904)',
+  );
 });
 
 test('Trendpfeile sind Icons, keine Textglyphen', () => {

@@ -7,7 +7,7 @@
 
   <p>
     Aufgaben, Kalender, Budget, Einkauf, Mahlzeiten, Gesundheit und mehr - für eine Familie,
-    ein Paar oder nur dich. Achtzehn Module auf einem Server, der dir gehört, und das Einzige,
+    ein Paar oder nur dich. Neunzehn Module auf einem Server, der dir gehört, und das Einzige,
     was ihn verlässt, ist eine Versionsprüfung.
   </p>
 
@@ -34,7 +34,7 @@
     <img src="docs/screenshots/de/dashboard-light-web.webp" alt="Das Yuvomi-Dashboard: Aufgaben, Termine, Mahlzeiten und Einkaufsliste des Tages auf einem Bildschirm" width="820">
   </picture>
 
-  <sub><b>18</b> Module &nbsp;·&nbsp; <b>24</b> Sprachen &nbsp;·&nbsp; <b>0</b> Tracker &nbsp;·&nbsp; optionale <b>AES-256</b>-Datenbankverschlüsselung &nbsp;·&nbsp; <b>MIT</b></sub>
+  <sub><b>19</b> Module &nbsp;·&nbsp; <b>24</b> Sprachen &nbsp;·&nbsp; <b>0</b> Tracker &nbsp;·&nbsp; optionale <b>AES-256</b>-Datenbankverschlüsselung &nbsp;·&nbsp; <b>MIT</b></sub>
 </div>
 
 Die meisten Haushalte kleben ihren Alltag aus einem Dutzend Bezahl-Apps zusammen, jede mit eigenem
@@ -68,7 +68,7 @@ Das ist der Teil, den ein Ordner voller Einzel-Apps nicht kann:
 - **Eine erledigte Aufgabe zahlt aus.** Punkte auf einer Aufgabe landen auf dem Konto der zugewiesenen Person, und der Belohnungskatalog gibt sie aus.
 - **Ein abgelegter Beleg hängt an der Buchung.** Einmal hochgeladen, gehört er gleichzeitig zur Buchung, zur geteilten Ausgabe und zum Inventargegenstand.
 
-## Die achtzehn Module
+## Die neunzehn Module
 
 Schalte an, was dein Haushalt braucht; der Rest bleibt aus dem Weg.
 
@@ -79,13 +79,14 @@ Schalte an, was dein Haushalt braucht; der Rest bleibt aus dem Weg.
 | **Mahlzeiten** | Wochenplaner per Drag-and-drop mit Rezept-Seitenleiste und direktem Export in die Einkaufsliste. |
 | **Rezepte** | Rezepte anlegen, duplizieren und skalieren, Mahlzeiten damit vorbelegen oder die Zutaten auf eine Einkaufsliste schicken. Eine Mealie- oder Tandoor-Instanz lässt sich lesend spiegeln. |
 | **Vorrat** | Was wirklich im Haus ist: Menge, Lagerort und Mindesthaltbarkeit, mit Filtern für Ablauf und knappe Bestände und einer Meldung, bevor ein Datum erreicht ist. |
-| **Kalender** | Zwei-Wege-Sync mit Google und CalDAV, einseitiger Outlook-Push via Microsoft Graph, Kalender-Abos, Wiederholungen, Feiertage und Sichtbarkeit je Termin. |
+| **Kalender** | Zwei-Wege-Sync mit Google und CalDAV, einseitiger Outlook-Push via Microsoft Graph, Kalender-Abos, Wiederholungen, Feiertage, Filter nach Person und Sichtbarkeit je Termin. |
 | **Dokumente** | Familiendateien hochladen, taggen, ansehen und ordnen, optional auf WebDAV oder Google Drive. |
 | **Inventar** | Was dir gehört: Kaufpreis, Garantie, Zustand und Lagerort, mit verknüpften Belegen und Erinnerungen vor Fristablauf. Standardmäßig aus; Haushalte schalten es an. |
 | **Budget** | Einnahmen, Ausgaben, Konten, Darlehen, Abos und Planung je Kategorie, mit persönlichem Modus. Ein Eintrag kann seinen Betrag teilen und Titel und Kategorie für sich behalten, damit der Stand eines geteilten Kontos stimmt. |
 | **Hauswirtschaft** | Haushaltshilfen: Dienstpläne, Ein- und Ausstempeln, Tages- oder Stundenabrechnung, Aufgaben und Materialwünsche. |
 | **Belohnungen** | Punkte auf Aufgaben schreiben der zugewiesenen Person gut, mit elterlich freigegebenem Katalog und nachvollziehbarem Konto. |
 | **Gesundheit** | Vitalwerte, Medikamente, Laborwerte, Aktivität und Zyklus je Mitglied, mit Verlaufsdiagrammen. |
+| **Schichtplan** | Rotierende Schichtmuster und feste Wochenpläne aus einem Zyklusmodell, mit Ausnahmen je Tag und einem ausdrücklichen freien Tag. Der Kalender zeigt sie als schreibgeschützte Ebene, beim Lesen berechnet - eine Musteränderung lässt keine veralteten Termine zurück. Standardmäßig aus. |
 | **Notizen &amp; Kontakte** | Farbige Markdown-Haftnotizen mit Checklisten, die man antippt statt zu bearbeiten, plus ein Kontaktverzeichnis mit CardDAV-Sync und vCard-Import/-Export. |
 | **Geburtstage** | Geburtstagsliste mit automatischen Kalendereinträgen, Altersanzeige und Erinnerungen. |
 | **Familie** | Mitgliedsprofile mit Rollen, Fotos und Kontaktdaten. Neue Mitglieder kommen über einen Einladungslink und wählen ihr Passwort selbst. |

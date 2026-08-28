@@ -2018,6 +2018,9 @@ svg.weather-forecast__icon {
   gap: var(--space-3);
   width: 100%;
   justify-content: flex-end;
+  /* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). */
+  flex-wrap: wrap;
   margin-top: var(--space-2);
 }
 
@@ -4684,6 +4687,15 @@ svg.weather-forecast__icon {
   line-height: 1;
 }
 
+/* Das eingebaute Symbol (#873). NICHT `100%` wie das Bild darüber: ein Foto
+ * füllt die Kachel randlos, ein Strichsymbol braucht Luft, sonst sitzt es wie
+ * ein zu grosser Aufkleber darin. 22 von 40 ist dasselbe Verhältnis, das der
+ * Buchstabe daneben hält. */
+.quick-link-face > svg {
+  inline-size: 22px;
+  block-size: 22px;
+}
+
 .quick-link-face--lg {
   inline-size: 72px;
   block-size: 72px;
@@ -4693,6 +4705,11 @@ svg.weather-forecast__icon {
 }
 
 .quick-link-face--lg .quick-link-face__monogram { font-size: var(--text-3xl); }
+
+.quick-link-face--lg > svg {
+  inline-size: 38px;
+  block-size: 38px;
+}
 
 .quick-link-tile {
   display: flex;
@@ -4739,6 +4756,14 @@ svg.weather-forecast__icon {
   font-size: var(--text-lg);
   font-weight: var(--font-weight-semibold);
   line-height: 1;
+}
+
+/* Das eingebaute Symbol (#873) - Begründung der Größe siehe .quick-link-face.
+ * Der Selektor greift auf `svg`, weil Lucide das `<i data-lucide>` beim
+ * Zeichnen dadurch ERSETZT; auf `i` gemünzt liefe die Regel ins Leere. */
+.quick-link-tile__face > svg {
+  inline-size: 24px;
+  block-size: 24px;
 }
 
 /* Name und Host bleiben einzeilig: eine Kachelreihe, in der eine Kachel drei

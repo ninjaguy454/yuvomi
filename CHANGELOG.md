@@ -7,6 +7,545 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.51.0] - 2026-08-28
+
+### Added
+
+- **The calendar has a filter sheet.** Holidays, school holidays, the shift overlay and birthdays
+  used to sit in the module header as up to five chips; below 640px they lost their labels and were
+  left as circles, one of them containing nothing but an 8px dot. Their on/off state was a surface
+  difference of 1.085:1 - the rule meant to carry it set the same border as the resting state and
+  did nothing - and four of the five had no `aria-pressed` at all, so the layer was stateless to a
+  screen reader. The sheet gives every switch its label back and adds what the calendar never had:
+  a filter by person, each row carrying that member's own colour. An empty selection means everyone,
+  so there is always a way back. The header keeps one button with the number of active filters.
+- **Filtering by person, not by calendar.** A colour legend is not constructible here: an event's
+  colour comes from three sources in order - its own colour, the primary assigned member, the
+  calendar - so "this colour means that calendar" would be wrong for the majority of entries. The
+  person is the one unambiguous axis, and in a family planner it is the one being asked about.
+
+### Fixed
+
+- **Every scroll area of the app was reserving 105 pixels for a banner nobody ever saw.** The
+  install prompt's trailing space was switched on by the mere presence of its element - which is
+  static in the page and never absent, renders 0x0 until one of its conditions is met, and on iOS
+  never fires at all. Measured, that cost 21.2% of the calendar grid's height on a 390px phone,
+  23.9% at 320px, and the same 105px in the notes. The component now reports whether it is actually
+  showing. A month row grows from 62.9 to 80.4 pixels on a phone.
+- **On a phone, the dot standing for an event now meets its contrast requirement.** Below 640px it
+  is the only carrier of information in the main view on the main platform, and five of the nine
+  colours failed WCAG 1.4.11 against the light surface (amber 2.15:1 through orange 2.80:1) while
+  all nine passed in dark mode - an invariant that only holds in one theme is not one. The colour
+  itself is untouched, since it is the household's to choose; a ring now carries the separation.
+  All 24 measured combinations are at 4.69:1 or better.
+- **A long appointment in the week and day views keeps its title visible.** An entry beginning above
+  the visible area showed a blank coloured rectangle - measured 151x120 pixels without a single
+  character - and it was the longest, most important entries this happened to.
+- **Tapping a day no longer rewrites the calendar's default view.** A navigation gesture silently
+  changed a setting, with no feedback and no way back other than noticing that the app opened
+  differently next time.
+- **At exactly 640px the calendar was in two states at once.** The stylesheet had already reduced
+  entries to dots while the click handling still assumed the desktop layout, so a tap had to hit a
+  10-pixel target instead of the whole cell.
+- **A header bar that overflows now shows that it continues.** The rounding tolerance was applied to
+  the scroll position as well as to the overflow itself, and subtracted from both ends: for any
+  overflow up to twice that tolerance a bar counted as being at its start and at its end at the same
+  time and showed no fade. Measured on the Ukrainian calendar at 375px, where the view switcher runs
+  over by 4 pixels and sits 2 pixels in.
+- **The install prompt cleaned up after itself again.** Its class defined the same lifecycle callback
+  twice; in JavaScript the later definition silently wins, so the listener teardown never ran. After
+  dismissal the prompt kept a click counter on the document that went on writing to local storage.
+
+### Changed
+
+- **The calendar header gives a row back to the content.** On a 390px phone it measured 230.1 pixels,
+  27.3% of the viewport, in four stacked rows; it now shares its title row and takes 174.1 pixels.
+  The "Today" button appears only when today is not in view, which frees exactly the width the date
+  label needs to stay whole. At 320px the row breaks instead, because a truncated month name is the
+  worse trade.
+- **The switch row is one shared form across the whole app.** It lived in the settings stylesheet,
+  which only loads on the settings route, so the primitive documented as "one switch, one form" had
+  no effect anywhere else.
+
+## [2.50.4] - 2026-08-28
+
+### Added
+
+- **The view switcher in the tasks header names its views.** List, Kanban and History showed three
+  mute glyphs; a Kanban rectangle and a history arrow are not shared vocabulary. The labels appear
+  from 1024px, where the header is single-line anyway and they cost one pixel. Below that the
+  icon-only form stays - measured, a labelled switcher grows from 130px to 395px and would push the
+  header from two rows to three at 834px. The three single buttons beside it keep their icon form:
+  their names are verbs ("Manage categories"), and a visible label made from an aria-label is a
+  second name for the same control.
+
+### Fixed
+
+- **Checking off a task now confirms the check and can be undone.** The confirmation was already
+  built but never visible: the class was set, the round trip ran, and the list re-render replaced
+  the button before the 200ms animation got a single frame - measured, it played in none of six
+  attempts. It now runs alongside the round trip instead of after it, so it costs no time when the
+  network is slower. Tapping also offers the same undo the swipe gesture has had all along; the most
+  common way to complete a task used to let the entry vanish from the filtered view without a word.
+- **The edge fade on the documents filter row follows the element that actually scrolls.** Below the
+  breakpoint the whole control row scrolls rather than the chip strip inside it, and the fade was
+  wired to the inner element only - 1246 pixels of content on a 390px viewport with no sign that
+  anything continued sideways.
+
+### Changed
+
+- **Every motion curve now comes from a token.** Three literals sat outside `tokens.css`: two spelled
+  out an existing curve by hand, blind to any later change, and the third was a fourth curve nobody
+  had decided on. Three durations move onto the canonical steps in the process (320ms and 350ms to
+  300ms, 220ms to 250ms). A guard checks the shape rather than a file list, so a new file cannot
+  quietly reintroduce one.
+
+## [2.50.3] - 2026-08-27
+
+### Added
+
+- **Recipes show "Planned this week"** on every recipe that appears in the current week's meal
+  plan, next to the ingredient count. The recipe list finally shows its own connection to the
+  plan — derived from the plan itself, no schema change.
+- **The tappable note checklist confirms a check** with the same check-pop the shopping list and
+  the tasks already use, and the checked text steps back softly instead of jumping.
+- **Screen readers hear which meal an action belongs to** ("Delete Fluffy pancakes" instead of
+  25 identical "Delete meal" buttons) and where they stand in the onboarding ("Step 2 of 3").
+
+### Changed
+
+- **Module headers grew a dedicated tool row.** Tab bars and view switchers used to share one
+  line with the title, month navigation and actions — on a 1280px desktop the Budget header had
+  138px for its 606px of tabs (one of seven visible), the calendar's "Agenda" switch was hidden
+  behind a fade and the month label truncated; on phones Health showed three of six tabs. Every
+  toolbar tab bar now lives on its own full-width row under the title line, on every viewport,
+  and both rows end on the same reading-measure edge as the content below. An overflowing bar
+  shows a sharp 12px peek fade that leaves the next tool visibly cut instead of swallowing it —
+  also on the kitchen rail, where the wide fade used to hide the "Pantry 10" badge completely.
+- **The calendar header keeps one width across all four views.** It used to jump to the agenda's
+  reading measure and back; the agenda list keeps its reading column.
+- **The install banner steps aside from actions.** With the FAB speed dial open, "Shopping" and
+  "Note" sat behind it; on the shopping list it overlapped the bulk pill ("To pantry / Delete").
+  It now yields to both states and returns when they end; a dismissal lasts 30 days instead of 7.
+- **Phones get their viewport back.** Documents open in the compact list view by default on
+  phones (the saved choice still wins; the grid card spent ~260px per document). The last card of
+  an odd metric row — the Budget balance — spans the full row instead of standing next to an
+  empty cell.
+- **Navigation badges carry their meaning.** Overdue tasks stay red, inventory deadlines are
+  amber, and an upcoming birthday uses the accent — a birthday is news, not an alarm. The More
+  sheet counted the same number neutrally all along.
+- **The schedule module speaks one language.** The navigation called it "Dienstplan" while the
+  page said "Schichtplan" (German); the "late" shift preset and the color-picker default no
+  longer imitate the brand violet; and a fresh household sees a single empty state instead of
+  two stacked "nothing here" messages.
+- **Small consistencies across the app:** deleting a shopping item uses the trash icon like
+  every other module (the cross means "close" app-wide); the housekeeping payments bar uses the
+  shared chart palette; the weekend tint in the month grid is the neutral well instead of a cool
+  module wash on the warm stage; the "Assigned to me" calendar chip is neutral while inactive so
+  its color states the activation (decided 2026-08-17); contact rows drop the truncated e-mail
+  on narrow phones; document cards no longer repeat "School · School" when folder and category
+  share a name.
+
+### Fixed
+
+- **Medication names wrap instead of vanishing.** "Eisen (Eisen…" next to free space is now a
+  two-line name with the take button fixed to the right (health overview and due list), and the
+  "as needed" lead no longer paints under the take button — it shrinks with an ellipsis and, in
+  the ready state, yields entirely to the primary button that says the same thing.
+- **The empty meal slot stays hidden on phones again.** Its hiding rule sat before the slot's
+  base rule and lost the cascade — the same trap v2.24.1 documented, returned silently; a guard
+  now pins the rule order.
+- **Scroll fades appear for real 1-8px overflows.** The fade helper's tolerance swallowed them;
+  a 4px-clipped view switcher showed no hint that it scrolls.
+
+## [2.50.2] - 2026-08-27
+
+### Fixed
+
+- **The Budget summary no longer clips the transaction list on short desktop windows** (#904). The
+  fixed part of the tab - summary cards plus the category chart - grows with the number of
+  categories; on a short viewport the transaction section collapsed to its header line, and since
+  the panel itself did not scroll, nothing could reach the list. The section now keeps a usable
+  minimum height (three rows plus a cut-off fourth as a scroll cue, capped at the panel's own
+  height on very short windows), and once that minimum makes the panel overflow, the whole tab
+  scrolls - summary and chart move along, with the same thin module scrollbar the loans tab
+  already had. On tall windows nothing changes: the summary stays put and only the list scrolls.
+
+- **A birthday photo now opens the same crop-and-zoom dialog as a profile picture** (#901). The
+  dialog existed, but every module had built its own way from the file to the stored image, and
+  the birthday path had no type check, no size check, no crop and a hardcoded English error
+  message. All five paths - profile picture, family member, housekeeping staff, quick-link tile,
+  birthday - now run through one shared picker; a birthday photo is stored as a cropped 256 × 256
+  JPEG (about 5 KB instead of the raw file). Along the way: choosing the same file twice in a row
+  works again everywhere (previously "crop it differently" with the same file did nothing), the
+  housekeeping module reports read errors instead of swallowing them in an empty `catch`, and an
+  image file that cannot be decoded shows the read-error message instead of silently doing
+  nothing.
+
+- **A test suite that throws can no longer hang `npm test` forever** (#903). The CalDAV sync
+  suite's tick counter kept the event loop alive when `sync()` threw: the failure printed, the
+  process never exited, and in CI the run sat "in progress" for the six-hour default instead of
+  turning red. The ticker now stops in a `finally` and no longer holds the process open, and every
+  workflow job carries an explicit `timeout-minutes` cap - a new guard ensures the next workflow
+  cannot arrive without one.
+
+### Changed
+
+- **An inventory item photo now goes through the same crop dialog, and the subscription logo
+  picker checks its file itself** (#901). The inventory photo path used to read the raw file with
+  no type check, no size check and an untranslated error message; it now runs through the shared
+  picker and is stored as a cropped 256 × 256 JPEG. The subscription logo keeps its raw path on
+  purpose - SVG and transparency would not survive a JPEG crop - but now rejects wrong types and
+  oversized files with translated messages instead of failing silently or in English.
+
+- **GIF is no longer offered when picking a birthday or inventory photo** (#901). The crop dialog
+  always returns a JPEG, so an animated GIF would silently have become a still image; a readable
+  rejection beats a result that differs from the upload. The server API accepts GIF unchanged.
+
+## [2.50.1] - 2026-08-27
+
+### Fixed
+
+- **A public address typed without a scheme no longer poisons the installer's derived settings.**
+  The advanced step's address field is free text; an entry like `yuvomi.example.com` was taken as
+  is and ended up scheme-less in the `.env` as `BASE_URL` and in every displayed OAuth redirect
+  URI. The field now only wins over the derivation from host and port when it names a full
+  `http://` or `https://` origin.
+
+### Security
+
+- **Resolved all open code-scanning findings.** The screensaver settings trim trailing slashes off
+  the Immich URL without a regular expression that backtracks on adversarial input, the calendar
+  stores its birthday-layer visibility toggle as a plain literal (the value was never more than a
+  toggle), and five test-suite checks now match URLs and markup exactly instead of by substring.
+
+## [2.50.0] - 2026-08-27
+
+### Fixed
+
+- **A colour set on a CalDAV or Apple appointment now reaches the server** (#897). `color` has
+  always been one of the mirrored fields, so recolouring an appointment marked it for an outbound
+  push - but `COLOR` appeared exactly once in the whole server, in `ics-parser.js`, where it is
+  *read*. Nothing ever wrote it. Every recolouring therefore cost a full `PUT` round trip that
+  changed nothing on the server, and the field list claimed a mirroring that did not happen for two
+  of the three outbound providers. This was the promise from #815 that never got a thread of its own.
+
+  Yuvomi now writes `COLOR` (RFC 7986), the same property its parser already reads. **The value is a
+  CSS3 colour name, not a hex code** - §5.9 allows nothing else, and a strict server may reject a hex
+  value - so a stored `#RRGGBB` is mapped to the nearest of the 147 CSS3 names by the same
+  perceptual redmean distance that already maps colours onto Google's eleven `colorId`s. The loss is
+  small (the largest deviation across Yuvomi's own palette is 28 of 255 in a single channel) and it
+  stays on the wire: recolouring sets `color_modified = 1` (#899), and an inbound run writes `color`
+  only while that is `0`, so the neighbouring value read back on the next sync never overwrites the
+  choice.
+
+  `COLOR` is now a *managed* property of the ICS patcher - without that it may be written but not
+  replaced, and an emitted value would not have survived the patch. Freshly uploaded appointments
+  carry their colour from the start too, so one created in Yuvomi no longer arrives at the server
+  colourless.
+
+  **An appointment whose colour was never learned sends no `COLOR` field at all** - "leave it alone",
+  not "remove it". A `null` there would let a mere title change strip a colour somebody else chose on
+  the server. Telling that state apart from a *deliberately cleared* colour is what #899 below is
+  for; with it, clearing a colour reaches the provider as well.
+
+- **A title edit no longer freezes an appointment's colour, and a cleared colour now reaches the
+  provider** (#899, migration 167). `user_modified` means "something about this appointment was
+  edited locally" - it is set on **any** edit to a mirrored appointment. All three inbound syncs read
+  it as "the colour is managed locally" and wrote `color` only while it was `0`. Renaming an
+  appointment was therefore enough to freeze its colour column forever: if somebody coloured that
+  same appointment in Nextcloud, Apple Calendar or Google afterwards, Yuvomi never found out.
+
+  The colour now carries a state of its own, `calendar_events.color_modified`, set only when the
+  colour actually changes - re-sending the unchanged value with the rest of a form is not a
+  recolouring. Three things follow. Inbound gates on it, so an edit to any other field leaves the
+  colour open to the provider again. `color IS NULL AND color_modified = 1` is unambiguously
+  *cleared*, so the CalDAV/Apple outbound may remove the `COLOR` property and Google's `colorId: null`
+  now goes out only for a colour somebody really cleared, rather than for every appointment without
+  one. And the upload paths record the flag when the appointment carries a colour, so the next
+  inbound run no longer replaces the chosen hex with the mapped one - both mappings are lossy (a
+  CSS3 name, or one of Google's eleven `colorId`s), and every colour in Yuvomi's palette maps to a
+  different hex.
+
+  **The backfill is deliberately conservative:** `color_modified = user_modified` for existing rows.
+  Every colour protected today stays protected. A blanket `0` would undo exactly the bug described
+  here, but it would also let the next sync overwrite a colour somebody set on purpose - and in
+  existing data the two are indistinguishable. Resetting an ICS appointment to its original clears
+  both flags: the feed manages it again, colour included.
+
+## [2.49.1] - 2026-08-27
+
+### Changed
+
+- **The repeat menu says that its intervals are adjustable** (#862). The four options - daily,
+  weekly, monthly, yearly - read like fixed values, because the field that turns them into `every 2
+  weeks` or `every 3 months` lives in a block that stays hidden until one of them is picked. A
+  reporter opened a thread asking for custom intervals and found them himself a few days later,
+  by picking a frequency on the off chance: *"sorry for opening a topic about an already built-in
+  feature, could have searched a little longer"*. He had not searched too little; the menu had
+  answered the wrong question.
+
+  A line under the menu now says the interval is free to set, and names two examples. It is shown
+  in exactly the state where the misreading is possible and goes away with it - the hint and the
+  detail block are complements, never both there and never both gone. The select's
+  `aria-describedby` is removed along with the hint rather than merely hidden, because a directly
+  referenced node counts towards the accessible description even while hidden - otherwise a
+  screen-reader user would keep hearing the hint that answers the question they just answered. Task
+  and appointment forms share the field, so both get it.
+
+## [2.49.0] - 2026-08-27
+
+### Fixed
+
+- **An appointment nobody picked a colour for lends the colour of the person it belongs to**
+  (#891). Since v2.36.0 every appointment looked as though someone had chosen its colour, so the
+  assigned member's colour never showed - the reporter saw the avatar next to an appointment that no
+  longer matched it.
+
+  **It was a missing state, not a wrong rule.** `calendar_events.color` was `NOT NULL` and rejected
+  the empty string, so there was no way to say *this appointment has no colour of its own*: the
+  dialog wrote the first palette entry into every new appointment and the sync wrote the calendar's
+  colour into every imported one. Both are inherited values, and once stored they were
+  indistinguishable from a deliberate choice - which is why they outranked the person's colour, the
+  rule from #815 being that an explicit value beats a derived one. That rule stands; a never-made
+  choice simply is not an explicit value.
+
+  The column may now be `NULL`, the import paths of all four sync providers stop copying the
+  inherited calendar colour into it, and the event dialog gains a first swatch, **"colour of the
+  assigned person"**, which is where a new appointment starts. Choosing a colour still keeps it, for
+  the appointment and across syncs.
+
+  **Existing appointments are left untouched.** `#007AFF` looks like an old default - no current
+  palette contains it - but it was the first entry of the event palette before the OKLCH switch, so
+  an appointment from the v1 era may well carry it on purpose. A migration cannot tell the two apart,
+  and discarding a real choice is worse than changing nothing: synced appointments normalise
+  themselves on the next sync, local ones through the dialog.
+
+  **Clearing a colour reaches Google too.** The outbound push is an `events.patch`, and a PATCH
+  touches exactly the fields present in the body - so omitting `colorId` means "leave it alone",
+  not "clear it". Google would have kept the old colour while Yuvomi showed the assignee's, and
+  because the same edit sets `user_modified = 1`, no inbound run would ever have reconciled the
+  two again. The payload now carries an explicit null. Not when the colour merely cannot be
+  mapped, though: a missing palette is not a missing colour, and a null there would throw away a
+  colour nobody asked to remove.
+
+  **The inherited colour belongs to the primary assignee**, the one named in `assigned_to` - not
+  to whichever row the assignment query happens to return first, since it aggregates without an
+  `ORDER BY`. With several people on an appointment the colour could otherwise belong to a
+  different member than the assignment means, and change between reloads without anyone touching
+  it.
+
+  **The countdown tile borrows the colour too.** It read `color` straight off the event and fell
+  back to the module tone - fine while every event carried a colour, but the same appointment would
+  now have shown the assignee's colour in the calendar and a generic tone on the tile right next to
+  it. It resolves through the shared rule as well; only when *no* source has anything does it keep
+  falling back to the module tone, which says more than a neutral grey.
+
+  **A `PUT` that does not mention `assigned_to` no longer re-picks the primary assignee.** The route
+  reloaded the assignment ids and wrote the first one back - but that query has no `ORDER BY`, so it
+  returns them by user id rather than in the order the form sent. With the borrowed colour following
+  `assigned_to`, an appointment could change colour because someone split a series (that request
+  carries only `recurrence_rule`). Same rule as for the colour itself: not sent means not touched.
+
+  **A deleted member no longer leaves a countdown colourless.** When the primary assignee is
+  deleted, the foreign key clears `assigned_to` and takes that one assignment row with it while the
+  others stay. The calendar falls back to the first remaining assignee; without the same step the
+  tile would have been the only place showing a generic tone.
+
+  Two more things surfaced while building it. The overview resolved event colours **on its own**
+  (`color || cal_color`, without the assignee branch) - harmless while every appointment carried a
+  colour, but two visibly different answers to one question as soon as one might not; both pages now
+  read the same rule from `public/utils/event-color.js`. And an ICS subscription has no
+  `external_calendars` row, so its colour had to reach the display over its own path - it is now read
+  from `ics_subscriptions`, and appointments from a subscription keep their feed's colour.
+
+
+## [2.48.0] - 2026-08-27
+
+### Added
+
+- **Schedule turns a rotation into one repeating cycle instead of a wall of appointments** (#786,
+  contributed by @mclgoerg). Define reusable shift types, lay them onto the days of a cycle, and
+  replace a single date with a different shift or an explicit day off. A fixed weekly timetable and a
+  rotating shift pattern share the same arithmetic - a "week A / week B" plan is a 14-day cycle, so
+  there is one model rather than two features.
+
+  **A pattern is not calendar recurrence**, and that is the reason it is its own module: a rotation is
+  a repeating sequence of *different* entries, which an RRULE cannot express without splitting it into
+  several unrelated series that then drift apart.
+
+  Entries are **computed when read**, never copied into the calendar. Changing a pattern therefore
+  cannot leave stale appointments behind, and a two-year rotation costs one row instead of roughly
+  seven hundred. The calendar shows them as an explicitly toggleable, read-only layer - a compact
+  strip by default, full blocks on request - and never as ordinary editable events.
+
+  Every household member can read the overlay, because the everyday question is "is Anna free on
+  Tuesday evening". A member writes only their own schedule; administrators write for anyone. Shift
+  types belong to the household rather than to a person: anyone may add one, and only its creator or
+  an administrator may rename or remove it. The module ships **switched off**, the way Inventory does.
+
+### Fixed
+
+- **Recording someone else's medication works in both directions again** (#884). A parent looking
+  after a child could create a medication schedule and a dose entry, but not delete the schedule or
+  tick the dose off - the answer was "not found" for something they had just entered themselves.
+
+  A schedule and a dose entry have no owner of their own; they hang off the medication and inherit its
+  scope. In four places that inheritance was spelled out by hand, and the hand-written version quietly
+  left out the caregiver relationship. Lab results had the same gap, just nobody had run into it.
+
+  **Why it looked random rather than broken:** as long as the caregiver ticks a dose themselves, the
+  request goes through the medication and works. Once the reminder job has created the entry ahead of
+  time, the same button takes a different route - and only that one was closed. Same dose, working one
+  day and refusing the next.
+
+- **The installed app follows the tablet again instead of pinning itself upright** (#890). The web app
+  manifest carried an orientation lock, so a Galaxy Tab held sideways still showed a narrow portrait
+  strip even though the layout has always been responsive well past that width. The lock is gone
+  rather than widened: the app now follows the device, and the rotation lock its owner set.
+
+- **A malformed time is rejected instead of stored.** Time fields validated only the shape `dd:dd`, so
+  an API client could store `99:99` as a reminder or a shift boundary. The check now reads the value
+  as a clock time.
+
+## [2.47.0] - 2026-08-27
+
+### Fixed
+
+- **A calendar event's object name no longer decides whether it arrives** (#883). A CalDAV event was
+  never picked up: no error, no warning, the sync reported success with an unchanged event count. The
+  report pointed at the iCal parser - `DURATION` instead of `DTEND`, a `TZID` without an inline
+  `VTIMEZONE`. The parser handles both, and the reproduction from the report now ships as a test so
+  the false trail does not come back.
+
+  **The cause sat one layer above it.** tsdav filters the hrefs of a `calendar-query` response on
+  `.ics` in the path by default, but the extension is pure convention - RFC 4791 prescribes no name
+  for the object resource, and a server may assign its own. Stalwart does exactly that for everything
+  created over JMAP (`NZtPkIOMoK`), while objects written by a CalDAV `PUT` keep the client-chosen
+  `<uid>.ics`. In the same calendar part of the events synced and part did not - and because the
+  filtered-out ones were never fetched, no log line could mention them. The two conspicuous
+  properties and the object name all come from the same JMAP origin; that is what the diagnosis
+  tripped over.
+
+  Yuvomi now uses the rule tsdav itself applies on the CardDAV side - let everything through except
+  the collection itself - and applies it at the **client** rather than at the call sites, since five
+  places fetch calendar objects and a sixth would lose the rule again. Two files that were building
+  their own CalDAV client turned up in the process and are now held by a guard. The same filter also
+  covers the outbound path, where the same objects were being dropped a second time.
+
+  **Per-event visibility comes with it**, as the report asked: anything the parser discards is now
+  reported with its UID and the reason instead of being swallowed. A skipped event was
+  indistinguishable from one the server never sent, and that is precisely what made this impossible
+  to diagnose from the outside.
+
+- **Deleting a series from a synced calendar says so first** (#880). Tapping one occurrence in the
+  month view and pressing delete made every occurrence disappear without a word. The scope was right
+  - Yuvomi cannot split a series that belongs to another calendar, an excluded occurrence would come
+  back on the next sync - but doing it silently was not.
+
+  A foreign series now asks first, and the question **names** the reach rather than offering a choice;
+  a dialog with only one selectable answer would be a prop. The wording follows what actually
+  happens, because a promise that does not hold is worse than none: a **birthday event** mirrors a
+  birthday entry and is recreated on the next run, so it points at the birthday itself; an **ICS
+  subscription** event cannot be deleted at the source at all and returns with the next fetch;
+  everything else is told that the whole series falls, with all its occurrences. Single events are
+  unchanged - the undo toast carries those.
+
+- **The module head is one row again on desktop** (#882). Tasks, Contacts, Budget and Birthdays broke
+  their head onto two rows, the Calendar in its week, day and agenda views. The rule that pulls the
+  end of the head row back to the reading measure did it with a margin on the last slot - and a
+  margin counts towards the flex container's *line occupancy* while never yielding. Measured at
+  1960px: the actions slot claimed 406px of content plus 560px of margin out of a 1280px row, leaving
+  315px for seal, title and search where they needed 441px. The wrap was arithmetically unavoidable
+  rather than content-dependent.
+
+  That offset is now a shrinkable slot, and from 1024px up a head no longer wraps: flex splits rows by
+  the *hypothetical* sizes, i.e. before anything has shrunk, so the head broke while yielding slots
+  stood right next to it. The page title is the last to give way, being the only one that cannot come
+  back. The Calendar's layer chips give up their label before the head wraps, but never their tap
+  target - until now, how many layers you had switched on decided how many rows your calendar head
+  had. At exactly 1024px the head still wraps, and deliberately so: the sidebar leaves it 740px of
+  inner width, of which the reading measure alone claims 720px.
+
+
+## [2.46.0] - 2026-08-26
+
+### Added
+
+- **A quick link can wear a built-in symbol instead of an uploaded picture** (#873). A tile had two
+  faces - an image you upload, or the first letter of its name on the colour you picked. Whoever
+  wanted neither had no third option, and the request said so plainly: *"It's just an icon and as
+  heavy self-hoster I don't want to search and fetch icons from somewhere, I would like to have it
+  just built-in Yuvomi."*
+
+  **The supply was already in the repo.** Yuvomi vendors the full Lucide set (1743 symbols) and
+  draws every button in the app with it; what was missing was not the icons but a way to pick one.
+  A symbol now costs the length of its name instead of the 20-40 KB of a data URL, it stays sharp,
+  it takes the tile colour, and it follows the light/dark switch - none of which a raster upload
+  does. The picker opens from the tile preview, starts with suggestions for the usual self-hosted
+  categories, and searches the whole set from there. The search runs over English identifiers
+  (`film`, `server`), and the placeholder says so rather than letting someone type "kalender" and
+  find nothing.
+
+  **Two other routes were considered and rejected**, and the reasoning lives in the code so the
+  next person finds it. Bundling a set of service logos would be a low double-digit megabyte
+  increase for a row that holds at most 24 tiles, with a licence situation per brand and a manual
+  update path that does not scale to a few thousand files - and the one service someone is looking
+  for could still be missing. Fetching the site's favicon on demand can only be done by the server
+  (a browser may display a cross-origin image but not read it), and **any household member can
+  create a quick link** while those links point into the home network by design: a server that any
+  member can aim at any internal address is a network-scanning tool. If you want the real brand
+  logo, the image upload is unchanged.
+
+- **Document folders can live inside document folders** (#785). The module carried two flat axes
+  side by side - categories as chips on top, folders as a list in the sidebar - and nothing showed
+  how they relate, because they do not: a folder holds documents of several categories at once.
+  The sidebar is now a real tree with a path above the list, folders can be nested, moved and
+  created inside one another, and categories stay what they always were: a label on the document
+  that filters across the whole tree.
+
+  **A folder now shows what lies beneath it.** Opening "Apartment" while the twelve documents sit
+  in "Apartment/Rent" used to show an empty view; the count next to the folder answers the same
+  question the view does. Deleting a folder still costs no document - they fall back to "no
+  folder", as they always have - but the confirmation now names how many subfolders go with it,
+  because the sidebar only shows the collapsed root. Nesting is capped at five levels, which is
+  where the indentation stops leaving room for the name on a phone.
+
+### Fixed
+
+- **The overdue-tasks badge is there right after signing in** (#868). It only appeared once you had
+  opened the module it belonged to. That was not a display glitch but the construction: three
+  modules each rebuilt the same badge markup from *their own* state, so a module that had never
+  rendered had no state and therefore no badge - and rebuilding the navigation (language switch,
+  module toggle, account change) threw the badges away until the next render. A badge is now a
+  remembered value that the navigation repaints, with one place that draws it. The count comes from
+  the overview response at startup and from the module itself once it has its list, so ticking a
+  task off still lowers the number immediately instead of after a round trip.
+
+- **Going back closes the dialog instead of changing the page underneath it** (#871). With a dialog
+  open, the back gesture navigated away and left the dialog standing - on a phone the swipe from
+  the left is the back button, so the most common way out was the one that broke the state. Every
+  modal overlay in the app now registers with the back gesture, including the native `<dialog>`
+  elements that carry no `aria-modal` attribute of their own, and the router asks the open overlays
+  before it navigates.
+
+- **A recurring key date that has run out disappears - and one that is still running stays** (#877).
+  Two faults in the same place, pulling in opposite directions. A repeat set to "ends after N times"
+  was never actually limited here: a three-time monthly series from January 2025 was still counting
+  in August 2026, and worse, it named a date in the *future*. In the other direction, catching a
+  long-running series up to today gave up after a fixed number of steps - a daily series started in
+  2023, or a weekly one from 2005, vanished from the tile even though the appointment happens today.
+  Catching up now jumps in interval steps instead of counting one by one, and "ends after N times"
+  is enforced.
+
+  **The seven-day grace period is unchanged and stays deliberate.** A countdown that stops exactly
+  on impact leaves you alone in the one moment you set it for - the day before it says "tomorrow",
+  the day after it would say nothing, and nobody tells you that you missed it.
+
+- **A right-aligned button row wraps instead of squeezing its buttons** (#872). Without a wrap rule
+  the row grew past its container - right-aligned, so it grew to the left - and whatever stuck out
+  was clipped by the frame.
+
 ## [2.45.0] - 2026-08-26
 
 ### Added

@@ -756,17 +756,27 @@ test('Monatsraster: die Tönung folgt dem Wochentag, nicht der Spaltenposition',
 });
 
 test('Monatsraster: das CSS hängt die Tönung an die Klasse, nicht an nth-child', () => {
+  // Der Filter fragt die ZUSICHERUNG ab (eine Wochenend-Zelle wird ueber ihre
+  // Klasse gemalt), nicht die Farbquelle: bis 2026-08-27 suchte er
+  // `--module-accent` im Regelkoerper und haette den Wechsel der Toenung auf
+  // den neutralen Well (Herkunfts-Regel: „Wochenende" ist keine
+  // Herkunftsaussage) als „verschwunden" gemeldet, obwohl die Regel steht.
   const tint = [...eachRule(calendarCss)]
-    .filter((r) => /--module-accent/.test(r.body) && /background-color/.test(r.body))
-    .filter((r) => r.selector.includes('.month-day'));
+    .filter((r) => /background-color/.test(r.body))
+    .filter((r) => r.selector.includes('.month-day--weekend'));
   assert(tint.length > 0, 'die Wochenend-Tönung im Monatsraster ist verschwunden');
   for (const rule of tint) {
-    assert(rule.selector.includes('month-day--weekend'),
-      `getönte Monatszellen müssen über .month-day--weekend adressiert werden, gefunden: ${rule.selector}`);
     assert(!/nth-child/.test(rule.selector),
       `die Tönung darf nicht an der Spaltenposition hängen (${rule.selector}): die Spalte sagt nur `
       + 'bei Wochenstart Montag den Wochentag');
   }
+  // Die Gegenrichtung, seit dem Quellen-Wechsel ausdruecklich: KEINE Regel
+  // malt eine Monatszelle ueber ihre Spaltenposition (#780).
+  const positional = [...eachRule(calendarCss)]
+    .filter((r) => r.selector.includes('.month-day') && /nth-child/.test(r.selector)
+      && /background-color/.test(r.body));
+  assert(positional.length === 0,
+    `eine Monatszelle wird ueber nth-child gemalt: ${positional.map((r) => r.selector).join(', ')}`);
 });
 
 // --------------------------------------------------------
@@ -813,19 +823,53 @@ test('die eigene Terminfarbe schlaegt die Farbe der zugewiesenen Person', () => 
   // ueber diesen einen aussagt. Ohne diese Haelfte waere der Test auch dann
   // gruen, wenn die Zuweisung gar nicht mehr faerbte.
   //
-  // WORAUF SICH DIESE HAELFTE NICHT BERUFEN DARF: sie beschreibt die Funktion,
-  // nicht die App. `calendar_events.color` ist NOT NULL und lehnt auch den
-  // Leerstring ab - ein Termin AUS DER DATENBANK erreicht die beiden unteren
-  // Zweige also nie. Sie bleiben stehen, weil sie die Rangfolge vollstaendig
-  // halten (und wieder greifen, sollte die Spalte je eine "keine eigene Farbe"
-  // kennen), aber wer hier gruen sieht, hat keine Zusicherung ueber das, was ein
-  // Nutzer zu sehen bekommt.
+  // DIESE HAELFTE WAR BIS v2.48.0 BLIND, und das ist der Grund, warum sie hier
+  // so ausfuehrlich steht. `calendar_events.color` war NOT NULL und lehnte auch
+  // den Leerstring ab - ein Termin AUS DER DATENBANK konnte die beiden unteren
+  // Zweige nie erreichen, der Test war also gruen ueber totem Code und sagte
+  // nichts darueber, was ein Nutzer zu sehen bekommt (#856).
+  //
+  // Seit Migration 166 darf die Spalte NULL sein, und erst damit traegt diese
+  // Haelfte eine Zusicherung. Dass ein NULL auch wirklich aus der Route und aus
+  // dem Sync herauskommt, kann dieser Frontend-Test aber nicht zeigen - das
+  // pruefen `test:calendar-routes` (Route) und `test:calendar-inherited-color`
+  // (Migration + Importpfade). Ohne die beiden waere er wieder blind.
   assert(resolveEventColor({ assigned_users: assignee, cal_color: '#0000FF' }) === '#FF0000',
     'ohne eigene Farbe muss die Zuweisung faerben');
   assert(resolveEventColor({ cal_color: '#0000FF' }) === '#0000FF',
     'ohne Zuweisung bleibt die Kalenderfarbe');
   assert(resolveEventColor({}) === '#8E8E93',
     'ohne alles bleibt das neutrale Grau');
+});
+
+test('die geerbte Farbe gehoert der PRIMAEREN Zuweisung, nicht der ersten Zeile', () => {
+  // `assigned_users` kommt aus einem `json_group_array` OHNE `ORDER BY`: seine
+  // Reihenfolge ist die der `event_assignments`-Zeilen, nicht die des Formulars.
+  // Die primaere Zuweisung steht ausdruecklich in `assigned_to`. Ohne die
+  // Unterscheidung traegt ein Termin mit mehreren Zugewiesenen die Farbe eines
+  // ANDEREN Mitglieds - und kann sie beim Neuladen wechseln, ohne dass jemand
+  // etwas geaendert hat. Solange die Spalte NOT NULL war, war der Zweig tot und
+  // der Fehler unsichtbar (#891).
+  const { resolveEventColor } = calendarHelpers;
+  const ev = {
+    color: null,
+    assigned_to: 7,
+    assigned_users: [{ id: 3, color: '#3CA368' }, { id: 7, color: '#CE5053' }],
+  };
+  assert(resolveEventColor(ev) === '#CE5053',
+    'die Farbe muss der in assigned_to genannten Person gehoeren');
+
+  // Gegenprobe: die naive Fassung greift daneben - ohne diese Zeile waere der
+  // Test auch dann gruen, wenn beide Personen dieselbe Farbe traegen.
+  assert(ev.assigned_users[0].color === '#3CA368',
+    'die erste Zeile traegt eine ANDERE Farbe - sonst prueft der Test nichts');
+
+  // Faellt assigned_to aus (Altbestand, geloeschtes Mitglied), bleibt die erste
+  // Zeile die beste verfuegbare Auskunft.
+  assert(resolveEventColor({ color: null, assigned_to: null, assigned_users: [{ id: 3, color: '#3CA368' }] }) === '#3CA368',
+    'ohne assigned_to gilt die erste Zeile');
+  assert(resolveEventColor({ color: null, assigned_to: 99, assigned_users: [{ id: 3, color: '#3CA368' }] }) === '#3CA368',
+    'zeigt assigned_to auf niemanden in der Liste, ebenso');
 });
 
 test('eine Zuweisung ohne eigene Farbe faellt nicht auf die Kalenderfarbe durch', () => {
@@ -897,11 +941,40 @@ test('ein Speichern, das die Farbe nicht anfasst, veraendert sie nicht', () => {
   // Wer eine Farbe waehlt, bekommt sie auch.
   assert(colorToSave('#8156C0', termin) === '#8156C0',
     'ein aktiver Swatch schlaegt die bisherige Farbe');
-  // Ein neuer Termin hat keine bisherige Farbe.
-  assert(colorToSave(undefined, null) === EVENT_COLORS[0],
-    'ohne Termin und ohne Auswahl bleibt die erste Palettenfarbe');
-  assert(colorToSave(undefined, { color: null }) === EVENT_COLORS[0],
-    'ein Termin ohne Farbe ebenso');
+});
+
+test('ein neuer Termin faengt OHNE eigene Farbe an, damit die Zuweisung faerben kann', () => {
+  // Die Verhaltensaenderung aus #891, und die zweite Haelfte desselben Bugs wie
+  // oben: #856 hat verhindert, dass BEARBEITEN eine Farbe umschreibt. Beim
+  // ANLEGEN schrieb dieselbe Formel den Palettenersten weiterhin fest, und weil
+  // er von einer bewussten Wahl nicht zu unterscheiden war, hat er die Farbe der
+  // zugewiesenen Person auf Dauer verdraengt - fuer JEDEN neuen Termin.
+  const { colorToSave, EVENT_COLORS } = calendarHelpers;
+  const alteFormel = (aktiv, ev) => aktiv || ev?.color || EVENT_COLORS[0];
+
+  assert(colorToSave(undefined, null) === null,
+    'ohne Termin und ohne Auswahl wird KEINE Farbe geschrieben');
+  assert(alteFormel(undefined, null) === EVENT_COLORS[0],
+    'die alte Formel legte hier den Palettenersten fest - genau der verdraengte die Person');
+  assert(colorToSave(undefined, { color: null }) === null,
+    'ein Termin ohne Farbe behaelt keine');
+});
+
+test('der Erben-Swatch ist eine ausdrueckliche Wahl, kein fehlender Wert', () => {
+  // Der Kern der Umsetzung von #891: das Speichern muss "der Nutzer hat
+  // ausdruecklich KEINE eigene Farbe gewaehlt" von "der Nutzer hat die Farbe gar
+  // nicht angefasst" unterscheiden koennen. Beide sind falsy - haetten sie
+  // denselben Wert, wuerde das Abwaehlen einer Farbe entweder verschluckt (bei
+  // COALESCE im Backend) oder es wuerde jedes Speichern die Farbe loeschen.
+  const { colorToSave } = calendarHelpers;
+  const termin = { color: '#8156C0' };
+
+  assert(colorToSave('', termin) === null,
+    'der Erben-Swatch loescht die eigene Farbe des Termins');
+  assert(colorToSave(undefined, termin) === '#8156C0',
+    'kein aktiver Swatch laesst sie dagegen stehen - derselbe falsy-Wert, andere Bedeutung');
+  assert(colorToSave('', termin) !== colorToSave(undefined, termin),
+    'die beiden Faelle duerfen nie dasselbe Ergebnis liefern');
 });
 
 test('sameColor vergleicht Hex-Werte ohne Ruecksicht auf Schreibweise', () => {

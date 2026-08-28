@@ -8,6 +8,7 @@ import { api } from '/api.js';
 import { canSeeWidget } from '/permissions.js';
 import { t, formatDate, formatTime, timeSuffix, getLocale, getNumberFormat } from '/i18n.js';
 import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
+import { resolveEventColor } from '/utils/event-color.js';
 import { esc, fmtLocation, renderMarkdownLight } from '/utils/html.js';
 // `todayKey` heisst hier schon ein Parameter (bzw. eine lokale Bindung), der den
 // Bezugstag traegt - der Import kommt deshalb unter eigenem Namen herein.
@@ -32,8 +33,10 @@ import { exitWallMode, isWallActive, syncWallMode } from '/utils/wall-mode.js';
 import { rememberLayoutHint, layoutHintSizes, layoutHintQuery } from '/utils/dashboard-layout-hint.js';
 import { emptyHintHTML } from '/utils/empty-state.js';
 import { quickLinkHost } from '/utils/quick-link-url.js';
+import { hasIcon } from '/utils/lucide-icons.js';
 import { prefersInkText } from '/utils/contrast.js';
 import { openQuickLinksManager } from '/components/quick-links-manager.js';
+import { attachOverlay } from '/utils/overlay-history.js';
 
 // Hält den AbortController des aktuellen FAB-Listeners - wird bei jedem render() erneuert.
 let _fabController = null;
@@ -156,13 +159,21 @@ function showOnboarding(appContainer, onDone) {
     body.className = 'onboarding-body';
     body.textContent = step.body;
 
+    // Die Punkte sind reine Dekoration und fuer Screenreader unsichtbar; die
+    // Fortschrittsansage traegt ein sr-only-Text daneben - vorher hoerte ein
+    // Screenreader gar nicht, an welchem der drei Schritte er steht
+    // (Critique 2026-08-27, Persona Sam).
     const dots = document.createElement('div');
     dots.className = 'onboarding-dots';
+    dots.setAttribute('aria-hidden', 'true');
     steps.forEach((_, i) => {
       const dot = document.createElement('span');
       dot.className = `onboarding-dot${i === current ? ' onboarding-dot--active' : ''}`;
       dots.appendChild(dot);
     });
+    const progress = document.createElement('p');
+    progress.className = 'sr-only';
+    progress.textContent = t('onboarding.stepProgress', { current: current + 1, total: steps.length });
 
     const actions = document.createElement('div');
     actions.className = 'onboarding-actions';
@@ -189,6 +200,7 @@ function showOnboarding(appContainer, onDone) {
     card.appendChild(title);
     card.appendChild(body);
     card.appendChild(dots);
+    card.appendChild(progress);
     card.appendChild(actions);
     overlay.appendChild(card);
 
@@ -217,6 +229,9 @@ function showOnboarding(appContainer, onDone) {
 
   renderStep();
   appContainer.appendChild(overlay);
+  // Die Zurueck-Geste beendet die Einfuehrung, statt hinter ihr zu navigieren
+  // (#871). `finish()` ist der EINE Weg hinaus und merkt sich das auch.
+  attachOverlay(overlay, finish);
 }
 
 // Einmaliger, zurückhaltender Hinweis auf den „Anpassen"-Einstieg: Da vier Widgets
@@ -931,7 +946,11 @@ function renderUpcomingEvents(events) {
     const timeStr = e.all_day ? t('dashboard.allDay') : `${formatTime(d)}${_suffix ? ' ' + _suffix : ''}`.trim();
     return `
       <div class="event-item" data-route="${esc(calendarEventRoute(e))}" role="button" tabindex="0">
-        <div class="event-item__bar" style="background-color:${esc(e.color || e.cal_color) || 'var(--color-accent)'}"></div>
+        <!-- Dieselbe Regel wie im Kalender, aus derselben Datei. Hier stand
+             e.color || e.cal_color - dieselbe Frage ohne den Zweig fuer die
+             zugewiesene Person, was seit #891 zwei verschiedene Antworten
+             gegeben haette. -->
+        <div class="event-item__bar" style="background-color:${esc(resolveEventColor(e))}"></div>
         <div class="event-item__content">
           <div class="event-item__title">${esc(e.title)}</div>
           <div class="event-item__time">
@@ -1215,9 +1234,21 @@ function quickLinkMonogram(name) {
 function renderQuickLinkTile(s) {
   const name = String(s.name ?? '');
   const host = quickLinkHost(s.url);
-  const face = s.icon_data
-    ? `<img src="${esc(s.icon_data)}" alt="" loading="lazy">`
-    : `<span class="quick-link-tile__monogram" aria-hidden="true">${esc(quickLinkMonogram(name))}</span>`;
+  // Bild, dann Symbol, dann Buchstabe - dieselbe Rangfolge wie im Verwaltungs-
+  // dialog (components/quick-links-manager.js), wo auch ihre Begründung steht.
+  //
+  // `hasIcon()` UND NICHT NUR `s.icon_name`: ein `data-lucide` mit einem Namen,
+  // den dieser Lucide-Stand nicht kennt, wird nicht ersetzt und bleibt als
+  // leeres Element stehen - die Kachel hätte dann gar kein Gesicht. Gefragt,
+  // ob es das Symbol gibt, fällt sie stattdessen auf ihren Buchstaben zurück.
+  let face;
+  if (s.icon_data) {
+    face = `<img src="${esc(s.icon_data)}" alt="" loading="lazy">`;
+  } else if (s.icon_name && hasIcon(s.icon_name)) {
+    face = `<i data-lucide="${esc(s.icon_name)}" aria-hidden="true"></i>`;
+  } else {
+    face = `<span class="quick-link-tile__monogram" aria-hidden="true">${esc(quickLinkMonogram(name))}</span>`;
+  }
   // WEISS AUF EINER FREI GEWAEHLTEN FARBE IST NICHT IMMER LESBAR - dieselbe
   // Messung, die die Avatar-Initialen einmal gekostet hat (utils/contrast.js).
   // CSS kann das nicht entscheiden: die Farbe kommt aus der Datenbank.
@@ -3719,6 +3750,14 @@ export async function render(container, { user }) {
       api.get('/preferences').catch(() => ({ data: {} })),
     ]);
     data         = dashRes;
+    /* Die Zahlen an den Nav-Zielen und Modulkacheln kommen aus derselben
+     * Antwort (#868). Sie hier hereinzureichen spart die zweite Aggregation,
+     * die der Shell-Aufbau sonst beim Anmelden anstiess - `layoutHintQuery`
+     * schraenkt sie allerdings ein, und eine eingeschraenkte Zahl ist eine
+     * andere Zahl, also nimmt der Speicher sie nur ungefiltert an. */
+    window.yuvomi?.primeModuleCountsFrom?.(dashRes, {
+      filtered: layoutHintQuery('/dashboard') !== '/dashboard',
+    });
     // Geburtstags-Termine tragen serverseitig einen sprachneutralen Titel
     // („Birthday: <Name>"); anhand von birthday_name in die aktive Sprache
     // übersetzen (Issue #524).

@@ -163,6 +163,24 @@ export function shiftDateKey(dateKey, days) {
 }
 
 /**
+ * Ganze Kalendertage zwischen zwei Datumsschluesseln (YYYY-MM-DD).
+ *
+ * Die Rechnung bleibt ueber DST-Grenzen korrekt, weil Datumsschluessel als
+ * UTC-Kalendertage statt als lokale Zeitpunkte behandelt werden.
+ */
+export function daysBetweenDateKeys(fromKey, toKey) {
+  const parse = (key) => {
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key ?? '').slice(0, 10));
+    if (!match) return null;
+    const ms = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    return new Date(ms).toISOString().slice(0, 10) === key ? ms : null;
+  };
+  const from = parse(fromKey);
+  const to = parse(toKey);
+  return from === null || to === null ? null : Math.round((to - from) / 86400000);
+}
+
+/**
  * Lokale Wanduhrzeit in einer IANA-Zone -> UTC-ISO (…Z).
  * @param {string} localStr  'YYYY-MM-DDTHH:mm:ss' ohne Offset
  * @param {string} tzid      z.B. 'Europe/Berlin'

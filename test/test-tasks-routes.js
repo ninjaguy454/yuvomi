@@ -488,11 +488,11 @@ test('GET /sync-targets liefert nur die fuer Aufgaben freigegebenen Listen', asy
 
   const r = await call('GET', '/sync-targets', { as: admin });
   assert.equal(r.status, 200);
-  const urls = r.body.data.caldav.map((entry) => entry.listUrl);
-  assert.ok(urls.includes(tasksList.url));
-  assert.ok(!urls.includes('https://dav.example/dav/u/einkauf/'),
+  const urls = new Set(r.body.data.caldav.map((entry) => entry.listUrl));
+  assert.ok(urls.has(tasksList.url));
+  assert.ok(!urls.has('https://dav.example/dav/u/einkauf/'),
     'Eine Einkaufsliste als Ziel brächte die Aufgabe als Einkaufsposten zurück');
-  assert.ok(!urls.includes('https://dav.example/dav/u/aus/'));
+  assert.ok(!urls.has('https://dav.example/dav/u/aus/'));
   // Kein Feld, das mehr verrät als das Dropdown braucht.
   for (const entry of r.body.data.caldav) {
     assert.deepEqual(Object.keys(entry).sort(), ['accountId', 'accountName', 'listName', 'listUrl']);

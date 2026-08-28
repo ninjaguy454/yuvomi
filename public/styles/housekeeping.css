@@ -32,14 +32,16 @@
   color: var(--color-success);
 }
 
-/* Schrumpfen, Scrollen und die Zeilenposition kommen aus der Shell-Regel
- * „Tab-Leiste im Modulkopf" (layout.css); hier steht nur, was diese Leiste von
- * anderen unterscheidet. */
+/* Schrumpfen, Scrollen und die Zeilenposition kommen aus der Shell
+ * (.page-toolbar__bar, Werkzeugzeilen-Regel 2026-08-27); hier steht nur, was
+ * diese Leiste von anderen unterscheidet. `flex: 1` und
+ * `justify-content: flex-end` sind mit der Bar-Zeile entfallen: beide waren
+ * Titelzeilen-Logik (rechtsbuendig neben dem Titel), und `flex: 1` setzte die
+ * flex-basis der Bar-Zeile auf 0 zurueck - die Leiste blieb damit auf dem
+ * Desktop in der Titelzeile haengen (mobil 3 von 4 Tabs sichtbar). */
 .housekeeping-tabs {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex: 1;
   gap: var(--space-1);
   height: var(--kitchen-tabs-height, var(--sub-tabs-height));
   padding: 0;
@@ -263,7 +265,12 @@
    * (budget/dashboard/tasks), vom frontend-audit erzwungen. */
   height: 100%;
   border-radius: inherit;
-  background: var(--color-accent);
+  /* Serie 1 statt der Stimme: der Balken ist eine DATENREIHE (Zahlungen in
+   * Euro), und Datenreihen nehmen die Chart-Palette - die Stimme sagt „was
+   * tut das hier", nicht „wieviel wurde gezahlt" (Chart-Serien-Regel,
+   * DESIGN.md; Critique 2026-08-27, P3). Serie 1 heisst in der
+   * Kontofarben-Wahl bewusst „Violett" - die Naehe ist dort die Zusage. */
+  background: var(--chart-series-1);
   transform-origin: bottom center;
   transform: scaleY(var(--bar-scale, 0));
 }

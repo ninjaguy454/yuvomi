@@ -82,5 +82,13 @@ export function setPageFabAction(fab, { label = '', onClick = null, hidden = fal
   // schlimmer als keines - der Knopf trüge dann einen falschen Namen.
   if (dockLabel) fab.dataset.dockLabel = dockLabel;
   else delete fab.dataset.dockLabel;
+  // Ein bereits angedockter Knopf trägt sein Nomen als eigenes Textelement
+  // (dockFabIntoToolbar in router.js schreibt es NUR beim Andocken selbst).
+  // Ein Kontext-FAB, dessen Nomen mit dem Tab wechselt, muss dieses Element
+  // hier nachziehen - sonst bliebe der sichtbare Text auf dem ersten Tab
+  // stehen, während `dataset.dockLabel` (und damit z. B. ein Tooltip) schon
+  // weitergezogen ist.
+  const dockedLabel = fab.querySelector('.toolbar-new-btn__label');
+  if (dockedLabel && dockLabel) dockedLabel.textContent = dockLabel;
   fab.onclick = hidden ? null : onClick;
 }

@@ -684,9 +684,14 @@ async function runSync() {
         // refId aus den Metadaten: trägt Name und Farbe des Kalenders statt der
         // rohen ID als Notnamen.
         const calRefId = meta.refId;
+        // `color_modified` mit hoch: die gerade hinausgegangene Farbe ist unsere.
+        // Die elf `colorId`s sind eine verlustbehaftete Abbildung des Hex-Werts -
+        // ohne das Flag holte der nächste Inbound-Lauf die gemappte Farbe zurück
+        // und ersetzte damit die gewählte (#899).
         db.get().prepare(`
           UPDATE calendar_events
-          SET external_calendar_id = ?, external_source = 'google', calendar_ref_id = ?
+          SET external_calendar_id = ?, external_source = 'google', calendar_ref_id = ?,
+              color_modified = CASE WHEN color IS NOT NULL THEN 1 ELSE color_modified END
           WHERE id = ?
         `).run(created.data.id, calRefId, event.id);
       } catch (err) {
@@ -894,9 +899,17 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
     // steht ein EXDATE vorn, landete es sonst als Wiederholungsregel in der DB.
     const rrule       = recurrenceRuleOf(item);
 
-    // Event-Eigenfarbe aus colorId auflösen (Google liefert nur die Paletten-ID),
-    // sonst Kalenderfarbe als Default.
-    const evColor = (item.colorId && colorMap[item.colorId]) || calColor;
+    // NUR die Eigenfarbe des Termins, aufgelöst aus Googles colorId (die API
+    // liefert die Paletten-ID, nicht den Hex-Wert). Die Kalenderfarbe gehört
+    // NICHT hierher: sie ist geerbt und sagt über diesen einen Termin nichts.
+    // Sie hier einzusetzen hat sie ununterscheidbar von einer ausdrücklichen
+    // Angabe gemacht und damit die Farbe der zugewiesenen Person verdrängt
+    // (#891). Der Lesepfad holt sie weiterhin als cal_color über calendar_ref_id.
+    //
+    // Google selbst denkt genauso: ein Event ohne colorId erbt dort die
+    // Kalenderfarbe, und `localEventToGoogle` schickt für einen Termin ohne
+    // eigene Farbe folgerichtig keine colorId zurück.
+    const evColor = (item.colorId && colorMap[item.colorId]) || null;
 
     const existing = db.get().prepare(
       'SELECT id, outbound_dirty FROM calendar_events WHERE external_calendar_id = ? AND external_source = ?'
@@ -910,15 +923,19 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
 
     if (existing) {
       // color nur überschreiben, solange der Nutzer nicht lokal umgefärbt hat
-      // (user_modified = 0). Dadurch bleiben benutzerdefinierte Event-Farben über
+      // (color_modified = 0). Dadurch bleiben benutzerdefinierte Event-Farben über
       // Syncs hinweg erhalten (Issue #219), während echte Google-Farbänderungen
       // weiterhin durchkommen. Titel/Zeit bleiben unverändert remote-geführt.
+      //
+      // Das Gatter hing bis #899 an `user_modified`, das JEDE Bearbeitung setzt:
+      // wer den Titel änderte, fror die Farbspalte für immer ein und erfuhr von
+      // einer Umfärbung in Google nie mehr etwas.
       // Der Vergleich in der WHERE-Klausel hält Schreibvorgänge ab, die nichts
       // ändern: ein Full-Resync (abgelaufener syncToken) liefert den kompletten
       // Kalender erneut, und ohne den Vergleich würde jede Zeile davon neu
       // geschrieben. `IS NOT` statt `<>`, weil der Vergleich NULL-sicher sein
       // muss; die Farbspalte wiederholt ihren SET-Ausdruck, damit eine lokale
-      // Umfärbung (user_modified) nicht als Unterschied zählt. Die Bindings der
+      // Umfärbung (color_modified) nicht als Unterschied zählt. Die Bindings der
       // SET-Liste kommen dafür ein zweites Mal.
       const values = [
         title, description, startDt, endDt, allDay ? 1 : 0, location, rrule, tzid, evColor, calRefId,
@@ -927,7 +944,7 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
         UPDATE calendar_events
         SET title = ?, description = ?, start_datetime = ?, end_datetime = ?,
             all_day = ?, location = ?, recurrence_rule = ?, tzid = ?,
-            color = CASE WHEN user_modified = 0 THEN ? ELSE color END,
+            color = CASE WHEN color_modified = 0 THEN ? ELSE color END,
             calendar_ref_id = ?
         WHERE id = ?
           AND (   title           IS NOT ?
@@ -938,7 +955,7 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
                OR location        IS NOT ?
                OR recurrence_rule IS NOT ?
                OR tzid            IS NOT ?
-               OR color           IS NOT CASE WHEN user_modified = 0 THEN ? ELSE color END
+               OR color           IS NOT CASE WHEN color_modified = 0 THEN ? ELSE color END
                OR calendar_ref_id IS NOT ?
               )
       `).run(...values, existing.id, ...values);
@@ -1098,9 +1115,31 @@ function localEventToGoogle(event, colorMap = {}, timeZone = householdTimeZone(n
   // Event-Farbe verlustbehaftet auf die nächste der 11 Google-colorIds mappen.
   // Ohne verfügbare Palette (colors.get fehlgeschlagen) bleibt colorId ungesetzt,
   // dann erbt das Event in Google die Kalenderfarbe.
+  //
+  // NULL STATT WEGLASSEN, wenn der Nutzer die Farbe GELEERT hat (#891/#899).
+  // Der Unterschied zählt nur beim Update, und dort entscheidet er alles: der
+  // Push ist ein `events.patch`, und ein PATCH fasst genau die Felder an, die im
+  // Body STEHEN. Ein fehlendes `colorId` heißt also "nicht anfassen", nicht
+  // "löschen" - Google behielte seine alte Farbe, während Yuvomi die der
+  // zugewiesenen Person zeigt, und die beiden blieben dauerhaft verschieden.
+  //
+  // ABER NUR BEI EINEM ECHTEN LEEREN, und das ist der Unterschied zu #891: dort
+  // ging das null bei jedem Termin ohne Farbe hinaus, auch bei einem, der nie
+  // eine hatte. Ein Termin kommt ohne `colorId` herein (lokal NULL), jemand
+  // färbt ihn später in Google, und die nächste beliebige Bearbeitung in Yuvomi
+  // hätte dessen Farbe abgeräumt, ohne dass sie hier je jemand angefasst hätte.
+  // `color_modified` trennt die beiden Zustände: nur wer die Farbe wirklich
+  // geleert hat, leert sie auch drüben.
+  //
+  // Eine fehlende Palette ist wieder etwas anderes als eine fehlende Farbe: dann
+  // trägt der Termin sehr wohl eine, wir können sie nur nicht auf eine colorId
+  // abbilden. Dort ist "nicht anfassen" richtig, und ein Nullwert würde eine in
+  // Google gesetzte Farbe löschen, obwohl niemand das wollte.
   if (event.color) {
     const colorId = nearestColorId(event.color, colorMap);
     if (colorId) gEvent.colorId = colorId;
+  } else if (event.color_modified) {
+    gEvent.colorId = null;
   }
 
   if (allDay) {

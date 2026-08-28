@@ -156,3 +156,98 @@ test('TOGGLEABLE_MODULES enthält jedes Kitchen-Kind', () => {
   const missing = KITCHEN_CHILD_IDS.filter((id) => !toggleable.includes(id));
   assert.deepEqual(missing, [], 'Kitchen-Kind ohne Abschalt-Möglichkeit');
 });
+
+// --------------------------------------------------------------------------
+// Die kanonische Modulliste: README.md
+//
+// CLAUDE.md nennt die Tabelle in README.md die kanonische Modulliste, und
+// genau dort stand ein neu gebautes Modul zuletzt nicht drin. Aufgefallen ist
+// es niemandem: `test:readme-consistency` prueft die README gegen sich selbst
+// und gegen die Homepage - fehlt ein Modul auf BEIDEN Flaechen, ist das
+// konsistent. Kein Test hat die ausgelieferten Module je gegen die Tabelle
+// gehalten.
+//
+// Die Zuordnung unten ist KEIN Ausnahmeverzeichnis, sondern eine Uebersetzung:
+// die Ueberschriften weichen bewusst von den Schluesseln ab (`notes` und
+// `contacts` teilen sich eine Zeile). Ein Schluessel ohne Eintrag laesst den
+// Test fallen - eine Allowlist wuerde ihn durchwinken.
+//
+// Geprueft wird die englische README; dass die deutsche dieselbe Struktur
+// traegt, haelt `test:readme-consistency` fest.
+// --------------------------------------------------------------------------
+const README_HEADINGS = {
+  tasks: 'Tasks',
+  shopping: 'Shopping',
+  meals: 'Meals',
+  pantry: 'Pantry',
+  inventory: 'Inventory',
+  calendar: 'Calendar',
+  notes: 'Notes &amp; Contacts',
+  contacts: 'Notes &amp; Contacts',
+  schedule: 'Schedule',
+  budget: 'Budget',
+  documents: 'Documents',
+  health: 'Health',
+  rewards: 'Rewards',
+  housekeeping: 'Housekeeping',
+};
+
+/** Die fett gesetzten Ueberschriften der Modultabelle, in Dokumentreihenfolge. */
+function readmeModuleHeadings(md) {
+  return [...md.matchAll(/^\|\s\*\*([^*]+)\*\*\s\|/gm)].map((m) => m[1].trim());
+}
+
+test('jedes rechteverwaltete Modul hat eine Zeile in der README-Modultabelle', () => {
+  const headings = readmeModuleHeadings(read('../README.md'));
+  assert.ok(headings.length >= 15, `nur ${headings.length} Tabellenzeilen gefunden - der Leser greift nicht mehr`);
+
+  const unmapped = PERMISSION_MODULES.map((m) => m.key).filter((key) => !(key in README_HEADINGS));
+  assert.deepEqual(unmapped, [], 'Modul ohne Zuordnung zu einer README-Ueberschrift - Zuordnung ergaenzen, nicht den Test lockern');
+
+  const missing = PERMISSION_MODULES
+    .map((m) => README_HEADINGS[m.key])
+    .filter((heading) => !headings.includes(heading));
+  assert.deepEqual([...new Set(missing)], [], 'Modul fehlt in der kanonischen Modulliste (README.md)');
+});
+
+// Gegenprobe zur Ableitung: liest der Test die Tabelle ueberhaupt, oder
+// verglich er eine leere Liste mit einer leeren?
+test('der README-Leser findet die Tabelle wirklich', () => {
+  const headings = readmeModuleHeadings('| Module | In one line |\n|---|---|\n| **Foo** | Bar. |\n| **Baz** | Qux. |\n');
+  assert.deepEqual(headings, ['Foo', 'Baz']);
+  assert.deepEqual(readmeModuleHeadings('kein Markup'), []);
+});
+
+// --------------------------------------------------------------------------
+// Die Navigation: was rechteverwaltet ist, muss auch erreichbar sein
+//
+// `navItems()` in public/router.js speist Seitenleiste, Mobil-Navigation UND
+// den Modulkatalog. Ein Modul, das dort herausfaellt, ist nur noch ueber die
+// direkt eingetippte Adresse zu erreichen - die Route bleibt ja registriert,
+// deshalb faellt es auch keinem Routing-Test auf. Genau das passierte beim
+// Rebase eines Feature-Branches: die `rewards`-Zeile verschwand still.
+// --------------------------------------------------------------------------
+
+/** Die `module:`-Schluessel aus dem Rueckgabe-Array von navItems(). */
+function navModuleKeys(source) {
+  const start = source.indexOf('function navItems(');
+  assert.notEqual(start, -1, 'navItems() nicht gefunden');
+  const end = source.indexOf('\n}', start);
+  assert.notEqual(end, -1, 'Ende von navItems() nicht gefunden');
+  return [...source.slice(start, end).matchAll(/module:\s*'([a-z-]+)'/g)].map((m) => m[1]);
+}
+
+test('jedes rechteverwaltete Modul hat einen Eintrag in navItems()', () => {
+  const keys = navModuleKeys(read('../public/router.js'));
+  assert.ok(keys.length >= 15, `nur ${keys.length} Nav-Eintraege gefunden - der Leser greift nicht mehr`);
+
+  const missing = PERMISSION_MODULES.map((m) => m.key).filter((key) => !keys.includes(key));
+  assert.deepEqual(missing, [],
+    'Modul ohne Nav-Eintrag: die Route bleibt registriert, aber Seitenleiste, Mobilnavigation und Katalog verlieren es');
+});
+
+// Gegenprobe zur Ableitung: liest der Test die Funktion ueberhaupt aus?
+test('der navItems-Leser findet die Eintraege wirklich', () => {
+  const fake = "function navItems({ x } = {}) {\n  return [\n    { path: '/a', module: 'alpha' },\n    { path: '/b', module: 'beta' },\n  ];\n}\n";
+  assert.deepEqual(navModuleKeys(fake), ['alpha', 'beta']);
+});

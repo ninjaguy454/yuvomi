@@ -195,13 +195,16 @@ export function getUpcomingEvents(d, {
            u_assigned.display_name AS assigned_name,
            u_assigned.avatar_color AS assigned_color,
            ec.name  AS cal_name,
-           ec.color AS cal_color,
+           -- Zwei Toepfe fuer dieselbe geerbte Farbe: CalDAV/Google ueber
+           -- calendar_ref_id, ICS-Abos ueber subscription_id (#891).
+           COALESCE(ec.color, isub.color) AS cal_color,
            bd.name       AS birthday_name,
            bd.birth_date AS birthday_date,
            ${ASSIGNED_USERS_SQL}
     FROM calendar_events e
     LEFT JOIN users u_assigned ON u_assigned.id = e.assigned_to
     LEFT JOIN external_calendars ec ON ec.id = e.calendar_ref_id
+    LEFT JOIN ics_subscriptions isub ON isub.id = e.subscription_id
     LEFT JOIN birthdays bd ON bd.calendar_event_id = e.id
     WHERE (
       (e.recurrence_rule IS NULL AND DATE(e.start_datetime) BETWEEN ? AND ?)

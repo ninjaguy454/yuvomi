@@ -6,6 +6,7 @@ import { t, formatDate, parseDateInput, isDateInputValid } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { todayKey } from '/utils/date.js';
+import { setNavBadge, BIRTHDAY_BADGE_DAYS } from '/utils/nav-badges.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { findPageFab } from '/utils/fab.js';
 // Alias: dieses Modul fuehrt selbst eine `emptyStateHtml()`, die den Renderer
@@ -145,25 +146,18 @@ async function loadData() {
   updateBirthdayBadge();
 }
 
+/**
+ * Wie viele Geburtstage stehen unmittelbar an? `days_until` rechnet der Server
+ * (`hydrateBirthday`), hier wird nur der Schnitt gezogen - deshalb liefert
+ * dieselbe Regel auch fuer den Startwert aus `/dashboard` dieselbe Zahl.
+ */
+export function countBirthdaysSoon(birthdays) {
+  return birthdays.filter((b) => (b.days_until ?? 9999) <= BIRTHDAY_BADGE_DAYS).length;
+}
+
 function updateBirthdayBadge() {
-  const soon = state.birthdays.filter((b) => (b.days_until ?? 9999) <= 3).length;
-  document.querySelectorAll('[data-route="/birthdays"] .nav-badge').forEach((el) => el.remove());
-  if (!soon) return;
-  document.querySelectorAll('[data-route="/birthdays"]').forEach((navItem) => {
-    let anchor = navItem.querySelector('.nav-item__icon-wrap');
-    if (!anchor) {
-      const icon = navItem.querySelector('.nav-item__icon');
-      anchor = document.createElement('span');
-      anchor.className = 'nav-item__icon-wrap';
-      if (icon) { icon.replaceWith(anchor); anchor.appendChild(icon); }
-      else navItem.prepend(anchor);
-    }
-    const badge = document.createElement('span');
-    badge.className = 'nav-badge';
-    badge.setAttribute('aria-hidden', 'true');
-    badge.textContent = String(soon);
-    anchor.appendChild(badge);
-  });
+  // Nachricht, kein Alarm (Valenz siehe nav-badges.js).
+  setNavBadge('/birthdays', countBirthdaysSoon(state.birthdays), undefined, 'accent');
 }
 
 function birthdayItemHtml(birthday) {
@@ -351,15 +345,6 @@ function bindEvents() {
   });
 }
 
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Failed to read image.'));
-    reader.readAsDataURL(file);
-  });
-}
-
 function birthdayPreviewHtml(name, photoData) {
   if (photoData) return `<img class="birthday-preview__image" src="${photoData}" alt="${esc(name || '')}">`;
   return `<span class="birthday-preview__fallback">${esc(initials(name))}</span>`;
@@ -379,7 +364,7 @@ function openBirthdayModal({ mode, birthday = null }) {
             <button type="button" class="birthday-avatar-editor" id="birthday-preview" aria-label="${t('birthdays.photoLabel')}">
               ${birthdayPreviewHtml(birthday?.name || '', photoData)}
             </button>
-            <input class="sr-only" id="bd-photo" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+            <input class="sr-only" id="bd-photo" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="birthday-modal__photo-actions">
               <button type="button" class="birthday-modal__photo-action" id="bd-photo-edit" aria-label="${t('birthdays.photoLabel')}" title="${t('birthdays.photoLabel')}">
                 <i data-lucide="pencil" aria-hidden="true"></i>
@@ -433,8 +418,17 @@ function openBirthdayModal({ mode, birthday = null }) {
       fileInput?.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
+        // Das Feld ist ein Transportmittel, kein Zustand - sofort leeren, wie
+        // beim Kachelbild (`quick-links-manager.js`). Bleibt der Dateiname
+        // stehen, feuert `change` beim nächsten Griff zu DERSELBEN Datei nicht
+        // mehr, und „nochmal anders zuschneiden" täte gar nichts.
+        e.target.value = '';
         try {
-          photoData = await readFileAsDataUrl(file);
+          const { pickCroppedImage } = await import('/utils/avatar-crop.js');
+          const cropped = await pickCroppedImage(file);
+          // Abgebrochener Zuschnitt: das bisherige Bild bleibt stehen.
+          if (cropped === undefined) return;
+          photoData = cropped;
           renderPreview();
         } catch (err) {
           window.yuvomi?.showToast(err.message, 'danger');

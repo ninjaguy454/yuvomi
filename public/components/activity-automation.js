@@ -5,6 +5,11 @@ import { esc } from '/utils/html.js';
 
 const h = (value) => esc(String(value ?? ''));
 
+function replaceHtml(element, html) {
+  element.replaceChildren();
+  element.insertAdjacentHTML('afterbegin', html);
+}
+
 function activityDescriptionTooltip(value) {
   const description = String(value ?? '').replace(/\s+/g, ' ').trim();
   return [...description].slice(0, 160).join('');
@@ -98,13 +103,13 @@ function wireVariableMentions(panel) {
   };
 
   const paint = () => {
-    menu.innerHTML = active.options.map((option, index) => `
+    replaceHtml(menu, active.options.map((option, index) => `
       <button type="button" role="option" id="automation-mention-${index}"
               aria-selected="${index === active.index}" data-mention-index="${index}"
               class="automation-mention-option ${index === active.index ? 'automation-mention-option--active' : ''}">
         <span>${h(option.label)}</span>
         <small>${h(option.detail)}</small>
-      </button>`).join('');
+      </button>`).join(''));
     active.field?.setAttribute('aria-activedescendant', `automation-mention-${active.index}`);
   };
 
@@ -374,7 +379,7 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
   const target = panel.querySelector('#quick-add-preview');
   const form = panel.querySelector('#quick-add-form');
   if (!target || !form) return;
-  target.innerHTML = `
+  replaceHtml(target, `
     <div class="automation-preview">
       ${preview.steps.map((step, index) => `
         <div class="automation-preview__step">
@@ -389,7 +394,7 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
     </div>
     <button type="button" class="btn btn--primary automation-preview-create" id="quick-add-create">
       Create activities
-    </button>`;
+    </button>`);
   const submitButton = panel.querySelector('button[type="submit"]');
   if (submitButton) submitButton.textContent = 'Refresh preview';
   if (window.lucide) window.lucide.createIcons({ el: target });
@@ -426,13 +431,13 @@ function validAutomationTab(tab) {
 
 export async function renderAutomationManager(container, { tab = 'skills', onTabChange = null } = {}) {
   const activeTab = validAutomationTab(tab);
-  container.innerHTML = `
+  replaceHtml(container, `
     <div class="automation-manager">
       <div class="group-toggle automation-tabs" role="tablist" aria-label="Household automation sections">
         ${AUTOMATION_TABS.map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === activeTab}" class="group-toggle__btn ${key === activeTab ? 'group-toggle__btn--active' : ''}" data-automation-tab="${key}">${h(label)}</button>`).join('')}
       </div>
       <div class="automation-manager__body"><p class="form-hint">Loading…</p></div>
-    </div>`;
+    </div>`);
 
   const navigate = async (nextTab) => {
     if (typeof onTabChange === 'function') await onTabChange(validAutomationTab(nextTab));
@@ -468,7 +473,7 @@ async function loadManagerTab(panel, tab, manager) {
     else await renderVariablesManager(body, manager);
     if (window.lucide) window.lucide.createIcons({ el: body });
   } catch (error) {
-    body.innerHTML = `<p class="form-hint">${h(error.message || 'Could not load automation settings.')}</p>`;
+    replaceHtml(body, `<p class="form-hint">${h(error.message || 'Could not load automation settings.')}</p>`);
   }
 }
 
@@ -491,7 +496,7 @@ async function renderVariablesManager(body, manager) {
   const response = await api.get('/automation/admin/variables');
   const variables = response.data ?? [];
   const context = response.context ?? [];
-  body.innerHTML = `${managerHeader('Reusable variables', 'automation-add-variable', 'Add variable')}
+  replaceHtml(body, `${managerHeader('Reusable variables', 'automation-add-variable', 'Add variable')}
     <p class="form-hint automation-manager__hint">Define values and reusable fields once, then use the same readable ID across household templates. IDs stay stable unless an admin deliberately renames one.</p>
     <div class="automation-list">
       ${variables.map((variable) => `
@@ -510,7 +515,7 @@ async function renderVariablesManager(body, manager) {
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>System context</strong></div>
     <p class="form-hint automation-manager__hint">These values are supplied automatically when a template runs and do not need to be maintained.</p>
     <div class="automation-list">${context.map((variable) => `
-      <div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`;
+      <div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`);
 
   body.querySelector('#automation-add-variable')?.addEventListener('click', () => openVariableForm(null, manager));
   body.querySelectorAll('[data-edit-variable]').forEach((button) => button.addEventListener('click', () => {
@@ -617,7 +622,7 @@ async function deleteAutomationDefinition({ name, noun, path, tab, manager }) {
 async function renderSkillsManager(body, manager) {
   const response = await api.get('/automation/admin/skills');
   const skills = response.data ?? [];
-  body.innerHTML = `${managerHeader('Reusable skills', 'automation-add-skill', 'Add skill')}
+  replaceHtml(body, `${managerHeader('Reusable skills', 'automation-add-skill', 'Add skill')}
     <p class="form-hint automation-manager__hint">Age provides the automatic baseline. Admin overrides on each member take precedence, except adult-only safety rules.</p>
     <div class="automation-list">
       ${skills.map((skill) => `
@@ -629,7 +634,7 @@ async function renderSkillsManager(body, manager) {
             <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-skill="${skill.id}" aria-label="Delete ${h(skill.name)} skill">Delete</button>
           </div>
         </div>`).join('') || '<p class="form-hint">No skills yet.</p>'}
-    </div>`;
+    </div>`);
   body.querySelector('#automation-add-skill')?.addEventListener('click', () => openSkillForm(null, manager));
   body.querySelectorAll('[data-edit-skill]').forEach((button) => {
     button.addEventListener('click', () => openSkillForm(skills.find((skill) => Number(skill.id) === Number(button.dataset.editSkill)), manager));
@@ -727,7 +732,7 @@ function openSkillProficiency(skill, manager = null) {
 async function renderActivitiesManager(body, manager) {
   const response = await api.get('/automation/admin/activity-templates');
   const activities = response.data ?? [];
-  body.innerHTML = `${managerHeader('Activity templates', 'automation-add-activity', 'Add activity')}
+  replaceHtml(body, `${managerHeader('Activity templates', 'automation-add-activity', 'Add activity')}
     <p class="form-hint automation-manager__hint">Activities define work, required skills and how Yuvomi chooses an assignee.</p>
     <div class="automation-list">
       ${activities.map((activity) => `
@@ -738,7 +743,7 @@ async function renderActivitiesManager(body, manager) {
             <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-activity="${activity.id}" aria-label="Delete ${h(activity.name)} activity template">Delete</button>
           </div>
         </div>`).join('') || '<p class="form-hint">No activity templates yet.</p>'}
-    </div>`;
+    </div>`);
   const context = { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [] };
   body.querySelector('#automation-add-activity')?.addEventListener('click', () => openActivityForm(null, context, manager));
   body.querySelectorAll('[data-edit-activity]').forEach((button) => {
@@ -820,7 +825,7 @@ function openActivityForm(activity, context, manager = null) {
 async function renderWorkflowsManager(body, manager) {
   const response = await api.get('/automation/admin/workflow-templates');
   const workflows = response.data ?? [];
-  body.innerHTML = `${managerHeader('Workflow templates', 'automation-add-workflow', 'Add workflow')}
+  replaceHtml(body, `${managerHeader('Workflow templates', 'automation-add-workflow', 'Add workflow')}
     <p class="form-hint automation-manager__hint">Workflows arrange reusable activities into an on-demand event. Enabled workflows appear in Quick Add.</p>
     <div class="automation-list">
       ${workflows.map((workflow) => `
@@ -831,7 +836,7 @@ async function renderWorkflowsManager(body, manager) {
             <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-workflow="${workflow.id}" aria-label="Delete ${h(workflow.name)} Quick Add template">Delete</button>
           </div>
         </div>`).join('') || '<p class="form-hint">No workflow templates yet.</p>'}
-    </div>`;
+    </div>`);
   const context = {
     activities: response.activities ?? [],
     members: response.members ?? [],
@@ -1032,9 +1037,9 @@ function openWorkflowForm(workflow, context, manager = null) {
           const select = row.querySelector('[data-step-dependency]');
           const old = select.value;
           const existing = row.dataset.initialDependency || '';
-          select.innerHTML = '<option value="">No dependency</option>' + rows.slice(0, index).map((priorRow, prior) =>
+          replaceHtml(select, '<option value="">No dependency</option>' + rows.slice(0, index).map((priorRow, prior) =>
             `<option value="${h(priorRow.dataset.workflowKey)}">After step ${prior + 1}</option>`
-          ).join('');
+          ).join(''));
           const wanted = old || existing;
           if ([...select.options].some((option) => option.value === wanted)) select.value = wanted;
           delete row.dataset.initialDependency;
@@ -1049,15 +1054,15 @@ function openWorkflowForm(workflow, context, manager = null) {
           const oldSubject = subjectSelect.value;
           const oldCondition = conditionSelect.value;
           const oldConditionValue = row.querySelector('[data-step-condition-value]')?.value ?? '';
-          subjectSelect.innerHTML = '<option value="">Use the workflow subject</option>'
-            + workflowVariableOptions(drafts, oldSubject, { memberOnly: true });
-          conditionSelect.innerHTML = '<option value="">Always include</option>'
-            + workflowVariableOptions(drafts, oldCondition);
+          replaceHtml(subjectSelect, '<option value="">Use the workflow subject</option>'
+            + workflowVariableOptions(drafts, oldSubject, { memberOnly: true }));
+          replaceHtml(conditionSelect, '<option value="">Always include</option>'
+            + workflowVariableOptions(drafts, oldCondition));
           if ([...subjectSelect.options].some((option) => option.value === oldSubject)) subjectSelect.value = oldSubject;
           if ([...conditionSelect.options].some((option) => option.value === oldCondition)) conditionSelect.value = oldCondition;
-          row.querySelector('[data-condition-value-slot]').innerHTML = conditionValueHtml(
+          replaceHtml(row.querySelector('[data-condition-value-slot]'), conditionValueHtml(
             conditionSelect.value, oldConditionValue, drafts, context.members,
-          );
+          ));
         });
       };
 
@@ -1144,9 +1149,9 @@ function openWorkflowForm(workflow, context, manager = null) {
         const select = event.target.closest('[data-step-condition-variable]');
         if (!select) return;
         const row = select.closest('[data-workflow-step]');
-        row.querySelector('[data-condition-value-slot]').innerHTML = conditionValueHtml(
+        replaceHtml(row.querySelector('[data-condition-value-slot]'), conditionValueHtml(
           select.value, '', readQuestionDrafts(), context.members,
-        );
+        ));
       });
 
       panel.querySelector('#automation-workflow-form')?.addEventListener('submit', async (event) => {

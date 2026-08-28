@@ -322,6 +322,32 @@
   color: color-mix(in srgb, var(--module-accent, var(--color-accent)) var(--tint-ink), var(--color-text-primary));
 }
 
+/* DER KOPF-UMSCHALTER TRAEGT SEIN LABEL ERST IN DER SIDEBAR-WELT.
+ *
+ * Die Label-Verlust-Regel oben (max-width: 640px) ist die Schwelle des
+ * Umschalters in der FILTERREIHE - der steht dort allein in seiner Zeile und
+ * hat den Platz. Der Umschalter im KOPF teilt sich seine Zeile mit Titel,
+ * Suche und vier weiteren Knoepfen, und fuer ihn ist 640px zu frueh:
+ * gemessen (2026-08-28, gleiche Laufart, nur Label an/aus) waechst er mit
+ * Label von 130 auf 395px und drueckt den Kopf bei 834px - iPad hochkant -
+ * von ZWEI auf DREI Zeilen, also um 52px. Genau die Zeile, die die
+ * Chrome-Regel nicht hergibt.
+ *
+ * 1024px ist deshalb nicht gegriffen, sondern die Grenze, an der der Kopf
+ * ohnehin einzeilig wird (dort uebernimmt die Sidebar, der Large Title faellt
+ * auf den Inline-Schnitt): gemessen 79px bei 1024 und 1440px, mit Label wie
+ * ohne. Was das Label kostet, ist dort 1px.
+ *
+ * Warum HIER und nicht im 640er-Block oben: die Bauteile stehen ab Zeile 247,
+ * also HINTER jenem Block. Eine Regel gleicher Spezifitaet wuerde dort gegen
+ * die spaetere Definition verlieren - dieselbe Kaskaden-Falle, die im
+ * schmalen Zustand der Kueche schon einmal 358px Hoehe gekostet hat. */
+@media (max-width: 1023px) {
+  .group-toggle--icons .group-toggle__label {
+    display: none;
+  }
+}
+
 /* --------------------------------------------------------
  * Filter-Leiste
  * -------------------------------------------------------- */

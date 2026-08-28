@@ -12,6 +12,7 @@ import { emptyStateHTML, mountLoadError } from '/utils/empty-state.js';
 import { openModal, closeModal, confirmModal } from '/components/modal.js';
 import { createPageFab, setPageFabAction } from '/utils/fab.js';
 import { wireTablist } from '/utils/tablist.js';
+import { wireScrollFade } from '/utils/ux.js';
 import { amountPlaceholder, amountStep, amountIsSavable, smallestUnitLabel } from '/utils/money.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 
@@ -168,7 +169,7 @@ function renderShell(container) {
     <section class="housekeeping-page page-measure--narrow" aria-labelledby="housekeeping-title">
       <header class="page-toolbar page-toolbar--narrow housekeeping-toolbar">
         <h1 class="page-toolbar__title" id="housekeeping-title">${esc(t('housekeeping.title'))}</h1>
-        <nav class="housekeeping-tabs" role="tablist" aria-label="${esc(t('housekeeping.bottomNav'))}">
+        <nav class="housekeeping-tabs page-toolbar__bar" role="tablist" aria-label="${esc(t('housekeeping.bottomNav'))}">
           ${renderTabButton('dashboard', 'layout-dashboard', t('housekeeping.dashboard'))}
           ${renderTabButton('tasks', 'list-checks', t('housekeeping.tasks'))}
           ${renderTabButton('reports', 'file-text', t('housekeeping.reports'))}
@@ -186,6 +187,10 @@ function renderShell(container) {
     activeId: state.tab,
     onChange: (id) => { state.tab = id; renderCurrentTab(container); },
   });
+  // Scroll-Affordanz der Bar-Zeile: laeuft die Leiste ueber (schmale Geraete,
+  // lange Locales), zeigt der geteilte Peek-Fade (.page-toolbar__bar) den
+  // Anschnitt statt Tabs stumm zu verstecken.
+  wireScrollFade(container.querySelector('.housekeeping-tabs'));
   renderCurrentTab(container);
 }
 
@@ -1199,21 +1204,23 @@ function openStaffModal(worker, content, options = {}) {
   avatarFile?.addEventListener('change', async () => {
     const file = avatarFile.files?.[0];
     if (!file) return;
+    // Das Feld ist ein Transportmittel, kein Zustand - sofort leeren, wie
+    // beim Kachelbild (`quick-links-manager.js`). Bleibt der Dateiname
+    // stehen, feuert `change` beim nächsten Griff zu DERSELBEN Datei nicht
+    // mehr, und „nochmal anders zuschneiden" täte gar nichts.
+    avatarFile.value = '';
     try {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.addEventListener('load', () => resolve(String(reader.result || '')));
-        reader.addEventListener('error', () => reject(new Error()));
-        reader.readAsDataURL(file);
-      });
-      const { openCropDialog } = await import('/utils/avatar-crop.js');
-      const cropped = await openCropDialog(dataUrl);
-      if (!cropped) { avatarFile.value = ''; return; }
+      const { pickCroppedImage } = await import('/utils/avatar-crop.js');
+      const cropped = await pickCroppedImage(file);
+      if (cropped === undefined) return; // abgebrochen: bisheriges Bild bleibt
       state.workerAvatar = cropped;
       avatarButton.replaceChildren();
       avatarButton.insertAdjacentHTML('beforeend', `<img src="${esc(state.workerAvatar)}" alt="">`);
-    } catch {
-      avatarFile.value = '';
+    } catch (err) {
+      // Vorher verschwand hier JEDER Fehler in einem leeren `catch` - eine zu
+      // große oder falsch getypte Datei sah aus wie ein Abbruch, und der
+      // Reader warf ohnehin einen Error ohne Text. Jetzt gibt es eine Meldung.
+      window.yuvomi?.showToast(err.message, 'danger');
     }
   });
   if (window.lucide) window.lucide.createIcons({ el: panel });

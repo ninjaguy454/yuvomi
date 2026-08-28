@@ -1,6 +1,7 @@
 import { t } from '/i18n.js';
 import { moduleIconHTML } from '/nav-icons.js';
 import { esc } from '/utils/html.js';
+import { getReadableTextColor } from '/utils/color.js';
 
 let settingRowIdCounter = 0;
 
@@ -78,14 +79,37 @@ export function toggleRowHtml({
   // Zeilen, deren Kontext den Schalter schon benennt (Modul-Listen), tragen ihr
   // Label nur für Screenreader.
   labelVisible = true,
+  // FARBSCHEIBE STATT ICON - für Zeilen, deren Gegenstand eine eigene Farbe
+  // HAT (eine Person, eine Kalenderebene). Sie nimmt eine FARBE entgegen und
+  // baut die Scheibe selbst, statt fertiges Markup durchzureichen: ein
+  // `swatchHtml`-Parameter wäre ein zweiter Escape-Pfad neben `attrs`, und
+  // genau davon hat diese Funktion einen.
+  //
+  // Die Farbe steht als Scheibe NEBEN dem Text, nie als Fläche darunter - das
+  // ist die Vollton-Regel für freie Nutzerfarben (DESIGN.md): auf einer frei
+  // gewählten Helligkeit gibt es keine Tinte, die trägt. `swatchLabel` füllt
+  // sie mit Initialen, wenn sie groß genug dafür ist.
+  swatchColor = null,
+  swatchLabel = '',
   attrs = {},
 }) {
   const rowClass = ['toggle-row', className].filter(Boolean).join(' ');
   const iconHtml = icon ? moduleIconHTML(icon) : '';
+  // DIE TINTE WIRD GERECHNET, NICHT GESETZT. `--color-ink-on-vivid` gilt fuer
+  // KURATIERTE Toene, deren Helligkeit bekannt ist. Eine frei gewaehlte Farbe
+  // hat keine garantierte Tinte - dieselbe Rechnung macht der Avatar-Stack
+  // (components/user-multi-select.js), und zwei Antworten auf dieselbe Frage
+  // waeren genau die Spaltung, die #891 an drei Stellen aufgeraeumt hat.
+  const swatchHtml = swatchColor
+    ? `<span class="toggle-row__swatch" aria-hidden="true"`
+      + ` style="--swatch-color:${esc(String(swatchColor))};color:${getReadableTextColor(String(swatchColor))}">`
+      + `${esc(String(swatchLabel ?? ''))}</span>`
+    : '';
   const labelClass = labelVisible ? '' : ' class="sr-only"';
   return `<label class="${rowClass}">`
     + `<input type="checkbox"${attrsHtml({ ...attrs, checked, disabled })}>`
     + iconHtml
+    + swatchHtml
     + `<span${labelClass}>${esc(String(label ?? ''))}</span>`
     + '</label>';
 }

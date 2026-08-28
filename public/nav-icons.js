@@ -68,6 +68,13 @@ const ICON_SHAPES = {
     ['rect', { x: '3.5', y: '12.5', width: '7.5', height: '8', rx: '2' }],
   ],
 
+  'calendar-clock': [
+    ['rect', { x: '3.5', y: '5.5', width: '17', height: '15', rx: '3' }],
+    ['path', { d: 'M3.5 10h17' }],
+    ['path', { d: 'M8 3.2v4.6M16 3.2v4.6' }],
+    ['circle', { cx: '16.5', cy: '16.5', r: '3.2' }],
+    ['path', { d: 'M16.5 14.8v1.9l1.25.8' }],
+  ],
   'calendar': [
     ['rect', { x: '3.5', y: '5.5', width: '17', height: '15', rx: '3' }],
     ['path', { d: 'M3.5 10h17' }],
@@ -297,6 +304,7 @@ function svgMarkup(shapes, className) {
 export const MODULE_ICON = {
   dashboard:        'layout-dashboard',
   calendar:         'calendar',
+  schedule:         'calendar-clock',
   tasks:            'check-square',
   notes:            'sticky-note',
   meals:            'utensils',

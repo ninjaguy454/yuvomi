@@ -263,6 +263,35 @@
 }
 
 
+/* „Diese Woche geplant": die zweite Meta-Angabe der Zeile - neutraler
+ * Sekundaertext, keine Flaeche und kein Ton (der Zustand ist eine Meldung,
+ * keine Identitaet; Skalen-Regel). Der Mittelpunkt kommt aus dem
+ * +-Kombinator, der Hausform fuer benachbarte Meldungen (pantry.css). Die
+ * Rezepteliste zeigte ihre Verbindung zum Wochenplan vorher nirgends
+ * (Critique 2026-08-27, P2). Der Block steht HINTER den beiden
+ * Container-Query-Bloecken oben: der Zeilen-Guard verlangt die
+ * Basis-vor-Query-Ordnung ueber die ganze Datei, und diese Query ist die
+ * dritte. */
+.recipe-row__planned {
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.list-row__meta + .recipe-row__planned::before {
+  content: '·';
+  margin-inline: var(--space-1) var(--space-1);
+  color: var(--color-text-tertiary);
+}
+
+/* In der Schmalfassung der Zeile ist die Angabe verzichtbar: sie ist eine
+ * Zweitinformation, und die Zutatenzahl behaelt ihren Platz (dieselbe
+ * Rangfolge wie beim Badge-Slot). */
+@container list-rows (max-width: 26rem) {
+  .recipe-row__planned { display: none; }
+}
+
 .recipe-row__chevron {
   flex-shrink: 0;
   color: var(--color-text-tertiary);

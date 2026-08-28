@@ -28,6 +28,8 @@ import { renderDocumentAttachField, bindDocumentAttachField } from '/components/
 import { warrantyStatus, hasUpcomingDeadline, dateStatus, countUpcomingDeadlines } from '/utils/inventory-warranty.js';
 import { openDetailView } from '/components/detail-view.js';
 import { wireScrollFade } from '/utils/ux.js';
+import { attachOverlay } from '/utils/overlay-history.js';
+import { setNavBadge } from '/utils/nav-badges.js';
 
 let _container = null;
 let _search = null;
@@ -263,37 +265,10 @@ function computeMetrics(items) {
  * geladenen Item-Liste berechnet, keine eigene Abfrage.
  */
 function updateAttentionBadge() {
-  const needsAttention = countUpcomingDeadlines(state.items);
-
-  document.querySelectorAll('[data-route="/inventory"] .nav-badge').forEach((el) => el.remove());
-  document.querySelectorAll('[data-route="/inventory"]').forEach((navItem) => {
-    const baseLabel = t('nav.inventory');
-    navItem.setAttribute('aria-label', needsAttention > 0
-      ? t('inventory.navLabelAttention', { count: needsAttention })
-      : baseLabel
-    );
-  });
-  if (needsAttention > 0) {
-    document.querySelectorAll('[data-route="/inventory"]').forEach((navItem) => {
-      let anchor = navItem.querySelector('.nav-item__icon-wrap');
-      if (!anchor) {
-        const icon = navItem.querySelector('.nav-item__icon');
-        anchor = document.createElement('span');
-        anchor.className = 'nav-item__icon-wrap';
-        if (icon) {
-          icon.replaceWith(anchor);
-          anchor.appendChild(icon);
-        } else {
-          navItem.prepend(anchor);
-        }
-      }
-      const badge = document.createElement('span');
-      badge.className = 'nav-badge';
-      badge.setAttribute('aria-hidden', 'true');
-      badge.textContent = String(needsAttention);
-      anchor.appendChild(badge);
-    });
-  }
+  // Ablaufende Frist = Warnung, nicht Alarm (Valenz siehe nav-badges.js).
+  setNavBadge('/inventory', countUpcomingDeadlines(state.items),
+    (count) => (count > 0 ? t('inventory.navLabelAttention', { count }) : t('nav.inventory')),
+    'warning');
 }
 
 function renderMetrics() {
@@ -937,6 +912,9 @@ function openBookingPicker(panel, { initialMonth, includeRole = false } = {}) {
       if (opener?.isConnected) opener.focus();
       resolve(result);
     };
+    // Liegt ueber einem offenen Modal - die Zurueck-Geste meint zuerst ihn
+    // (#871). Ohne Auswahl heisst zu: abgebrochen.
+    attachOverlay(overlay, () => close(null));
 
     const renderList = () => {
       monthEl.textContent = formatMonthLabel(month);
@@ -1156,16 +1134,6 @@ function collectTrackedDates(panel) {
   }).filter((d) => d.label && d.date);
 }
 
-/** Gleiche Umsetzung wie public/pages/birthdays.js#readFileAsDataUrl. */
-function readFileAsDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error('Failed to read image.'));
-    reader.readAsDataURL(file);
-  });
-}
-
 /** Vorschau im Formular-Editor: Bild oder ein neutrales Platzhalter-Icon -
  *  anders als birthdays.js's Initialen, die fuer einen Gegenstand keinen
  *  Sinn ergeben. */
@@ -1253,7 +1221,7 @@ function buildItemForm({ mode, item = null }) {
             <button type="button" class="inventory-photo-editor" id="inv-photo-preview" aria-label="${esc(t('inventory.photoLabel'))}">
               ${photoPreviewHtml(photoData)}
             </button>
-            <input class="sr-only" id="inv-photo" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+            <input class="sr-only" id="inv-photo" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="inventory-photo-actions">
               <button type="button" class="inventory-photo-action" id="inv-photo-edit"
                       aria-label="${esc(t('inventory.photoLabel'))}" title="${esc(t('inventory.photoLabel'))}">
@@ -1358,9 +1326,20 @@ function buildItemForm({ mode, item = null }) {
     panel.querySelector('#inv-photo-edit')?.addEventListener('click', () => photoInput?.click());
     photoInput?.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
-      if (!file) return;
+      // Sofort zurücksetzen: ohne Reset feuert dieselbe Datei kein zweites
+      // `change`-Event - nach einem abgebrochenen Zuschnitt ließe sie sich
+      // nicht erneut wählen.
+      e.target.value = '';
       try {
-        photoData = await readFileAsDataUrl(file);
+        const { pickCroppedImage } = await import('/utils/avatar-crop.js');
+        const cropped = await pickCroppedImage(file, {
+          // Nur der Ergebnis-Text ist inventarspezifisch: „Profilbild" wäre
+          // für ein Gegenstandsfoto die falsche Vokabel.
+          messageKeys: { dataTooLarge: 'inventory.photoTooLarge' },
+        });
+        // Abgebrochener Zuschnitt: das bisherige Foto bleibt stehen.
+        if (cropped === undefined) return;
+        photoData = cropped;
         renderPhotoPreview();
       } catch (err) {
         window.yuvomi?.showToast(err.message, 'danger');

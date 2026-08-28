@@ -175,6 +175,50 @@
 }
 
 /* --------------------------------------------------------
+ * Die scharfe Fassung fuer TAB-LEISTEN (Werkzeugzeilen-Regel, 2026-08-27).
+ *
+ * Der 24px-Fade oben ist fuer Chip-Reihen gebaut, in denen viele schmale
+ * Elemente stehen - an einer Tab-Leiste verdeckt er genau den mageren
+ * Anschnitt, der „hier geht es weiter" sagen soll (gemessen am Budget:
+ * 9px-Anschnitt komplett im Fade; an der Kuechen-Rail verschwand das
+ * „Vorrat 10"-Badge bei 403>375px). Die Bauart stammt aus budget.css
+ * (Audit P2) und war dort Modul-privat, waehrend dieselbe Leiste in sechs
+ * Moduldateien lebt: schmaler 12px-Fade, der den angeschnittenen Nachbarn
+ * sichtbar laesst. Gilt fuer die Bar-Zeile des Modulkopfs
+ * (.page-toolbar__bar, layout.css) und fuer eigenstaendige Sub-Tab-Rails
+ * (.sub-tabs-bar, heute die Kueche). Sie steht HIER, weil die Masken-Familie
+ * samt RTL-Spiegelung an diesem Ort wohnt - eine zweite Rezeptur in einer
+ * Moduldatei war der Zustand, den diese Runde beendet. */
+.page-toolbar__bar.has-fade-end,
+.page-toolbar__bar .has-fade-end,
+.sub-tabs-bar.has-fade-end {
+  mask-image: linear-gradient(to right, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+  -webkit-mask-image: linear-gradient(to right, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+}
+
+.page-toolbar__bar.has-fade-start.has-fade-end,
+.page-toolbar__bar .has-fade-start.has-fade-end,
+.sub-tabs-bar.has-fade-start.has-fade-end {
+  mask-image: linear-gradient(to right, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+  -webkit-mask-image: linear-gradient(to right, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+}
+
+/* Achse gespiegelt, Werte gleich - Begruendung an der RTL-Basisregel oben. */
+[dir="rtl"] .page-toolbar__bar.has-fade-end,
+[dir="rtl"] .page-toolbar__bar .has-fade-end,
+[dir="rtl"] .sub-tabs-bar.has-fade-end {
+  mask-image: linear-gradient(to left, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+  -webkit-mask-image: linear-gradient(to left, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+}
+
+[dir="rtl"] .page-toolbar__bar.has-fade-start.has-fade-end,
+[dir="rtl"] .page-toolbar__bar .has-fade-start.has-fade-end,
+[dir="rtl"] .sub-tabs-bar.has-fade-start.has-fade-end {
+  mask-image: linear-gradient(to left, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+  -webkit-mask-image: linear-gradient(to left, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
+}
+
+/* --------------------------------------------------------
  * Scroll-Polster für jede Leiste mit Rand-Fade (HIG-Rollout Runde 3).
  *
  * Die Maske sagt „hier geht es weiter"; sie sagt nicht, wo eine Leiste zum

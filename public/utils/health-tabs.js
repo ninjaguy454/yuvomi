@@ -73,7 +73,10 @@ export function renderHealthTabsBar(container, activeRoute, { cycleEnabled = tru
     tabs: HEALTH_TABS({ cycleEnabled }).map(({ route, labelKey, icon }) => ({ id: route, label: t(labelKey), icon })),
     activeId: activeRoute,
     storageKey: HEALTH_STORAGE_KEY,
-    extraClass: 'health-tabs-bar',
+    // page-toolbar__bar: die Bar-Zeile des Canonical Page Head (layout.css,
+    // Werkzeugzeilen-Regel) - volle Kopfbreite statt Restbreite neben dem
+    // Titel; mobil waren sonst nur 3 von 6 Tabs sichtbar.
+    extraClass: 'health-tabs-bar page-toolbar__bar',
     ariaLabel: t('nav.health'),
     insertPosition: 'beforeend',
     onChange: (route) => window.yuvomi?.navigate(route),

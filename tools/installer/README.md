@@ -66,7 +66,9 @@ dedicated `podman-compose.yml` (SELinux `:Z` labels).
        currency rates (`FIXER_API_KEY`) and the Web-Push contact (`VAPID_SUBJECT`).
        Everything that decides *what Yuvomi connects to*
    - The advanced path asks for `BASE_URL` (pre-filled from host, port and the
-     exposure choice); the simple path derives it. Every redirect URI the wizard
+     exposure choice); the simple path derives it. A typed value only wins over
+     the pre-fill when it names a full `http://` or `https://` origin.
+     Every redirect URI the wizard
      shows - Google Calendar, Google Drive, OIDC - is built from that one value, so
      what you copy into a provider console is what the app will send.
    - A language switcher (top corner) overrides the auto-detected browser

@@ -4,5 +4,8 @@
 # Locale formatting tests are byte-sensitive and production images run on Linux.
 public/locales/*.json text eol=lf
 
+# Workflow contract tests parse indentation and LF boundaries byte-for-byte.
+.github/workflows/*.yml text eol=lf
+
 # Default: normalize all text files to LF in the repo
 * text=auto

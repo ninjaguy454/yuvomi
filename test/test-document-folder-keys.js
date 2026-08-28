@@ -29,19 +29,32 @@ const { ensureModuleFolder, MODULE_FOLDER_KEYS, isModuleFolderKey } =
 const ACTOR = 1;
 
 /**
- * Die Tabelle so, wie die Migration sie vorfindet - MIT dem `UNIQUE` auf
- * `name` (Migration 60). Ohne das Constraint wäre die Suite grün, während ein
- * echter Haushalt beim Anlegen abbräche; genau diese Lücke hatte die erste
- * Fassung des v146-Tests (PR #788).
+ * Die Tabelle so, wie die Migration sie vorfindet - MIT der Eindeutigkeit auf
+ * `name`. Ohne das Constraint wäre die Suite grün, während ein echter Haushalt
+ * beim Anlegen abbräche; genau diese Lücke hatte die erste Fassung des
+ * v146-Tests (PR #788).
+ *
+ * SEIT v164 IST DIE EINDEUTIGKEIT EINE ANDERE: nicht mehr global auf `name`,
+ * sondern je Geschwisterreihe - "Rechnungen" darf unter "Auto" und unter
+ * "Wohnung" stehen. Fuer alle Zeilen dieser Suite (Wurzelordner, parent_id
+ * NULL) prueft der Index dieselbe Bedingung wie das alte globale UNIQUE, die
+ * Aussage der Tests bleibt also erhalten.
+ *
+ * DASS DIESER NACHBAU DEM ECHTEN SCHEMA FOLGT, prueft der Test ganz unten -
+ * er hielt sonst still an v60 fest, waehrend die Aufrufe daneben laengst auf
+ * `parent_id` zeigen (und genau daran ist diese Suite beim Baum aufgelaufen).
  */
 function folders(rows = []) {
   const conn = new DatabaseSync(':memory:');
   conn.exec(`
     CREATE TABLE family_document_folders (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
-      name       TEXT NOT NULL UNIQUE,
+      name       TEXT NOT NULL,
+      parent_id  INTEGER REFERENCES family_document_folders(id) ON DELETE CASCADE,
       created_by INTEGER
     );
+    CREATE UNIQUE INDEX idx_family_document_folders_sibling_name
+      ON family_document_folders(COALESCE(parent_id, 0), name);
   `);
   const insert = conn.prepare('INSERT INTO family_document_folders (name) VALUES (?)');
   for (const name of rows) insert.run(name);
@@ -305,4 +318,43 @@ test('wer einen Modul-Ordner anspricht, nennt seinen Schluessel', () => {
   assert.deepEqual(ohneKey.map((t) => `${t.ort} (${t.key})`), [],
     'Diese Stellen legen ueber den uebersetzten Namen ab und ergeben in einem\n'
     + 'mehrsprachigen Haushalt einen zweiten Ordner - sie brauchen folderKey/folder_key:');
+});
+
+/**
+ * DER NACHBAU OBEN MUSS DEM ECHTEN SCHEMA FOLGEN.
+ *
+ * `folders()` legt die Tabelle von Hand an, statt die Migrationen laufen zu
+ * lassen - das ist hier richtig, weil die Suite genau den Zustand VOR einer
+ * Migration herstellen muss. Der Preis ist Drift: der Nachbau hielt still an
+ * Migration 60 fest, waehrend die geprueften Aufrufe laengst `parent_id`
+ * lasen. Die Suite lief in fuenf "no such column"-Fehler, und das war der
+ * gnaedige Ausgang - eine Spalte, die im Nachbau FEHLT, aber nirgends
+ * abgefragt wird, haette gar nichts gemeldet und die Tests hier gruen an
+ * einem Schema laufen lassen, das es nicht mehr gibt.
+ *
+ * Verglichen werden die Spalten, die der Nachbau fuehrt, nicht die des echten
+ * Schemas: er darf weniger haben (`module_key` kommt erst mit der geprueften
+ * Migration dazu, `updated_at` braucht diese Suite nicht). Was er fuehrt, muss
+ * es aber auch wirklich geben.
+ */
+test('der handgebaute Ordner-Tisch kennt keine Spalte, die das echte Schema nicht hat', () => {
+  const nachbau = new Set(folders().prepare('PRAGMA table_info(family_document_folders)')
+    .all().map((c) => c.name));
+
+  // Das echte Schema, aufgebaut wie in Produktion: alle Migrationen der Reihe
+  // nach auf eine leere Datenbank.
+  const echt = new DatabaseSync(':memory:');
+  echt.exec('PRAGMA foreign_keys = OFF');
+  for (const migration of dbmod.MIGRATIONS) {
+    if (typeof migration.up === 'string') echt.exec(migration.up);
+    else migration.up(echt);
+  }
+  const echteSpalten = new Set(echt.prepare('PRAGMA table_info(family_document_folders)')
+    .all().map((c) => c.name));
+
+  assert.ok(echteSpalten.size > 3, 'das echte Schema wurde nicht aufgebaut - der Vergleich prueft nichts');
+  assert.deepEqual([...nachbau].filter((c) => !echteSpalten.has(c)), [],
+    'Diese Spalten stehen nur im Nachbau oben. Entweder ist das echte Schema\n'
+    + 'weitergezogen, oder der Nachbau erfindet etwas - beides macht die Tests\n'
+    + 'dieser Suite zu Aussagen ueber ein Schema, das es nicht gibt.');
 });

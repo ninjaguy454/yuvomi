@@ -121,22 +121,166 @@ function nextOccurrence(baseDateStr, rrule) {
 }
 
 /**
+ * So viele Einzelschritte holt das Aufholen höchstens nach.
+ *
+ * DIE ZAHL IST EIN SICHERHEITSNETZ, KEINE REICHWEITE. Sie war es einmal nicht:
+ * bei 1000 Schritten gab eine tägliche Serie ab 2023 auf und eine wöchentliche
+ * ab 2005 ebenso - beides gewöhnliche Einträge, keine Randfälle. Das Ergebnis
+ * war ein Datum in der Vergangenheit, das der Aufrufer als "gibt es nicht mehr"
+ * las: ein Termin, der heute stattfindet, verschwand (#877).
+ *
+ * Die Reichweite kommt jetzt vom Vorsprung darunter, der in Intervallschritten
+ * springt statt zu zählen. Was danach noch iteriert wird, sind die Fälle mit
+ * BYDAY, und dort liegt die Schrittweite unter einer Woche - 2000 Schritte
+ * decken damit gut drei Jahrzehnte ab.
+ */
+const CATCH_UP_STEPS = 2000;
+
+/**
+ * Springt in Intervallschritten dicht an `notBeforeStr` heran.
+ *
+ * WARUM RECHNEN STATT ZAEHLEN. Eine tägliche Serie von 2015 bis heute sind
+ * viertausend Einzelschritte, jeder mit einem eigenen Date-Objekt - und das
+ * bei jedem Aufbau der Übersicht. Wie viele Intervalle dazwischenliegen, lässt
+ * sich für die Frequenzen ohne Wochentagsfilter direkt ausrechnen.
+ *
+ * MIT BYDAY WIRD NICHT GESPRUNGEN. Dort bestimmt nicht das Intervall allein,
+ * wann das nächste Vorkommen liegt ("jeden zweiten Montag und Donnerstag"),
+ * und ein Sprung könnte über ein Vorkommen hinweggehen. Diese Fälle laufen
+ * weiter über die Schleife - ihre Schritte sind klein genug.
+ *
+ * BEWUSST EIN STUECK ZU KURZ: der Sprung landet garantiert NICHT hinter dem
+ * Ziel, damit die Schleife danach das erste passende Vorkommen findet. Ein
+ * Sprung, der zu weit ginge, überspränge genau das Vorkommen, das gesucht ist.
+ *
+ * MONATLICH UND JAEHRLICH NUR BIS ZUM 28. Eine Serie am 31. läuft nicht auf
+ * einem festen Monatsraster: der 31. Juni existiert nicht, `nextOccurrence()`
+ * schiebt sie auf den nächsten Monat, und ab da DRIFTET sie - aus "alle fünf
+ * Monate ab dem 31. Januar" wird der 31. Juli statt des 30. Juni. Die Zahl der
+ * Kalendermonate ist dann nicht mehr die Zahl der Schritte, und ein Sprung
+ * darüber landet Monate daneben (gemessen: 2026-12-31 statt 2026-08-31).
+ *
+ * Diese Serien laufen weiter über die Schleife. Das kostet nichts: monatlich
+ * sind zwölf Schritte im Jahr, die Grenze von 2000 reicht für Jahrhunderte -
+ * anders als täglich, wo genau das der gemeldete Fehler war.
+ *
+ * @returns {string} das Datum, ab dem weitergezählt wird (nie hinter notBefore)
+ */
+function fastForward(fromKey, parsed, notBeforeKey) {
+  const { freq, interval, byday } = parsed;
+  if (byday.length) return fromKey;
+
+  const from = new Date(`${fromKey}T00:00:00Z`);
+  const to   = new Date(`${notBeforeKey}T00:00:00Z`);
+  if (isNaN(from.getTime()) || isNaN(to.getTime()) || to <= from) return fromKey;
+  if ((freq === 'MONTHLY' || freq === 'YEARLY') && from.getUTCDate() > 28) return fromKey;
+
+  const days = Math.floor((to - from) / 86400000);
+  let steps;
+  if (freq === 'DAILY')       steps = Math.floor(days / interval);
+  else if (freq === 'WEEKLY')  steps = Math.floor(days / (7 * interval));
+  else {
+    // MONTHLY und YEARLY über Kalendermonate, nicht über Tage: ein Monat ist
+    // keine feste Anzahl Tage, und eine Näherung liefe über die Jahre auseinander.
+    const months = (to.getUTCFullYear() - from.getUTCFullYear()) * 12
+      + (to.getUTCMonth() - from.getUTCMonth());
+    steps = Math.floor(months / (freq === 'YEARLY' ? 12 * interval : interval));
+  }
+  // Einen Schritt Sicherheitsabstand - siehe oben.
+  steps -= 1;
+  if (!Number.isFinite(steps) || steps <= 0) return fromKey;
+
+  const jumped = new Date(from);
+  if (freq === 'DAILY')        jumped.setUTCDate(jumped.getUTCDate() + steps * interval);
+  else if (freq === 'WEEKLY')  jumped.setUTCDate(jumped.getUTCDate() + steps * 7 * interval);
+  else if (freq === 'MONTHLY') jumped.setUTCMonth(jumped.getUTCMonth() + steps * interval);
+  else                          jumped.setUTCFullYear(jumped.getUTCFullYear() + steps * interval);
+
+  const key = jumped.toISOString().slice(0, 10);
+  // MONTHLY kippt bei einem 31. in einen kürzeren Monat um ein paar Tage
+  // vorwärts (JS-Datumsarithmetik). Dann lieber gar nicht springen als
+  // daneben - die Schleife kann es ohnehin.
+  return key > notBeforeKey || key < fromKey ? fromKey : key;
+}
+
+/**
  * Wie nextOccurrence, überspringt aber alle Vorkommen vor `notBeforeStr`, bis das
  * erste Vorkommen >= notBeforeStr gefunden ist (Aufholen übersprungener Serien).
  * Gibt null zurück, wenn die Serie (UNTIL) vorher endet oder kein Basisdatum existiert.
+ *
+ * `seriesStart` SETZT ZUSAETZLICH `COUNT` DURCH. Ohne die Angabe bleibt es beim
+ * bisherigen Verhalten - `nextOccurrence()` ist zustandslos und kann nicht
+ * wissen, das wievielte Vorkommen es gerade liefert. Wer den Serienanfang
+ * kennt, kann zählen: das letzte erlaubte Vorkommen ist `seriesStart` plus
+ * (COUNT - 1) Intervalle, und alles danach gibt es nicht mehr.
+ *
+ * WARUM DAS NICHT IMMER GILT: `nextDueAfterCompletion()` reicht als Basis das
+ * Fälligkeitsdatum der gerade erledigten Instanz herein, nicht den Serienstart.
+ * Von dort zu zählen ergäbe eine Serie, die sich bei jedem Abhaken verlängert -
+ * also lieber gar nicht zählen als falsch. Deshalb ist es eine Angabe des
+ * Aufrufers und keine Vermutung dieser Funktion.
+ *
  * @param {string} baseDateStr  - ISO-Datums-String (YYYY-MM-DD)
  * @param {string} rrule        - RRULE-String
  * @param {string} notBeforeStr - Untere Schranke (YYYY-MM-DD); Ergebnis ist >= dieser
+ * @param {{seriesStart?: string|null}} [opts]
  * @returns {string|null}       - Nächstes zukünftiges Datum als YYYY-MM-DD oder null
  */
-function nextOccurrenceAfter(baseDateStr, rrule, notBeforeStr) {
-  let current = nextOccurrence(baseDateStr, rrule);
+function nextOccurrenceAfter(baseDateStr, rrule, notBeforeStr, { seriesStart = null } = {}) {
+  const parsed = parseRRule(rrule);
+  if (!parsed) return null;
+
+  const lastAllowed = seriesStart ? lastOccurrenceOf(seriesStart, parsed) : null;
+  // Die Serie ist aufgebraucht, bevor die Schranke ueberhaupt erreicht wird.
+  if (lastAllowed && notBeforeStr && lastAllowed < notBeforeStr) return null;
+
+  const start = notBeforeStr ? fastForward(baseDateStr, parsed, notBeforeStr) : baseDateStr;
+  let current = nextOccurrence(start, rrule);
   // Vergleich per lexikografischem YYYY-MM-DD-String (Format ist fix, daher sicher).
   let guard = 0;
-  while (current && notBeforeStr && current < notBeforeStr && guard++ < 1000) {
+  while (current && notBeforeStr && current < notBeforeStr && guard++ < CATCH_UP_STEPS) {
     current = nextOccurrence(current, rrule);
   }
+  if (current && lastAllowed && current > lastAllowed) return null;
   return current;
+}
+
+/**
+ * Das letzte Vorkommen einer Serie mit COUNT - oder null, wenn sie keines hat.
+ *
+ * DTSTART IST VORKOMMEN 1, deshalb (COUNT - 1) Intervalle. Mit BYDAY laesst
+ * sich das nicht ausrechnen: dort haengt an einem Intervall mehr als ein
+ * Vorkommen, und die Zahl derer vor der Schranke ist nicht die Zahl der
+ * Intervalle. Solche Serien werden nicht begrenzt - lieber einer zu lang als
+ * einer zu kurz, denn das Zuviel sieht man, das Zuwenig fehlt lautlos.
+ *
+ * @returns {string|null} YYYY-MM-DD
+ */
+function lastOccurrenceOf(seriesStart, parsed) {
+  const { freq, interval, byday, count } = parsed;
+  if (!count || byday.length) return null;
+
+  const start = new Date(`${String(seriesStart).slice(0, 10)}T00:00:00Z`);
+  if (isNaN(start.getTime())) return null;
+
+  /* MONATLICH UND JAEHRLICH NUR BIS ZUM 28., aus demselben Grund wie beim
+   * Sprung darueber: eine Serie am 31. laeuft nicht auf einem festen
+   * Monatsraster, sondern driftet an jedem kurzen Monat. (COUNT - 1) Intervalle
+   * waeren dann nicht ihr letztes Vorkommen, sondern irgendeines davor - und
+   * eine zu frueh gesetzte Grenze schneidet Termine ab, die es noch gibt.
+   * Solche Serien werden nicht begrenzt: einer zu lang sieht man, einer zu
+   * kurz fehlt lautlos. */
+  if ((freq === 'MONTHLY' || freq === 'YEARLY') && start.getUTCDate() > 28) return null;
+
+  const steps = count - 1;
+  const last = new Date(start);
+  if (freq === 'DAILY')        last.setUTCDate(last.getUTCDate() + steps * interval);
+  else if (freq === 'WEEKLY')  last.setUTCDate(last.getUTCDate() + steps * 7 * interval);
+  else if (freq === 'MONTHLY') last.setUTCMonth(last.getUTCMonth() + steps * interval);
+  else if (freq === 'YEARLY')  last.setUTCFullYear(last.getUTCFullYear() + steps * interval);
+  else return null;
+
+  return last.toISOString().slice(0, 10);
 }
 
 /**

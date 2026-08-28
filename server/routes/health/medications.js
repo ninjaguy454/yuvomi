@@ -11,7 +11,7 @@ import * as v from '../../middleware/validate.js';
 import {
   log, VISIBILITIES, LOG_STATUS, MAX_UNIT,
   viewerId, careAwareClause, toBit, applyUpdate, badRequest,
-  resolveOwner, writableClause,
+  resolveOwner, writableClause, writableChild,
 } from './helpers.js';
 
 const router = express.Router();
@@ -256,11 +256,11 @@ router.patch('/schedules/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Ungültige ID.', code: 400 });
 
-    const existing = db.get().prepare(`
+    const existing = writableChild(`
       SELECT s.* FROM medication_schedules s
       JOIN medications m ON m.id = s.medication_id
-      WHERE s.id = ? AND m.user_id = ?
-    `).get(id, viewer);
+      WHERE s.id = ?
+    `, 'm', id, viewer);
     if (!existing) return res.status(404).json({ error: 'Einnahmeplan nicht gefunden.', code: 404 });
 
     const b = req.body || {};
@@ -299,11 +299,11 @@ router.delete('/schedules/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Ungültige ID.', code: 400 });
 
-    const existing = db.get().prepare(`
+    const existing = writableChild(`
       SELECT s.id FROM medication_schedules s
       JOIN medications m ON m.id = s.medication_id
-      WHERE s.id = ? AND m.user_id = ?
-    `).get(id, viewer);
+      WHERE s.id = ?
+    `, 'm', id, viewer);
     if (!existing) return res.status(404).json({ error: 'Einnahmeplan nicht gefunden.', code: 404 });
 
     db.get().prepare('DELETE FROM medication_schedules WHERE id = ?').run(id);
@@ -418,17 +418,20 @@ function updateLogStatus(req, res, newStatus) {
 /**
  * Der Log-Eintrag samt Besitzer, oder null.
  *
- * Bewusst über `m.user_id = viewer` und nicht über die Sichtbarkeit: ein
- * Dosis-Eintrag ist eine Aufzeichnung über den eigenen Körper. Wer ein
+ * Bewusst über das Schreibrecht am Medikament und nicht über die Sichtbarkeit:
+ * ein Dosis-Eintrag ist eine Aufzeichnung über den eigenen Körper. Wer ein
  * Medikament sehen darf, darf deshalb noch lange nicht in seinem Protokoll
- * korrigieren - dieselbe Grenze, die take/skip seit jeher ziehen.
+ * korrigieren - dieselbe Grenze, die take/skip seit jeher ziehen. Die Betreuung
+ * (#584) liegt innerhalb dieser Grenze: sie ist ausdrücklich erteilt, und ohne
+ * sie könnte ein Elternteil die Dosis, die es selbst eingetragen hat, nicht
+ * abhaken (#884).
  */
 function ownLogRow(id, viewer) {
-  return db.get().prepare(`
+  return writableChild(`
     SELECT l.*, m.user_id AS owner_id FROM medication_logs l
     JOIN medications m ON m.id = l.medication_id
-    WHERE l.id = ? AND m.user_id = ?
-  `).get(id, viewer) ?? null;
+    WHERE l.id = ?
+  `, 'm', id, viewer);
 }
 
 // --------------------------------------------------------

@@ -21,6 +21,7 @@ import {
   openModal, closeModal, mountFooter, refreshDirtySnapshot,
   focusFirstField, updateHeaderAction,
 } from '/components/modal.js';
+import { pushOverlay, dropOverlay } from '/utils/overlay-history.js';
 
 // Ab dieser Breite ist ein Popover am Auslöser die bessere Präsentation: Der
 // Auslöser bleibt sichtbar, der Weg ist kurz. Darunter deckt ein 320px-Kärtchen
@@ -589,6 +590,11 @@ function openAsPopover(opts) {
     el: popover,
     anchor: opts.anchor,
     onClose: opts.onClose,
+    // Die Sheet-Praesentation erbt den Marker der Zurueck-Geste von modal.js;
+    // das Popover ist der zweite Weg dieser API und braucht deshalb seinen
+    // eigenen (#871). Es hat keinen Dirty-Guard - eine Leseansicht kann nichts
+    // zu verwerfen haben -, also geht es immer zu.
+    overlayToken: pushOverlay(() => { closeDetailView(); }),
     teardown() {
       document.removeEventListener('keydown', onKeydown);
       document.removeEventListener('click', onOutsideClick);
@@ -698,10 +704,11 @@ export function openDetailView(opts = {}) {
 export function closeDetailView({ force = false } = {}) {
   activeViewToken = 0;
   if (activePopover) {
-    const { el, teardown, onClose } = activePopover;
+    const { el, teardown, onClose, overlayToken } = activePopover;
     activePopover = null;
     teardown();
     el.remove();
+    dropOverlay(overlayToken);
     if (typeof onClose === 'function') onClose();
     return Promise.resolve();
   }

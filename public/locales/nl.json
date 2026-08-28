@@ -59,7 +59,8 @@
             "private": "Alleen ik",
             "hint": "Bepaalt wie dit item in Yuvomi kan zien.",
             "assigneesNobodyHint": "Zonder toewijzing zie alleen jij dit item."
-        }
+        },
+        "toShoppingListNamed": "{{title}} op de boodschappenlijst zetten"
     },
     "kitchen": {
         "noShoppingLists": "Er is nog geen boodschappenlijst.",
@@ -112,7 +113,8 @@
         "health": "Gezondheid",
         "rewards": "Beloningen",
         "pantry": "Voorraad",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Overzicht",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Deze en alle volgende",
         "deleteScopeSeries": "Hele reeks (alle weken)",
         "seriesEndedToast": "Reeks vanaf deze datum beëindigd.",
-        "seriesDeletedToast": "Reeks verwijderd."
+        "seriesDeletedToast": "Reeks verwijderd.",
+        "deleteMealNamed": "{{title}} verwijderen",
+        "openRecipeNamed": "Recept voor {{title}} openen"
     },
     "calendar": {
         "searchOpen": "Afspraken zoeken",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Heeft invloed op de hele reeks.",
         "detailWhen": "Tijd",
         "detailCalendar": "Agenda",
-        "colorCurrent": "Huidige kleur"
+        "colorCurrent": "Huidige kleur",
+        "deleteExternalSeriesTitle": "Hele reeks verwijderen?",
+        "deleteExternalSeriesDetail": "\"{{title}}\" komt uit een gesynchroniseerde agenda. Afzonderlijke afspraken kunnen daar niet worden uitgesloten - de hele reeks wordt verwijderd, met alle afspraken erin.",
+        "deleteExternalSeriesConfirm": "Reeks verwijderen",
+        "deleteBirthdayEventTitle": "Verjaardagsafspraak verwijderen?",
+        "deleteBirthdayEventDetail": "\"{{title}}\" is de weerspiegeling van een verjaardag. De afspraak verdwijnt, maar de volgende synchronisatie maakt hem opnieuw aan - definitief verwijderen kan alleen via de verjaardag zelf.",
+        "deleteBirthdayEventConfirm": "Toch verwijderen",
+        "deleteSubscribedSeriesTitle": "Geabonneerde reeks verwijderen?",
+        "deleteSubscribedSeriesDetail": "\"{{title}}\" komt uit een geabonneerde agenda. Yuvomi kan daar niets verwijderen - de reeks verdwijnt alleen tot de volgende synchronisatie; opzeggen van het abonnement verwijdert hem definitief.",
+        "deleteSubscribedSeriesConfirm": "Toch verwijderen",
+        "colorInherit": "Kleur van de toegewezen persoon",
+        "colorInheritHint": "De afspraak krijgt geen eigen kleur en neemt die van de toegewezen persoon over. Is er niemand toegewezen, dan geldt de kleur van de agenda.",
+        "filters": "Filters",
+        "filtersOpen": "Filters openen",
+        "filtersLayers": "Lagen",
+        "filtersPeople": "Personen",
+        "filtersActive": "{{count}} filters actief",
+        "filtersActive_one": "1 filter actief",
+        "filtersReset": "Alle filters wissen",
+        "filtersDisplay": "Weergave"
     },
     "notes": {
         "title": "Bord",
@@ -1708,6 +1731,7 @@
             "shopping": "Boodschappen",
             "meals": "Maaltijden",
             "calendar": "Agenda",
+            "schedule": "Schedule",
             "notes": "Bord",
             "contacts": "Contacten",
             "budget": "Budget",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} herhaling",
         "fromCompletionLabel": "Herhalen vanaf voltooiing",
         "fromCompletionHint": "Het interval begint op de dag dat je de taak afvinkt, niet op de vervaldatum.",
-        "summaryFromCompletion": "vanaf voltooiing"
+        "summaryFromCompletion": "vanaf voltooiing",
+        "intervalHint": "Na je keuze is het interval vrij in te stellen - bijvoorbeeld elke 2 weken of elke 3 maanden."
     },
     "reminders": {
         "sectionTitle": "Herinnering",
@@ -2706,7 +2731,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Eigen",
         "sourceAll": "Alle",
-        "sourceFilterLabel": "Filter op bron"
+        "sourceFilterLabel": "Filter op bron",
+        "plannedThisWeek": "Deze week gepland"
     },
     "search": {
         "emptyHint": "Typ minstens 2 tekens om te zoeken in taken, afspraken, notities, contacten, boodschappen en gezondheid.",
@@ -2731,7 +2757,8 @@
         "done": "Aan de slag",
         "skip": "Overslaan",
         "step2BodyDesktop": "De zijbalk links brengt je naar alle modules - van agenda en taken tot keuken, documenten en instellingen.",
-        "step3BodyDesktop": "Met de +-knop rechtsonder maak je overal nieuwe items aan."
+        "step3BodyDesktop": "Met de +-knop rechtsonder maak je overal nieuwe items aan.",
+        "stepProgress": "Stap {{current}} van {{total}}"
     },
     "offline": {
         "banner": "Offline - opnieuw verbinden…",
@@ -2774,7 +2801,7 @@
         "colorOption": "Kleur {{color}}",
         "iconPick": "Afbeelding kiezen",
         "iconClear": "Afbeelding verwijderen",
-        "iconHint": "Zonder afbeelding staat de eerste letter op de gekozen kleur.",
+        "iconHint": "Kies een ingebouwd pictogram of een eigen afbeelding. Zonder beide staat de eerste letter op de gekozen kleur.",
         "iconTypeError": "Kies een PNG-, JPEG- of WebP-afbeelding.",
         "iconReadError": "De afbeelding kon niet worden gelezen.",
         "iconTooLarge": "De afbeelding is te groot.",
@@ -2790,7 +2817,9 @@
         "saved": "Snelkoppeling opgeslagen",
         "deleted": "Snelkoppeling verwijderd",
         "loadError": "De snelkoppelingen konden niet worden geladen.",
-        "orderError": "De volgorde kon niet worden opgeslagen."
+        "orderError": "De volgorde kon niet worden opgeslagen.",
+        "iconSymbol": "Pictogram kiezen",
+        "iconChoose": "Pictogram of afbeelding kiezen"
     },
     "emptyHint": {
         "tasks": "Tik op + om je eerste taak aan te maken. Veeg een kaart naar links om af te vinken, naar rechts om te bekijken.",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "Bonnen",
         "splitExpensesFolder": "Gedeelde uitgaven",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Taken"
+        "tasksFolder": "Taken",
+        "newSubfolder": "Nieuwe submap",
+        "moveFolder": "Map verplaatsen",
+        "moveFolderTo": "„{{name}}\" verplaatsen naar",
+        "folderMovedToast": "Map verplaatst",
+        "folderParentLabel": "Bovenliggende map",
+        "folderRootLevel": "Hoogste niveau",
+        "folderPathLabel": "Mappad",
+        "folderExpand": "„{{name}}\" uitklappen",
+        "folderCollapse": "„{{name}}\" inklappen",
+        "deleteFolderSubtreeDetail": "De {{count}} submappen erin worden ook verwijderd. De documenten blijven bestaan en zijn bereikbaar via het filter voor documenten zonder map.",
+        "deleteFolderSubtreeDetail_one": "De submap erin wordt ook verwijderd. De documenten blijven bestaan en zijn bereikbaar via het filter voor documenten zonder map."
     },
     "housekeeping": {
         "title": "Huishouden",
@@ -3534,7 +3574,8 @@
         "completed": "Voltooid",
         "completedOn": "Voltooid op {{date}}",
         "completedToast": "Abonnement voltooid.",
-        "endsAfter": "Nog {{count}} betalingen"
+        "endsAfter": "Nog {{count}} betalingen",
+        "logoTypeError": "Gebruik een PNG-, JPEG-, WebP- of SVG-afbeelding."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "De foto is na verkleinen nog steeds te groot."
     },
     "documentAttach": {
         "label": "Bijlagen",
@@ -4435,5 +4477,90 @@
         "recipes": "Recept",
         "shopping": "Item",
         "splitExpenses": "Uitgave"
+    },
+    "iconPicker": {
+        "title": "Pictogram kiezen",
+        "searchLabel": "Pictogram zoeken",
+        "searchPlaceholder": "Zoek in het Engels, bijv. film",
+        "resultsLabel": "Pictogrammen",
+        "noResults": "Geen pictogram gevonden.",
+        "clear": "Geen pictogram",
+        "unavailable": "Pictogrammen zijn nu niet beschikbaar."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

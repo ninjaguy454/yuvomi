@@ -74,8 +74,17 @@ test('kein Pfad-Parameter mit Namens-Bedeutung ist als Zahl deklariert', () => {
   // hatte - beide waren betroffen, in Tasks wie in Contacts.
   //
   // Die Regel greift in der wirksamen Richtung: ein numerischer Parameter heisst
-  // `id` oder endet auf `Id`. Umgekehrt darf ein `id` durchaus ein String sein
-  // (Modul-IDs sind Slugs), deshalb wird nur die Zahl-Seite geprueft.
+  // `id`, endet auf `Id` oder benennt eine POSITION. Umgekehrt darf ein `id`
+  // durchaus ein String sein (Modul-IDs sind Slugs), deshalb wird nur die
+  // Zahl-Seite geprueft.
+  //
+  // Warum ein Index dazugehoert und keine Ausnahme ist: der Guard faengt einen
+  // frei waehlbaren NAMEN, der faelschlich als Zahl deklariert wurde - ein Tag
+  // heisst "Garten", ein Modul traegt einen Slug. Ein Index ist kein Bezeichner,
+  // sondern eine Stelle in einer Folge; er ist per Definition eine Zahl und
+  // kann gar kein Wort sein. Wer hier etwas ergaenzt, muss dasselbe zeigen
+  // koennen.
+  const NUMERIC_BY_NATURE = /^(position|index)$/;
   const paths = buildPaths();
   const offenders = [];
 
@@ -85,6 +94,7 @@ test('kein Pfad-Parameter mit Namens-Bedeutung ist als Zahl deklariert', () => {
         if (parameter.in !== 'path') continue;
         if (parameter.schema?.type !== 'integer') continue;
         if (/^id$|Id$/.test(parameter.name)) continue;
+        if (NUMERIC_BY_NATURE.test(parameter.name)) continue;
         offenders.push(`${method.toUpperCase()} ${path} -> {${parameter.name}}`);
       }
     }

@@ -364,6 +364,17 @@
   .metric-grid {
     grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   }
+
+  /* Eine ungerade Reihe laesst keine Waisenkarte neben einer Leerzelle stehen:
+   * die letzte Karte spannt die volle Zeile. Bei der Budget-Dreierreihe ist
+   * das der SALDO - inhaltlich die Synthese der beiden Karten darueber, und
+   * er stand allein in der linken Spalte mit Leere rechts (Critique
+   * 2026-08-27, P2). Vierer-Reihen (2x2) und die Einzelkarte bleiben
+   * unberuehrt: last-child + nth-child(odd) trifft nur ungerade Kartenzahlen,
+   * und in der Einspalten-Lage ist die volle Zeile ohnehin der Normalfall. */
+  .metric-grid > .metric-card:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Fußnote unter dem Betrag: „7 aktiv", „121% des Budgets genutzt", „EUR".

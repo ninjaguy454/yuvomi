@@ -657,6 +657,11 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
     `;
   }
 
+  // Die Aktions-Labels NENNEN ihre Mahlzeit („Fluffige Pancakes loeschen"):
+  // vorher trugen alle Karten dieselben drei Saetze, und ein Screenreader, der
+  // die Woche durchgeht, hoerte 25x „Mahlzeit loeschen" ohne Bezug (Critique
+  // 2026-08-27, Persona Sam). Dasselbe Muster wie im Einkauf („Brokkoli
+  // abhaken", shopping.markDoneLabel).
   const cardsHTML = meals.map((meal) => {
     const ownCount    = meal.ingredients?.length ?? 0;
     const ingDone     = meal.ingredients?.filter((i) => i.on_shopping_list).length ?? 0;
@@ -700,17 +705,17 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
             href="${esc(meal.recipe_url)}"
             target="_blank"
             rel="noopener noreferrer"
-            aria-label="${t('meals.openRecipe')}"
+            aria-label="${esc(t('meals.openRecipeNamed', { title: meal.title }))}"
           ><i data-lucide="link" class="icon-sm" aria-hidden="true"></i></a>` : ''}
           ${canTransfer ? `<button class="meal-card__action-btn meal-card__action-btn--shopping"
             data-action="transfer-meal"
             data-meal-id="${meal.id}"
-            aria-label="${t('common.toShoppingList')}"
+            aria-label="${esc(t('common.toShoppingListNamed', { title: meal.title }))}"
           ><i data-lucide="shopping-cart" class="icon-sm" aria-hidden="true"></i></button>` : ''}
           <button class="meal-card__action-btn"
             data-action="delete-meal"
             data-meal-id="${meal.id}"
-            aria-label="${t('meals.deleteMeal')}"
+            aria-label="${esc(t('meals.deleteMealNamed', { title: meal.title }))}"
           ><i data-lucide="trash-2" class="icon-sm" aria-hidden="true"></i></button>
         </div>
       </div>

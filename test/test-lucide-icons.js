@@ -60,9 +60,17 @@ function sourceFiles(dir, out = []) {
 /**
  * Alle benutzten Icon-Namen samt Fundstelle.
  *
- * Zwei Schreibweisen: das Attribut im Markup und die `icon:`-Eigenschaft der
+ * Drei Schreibweisen: das Attribut im Markup, die `icon:`-Eigenschaft der
  * datengetriebenen Listen (Modul-Registry, Gesundheits-Reiter, Formatierungs-
- * leiste), die spaeter genau dieses Attribut bauen.
+ * leiste), die spaeter genau dieses Attribut bauen - und die Vorschlagsreihe
+ * der Symbolauswahl (#873).
+ *
+ * DIE DRITTE STEHT HIER, WEIL DER GUARD SIE SONST NICHT SAEHE. `SUGGESTIONS`
+ * in components/icon-picker.js ist eine nackte Liste von Zeichenketten: kein
+ * `data-lucide`, kein `icon:`, also fuer die beiden Muster darueber unsichtbar.
+ * Ein Lucide-Update, das einen dieser Namen fallen laesst, haette eine leere
+ * Kachel im Raster hinterlassen - und der Guard waere gruen geblieben, weil er
+ * die Liste nie gelesen hat.
  */
 function usedIcons() {
   const used = new Map();
@@ -74,8 +82,22 @@ function usedIcons() {
     const src = readFileSync(file, 'utf8');
     for (const m of src.matchAll(/data-lucide="([a-z0-9-]+)"/g)) add(m[1], file);
     for (const m of src.matchAll(/\bicon:\s*['"]([a-z0-9-]+)['"]/g)) add(m[1], file);
+    for (const name of suggestionNames(src)) add(name, file);
   }
   return used;
+}
+
+/**
+ * Die Namen aus einem `const SUGGESTIONS = [...]`-Block.
+ *
+ * Ueber den Block und nicht ueber jede Zeichenkette der Datei: `'film'` ist ein
+ * Icon-Name, `'input'` ein Selektor, und ein Muster, das beide einsammelt,
+ * meldete lauter Fehlalarme.
+ */
+function suggestionNames(src) {
+  const block = src.match(/const SUGGESTIONS = \[([\s\S]*?)\];/);
+  if (!block) return [];
+  return [...block[1].matchAll(/'([a-z0-9-]+)'/g)].map((m) => m[1]);
 }
 
 test('das Bundle wird ueberhaupt gelesen', () => {

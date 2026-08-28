@@ -10,7 +10,7 @@ import * as v from '../../middleware/validate.js';
 import {
   log, VISIBILITIES, MAX_UNIT,
   viewerId, careAwareClause, applyUpdate, badRequest, deriveFlag, attachResults,
-  resolveOwner, writableClause,
+  resolveOwner, writableClause, writableChild,
 } from './helpers.js';
 
 const router = express.Router();
@@ -222,11 +222,11 @@ router.delete('/results/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Ungültige ID.', code: 400 });
 
-    const existing = db.get().prepare(`
+    const existing = writableChild(`
       SELECT res.id FROM health_lab_results res
       JOIN health_lab_reports r ON r.id = res.report_id
-      WHERE res.id = ? AND r.user_id = ?
-    `).get(id, viewer);
+      WHERE res.id = ?
+    `, 'r', id, viewer);
     if (!existing) return res.status(404).json({ error: 'Analyt nicht gefunden.', code: 404 });
 
     db.get().prepare('DELETE FROM health_lab_results WHERE id = ?').run(id);

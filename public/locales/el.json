@@ -59,7 +59,8 @@
             "private": "Μόνο εγώ",
             "hint": "Καθορίζει ποιος βλέπει αυτήν την καταχώριση στο Yuvomi.",
             "assigneesNobodyHint": "Χωρίς ανάθεση, μόνο εσύ βλέπεις αυτήν την καταχώριση."
-        }
+        },
+        "toShoppingListNamed": "Προσθήκη «{{title}}» στη λίστα αγορών"
     },
     "kitchen": {
         "noShoppingLists": "Δεν υπάρχει ακόμη λίστα αγορών.",
@@ -112,7 +113,8 @@
         "health": "Υγεία",
         "rewards": "Επιβραβεύσεις",
         "pantry": "Απόθεμα",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Επισκόπηση",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Αυτή και όλες τις επόμενες",
         "deleteScopeSeries": "Ολόκληρη η σειρά (όλες οι εβδομάδες)",
         "seriesEndedToast": "Η σειρά τερματίστηκε από αυτή την ημερομηνία.",
-        "seriesDeletedToast": "Η σειρά διαγράφηκε."
+        "seriesDeletedToast": "Η σειρά διαγράφηκε.",
+        "deleteMealNamed": "Διαγραφή «{{title}}»",
+        "openRecipeNamed": "Άνοιγμα συνταγής για «{{title}}»"
     },
     "calendar": {
         "searchOpen": "Αναζήτηση εκδηλώσεων",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Επηρεάζει ολόκληρη τη σειρά.",
         "detailWhen": "Ώρα",
         "detailCalendar": "Ημερολόγιο",
-        "colorCurrent": "Τρέχον χρώμα"
+        "colorCurrent": "Τρέχον χρώμα",
+        "deleteExternalSeriesTitle": "Διαγραφή ολόκληρης της σειράς;",
+        "deleteExternalSeriesDetail": "Το «{{title}}» προέρχεται από συγχρονισμένο ημερολόγιο. Οι μεμονωμένες εμφανίσεις δεν μπορούν να εξαιρεθούν εκεί - διαγράφεται ολόκληρη η σειρά, με όλες τις εμφανίσεις της.",
+        "deleteExternalSeriesConfirm": "Διαγραφή σειράς",
+        "deleteBirthdayEventTitle": "Διαγραφή συμβάντος γενεθλίων;",
+        "deleteBirthdayEventDetail": "Το «{{title}}» είναι αντίγραφο μιας καταχώρισης γενεθλίων. Το συμβάν θα εξαφανιστεί, αλλά ο επόμενος συγχρονισμός θα το δημιουργήσει ξανά - οριστικά αφαιρείται μόνο μέσω των ίδιων των γενεθλίων.",
+        "deleteBirthdayEventConfirm": "Διαγραφή ούτως ή άλλως",
+        "deleteSubscribedSeriesTitle": "Διαγραφή συνδρομητικής σειράς;",
+        "deleteSubscribedSeriesDetail": "Το «{{title}}» προέρχεται από ημερολόγιο συνδρομής. Το Yuvomi δεν μπορεί να διαγράψει τίποτα εκεί - η σειρά εξαφανίζεται μόνο μέχρι τον επόμενο συγχρονισμό· για οριστική αφαίρεση, καταργήστε τη συνδρομή.",
+        "deleteSubscribedSeriesConfirm": "Διαγραφή ούτως ή άλλως",
+        "colorInherit": "Χρώμα του ατόμου που έχει ανατεθεί",
+        "colorInheritHint": "Το συμβάν δεν αποκτά δικό του χρώμα και παίρνει εκείνο του ατόμου στο οποίο έχει ανατεθεί. Αν δεν έχει ανατεθεί σε κανέναν, ισχύει το χρώμα του ημερολογίου.",
+        "filters": "Φίλτρα",
+        "filtersOpen": "Άνοιγμα φίλτρων",
+        "filtersLayers": "Επίπεδα",
+        "filtersPeople": "Άτομα",
+        "filtersActive": "{{count}} ενεργά φίλτρα",
+        "filtersActive_one": "1 ενεργό φίλτρο",
+        "filtersReset": "Κατάργηση όλων των φίλτρων",
+        "filtersDisplay": "Εμφάνιση"
     },
     "notes": {
         "title": "Σημειώσεις",
@@ -1691,6 +1714,7 @@
             "shopping": "Αγορές",
             "meals": "Γεύματα",
             "calendar": "Ημερολόγιο",
+            "schedule": "Schedule",
             "notes": "Σημειώσεις",
             "contacts": "Επαφές",
             "budget": "Προϋπολογισμός",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} επανάληψη",
         "fromCompletionLabel": "Επανάληψη από την ολοκλήρωση",
         "fromCompletionHint": "Το διάστημα ξεκινά την ημέρα που ολοκληρώνετε την εργασία, όχι από την ημερομηνία λήξης.",
-        "summaryFromCompletion": "από την ολοκλήρωση"
+        "summaryFromCompletion": "από την ολοκλήρωση",
+        "intervalHint": "Μετά την επιλογή, το διάστημα ρυθμίζεται ελεύθερα - π.χ. κάθε 2 εβδομάδες ή κάθε 3 μήνες."
     },
     "recipes": {
         "mealTypeNone": "Χωρίς γεύμα",
@@ -2628,7 +2653,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Τοπική",
         "sourceAll": "Όλες",
-        "sourceFilterLabel": "Φιλτράρισμα κατά προέλευση"
+        "sourceFilterLabel": "Φιλτράρισμα κατά προέλευση",
+        "plannedThisWeek": "Προγραμματισμένο αυτή την εβδομάδα"
     },
     "search": {
         "emptyHint": "Πληκτρολόγησε τουλάχιστον 2 χαρακτήρες για αναζήτηση σε εργασίες, ραντεβού, σημειώσεις, επαφές, αγορές και υγεία.",
@@ -2731,7 +2757,8 @@
         "done": "Ξεκίνα",
         "skip": "Παράλειψη",
         "step2BodyDesktop": "Η πλαϊνή στήλη αριστερά οδηγεί σε όλες τις ενότητες - από το ημερολόγιο και τις εργασίες ως την κουζίνα, τα έγγραφα και τις ρυθμίσεις.",
-        "step3BodyDesktop": "Με το κουμπί + κάτω δεξιά δημιουργείς νέες καταχωρίσεις παντού."
+        "step3BodyDesktop": "Με το κουμπί + κάτω δεξιά δημιουργείς νέες καταχωρίσεις παντού.",
+        "stepProgress": "Βήμα {{current}} από {{total}}"
     },
     "offline": {
         "banner": "Εκτός σύνδεσης - γίνεται επανασύνδεση…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "Αποδείξεις",
         "splitExpensesFolder": "Κοινά έξοδα",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Εργασίες"
+        "tasksFolder": "Εργασίες",
+        "newSubfolder": "Νέος υποφάκελος",
+        "moveFolder": "Μετακίνηση φακέλου",
+        "moveFolderTo": "Μετακίνηση του «{{name}}» σε",
+        "folderMovedToast": "Ο φάκελος μετακινήθηκε",
+        "folderParentLabel": "Γονικός φάκελος",
+        "folderRootLevel": "Ανώτατο επίπεδο",
+        "folderPathLabel": "Διαδρομή φακέλου",
+        "folderExpand": "Ανάπτυξη «{{name}}»",
+        "folderCollapse": "Σύμπτυξη «{{name}}»",
+        "deleteFolderSubtreeDetail": "Θα διαγραφούν και οι {{count}} υποφάκελοι μέσα. Τα έγγραφα παραμένουν και είναι προσβάσιμα μέσω του φίλτρου για έγγραφα χωρίς φάκελο.",
+        "deleteFolderSubtreeDetail_one": "Θα διαγραφεί και ο υποφάκελος μέσα. Τα έγγραφα παραμένουν και είναι προσβάσιμα μέσω του φίλτρου για έγγραφα χωρίς φάκελο."
     },
     "shortcuts": {
         "goKitchen": "Κουζίνα",
@@ -2931,7 +2969,7 @@
         "colorOption": "Χρώμα {{color}}",
         "iconPick": "Επιλογή εικόνας",
         "iconClear": "Αφαίρεση εικόνας",
-        "iconHint": "Χωρίς εικόνα, το αρχικό γράμμα εμφανίζεται στο επιλεγμένο χρώμα.",
+        "iconHint": "Διαλέξτε ενσωματωμένο εικονίδιο ή δική σας εικόνα. Χωρίς κανένα από τα δύο, το αρχικό γράμμα εμφανίζεται στο επιλεγμένο χρώμα.",
         "iconTypeError": "Επιλέξτε εικόνα PNG, JPEG ή WebP.",
         "iconReadError": "Η εικόνα δεν ήταν δυνατό να διαβαστεί.",
         "iconTooLarge": "Η εικόνα είναι πολύ μεγάλη.",
@@ -2947,7 +2985,9 @@
         "saved": "Ο σύνδεσμος αποθηκεύτηκε",
         "deleted": "Ο σύνδεσμος διαγράφηκε",
         "loadError": "Δεν ήταν δυνατή η φόρτωση των συνδέσμων.",
-        "orderError": "Δεν ήταν δυνατή η αποθήκευση της σειράς."
+        "orderError": "Δεν ήταν δυνατή η αποθήκευση της σειράς.",
+        "iconSymbol": "Επιλογή εικονιδίου",
+        "iconChoose": "Επιλογή εικονιδίου ή εικόνας"
     },
     "housekeeping": {
         "title": "Νοικοκυριό",
@@ -3534,7 +3574,8 @@
         "completed": "Ολοκληρώθηκε",
         "completedOn": "Ολοκληρώθηκε στις {{date}}",
         "completedToast": "Η συνδρομή ολοκληρώθηκε.",
-        "endsAfter": "Απομένουν {{count}} πληρωμές"
+        "endsAfter": "Απομένουν {{count}} πληρωμές",
+        "logoTypeError": "Χρησιμοποιήστε εικόνα PNG, JPEG, WebP ή SVG."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Η φωτογραφία παραμένει πολύ μεγάλη μετά την αλλαγή μεγέθους."
     },
     "documentAttach": {
         "label": "Συνημμένα",
@@ -4435,5 +4477,90 @@
         "recipes": "Συνταγή",
         "shopping": "Είδος",
         "splitExpenses": "Έξοδο"
+    },
+    "iconPicker": {
+        "title": "Επιλογή εικονιδίου",
+        "searchLabel": "Αναζήτηση εικονιδίου",
+        "searchPlaceholder": "Αναζήτηση στα αγγλικά, π.χ. film",
+        "resultsLabel": "Εικονίδια",
+        "noResults": "Δεν βρέθηκε εικονίδιο.",
+        "clear": "Χωρίς εικονίδιο",
+        "unavailable": "Τα εικονίδια δεν είναι διαθέσιμα αυτή τη στιγμή."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

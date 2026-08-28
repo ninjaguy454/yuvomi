@@ -470,7 +470,12 @@ function renderItem(item) {
           </button>
           <button class="row-action row-action--danger" data-action="delete-item" data-id="${item.id}"
                   aria-label="${t('shopping.deleteItemLabel', { name: esc(item.name) })}">
-            <i data-lucide="x" class="icon-md" aria-hidden="true"></i>
+            ${/* trash-2 statt x: das Kreuz heisst app-weit „Schliessen"
+                 (Modals, Chips), Loeschen traegt ueberall den Papierkorb
+                 (Aufgaben, Geburtstage, Mahlzeiten). Der Einkauf war die eine
+                 Zeile, die fuer dieselbe Tat ein anderes Zeichen sprach
+                 (Critique 2026-08-27, P3). */ ''}
+            <i data-lucide="trash-2" class="icon-md" aria-hidden="true"></i>
           </button>
         </div>
       </div>

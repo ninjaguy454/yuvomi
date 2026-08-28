@@ -48,7 +48,15 @@ function householdWith(value) {
 }
 
 test('Neuinstallation startet mit abgeschaltetem Inventory', () => {
-  assert.deepEqual(readDisabled(db), ['inventory']);
+  // Isoliert wie die beiden Faelle darunter: der globale `db` durchlaeuft
+  // ALLE Migrationen, nicht nur 145, und traegt seit Migration 161 zusaetzlich
+  // 'schedule' im selben Feld (dasselbe Muster, ein zweites Modul). Eine
+  // Zusicherung gegen den globalen Singleton waere bei jedem weiteren
+  // Default-Off-Modul erneut faellig - migration145.up() auf einer isolierten
+  // Verbindung zeigt stattdessen genau das, was DIESE Migration beitraegt.
+  const conn = householdWith();
+  migration145.up(conn);
+  assert.deepEqual(readDisabled(conn), ['inventory']);
 });
 
 test('Bestandshaushalt behaelt seine eigenen Abschaltungen', () => {

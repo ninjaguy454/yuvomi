@@ -18,8 +18,31 @@ import {
   promptPwaInstall,
 } from '/utils/pwa-install.js';
 
+/**
+ * DER ZUSTAND, AN DEM DER NACHLAUF HAENGT.
+ *
+ * layout.css reserviert unter jedem Scrollport Platz fuer dieses Banner. Die
+ * Bedingung dort war `:root:has(yuvomi-install-prompt)` - also die ANWESENHEIT
+ * des Elements. Das Element steht statisch in index.html und ist damit nie
+ * abwesend: es rendert 0x0 mit leerem Shadow-Root, solange keine der
+ * Bedingungen in `connectedCallback` erfuellt ist (installiert, weggeklickt,
+ * zu wenige Interaktionen) - und auf iOS feuert `beforeinstallprompt` ohnehin
+ * nie. Gemessen kostete das JEDEN Scrollport der App dauerhaft 105px, ohne
+ * dass je ein Banner zu sehen war; im Kalender waren das 21% der Rasterhoehe
+ * auf dem Telefon.
+ *
+ * Das Attribut sagt „ich belege gerade Flaeche" und wird genau dann gesetzt,
+ * wenn das Banner tatsaechlich im Shadow-Root steht. Der 89px-Fallback der
+ * Hoehe bleibt davon unberuehrt - er traegt weiter das Fenster zwischen Render
+ * und erster ResizeObserver-Meldung.
+ */
+const SHOWN_ATTR = 'data-shown';
+
 const DISMISS_KEY = 'yuvomi-install-dismissed';
-const DISMISS_DURATION_MS = 7 * 24 * 60 * 60 * 1000; // 7 Tage
+// 30 Tage statt 7 (Critique 2026-08-27): wer bewusst im Browser bleibt, sah
+// das Banner sonst ~4x im Monat neu - fuer eine Familien-App ist ein ruhiger
+// Monatstakt die passendere Erinnerung als ein Wochentakt.
+const DISMISS_DURATION_MS = 30 * 24 * 60 * 60 * 1000; // 30 Tage
 
 const INTERACTION_KEY = 'yuvomi-install-interactions';
 const INTERACTION_THRESHOLD = 2;
@@ -65,6 +88,17 @@ class YuvomiInstallPrompt extends HTMLElement {
     }
   }
 
+  /**
+   * EIN `disconnectedCallback`, und das ist der eigentliche Befund.
+   *
+   * Diese Klasse hatte ZWEI davon - diesen und einen zweiten unten beim
+   * ResizeObserver. In einer JS-Klasse gewinnt die spaetere Definition
+   * kommentarlos: der Listener-Abbau hier lief nie. Nach jedem `_remove()`
+   * blieben `beforeinstallprompt`, `locale-changed` und der Click-Zaehler auf
+   * `document` haengen - letzterer schrieb bei jedem Klick der Sitzung weiter
+   * in localStorage hoch, obwohl das Banner laengst weg war. Kein Test konnte
+   * das sehen, weil beide Fassungen fuer sich richtig aussahen.
+   */
   disconnectedCallback() {
     window.removeEventListener('beforeinstallprompt', this._onBeforeInstall);
     if (this._offInteraction) this._offInteraction();
@@ -72,6 +106,14 @@ class YuvomiInstallPrompt extends HTMLElement {
     if (this._onLocaleChanged) {
       window.removeEventListener('locale-changed', this._onLocaleChanged);
     }
+
+    // Die gemeldete Hoehe geht mit dem Banner. Sie steht am `html`-Element und
+    // ueberlebte sonst jedes Entfernen - der Nachlauf am Seitenende bliebe als
+    // Loch stehen, obwohl nichts mehr darueber liegt.
+    this._sizeObserver?.disconnect();
+    this._sizeObserver = null;
+    document.documentElement.style.removeProperty('--install-prompt-height');
+    this.removeAttribute(SHOWN_ATTR);
   }
 
   _waitForInteractions() {
@@ -348,6 +390,10 @@ class YuvomiInstallPrompt extends HTMLElement {
     this._shadow.appendChild(style);
     this._shadow.appendChild(banner);
 
+    // Ab hier belegt das Bauteil wirklich Flaeche - erst jetzt darf der
+    // Nachlauf der Scrollports sie einrechnen (siehe SHOWN_ATTR oben).
+    this.setAttribute(SHOWN_ATTR, '');
+
     // DER BANNER MELDET SEINE HOEHE AN DIE SHELL.
     //
     // Er liegt fixiert auf der Toast-Ebene und verdeckte damit das Ende jeder
@@ -372,17 +418,6 @@ class YuvomiInstallPrompt extends HTMLElement {
         banner.classList.add('banner--visible');
       });
     });
-  }
-
-  /**
-   * Die gemeldete Hoehe geht mit dem Banner. Sie steht am `html`-Element und
-   * ueberlebte sonst jedes Entfernen - der Nachlauf am Seitenende bliebe als
-   * Loch stehen, obwohl nichts mehr darueber liegt.
-   */
-  disconnectedCallback() {
-    this._sizeObserver?.disconnect();
-    this._sizeObserver = null;
-    document.documentElement.style.removeProperty('--install-prompt-height');
   }
 
   /** iOS Teilen-Icon (Box mit Pfeil nach oben) */

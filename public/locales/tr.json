@@ -59,7 +59,8 @@
             "private": "Yalnızca ben",
             "hint": "Bu kaydı Yuvomi’de kimin görebileceğini belirler.",
             "assigneesNobodyHint": "Kimse atanmazsa bu kaydı yalnızca sen görürsün."
-        }
+        },
+        "toShoppingListNamed": "{{title}} yemeğini alışveriş listesine ekle"
     },
     "kitchen": {
         "noShoppingLists": "Henüz alışveriş listesi yok.",
@@ -112,7 +113,8 @@
         "health": "Sağlık",
         "rewards": "Ödüller",
         "pantry": "Kiler",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Genel Bakış",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Bu ve sonraki tüm tarihler",
         "deleteScopeSeries": "Tüm seri (tüm haftalar)",
         "seriesEndedToast": "Seri bu tarihten itibaren sonlandırıldı.",
-        "seriesDeletedToast": "Seri silindi."
+        "seriesDeletedToast": "Seri silindi.",
+        "deleteMealNamed": "{{title}} yemeğini sil",
+        "openRecipeNamed": "{{title}} tarifini aç"
     },
     "calendar": {
         "searchOpen": "Etkinlik ara",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Tüm seriyi etkiler.",
         "detailWhen": "Saat",
         "detailCalendar": "Takvim",
-        "colorCurrent": "Geçerli renk"
+        "colorCurrent": "Geçerli renk",
+        "deleteExternalSeriesTitle": "Tüm seri silinsin mi?",
+        "deleteExternalSeriesDetail": "\"{{title}}\" eşitlenmiş bir takvimden geliyor. Orada tek tek yinelemeler hariç tutulamaz - tüm seri, bütün yinelemeleriyle birlikte silinir.",
+        "deleteExternalSeriesConfirm": "Seriyi sil",
+        "deleteBirthdayEventTitle": "Doğum günü etkinliği silinsin mi?",
+        "deleteBirthdayEventDetail": "\"{{title}}\" bir doğum günü kaydının yansımasıdır. Etkinlik kaybolur, ancak sonraki eşitlemede yeniden oluşturulur - kalıcı olarak yalnızca doğum gününün kendisi üzerinden kaldırılabilir.",
+        "deleteBirthdayEventConfirm": "Yine de sil",
+        "deleteSubscribedSeriesTitle": "Abone olunan seri silinsin mi?",
+        "deleteSubscribedSeriesDetail": "\"{{title}}\" abone olunan bir takvimden geliyor. Yuvomi orada hiçbir şeyi silemez - seri yalnızca bir sonraki eşitlemeye kadar kaybolur; kalıcı olarak kaldırmak için takvim aboneliğini iptal edin.",
+        "deleteSubscribedSeriesConfirm": "Yine de sil",
+        "colorInherit": "Atanan kişinin rengi",
+        "colorInheritHint": "Etkinliğin kendi rengi olmaz, atandığı kişinin rengini alır. Kimseye atanmamışsa takvimin rengi geçerlidir.",
+        "filters": "Filtreler",
+        "filtersOpen": "Filtreleri aç",
+        "filtersLayers": "Katmanlar",
+        "filtersPeople": "Kişiler",
+        "filtersActive": "{{count}} filtre etkin",
+        "filtersActive_one": "1 filtre etkin",
+        "filtersReset": "Tüm filtreleri kaldır",
+        "filtersDisplay": "Görünüm"
     },
     "notes": {
         "title": "Notlar",
@@ -1691,6 +1714,7 @@
             "shopping": "Alışveriş",
             "meals": "Yemekler",
             "calendar": "Takvim",
+            "schedule": "Schedule",
             "notes": "Notlar",
             "contacts": "Kişiler",
             "budget": "Bütçe",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} tekrar",
         "fromCompletionLabel": "Tamamlandığı günden itibaren tekrarla",
         "fromCompletionHint": "Aralık, görevi tamamladığınız gün başlar; son tarihte değil.",
-        "summaryFromCompletion": "tamamlanmadan itibaren"
+        "summaryFromCompletion": "tamamlanmadan itibaren",
+        "intervalHint": "Seçtikten sonra aralığı istediğin gibi ayarlayabilirsin - örneğin her 2 haftada bir veya her 3 ayda bir."
     },
     "recipes": {
         "mealTypeNone": "Öğün yok",
@@ -2628,7 +2653,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Yerel",
         "sourceAll": "Tümü",
-        "sourceFilterLabel": "Kaynağa göre filtrele"
+        "sourceFilterLabel": "Kaynağa göre filtrele",
+        "plannedThisWeek": "Bu hafta planlandı"
     },
     "search": {
         "emptyHint": "Görevler, etkinlikler, notlar, kişiler, alışveriş ve sağlıkta aramak için en az 2 karakter yaz.",
@@ -2731,7 +2757,8 @@
         "done": "Başla",
         "skip": "Atla",
         "step2BodyDesktop": "Soldaki kenar çubuğu seni tüm modüllere götürür - takvim ve görevlerden mutfağa, belgelere ve ayarlara.",
-        "step3BodyDesktop": "Alt köşedeki + düğmesiyle her yerde yeni kayıt oluşturursun."
+        "step3BodyDesktop": "Alt köşedeki + düğmesiyle her yerde yeni kayıt oluşturursun.",
+        "stepProgress": "Adım {{current}}/{{total}}"
     },
     "offline": {
         "banner": "Çevrimdışı - yeniden bağlanılıyor…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "Fişler",
         "splitExpensesFolder": "Paylaşılan giderler",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Görevler"
+        "tasksFolder": "Görevler",
+        "newSubfolder": "Yeni alt klasör",
+        "moveFolder": "Klasörü taşı",
+        "moveFolderTo": "\"{{name}}\" şuraya taşınsın",
+        "folderMovedToast": "Klasör taşındı",
+        "folderParentLabel": "Üst klasör",
+        "folderRootLevel": "En üst düzey",
+        "folderPathLabel": "Klasör yolu",
+        "folderExpand": "\"{{name}}\" genişlet",
+        "folderCollapse": "\"{{name}}\" daralt",
+        "deleteFolderSubtreeDetail": "İçindeki {{count}} alt klasör de silinir. Belgeler kalır ve klasörsüz belgeler filtresinden erişilebilir.",
+        "deleteFolderSubtreeDetail_one": "İçindeki alt klasör de silinir. Belgeler kalır ve klasörsüz belgeler filtresinden erişilebilir."
     },
     "shortcuts": {
         "goKitchen": "Mutfak",
@@ -2931,7 +2969,7 @@
         "colorOption": "{{color}} rengi",
         "iconPick": "Görsel seç",
         "iconClear": "Görseli kaldır",
-        "iconHint": "Görsel yoksa seçilen rengin üzerinde baş harf görünür.",
+        "iconHint": "Yerleşik bir simge ya da kendi görselinizi seçin. İkisi de yoksa seçilen rengin üzerinde baş harf görünür.",
         "iconTypeError": "Lütfen PNG, JPEG veya WebP görsel seçin.",
         "iconReadError": "Görsel okunamadı.",
         "iconTooLarge": "Görsel çok büyük.",
@@ -2947,7 +2985,9 @@
         "saved": "Hızlı bağlantı kaydedildi",
         "deleted": "Hızlı bağlantı silindi",
         "loadError": "Hızlı bağlantılar yüklenemedi.",
-        "orderError": "Sıralama kaydedilemedi."
+        "orderError": "Sıralama kaydedilemedi.",
+        "iconSymbol": "Simge seç",
+        "iconChoose": "Simge ya da görsel seç"
     },
     "housekeeping": {
         "title": "Ev işleri",
@@ -3534,7 +3574,8 @@
         "completed": "Tamamlandı",
         "completedOn": "{{date}} tarihinde tamamlandı",
         "completedToast": "Abonelik tamamlandı.",
-        "endsAfter": "{{count}} ödeme kaldı"
+        "endsAfter": "{{count}} ödeme kaldı",
+        "logoTypeError": "PNG, JPEG, WebP veya SVG resmi kullanın."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Fotoğraf yeniden boyutlandırmadan sonra hâlâ çok büyük."
     },
     "documentAttach": {
         "label": "Ekler",
@@ -4435,5 +4477,90 @@
         "recipes": "Tarif",
         "shopping": "Ürün",
         "splitExpenses": "Gider"
+    },
+    "iconPicker": {
+        "title": "Simge seç",
+        "searchLabel": "Simge ara",
+        "searchPlaceholder": "İngilizce arayın, örn. film",
+        "resultsLabel": "Simgeler",
+        "noResults": "Simge bulunamadı.",
+        "clear": "Simge yok",
+        "unavailable": "Simgeler şu anda kullanılamıyor."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

@@ -64,7 +64,12 @@ router.get('/config', requireAdmin, (_req, res) => {
 router.put('/config', requireAdmin, (req, res) => {
   const body = req.body || {};
   if (body.url !== undefined && !process.env.IMMICH_URL) {
-    const url = String(body.url).trim().replace(/\/+$/, '');
+    // Schluss-Slashes ohne Regex trimmen: /\/+$/ ist auf einer Nutzereingabe
+    // polynomiell (viele Slashes vor einem Nicht-Slash erzwingen Backtracking).
+    const raw = String(body.url).trim();
+    let end = raw.length;
+    while (end > 0 && raw[end - 1] === '/') end--;
+    const url = raw.slice(0, end);
     if (url && (!/^https?:\/\//i.test(url) || url.length > 2048)) {
       return res.status(400).json({ error: 'Invalid Immich URL.', code: 400 });
     }

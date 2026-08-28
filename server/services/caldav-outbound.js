@@ -15,6 +15,7 @@ import { createLogger } from '../logger.js';
 import * as outbound from './calendar-outbound.js';
 import { patchICSEvent } from '../utils/ics-patch.js';
 import { toICSDatetime } from '../utils/ics-format.js';
+import { nearestIcalColorName } from '../utils/ical-color.js';
 
 const log = createLogger('CalDAVOutbound');
 
@@ -44,7 +45,7 @@ export function icsFieldsForEvent(event) {
     end   = { value: toICSDatetime(event.end_datetime || event.start_datetime), params: tzParam };
   }
 
-  return {
+  const fields = {
     SUMMARY:     event.title,
     DESCRIPTION: event.description || null,
     LOCATION:    event.location || null,
@@ -52,6 +53,36 @@ export function icsFieldsForEvent(event) {
     DTSTART:     start,
     DTEND:       end,
   };
+
+  // COLOR ist Teil von MIRRORED_FIELDS, wurde aber nie geschrieben (#897): eine
+  // Umfaerbung kostete einen PUT, der beim Server nichts aenderte.
+  //
+  // DREI FAELLE, und der Unterschied zwischen den letzten beiden ist der ganze
+  // Punkt von #899:
+  //
+  //   1. Eine Eigenfarbe, die sich abbilden laesst → ihr CSS3-Name geht hinaus.
+  //   2. Keine Eigenfarbe, und der Nutzer hat sie GELEERT (color_modified = 1)
+  //      → null, und der Patcher entfernt die COLOR-Zeile. Verwaltet heisst
+  //      ersetzen UND entfernen; erst hier wird die zweite Haelfte gebraucht.
+  //   3. Keine Eigenfarbe, weil wir nie eine gelernt haben (color_modified = 0)
+  //      → das Feld bleibt weg, "nicht anfassen".
+  //
+  // Fall 3 ist keine Vorsicht ohne Anlass. Ein Termin kommt ohne COLOR herein,
+  // jemand faerbt ihn spaeter auf dem SERVER, und Yuvomi erfaehrt davon erst
+  // beim naechsten Inbound-Lauf - der aber laeuft nicht zwischen der Bearbeitung
+  // und ihrem Push. Ein pauschales null haette dessen Farbe abgeraeumt, und vor
+  // #899 dauerhaft: das Gatter hing an `user_modified`, das jede Bearbeitung
+  // setzt, also holte auch kein spaeterer Lauf sie zurueck.
+  //
+  // Eine Farbe, die sich nicht abbilden laesst (kein gueltiges #RRGGBB), faellt
+  // NICHT in Fall 2: `event.color` steht, geleert wurde nichts. Sie bleibt in
+  // Fall 3 - ein null wuerde eine fremde Farbe wegwerfen, um einen Wert
+  // wiederzugeben, den wir gar nicht ausdruecken koennen.
+  const colorName = nearestIcalColorName(event.color);
+  if (colorName) fields.COLOR = colorName;
+  else if (!event.color && event.color_modified) fields.COLOR = null;
+
+  return fields;
 }
 
 /** Dateiname eines Kalenderobjekts aus seiner URL, ersatzweise aus der UID. */

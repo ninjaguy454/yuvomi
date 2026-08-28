@@ -1,0 +1,142 @@
+/* ------------------------------------------------------------------ */
+/* Symbolauswahl (#873)                                                */
+/*                                                                     */
+/* EIN EIGENES STYLESHEET UND KEIN EINGEBETTETES <style>. Der Zuschnitt-*/
+/* Dialog (utils/avatar-crop.js) trägt seine Regeln in einer .js, und   */
+/* der Kommentar dort hält selbst fest, was das kostet: die CSS-Guards  */
+/* lesen public/styles/, also fiel dort ein Overlay-Ton durch, den      */
+/* tokens.css nirgends kennt. Diese Datei liegt deshalb im Blick der    */
+/* Guards.                                                             */
+/* ------------------------------------------------------------------ */
+
+.icon-picker {
+  border: none;
+  padding: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl);
+  width: calc(100vw - var(--space-8));
+  max-width: 420px;
+  /* Der Dialog wächst mit seinem Inhalt, aber nie über den Bildschirm
+   * hinaus - das Raster darin scrollt, der Rahmen bleibt stehen. */
+  max-height: min(560px, calc(100vh - var(--space-8)));
+  overflow: hidden;
+}
+
+.icon-picker::backdrop {
+  background: var(--color-overlay);
+}
+
+.icon-picker__form {
+  display: flex;
+  flex-direction: column;
+  /* Ohne die Höhe hier bleibt das Formular auf seiner Inhaltshöhe stehen und
+   * der Deckel des Dialogs greift nicht - das Raster scrollte dann nicht,
+   * sondern wuchs aus dem Rahmen heraus. */
+  max-height: inherit;
+  min-height: 0;
+}
+
+.icon-picker__header {
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.icon-picker__title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.icon-picker__search {
+  padding: 0 var(--space-4) var(--space-3);
+}
+
+.icon-picker__results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 var(--space-4) var(--space-3);
+  display: grid;
+  /* Auto-fill statt einer festen Spaltenzahl: dieselbe Kachelgröße auf dem
+   * Telefon wie auf dem Desktop, nur mehr davon nebeneinander. */
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: var(--space-2);
+}
+
+.icon-picker__tile {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast),
+              border-color var(--transition-fast);
+}
+
+.icon-picker__tile:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-text-primary);
+}
+
+.icon-picker__tile:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Das bereits gewählte Symbol trägt den Akzent als Fläche, nicht nur als
+ * Rand: bei 56px Kachel ist ein 1px-Rand die schwächere Ansage, und die
+ * Kachel steht zwischen bis zu 120 gleich aussehenden Nachbarn.
+ *
+ * DIE TINTE IST --color-ink-on-vivid UND NICHT --color-text-on-accent. Der
+ * Akzent hellt im Dark-Theme auf (#A78BFA); Weiss darauf misst 2.72:1 und
+ * verfehlt AA - derselbe Befund, den die Kachelgesichter schon einmal
+ * gekostet haben (.quick-link-face in dashboard.css nimmt dieselbe Tinte). */
+.icon-picker__tile--current,
+.icon-picker__tile--current:hover {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-ink-on-vivid);
+}
+
+.icon-picker__tile i,
+.icon-picker__tile svg {
+  width: 22px;
+  height: 22px;
+}
+
+/* Die Leermeldung ist KEIN Flächen-Leerzustand und deshalb keine .empty-state:
+ * sie sagt „diese Suche trifft nichts", während Suchfeld und Fußzeile darüber
+ * und darunter stehen bleiben. Ein .empty-state mit Symbol, Titel und 48px
+ * Eigenraum wäre die Antwort auf eine leere Seite - hier ist sie eine Zeile in
+ * einem sonst vollen Dialog. Ohne eigenen Raumaufschlag bleibt der Unterschied
+ * auch sichtbar. */
+.icon-picker__empty {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.icon-picker__footer {
+  display: flex;
+  /* Umbrechen statt überstehen: drei Knöpfe in einer Sprache mit langen
+   * Wörtern („Pictogram kiezen" neben „Annuleren") passen auf einem schmalen
+   * Telefon nicht nebeneinander (#872). */
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+/* „Kein Symbol" ist die Gegenrichtung zu allen Kacheln darüber und gehört
+ * deshalb an den anderen Rand - dasselbe Muster wie der Löschknopf im
+ * Bearbeiten-Formular. */
+.icon-picker__footer #icon-picker-clear {
+  margin-right: auto;
+}

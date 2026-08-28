@@ -927,7 +927,7 @@ test('Ein neues VTODO traegt die Felder der Aufgabe, gebaut aus demselben Patche
   }, uid);
 
   assert.match(ics, /BEGIN:VTODO/);
-  assert.match(ics, new RegExp(`UID:${uid.replace(/[.@]/g, '\\$&')}`));
+  assert.match(ics, new RegExp(`UID:${uid.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&')}`));
   assert.match(ics, /SUMMARY:Reifen wechseln/);
   assert.match(ics, /DESCRIPTION:Sommerreifen/);
   assert.match(ics, /DUE;VALUE=DATE:20260901/);

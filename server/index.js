@@ -73,6 +73,7 @@ import automationRouter from './routes/automation.js';
 import permissionsRouter from './routes/permissions.js';
 import changelogRouter from './routes/changelog.js';
 import mcpRouter from './mcp/server.js';
+import scheduleRouter from './routes/schedule.js';
 import { moduleForPath, requiredAccess, tokenAllows } from './scopes.js';
 import { moduleAccessVerdict, MODULE_ACCESS_DENIED, MODULE_ACCESS_READ_ONLY } from './permissions.js';
 import { BODY_LIMIT, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB } from './utils/upload-limit.js';
@@ -320,9 +321,15 @@ app.get('/manifest.webmanifest', apiLimiter, (req, res) => {
     scope: '/',
     display: 'standalone',
     display_override: ['standalone', 'minimal-ui'],
-    orientation: 'portrait-primary',
-    // Muss mit public/manifest.json und den theme-color-Metas in index.html
-    // zusammenbleiben: der App-Grund (#F5F3ED = --neutral-100, warmes Papier).
+    // Kein `orientation`: der Schluessel ist eine Sperre, keine Bevorzugung.
+    // Auf einem Tablet zwang `portrait-primary` die installierte App in den
+    // schmalen Hochkant-Streifen, obwohl das Layout bis 1024px+ reicht (#890).
+    // Ohne den Schluessel folgt die App der Geraeteorientierung - und der
+    // Systemsperre, die der Nutzer gesetzt hat. Ein ausdrueckliches 'any' waere
+    // wieder eine Ansage und nicht dasselbe.
+    // theme_color/background_color muessen mit public/manifest.json und den
+    // theme-color-Metas in index.html zusammenbleiben: der App-Grund
+    // (#F5F3ED = --neutral-100, warmes Papier).
     theme_color: '#F5F3ED',
     background_color: '#F5F3ED',
     lang: 'de-DE',
@@ -490,6 +497,7 @@ app.use('/api/v1/notifications', notificationsRouter);
 app.use('/api/v1/health', healthRouter);
 app.use('/api/v1/rewards', rewardsRouter);
 app.use('/api/v1/automation', automationRouter);
+app.use('/api/v1/schedule', scheduleRouter);
 app.use('/api/v1/permissions', permissionsRouter);
 
 // --------------------------------------------------------

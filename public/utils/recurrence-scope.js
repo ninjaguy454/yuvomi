@@ -11,6 +11,33 @@ import { parseLocalDateKey, addLocalDays } from './date.js';
 
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}/;
 
+/**
+ * Trägt eine Serie Yuvomi selbst, oder gehört sie einem anderen Kalender?
+ *
+ * Die Frage entscheidet über den Löschumfang, deshalb steht sie hier neben der
+ * Scope-Arithmetik statt in der Seite: nur eine LOKALE Serie lässt sich in „nur
+ * dieser Termin" / „dieser und folgende" / „ganze Serie" zerlegen. Bei einer
+ * Serie aus Google, Apple, CalDAV oder einem ICS-Abo käme ein lokal
+ * ausgenommenes Vorkommen beim nächsten Sync zurück (#489/#532).
+ *
+ * `external_source` ist serverseitig NOT NULL DEFAULT 'local'; das `?? 'local'`
+ * fängt eine Antwort ab, die die Spalte gar nicht mitliefert.
+ */
+export function isLocalRecurringSeries(event) {
+  return !!event?.recurrence_rule
+    && (event.external_source ?? 'local') === 'local'
+    && !event.calendar_ref_id && !event.subscription_id;
+}
+
+/**
+ * Das Gegenstück: wiederkehrend, aber einem anderen Kalender gehörend. Genau
+ * dieser Fall löscht mehr, als der angetippte Termin vermuten lässt, und muss
+ * es deshalb sagen, bevor er es tut (#880).
+ */
+export function isExternalRecurringSeries(event) {
+  return !!event?.recurrence_rule && !isLocalRecurringSeries(event);
+}
+
 /** Tagesdifferenz (ganze Tage) zwischen zwei YYYY-MM-DD-Schlüsseln. */
 function dayDelta(fromKey, toKey) {
   return Math.round((parseLocalDateKey(toKey) - parseLocalDateKey(fromKey)) / 86400000);

@@ -15,13 +15,14 @@
   flex-direction: column;
 }
 
-/* Toolbar: Titel links, Tab-Reihe bleibt rechtsbündig. Schrumpfen, Scrollen und
- * die eigene Zeile in der kompakten Grössenklasse kommen aus der Shell-Regel
- * „Tab-Leiste im Modulkopf" (layout.css). */
+/* Die Tab-Reihe ist die Bar-Zeile des Kopfs (.page-toolbar__bar, layout.css,
+ * Werkzeugzeilen-Regel 2026-08-27): volle Zeile unter dem Titel auf ALLEN
+ * Viewports, nicht mehr nur in der kompakten Groessenklasse. Das fruehere
+ * `margin-left: auto` (rechtsbuendig neben dem Titel) war Titelzeilen-Logik
+ * und ist mit der eigenen Zeile entfallen. */
 .rewards-tabs {
   display: flex;
   gap: var(--space-1);
-  margin-left: auto;
 }
 
 .rewards-content__inner {
@@ -167,7 +168,9 @@
  * nehmen, solange er läuft. */
 .rw-standing__points strong.rw-countup--active { color: var(--color-accent); }
 .rw-standing__progress { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
-.rw-standing__actions { display: flex; justify-content: flex-end; }
+/* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+ * (layout.css, #872). */
+.rw-standing__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; }
 
 /* --------------------------------------------------------
    Eltern-Ersteinrichtung
@@ -244,7 +247,7 @@
    * vom frontend-audit erzwungen; --rw-progress (0–1) wird inline gesetzt. */
   transform-origin: left center;
   transform: scaleX(var(--rw-progress, 0));
-  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform var(--duration-xl) var(--ease-out);
 }
 .rw-progress__label { margin: 0; font-size: var(--text-xs); color: var(--color-text-secondary); }
 .rw-progress__label--muted { color: var(--color-text-tertiary); }

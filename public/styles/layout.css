@@ -272,7 +272,23 @@
   --bulk-pill-tail: 0px;
 }
 
-:root:has(yuvomi-install-prompt) {
+/* AM ZUSTAND, NICHT AN DER ANWESENHEIT - und das ist gemessen, nicht
+ * vorsorglich. Hier stand `:root:has(yuvomi-install-prompt)`, also die blosse
+ * Existenz des Elements. Das Element steht statisch in index.html und ist
+ * damit NIE abwesend: es rendert 0x0 mit leerem Shadow-Root, solange keine
+ * seiner Anzeigebedingungen erfuellt ist, und auf iOS feuert
+ * `beforeinstallprompt` ueberhaupt nie. Der Fallback von 89px sprang damit
+ * dauerhaft an, und jeder Scrollport der App reservierte 105px fuer ein
+ * Banner, das keiner je gesehen hat - gemessen im Kalender (21,2% der
+ * Rasterhoehe bei 390px, 23,9% bei 320px) und in den Notizen.
+ *
+ * Der Kommentar drei Absaetze weiter oben versprach das Gegenteil: „jeder 0,
+ * solange seine Flaeche fehlt". Genau das tat der Selektor nicht.
+ *
+ * `[data-shown]` setzt das Bauteil selbst, wenn das Banner im Shadow-Root
+ * steht (yuvomi-install-prompt.js). Spezifitaet bleibt ueber der `:root`-Basis:
+ * `:has()` zaehlt sein staerkstes Argument, hier Typ+Attribut. */
+:root:has(yuvomi-install-prompt[data-shown]) {
   --install-prompt-tail: calc(var(--install-prompt-height, 89px) + var(--space-4));
 }
 
@@ -327,9 +343,10 @@
  * `:not(:has(.page-scrollport))` an BEIDEN Selektoren, und das ist keine
  * Symmetrie um ihrer selbst willen. Am Default-Port beantwortet es „bringt die
  * Seite ihren eigenen mit?". An der Rolle beantwortet es dieselbe Frage eine
- * Ebene tiefer: das Budget schaltet seinen Scrollport bei 640px um (darüber
- * scrollt `.budget-list` im Panel, darunter das Panel selbst), beide tragen die
- * Rolle, und der Nachlauf gehört jeweils dem inneren. Ohne den Ausschluss
+ * Ebene tiefer: im Budget tragen Panel und `.budget-list` BEIDE die Rolle -
+ * unter 640px scrollt nur das Panel, darüber die Liste (und seit #904 bei
+ * Überlauf zusätzlich das Panel) -, und der Nachlauf gehört in jeder dieser
+ * Konstellationen dem inneren Träger. Ohne den Ausschluss
  * polsterte das Panel die Liste, die es enthält, aus dem sichtbaren Bereich -
  * derselbe Fehler wie oben, nur eine Ebene tiefer.
  *
@@ -351,6 +368,91 @@
 .app-content:focus,
 .app-content:focus-visible {
   outline: none;
+}
+
+/* --------------------------------------------------------
+ * DIE SCHALTERZEILE - EINE FORM, APP-WEIT
+ *
+ * Sie stand bis 2026-08-28 in `settings.css`, weil dort ihr Anlass lag: vier
+ * Schalterformen nebeneinander fuer dieselbe Boolean-Entscheidung (Critique
+ * 2026-07-27). Der Ort war trotzdem falsch, und das ist gemessen aufgefallen,
+ * nicht vermutet: `settings.css` laedt nur auf der Einstellungsroute (eine
+ * Page-CSS je Seite). Als das Filter-Blatt des Kalenders `toggleRowHtml()`
+ * benutzte, kam sein Markup ohne Regeln an - neun Zeilen liefen inline
+ * ineinander, die Farbscheiben hatten keine Groesse.
+ *
+ * Eine geteilte Form, deren Regeln in einem Modul-Stylesheet wohnen, ist nur
+ * in diesem Modul eine Form. Hier gilt sie ueberall.
+ * -------------------------------------------------------- */
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+  min-height: var(--target-lg);
+}
+
+.toggle-row:hover {
+  background-color: var(--color-surface-hover);
+}
+
+.toggle-row:focus-within {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.toggle-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toggle-row span {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+/* DIE FARBSCHEIBE EINER ZEILE, DEREN GEGENSTAND EINE EIGENE FARBE HAT
+   (eine Person, eine Kalenderebene).
+
+   Sie ist der Dot der User-Farben-Regel in seiner groessten Form: die Farbe
+   steht NEBEN dem Text, nie als Flaeche darunter. Auf einer frei gewaehlten
+   Helligkeit gibt es keine Tinte, die traegt - ein schwarzer Termin lag
+   gemessen bei 1,22:1.
+
+   DER RING IST DER EIGENTLICHE PUNKT DIESER REGEL, und er ist gemessen: eine
+   freie Farbe schafft ihre eigenen 3:1 (WCAG 1.4.11) nicht zuverlaessig. Von
+   den neun Seed-Terminfarben fielen FUENF gegen die helle Arbeitsflaeche
+   durch - Amber 2,15:1, Cyan 2,43:1, Teal 2,49:1, Gruen 2,54:1, Orange
+   2,80:1. Der Ring in --color-border-strong traegt die Abgrenzung deshalb
+   selbst; die Farbe muss sie nicht mehr leisten, und keine Nutzerfarbe wird
+   dafuer verbogen. Dieselbe Bauart wie am Aufgaben-Chip des Kalenders.
+
+   Die Initialen erscheinen erst ab 20px (Initialen-Schwelle-Regel); diese
+   Scheibe ist 24px und traegt sie deshalb. */
+.toggle-row__swatch {
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
+  flex-shrink: 0;
+  border-radius: var(--radius-full);
+  background-color: var(--swatch-color);
+  box-shadow: inset 0 0 0 var(--space-px) var(--color-border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-2xs);
+  font-weight: var(--font-weight-bold);
+  /* Die Tinte kommt per Inline-Style aus getReadableTextColor() - siehe
+     toggleRowHtml(). Hier steht nur der Notnagel fuer eine Scheibe ohne
+     berechnete Tinte. */
+  color: var(--color-ink-on-vivid);
+  overflow: hidden;
 }
 
 /* Sidebar auf Mobile verstecken */
@@ -470,10 +572,21 @@
  * Overlay — regulären Modals (.modal-overlay: Hilfe, Änderungen, Löschdialoge,
  * Formulare …), dem More-Sheet und dem Such-Overlay — statt deren Inhalt zu
  * überlagern. Deklarativ via :has() (im Projekt etabliert: auth.css,
- * user-multi-select.css); reaktiv beim Ein-/Ausblenden, ohne JS-Hooks. */
+ * user-multi-select.css); reaktiv beim Ein-/Ausblenden, ohne JS-Hooks.
+ *
+ * SEIT 2026-08-27 WEICHT ER AUCH DEN BEIDEN HANDLUNGS-ZUSTAENDEN DER
+ * BOTTOM-ZONE (Critique 2026-08-27, P1; Backlog-P1 vom 17.08.): dem offenen
+ * FAB-Speed-Dial (.fab-actions--visible - „Einkauf" und „Notiz" lagen mobil
+ * hinter dem Banner, Screenshot-Beleg) und der Sammelaktions-Pille
+ * (.list-bulkbar - „In den Vorrat / Löschen" war halb verdeckt, das
+ * Vorrats-Killer-Feature unsichtbar). Ein Banner, das die App bewirbt, darf
+ * nicht die Handlung verdecken, fuer die Casey sie gerade geoeffnet hat; es
+ * kehrt zurueck, sobald der Zustand endet. */
 html:has(.modal-overlay) yuvomi-install-prompt,
 html:has(.more-sheet[aria-hidden="false"]) yuvomi-install-prompt,
-html:has(.search-overlay--visible) yuvomi-install-prompt {
+html:has(.search-overlay--visible) yuvomi-install-prompt,
+html:has(.fab-actions--visible) yuvomi-install-prompt,
+html:has(.list-bulkbar) yuvomi-install-prompt {
   display: none;
 }
 
@@ -1478,6 +1591,20 @@ html:has(.search-overlay--visible) yuvomi-install-prompt {
   font-weight: var(--font-weight-bold);
 }
 
+/* Die Valenz der Zahl (nav-badges.js, paint): Danger ist die gerissene Frist,
+ * Warning die ablaufende, Accent die Nachricht. Ein Geburtstag in drei Tagen
+ * stand vorher im selben Alarm-Rot wie eine ueberfaellige Aufgabe - und das
+ * Mehr-Blatt zaehlte dieselbe Zahl neutral (Critique 2026-08-27). Tinte
+ * bleibt --color-ink-on-vivid: dieselbe Paarung wie FAB (accent) und
+ * Kuechen-Warnzaehler (warning). */
+.nav-badge--accent {
+  background-color: var(--color-accent);
+}
+
+.nav-badge--warning {
+  background-color: var(--color-warning);
+}
+
 .nav-item__icon-wrap .nav-badge {
   position: absolute;
   top: calc(-1 * var(--space-1));
@@ -1609,7 +1736,6 @@ html:has(.search-overlay--visible) yuvomi-install-prompt {
 .documents-view-toggle__btn--active svg,
 .segmented__item.is-active svg,
 .cal-toolbar__view-btn--active svg,
-.cal-toolbar__layer-btn--active svg,
 .cal-toolbar__search-btn--active svg,
 .theme-toggle__btn--active svg,
 .perm-modeswitch__btn.is-active svg,
@@ -2054,6 +2180,85 @@ html.fab-anim-done .page-fab {
   display: none;
 }
 
+/* --------------------------------------------------------
+ * Die Bar-Zeile des Modulkopfs (Werkzeugzeilen-Regel, 2026-08-27)
+ *
+ * Der Kommentar oben versprach seit Runde 6 "eine Tab-Leiste im Kopf ist eine
+ * eigene, horizontal scrollende Zeile" - die Regel darunter gab aber nur das
+ * Scrollen, nie die Zeile. Jede Modulnavigation quetschte sich deshalb in die
+ * Titelzeile: die Budget-Tabs hatten bei 1280px 138px clientWidth fuer 606px
+ * Inhalt (1 von 7 Tabs sichtbar), das Kalender-Segment 212px fuer 245px
+ * ("Agenda" unsichtbar, das Monatslabel ellipsiert), Gesundheit zeigte mobil
+ * 3 von 6, die Haushaltshilfe 3 von 4 Tabs. Die Modulstruktur musste ERINNERT
+ * statt gesehen werden (Critique 2026-08-27, P1).
+ *
+ * `.page-toolbar__bar` ist der vierte Slot des Canonical Page Head: die volle
+ * Zeile UNTER Titel/Center/Aktionen, in der die Werkzeug-Leiste des Moduls
+ * wohnt. Die Klasse sitzt direkt an einer Pillen-Leiste (budget-tabs,
+ * sub-tabs-bar, housekeeping-tabs, rewards-tabs) oder als neutraler Wrapper
+ * um einen Segment-Traeger, dessen Well nicht die ganze Zeile faerben darf
+ * (Kalender-Views). `order: 4` stellt sie hinter den mobilen Center-Slot
+ * (order: 3 in .page-toolbar--wrap); das :has() erspart jedem Kopf das
+ * --wrap-Opt-in, sobald er eine Bar-Zeile traegt.
+ * -------------------------------------------------------- */
+.page-toolbar:has(> .page-toolbar__bar) {
+  flex-wrap: wrap;
+  row-gap: var(--space-2);
+}
+
+.page-toolbar__bar {
+  flex-basis: 100%;
+  order: 4;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+/* EIN GEDECKELTER KOPF MIT BAR-ZEILE DECKELT UEBER SEIN PADDING, nicht ueber
+ * den ::after-Rest-Slot (siehe .page-toolbar--narrow::after weiter unten):
+ * der Slot kann nur EINE Zeile fuellen, und im Wrap-Kopf schwamm er in die
+ * Bar-Zeile und schob die Tab-Leiste rechtsbuendig an die Kopf-Kante
+ * (Sonde 19: Kopfende 996px statt 720px Lesemass, bei 1960px sogar 1280px).
+ * Das Padding deckelt BEIDE Zeilen zugleich - Titelzeile und Bar enden auf
+ * derselben Fluchtlinie wie der Koerper -, das Chrome (Grund, Linie, Sticky)
+ * bleibt full-bleed, und die ::after-Basis faellt rechnerisch auf 0.
+ * Prozent-Padding liest die Breite des Containing Blocks (der Kopf ist
+ * full-bleed, also die Shell-Spalte); die Formel zieht deshalb beide
+ * Innenabstaende ab, und max() haelt den regulaeren Abstand, wo die Spalte
+ * schmaler als das Lesemass ist. */
+.page-toolbar--narrow:has(> .page-toolbar__bar) {
+  padding-inline-end: max(
+    var(--page-inline-pad),
+    calc(100% - var(--content-max-width-narrow) - var(--page-inline-pad))
+  );
+}
+
+/* Scroll-Snap der Bar-Leisten: gemeinsame Bauart, vorher Budget-privat. */
+.page-toolbar__bar[role="tablist"],
+.page-toolbar__bar [role="tablist"] {
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
+
+.page-toolbar__bar .sub-tab {
+  scroll-snap-align: start;
+}
+
+/* Scroll-Affordanz der Bar-Zeile: wenn sie doch ueberlaeuft (schmale Geraete,
+ * lange Locales), zeigt sie den Anschnitt statt ihn zu schlucken - die scharfe
+ * Tab-Leisten-Maske steht bei der Masken-Familie in filter-chip.css
+ * (.page-toolbar__bar / .sub-tabs-bar, inkl. RTL). Hier nur die engeren
+ * Tab-Polster unter 640px, die mehr Tabs in den Viewport lassen (Bauart aus
+ * budget.css, Audit P2 - jetzt geteilt, weil dieselbe Leiste in sechs
+ * Moduldateien lebt). */
+@media (max-width: 640px) {
+  .page-toolbar__bar .sub-tab {
+    padding: 0 var(--space-2);
+  }
+}
+
 /* Center-Slot des Canonical Page Head: wachsende Mitte (Suche, Datums-Nav).
  * flex:1 schiebt die Aktionen via deren margin-left:auto an den Rand. Auf
  * schmalen Viewports darf der Kopf umbrechen — der Center-Slot nimmt dann
@@ -2076,6 +2281,66 @@ html.fab-anim-done .page-fab {
 .page-toolbar--wrap .page-toolbar__center {
   flex-basis: 100%;
   order: 3;
+}
+
+/* EIN BAR-KOPF TEILT SEINE TITELZEILE, STATT EINE VIERTE ZU OEFFNEN.
+ *
+ * `flex-basis: 100%` daueber gibt dem Center-Slot eine eigene Zeile - und zwar
+ * unabhaengig davon, wie wenig darin steht. Gemessen am Kalender: nachdem
+ * seine fuenf Ebenen-Chips ins Filter-Blatt gezogen waren, blieben im
+ * Aktions-Slot 100px uebrig, und der Kopf stand trotzdem unveraendert bei
+ * 230,1px auf 390px - 27,3 % der Viewporthoehe, waehrend 258px der Zeile
+ * daneben leer waren.
+ *
+ * `flex-basis: 0` ist dieselbe Antwort, die dieser Kopf ab 1024px schon gibt
+ * (Regel weiter unten, mit derselben Begruendung): mit Basis 0 meldet der Slot
+ * eine kleine HYPOTHETISCHE Groesse, bleibt damit in der Zeile und waechst per
+ * `flex-grow` real in allen Restplatz. Gemessen ueber acht Module bei 390px
+ * und 767px: Kalender 230,1 -> 174,1px, Budget 178,1 -> 170,1px, die sechs
+ * uebrigen unveraendert, kein horizontaler Overflow.
+ *
+ * NUR FUER KOEPFE MIT BAR-ZEILE, und das ist keine Vorsicht, sondern die
+ * Bedingung: wo keine Bar liegt, ist die Zeile des Centers ohnehin die letzte,
+ * und ein Zusammenruecken spart dort nichts, waehrend es Platz kostet.
+ *
+ * DER PREIS IST GEMESSEN UND BEZAHLT: ohne Gegenmassnahme kappt der engere
+ * Slot das Zeitraum-Label auf seine 7ch-Untergrenze („August 2026" auf 75 von
+ * 98px). Die Gegenmassnahme ist der kontextabhaengige „Heute"-Knopf in
+ * calendar.js - er gibt genau die 66px frei, die dem Label fehlen. Wer diese
+ * Regel auf einen weiteren Kopf zieht, braucht dort dieselbe Rechnung. */
+/* NUR IM AUSGEKLAPPTEN ZUSTAND, und das ist gemessen worden, nicht vermutet.
+ *
+ * Der eingeklappte Kopf (`is-collapsed`) hat eine ANDERE Zeilenordnung: der
+ * Titel steht wieder neben den Slots, und der Rechtsschub der Basisregel gilt.
+ * Mit Basis 0 wurden Center und Aktionen dort in eine Zeile gepresst, in die
+ * sie nicht passen - und sie brachen nicht um, sie ueberlappten: bei 390px lag
+ * der Filterknopf (274-322) auf dem Weiter-Chevron (276-324), bei 320px ragte
+ * der Chevron mit r=324 ueber den 320px-Viewport hinaus. Aufgefallen ist es
+ * nicht am Aussehen, sondern daran, dass ein Klick auf den Chevron nicht mehr
+ * ankam („subtree intercepts pointer events") - eine Ueberlappung, die ein
+ * Screenshot nicht zeigt und eine Box-Messung erst, wenn man nach ihr sucht.
+ *
+ * Die drei Nachbarregeln weiter unten unterscheiden dieselben zwei Zustaende
+ * schon; diese hier tat es als einzige nicht. */
+@media (max-width: 767px) {
+  .page-toolbar--wrap:has(> .page-toolbar__bar) > .page-toolbar__center {
+    flex-basis: 0;
+    /* `min-content` STATT DES GEERBTEN `min-width: 0` - DAS IST DIE ZEILE, DIE
+     * DIE UEBERLAPPUNG VERHINDERT.
+     *
+     * Mit Basis 0 UND `min-width: 0` darf der Slot schmaler werden als sein
+     * eigener Inhalt; die Knoepfe darin schrumpfen aber nicht mit, sondern
+     * laufen ueber ihn hinaus. Im eingeklappten Kopf lag der Filterknopf
+     * dadurch auf dem Weiter-Chevron (390px: 274-322 ueber 276-324), bei 320px
+     * ragte der Chevron mit r=324 ueber den Viewport. Sichtbar wurde es nicht
+     * am Aussehen, sondern daran, dass der Klick nicht mehr ankam.
+     *
+     * `min-content` ist die Breite, unter die der Slot nicht darf. Reicht der
+     * Platz nicht, bricht die Flex-ZEILE um - der Kopf wird eine Zeile hoeher,
+     * statt seine eigenen Bedienelemente uebereinanderzulegen. Eine Zeile mehr
+     * ist ein Preis, eine unklickbare Schaltflaeche ist ein Defekt. */
+    min-width: min-content;
+  }
 }
 
 @media (min-width: 768px) {
@@ -2232,20 +2497,119 @@ html.fab-anim-done .page-fab {
  * Breite jedes Slots - die Slots sind aber schmaler als das Lesemaß (im Vorrat
  * misst der Aktions-Slot 40px), und `.page-toolbar__actions { margin-left:
  * auto }` schob sie danach unverändert an die äußere Kante. Das Maß ist nicht
- * die Breite der Slots, sondern das ENDE der Zeile: eine Marge am letzten Slot,
- * egal welcher das ist.
+ * die Breite der Slots, sondern das ENDE der Zeile.
  *
  * Das Prozent löst gegen die Content-Box des Kopfes auf und wandert damit von
- * selbst mit der Fensterbreite mit; `max()` nimmt die Marge zurück, sobald die
+ * selbst mit der Fensterbreite mit; `max()` nimmt den Abstand zurück, sobald die
  * Spalte schmaler als das Lesemaß ist. Deshalb ohne Breakpoint - die
  * Vorgängerregeln standen in `@media (min-width: 1024px)` und ließen den
  * Versatz zwischen 720px und 1024px stehen, wo der Körper längst gekappt ist.
  *
  * Der Rail bleibt full-bleed: Hintergrund, Trennlinie und Sticky-Fläche laufen
  * weiter bis zur Shell-Kante, nur die Zeile darin wird kürzer. */
-.page-toolbar--narrow > :last-child {
-  margin-inline-end: max(0px, calc(100% - var(--content-max-width-narrow)));
+
+/* DER ABSTAND IST EIN SLOT, KEINE MARGE - WEIL ER NACHGEBEN MUSS.
+ *
+ * Als `margin-inline-end` am letzten Slot war er unnachgiebig und zaehlte
+ * trotzdem in die ZEILENBELEGUNG des Flex-Containers. Gemessen bei 1960px
+ * Fensterbreite: Kopfzeile innen 1280px, Aktions-Slot 406px Inhalt plus 560px
+ * Marge, verbleibend fuer Siegel, Titel und Suche 315px, gebraucht 441px. Der
+ * Umbruch war damit rechnerisch unvermeidlich statt vom Inhalt abhaengig -
+ * Aufgaben, Kontakte, Budget und die Kalender-Agenda bauten bei JEDER
+ * Fensterbreite zwei Zeilen (#882).
+ *
+ * Als schrumpfbares Flex-Item gibt derselbe Abstand nach, sobald der Inhalt ihn
+ * braucht: `flex-shrink` verteilt den Mangel im Verhaeltnis der Basen, und mit
+ * 560px hat dieser Slot die groesste - er gibt zuerst und am meisten ab. Ist
+ * Platz da, steht er voll und die Aktionen enden exakt am Lesemass, wie zuvor.
+ * Ist keiner da, weicht er ganz, und die Aktionen stehen am Rail-Rand - das ist
+ * der richtige Notausgang, denn die Alternative war ein gekuerzter Seitentitel
+ * ("Budget" auf 8px gemessen), und der Titel ist das Letzte, was gehen darf.
+ *
+ * KEIN ZUSAETZLICHES ELEMENT IM MARKUP: der Slot ist ein Pseudo-Element, damit
+ * die Zeilenordnung eine Entscheidung der Shell bleibt und kein Modul ihn
+ * vergessen oder falsch einsortieren kann. */
+.page-toolbar--narrow::after {
+  content: '';
+  /* UNNACHGIEBIG, UND DAS IST DER PUNKT - gemessen an beiden Fassungen. Mit
+   * `flex-shrink` gab dieser Slot als erster nach, weil er die groesste Basis
+   * traegt; der Kopf blieb einzeilig, aber sein Ende lief dem Koerper um 69 bis
+   * 87px davon (je Modul gemessen, Koerperkante 720px). Damit waere die eine
+   * Invariante gegen die andere getauscht: die gemeinsame Fluchtlinie ist der
+   * GRUND, aus dem es diesen Abstand gibt. Er steht deshalb, und der Mangel
+   * landet bei den Slots, die dafuer gebaut sind - Suchfeld und Tab-Leisten
+   * geben nach, der Seitentitel zuletzt (siehe unten). */
+  flex: 0 0 max(0px, calc(100% - var(--content-max-width-narrow)));
+  min-width: 0;
+  /* DEN EIGENEN ABSTAND ZURUECKNEHMEN. Als Marge am letzten Slot lag der
+   * Rueckhalt INNERHALB von dessen Box und beruehrte den `gap` der Leiste nie.
+   * Als eigenes Flex-Item bekommt er einen davor - und der schoebe die Aktionen
+   * um genau eine Luecke vor die Koerperkante (gemessen 712 statt 720px, bei
+   * <=640px 4px). Der negative Rand hebt ihn auf und wirkt auch dort noch, wo
+   * `max()` die Basis auf 0 klemmt: sonst verloere die schmale Spalte eine
+   * Luecke Zeilenbreite, die sie vorher nicht verlor. */
+  margin-inline-start: calc(-1 * var(--page-toolbar-gap));
 }
+
+/* IN DER REGULAEREN GROESSENKLASSE BRICHT DER KOPF NICHT UM.
+ *
+ * Umbrechen und Nachgeben sind zwei Antworten auf dieselbe Enge, und wer beide
+ * gibt, gibt keine: Flexbox teilt die Zeilen nach den HYPOTHETISCHEN Groessen
+ * auf, also bevor irgendein Slot geschrumpft ist. Ein Kopf mit `wrap` bricht
+ * deshalb um, waehrend daneben Slots stehen, die bereitwillig Platz abgegeben
+ * haetten - im Kalender die Ansichts-Umschalter und die Ebenen-Chips, in den
+ * gedeckelten Koepfen der Lesemass-Slot darueber, der dort sogar in voller
+ * Breite auf Zeile zwei gewandert waere (#882).
+ *
+ * Dass die Slots das koennen, ist die Bedingung dieser Regel und keine Annahme:
+ * `__title`, `__center` und `__actions` tragen `min-width: 0`, die Tab-Leisten
+ * `overflow-x: auto`, und der Lesemass-Slot gibt zuerst und ganz nach.
+ *
+ * DIE GRENZE IST DIE GROESSENKLASSE, KEINE LAYOUT-ZAHL. Unterhalb von 1024px
+ * regiert die Large-Title-Zone (die Regel weiter unten), und die setzt den
+ * Umbruch selbst - dort steht der Titel bewusst auf einer eigenen Zeile. */
+@media (min-width: 1024px) {
+  .page-toolbar--wrap {
+    flex-wrap: nowrap;
+  }
+
+  /* DER SEITENTITEL GIBT ZULETZT NACH.
+   *
+   * In einer Zeile, die nicht mehr umbricht, verteilt Flexbox den Mangel auf
+   * alle Slots - und der Titel gab mit ab, obwohl er der einzige ist, der nicht
+   * zurueckkann: eine Tab-Leiste scrollt (`overflow-x: auto`), ein Suchfeld
+   * ist an seinem Symbol erkennbar, ein ellipsierter Seitentitel ist nur noch
+   * Rest ("Budget" auf 45px gemessen). Mit `flex-shrink: 0` steht er, und der
+   * Mangel landet dort, wo er getragen werden kann.
+   *
+   * NUR IN DER ZEILE, DIE NICHT MEHR UMBRICHT, und das ist gemessen: auf JEDEN
+   * Kopf gesetzt lief der Gesundheitskopf bei 1024px um 64px ueber die Kante.
+   * Der bricht nie um und gibt seinen Platz anderswo her; er braucht den Titel
+   * als Reserve. Die Haerte gehoert dorthin, wo der Umbruch abgeschaltet ist.
+   *
+   * Nur ab 1024px: darunter steht der Titel als Large Title auf einer eigenen
+   * Zeile und teilt sie mit niemandem - dort gibt es nichts zu verteilen. */
+  .page-toolbar--wrap > .page-toolbar__title {
+    flex-shrink: 0;
+  }
+
+  /* IM BAR-KOPF BLEIBT DER KOPF WRAP (die Bar ist seine zweite Zeile) - die
+   * TITELZEILE darf trotzdem nicht brechen. Flexbox teilt Zeilen nach den
+   * HYPOTHETISCHEN Groessen (siehe oben), und der Center-Slot (Monats-/
+   * Datums-Navigation) meldet als einziger eine grosse: mit Basis 0 bleibt
+   * er hypothetisch klein, waechst real per flex-grow in allen Restplatz der
+   * Zeile, und die Titelzeile bleibt die eine Zeile, die #882 verlangt
+   * (gemessen am Kalender: 1049px hypothetisch gegen 996px Innenraum bei
+   * 1280 - die Aktionen brachen unter das Datum). Das Label-Verschwinden von
+   * damals („flex:1 hiess Basis 0", #882) betraf ein Label in einer Zeile
+   * OHNE freien Raum; hier ist der Center der einzige Wachser seiner Zeile.
+   * Bei 1024px darf der Kopf weiter brechen (Sonde 19, rows: false) - dort
+   * ist der Platzmangel echt. */
+  .page-toolbar:has(> .page-toolbar__bar) > .page-toolbar__center {
+    flex-basis: 0;
+  }
+}
+
 
 /* --------------------------------------------------------
  * Large-Title-Zone des Modulkopfes (HIG, Redesign Runde 4 / C-1)
@@ -4018,10 +4382,18 @@ p.field-hint--warn[hidden] {
   .form-advanced__chevron { transition: none; }
 }
 
+/* Dieselbe Not, dieselbe Antwort wie bei `.modal-panel__footer` weiter unten
+ * (#872): eine Knopfzeile im Modal-Rumpf laeuft sonst genauso ueber ihren
+ * Container hinaus. Die Begruendung steht dort, damit sie EINMAL steht. */
 .modal-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-2);
+}
+
+.modal-actions .btn {
+  white-space: normal;
 }
 
 /* Einleitender Hinweis-Text über gestapelten Modal-Aktionen (z. B. Scope-Wahl). */
@@ -4042,13 +4414,56 @@ p.field-hint--warn[hidden] {
   align-items: stretch;
 }
 
+/* EINE FUSSZEILE LAEUFT NICHT UEBER - SIE BRICHT UM (#872).
+ *
+ * WAS GENAU PASSIERTE, gemessen an der Aufgaben-Detailansicht auf 390px
+ * Telefonbreite: die drei Aktionen (Löschen · Starten · Aufgabe archivieren)
+ * brauchen zusammen rund 440px, die Fusszeile hat 364. Gequetscht werden die
+ * Knoepfe dabei NICHT - ein Flex-Item traegt `min-width: auto` und schrumpft
+ * deshalb nicht unter seine Inhaltsbreite. Stattdessen waechst die ZEILE ueber
+ * den Container hinaus, und weil sie rechtsbuendig ausgerichtet ist, tut sie
+ * das nach LINKS. Das Panel traegt `overflow: clip`, also faellt dort ab, was
+ * heraussteht: der Löschen-Knopf sass bei x = -11, das Panel beginnt bei
+ * x = 12 - dreiundzwanzig Pixel fehlten, und aus „Löschen" wurde sichtbar
+ * „öschen".
+ *
+ * Ein abgeschnittener Knopf sagt nicht, dass er abgeschnitten ist. Es gibt
+ * keine Ellipse, keinen Scrollbalken - nur ein Wort, das falsch anfaengt.
+ *
+ * DER UMBRUCH IST DIE ANTWORT UND KEINE UEBERLAUFLEISTE. Ein „…"-Menue wie in
+ * SAP Fiori (Vorschlag des Melders) verschoebe die Grenze nur: es misst in
+ * Pixeln, was in 20 Locales unterschiedlich lang ist, und braeuchte fuer den
+ * Rest doch wieder einen Umbruch. Der Umbruch traegt jede Sprache ohne
+ * Messung, und im Sheet ist die Hoehe da.
+ *
+ * DER ZWEITE TEIL GEHOERT DAZU: bricht die ZEILE, kann ein EINZELNER Knopf
+ * immer noch breiter sein als das Panel (lange Locale, 200 % Zoom). Dann hat
+ * die Zeile nichts mehr umzubrechen, und der Ueberlauf ist zurueck - also muss
+ * der Knopf INNEN umbrechen duerfen. Das nimmt das `white-space: nowrap` von
+ * `.btn` fuer genau diesen Ort zurueck. */
 .modal-panel__footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-top: 1px solid var(--color-border-subtle);
+}
+
+/* JEDER Knopf in der Fusszeile, nicht nur das direkte Kind: mehrere Module
+ * legen Abbrechen/Speichern in eine eigene Flex-Gruppe (Kalender, Budget-Plaene,
+ * Kontakte), und deren Knoepfe traegen dasselbe `nowrap`. */
+.modal-panel__footer .btn {
+  white-space: normal;
+}
+
+/* Und die Gruppe selbst darf umbrechen. Fuer die Fusszeile ist sie EIN
+ * Flex-Item und damit unteilbar - ohne diese Zeile laeuft sie als Ganzes ueber
+ * den Rand, und der Umbruch der Fusszeile hilft nichts mehr. `flex-wrap` an
+ * einem Nicht-Flex-Kind ist folgenlos, deshalb reicht der schlichte Selektor. */
+.modal-panel__footer > div {
+  flex-wrap: wrap;
 }
 
 /* Fußzeile INNERHALB des scrollenden Bodys (kein direktes Panel-Kind): dort
@@ -4699,7 +5114,7 @@ textarea::placeholder {
 }
 
 .toggle input:checked + .toggle__track::after {
-  transition: transform 350ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  transition: transform var(--duration-xl) var(--ease-glass);
 }
 
 .toggle input:checked + .toggle__track::after {
@@ -5561,6 +5976,16 @@ textarea::placeholder {
 }
 
 .rrule-anchor__hint {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+/* Gegenstueck zur Progressive Disclosure oben: solange keine Frequenz gewaehlt
+ * ist, sagt die Liste nichts darueber, dass der Takt danach frei einstellbar
+ * ist - sie liest sich wie vier feste Werte (#862). Der Hinweis steht genau in
+ * dem Zustand, in dem der Irrtum moeglich ist, und verschwindet mit ihm. */
+.rrule-hint {
   margin: var(--space-1) 0 0;
   font-size: var(--text-sm);
   color: var(--color-text-secondary);

@@ -12,6 +12,7 @@ import { stagger, wireScrollFade, scheduleUndoableDelete } from '/utils/ux.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { previewKind } from '/utils/document-preview.js';
+import { attachOverlay } from '/utils/overlay-history.js';
 import { findPageFab } from '/utils/fab.js';
 // Im Solo-Haushalt hat „Wer darf das sehen" genau eine Antwort - gefragt wird
 // dann nicht (utils/household.js). Das Feld bleibt im DOM und behaelt seinen
@@ -20,6 +21,7 @@ import { findPageFab } from '/utils/fab.js';
 import { isSoloHousehold } from '/utils/household.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 import { mountEmptyState } from '/utils/empty-state.js';
+import { subtreeIds, folderPath, flattenFolderTree } from '/utils/folder-tree.js';
 
 const CATEGORIES = ['medical', 'school', 'identity', 'insurance', 'finance', 'home', 'vehicle', 'legal', 'travel', 'pets', 'warranty', 'taxes', 'work', 'other'];
 
@@ -66,7 +68,13 @@ let state = {
   members: [],
   dmsAccounts: [],
   activeUploadBackend: 'local',
-  view: localStorage.getItem('yuvomi-documents-view') || 'grid',
+  // Mobil ist die kompakte LISTE der Default: die Grid-Karte kostet bei 375px
+  // ~260px je Dokument (~1,5 Dokumente je Schirm), die Listenzeile traegt
+  // dieselben Angaben auf einem Bruchteil (Critique 2026-08-27, P2). Die
+  // gespeicherte Wahl gewinnt auf jedem Geraet; 640px ist die kanonische
+  // Mobile-Grenze (tokens.css §11c).
+  view: localStorage.getItem('yuvomi-documents-view')
+    || (typeof matchMedia !== 'undefined' && matchMedia('(max-width: 640px)').matches ? 'list' : 'grid'),
   sort: SORTS.includes(localStorage.getItem('yuvomi-documents-sort'))
     ? localStorage.getItem('yuvomi-documents-sort')
     : 'updated',
@@ -76,7 +84,38 @@ let state = {
   query: '',
   selectMode: false,
   selected: new Set(),
+  /* Welche Ordner aufgeklappt sind (#785).
+   *
+   * IM BROWSER GEMERKT UND NICHT AM SERVER: der aufgeklappte Zustand ist eine
+   * Eigenschaft dieses Fensters, nicht des Haushalts - zwei Personen sollen
+   * nicht gegenseitig ihre Zweige zuklappen. Er ueberlebt den Modulwechsel
+   * (localStorage), weil das Zuklappen sonst bei jedem Zurueckkommen von vorn
+   * begaenne. */
+  expanded: new Set(readExpandedFolders()),
 };
+
+/**
+ * Die zuletzt aufgeklappten Ordner, gegen kaputten Speicher abgesichert.
+ * Ein defekter Eintrag ist kein Grund, das Modul nicht zu zeigen - er ist ein
+ * Grund, mit zugeklapptem Baum anzufangen.
+ */
+function readExpandedFolders() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('yuvomi-documents-expanded') || '[]');
+    return Array.isArray(raw) ? raw.map(Number).filter(Number.isInteger) : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistExpandedFolders() {
+  try {
+    localStorage.setItem('yuvomi-documents-expanded', JSON.stringify([...state.expanded]));
+  } catch {
+    // Voller oder gesperrter Speicher (privates Fenster): der Baum funktioniert
+    // weiter, er erinnert sich nur bis zum naechsten Laden.
+  }
+}
 let _container = null;
 let _search = null;
 
@@ -159,7 +198,17 @@ export async function render(container) {
           </div>
           <ul class="documents-folder-browser__list row-carrier" id="documents-folder-browser"></ul>
         </aside>
-        <div id="documents-list" class="${listClasses()}" aria-busy="true">${renderSkeletonList({ rows: 6, lines: 2 })}</div>
+        <div class="documents-browser-main">
+          ${/* Der Pfad, in dem man steht (#785). Er steht ueber der Liste und
+               nicht in der Seitenleiste: dort ist die Einrueckung schon die
+               Auskunft ueber die Lage, hier beantwortet er die Frage, zu
+               welchem Ordner die Dokumente daneben gehoeren - unterhalb Tablet
+               ist die Leiste ohnehin zugeklappt. Leer, solange kein Ordner
+               gewaehlt ist: ein Pfad auf "alle Dokumente" waere eine Zeile
+               ohne Aussage. */''}
+          <nav class="documents-breadcrumb" id="documents-breadcrumb" aria-label="${t('documents.folderPathLabel')}" hidden></nav>
+          <div id="documents-list" class="${listClasses()}" aria-busy="true">${renderSkeletonList({ rows: 6, lines: 2 })}</div>
+        </div>
       </div>
       <button class="page-fab" id="fab-new-document" aria-label="${t('documents.addButton')}" data-dock-label="${t('newLabel.documents')}">
         <i data-lucide="upload" class="icon-xl" aria-hidden="true"></i>
@@ -183,7 +232,38 @@ export async function render(container) {
 function renderAll() {
   renderCategoryChips();
   renderFolderBrowser();
+  renderBreadcrumb();
   renderDocuments();
+}
+
+/**
+ * Der Pfad zum gewaehlten Ordner, jede Stufe anklickbar.
+ *
+ * DIE LETZTE STUFE IST KEIN LINK. Sie ist der Ort, an dem man schon steht -
+ * ein Knopf, der nichts tut, ist eine Zusage, die er nicht einloest. Sie traegt
+ * `aria-current="page"`, wie es die Breadcrumb-Praxis vorsieht.
+ */
+function renderBreadcrumb() {
+  const host = _container?.querySelector('#documents-breadcrumb');
+  if (!host) return;
+
+  const id = Number(state.folderId);
+  const chain = Number.isInteger(id) && id > 0 ? folderPath(state.folders, id) : [];
+  host.hidden = chain.length === 0;
+  host.replaceChildren();
+  if (!chain.length) return;
+
+  host.insertAdjacentHTML('beforeend', `
+    <button type="button" class="documents-breadcrumb__crumb" data-folder-select="">
+      ${esc(t('documents.allDocuments'))}
+    </button>
+    ${chain.map((folder, i) => {
+    const last = i === chain.length - 1;
+    const sep = '<span class="documents-breadcrumb__sep" aria-hidden="true">/</span>';
+    return sep + (last
+      ? `<span class="documents-breadcrumb__crumb documents-breadcrumb__crumb--current" aria-current="page">${esc(folder.name)}</span>`
+      : `<button type="button" class="documents-breadcrumb__crumb" data-folder-select="${folder.id}">${esc(folder.name)}</button>`);
+  }).join('')}`);
 }
 
 async function loadMembers() {
@@ -243,7 +323,12 @@ function matchesCategory(doc) {
 function matchesFolder(doc) {
   if (state.folderId === '__none') return !doc.folder_id;
   if (!state.folderId) return true;
-  return String(doc.folder_id || '') === String(state.folderId);
+  /* AUCH DIE UNTERORDNER (#785) - dieselbe Regel wie im Server, sonst zeigen
+   * die Zaehler links und die Liste rechts verschiedene Mengen. Der Filter
+   * hier ist die Facette (er laeuft ueber `state.allDocuments`, ohne
+   * Roundtrip); die Abfrage dort ist die Grenze. Beide muessen dasselbe
+   * beantworten. */
+  return doc.folder_id != null && folderSubtree(Number(state.folderId)).has(doc.folder_id);
 }
 
 function sortDocuments(docs) {
@@ -291,7 +376,22 @@ function bindPageEvents() {
   });
   // Rand-Fade der Kategorie-Chips: geteiltes Utility (Audit F-06) — deckt
   // anders als der frühere Scroll-Listener auch Resize und Re-Render ab.
+  //
+  // ZWEI KANDIDATEN, WEIL DER SCROLLER MIT DER BREITE WECHSELT: unterhalb des
+  // Breakpoints scrollt nicht die Chip-Reihe, sondern die ganze Bedienzeile
+  // (documents.css: `.documents-filters { overflow-x: auto }`), und
+  // `#documents-category` berechnet dort `overflow-x: visible`. Der Fade hing
+  // bis zum Critique 2026-08-28 allein am inneren Element und war damit genau
+  // dort weg, wo er gebraucht wird: gemessen 1246px Inhalt auf 390px Viewport
+  // ohne jedes Signal, dass es seitlich weitergeht. Auf /contacts liegt
+  // dieselbe Konstruktion richtig herum - dort IST die Filterzeile der
+  // Scroller, und sie trägt den Helfer.
+  //
+  // Beide zu verdrahten ist gefahrlos: `update()` vergleicht scrollWidth gegen
+  // clientWidth, und ein Element, das nicht überläuft, bekommt keine
+  // `has-fade-*`-Klasse. Es gewinnt also immer der, der gerade scrollt.
   wireScrollFade(_container.querySelector('#documents-category'));
+  wireScrollFade(_container.querySelector('.documents-filters'));
   _container.querySelector('#documents-sort')?.addEventListener('change', (e) => {
     state.sort = SORTS.includes(e.target.value) ? e.target.value : 'updated';
     localStorage.setItem('yuvomi-documents-sort', state.sort);
@@ -335,6 +435,14 @@ function bindPageEvents() {
     renderDocuments();
   });
   _container.querySelector('#documents-list')?.addEventListener('click', handleDocumentAction);
+  /* Der Pfad benutzt dasselbe `data-folder-select` wie die Seitenleiste, aber
+   * er haengt an einem anderen Traeger - ein Listener genuegt nicht. Die
+   * Auswahl selbst laeuft ueber `selectFolder()`, damit beide Wege dieselben
+   * Folgeschritte gehen (Aufklappen, Filtern, Zeichnen). */
+  _container.querySelector('#documents-breadcrumb')?.addEventListener('click', (e) => {
+    const crumb = e.target.closest('[data-folder-select]');
+    if (crumb) selectFolder(crumb.dataset.folderSelect);
+  });
   const folderBrowser = _container.querySelector('#documents-folder-browser');
   /* AUFKLAPPEN STATT WISCHEN (≤1023px).
    *
@@ -367,15 +475,44 @@ function bindPageEvents() {
       if (folder) openFolderMenu(folder, menuBtn);
       return;
     }
+    /* Aufklappen wechselt die Ansicht rechts NICHT (#785). Es beantwortet nur
+     * "was liegt darunter" - und nur die Seitenleiste wird neu gezeichnet,
+     * nicht die Dokumentliste, die sich nicht geaendert hat. */
+    const toggleBtn = e.target.closest('[data-folder-toggle]');
+    if (toggleBtn) {
+      const id = Number(toggleBtn.dataset.folderToggle);
+      if (state.expanded.has(id)) state.expanded.delete(id);
+      else state.expanded.add(id);
+      persistExpandedFolders();
+      renderFolderBrowser();
+      return;
+    }
     const btn = e.target.closest('[data-folder-select]');
     if (!btn) return;
-    state.folderId = btn.dataset.folderSelect;
+    selectFolder(btn.dataset.folderSelect);
     // Die Wahl beantwortet die Frage, die das Aufklappen gestellt hat: zu.
     // Am Desktop ist der Auslöser ausgeblendet und die Klasse wirkungslos.
     setFolderListOpen(false);
-    applyFilters();
-    renderAll();
   });
+}
+
+/**
+ * Einen Ordner waehlen - der eine Weg fuer Seitenleiste und Pfad.
+ *
+ * @param {string} id  Ordner-id als Zeichenkette, `''` = alle, `'__none'` = ohne Ordner
+ */
+function selectFolder(id) {
+  state.folderId = id;
+  /* Wer einen Ordner mit Kindern waehlt, klappt ihn auf: die Ansicht zeigt ab
+   * jetzt auch dessen Unterordner, und ein zugeklappter Zweig verschwiege,
+   * woher die Dokumente kommen. */
+  const chosen = Number(id);
+  if (Number.isInteger(chosen) && chosen > 0 && state.folders.some((f) => f.parent_id === chosen)) {
+    state.expanded.add(chosen);
+    persistExpandedFolders();
+  }
+  applyFilters();
+  renderAll();
 }
 
 async function selectStatus(status) {
@@ -558,16 +695,47 @@ function renderDocuments() {
 // Facetten-Zähler: jede Achse zählt unter Berücksichtigung der jeweils ANDEREN
 // Achse, aber nicht ihrer selbst. Dadurch führt kein sichtbarer Zähler ins Leere
 // und die eigene Auswahl schrumpft die eigene Liste nicht auf einen Eintrag.
+/** Der sichtbare Teil des Baums - zugeklappte Zweige bleiben aussen vor. */
+function visibleFolderRows() {
+  return flattenFolderTree(state.folders, { expanded: state.expanded });
+}
+
+/**
+ * Der ganze Baum als flache Liste, unabhaengig vom Aufgeklappt-Zustand.
+ * Fuer Auswahllisten: dort ist die Einrueckung die Auskunft ueber die Lage,
+ * und ein zugeklappter Zweig darf keine Wahl verstecken.
+ */
+function visibleAllFolderRows() {
+  return flattenFolderTree(state.folders);
+}
+
+/** Dieser Ordner und alles darunter - dieselbe Regel wie im Server. */
+function folderSubtree(folderId) {
+  return subtreeIds(state.folders, folderId);
+}
+
 function folderCounts() {
   const scope = state.allDocuments.filter(matchesCategory);
   const counts = new Map();
   counts.set('', scope.length);
   counts.set('__none', scope.filter((doc) => !doc.folder_id).length);
-  state.folders.forEach((folder) => counts.set(String(folder.id), 0));
+
+  // Erst die eigenen Dokumente je Ordner ...
+  const own = new Map();
   scope.forEach((doc) => {
     if (!doc.folder_id) return;
-    const key = String(doc.folder_id);
-    counts.set(key, (counts.get(key) || 0) + 1);
+    own.set(doc.folder_id, (own.get(doc.folder_id) || 0) + 1);
+  });
+
+  /* ... dann die Summe ueber den Teilbaum. DIE ZAHL MUSS DASSELBE MEINEN WIE
+   * DIE ANSICHT DAHINTER: ein Klick auf "Wohnung" zeigt seit dem Baum auch die
+   * Dokumente aus "Wohnung/Miete", also darf die Zahl daneben nicht nur die
+   * direkt darin liegenden zaehlen. Eine 0 neben einem Ordner, der beim Oeffnen
+   * zwoelf Dokumente zeigt, ist schlimmer als gar keine Zahl. */
+  state.folders.forEach((folder) => {
+    let total = 0;
+    for (const id of folderSubtree(folder.id)) total += own.get(id) || 0;
+    counts.set(String(folder.id), total);
   });
   return counts;
 }
@@ -606,10 +774,26 @@ function renderFolderBrowser() {
   const browser = _container.querySelector('#documents-folder-browser');
   if (!browser) return;
   const counts = folderCounts();
+  /* Zwei feste Zeilen, dann der Baum (#785).
+   *
+   * `depth` ruecken die Zeilen ein, `branch` sagt, ob ein Pfeil davorsteht.
+   * Die beiden festen Zeilen sind KEINE Ordner und tragen deshalb weder das
+   * eine noch das andere - "alle Dokumente" ist kein Vorfahre von irgendwas.
+   */
   const items = [
-    { id: '', name: t('documents.allDocuments'), icon: 'folders', managed: false },
-    { id: '__none', name: t('documents.noFolder'), icon: 'folder-x', managed: false },
-    ...state.folders.map((folder) => ({ id: String(folder.id), name: folder.name, icon: 'folder', managed: true })),
+    { id: '', name: t('documents.allDocuments'), icon: 'folders', managed: false, depth: 0 },
+    { id: '__none', name: t('documents.noFolder'), icon: 'folder-x', managed: false, depth: 0 },
+    ...visibleFolderRows().map((row) => ({
+      id: String(row.folder.id),
+      name: row.folder.name,
+      // Ein Ordner mit Inhalt sieht anders aus als einer ohne - dieselbe
+      // Auskunft, die ein Dateibrowser ueber sein Ordnersymbol gibt.
+      icon: row.children.length && state.expanded.has(row.folder.id) ? 'folder-open' : 'folder',
+      managed: true,
+      depth: row.depth,
+      branch: row.children.length > 0,
+      open: state.expanded.has(row.folder.id),
+    })),
   ];
   browser.replaceChildren();
   /* Die geteilte Zeilen-Grammatik statt einer nachgebauten: `.documents-folder-item`
@@ -620,8 +804,27 @@ function renderFolderBrowser() {
    * und die Trennlinien per `+`-Kombinator stellt, statt sie hier nachzubauen. */
   browser.insertAdjacentHTML('beforeend', items.map((item) => {
     const active = String(state.folderId) === item.id;
+    /* DER PFEIL IST EIN EIGENER KNOPF, KEIN KLICK AUF DIE ZEILE. Aufklappen
+     * und Hineingehen sind zwei verschiedene Absichten: wer den Inhalt von
+     * "Wohnung" sehen will, klickt den Namen; wer nur wissen will, was
+     * darunter liegt, klappt auf, ohne die Ansicht rechts zu wechseln. In
+     * einen Knopf gelegt kann man das eine nicht ohne das andere.
+     *
+     * Ordner ohne Kinder bekommen einen leeren Platzhalter statt gar nichts -
+     * sonst springen die Namen einer Geschwisterreihe um die Pfeilbreite
+     * gegeneinander, je nachdem wer Kinder hat. */
+    const twisty = !item.managed ? '' : (item.branch
+      ? `<button class="documents-folder-item__twisty" type="button" data-folder-toggle="${esc(item.id)}"
+                 aria-expanded="${item.open ? 'true' : 'false'}"
+                 aria-label="${esc(item.open ? t('documents.folderCollapse', { name: item.name }) : t('documents.folderExpand', { name: item.name }))}">
+           <i data-lucide="chevron-right" aria-hidden="true"></i>
+         </button>`
+      : '<span class="documents-folder-item__twisty documents-folder-item__twisty--leaf" aria-hidden="true"></span>');
+
     return `
-    <li class="list-row documents-folder-item ${active ? 'documents-folder-item--active' : ''} ${item.managed ? 'documents-folder-item--managed' : ''}">
+    <li class="list-row documents-folder-item ${active ? 'documents-folder-item--active' : ''} ${item.managed ? 'documents-folder-item--managed' : ''}"
+        style="--folder-depth:${item.depth}">
+      ${twisty}
       <button class="documents-folder-item__select list-row__main--interactive" type="button" data-folder-select="${esc(item.id)}" aria-current="${active ? 'true' : 'false'}">
         <span class="documents-folder-item__icon"><i data-lucide="${esc(item.icon)}" aria-hidden="true"></i></span>
         <span class="list-row__name documents-folder-item__name">${esc(item.name)}</span>
@@ -745,16 +948,57 @@ function positionContextMenu(menu, anchorBtn) {
 
 function openFolderMenu(folder, anchorBtn) {
   openContextMenu(anchorBtn, `
+    <button class="documents-context-menu__item" type="button" role="menuitem" data-menu-action="subfolder">
+      <i data-lucide="folder-plus" aria-hidden="true"></i><span>${t('documents.newSubfolder')}</span>
+    </button>
     <button class="documents-context-menu__item" type="button" role="menuitem" data-menu-action="rename">
       <i data-lucide="pencil" aria-hidden="true"></i><span>${t('documents.renameFolder')}</span>
+    </button>
+    <button class="documents-context-menu__item" type="button" role="menuitem" data-menu-action="move">
+      <i data-lucide="folder-input" aria-hidden="true"></i><span>${t('documents.moveFolder')}</span>
     </button>
     <button class="documents-context-menu__item documents-context-menu__item--danger" type="button" role="menuitem" data-menu-action="delete">
       <i data-lucide="trash-2" aria-hidden="true"></i><span>${t('documents.deleteFolder')}</span>
     </button>
   `, async (action) => {
-    if (action === 'rename') await renameFolder(folder);
+    if (action === 'subfolder') openFolderModal({ parentId: folder.id });
+    else if (action === 'rename') await renameFolder(folder);
+    else if (action === 'move') await moveFolder(folder);
     else if (action === 'delete') await deleteFolder(folder);
   });
+}
+
+/**
+ * Ein Ordner zieht um.
+ *
+ * DIE AUSWAHL ZEIGT NICHT ALLE ORDNER, sondern nur die moeglichen: der Ordner
+ * selbst und sein ganzer Teilbaum fehlen, weil ein Ordner nicht in sich selbst
+ * ziehen kann. Der Server weist das ohnehin ab - eine Auswahl, die eine Absage
+ * anbietet, ist trotzdem eine schlechte Auswahl.
+ */
+async function moveFolder(folder) {
+  const forbidden = folderSubtree(folder.id);
+  const options = [
+    { value: '', label: t('documents.folderRootLevel') },
+    ...visibleAllFolderRows()
+      .filter((row) => !forbidden.has(row.folder.id))
+      .map((row) => ({ value: String(row.folder.id), label: `${'  '.repeat(row.depth)}${row.folder.name}` })),
+  ];
+
+  const chosen = await selectModal(t('documents.moveFolderTo', { name: folder.name }), options);
+  if (chosen === null) return;
+  try {
+    await api.put(`/documents/folders/${folder.id}`, { parent_id: chosen === '' ? null : Number(chosen) });
+    window.yuvomi?.showToast(t('documents.folderMovedToast'), 'success');
+    // Der neue Elternteil wird aufgeklappt, sonst verschwindet der Ordner
+    // scheinbar - er sitzt dann in einem zugeklappten Zweig.
+    if (chosen !== '') state.expanded.add(Number(chosen));
+    persistExpandedFolders();
+    await Promise.all([loadFolders(), loadDocuments()]);
+    renderAll();
+  } catch (err) {
+    window.yuvomi?.showToast(err.data?.error ?? t('common.unknownError'), 'danger');
+  }
 }
 
 // Overflow-Menü einer Dokumentkarte/-zeile: Sekundäraktionen aus der Aktionszeile
@@ -799,9 +1043,26 @@ async function renameFolder(folder) {
 }
 
 async function deleteFolder(folder) {
+  /* WAS MITGEHT, STEHT IN DER FRAGE (#785). Ein Ordner nimmt seinen ganzen
+   * Zweig mit, und in der Seitenleiste sieht man davon nur die zugeklappte
+   * Wurzel - "Ordner loeschen?" waere dann die Frage nach einer Zeile und die
+   * Antwort auf ein Dutzend. Die Dokumente sind sicher (sie fallen auf "ohne
+   * Ordner" zurueck), aber die Struktur ist es nicht. */
+  const descendants = folderSubtree(folder.id).size - 1;
+
+  /* Die Optionen stehen als Literal im Aufruf und nicht in einer Variablen
+   * davor: der Guard "jeder als gefaehrlich markierte Dialog nennt seine
+   * Folgen" liest sie aus dem Aufruf, und eine Kurzschreibweise (`detail`
+   * statt `detail:`) ist fuer ihn dasselbe wie gar kein Detail. */
   const confirmed = await confirmModal(
     t('documents.deleteFolderConfirm', { name: folder.name }),
-    { danger: true, confirmLabel: t('documents.deleteFolder'), detail: t('documents.deleteFolderConfirmDetail') },
+    {
+      danger: true,
+      confirmLabel: t('documents.deleteFolder'),
+      detail: descendants > 0
+        ? t('documents.deleteFolderSubtreeDetail', { count: descendants })
+        : t('documents.deleteFolderConfirmDetail'),
+    },
   );
   if (!confirmed) return;
   try {
@@ -820,9 +1081,17 @@ async function deleteFolder(folder) {
 // führt (Listenzeile) — sonst stünde sie doppelt in derselben Zeile.
 function renderMeta(doc, { showSize = true } = {}) {
   const labels = categoryLabels();
+  const categoryLabel = labels[doc.category] || doc.category;
+  // Der Ordner-Chip entfaellt, wenn der Ordner woertlich wie die Kategorie
+  // heisst: „Schule · Schule" sagte dasselbe zweimal auf jeder Karte
+  // (Critique 2026-08-27, P3). Nur exakte Gleichheit - ein Ordner
+  // „Versicherungen" unter der Kategorie „Versicherung" ist eine
+  // Nutzerentscheidung und bleibt sichtbar.
+  const folderDuplicatesCategory = doc.folder_name
+    && doc.folder_name.trim().toLowerCase() === String(categoryLabel).trim().toLowerCase();
   return `
-    <span><i data-lucide="${CATEGORY_ICONS[doc.category] || 'folder'}" aria-hidden="true"></i>${labels[doc.category] || doc.category}</span>
-    ${doc.folder_name ? `<span><i data-lucide="folder" aria-hidden="true"></i>${esc(doc.folder_name)}</span>` : ''}
+    <span><i data-lucide="${CATEGORY_ICONS[doc.category] || 'folder'}" aria-hidden="true"></i>${categoryLabel}</span>
+    ${doc.folder_name && !folderDuplicatesCategory ? `<span><i data-lucide="folder" aria-hidden="true"></i>${esc(doc.folder_name)}</span>` : ''}
     ${isSoloHousehold() ? '' : `<span><i data-lucide="${doc.visibility === 'family' ? 'users' : doc.visibility === 'private' ? 'lock' : 'user-check'}" aria-hidden="true"></i>${t(`documents.visibility.${doc.visibility}`)}</span>`}
     ${showSize ? `<span>${formatFileSize(doc.file_size)}</span>` : ''}
     ${storageBadgeHtml(doc)}
@@ -1448,7 +1717,23 @@ async function saveDocument(event, doc, panel) {
   }
 }
 
-function openFolderModal() {
+/**
+ * Neuer Ordner, auf Wunsch unter einem bestimmten.
+ *
+ * `parentId` kommt aus dem Menue "Unterordner anlegen"; ohne Angabe steht die
+ * Auswahl auf dem gerade geoeffneten Ordner. DAS IST DER HAEUFIGE FALL und
+ * nicht die Wurzel: wer in "Wohnung" steht und einen Ordner anlegt, meint fast
+ * immer einen darin. Die Auswahl bleibt sichtbar, damit die Voreinstellung
+ * eine Ansage ist und keine Ueberraschung.
+ */
+function openFolderModal({ parentId = null } = {}) {
+  const preselected = parentId ?? (Number.isInteger(Number(state.folderId)) && Number(state.folderId) > 0
+    ? Number(state.folderId)
+    : null);
+  const options = visibleAllFolderRows()
+    .map((row) => `<option value="${row.folder.id}" ${row.folder.id === preselected ? 'selected' : ''}>${esc(`${'  '.repeat(row.depth)}${row.folder.name}`)}</option>`)
+    .join('');
+
   openSharedModal({
     title: t('documents.newFolderTitle'),
     size: 'sm',
@@ -1457,6 +1742,13 @@ function openFolderModal() {
         <div class="form-group">
           <label class="label" for="document-folder-name">${t('documents.folderNameLabel')}</label>
           <input class="input" id="document-folder-name" required maxlength="200" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="label" for="document-folder-parent">${t('documents.folderParentLabel')}</label>
+          <select class="input" id="document-folder-parent">
+            <option value="" ${preselected === null ? 'selected' : ''}>${esc(t('documents.folderRootLevel'))}</option>
+            ${options}
+          </select>
         </div>
         <div id="document-folder-error" class="form-error" hidden></div>
         <div class="modal-panel__footer modal-panel__footer--plain">
@@ -1469,9 +1761,17 @@ function openFolderModal() {
         event.preventDefault();
         const error = panel.querySelector('#document-folder-error');
         const input = panel.querySelector('#document-folder-name');
+        const parentSelect = panel.querySelector('#document-folder-parent');
+        const parent = parentSelect.value ? Number(parentSelect.value) : null;
         error.hidden = true;
         try {
-          const res = await api.post('/documents/folders', { name: input.value.trim() });
+          const res = await api.post('/documents/folders', { name: input.value.trim(), parent_id: parent });
+          // Der Elternteil wird aufgeklappt - ein neuer Ordner, den man nicht
+          // sieht, sieht aus wie einer, der nicht angelegt wurde.
+          if (parent !== null) {
+            state.expanded.add(parent);
+            persistExpandedFolders();
+          }
           window.yuvomi?.showToast(t('documents.folderCreatedToast'), 'success');
           state.folderId = String(res.data?.id || '');
           await loadFolders();
@@ -1816,6 +2116,9 @@ function openDmsPreview({ item, src, canOpen, onLink }) {
     layer.remove();
     opener?.focus?.();
   };
+  // Wie bei Escape gilt fuer die Zurueck-Geste: sie schliesst zuerst die
+  // Vorschau, nicht die Auswahl darunter (#871).
+  attachOverlay(layer, dismiss);
   // Capture-Phase: das Modal schließt auf Escape über einen Listener am document.
   // Hier wird das Ereignis abgefangen, damit Escape zuerst nur die Vorschau
   // schließt und nicht gleich die ganze Auswahl wegräumt.

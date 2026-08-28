@@ -40,6 +40,10 @@ import { nextOccurrenceAfter } from './recurrence.js';
 import { loadEventExceptions } from './calendar-events.js';
 import { visibilityWhere } from './visibility.js';
 import { householdTimeZone, utcToWall } from '../utils/timezone.js';
+// Dieselbe Rangfolge wie im Kalender und auf der Uebersicht - eine Regel, eine
+// Datei. Der Server importiert oefter aus `public/utils/` (date, folder-tree,
+// currency-codes, ...), immer fuer abhaengigkeitsfreie geteilte Regeln.
+import { resolveEventColorOrNull } from '../../public/utils/event-color.js';
 
 // So viele Countdowns liefert der Server. Die Kachel entscheidet wie überall
 // selbst, wie viele davon sie zeigt (`listRowCap` in pages/dashboard.js) - der
@@ -135,18 +139,26 @@ export function nextEventDate(event, todayKey, exceptions = null, { graceDays = 
     return floor && startKey >= floor ? startKey : null;
   }
 
+  /* `seriesStart` SETZT COUNT DURCH (#877). Ohne die Angabe zaehlte eine Serie
+   * mit "endet nach N Malen" endlos weiter: `nextOccurrence()` ist zustandslos
+   * und weiss nicht, das wievielte Vorkommen es liefert. Gemeldet wurde das als
+   * "abgelaufene Termine bleiben unbegrenzt stehen" - und es war sogar der
+   * schlimmere Fall, weil die Kachel dazu ein Datum in der ZUKUNFT nannte.
+   *
+   * Die Kalender-Oberflaeche bietet "endet nach N Malen" ausdruecklich an
+   * (`allowCount` in pages/calendar.js), das ist also keine Sonderform. */
   let candidate = startKey >= todayKey
     ? startKey
-    : nextOccurrenceAfter(startKey, event.recurrence_rule, todayKey);
+    : nextOccurrenceAfter(startKey, event.recurrence_rule, todayKey, { seriesStart: startKey });
 
   let skips = 0;
   while (candidate && exceptions?.has(candidate) && skips++ < MAX_EXCEPTION_SKIPS) {
-    candidate = nextOccurrenceAfter(candidate, event.recurrence_rule, candidate);
+    candidate = nextOccurrenceAfter(candidate, event.recurrence_rule, candidate, { seriesStart: startKey });
   }
-  // `nextOccurrenceAfter` hat eine eigene Schleifengrenze und kann bei einer
-  // sehr alten Serie mit sehr kurzem Intervall aufgeben, bevor sie die Gegenwart
-  // erreicht. Ein Datum in der Vergangenheit ist dann kein Countdown, sondern
-  // ein falscher - lieber nichts zeigen.
+  // Ein Datum in der Vergangenheit ist kein Countdown, sondern ein falscher -
+  // lieber nichts zeigen. Der haeufigste Weg hierher war frueher die
+  // Schleifengrenze beim Aufholen (eine taegliche Serie ab 2023 gab auf);
+  // seit #877 springt das Aufholen, statt zu zaehlen.
   if (!candidate || candidate < todayKey) return null;
   return candidate;
 }
@@ -245,8 +257,30 @@ function eventCountdowns(d, userId, todayKey) {
   // sich innerhalb eines Requests nicht.
   const tz = householdTimeZone(d);
   const rows = d.prepare(`
-    SELECT e.id, e.title, e.start_datetime, e.recurrence_rule, e.icon, e.color, e.all_day
+    SELECT e.id, e.title, e.start_datetime, e.recurrence_rule, e.icon, e.color, e.all_day,
+           e.assigned_to,
+           -- Die geliehene Farbe braucht dieselben drei Quellen wie im Kalender
+           -- (#891). Hier reicht EINE Person statt des ganzen Avatar-Stacks: die
+           -- Kachel zeigt eine Kante, keine Personenliste.
+           --
+           -- Der COALESCE ist der Fall "primaeres Mitglied geloescht": dann
+           -- setzt der Fremdschluessel assigned_to auf NULL und nimmt dessen
+           -- Zuweisungszeile mit, waehrend die uebrigen Zugewiesenen bleiben.
+           -- Der Kalender faellt dort auf den ersten verbliebenen zurueck
+           -- (assignees.find(...) ?? assignees[0]); ohne dieselbe Ruecknahme
+           -- zeigte die Kachel als einzige Stelle den Modulton.
+           COALESCE(u.avatar_color, (
+             SELECT u2.avatar_color FROM event_assignments ea
+             JOIN users u2 ON u2.id = ea.user_id
+             WHERE ea.event_id = e.id
+             ORDER BY ea.user_id
+             LIMIT 1
+           )) AS assigned_color,
+           COALESCE(ec.color, isub.color) AS cal_color
     FROM calendar_events e
+    LEFT JOIN users u ON u.id = e.assigned_to
+    LEFT JOIN external_calendars ec ON ec.id = e.calendar_ref_id
+    LEFT JOIN ics_subscriptions isub ON isub.id = e.subscription_id
     WHERE e.countdown = 1
       AND ${visibilityWhere('e', 'event_assignments', 'event_id')}
   `).all(userId, userId);
@@ -274,7 +308,16 @@ function eventCountdowns(d, userId, todayKey) {
       date,
       days_until: days,
       icon: row.icon || 'calendar',
-      color: row.color || null,
+      // Nicht `row.color`: ein Termin darf seit #891 ohne eigene Farbe sein und
+      // leiht sich dann die der zugewiesenen Person. Ohne diesen Schritt faellt
+      // genau so ein Termin auf den Modulton zurueck - er saehe hier farblos
+      // aus und im Kalender daneben in der Farbe der Person.
+      color: resolveEventColorOrNull({
+        color: row.color,
+        assigned_to: row.assigned_to,
+        assigned_users: row.assigned_color ? [{ id: row.assigned_to, color: row.assigned_color }] : [],
+        cal_color: row.cal_color,
+      }),
       recurring: Boolean(row.recurrence_rule),
     });
   }

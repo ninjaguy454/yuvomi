@@ -15,10 +15,7 @@
  *   → bypassCacheUntil (in-memory + Cache API für SW-Restart-Robustheit)
  */
 
-const APP_RELEASE   = '2.45.0';
-// Updating this file makes browsers run install again and refresh the existing
-// versioned Cache API entries for the Phase 1.5 Tasks/Recipes UI.
-const STATIC_REFRESH = 'phase-1.5-8';
+const APP_RELEASE   = '2.51.0';
 const SHELL_CACHE   = `yuvomi-shell-${APP_RELEASE}`;
 const PAGES_CACHE   = `yuvomi-pages-${APP_RELEASE}`;
 const LOCALES_CACHE = `yuvomi-locales-${APP_RELEASE}`;
@@ -64,6 +61,7 @@ const APP_SHELL = [
   '/styles/user-multi-select.css',
   '/styles/datepicker.css',
   '/styles/category-manager.css',
+  '/styles/icon-picker.css',
   '/styles/document-attach.css',
   '/styles/auth.css',
   '/styles/reminders.css',
@@ -72,6 +70,7 @@ const APP_SHELL = [
   '/styles/shopping.css',
   '/styles/meals.css',
   '/styles/calendar.css',
+  '/styles/schedule.css',
   '/styles/markdown-toolbar.css',
   '/styles/notes.css',
   '/styles/contacts.css',
@@ -113,8 +112,10 @@ const APP_SHELL = [
   '/utils/date.js',
   '/utils/currency-codes.js',
   '/utils/document-preview.js',
+  '/utils/event-color.js',
   '/utils/empty-state.js',
   '/utils/fab.js',
+  '/utils/folder-tree.js',
   '/utils/health-activity.js',
   '/utils/health-cycle.js',
   '/utils/health-labs.js',
@@ -135,6 +136,8 @@ const APP_SHELL = [
   '/utils/module-accent.js',
   '/utils/metric-card.js',
   '/utils/money.js',
+  '/utils/nav-badges.js',
+  '/utils/overlay-history.js',
   '/utils/page-search.js',
   '/utils/pantry-locations.js',
   '/utils/pantry-status.js',
@@ -230,7 +233,9 @@ const PAGE_MODULES = [
   '/pages/split-expenses.js',
   '/pages/subscriptions.js',
   '/components/category-manager.js',
+  '/components/icon-picker.js',
   '/components/tag-manager.js',
+  '/utils/lucide-icons.js',
   '/utils/sortable.js',
   '/vendor/sortablejs/sortable.esm.min.js',
   // libphonenumber-js: lazy im Kontaktmodul, aber vorab gecacht → Telefon-

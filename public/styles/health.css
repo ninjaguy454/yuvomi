@@ -394,14 +394,24 @@
 
 /* Der Name darf nicht unter ~8rem schrumpfen. So bricht bei Enge (Mobil) die
  * Aktions-Gruppe in die zweite Zeile um, statt den Namen auf 0px zu verschlucken —
- * bei einem Medikamenten-Tracker muss immer sichtbar sein, WELCHES Präparat gemeint ist. */
+ * bei einem Medikamenten-Tracker muss immer sichtbar sein, WELCHES Präparat gemeint ist.
+ *
+ * ZWEIZEILIG STATT EINZEILIGER ELLIPSE (Backlog-P1 vom 17.08., Critique
+ * 2026-08-27): „Eisen (Eisen…" stand neben einer 88px-Buttonzone, und welche
+ * Dosis gemeint ist, musste Casey einhaendig beim Kochen erklicken. Der Name
+ * bekommt zwei Zeilen, BEVOR die Ellipse greift - die Zeile waechst mit
+ * (align-items: center der geteilten Zeile zentriert die Nachbarn), und die
+ * Truncation bleibt als letzte Instanz fuer den dritten Umbruch. */
 .health-dose__name {
   flex: 1 1 auto;
   min-width: 8rem;
   color: var(--color-text-primary);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 /* DER 8REM-BODEN DARUEBER STAMMT AUS DER ZEIT VOR DER GETEILTEN ZEILE.
@@ -459,11 +469,21 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Die Erstangabe ist die handlungsleitende und darf nicht schrumpfen; die
- * Zweitangabe ist die Lesehilfe und tritt bei Enge ab (siehe unten). */
+/* Die Erstangabe ist die handlungsleitende; die Zweitangabe ist die Lesehilfe
+ * und tritt bei Enge ab (siehe unten).
+ *
+ * „DARF NICHT SCHRUMPFEN" WAR HIER EINE UEBERMALUNG, KEIN SCHUTZ (Critique
+ * 2026-08-27, P2, Light+Dark belegt): der Status schrumpft (flex: 0 1 auto,
+ * min-width: 0), sein nowrap-Lead aber nicht - der Text lief aus seiner Box
+ * heraus UNTER den Einnehmen-Knopf („Noch nicht genomm[Knopf]"). Jetzt
+ * schrumpft der Lead mit, die Ellipse ist die letzte Instanz, und der volle
+ * Satz bleibt am title der Statuszeile. */
 .health-prn__lead {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .health-prn__detail {
@@ -494,6 +514,12 @@
  * aus `.btn`, sein `aria-label` nennt weiterhin das Medikament. */
 @container list-rows (max-width: 26rem) {
   .health-prn__detail { display: none; }
+
+  /* Im FREIGEGEBENEN Zustand sagt „Noch nicht genommen" nichts, was der
+   * primaere Einnehmen-Knopf daneben nicht sagt - bei Enge faellt die Zeile
+   * dort ganz und der Name behaelt seinen Platz. Im WARTENDEN Zustand IST der
+   * Lead die Aussage („wieder ab …") und bleibt stehen. */
+  .health-prn:not(.is-waiting) .health-prn__lead { display: none; }
 }
 
 @container list-rows (max-width: 21rem) {
@@ -2052,7 +2078,9 @@ button.cycle-cal__day:not(:disabled):hover { background: var(--color-surface-2);
 /* display erst wenn sichtbar - sonst überschreibt der Flex das UA-[hidden]. */
 .cycle-bulk__confirm:not([hidden]) { display: flex; }
 .cycle-bulk__question { color: var(--color-text-primary); }
-.cycle-bulk__actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+/* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+ * (layout.css, #872). */
+.cycle-bulk__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); }
 
 @media (max-width: 640px) {
   .cycle-hero { flex-direction: column; }

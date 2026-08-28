@@ -59,7 +59,8 @@
             "private": "Endast jag",
             "hint": "Styr vem som kan se den här posten i Yuvomi.",
             "assigneesNobodyHint": "Utan tilldelning ser bara du den här posten."
-        }
+        },
+        "toShoppingListNamed": "Lägg till {{title}} i inköpslistan"
     },
     "kitchen": {
         "noShoppingLists": "Det finns ingen inköpslista än.",
@@ -112,7 +113,8 @@
         "health": "Hälsa",
         "rewards": "Belöningar",
         "pantry": "Skafferi",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Översikt",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Denna och alla följande",
         "deleteScopeSeries": "Hela serien (alla veckor)",
         "seriesEndedToast": "Serien avslutad från detta datum.",
-        "seriesDeletedToast": "Serie borttagen."
+        "seriesDeletedToast": "Serie borttagen.",
+        "deleteMealNamed": "Ta bort {{title}}",
+        "openRecipeNamed": "Öppna receptet för {{title}}"
     },
     "calendar": {
         "searchOpen": "Sök händelser",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Påverkar hela serien.",
         "detailWhen": "Tid",
         "detailCalendar": "Kalender",
-        "colorCurrent": "Nuvarande färg"
+        "colorCurrent": "Nuvarande färg",
+        "deleteExternalSeriesTitle": "Ta bort hela serien?",
+        "deleteExternalSeriesDetail": "”{{title}}” kommer från en synkroniserad kalender. Enskilda händelser kan inte uteslutas där - hela serien tas bort, med alla sina händelser.",
+        "deleteExternalSeriesConfirm": "Ta bort serien",
+        "deleteBirthdayEventTitle": "Ta bort födelsedagshändelsen?",
+        "deleteBirthdayEventDetail": "”{{title}}” speglar en födelsedagspost. Händelsen försvinner, men nästa synkronisering skapar den igen - permanent tas den bort endast via själva födelsedagen.",
+        "deleteBirthdayEventConfirm": "Ta bort ändå",
+        "deleteSubscribedSeriesTitle": "Ta bort den prenumererade serien?",
+        "deleteSubscribedSeriesDetail": "”{{title}}” kommer från en prenumererad kalender. Yuvomi kan inte ta bort något där - serien försvinner bara till nästa synkronisering; säg upp prenumerationen för att ta bort den permanent.",
+        "deleteSubscribedSeriesConfirm": "Ta bort ändå",
+        "colorInherit": "Färg för den tilldelade personen",
+        "colorInheritHint": "Händelsen får ingen egen färg utan tar den tilldelade personens. Om ingen är tilldelad gäller kalenderns färg.",
+        "filters": "Filter",
+        "filtersOpen": "Öppna filter",
+        "filtersLayers": "Lager",
+        "filtersPeople": "Personer",
+        "filtersActive": "{{count}} filter aktiva",
+        "filtersActive_one": "1 filter aktivt",
+        "filtersReset": "Rensa alla filter",
+        "filtersDisplay": "Visning"
     },
     "notes": {
         "title": "Anteckningar",
@@ -1691,6 +1714,7 @@
             "shopping": "Shopping",
             "meals": "Måltider",
             "calendar": "Kalender",
+            "schedule": "Schedule",
             "notes": "Anteckningar",
             "contacts": "Kontakter",
             "budget": "Budget",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} tillfälle",
         "fromCompletionLabel": "Upprepa från slutförandet",
         "fromCompletionHint": "Intervallet börjar den dag du bockar av uppgiften, inte på förfallodatumet.",
-        "summaryFromCompletion": "från slutförandet"
+        "summaryFromCompletion": "från slutförandet",
+        "intervalHint": "Efter valet kan intervallet ställas in fritt - till exempel varannan vecka eller var tredje månad."
     },
     "recipes": {
         "mealTypeNone": "Ingen måltid",
@@ -2628,7 +2653,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Egna",
         "sourceAll": "Alla",
-        "sourceFilterLabel": "Filtrera efter källa"
+        "sourceFilterLabel": "Filtrera efter källa",
+        "plannedThisWeek": "Planerad denna vecka"
     },
     "search": {
         "emptyHint": "Skriv minst 2 tecken för att söka bland uppgifter, händelser, anteckningar, kontakter, inköp och hälsa.",
@@ -2731,7 +2757,8 @@
         "done": "Kom igång",
         "skip": "Skippa",
         "step2BodyDesktop": "Sidofältet till vänster tar dig till alla moduler - från kalender och uppgifter till kök, dokument och inställningar.",
-        "step3BodyDesktop": "Med +-knappen i nedre hörnet skapar du nya poster överallt."
+        "step3BodyDesktop": "Med +-knappen i nedre hörnet skapar du nya poster överallt.",
+        "stepProgress": "Steg {{current}} av {{total}}"
     },
     "offline": {
         "banner": "Offline - återansluter…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "Kvitton",
         "splitExpensesFolder": "Delade utgifter",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Uppgifter"
+        "tasksFolder": "Uppgifter",
+        "newSubfolder": "Ny undermapp",
+        "moveFolder": "Flytta mapp",
+        "moveFolderTo": "Flytta ”{{name}}” till",
+        "folderMovedToast": "Mappen flyttades",
+        "folderParentLabel": "Överordnad mapp",
+        "folderRootLevel": "Översta nivån",
+        "folderPathLabel": "Sökväg till mappen",
+        "folderExpand": "Expandera ”{{name}}”",
+        "folderCollapse": "Fäll ihop ”{{name}}”",
+        "deleteFolderSubtreeDetail": "De {{count}} undermapparna i den tas också bort. Dokumenten finns kvar och nås via filtret för dokument utan mapp.",
+        "deleteFolderSubtreeDetail_one": "Undermappen i den tas också bort. Dokumenten finns kvar och nås via filtret för dokument utan mapp."
     },
     "shortcuts": {
         "goKitchen": "Kök",
@@ -2931,7 +2969,7 @@
         "colorOption": "Färg {{color}}",
         "iconPick": "Välj bild",
         "iconClear": "Ta bort bild",
-        "iconHint": "Utan bild visas första bokstaven på den valda färgen.",
+        "iconHint": "Välj en inbyggd ikon eller en egen bild. Utan någon av dem visas första bokstaven på den valda färgen.",
         "iconTypeError": "Välj en PNG-, JPEG- eller WebP-bild.",
         "iconReadError": "Bilden kunde inte läsas.",
         "iconTooLarge": "Bilden är för stor.",
@@ -2947,7 +2985,9 @@
         "saved": "Snabblänk sparad",
         "deleted": "Snabblänk borttagen",
         "loadError": "Snabblänkarna kunde inte laddas.",
-        "orderError": "Ordningen kunde inte sparas."
+        "orderError": "Ordningen kunde inte sparas.",
+        "iconSymbol": "Välj ikon",
+        "iconChoose": "Välj ikon eller bild"
     },
     "housekeeping": {
         "title": "Städning",
@@ -3534,7 +3574,8 @@
         "completed": "Avslutad",
         "completedOn": "Avslutad {{date}}",
         "completedToast": "Prenumeration avslutad.",
-        "endsAfter": "{{count}} betalningar kvar"
+        "endsAfter": "{{count}} betalningar kvar",
+        "logoTypeError": "Använd en PNG-, JPEG-, WebP- eller SVG-bild."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Fotot är fortfarande för stort efter storleksändring."
     },
     "documentAttach": {
         "label": "Bilagor",
@@ -4435,5 +4477,90 @@
         "recipes": "Recept",
         "shopping": "Objekt",
         "splitExpenses": "Utgift"
+    },
+    "iconPicker": {
+        "title": "Välj ikon",
+        "searchLabel": "Sök ikon",
+        "searchPlaceholder": "Sök på engelska, t.ex. film",
+        "resultsLabel": "Ikoner",
+        "noResults": "Ingen ikon hittades.",
+        "clear": "Ingen ikon",
+        "unavailable": "Ikonerna är inte tillgängliga just nu."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

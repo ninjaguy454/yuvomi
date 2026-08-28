@@ -194,6 +194,9 @@ a.doc-attach__chip-name:focus-visible {
 
 .doc-attach-picker__footer {
   justify-content: flex-end;
+  /* Umbruch statt Ueberlauf - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). */
+  flex-wrap: wrap;
 }
 
 .doc-attach-picker__list {

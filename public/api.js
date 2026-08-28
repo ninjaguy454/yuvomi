@@ -106,7 +106,38 @@ async function apiFetch(path, options = {}, _retried = false) {
     throw new ApiError(message, response.status, data);
   }
 
+  if (stateChanging) notifyCountedMutation(path);
+
   return data;
+}
+
+/* WER ETWAS AENDERT, DAS GEZAEHLT WIRD, MELDET ES HIER - EINMAL FUER ALLE (#868).
+ *
+ * Die Zahlen an den Nav-Zielen und an den Modulkacheln kommen aus `/dashboard`
+ * und altern sonst bis zu einer Minute. Sie an den Schreibpfaden der Module
+ * einzeln nachzuziehen hiesse: allein im Aufgabenmodul siebzehn Stellen, und
+ * die achtzehnte wird vergessen. Deshalb steht die Meldung an der Schicht, die
+ * ohnehin jeder Schreibvorgang durchlaeuft.
+ *
+ * NICHT AN DER RENDER-SCHICHT, und das ist der Unterschied, der zaehlt: eine
+ * erste Fassung haengte sie an `updateOverdueBadge()`, das jedes
+ * `renderTaskList()` ruft - also auch bei jedem Tastenanschlag in der Suche,
+ * bei jedem Filter- und Ansichtswechsel. Jede Tipppause laenger als der
+ * Entprellzeitraum stiess damit eine vollstaendige Dashboard-Aggregation an,
+ * ohne dass sich an den gezaehlten Daten irgendetwas geaendert haette.
+ *
+ * DIE LISTE IST KURZ UND BLEIBT ES. Sie nennt die Praefixe, deren Bestand in
+ * einer Zahl auftaucht - nicht jeden Schreibpfad der App. Ein Praefix zu
+ * vergessen kostet eine veraltete Zahl bis zum Ablauf der TTL; jeden
+ * Einstellungsklick mitzuzaehlen kostet eine Aggregation pro Klick. */
+const COUNTED_PATHS = ['/tasks', '/shopping', '/rewards', '/health', '/birthdays', '/inventory'];
+
+function notifyCountedMutation(path) {
+  const base = path.split('?')[0];
+  if (!COUNTED_PATHS.some((prefix) => base === prefix || base.startsWith(`${prefix}/`))) return;
+  // Still und entkoppelt: die API-Schicht kennt den Router nicht, und ein
+  // fehlender Zaehler darf keinen Schreibvorgang scheitern lassen.
+  try { window.yuvomi?.invalidateModuleCounts?.(); } catch { /* siehe oben */ }
 }
 
 /**

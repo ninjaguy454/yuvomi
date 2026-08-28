@@ -567,10 +567,98 @@ test('POST / — legt minimalen Termin an (Defaults)', async () => {
   const res = await call('POST', '/', { actor: ADMIN, body: { title: 'Neuer Termin', start_datetime: '2040-02-01T09:00' } });
   assert.equal(res.status, 201);
   assert.equal(res.body.data.title, 'Neuer Termin');
-  assert.equal(res.body.data.color, '#007AFF', 'Default-Farbe');
+  assert.equal(res.body.data.color, null,
+    'ohne Angabe KEINE eigene Farbe - der Termin leiht sich die der zugewiesenen Person (#891)');
   assert.equal(res.body.data.icon, 'calendar');
   assert.equal(res.body.data.created_by, ADMIN.id);
   assert.equal(res.body.data.visibility, 'all');
+});
+
+test('Farbe: die Route unterscheidet "nicht angefasst" von "ausdruecklich keine" (#891)', async () => {
+  // Der Kern von #891 auf der Serverseite. Beide Faelle schicken einen falsy
+  // Wert; das Feld MUSS trotzdem zwei verschiedene Dinge bewirken koennen, sonst
+  // ist "keine eigene Farbe" nicht ausdrueckbar - genau die Luecke, die die
+  // Farbe der zugewiesenen Person zu totem Code gemacht hat.
+  const created = await call('POST', '/', { actor: ADMIN, body: {
+    title: 'Faerbbar', start_datetime: '2040-04-01T09:00', color: '#8156C0',
+  } });
+  assert.equal(created.status, 201);
+  const id = created.body.data.id;
+  assert.equal(created.body.data.color, '#8156C0', 'eine gewaehlte Farbe wird uebernommen');
+
+  // 1. Feld GAR NICHT mitgeschickt: die Farbe bleibt stehen. Das ist die Regel,
+  //    die ein aelterer Client oder ein Modul-PUT braucht, das color nicht kennt.
+  const untouched = await call('PUT', `/${id}`, { actor: ADMIN, body: {
+    title: 'Faerbbar, umbenannt', start_datetime: '2040-04-01T09:00',
+  } });
+  assert.equal(untouched.status, 200);
+  assert.equal(untouched.body.data.color, '#8156C0',
+    'ein PUT ohne color-Feld darf eine gesetzte Farbe nicht stillschweigend loeschen');
+
+  // 2. Feld AUSDRUECKLICH auf null: die Farbe geht weg. Vorher hat COALESCE im
+  //    UPDATE genau das geschluckt, weil es beide Faelle gleich sieht.
+  const cleared = await call('PUT', `/${id}`, { actor: ADMIN, body: {
+    title: 'Faerbbar, umbenannt', start_datetime: '2040-04-01T09:00', color: null,
+  } });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.data.color, null,
+    'ein PUT mit color: null nimmt dem Termin seine eigene Farbe ab');
+
+  // 3. Und zurueck: die Wahl ist in beide Richtungen moeglich.
+  const again = await call('PUT', `/${id}`, { actor: ADMIN, body: {
+    title: 'Faerbbar, umbenannt', start_datetime: '2040-04-01T09:00', color: '#3CA368',
+  } });
+  assert.equal(again.body.data.color, '#3CA368', 'und laesst sich wieder setzen');
+
+  // Ein Unsinnswert bleibt ein Fehler - "keine Farbe" heisst nicht "alles erlaubt".
+  const bad = await call('PUT', `/${id}`, { actor: ADMIN, body: {
+    title: 'Faerbbar', start_datetime: '2040-04-01T09:00', color: 'red; background:url(x)',
+  } });
+  assert.equal(bad.status, 400, 'ein ungueltiger Farbwert wird weiterhin abgewiesen');
+});
+
+test('ein PUT ohne assigned_to laesst die primaere Zuweisung stehen (#891)', async () => {
+  // `assigned_to` ist die PRIMAERE Zuweisung, nicht irgendeine: das Formular
+  // schickt seine Reihenfolge mit, und die Route legt `userIds[0]` dort ab.
+  // Beim Nachladen gibt es diese Reihenfolge nicht mehr - `SELECT user_id FROM
+  // event_assignments` hat kein ORDER BY und laeuft ueber den Primaerschluessel,
+  // kommt also nach user_id sortiert zurueck. Ein PUT, das `assigned_to` gar
+  // nicht mitschickt, wuerde die primaere Zuweisung deshalb neu wuerfeln.
+  //
+  // Seit #891 ist das sichtbar statt nur unsauber: die geliehene Farbe folgt
+  // `assigned_to`, ein Termin ohne eigene Farbe wechselt also seine Farbe, ohne
+  // dass jemand die Zuweisung angefasst hat. Der Serien-Split schickt genau so
+  // ein PUT (nur `recurrence_rule`).
+  const created = await call('POST', '/', { actor: ADMIN, body: {
+    title: 'Zwei Zustaendige', start_datetime: '2040-05-01T09:00',
+    assigned_to: [3, 2],   // 3 ist die PRIMAERE - und die hoehere Id
+  } });
+  assert.equal(created.status, 201);
+  const id = created.body.data.id;
+  assert.equal(created.body.data.assigned_to, 3, 'die erste des Formulars wird die primaere');
+
+  // Vorbedingung, ohne die der Test nichts misst: die nachgeladene Reihenfolge
+  // weicht von der des Formulars ab.
+  const nachgeladen = db.prepare('SELECT user_id FROM event_assignments WHERE event_id = ?')
+    .all(id).map((r) => r.user_id);
+  assert.deepEqual(nachgeladen, [2, 3],
+    'die Abfrage ohne ORDER BY liefert nach user_id - sonst prueft dieser Test nichts');
+
+  // Ein PUT, das die Zuweisung nicht erwaehnt.
+  const res = await call('PUT', `/${id}`, { actor: ADMIN, body: {
+    title: 'Zwei Zustaendige', start_datetime: '2040-05-01T09:00',
+    recurrence_rule: 'FREQ=WEEKLY;COUNT=3',
+  } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.assigned_to, 3,
+    'die primaere Zuweisung darf ein PUT, das sie nicht nennt, nicht umlegen');
+  assert.equal(res.body.data.assigned_users.length, 2, 'und beide Zuweisungen bleiben');
+
+  // Wer sie ausdruecklich aendert, bekommt die Aenderung natuerlich.
+  const geaendert = await call('PUT', `/${id}`, { actor: ADMIN, body: {
+    title: 'Zwei Zustaendige', start_datetime: '2040-05-01T09:00', assigned_to: [2, 3],
+  } });
+  assert.equal(geaendert.body.data.assigned_to, 2, 'ein ausdrueckliches assigned_to gilt');
 });
 
 test('POST / — mit Zuweisungen, Serie und Sichtbarkeit', async () => {
@@ -665,6 +753,58 @@ test('PUT /:id — externes Event wird als user_modified markiert', async () => 
   assert.equal(res.body.data.user_modified, 1, 'Bearbeitung eines externen Events setzt user_modified');
 });
 
+// ── color_modified: die Farbe fuehrt ihren eigenen Zustand (#899) ──────────────
+//
+// `user_modified` heisst "an diesem Termin wurde etwas bearbeitet". Der Inbound
+// aller drei Anbieter las es als "die Farbe wird lokal gefuehrt" und fror sie
+// damit bei jeder Titelaenderung ein. Diese vier Faelle halten die Trennung.
+
+test('PUT /:id — eine Titeländerung fasst color_modified nicht an (#899)', async () => {
+  const id = insertEvent({ title: 'COLMOD-TITEL', start_datetime: '2041-05-02T09:00', external_source: 'caldav' });
+  const res = await call('PUT', `/${id}`, { body: { title: 'Nur der Titel' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.user_modified, 1, 'bearbeitet wurde ja etwas');
+  assert.equal(res.body.data.color_modified, 0, 'aber nicht die Farbe - sonst friert sie ein');
+});
+
+test('PUT /:id — eine echte Umfärbung setzt color_modified (#899)', async () => {
+  const id = insertEvent({ title: 'COLMOD-FARBE', start_datetime: '2041-05-03T09:00', external_source: 'caldav' });
+  const res = await call('PUT', `/${id}`, { body: { color: '#7C3AED' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.color, '#7C3AED');
+  assert.equal(res.body.data.color_modified, 1);
+});
+
+test('PUT /:id — dieselbe Farbe noch einmal ist keine Umfärbung (#899)', async () => {
+  // Das Formular schickt den Bestandswert brav mit. Wuerde schon das Mitschicken
+  // zaehlen, waere jede Bearbeitung wieder eine Umfaerbung - und der Unterschied
+  // zu user_modified damit gerade wieder eingerissen.
+  const id = insertEvent({ title: 'COLMOD-GLEICH', start_datetime: '2041-05-04T09:00', external_source: 'caldav', color: '#007AFF' });
+  const res = await call('PUT', `/${id}`, { body: { title: 'Neuer Titel', color: '#007AFF' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.color_modified, 0);
+});
+
+test('PUT /:id — dieselbe Farbe in anderer Schreibweise ist keine Umfärbung (#899)', async () => {
+  // Die beiden Schreibweisen treffen wirklich aufeinander: der Sync legt seinen
+  // Hex in Grossbuchstaben ab (`COLOR:tomato` wird zu `#FF6347`).
+  const id = insertEvent({ title: 'COLMOD-CASE', start_datetime: '2041-05-06T09:00', external_source: 'caldav', color: '#FF6347' });
+  const res = await call('PUT', `/${id}`, { body: { color: '#ff6347' } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.color_modified, 0);
+});
+
+test('PUT /:id — eine geleerte Farbe ist eine Aussage und wird vermerkt (#899)', async () => {
+  // Der Zustand, den der Ausgang braucht: `color IS NULL AND color_modified = 1`
+  // heisst "geleert" und darf beim Anbieter die COLOR-Zeile entfernen. Ohne das
+  // Flag waere er von "wir haben nie eine Farbe gelernt" nicht zu unterscheiden.
+  const id = insertEvent({ title: 'COLMOD-LEER', start_datetime: '2041-05-05T09:00', external_source: 'caldav', color: '#7C3AED' });
+  const res = await call('PUT', `/${id}`, { body: { color: null } });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.color, null);
+  assert.equal(res.body.data.color_modified, 1);
+});
+
 test('PUT /:id — Anhang entfernen', async () => {
   const dataUrl = `data:text/plain;base64,${Buffer.from('weg').toString('base64')}`;
   const created = await call('POST', '/', { actor: ADMIN, body: {
@@ -690,13 +830,20 @@ test('POST /:id/reset — 400/404/400-nicht-ics/403/Happy', async () => {
 
   const subId = db.prepare("INSERT INTO ics_subscriptions (name, url, color, created_by, shared) VALUES ('ResetSub','https://x/r.ics','#ABCDEF',2,1)").run().lastInsertRowid;
   const icsEv = insertEvent({ title: 'RESET-ICS', start_datetime: '2042-01-02T09:00', external_source: 'ics', subscription_id: subId, created_by: MARIA.id, user_modified: 1 });
+  // Auch die Farbe wurde lokal angefasst - sonst haette die Zusicherung weiter
+  // unten keinen Wert: `color_modified` stuende ohnehin auf 0 (#899).
+  db.prepare('UPDATE calendar_events SET color_modified = 1 WHERE id = ?').run(icsEv);
   // Tom: weder Event-Creator noch Sub-Creator, non-admin -> 403
   assert.equal((await call('POST', `/${icsEv}/reset`, { actor: TOM })).status, 403);
   // Maria (Event- + Sub-Creator) -> Happy
   const ok = await call('POST', `/${icsEv}/reset`, { actor: MARIA });
   assert.equal(ok.status, 200);
   assert.equal(ok.body.data.reset, true);
-  assert.equal(db.prepare('SELECT user_modified AS m FROM calendar_events WHERE id=?').get(icsEv).m, 0);
+  const zurueckgesetzt = db.prepare('SELECT user_modified AS m, color_modified AS c FROM calendar_events WHERE id=?').get(icsEv);
+  assert.equal(zurueckgesetzt.m, 0);
+  // Zuruecksetzen heisst "der Feed fuehrt diesen Termin wieder" - das schliesst
+  // seine Farbe ein, sonst bliebe ein Flag stehen, das keine Wahl mehr vertritt (#899).
+  assert.equal(zurueckgesetzt.c, 0);
 });
 
 // ════════════════════════════════════════════════════════════════════════════════

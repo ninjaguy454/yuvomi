@@ -16,6 +16,7 @@
 // Nav-Module (dashboard, settings, third-party) sind nie gesperrt.
 const NAV_TO_MODULE = Object.freeze({
   calendar: 'calendar',
+  schedule: 'schedule',
   birthdays: 'calendar',
   tasks: 'tasks',
   notes: 'notes',

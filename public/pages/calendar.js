@@ -6,7 +6,8 @@
 
 import { api } from '/api.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, recurrenceRow } from '/rrule-ui.js';
-import { openModal as openSharedModal, closeModal, advancedSection, wireBlurValidation, reportFieldError } from '/components/modal.js';
+import { openModal as openSharedModal, closeModal, confirmModal, advancedSection, wireBlurValidation, reportFieldError } from '/components/modal.js';
+import { attachOverlay } from '/utils/overlay-history.js';
 import { openDetailView, visibilityRow, assignedRow } from '/components/detail-view.js';
 import { stagger, wireScrollFade, scheduleUndoableDelete } from '/utils/ux.js';
 import { t, formatDate as formatPreferredDate, formatDayMonth, formatTime, timeSuffix, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
@@ -14,12 +15,21 @@ import { esc, fmtLocation } from '/utils/html.js';
 import { shiftEndDateKey, isEndBeforeStart, weekStartIndex, weekdayOrder,
          monthPeriodKeys, startOfLocalWeekKey, addLocalDays, defaultDateInPeriod,
          isWeekendKey } from '/utils/date.js';
-import { truncateRuleBefore, shiftSeriesStart, shiftEndForStart } from '/utils/recurrence-scope.js';
+import { truncateRuleBefore, shiftSeriesStart, shiftEndForStart,
+         isLocalRecurringSeries, isExternalRecurringSeries } from '/utils/recurrence-scope.js';
 import { getReadableTextColor } from '/utils/color.js';
+import { resolveEventColor } from '/utils/event-color.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { wireTablist } from '/utils/tablist.js';
+// EINE Schalterform, auch hier. Das Primitiv liegt unter `/settings/`, weil
+// dort sein Anlass lag (vier Schalterformen nebeneinander, Critique
+// 2026-07-27) - die Funktion selbst ist geteiltes UI-Vokabular und kein
+// Einstellungs-Bauteil. Eine Kopie im Kalender waeren zwei Wahrheiten ueber
+// dieselbe Form; der Umzug nach `/utils/` beruehrt zehn Blaetter und gehoert
+// in eine eigene Runde. Der Import benennt die Schuld, statt sie zu umgehen.
+import { toggleRowHtml } from '/settings/components.js';
 import { localizeBirthdayEvent } from '/utils/birthday-event.js';
 import { googleTargetValue, caldavTargetValue, outlookTargetValue } from '/utils/sync-target.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
@@ -118,15 +128,36 @@ function pickerColors(event) {
 }
 
 /**
+ * Der Wert des Erben-Swatch: "dieser Termin hat keine eigene Farbe".
+ *
+ * Der Leerstring, nicht `null`, weil er aus `dataset.color` kommt - ein
+ * data-Attribut kennt keinen Nullwert, und ein fehlendes Attribut waere
+ * `undefined` und damit nicht mehr von "gar kein Swatch aktiv" zu
+ * unterscheiden. Genau diese Unterscheidung traegt die Regel unten.
+ */
+const COLOR_INHERIT = '';
+
+/**
  * Welche Farbe ein Speichern schreibt.
  *
- * Die Regel dahinter ist eine einzige: ein Speichern, bei dem niemand die Farbe
- * angefasst hat, darf sie nicht veraendern. Steht kein Swatch auf aktiv, gilt
- * also die Farbe, die der Termin schon traegt - erst wenn auch die fehlt (neuer
- * Termin), die erste der Palette.
+ * Zwei Regeln, und die Reihenfolge ist der ganze Punkt:
+ *
+ * 1. Steht der Erben-Swatch auf aktiv, schreibt das Speichern `null` - der
+ *    Termin bekommt KEINE eigene Farbe und leiht sich die der zugewiesenen
+ *    Person (#891). Das ist eine ausdrueckliche Wahl und deshalb ein Wert, den
+ *    das Backend annehmen muss; `crud.js` unterscheidet sie am mitgeschickten
+ *    Feld von "nicht angefasst".
+ * 2. Steht gar kein Swatch auf aktiv, darf ein Speichern die Farbe nicht
+ *    veraendern - es gilt, was der Termin schon traegt. Fehlt auch die, bleibt
+ *    es bei `null`: ein neuer Termin faengt ohne eigene Farbe an. Bis v2.48.0
+ *    stand hier `EVENT_COLORS[0]`, und weil dieser Palettenerste ununterscheidbar
+ *    von einer bewussten Wahl war, hat er die Personenfarbe verdraengt, ohne dass
+ *    sie je jemand abgewaehlt haette.
  */
 function colorToSave(activeSwatchColor, event) {
-  return activeSwatchColor || event?.color || EVENT_COLORS[0];
+  if (activeSwatchColor === COLOR_INHERIT) return null;
+  if (activeSwatchColor) return activeSwatchColor;
+  return event?.color ?? null;
 }
 
 const EVENT_ICON_ALIASES = {
@@ -281,7 +312,43 @@ const LEGACY_CALENDAR_VIEW_STORAGE_KEY = 'yuvomi-calendar-view';
 const LAYER_HOLIDAYS_KEY = 'yuvomi:calendar:layer:holidays';
 const LAYER_SCHOOL_KEY    = 'yuvomi:calendar:layer:school';
 const LAYER_BIRTHDAYS_KEY = 'yuvomi:calendar:layer:birthdays';
+const LAYER_SCHEDULE_KEY = 'yuvomi:calendar:layer:schedule';
+const SCHEDULE_DISPLAY_KEY = 'yuvomi:calendar:schedule-display';
 const ASSIGNED_TO_ME_KEY  = 'yuvomi:calendar:assignedToMe';
+const PEOPLE_FILTER_KEY   = 'yuvomi:calendar:people';
+
+/* DIE FEIERTAGSFARBEN, WENN DER HAUSHALT KEINE GEWAEHLT HAT.
+ *
+ * Sie standen zweimal als nacktes Hex im Markup dieser Datei und viermal im
+ * Server (routes/preferences.js, services/holidays.js). Hier stehen sie
+ * einmal - der Client erfindet keinen eigenen Wert, er nennt denselben wie
+ * die Quelle.
+ *
+ * DIE WERTE SELBST SIND EIN OFFENER PUNKT, kein Versehen: `#FF3B30` und
+ * `#34C759` sind iOS System Red und System Green, also genau die
+ * Apple-Rohpalette, die der Direction Contract am 2026-08-10 ausdruecklich
+ * verlassen hat. Sie zu aendern faerbt jeden Haushalt um, der nie eine Farbe
+ * gewaehlt hat - das ist eine Entscheidung des Betreibers, keine Reparatur,
+ * und sie muesste den Server mitnehmen. Bis dahin steht der Wert wenigstens
+ * an einer Stelle statt an dreien. */
+/* DIE MOBIL-GRENZE STEHT EINMAL, UND SIE FOLGT DEM CSS.
+ *
+ * Sie stand viermal als `(max-width: 639px)` im JS, waehrend calendar.css an
+ * drei Stellen bei `max-width: 640px` schaltet. Bei GENAU 640px war die App
+ * deshalb in zwei Zustaenden zugleich: das CSS hatte die Termin-Chips schon
+ * auf Punkte reduziert, das JS hielt noch die Desktop-Klicklogik - ein Tap
+ * musste einen 10px-Punkt treffen, statt die ganze Zelle als Ziel zu haben.
+ * Verifiziert bei 640px: `cssMobile: true`, `jsMobile: false`.
+ *
+ * Ein Guard haelt beide Seiten zusammen (`test:frontend-audit`): jede
+ * matchMedia-Grenze dieser Datei muss eine Media-Query-Grenze in calendar.css
+ * sein. Zwei Zahlen fuer dieselbe Schwelle sind genau die Bauart, an der
+ * dieser Fehler entstanden ist. */
+const MOBILE_MEDIA_QUERY = '(max-width: 640px)';
+
+const HOLIDAY_PUBLIC_FALLBACK = '#FF3B30';
+const HOLIDAY_SCHOOL_FALLBACK = '#34C759';
+
 const DATE_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /* DIE STUNDENHOEHE STEHT IN tokens.css UND NUR DORT.
@@ -376,6 +443,9 @@ function openIconPickerDialog(selectedIcon, onSelect, onClose = () => {}) {
     document.removeEventListener('keydown', onKeydown);
     onClose();
   }
+  // Die Zurueck-Geste schliesst zuerst diesen Picker, nicht das Formular
+  // darunter (#871).
+  attachOverlay(overlay, close);
   function onKeydown(e) {
     if (e.key === 'Escape') close();
   }
@@ -408,37 +478,8 @@ function openIconPickerDialog(selectedIcon, onSelect, onClose = () => {}) {
 // --------------------------------------------------------
 
 /** Neutrale Fallback-Farbe wenn weder Assignee noch manuelle Farbe gesetzt. */
-const FALLBACK_COLOR = '#8E8E93';
-
-/**
- * Gibt die primäre Einzelfarbe eines Events zurück.
- * Wird für Textkontrastberechnung und Stellen genutzt, die keine Gradienten unterstützen.
- * Priorität: 1. ev.color, 2. erster Assignee, 3. ev.cal_color, 4. Grau.
- *
- * WARUM DIE TERMINFARBE VORN STEHT (#815). Bis v2.35.0 schlug die Farbe der
- * zugewiesenen Person alles andere. Das warf zwei sehr verschiedene Dinge in
- * denselben Topf: `cal_color` ist GEERBT - jeder Termin des Kalenders hat sie,
- * sie sagt nichts über diesen einen aus -, `ev.color` dagegen ist an DIESEM
- * Termin ausdrücklich gesetzt, von Hand hier oder als RFC-7986-`COLOR` vom
- * CalDAV-Server. Eine ausdrückliche Angabe darf eine abgeleitete nicht
- * verlieren; gegen die geerbte Kalenderfarbe gewinnt die Person weiterhin.
- *
- * Der Melder von #815 hat den Fall belegt: seine Termine tragen in Baikal und
- * Nextcloud eigene Farben, Yuvomi liest sie korrekt ein - sichtbar waren sie
- * nur, solange der Kalender niemandem zugewiesen war. Die Sync war nie das
- * Problem, die Vorrangregel war es.
- *
- * WAS DABEI NICHT VERLOREN GEHT: wer der Termin gehört, steht weiter im
- * Avatar-Stack daneben - das ist ohnehin der Weg, auf dem MEHRERE Zugewiesene
- * kommuniziert werden (siehe resolveEventBackground). Die Farbe war für diese
- * Auskunft nie die einzige Quelle.
- */
-function resolveEventColor(ev) {
-  if (ev.color) return ev.color;
-  const assignees = ev.assigned_users ?? [];
-  if (assignees.length > 0) return assignees[0].color || FALLBACK_COLOR;
-  return ev.cal_color || FALLBACK_COLOR;
-}
+// Die Rangfolge selbst steht in utils/event-color.js, weil das Dashboard
+// dieselbe Frage stellt und vor #891 eine eigene, kuerzere Antwort hatte.
 
 /**
  * Gibt eine einzelne CSS-Füllfarbe zurück (nie ein Gradient).
@@ -503,6 +544,8 @@ let state = {
   cursor:        null,     // aktuell angezeigte Referenz-Datum (YYYY-MM-DD)
   events:        [],
   tasks:         [],       // Aufgaben mit due_date für Kalender-Anzeige
+  scheduleEntries: [],
+  scheduleWarnings: [],
   users:         [],
   rangeFrom:     '',
   rangeTo:       '',
@@ -513,10 +556,26 @@ let state = {
   layerHolidays: true,     // toggle for public holiday layer
   layerSchool:   true,     // toggle for school holiday layer
   layerBirthdays: true,    // toggle for the birthday layer (#778)
+  layerSchedule: true,     // computed schedule overlay
+  scheduleDisplay: 'compact',
   offlineSince:  null,     // Date des letzten Cache-Stands, wenn offline bedient
   defaultDuration: 60,     // Standard-Termindauer (Minuten) aus den Präferenzen
   currentUserId: null,     // eigene User-ID für „Mir zugewiesen"-Filter
   assignedToMe:  false,    // nur Termine/Aufgaben zeigen, die mir zugewiesen sind
+  // Gewaehlte Personen als Set von User-IDs; LEER heisst ALLE, nicht KEINE.
+  //
+  // DIE ACHSE IST DIE PERSON, NICHT DER KALENDER - und das ist eine gemessene
+  // Entscheidung, keine Auslegung. Die Critique vom 2026-08-28 verlangte einen
+  // „Kalenderfilter mit Legende" nach Apples Muster. Eine FARBLEGENDE ist hier
+  // aber nicht konstruierbar: `resolveEventColor()` (utils/event-color.js)
+  // beantwortet die Farbe aus DREI Quellen in Rangfolge - eigene Terminfarbe,
+  // Farbe der primaeren zugewiesenen Person, Kalenderfarbe. Eine Legende, die
+  // „diese Farbe = jener Kalender" behauptet, waere bei jedem Termin falsch,
+  // der eine eigene Farbe traegt oder von einer Person erbt - also bei der
+  // Mehrheit. Die Person dagegen ist eindeutig: sie steht in
+  // `assigned_users`, ihre Farbe gehoert ihr, und in einem FAMILIENplaner ist
+  // „wessen Termin ist das" die Frage, die der Filter beantworten soll.
+  people:        new Set(),
 };
 let _container = null;
 
@@ -883,6 +942,43 @@ function belongsToMe(item) {
 }
 
 /**
+ * True, solange der Personenfilter aus ist oder eine der gewaehlten Personen
+ * zugewiesen ist.
+ *
+ * EIN LEERES SET HEISST „ALLE", NICHT „KEINE" - und das ist die einzige
+ * Lesart, die einen Ruecknahmeweg hat. Die Umkehrung (leer = nichts zeigen)
+ * haette einen Zustand erzeugt, aus dem der leere Kalender selbst nicht mehr
+ * herausfuehrt: wer alle Haekchen entfernt, saehe nichts mehr und haette
+ * ausserhalb des Blatts keinen Hinweis darauf, warum.
+ *
+ * Termine OHNE Zuweisung fallen bei aktivem Filter heraus. Das ist Absicht:
+ * der Filter beantwortet „wessen Termin", und ein Termin ohne Person ist
+ * keine Antwort darauf. Der Rueckweg steht im Blatt.
+ */
+function matchesPeopleFilter(item) {
+  if (state.people.size === 0) return true;
+  return (item.assigned_users ?? []).some((u) => state.people.has(u.id));
+}
+
+/** Beide Personen-Achsen in einem Praedikat - „mir" und die Auswahl. */
+function passesPersonFilters(item) {
+  return belongsToMe(item) && matchesPeopleFilter(item);
+}
+
+/** Wie viele Filter gerade etwas wegnehmen - die Zahl am Filterknopf. */
+function activeFilterCount() {
+  let n = 0;
+  if (state.assignedToMe) n += 1;
+  if (state.people.size > 0) n += 1;
+  const hp = state.holidayPrefs ?? {};
+  if (hp.holiday_show_public && !state.layerHolidays) n += 1;
+  if (hp.holiday_show_school && !state.layerSchool) n += 1;
+  if (!state.layerBirthdays) n += 1;
+  if (scheduleEnabled() && !state.layerSchedule) n += 1;
+  return n;
+}
+
+/**
  * True, solange die Ebene sichtbar ist, zu der ein Termin gehoert (#778).
  *
  * Geburtstage kommen aus den Kontakten und fuellen bei einem grossen Adressbuch
@@ -912,7 +1008,7 @@ function eventsOnDay(dateStr) {
         return start <= dateStr && end >= dateStr;
       });
   const layered = state.layerBirthdays ? list : list.filter(isVisibleLayer);
-  return state.assignedToMe ? layered.filter(belongsToMe) : layered;
+  return layered.filter(passesPersonFilters);
 }
 
 /**
@@ -985,7 +1081,7 @@ function tasksOnDay(dateStr) {
   const list = _dayIndex.active
     ? (_dayIndex.tasks.get(dateStr) ?? [])
     : state.tasks.filter((t) => t.due_date === dateStr);
-  return state.assignedToMe ? list.filter(belongsToMe) : list;
+  return list.filter(passesPersonFilters);
 }
 
 /** Holiday entries that overlap a given date (respects layer toggles). */
@@ -1055,20 +1151,20 @@ async function loadRange(from, to) {
   const win     = fetchWindow(from, to);
   const calPath = `/calendar?from=${win.from}&to=${win.to}`;
   try {
-    const [evRes, taskRes, holRes] = await Promise.all([
+    const [evRes, taskRes, holRes, scheduleRes] = await Promise.all([
       api.get(calPath),
-      api.get('/tasks?include_future=1').catch((err) => {
-        console.warn('[Calendar] Tasks-Fetch fehlgeschlagen:', err);
-        return { data: [] };
-      }),
+      api.get("/tasks?include_future=1").catch((err) => { console.warn("[Calendar] Tasks fetch failed:", err); return { data: [] }; }),
       api.get(`/calendar/holidays?from=${from}&to=${to}`).catch(() => ({ data: [] })),
+      scheduleEnabled()
+        ? api.get(`/schedule/entries?from=${from}&to=${to}`).catch(() => ({ data: { entries: [] } }))
+        : Promise.resolve({ data: { entries: [] } }),
     ]);
     state.loadError = null;
-    state.events   = (evRes.data ?? []).map(localizeBirthdayEvent);
-    state.tasks    = filterTasksForCalendar(taskRes.data ?? []);
+    state.events = (evRes.data ?? []).map(localizeBirthdayEvent);
+    state.tasks = filterTasksForCalendar(taskRes.data ?? []);
     state.holidays = holRes.data ?? [];
-    // Offline-Stand: wenn der Browser offline ist, kamen die Daten aus dem
-    // Service-Worker-Cache. Den Cache-Zeitstempel (x-cached-at) als „Stand" lesen.
+    state.scheduleEntries = scheduleRes.data?.entries ?? [];
+    state.scheduleWarnings = scheduleRes.data?.warnings ?? [];
     state.offlineSince = navigator.onLine ? null : await getCachedAt(calPath);
   } catch (err) {
     console.error('[Calendar] loadRange Fehler:', err);
@@ -1081,6 +1177,7 @@ async function loadRange(from, to) {
     state.events   = [];
     state.tasks    = [];
     state.holidays = [];
+    state.scheduleEntries = [];
     state.offlineSince = null;
   }
   state.rangeFrom = from;
@@ -1203,8 +1300,11 @@ export async function render(container, { user }) {
   state.layerHolidays = localStorage.getItem(LAYER_HOLIDAYS_KEY) !== 'false';
   state.layerSchool   = localStorage.getItem(LAYER_SCHOOL_KEY)   !== 'false';
   state.layerBirthdays = localStorage.getItem(LAYER_BIRTHDAYS_KEY) !== 'false';
+  state.layerSchedule = localStorage.getItem(LAYER_SCHEDULE_KEY) !== 'false';
+  state.scheduleDisplay = localStorage.getItem(SCHEDULE_DISPLAY_KEY) === 'blocks' ? 'blocks' : 'compact';
   state.currentUserId = user?.id ?? null;
   state.assignedToMe  = localStorage.getItem(ASSIGNED_TO_ME_KEY) === '1';
+  state.people = restorePeopleFilter(state.users);
 
   renderToolbar();
   renderView();
@@ -1239,47 +1339,37 @@ function renderToolbar() {
   const bar = _container.querySelector('#cal-toolbar');
   if (!bar) return;
 
-  const hp = state.holidayPrefs ?? {};
-  const showHolidayToggle = hp.holiday_show_public;
-  const showSchoolToggle  = hp.holiday_show_school;
+  // DIE EBENEN WOHNEN IM BLATT, NICHT IM KOPF (2026-08-28).
+  //
+  // Hier standen bis zu fuenf Chips plus den „Mir zugewiesen"-Schalter und
+  // belegten damit eine eigene Kopfzeile - gemessen 56px auf 390px, also
+  // 6,6% der Viewporthoehe, fuer Bedienelemente, die unter 640px ihr Label
+  // verloren und deren An/Aus-Zustand eine Flaeche von 1,085:1 war. Was hier
+  // bleibt, ist ein Knopf mit der ZAHL der aktiven Filter: er beantwortet die
+  // einzige Frage, die der Kopf beantworten muss („nehme ich gerade etwas
+  // weg?"), und der Rest steht beschriftet im Blatt (openCalendarFilters).
+  const filterCount = activeFilterCount();
 
-  // Der Geburtstags-Schalter erscheint nur, wenn im geladenen Bereich wirklich
-  // Geburtstage liegen - oder wenn die Ebene aus ist, denn sonst gaebe es keinen
-  // Weg zurueck: ohne sichtbare Geburtstage verschwaende der Knopf, der sie
-  // wieder einschaltet.
-  const showBirthdayToggle = hasBirthdayEvents() || !state.layerBirthdays;
-
-  const holidayToggleHtml = (showHolidayToggle || showSchoolToggle || showBirthdayToggle) ? `
-    <div class="cal-toolbar__layers">
-      ${showHolidayToggle ? `
-        <button class="cal-toolbar__layer-btn ${state.layerHolidays ? 'cal-toolbar__layer-btn--active' : ''}"
-                id="cal-layer-holidays" data-layer="holidays"
-                title="${t('calendar.toggleHolidays')}"
-                style="--layer-color:${esc(hp.holiday_public_color ?? '#FF3B30')}">
-          <span class="cal-toolbar__layer-dot"></span>
-          <span>${t('calendar.toggleHolidays')}</span>
-        </button>
-      ` : ''}
-      ${showSchoolToggle ? `
-        <button class="cal-toolbar__layer-btn ${state.layerSchool ? 'cal-toolbar__layer-btn--active' : ''}"
-                id="cal-layer-school" data-layer="school"
-                title="${t('calendar.toggleSchool')}"
-                style="--layer-color:${esc(hp.holiday_school_color ?? '#34C759')}">
-          <span class="cal-toolbar__layer-dot"></span>
-          <span>${t('calendar.toggleSchool')}</span>
-        </button>
-      ` : ''}
-      ${showBirthdayToggle ? `
-        <button class="cal-toolbar__layer-btn ${state.layerBirthdays ? 'cal-toolbar__layer-btn--active' : ''}"
-                id="cal-layer-birthdays" data-layer="birthdays"
-                title="${t('calendar.toggleBirthdays')}"
-                style="--layer-color:var(--color-accent)">
-          <span class="cal-toolbar__layer-dot"></span>
-          <span>${t('calendar.toggleBirthdays')}</span>
-        </button>
-      ` : ''}
-    </div>
+  // DIE UEBERLAPPUNGSWARNUNG BLEIBT IM KOPF. Sie ist eine Meldung mit
+  // `role="status"`, kein Filter - im Blatt waere sie hinter einem Klick
+  // versteckt, und eine Warnung, die man erst oeffnen muss, ist keine.
+  const scheduleWarningHtml = (scheduleEnabled() && state.scheduleWarnings.length) ? `
+    <span class="cal-toolbar__schedule-warning" role="status"
+          title="${esc(t('schedule.overlapWarning', { date: state.scheduleWarnings[0].date_key, user: scheduleOwnerName(state.scheduleWarnings[0]) }))}">
+      <i data-lucide="triangle-alert" class="icon-sm" aria-hidden="true"></i>
+      <span>${t('schedule.overlapWarningShort')}</span>
+    </span>
   ` : '';
+
+  const filterBtnHtml = `
+    ${scheduleWarningHtml}
+    <button class="btn btn--icon cal-toolbar__filter-btn ${filterCount ? 'cal-toolbar__filter-btn--active' : ''}"
+            id="cal-filters" aria-label="${filterCount ? esc(t('calendar.filtersActive', { count: filterCount })) : t('calendar.filtersOpen')}"
+            title="${t('calendar.filters')}" aria-haspopup="dialog">
+      <i data-lucide="sliders-horizontal" aria-hidden="true"></i>
+      ${filterCount ? `<span class="cal-toolbar__filter-count" aria-hidden="true">${filterCount}</span>` : ''}
+    </button>
+  `;
 
   bar.replaceChildren();
   bar.insertAdjacentHTML('beforeend', `
@@ -1295,15 +1385,7 @@ function renderToolbar() {
       </button>
     </div>
     <div class="page-toolbar__actions">
-      ${holidayToggleHtml}
-      ${state.users.length > 1 && state.currentUserId != null ? `
-        <button class="cal-toolbar__layer-btn cal-toolbar__mine-btn ${state.assignedToMe ? 'cal-toolbar__layer-btn--active' : ''}"
-                id="cal-assigned-me" aria-pressed="${state.assignedToMe ? 'true' : 'false'}"
-                title="${t('calendar.assignedToMe')}" style="--layer-color:var(--module-calendar)">
-          <i data-lucide="user" class="icon-sm" aria-hidden="true"></i>
-          <span>${t('calendar.assignedToMe')}</span>
-        </button>
-      ` : ''}
+      ${filterBtnHtml}
       <!-- KEIN aria-controls im geschlossenen Zustand: die Suchleiste entsteht
            erst beim Öffnen (openCalendarSearch), und ein Verweis auf eine ID, die
            es noch nicht gibt, kündigt einem Screenreader ein Ziel an, das nicht
@@ -1315,6 +1397,17 @@ function renderToolbar() {
               aria-expanded="false">
         <i data-lucide="search" aria-hidden="true"></i>
       </button>
+      <button class="btn btn--primary toolbar-new-btn" id="cal-add" aria-label="${t('calendar.addEvent')}">
+        <i data-lucide="plus" aria-hidden="true"></i>
+        <span class="toolbar-new-btn__label">${t('newLabel.calendar')}</span>
+      </button>
+    </div>
+    <!-- Bar-Zeile des Kopfs (Werkzeugzeilen-Regel, layout.css): das Ansichts-
+         Segment hatte im Actions-Slot bei 1280px 212px fuer 245px Inhalt -
+         "Agenda" lag hinter dem Fade und das Monatslabel daneben ellipsierte
+         auf seine 7ch-Untergrenze. Der neutrale Wrapper haelt das Well des
+         Segments auf intrinsischer Breite; die Zeile gehoert trotzdem ihm. -->
+    <div class="page-toolbar__bar">
       <div class="cal-toolbar__views" role="tablist" aria-label="${t('nav.calendar')}">
         ${VIEWS.map((v) => `
           <button class="cal-toolbar__view-btn ${v === state.view ? 'cal-toolbar__view-btn--active' : ''}"
@@ -1322,10 +1415,6 @@ function renderToolbar() {
                   tabindex="${v === state.view ? '0' : '-1'}">${VIEW_LABELS()[v]}</button>
         `).join('')}
       </div>
-      <button class="btn btn--primary toolbar-new-btn" id="cal-add" aria-label="${t('calendar.addEvent')}">
-        <i data-lucide="plus" aria-hidden="true"></i>
-        <span class="toolbar-new-btn__label">${t('newLabel.calendar')}</span>
-      </button>
     </div>
   `);
 
@@ -1338,38 +1427,17 @@ function renderToolbar() {
   bar.querySelector('#cal-today').addEventListener('click', goToday);
   bar.querySelector('#cal-add').addEventListener('click', () => openEventModal({ mode: 'create', date: newEventDate() }));
   bar.querySelector('#cal-search').addEventListener('click', openCalendarSearch);
+  bar.querySelector('#cal-filters').addEventListener('click', openCalendarFilters);
 
-  bar.querySelector('#cal-assigned-me')?.addEventListener('click', (e) => {
-    state.assignedToMe = !state.assignedToMe;
-    try { localStorage.setItem(ASSIGNED_TO_ME_KEY, state.assignedToMe ? '1' : '0'); } catch {}
-    const btn = e.currentTarget;
-    btn.classList.toggle('cal-toolbar__layer-btn--active', state.assignedToMe);
-    btn.setAttribute('aria-pressed', String(state.assignedToMe));
-    renderView();
-  });
-
-  bar.querySelectorAll('[data-layer]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const layer = btn.dataset.layer;
-      if (layer === 'holidays') {
-        state.layerHolidays = !state.layerHolidays;
-        localStorage.setItem(LAYER_HOLIDAYS_KEY, state.layerHolidays);
-        btn.classList.toggle('cal-toolbar__layer-btn--active', state.layerHolidays);
-      } else if (layer === 'school') {
-        state.layerSchool = !state.layerSchool;
-        localStorage.setItem(LAYER_SCHOOL_KEY, state.layerSchool);
-        btn.classList.toggle('cal-toolbar__layer-btn--active', state.layerSchool);
-      } else if (layer === 'birthdays') {
-        state.layerBirthdays = !state.layerBirthdays;
-        localStorage.setItem(LAYER_BIRTHDAYS_KEY, state.layerBirthdays);
-        btn.classList.toggle('cal-toolbar__layer-btn--active', state.layerBirthdays);
-      }
-      renderView();
-    });
-  });
-
-  // Ansichts-Umschalter scrollt auf Mobile horizontal (Scrollbalken versteckt):
-  // Rand-Fade als Affordanz (geteilte has-fade-*-Konvention, Audit F-06).
+  // EIN wireScrollFade auf diesem Element, nicht zwei.
+  //
+  // Es stand hier oben UND unten am Tablist-Block - beide Male auf
+  // `.cal-toolbar__views`, beide Rueckgabewerte verworfen. Der Helfer ist
+  // nicht idempotent (utils/ux.js): jeder Aufruf haengt einen Scroll-Listener,
+  // einen ResizeObserver und einen MutationObserver mit `subtree: true` an.
+  // `renderToolbar()` laeuft bei jedem Filterwechsel erneut, also wuchs die
+  // Zahl der Beobachter mit der Benutzung. Der Aufruf gehoert an den Ort, an
+  // dem auch die Tablist verdrahtet wird - dort steht er jetzt, einmal.
   wireScrollFade(bar.querySelector('.cal-toolbar__views'));
   viewTabs = wireTablist(bar.querySelector('.cal-toolbar__views'), {
     activeId: state.view,
@@ -1397,12 +1465,41 @@ function updateLabel() {
     // Mobil zeigt die "Woche" ein 3-Tage-Fenster um den Cursor (renderWeekView);
     // ein "KW 30"-Label würde dann einen Bereich behaupten, der nicht zu sehen
     // ist (Audit A1-19). Das Label nennt stattdessen den sichtbaren Bereich.
-    lbl.textContent = window.matchMedia('(max-width: 639px)').matches
+    lbl.textContent = window.matchMedia(MOBILE_MEDIA_QUERY).matches
       ? t('calendar.dayRangeLabel', { from: formatDayMonth(addDays(state.cursor, -1)), to: formatPreferredDate(addDays(state.cursor, 1)) })
       : t('calendar.weekNumberLabel', { week: getWeekNumber(state.cursor), month: mon, year });
   }
   if (state.view === 'day')    lbl.textContent = formatDate(state.cursor, { weekday: true, long: true });
   if (state.view === 'agenda') lbl.textContent = t('calendar.agendaFrom', { date: formatDate(state.cursor) });
+
+  syncTodayButton();
+}
+
+/**
+ * „HEUTE" ERSCHEINT NUR, WENN HEUTE NICHT ZU SEHEN IST.
+ *
+ * Ein Knopf, der an den aktuellen Zeitraum zurueckfuehrt, ist sinnlos, solange
+ * man dort steht - Apple Kalender und Fantastical blenden ihn genau dann aus.
+ * Hier ist er ausserdem die Gegenmassnahme zu `flex-basis: 0` am Center-Slot
+ * (layout.css): der engere Slot kappt das Zeitraum-Label sonst auf seine
+ * 7ch-Untergrenze, und die 66px dieses Knopfes sind genau die, die fehlen.
+ *
+ * `hidden` STATT ENTFERNEN, und das ist der Punkt: der Slot behaelt seine
+ * Basis 0 und bleibt in der Titelzeile, egal ob der Knopf da ist. Die
+ * KOPFHOEHE springt beim Navigieren damit nicht - nur die Labelbreite aendert
+ * sich. Ein Kopf, der beim Blaettern seine Hoehe wechselt, waere derselbe
+ * Fehler, den die kollabierende Leiste mit ihrem negativen `top` vermeidet.
+ *
+ * Die Frage „ist heute zu sehen" beantwortet der ANGEZEIGTE BEREICH, nicht
+ * eine Fallunterscheidung je Ansicht: `getRangeForView` kennt ihn fuer alle
+ * vier, und eine zweite Rechnung daneben waere die naechste Stelle, an der
+ * Monat und Agenda auseinanderlaufen.
+ */
+function syncTodayButton() {
+  const btn = _container.querySelector('#cal-today');
+  if (!btn) return;
+  const { from, to } = getRangeForView(state.view, state.cursor);
+  btn.hidden = state.today >= from && state.today <= to;
 }
 
 function getWeekNumber(dateStr) {
@@ -1424,7 +1521,7 @@ async function navigate(dir) {
   if (state.view === 'month') {
     state.cursor = addMonths(state.cursor, dir);
   } else if (state.view === 'week') {
-    const isMobile = window.matchMedia('(max-width: 639px)').matches;
+    const isMobile = window.matchMedia(MOBILE_MEDIA_QUERY).matches;
     state.cursor = addDays(state.cursor, dir * (isMobile ? 3 : 7));
   } else if (state.view === 'day') {
     state.cursor = addDays(state.cursor, dir);
@@ -1444,10 +1541,23 @@ async function goToday() {
   renderView();
 }
 
+/**
+ * Drill-in aus einer Tageszelle - EINE NAVIGATION, KEINE EINSTELLUNG.
+ *
+ * Hier stand `setSavedCalendarView('day')`. Eine Geste, die „zeig mir diesen
+ * Tag" meint, schrieb damit still die STANDARDANSICHT des Kalenders um: wer
+ * dreimal auf eine Monatszelle tippte, oeffnete den Kalender fortan in der
+ * Tagesansicht und bekam dafuer weder eine Rueckmeldung noch einen Rueckweg -
+ * verifiziert, `yuvomi:calendar:view` stand nach einem Tap auf `"day"` und
+ * ueberlebte den Reload.
+ *
+ * `state.view` und `viewTabs.sync` wechseln die Ansicht fuer die Sitzung, und
+ * genau das ist gemeint. Gespeichert wird die Ansicht nur dort, wo der Nutzer
+ * sie WAEHLT: im `onChange` der Tablist.
+ */
 async function switchToDayView(date) {
   state.cursor = date;
   state.view = 'day';
-  setSavedCalendarView('day');
   viewTabs?.sync('day');
   await reloadForView();
   updateLabel();
@@ -1578,11 +1688,18 @@ function renderView() {
    * Monatsgitter ist eine Flaeche und will die ganze Content-Spalte. Ein
    * fester Modifier stimmte in genau einer der vier Ansichten - dieselbe
    * Kopplung wie auf /tasks (Liste gegen Kanban), und derselbe Guard prueft
-   * sie (Critique 2026-08-13, zweite Runde). */
+   * sie (Critique 2026-08-13, zweite Runde).
+   *
+   * DER KOPF TOGGELT NICHT MEHR MIT (2026-08-27): er steht ueber vier
+   * Koerpern, drei davon full-bleed, und seit die Ansichts-Umschalter in der
+   * Bar-Zeile wohnen (Werkzeugzeilen-Regel) kann seine volle Titelzeile im
+   * 720er-Deckel der Agenda nicht einzeilig wohnen (Sonde 19: zwei Zeilen
+   * bei 1280px). EIN Kopf, EINE Breite - er haelt die Kante seines
+   * breitesten Koerpers; die Agenda-LISTE behaelt ihre Lesebahn. Der
+   * Kanten-Guard kennt diese Bauart (test-frontend-audit: Lesemass-Toggle
+   * am Koerper ohne Kopf-Toggle). */
   _container.querySelector('#calendar-page')
     ?.classList.toggle('page-measure--narrow', state.view === 'agenda');
-  _container.querySelector('.cal-toolbar')
-    ?.classList.toggle('page-toolbar--narrow', state.view === 'agenda');
   // Monats-Resize-Observer lösen, bevor das alte #month-grid detached wird;
   // nur die Monatsansicht setzt ihn danach wieder auf.
   _monthGridResizeObserver?.disconnect();
@@ -1664,7 +1781,7 @@ function renderMonthView(container) {
     // Punkten reduziert (reines "etwas ist los"-Signal), ein Tap darf nie in
     // einem Event-Popup enden statt in der handlungsfähigen Tagesansicht (P1).
     // Desktop behält die feinere Interaktion: Chip -> Ziel, Zelle -> Tag.
-    const isMobile = window.matchMedia('(max-width: 639px)').matches;
+    const isMobile = window.matchMedia(MOBILE_MEDIA_QUERY).matches;
     if (!isMobile) {
       const taskChip = e.target.closest('.cal-task-chip');
       if (taskChip) {
@@ -1721,6 +1838,7 @@ function renderMonthDay(date, inMonth) {
   const evs      = eventsOnDay(date);
   const dayTasks = tasksOnDay(date);
   const dayHols  = holidaysOnDay(date);
+  const daySchedule = state.layerSchedule ? state.scheduleEntries.filter((entry) => entry.date_key === date && entry.shift_type) : [];
   const isToday  = date === state.today;
   const classes  = monthDayClasses(date, inMonth);
 
@@ -1731,7 +1849,7 @@ function renderMonthDay(date, inMonth) {
   // Chip mittig ab, ohne "+N" (Audit A1-04 / P2). data-total trägt die Gesamtzahl,
   // damit "+N" auch die nicht gerenderten Überzähligen mitzählt. Reihenfolge
   // Feiertag -> Termin -> Aufgabe.
-  const total     = dayHols.length + evs.length + dayTasks.length;
+  const total     = dayHols.length + daySchedule.length + evs.length + dayTasks.length;
   const holShown  = dayHols.slice(0, MONTH_DAY_MAX_CHIPS);
   const evShown   = evs.slice(0, Math.max(0, MONTH_DAY_MAX_CHIPS - holShown.length));
   const taskShown = dayTasks.slice(0, Math.max(0, MONTH_DAY_MAX_CHIPS - holShown.length - evShown.length));
@@ -1741,6 +1859,8 @@ function renderMonthDay(date, inMonth) {
       <span>${esc(h.name)}</span>
     </div>
   `).join('');
+
+  const scheduleHtml = daySchedule.map((entry) => `<div class="month-day__holiday schedule-entry" style="--holi-color:${esc(entry.shift_type.color)}" title="${esc(scheduleEntryTitle(entry))}"><span>${esc(scheduleEntryLabel(entry))}</span></div>`).join("");
 
   // Monatsgrid-Kanon (Apple Kalender / Fantastical): flache getönte Bar mit nur
   // dem Titel. Icon und Avatar-Stack leben in der Tages-/Detailansicht; die
@@ -1761,6 +1881,7 @@ function renderMonthDay(date, inMonth) {
          aria-label="${esc(monthDayAriaLabel(date, total))}"${isToday ? ' aria-current="date"' : ''}>
       <div class="month-day__number">${new Date(date + 'T00:00:00').getDate()}</div>
       ${holHtml}
+      ${scheduleHtml}
       ${evHtml}
       ${taskHtml}
       <div class="month-day__more" hidden></div>
@@ -1771,6 +1892,69 @@ function renderMonthDay(date, inMonth) {
 // aria-label der Tageszelle: lokalisiertes Datum + (falls vorhanden) Zahl der
 // Einträge, damit Tastatur/Screenreader den Tag vor dem Drill-in einordnen
 // können. Leere Tage tragen nur das Datum (die role sagt "Schaltfläche"). P1.
+function scheduleEntriesOnDay(date) {
+  return state.layerSchedule
+    ? state.scheduleEntries.filter((entry) => entry.date_key === date && entry.shift_type)
+    : [];
+}
+
+/**
+ * Ist der Schichtplan im Haushalt ueberhaupt eingeschaltet?
+ *
+ * `disabled_modules` heisst "dieses Modul gibt es hier nicht". Der Routen-Guard
+ * schuetzt `/schedule` - der Kalender ist aber eine MISCHSTELLE: sein Pfad nennt
+ * ein Modul, sein Inhalt kommt aus mehreren. Ohne diese Frage laedt und zeigt er
+ * die Schichten eines abgeschalteten Moduls weiter, samt Ebenen-Knopf. Dasselbe
+ * Muster wie in dashboard.js und recipes.js.
+ */
+function scheduleEnabled() { return !window.yuvomi?.isModuleDisabled?.('schedule'); }
+
+function scheduleHasTimes(entry) { return Boolean(entry.shift_type?.start_time && entry.shift_type?.end_time); }
+
+function scheduleOwnerName(entry) {
+  const owner = state.users.find((user) => Number(user.id) === Number(entry.user_id));
+  return owner?.display_name || owner?.username || "";
+}
+
+function scheduleEntryLabel(entry) {
+  const shift = entry.shift_type.short_code || entry.shift_type.name;
+  const owner = scheduleOwnerName(entry);
+  return owner ? shift + " · " + owner : shift;
+}
+
+function scheduleEntryTitle(entry) {
+  const owner = scheduleOwnerName(entry);
+  const time = scheduleTimeLabel(entry.shift_type);
+  return entry.shift_type.name + (owner ? " · " + owner : "") + (time ? " · " + time : "");
+}
+
+function scheduleIsFullDayShift(entry) {
+  const type = entry.shift_type;
+  return Boolean(type?.start_time && type?.end_time && type.start_time === type.end_time);
+}
+
+function scheduleTimeLabel(type) {
+  if (!type.start_time || !type.end_time) return "";
+  const crossesDay = type.end_time <= type.start_time;
+  const fullDay = type.end_time === type.start_time;
+  return type.start_time + "–" + type.end_time + (crossesDay ? " +1" : "") + (fullDay ? " · 24 h" : "");
+}
+
+function renderScheduleChip(entry, className = 'allday-holiday') {
+  const type = entry.shift_type;
+  const label = scheduleEntryLabel(entry);
+  const start = type.start_time ? '<small class="schedule-entry__start">' + esc(type.start_time) + '</small>' : '';
+  return `<div class="${className} schedule-entry" style="--holi-color:${esc(type.color)}" title="${esc(scheduleEntryTitle(entry))}"><span>${esc(label)}</span>${start}</div>`;
+}
+function renderScheduleTimeBlock(entry, className) {
+  const type = entry.shift_type;
+  const start = timeToMinutes(type.start_time);
+  const end = timeToMinutes(type.end_time);
+  const duration = Math.max((end > start ? end : 24 * 60) - start, 30);
+  const bounds = className === 'week-event' ? 'left:2px;width:calc(100% - 4px);' : 'left:calc(4px);width:calc(100% - 14px);';
+  return `<div class="${className} schedule-time-block" style="top:${hourOffset(start)};height:calc(${hourOffset(duration)} - 4px);${bounds}--ev-color:${esc(type.color)}" title="${esc(scheduleEntryTitle(entry))}"><span>${esc(scheduleEntryLabel(entry))}</span><small>${esc(scheduleTimeLabel(type))}</small></div>`;
+}
+
 function monthDayAriaLabel(date, total) {
   const d = formatPreferredDate(date);
   return total > 0 ? `${d}, ${t('calendar.monthDayEntries', { count: total })}` : d;
@@ -1781,7 +1965,7 @@ function monthDayAriaLabel(date, total) {
 // --------------------------------------------------------
 
 function renderWeekView(container) {
-  const isMobile = window.matchMedia('(max-width: 639px)').matches;
+  const isMobile = window.matchMedia(MOBILE_MEDIA_QUERY).matches;
   // Auf Mobile: 3-Tage-Fenster zentriert um state.cursor statt vollem Mo–So
   const days = isMobile
     ? Array.from({ length: 3 }, (_, i) => addDays(state.cursor, i - 1))
@@ -1798,6 +1982,9 @@ function renderWeekView(container) {
     eventsOnDay(d).filter((e) => !isAllDayLike(e))
   );
   const layouts = timedEvs.map((events) => layoutOverlaps(events));
+  const schedule = days.map((d) => scheduleEntriesOnDay(d));
+  const scheduleChips = schedule.map((items) => state.scheduleDisplay === 'compact' ? items : items.filter((entry) => !scheduleHasTimes(entry) || scheduleIsFullDayShift(entry)));
+  const scheduleBlocks = schedule.map((items) => state.scheduleDisplay === 'blocks' ? items.filter((entry) => scheduleHasTimes(entry) && !scheduleIsFullDayShift(entry)) : []);
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -1823,6 +2010,7 @@ function renderWeekView(container) {
                 <span>${esc(h.name)}</span>
               </div>
             `).join('')}
+            ${scheduleChips[i].map((entry) => renderScheduleChip(entry)).join('')}
             ${alldayEvs[i].map((ev) => `
               <div class="allday-event" data-id="${ev.id}"
                    style="${eventSurfaceStyle(ev)}"
@@ -1848,6 +2036,7 @@ function renderWeekView(container) {
                 ${Array.from({ length: 24 }, (_, h) => `
                   <div class="week-view__hour-line" style="top:${hourOffset(h * 60)};"></div>
                 `).join('')}
+                ${scheduleBlocks[i].map((entry) => renderScheduleTimeBlock(entry, 'week-event')).join('')}
                 ${timedEvs[i].map((ev) => renderWeekEvent(ev, layouts[i].get(ev.id))).join('')}
                 ${d === state.today ? `<div class="week-view__now-line" id="now-line" style="top:${hourOffset(nowMinutes())};"></div>` : ''}
               </div>
@@ -1865,6 +2054,7 @@ function renderWeekView(container) {
   });
 
   container.querySelector('#week-cols').addEventListener('click', (e) => {
+    if (e.target.closest('.schedule-time-block')) return;
     const evEl = e.target.closest('.week-event');
     if (evEl) {
       const ev = state.events.find((ev) => ev.id === parseInt(evEl.dataset.id, 10));
@@ -2038,13 +2228,16 @@ function renderDayView(container) {
   const allday  = dayEvs.filter(isAllDayLike);
   const timed   = dayEvs.filter((e) => !isAllDayLike(e));
   const layout = layoutOverlaps(timed);
+  const schedule = scheduleEntriesOnDay(state.cursor);
+  const scheduleChips = state.scheduleDisplay === 'compact' ? schedule : schedule.filter((entry) => !scheduleHasTimes(entry) || scheduleIsFullDayShift(entry));
+  const scheduleBlocks = state.scheduleDisplay === 'blocks' ? schedule.filter((entry) => scheduleHasTimes(entry) && !scheduleIsFullDayShift(entry)) : [];
 
   container.replaceChildren();
   // Kein eigener Datums-Header mehr: die Toolbar zeigt exakt dasselbe Datum
   // bereits als Ansichts-Label (Audit A1-18).
   container.insertAdjacentHTML('beforeend', `
     <div class="day-view">
-      ${(allday.length || tasksOnDay(state.cursor).length || holidaysOnDay(state.cursor).length) ? `
+      ${(allday.length || scheduleChips.length || tasksOnDay(state.cursor).length || holidaysOnDay(state.cursor).length) ? `
       <div class="allday-row" style="display:grid;grid-template-columns:var(--cal-gutter-width) 1fr;">
         <div class="calendar-all-day-label">${t('calendar.allDayShort')}</div>
         <div class="allday-cell">
@@ -2053,6 +2246,7 @@ function renderDayView(container) {
               <span>${esc(h.name)}</span>
             </div>
           `).join('')}
+          ${scheduleChips.map((entry) => renderScheduleChip(entry)).join('')}
           ${allday.map((ev) => `
             <div class="allday-event" data-id="${ev.id}"
                  style="${eventSurfaceStyle(ev)}"
@@ -2073,8 +2267,9 @@ function renderDayView(container) {
             ${Array.from({ length: 24 }, (_, h) => `
               <div class="week-view__hour-line" style="top:${hourOffset(h * 60)};"></div>
             `).join('')}
+            ${scheduleBlocks.map((entry) => renderScheduleTimeBlock(entry, 'day-event')).join('')}
             ${timed.map((ev) => renderDayEvent(ev, layout.get(ev.id))).join('')}
-            ${dayEvs.length === 0 ? `<div class="day-view__empty-hint" style="top:calc(${hourOffset(state.cursor === state.today ? nowMinutes() : 9 * 60)} + 16px)">${t('calendar.dayEmptyHint')}</div>` : ''}
+            ${dayEvs.length === 0 && schedule.length === 0 ? `<div class="day-view__empty-hint" style="top:calc(${hourOffset(state.cursor === state.today ? nowMinutes() : 9 * 60)} + 16px)">${t('calendar.dayEmptyHint')}</div>` : ''}
           </div>
           ${state.cursor === state.today ? `
             <div class="day-view__now-line" aria-hidden="true" style="top:${hourOffset(nowMinutes())};"></div>
@@ -2099,6 +2294,7 @@ function renderDayView(container) {
   });
 
   container.querySelector('#day-col').addEventListener('click', (e) => {
+    if (e.target.closest('.schedule-time-block')) return;
     const evEl = e.target.closest('.day-event');
     if (evEl) {
       const ev = state.events.find((ev) => ev.id === parseInt(evEl.dataset.id, 10));
@@ -2164,8 +2360,8 @@ function renderAgendaView(container) {
   const days = Array.from({ length: 31 }, (_, i) => addDays(from, i));
 
   const groups = days
-    .map((d) => ({ date: d, events: eventsOnDay(d), tasks: tasksOnDay(d), holidays: holidaysOnDay(d) }))
-    .filter((g) => g.events.length > 0 || g.tasks.length > 0 || g.holidays.length > 0);
+    .map((d) => ({ date: d, events: eventsOnDay(d), tasks: tasksOnDay(d), holidays: holidaysOnDay(d), schedule: scheduleEntriesOnDay(d) }))
+    .filter((g) => g.events.length > 0 || g.tasks.length > 0 || g.holidays.length > 0 || g.schedule.length > 0);
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -2176,7 +2372,7 @@ function renderAgendaView(container) {
           title: t('calendar.agendaEmpty'),
           action: { label: t('calendar.newEvent'), attrs: { id: 'agenda-empty-cta' } },
         })
-        : groups.map(({ date, events, tasks, holidays }) => `
+        : groups.map(({ date, events, tasks, holidays, schedule }) => `
           <div class="agenda-day">
             <!-- Tageskopf als echte Ueberschrift (Critique 2026-08-10):
                  /calendar hatte genau EIN h-Element im ganzen Dokument. -->
@@ -2189,6 +2385,7 @@ function renderAgendaView(container) {
                 <span class="agenda-holiday__dot"></span>
                 <span>${esc(h.name)}</span>
               </div>`).join('')}</div>` : ''}
+            ${schedule.length ? `<div class="agenda-holidays">${schedule.map((entry) => renderScheduleChip(entry, 'agenda-holiday')).join('')}</div>` : ''}
             ${events.length ? `<div class="list-rows">${events.map((ev) => renderAgendaEvent(ev, date)).join('')}</div>` : ''}
             ${tasks.length ? `<div class="agenda-tasks">${tasks.map(renderTaskChip).join('')}</div>` : ''}
           </div>
@@ -2233,6 +2430,247 @@ function renderAgendaView(container) {
 // Eine Leiste unter der Toolbar; der Body zeigt eine chronologische Trefferliste
 // (Vergangenheit + Zukunft) mit „Heute"-Anker. Klick öffnet den Termin im Kontext.
 // --------------------------------------------------------
+
+// --------------------------------------------------------
+// Filter-Blatt
+//
+// DER ORT, AN DEM DIE EBENEN WOHNEN - und der Grund, warum sie umgezogen sind.
+//
+// Bis 2026-08-28 standen bis zu fuenf Ebenen-Schalter als Chips im Modulkopf.
+// Gemessen kostete das eine eigene Kopfzeile (56px = 6,6% der Viewporthoehe
+// auf 390px), und unter 640px verloren die Chips ihr Label: uebrig blieben
+// 48px-Kreise, von denen einer nur einen 8px-Punkt enthielt. Ihr An/Aus-
+// Zustand war eine Flaeche von 1,085:1 in Light - die `--active`-Regel, die
+// ihn tragen sollte, setzte dieselbe Kante wie der Ruhezustand und war damit
+// ein No-op. Vier der fuenf hatten kein `aria-pressed`; fuer einen
+// Screenreader war die Ebene zustandslos.
+//
+// Ein Blatt loest alle drei Befunde mit einem Bauteil: die Schalter bekommen
+// ihre Beschriftung zurueck, ihr Zustand ist eine echte Checkbox statt einer
+// Waschung, und der Kopf gibt eine Zeile her.
+//
+// WAS ES NICHT IST: eine FARBLEGENDE. Die Farbe eines Termins kommt aus drei
+// Quellen in Rangfolge (`resolveEventColor`, utils/event-color.js) - eigene
+// Farbe, primaere zugewiesene Person, Kalender. Eine Legende „diese Farbe =
+// jener Kalender" waere bei jedem Termin falsch, der eine der ersten beiden
+// Quellen nutzt. Die Person ist die einzige Achse, die eindeutig ist, und in
+// einem Familienplaner ist sie auch die gefragte.
+// --------------------------------------------------------
+
+/** Die Ebenen, die es im aktuellen Zustand ueberhaupt gibt. */
+function availableLayers() {
+  const hp = state.holidayPrefs ?? {};
+  const rows = [];
+  if (hp.holiday_show_public) {
+    rows.push({
+      key: 'holidays', label: t('calendar.toggleHolidays'),
+      checked: state.layerHolidays, color: hp.holiday_public_color ?? HOLIDAY_PUBLIC_FALLBACK,
+    });
+  }
+  if (hp.holiday_show_school) {
+    rows.push({
+      key: 'school', label: t('calendar.toggleSchool'),
+      checked: state.layerSchool, color: hp.holiday_school_color ?? HOLIDAY_SCHOOL_FALLBACK,
+    });
+  }
+  if (scheduleEnabled()) {
+    rows.push({
+      key: 'schedule', label: t('schedule.overlay'),
+      checked: state.layerSchedule, color: null,
+    });
+  }
+  // Der Geburtstags-Schalter braucht hier keine „gibt es welche?"-Bedingung
+  // mehr: im Blatt kostet eine Zeile keine Kopfzeile, und ein Schalter, der
+  // je nach Datenlage verschwindet, ist im Blatt schwerer zu finden als eine
+  // Zeile, die immer an derselben Stelle steht.
+  rows.push({
+    key: 'birthdays', label: t('calendar.toggleBirthdays'),
+    checked: state.layerBirthdays, color: null,
+  });
+  return rows;
+}
+
+/** Initialen einer Person - dieselbe Bildung wie im Avatar-Stack. */
+function personInitials(name) {
+  return String(name ?? '')
+    .split(' ')
+    .map((w) => w[0] ?? '')
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+}
+
+function openCalendarFilters() {
+  const layers = availableLayers();
+  const people = state.users ?? [];
+
+  const layerRows = layers.map((row) => toggleRowHtml({
+    label: row.label,
+    checked: row.checked,
+    swatchColor: row.color,
+    attrs: { 'data-filter-layer': row.key },
+  })).join('');
+
+  // Der Anzeigemodus des Schichtplans ist KEIN Filter - er nimmt nichts weg,
+  // er zeigt dasselbe anders. Er steht trotzdem hier, weil er im Kopf als
+  // Text-Chip neben den Ebenen hing und dort dieselbe Zeile kostete; im Blatt
+  // hat er als beschrifteter Schalter zum ersten Mal einen Zustand, den man
+  // ablesen kann statt ihn aus der Knopfbeschriftung zu erschliessen (der
+  // Chip hiess „Volle Bloecke", wenn er sie NICHT zeigte).
+  const scheduleDisplayRow = scheduleEnabled() ? toggleRowHtml({
+    label: t('schedule.fullBlocks'),
+    checked: state.scheduleDisplay === 'blocks',
+    attrs: { 'data-filter-schedule-display': 'true' },
+  }) : '';
+
+  const meRow = (people.length > 1 && state.currentUserId != null)
+    ? toggleRowHtml({
+      label: t('calendar.assignedToMe'),
+      checked: state.assignedToMe,
+      attrs: { 'data-filter-mine': 'true' },
+    })
+    : '';
+
+  const personRows = people.map((u) => toggleRowHtml({
+    label: u.display_name ?? '',
+    // Leeres Set heisst ALLE - die Haekchen stehen dann auf „an", weil genau
+    // das der sichtbare Zustand ist. Wer das erste abwaehlt, waehlt damit die
+    // uebrigen aus; das ist die Lesart, die Apple in derselben Liste hat.
+    checked: state.people.size === 0 || state.people.has(u.id),
+    // ZWEI NAMEN FUER DIESELBE FARBE, und das ist kein Tippfehler in einer
+    // der beiden Quellen: `/auth/users` liefert die Spalte roh als
+    // `avatar_color`, waehrend `assigned_users` sie im JSON auf `color`
+    // umbenennt (services/calendar-events.js:17). Wer nur einen der beiden
+    // Namen liest, bekommt an einer der beiden Stellen `undefined` - hier
+    // stand zuerst `u.color` und die Scheiben blieben in jeder Zeile leer.
+    swatchColor: u.avatar_color ?? u.color ?? null,
+    swatchLabel: personInitials(u.display_name),
+    attrs: { 'data-filter-person': String(u.id) },
+  })).join('');
+
+  const content = `
+    <div class="cal-filters">
+      ${layerRows ? `
+        <section class="cal-filters__group">
+          <h3 class="cal-filters__heading">${t('calendar.filtersLayers')}</h3>
+          ${layerRows}
+        </section>
+      ` : ''}
+      ${(meRow || personRows) ? `
+        <section class="cal-filters__group">
+          <h3 class="cal-filters__heading">${t('calendar.filtersPeople')}</h3>
+          ${meRow}
+          ${personRows}
+        </section>
+      ` : ''}
+      ${scheduleDisplayRow ? `
+        <section class="cal-filters__group">
+          <h3 class="cal-filters__heading">${t('calendar.filtersDisplay')}</h3>
+          ${scheduleDisplayRow}
+        </section>
+      ` : ''}
+      <button type="button" class="btn btn--secondary cal-filters__reset" id="cal-filters-reset">
+        ${t('calendar.filtersReset')}
+      </button>
+    </div>
+  `;
+
+  openSharedModal({ title: t('calendar.filters'), content, size: 'sm', initialFocus: 'none' });
+
+  const panel = document.querySelector('#shared-modal-overlay .modal-panel');
+  if (!panel) return;
+
+  const LAYER_STATE = {
+    holidays:  ['layerHolidays',  LAYER_HOLIDAYS_KEY],
+    school:    ['layerSchool',    LAYER_SCHOOL_KEY],
+    schedule:  ['layerSchedule',  LAYER_SCHEDULE_KEY],
+    birthdays: ['layerBirthdays', LAYER_BIRTHDAYS_KEY],
+  };
+
+  panel.addEventListener('change', (e) => {
+    const input = e.target;
+    if (!(input instanceof HTMLInputElement)) return;
+
+    const layerKey = input.dataset.filterLayer;
+    if (layerKey && LAYER_STATE[layerKey]) {
+      const [field, storageKey] = LAYER_STATE[layerKey];
+      state[field] = input.checked;
+      try { localStorage.setItem(storageKey, input.checked ? 'true' : 'false'); } catch {}
+    } else if (input.dataset.filterScheduleDisplay) {
+      state.scheduleDisplay = input.checked ? 'blocks' : 'compact';
+      try { localStorage.setItem(SCHEDULE_DISPLAY_KEY, state.scheduleDisplay); } catch {}
+    } else if (input.dataset.filterMine) {
+      state.assignedToMe = input.checked;
+      try { localStorage.setItem(ASSIGNED_TO_ME_KEY, input.checked ? '1' : '0'); } catch {}
+    } else if (input.dataset.filterPerson) {
+      const id = Number(input.dataset.filterPerson);
+      // Der Sprung aus „alle" heraus: das erste Abwaehlen macht aus dem leeren
+      // Set die Menge der UEBRIGEN. Ohne diesen Schritt haette ein Klick auf
+      // ein Haekchen, das „alle" bedeutet, gar nichts getan.
+      if (state.people.size === 0) {
+        for (const u of state.users ?? []) state.people.add(u.id);
+      }
+      if (input.checked) state.people.add(id);
+      else state.people.delete(id);
+      // Wieder ALLE gewaehlt heisst wieder „kein Filter" - sonst bliebe ein
+      // Filter aktiv, der nichts wegnimmt, und der Zaehler am Knopf loege.
+      if (state.people.size === (state.users ?? []).length) state.people.clear();
+      persistPeopleFilter();
+    } else {
+      return;
+    }
+
+    renderToolbar();
+    renderView();
+  });
+
+  panel.querySelector('#cal-filters-reset')?.addEventListener('click', () => {
+    state.layerHolidays = true;
+    state.layerSchool = true;
+    state.layerSchedule = true;
+    state.layerBirthdays = true;
+    state.assignedToMe = false;
+    state.people.clear();
+    try {
+      localStorage.setItem(LAYER_HOLIDAYS_KEY, 'true');
+      localStorage.setItem(LAYER_SCHOOL_KEY, 'true');
+      localStorage.setItem(LAYER_SCHEDULE_KEY, 'true');
+      localStorage.setItem(LAYER_BIRTHDAYS_KEY, 'true');
+      localStorage.setItem(ASSIGNED_TO_ME_KEY, '0');
+    } catch {}
+    persistPeopleFilter();
+    closeModal({ force: true });
+    renderToolbar();
+    renderView();
+  });
+}
+
+/**
+ * Der gespeicherte Personenfilter, GEGEN DEN HAUSHALT GEPRUEFT.
+ *
+ * Eine gespeicherte ID, die es nicht mehr gibt (Mitglied entfernt), waere ein
+ * Filter, den kein Haekchen im Blatt mehr zurueckstellen kann: der Kalender
+ * bliebe leer, das Blatt zeigte lauter aktive Haekchen, und der Zaehler am
+ * Knopf naennte einen Filter ohne sichtbare Ursache. Deshalb faellt jede
+ * unbekannte ID beim Laden weg - und wenn danach alle oder keine uebrig sind,
+ * ist es wieder „alle", also gar kein Filter.
+ */
+function restorePeopleFilter(users) {
+  const known = new Set((users ?? []).map((u) => u.id));
+  let stored;
+  try { stored = JSON.parse(localStorage.getItem(PEOPLE_FILTER_KEY) ?? '[]'); } catch { stored = []; }
+  if (!Array.isArray(stored)) return new Set();
+  const valid = stored.map(Number).filter((id) => known.has(id));
+  if (valid.length === 0 || valid.length === known.size) return new Set();
+  return new Set(valid);
+}
+
+function persistPeopleFilter() {
+  try {
+    if (state.people.size === 0) localStorage.removeItem(PEOPLE_FILTER_KEY);
+    else localStorage.setItem(PEOPLE_FILTER_KEY, JSON.stringify([...state.people]));
+  } catch {}
+}
 
 function openCalendarSearch() {
   if (searchActive) {
@@ -3098,15 +3536,20 @@ function wireEventForm(panel, { mode, event = null, reminder = null }) {
   bindUserMultiSelect(panel, 'cal_assigned');
   wireVisibilityWarning(panel, '#modal-visibility', 'cal_assigned', '#modal-visibility-warning');
 
-  // Der Farbwaehler war ausgegraut, sobald jemand zugewiesen war, mit dem
-  // Hinweis, die Farbe der Person schlage sie ohnehin. Das galt bis v2.35.0.
-  // Seit #815 steht die Terminfarbe in resolveEventColor VORN, und weil
-  // calendar_events.color NOT NULL ist und auch den Leerstring ablehnt, ist sie
-  // immer gesetzt: die Zuweisung faerbt seither nie mehr. Die Sperre nahm dem
-  // Nutzer also eine Wahl ab, um ein Versprechen zu halten, das der Code nicht
-  // mehr gab. Wer der Termin ist, sagt weiterhin der Avatar-Stack daneben.
+  // Der Farbwaehler war bis v2.35.0 ausgegraut, sobald jemand zugewiesen war,
+  // mit dem Hinweis, die Farbe der Person schlage sie ohnehin. Seit #815 steht
+  // die Terminfarbe in resolveEventColor VORN, womit der Hinweis unwahr wurde -
+  // die Sperre nahm dem Nutzer eine Wahl ab, um ein Versprechen zu halten, das
+  // der Code nicht mehr gab (#856). Sie ist deshalb weg und bleibt weg.
+  //
+  // Seit #891 ist die Aussage von damals wieder erreichbar, nur als WAHL statt
+  // als Sperre: der Erben-Swatch traegt sie, und wer stattdessen eine Farbe
+  // waehlt, behaelt sie. Wer der Termin ist, sagt weiterhin der Avatar-Stack.
 
-  const selectedColor = isEdit ? (event?.color || EVENT_COLORS[0]) : EVENT_COLORS[0];
+  // Leerstring = der Erben-Swatch. Ein neuer Termin startet dort, und ein
+  // bestehender ohne eigene Farbe steht dort ebenfalls - beides ist seit #891
+  // ein ausdrueckbarer Zustand und nicht mehr der Palettenerste als Notloesung.
+  const selectedColor = isEdit ? (event?.color || COLOR_INHERIT) : COLOR_INHERIT;
 
   // Farb-Auswahl: Auswahl + ARIA + Keyboard (Roving Tabindex)
   function selectSwatch(target) {
@@ -3408,10 +3851,21 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
     <div class="form-group">
       <label class="form-label" id="event-color-label">${t('calendar.colorLabel')}</label>
       <div class="color-picker" id="event-color-picker" role="radiogroup" aria-labelledby="event-color-label">
-        ${pickerColors(isEdit ? event : null).map((c, i) => `
+        <!-- Steht vorn, weil er der Standard ist: ein Termin, fuer den niemand
+             eine Farbe gewaehlt hat, traegt die der zugewiesenen Person (#891).
+             Traegt bewusst KEIN Inline-background - seine Optik kommt aus
+             calendar.css, weil sie eine Designentscheidung ist und keine
+             Nutzereinstellung. -->
+        <div class="color-swatch color-swatch--inherit" data-color=""
+             role="radio"
+             tabindex="0"
+             aria-checked="false"
+             aria-label="${esc(t('calendar.colorInherit'))}"
+             title="${esc(t('calendar.colorInheritHint'))}"></div>
+        ${pickerColors(isEdit ? event : null).map((c) => `
           <div class="color-swatch" data-color="${esc(c)}" style="background-color:${esc(c)};"
                role="radio"
-               tabindex="${i === 0 ? '0' : '-1'}"
+               tabindex="-1"
                aria-checked="false"
                aria-label="${esc(EVENT_COLOR_NAMES()[c] ?? t('calendar.colorCurrent'))}"></div>
         `).join('')}
@@ -3863,17 +4317,6 @@ async function deleteEvent(id) {
 }
 
 /**
- * True für rein lokale, nicht extern synchronisierte Serien. Nur diese erhalten die
- * Scope-Auswahl (#489/#532); Google/Apple/CalDAV/ICS-Serien würden beim nächsten Sync
- * wiederkehren und bleiben deshalb „ganze Serie".
- */
-function isLocalRecurringSeries(event) {
-  return !!event?.recurrence_rule
-    && (event.external_source ?? 'local') === 'local'
-    && !event.calendar_ref_id && !event.subscription_id;
-}
-
-/**
  * Gemeinsame Scope-Auswahl für Serientermine (#532): identisches Control für
  * „Bearbeiten" und „Löschen". Select (App-weites Formular-Vokabular) mit Default
  * „Nur diesen Termin" (least-destructive) plus dynamischem Reichweiten-Hinweis,
@@ -3918,10 +4361,77 @@ function getRecurringScope(root, prefix) {
 
 /**
  * Einstiegspunkt für das Löschen (#489/#532). Lokale Serien fragen „nur dieser
- * Termin" / „dieser und folgende" / „ganze Serie"; alles andere (Einzeltermine,
- * externe Serien) wird direkt gelöscht.
+ * Termin" / „dieser und folgende" / „ganze Serie"; Einzeltermine werden direkt
+ * gelöscht (der Undo-Toast trägt die Rücknahme).
+ *
+ * Externe Serien können die Auswahl nicht anbieten: Yuvomi kann eine Serie, die
+ * einem anderen Kalender gehört, nicht lokal aufteilen - ein ausgenommenes
+ * Vorkommen käme beim nächsten Sync zurück. Gelöscht wird deshalb die ganze
+ * Serie. Das ist richtig, aber es wortlos zu tun war es nicht: wer im Monat auf
+ * einen Termin tippt und löscht, sieht ohne Vorwarnung alle Vorkommen
+ * verschwinden (#880). Die Rückfrage benennt die Reichweite, statt sie
+ * anzubieten - ein Dialog mit nur einer wählbaren Antwort wäre eine Attrappe.
  */
+/**
+ * Die Rückfrage für eine Serie, die einem anderen Kalender gehört (#880).
+ *
+ * Drei Fälle, drei verschiedene Wahrheiten - und eine Zusage, die nicht hält,
+ * ist schlimmer als gar keine, denn sie ist der einzige Grund, überhaupt zu
+ * fragen:
+ *
+ * - Ein Geburtstagstermin ist das Abbild seines Geburtstags, nicht sein
+ *   Original: `syncBirthdayCalendarEvent` legt ihn beim nächsten Abgleich neu
+ *   an und lädt ihn wieder hoch (server/services/birthdays.js).
+ * - Ein Termin aus einem ICS-Abo ist doppelt unlöschbar: `OUTBOUND_SOURCES`
+ *   kennt kein `ics`, es wird also nichts an der Quelle gelöscht, und der
+ *   nächste Aboabruf legt ihn wieder an (kein Tombstone in ics-subscription.js).
+ * - Bei Google, CalDAV und Apple greift die Löschung meistens bis zur Quelle
+ *   durch - aber eben nur meistens: `acceptsOutbound` verlangt eine schreibende
+ *   Verbindung, und ein Google-Konto im Nur-Lesen-Modus oder ein entferntes
+ *   CalDAV-Konto hat keine. Der Dialog sagt deshalb NICHT mehr, dass die Serie
+ *   auch im Quellkalender fällt; er sagt, was Yuvomi garantieren kann - dass
+ *   alle Vorkommen fallen, nicht nur das angetippte. Das ist die Warnung, um
+ *   die es hier geht. Alles Weitere wüsste erst der Server, und dafür eine
+ *   Auskunft durch die Leseroute zu ziehen, wäre für eine Textnuance ein zu
+ *   hoher Preis (heisser Pfad, expandierte Serien).
+ *
+ * Die drei Aufrufe stehen ausgeschrieben statt über einen zusammengesetzten
+ * Schlüssel: `jeder als gefaehrlich markierte Dialog nennt seine Folgen`
+ * (test-frontend-audit.js) liest den Schlüssel aus dem Aufruf und wäre an einem
+ * `t(`${prefix}Detail`)` erblindet - bei einem Dialog, dessen ganzer Zweck es
+ * ist, seine Folgen zu benennen, ist das der falsche Handel.
+ *
+ * `birthday_name` ist der etablierte Marker; die Leseroute hängt ihn nur an
+ * Termine, die zu einem Geburtstag gehören.
+ */
+function confirmExternalSeriesDelete(event) {
+  const title = event.title;
+  if (event.birthday_name) {
+    return confirmModal(t('calendar.deleteBirthdayEventTitle'), {
+      detail:       t('calendar.deleteBirthdayEventDetail', { title }),
+      confirmLabel: t('calendar.deleteBirthdayEventConfirm'),
+      danger:       true,
+    });
+  }
+  if (event.subscription_id) {
+    return confirmModal(t('calendar.deleteSubscribedSeriesTitle'), {
+      detail:       t('calendar.deleteSubscribedSeriesDetail', { title }),
+      confirmLabel: t('calendar.deleteSubscribedSeriesConfirm'),
+      danger:       true,
+    });
+  }
+  return confirmModal(t('calendar.deleteExternalSeriesTitle'), {
+    detail:       t('calendar.deleteExternalSeriesDetail', { title }),
+    confirmLabel: t('calendar.deleteExternalSeriesConfirm'),
+    danger:       true,
+  });
+}
+
 async function requestDeleteEvent(event) {
+  if (isExternalRecurringSeries(event)) {
+    if (await confirmExternalSeriesDelete(event)) await deleteEvent(event.id);
+    return;
+  }
   if (!isLocalRecurringSeries(event)) {
     await deleteEvent(event.id);
     return;

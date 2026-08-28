@@ -6,7 +6,7 @@ import { createRetryState, toggleRowHtml } from '/settings/components.js';
 
 // Muss mit MODULE_KEYS in server/scopes.js übereinstimmen (gleiche Reihenfolge).
 const SCOPE_MODULE_KEYS = [
-  'tasks', 'shopping', 'meals', 'pantry', 'inventory', 'calendar', 'notes', 'contacts', 'budget',
+  'tasks', 'shopping', 'meals', 'pantry', 'inventory', 'calendar', 'schedule', 'notes', 'contacts', 'budget',
   'documents', 'health', 'rewards', 'housekeeping', 'weather', 'family',
   'dashboard', 'search',
 ];

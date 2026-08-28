@@ -322,6 +322,113 @@
   position: relative;
 }
 
+/* ------------------------------------------------------------------ */
+/* Ordnerbaum (#785)                                                   */
+/* ------------------------------------------------------------------ */
+
+/* Die Einrueckung je Ebene. 14px und nicht --space-4: der Pfeil davor ist
+ * 20px breit, zusammen ergibt das die Stufe, an der das Auge die Ebene liest,
+ * ohne dass bei fuenf Ebenen (der Grenze) auf einer 280px-Leiste weniger als
+ * die halbe Breite fuer den Namen bleibt. */
+.documents-folder-item {
+  padding-inline-start: calc(var(--folder-depth, 0) * 14px);
+}
+
+/* Aufklappen ist ein EIGENER Knopf neben dem Namen, nicht die Zeile - die
+ * beiden Absichten (hineingehen, nachsehen was darunter liegt) sind getrennt. */
+.documents-folder-item__twisty {
+  flex: none;
+  inline-size: 20px;
+  block-size: 20px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.documents-folder-item__twisty:hover {
+  color: var(--color-text-primary);
+}
+
+.documents-folder-item__twisty:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.documents-folder-item__twisty > svg {
+  inline-size: 16px;
+  block-size: 16px;
+  transition: transform var(--transition-fast);
+}
+
+.documents-folder-item__twisty[aria-expanded="true"] > svg {
+  transform: rotate(90deg);
+}
+
+/* Ein Ordner ohne Kinder haelt den Platz frei, statt ihn einzusparen: sonst
+ * springen die Namen einer Geschwisterreihe um die Pfeilbreite gegeneinander,
+ * je nachdem wer Kinder hat. */
+.documents-folder-item__twisty--leaf {
+  cursor: default;
+}
+
+/* Der Pfad ueber der Liste. */
+.documents-browser-main {
+  min-width: 0;
+}
+
+.documents-breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.documents-breadcrumb__crumb {
+  border: none;
+  background: none;
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.documents-breadcrumb__crumb:hover {
+  color: var(--module-accent);
+  background: color-mix(in srgb, var(--module-accent) var(--tint-state), transparent);
+}
+
+.documents-breadcrumb__crumb:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* Die letzte Stufe ist der Ort, an dem man steht - kein Knopf, kein Zeiger. */
+.documents-breadcrumb__crumb--current {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+  cursor: default;
+}
+
+.documents-breadcrumb__crumb--current:hover {
+  background: none;
+  color: var(--color-text-primary);
+}
+
+/* Der Trenner ist leise, aber NICHT in der Deaktiviert-Farbe: die traegt in
+ * dieser App die Aussage "hier geht nichts", und der Pfad daneben ist voll
+ * bedienbar. Ein Slash in Sekundaerfarbe ist leise genug. */
+.documents-breadcrumb__sep {
+  color: var(--color-text-secondary);
+}
+
 /* Die Spaltenaufteilung der Zeile ist eigen (Icon, Name, Zaehler in einem
  * Ziel), Polsterung und Hoehe kommen aus `.list-row__main--interactive`. */
 .documents-folder-item__select {

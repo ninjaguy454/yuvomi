@@ -51,7 +51,7 @@ const log = createLogger('Dashboard');
 const DENIED_PAYLOAD = Object.freeze({
   // Geburtstage gehören zum Kalender-Modul, nicht zu einem eigenen — dieselbe
   // Zuordnung wie in PERMISSION_MODULES (navIds) und im Client (NAV_TO_MODULE).
-  calendar: () => ({ upcomingEvents: [], birthdays: [], birthdayCount: 0 }),
+  calendar: () => ({ upcomingEvents: [], birthdays: [], birthdayCount: 0, birthdaySoonCount: 0 }),
   tasks: () => ({
     urgentTasks: [], openTaskCount: 0, overdueTaskCount: 0,
     memberTodayTasks: [], tasksDoneToday: 0,
@@ -397,9 +397,24 @@ router.get('/', (req, res) => {
         LEFT JOIN users u ON u.id = b.family_user_id
        ORDER BY b.name COLLATE NOCASE ASC
     `).all();
-    result.birthdays = rows
+    const hydrated = rows
       .map((row) => hydrateBirthday(db.get(), row))
-      .sort((a, b) => a.days_until - b.days_until || a.name.localeCompare(b.name))
+      .sort((a, b) => a.days_until - b.days_until || a.name.localeCompare(b.name));
+
+    /* DIE ZAHL FUERS NAV-BADGE, UNGEDECKELT (#868).
+     *
+     * Sie darf NICHT aus `result.birthdays` abgeleitet werden: die Liste ist
+     * gleich auf fuenf geschnitten, und das ist der Vorrat der KACHEL, keine
+     * Aussage ueber den Bestand. Ein Haushalt mit sieben Geburtstagen in drei
+     * Tagen bekaeme sonst beim Start eine Fuenf am Nav-Ziel und nach dem
+     * ersten Besuch der Seite eine Sieben - dieselbe Frage, zwei Antworten.
+     *
+     * Der Schnitt bei DREI Tagen ist derselbe wie im Browser
+     * (`BIRTHDAY_BADGE_DAYS` in public/utils/nav-badges.js); ein Guard haelt
+     * beide zusammen. */
+    result.birthdaySoonCount = hydrated.filter((b) => (b.days_until ?? 9999) <= 3).length;
+
+    result.birthdays = hydrated
       // FUENF, WEIL DIE KACHEL ZWEI HOCH SEIN DARF. Der Schnitt stand auf drei
       // und war damit die Obergrenze fuer JEDE Kachelgroesse: in der
       // 1x2-Standardgroesse blieb darunter rund ein Drittel der Karte leer, weil
@@ -412,6 +427,7 @@ router.get('/', (req, res) => {
     log.error('birthdays error:', err.message);
     result.birthdays = [];
     result.birthdayCount = 0;
+    result.birthdaySoonCount = 0;
   }
 
   // Countdowns (#647): Termine und Aufgaben, die jemand als Countdown markiert

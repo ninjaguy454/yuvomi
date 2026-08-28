@@ -10,6 +10,7 @@ import { createLogger } from '../logger.js';
 import { str, collectErrors, id as validateId, MAX_TEXT, MAX_TITLE } from '../middleware/validate.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { ensureModuleFolder, isModuleFolderKey } from '../services/document-folders.js';
+import { subtreeIds, folderMoveIssue, MAX_FOLDER_DEPTH } from '../../public/utils/folder-tree.js';
 import { getAdapter as defaultGetDmsAdapter } from '../services/dms/index.js';
 import { getStatus as getGoogleDriveStatus } from '../services/google-drive-storage.js';
 import {
@@ -473,10 +474,60 @@ router.get('/meta/options', (req, res) => {
   }
 });
 
+/**
+ * Die Ordner, ueber die eine Baumfrage laeuft.
+ *
+ * DIE GANZE LISTE UND KEINE TEILABFRAGE: die geteilten Regeln
+ * (public/utils/folder-tree.js) rechnen auf einer Liste, nicht auf einer
+ * Verbindung - das ist der Preis dafuer, dass Browser und Server dieselbe
+ * Regel benutzen statt zweier, die auseinanderlaufen. Er ist klein: die Tiefe
+ * ist auf fuenf begrenzt, und ein Haushalt fuehrt Dutzende Ordner, nicht
+ * Tausende.
+ */
+function allFolders() {
+  return db.get().prepare('SELECT id, name, parent_id FROM family_document_folders').all();
+}
+
+/** Die Absage der Baumpruefung als Satz, den jemand lesen kann. */
+const MOVE_ISSUE_MESSAGES = {
+  'self':           'A folder cannot be inside itself.',
+  'descendant':     'A folder cannot be moved into its own subfolder.',
+  'missing-parent': 'Parent folder not found.',
+  'too-deep':       `Folders can be nested at most ${MAX_FOLDER_DEPTH} levels deep.`,
+};
+
+/**
+ * Darf dieser Ordner dorthin? Gibt die Meldung, oder null.
+ * @returns {string|null}
+ */
+function folderMoveError(folderId, parentId) {
+  const issue = folderMoveIssue(allFolders(), folderId, parentId);
+  return issue ? MOVE_ISSUE_MESSAGES[issue] : null;
+}
+
+/**
+ * Liest `parent_id` aus einem Request-Body.
+ * @returns {{ value: number|null, error: string|null }}
+ */
+function parentId(value) {
+  if (value === undefined || value === null || value === '') return { value: null, error: null };
+  const num = Number(value);
+  if (!Number.isInteger(num) || num <= 0) return { value: null, error: 'Invalid parent folder id.' };
+  return { value: num, error: null };
+}
+
 router.get('/folders', (_req, res) => {
   try {
+    // Flach mit `parent_id`, nicht verschachtelt: der Baum wird im Browser
+    // gebaut, weil dort ohnehin die Zaehler und der aufgeklappte Zustand
+    // dazukommen. Eine geschachtelte Antwort waere derselbe Inhalt in einer
+    // Form, die der Client wieder auseinandernehmen muss.
+    //
+    // Die Sortierung ist die Geschwisterfolge - der Aufbau haengt sie unter
+    // ihre Eltern, die Reihenfolge innerhalb einer Ebene steht damit schon
+    // hier fest und nicht in zwei Clients verschieden.
     const rows = db.get().prepare(`
-      SELECT id, name, created_by, created_at, updated_at
+      SELECT id, name, parent_id, module_key, created_by, created_at, updated_at
       FROM family_document_folders
       ORDER BY name COLLATE NOCASE ASC
     `).all();
@@ -487,18 +538,29 @@ router.get('/folders', (_req, res) => {
   }
 });
 
+/** Die Spalten, die eine Ordner-Antwort traegt - eine Schreibweise fuer alle Wege. */
+const FOLDER_COLUMNS = 'id, name, parent_id, module_key, created_by, created_at, updated_at';
+
 router.post('/folders', (req, res) => {
   try {
     const vName = str(req.body.name, 'Name', { max: MAX_TITLE });
     if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
-    const result = db.get().prepare('INSERT INTO family_document_folders (name, created_by) VALUES (?, ?)')
-      .run(vName.value, userId(req));
-    const row = db.get().prepare('SELECT id, name, created_by, created_at, updated_at FROM family_document_folders WHERE id = ?')
+    const vParent = parentId(req.body.parent_id);
+    if (vParent.error) return res.status(400).json({ error: vParent.error, code: 400 });
+
+    const moveError = folderMoveError(null, vParent.value);
+    if (moveError) return res.status(400).json({ error: moveError, code: 400 });
+
+    const result = db.get().prepare('INSERT INTO family_document_folders (name, parent_id, created_by) VALUES (?, ?, ?)')
+      .run(vName.value, vParent.value, userId(req));
+    const row = db.get().prepare(`SELECT ${FOLDER_COLUMNS} FROM family_document_folders WHERE id = ?`)
       .get(result.lastInsertRowid);
     res.status(201).json({ data: row });
   } catch (err) {
     if (err.message?.includes('UNIQUE constraint')) {
-      return res.status(409).json({ error: 'Folder already exists.', code: 409 });
+      // Der Name kollidiert ab jetzt nur noch mit den GESCHWISTERN (Migration
+      // v164) - "Rechnungen" darf unter "Auto" und unter "Wohnung" stehen.
+      return res.status(409).json({ error: 'A folder with this name already exists here.', code: 409 });
     }
     log.error('POST /folders error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -511,16 +573,36 @@ router.put('/folders/:id', (req, res) => {
     if (!Number.isInteger(id) || id <= 0) {
       return res.status(400).json({ error: 'Invalid folder id.', code: 400 });
     }
-    const vName = str(req.body.name, 'Name', { max: MAX_TITLE });
-    if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
-    const existing = db.get().prepare('SELECT id FROM family_document_folders WHERE id = ?').get(id);
+    const existing = db.get().prepare('SELECT id, name, parent_id FROM family_document_folders WHERE id = ?').get(id);
     if (!existing) return res.status(404).json({ error: 'Folder not found.', code: 404 });
-    db.get().prepare('UPDATE family_document_folders SET name = ? WHERE id = ?').run(vName.value, id);
-    const row = db.get().prepare('SELECT id, name, created_by, created_at, updated_at FROM family_document_folders WHERE id = ?').get(id);
+
+    // Umbenennen und Verschieben sind derselbe Schreibvorgang, und beide sind
+    // einzeln weglassbar: ein Feld, das nicht mitkommt, ist keine Ansage.
+    // Ohne diese Trennung nimmt ein reines Umbenennen den Ordner an die Wurzel
+    // mit, weil `parent_id` dann als "nicht gesetzt" gelesen wuerde.
+    let name = existing.name;
+    if (req.body.name !== undefined) {
+      const vName = str(req.body.name, 'Name', { max: MAX_TITLE });
+      if (vName.error) return res.status(400).json({ error: vName.error, code: 400 });
+      name = vName.value;
+    }
+
+    let parent = existing.parent_id;
+    if (req.body.parent_id !== undefined) {
+      const vParent = parentId(req.body.parent_id);
+      if (vParent.error) return res.status(400).json({ error: vParent.error, code: 400 });
+      const moveError = folderMoveError(id, vParent.value);
+      if (moveError) return res.status(400).json({ error: moveError, code: 400 });
+      parent = vParent.value;
+    }
+
+    db.get().prepare('UPDATE family_document_folders SET name = ?, parent_id = ? WHERE id = ?')
+      .run(name, parent, id);
+    const row = db.get().prepare(`SELECT ${FOLDER_COLUMNS} FROM family_document_folders WHERE id = ?`).get(id);
     res.json({ data: row });
   } catch (err) {
     if (err.message?.includes('UNIQUE constraint')) {
-      return res.status(409).json({ error: 'Folder already exists.', code: 409 });
+      return res.status(409).json({ error: 'A folder with this name already exists here.', code: 409 });
     }
     log.error('PUT /folders/:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -535,9 +617,23 @@ router.delete('/folders/:id', (req, res) => {
     }
     const existing = db.get().prepare('SELECT id FROM family_document_folders WHERE id = ?').get(id);
     if (!existing) return res.status(404).json({ error: 'Folder not found.', code: 404 });
-    // Dokumente behalten ihre Zeile: folder_id wird per ON DELETE SET NULL geleert.
+
+    // WAS MITGEHT, WIRD VORHER GEZAEHLT UND NICHT NUR GELOESCHT. Ein Ordner
+    // nimmt seinen ganzen Teilbaum mit (ON DELETE CASCADE, Migration v164),
+    // und wer ihn loescht, sieht in der Seitenleiste nur die zugeklappte
+    // Wurzel - die Antwort sagt deshalb, was verschwunden ist, damit die
+    // Oberflaeche vorher fragen kann.
+    //
+    // DIE DOKUMENTE BLEIBEN, unveraendert seit dieser Route: folder_id traegt
+    // ON DELETE SET NULL, sie landen unter "ohne Ordner". Kein Loeschen in
+    // diesem Modul kostet ein Dokument.
+    const subtree = [...subtreeIds(allFolders(), id)];
+    const affected = db.get()
+      .prepare(`SELECT COUNT(*) AS n FROM family_documents WHERE folder_id IN (${subtree.map((_v, i) => `@f${i}`).join(',')})`)
+      .get(Object.fromEntries(subtree.map((value, i) => [`f${i}`, value]))).n;
+
     db.get().prepare('DELETE FROM family_document_folders WHERE id = ?').run(id);
-    res.json({ data: { id } });
+    res.json({ data: { id, removed_folders: subtree.length, unfiled_documents: affected } });
   } catch (err) {
     log.error('DELETE /folders/:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -551,13 +647,40 @@ router.get('/', (req, res) => {
     const folderId = req.query.folder_id !== undefined && req.query.folder_id !== ''
       ? Number(req.query.folder_id)
       : null;
-    const params = { userId: userId(req), status, category, folderId };
+
+    /* EIN ORDNER ZEIGT AUCH, WAS UNTER IHM LIEGT (#785).
+     *
+     * In der flachen Ablage waren "Ordner" und "Filter" dasselbe. In einem
+     * Baum ist die alte Antwort die falsche: wer "Wohnung" oeffnet und alle
+     * zwoelf Dokumente in "Wohnung/Miete" abgelegt hat, saehe eine leere
+     * Ansicht und muesste raten, wo sie sind.
+     *
+     * Die ids kommen als Liste in die Abfrage und nicht als rekursives CTE:
+     * die Tiefe ist auf fuenf begrenzt, es sind also eine Handvoll Zeilen -
+     * und die Liste wird ohnehin gebraucht, um zu erkennen, dass der Ordner
+     * gar nicht existiert (dann darf die Antwort nicht stillschweigend ALLE
+     * Dokumente zeigen, was ein blosses `IS NULL` taete).
+     */
+    let subtree = null;
+    if (folderId != null && Number.isInteger(folderId) && folderId > 0) {
+      const exists = db.get().prepare('SELECT id FROM family_document_folders WHERE id = ?').get(folderId);
+      subtree = exists ? [...subtreeIds(allFolders(), folderId)] : [folderId];
+    }
+
+    /* Benannte Platzhalter auch fuer die Liste: die uebrige Abfrage laeuft
+     * ueber `@userId`/`@status`, und better-sqlite3 nimmt benannte und
+     * positionelle Parameter nicht im selben Aufruf. */
+    const folderParams = Object.fromEntries((subtree ?? []).map((value, i) => [`f${i}`, value]));
+    const folderClause = subtree
+      ? `AND d.folder_id IN (${subtree.map((_v, i) => `@f${i}`).join(',')})`
+      : '';
+    const params = { userId: userId(req), status, category, ...folderParams };
     const rows = db.get().prepare(`
       ${documentSelect()}
       WHERE ${canSeeSql('d')}
         AND d.status = @status
         AND (@category IS NULL OR d.category = @category)
-        AND (@folderId IS NULL OR d.folder_id = @folderId)
+        ${folderClause}
       GROUP BY d.id
       ORDER BY d.updated_at DESC
     `).all(params);

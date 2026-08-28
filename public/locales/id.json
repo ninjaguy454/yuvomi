@@ -59,7 +59,8 @@
             "private": "Hanya saya",
             "hint": "Menentukan siapa yang dapat melihat entri ini di Yuvomi.",
             "assigneesNobodyHint": "Tanpa penerima tugas, hanya kamu yang melihat entri ini."
-        }
+        },
+        "toShoppingListNamed": "Tambahkan {{title}} ke daftar belanja"
     },
     "kitchen": {
         "noShoppingLists": "Belum ada daftar belanja.",
@@ -112,7 +113,8 @@
         "health": "Kesehatan",
         "rewards": "Hadiah",
         "pantry": "Persediaan",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "search": {
         "emptyHint": "Ketik minimal 2 karakter untuk mencari tugas, acara, catatan, kontak, belanja, dan kesehatan.",
@@ -669,7 +671,9 @@
         "deleteScopeFuture": "Ini dan semua berikutnya",
         "deleteScopeSeries": "Seluruh rangkaian (semua minggu)",
         "seriesEndedToast": "Seri diakhiri mulai tanggal ini.",
-        "seriesDeletedToast": "Seri dihapus."
+        "seriesDeletedToast": "Seri dihapus.",
+        "deleteMealNamed": "Hapus {{title}}",
+        "openRecipeNamed": "Buka resep {{title}}"
     },
     "calendar": {
         "searchOpen": "Cari acara",
@@ -896,7 +900,26 @@
         "recurringScopeHintSeries": "Memengaruhi seluruh seri.",
         "detailWhen": "Waktu",
         "detailCalendar": "Kalender",
-        "colorCurrent": "Warna saat ini"
+        "colorCurrent": "Warna saat ini",
+        "deleteExternalSeriesTitle": "Hapus seluruh rangkaian?",
+        "deleteExternalSeriesDetail": "\"{{title}}\" berasal dari kalender tersinkron. Kemunculan tunggal tidak dapat dikecualikan di sana - seluruh rangkaian akan dihapus, beserta semua kemunculannya.",
+        "deleteExternalSeriesConfirm": "Hapus rangkaian",
+        "deleteBirthdayEventTitle": "Hapus acara ulang tahun?",
+        "deleteBirthdayEventDetail": "\"{{title}}\" adalah cerminan entri ulang tahun. Acara akan hilang, tetapi sinkronisasi berikutnya membuatnya kembali - hanya dapat dihapus permanen melalui ulang tahun itu sendiri.",
+        "deleteBirthdayEventConfirm": "Tetap hapus",
+        "deleteSubscribedSeriesTitle": "Hapus rangkaian langganan?",
+        "deleteSubscribedSeriesDetail": "\"{{title}}\" berasal dari kalender langganan. Yuvomi tidak dapat menghapus apa pun di sana - rangkaian hanya hilang sampai sinkronisasi berikutnya; untuk menghapusnya permanen, berhenti berlangganan kalender tersebut.",
+        "deleteSubscribedSeriesConfirm": "Tetap hapus",
+        "colorInherit": "Warna orang yang ditugaskan",
+        "colorInheritHint": "Acara tidak mendapat warna sendiri dan mengambil warna orang yang ditugaskan. Jika tidak ada yang ditugaskan, warna kalender yang berlaku.",
+        "filters": "Filter",
+        "filtersOpen": "Buka filter",
+        "filtersLayers": "Lapisan",
+        "filtersPeople": "Orang",
+        "filtersActive": "{{count}} filter aktif",
+        "filtersActive_one": "1 filter aktif",
+        "filtersReset": "Hapus semua filter",
+        "filtersDisplay": "Tampilan"
     },
     "notes": {
         "title": "Catatan",
@@ -1738,6 +1761,7 @@
             "shopping": "Belanja",
             "meals": "Makanan",
             "calendar": "Kalender",
+            "schedule": "Schedule",
             "notes": "Catatan",
             "contacts": "Kontak",
             "budget": "Anggaran",
@@ -2596,7 +2620,8 @@
         "summaryCount_one": "{{count}} kejadian",
         "fromCompletionLabel": "Ulangi dari tanggal penyelesaian",
         "fromCompletionHint": "Interval dimulai pada hari Anda menandai tugas selesai, bukan pada tanggal jatuh temponya.",
-        "summaryFromCompletion": "dari penyelesaian"
+        "summaryFromCompletion": "dari penyelesaian",
+        "intervalHint": "Setelah memilih, interval dapat diatur bebas - misalnya setiap 2 minggu atau setiap 3 bulan."
     },
     "reminders": {
         "sectionTitle": "Pengingat",
@@ -2718,7 +2743,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Asli",
         "sourceAll": "Semua",
-        "sourceFilterLabel": "Filter menurut sumber"
+        "sourceFilterLabel": "Filter menurut sumber",
+        "plannedThisWeek": "Direncanakan minggu ini"
     },
     "onboarding": {
         "step1Title": "Selamat datang di {{name}}",
@@ -2731,7 +2757,8 @@
         "done": "Mulai",
         "skip": "Lewati",
         "step2BodyDesktop": "Bilah samping di kiri membawamu ke semua modul - dari kalender dan tugas hingga dapur, dokumen, dan pengaturan.",
-        "step3BodyDesktop": "Tombol + di sudut bawah membuat entri baru di mana saja."
+        "step3BodyDesktop": "Tombol + di sudut bawah membuat entri baru di mana saja.",
+        "stepProgress": "Langkah {{current}} dari {{total}}"
     },
     "offline": {
         "banner": "Offline - memulihkan koneksi…",
@@ -2786,7 +2813,7 @@
         "colorOption": "Warna {{color}}",
         "iconPick": "Pilih gambar",
         "iconClear": "Hapus gambar",
-        "iconHint": "Tanpa gambar, huruf pertama tampil di atas warna pilihan.",
+        "iconHint": "Pilih ikon bawaan atau gambar Anda sendiri. Tanpa keduanya, huruf pertama tampil di atas warna pilihan.",
         "iconTypeError": "Pilih gambar PNG, JPEG, atau WebP.",
         "iconReadError": "Gambar tidak dapat dibaca.",
         "iconTooLarge": "Gambar terlalu besar.",
@@ -2802,7 +2829,9 @@
         "saved": "Tautan cepat disimpan",
         "deleted": "Tautan cepat dihapus",
         "loadError": "Tautan cepat tidak dapat dimuat.",
-        "orderError": "Urutan tidak dapat disimpan."
+        "orderError": "Urutan tidak dapat disimpan.",
+        "iconSymbol": "Pilih ikon",
+        "iconChoose": "Pilih ikon atau gambar"
     },
     "documents": {
         "title": "Dokumen",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "Bukti",
         "splitExpensesFolder": "Pengeluaran Bersama",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Tugas"
+        "tasksFolder": "Tugas",
+        "newSubfolder": "Subfolder baru",
+        "moveFolder": "Pindahkan folder",
+        "moveFolderTo": "Pindahkan \"{{name}}\" ke",
+        "folderMovedToast": "Folder dipindahkan",
+        "folderParentLabel": "Folder induk",
+        "folderRootLevel": "Tingkat teratas",
+        "folderPathLabel": "Jalur folder",
+        "folderExpand": "Buka \"{{name}}\"",
+        "folderCollapse": "Tutup \"{{name}}\"",
+        "deleteFolderSubtreeDetail": "{{count}} subfolder di dalamnya juga akan dihapus. Dokumen tetap ada dan bisa dijangkau lewat filter untuk dokumen tanpa folder.",
+        "deleteFolderSubtreeDetail_one": "Subfolder di dalamnya juga akan dihapus. Dokumen tetap ada dan bisa dijangkau lewat filter untuk dokumen tanpa folder."
     },
     "userMultiSelect": {
         "nobody": "- Tidak ada -",
@@ -3534,7 +3574,8 @@
         "completed": "Selesai",
         "completedOn": "Selesai pada {{date}}",
         "completedToast": "Langganan selesai.",
-        "endsAfter": "Tersisa {{count}} pembayaran"
+        "endsAfter": "Tersisa {{count}} pembayaran",
+        "logoTypeError": "Gunakan gambar PNG, JPEG, WebP, atau SVG."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Foto masih terlalu besar setelah diperkecil."
     },
     "documentAttach": {
         "label": "Lampiran",
@@ -4435,5 +4477,90 @@
         "recipes": "Resep",
         "shopping": "Item",
         "splitExpenses": "Pengeluaran"
+    },
+    "iconPicker": {
+        "title": "Pilih ikon",
+        "searchLabel": "Cari ikon",
+        "searchPlaceholder": "Cari dalam bahasa Inggris, mis. film",
+        "resultsLabel": "Ikon",
+        "noResults": "Ikon tidak ditemukan.",
+        "clear": "Tanpa ikon",
+        "unavailable": "Ikon sedang tidak tersedia."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

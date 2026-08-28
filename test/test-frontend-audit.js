@@ -195,20 +195,30 @@ function assertRuleUsesToken(css, selector, property, token, file) {
   assert.match(body, new RegExp(`${property}:\\s*var\\(${token}\\)`), `${file} ${selector} ${property} should use ${token}`);
 }
 
-test('audited frontend files do not assign innerHTML', () => {
-  const files = [
-    '../public/components/yuvomi-install-prompt.js',
-    '../public/components/category-manager.js',
-    '../public/pages/notes.js',
-    '../public/pages/meals.js',
-    '../public/pages/contacts.js',
-    '../public/pages/documents.js',
-    '../public/pages/housekeeping.js',
-  ];
+// `innerHTML` ist eine der harten Invarianten, und der Guard dafuer war eine
+// Liste von sieben Dateien: jede NEUE Seite kam ungeprueft durch, und genau die
+// neue ist die, in der es passiert. Der Bestand haelt die Regel ohnehin schon
+// ueberall - die Liste war also nie eine Ausnahmegenehmigung, nur ein zu enger
+// Suchbereich. Vendor-Code ist ausgenommen: der wird von Hand kopiert und nicht
+// nach unseren Regeln geschrieben.
+const VENDOR_PREFIX = '../public/vendor/';
 
-  for (const file of files) {
-    assert.doesNotMatch(read(file), /\.innerHTML\s*=/, `${file} must not assign innerHTML`);
-  }
+test('kein innerHTML-Schreibzugriff irgendwo unter public/ (ausser vendor/)', () => {
+  const files = walkJsFiles('../public/').filter((f) => !f.startsWith(VENDOR_PREFIX));
+  const offenders = files.filter((file) => /\.innerHTML\s*=[^=]/.test(read(file)));
+  assert.deepEqual(offenders, [],
+    'anhaengen mit insertAdjacentHTML oder ueber die DOM-API, User-Daten durch esc()');
+
+  // Ohne diese Schranke waere der Guard auch dann gruen, wenn walkJsFiles nach
+  // einem Umbau eine leere Liste liefert - gruen ueber nichts.
+  assert.ok(files.length >= 100, `nur ${files.length} Frontend-Dateien gefunden - der Scan greift nicht mehr`);
+});
+
+test('der innerHTML-Guard erkennt das Muster, das er verbietet', () => {
+  const pattern = /\.innerHTML\s*=[^=]/;
+  assert.ok(pattern.test('root.innerHTML = `<div>`;'), 'Zuweisung wird nicht erkannt');
+  assert.ok(pattern.test('el.innerHTML=""'), 'Zuweisung ohne Leerzeichen wird nicht erkannt');
+  assert.ok(!pattern.test('if (el.innerHTML === x)'), 'ein Vergleich wird faelschlich beanstandet');
 });
 
 /**
@@ -567,6 +577,61 @@ test('kein endlos animiertes Element traegt in derselben Regel einen filter', ()
 });
 
 /**
+ * Eine Bewegung nennt ihre Kurve aus einem Token.
+ *
+ * DIE REGEL, NICHT DIE LISTE: geprueft wird die BAUART - eine `cubic-bezier(`-
+ * Klammer in einem Stylesheet ausserhalb von tokens.css. Eine Allowlist der
+ * bekannten Suender waere hier der falsche Bau gewesen: sie sagt zu jeder
+ * NEUEN Datei ja, und genau so sind die drei Treffer entstanden, die diesen
+ * Guard ausgeloest haben (Critique 2026-08-28).
+ *
+ * DER ANLASS: `rewards.css:250` fuehrte `cubic-bezier(0.22, 1, 0.36, 1)` - eine
+ * VIERTE Kurve, die tokens.css nicht kennt und die niemand entschieden hat.
+ * `layout.css:4909` und `settings.css:2985` schrieben dagegen `--ease-glass`
+ * bzw. `--ease-out` woertlich aus: derselbe Wert, am Token vorbei. Der
+ * Unterschied ist unsichtbar, solange niemand die Kurve aendert - und genau
+ * dann faellt er auf, weil zwei Elemente der Aenderung nicht folgen.
+ *
+ * `tokens.css` ist ausgenommen, weil dort die Kurven DEFINIERT werden. Die drei
+ * Namen (`--ease-out`, `--ease-glass`, `--ease-sidebar-glide`) sind die
+ * vollstaendige Liste; wer eine vierte braucht, gibt ihr dort einen Namen und
+ * einen Grund, statt sie in ein Bauteil zu schreiben.
+ */
+test('keine Bewegungskurve steht ausserhalb von tokens.css als Literal', () => {
+  const styleDir = new URL('../public/styles/', import.meta.url);
+  const offenders = [];
+  let seenCurveTokens = 0;
+
+  for (const { selector, body, at } of eachRule(read('../public/styles/tokens.css'))) {
+    seenCurveTokens += (body.match(/--ease-[a-z-]+\s*:/g) || []).length;
+  }
+
+  for (const file of readdirSync(styleDir).filter((f) => f.endsWith('.css'))) {
+    if (file === 'tokens.css') continue;
+    for (const { selector, body, at } of eachRule(read(`../public/styles/${file}`))) {
+      if (!/cubic-bezier\s*\(/.test(body)) continue;
+      const m = body.match(/[^;{]*cubic-bezier\s*\([^)]*\)[^;}]*/);
+      offenders.push(`${file}${at.length ? ` [${at.join(' ')}]` : ''}: ${selector} -> ${(m ? m[0] : '').trim()}`);
+    }
+  }
+
+  // Eine leere Liste ist keine Zusicherung: faende der Scanner tokens.css nicht
+  // mehr, waere dieser Guard gruen, waehrend er nichts mehr liest.
+  assert.ok(seenCurveTokens >= 3,
+    `Nur ${seenCurveTokens} --ease-*-Definitionen in tokens.css gefunden - der Scanner `
+    + 'liest die Token-Datei nicht mehr, statt nichts zu beanstanden.');
+
+  assert.deepEqual(offenders.sort(), [],
+    'Eine Bewegungskurve steht als Literal in einem Bauteil statt als Token. Wer '
+    + '`--ease-out` oder `--ease-glass` woertlich ausschreibt, folgt einer spaeteren '
+    + 'Aenderung des Tokens nicht mehr; wer eine unbekannte Kurve schreibt, fuehrt eine '
+    + 'vierte Bewegungssprache ohne Entscheidung ein. Kurven werden in tokens.css '
+    + `benannt und hier nur benutzt.\n${offenders.join('\n')}`);
+});
+
+
+
+/**
  * Das Wetter-Vokabular haelt an vier Enden zusammen.
  *
  * DIE LAGEN UND BAENDER STEHEN NICHT ALS LISTE HIER, sondern werden aus
@@ -809,6 +874,127 @@ test('das Install-Banner faellt nicht in die abgeloeste Welt zurueck', () => {
   // ausbleibt - sonst bleibt das Host-Element samt Listenern im Dokument.
   assert.match(source, /setTimeout\(finish/,
     '_remove() braucht eine Frist als zweiten Weg hinaus (transitionend feuert ohne Transition nie)');
+});
+
+/**
+ * DER NACHLAUF HAENGT AM ZUSTAND, NICHT AN DER ANWESENHEIT.
+ *
+ * `:root:has(yuvomi-install-prompt)` war immer wahr: das Element steht statisch
+ * in index.html, rendert 0x0 solange keine Anzeigebedingung erfuellt ist, und
+ * auf iOS feuert `beforeinstallprompt` nie. Der 89px-Fallback sprang damit
+ * dauerhaft an - JEDER Scrollport der App reservierte 105px fuer ein Banner,
+ * das keiner je gesehen hat (gemessen: 21,2% der Kalender-Rasterhoehe bei
+ * 390px, 23,9% bei 320px, dieselben 105px in den Notizen).
+ *
+ * Zwei Enden, zwei Zusicherungen: das CSS muss den Zustand ABFRAGEN, und das
+ * Bauteil muss ihn SETZEN. Nur eines von beiden zu pruefen laesst die Regel
+ * still zerfallen, sobald die andere Seite umgebaut wird.
+ */
+test('der Install-Nachlauf haengt am gerenderten Banner, nicht an seiner Existenz', () => {
+  const layout = read('../public/styles/layout.css');
+  const source = read('../public/components/yuvomi-install-prompt.js');
+
+  const setzer = layout.match(/:root:has\(yuvomi-install-prompt([^)]*)\)\s*\{[^}]*--install-prompt-tail/);
+  assert.ok(setzer, 'die Regel, die --install-prompt-tail setzt, muss ueber :root:has(yuvomi-install-prompt...) laufen');
+  assert.match(setzer[1], /\[[a-z-]+\]/,
+    'das :has()-Argument braucht ein Zustands-Attribut. Ohne eines fragt der Selektor nur, ob das '
+    + 'Element im DOM steht - und das ist es immer (index.html). Gemessen: 105px Nachlauf unter '
+    + 'jedem Scrollport der App, dauerhaft, ohne je ein Banner zu zeigen.');
+
+  const attr = setzer[1].match(/\[([a-z-]+)\]/)[1];
+  assert.match(source, new RegExp(`setAttribute\\(\\s*SHOWN_ATTR|setAttribute\\(\\s*['"\`]${attr}['"\`]`),
+    `das Bauteil muss ${attr} setzen, wenn das Banner steht - sonst fragt das CSS einen Zustand ab, den niemand meldet`);
+  assert.match(source, new RegExp(`removeAttribute\\(\\s*SHOWN_ATTR|removeAttribute\\(\\s*['"\`]${attr}['"\`]`),
+    `das Bauteil muss ${attr} beim Abbau wieder entfernen`);
+});
+
+/**
+ * EINE LIFECYCLE-METHODE JE KLASSE - und das ist keine Stilfrage.
+ *
+ * `yuvomi-install-prompt` hatte ZWEI `disconnectedCallback`. In einer
+ * JS-Klasse gewinnt die spaetere Definition kommentarlos: der Listener-Abbau
+ * der ersten lief nie. Nach jedem Entfernen blieben `beforeinstallprompt`,
+ * `locale-changed` und ein Click-Zaehler auf `document` haengen - letzterer
+ * schrieb bei JEDEM Klick der Sitzung weiter in localStorage, obwohl das
+ * Banner weg war. Beide Fassungen sahen fuer sich richtig aus; nur ihre
+ * Koexistenz war der Fehler.
+ *
+ * Als REGEL ueber alle Komponenten, nicht als Einzelfall: eine Namensliste
+ * haette den naechsten Fall in der naechsten Datei nicht gesehen.
+ */
+/**
+ * JS UND CSS SCHALTEN AN DERSELBEN SCHWELLE.
+ *
+ * Der Kalender fragte viermal `(max-width: 639px)` ab, waehrend
+ * `calendar.css` bei `max-width: 640px` schaltet. Bei GENAU 640px war die
+ * Seite in zwei Zustaenden zugleich: das CSS hatte die Termin-Chips schon auf
+ * Punkte reduziert, das JS hielt noch die Desktop-Klicklogik - ein Tap musste
+ * einen 10px-Punkt treffen statt die ganze Zelle.
+ *
+ * Als REGEL ueber alle Seiten: jede `matchMedia`-Grenze muss eine Grenze
+ * sein, die im CSS derselben Seite (oder in layout.css) auch vorkommt. Eine
+ * Zahl, die nur eine der beiden Seiten kennt, ist per Konstruktion eine
+ * Schwelle, an der sie auseinanderlaufen.
+ */
+test('jede matchMedia-Grenze einer Seite kennt ihr CSS auch', () => {
+  // SEITENWEISE, NICHT UEBER ALLE STYLESHEETS - und das ist die Lehre aus der
+  // ersten Fassung dieses Guards. Sie sammelte die Grenzen aller Dateien in
+  // EINEN Satz; damit war `639px` „gedeckt", weil schedule.css und
+  // split-expenses.css es fuehren, und der Guard blieb gruen, als ich den
+  // Fehler zur Gegenprobe wieder einbaute. Ein Breakpoint ist nur dort eine
+  // Deckung, wo er auf DIESELBEN Elemente wirkt.
+  const shared = new Set();
+  for (const file of ['layout.css', 'tokens.css', 'list-row.css', 'panel.css', 'sub-tabs.css']) {
+    for (const m of read(`../public/styles/${file}`).matchAll(/\(\s*(?:min|max)-width:\s*(\d+)px\s*\)/g)) {
+      shared.add(m[1]);
+    }
+  }
+
+  const offenders = [];
+  for (const path of walkJsFiles('../public/pages/')) {
+    const page = path.split('/').pop().replace(/\.js$/, '');
+    const cssPath = `../public/styles/${page}.css`;
+    const own = new Set(shared);
+    if (existsSync(new URL(cssPath, import.meta.url))) {
+      for (const m of read(cssPath).matchAll(/\(\s*(?:min|max)-width:\s*(\d+)px\s*\)/g)) own.add(m[1]);
+    }
+
+    // JEDES Media-Query-LITERAL der Datei, nicht nur die direkt an
+    // `matchMedia()` uebergebenen. Die erste Fassung suchte
+    // `matchMedia('(max-width: …` - und wurde in dem Moment blind, in dem der
+    // Kalender seine vier Literale zu EINER Konstante zusammenzog, also genau
+    // durch die Aufraeumarbeit, die dieser Guard absichern soll. Beide
+    // Gegenproben (639px, 641px) blieben gruen. Ein Guard, der die gute Form
+    // nicht mehr prueft, prueft nichts.
+    for (const m of withoutBlockComments(read(path)).matchAll(/['"`]\(\s*(?:min|max)-width:\s*(\d+)px\s*\)['"`]/g)) {
+      if (!own.has(m[1])) {
+        offenders.push(`${path}: schaltet bei ${m[1]}px, aber weder ${page}.css noch die geteilten Stylesheets kennen diese Grenze`);
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, [],
+    'matchMedia-Grenze ohne Entsprechung im eigenen CSS - an genau dieser Zahl laufen Layout und '
+    + 'Verhalten auseinander:\n  ' + offenders.join('\n  '));
+});
+
+test('keine Komponente definiert dieselbe Lifecycle-Methode zweimal', () => {
+  const LIFECYCLE = ['connectedCallback', 'disconnectedCallback', 'adoptedCallback', 'attributeChangedCallback'];
+  const offenders = [];
+
+  for (const file of walkJsFiles('../public/components/')) {
+    const src = read(file);
+    for (const name of LIFECYCLE) {
+      const treffer = [...src.matchAll(new RegExp(`^\\s{2}(?:async\\s+)?${name}\\s*\\(`, 'gm'))];
+      if (treffer.length > 1) {
+        offenders.push(`${file}: ${name} ist ${treffer.length}x definiert`);
+      }
+    }
+  }
+
+  assert.deepEqual(offenders, [],
+    'doppelte Lifecycle-Methode - die spaetere ueberschreibt die fruehere lautlos:\n  '
+    + offenders.join('\n  '));
 });
 
 test('der Hinweis am Formularlabel ist eine Klasse, kein Inline-Design-Wert', () => {
@@ -5083,16 +5269,23 @@ test('die Küche benutzt ein Vokabular für eine Sache', () => {
   const pages = Object.fromEntries(['meals', 'recipes', 'shopping', 'pantry']
     .map((p) => [p, read(`../public/pages/${p}.js`)]));
 
-  // EIN Transfer-Label und EIN „auf welche Liste?" für alle vier Tabs.
-  assertKeysExistInEveryLocale(['common.toShoppingList', 'common.toShoppingListWhich']);
-  for (const dead of ['meals.transferToShoppingList', 'recipes.toShoppingList', 'recipes.toShoppingListTitle', 'pantry.toShopping', 'pantry.chooseList']) {
+  // EIN Transfer-Label und EIN „auf welche Liste?" für alle vier Tabs. Die
+  // BENANNTE Fassung („{{title}} auf die Einkaufsliste setzen", seit 2026-08-27
+  // fuer aria-labels der Mahlzeitkarten) gehoert zur selben Familie und lebt
+  // deshalb ebenfalls unter common - ein meals-eigener Named-Key waere der
+  // Anfang genau der Drift, die dieser Test beendet hat.
+  assertKeysExistInEveryLocale(['common.toShoppingList', 'common.toShoppingListWhich', 'common.toShoppingListNamed']);
+  for (const dead of ['meals.transferToShoppingList', 'meals.toShoppingListNamed', 'recipes.toShoppingList', 'recipes.toShoppingListTitle', 'pantry.toShopping', 'pantry.chooseList']) {
     const [block, key] = dead.split('.');
     assert.equal(de[block]?.[key], undefined,
-      `${dead} ist durch common.toShoppingList ersetzt - zwei Keys für ein Label laufen auseinander (auf Englisch war das schon passiert)`);
+      `${dead} ist durch common.toShoppingList(Named) ersetzt - zwei Keys für ein Label laufen auseinander (auf Englisch war das schon passiert)`);
   }
   for (const page of ['meals', 'recipes', 'pantry']) {
-    assert.ok(pages[page].includes("t('common.toShoppingList')"),
-      `${page}.js muss das geteilte Transfer-Label nutzen`);
+    assert.ok(
+      pages[page].includes("t('common.toShoppingList')")
+        || pages[page].includes("t('common.toShoppingListNamed'"),
+      `${page}.js muss das geteilte Transfer-Label nutzen (common.toShoppingList oder die benannte Fassung)`,
+    );
   }
 
   // Jeder Transfer-Toast nennt sein ZIEL.
@@ -8146,18 +8339,28 @@ const ALLOWED_INLINE = /^(0|0px|var\(--page-inline-pad\))$/;
 
 // Dokumentierte Ausnahmen. Bewusst als Liste MIT Begründung statt als stille
 // Lücke im Scan: wer hier etwas einträgt, muss den Grund hinschreiben.
+//
+// Der kitchen-tabs-Eintrag („.kitchen-tabs-bar .sub-tab: Button-Innenabstand
+// des Tabs, keine Rail-Einrückung") ist 2026-08-27 entfallen - nicht weil die
+// Begründung falsch war, sondern weil sie zur REGEL geworden ist: der Scan
+// prüft seither das Selektor-SUBJEKT (siehe hitsRail unten). Ein Selektor,
+// dessen letztes Compound nicht die Rail ist, polstert ein KIND der Rail, und
+// Kind-Innenabstände waren nie Gegenstand von #577. Der zweite Fall derselben
+// Bauart (.page-toolbar__bar .sub-tab, Werkzeugzeilen-Regel) hätte sonst den
+// zweiten Listeneintrag verlangt - ein Guard über eine Namensliste deckt keine
+// Regel ab, sondern N Einträge.
 const RAIL_PAD_EXCEPTIONS = [
   {
-    file: 'kitchen-tabs.css',
-    selector: '.kitchen-tabs-bar .sub-tab',
-    // Der Tab-Button liegt IN der Rail, er ist nicht die Rail: sein
-    // padding-inline ist Innenabstand zwischen Icon und Pill-Rand, nicht die
-    // Einrückung der Content-Spalte. Vorher stand hier die Rail selbst
-    // (.kitchen-tabs-bar mit padding-inline: var(--space-2)) und deckte diesen
-    // Selektor per Substring-Match versehentlich mit ab. Seit der Modultitel
-    // mobil entfällt (Critique 2026-07-29), braucht die Rail keinen Override
-    // mehr und erbt --page-inline-pad - der 8px-Versatz zum Body ist damit weg.
-    reason: 'Button-Innenabstand des Tabs, keine Rail-Einrückung',
+    file: 'layout.css',
+    selector: '.page-toolbar--narrow:has(> .page-toolbar__bar)',
+    // Dieses Padding IST die Fluchtlinie, nicht ihre Verletzung: ein
+    // gedeckelter Kopf MIT Bar-Zeile deckelt beide Zeilen ueber
+    // padding-inline-end auf das Lesemass, weil der ::after-Rest-Slot nur
+    // EINE Flex-Zeile fuellen kann - im Wrap-Kopf schwamm er in die Bar-Zeile
+    // und schob die Tab-Leiste rechtsbuendig an die Kopf-Kante (Sonde 19,
+    // Kopfende 996 statt 720). Gemessen wird die Zusage von #577 (Kopf endet
+    // auf der Koerperkante) dort weiter, am gerenderten Dokument.
+    reason: 'Lesemass-Deckelung beider Kopfzeilen; der ::after-Slot deckt nur eine',
   },
 ];
 
@@ -8247,12 +8450,20 @@ test('page-inline-pad contract holds across every stylesheet (#577)', () => {
     .filter((f) => f.endsWith('.css'));
 
   // (1) Kein Stylesheet darf ein Rail horizontal umpolstern - egal welche Datei,
-  //     welcher Breakpoint, welche Spezifität.
+  //     welcher Breakpoint, welche Spezifität. Geprüft wird das SUBJEKT des
+  //     Selektors (sein letztes Compound): nur wer die Rail SELBST stylt, kann
+  //     ihre Einrückung verschieben. Ein Nachfahren-Selektor mit der Rail als
+  //     Kontext (.page-toolbar__bar .sub-tab) polstert einen Button IN der
+  //     Rail - das ist Innenabstand, keine Rail-Einrückung, und war vorher ein
+  //     dokumentierter Ausnahme-Eintrag je Fundstelle.
   for (const file of styleFiles) {
     for (const rule of cssRules(read(`../public/styles/${file}`))) {
-      const hitsRail = rule.selectors.some((sel) => [...rails].some(
-        (rail) => new RegExp(`${rail.replace('.', '\\.')}(?![\\w-])`).test(sel),
-      ));
+      const hitsRail = rule.selectors.some((sel) => {
+        const subject = sel.trim().split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
+        return [...rails].some(
+          (rail) => new RegExp(`${rail.replace('.', '\\.')}(?![\\w-])`).test(subject),
+        );
+      });
       if (!hitsRail) continue;
       for (const value of horizontalPaddings(rule.body)) {
         if (isException(file, rule.selectors.join(', '))) continue;
@@ -8345,6 +8556,17 @@ test('wer seinen Körper aufs Lesemaß kappt, kappt auch seinen Kopf', () => {
 
   for (const file of pages) {
     const src = read(file);
+    // EIN KOPF, EINE BREITE - die bewusste Gegenform (2026-08-27): wer sein
+    // Lesemass je SICHT am Koerper toggelt (page-measure--narrow), den Kopf
+    // aber konstant laesst, hat gemischte Koerperbreiten und haelt die Kante
+    // seines BREITESTEN Koerpers. Heute ist das der Kalender: drei Flaechen,
+    // eine Lesebahn - und seit die Ansichts-Umschalter in der Bar-Zeile
+    // wohnen, kann seine volle Titelzeile im 720er-Deckel nicht einzeilig
+    // wohnen (Sonde 19). Der Verzicht ist an der BAUART ablesbar, nicht an
+    // einem Dateinamen; wer BEIDE toggelt (tasks: Liste gegen Kanban), wird
+    // weiter geprueft.
+    if (/classList\.toggle\(\s*'page-measure--narrow'/.test(src)
+      && !/classList\.toggle\(\s*'page-toolbar--narrow'/.test(src)) continue;
     // Jeder Kopf dieser Seite, egal ob als Template-Literal oder über className.
     const heads = [
       ...src.matchAll(/class="([^"]*\bpage-toolbar\b[^"]*)"/g),
@@ -8368,14 +8590,49 @@ test('wer seinen Körper aufs Lesemaß kappt, kappt auch seinen Kopf', () => {
     + '.page-toolbar geändert, oder haben die Küchen-Listen ihre Köpfe alle verloren?',
   );
 
-  // Und die Variante muss das auch tun: Marge am letzten Slot, gegen dasselbe
-  // Token, das .list-scroller kappt.
+  // Und die Variante muss das auch tun: das ENDE der Zeile aufs Lesemaß
+  // zurückholen, gegen dasselbe Token, das .list-scroller kappt.
+  //
+  // GEPRÜFT WIRD DIE ZUSICHERUNG, NICHT DIE SCHREIBWEISE. Bis #882 stand hier
+  // die Regel wörtlich - `margin-inline-end` am `:last-child`, Zeichen für
+  // Zeichen. Genau diese Marge war der Fehler: sie zählte in die
+  // Zeilenbelegung des Flex-Containers und machte den Umbruch rechnerisch
+  // unvermeidlich (gemessen 560px von 1280px, für Titel und Suche blieben
+  // 315px bei 441px Bedarf). Der Abstand ist jetzt ein schrumpfbarer Slot -
+  // dieselbe Zusage, anderes Mittel. Ein Guard, der die Implementierung
+  // festschreibt, hätte hier den Fix blockiert statt den Fehler zu finden.
   const layout = stripCssComments(read('../public/styles/layout.css'));
-  assert.match(
-    layout,
-    /\.page-toolbar--narrow\s*>\s*:last-child\s*\{[^}]*margin-inline-end:\s*max\(\s*0px,\s*calc\(100% - var\(--content-max-width-narrow\)\)\s*\)/,
-    'layout.css: .page-toolbar--narrow muss den letzten Slot auf --content-max-width-narrow zurückholen',
+  const narrowRules = cssRules(read('../public/styles/layout.css'))
+    .filter((r) => r.selectors.some((sel) => /\.page-toolbar--narrow(?![\w-])/.test(sel)));
+
+  // Der Abstand ist ein eigener Slot am Ende der Zeile - nicht irgendeine
+  // Deklaration, die das Token nur ERWÄHNT. Auf blosse Token-Präsenz geprüft
+  // ginge auch `.page-toolbar--narrow { max-width: var(--content-max-width-narrow) }`
+  // durch, und genau das schliesst der Kommentarblock in layout.css als
+  // rail-brechend aus.
+  const spacer = narrowRules.filter((r) =>
+    r.selectors.some((sel) => /\.page-toolbar--narrow::after\b/.test(sel))
+    && /flex(?:-basis)?:[^;]*var\(--content-max-width-narrow\)/.test(r.body));
+  assert.equal(
+    spacer.length, 1,
+    'layout.css: .page-toolbar--narrow::after muss das Ende seiner Zeile als Flex-Slot auf '
+    + '--content-max-width-narrow zurückholen (genau eine Regel, gefunden: ' + spacer.length + ')',
   );
+
+  // Und KEINE der Regeln darf den Rückhalt wieder als Marge setzen. Über ALLE
+  // statt über die erste: die Prüfung nahm zuerst nur `find()`, und damit wäre
+  // sie grün geblieben, sobald die alte, fehlerhafte Regel NACH der neuen
+  // wieder aufgetaucht wäre - also genau im Wiedereinführungsfall, für den sie
+  // gedacht ist. Eine Marge gibt nie nach und zählt trotzdem in die
+  // Flex-Zeilenbelegung; das war #882.
+  for (const rule of narrowRules) {
+    assert.doesNotMatch(
+      rule.body,
+      /margin-(?:inline-end|right):\s*max\(/,
+      `layout.css: "${rule.selectors.join(', ')}" setzt den Lesemaß-Abstand wieder als Marge - `
+      + 'eine Marge gibt nie nach und zählt trotzdem in die Flex-Zeilenbelegung (#882)',
+    );
+  }
   // Ohne Breakpoint: .list-scroller kappt unbedingt, der Kopf muss das auch.
   // Der Vorgänger stand in `@media (min-width: 1024px)` und ließ den Versatz
   // zwischen 720px und 1024px stehen (gemessen 148px bei 900px Fensterbreite).
@@ -13504,7 +13761,7 @@ test('ein Formularfeld traegt nur form-Klassen, die ein Stylesheet kennt', () =>
       const cls = attrs.match(/class="([^"${}]*)"/)?.[1];
       if (!cls) continue;
       for (const name of cls.split(/\s+/).filter((c) => c.startsWith('form-'))) {
-        if (!defined.has(name)) offenders.push(`${path.replace('../', '')}: <${tag} class="${name}">`);
+        if (!defined.has(name)) offenders.push(`${path.startsWith('../') ? path.slice(3) : path}: <${tag} class="${name}">`);
       }
     }
   }
@@ -13718,10 +13975,491 @@ test('the app shell exposes bounded Back and Forward navigation', () => {
     'mobile navigation must expose labeled history controls in the More sheet');
   assert.match(router, /button\.disabled = isBack[\s\S]*?_navHistoryIndex <= 0[\s\S]*?_navHistoryIndex >= _navHistoryMax/,
     'Back must stop at the first in-app page and Forward must reflect the retained branch');
-  assert.match(router, /history\.pushState\(\{[\s\S]*?\[NAV_HISTORY_INDEX_KEY\]: _navHistoryIndex/,
+  assert.match(router, /const state = \{[\s\S]*?\[NAV_HISTORY_INDEX_KEY\]: _navHistoryIndex[\s\S]*?history\.pushState\(state/,
     'every SPA route push must carry its app-history index');
   assert.match(router, /popstate[\s\S]{0,160}syncNavigationHistory\(e\.state\)[\s\S]{0,120}navigate\(/,
     'browser and shell Back/Forward must synchronize before rendering the route');
   assert.match(layout, /\.nav-sidebar__history\s*\{/);
   assert.match(layout, /\.nav-history--mobile\s*\{/);
+});
+
+/**
+ * EINE KNOPFZEILE SAGT, OB SIE UMBRICHT (#872).
+ *
+ * Der gemeldete Fehler war nicht kosmetisch, und er entsteht nicht durch
+ * Quetschen: ein Flex-Item traegt `min-width: auto` und schrumpft nicht unter
+ * seine Inhaltsbreite. Stattdessen waechst die ZEILE ueber den Container
+ * hinaus - rechtsbuendig also nach LINKS -, und das Panel schneidet mit
+ * `overflow: clip` ab, was heraussteht. Gemessen an der Aufgaben-Detailansicht
+ * auf 390px: der Löschen-Knopf sass bei x = -11, das Panel beginnt bei x = 12,
+ * aus „Löschen" wurde sichtbar „öschen". Ohne Ellipse, ohne Scrollbalken -
+ * nur ein Wort, das falsch anfaengt. Getroffen haette es jede Fusszeile mit
+ * drei Knoepfen in einer laengeren Locale.
+ *
+ * DIE REGEL VERLANGT EINE ENTSCHEIDUNG, KEINEN BESTIMMTEN WERT. Wo ein
+ * Umbruch falsch waere (zwei Icon-Knoepfe in einer Rasterspalte), steht
+ * `flex-wrap: nowrap` ausdruecklich da. Das unterscheidet eine getroffene
+ * Entscheidung von einem Versaeumnis - und nur Letzteres ist der Bug.
+ *
+ * ALS REGEL UND NICHT ALS ALLOWLIST: er sucht die FORM (rechtsbuendige
+ * Flex-Zeile, deren Name sie als Fuss- oder Aktionszeile ausweist), nicht die
+ * neun Selektoren, die es heute gibt. Beim ersten Lauf fand er in genau
+ * dieser Form acht weitere Zeilen mit demselben Mangel; eine Liste haette nur
+ * die eine gemeldete Stelle gedeckt.
+ *
+ * Guard-Ebene: Form (aus dem Stylesheet gelesen).
+ */
+test('jede rechtsbuendige Knopfzeile sagt, ob sie umbricht (#872)', () => {
+  const styleDir = new URL('../public/styles/', import.meta.url);
+  const offenders = [];
+  let seenRows = 0;
+
+  /* JE SELEKTOR GESAMMELT, NICHT JE REGEL - so, wie die Kaskade es sieht.
+   *
+   * Die erste Fassung urteilte ueber die EINZELNE Regel und war damit blind
+   * fuer jede Zeile, deren Deklarationen verteilt stehen: `display: flex` aus
+   * einer geteilten Kopf-/Fusszeilen-Regel, `justify-content` dreissig Zeilen
+   * spaeter aus einer eigenen. Genau so gebaut sind
+   * `.budget-inline-modal__footer` und `.doc-attach-picker__footer` - zwei
+   * echte Verstoesse, die der Guard nicht sah. Gefunden hat sie die Review,
+   * nicht er. */
+  const declarations = new Map();
+  for (const file of readdirSync(styleDir).filter((f) => f.endsWith('.css'))) {
+    for (const { selector, body, at } of eachRule(read(`../public/styles/${file}`))) {
+      // Gruppenselektoren aufspalten: `.a, .b { display: flex }` gibt beiden
+      // dieselbe Deklaration, und nur einzeln laesst sich das zusammenlegen.
+      for (const one of selector.split(',').map((x) => x.trim()).filter(Boolean)) {
+        const key = `${file}${at.length ? ` [${at.join(' ')}]` : ''}: ${one}`;
+        declarations.set(key, (declarations.get(key) ?? '') + body);
+      }
+    }
+  }
+
+  for (const [key, body] of declarations) {
+    if (!/(footer|actions)\b/.test(key)) continue;
+    if (!/display\s*:\s*(inline-)?flex/.test(body)) continue;
+    if (!/justify-content\s*:\s*(flex-)?end/.test(body)) continue;
+    seenRows += 1;
+    if (/flex-wrap\s*:/.test(body) || /\bflex-flow\s*:/.test(body)) continue;
+    offenders.push(key);
+  }
+
+  // Ohne diese Zusicherung waere der Guard gruen, sobald der Scanner die
+  // Stylesheets nicht mehr faende - eine leere Liste ist keine Zusicherung.
+  assert.ok(seenRows >= 9,
+    `Nur ${seenRows} rechtsbuendige Knopfzeilen gefunden - der Scanner findet `
+    + 'public/styles/ nicht mehr, statt nichts zu beanstanden.');
+
+  assert.deepEqual(offenders.sort(), [],
+    'Diese Knopfzeile sagt nicht, was bei Platzmangel passieren soll. Ohne '
+    + '`flex-wrap` waechst sie ueber ihren Container hinaus - rechtsbuendig also '
+    + 'nach links -, und was heraussteht, schneidet der Rahmen ab (#872). '
+    + 'Setze `flex-wrap: wrap` - oder `nowrap` mit einer '
+    + `Begruendung, wenn der Umbruch hier falsch waere.\n${offenders.join('\n')}`);
+});
+
+/**
+ * Der Umbruch der ZEILE reicht nicht, wenn EIN Knopf allein zu breit ist.
+ *
+ * Genau dann kann die Zeile nicht mehr umbrechen, und der abgeschnittene Text
+ * aus #872 stuende wieder da - seltener, aber unveraendert falsch. Deshalb
+ * geben die beiden kanonischen Modal-Knopfzeilen ihren Knoepfen das Recht,
+ * INNEN umzubrechen, und nehmen damit das `white-space: nowrap` von `.btn`
+ * fuer diesen einen Ort zurueck.
+ */
+test('in den Modal-Knopfzeilen darf der Knopftext umbrechen (#872)', () => {
+  const css = read('../public/styles/layout.css');
+
+  /* Und die verschachtelte Aktionsgruppe bricht selbst um. Fuer die Fusszeile
+   * ist sie EIN Flex-Item; ohne eigenen Umbruch laeuft sie als Ganzes ueber
+   * den Rand, und der Umbruch der Fusszeile hilft nichts mehr. Gebaut ist das
+   * so im Kalender, in den Budget-Plaenen und in den Kontakten. */
+  const gruppe = [...eachRule(css)].find((r) => r.selector.trim() === '.modal-panel__footer > div');
+  assert.ok(gruppe, '.modal-panel__footer > div fehlt - eine Aktionsgruppe laeuft wieder als Ganzes ueber');
+  assert.match(gruppe.body, /flex-wrap\s*:\s*wrap/);
+  for (const selector of ['.modal-panel__footer .btn', '.modal-actions .btn']) {
+    const rule = [...eachRule(css)].find((r) => r.selector.trim() === selector);
+    assert.ok(rule, `${selector} fehlt - ein einzelner zu breiter Knopf wird wieder abgeschnitten.`);
+    assert.match(rule.body, /white-space\s*:\s*normal/,
+      `${selector} nimmt das nowrap von .btn nicht zurueck.`);
+  }
+});
+
+/**
+ * JEDES OVERLAY MELDET SICH AN DER ZURUECK-GESTE AN (#871).
+ *
+ * Der gemeldete Fehler war, dass die Zurueck-Geste ueber einem offenen Dialog
+ * die SEITE wechselte und den Dialog stehen liess - im Hintergrund landete man
+ * auf der Uebersicht, davor hing weiter der Termin. Auf dem Telefon ist die
+ * Wischgeste von links der Zurueck-Knopf, also war das die einzige Geste, die
+ * den Zustand kaputt statt kleiner machte.
+ *
+ * DIESE APP HAT NICHT EINEN DIALOG. Neben dem geteilten Modal-System stehen
+ * neun eigene Overlays (Mehr-Blatt, Suche, Hilfe, Icon-Picker, Belegpicker,
+ * Belegvorschau, Buchungspicker, Logopicker, Onboarding, Budget-Inline). Ein
+ * Fix nur im Modal-System haette den gemeldeten Fall geschlossen und die
+ * anderen offen gelassen - und die zehnte Stelle waere wieder eine neue.
+ *
+ * DIE REGEL IST DIE VOLLSTAENDIGKEIT, NICHT DIE LISTE: wer ein Overlay
+ * aufmacht (`aria-modal="true"`), meldet es an. Geprueft wird je Datei, dass
+ * mindestens so viele Anmeldungen wie modale Overlays darin stehen.
+ *
+ * WAS ER NICHT SIEHT, ausgesprochen: er zaehlt je DATEI. Ein zweites Overlay
+ * in einer Datei, die schon eine Anmeldung hat, faellt ihm auf; ein Overlay,
+ * das seinen `aria-modal`-Wert aus einer Variablen setzt, nicht.
+ *
+ * Guard-Ebene: Vollstaendigkeit (aus dem Quelltext gezaehlt).
+ */
+test('jedes modale Overlay meldet sich an der Zurueck-Geste an (#871)', () => {
+  /* Ein Overlay AUFMACHEN heisst hier zweierlei, und die zweite Form hat der
+   * Guard zuerst uebersehen:
+   *   1. `aria-modal="true"` an einem selbstgebauten Kasten,
+   *   2. `showModal()` an einem nativen `<dialog>`. Es traegt kein Attribut -
+   *      das setzt der Browser implizit -, ist aber genauso modal und liegt in
+   *      der Top-Layer sogar DARUEBER. Der Bildzuschnitt (utils/avatar-crop.js)
+   *      ist so gebaut und oeffnet ueber geteilten Modals; ohne Anmeldung nahm
+   *      die Zurueck-Geste den Eintrag des Modals darunter. */
+  const OPENS_OVERLAY = /aria-modal["']?\s*[,:=]\s*["']?true|\.showModal\s*\(/g;
+  const REGISTERS = /\b(attachOverlay|pushOverlay)\s*\(/g;
+
+  const offenders = [];
+  let seenOverlays = 0;
+
+  for (const file of walkJsFiles('../public/')) {
+    if (file.includes('/vendor/')) continue;
+    const src = withoutBlockComments(read(file));
+    const opens = (src.match(OPENS_OVERLAY) ?? []).length;
+    if (!opens) continue;
+    seenOverlays += opens;
+    const registers = (src.match(REGISTERS) ?? []).length;
+    if (registers < opens) {
+      offenders.push(`${file}: ${opens} modale Overlays, nur ${registers} Anmeldungen`);
+    }
+  }
+
+  // Ohne diese Zusicherung waere der Guard gruen, sobald die Muster nicht mehr
+  // greifen - eine leere Liste ist keine Zusicherung.
+  assert.ok(seenOverlays >= 11,
+    `Nur ${seenOverlays} modale Overlays gefunden - das Muster greift nicht mehr, `
+    + 'statt nichts zu beanstanden.');
+
+  assert.deepEqual(offenders.sort(), [],
+    'Dieses Overlay faengt die Zurueck-Geste nicht ab. Sie wechselt dann die Seite '
+    + 'darunter und laesst das Overlay stehen (#871) - auf dem Telefon ist das die '
+    + 'Wischgeste von links, also der haeufigste Weg hinaus. Melde es mit '
+    + '`attachOverlay(el, close)` aus /utils/overlay-history.js an; `pushOverlay` '
+    + `nur, wenn das Overlay einen eigenen Lebenszyklus fuehrt.\n${offenders.join('\n')}`);
+});
+
+/**
+ * Und der Router fragt auch wirklich, bevor er navigiert.
+ *
+ * Die Registrierung allein reicht nicht: ohne diesen Handler stuende das
+ * ganze Register da und die Geste liefe weiter an ihm vorbei. Der Test haelt
+ * die EINE Zeile fest, an der die Frage haengt.
+ */
+test('der popstate-Handler fragt zuerst die offenen Overlays (#871)', () => {
+  const router = read('../public/router.js');
+  const handler = /window\.addEventListener\('popstate'[\s\S]*?\n\}\);/.exec(router);
+  assert.ok(handler, 'der popstate-Handler ist nicht mehr auffindbar');
+  assert.match(handler[0], /handleBackNavigation\(\)/,
+    'der Handler fragt die offenen Overlays nicht - die Geste wechselt wieder die Seite');
+  assert.match(handler[0], /if \(!handled\) navigate\(/,
+    'der Handler navigiert unabhaengig von der Antwort - dann bleibt der Dialog '
+    + 'stehen UND die Seite wechselt, also genau der gemeldete Zustand');
+});
+
+/**
+ * EIN ERZWUNGENES SCHLIESSEN RAEUMT AUCH DIE GEPARKTEN KAESTEN WEG (#871).
+ *
+ * Das Modal-System fuehrt EINEN Registereintrag fuer beliebig viele
+ * gestapelte Zustaende: ein Bestaetigungsdialog PARKT das Formular darunter,
+ * statt es zu schliessen (`_suspendActiveModal`). Ein `closeModal({force})`
+ * erwischt deshalb nur den obersten Kasten - und der laufende
+ * Bestaetigungs-Ablauf holt danach das geparkte Formular zurueck, bei
+ * Sitzungsende also ueber die Anmeldeseite und ohne Registrierung. Wieder der
+ * Zustand aus #871, nur mit abgelaufener Sitzung davor.
+ *
+ * Guard-Ebene: Struktur (aus dem Quelltext gelesen).
+ */
+test('erzwungenes Schliessen raeumt auch geparkte Modals weg (#871)', () => {
+  const modal = read('../public/components/modal.js');
+  const fn = /async function _closeFromBackNavigation\([\s\S]*?\n\}/.exec(modal);
+  assert.ok(fn, '_closeFromBackNavigation ist nicht mehr auffindbar');
+  assert.match(fn[0], /if \(force\)/,
+    'der Zwangspfad ist nicht vom normalen unterschieden - dann bleibt ein '
+    + 'geparktes Formular ueber der Anmeldeseite stehen');
+  assert.match(fn[0], /querySelectorAll\('\.modal-overlay'\)[\s\S]{0,80}remove\(\)/,
+    'der Zwangspfad entfernt die geparkten Kaesten nicht');
+
+  /* UND DAS ZURUECKHOLEN ERKENNT DEN ENTFERNTEN KNOTEN. Der
+   * Bestaetigungs-Ablauf laeuft in einer eigenen Kette weiter und kam nach dem
+   * Zwangsraeumen hier an: er setzte `activeOverlay` auf ein Phantom,
+   * `modalState` auf 'open' und die Scroll-Sperre auf die naechste Seite. Die
+   * Anmeldeseite blieb unscrollbar, bis irgendwo das naechste Modal aufging. */
+  const resume = /function _resumeSuspendedModal\([\s\S]*?\n\}/.exec(modal);
+  assert.ok(resume, '_resumeSuspendedModal ist nicht mehr auffindbar');
+  assert.match(resume[0], /if \(!overlay\.isConnected\)[\s\S]{0,120}return;/,
+    'ein zwangsweise entfernter Kasten wird wieder „zurueckgeholt" - Scroll-Sperre '
+    + 'und Escape-Handler bleiben dann auf einem Phantom haengen');
+});
+
+/**
+ * DER REGISTEREINTRAG FOLGT DEM ZUSTAND, NICHT DEM EREIGNIS (#871).
+ *
+ * Drei Anlaeufe scheiterten daran, den Eintrag an Oeffnen und Schliessen zu
+ * haengen: beide Stellen mussten wissen, ob unter dem Kasten, der gerade
+ * zugeht, noch einer liegt, und konnten es nicht. Ein Bestaetigungsdialog ist
+ * fuer `_doClose` das aktive Overlay, obwohl er das Formular darunter nur
+ * PARKT - der Zweig gab also dessen Eintrag zurueck, und das gleich folgende
+ * `_resumeSuspendedModal` holte es ohne Registrierung hervor. Wer direkt nach
+ * `closeModal()` fragt, fragt ausserdem zu frueh: der Bestaetigungs-Ablauf
+ * laeuft in einer eigenen, nicht abgewarteten Kette.
+ *
+ * Eine Zustandsfrage kennt diese Reihenfolgen nicht.
+ *
+ * Guard-Ebene: Struktur (aus dem Quelltext gelesen).
+ */
+test('die Registrierung des Modal-Systems folgt dem Zustand (#871)', () => {
+  const modal = read('../public/components/modal.js');
+  const fn = /function _syncOverlayRegistration\(\)[\s\S]*?\n\}/.exec(modal);
+  assert.ok(fn, '_syncOverlayRegistration ist nicht mehr auffindbar');
+  assert.match(fn[0], /querySelector\('\.modal-overlay'\)/,
+    'die Registrierung fragt nicht mehr den Zustand ab');
+  /* UND SIE FRAGT DAS REGISTER, nicht nur den eigenen Token.
+   * `handleBackNavigation()` nimmt den Eintrag heraus, BEVOR es schliessen
+   * laesst - wer danach nur prueft, ob er einen Token HAT, haelt sich fuer
+   * angemeldet und ist es nicht. Genau so verlor ein wieder hervorgeholtes
+   * Formular seinen Anspruch auf die naechste Geste. */
+  assert.match(fn[0], /isOverlayOpen\(_overlayToken\)/,
+    'die Registrierung prueft nicht, ob ihr Token ueberhaupt noch im Register '
+    + 'steht - ein wieder hervorgeholtes Formular meldet sich dann nie neu an');
+
+  /* Jeder Uebergang zieht sie nach - Oeffnen, endgueltiges Schliessen und das
+   * Zurueckholen eines geparkten Formulars.
+   *
+   * Der Ausschnitt laeuft vom Funktionskopf bis zum naechsten auf Spaltenrand
+   * beginnenden Kopf, NICHT ueber eine Klammerbilanz per Regex: `openModal`
+   * enthaelt mehrere innere Bloecke, und ein `[\s\S]*?\n\}` endete am
+   * ersten von ihnen - der Guard war damit rot, obwohl die Zeile dastand. */
+  const abschnitt = (name) => {
+    const start = modal.indexOf(`function ${name}(`);
+    if (start === -1) return null;
+    const rest = modal.slice(start);
+    const ende = rest.slice(1).search(/\n(?:export )?(?:async )?function |\n\/\*\*/);
+    return ende === -1 ? rest : rest.slice(0, ende + 1);
+  };
+
+  for (const name of ['openModal', '_doClose', '_resumeSuspendedModal']) {
+    const block = abschnitt(name);
+    assert.ok(block, `${name} ist nicht mehr auffindbar`);
+    assert.match(block, /_syncOverlayRegistration\(\)/,
+      `${name} zieht die Registrierung nicht nach - nach diesem Uebergang `
+      + 'stimmt der Eintrag nicht mehr mit dem ueberein, was zu sehen ist');
+  }
+});
+
+/**
+ * DIE ZAHL AM NAV-ZIEL WIRD AN EINER STELLE GEZEICHNET (#868).
+ *
+ * Gemeldet war, dass das Badge mit den ueberfaelligen Aufgaben nach dem
+ * Anmelden fehlt. Der Grund war die Bauart: drei Module (Aufgaben,
+ * Geburtstage, Inventar) bauten dasselbe Badge-DOM je einzeln nach - zwanzig
+ * Zeilen, die den Icon-Wrapper nachruesten und die Zahl anhaengen - und sie
+ * taten es aus IHREM Zustand heraus. Ein Modul, das nie gerendert wurde, hat
+ * keinen Zustand; also gab es kein Badge. Dieselbe Bauart liess das Badge
+ * auch bei jedem `rebuildNavigation()` verschwinden.
+ *
+ * DER GUARD SCHUETZT DIE EINE STELLE, nicht die drei Aufrufer: wer eine
+ * `.nav-badge` ausserhalb von `utils/nav-badges.js` baut, baut die Bauart
+ * wieder auf, aus der der Fehler kam - und erbt weder den Icon-Wrapper noch
+ * die Deckelung noch den Zugaenglichkeitsnamen.
+ *
+ * Guard-Ebene: Struktur (aus dem Quelltext gelesen).
+ */
+test('nur EINE Stelle baut die Zahl am Nav-Ziel (#868)', () => {
+  const OWNER = '../public/utils/nav-badges.js';
+  const offenders = [];
+
+  for (const file of walkJsFiles('../public/')) {
+    if (file === OWNER || file.includes('/vendor/')) continue;
+    const src = withoutBlockComments(read(file));
+    // Ein Badge BAUEN heisst: die Klasse einem erzeugten Knoten geben.
+    if (/className\s*=\s*['"]nav-badge['"]|classList\.add\(\s*['"]nav-badge['"]/.test(src)) {
+      offenders.push(file);
+    }
+  }
+
+  assert.deepEqual(offenders.sort(), [],
+    'Diese Datei baut ihr Nav-Badge selbst. Genau daraus entstand #868: das '
+    + 'Badge haengt dann am Zustand eines Moduls, das beim Anmelden noch gar '
+    + 'nicht gerendert wurde, und faellt bei jedem Neuaufbau der Navigation '
+    + `weg. Benutze setNavBadge() aus /utils/nav-badges.js.\n${offenders.join('\n')}`);
+});
+
+/**
+ * Und der Router zeichnet sie nach jedem Neuaufbau der Navigation nach.
+ *
+ * Ohne diesen Aufruf traegt der Speicher die Zahlen zwar, aber niemand malt
+ * sie hin - der zweite Teil von #868 waere zurueck, und zwar still.
+ */
+test('rebuildNavigation zeichnet die Nav-Zahlen nach (#868)', () => {
+  const router = read('../public/router.js');
+  const fn = /function rebuildNavigation\([\s\S]*?\n\}/.exec(router);
+  assert.ok(fn, 'rebuildNavigation() ist nicht mehr auffindbar');
+  assert.match(fn[0], /applyNavBadges\(\)/,
+    'nach dem Neuaufbau der Navigation fehlen die Zahlen an den Nav-Zielen');
+
+  // Und die Startwerte kommen aus der Antwort, die ohnehin geholt wird.
+  assert.match(router, /function primeNavBadges\(/,
+    'die Startwerte aus /dashboard fehlen - das Badge erschiene wieder erst '
+    + 'nach dem ersten Besuch des Moduls');
+  assert.match(router, /_moduleCountsAt = Date\.now\(\);\s*\n\s*primeNavBadges\(res\)/,
+    'primeNavBadges haengt nicht an der /dashboard-Antwort');
+});
+
+/**
+ * DAS MEHR-BLATT ZEICHNET ZUERST AUS DEM SPEICHER (#868).
+ *
+ * Ein Folgefehler des Fixes selbst, den erst eine Review fand: seit der
+ * Shell-Aufbau die Zaehlstaende holt (fuer die Nav-Badges), stempelt er auch
+ * deren TTL. Beim ersten Oeffnen des Mehr-Blattes innerhalb der naechsten 60
+ * Sekunden gab `refreshModuleCounts()` deshalb `false` zurueck („nichts
+ * Neues"), und die Wache darunter uebersprang das Zeichnen - die Kacheln
+ * blieben leer, obwohl die Zahlen im Speicher lagen.
+ *
+ * Also derselbe Fehler wie der gemeldete, nur eine Ebene versetzt: eine Zahl,
+ * die da ist, aber nicht gezeigt wird.
+ *
+ * Guard-Ebene: Struktur (aus dem Quelltext gelesen).
+ */
+test('das Mehr-Blatt zeichnet erst aus dem Speicher, dann nach (#868)', () => {
+  const router = read('../public/router.js');
+  const fn = /function openSheet\(\)[\s\S]*?\n  \}/.exec(router);
+  assert.ok(fn, 'openSheet() ist nicht mehr auffindbar');
+
+  const bare = fn[0].indexOf('paintMoreSheetBadges(sheet);');
+  const guarded = fn[0].indexOf('if (fresh');
+  assert.ok(bare !== -1,
+    'das Blatt zeichnet die schon bekannten Zahlen nicht - innerhalb der TTL '
+    + 'bleiben die Kacheln leer, obwohl die Zahlen im Speicher liegen');
+  assert.ok(guarded !== -1 && bare < guarded,
+    'das Zeichnen aus dem Speicher muss VOR dem Nachziehen stehen');
+});
+
+/**
+ * DIE DREI-TAGE-GRENZE STEHT AN ZWEI ENDEN UND MUSS DIESELBE SEIN (#868).
+ *
+ * Der Server zaehlt sie fuer den Startwert (`birthdaySoonCount` in
+ * routes/dashboard.js), der Browser fuer die laufende Aktualisierung
+ * (`BIRTHDAY_BADGE_DAYS` in utils/nav-badges.js). Laufen sie auseinander,
+ * springt die Zahl beim ersten Besuch der Geburtstagsseite - dieselbe Frage,
+ * zwei Antworten, und keine davon sichtbar falsch.
+ *
+ * Guard-Ebene: Wert (aus beiden Quellen gelesen).
+ */
+test('Server und Browser ziehen den Geburtstags-Schnitt beim selben Tag (#868)', () => {
+  const client = read('../public/utils/nav-badges.js');
+  const server = read('../server/routes/dashboard.js');
+
+  const c = /BIRTHDAY_BADGE_DAYS\s*=\s*(\d+)/.exec(client);
+  assert.ok(c, 'BIRTHDAY_BADGE_DAYS ist nicht mehr auffindbar');
+
+  const s = /birthdaySoonCount\s*=\s*hydrated\.filter\(\(b\) => \(b\.days_until \?\? \d+\) <= (\d+)\)/.exec(server);
+  assert.ok(s, 'der Server-Zaehler fuer nahe Geburtstage ist nicht mehr auffindbar');
+
+  assert.equal(s[1], c[1],
+    `Der Server schneidet bei ${s[1]} Tagen, der Browser bei ${c[1]}. Die Zahl `
+    + 'springt dann beim ersten Besuch der Geburtstagsseite.');
+});
+
+/**
+ * DAS AUFGABEN-BADGE HAT GENAU EINE QUELLE (#868).
+ *
+ * `state.tasks` ist die GEFILTERTE Liste der Ansicht - der Standardfilter
+ * zeigt nur `open`, das Kanban laesst den Statusfilter ganz weg, und
+ * Prioritaet, Zuweisung und Tags engen weiter ein. Daraus gezaehlt sprang die
+ * Zahl beim blossen Wechsel zwischen Liste und Kanban, ohne dass sich an den
+ * Daten etwas geaendert haette: die zweite Wahrheit, die dieser Fix
+ * eigentlich abschafft, eine Ebene tiefer.
+ *
+ * Guard-Ebene: Struktur (aus dem Quelltext gelesen).
+ */
+test('das Aufgabenmodul zaehlt sein Badge nicht selbst (#868)', () => {
+  const tasks = read('../public/pages/tasks.js');
+  assert.doesNotMatch(tasks, /setNavBadge\s*\(/,
+    'das Aufgabenmodul schreibt wieder direkt in den Badge-Slot - seine '
+    + 'Liste ist gefiltert und kann die Frage nicht beantworten');
+});
+
+/**
+ * UND DIE MELDUNG HAENGT AM SCHREIBEN, NICHT AM ZEICHNEN (#868).
+ *
+ * Eine erste Fassung meldete aus `updateOverdueBadge()`, und das ruft jedes
+ * `renderTaskList()` - also auch jeder Tastenanschlag in der Suche, jeder
+ * Filter- und jeder Ansichtswechsel. Jede Tipppause laenger als der
+ * Entprellzeitraum stiess damit eine vollstaendige Dashboard-Aggregation an,
+ * ohne dass sich an den gezaehlten Daten irgendetwas geaendert haette.
+ *
+ * Sie steht deshalb in der API-Schicht, die ohnehin jeder Schreibvorgang
+ * durchlaeuft - eine Stelle statt siebzehn Schreibpfaden allein im
+ * Aufgabenmodul, von denen der achtzehnte vergessen wuerde.
+ *
+ * Guard-Ebene: Struktur (aus dem Quelltext gelesen).
+ */
+test('die Zaehler-Meldung haengt am Schreiben, nicht am Rendern (#868)', () => {
+  const api = read('../public/api.js');
+  const fn = /function notifyCountedMutation\(path\)[\s\S]*?\n\}/.exec(api);
+  assert.ok(fn, 'notifyCountedMutation ist nicht mehr auffindbar');
+  assert.match(fn[0], /invalidateModuleCounts/,
+    'die Meldung erreicht den Zaehlstand nicht');
+  assert.match(api, /if \(stateChanging\) notifyCountedMutation\(path\);/,
+    'sie haengt nicht mehr am schreibenden Request');
+
+  // Und die Render-Pfade melden NICHT mehr.
+  const tasks = read('../public/pages/tasks.js');
+  assert.doesNotMatch(tasks, /invalidateModuleCounts/,
+    'das Aufgabenmodul meldet wieder selbst - dann haengt die Meldung am '
+    + 'Rendern und feuert bei jedem Tastenanschlag in der Suche');
+});
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Der schmale Zustand der Kueche steht HINTER seinem Bauteil
+ *
+ * Zweimal dieselbe Falle in derselben Datei: `display: none` fuer die leeren
+ * Slots stand im fruehen 640px-Block, die `.meal-slot`-Basisregel
+ * (display: flex) kam spaeter - bei gleicher Spezifitaet gewinnt die spaetere
+ * Regel, und der gestrichelte Slot stand mobil wieder neben dem .day-add.
+ * Etappe E (v2.24.1) hat den Fall fuer flex-direction/add-more-btn behoben
+ * und als Don't in DESIGN.md dokumentiert; die empty-Slot-Ausblendung kehrte
+ * trotzdem in den fruehen Block zurueck (Critique 2026-08-27, gemessen:
+ * 1 leerer Slot sichtbar bei 375px). Ein Fehler, der zweimal kam, kommt
+ * dreimal - deshalb hier die REIHENFOLGE als Zusicherung, ueber eachRule()
+ * statt Zeilennummern: die letzte display-Regel, die einen leeren Slot
+ * treffen kann, muss die Ausblendung sein.
+ * ──────────────────────────────────────────────────────────────────────────── */
+test('der schmale Zustand der Kueche steht hinter seinem Bauteil', () => {
+  const css = read('../public/styles/meals.css');
+  let lastEmptyNone = -1;
+  let lastSlotDisplay = -1;
+  let i = 0;
+  for (const rule of eachRule(css)) {
+    i += 1;
+    if (!/display\s*:/.test(rule.body ?? rule.declarations ?? '')) continue;
+    const sels = String(rule.selector).split(',').map((s) => s.trim());
+    if (sels.some((s) => /\.meal-slot--empty(?![\w-])/.test(s))
+      && /display\s*:\s*none/.test(rule.body ?? rule.declarations ?? '')) {
+      lastEmptyNone = i;
+    } else if (sels.some((s) => /\.meal-slot(?![\w-])/.test(s))) {
+      lastSlotDisplay = i;
+    }
+  }
+  assert.ok(lastEmptyNone > -1, 'meals.css blendet die leeren Slots nicht mehr aus '
+    + '(.meal-slot--empty { display: none } fehlt) - mobil stapeln sich dann wieder '
+    + 'bis zu 28 gestrichelte Anlege-Boxen neben dem .day-add');
+  assert.ok(lastSlotDisplay === -1 || lastEmptyNone > lastSlotDisplay,
+    'die Ausblendung der leeren Slots steht VOR einer spaeteren .meal-slot-display-Regel '
+    + `(Regel ${lastEmptyNone} vs. ${lastSlotDisplay}) - bei gleicher Spezifitaet gewinnt `
+    + 'die spaetere Regel, und der leere Slot ist mobil wieder sichtbar (DESIGN.md, Don\'t '
+    + '"eine Regel in einen Media-Block schreiben, der VOR den Bauteilen steht")');
 });

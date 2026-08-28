@@ -25,6 +25,7 @@ import { t, formatDate } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { isPreviewable } from '/utils/document-preview.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
+import { attachOverlay } from '/utils/overlay-history.js';
 
 
 
@@ -363,6 +364,9 @@ function openDocumentPicker(panel, { excludeIds = new Set(), single = false } = 
       if (opener?.isConnected) opener.focus();
       resolve(result);
     };
+    // Das Overlay liegt ueber einem offenen Modal; die Zurueck-Geste meint
+    // deshalb zuerst den Picker (#871). Ohne Auswahl heisst zu: abgebrochen.
+    attachOverlay(overlay, () => close(null));
 
     const renderList = () => {
       const needle = searchEl.value.trim().toLowerCase();

@@ -38,6 +38,8 @@ const state = {
   // sichtbar, sobald mindestens ein gespiegeltes Rezept existiert (siehe
   // renderSourceFilter).
   sourceFilter: 'all',
+  // Rezept-IDs, die im Wochenplan der AKTUELLEN Woche stehen (loadPlannedRecipes).
+  plannedRecipeIds: new Set(),
 };
 
 // Client-seitige Suche über Titel, Notizen und Zutaten (Audit A1-21):
@@ -188,6 +190,25 @@ async function loadShoppingLists() {
   }
 }
 
+// „Diese Woche geplant": die Rezepteliste kannte ihren eigenen Wochenplan
+// nicht - die Verbindung der beiden Kuechen-Raeume war nur im Meals-Tab
+// sichtbar, und die Liste las sich als kontextlose CRUD-Ablage (Critique
+// 2026-08-27, P2). Die Zuordnung steht laengst in meals.recipe_id; der Server
+// liefert ohne week-Parameter die aktuelle Woche. Ein Fehler laesst die
+// Angabe schlicht weg - die Liste haengt nicht an ihr.
+async function loadPlannedRecipes() {
+  if (window.yuvomi?.isModuleDisabled?.('meals')) {
+    state.plannedRecipeIds = new Set();
+    return;
+  }
+  try {
+    const res = await api.get('/meals');
+    state.plannedRecipeIds = new Set((res.data ?? []).map((m) => m.recipe_id).filter(Boolean));
+  } catch {
+    state.plannedRecipeIds = new Set();
+  }
+}
+
 export async function render(container) {
   _container = container;
 
@@ -284,7 +305,7 @@ export async function render(container) {
 
   if (window.lucide) window.lucide.createIcons({ el: container });
 
-  await Promise.all([loadRecipes(), loadCategories(), loadShoppingLists()]);
+  await Promise.all([loadRecipes(), loadCategories(), loadShoppingLists(), loadPlannedRecipes()]);
   renderSourceFilter();
   renderRecipeList();
 
@@ -568,6 +589,16 @@ function renderRecipeList() {
     meta.className = 'list-row__meta';
     meta.textContent = t('meals.ingredientCount', { count: ingredients.length });
     toggle.appendChild(meta);
+
+    // Zweite Meta-Angabe, getrennt ueber den Mittelpunkt des +-Kombinators
+    // (Hausform, Vorrat): neutraler Sekundaertext, keine Flaeche - der
+    // Zustand ist eine Meldung, keine Identitaet (Skalen-Regel).
+    if (state.plannedRecipeIds.has(recipe.id)) {
+      const planned = document.createElement('span');
+      planned.className = 'recipe-row__planned';
+      planned.textContent = t('recipes.plannedThisWeek');
+      toggle.appendChild(planned);
+    }
 
     if (hasDetail) {
       toggle.setAttribute('aria-expanded', 'false');

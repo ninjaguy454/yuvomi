@@ -8,7 +8,7 @@ import { api } from '/api.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, recurrenceRow } from '/rrule-ui.js';
 import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, promptModal, confirmModal, advancedSection } from '/components/modal.js';
 import { openDetailView, closeDetailView, visibilityRow, assignedRow } from '/components/detail-view.js';
-import { stagger, vibrate, scheduleUndoableDelete } from '/utils/ux.js';
+import { stagger, vibrate, scheduleUndoableDelete, animationSettled } from '/utils/ux.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
 import { esc, renderMarkdownLight } from '/utils/html.js';
@@ -2966,7 +2966,6 @@ function renderKanban(container) {
       container.querySelector('[data-page-search-clear]')?.setAttribute('hidden', '');
       renderTaskList(container);
     });
-    updateOverdueBadge();
     return;
   }
 
@@ -2998,7 +2997,6 @@ function renderKanban(container) {
   if (window.lucide) window.lucide.createIcons({ el: listEl });
   wireKanbanDrag(container);
   wireKanbanTouch(container);
-  updateOverdueBadge();
 }
 
 function wireKanbanDrag(container) {
@@ -3538,7 +3536,6 @@ function renderTaskList(container) {
   listEl.insertAdjacentHTML('beforeend', renderTaskGroups(filteredTasks(), state.groupMode));
   if (window.lucide) window.lucide.createIcons({ el: listEl });
   stagger(listEl.querySelectorAll('.swipe-row, .kanban-card'));
-  updateOverdueBadge();
   updateBulkActionsBar(container);
   wireSwipeGestures(container);
   maybeShowSwipeHint(container);
@@ -3808,45 +3805,23 @@ function renderFilters(container) {
   wireFilterChips(container);
 }
 
-function updateOverdueBadge() {
-  // Ein Badge zählt, was wartet. Eine abgelegte Aufgabe wartet nicht - sie
-  // erschiene sonst im Kanban und unter aktivem Archiv-Chip als offene Schuld
-  // (#688), obwohl kein Weg von der Zahl zu ihr führt.
-  const overdue = state.tasks.filter((t) => {
-    if (!t.due_date || t.status === 'done' || isArchived(t)) return false;
-    return new Date(t.due_date) < new Date().setHours(0, 0, 0, 0);
-  }).length;
-
-  document.querySelectorAll('[data-route="/tasks"] .nav-badge').forEach((el) => el.remove());
-  document.querySelectorAll('[data-route="/tasks"]').forEach((navItem) => {
-    const baseLabel = t('tasks.title');
-    navItem.setAttribute('aria-label', overdue > 0
-      ? t('tasks.navLabelOverdue', { count: overdue })
-      : baseLabel
-    );
-  });
-  if (overdue > 0) {
-    document.querySelectorAll('[data-route="/tasks"]').forEach((navItem) => {
-      let anchor = navItem.querySelector('.nav-item__icon-wrap');
-      if (!anchor) {
-        const icon = navItem.querySelector('.nav-item__icon');
-        anchor = document.createElement('span');
-        anchor.className = 'nav-item__icon-wrap';
-        if (icon) {
-          icon.replaceWith(anchor);
-          anchor.appendChild(icon);
-        } else {
-          navItem.prepend(anchor);
-        }
-      }
-      const badge = document.createElement('span');
-      badge.className = 'nav-badge';
-      badge.setAttribute('aria-hidden', 'true');
-      badge.textContent = String(overdue);
-      anchor.appendChild(badge);
-    });
-  }
-}
+/* DIESES MODUL FUEHRT DIE ZAHL NICHT MEHR (#868).
+ *
+ * Das Badge beantwortet „wie viele Aufgaben im Haushalt sind ueberfaellig".
+ * `state.tasks` beantwortet eine andere Frage: es ist die GEFILTERTE Liste
+ * dieser Ansicht. Der Standardfilter zeigt nur `open` (schliesst also
+ * „In Bearbeitung" aus), das Kanban laesst den Statusfilter ganz weg, und
+ * Priorität, Zuweisung und Tags engen zusaetzlich ein. Aus dieser Liste
+ * gezaehlt sprang die Zahl beim blossen Wechsel zwischen Liste und Kanban -
+ * ohne dass sich an den Daten etwas geaendert haette. Dieselbe Zahl stand
+ * ausserdem in zwei ZONEN: der Server rechnet in der Haushaltszone, eine
+ * Client-Rechnung im Automatikmodus in der des Browsers.
+ *
+ * Der Server zaehlt also, und dass sich etwas geaendert hat, meldet nicht
+ * dieses Modul, sondern die API-Schicht (`notifyCountedMutation` in api.js) -
+ * eine Stelle statt siebzehn Schreibpfaden allein hier. Es gibt deshalb keine
+ * `updateOverdueBadge()` mehr; sie hing am RENDERN und feuerte bei jedem
+ * Tastenanschlag in der Suche. */
 
 // --------------------------------------------------------
 // Swipe-Gesten (Mobil: links = erledigt, rechts = bearbeiten)
@@ -4352,12 +4327,44 @@ function wireTaskList(container) {
 
     if (action === 'toggle-status') {
       const status = target.dataset.status;
+      const nextStatus = status === 'done' ? 'open' : 'done';
       vibrate(15);
-      target.classList.toggle('task-status-btn--done', status !== 'done');
-      target.closest('.task-card')?.classList.toggle('task-card--done', status !== 'done');
+      // Beide Zustandsklassen führen, nicht nur die neue anhängen: der Knopf
+      // trug sonst `--open` UND `--done` gleichzeitig (gemessen 2026-08-28),
+      // und die Regel, die zuletzt im Stylesheet steht, gewann das Aussehen.
+      target.classList.toggle('task-status-btn--done', nextStatus === 'done');
+      target.classList.toggle('task-status-btn--open', nextStatus !== 'done');
+      target.closest('.task-card')?.classList.toggle('task-card--done', nextStatus === 'done');
+      // Die Quittung startet JETZT und läuft neben dem Roundtrip, nicht danach:
+      // `loadTasks()` ersetzt den Knopf, und ohne dieses Warten war `check-pop`
+      // (tasks.css:703) in 0 von 6 Messungen zu sehen. Siehe animationSettled().
+      const settled = animationSettled(target);
       try {
         await toggleTaskStatus(id, status);
+        await settled;
         await loadTasks(container);
+        // Derselbe Rückweg wie beim Wischen. Die Geste hatte hier zwei
+        // Endpunkte mit zwei Antworten: der Wisch bot Undo an, der Tipp - die
+        // häufigere Bedienung - liess den Eintrag kommentarlos aus dem
+        // gefilterten Bild verschwinden.
+        //
+        // Die Schlüssel heissen weiter `swiped*`: ihr TEXT ist gestenneutral
+        // ("Als erledigt markiert."), nur der Name nennt die Wischgeste. Ein
+        // Rename kostet 24 Locale-Dateien für eine Namensschuld, die kein
+        // Nutzer sieht - vermerkt statt bezahlt.
+        window.yuvomi.showToast(
+          t(nextStatus === 'done' ? 'tasks.swipedDoneToast' : 'tasks.swipedOpenToast'),
+          'default',
+          5000,
+          async () => {
+            try {
+              await toggleTaskStatus(id, nextStatus);
+              await loadTasks(container);
+            } catch (err) {
+              window.yuvomi.showToast(err.message, 'danger');
+            }
+          },
+        );
       } catch (err) {
         window.yuvomi.showToast(err.message, 'danger');
         await loadTasks(container);
@@ -4471,18 +4478,36 @@ export async function render(container, { user }) {
           className: 'tasks-toolbar__search page-toolbar__center',
         })}
         <div class="page-toolbar__actions">
+          <!-- ICON PLUS LABEL, wie beim Geschwister-Umschalter in der Filterreihe
+               (#group-mode-toggle, ~60 Zeilen tiefer). tasks.css:143 sagt ueber
+               den Label-Verlust ausdruecklich „Der Ansichts-Umschalter im Kopf
+               bekommt sie mit; er ist dasselbe Bauteil" - nur trug er gar kein
+               Label, das haette fallen koennen. Die Regel lief hier ins Leere,
+               und uebrig blieben drei stumme Glyphen (Critique 2026-08-28, P1:
+               ein Kanban-Rechteck und ein Verlaufs-Pfeil sind kein geteiltes
+               Vokabular). Unter 640px faellt das Label ueber die vorhandene
+               Regel weg, mobil bleibt also die Icon-Form - iOS-Kanon.
+               Die drei EINZELNEN Knoepfe daneben behalten ihre reine Icon-Form:
+               ihre Namen sind Verben („Kategorien verwalten"), und ein
+               aria-label als sichtbaren Text weiterzureichen verbietet
+               DESIGN.md. Damit trennt jetzt auch der Text, was vorher nur die
+               Behaelterform andeutete: benannte Ansichten in der Gruppe,
+               unbenannte Werkzeuge daneben. -->
           <div class="group-toggle group-toggle--icons" id="view-toggle" role="group" aria-label="${t('tasks.viewToggleLabel')}">
             <button type="button" class="group-toggle__btn ${isKanban || isHistory ? '' : 'group-toggle__btn--active'}" data-view="list"
                     title="${t('tasks.listView')}" aria-label="${t('tasks.listView')}" aria-pressed="${!isKanban && !isHistory}">
-              <i data-lucide="list" class="icon-md" aria-hidden="true"></i>
+              <i data-lucide="list" class="icon-md group-toggle__icon" aria-hidden="true"></i>
+              <span class="group-toggle__label">${t('tasks.listView')}</span>
             </button>
             <button type="button" class="group-toggle__btn ${isKanban ? 'group-toggle__btn--active' : ''}" data-view="kanban"
                     title="${t('tasks.kanbanView')}" aria-label="${t('tasks.kanbanView')}" aria-pressed="${isKanban}">
-              <i data-lucide="columns" class="icon-md" aria-hidden="true"></i>
+              <i data-lucide="columns" class="icon-md group-toggle__icon" aria-hidden="true"></i>
+              <span class="group-toggle__label">${t('tasks.kanbanView')}</span>
             </button>
             <button type="button" class="group-toggle__btn ${isHistory ? 'group-toggle__btn--active' : ''}" data-view="history"
                     title="${t('tasks.historyView')}" aria-label="${t('tasks.historyView')}" aria-pressed="${isHistory}">
-              <i data-lucide="history" class="icon-md" aria-hidden="true"></i>
+              <i data-lucide="history" class="icon-md group-toggle__icon" aria-hidden="true"></i>
+              <span class="group-toggle__label">${t('tasks.historyView')}</span>
             </button>
           </div>
           <button class="btn btn--ghost btn--icon" id="btn-bulk-select"

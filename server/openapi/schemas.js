@@ -358,6 +358,14 @@ export const schemas = {
           properties: {
             id: { type: 'integer' },
             title: { type: 'string' },
+            color: {
+              type: ['string', 'null'],
+              description: 'The event\'s own colour as #RRGGBB, or null when it has none. Null is the normal state for an event nobody picked a colour for: it then borrows the colour of the first assigned member, and failing that cal_color. On PUT the field distinguishes two cases - omit it to leave the colour untouched, send null to deliberately clear it.',
+            },
+            cal_color: {
+              type: ['string', 'null'],
+              description: 'Inherited colour of the source calendar or ICS subscription, read-only. Applies to every event of that source and therefore says nothing about this one; it is the fallback below color and the assignee.',
+            },
             attachment_name: { type: ['string', 'null'] },
             attachment_mime: { type: ['string', 'null'] },
             attachment_size: { type: ['integer', 'null'] },

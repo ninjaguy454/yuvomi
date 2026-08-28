@@ -1991,39 +1991,13 @@
   gap: var(--space-2);
 }
 
-.toggle-row {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: background-color var(--transition-fast);
-  min-height: var(--target-lg);
-}
-
-.toggle-row:hover {
-  background-color: var(--color-surface-hover);
-}
-
-.toggle-row:focus-within {
-  outline: var(--focus-ring-width) solid var(--focus-ring-color);
-  outline-offset: var(--focus-ring-offset);
-}
-
-.toggle-row input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
-  accent-color: var(--color-accent);
-  cursor: pointer;
-  flex-shrink: 0;
-}
-
-.toggle-row span {
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-}
+/* Die Schalterzeile `.toggle-row` stand hier und ist 2026-08-28 nach
+   layout.css gezogen. GRUND, gemessen: `settings.css` wird nur auf der
+   Einstellungsroute geladen (eine Page-CSS je Seite). Das Primitiv gilt aber
+   app-weit - „ein Schalter, eine Form" -, und als der Kalender es fuer sein
+   Filter-Blatt benutzte, kam das Markup ohne sein CSS an: neun Zeilen liefen
+   inline ineinander, die Farbscheiben waren unsichtbar. Eine geteilte Form,
+   deren Regeln in einem Modul-Stylesheet wohnen, ist nur dort eine Form. */
 
 /* --------------------------------------------------------
    Preset-Pillen (Multi-Select-Checkboxen, z. B. Standard-Erinnerungen)
@@ -3329,7 +3303,7 @@
   background: var(--seg-active-bg);
   box-shadow: var(--seg-active-shadow);
   transform: translateX(calc(var(--seg-index, 0) * 100%));
-  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: transform var(--duration-lg) var(--ease-out);
   pointer-events: none;
 }
 
@@ -3377,6 +3351,10 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  /* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). Die Schmalregel weiter unten setzt ihn nicht mehr,
+   * sie gibt der Statuszeile dort nur noch ihre eigene Zeile. */
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-top: var(--space-5);
   padding: var(--space-3) 0;
@@ -3470,10 +3448,10 @@
     text-align: center;
   }
 
-  /* Zwei Buttons plus Statuszeile passen bei 390px nicht nebeneinander; ohne
-     Umbruch schob der Status unter die Aktionsleiste. */
-  .perm-actions { flex-wrap: wrap; }
-
+  /* Zwei Buttons plus Statuszeile passen bei 390px nicht nebeneinander. Die
+     ERLAUBNIS zum Umbruch steht seit #872 in der Basisregel und gilt in jeder
+     Breite; hier bleibt nur der GRUND: die Statuszeile nimmt sich eine eigene
+     Zeile, statt sich zwischen die Knoepfe zu draengen. */
   .perm-actions__status {
     flex-basis: 100%;
     margin-right: 0;

@@ -13,6 +13,7 @@ import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 import { openModal, closeModal, confirmModal, confirmOverModal } from '/components/modal.js';
 import { createPageFab, setPageFabAction } from '/utils/fab.js';
 import { wireTablist } from '/utils/tablist.js';
+import { wireScrollFade } from '/utils/ux.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { emptyStateHTML, mountLoadError } from '/utils/empty-state.js';
 
@@ -187,7 +188,7 @@ function renderShell(container) {
     <div class="rewards-page page-measure--narrow">
       <header class="page-toolbar page-toolbar--narrow rewards-toolbar">
         <h1 class="page-toolbar__title" id="rewards-title">${esc(t('rewards.title'))}</h1>
-        <nav class="rewards-tabs" role="tablist" aria-label="${esc(t('rewards.title'))}">
+        <nav class="rewards-tabs page-toolbar__bar" role="tablist" aria-label="${esc(t('rewards.title'))}">
           ${tabButton('overview', 'trophy', t('rewards.tabOverview'))}
           ${tabButton('catalog', 'gift', t('rewards.tabCatalog'))}
           ${tabButton('ledger', 'history', t('rewards.tabLedger'))}
@@ -200,6 +201,8 @@ function renderShell(container) {
     activeId: state.tab,
     onChange: (id) => { state.tab = id; renderCurrentTab(container); },
   });
+  // Scroll-Affordanz der Bar-Zeile (geteilter Peek-Fade, .page-toolbar__bar).
+  wireScrollFade(container.querySelector('.rewards-tabs'));
   fab = createPageFab({ id: 'rewards-fab' });
   container.querySelector('.rewards-page').appendChild(fab);
   updateRewardsFab();

@@ -365,12 +365,13 @@
     gap: var(--space-2);
   }
 
-  /* Kernentschärfung: leere Slots nicht als große gestrichelte Boxen stapeln
-   * (7 Tage × 4 Typen = bis zu 28). Belegte Slots bleiben; pro Tag ein
-   * gesammelter Add-Button, der das Modal mit Typ-Auswahl öffnet. */
-  .meal-slot--empty {
-    display: none;
-  }
+  /* Die Ausblendung der leeren Slots stand HIER und war damit wirkungslos:
+   * dieser Block laeuft vor der .meal-slot-Basisregel (display: flex, gleiche
+   * Spezifitaet), und die spaetere Regel gewinnt - der gestrichelte Slot stand
+   * mobil wieder neben dem .day-add (Critique 2026-08-27, gemessen: 1 leerer
+   * Slot sichtbar bei 375px). Genau die Falle, die der Abschnitt „Schmale
+   * Fassung" fuer add-more-btn schon dokumentiert; die Regel steht jetzt dort,
+   * hinter ihrem Bauteil. */
 
   .day-add {
     display: flex;
@@ -787,6 +788,17 @@
    * Slots sichtbar, `.day-add` gibt es nicht, und er ist der einzige Weg, eine
    * ZWEITE Mahlzeit in denselben Slot zu legen. */
   .meal-slot__add-more-btn {
+    display: none;
+  }
+
+  /* Kernentschaerfung: leere Slots nicht als grosse gestrichelte Boxen stapeln
+   * (7 Tage x 4 Typen = bis zu 28). Belegte Slots bleiben; pro Tag ein
+   * gesammelter Add-Button (.day-add), der das Modal mit Typ-Auswahl oeffnet.
+   * Die Regel stand bis 2026-08-27 im Mobil-Block VOR der .meal-slot-Basisregel
+   * (display: flex, gleiche Spezifitaet) und war damit still wirkungslos -
+   * dieselbe Kaskade-Falle wie beim add-more-btn darueber, nur eine Runde
+   * spaeter zurueckgekehrt. */
+  .meal-slot--empty {
     display: none;
   }
 

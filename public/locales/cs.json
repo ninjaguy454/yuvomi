@@ -59,7 +59,8 @@
             "private": "Pouze já",
             "hint": "Určuje, kdo vidí tuto položku v Yuvomi.",
             "assigneesNobodyHint": "Bez přiřazení vidíš tuto položku jen ty."
-        }
+        },
+        "toShoppingListNamed": "Přidat {{title}} na nákupní seznam"
     },
     "kitchen": {
         "noShoppingLists": "Nákupní seznam ještě neexistuje.",
@@ -112,7 +113,8 @@
         "health": "Zdraví",
         "rewards": "Odměny",
         "pantry": "Spíž",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Přehled",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Toto a všechna následující",
         "deleteScopeSeries": "Celá série (všechny týdny)",
         "seriesEndedToast": "Série ukončena od tohoto data.",
-        "seriesDeletedToast": "Série odstraněna."
+        "seriesDeletedToast": "Série odstraněna.",
+        "deleteMealNamed": "Smazat {{title}}",
+        "openRecipeNamed": "Otevřít recept: {{title}}"
     },
     "calendar": {
         "searchOpen": "Hledat události",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Ovlivní celou sérii.",
         "detailWhen": "Čas",
         "detailCalendar": "Kalendář",
-        "colorCurrent": "Aktuální barva"
+        "colorCurrent": "Aktuální barva",
+        "deleteExternalSeriesTitle": "Odstranit celou sérii?",
+        "deleteExternalSeriesDetail": "„{{title}}\" pochází ze synchronizovaného kalendáře. Jednotlivé výskyty tam nelze vyloučit - odstraní se celá série se všemi výskyty.",
+        "deleteExternalSeriesConfirm": "Odstranit sérii",
+        "deleteBirthdayEventTitle": "Odstranit narozeninovou událost?",
+        "deleteBirthdayEventDetail": "„{{title}}\" je odrazem narozeninového záznamu. Událost zmizí, ale při dalším synchronizování se znovu vytvoří - natrvalo ji lze odstranit jen přes samotné narozeniny.",
+        "deleteBirthdayEventConfirm": "Přesto odstranit",
+        "deleteSubscribedSeriesTitle": "Odstranit odebíranou sérii?",
+        "deleteSubscribedSeriesDetail": "„{{title}}\" pochází z odebíraného kalendáře. Yuvomi tam nemůže nic odstranit - série zmizí jen do další synchronizace; natrvalo ji odstraníte zrušením odběru.",
+        "deleteSubscribedSeriesConfirm": "Přesto odstranit",
+        "colorInherit": "Barva přiřazené osoby",
+        "colorInheritHint": "Událost nemá vlastní barvu a přebírá barvu přiřazené osoby. Pokud není nikdo přiřazen, platí barva kalendáře.",
+        "filters": "Filtry",
+        "filtersOpen": "Otevřít filtry",
+        "filtersLayers": "Vrstvy",
+        "filtersPeople": "Osoby",
+        "filtersActive": "Aktivní filtry: {{count}}",
+        "filtersActive_one": "1 aktivní filtr",
+        "filtersReset": "Zrušit všechny filtry",
+        "filtersDisplay": "Zobrazení"
     },
     "notes": {
         "title": "Nástěnka",
@@ -1726,6 +1749,7 @@
             "shopping": "Nákupy",
             "meals": "Jídelníček",
             "calendar": "Kalendář",
+            "schedule": "Schedule",
             "notes": "Nástěnka",
             "contacts": "Kontakty",
             "budget": "Rozpočet",
@@ -2597,7 +2621,7 @@
         "colorOption": "Barva {{color}}",
         "iconPick": "Vybrat obrázek",
         "iconClear": "Odebrat obrázek",
-        "iconHint": "Bez obrázku se na zvolené barvě zobrazí první písmeno.",
+        "iconHint": "Vyberte vestavěnou ikonu nebo vlastní obrázek. Bez obojího se na zvolené barvě zobrazí první písmeno.",
         "iconTypeError": "Vyberte obrázek PNG, JPEG nebo WebP.",
         "iconReadError": "Obrázek se nepodařilo načíst.",
         "iconTooLarge": "Obrázek je příliš velký.",
@@ -2613,7 +2637,9 @@
         "saved": "Rychlý odkaz uložen",
         "deleted": "Rychlý odkaz smazán",
         "loadError": "Rychlé odkazy se nepodařilo načíst.",
-        "orderError": "Pořadí se nepodařilo uložit."
+        "orderError": "Pořadí se nepodařilo uložit.",
+        "iconSymbol": "Vybrat ikonu",
+        "iconChoose": "Vybrat ikonu nebo obrázek"
     },
     "emptyHint": {
         "tasks": "Klepněte na + a vytvořte svůj první úkol. Přejetím karty doleva ji označíte za hotovou, doprava zobrazíte.",
@@ -2642,7 +2668,8 @@
         "done": "Začít",
         "skip": "Přeskočit",
         "step2BodyDesktop": "Postranní panel vlevo tě zavede do všech modulů - od kalendáře a úkolů po kuchyni, dokumenty a nastavení.",
-        "step3BodyDesktop": "Tlačítkem + v dolním rohu vytvoříš nové záznamy kdekoli."
+        "step3BodyDesktop": "Tlačítkem + v dolním rohu vytvoříš nové záznamy kdekoli.",
+        "stepProgress": "Krok {{current}} z {{total}}"
     },
     "userMultiSelect": {
         "nobody": "- Nikdo -",
@@ -3094,7 +3121,18 @@
         "budgetFolder": "Doklady",
         "splitExpensesFolder": "Společné výdaje",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Úkoly"
+        "tasksFolder": "Úkoly",
+        "newSubfolder": "Nová podsložka",
+        "moveFolder": "Přesunout složku",
+        "moveFolderTo": "Přesunout „{{name}}\" do",
+        "folderMovedToast": "Složka přesunuta",
+        "folderParentLabel": "Nadřazená složka",
+        "folderRootLevel": "Nejvyšší úroveň",
+        "folderPathLabel": "Cesta ke složce",
+        "folderExpand": "Rozbalit „{{name}}\"",
+        "folderCollapse": "Sbalit „{{name}}\"",
+        "deleteFolderSubtreeDetail": "Smaže se také {{count}} podsložek uvnitř. Dokumenty zůstanou a budou dostupné přes filtr pro dokumenty bez složky.",
+        "deleteFolderSubtreeDetail_one": "Smaže se také podsložka uvnitř. Dokumenty zůstanou a budou dostupné přes filtr pro dokumenty bez složky."
     },
     "reminders": {
         "sectionTitle": "Připomínka",
@@ -3210,7 +3248,8 @@
         "summaryCount_one": "{{count}} termín",
         "fromCompletionLabel": "Opakovat od splnění",
         "fromCompletionHint": "Interval začíná dnem, kdy úkol odškrtnete, ne datem splatnosti.",
-        "summaryFromCompletion": "od splnění"
+        "summaryFromCompletion": "od splnění",
+        "intervalHint": "Po výběru lze interval libovolně nastavit - třeba každé 2 týdny nebo každé 3 měsíce."
     },
     "recipes": {
         "mealTypeNone": "Žádné jídlo",
@@ -3254,7 +3293,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Vlastní",
         "sourceAll": "Vše",
-        "sourceFilterLabel": "Filtrovat podle zdroje"
+        "sourceFilterLabel": "Filtrovat podle zdroje",
+        "plannedThisWeek": "Naplánováno na tento týden"
     },
     "wmo": {
         "0": "Jasno",
@@ -3534,7 +3574,8 @@
         "completed": "Dokončeno",
         "completedOn": "Dokončeno {{date}}",
         "completedToast": "Předplatné dokončeno.",
-        "endsAfter": "Zbývá {{count}} plateb"
+        "endsAfter": "Zbývá {{count}} plateb",
+        "logoTypeError": "Použijte prosím obrázek ve formátu PNG, JPEG, WebP nebo SVG."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Fotografie je po zmenšení stále příliš velká."
     },
     "documentAttach": {
         "label": "Přílohy",
@@ -4435,5 +4477,90 @@
         "recipes": "Recept",
         "shopping": "Položka",
         "splitExpenses": "Výdaj"
+    },
+    "iconPicker": {
+        "title": "Vybrat ikonu",
+        "searchLabel": "Hledat ikonu",
+        "searchPlaceholder": "Hledejte anglicky, např. film",
+        "resultsLabel": "Ikony",
+        "noResults": "Žádná ikona nenalezena.",
+        "clear": "Bez ikony",
+        "unavailable": "Ikony nejsou momentálně dostupné."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

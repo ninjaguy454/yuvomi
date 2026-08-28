@@ -110,7 +110,14 @@ function parseRelations(block) {
   return { parentUid, childUids };
 }
 
-function parseICS(ics) {
+/**
+ * @param {string} ics
+ * @param {{onSkip?: (info: {uid: string|null, reason: string, summary: string|null}) => void}} [opts]
+ *   `onSkip` meldet jeden VEVENT, den der Parser verwirft. Ohne den Haken war ein
+ *   übersprungener Termin von einem nie gelieferten nicht zu unterscheiden: er
+ *   fehlte einfach, und der Sync meldete Erfolg (#883).
+ */
+function parseICS(ics, { onSkip } = {}) {
   const unfolded = unfoldLines(ics);
   const events   = [];
   const vEventRe = /BEGIN:VEVENT([\s\S]*?)END:VEVENT/g;
@@ -184,7 +191,10 @@ function parseICS(ics) {
       const conv = formatICSDate(recIdLine.value, recIsDate, recIdLine.tzid);
       recurrenceId = conv ? conv.slice(0, 10) : null;
     }
-    if (!uid || !dtstart) continue;
+    if (!uid || !dtstart) {
+      onSkip?.({ uid, summary: uid ? summary : null, reason: !uid ? 'missing UID' : 'missing or unparsable DTSTART' });
+      continue;
+    }
     // TZID des Serien-Starts merken (nur zeitgebunden): erlaubt DST-korrekte
     // Expansion, die die lokale Uhrzeit über die Sommer-/Winterzeit hält (#549).
     const tzid = (!allDay && dtStartLine.tzid) ? dtStartLine.tzid : null;

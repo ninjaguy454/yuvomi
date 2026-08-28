@@ -1190,6 +1190,85 @@ test('Betreuung: eine leere Liste entzieht sie wieder', async () => {
   assert.equal(res.status, 403, 'nach dem Entzug ist der Weg sofort zu');
 });
 
+// Die Meldung aus #884: angelegt werden konnte beides, weggeraeumt nichts. Ein
+// Zeitplan und ein Dosis-Eintrag haben keine eigene `user_id` - sie haengen am
+// Medikament und muessen dessen Scoping erben, Betreuung eingeschlossen. Der
+// Alltagsfall ist die betreuende Person, die den Plan des Kindes wieder
+// loeschen oder dessen Dosis abhaken will.
+test('Betreuung: Zeitplan der betreuten Person laesst sich aendern und loeschen (#884)', async () => {
+  asAdmin();
+  await call('PUT', `/caregivers/${userC}`, { caregiver_ids: [userA] });
+
+  asA();
+  const med = await call('POST', '/medications', { name: 'Vitamin D', user_id: userC });
+  assert.equal(med.body.data.user_id, userC);
+
+  const sched = await call('POST', `/medications/${med.body.data.id}/schedules`, {
+    time_of_day: '07:00', dose_qty: 1,
+  });
+  assert.equal(sched.status, 201, 'anlegen ging schon vorher');
+  const schedId = sched.body.data.id;
+
+  const patched = await call('PATCH', `/schedules/${schedId}`, { dose_qty: 2 });
+  assert.equal(patched.status, 200);
+  assert.equal(patched.body.data.dose_qty, 2);
+
+  asB();
+  assert.equal((await call('DELETE', `/schedules/${schedId}`)).status, 404,
+    'ohne Betreuung bleibt der Plan unerreichbar');
+
+  asA();
+  assert.equal((await call('DELETE', `/schedules/${schedId}`)).status, 204);
+});
+
+// Warum die Meldung „zufaellig" klang: solange der Betreuer die Dosis selbst
+// anlegt, laeuft sie ueber das Medikament und geht. Sobald der Scheduler den
+// Eintrag vorab erzeugt hat, tippt die Oberflaeche auf /logs/:id/take - und nur
+// dieser Weg war zu. Derselbe Knopf, mal so, mal so.
+test('Betreuung: eine vorab erzeugte Dosis der betreuten Person ist abhakbar (#884)', async () => {
+  asA();
+  const med = await call('POST', '/medications', { name: 'Eisen', user_id: userC });
+  const medId = med.body.data.id;
+  const sched = await call('POST', `/medications/${medId}/schedules`, { time_of_day: '08:00' });
+
+  // So legt der Scheduler ihn an: pending, mit schedule_id, ohne Zutun des Betreuers.
+  const logId = db.prepare(`INSERT INTO medication_logs (medication_id, schedule_id, scheduled_at, status)
+    VALUES (?, ?, '2026-08-05T08:00', 'pending')`).run(medId, sched.body.data.id).lastInsertRowid;
+
+  asB();
+  assert.equal((await call('POST', `/logs/${logId}/take`, {})).status, 404,
+    'ohne Betreuung bleibt fremdes Protokoll zu');
+
+  asA();
+  const taken = await call('POST', `/logs/${logId}/take`, {});
+  assert.equal(taken.status, 200);
+  assert.equal(taken.body.data.status, 'taken');
+
+  const back = await call('PATCH', `/logs/${logId}`, { status: 'pending' });
+  assert.equal(back.status, 200);
+  assert.equal(back.body.data.status, 'pending');
+  assert.equal(back.body.data.taken_at, null);
+
+  const skipped = await call('POST', `/logs/${logId}/skip`, {});
+  assert.equal(skipped.status, 200);
+});
+
+// Dieselbe Luecke, nur nie gemeldet: ein Analyt haengt am Befund wie der
+// Zeitplan am Medikament. Anlegen ging, loeschen nicht.
+test('Betreuung: Analyt der betreuten Person laesst sich wieder loeschen (#884)', async () => {
+  asA();
+  const lab = await call('POST', '/labs', { report_date: '2026-08-05', user_id: userC });
+  assert.equal(lab.body.data.user_id, userC);
+  const resu = await call('POST', `/labs/${lab.body.data.id}/results`, { analyte: 'Ferritin', value_num: 40 });
+  assert.equal(resu.status, 201);
+
+  asB();
+  assert.equal((await call('DELETE', `/results/${resu.body.data.id}`)).status, 404);
+
+  asA();
+  assert.equal((await call('DELETE', `/results/${resu.body.data.id}`)).status, 204);
+});
+
 test('Betreuung: niemand wird sein eigener Betreuer, Unbekannte werden abgelehnt', async () => {
   asAdmin();
   const self = await call('PUT', `/caregivers/${userC}`, { caregiver_ids: [userC, userA] });

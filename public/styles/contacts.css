@@ -341,6 +341,19 @@ html:has(.contacts-page.is-selecting) {
   white-space: nowrap;
 }
 
+/* In der schmalen Zeile faellt die E-Mail GANZ, samt Trenner: „+49 231
+ * 4452210 · pr…" trug null Information mehr als die Nummer allein, kostete
+ * aber die Zeile ihren Atem (Critique 2026-08-27, P3). Die Telefonnummer ist
+ * die handlungsleitende Angabe (der Anrufen-Knopf steht daneben); die Mail
+ * steht vollstaendig im Detail. Steht hinter den Basisregeln - bei gleicher
+ * Spezifitaet gewinnt sonst die Basis (DESIGN.md, Media-Block-Don't). */
+@container list-rows (max-width: 26rem) {
+  .contact-item__meta-sep,
+  .contact-item__meta-email {
+    display: none;
+  }
+}
+
 .contact-item__actions {
   display: flex;
   gap: var(--space-1);
@@ -517,8 +530,12 @@ html:has(.contacts-page.is-selecting) {
   margin-top: var(--space-4);
 }
 
+/* Eine Aktionsgruppe IN der Fusszeile ist selbst eine Knopfzeile und braucht
+ * dieselbe Erlaubnis (#872): fuer die Fusszeile ist sie EIN Flex-Item, also
+ * unteilbar - ohne eigenen Umbruch laeuft sie als Ganzes ueber. */
 .contact-modal__footer-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
 }
 
@@ -670,6 +687,9 @@ html:has(.contacts-page.is-selecting) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  /* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). */
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-top: var(--space-4);
 }

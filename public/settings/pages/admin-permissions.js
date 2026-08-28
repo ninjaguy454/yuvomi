@@ -21,6 +21,7 @@ import { createRetryState } from '/settings/components.js';
 
 const MODULE_ACCENT = {
   calendar: 'var(--module-calendar)',
+  schedule: 'var(--module-schedule)',
   tasks: 'var(--module-tasks)',
   notes: 'var(--module-notes)',
   contacts: 'var(--module-contacts)',

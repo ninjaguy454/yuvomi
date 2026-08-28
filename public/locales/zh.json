@@ -59,7 +59,8 @@
             "private": "仅自己",
             "hint": "控制谁可以在 Yuvomi 中看到此条目。",
             "assigneesNobodyHint": "未指定任何人时，只有你能看到此条目。"
-        }
+        },
+        "toShoppingListNamed": "将{{title}}加入购物清单"
     },
     "kitchen": {
         "noShoppingLists": "还没有购物清单。",
@@ -112,7 +113,8 @@
         "health": "健康",
         "rewards": "奖励",
         "pantry": "库存",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "概览",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "此项及之后全部",
         "deleteScopeSeries": "整个系列（所有周）",
         "seriesEndedToast": "已从该日期结束该系列。",
-        "seriesDeletedToast": "已删除该系列。"
+        "seriesDeletedToast": "已删除该系列。",
+        "deleteMealNamed": "删除{{title}}",
+        "openRecipeNamed": "打开{{title}}的食谱"
     },
     "calendar": {
         "searchOpen": "搜索日程",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "影响整个系列。",
         "detailWhen": "时间",
         "detailCalendar": "日历",
-        "colorCurrent": "当前颜色"
+        "colorCurrent": "当前颜色",
+        "deleteExternalSeriesTitle": "删除整个系列？",
+        "deleteExternalSeriesDetail": "“{{title}}”来自已同步的日历。在那里无法排除单个事件，整个系列连同全部重复都会被删除。",
+        "deleteExternalSeriesConfirm": "删除系列",
+        "deleteBirthdayEventTitle": "删除生日事件？",
+        "deleteBirthdayEventDetail": "“{{title}}”是生日条目的映射。事件会消失，但下次同步时会重新创建，只能通过生日条目本身彻底移除。",
+        "deleteBirthdayEventConfirm": "仍然删除",
+        "deleteSubscribedSeriesTitle": "删除订阅系列？",
+        "deleteSubscribedSeriesDetail": "“{{title}}”来自已订阅的日历。Yuvomi 无法删除源端内容，该系列只会消失到下次同步为止；要彻底移除，请取消订阅该日历。",
+        "deleteSubscribedSeriesConfirm": "仍然删除",
+        "colorInherit": "指派人的颜色",
+        "colorInheritHint": "该日程不使用自己的颜色，而采用指派人的颜色。若未指派任何人，则使用日历的颜色。",
+        "filters": "筛选",
+        "filtersOpen": "打开筛选",
+        "filtersLayers": "图层",
+        "filtersPeople": "成员",
+        "filtersActive": "{{count}} 个筛选条件生效",
+        "filtersActive_one": "1 个筛选条件生效",
+        "filtersReset": "清除所有筛选",
+        "filtersDisplay": "显示"
     },
     "notes": {
         "title": "便签板",
@@ -1691,6 +1714,7 @@
             "shopping": "购物",
             "meals": "饮食",
             "calendar": "日历",
+            "schedule": "Schedule",
             "notes": "便签",
             "contacts": "联系人",
             "budget": "预算",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} 次",
         "fromCompletionLabel": "从完成日重复",
         "fromCompletionHint": "间隔从你完成任务的那天开始计算，而不是从截止日期开始。",
-        "summaryFromCompletion": "从完成日起"
+        "summaryFromCompletion": "从完成日起",
+        "intervalHint": "选择之后可以自由设置间隔，例如每 2 周或每 3 个月。"
     },
     "recipes": {
         "mealTypeNone": "无餐次",
@@ -2628,7 +2653,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "本地",
         "sourceAll": "全部",
-        "sourceFilterLabel": "按来源筛选"
+        "sourceFilterLabel": "按来源筛选",
+        "plannedThisWeek": "本周已安排"
     },
     "search": {
         "emptyHint": "输入至少 2 个字符即可搜索任务、日程、便签、联系人、购物和健康。",
@@ -2731,7 +2757,8 @@
         "done": "开始使用",
         "skip": "跳过",
         "step2BodyDesktop": "左侧边栏可进入所有模块：日历、任务、厨房、文档和设置。",
-        "step3BodyDesktop": "右下角的 + 按钮可随处创建新条目。"
+        "step3BodyDesktop": "右下角的 + 按钮可随处创建新条目。",
+        "stepProgress": "第{{current}}步，共{{total}}步"
     },
     "offline": {
         "banner": "离线 - 正在重新连接…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "凭证",
         "splitExpensesFolder": "共享支出",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "任务"
+        "tasksFolder": "任务",
+        "newSubfolder": "新建子文件夹",
+        "moveFolder": "移动文件夹",
+        "moveFolderTo": "将“{{name}}”移动到",
+        "folderMovedToast": "文件夹已移动",
+        "folderParentLabel": "上级文件夹",
+        "folderRootLevel": "最上层",
+        "folderPathLabel": "文件夹路径",
+        "folderExpand": "展开“{{name}}”",
+        "folderCollapse": "折叠“{{name}}”",
+        "deleteFolderSubtreeDetail": "其中的 {{count}} 个子文件夹也会一并删除。文档仍会保留，可通过“无文件夹的文档”筛选找到。",
+        "deleteFolderSubtreeDetail_one": "其中的子文件夹也会一并删除。文档仍会保留，可通过“无文件夹的文档”筛选找到。"
     },
     "shortcuts": {
         "goKitchen": "厨房",
@@ -2931,7 +2969,7 @@
         "colorOption": "颜色 {{color}}",
         "iconPick": "选择图片",
         "iconClear": "移除图片",
-        "iconHint": "没有图片时，所选颜色上会显示首字母。",
+        "iconHint": "可选择内置图标或自己的图片。两者都没有时，所选颜色上会显示首字母。",
         "iconTypeError": "请选择 PNG、JPEG 或 WebP 图片。",
         "iconReadError": "无法读取图片。",
         "iconTooLarge": "图片过大。",
@@ -2947,7 +2985,9 @@
         "saved": "已保存快捷链接",
         "deleted": "已删除快捷链接",
         "loadError": "无法加载快捷链接。",
-        "orderError": "无法保存顺序。"
+        "orderError": "无法保存顺序。",
+        "iconSymbol": "选择图标",
+        "iconChoose": "选择图标或图片"
     },
     "housekeeping": {
         "title": "家务",
@@ -3534,7 +3574,8 @@
         "completed": "已完成",
         "completedOn": "于 {{date}} 完成",
         "completedToast": "订阅已完成。",
-        "endsAfter": "还剩 {{count}} 次付款"
+        "endsAfter": "还剩 {{count}} 次付款",
+        "logoTypeError": "请使用 PNG、JPEG、WebP 或 SVG 图片。"
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "缩放后照片仍然太大。"
     },
     "documentAttach": {
         "label": "附件",
@@ -4435,5 +4477,90 @@
         "recipes": "食谱",
         "shopping": "商品",
         "splitExpenses": "支出"
+    },
+    "iconPicker": {
+        "title": "选择图标",
+        "searchLabel": "搜索图标",
+        "searchPlaceholder": "用英文搜索，例如 film",
+        "resultsLabel": "图标",
+        "noResults": "未找到图标。",
+        "clear": "不使用图标",
+        "unavailable": "图标暂时不可用。"
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

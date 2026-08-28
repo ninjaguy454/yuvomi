@@ -592,6 +592,9 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  /* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). */
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-top: var(--space-4);
 }

@@ -341,3 +341,100 @@ test('/order fängt eine kaputte Anfrage ab, statt die Reihenfolge zu leeren', a
   assert.equal((await call('PUT', '/order', { ids: 'keine-liste' })).status, 400);
   assert.equal((await call('PUT', '/order', {})).status, 400);
 });
+
+// --------------------------------------------------------
+// Das eingebaute Symbol als drittes Gesicht (#873)
+// --------------------------------------------------------
+
+test('ein Symbolname wird gespeichert und kommt zurück', async () => {
+  reset();
+  as(ALICE);
+  const res = await call('POST', '/', { name: 'Jellyfin', url: 'j.example', icon_name: 'clapperboard' });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.data.icon_name, 'clapperboard');
+  assert.equal(res.body.data.icon_data, null);
+});
+
+test('der Server prüft die FORM des Namens, nicht seine Existenz', async () => {
+  reset();
+  as(ALICE);
+  // Ein Name, den dieser Lucide-Stand nicht kennt, ist KEIN Fehler: das Bundle
+  // benennt zwischen Versionen um, und der Server kennt den Vorrat nicht. Die
+  // Kachel fällt in der Anzeige auf ihren Buchstaben zurück.
+  const ok = await call('POST', '/', { name: 'X', url: 'x.example', icon_name: 'gibt-es-nicht-mehr' });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.data.icon_name, 'gibt-es-nicht-mehr');
+});
+
+test('ein Symbolname, der aus dem Attribut ausbrechen könnte, wird abgewiesen', async () => {
+  reset();
+  as(ALICE);
+  // Der Name landet als `data-lucide="..."` im Markup. Grossbuchstaben,
+  // Anfuehrungszeichen, spitze Klammern und Leerzeichen haben dort nichts zu
+  // suchen - und die Absage kommt vom Server, nicht erst vom esc() dahinter.
+  for (const bad of ['film" onload="x', '<script>', 'Film', 'film icon', 'film/../x', 'ünicode']) {
+    const res = await call('POST', '/', { name: 'X', url: 'x.example', icon_name: bad });
+    assert.equal(res.status, 400, `"${bad}" hätte abgewiesen werden müssen`);
+  }
+});
+
+test('ein zu langer Symbolname wird abgewiesen', async () => {
+  reset();
+  as(ALICE);
+  const res = await call('POST', '/', { name: 'X', url: 'x.example', icon_name: 'a'.repeat(49) });
+  assert.equal(res.status, 400);
+});
+
+test('leer und null heissen beide „kein Symbol"', async () => {
+  reset();
+  as(ALICE);
+  for (const value of ['', null, '   ']) {
+    const res = await call('POST', '/', { name: 'X', url: 'x.example', icon_name: value });
+    assert.equal(res.status, 201);
+    assert.equal(res.body.data.icon_name, null, `${JSON.stringify(value)} sollte null ergeben`);
+  }
+});
+
+test('PUT ohne icon_name lässt das vorhandene Symbol stehen', async () => {
+  reset();
+  as(ALICE);
+  const row = (await call('POST', '/', { name: 'X', url: 'x.example', icon_name: 'server' })).body.data;
+
+  // Ein Feld, das nicht mitgeschickt wird, ist keine Ansage - sonst löschte
+  // jede Teiländerung das Symbol mit.
+  const res = await call('PUT', `/${row.id}`, { name: 'Y' });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.icon_name, 'server');
+});
+
+test('PUT mit null nimmt das Symbol weg', async () => {
+  reset();
+  as(ALICE);
+  const row = (await call('POST', '/', { name: 'X', url: 'x.example', icon_name: 'server' })).body.data;
+  const res = await call('PUT', `/${row.id}`, { icon_name: null });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.data.icon_name, null);
+});
+
+test('Symbol und Bild dürfen nebeneinander stehen - die Anzeige entscheidet', async () => {
+  reset();
+  as(ALICE);
+  // Das Schema verbietet es bewusst nicht (Migration v163): ein CHECK machte
+  // aus jedem Wechsel zwischen den Gesichtern zwei Schreibvorgänge.
+  const png = `data:image/png;base64,${'A'.repeat(40)}`;
+  const res = await call('POST', '/', { name: 'X', url: 'x.example', icon_name: 'server', icon_data: png });
+  assert.equal(res.status, 201);
+  assert.equal(res.body.data.icon_name, 'server');
+  assert.equal(res.body.data.icon_data, png);
+});
+
+test('listQuickLinksFor liefert icon_name mit - die Übersicht liest über diesen Weg', async () => {
+  reset();
+  as(ALICE);
+  await call('POST', '/', { name: 'X', url: 'x.example', icon_name: 'house' });
+  // Die Kacheln kommen mit der Übersichts-Antwort, nicht über GET /quick-links
+  // (server/routes/dashboard.js). Fehlte die Spalte dort, wäre das Symbol im
+  // Verwaltungsdialog zu sehen und auf der Startseite nicht.
+  const rows = listQuickLinksFor(ALICE, false);
+  assert.equal(rows[0].icon_name, 'house');
+});

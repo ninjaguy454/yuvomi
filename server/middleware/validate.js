@@ -93,9 +93,10 @@ function date(val, field, required = false) {
  */
 function time(val, field) {
   if (!val) return { value: null, error: null };
-  if (!/^\d{2}:\d{2}$/.test(String(val)))
-    return { value: null, error: `${field} must be in HH:MM format.` };
-  return { value: String(val), error: null };
+  const raw = String(val);
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(raw))
+    return { value: null, error: `${field} must be a valid HH:MM time.` };
+  return { value: raw, error: null };
 }
 
 /**

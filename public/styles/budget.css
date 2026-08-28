@@ -130,25 +130,13 @@
   flex: 1 1 0;
 }
 
-.budget-tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1);
-  /* Geteilte Pillen-Grammatik (sub-tabs.css): transparente Leiste, keine Box.
-   * Bis zu 5 Tabs passen auf 380px nicht nebeneinander: horizontal scrollen
-   * statt Text zu stauchen oder den Add-Button vom Rand zu drängen. Tabs
-   * behalten ihre lesbare Größe (flex-shrink:0), der Streifen darf schrumpfen. */
-  min-width: 0;
-  max-width: 100%;
-  overflow-x: auto;
-  flex-wrap: nowrap;
-  scroll-snap-type: x proximity;
-  scrollbar-width: none;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior-x: contain;
-}
-
-.budget-tabs::-webkit-scrollbar { display: none; }
+/* Die Tab-Leiste ist die Bar-Zeile des Kopfs (.page-toolbar__bar, layout.css,
+ * Werkzeugzeilen-Regel 2026-08-27): volle Zeile unter Titel/Monat/Aktionen.
+ * Layout, Scrollen, Snap und Scroll-Affordanz kommen komplett aus der Shell
+ * (.page-toolbar__bar + [role="tablist"]-Regeln); die Pillen aus sub-tabs.css.
+ * Vorher teilte sie sich den Actions-Slot mit dem Primaerknopf und hatte bei
+ * 1280px 138px fuer 606px Inhalt - 1 von 7 Tabs sichtbar. Hier bleibt nur der
+ * Klassenname als Anker fuer wireTablist/wireScrollFade. */
 
 /* Ansichts-Scope-Umschalter (Mein Budget / Haushalt), nur im personal-Modus
  * (#476/#505). Nutzt dieselbe geteilte .sub-tab-Pillen-Grammatik wie die
@@ -241,51 +229,18 @@
   color: var(--color-text-secondary);
 }
 
-/* Scroll-Affordance der Tab-Leiste: geteilte has-fade-*-Masken aus
- * filter-chip.css, verdrahtet via wireScrollFade (utils/ux.js, Audit F-06). */
-
-/* Tab-Buttons nutzen die geteilte .sub-tab-Pillen-Grammatik (sub-tabs.css) und
+/* Scroll-Affordanz, Snap und die engere Mobil-Polsterung der Tab-Leiste sind
+ * 2026-08-27 in die Shell gewandert (.page-toolbar__bar in layout.css): die
+ * Bauart aus Audit P2 (schmaler, schaerferer End-Fade, der den Anschnitt zeigt
+ * statt ihn zu schlucken) war Budget-privat, waehrend dieselbe Leiste in sechs
+ * Moduldateien lebt. wireScrollFade (utils/ux.js) setzt die has-fade-*-Klassen
+ * weiterhin hier im Modul.
+ *
+ * Tab-Buttons nutzen die geteilte .sub-tab-Pillen-Grammatik (sub-tabs.css) und
  * das wireTablist-Verhalten (utils/tablist.js) — wie Belohnungen/Haushaltshilfe.
- * Budget-spezifisch bleiben hier nur das Scroll-Snapping der scrollbaren Leiste
- * und die pro-Sub-Domäne-Aktiv-Tönung. Der Default (.sub-tab--active) folgt
- * bereits dem Modul-Akzent (--active-module-accent = --module-budget). Nur Tabs,
- * die eine ANDERE Modul-Identität tragen, überschreiben den Tint. */
-.budget-tabs .sub-tab {
-  scroll-snap-align: start;
-}
-
-/* Mobile Scroll-Affordanz der Tab-Leiste (Audit P2): auf schmalen Viewports
- * passen die 7 Tabs nicht nebeneinander. Damit der nächste Tab sichtbar ~1/3
- * "hereinschaut" (statt bündig zu enden und drei Tabs unauffindbar zu lassen),
- * engere Tab-Polsterung + ein schmalerer, schärferer End-Fade, der den Anschnitt
- * zeigt statt ihn zu schlucken (der breite 24px-Fade verdeckte den mageren 9px-
- * Anschnitt komplett). Vorbild: die Personen-Chips in Gesundheit mit sichtbar
- * angeschnittenem Nachbarn. Spezifität 0,2,0/0,3,0 schlägt filter-chip.css. */
-@media (max-width: 640px) {
-  .budget-tabs .sub-tab {
-    padding: 0 var(--space-2);
-  }
-  .budget-tabs.has-fade-end {
-    mask-image: linear-gradient(to right, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-    -webkit-mask-image: linear-gradient(to right, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-  }
-  .budget-tabs.has-fade-start.has-fade-end {
-    mask-image: linear-gradient(to right, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-    -webkit-mask-image: linear-gradient(to right, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-  }
-
-  /* Achse gespiegelt, Werte gleich - Begruendung an den Basisregeln in
-     filter-chip.css. */
-  [dir="rtl"] .budget-tabs.has-fade-end {
-    mask-image: linear-gradient(to left, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-    -webkit-mask-image: linear-gradient(to left, var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-  }
-
-  [dir="rtl"] .budget-tabs.has-fade-start.has-fade-end {
-    mask-image: linear-gradient(to left, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-    -webkit-mask-image: linear-gradient(to left, transparent, var(--mask-opaque) var(--space-3), var(--mask-opaque) calc(100% - var(--space-3)), transparent);
-  }
-}
+ * Der Default (.sub-tab--active) folgt bereits dem Modul-Akzent
+ * (--active-module-accent = --module-budget). Nur Tabs, die eine ANDERE
+ * Modul-Identität tragen, überschreiben den Tint. */
 
 /* --------------------------------------------------------
  * Panel-Baustein: die Fläche, auf der jeder Untertab rendert.
@@ -304,12 +259,21 @@
 }
 
 /* Der Budget-Tab hält seine eigene Scroll-Region: Zusammenfassung und
- * Kategoriebalken bleiben stehen, nur die Transaktionsliste scrollt. Das Panel
- * selbst scrollt deshalb nicht, und sein Abstand kommt aus .budget-summary-bar. */
+ * Kategoriebalken bleiben stehen, nur die Transaktionsliste scrollt - solange
+ * der feste Teil in den Viewport passt. Die Scroll-Achse kommt aus der
+ * Basisregel (.budget-tab-panel, overflow-y: auto) und wird hier bewusst
+ * NICHT mehr überschrieben: das frühere `overflow: hidden` schnitt die Liste
+ * auf kurzen Desktop-Viewports unerreichbar ab (#904). Im Normalfall läuft
+ * nichts über und das Panel scrollt nicht; erst wenn die Untergrenze von
+ * .budget-list-section das Panel überlaufen lässt, scrollen Zusammenfassung
+ * und Balken mit. Mit dem Shorthand entfiel auch `overflow-x: hidden` - die
+ * x-Achse steht damit auf `auto`, gemessen ohne horizontalen Überlauf
+ * (scrollWidth == clientWidth bei 641/900/1512px Breite). Der Abstand kommt
+ * aus .budget-summary-bar. */
 .budget-tab-panel--budget {
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  -webkit-overflow-scrolling: touch;
   padding-block-start: 0;
 }
 
@@ -1183,7 +1147,17 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-height: 0;
+  /* Untergrenze statt `min-height: 0`: als flex:1-Kind neben dem inhaltshohen
+   * Kategorie-Chart kollabierte die Sektion auf kurzen Desktop-Viewports bis
+   * auf Kopfzeilenhöhe, und das Panel (damals `overflow: hidden`) ließ sie
+   * unerreichbar (#904). 280px = Kopfzeile (60px) + drei Buchungszeilen (64px)
+   * + eine angeschnittene vierte, die das interne Scrollen sichtbar macht.
+   * Das `min(…, 100%)` kappt die Untergrenze am Panel-Viewport: auf einer
+   * Kompakthöhe (Panel < 280px) erzwänge der harte Wert sonst einen Überlauf,
+   * bei dem selbst am Scroll-Ende die Kopfzeile angeschnitten bliebe.
+   * Unterhalb von 640px setzt der Mobil-Reflow sie zurück - dort scrollt das
+   * Panel als Ganzes und die Sektion wächst mit ihrem Inhalt. */
+  min-height: min(280px, 100%);
   /* Das Lesemaß steht an der SEKTION, nicht an `.budget-list` darunter, und
    * zwar aus zwei Gründen. Erstens fluchten so Kopf und Liste an derselben
    * Kante - läge es an der Liste, stünde die Überschrift „Transaktionen" über
@@ -1269,28 +1243,37 @@
   border-top: 1px solid var(--color-border-subtle);
 }
 
+/* Seit #904 kann auch das Budget-Panel selbst scrollen (Untergrenze der
+ * Transaktionssektion laesst es ueberlaufen) - es gehoert deshalb wie
+ * --loans in die Gruppe der duennen Modul-Scrollbars, sonst stuende auf
+ * Plattformen mit klassischen Scrollbalken ein System-Balken direkt
+ * neben dem 10px-Akzentbalken der Liste. */
 .budget-list,
 .budget-loans__list,
-.budget-tab-panel--loans {
+.budget-tab-panel--loans,
+.budget-tab-panel--budget {
   scrollbar-width: thin;
   scrollbar-color: var(--module-accent) transparent;
 }
 
 .budget-list::-webkit-scrollbar,
 .budget-loans__list::-webkit-scrollbar,
-.budget-tab-panel--loans::-webkit-scrollbar {
+.budget-tab-panel--loans::-webkit-scrollbar,
+.budget-tab-panel--budget::-webkit-scrollbar {
   width: 10px;
 }
 
 .budget-list::-webkit-scrollbar-track,
 .budget-loans__list::-webkit-scrollbar-track,
-.budget-tab-panel--loans::-webkit-scrollbar-track {
+.budget-tab-panel--loans::-webkit-scrollbar-track,
+.budget-tab-panel--budget::-webkit-scrollbar-track {
   background: transparent;
 }
 
 .budget-list::-webkit-scrollbar-thumb,
 .budget-loans__list::-webkit-scrollbar-thumb,
-.budget-tab-panel--loans::-webkit-scrollbar-thumb {
+.budget-tab-panel--loans::-webkit-scrollbar-thumb,
+.budget-tab-panel--budget::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--module-accent) var(--tint-hint), transparent);
   border: 3px solid transparent;
   border-radius: var(--radius-full);
@@ -1403,20 +1386,17 @@
  * - Budget-Tab scrollt als Ganzes (Summary + Chart + Liste), damit der
  *   schwebende FAB keine Kategorie-/Transaktionszeile mehr verdeckt und das
  *   9-zeilige Kategorie-Chart nicht abgeschnitten wird.
- * - Tab-Leiste auf die Zeilenbreite kappen, damit sie horizontal scrollt
- *   statt den letzten Tab abzuschneiden.
  * -------------------------------------------------------- */
 @media (max-width: 640px) {
-  /* Tab-Leiste auf die verfügbare Zeilenbreite kappen (Toolbar-Seitenpadding
-   * abziehen), damit overflow-x:auto greift statt den letzten Tab zu kappen.
-   * Der Eltern-Container begrenzt die Breite nicht, daher viewport-relativ. */
-  .budget-tabs { max-width: calc(100vw - var(--space-8)); }
+  /* Die frühere 100vw-Kappung der Tab-Leiste ist mit der Bar-Zeile entfallen:
+   * als .page-toolbar__bar begrenzt der Kopf selbst (flex-basis 100% +
+   * min-width 0), viewport-relativ war nur der Actions-Slot-Notbehelf. */
 
-  .budget-tab-panel--budget {
-    overflow-y: auto;
-    -webkit-overflow-scrolling: touch;
-  }
-
+  /* `overflow-y: auto` + Momentum stehen seit #904 an der Basisregel des
+   * Panels - hier bleibt nur der Reflow: Sektion und Liste geben ihre eigene
+   * Scroll-Achse ab und wachsen mit ihrem Inhalt, das Panel scrollt als
+   * Ganzes. `min-height: 0` nimmt der Sektion die 280px-Untergrenze der
+   * Desktop-Fassung wieder ab - hier ist sie kein Scrollfenster mehr. */
   .budget-tab-panel--budget .budget-list-section,
   .budget-tab-panel--budget .budget-list {
     flex: 0 0 auto;
@@ -1568,6 +1548,9 @@
 
 .budget-inline-modal__footer {
   justify-content: flex-end;
+  /* Umbruch statt Ueberlauf - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). */
+  flex-wrap: wrap;
 }
 
 /* --------------------------------------------------------

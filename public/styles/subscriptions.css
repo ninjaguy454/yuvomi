@@ -932,8 +932,13 @@
     justify-self: start;
   }
 
+  /* KEIN Umbruch, anders als bei den Fusszeilen (#872): das hier sind zwei
+   * Icon-Knoepfe ohne Text - sie koennen nicht zu lang werden, und ein
+   * Umbruch machte aus der letzten Rasterspalte zwei Zeilen. Die Ansage steht
+   * ausdruecklich da, damit sie als Entscheidung lesbar ist. */
   .subscriptions-toolbar__actions {
     display: flex;
+    flex-wrap: nowrap;
     gap: var(--space-2);
     grid-column: 3 / -1;
     justify-content: flex-end;

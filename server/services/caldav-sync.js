@@ -17,6 +17,7 @@ import { detachAccountRows } from './caldav-todo-outbound.js';
 import { toICSDatetime, escapeICSText } from '../utils/ics-format.js';
 import { createCalDAVClient, supportsComponent } from '../utils/caldav-client.js';
 import { rruleLine } from './recurrence.js';
+import { nearestIcalColorName } from '../utils/ical-color.js';
 
 // Reused functions from apple-calendar.js
 import {
@@ -59,6 +60,11 @@ function buildCalDAVICS(event) {
 
   if (event.description)     lines.push(`DESCRIPTION:${escapeICSText(event.description)}`);
   if (event.location)        lines.push(`LOCATION:${escapeICSText(event.location)}`);
+  // Eigenfarbe als CSS3-Name (RFC 7986, #897). Ein Termin ohne eigene Farbe
+  // bekommt keine Zeile und erbt beim Anbieter die des Kalenders.
+  const colorName = nearestIcalColorName(event.color);
+  if (colorName) lines.push(`COLOR:${colorName}`);
+
   if (event.recurrence_rule) {
     lines.push(rruleLine(event.recurrence_rule));
   }
@@ -127,17 +133,8 @@ function eventCalendars(calendars) {
  */
 async function testConnection(caldavUrl, username, password, { createClient } = {}) {
   try {
-    const client = createClient
-      ? await createClient({ caldav_url: caldavUrl, username, password })
-      : await (async () => {
-        const { createDAVClient } = await import('tsdav');
-        return createDAVClient({
-          serverUrl:          caldavUrl,
-          credentials:        { username, password },
-          authMethod:         'Basic',
-          defaultAccountType: 'caldav',
-        });
-      })();
+    const makeClient = createClient || createCalDAVClient;
+    const client = await makeClient({ caldav_url: caldavUrl, username, password });
 
     const calendars = await client.fetchCalendars();
     if (!calendars.length) {
@@ -520,13 +517,18 @@ async function sync({ createClient } = {}) {
   // Normalfall (nichts hat sich geändert) erzeugt keine WAL-Writes mehr.
   // `IS NOT` statt `<>`, weil der Vergleich NULL-sicher sein muss, und die
   // beiden abgeleiteten Spalten wiederholen ihren SET-Ausdruck, damit eine
-  // lokale Umfärbung (user_modified) bzw. ein fehlendes obj.url nicht als
+  // lokale Umfärbung (color_modified) bzw. ein fehlendes obj.url nicht als
   // Unterschied zählt. Die Bindings der SET-Liste kommen dafür ein zweites Mal.
+  //
+  // Die Farbe gattert auf `color_modified`, NICHT auf `user_modified` (#899):
+  // letzteres wird bei jeder Bearbeitung gesetzt, eine Titeländerung hätte die
+  // Farbspalte also für immer eingefroren und eine Umfärbung auf dem Server
+  // wäre nie mehr angekommen.
   const updEvent = conn.prepare(`
     UPDATE calendar_events
     SET title = ?, description = ?, start_datetime = ?, end_datetime = ?,
         all_day = ?, location = ?, recurrence_rule = ?, tzid = ?,
-        color = CASE WHEN user_modified = 0 THEN ? ELSE color END,
+        color = CASE WHEN color_modified = 0 THEN ? ELSE color END,
         calendar_ref_id = ?,
         external_object_url = COALESCE(?, external_object_url)
     WHERE id = ?
@@ -538,7 +540,7 @@ async function sync({ createClient } = {}) {
            OR location            IS NOT ?
            OR recurrence_rule     IS NOT ?
            OR tzid                IS NOT ?
-           OR color               IS NOT CASE WHEN user_modified = 0 THEN ? ELSE color END
+           OR color               IS NOT CASE WHEN color_modified = 0 THEN ? ELSE color END
            OR calendar_ref_id     IS NOT ?
            OR external_object_url IS NOT COALESCE(?, external_object_url)
           )
@@ -650,7 +652,15 @@ async function sync({ createClient } = {}) {
         for (const obj of calObjects) {
           // RECURRENCE-ID-Overrides zusammenführen, sonst überschreibt ein
           // geändertes Einzel-Vorkommen die Serie derselben UID (#549).
-          const parsed = normalizeRecurrenceOverrides(parseICS(obj.data || ''));
+          // Was der Parser verwirft, wird benannt: ein still fehlender Termin
+          // sah bisher aus wie einer, den der Server nie geliefert hat (#883).
+          const parsed = normalizeRecurrenceOverrides(parseICS(obj.data || '', {
+            onSkip: ({ uid, reason }) =>
+              log.warn(`Skipped VEVENT (${reason}) uid=${uid ?? '(none)'} at ${obj.url ?? '(unknown URL)'}`),
+          }));
+          if (!parsed.length && !String(obj.data || '').includes('BEGIN:VEVENT')) {
+            log.warn(`Calendar object without any VEVENT at ${obj.url ?? '(unknown URL)'}`);
+          }
 
           for (const ev of parsed) {
             try {
@@ -663,8 +673,14 @@ async function sync({ createClient } = {}) {
                   url: obj.url, etag: obj.etag, data: obj.data, calendarUrl: selCal.calendar_url,
                 });
               }
-              // Event-Eigenfarbe (RFC 7986) hat Vorrang, sonst Kalenderfarbe.
-              const evColor = ev.color || selCal.calendar_color;
+              // NUR die Eigenfarbe des Termins (RFC 7986 COLOR). Die Kalenderfarbe
+              // gehoert NICHT hierher: sie ist geerbt, gilt fuer jeden Termin des
+              // Kalenders und sagt ueber diesen einen nichts aus. Sie hier
+              // einzusetzen hat sie ununterscheidbar von einer ausdruecklichen
+              // Angabe gemacht und damit die Farbe der zugewiesenen Person
+              // dauerhaft verdraengt (#891). Die Anzeige holt sie weiterhin - als
+              // cal_color ueber calendar_ref_id, wo sie als geerbt erkennbar ist.
+              const evColor = ev.color ?? null;
 
               // Vom Nutzer gelöscht und noch nicht auf dem Server: nicht wieder
               // anlegen, sonst kehrt der Termin bei jedem Sync zurück (#593).
@@ -685,7 +701,7 @@ async function sync({ createClient } = {}) {
               let changed = false;
               if (existing) {
                 // Update: color nur überschreiben, solange der Nutzer nicht lokal
-                // umgefärbt hat (user_modified = 0); Titel/Zeit bleiben remote-geführt.
+                // umgefärbt hat (color_modified = 0); Titel/Zeit bleiben remote-geführt.
                 // Dieselben Werte binden die SET-Liste und den Vergleich in der
                 // WHERE-Klausel, weshalb sie zweimal übergeben werden.
                 const values = [
@@ -796,10 +812,18 @@ async function sync({ createClient } = {}) {
             'caldav', event.target_caldav_calendar_url,
             targetCal.displayName || event.target_caldav_calendar_url, null
           );
+          // `color_modified` mit hoch: die Farbe, die gerade als CSS3-Name
+          // hinausging, ist unsere. Der Name ist eine verlustbehaftete Abbildung
+          // des Hex-Werts, und ohne das Flag holte der nächste Inbound-Lauf
+          // genau ihn zurück und überschriebe den exakten Wert mit dem
+          // gerundeten (#899). Ein Termin, der gar keine eigene Farbe trägt,
+          // behält seinen Zustand - dann ist nichts hinausgegangen, was wir
+          // verteidigen müssten.
           db.get().prepare(`
             UPDATE calendar_events
             SET external_source = 'caldav', external_calendar_id = ?,
-                external_object_url = ?, calendar_ref_id = ?
+                external_object_url = ?, calendar_ref_id = ?,
+                color_modified = CASE WHEN color IS NOT NULL THEN 1 ELSE color_modified END
             WHERE id = ?
           `).run(uid, objectUrl, calRefId, event.id);
 
@@ -959,3 +983,8 @@ export {
   flushOutbound,
   getStatus
 };
+
+// Nur fuer Tests: der ICS-Builder ist der einzige Weg, auf dem ein rein lokaler
+// Termin zum Anbieter kommt, und der Sync-Pfad drumherum ist zu gross, um ihn
+// dafuer nachzustellen.
+export const __test = { buildCalDAVICS };

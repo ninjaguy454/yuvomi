@@ -41,6 +41,48 @@ export function vibrate(pattern) {
   navigator.vibrate(pattern);
 }
 
+/**
+ * Wartet, bis eine Quittungs-Animation auf `el` ausgespielt ist.
+ *
+ * DER ANLASS (Critique 2026-08-28, P0): das Abhaken einer Aufgabe zeigte nie
+ * eine Quittung, obwohl `check-pop` an `.task-status-btn--done` verdrahtet ist
+ * (tasks.css:703). Gemessen feuerte sie in 0 von 6 Versuchen. Der Grund war
+ * kein fehlendes Bauteil, sondern ein WETTLAUF: die Klasse wurde gesetzt, und
+ * der Re-Render der Liste ersetzte das Element, bevor die 200ms einen Frame
+ * bekamen. Eine gebaute Animation, die nie zu sehen ist, ist teurer als keine -
+ * sie sieht im Stylesheet nach erledigter Arbeit aus.
+ *
+ * DER FALLBACK IST PFLICHT, NICHT VORSICHT: unter `prefers-reduced-motion`
+ * feuert `animationend` NIE, weil es gar keine Animation gibt (dieselbe Lehre
+ * wie bei `transitionend` in detail-view.js:250 und router.js:1554). Ohne den
+ * Timer bliebe der Aufrufer dort für immer hängen.
+ *
+ * Der Rückgabewert ist bewusst ein Promise und kein Callback: der Aufrufer
+ * startet ihn VOR seinem Server-Roundtrip und wartet danach auf beides. So
+ * kostet die Quittung keine zusätzliche Zeit, solange das Netz langsamer ist
+ * als sie - und sie bleibt sichtbar, wenn es schneller ist.
+ *
+ * @param {Element} el                 - Element, das die Animation trägt
+ * @param {Object} [opts]
+ * @param {number} [opts.fallback=260] - ms, nach denen ohne Event aufgelöst wird
+ * @returns {Promise<void>}
+ */
+export function animationSettled(el, { fallback = 260 } = {}) {
+  if (!el) return Promise.resolve();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return Promise.resolve();
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      el.removeEventListener('animationend', finish);
+      resolve();
+    };
+    el.addEventListener('animationend', finish, { once: true });
+    setTimeout(finish, fallback);
+  });
+}
+
 // --------------------------------------------------------
 // Verzögertes Löschen mit Undo-Fenster (kanonisches Muster, Audit F-13)
 // --------------------------------------------------------
@@ -127,7 +169,15 @@ export function wireScrollFade(el, { axis = 'x' } = {}) {
   // jedem Modul-CSS, damit die Regel jede Leiste erfasst, die diesen Helfer
   // nutzt - auch die, die es noch nicht gibt.
   el.classList.add('u-scroll-fade');
-  const eps = 8; // Toleranz: kein Fade bei minimalem Sub-Pixel-Offset
+  // Toleranz gegen Sub-Pixel und DPR-Rundung. Sie stand auf 8 und schluckte
+  // damit ECHTE 1-8px-Ueberlaeufe: das Kalender-Segment lief in `uk` bei
+  // 375px 4px ueber - vom letzten Wort war der Abschluss weg, und die Leiste
+  // trug trotzdem keinen End-Fade (Sonde 20). 2px decken Rundung; ein
+  // Ueberlauf darueber ist Inhalt, kein Offset.
+  const eps = 2;
+  // Sub-Pixel-Schwelle fuer die POSITION. Sie ist bewusst kleiner als `eps`:
+  // siehe die Trennung der beiden Fragen im `update` darunter.
+  const posEps = 0.5;
   const update = () => {
     // `Math.abs` wegen RTL: in `ar` und `fa` setzt die App `dir=rtl`, und dort
     // steht `scrollLeft` nach CSSOM am Anfang auf 0 und laeuft beim Scrollen ins
@@ -138,8 +188,32 @@ export function wireScrollFade(el, { axis = 'x' } = {}) {
     const max = axis === 'y'
       ? el.scrollHeight - el.clientHeight
       : el.scrollWidth - el.clientWidth;
-    el.classList.toggle('has-fade-start', pos > eps);
-    el.classList.toggle('has-fade-end', pos < max - eps);
+
+    // ZWEI FRAGEN, ZWEI SCHWELLEN - und die Vermischung war der Fehler.
+    //
+    // `eps` beantwortet „laeuft die Leiste UEBERHAUPT ueber?"; das ist die
+    // Frage, fuer die eine Rundungstoleranz gedacht ist. Wurde sie mit Ja
+    // beantwortet, entscheidet die POSITION, welche Seite noch etwas verbirgt -
+    // und dort ist dieselbe Toleranz falsch, weil sie von BEIDEN Seiten
+    // abgezogen wird.
+    //
+    // GEMESSEN, und der Fall stand schon einmal im Kommentar darueber, ohne
+    // behoben zu sein: das Kalender-Segment laeuft in `uk` bei 375px 4px ueber
+    // und stand bei `scrollLeft` 2 (die Tablist scrollt ihr aktives Element in
+    // den Blick). Damit war `pos > eps` falsch (2 > 2) UND `pos < max - eps`
+    // falsch (2 < 2) - die Leiste galt gleichzeitig als „am Anfang" und „am
+    // Ende" und trug keinen einzigen Fade, obwohl links wie rechts je 2px
+    // verborgen waren. Bei jedem Ueberlauf bis 2*eps passiert das; die
+    // Korrektur von 8 auf 2 hat das Fenster nur verkleinert, nicht geschlossen.
+    //
+    // Sonde 20 verlangt genau diese Invariante: laeuft eine Kopf-Leiste ueber,
+    // traegt sie mindestens einen Fade.
+    if (max <= eps) {
+      el.classList.remove('has-fade-start', 'has-fade-end');
+      return;
+    }
+    el.classList.toggle('has-fade-start', pos > posEps);
+    el.classList.toggle('has-fade-end', max - pos > posEps);
   };
   el.addEventListener('scroll', update, { passive: true });
   const ro = new ResizeObserver(update);

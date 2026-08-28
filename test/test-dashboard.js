@@ -1217,9 +1217,13 @@ cdb.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL, color TEXT
   );
+  -- color gehoert dazu: sie ist die GEERBTE Farbe eines Abos und wird seit #891
+  -- als cal_color mitgelesen, weil ein Abo-Termin keinen external_calendars-
+  -- Eintrag hat. Fehlt sie hier, misst dieses verkuerzte Schema an der echten
+  -- Abfrage vorbei.
   CREATE TABLE ics_subscriptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0,
+    name TEXT NOT NULL, color TEXT, shared INTEGER NOT NULL DEFAULT 0,
     created_by INTEGER REFERENCES users(id) ON DELETE CASCADE
   );
   CREATE TABLE calendar_events (
@@ -1454,7 +1458,7 @@ test('getUpcomingEvents: private ICS-Termine fremder User werden ausgeblendet', 
     );
     CREATE TABLE ics_subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL, shared INTEGER NOT NULL DEFAULT 0,
+      name TEXT NOT NULL, color TEXT, shared INTEGER NOT NULL DEFAULT 0,
       created_by INTEGER REFERENCES users(id) ON DELETE CASCADE
     );
     CREATE TABLE reminders (

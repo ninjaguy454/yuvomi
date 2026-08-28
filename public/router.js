@@ -24,6 +24,14 @@ import { getLastHealthRoute, HEALTH_ROUTES } from '/utils/health-tabs.js';
 import { activityType } from '/utils/health-activity.js';
 import { buildHelpRows } from '/utils/help.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
+import {
+  handleBackNavigation, closeAllOverlays, consumeOverlayMarker,
+  pushOverlay, dropOverlay, attachOverlay,
+} from '/utils/overlay-history.js';
+import {
+  applyNavBadges, setNavBadge, resetNavBadges, navBadgeRoutes,
+  moduleCountsFrom, navBadgeCountsFrom,
+} from '/utils/nav-badges.js';
 import { isNewerVersion, displayVersion } from '/utils/version.js';
 import { setMaxUploadBytes } from '/utils/upload-limit.js';
 import { syncWallMode } from '/utils/wall-mode.js';
@@ -75,6 +83,7 @@ const ROUTES = [
   { path: '/recipes',  page: '/pages/recipes.js',   requiresAuth: true, module: 'recipes',   titleKey: 'nav.recipes' },
   { path: '/pantry',   page: '/pages/pantry.js',    requiresAuth: true, module: 'pantry',    titleKey: 'nav.pantry' },
   { path: '/inventory', page: '/pages/inventory.js', requiresAuth: true, module: 'inventory', titleKey: 'nav.inventory' },
+  { path: '/schedule', page: '/pages/schedule.js', requiresAuth: true, module: 'schedule', titleKey: 'nav.schedule' },
   { path: '/contacts', page: '/pages/contacts.js',  requiresAuth: true, module: 'contacts',  titleKey: 'nav.contacts' },
   { path: '/budget',   page: '/pages/budget.js',    requiresAuth: true, module: 'budget',    titleKey: 'nav.budget' },
   { path: '/documents', page: '/pages/documents.js', requiresAuth: true, module: 'documents', titleKey: 'nav.documents' },
@@ -462,15 +471,18 @@ function updateNavigationHistoryControls() {
 }
 
 function pushNavigationHistory(path) {
+  const replaceOverlay = consumeOverlayMarker();
   _navHistoryIndex += 1;
   // Ein neuer Weg nach einem Zurueck verwirft den bisherigen Forward-Zweig.
   _navHistoryMax = _navHistoryIndex;
   rememberNavigationHistoryMax();
-  history.pushState({
+  const state = {
     ...history.state,
     path,
     [NAV_HISTORY_INDEX_KEY]: _navHistoryIndex,
-  }, '', path);
+  };
+  if (replaceOverlay) history.replaceState(state, '', path);
+  else history.pushState(state, '', path);
   updateNavigationHistoryControls();
 }
 
@@ -486,7 +498,7 @@ function syncNavigationHistory(state) {
 // Router
 // --------------------------------------------------------
 
-const ROUTE_ORDER = ['/', '/calendar', '/tasks', '/meals', '/recipes', '/shopping', '/pantry',
+const ROUTE_ORDER = ['/', '/calendar', '/schedule', '/tasks', '/meals', '/recipes', '/shopping', '/pantry',
                      '/birthdays', '/notes', '/contacts', '/budget', '/inventory', '/documents', '/housekeeping', '/health', '/settings'];
 
 const MOBILE_FAVORITE_COUNT = 3;
@@ -1182,35 +1194,6 @@ let _moduleCountsAt = 0;
 let _moduleCountsGen = 0;
 const MODULE_COUNTS_TTL = 60_000;
 
-function moduleCountsFrom(data) {
-  const openDoses = Math.max(0, (data?.health?.dosesTotal ?? 0) - (data?.health?.dosesTaken ?? 0) - (data?.health?.dosesSkipped ?? 0));
-  const counts = {
-    tasks: data?.openTaskCount ?? 0,
-    shopping: data?.shoppingOpenCount ?? 0,
-    /* NUR FUER ELTERN. `rewards.pending` zaehlt serverseitig JEDE offene Anfrage
-     * des Haushalts, waehrend die Belohnungsseite einem Nicht-Admin nur die
-     * EIGENEN zeigt: hat ein Geschwister eine offene Anfrage und man selbst
-     * keine, warb das Badge mit Arbeit, hinter der nichts stand (Codex-Review
-     * zu PR #754). Eine mitgliedseigene Zahl gaebe es nur mit einem neuen Feld
-     * in der Nutzlast; bis dahin ist keine Zahl richtiger als eine falsche. */
-    rewards: isAdmin() ? (data?.rewards?.pending ?? 0) : 0,
-    health: openDoses,
-  };
-  /* Die Küche ist im mobilen Menü EIN Ziel für vier Module; was dort wartet,
-   * ist der Einkaufszettel.
-   *
-   * NUR WENN DER EINKAUF DIESEM MITGLIED AUCH OFFENSTEHT. Die Kachel ist die
-   * einzige, die einen FREMDEN Modulzähler tragen kann - die anderen erscheinen
-   * gar nicht erst, wenn ihr Modul fehlt, diese hier bleibt stehen, solange
-   * eines der vier da ist. Der Server zählt `shoppingOpenCount` ungefiltert über
-   * den ganzen Haushalt (`routes/dashboard.js`), also warb die Kachel mit
-   * Arbeit in einem Modul, das sich nicht öffnen lässt, und führte beim Antippen
-   * nach Mahlzeiten (Codex-Review zu PR #754). `navItems()` ist bereits nach
-   * Zugang gefiltert und damit die richtige Quelle für die Frage. */
-  const einkaufOffen = navItems().some((item) => item.module === 'shopping');
-  counts.kitchen = einkaufOffen ? counts.shopping : 0;
-  return counts;
-}
 
 /**
  * Die Zaehlstaende gehoeren der SITZUNG, nicht dem Geraet.
@@ -1231,6 +1214,119 @@ function resetModuleCounts() {
   _moduleCountsGen += 1;
 }
 
+/**
+ * DIE ZAHLEN AM NAV-ZIEL, BEVOR DAS MODUL GELADEN WURDE (#868).
+ *
+ * Gemeldet war: nach dem Anmelden fehlt das Badge mit den ueberfaelligen
+ * Aufgaben, es erscheint erst nach einem Besuch der Aufgaben. Der Grund lag
+ * nicht in der Anzeige, sondern in der Quelle - die Zahl kam aus dem Zustand
+ * eines Moduls, das noch gar nicht gerendert war.
+ *
+ * SIE STAND DIE GANZE ZEIT IM PAYLOAD. `/dashboard` liefert
+ * `overdueTaskCount` seit jeher (es ist die Zweitzeile der Aufgaben-Kachel),
+ * und die Geburtstagsliste traegt ihr `days_until` mit. Es brauchte also
+ * keinen neuen Endpunkt, sondern nur, dass jemand hinsieht.
+ *
+ * UND ZWAR HIER, weil dieselbe Antwort schon fuer die Kachel-Zaehlstaende
+ * geholt wird - ein zweiter Abruf fuer dieselben Zahlen waere die zweite
+ * Wahrheit UND der zweite Request.
+ *
+ * WAS HIER (NOCH) FEHLT, ausgesprochen statt verschwiegen: das INVENTAR. Seine
+ * Zahl ist „wie viele Gegenstaende haben eine ablaufende Frist", und die
+ * beantwortet `/dashboard` nicht - das Modul hat dort keinen Block. Sein Badge
+ * erscheint deshalb weiterhin erst nach dem ersten Besuch; es ueberlebt seit
+ * diesem Fix immerhin einen Neuaufbau der Navigation. Der saubere Weg dorthin
+ * ist ein Zaehler in der Nutzlast, nicht eine zweite Rechnung im Browser.
+ */
+function primeNavBadges(data) {
+  const counts = navBadgeCountsFrom(data);
+  setNavBadge('/tasks', counts['/tasks'],
+    (count) => (count > 0 ? t('tasks.navLabelOverdue', { count }) : t('tasks.title')));
+  // Ein anstehender Geburtstag ist eine Nachricht, kein Alarm (Valenz siehe
+  // nav-badges.js).
+  setNavBadge('/birthdays', counts['/birthdays'], undefined, 'accent');
+}
+
+/**
+ * Ein Modul hat etwas geaendert, das gezaehlt wird.
+ *
+ * DIE ZAHL GEHOERT DEM SERVER, und deshalb steht hier eine Entwertung und
+ * keine Rechnung. Das Aufgabenmodul koennte sie gar nicht selbst fuehren:
+ * `state.tasks` ist eine GEFILTERTE Liste (der Standardfilter zeigt nur
+ * offene, das Kanban laesst den Statusfilter ganz weg), waehrend
+ * `overdueTaskCount` haushaltweit und ungefiltert zaehlt. Beide in denselben
+ * Badge-Slot zu schreiben liess die Zahl beim blossen Wechsel zwischen Liste
+ * und Kanban springen - die zweite Wahrheit, die dieser Fix eigentlich
+ * abschaffen sollte, eine Ebene tiefer.
+ *
+ * Nebenbei erledigt das die Zeitzonenfrage: `overdueTaskCount` rechnet mit der
+ * Haushaltszone, eine Client-Rechnung mit `todayKey()` im Automatikmodus mit
+ * der des Browsers. Zwei Zonen, zwei Tage, zwei Zahlen.
+ *
+ * GEBUENDELT, weil Mutationen in Serien kommen (Mehrfachauswahl, schnelles
+ * Abhaken): sonst loeste jeder Haken einen eigenen Abruf aus.
+ */
+let _moduleCountsRefreshTimer = null;
+function invalidateModuleCounts() {
+  _moduleCountsAt = 0;
+  /* DIE GENERATION MUSS MIT, sonst frisst eine noch laufende Antwort die
+   * Entwertung. Sie stammt von VOR der Aenderung, kaeme aber danach an, setzte
+   * ihren alten Stand in den Speicher und stempelte `_moduleCountsAt` neu -
+   * der entprellte Abruf 300 ms spaeter liefe dann in die TTL-Sperre, und die
+   * Zahl bliebe bis zu einer Minute auf dem Stand vor der Aenderung stehen.
+   * Also genau in der Serie schneller Haken, fuer die diese Funktion da ist.
+   * `resetModuleCounts()` direkt darueber tut aus demselben Grund dasselbe. */
+  _moduleCountsGen += 1;
+  if (_moduleCountsRefreshTimer) clearTimeout(_moduleCountsRefreshTimer);
+  _moduleCountsRefreshTimer = setTimeout(() => {
+    _moduleCountsRefreshTimer = null;
+    refreshModuleCounts();
+  }, 300);
+}
+
+/**
+ * Die Uebersichtsseite hat ihre `/dashboard`-Antwort schon - der Speicher
+ * nimmt sie, statt sie ein zweites Mal zu holen.
+ *
+ * Beim Anmelden faellt der Weg auf `/`, und dort holten bis dahin ZWEI Stellen
+ * dieselbe teure Aggregation: der Shell-Aufbau fuer die Zahlen und die Seite
+ * fuer ihre Kacheln. Der Server rechnet dabei ein Dutzend Abfragen doppelt.
+ *
+ * Die Seite fragt gefiltert (`layoutHintQuery`), die Zahlen brauchen das nicht
+ * - sie zaehlen, was wartet, nicht was die Kachel zeigt. Fuer `openTaskCount`
+ * und `overdueTaskCount` macht die Widget-Einschraenkung sehr wohl einen
+ * Unterschied (`test:task-scope` haelt genau das fest), und deshalb gilt: nur
+ * eine UNGEFILTERTE Antwort darf den Speicher fuellen. Kommt sie gefiltert,
+ * bleibt es beim eigenen Abruf.
+ */
+function primeModuleCountsFrom(data, { filtered = false } = {}) {
+  if (filtered || !data) return;
+  _moduleCounts = moduleCountsFrom(data, {
+    isAdmin: currentUser?.role === 'admin',
+    shoppingVisible: navItems().some((item) => item.module === 'shopping'),
+  });
+  _moduleCountsAt = Date.now();
+  primeNavBadges(data);
+}
+
+/**
+ * Auf der Uebersicht holt die SEITE dieselbe Antwort - der Shell-Aufbau tritt
+ * ihr zurueck.
+ *
+ * Beide starteten sonst gleichzeitig, und der Server rechnete ein Dutzend
+ * Abfragen zweimal. Ein Aufschub waere ein Rennen; die Route ist die Antwort,
+ * denn nur `/` traegt die Uebersichtsseite.
+ *
+ * DER RUECKFALL BLEIBT, weil zwei Faelle die Seite nicht liefern lassen: eine
+ * gefilterte Abfrage (gesetzte Widget-Optionen - eine eingeschraenkte Zahl ist
+ * eine andere Zahl) und ein Fehlschlag ihrer Anfrage. Beide erkennt man
+ * daran, dass der Speicher danach immer noch leer ist.
+ */
+function refreshModuleCountsUnlessPageProvides(path) {
+  if (path !== '/') { refreshModuleCounts(); return; }
+  setTimeout(() => { if (!_moduleCountsAt) refreshModuleCounts(); }, 1500);
+}
+
 async function refreshModuleCounts() {
   if (Date.now() - _moduleCountsAt < MODULE_COUNTS_TTL) return false;
   /* EINE LAUFENDE ANFRAGE UEBERLEBT DAS ZURUECKSETZEN SONST.
@@ -1245,12 +1341,27 @@ async function refreshModuleCounts() {
   try {
     const res = await api.get('/dashboard');
     if (gen !== _moduleCountsGen) return false;
-    _moduleCounts = moduleCountsFrom(res);
+    _moduleCounts = moduleCountsFrom(res, {
+      isAdmin: currentUser?.role === 'admin',
+      // `navItems()` ist bereits nach Zugang gefiltert und damit die richtige
+      // Quelle fuer die Frage, ob der Einkauf diesem Mitglied offensteht.
+      shoppingVisible: navItems().some((item) => item.module === 'shopping'),
+    });
     _moduleCountsAt = Date.now();
+    primeNavBadges(res);
     return true;
-  } catch {
-    // Kein Netz, keine Sitzung, Serverfehler: das Sheet bleibt ohne Badges
-    // benutzbar. Ein Fehler an dieser Stelle darf die Navigation nicht stören.
+  } catch (err) {
+    /* Kein Netz, keine Sitzung, Serverfehler: das Sheet bleibt ohne Badges
+     * benutzbar. Ein Fehler an dieser Stelle darf die Navigation nicht stören.
+     *
+     * ABER ER DARF AUCH NICHT SPURLOS SEIN. Dieser Block schluckte bis #868
+     * einen ReferenceError mit: `moduleCountsFrom()` rief ein `isAdmin()`, das
+     * es in dieser Datei nie gab (es lebt modul-lokal in pages/rewards.js).
+     * Der Aufruf warf also bei JEDEM Durchlauf, seit die Zeile 2026 dazukam -
+     * die Zaehlstaende der Modulkacheln waren nie da, und niemand sah es, weil
+     * ein leeres Sheet genauso aussieht wie eines ohne wartende Arbeit.
+     * Ein Programmierfehler ist keine Netzstoerung; er gehoert in die Konsole. */
+    console.error('[Router] Zählstände konnten nicht geladen werden:', err);
     return false;
   }
 }
@@ -1455,11 +1566,29 @@ async function renderPage(route, previousPath = null, scrollTarget = 0) {
       _navBuiltForUserId = currentUser.id;
       // Nebenläufig und still: der Hinweis darf das erste Rendern nicht aufhalten.
       checkForUpdate();
+      /* Und die Zahlen an den Nav-Zielen (#868).
+       *
+       * ERST AUS DEM SPEICHER, dann nachziehen - aus demselben Grund wie beim
+       * Mehr-Blatt: `refreshModuleCounts()` kehrt innerhalb seiner TTL sofort
+       * zurueck, ohne zu zeichnen. Die Shell wird aber auch INNERHALB dieser
+       * Minute neu gebaut - `/reset-password`, `/forgot-password` und `/join`
+       * sind ohne Auth erreichbar und raeumen sie ab, auch wenn man angemeldet
+       * ist. Ohne diese Zeile kaeme die Navigation danach ohne Badges zurueck:
+       * der gemeldete Fehler, nur ueber einen schmaleren Weg.
+       *
+       * Das Nachziehen bleibt still: ohne Antwort bleibt die Navigation ohne
+       * Badges - das war bis hierher der Normalfall. */
+      applyNavBadges();
+      refreshModuleCountsUnlessPageProvides(route.path);
     } else if (currentUser && _navBuiltForUserId !== currentUser.id) {
       // Shell besteht bereits, aber der Nutzer hat gewechselt → Nav mit den
       // Modul-Rechten des aktuellen Nutzers neu aufbauen (#467).
       rebuildNavigation();
       _navBuiltForUserId = currentUser.id;
+      // Die Zahlen gehoeren dem Mitglied, nicht dem Geraet: `forgetSessionState`
+      // hat sie geleert, hier kommen die des neuen Mitglieds (#868).
+      applyNavBadges();
+      refreshModuleCountsUnlessPageProvides(route.path);
     }
 
     const content = document.getElementById('main-content') || app;
@@ -2474,6 +2603,9 @@ function showHelpModal() {
 
   overlay.appendChild(panel);
   document.body.appendChild(overlay);
+  // Die Zurueck-Geste schliesst auch diesen Dialog (#871). `attachOverlay`
+  // statt `pushOverlay`, weil er auf drei Wegen per `remove()` verschwindet.
+  attachOverlay(overlay, () => overlay.remove());
   if (window.lucide) window.lucide.createIcons({ el: panel });
 }
 
@@ -2765,18 +2897,32 @@ function initMoreSheet(container, openSearch) {
   const moreSheetTrap = createFocusTrap(sheet);
   const currentMoreBtn = () => container.querySelector('#more-btn') || moreBtn;
 
+  // Der Marker der Zurueck-Geste, solange das Blatt offen ist (#871).
+  let sheetOverlayToken = null;
+
   function openSheet() {
     lastFocusedBeforeSheet = document.activeElement;
+    sheetOverlayToken = pushOverlay(() => closeSheet());
     setOverlayInteractive(sheet, true);
     sheet.addEventListener('keydown', moreSheetTrap);
     backdrop.classList.add('more-backdrop--visible');
     currentMoreBtn().setAttribute('aria-expanded', 'true');
     sheet.querySelector('#more-sheet-search, [data-route]')?.focus();
     if (window.lucide) window.lucide.createIcons({ el: sheet });
-    // Zählstände nachziehen, ohne das Öffnen zu verzögern: das Sheet steht
-    // sofort, die Badges kommen, sobald die Antwort da ist. Beim zweiten Öffnen
-    // innerhalb der TTL passiert gar nichts - das Sheet ist eine Navigation,
-    // kein Monitor.
+    /* ZUERST AUS DEM SPEICHER, DANN NACHZIEHEN.
+     *
+     * Der Speicher ist beim Oeffnen in der Regel schon warm: seit #868 holt
+     * ihn der Shell-Aufbau, weil die Nav-Badges daran haengen. Ohne die erste
+     * Zeile faenden die Kacheln davon nichts - `refreshModuleCounts()` gaebe
+     * innerhalb seiner TTL `false` zurueck („nichts Neues"), und die Wache
+     * darunter uebersprang das Zeichnen. Die Kacheln blieben dann bis zu 60
+     * Sekunden nach dem Anmelden leer, obwohl die Zahlen im Speicher lagen -
+     * derselbe Fehler, den dieser Fix fuer die Nav-Badges behebt, nur eine
+     * Ebene versetzt.
+     *
+     * Das Nachziehen bleibt: das Sheet steht sofort, frische Zahlen kommen,
+     * sobald die Antwort da ist. */
+    paintMoreSheetBadges(sheet);
     refreshModuleCounts().then((fresh) => {
       if (fresh && sheet.getAttribute('aria-hidden') !== 'true') paintMoreSheetBadges(sheet);
     });
@@ -2784,6 +2930,11 @@ function initMoreSheet(container, openSearch) {
 
   function closeSheet({ restoreFocus = true } = {}) {
     if (sheet.getAttribute('aria-hidden') === 'true') return;
+    if (sheetOverlayToken !== null) {
+      const token = sheetOverlayToken;
+      sheetOverlayToken = null;
+      dropOverlay(token);
+    }
     setOverlayInteractive(sheet, false);
     sheet.removeEventListener('keydown', moreSheetTrap);
     backdrop.classList.remove('more-backdrop--visible');
@@ -2915,7 +3066,7 @@ function initSearch(container) {
       label.textContent = t(scope.labelKey);
       btn.append(seal, label);
       btn.addEventListener('click', () => {
-        closeSearch();
+        closeSearch({ restoreFocus: false });
         navigate(scope.route);
       });
       list.appendChild(btn);
@@ -2927,9 +3078,13 @@ function initSearch(container) {
     window.lucide?.createIcons({ el: results });
   }
 
+  // Der Marker der Zurueck-Geste, solange die Suche offen ist (#871).
+  let searchOverlayToken = null;
+
   function openSearch() {
     if (window._closeMoreSheet) window._closeMoreSheet({ restoreFocus: false });
     lastFocusedBeforeSearch = document.activeElement;
+    if (searchOverlayToken === null) searchOverlayToken = pushOverlay(() => closeSearch());
     setOverlayInteractive(overlay, true);
     overlay.classList.add('search-overlay--visible');
     if (!input.value.trim()) renderSearchHint();
@@ -2941,6 +3096,11 @@ function initSearch(container) {
   }
 
   function closeSearch({ restoreFocus = true } = {}) {
+    if (searchOverlayToken !== null) {
+      const token = searchOverlayToken;
+      searchOverlayToken = null;
+      dropOverlay(token);
+    }
     // Laufenden Debounce abbrechen: sonst feuert ein noch offener Timer nach dem
     // Schließen ins versteckte Overlay und macht eine Phantom-Live-Ansage.
     clearTimeout(searchTimer);
@@ -3000,7 +3160,7 @@ function initSearch(container) {
       setStatus(t('search.loading'));
       try {
         const data = await api.get(`/search?q=${encodeURIComponent(q)}`);
-        const count = renderSearchResults(results, data, closeSearch);
+        const count = renderSearchResults(results, data, () => closeSearch({ restoreFocus: false }));
         results.setAttribute('aria-busy', 'false');
         setStatus(
           count === 0 ? t('search.noResults')
@@ -3149,6 +3309,7 @@ function navItems({ catalog = false } = {}) {
     { path: '/',          label: t('nav.dashboard'), module: 'dashboard', section: NAV_SECTION.overview },
     // Plan
     { path: '/calendar',  label: t('nav.calendar'),  module: 'calendar',  section: NAV_SECTION.plan },
+    { path: '/schedule',  label: t('nav.schedule'),  module: 'schedule',  section: NAV_SECTION.plan },
     { path: '/tasks',     label: t('nav.tasks'),     module: 'tasks',     section: NAV_SECTION.plan },
     { path: '/notes',     label: t('nav.notes'),     module: 'notes',     section: NAV_SECTION.plan },
     // Haushalt — Kitchen-Gruppe zuerst, dann die übrigen Haushalts-Module
@@ -4017,9 +4178,22 @@ if ('serviceWorker' in navigator) {
 }
 
 // Browser zurück/vor
+//
+// EIN OFFENER DIALOG FAENGT DIE GESTE AB (#871). Auf dem Telefon ist die
+// Wischgeste von links der Zurueck-Knopf, und ueber einem offenen Dialog meint
+// sie den Dialog, nicht die Seite darunter. Vorher tat die App beides falsch
+// herum: sie navigierte im Hintergrund und liess den Dialog stehen.
+//
+// Der Handler ist async, der Listener bleibt es nicht: `navigate()` darf erst
+// laufen, wenn feststeht, dass die Geste NICHT fuer einen Dialog war - der
+// Weg aus einem Formular mit ungespeicherten Aenderungen fragt zurueck und
+// beantwortet die Frage erst danach.
 window.addEventListener('popstate', (e) => {
   syncNavigationHistory(e.state);
-  navigate(e.state?.path || location.pathname, false);
+  const target = e.state?.path || location.pathname;
+  handleBackNavigation().then((handled) => {
+    if (!handled) navigate(target, false);
+  });
 });
 
 /* ES GIBT ZWEI ABGAENGE, UND SIE TEILEN SICH KEINEN CODE.
@@ -4055,6 +4229,13 @@ function forgetSessionState() {
   forgetScrollPositions();
   // Und die Zählstände der Modulkacheln aus demselben Grund.
   resetModuleCounts();
+  // Ebenso die Zahlen an den Nav-Zielen (#868).
+  resetNavBadges();
+  // Was noch offen steht, geht mit der Sitzung zu (#871). SCHLIESSEN und nicht
+  // nur vergessen: ein geteiltes Modal haengt an `document.body` und ueberlebt
+  // das Abraeumen der Shell - ein bloss geleertes Register liesse es ueber der
+  // Anmeldeseite stehen.
+  closeAllOverlays();
   stopThirdPartyModulePolling();
   stopReminders();
   stopPush();
@@ -4074,6 +4255,22 @@ window.addEventListener('auth:expired', () => {
 
 // Navigation komplett neu rendern (z.B. nach Sprach- oder Modul-Toggle-Änderung).
 // Behält Bottom-Bar-Buttons (Kitchen, More) und More-Sheet-Handle/Suche bei.
+/**
+ * Ein Ziel ist aus der Navigation verschwunden (Modul abgeschaltet oder
+ * ausgeblendet): seine Zahl geht mit.
+ *
+ * Sonst lebt sie beim Wiedereinschalten wieder auf - und fuer das Inventar
+ * heilt sich das nicht von selbst, weil `/dashboard` fuer dieses Modul keinen
+ * Zaehler liefert: der alte Stand stuende dort, bis jemand die Seite besucht.
+ */
+function dropBadgesForRemovedRoutes() {
+  for (const route of navBadgeRoutes()) {
+    if (!document.querySelector(`.nav-sidebar [data-route="${route}"], .nav-bottom [data-route="${route}"]`)) {
+      setNavBadge(route, 0);
+    }
+  }
+}
+
 function rebuildNavigation({ updateLabels = true } = {}) {
   const skipLink     = document.querySelector('.sr-only[href="#main-content"]');
   const navSidebar   = document.querySelector('.nav-sidebar');
@@ -4141,6 +4338,13 @@ function rebuildNavigation({ updateLabels = true } = {}) {
   // Die Einstiege zum Änderungsverlauf sind gerade neu entstanden - ein noch
   // offener Hinweis muss ihnen folgen, sonst fällt er beim Sprachwechsel weg.
   applyUpdateBadge();
+  // Aus demselben Grund die Zahlen an den Nav-Zielen: `replaceChildren()` oben
+  // hat sie mit weggeworfen, und bis #868 kamen sie erst wieder, wenn das
+  // zugehoerige Modul erneut rendert - nach einem Sprachwechsel also womoeglich
+  // nie.
+  applyNavBadges();
+  // Und was gerade aus der Navigation gefallen ist, verliert seine Zahl.
+  dropBadgesForRemovedRoutes();
 }
 
 // Sprache geändert: Navigation und aktuelle Seite gemeinsam neu rendern.
@@ -4351,6 +4555,12 @@ window.yuvomi = {
   setMobileNavOrder,
   refreshThirdPartyModules,
   isModuleDisabled,
+  // Ein Modul hat etwas geaendert, das an einem Nav-Ziel gezaehlt wird (#868).
+  // Begruendung an `invalidateModuleCounts`.
+  invalidateModuleCounts,
+  // Die Uebersichtsseite reicht ihre `/dashboard`-Antwort herein, statt sie ein
+  // zweites Mal holen zu lassen. Begruendung an `primeModuleCountsFrom`.
+  primeModuleCountsFrom,
   applyTheme: (value) => {
     if (value === 'dark') {
       document.documentElement.setAttribute('data-theme', 'dark');

@@ -59,7 +59,8 @@
             "private": "Лише я",
             "hint": "Визначає, хто бачить цей запис у Yuvomi.",
             "assigneesNobodyHint": "Без призначення цей запис бачите лише ви."
-        }
+        },
+        "toShoppingListNamed": "Додати {{title}} до списку покупок"
     },
     "kitchen": {
         "noShoppingLists": "Списку покупок ще немає.",
@@ -112,7 +113,8 @@
         "health": "Здоровʼя",
         "rewards": "Нагороди",
         "pantry": "Запаси",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Огляд",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Це та всі наступні",
         "deleteScopeSeries": "Уся серія (усі тижні)",
         "seriesEndedToast": "Серію завершено з цієї дати.",
-        "seriesDeletedToast": "Серію видалено."
+        "seriesDeletedToast": "Серію видалено.",
+        "deleteMealNamed": "Видалити {{title}}",
+        "openRecipeNamed": "Відкрити рецепт {{title}}"
     },
     "calendar": {
         "searchOpen": "Пошук подій",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "Стосується всієї серії.",
         "detailWhen": "Час",
         "detailCalendar": "Календар",
-        "colorCurrent": "Поточний колір"
+        "colorCurrent": "Поточний колір",
+        "deleteExternalSeriesTitle": "Видалити всю серію?",
+        "deleteExternalSeriesDetail": "«{{title}}» походить із синхронізованого календаря. Окремі події там виключити неможливо - буде видалено всю серію з усіма її повтореннями.",
+        "deleteExternalSeriesConfirm": "Видалити серію",
+        "deleteBirthdayEventTitle": "Видалити подію дня народження?",
+        "deleteBirthdayEventDetail": "«{{title}}» - це відображення запису про день народження. Подія зникне, але наступна синхронізація створить її знову: остаточно видалити її можна лише через сам день народження.",
+        "deleteBirthdayEventConfirm": "Усе одно видалити",
+        "deleteSubscribedSeriesTitle": "Видалити серію з підписки?",
+        "deleteSubscribedSeriesDetail": "«{{title}}» походить із календаря за підпискою. Yuvomi не може нічого видалити в джерелі - серія зникне лише до наступної синхронізації; щоб прибрати її назавжди, скасуйте підписку.",
+        "deleteSubscribedSeriesConfirm": "Усе одно видалити",
+        "colorInherit": "Колір призначеної особи",
+        "colorInheritHint": "Подія не отримує власного кольору й переймає колір призначеної особи. Якщо нікого не призначено, діє колір календаря.",
+        "filters": "Фільтри",
+        "filtersOpen": "Відкрити фільтри",
+        "filtersLayers": "Шари",
+        "filtersPeople": "Люди",
+        "filtersActive": "Активних фільтрів: {{count}}",
+        "filtersActive_one": "1 активний фільтр",
+        "filtersReset": "Зняти всі фільтри",
+        "filtersDisplay": "Відображення"
     },
     "notes": {
         "title": "Нотатки",
@@ -1691,6 +1714,7 @@
             "shopping": "Покупки",
             "meals": "Харчування",
             "calendar": "Календар",
+            "schedule": "Schedule",
             "notes": "Нотатки",
             "contacts": "Контакти",
             "budget": "Бюджет",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} повторення",
         "fromCompletionLabel": "Повторювати від дня виконання",
         "fromCompletionHint": "Інтервал починається від дня, коли ви позначили завдання виконаним, а не від терміну.",
-        "summaryFromCompletion": "від виконання"
+        "summaryFromCompletion": "від виконання",
+        "intervalHint": "Після вибору інтервал налаштовується вільно - наприклад, кожні 2 тижні або кожні 3 місяці."
     },
     "reminders": {
         "sectionTitle": "Нагадування",
@@ -2662,7 +2687,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Локальний",
         "sourceAll": "Усі",
-        "sourceFilterLabel": "Фільтр за джерелом"
+        "sourceFilterLabel": "Фільтр за джерелом",
+        "plannedThisWeek": "Заплановано на цей тиждень"
     },
     "search": {
         "emptyHint": "Введіть щонайменше 2 символи для пошуку в завданнях, подіях, нотатках, контактах, покупках і здоров'ї.",
@@ -2731,7 +2757,8 @@
         "done": "Почніть роботу",
         "skip": "Пропустити",
         "step2BodyDesktop": "Бічна панель ліворуч веде до всіх модулів - від календаря й завдань до кухні, документів і налаштувань.",
-        "step3BodyDesktop": "Кнопка + в нижньому куті створює нові записи будь-де."
+        "step3BodyDesktop": "Кнопка + в нижньому куті створює нові записи будь-де.",
+        "stepProgress": "Крок {{current}} з {{total}}"
     },
     "offline": {
         "banner": "Офлайн - повторне підключення…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "Чеки",
         "splitExpensesFolder": "Спільні витрати",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Завдання"
+        "tasksFolder": "Завдання",
+        "newSubfolder": "Нова підпапка",
+        "moveFolder": "Перемістити папку",
+        "moveFolderTo": "Перемістити «{{name}}» до",
+        "folderMovedToast": "Папку переміщено",
+        "folderParentLabel": "Батьківська папка",
+        "folderRootLevel": "Верхній рівень",
+        "folderPathLabel": "Шлях до папки",
+        "folderExpand": "Розгорнути «{{name}}»",
+        "folderCollapse": "Згорнути «{{name}}»",
+        "deleteFolderSubtreeDetail": "Вкладені {{count}} підпапок теж буде видалено. Документи залишаться і будуть доступні через фільтр документів без папки.",
+        "deleteFolderSubtreeDetail_one": "Вкладену підпапку теж буде видалено. Документи залишаться і будуть доступні через фільтр документів без папки."
     },
     "shortcuts": {
         "goKitchen": "Кухня",
@@ -2931,7 +2969,7 @@
         "colorOption": "Колір {{color}}",
         "iconPick": "Вибрати зображення",
         "iconClear": "Прибрати зображення",
-        "iconHint": "Без зображення на вибраному кольорі видно першу літеру.",
+        "iconHint": "Виберіть вбудовану піктограму або власне зображення. Без жодного з них на вибраному кольорі видно першу літеру.",
         "iconTypeError": "Виберіть зображення PNG, JPEG або WebP.",
         "iconReadError": "Не вдалося прочитати зображення.",
         "iconTooLarge": "Зображення завелике.",
@@ -2947,7 +2985,9 @@
         "saved": "Швидке посилання збережено",
         "deleted": "Швидке посилання видалено",
         "loadError": "Не вдалося завантажити швидкі посилання.",
-        "orderError": "Не вдалося зберегти порядок."
+        "orderError": "Не вдалося зберегти порядок.",
+        "iconSymbol": "Вибрати піктограму",
+        "iconChoose": "Вибрати піктограму або зображення"
     },
     "housekeeping": {
         "title": "Прибирання",
@@ -3534,7 +3574,8 @@
         "completed": "Завершено",
         "completedOn": "Завершено {{date}}",
         "completedToast": "Підписку завершено.",
-        "endsAfter": "Залишилось {{count}} платежів"
+        "endsAfter": "Залишилось {{count}} платежів",
+        "logoTypeError": "Використайте зображення PNG, JPEG, WebP або SVG."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "Фото все ще завелике після зміни розміру."
     },
     "documentAttach": {
         "label": "Вкладення",
@@ -4435,5 +4477,90 @@
         "recipes": "Рецепт",
         "shopping": "Товар",
         "splitExpenses": "Витрата"
+    },
+    "iconPicker": {
+        "title": "Вибрати піктограму",
+        "searchLabel": "Пошук піктограми",
+        "searchPlaceholder": "Шукайте англійською, напр. film",
+        "resultsLabel": "Піктограми",
+        "noResults": "Піктограму не знайдено.",
+        "clear": "Без піктограми",
+        "unavailable": "Піктограми зараз недоступні."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

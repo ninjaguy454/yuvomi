@@ -72,7 +72,11 @@ export function ensureModuleFolder(database, { key = null, name = '' } = {}, act
   // Anlegen in eine Constraint-Verletzung statt in den richtigen Ordner.)
   if (folderName) {
     const byName = database
-      .prepare('SELECT id, module_key FROM family_document_folders WHERE name = ? COLLATE NOCASE')
+      // Auf der Wurzelebene, aus demselben Grund wie in findOrCreateByName:
+      // seit dem Baum (v164) traegt ein Name allein keine Identitaet mehr.
+      // Ein Modulordner, der vor v157 ueber seinen Namen gefunden wurde, ist
+      // ohnehin ein Wurzelordner.
+      .prepare('SELECT id, module_key FROM family_document_folders WHERE name = ? COLLATE NOCASE AND parent_id IS NULL')
       .get(folderName);
     if (byName) {
       // Gehört er schon einem anderen Modul, bleibt er unangetastet: einen
@@ -92,9 +96,23 @@ export function ensureModuleFolder(database, { key = null, name = '' } = {}, act
   return result.lastInsertRowid;
 }
 
+/**
+ * Ordner mit diesem Namen auf der WURZELEBENE, sonst angelegt.
+ *
+ * `parent_id IS NULL` ist seit dem Baum (Migration v164) Pflicht und nicht
+ * Geschmack: ein Name ist nur noch unter seinen Geschwistern eindeutig. Ohne
+ * die Einschraenkung faende diese Abfrage ein "Rechnungen" irgendwo tief im
+ * Baum - welches, entschiede die Zeilenreihenfolge -, und ein Beleg landete
+ * je nach Datenbankzustand woanders.
+ *
+ * Auf der Wurzel und nicht anderswo, weil hier keine Angabe ueber einen
+ * Elternteil vorliegt: der Aufrufer schickt einen blossen Namen. Alle Ordner
+ * aus der Zeit vor v164 sind Wurzelordner, der bisherige Weg bleibt damit
+ * genau derselbe.
+ */
 function findOrCreateByName(database, folderName, actorId) {
   const existing = database
-    .prepare('SELECT id FROM family_document_folders WHERE name = ? COLLATE NOCASE')
+    .prepare('SELECT id FROM family_document_folders WHERE name = ? COLLATE NOCASE AND parent_id IS NULL')
     .get(folderName);
   if (existing) return existing.id;
   const result = database

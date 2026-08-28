@@ -1183,8 +1183,18 @@ das war der Bestand, und zwar viermal mit vier eigenen Antworten - `.cal-toolbar
 schrumpfte unter 640px vom beschrifteten Chip auf 28x28, `.birthdays-toolbar__import` zog nur
 seinen Innenabstand zusammen und blieb als 50x48-Oval in einer Form zurueck, die es sonst
 nirgends gibt, `.perm-seg__opt` stand als Icon-Segment auf 34x30, und allein
-`.documents-dms-link-btn` machte es richtig. Alle vier messen jetzt `--target-base`
+`.documents-dms-link-btn` machte es richtig. Alle messen `--target-base`
 (auf Touch `--target-lg`).
+
+**Der erste der vier ist seit 2026-08-28 GESCHICHTE, und sein Ende ist die staerkere Lesart
+derselben Regel.** `.cal-toolbar__mine-btn` und die vier Ebenen-Chips daneben sind aus dem
+Kalenderkopf verschwunden; ihre Schalter stehen jetzt beschriftet im Filter-Blatt
+(`openCalendarFilters`). Der Anlass war gemessen: die Regel hatte ihre Zielgroesse gerettet,
+aber nicht die Verstaendlichkeit - ein 48px-Kreis mit einem 8px-Punkt darin ist ein volles
+Ziel und sagt trotzdem nichts, und der Zustand, den er „ueber getoente Flaeche" tragen sollte,
+mass 1,085:1. **Die Regel sagt, was passiert, wenn ein Label faellt. Sie sagt nicht, dass es
+fallen muss** - und wo ein Blatt Platz hat, ist das Label die bessere Antwort als die beste
+Icon-Form.
 
 NICHT geregelt ist, WANN ein Label faellt: das entscheidet die Leiste, in der das Element
 steht, denn es haengt daran, was sonst noch in ihr liegt. Kalender und Geburtstage geben ihr
@@ -1301,9 +1311,11 @@ Zielgroessen-Regel halten (**Ebene 3**, `die Groesse des Icon-Knopfs gehoert der
 
 ### Chips
 - **Form:** Kapsel (`--radius-full`), Kante wie ein Bedienelement. Kalender-Layer-Chips
-  tragen die User-Farbe als Border mit ~60 % Deckung (>=3:1), nie als Textfarbe; nur der
-  Mir-zugewiesen-Chip traegt sein Label in der Layer-Farbe (AA-verifiziert),
-  Feiertags-Chips bleiben Sekundaertext. Ein aktiver Filter-Chip traegt den Ton als
+  tragen die User-Farbe als Border mit ~60 % Deckung (>=3:1), nie als Textfarbe; alle
+  Labels stehen inaktiv in Sekundaertext - auch der Mir-zugewiesen-Chip (Beschluss
+  2026-08-17, umgesetzt 2026-08-27: seine dauerhaft getoente Schrift las sich als
+  „Filter ist an"; die Farbe erscheint erst mit der Aktivierung). Ein aktiver
+  Filter-Chip traegt den Ton als
   getoente FLAECHE (`--tint-state` Grund, `--tint-hint` Kante, `--tint-ink` Tinte) - das
   ist die andere Haelfte der Regel „eine Behandlung pro Kontrolltyp" und ausdruecklich
   NICHT die Segment-Pille. Scrollende Chip-Reihen bekommen die Fade-Mask (siehe Layout).
@@ -1484,6 +1496,43 @@ faellt beim Scrollen auf den Inline-Schnitt (22px) zurueck; die Trennlinie ersch
 Andocken, davor steht der Kopf nahtlos auf dem Seitengrund. Ab 1024px regiert die Sidebar -
 dort bleibt es beim Inline-Titel, wie in Apples regulaerer Groessenklasse.
 
+**Die Werkzeugzeilen-Regel (Critique 2026-08-27, P1).** Die Werkzeug-Leiste eines Modulkopfs
+(Tab-Leiste, Ansichts-Segment) ist die BAR-ZEILE: eine eigene, volle Zeile unter Titel,
+Center und Aktionen (`.page-toolbar__bar`, order 4), auf ALLEN Viewports. Der Slot stand
+seit Runde 6 als Zusage im Shell-Kommentar („eine Tab-Leiste im Kopf ist eine eigene,
+horizontal scrollende Zeile") - die Regel darunter gab aber nur das Scrollen, nie die Zeile,
+und die Einzeilen-Doktrin aus #882 zwang jede Leiste in die Titelzeile, wo sie ihre eigenen
+Module versteckte. Gemessen bei 1280px: die Budget-Tabs hatten 138px clientWidth fuer 606px
+Inhalt (1 von 7 Tabs sichtbar - Abonnements, Darlehen und Statistik waren Geheimwissen),
+das Kalender-Segment 212px fuer 245px („Agenda" unsichtbar, das Monatslabel daneben auf
+seiner 7ch-Untergrenze ellipsiert); mobil zeigte Gesundheit 3 von 6, die Haushaltshilfe
+3 von 4 Tabs, und das einzige Existenzsignal war ein Fade. Drei Zusagen:
+
+1. **Die Titelzeile bleibt EINE Zeile** - #882 gilt unveraendert; die Bar-Zeile ist die eine
+   erlaubte zweite und bricht selbst nie um (sie scrollt). Pruefebene: Dokument (Sonde 19
+   zaehlt Titel- und Bar-Zeile getrennt; Sonde 15 erlaubte die Bar-Zeile der kompakten
+   Hoehe schon immer - neu ist, dass sie eine Eigenschaft des KOPFES ist, keiner
+   Groessenklasse).
+2. **Eine ueberlaufende Leiste zeigt ihre Fortsetzung**: Scroll-Fade (wireScrollFade; die
+   eps-Toleranz des Helfers steht seit 2026-08-27 auf 2px - bei 8px schluckte sie einen
+   echten 4px-Ueberlauf des uk-Kalender-Segments) plus ein Ende IN der Fade-Zone: die
+   scharfe Tab-Leisten-Maske (12px statt der 24px der Chip-Reihen, Masken-Familie in
+   filter-chip.css, gilt auch der Kuechen-Rail) schneidet das letzte Werkzeug sichtbar an -
+   auch eines, dessen Kante zufaellig buendig faellt. Der Befund ist LEERRAUM vor der
+   Endkante, der breiter ist als der Fade: dann faded die Maske Leere, und das naechste
+   Werkzeug ist unauffindbar (so verdeckte der breite Fade das „Vorrat 10"-Badge komplett).
+   Pruefebene: Dokument (Sonde 20: Fade verdrahtet UND Leerraum an der Endkante <= 12px).
+3. **Ein Scope-Schalter ist keine Werkzeug-Leiste.** Die zwei Pillen „Mein Budget /
+   Haushalt" beantworten „wessen Zahlen", nicht „welcher Bereich", und bleiben in der
+   Titelzeile - eine Zwei-Optionen-Wippe auf eigener Zeile waere Zeilenverbrauch ohne
+   Sichtbarkeitsgewinn.
+
+Traeger: die Klasse sitzt direkt an einer Pillen-Leiste (budget-tabs, sub-tabs-bar im Kopf,
+housekeeping-/rewards-tabs) oder als neutraler Wrapper um einen Segment-Traeger, dessen
+Well nicht die ganze Zeile faerben darf (Kalender-Views). Der fruehere Rail-Pad-
+Ausnahmeeintrag fuer Tab-Innenabstaende ist mit dem Subjekt-Scan des #577-Guards entfallen:
+ein Selektor, dessen letztes Compound nicht die Rail ist, polstert ein KIND der Rail.
+
 **Der Absender steht genau einmal, und die Shell setzt ihn.** Das Markensiegel des Moduls
 sitzt unmittelbar vor dem Seitentitel und wird von `wireCollapsingHeader` angehaengt - am
 selben Ort und aus demselben Grund wie der angedockte Titel: der Kopf ist die eine
@@ -1514,8 +1563,10 @@ liegt sie IM Kopf, und der traegt seinen Absender bereits.
 einer Zeile steht. Wo keine ist, traegt die Leiste ihre Linie durchgehend und markiert
 schlicht die Kopfkante. Das ist kein Sonderfall, sondern derselbe Satz von der anderen
 Seite: ohne wegscrollende Zeile gibt es kein Andocken zu zeigen. Gemessen trifft das zwei
-Lagen - die regulaere Groessenklasse ab 1024px (Inline-Titel, alles in EINER Zeile, alle 14
-Koepfe) und mobil die drei einzeiligen Kuechen-Koepfe (Einkauf, Rezepte, Vorrat), wo die
+Lagen - die regulaere Groessenklasse ab 1024px (Inline-Titel; seit der Werkzeugzeilen-Regel
+traegt ein Kopf dort zwar zusaetzlich seine Bar-Zeile, aber die gehoert nicht zur Lead-Zone -
+sie ist die Bedienzeile, die beim Andocken stuende, und Andocken bleibt ohnehin der kompakten
+Klasse) und mobil die drei einzeiligen Kuechen-Koepfe (Einkauf, Rezepte, Vorrat), wo die
 Kuechen-Leiste den Modulnamen traegt, also kein Seitentitel darueber steht und der Kopf
 allein seinen Center-Slot fuehrt. Der Essensplan ist unter den vieren die Ausnahme: seine
 Zeitraum-Navigation und seine Aktionen brauchen zwei Zeilen, also hat er eine Lead-Zone.
@@ -2251,6 +2302,10 @@ Angabe braeuchte einen zweiten Timer, nur damit sie sich selbst aktuell haelt.
   WERT (`trendValence()` in `utils/metric-card.js`). Neun Vitalkarten mit neun identischen
   Modul-Glyphen sagten neunmal, in welchem Modul man steht - das ist die Wetter-Glyphe vor
   v2.21.0, nur an einem geteilten Bauteil.
+- **Do** die Werkzeug-Leiste eines Modulkopfs in die Bar-Zeile legen
+  (`.page-toolbar__bar`): eine eigene, volle Zeile unter Titel, Center und Aktionen, auf
+  allen Viewports, scrollend mit Peek-Fade statt buendigem Ende (Werkzeugzeilen-Regel).
+  Ein Zwei-Optionen-Scope-Schalter bleibt in der Titelzeile.
 
 ### Don't:
 - **Don't** einen zweiten Buttonradius einfuehren; die Kapsel steht in der `.btn`-Basisregel
@@ -2311,6 +2366,10 @@ Angabe braeuchte einen zweiten Timer, nur damit sie sich selbst aktuell haelt.
   **Don't** dabei eine Bauart ueber `includes()` suchen: „jede Klasse mit `day` darin"
   faengt `birthday` mit, und die Geburtstagszeile ist der dokumentierte Gegenfall. Der
   Vergleich laeuft ueber NAMENSABSCHNITTE.
+- **Don't** eine Tab-Leiste in den Actions-Slot oder neben den Titel setzen; dort versteckt
+  sie ihre eigenen Module hinter einem Fade (Budget: 1 von 7 Tabs bei 1280px, „Agenda" des
+  Kalenders unsichtbar). Die Bar-Zeile ist ihr Ort, und wer sie verlaesst, macht Sonde 19
+  und 20 rot (Werkzeugzeilen-Regel).
 - **Don't** eine Regel in einen Media-Block schreiben, der VOR den Bauteilen steht, die sie
   ueberschreiben soll. Bei gleicher Spezifitaet gewinnt die spaetere Regel: `display: none`
   und `flex-direction: row` im 640px-Block von meals.css verloren gegen die

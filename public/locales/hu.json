@@ -59,7 +59,8 @@
             "private": "Csak én",
             "hint": "Meghatározza, ki láthatja ezt a bejegyzést a Yuvomiban.",
             "assigneesNobodyHint": "Hozzárendelés nélkül csak te látod ezt a bejegyzést."
-        }
+        },
+        "toShoppingListNamed": "{{title}} hozzáadása a bevásárlólistához"
     },
     "kitchen": {
         "noShoppingLists": "Még nincs bevásárlólista.",
@@ -112,7 +113,8 @@
         "health": "Egészség",
         "rewards": "Jutalmak",
         "pantry": "Készlet",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "Áttekintés",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "Ez és az összes következő",
         "deleteScopeSeries": "Teljes sorozat (minden hét)",
         "seriesEndedToast": "A sorozat ettől a dátumtól véget ér.",
-        "seriesDeletedToast": "Sorozat törölve."
+        "seriesDeletedToast": "Sorozat törölve.",
+        "deleteMealNamed": "{{title}} törlése",
+        "openRecipeNamed": "{{title}} receptjének megnyitása"
     },
     "calendar": {
         "searchOpen": "Események keresése",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "A teljes sorozatot érinti.",
         "detailWhen": "Időpont",
         "detailCalendar": "Naptár",
-        "colorCurrent": "Jelenlegi szín"
+        "colorCurrent": "Jelenlegi szín",
+        "deleteExternalSeriesTitle": "Törli az egész sorozatot?",
+        "deleteExternalSeriesDetail": "A(z) „{{title}}\" szinkronizált naptárból származik. Ott nem lehet egyes előfordulásokat kihagyni - a teljes sorozat törlődik, minden előfordulásával együtt.",
+        "deleteExternalSeriesConfirm": "Sorozat törlése",
+        "deleteBirthdayEventTitle": "Törli a születésnapi eseményt?",
+        "deleteBirthdayEventDetail": "A(z) „{{title}}\" egy születésnapi bejegyzés tükre. Az esemény eltűnik, de a következő szinkronizálás újra létrehozza - véglegesen csak magánál a születésnapnál távolítható el.",
+        "deleteBirthdayEventConfirm": "Mégis törlöm",
+        "deleteSubscribedSeriesTitle": "Törli a feliratkozott sorozatot?",
+        "deleteSubscribedSeriesDetail": "A(z) „{{title}}\" egy feliratkozott naptárból származik. A Yuvomi ott semmit sem tud törölni - a sorozat csak a következő szinkronizálásig tűnik el; végleges eltávolításhoz mondja le a feliratkozást.",
+        "deleteSubscribedSeriesConfirm": "Mégis törlöm",
+        "colorInherit": "A hozzárendelt személy színe",
+        "colorInheritHint": "Az esemény nem kap saját színt, hanem a hozzárendelt személyét veszi át. Ha senki sincs hozzárendelve, a naptár színe érvényes.",
+        "filters": "Szűrők",
+        "filtersOpen": "Szűrők megnyitása",
+        "filtersLayers": "Rétegek",
+        "filtersPeople": "Személyek",
+        "filtersActive": "{{count}} aktív szűrő",
+        "filtersActive_one": "1 aktív szűrő",
+        "filtersReset": "Összes szűrő törlése",
+        "filtersDisplay": "Megjelenítés"
     },
     "notes": {
         "title": "Tábla",
@@ -1708,6 +1731,7 @@
             "shopping": "Bevásárlás",
             "meals": "Ételek",
             "calendar": "Naptár",
+            "schedule": "Schedule",
             "notes": "Jegyzetek",
             "contacts": "Kapcsolatok",
             "budget": "Költségvetés",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} alkalom",
         "fromCompletionLabel": "Ismétlés a teljesítéstől",
         "fromCompletionHint": "Az időköz azon a napon indul, amikor kipipálod a feladatot, nem a határidőtől.",
-        "summaryFromCompletion": "a teljesítéstől"
+        "summaryFromCompletion": "a teljesítéstől",
+        "intervalHint": "A választás után az időköz szabadon beállítható - például minden 2. héten vagy minden 3. hónapban."
     },
     "reminders": {
         "sectionTitle": "Emlékeztetők",
@@ -2706,7 +2731,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "Natív",
         "sourceAll": "Összes",
-        "sourceFilterLabel": "Szűrés forrás szerint"
+        "sourceFilterLabel": "Szűrés forrás szerint",
+        "plannedThisWeek": "Erre a hétre betervezve"
     },
     "search": {
         "emptyHint": "Írj be legalább 2 karaktert a feladatok, események, jegyzetek, névjegyek, bevásárlás és egészség kereséséhez.",
@@ -2731,7 +2757,8 @@
         "done": "Kezdés",
         "skip": "Kihagyás",
         "step2BodyDesktop": "A bal oldali oldalsáv minden modulhoz elvezet - a naptártól és a feladatoktól a konyháig, a dokumentumokig és a beállításokig.",
-        "step3BodyDesktop": "A jobb alsó + gombbal bárhol új bejegyzést hozhatsz létre."
+        "step3BodyDesktop": "A jobb alsó + gombbal bárhol új bejegyzést hozhatsz létre.",
+        "stepProgress": "{{current}}. lépés a(z) {{total}}-ból"
     },
     "offline": {
         "banner": "Offline - újracsatlakozás…",
@@ -2774,7 +2801,7 @@
         "colorOption": "{{color}} szín",
         "iconPick": "Kép választása",
         "iconClear": "Kép eltávolítása",
-        "iconHint": "Kép nélkül a kezdőbetű látszik a választott színen.",
+        "iconHint": "Válasszon beépített ikont vagy saját képet. Egyik nélkül a kezdőbetű látszik a választott színen.",
         "iconTypeError": "Válasszon PNG-, JPEG- vagy WebP-képet.",
         "iconReadError": "A képet nem sikerült beolvasni.",
         "iconTooLarge": "A kép túl nagy.",
@@ -2790,7 +2817,9 @@
         "saved": "Gyorslink mentve",
         "deleted": "Gyorslink törölve",
         "loadError": "A gyorslinkeket nem sikerült betölteni.",
-        "orderError": "A sorrendet nem sikerült menteni."
+        "orderError": "A sorrendet nem sikerült menteni.",
+        "iconSymbol": "Ikon választása",
+        "iconChoose": "Ikon vagy kép választása"
     },
     "emptyHint": {
         "tasks": "Érintse meg a + gombot az első feladat létrehozásához. Húzza a kártyát balra a kész állapothoz, jobbra a megtekintéshez.",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "Bizonylatok",
         "splitExpensesFolder": "Megosztott költségek",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "Feladatok"
+        "tasksFolder": "Feladatok",
+        "newSubfolder": "Új almappa",
+        "moveFolder": "Mappa áthelyezése",
+        "moveFolderTo": "„{{name}}\" áthelyezése ide",
+        "folderMovedToast": "Mappa áthelyezve",
+        "folderParentLabel": "Szülőmappa",
+        "folderRootLevel": "Legfelső szint",
+        "folderPathLabel": "Mappa útvonala",
+        "folderExpand": "„{{name}}\" kibontása",
+        "folderCollapse": "„{{name}}\" összecsukása",
+        "deleteFolderSubtreeDetail": "A benne lévő {{count}} almappa is törlődik. A dokumentumok megmaradnak, és elérhetők a mappa nélküli dokumentumok szűrőjével.",
+        "deleteFolderSubtreeDetail_one": "A benne lévő almappa is törlődik. A dokumentumok megmaradnak, és elérhetők a mappa nélküli dokumentumok szűrőjével."
     },
     "housekeeping": {
         "title": "Háztartás",
@@ -3534,7 +3574,8 @@
         "completed": "Befejezve",
         "completedOn": "Befejezve: {{date}}",
         "completedToast": "Előfizetés befejezve.",
-        "endsAfter": "Még {{count}} fizetés"
+        "endsAfter": "Még {{count}} fizetés",
+        "logoTypeError": "Használjon PNG, JPEG, WebP vagy SVG képet."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "A fotó még mindig túl nagy az átméretezés után."
     },
     "documentAttach": {
         "label": "Mellékletek",
@@ -4435,5 +4477,90 @@
         "recipes": "Recept",
         "shopping": "Elem",
         "splitExpenses": "Kiadás"
+    },
+    "iconPicker": {
+        "title": "Ikon választása",
+        "searchLabel": "Ikon keresése",
+        "searchPlaceholder": "Keressen angolul, pl. film",
+        "resultsLabel": "Ikonok",
+        "noResults": "Nincs találat.",
+        "clear": "Nincs ikon",
+        "unavailable": "Az ikonok jelenleg nem érhetők el."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

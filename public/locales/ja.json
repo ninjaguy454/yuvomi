@@ -59,7 +59,8 @@
             "private": "自分のみ",
             "hint": "この項目を Yuvomi 内で見られる人を設定します。",
             "assigneesNobodyHint": "誰も割り当てないと、この項目はあなたにしか表示されません。"
-        }
+        },
+        "toShoppingListNamed": "{{title}}を買い物リストへ追加"
     },
     "kitchen": {
         "noShoppingLists": "買い物リストがまだありません。",
@@ -112,7 +113,8 @@
         "health": "健康",
         "rewards": "ごほうび",
         "pantry": "在庫",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "ダッシュボード",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "この日以降のすべて",
         "deleteScopeSeries": "シリーズ全体（毎週）",
         "seriesEndedToast": "この日でシリーズを終了しました。",
-        "seriesDeletedToast": "シリーズを削除しました。"
+        "seriesDeletedToast": "シリーズを削除しました。",
+        "deleteMealNamed": "{{title}}を削除",
+        "openRecipeNamed": "{{title}}のレシピを開く"
     },
     "calendar": {
         "searchOpen": "予定を検索",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "シリーズ全体に影響します。",
         "detailWhen": "時間",
         "detailCalendar": "カレンダー",
-        "colorCurrent": "現在の色"
+        "colorCurrent": "現在の色",
+        "deleteExternalSeriesTitle": "シリーズ全体を削除しますか？",
+        "deleteExternalSeriesDetail": "「{{title}}」は同期されたカレンダーの予定です。そちらでは個々の予定だけを除外できないため、シリーズ全体がすべての繰り返しとともに削除されます。",
+        "deleteExternalSeriesConfirm": "シリーズを削除",
+        "deleteBirthdayEventTitle": "誕生日の予定を削除しますか？",
+        "deleteBirthdayEventDetail": "「{{title}}」は誕生日の登録を映したものです。予定は消えますが、次回の同期で再び作成されます。完全に削除するには誕生日の登録そのものを変更してください。",
+        "deleteBirthdayEventConfirm": "それでも削除",
+        "deleteSubscribedSeriesTitle": "購読カレンダーの繰り返しを削除しますか？",
+        "deleteSubscribedSeriesDetail": "「{{title}}」は購読中のカレンダーの予定です。Yuvomi はそちらの予定を削除できないため、次回の同期までしか消えません。完全に消すには購読を解除してください。",
+        "deleteSubscribedSeriesConfirm": "それでも削除",
+        "colorInherit": "担当者の色",
+        "colorInheritHint": "予定は独自の色を持たず、担当者の色を引き継ぎます。担当者がいない場合はカレンダーの色が適用されます。",
+        "filters": "フィルター",
+        "filtersOpen": "フィルターを開く",
+        "filtersLayers": "レイヤー",
+        "filtersPeople": "メンバー",
+        "filtersActive": "フィルター {{count}} 件が有効",
+        "filtersActive_one": "フィルター 1 件が有効",
+        "filtersReset": "すべてのフィルターを解除",
+        "filtersDisplay": "表示"
     },
     "notes": {
         "title": "メモボード",
@@ -1691,6 +1714,7 @@
             "shopping": "買い物",
             "meals": "食事",
             "calendar": "カレンダー",
+            "schedule": "Schedule",
             "notes": "メモ",
             "contacts": "連絡先",
             "budget": "家計",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}}回",
         "fromCompletionLabel": "完了日から繰り返す",
         "fromCompletionHint": "期限日ではなく、タスクを完了した日から間隔が始まります。",
-        "summaryFromCompletion": "完了日から"
+        "summaryFromCompletion": "完了日から",
+        "intervalHint": "選択したあとで間隔を自由に設定できます。2週間ごと、3ヶ月ごとなど。"
     },
     "recipes": {
         "mealTypeNone": "食事なし",
@@ -2628,7 +2653,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "ネイティブ",
         "sourceAll": "すべて",
-        "sourceFilterLabel": "ソースで絞り込み"
+        "sourceFilterLabel": "ソースで絞り込み",
+        "plannedThisWeek": "今週の予定あり"
     },
     "search": {
         "emptyHint": "2文字以上入力すると、タスク・予定・メモ・連絡先・買い物・健康を検索できます。",
@@ -2731,7 +2757,8 @@
         "done": "はじめる",
         "skip": "スキップ",
         "step2BodyDesktop": "左のサイドバーからすべてのモジュールに移動できます。カレンダーやタスクからキッチン、書類、設定まで。",
-        "step3BodyDesktop": "右下の＋ボタンでどこでも新しい項目を作成できます。"
+        "step3BodyDesktop": "右下の＋ボタンでどこでも新しい項目を作成できます。",
+        "stepProgress": "ステップ {{current}}/{{total}}"
     },
     "offline": {
         "banner": "オフライン - 再接続しています…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "領収書",
         "splitExpensesFolder": "共有費用",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "タスク"
+        "tasksFolder": "タスク",
+        "newSubfolder": "新しいサブフォルダー",
+        "moveFolder": "フォルダーを移動",
+        "moveFolderTo": "「{{name}}」の移動先",
+        "folderMovedToast": "フォルダーを移動しました",
+        "folderParentLabel": "親フォルダー",
+        "folderRootLevel": "最上位",
+        "folderPathLabel": "フォルダーのパス",
+        "folderExpand": "「{{name}}」を展開",
+        "folderCollapse": "「{{name}}」を折りたたむ",
+        "deleteFolderSubtreeDetail": "中にある{{count}}個のサブフォルダーも削除されます。文書は残り、フォルダーなしの文書のフィルターから見つけられます。",
+        "deleteFolderSubtreeDetail_one": "中にあるサブフォルダーも削除されます。文書は残り、フォルダーなしの文書のフィルターから見つけられます。"
     },
     "shortcuts": {
         "goKitchen": "キッチン",
@@ -2931,7 +2969,7 @@
         "colorOption": "色 {{color}}",
         "iconPick": "画像を選ぶ",
         "iconClear": "画像を外す",
-        "iconHint": "画像がない場合は、選んだ色の上に頭文字が表示されます。",
+        "iconHint": "内蔵アイコンか自分の画像を選べます。どちらもない場合は、選んだ色の上に頭文字が表示されます。",
         "iconTypeError": "PNG、JPEG、WebP の画像を選んでください。",
         "iconReadError": "画像を読み取れませんでした。",
         "iconTooLarge": "画像が大きすぎます。",
@@ -2947,7 +2985,9 @@
         "saved": "クイックリンクを保存しました",
         "deleted": "クイックリンクを削除しました",
         "loadError": "クイックリンクを読み込めませんでした。",
-        "orderError": "並び順を保存できませんでした。"
+        "orderError": "並び順を保存できませんでした。",
+        "iconSymbol": "アイコンを選ぶ",
+        "iconChoose": "アイコンまたは画像を選ぶ"
     },
     "housekeeping": {
         "title": "家事",
@@ -3534,7 +3574,8 @@
         "completed": "完了",
         "completedOn": "{{date}}に完了",
         "completedToast": "サブスクリプションが完了しました。",
-        "endsAfter": "残り{{count}}回の支払い"
+        "endsAfter": "残り{{count}}回の支払い",
+        "logoTypeError": "PNG、JPEG、WebP、SVG画像を使用してください。"
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "縮小後も写真が大きすぎます。"
     },
     "documentAttach": {
         "label": "添付",
@@ -4435,5 +4477,90 @@
         "recipes": "レシピ",
         "shopping": "商品",
         "splitExpenses": "支出"
+    },
+    "iconPicker": {
+        "title": "アイコンを選ぶ",
+        "searchLabel": "アイコンを検索",
+        "searchPlaceholder": "英語で検索します。例: film",
+        "resultsLabel": "アイコン",
+        "noResults": "アイコンが見つかりません。",
+        "clear": "アイコンなし",
+        "unavailable": "現在アイコンを利用できません。"
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

@@ -219,8 +219,11 @@ async function syncOne(sub) {
     db.get().transaction(() => {
       for (const ev of flatEvents) {
         try {
-          // Event-Eigenfarbe (RFC 7986) hat Vorrang, sonst die Abo-Farbe.
-          const color    = ev.color || sub.color;
+          // NUR die Eigenfarbe des Termins (RFC 7986 COLOR); die Abo-Farbe ist
+          // geerbt und gehoert nicht in die Eigenfarb-Spalte (#891), sonst
+          // verdraengt sie dauerhaft die Farbe der zugewiesenen Person. Der
+          // Lesepfad liefert sie als cal_color aus ics_subscriptions nach.
+          const color    = ev.color ?? null;
           const existing = findExisting.get(sub.id, ev.uid);
           if (existing) {
             // Dieselben Werte binden die SET-Liste und den Vergleich.
@@ -341,6 +344,11 @@ async function importToLocal(userId, { ics, url, color } = {}) {
   // Einzel-Vorkommen werden eigenständige Termine statt die Serie zu killen (#549).
   rawEvents = normalizeRecurrenceOverrides(rawEvents);
 
+  // HIER bleibt der Fallback bewusst stehen, anders als im Abo-Sync oben (#891).
+  // Ein einmaliger Import macht aus den Terminen LOKALE Termine ohne Quelle -
+  // sie haben danach keinen Kalender mehr, von dem sie eine Farbe erben koennten,
+  // und `color` ist der Wert, den der Nutzer fuer genau diesen Import angegeben
+  // hat. Das ist eine Wahl und gehoert deshalb in die Eigenfarb-Spalte.
   const fallbackColor = color || '#007AFF';
   const insert = db.get().prepare(`
     INSERT INTO calendar_events

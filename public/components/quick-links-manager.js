@@ -24,6 +24,7 @@ import { AVATAR_COLORS } from '/utils/color.js';
 import { prefersInkText } from '/utils/contrast.js';
 import { openModal, closeModal, confirmOverModal, reportFieldError, btnError } from '/components/modal.js';
 import { normalizeQuickLinkUrl, quickLinkHost } from '/utils/quick-link-url.js';
+import { iconElement } from '/utils/lucide-icons.js';
 import { makeSortable } from '/utils/sortable.js';
 
 /** Dieselben Werte wie in server/routes/quick-links.js. */
@@ -36,8 +37,6 @@ const VISIBILITY_VALUES = ['all', 'private'];
  * Leitung gehen.
  */
 const MAX_ICON_DATA_LENGTH = 128 * 1024;
-
-const ICON_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
 
 /**
  * Die Absage der Adressprüfung als Satz, den jemand lesen kann.
@@ -71,10 +70,44 @@ function monogram(name) {
   return (match ? match[0] : '?').toUpperCase();
 }
 
-function faceInner(iconData, name) {
-  return iconData
-    ? `<img src="${esc(iconData)}" alt="">`
-    : `<span class="quick-link-face__monogram">${esc(monogram(name))}</span>`;
+/**
+ * Das Gesicht einer Kachel - Bild, Symbol oder Buchstabe, in dieser Reihenfolge.
+ *
+ * WER EIN BILD HOCHGELADEN HAT, HAT DIE AUFWENDIGERE WAHL GETROFFEN, und sie
+ * gewinnt deshalb gegen ein Symbol, das daneben noch in der Zeile steht. Die
+ * Rangfolge steht hier und nicht im Schema (Migration v163): sie ist eine
+ * Anzeigefrage, und ein CHECK, der nur eine der beiden Spalten zuliesse, machte
+ * aus jedem Wechsel zwischen den Gesichtern zwei Schreibvorgänge statt einem.
+ *
+ * GIBT DOM UND KEINE ZEICHENKETTE. Das Symbol kommt als fertiges `<svg>` von
+ * `iconElement()`; als Markup zurückgegeben müsste es erst wieder geparst
+ * werden, und der Weg dorthin führte über `data-lucide` plus einen
+ * `createIcons()`-Lauf, der - anders als seine 213 Aufrufstellen glauben -
+ * kein Ausschnittsargument kennt und jedes Mal das ganze Dokument absucht.
+ *
+ * KENNT LUCIDE DEN NAMEN NICHT, GILT DER BUCHSTABE. Ein Symbolname steht in
+ * der Datenbank und überlebt ein Lucide-Update, das ihn umbenennt; die Kachel
+ * fällt dann auf ihr Ersatzgesicht zurück statt leer zu bleiben.
+ *
+ * @returns {Node}
+ */
+function faceInner(iconData, iconName, name) {
+  if (iconData) {
+    const img = document.createElement('img');
+    img.src = iconData;
+    img.alt = '';
+    return img;
+  }
+
+  if (iconName) {
+    const svg = iconElement(iconName);
+    if (svg) return svg;
+  }
+
+  const span = document.createElement('span');
+  span.className = 'quick-link-face__monogram';
+  span.textContent = monogram(name);
+  return span;
 }
 
 /**
@@ -88,26 +121,21 @@ function faceInk(color) {
 
 /**
  * Liest eine Bilddatei und lässt sie zuschneiden.
- * Nutzt denselben Zuschnitt-Dialog wie das Mitgliedsfoto - ein zweiter wäre
- * dieselbe Arbeit mit einer zweiten Bedienung.
+ * Derselbe Weg wie beim Mitgliedsfoto (#901) - hier nur mit der engeren
+ * Obergrenze einer Kachel und dem eigenen Vokabular: was hier gewählt wird,
+ * ist ein Symbol und kein Profilbild.
  * @returns {Promise<string|undefined>} Data-URL, oder undefined bei Abbruch
  */
 async function readIconAsDataUrl(file) {
-  if (!file) return undefined;
-  if (!ICON_TYPES.includes(file.type)) throw new Error(t('quickLinks.iconTypeError'));
-
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error(t('quickLinks.iconReadError')));
-    reader.readAsDataURL(file);
+  const { pickCroppedImage } = await import('/utils/avatar-crop.js');
+  return pickCroppedImage(file, {
+    maxDataLength: MAX_ICON_DATA_LENGTH,
+    messageKeys: {
+      type:         'quickLinks.iconTypeError',
+      read:         'quickLinks.iconReadError',
+      dataTooLarge: 'quickLinks.iconTooLarge',
+    },
   });
-
-  const { openCropDialog } = await import('/utils/avatar-crop.js');
-  const cropped = await openCropDialog(dataUrl);
-  if (cropped === null) return undefined;
-  if (cropped.length > MAX_ICON_DATA_LENGTH) throw new Error(t('quickLinks.iconTooLarge'));
-  return cropped;
 }
 
 // --------------------------------------------------------
@@ -127,15 +155,16 @@ function formHtml(state, isEdit) {
       <div class="quick-link-form__face">
         <button type="button" class="quick-link-face quick-link-face--lg${faceInk(state.color)}" id="quick-link-icon-trigger"
                 style="--quick-link-color:${esc(state.color)}"
-                aria-label="${esc(t('quickLinks.iconPick'))}">
-          ${faceInner(state.iconData, state.name)}
-        </button>
+                aria-label="${esc(t('quickLinks.iconChoose'))}"></button>
         <div class="quick-link-form__face-actions">
+          <button type="button" class="btn btn--secondary btn--sm" id="quick-link-icon-symbol">
+            ${esc(t('quickLinks.iconSymbol'))}
+          </button>
           <button type="button" class="btn btn--secondary btn--sm" id="quick-link-icon-pick">
             ${esc(t('quickLinks.iconPick'))}
           </button>
           <button type="button" class="btn btn--ghost btn--sm" id="quick-link-icon-clear"
-                  ${state.iconData ? '' : 'hidden'}>
+                  ${state.iconData || state.iconName ? '' : 'hidden'}>
             ${esc(t('quickLinks.iconClear'))}
           </button>
         </div>
@@ -190,6 +219,7 @@ function openQuickLinkForm(link, onDone) {
     name: link?.name ?? '',
     url: link?.url ?? '',
     iconData: link?.icon_data ?? null,
+    iconName: link?.icon_name ?? null,
     color: link?.color ?? TILE_COLORS[0],
     visibility: VISIBILITY_VALUES.includes(link?.visibility) ? link.visibility : 'all',
   };
@@ -207,21 +237,41 @@ function openQuickLinkForm(link, onDone) {
       const repaintFace = () => {
         face.style.setProperty('--quick-link-color', state.color);
         face.classList.toggle('quick-link-face--ink', prefersInkText(state.color));
-        face.replaceChildren();
-        face.insertAdjacentHTML('afterbegin', faceInner(state.iconData, state.name));
-        clearBtn.hidden = !state.iconData;
+        face.replaceChildren(faceInner(state.iconData, state.iconName, state.name));
+        clearBtn.hidden = !state.iconData && !state.iconName;
       };
+
+      repaintFace();
 
       // Der Buchstabe folgt dem Namen beim Tippen: die Vorschau ist die Kachel,
       // die gleich auf der Übersicht steht, und nicht ihr Platzhalter.
       nameInput.addEventListener('input', (e) => {
         state.name = e.target.value;
-        if (!state.iconData) repaintFace();
+        if (!state.iconData && !state.iconName) repaintFace();
       });
 
-      [face, panel.querySelector('#quick-link-icon-pick')].forEach((el) => {
-        el.addEventListener('click', () => fileInput.click());
+      /* DAS GESICHT SELBST FUEHRT ZUM SYMBOL, NICHT ZUM DATEIDIALOG.
+       *
+       * Vorher war es der Bild-Upload, weil es nur den gab. Jetzt gibt es zwei
+       * Wege, und der Griff auf die Vorschau soll den nehmen, der nichts
+       * kostet: kein Dateibrowser, kein Zuschnitt, kein Bild, das irgendwo
+       * gesucht werden muss. Wer ein eigenes Bild will, sagt das ausdrücklich. */
+      const openSymbolPicker = async () => {
+        const { openIconPicker } = await import('/components/icon-picker.js');
+        const chosen = await openIconPicker(state.iconName);
+        if (chosen === undefined) return;
+        state.iconName = chosen;
+        // Ein gewähltes Symbol setzt das Bild ab: sonst gewänne das Bild in
+        // der Anzeige (siehe faceInner), und die Wahl bliebe folgenlos.
+        if (chosen) state.iconData = null;
+        repaintFace();
+      };
+
+      [face, panel.querySelector('#quick-link-icon-symbol')].forEach((el) => {
+        el.addEventListener('click', openSymbolPicker);
       });
+
+      panel.querySelector('#quick-link-icon-pick').addEventListener('click', () => fileInput.click());
 
       fileInput.addEventListener('change', async () => {
         const file = fileInput.files?.[0];
@@ -230,6 +280,9 @@ function openQuickLinkForm(link, onDone) {
           const data = await readIconAsDataUrl(file);
           if (data === undefined) return;
           state.iconData = data;
+          // Umgekehrt genauso: ein hochgeladenes Bild ersetzt das Symbol,
+          // statt es unsichtbar in der Zeile stehen zu lassen.
+          state.iconName = null;
           repaintFace();
         } catch (err) {
           window.yuvomi?.showToast(err.message, 'danger');
@@ -238,6 +291,7 @@ function openQuickLinkForm(link, onDone) {
 
       clearBtn.addEventListener('click', () => {
         state.iconData = null;
+        state.iconName = null;
         repaintFace();
       });
 
@@ -310,6 +364,7 @@ function openQuickLinkForm(link, onDone) {
           name,
           url: parsed.url,
           icon_data: state.iconData,
+          icon_name: state.iconName,
           color: state.color,
           visibility: panel.querySelector('#quick-link-visibility').value,
         };
@@ -338,6 +393,23 @@ function openQuickLinkForm(link, onDone) {
 // Übersicht der Kacheln
 // --------------------------------------------------------
 
+/**
+ * Hängt die Gesichter in die eben gezeichneten Zeilen.
+ *
+ * DIE ZEILEN SIND MARKUP, DAS GESICHT IST DOM - deshalb der Nachlauf. Die
+ * Liste als Zeichenkette zu bauen ist hier die richtige Form (sie ist statisch
+ * und wird am Stück ersetzt); das Symbol darin kommt aber als fertiges `<svg>`
+ * aus dem Vorrat und nicht als Markup, das erneut geparst werden müsste. Die
+ * Zeile trägt ihre Angaben so lange in `data-`-Attributen mit sich.
+ */
+function paintFaces(scope, items) {
+  const byId = new Map(items.map((s) => [String(s.id), s]));
+  scope.querySelectorAll('.quick-link-manage-row [data-face]').forEach((face) => {
+    const item = byId.get(face.closest('.quick-link-manage-row')?.dataset.id);
+    if (item) face.replaceChildren(faceInner(item.icon_data, item.icon_name, item.name));
+  });
+}
+
 function listRowHtml(s, canEdit) {
   const host = quickLinkHost(s.url);
   return `
@@ -345,7 +417,7 @@ function listRowHtml(s, canEdit) {
       <span class="quick-link-manage-row__handle" data-sortable-handle aria-hidden="true">
         <i data-lucide="grip-vertical"></i>
       </span>
-      <span class="quick-link-face${faceInk(s.color || TILE_COLORS[0])}" style="--quick-link-color:${esc(s.color || TILE_COLORS[0])}">${faceInner(s.icon_data, s.name)}</span>
+      <span class="quick-link-face${faceInk(s.color || TILE_COLORS[0])}" style="--quick-link-color:${esc(s.color || TILE_COLORS[0])}" data-face></span>
       <span class="quick-link-manage-row__body">
         <span class="quick-link-manage-row__name">${esc(s.name)}</span>
         <span class="quick-link-manage-row__host">${esc(host)}</span>
@@ -402,6 +474,7 @@ export async function openQuickLinksManager({ onChange = () => {} } = {}) {
         <button type="button" class="btn btn--secondary" id="quick-link-manage-close">${esc(t('common.close'))}</button>
       </div>`,
     onSave(panel) {
+      paintFaces(panel, items);
       panel.querySelector('#quick-link-manage-close').addEventListener('click', () => closeModal({ force: true }));
       panel.querySelector('#quick-link-add').addEventListener('click', () => openQuickLinkForm(null, reload));
 

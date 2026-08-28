@@ -26,6 +26,8 @@ import { decodeHtmlEntities } from '../utils/html-entities.js';
 import * as outbound from './calendar-outbound.js';
 import { processPendingDeletions, processPendingUpdates, flushAccount } from './caldav-outbound.js';
 import { rruleLine } from './recurrence.js';
+import { createCalDAVClient } from '../utils/caldav-client.js';
+import { nearestIcalColorName } from '../utils/ical-color.js';
 
 const APPLE_COLOR = '#FC3C44';
 
@@ -151,13 +153,7 @@ async function testConnection() {
   const creds = getCredentials();
   if (!creds) throw new Error('[Apple] No credentials configured.');
 
-  const { createDAVClient } = await import('tsdav');
-  const client = await createDAVClient({
-    serverUrl:          creds.url,
-    credentials:        { username: creds.username, password: creds.password },
-    authMethod:         'Basic',
-    defaultAccountType: 'caldav',
-  });
+  const client = await createClient(creds);
 
   const calendars = await client.fetchCalendars();
   if (!calendars.length) throw new Error('[Apple] Connected, but no calendars found.');
@@ -208,6 +204,11 @@ function buildICS(event) {
 
   if (event.description) lines.push(`DESCRIPTION:${escapeICS(event.description)}`);
   if (event.location)    lines.push(`LOCATION:${escapeICS(event.location)}`);
+  // Eigenfarbe als CSS3-Name (RFC 7986, #897). Ein Termin ohne eigene Farbe
+  // bekommt keine Zeile und erbt beim Anbieter die des Kalenders.
+  const colorName = nearestIcalColorName(event.color);
+  if (colorName) lines.push(`COLOR:${colorName}`);
+
   // Beide Schreibweisen kommen vor: eingelesene Serien tragen die volle
   // ICS-Zeile, lokal angelegte nur den Regelkörper (#756). Roh übernommen ergab
   // letzteres eine Zeile ohne Property-Namen - ein VEVENT, das kein Server als
@@ -242,15 +243,14 @@ function unescapeICS(str) {
  * Inbound:  iCloud → lokale DB (Upsert via external_calendar_id = UID)
  * Outbound: lokale Termine (external_source='local', external_calendar_id IS NULL) → iCloud
  */
-/** tsdav ist eine optionale Abhängigkeit - dynamischer Import für graceful degradation. */
+/**
+ * tsdav ist eine optionale Abhängigkeit - `createCalDAVClient` importiert sie
+ * dynamisch (graceful degradation) und legt zugleich den `urlFilter` für
+ * Kalenderobjekte an, ohne den tsdav Objekte ohne `.ics`-Namen still
+ * verschluckt (#883).
+ */
 async function createClient(creds) {
-  const { createDAVClient } = await import('tsdav');
-  return createDAVClient({
-    serverUrl:          creds.url,
-    credentials:        { username: creds.username, password: creds.password },
-    authMethod:         'Basic',
-    defaultAccountType: 'caldav',
-  });
+  return createCalDAVClient({ caldav_url: creds.url, username: creds.username, password: creds.password });
 }
 
 /**
@@ -366,8 +366,12 @@ async function runSync() {
 
     for (const obj of calObjects) {
       // RECURRENCE-ID-Overrides zusammenführen, sonst überschreibt ein geändertes
-      // Einzel-Vorkommen die Serie derselben UID (#549).
-      const parsed = normalizeRecurrenceOverrides(parseICS(obj.data || ''));
+      // Einzel-Vorkommen die Serie derselben UID (#549). Was der Parser verwirft,
+      // wird benannt statt still übergangen (#883).
+      const parsed = normalizeRecurrenceOverrides(parseICS(obj.data || '', {
+        onSkip: ({ uid, reason }) =>
+          log.warn(`Skipped VEVENT (${reason}) uid=${uid ?? '(none)'} at ${obj.url ?? '(unknown URL)'}`),
+      }));
       for (const ev of parsed) {
         try {
           calendarUids.add(ev.uid);
@@ -379,8 +383,11 @@ async function runSync() {
               url: obj.url, etag: obj.etag, data: obj.data, calendarUrl: cal.url,
             });
           }
-          // Event-Eigenfarbe (RFC 7986) hat Vorrang, sonst Kalenderfarbe.
-          const evColor = ev.color || calColor;
+          // NUR die Eigenfarbe des Termins (RFC 7986 COLOR); die Kalenderfarbe
+          // ist geerbt und gehoert nicht in die Eigenfarb-Spalte (#891), sonst
+          // verdraengt sie dauerhaft die Farbe der zugewiesenen Person. Der
+          // Lesepfad holt sie als cal_color ueber calendar_ref_id.
+          const evColor = ev.color ?? null;
 
           // Vom Nutzer gelöscht und noch nicht auf dem Server: nicht wieder
           // anlegen, sonst kehrt der Termin bei jedem Sync zurück (#593).
@@ -397,12 +404,16 @@ async function runSync() {
           let eventId;
           if (existing) {
             // color nur überschreiben, solange der Nutzer nicht lokal umgefärbt
-            // hat (user_modified = 0); Titel/Zeit bleiben remote-geführt.
+            // hat (color_modified = 0); Titel/Zeit bleiben remote-geführt.
+            //
+            // Nicht `user_modified` (#899): das wird bei jeder Bearbeitung
+            // gesetzt, eine Titeländerung hätte die Farbspalte also dauerhaft
+            // eingefroren und eine Umfärbung auf dem Server nie mehr erreicht.
             db.get().prepare(`
               UPDATE calendar_events
               SET title = ?, description = ?, start_datetime = ?, end_datetime = ?,
                   all_day = ?, location = ?, recurrence_rule = ?, tzid = ?,
-                  color = CASE WHEN user_modified = 0 THEN ? ELSE color END,
+                  color = CASE WHEN color_modified = 0 THEN ? ELSE color END,
                   calendar_ref_id = ?,
                   external_object_url = COALESCE(?, external_object_url)
               WHERE id = ?
@@ -507,10 +518,15 @@ async function runSync() {
         'apple', defaultCal.url, defaultCal.displayName || 'Apple Calendar',
         normalizeCalColor(defaultCal.calendarColor) || APPLE_COLOR
       );
+      // `color_modified` mit hoch: die gerade hinausgegangene Farbe ist unsere.
+      // Der CSS3-Name ist eine verlustbehaftete Abbildung des Hex-Werts - ohne
+      // das Flag holte der nächste Inbound-Lauf ihn zurück und ersetzte den
+      // exakten Wert durch den gerundeten (#899).
       db.get().prepare(`
         UPDATE calendar_events
         SET external_calendar_id = ?, external_source = 'apple',
-            external_object_url = ?, calendar_ref_id = ?
+            external_object_url = ?, calendar_ref_id = ?,
+            color_modified = CASE WHEN color IS NOT NULL THEN 1 ELSE color_modified END
         WHERE id = ?
       `).run(uid, objectUrl, calRefId, event.id);
     } catch (err) {
@@ -527,3 +543,8 @@ async function runSync() {
 
 export { sync, flushOutbound, getStatus, saveCredentials, clearCredentials,
          clearMirroredEvents, testConnection };
+
+// Nur fuer Tests: der ICS-Builder ist der einzige Weg, auf dem ein rein lokaler
+// Termin zum Anbieter kommt, und der Sync-Pfad drumherum ist zu gross, um ihn
+// dafuer nachzustellen.
+export const __test = { buildICS };

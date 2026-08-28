@@ -82,6 +82,43 @@ function iconData(value) {
 }
 
 /**
+ * Der Name eines eingebauten Symbols (#873).
+ *
+ * DIE FORM IST DIE GRENZE, NICHT EINE NAMENSLISTE. Was hier durchkommt, landet
+ * als `data-lucide` an einem Element; kennt Lucide den Namen nicht, bleibt das
+ * Element leer und die Kachel zeigt ihren Buchstaben. Ein Tippfehler ist damit
+ * folgenlos, und der Server muss den Vorrat nicht kennen - er kennt nur die
+ * Zeichen, aus denen ein Lucide-Name bestehen darf.
+ *
+ * DAS IST TROTZDEM EINE SICHERHEITSPRUEFUNG und nicht nur Ordnung: Kleinbuchstaben,
+ * Ziffern und Bindestriche schliessen alles aus, was aus einem Attributwert
+ * ausbrechen koennte. Die Ausgabe entkommt zusaetzlich mit esc() - beides,
+ * weil diese Zeichenkette in genau der Art von Kontext landet, in dem eine
+ * einzelne Schutzschicht historisch reisst.
+ */
+const ICON_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/** Lucides laengster Name liegt bei 34 Zeichen; 48 laesst Luft nach oben. */
+const MAX_ICON_NAME_LENGTH = 48;
+
+/**
+ * Prüft den Namen eines eingebauten Symbols.
+ * @param {unknown} value
+ * @returns {{ value: string|null, error: string|null }}
+ */
+function iconName(value) {
+  if (value === undefined || value === null || value === '') return { value: null, error: null };
+  if (typeof value !== 'string') return { value: null, error: 'Icon name must be a string.' };
+  const trimmed = value.trim();
+  if (!trimmed) return { value: null, error: null };
+  if (trimmed.length > MAX_ICON_NAME_LENGTH) return { value: null, error: 'Icon name is too long.' };
+  if (!ICON_NAME_RE.test(trimmed)) {
+    return { value: null, error: 'Icon name must contain only lowercase letters, digits, and hyphens.' };
+  }
+  return { value: trimmed, error: null };
+}
+
+/**
  * WHERE-Fragment: was diese Person sehen darf.
  * Geteilte Kacheln sehen alle; private nur ihre Urheberin - auch Admins nicht,
  * wie überall sonst in dieser App (vgl. services/visibility.js).
@@ -89,7 +126,7 @@ function iconData(value) {
 const VISIBLE_WHERE = "(q.visibility = 'all' OR q.created_by = @me)";
 
 const SELECT_COLUMNS = `
-  q.id, q.name, q.url, q.icon_data, q.color, q.visibility,
+  q.id, q.name, q.url, q.icon_data, q.icon_name, q.color, q.visibility,
   q.created_by, q.position, q.created_at, q.updated_at`;
 
 /**
@@ -173,7 +210,7 @@ router.get('/', (req, res) => {
 
 /**
  * POST /api/v1/quick-links
- * Body: { name, url, icon_data?, color?, visibility? }
+ * Body: { name, url, icon_data?, icon_name?, color?, visibility? }
  * Response: { data: QuickLink }
  */
 router.post('/', (req, res) => {
@@ -182,7 +219,8 @@ router.post('/', (req, res) => {
     const vName  = str(req.body.name, 'Name', { max: MAX_SHORT });
     const vColor = color(req.body.color || null, 'Color');
     const vIcon  = iconData(req.body.icon_data);
-    const errors = collectErrors([vName, vColor, vIcon]);
+    const vGlyph = iconName(req.body.icon_name);
+    const errors = collectErrors([vName, vColor, vIcon, vGlyph]);
 
     const parsedUrl = normalizeQuickLinkUrl(req.body.url);
     if (!parsedUrl.ok) errors.push(urlErrorMessage(parsedUrl.reason));
@@ -202,9 +240,9 @@ router.post('/', (req, res) => {
     const next = db.get().prepare('SELECT COALESCE(MAX(position), -1) + 1 AS pos FROM quick_links').get().pos;
 
     const result = db.get().prepare(`
-      INSERT INTO quick_links (name, url, icon_data, color, visibility, created_by, position)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).run(vName.value, parsedUrl.url, vIcon.value, vColor.value, visibility, me, next);
+      INSERT INTO quick_links (name, url, icon_data, icon_name, color, visibility, created_by, position)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(vName.value, parsedUrl.url, vIcon.value, vGlyph.value, vColor.value, visibility, me, next);
 
     const row = db.get().prepare(`SELECT ${SELECT_COLUMNS} FROM quick_links q WHERE q.id = ?`)
       .get(result.lastInsertRowid);
@@ -249,7 +287,7 @@ router.put('/order', (req, res) => {
 
 /**
  * PUT /api/v1/quick-links/:id
- * Body: { name?, url?, icon_data?, color?, visibility? }
+ * Body: { name?, url?, icon_data?, icon_name?, color?, visibility? }
  * Response: { data: QuickLink }
  */
 router.put('/:id', (req, res) => {
@@ -266,7 +304,8 @@ router.put('/:id', (req, res) => {
     const vName  = req.body.name !== undefined ? str(req.body.name, 'Name', { max: MAX_SHORT }) : { value: row.name, error: null };
     const vColor = req.body.color !== undefined ? color(req.body.color || null, 'Color') : { value: row.color, error: null };
     const vIcon  = req.body.icon_data !== undefined ? iconData(req.body.icon_data) : { value: row.icon_data, error: null };
-    const errors = collectErrors([vName, vColor, vIcon]);
+    const vGlyph = req.body.icon_name !== undefined ? iconName(req.body.icon_name) : { value: row.icon_name, error: null };
+    const errors = collectErrors([vName, vColor, vIcon, vGlyph]);
 
     let url = row.url;
     if (req.body.url !== undefined) {
@@ -282,10 +321,10 @@ router.put('/:id', (req, res) => {
 
     db.get().prepare(`
       UPDATE quick_links
-      SET name = ?, url = ?, icon_data = ?, color = ?, visibility = ?,
+      SET name = ?, url = ?, icon_data = ?, icon_name = ?, color = ?, visibility = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
-    `).run(vName.value, url, vIcon.value, vColor.value, visibility, id);
+    `).run(vName.value, url, vIcon.value, vGlyph.value, vColor.value, visibility, id);
 
     res.json({ data: db.get().prepare(`SELECT ${SELECT_COLUMNS} FROM quick_links q WHERE q.id = ?`).get(id) });
   } catch (err) {

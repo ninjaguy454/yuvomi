@@ -179,7 +179,7 @@ node tools/installer/install-server.js
 
 Open your browser and navigate to **http://localhost:8090**. The wizard detects your browser language (24 languages supported), verifies that a container engine is available (Docker with Compose v2, or Podman with `podman compose` / `podman-compose`), and reports an existing `.env` file as well as a running container before you start. When it finds one, the **simple setup is disabled** and you continue with the advanced setup: the simple path writes fixed values for host, port, `SESSION_SECURE` and `TRUST_PROXY`, which would silently downgrade an installation that already runs behind a reverse proxy. The wizard then guides you through:
 
-- Basics — domain/IP, HTTP host port (`OIKOS_HTTP_PORT`), timezone (`TZ`, which pre-sets the household zone; that one is changeable later under Settings → Personal → Appearance → Region), how Yuvomi is exposed (`SESSION_SECURE`, `TRUST_PROXY`) and the public address (`BASE_URL`). The exposure choice follows the host you enter, and the wizard rejects an `http://` address combined with enforced secure cookies — nobody could sign in to that combination
+- Basics — domain/IP, HTTP host port (`OIKOS_HTTP_PORT`), timezone (`TZ`, which pre-sets the household zone; that one is changeable later under Settings → Personal → Appearance → Region), how Yuvomi is exposed (`SESSION_SECURE`, `TRUST_PROXY`) and the public address (`BASE_URL`). The exposure choice follows the host you enter, and the wizard rejects an `http://` address combined with enforced secure cookies — nobody could sign in to that combination. A typed public address only counts once it names a full `http://` or `https://` origin; until then the wizard keeps the address it derives from host and port
 - Security key generation (`SESSION_SECRET`, `DB_ENCRYPTION_KEY`) — on a re-run, keys already present in your `.env` are kept rather than regenerated, so running the wizard again on a live installation cannot lock you out of your encrypted database
 - Optional integrations (weather, Google Calendar, Apple CalDAV)
 - Email/SMTP for the "forgot password" flow (`EMAIL_SMTP_*`, `EMAIL_FROM_*`)
@@ -239,9 +239,9 @@ docker compose up -d
 Docker pulls `ghcr.io/ulsklyc/yuvomi:latest` automatically. No build step, no Node.js installation needed.
 
 > **Pinning a version.** Every release is also published under immutable tags:
-> `2.45.0` (exact version), `2.44` (latest patch of that minor), plus a moving `main`
+> `2.51.0` (exact version), `2.51` (latest patch of that minor), plus a moving `main`
 > tag for the current development state. To pin production to a known-good release,
-> set `image: ghcr.io/ulsklyc/yuvomi:2.45.0` in your compose file and bump it
+> set `image: ghcr.io/ulsklyc/yuvomi:2.51.0` in your compose file and bump it
 > deliberately; `latest` always points at the newest release.
 
 Continue with [Step 4 — Verify](#4-verify-the-container-is-running).
@@ -287,7 +287,7 @@ docker compose logs -f
 You should see output like:
 
 ```
-yuvomi  | [Yuvomi] Server running on port 3000 | Version 2.45.0
+yuvomi  | [Yuvomi] Server running on port 3000 | Version 2.51.0
 yuvomi  | [Yuvomi] Environment: production
 yuvomi  | [Sync] Auto-sync active every 15 minutes.
 ```
@@ -1468,6 +1468,24 @@ own state on the next run, and re-creates it if you delete it there. To get rid 
 good, delete it in Yuvomi. Note also that disconnecting an account leaves everything already
 pushed behind in Outlook — clear those events in Yuvomi *before* disconnecting, or delete them by
 hand in Outlook afterwards.
+
+</details>
+
+<details>
+<summary>Single CalDAV events never show up, and nothing is logged</summary>
+
+Fixed in v2.47.0 (#883). Update and run a sync; the missing events arrive on the next pass.
+
+Before that, Yuvomi discarded any calendar object whose URL did not contain `.ics`. That extension
+is pure convention - RFC 4791 prescribes no name for the object resource, and a server is free to
+assign its own. Stalwart, for instance, does so for everything created over JMAP (`NZtPkIOMoK`),
+while objects written by a CalDAV `PUT` keep the client-chosen `<uid>.ics`. In the same calendar,
+part of the events synced and part did not - and because the discarded ones were never fetched, no
+log line could name them: the sync reported success with a plausible event count.
+
+If events are still missing after the update, the server log now names them. Anything the parser
+rejects is reported at warn level with its UID and the reason, so a report can point at a concrete
+event instead of an absence.
 
 </details>
 

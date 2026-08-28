@@ -1708,7 +1708,10 @@ function plannedOrigin() {
   // drei falsche Redirect-URIs und einen Oeffnen-Knopf auf localhost.
   const field = $('adv-base-url');
   const typed = field?.dataset.touched ? field.value.trim().replace(/\/+$/, '') : '';
-  if (typed) return typed;
+  // Ohne http(s)-Schema ist die Eingabe keine Origin: "yuvomi.example.com"
+  // ergaebe schemalose Redirect-URIs, eine kaputte BASE_URL in der .env und
+  // einen Oeffnen-Link, der jedes getippte Schema unbesehen uebernaehme.
+  if (typed.startsWith('http://') || typed.startsWith('https://')) return typed;
 
   // Host und Port aus den FELDERN, nicht aus S: S.host/S.port werden erst in
   // cfg-next gesetzt, die Vorbelegung laeuft aber waehrend der Eingabe auf

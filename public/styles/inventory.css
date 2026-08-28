@@ -464,6 +464,9 @@
 .inventory-booking-picker__role-footer {
   display: flex;
   justify-content: flex-end;
+  /* Umbruch statt Quetschen - Begruendung an `.modal-panel__footer`
+   * (layout.css, #872). */
+  flex-wrap: wrap;
   gap: var(--space-2);
 }
 

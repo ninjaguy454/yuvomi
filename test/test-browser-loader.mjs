@@ -96,6 +96,9 @@ const STUBS = {
     export const vibrate = () => {};
     export const wireScrollFade = () => ({ update: () => {}, destroy: () => {} });
     export const scheduleUndoableDelete = () => {};
+    // Im Test gibt es keine Animation, die ausspielen koennte - der Aufrufer
+    // awaitet das Ergebnis, also loest der Stub sofort auf.
+    export const animationSettled = () => Promise.resolve();
   `,
   '/utils/html.js': `
     export const esc = (value) => String(value ?? '')

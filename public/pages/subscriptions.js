@@ -19,6 +19,7 @@ import { todayKey } from '/utils/date.js';
 import { CURRENCY_CODES } from '/utils/currency-codes.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { formatMoney, amountPlaceholder, amountStep, applyAmountFormat, amountIsSavable, smallestUnitLabel } from '/utils/money.js';
+import { attachOverlay } from '/utils/overlay-history.js';
 
 let state = {
   subscriptions: [],
@@ -1093,13 +1094,22 @@ export function openSubscriptionModal(subscription = null) {
   });
 }
 
+/* Muss dem accept-Attribut des Logo-Felds entsprechen (test/test-image-picker.js
+ * hält beide deckungsgleich). Bewusst NICHT pickCroppedImage() (#901): ein Logo
+ * lebt von Transparenz und darf SVG sein - der Zuschnitt gibt immer ein
+ * 256-px-JPEG zurück und zerstörte beides. */
+const LOGO_ACCEPTED_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml'];
+
 async function fileToDataUrl(file) {
   if (!file) return null;
+  if (!LOGO_ACCEPTED_TYPES.includes(file.type)) throw new Error(t('subscriptions.logoTypeError'));
   if (file.size > 500000) throw new Error(t('subscriptions.logoTooLarge'));
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
-    reader.onerror = reject;
+    // Roh weitergereicht war das der ProgressEvent - `err.message` im Toast
+    // des Aufrufers zeigte dann `undefined`.
+    reader.onerror = () => reject(new Error(t('documents.fileReadError')));
     reader.readAsDataURL(file);
   });
 }
@@ -1234,6 +1244,8 @@ function openLogoPickerModal(panel, initialQuery, onSelect) {
   const input = overlay.querySelector('#subscription-logo-search-input');
   let options = [];
   const close = () => overlay.remove();
+  // Der Picker liegt ueber dem Abo-Formular; die Zurueck-Geste meint ihn (#871).
+  attachOverlay(overlay, close);
   const search = async () => {
     const query = input.value.trim();
     if (!query) return;

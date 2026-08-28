@@ -59,7 +59,8 @@
             "private": "केवल मैं",
             "hint": "नियंत्रित करता है कि Yuvomi में इस प्रविष्टि को कौन देख सकता है।",
             "assigneesNobodyHint": "किसी को असाइन न करने पर यह प्रविष्टि केवल आप देख सकते हैं।"
-        }
+        },
+        "toShoppingListNamed": "{{title}} खरीदारी सूची में जोड़ें"
     },
     "kitchen": {
         "noShoppingLists": "अभी कोई खरीद सूची नहीं है.",
@@ -112,7 +113,8 @@
         "health": "स्वास्थ्य",
         "rewards": "पुरस्कार",
         "pantry": "भंडार",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "dashboard": {
         "title": "डैशबोर्ड",
@@ -657,7 +659,9 @@
         "deleteScopeFuture": "यह और आगे के सभी",
         "deleteScopeSeries": "पूरी शृंखला (सभी सप्ताह)",
         "seriesEndedToast": "श्रृंखला इस तारीख से समाप्त कर दी गई।",
-        "seriesDeletedToast": "श्रृंखला हटाई गई।"
+        "seriesDeletedToast": "श्रृंखला हटाई गई।",
+        "deleteMealNamed": "{{title}} हटाएं",
+        "openRecipeNamed": "{{title}} की रेसिपी खोलें"
     },
     "calendar": {
         "searchOpen": "इवेंट खोजें",
@@ -884,7 +888,26 @@
         "recurringScopeHintSeries": "पूरी शृंखला को प्रभावित करता है।",
         "detailWhen": "समय",
         "detailCalendar": "कैलेंडर",
-        "colorCurrent": "वर्तमान रंग"
+        "colorCurrent": "वर्तमान रंग",
+        "deleteExternalSeriesTitle": "पूरी शृंखला हटाएँ?",
+        "deleteExternalSeriesDetail": "«{{title}}» एक सिंक किए गए कैलेंडर से आता है। वहाँ अलग-अलग घटनाओं को बाहर नहीं रखा जा सकता - पूरी शृंखला अपनी सभी घटनाओं सहित हट जाएगी।",
+        "deleteExternalSeriesConfirm": "शृंखला हटाएँ",
+        "deleteBirthdayEventTitle": "जन्मदिन इवेंट हटाएँ?",
+        "deleteBirthdayEventDetail": "«{{title}}» एक जन्मदिन प्रविष्टि का प्रतिबिंब है। इवेंट गायब हो जाएगा, लेकिन अगले सिंक में फिर बन जाएगा - इसे स्थायी रूप से केवल जन्मदिन से ही हटाया जा सकता है।",
+        "deleteBirthdayEventConfirm": "फिर भी हटाएँ",
+        "deleteSubscribedSeriesTitle": "सदस्यता वाली शृंखला हटाएँ?",
+        "deleteSubscribedSeriesDetail": "«{{title}}» एक सब्सक्राइब किए गए कैलेंडर से आता है। Yuvomi वहाँ कुछ नहीं हटा सकता - शृंखला केवल अगले सिंक तक गायब रहेगी; इसे स्थायी रूप से हटाने के लिए कैलेंडर की सदस्यता समाप्त करें।",
+        "deleteSubscribedSeriesConfirm": "फिर भी हटाएँ",
+        "colorInherit": "असाइन किए गए व्यक्ति का रंग",
+        "colorInheritHint": "कार्यक्रम को अपना कोई रंग नहीं मिलता और वह असाइन किए गए व्यक्ति का रंग ले लेता है। यदि कोई असाइन नहीं है, तो कैलेंडर का रंग लागू होता है।",
+        "filters": "फ़िल्टर",
+        "filtersOpen": "फ़िल्टर खोलें",
+        "filtersLayers": "परतें",
+        "filtersPeople": "लोग",
+        "filtersActive": "{{count}} फ़िल्टर सक्रिय",
+        "filtersActive_one": "1 फ़िल्टर सक्रिय",
+        "filtersReset": "सभी फ़िल्टर हटाएँ",
+        "filtersDisplay": "प्रदर्शन"
     },
     "notes": {
         "title": "नोट बोर्ड",
@@ -1691,6 +1714,7 @@
             "shopping": "खरीदारी",
             "meals": "भोजन",
             "calendar": "कैलेंडर",
+            "schedule": "Schedule",
             "notes": "नोट्स",
             "contacts": "संपर्क",
             "budget": "बजट",
@@ -2584,7 +2608,8 @@
         "summaryCount_one": "{{count}} पुनरावृत्ति",
         "fromCompletionLabel": "पूरा होने से दोहराएँ",
         "fromCompletionHint": "अंतराल उस दिन से शुरू होता है जिस दिन आप कार्य पूरा करते हैं, नियत तारीख से नहीं।",
-        "summaryFromCompletion": "पूरा होने से"
+        "summaryFromCompletion": "पूरा होने से",
+        "intervalHint": "चुनने के बाद अंतराल स्वतंत्र रूप से सेट किया जा सकता है, जैसे हर 2 सप्ताह या हर 3 माह।"
     },
     "recipes": {
         "mealTypeNone": "कोई भोजन नहीं",
@@ -2628,7 +2653,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "मूल",
         "sourceAll": "सभी",
-        "sourceFilterLabel": "स्रोत के अनुसार फ़िल्टर करें"
+        "sourceFilterLabel": "स्रोत के अनुसार फ़िल्टर करें",
+        "plannedThisWeek": "इस सप्ताह नियोजित"
     },
     "search": {
         "emptyHint": "कार्य, ईवेंट, नोट्स, संपर्क, खरीदारी और स्वास्थ्य में खोजने के लिए कम से कम 2 अक्षर लिखें।",
@@ -2731,7 +2757,8 @@
         "done": "शुरू करें",
         "skip": "छोड़ें",
         "step2BodyDesktop": "बाईं ओर का साइडबार आपको हर मॉड्यूल तक ले जाता है - कैलेंडर और कार्यों से लेकर रसोई, दस्तावेज़ और सेटिंग्स तक।",
-        "step3BodyDesktop": "निचले कोने का + बटन कहीं भी नई प्रविष्टि बनाता है।"
+        "step3BodyDesktop": "निचले कोने का + बटन कहीं भी नई प्रविष्टि बनाता है।",
+        "stepProgress": "चरण {{current}} / {{total}}"
     },
     "offline": {
         "banner": "ऑफ़लाइन - फिर से कनेक्ट किया जा रहा है…",
@@ -2892,7 +2919,18 @@
         "budgetFolder": "रसीदें",
         "splitExpensesFolder": "साझा खर्च",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "कार्य"
+        "tasksFolder": "कार्य",
+        "newSubfolder": "नया उप-फ़ोल्डर",
+        "moveFolder": "फ़ोल्डर ले जाएँ",
+        "moveFolderTo": "„{{name}}\" को यहाँ ले जाएँ",
+        "folderMovedToast": "फ़ोल्डर ले जाया गया",
+        "folderParentLabel": "मूल फ़ोल्डर",
+        "folderRootLevel": "सबसे ऊपरी स्तर",
+        "folderPathLabel": "फ़ोल्डर पथ",
+        "folderExpand": "„{{name}}\" खोलें",
+        "folderCollapse": "„{{name}}\" बंद करें",
+        "deleteFolderSubtreeDetail": "इसमें मौजूद {{count}} उप-फ़ोल्डर भी हट जाएँगे। दस्तावेज़ बने रहते हैं और बिना फ़ोल्डर वाले दस्तावेज़ों के फ़िल्टर से मिल जाते हैं।",
+        "deleteFolderSubtreeDetail_one": "इसमें मौजूद उप-फ़ोल्डर भी हट जाएगा। दस्तावेज़ बने रहते हैं और बिना फ़ोल्डर वाले दस्तावेज़ों के फ़िल्टर से मिल जाते हैं।"
     },
     "shortcuts": {
         "goKitchen": "रसोई",
@@ -2931,7 +2969,7 @@
         "colorOption": "रंग {{color}}",
         "iconPick": "छवि चुनें",
         "iconClear": "छवि हटाएँ",
-        "iconHint": "छवि न हो तो चुने हुए रंग पर पहला अक्षर दिखता है।",
+        "iconHint": "कोई अंतर्निहित आइकन या अपनी छवि चुनें। दोनों न हों तो चुने हुए रंग पर पहला अक्षर दिखता है।",
         "iconTypeError": "कृपया PNG, JPEG या WebP छवि चुनें।",
         "iconReadError": "छवि पढ़ी नहीं जा सकी।",
         "iconTooLarge": "छवि बहुत बड़ी है।",
@@ -2947,7 +2985,9 @@
         "saved": "त्वरित लिंक सहेजा गया",
         "deleted": "त्वरित लिंक हटाया गया",
         "loadError": "त्वरित लिंक लोड नहीं हो सके।",
-        "orderError": "क्रम सहेजा नहीं जा सका।"
+        "orderError": "क्रम सहेजा नहीं जा सका।",
+        "iconSymbol": "आइकन चुनें",
+        "iconChoose": "आइकन या छवि चुनें"
     },
     "housekeeping": {
         "title": "गृहकार्य",
@@ -3534,7 +3574,8 @@
         "completed": "पूर्ण",
         "completedOn": "{{date}} को पूर्ण",
         "completedToast": "सदस्यता पूर्ण हुई।",
-        "endsAfter": "{{count}} भुगतान शेष"
+        "endsAfter": "{{count}} भुगतान शेष",
+        "logoTypeError": "PNG, JPEG, WebP या SVG चित्र इस्तेमाल करें।"
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "आकार बदलने के बाद भी फ़ोटो बहुत बड़ा है।"
     },
     "documentAttach": {
         "label": "अनुलग्नक",
@@ -4435,5 +4477,90 @@
         "recipes": "रेसिपी",
         "shopping": "आइटम",
         "splitExpenses": "व्यय"
+    },
+    "iconPicker": {
+        "title": "आइकन चुनें",
+        "searchLabel": "आइकन खोजें",
+        "searchPlaceholder": "अंग्रेज़ी में खोजें, जैसे film",
+        "resultsLabel": "आइकन",
+        "noResults": "कोई आइकन नहीं मिला।",
+        "clear": "कोई आइकन नहीं",
+        "unavailable": "आइकन अभी उपलब्ध नहीं हैं।"
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

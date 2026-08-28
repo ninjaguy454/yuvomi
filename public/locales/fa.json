@@ -59,7 +59,8 @@
             "private": "فقط من",
             "hint": "تعیین می‌کند چه کسی این مورد را در Yuvomi می‌بیند.",
             "assigneesNobodyHint": "بدون واگذاری، فقط خودت این مورد را می‌بینی."
-        }
+        },
+        "toShoppingListNamed": "افزودن {{title}} به فهرست خرید"
     },
     "kitchen": {
         "noShoppingLists": "هنوز فهرست خریدی وجود ندارد.",
@@ -112,7 +113,8 @@
         "health": "سلامت",
         "rewards": "پاداش‌ها",
         "pantry": "انبار",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "search": {
         "emptyHint": "برای جستجو در کارها، رویدادها، یادداشت‌ها، مخاطبین، خرید و سلامت دست‌کم ۲ نویسه بنویس.",
@@ -669,7 +671,9 @@
         "deleteScopeFuture": "این و همه موارد بعدی",
         "deleteScopeSeries": "کل مجموعه (همه هفته‌ها)",
         "seriesEndedToast": "سری از این تاریخ پایان یافت.",
-        "seriesDeletedToast": "سری حذف شد."
+        "seriesDeletedToast": "سری حذف شد.",
+        "deleteMealNamed": "حذف {{title}}",
+        "openRecipeNamed": "باز کردن دستور غذای {{title}}"
     },
     "calendar": {
         "searchOpen": "جستجوی رویدادها",
@@ -896,7 +900,26 @@
         "recurringScopeHintSeries": "کل مجموعه را تحت تأثیر قرار می‌دهد.",
         "detailWhen": "زمان",
         "detailCalendar": "تقویم",
-        "colorCurrent": "رنگ فعلی"
+        "colorCurrent": "رنگ فعلی",
+        "deleteExternalSeriesTitle": "کل مجموعه حذف شود؟",
+        "deleteExternalSeriesDetail": "«{{title}}» از یک تقویم همگام‌سازی‌شده می‌آید. رویدادهای منفرد را نمی‌توان در آنجا مستثنا کرد - کل مجموعه با همه تکرارهایش حذف می‌شود.",
+        "deleteExternalSeriesConfirm": "حذف مجموعه",
+        "deleteBirthdayEventTitle": "رویداد تولد حذف شود؟",
+        "deleteBirthdayEventDetail": "«{{title}}» بازتاب یک ورودی تولد است. رویداد ناپدید می‌شود، اما همگام‌سازی بعدی دوباره آن را می‌سازد - حذف دائمی فقط از طریق خود تولد ممکن است.",
+        "deleteBirthdayEventConfirm": "با این حال حذف شود",
+        "deleteSubscribedSeriesTitle": "مجموعه اشتراکی حذف شود؟",
+        "deleteSubscribedSeriesDetail": "«{{title}}» از یک تقویم اشتراکی می‌آید. Yuvomi نمی‌تواند چیزی را آنجا حذف کند - مجموعه فقط تا همگام‌سازی بعدی ناپدید می‌شود؛ برای حذف دائمی، اشتراک را لغو کنید.",
+        "deleteSubscribedSeriesConfirm": "با این حال حذف شود",
+        "colorInherit": "رنگ شخص واگذارشده",
+        "colorInheritHint": "رویداد رنگ مخصوص خود را نمی‌گیرد و رنگ شخصی را که به او واگذار شده است می‌پذیرد. اگر به کسی واگذار نشده باشد، رنگ تقویم اعمال می‌شود.",
+        "filters": "فیلترها",
+        "filtersOpen": "باز کردن فیلترها",
+        "filtersLayers": "لایه‌ها",
+        "filtersPeople": "افراد",
+        "filtersActive": "{{count}} فیلتر فعال",
+        "filtersActive_one": "۱ فیلتر فعال",
+        "filtersReset": "برداشتن همه فیلترها",
+        "filtersDisplay": "نمایش"
     },
     "notes": {
         "title": "یادداشت‌ها",
@@ -1738,6 +1761,7 @@
             "shopping": "خرید",
             "meals": "وعده‌های غذایی",
             "calendar": "تقویم",
+            "schedule": "Schedule",
             "notes": "یادداشت‌ها",
             "contacts": "مخاطبین",
             "budget": "بودجه",
@@ -2596,7 +2620,8 @@
         "summaryCount_one": "{{count}} رویداد",
         "fromCompletionLabel": "تکرار از روز انجام",
         "fromCompletionHint": "بازه از روزی آغاز می‌شود که کار را انجام‌شده علامت می‌زنید، نه از تاریخ سررسید.",
-        "summaryFromCompletion": "از روز انجام"
+        "summaryFromCompletion": "از روز انجام",
+        "intervalHint": "پس از انتخاب، بازه زمانی آزادانه قابل تنظیم است، مثلاً هر 2 هفته یا هر 3 ماه."
     },
     "reminders": {
         "sectionTitle": "یادآور",
@@ -2718,7 +2743,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "بومی",
         "sourceAll": "همه",
-        "sourceFilterLabel": "فیلتر بر اساس منبع"
+        "sourceFilterLabel": "فیلتر بر اساس منبع",
+        "plannedThisWeek": "برنامه‌ریزی‌شده برای این هفته"
     },
     "onboarding": {
         "step1Title": "به {{name}} خوش آمدید",
@@ -2731,7 +2757,8 @@
         "done": "شروع",
         "skip": "رد کردن",
         "step2BodyDesktop": "نوار کناری سمت چپ تو را به همه بخش‌ها می‌برد - از تقویم و وظایف تا آشپزخانه، اسناد و تنظیمات.",
-        "step3BodyDesktop": "با دکمه + در گوشه پایین در همه‌جا مورد تازه می‌سازی."
+        "step3BodyDesktop": "با دکمه + در گوشه پایین در همه‌جا مورد تازه می‌سازی.",
+        "stepProgress": "مرحله {{current}} از {{total}}"
     },
     "offline": {
         "banner": "آفلاین - در حال بازیابی اتصال…",
@@ -2786,7 +2813,7 @@
         "colorOption": "رنگ {{color}}",
         "iconPick": "انتخاب تصویر",
         "iconClear": "حذف تصویر",
-        "iconHint": "بدون تصویر، حرف نخست روی رنگ انتخابی می‌نشیند.",
+        "iconHint": "یک آیکون داخلی یا تصویر خودتان را انتخاب کنید. بدون هیچ‌کدام، حرف نخست روی رنگ انتخابی می‌نشیند.",
         "iconTypeError": "لطفاً تصویر PNG، JPEG یا WebP انتخاب کنید.",
         "iconReadError": "تصویر خوانده نشد.",
         "iconTooLarge": "تصویر بیش از حد بزرگ است.",
@@ -2802,7 +2829,9 @@
         "saved": "پیوند سریع ذخیره شد",
         "deleted": "پیوند سریع حذف شد",
         "loadError": "پیوندهای سریع بارگیری نشد.",
-        "orderError": "ترتیب ذخیره نشد."
+        "orderError": "ترتیب ذخیره نشد.",
+        "iconSymbol": "انتخاب آیکون",
+        "iconChoose": "انتخاب آیکون یا تصویر"
     },
     "documents": {
         "title": "اسناد",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "رسیدها",
         "splitExpensesFolder": "هزینه‌های مشترک",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "کارها"
+        "tasksFolder": "کارها",
+        "newSubfolder": "زیرپوشه جدید",
+        "moveFolder": "انتقال پوشه",
+        "moveFolderTo": "انتقال «{{name}}» به",
+        "folderMovedToast": "پوشه منتقل شد",
+        "folderParentLabel": "پوشه والد",
+        "folderRootLevel": "بالاترین سطح",
+        "folderPathLabel": "مسیر پوشه",
+        "folderExpand": "باز کردن «{{name}}»",
+        "folderCollapse": "بستن «{{name}}»",
+        "deleteFolderSubtreeDetail": "{{count}} زیرپوشه داخل آن هم حذف می‌شوند. سندها باقی می‌مانند و از طریق فیلتر سندهای بدون پوشه در دسترس‌اند.",
+        "deleteFolderSubtreeDetail_one": "زیرپوشه داخل آن هم حذف می‌شود. سندها باقی می‌مانند و از طریق فیلتر سندهای بدون پوشه در دسترس‌اند."
     },
     "userMultiSelect": {
         "nobody": "- هیچ‌کس -",
@@ -3534,7 +3574,8 @@
         "completed": "تکمیل‌شده",
         "completedOn": "تکمیل در {{date}}",
         "completedToast": "اشتراک تکمیل شد.",
-        "endsAfter": "{{count}} پرداخت باقی‌مانده"
+        "endsAfter": "{{count}} پرداخت باقی‌مانده",
+        "logoTypeError": "لطفاً از تصویر PNG، JPEG، WebP یا SVG استفاده کنید."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "عکس پس از کوچک‌سازی هنوز بیش از حد بزرگ است."
     },
     "documentAttach": {
         "label": "پیوست‌ها",
@@ -4435,5 +4477,90 @@
         "recipes": "دستور غذا",
         "shopping": "قلم",
         "splitExpenses": "هزینه"
+    },
+    "iconPicker": {
+        "title": "انتخاب آیکون",
+        "searchLabel": "جست‌وجوی آیکون",
+        "searchPlaceholder": "به انگلیسی جست‌وجو کنید، مثل film",
+        "resultsLabel": "آیکون‌ها",
+        "noResults": "آیکونی پیدا نشد.",
+        "clear": "بدون آیکون",
+        "unavailable": "آیکون‌ها در حال حاضر در دسترس نیستند."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

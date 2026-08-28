@@ -28,6 +28,7 @@ import { modulesPaths } from './modules.js';
 import { pushPaths } from './push.js';
 import { notificationsPaths } from './notifications.js';
 import { healthPaths } from './health.js';
+import { schedulePaths } from './schedule.js';
 
 export function buildPaths() {
   return {
@@ -61,5 +62,6 @@ export function buildPaths() {
     ...pushPaths(),
     ...notificationsPaths(),
     ...healthPaths(),
+    ...schedulePaths(),
   };
 }

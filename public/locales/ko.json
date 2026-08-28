@@ -59,7 +59,8 @@
             "private": "나만",
             "hint": "Yuvomi에서 이 항목을 볼 수 있는 사람을 설정합니다.",
             "assigneesNobodyHint": "아무도 지정하지 않으면 이 항목은 나만 볼 수 있습니다."
-        }
+        },
+        "toShoppingListNamed": "{{title}} 장보기 목록에 추가"
     },
     "kitchen": {
         "noShoppingLists": "아직 장보기 목록이 없습니다.",
@@ -112,7 +113,8 @@
         "health": "건강",
         "rewards": "보상",
         "pantry": "재고",
-        "inventory": "Inventory"
+        "inventory": "Inventory",
+        "schedule": "Schedule"
     },
     "search": {
         "emptyHint": "2자 이상 입력하면 할 일, 일정, 메모, 연락처, 쇼핑, 건강을 검색합니다.",
@@ -669,7 +671,9 @@
         "deleteScopeFuture": "이 항목과 이후 모두",
         "deleteScopeSeries": "전체 시리즈(모든 주)",
         "seriesEndedToast": "이 날짜부터 시리즈를 종료했습니다.",
-        "seriesDeletedToast": "시리즈가 삭제되었습니다."
+        "seriesDeletedToast": "시리즈가 삭제되었습니다.",
+        "deleteMealNamed": "{{title}} 삭제",
+        "openRecipeNamed": "{{title}} 레시피 열기"
     },
     "calendar": {
         "searchOpen": "일정 검색",
@@ -896,7 +900,26 @@
         "recurringScopeHintSeries": "시리즈 전체에 적용됩니다.",
         "detailWhen": "시간",
         "detailCalendar": "캘린더",
-        "colorCurrent": "현재 색상"
+        "colorCurrent": "현재 색상",
+        "deleteExternalSeriesTitle": "전체 시리즈를 삭제할까요?",
+        "deleteExternalSeriesDetail": "\"{{title}}\"은(는) 동기화된 캘린더의 일정입니다. 거기서는 개별 일정만 제외할 수 없어 시리즈 전체가 모든 반복과 함께 삭제됩니다.",
+        "deleteExternalSeriesConfirm": "시리즈 삭제",
+        "deleteBirthdayEventTitle": "생일 일정을 삭제할까요?",
+        "deleteBirthdayEventDetail": "\"{{title}}\"은(는) 생일 항목을 옮겨 놓은 일정입니다. 일정은 사라지지만 다음 동기화에서 다시 만들어집니다. 완전히 없애려면 생일 항목 자체를 바꿔야 합니다.",
+        "deleteBirthdayEventConfirm": "그래도 삭제",
+        "deleteSubscribedSeriesTitle": "구독 시리즈를 삭제할까요?",
+        "deleteSubscribedSeriesDetail": "\"{{title}}\"은(는) 구독 중인 캘린더의 일정입니다. Yuvomi는 원본에서 삭제할 수 없어 다음 동기화 전까지만 사라집니다. 완전히 없애려면 캘린더 구독을 해지하세요.",
+        "deleteSubscribedSeriesConfirm": "그래도 삭제",
+        "colorInherit": "담당자 색상",
+        "colorInheritHint": "일정은 자체 색상을 갖지 않고 담당자의 색상을 따릅니다. 담당자가 없으면 캘린더 색상이 적용됩니다.",
+        "filters": "필터",
+        "filtersOpen": "필터 열기",
+        "filtersLayers": "레이어",
+        "filtersPeople": "사람",
+        "filtersActive": "필터 {{count}}개 적용됨",
+        "filtersActive_one": "필터 1개 적용됨",
+        "filtersReset": "모든 필터 해제",
+        "filtersDisplay": "표시"
     },
     "notes": {
         "title": "메모",
@@ -1738,6 +1761,7 @@
             "shopping": "장보기",
             "meals": "식단",
             "calendar": "캘린더",
+            "schedule": "Schedule",
             "notes": "메모",
             "contacts": "연락처",
             "budget": "예산",
@@ -2596,7 +2620,8 @@
         "summaryCount_one": "{{count}}회",
         "fromCompletionLabel": "완료일부터 반복",
         "fromCompletionHint": "마감일이 아니라 작업을 완료한 날부터 간격이 시작됩니다.",
-        "summaryFromCompletion": "완료일부터"
+        "summaryFromCompletion": "완료일부터",
+        "intervalHint": "선택한 뒤에는 간격을 자유롭게 정할 수 있습니다. 2주마다, 3개월마다처럼요."
     },
     "reminders": {
         "sectionTitle": "알림",
@@ -2718,7 +2743,8 @@
         "sourceTandoor": "Tandoor",
         "sourceNative": "기본",
         "sourceAll": "전체",
-        "sourceFilterLabel": "출처별로 필터링"
+        "sourceFilterLabel": "출처별로 필터링",
+        "plannedThisWeek": "이번 주에 계획됨"
     },
     "onboarding": {
         "step1Title": "{{name}}에 오신 것을 환영합니다",
@@ -2731,7 +2757,8 @@
         "done": "시작하기",
         "skip": "건너뛰기",
         "step2BodyDesktop": "왼쪽 사이드바에서 모든 모듈로 이동할 수 있습니다 - 캘린더와 할 일부터 주방, 문서, 설정까지.",
-        "step3BodyDesktop": "하단의 + 버튼으로 어디서든 새 항목을 만들 수 있습니다."
+        "step3BodyDesktop": "하단의 + 버튼으로 어디서든 새 항목을 만들 수 있습니다.",
+        "stepProgress": "{{total}}단계 중 {{current}}단계"
     },
     "offline": {
         "banner": "오프라인 - 연결을 복구하는 중…",
@@ -2786,7 +2813,7 @@
         "colorOption": "색상 {{color}}",
         "iconPick": "이미지 선택",
         "iconClear": "이미지 제거",
-        "iconHint": "이미지가 없으면 선택한 색 위에 첫 글자가 표시됩니다.",
+        "iconHint": "기본 제공 아이콘이나 직접 만든 이미지를 고르세요. 둘 다 없으면 선택한 색 위에 첫 글자가 표시됩니다.",
         "iconTypeError": "PNG, JPEG 또는 WebP 이미지를 선택하세요.",
         "iconReadError": "이미지를 읽지 못했습니다.",
         "iconTooLarge": "이미지가 너무 큽니다.",
@@ -2802,7 +2829,9 @@
         "saved": "바로가기를 저장했습니다",
         "deleted": "바로가기를 삭제했습니다",
         "loadError": "바로가기를 불러오지 못했습니다.",
-        "orderError": "순서를 저장하지 못했습니다."
+        "orderError": "순서를 저장하지 못했습니다.",
+        "iconSymbol": "아이콘 선택",
+        "iconChoose": "아이콘 또는 이미지 선택"
     },
     "documents": {
         "title": "문서",
@@ -2947,7 +2976,18 @@
         "budgetFolder": "영수증",
         "splitExpensesFolder": "공동 지출",
         "inventoryFolder": "Inventory",
-        "tasksFolder": "할 일"
+        "tasksFolder": "할 일",
+        "newSubfolder": "새 하위 폴더",
+        "moveFolder": "폴더 이동",
+        "moveFolderTo": "\"{{name}}\"을(를) 이동할 위치",
+        "folderMovedToast": "폴더를 옮겼습니다",
+        "folderParentLabel": "상위 폴더",
+        "folderRootLevel": "최상위",
+        "folderPathLabel": "폴더 경로",
+        "folderExpand": "\"{{name}}\" 펼치기",
+        "folderCollapse": "\"{{name}}\" 접기",
+        "deleteFolderSubtreeDetail": "안에 있는 하위 폴더 {{count}}개도 함께 삭제됩니다. 문서는 남아 있으며 폴더 없는 문서 필터에서 찾을 수 있습니다.",
+        "deleteFolderSubtreeDetail_one": "안에 있는 하위 폴더도 함께 삭제됩니다. 문서는 남아 있으며 폴더 없는 문서 필터에서 찾을 수 있습니다."
     },
     "userMultiSelect": {
         "nobody": "- 없음 -",
@@ -3534,7 +3574,8 @@
         "completed": "완료됨",
         "completedOn": "{{date}}에 완료됨",
         "completedToast": "구독이 완료되었습니다.",
-        "endsAfter": "{{count}}회 결제 남음"
+        "endsAfter": "{{count}}회 결제 남음",
+        "logoTypeError": "PNG, JPEG, WebP 또는 SVG 이미지를 사용하세요."
     },
     "health": {
         "tabs": {
@@ -4382,7 +4423,8 @@
         "icsWarrantySummary": "Warranty ends: {{name}}",
         "icsTrackedDateSummary": "{{label}}: {{name}}",
         "icsCalendarName": "Yuvomi Inventory",
-        "removeBookingAction": "Remove \"{{title}}\""
+        "removeBookingAction": "Remove \"{{title}}\"",
+        "photoTooLarge": "축소 후에도 사진이 너무 큽니다."
     },
     "documentAttach": {
         "label": "첨부",
@@ -4435,5 +4477,90 @@
         "recipes": "레시피",
         "shopping": "항목",
         "splitExpenses": "지출"
+    },
+    "iconPicker": {
+        "title": "아이콘 선택",
+        "searchLabel": "아이콘 검색",
+        "searchPlaceholder": "영어로 검색하세요. 예: film",
+        "resultsLabel": "아이콘",
+        "noResults": "아이콘을 찾을 수 없습니다.",
+        "clear": "아이콘 없음",
+        "unavailable": "지금은 아이콘을 사용할 수 없습니다."
+    },
+    "schedule": {
+        "title": "Schedule",
+        "today": "Today",
+        "shiftTypes": "Shift types",
+        "patterns": "Patterns",
+        "overrides": "Overrides",
+        "shiftType": "Shift type",
+        "pattern": "Pattern",
+        "override": "Override",
+        "createShiftType": "Create shift type",
+        "createPattern": "Create pattern",
+        "createOverride": "Create override",
+        "name": "Name",
+        "shortCode": "Short code",
+        "color": "Color",
+        "startTime": "Start time",
+        "endTime": "End time",
+        "allDay": "All day",
+        "owner": "Owner",
+        "anchorDate": "Anchor date",
+        "cycleLength": "Cycle length",
+        "validFrom": "Valid from",
+        "validUntil": "Valid until",
+        "active": "Active",
+        "cycleDays": "Cycle days",
+        "freeDay": "Free day",
+        "date": "Date",
+        "note": "Note",
+        "save": "Save",
+        "delete": "Delete",
+        "empty": "No schedule entries yet.",
+        "saved": "Saved.",
+        "deleted": "Deleted.",
+        "overlay": "Schedule overlay",
+        "fullBlocks": "Full blocks",
+        "compactDisplay": "Compact",
+        "addPattern": "Add schedule plan",
+        "preset": "Preset",
+        "presetCustom": "Custom",
+        "emptyPatternsTitle": "No schedule plan yet",
+        "emptyPatternsDescription": "Create a repeating shift cycle for a household member.",
+        "presets": {
+            "early": "Early shift",
+            "late": "Late shift",
+            "night": "Night shift",
+            "day": "Day shift",
+            "fullDay": "24-hour shift"
+        },
+        "overlapWarning": "Overlapping schedules on {{date}} for {{user}}; the newer pattern is shown.",
+        "overlapWarningShort": "Overlapping schedules",
+        "editOverride": "Edit override",
+        "statistics": "Statistics",
+        "statisticsRange": "Period",
+        "currentMonth": "Current month",
+        "selectedMonths": "Full months",
+        "customRange": "Custom range",
+        "monthFrom": "Month from",
+        "monthTo": "Month to",
+        "applyStatistics": "Show statistics",
+        "shiftCounts": "Shift count",
+        "shiftCountsDescription": "Number of scheduled shifts by type.",
+        "workedHours": "Hours by shift type",
+        "workedHoursDescription": "Scheduled hours by shift type.",
+        "shifts": "shifts",
+        "total": "Total",
+        "freeDays": "Free days",
+        "noStatistics": "No schedule entries in the selected period.",
+        "statisticsFor": "{{user}} · {{from}} to {{to}}",
+        "hoursValue": "{{value}} h",
+        "invalidRange": "Choose a valid period.",
+        "typeOwnedBy": "Created by {{user}} - only they or an administrator can change it.",
+        "typeOrphaned": "Its creator has left the household - only an administrator can change this shift type.",
+        "deletePatternTitle": "Delete pattern \"{{name}}\"?",
+        "deletePatternDetail": "Its {{count}} cycle days go with it. This cannot be undone.",
+        "deletePatternDetail_one": "Its one cycle day goes with it. This cannot be undone."
     }
 }

@@ -415,6 +415,74 @@ let _pendingLoginRedirect = false;
 let _setupRequired = false;
 
 // --------------------------------------------------------
+// App-interner Zurueck-/Vorwaerts-Verlauf
+// --------------------------------------------------------
+// Browser-History kennt zwar `back()` und `forward()`, verraet der Seite aber
+// nicht, ob in der jeweiligen Richtung noch ein Eintrag liegt. Fuer sichtbare
+// Shell-Knoepfe braucht Yuvomi diese Auskunft, damit ein Klick am Anfang nicht
+// versehentlich die App verlaesst und Vorwaerts nur dann angeboten wird, wenn
+// der Nutzer zuvor wirklich zurueckgegangen ist.
+const NAV_HISTORY_INDEX_KEY = 'yuvomiHistoryIndex';
+const NAV_HISTORY_MAX_STORAGE_KEY = 'yuvomi-history-max';
+let _navHistoryIndex = Number(history.state?.[NAV_HISTORY_INDEX_KEY]);
+let _navHistoryMax = _navHistoryIndex;
+try {
+  _navHistoryMax = Number(sessionStorage.getItem(NAV_HISTORY_MAX_STORAGE_KEY));
+} catch { /* Private Mode: ohne gespeichertes Maximum bei null beginnen. */ }
+
+if (!Number.isSafeInteger(_navHistoryIndex) || _navHistoryIndex < 0) {
+  _navHistoryIndex = 0;
+}
+if (!Number.isSafeInteger(_navHistoryMax) || _navHistoryMax < _navHistoryIndex) {
+  _navHistoryMax = _navHistoryIndex;
+}
+
+// Auch der erste, vom Server geladene Eintrag wird zu einem Yuvomi-Eintrag.
+// replaceState statt pushState: Laden/Reload darf keinen kuenstlichen zweiten
+// Schritt erzeugen. Bestehende State-Felder bleiben fuer andere Module stehen.
+history.replaceState({
+  ...history.state,
+  path: history.state?.path ?? `${location.pathname}${location.search}`,
+  [NAV_HISTORY_INDEX_KEY]: _navHistoryIndex,
+}, '');
+
+function rememberNavigationHistoryMax() {
+  try {
+    sessionStorage.setItem(NAV_HISTORY_MAX_STORAGE_KEY, String(_navHistoryMax));
+  } catch { /* Private Mode: Buttons funktionieren weiter, nur Reload vergisst Forward. */ }
+}
+
+function updateNavigationHistoryControls() {
+  document.querySelectorAll('[data-history-direction]').forEach((button) => {
+    const isBack = button.dataset.historyDirection === 'back';
+    button.disabled = isBack
+      ? _navHistoryIndex <= 0
+      : _navHistoryIndex >= _navHistoryMax;
+  });
+}
+
+function pushNavigationHistory(path) {
+  _navHistoryIndex += 1;
+  // Ein neuer Weg nach einem Zurueck verwirft den bisherigen Forward-Zweig.
+  _navHistoryMax = _navHistoryIndex;
+  rememberNavigationHistoryMax();
+  history.pushState({
+    ...history.state,
+    path,
+    [NAV_HISTORY_INDEX_KEY]: _navHistoryIndex,
+  }, '', path);
+  updateNavigationHistoryControls();
+}
+
+function syncNavigationHistory(state) {
+  const index = Number(state?.[NAV_HISTORY_INDEX_KEY]);
+  _navHistoryIndex = Number.isSafeInteger(index) && index >= 0 ? index : 0;
+  _navHistoryMax = Math.max(_navHistoryMax, _navHistoryIndex);
+  rememberNavigationHistoryMax();
+  updateNavigationHistoryControls();
+}
+
+// --------------------------------------------------------
 // Router
 // --------------------------------------------------------
 
@@ -592,6 +660,46 @@ function createFocusTrap(container) {
   };
 }
 
+function navigationHistoryControls({ showLabels = false, mobile = false } = {}) {
+  const group = document.createElement('div');
+  group.className = mobile
+    ? 'nav-history nav-history--mobile'
+    : 'nav-history nav-sidebar__history';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', t('nav.navigation'));
+
+  for (const direction of ['back', 'forward']) {
+    const label = direction === 'back' ? t('calendar.back') : t('calendar.forward');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `btn btn--ghost${showLabels ? '' : ' btn--icon'} nav-history__button`;
+    button.dataset.historyDirection = direction;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+
+    const icon = document.createElement('i');
+    icon.dataset.lucide = direction === 'back' ? 'arrow-left' : 'arrow-right';
+    icon.setAttribute('aria-hidden', 'true');
+    button.appendChild(icon);
+
+    if (showLabels) {
+      const text = document.createElement('span');
+      text.textContent = label;
+      button.appendChild(text);
+    }
+
+    button.addEventListener('click', () => {
+      if (button.disabled) return;
+      if (direction === 'back') history.back();
+      else history.forward();
+    });
+    group.appendChild(button);
+  }
+
+  queueMicrotask(updateNavigationHistoryControls);
+  return group;
+}
+
 /**
  * Navigiert zu einem Pfad und rendert die entsprechende Seite.
  * @param {string} path
@@ -747,9 +855,7 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       return;
     }
 
-    if (pushState) {
-      history.pushState({ path }, '', path);
-    }
+    if (pushState) pushNavigationHistory(path);
 
     // Soft-Navigation innerhalb desselben Moduls (z. B. Settings-Blatt → Blatt
     // oder Browser-Zurück innerhalb der Einstellungen): Das bereits gerenderte
@@ -1212,6 +1318,10 @@ function buildMoreSheetBody() {
   body.className = 'more-sheet__body';
   const nodes = [];
 
+  // Mobile hat keine Sidebar. Die gleiche App-History steht deshalb oben im
+  // Mehr-Blatt als beschriftetes Paar statt nur als Desktop-Icon zur Verfuegung.
+  nodes.push(navigationHistoryControls({ showLabels: true, mobile: true }));
+
   // Der Katalog-Hinweis („Alle Module … in den Einstellungen") lebt jetzt in
   // der Hilfe (buildHelpRows), nicht mehr als Dauer-Zeile über dem Grid — das
   // hält das Sheet ruhig und kompakt.
@@ -1668,6 +1778,7 @@ function renderAppShell(container) {
 
   sidebar.appendChild(sidebarLogo);
   sidebar.appendChild(sidebarToggle);
+  sidebar.appendChild(navigationHistoryControls());
 
   // Sichtbarer Desktop-Einstieg in die globale Suche (Audit R2, A1-01): vor den
   // Modul-Items, bleibt im eingeklappten Modus als Lupe erreichbar. Kein
@@ -3907,6 +4018,7 @@ if ('serviceWorker' in navigator) {
 
 // Browser zurück/vor
 window.addEventListener('popstate', (e) => {
+  syncNavigationHistory(e.state);
   navigate(e.state?.path || location.pathname, false);
 });
 
@@ -4024,6 +4136,7 @@ function rebuildNavigation({ updateLabels = true } = {}) {
   });
 
   updateNav(currentPath);
+  updateNavigationHistoryControls();
   updateBranding(currentPath || '/');
   // Die Einstiege zum Änderungsverlauf sind gerade neu entstanden - ein noch
   // offener Hinweis muss ihnen folgen, sonst fällt er beim Sprachwechsel weg.

@@ -13692,3 +13692,36 @@ test('Quick Add keeps activity names visible and moves descriptions into a short
     'activity descriptions must not replace or visually compete with the activity name',
   );
 });
+
+test('Recipes expose Markdown export through both row-action layouts', () => {
+  const recipes = read('../public/pages/recipes.js');
+
+  assert.match(recipes, /import \{ recipeToMarkdown \} from '\/utils\/recipe-markdown\.js'/);
+  assert.match(recipes, /action: 'export-markdown', icon: 'clipboard-copy', label: t\('recipes\.exportMarkdown'\)/);
+  assert.match(recipes, /showToast\(t\('recipes\.exportMarkdownCopied'\), 'success'\)/);
+  assert.match(recipes, /showToast\(t\('recipes\.exportMarkdownCopyFailed'\), 'danger'\)/);
+  assert.match(recipes, /dataset\.action === 'export-markdown'[\s\S]{0,120}exportRecipeMarkdown\(recipe\)/);
+  assert.match(recipes, /navigator\.clipboard\?\.writeText/);
+  assert.match(recipes, /document\.execCommand\('copy'\)/,
+    'self-hosted HTTP instances need a clipboard fallback');
+});
+
+test('the app shell exposes bounded Back and Forward navigation', () => {
+  const router = read('../public/router.js');
+  const layout = read('../public/styles/layout.css');
+
+  assert.match(router, /function navigationHistoryControls[\s\S]*?history\.back\(\)[\s\S]*?history\.forward\(\)/,
+    'the shell history controls must invoke the browser History API');
+  assert.match(router, /sidebar\.appendChild\(navigationHistoryControls\(\)\)/,
+    'desktop navigation must expose the history controls');
+  assert.match(router, /nodes\.push\(navigationHistoryControls\(\{ showLabels: true, mobile: true \}\)\)/,
+    'mobile navigation must expose labeled history controls in the More sheet');
+  assert.match(router, /button\.disabled = isBack[\s\S]*?_navHistoryIndex <= 0[\s\S]*?_navHistoryIndex >= _navHistoryMax/,
+    'Back must stop at the first in-app page and Forward must reflect the retained branch');
+  assert.match(router, /history\.pushState\(\{[\s\S]*?\[NAV_HISTORY_INDEX_KEY\]: _navHistoryIndex/,
+    'every SPA route push must carry its app-history index');
+  assert.match(router, /popstate[\s\S]{0,160}syncNavigationHistory\(e\.state\)[\s\S]{0,120}navigate\(/,
+    'browser and shell Back/Forward must synchronize before rendering the route');
+  assert.match(layout, /\.nav-sidebar__history\s*\{/);
+  assert.match(layout, /\.nav-history--mobile\s*\{/);
+});

@@ -164,7 +164,8 @@ function consumeOidcNotice() {
   params.delete('oidc_linked');
   params.delete('oidc_link_error');
   const query = params.toString();
-  history.replaceState(null, '', location.pathname + (query ? `?${query}` : ''));
+  const path = location.pathname + (query ? `?${query}` : '');
+  history.replaceState({ ...history.state, path }, '', path);
 
   if (ok) return { kind: 'ok', text: t('settings.oidcLinkSuccess') };
   const known = ['already_linked', 'sub_taken'].includes(err);

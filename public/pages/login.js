@@ -123,7 +123,7 @@ export async function render(container) {
   // Anmeldeformular und wuesste nicht, dass ihm nur noch der Code fehlt.
   if (new URLSearchParams(location.search).has('two_factor')) {
     // Die Marke aus der Adresszeile nehmen, damit ein Neuladen sie nicht wiederholt.
-    history.replaceState(null, '', location.pathname);
+    history.replaceState({ ...history.state, path: location.pathname }, '', location.pathname);
     renderSecondFactor(container, { recoveryAvailable: true });
     return;
   }

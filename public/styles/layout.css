@@ -562,6 +562,30 @@ html:has(.search-overlay--visible) yuvomi-install-prompt {
   margin-block: calc(-1 * var(--space-0h));
 }
 
+/* App-History auf kleinen Screens: direkt im Mehr-Blatt und mit sichtbaren
+ * Labels, weil dort keine dauerhaft sichtbare Sidebar fuer die Icon-Version
+ * existiert. Die Browser-History selbst bleibt die Quelle der Navigation. */
+.nav-history {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.nav-history--mobile {
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.nav-history--mobile .nav-history__button {
+  flex: 1 1 50%;
+}
+
+.nav-history__button svg {
+  width: var(--space-4);
+  height: var(--space-4);
+}
+
 /* App-Launcher-Raster: EINE Matrix, vier Spalten, keine Bereichskoepfe.
  *
  * HIER STANDEN DREI SPALTEN, weil bei vier die Zelle (~80px auf 375px)
@@ -3000,6 +3024,14 @@ p.field-hint--warn[hidden] {
     color: var(--color-text-tertiary);
   }
 
+  /* Obsidian-artige App-History direkt unter der Marke. Sie liegt ausserhalb
+   * des Modul-Scrollers und bleibt deshalb auch in langen Sidebars erreichbar. */
+  .nav-sidebar__history {
+    justify-content: flex-start;
+    padding: 0 var(--space-3) var(--space-2);
+    flex-shrink: 0;
+  }
+
   /* ── Nav-Items Container ── */
   .nav-sidebar__items {
     display: flex;
@@ -3248,6 +3280,15 @@ p.field-hint--warn[hidden] {
     padding-left: 0;
   }
 
+  /* Zwei volle Pointer-Ziele passen nicht nebeneinander in die 56px-Rail.
+   * Gestapelt bleiben beide erreichbar; das Hover-/Fokus-Flyout stellt die
+   * gewohnte horizontale Form wieder her. */
+  html.sidebar-collapsed .nav-sidebar .nav-sidebar__history {
+    flex-direction: column;
+    align-items: center;
+    padding-inline: 0;
+  }
+
   /* Eingeklappt: Labels bleiben im Layout (Sidebar-Breite ist fix, overflow:hidden
    * beschneidet den Überhang), nur per Opacity verborgen. So kein „display:block"-
    * Pop, der den Text mitten in der Breiten-Animation auf Einzelzeichen klippt —
@@ -3330,6 +3371,13 @@ p.field-hint--warn[hidden] {
   html.sidebar-collapsed .nav-sidebar:focus-within .nav-section-label {
     height: auto;
     padding-block: var(--space-2) var(--space-1);
+  }
+
+  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-sidebar__history,
+  html.sidebar-collapsed .nav-sidebar:focus-within .nav-sidebar__history {
+    flex-direction: row;
+    align-items: center;
+    padding-inline: var(--space-3);
   }
 
   /* Beim Aufklappen (Hover/Fokus) muss der Footer das Expanded-Layout annehmen:

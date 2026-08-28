@@ -20,6 +20,7 @@ const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 const MAX_INGREDIENTS = 250;
 const MAX_MARKDOWN_CHARS = 100_000;
+const NOTE_SECTION = /^(?:notes?|notizen|remarques|notas|note)$/iu;
 
 const INGREDIENT_SECTION = /^(?:ingredients?|what you(?:'|’)ll need|zutaten|ingrédients?|ingredientes?|ingredienti|ingrediënten|ingredienser|ingredience|składniki|hozzávalók|malzemeler|ингредиенты|інгредієнти|υλικά|المكونات|مواد لازم|सामग्री|bahan|(?:mga )?sangkap|nguyên liệu|食材|配料|材料|재료)$/iu;
 const INSTRUCTION_SECTION = /^(?:instructions?|directions?|method|preparation|steps?|zubereitung|anleitung|préparation|étapes?|instrucciones|preparación|pasos|istruzioni|preparazione|procedimento|instruções|preparo|bereiding|stappen|instruktioner|tillagning|postup|przygotowanie|utasítások|elkészítés|hazırlanış|yapılışı|инструкции|приготовление|інструкції|приготування|οδηγίες|εκτέλεση|طريقة التحضير|دستور پخت|विधि|निर्देश|cara membuat|paraan|hướng dẫn|cách làm|做法|步骤|作り方|手順|만드는 법|조리법)$/iu;
@@ -250,6 +251,22 @@ function sourceName(recipeUrl, fallback = 'Pasted Markdown') {
   try { return new URL(recipeUrl).hostname; } catch { return fallback; }
 }
 
+function embeddedMarkdownSource(source, fallbackUrl) {
+  if (fallbackUrl) return fallbackUrl;
+  const match = String(source || '').match(/^\*\*Source:\*\*\s*<([^>]+)>/mi);
+  if (!match) return null;
+  try { return normalizedUrl(match[1]).href; } catch { return null; }
+}
+
+function embeddedMarkdownMealTypes(source) {
+  const match = String(source || '').match(/^\*\*Meal types:\*\*\s*(.+)$/mi);
+  if (!match) return null;
+  const value = match[1].trim().toLocaleLowerCase();
+  if (value === 'none') return [];
+  const known = new Set(['breakfast', 'lunch', 'dinner', 'snack']);
+  return [...new Set(value.split(',').map((entry) => entry.trim()).filter((entry) => known.has(entry)))];
+}
+
 export function parseRecipeMarkdown(markdown, recipeUrl = null) {
   const source = String(markdown || '').replace(/\r/g, '').trim();
   if (!source) throw new RecipeUrlImportError('Paste a Markdown recipe to import.', 400);
@@ -257,6 +274,8 @@ export function parseRecipeMarkdown(markdown, recipeUrl = null) {
     throw new RecipeUrlImportError('That Markdown recipe is too large to import.', 413);
   }
 
+  const resolvedRecipeUrl = embeddedMarkdownSource(source, recipeUrl);
+  const exportedMealTypes = embeddedMarkdownMealTypes(source);
   const lines = source.split('\n');
   const firstTitle = lines.map(markdownHeading).find((heading) => (
     heading?.label && heading.level === 1
@@ -267,6 +286,7 @@ export function parseRecipeMarkdown(markdown, recipeUrl = null) {
   let section = null;
   const ingredientLines = [];
   const instructionLines = [];
+  const noteLines = [];
 
   for (const line of lines) {
     const heading = markdownHeading(line);
@@ -277,10 +297,16 @@ export function parseRecipeMarkdown(markdown, recipeUrl = null) {
           && !END_SECTION.test(heading.label)) title = heading.label;
       if (INGREDIENT_SECTION.test(heading.label)) section = 'ingredients';
       else if (INSTRUCTION_SECTION.test(heading.label)) section = 'instructions';
+      else if (NOTE_SECTION.test(heading.label)) section = 'notes';
       else if (END_SECTION.test(heading.label)) section = null;
       continue;
     }
     if (!section) continue;
+    if (section === 'notes') {
+      const note = String(line || '').trim();
+      if (note) noteLines.push(note.slice(0, 500));
+      continue;
+    }
     const item = markdownItem(line);
     if (!item || item.length < 2) continue;
     if (section === 'ingredients') ingredientLines.push(item);
@@ -290,21 +316,27 @@ export function parseRecipeMarkdown(markdown, recipeUrl = null) {
   title = title.slice(0, 200);
   const ingredients = uniqueIngredients(ingredientLines.slice(0, MAX_INGREDIENTS));
   const instructions = [...new Set(instructionLines)].slice(0, 100);
-  if (!title || (!ingredients.length && !instructions.length)) {
+  const plainNotes = noteLines.join('\n').trim();
+  if (!title || (!ingredients.length && !instructions.length && !plainNotes)) {
     throw new RecipeUrlImportError(
-      'No recognizable Markdown recipe was found. Use a title plus Ingredients and/or Instructions headings.',
+      'No recognizable Markdown recipe was found. Use a title plus Ingredients, Instructions, or Notes headings.',
     );
   }
 
+  const noteSections = [];
+  if (instructions.length) {
+    noteSections.push(`## Instructions\n\n${instructions.map((step, index) => `${index + 1}. ${step}`).join('\n')}`);
+  }
+  if (plainNotes) noteSections.push(`## Notes\n\n${plainNotes}`);
+
   return {
     title,
-    notes: instructions.length
-      ? `## Instructions\n\n${instructions.map((step, index) => `${index + 1}. ${step}`).join('\n')}`.slice(0, 5000)
-      : null,
-    recipe_url: recipeUrl || null,
-    meal_types: inferredMealTypes({ recipeCategory: source.slice(0, 3000), keywords: title }),
+    notes: noteSections.join('\n\n').slice(0, 5000) || null,
+    recipe_url: resolvedRecipeUrl,
+    meal_types: exportedMealTypes
+      ?? inferredMealTypes({ recipeCategory: source.slice(0, 3000), keywords: title }),
     ingredients,
-    import_source: sourceName(recipeUrl),
+    import_source: sourceName(resolvedRecipeUrl),
   };
 }
 

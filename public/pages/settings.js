@@ -45,7 +45,7 @@ async function refreshUser(user) {
 // korrigiert, die eigentliche Navigation aber auf den nächsten Macrotask
 // verschoben — nach dem finally des laufenden navigate().
 function redirectTo(target) {
-  history.replaceState({ path: target }, '', target);
+  history.replaceState({ ...history.state, path: target }, '', target);
   setTimeout(() => {
     window.yuvomi?.navigate(target, false);
   }, 0);

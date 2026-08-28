@@ -14,6 +14,7 @@ import { popoverMenuHtml, installPopoverMenus } from '/utils/popover-menu.js';
 import { ingredientRowHTML } from '/utils/ingredient-row.js';
 import { scheduleUndoableDelete } from '/utils/ux.js';
 import { normalizeRecipeMealTypes, RECIPE_MEAL_TYPE_KEYS } from '/utils/recipe-meal-types.js';
+import { recipeToMarkdown } from '/utils/recipe-markdown.js';
 import { mealPayloadFromRecipe } from '/utils/recipe-to-meal.js';
 import { todayKey } from '/utils/date.js';
 import '/components/datepicker.js';
@@ -115,6 +116,42 @@ function mealTypeOptions() {
  * nur eine Liste fehlte (Critique P0, 2026-07-30). Ein Modul, das seine Daten
  * nicht bekommt, darf höchstens sich selbst verlieren.
  */
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch { /* self-hosted HTTP instances use the selection fallback below */ }
+  }
+
+  const previousFocus = document.activeElement;
+  const field = document.createElement('textarea');
+  field.className = 'sr-only';
+  field.readOnly = true;
+  field.value = text;
+  document.body.appendChild(field);
+  try {
+    field.focus();
+    field.select();
+    field.setSelectionRange(0, field.value.length);
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    field.remove();
+    if (previousFocus instanceof HTMLElement) previousFocus.focus();
+  }
+}
+
+async function exportRecipeMarkdown(recipe) {
+  const markdown = recipeToMarkdown(recipe);
+  if (await copyTextToClipboard(markdown)) {
+    window.yuvomi?.showToast(t('recipes.exportMarkdownCopied'), 'success');
+  } else {
+    window.yuvomi?.showToast(t('recipes.exportMarkdownCopyFailed'), 'danger');
+  }
+}
+
 async function loadRecipes() {
   try {
     const res = await api.get('/recipes');
@@ -299,6 +336,11 @@ export async function render(container) {
 
     if (actionBtn.dataset.action === 'duplicate') {
       await duplicateRecipe(recipe);
+      return;
+    }
+
+    if (actionBtn.dataset.action === 'export-markdown') {
+      await exportRecipeMarkdown(recipe);
       return;
     }
 
@@ -566,6 +608,7 @@ function renderRecipeList() {
     // beide Fassungen nie auseinanderlaufen.
     const ROW_ACTIONS = [
       !isMirrored && { action: 'edit',      icon: 'pencil',  label: t('common.edit') },
+      { action: 'export-markdown', icon: 'clipboard-copy', label: t('recipes.exportMarkdown') },
       { action: 'duplicate', icon: 'copy',    label: t('recipes.duplicate') },
       !isMirrored && { action: 'delete',    icon: 'trash-2', label: t('common.delete'), danger: true },
     ].filter(Boolean);

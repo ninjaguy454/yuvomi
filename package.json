@@ -48,7 +48,7 @@
     "test:shopping-order-migration": "node --experimental-sqlite --test test/test-shopping-order-migration.js",
     "test:meals": "node --loader ./test/test-browser-loader.mjs --experimental-sqlite test/test-meals.js",
     "test:meals-routes": "node --experimental-sqlite --test test/test-meals-routes.js",
-    "test:recipes-routes": "node --experimental-sqlite --test test/test-recipes-routes.js && node --test test/test-recipe-url-import.js",
+    "test:recipes-routes": "node --experimental-sqlite --test test/test-recipes-routes.js && node --test test/test-recipe-url-import.js test/test-recipe-markdown-export.js",
     "test:recipe-url-import": "node --test test/test-recipe-url-import.js",
     "test:pantry-routes": "node --experimental-sqlite --test test/test-pantry-routes.js",
     "test:pantry-status": "node --loader ./test/test-browser-loader.mjs --test test/test-pantry-status.js",

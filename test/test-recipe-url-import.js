@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { Readable } from 'node:stream';
 
 import {
   RecipeUrlImportError,
+  importRecipeFromMarkdown,
   importRecipeFromUrl,
   parseRecipeDocument,
+  parseRecipeMarkdown,
 } from '../server/services/recipe-url-import.js';
 
 const recipeJson = {
@@ -66,6 +69,52 @@ test('importRecipeFromUrl follows validated redirects and keeps the final URL', 
   assert.equal(draft.recipe_url, 'https://cdn.example/final-recipe');
 });
 
+test('parseRecipeDocument falls back to Markdown-style webpage sections', () => {
+  const html = `<!doctype html><html><body>
+    <h1>Skillet Lemon Potatoes</h1>
+    <h2>Ingredients</h2>
+    <ul><li>2 lb potatoes</li><li>1 tbsp olive oil</li><li>1 lemon</li></ul>
+    <h2>Instructions</h2>
+    <ol><li>Slice the potatoes.</li><li>Cook until golden.</li></ol>
+  </body></html>`;
+  const draft = parseRecipeDocument(html, 'https://recipes.example/lemon-potatoes');
+  assert.equal(draft.title, 'Skillet Lemon Potatoes');
+  assert.deepEqual(draft.ingredients[0], {
+    name: 'potatoes', quantity: '2 lb', category: 'Sonstiges',
+  });
+  assert.match(draft.notes, /1\. Slice the potatoes\./);
+  assert.equal(draft.recipe_url, 'https://recipes.example/lemon-potatoes');
+});
+
+test('pasted Markdown creates the same reviewable recipe draft', () => {
+  const draft = importRecipeFromMarkdown(`# Weeknight Lemon Pasta
+
+## Ingredients
+- 8 oz spaghetti
+- 2 lemons
+- 1/2 cup parmesan cheese
+
+## Instructions
+1. Boil the pasta.
+2. Toss with lemon and cheese.
+`);
+  assert.equal(draft.title, 'Weeknight Lemon Pasta');
+  assert.equal(draft.recipe_url, null);
+  assert.equal(draft.import_source, 'Pasted Markdown');
+  assert.equal(draft.ingredients.length, 3);
+  assert.deepEqual(draft.ingredients[2], {
+    name: 'parmesan cheese', quantity: '1/2 cup', category: 'Milchprodukte',
+  });
+  assert.match(draft.notes, /2\. Toss with lemon and cheese\./);
+});
+
+test('parseRecipeMarkdown requires recognizable recipe sections', () => {
+  assert.throws(
+    () => parseRecipeMarkdown('# Grocery thoughts\n\nRemember to buy lemons.'),
+    (error) => error instanceof RecipeUrlImportError && error.status === 422,
+  );
+});
+
 test('importRecipeFromUrl rejects local targets before making a request', async () => {
   let called = false;
   await assert.rejects(
@@ -82,3 +131,10 @@ test('parseRecipeDocument reports pages without structured Recipe data', () => {
   );
 });
 
+test('recipe import UI offers automatic URL fallback and direct Markdown paste', async () => {
+  const source = await readFile(new URL('../public/pages/recipes.js', import.meta.url), 'utf8');
+  assert.match(source, /Markdown-style Ingredients and Instructions sections/);
+  assert.match(source, /id="recipe-import-markdown"/);
+  assert.match(source, /\/recipes\/markdown-preview/);
+  assert.match(source, /\/recipes\/url-preview/);
+});

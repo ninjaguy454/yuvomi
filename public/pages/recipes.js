@@ -207,8 +207,8 @@ export async function render(container) {
   importButton.className = 'btn btn--secondary recipes-import-button';
   importButton.type = 'button';
   importButton.id = 'recipes-import-url';
-  importButton.setAttribute('aria-label', 'Import recipe from URL');
-  importButton.title = 'Import recipe from URL';
+  importButton.setAttribute('aria-label', 'Import recipe');
+  importButton.title = 'Import recipe';
   importButton.insertAdjacentHTML('beforeend', '<i data-lucide="link" class="icon-md" aria-hidden="true"></i><span>Import</span>');
   const sourceFilter = document.createElement('div');
   sourceFilter.id = 'recipes-source-filter';
@@ -824,41 +824,54 @@ function openRecipeModal(mode, recipe = null) {
 
 function openRecipeImportModal() {
   openSharedModal({
-    title: 'Import recipe from URL',
+    title: 'Import recipe',
     size: 'sm',
     content: `
-      <p class="form-hint recipe-import-intro">Paste a public recipe page. Yuvomi will extract its structured title, ingredients, and instructions, then let you review everything before saving.</p>
+      <p class="form-hint recipe-import-intro">Paste a public recipe page. Yuvomi tries structured recipe data first, then Markdown-style Ingredients and Instructions sections. You can also paste Markdown directly. Nothing is saved until you review it.</p>
       <div class="form-group">
-        <label class="form-label" for="recipe-import-url">Recipe page</label>
-        <input id="recipe-import-url" class="form-input" type="url" required autocomplete="url" placeholder="https://example.com/recipe">
+        <label class="form-label" for="recipe-import-url">Recipe page or source URL</label>
+        <input id="recipe-import-url" class="form-input" type="url" autocomplete="url" placeholder="https://example.com/recipe">
+      </div>
+      <p class="form-hint recipe-import-or">Or paste a Markdown recipe</p>
+      <div class="form-group">
+        <label class="form-label" for="recipe-import-markdown">Recipe Markdown</label>
+        <textarea id="recipe-import-markdown" class="form-input" rows="8" placeholder="# Recipe title&#10;&#10;## Ingredients&#10;- 2 cups flour&#10;&#10;## Instructions&#10;1. Mix the ingredients."></textarea>
+        <small class="form-hint">Use a title plus Ingredients and/or Instructions headings.</small>
       </div>
       <div class="modal-panel__footer modal-panel__footer--plain">
         <button class="btn btn--secondary" type="button" id="recipe-import-cancel">${t('common.cancel')}</button>
         <button class="btn btn--primary" type="button" id="recipe-import-submit">Import and review</button>
       </div>`,
     onSave(panel) {
-      const input = panel.querySelector('#recipe-import-url');
+      const urlInput = panel.querySelector('#recipe-import-url');
+      const markdownInput = panel.querySelector('#recipe-import-markdown');
       const submit = panel.querySelector('#recipe-import-submit');
       panel.querySelector('#recipe-import-cancel')?.addEventListener('click', closeModal);
       submit?.addEventListener('click', async () => {
-        const url = input?.value.trim() || '';
-        if (!url) {
-          reportFieldError(input, 'Enter a recipe URL.');
+        const url = urlInput?.value.trim() || '';
+        const markdown = markdownInput?.value.trim() || '';
+        if (!url && !markdown) {
+          reportFieldError(urlInput, 'Enter a recipe URL or paste recipe Markdown.');
           return;
         }
         submit.disabled = true;
         submit.textContent = 'Importing…';
         try {
-          const response = await api.post('/recipes/url-preview', { url });
+          const response = markdown
+            ? await api.post('/recipes/markdown-preview', { markdown, source_url: url || null })
+            : await api.post('/recipes/url-preview', { url });
           closeModal({ force: true });
           openRecipeModal('import', response.data);
         } catch (error) {
           submit.disabled = false;
           submit.textContent = 'Import and review';
-          reportFieldError(input, error.data?.error ?? 'That recipe page could not be imported.');
+          reportFieldError(
+            markdown ? markdownInput : urlInput,
+            error.data?.error ?? 'That recipe could not be imported.',
+          );
         }
       });
-      input?.addEventListener('keydown', (event) => {
+      urlInput?.addEventListener('keydown', (event) => {
         if (event.key === 'Enter') {
           event.preventDefault();
           submit?.click();

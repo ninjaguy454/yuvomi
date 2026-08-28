@@ -10,7 +10,11 @@ import * as db from '../db.js';
 import { str, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT } from '../middleware/validate.js';
 import { normalizeRecipeMealTypes } from '../../public/utils/recipe-meal-types.js';
 import { getAdapter } from '../services/recipe-providers/index.js';
-import { importRecipeFromUrl, RecipeUrlImportError } from '../services/recipe-url-import.js';
+import {
+  importRecipeFromMarkdown,
+  importRecipeFromUrl,
+  RecipeUrlImportError,
+} from '../services/recipe-url-import.js';
 
 const log = createLogger('Recipes');
 const router = express.Router();
@@ -113,6 +117,27 @@ router.post('/url-preview', async (req, res) => {
     log.warn('POST /url-preview:', err?.message || err);
     res.status(status).json({
       error: err?.message || 'The recipe page could not be imported.',
+      code: status,
+    });
+  }
+});
+
+router.post('/markdown-preview', (req, res) => {
+  try {
+    const markdown = String(req.body?.markdown || '');
+    const sourceUrl = String(req.body?.source_url || '').trim() || null;
+    if (sourceUrl && sourceUrl.length > MAX_TEXT) {
+      return res.status(400).json({ error: 'Enter a valid source URL.', code: 400 });
+    }
+    const draft = importRecipeFromMarkdown(markdown, { sourceUrl });
+    res.json({ data: draft });
+  } catch (err) {
+    const status = err instanceof RecipeUrlImportError
+      ? err.status
+      : (Number.isInteger(err?.status) ? err.status : 422);
+    log.warn('POST /markdown-preview:', err?.message || err);
+    res.status(status).json({
+      error: err?.message || 'The Markdown recipe could not be imported.',
       code: status,
     });
   }

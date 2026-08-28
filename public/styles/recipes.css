@@ -443,6 +443,11 @@
   margin-bottom: var(--space-4);
 }
 
+.recipe-import-or {
+  margin-block: var(--space-4) var(--space-2);
+  text-align: center;
+}
+
 @media (max-width: 640px) {
   .recipes-import-button span {
     display: none;

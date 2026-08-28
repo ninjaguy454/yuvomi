@@ -78,6 +78,27 @@ test('POST /url-preview returns a review draft without writing a recipe', async 
   }
 });
 
+test('POST /markdown-preview returns a review draft without writing a recipe', async () => {
+  const before = db.prepare('SELECT COUNT(*) AS n FROM recipes').get().n;
+  const r = await call('POST', '/markdown-preview', {
+    source_url: 'https://recipes.example/toast',
+    markdown: `# Tomato Toast
+
+## Ingredients
+- 2 slices bread
+- 1 tomato
+
+## Instructions
+1. Toast the bread.
+2. Add sliced tomato.`,
+  });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.data.title, 'Tomato Toast');
+  assert.equal(r.body.data.recipe_url, 'https://recipes.example/toast');
+  assert.equal(r.body.data.ingredients.length, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM recipes').get().n, before);
+});
+
 // --------------------------------------------------------------------------
 // GET / (Liste)
 // --------------------------------------------------------------------------

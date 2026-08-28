@@ -675,3 +675,52 @@ test('POST /:id/to-shopping-list: Mahlzeit ohne Rezept und ohne Zutaten → 0 ü
   assert.equal(r.status, 200);
   assert.equal(r.body.data.transferred, 0);
 });
+
+test('Phase 2 meal details persist timing, scope, participants and roles', async () => {
+  const r = await createMeal({
+    date: '2040-06-05', meal_type: 'dinner', title: 'Family dinner',
+    scope: 'takeout', scheduled_time: '18:15', earliest_time: '17:45',
+    preferred_time: '18:15', latest_time: '19:30', expected_duration_minutes: 60,
+    participants: [
+      { user_id: U, role: 'chooser', status: 'participating' },
+      { user_id: U, role: 'cook', status: 'participating' },
+    ],
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.data.scope, 'takeout');
+  assert.equal(r.body.data.scheduled_time, '18:15');
+  assert.deepEqual(r.body.data.participants.map((row) => row.role).sort(), ['chooser', 'cook']);
+});
+
+test('Phase 2 recurring schedule materializes one stable occurrence and preserves a deletion exception', async () => {
+  actor = { id: U, role: 'admin' };
+  const saved = await call('PUT', '/planning', {
+    timing_defaults: [{
+      meal_type: 'breakfast', earliest_time: '06:30', preferred_time: '07:30',
+      latest_time: '09:00', expected_duration_minutes: 30,
+    }],
+    slots: [{
+      weekday: 0, meal_type: 'breakfast', active: true, policy: 'fixed',
+      fixed_user_id: U, fallback_user_id: U, participant_ids: [U], presence_required: false,
+    }],
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.data.slots.find((row) => row.weekday === 0 && row.meal_type === 'breakfast').active, 1);
+
+  const first = await call('GET', '/?week=2040-06-04');
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const generated = first.body.data.find((meal) => meal.source === 'schedule' && meal.date === '2040-06-04');
+  assert.ok(generated, 'scheduled meal is generated');
+  assert.equal(generated.preferred_time, '07:30');
+  assert.deepEqual(generated.participants.map((row) => row.role).sort(), ['chooser', 'participant']);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ?").get(generated.id).n, 1);
+
+  await call('GET', '/?week=2040-06-04');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM meals WHERE source = 'schedule' AND date = '2040-06-04' AND meal_type = 'breakfast'").get().n, 1, 'materialization is idempotent');
+
+  assert.equal((await call('DELETE', `/${generated.id}`)).status, 204);
+  await call('GET', '/?week=2040-06-04');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM meals WHERE source = 'schedule' AND date = '2040-06-04' AND meal_type = 'breakfast'").get().n, 0, 'deleted occurrence is not recreated');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM meal_schedule_exceptions WHERE date = '2040-06-04' AND action = 'skip'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ?").get(generated.id).n, 0, 'deleted occurrence removes its chooser obligation');
+});

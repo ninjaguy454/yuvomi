@@ -417,6 +417,7 @@ const AUTOMATION_TABS = [
   ['skills', 'Skills'],
   ['activities', 'Activities'],
   ['workflows', 'Quick Add templates'],
+  ['variables', 'Variables'],
 ];
 
 function validAutomationTab(tab) {
@@ -463,7 +464,8 @@ async function loadManagerTab(panel, tab, manager) {
   try {
     if (tab === 'skills') await renderSkillsManager(body, manager);
     else if (tab === 'activities') await renderActivitiesManager(body, manager);
-    else await renderWorkflowsManager(body, manager);
+    else if (tab === 'workflows') await renderWorkflowsManager(body, manager);
+    else await renderVariablesManager(body, manager);
     if (window.lucide) window.lucide.createIcons({ el: body });
   } catch (error) {
     body.innerHTML = `<p class="form-hint">${h(error.message || 'Could not load automation settings.')}</p>`;
@@ -475,6 +477,116 @@ function managerHeader(title, addId, addLabel) {
     <div><strong>${h(title)}</strong></div>
     <button type="button" class="btn btn--primary btn--sm" id="${h(addId)}"><i data-lucide="plus" class="icon-md"></i>${h(addLabel)}</button>
   </div>`;
+}
+
+function householdVariableTypeOptions(selected = 'text') {
+  return [
+    ['text', 'Text'], ['number', 'Number'], ['boolean', 'Yes/No'],
+    ['choice', 'Choice'], ['date', 'Date'], ['time', 'Time'],
+    ['household_member', 'Household member'],
+  ].map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+async function renderVariablesManager(body, manager) {
+  const response = await api.get('/automation/admin/variables');
+  const variables = response.data ?? [];
+  const context = response.context ?? [];
+  body.innerHTML = `${managerHeader('Reusable variables', 'automation-add-variable', 'Add variable')}
+    <p class="form-hint automation-manager__hint">Define values and reusable fields once, then use the same readable ID across household templates. IDs stay stable unless an admin deliberately renames one.</p>
+    <div class="automation-list">
+      ${variables.map((variable) => `
+        <div class="automation-list-row">
+          <div class="automation-list-row__copy">
+            <strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.variable_key)}}}</code><br>
+            <small class="form-hint">${h(variable.type)} · ${variable.kind === 'value' ? 'Household value' : 'Reusable field'}${variable.usage_count ? ` · used by ${variable.usage_count} workflow variable${variable.usage_count === 1 ? '' : 's'}` : ''}</small>
+          </div>
+          <div class="automation-list-row__actions">
+            <button type="button" class="btn btn--ghost btn--sm" data-edit-variable="${variable.id}">Edit</button>
+            <button type="button" class="btn btn--ghost btn--sm" data-rename-variable="${variable.id}">Rename ID</button>
+            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-variable="${variable.id}">Delete</button>
+          </div>
+        </div>`).join('') || '<p class="form-hint">No reusable variables yet.</p>'}
+    </div>
+    <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>System context</strong></div>
+    <p class="form-hint automation-manager__hint">These values are supplied automatically when a template runs and do not need to be maintained.</p>
+    <div class="automation-list">${context.map((variable) => `
+      <div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`;
+
+  body.querySelector('#automation-add-variable')?.addEventListener('click', () => openVariableForm(null, manager));
+  body.querySelectorAll('[data-edit-variable]').forEach((button) => button.addEventListener('click', () => {
+    openVariableForm(variables.find((row) => Number(row.id) === Number(button.dataset.editVariable)), manager);
+  }));
+  body.querySelectorAll('[data-rename-variable]').forEach((button) => button.addEventListener('click', () => {
+    openVariableKeyForm(variables.find((row) => Number(row.id) === Number(button.dataset.renameVariable)), manager);
+  }));
+  body.querySelectorAll('[data-delete-variable]').forEach((button) => button.addEventListener('click', () => {
+    const variable = variables.find((row) => Number(row.id) === Number(button.dataset.deleteVariable));
+    if (!variable) return;
+    deleteAutomationDefinition({
+      name: variable.label, noun: 'reusable variable',
+      path: `/automation/admin/variables/${variable.id}`, tab: 'variables', manager,
+    });
+  }));
+}
+
+function openVariableForm(variable = null, manager = null) {
+  const content = `<form id="automation-variable-form">
+    ${inputRow('Variable name', `<input class="input" name="label" required maxlength="120" value="${h(variable?.label || '')}">`, 'The friendly name shown in variable suggestions.')}
+    ${variable ? inputRow('Variable ID', `<code class="automation-variable-token">{{${h(variable.variable_key)}}}</code>`, 'Use Rename ID only when every reference should change.') : inputRow('Variable ID', `<input class="input" name="variable_key" maxlength="80" placeholder="Generated from the name">`, 'Lowercase letters, numbers, and underscores. Leave blank to generate it from the name.')}
+    ${inputRow('Description', `<textarea class="input" name="description" rows="2">${h(variable?.description || '')}</textarea>`)}
+    ${inputRow('Type', `<select class="input" name="type" id="automation-variable-type">${householdVariableTypeOptions(variable?.type || 'text')}</select>`)}
+    ${inputRow('Use', `<select class="input" name="kind"><option value="field" ${variable?.kind !== 'value' ? 'selected' : ''}>Ask when a template runs</option><option value="value" ${variable?.kind === 'value' ? 'selected' : ''}>Saved household value</option></select>`)}
+    <div id="automation-variable-options" ${variable?.type === 'choice' ? '' : 'hidden'}>${inputRow('Choices', `<input class="input" name="options" value="${h((variable?.options || []).join(', '))}" placeholder="One, Two, Three">`)}</div>
+    ${inputRow('Default value', `<input class="input" name="default_value" value="${h(variable?.default_value ?? '')}">`, 'Optional. The value can still be supplied or changed when used.')}
+    ${footer(variable ? 'Save variable' : 'Create variable')}
+  </form>`;
+  openModal({
+    title: variable ? 'Edit reusable variable' : 'New reusable variable', content,
+    onSave(panel) {
+      const type = panel.querySelector('#automation-variable-type');
+      const options = panel.querySelector('#automation-variable-options');
+      type?.addEventListener('change', () => { options.hidden = type.value !== 'choice'; });
+      panel.querySelector('#automation-variable-form')?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        const payload = {
+          label: data.get('label'), description: data.get('description'), type: data.get('type'),
+          kind: data.get('kind'), variable_key: data.get('variable_key') || undefined,
+          options: String(data.get('options') || '').split(',').map((item) => item.trim()).filter(Boolean),
+          default_value: data.get('default_value') || null, active: true,
+        };
+        try {
+          if (variable) await api.put(`/automation/admin/variables/${variable.id}`, payload);
+          else await api.post('/automation/admin/variables', payload);
+          toast('Reusable variable saved.');
+          await refreshAutomationManager(manager, 'variables');
+        } catch (error) { toast(error.message, 'danger'); }
+      });
+    },
+  });
+}
+
+function openVariableKeyForm(variable, manager = null) {
+  if (!variable) return;
+  const content = `<form id="automation-variable-key-form">
+    <p class="form-hint">Renaming this ID updates linked definitions while preserving the variable's permanent identity. Existing plain text copied outside Yuvomi cannot be updated.</p>
+    ${inputRow('New variable ID', `<input class="input" name="variable_key" required value="${h(variable.variable_key)}">`)}
+    ${footer('Rename ID')}
+  </form>`;
+  openModal({ title: `Rename ${variable.label}`, content, onSave(panel) {
+    panel.querySelector('#automation-variable-key-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const confirmed = await confirmOverModal('Rename this reusable variable ID?', {
+        confirmLabel: 'Rename ID', detail: 'Yuvomi will keep database links intact. Use this only when the new ID is clearer.',
+      });
+      if (!confirmed) return;
+      try {
+        await api.put(`/automation/admin/variables/${variable.id}/key`, { variable_key: new FormData(event.currentTarget).get('variable_key') });
+        toast('Variable ID renamed.');
+        await refreshAutomationManager(manager, 'variables');
+      } catch (error) { toast(error.message, 'danger'); }
+    });
+  }});
 }
 
 async function refreshAutomationManager(manager, tab) {
@@ -724,6 +836,7 @@ async function renderWorkflowsManager(body, manager) {
     activities: response.activities ?? [],
     members: response.members ?? [],
     categories: response.categories ?? [],
+    variables: response.variables ?? [],
   };
   body.querySelector('#automation-add-workflow')?.addEventListener('click', () => openWorkflowForm(null, context, manager));
   body.querySelectorAll('[data-edit-workflow]').forEach((button) => {
@@ -847,11 +960,11 @@ function workflowStepHtml(step, index, activities, questions, members) {
   </div>`;
 }
 
-function questionHtml(question = {}) {
+function questionHtml(question = {}, workflowId = null) {
   const existingVariableId = workflowVariableId(question);
   const variableId = existingVariableId || newWorkflowVariableId();
   const type = question.type === 'select' ? 'choice' : (question.type || 'text');
-  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-definition-id="${h(question.definition_id || '')}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}">
+  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-definition-id="${h(question.definition_id || '')}" data-reusable-definition-id="${h(question.reusable_definition_id || '')}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}">
     <code class="automation-variable-token" data-variable-token title="Readable key used by this workflow">{{${h(variableId)}}}</code>
     <input class="input" data-question-label placeholder="Question or variable name" aria-label="Question or variable name" value="${h(question.label || '')}">
     <select class="input" data-question-type>
@@ -863,7 +976,11 @@ function questionHtml(question = {}) {
       <option value="date" ${type === 'date' ? 'selected' : ''}>Date</option>
       <option value="time" ${type === 'time' ? 'selected' : ''}>Time</option>
     </select>
-    <button type="button" class="btn btn--ghost btn--sm" data-remove-question>Remove</button>
+    <div class="automation-question-actions">
+      ${workflowId && question.definition_id && !question.reusable_definition_id ? `<button type="button" class="btn btn--ghost btn--sm btn--icon" data-promote-question title="Make reusable across the household" aria-label="Make ${h(question.label || variableId)} reusable"><i data-lucide="globe-2" class="icon-sm"></i></button>` : ''}
+      ${question.reusable_definition_id ? '<span class="automation-variable-scope" title="Reusable household variable"><i data-lucide="globe-2" class="icon-sm"></i></span>' : ''}
+      <button type="button" class="btn btn--ghost btn--sm" data-remove-question>Remove</button>
+    </div>
     <input class="input automation-question-options" data-question-options placeholder="Choice options, comma separated" value="${h((question.options || []).join(', '))}" ${type === 'choice' ? '' : 'hidden'}>
   </div>`;
 }
@@ -876,9 +993,9 @@ function openWorkflowForm(workflow, context, manager = null) {
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${workflow?.subject_required !== 0 ? 'checked' : ''}> Ask which household member this is for</label>
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${workflow?.quick_add_enabled !== 0 ? 'checked' : ''}> Show in Quick Add</label>
 
-    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add variable</button></div>
+    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>
     <p class="form-hint automation-manager__hint">New IDs are generated from the variable name (for example, Day of Week becomes day_of_week). Duplicate names receive _2, _3, and so on. Once saved, IDs remain stable when display wording changes.</p>
-    <div id="workflow-questions">${(workflow?.input_schema || []).map(questionHtml).join('')}</div>
+    <div id="workflow-questions">${(workflow?.input_schema || []).map((question) => questionHtml(question, workflow?.id)).join('')}</div>
 
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>Activities</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-step">Add activity</button></div>
     <div id="workflow-steps">${(workflow?.steps?.length ? workflow.steps : [{}]).map((step, index) => workflowStepHtml(step, index, context.activities, workflow?.input_schema || [], context.members)).join('')}</div>
@@ -899,6 +1016,7 @@ function openWorkflowForm(workflow, context, manager = null) {
         return {
           id: row.dataset.variableId,
           definition_id: Number(row.dataset.variableDefinitionId) || null,
+          reusable_definition_id: Number(row.dataset.reusableDefinitionId) || null,
           label: row.querySelector('[data-question-label]').value.trim(),
           type,
           options: type === 'choice'
@@ -958,10 +1076,45 @@ function openWorkflowForm(workflow, context, manager = null) {
         }
       });
       panel.querySelector('#workflow-add-question')?.addEventListener('click', () => {
-        questions.insertAdjacentHTML('beforeend', questionHtml());
+        questions.insertAdjacentHTML('beforeend', questionHtml({}, workflow?.id));
         refreshStepVariables();
       });
+      panel.querySelector('#workflow-use-reusable')?.addEventListener('click', () => {
+        const selectedId = Number(panel.querySelector('#workflow-reusable-variable')?.value);
+        const variable = (context.variables || []).find((row) => Number(row.id) === selectedId);
+        if (!variable) return;
+        if ([...questions.querySelectorAll('[data-workflow-question]')].some((row) => row.dataset.variableId === variable.variable_key)) {
+          toast('That reusable variable is already part of this workflow.', 'danger');
+          return;
+        }
+        questions.insertAdjacentHTML('beforeend', questionHtml({
+          id: variable.variable_key, label: variable.label, type: variable.type,
+          options: variable.options || [], reusable_definition_id: variable.id,
+        }, workflow?.id));
+        refreshStepVariables();
+        if (window.lucide) window.lucide.createIcons({ el: questions });
+      });
       questions.addEventListener('click', (event) => {
+        const promote = event.target.closest('[data-promote-question]');
+        if (promote) {
+          const row = promote.closest('[data-workflow-question]');
+          const definitionId = Number(row?.dataset.variableDefinitionId);
+          if (!workflow?.id || !definitionId) return;
+          (async () => {
+            const confirmed = await confirmOverModal('Make this a reusable household variable?', {
+              confirmLabel: 'Make reusable',
+              detail: 'The variable will appear in the Variable Manager and remain linked to this workflow. This promotion cannot be undone from the workflow editor.',
+            });
+            if (!confirmed) return;
+            try {
+              await api.post(`/automation/admin/workflow-templates/${workflow.id}/variables/${definitionId}/promote`, {});
+              promote.outerHTML = '<span class="automation-variable-scope" title="Reusable household variable"><i data-lucide="globe-2" class="icon-sm"></i></span>';
+              if (window.lucide) window.lucide.createIcons({ el: row });
+              toast('Variable is now reusable across the household.');
+            } catch (error) { toast(error.message, 'danger'); }
+          })();
+          return;
+        }
         const remove = event.target.closest('[data-remove-question]');
         if (!remove) return;
         remove.closest('[data-workflow-question]')?.remove();

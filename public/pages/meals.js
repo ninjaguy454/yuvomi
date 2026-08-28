@@ -49,6 +49,9 @@ let state = {
   recipes:          [],
   lists:            [],     // Einkaufslisten für Transfer-Dropdown
   categories:       [],     // Einkaufskategorien für Zutaten
+  planning:         { timing_defaults: [], slots: [], members: [] },
+  viewMode:         'week',
+  isAdmin:          false,
   modal:            null,
   visibleMealTypes: ['breakfast', 'lunch', 'dinner', 'snack'],
   /** Gefangener Fehler des letzten Wochen-Ladevorgangs, sonst null.
@@ -204,12 +207,22 @@ async function loadPreferences() {
   }
 }
 
+async function loadPlanning() {
+  try {
+    const res = await api.get('/meals/planning');
+    state.planning = res.data || { timing_defaults: [], slots: [], members: [] };
+  } catch {
+    state.planning = { timing_defaults: [], slots: [], members: [] };
+  }
+}
+
 // --------------------------------------------------------
 // Render
 // --------------------------------------------------------
 
 export async function render(container, { user }) {
   _container = container;
+  state.isAdmin = user?.role === 'admin';
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
     <div class="meals-page">
@@ -234,6 +247,8 @@ export async function render(container, { user }) {
           </button>
         </div>
         <div class="page-toolbar__actions">
+          <button class="btn btn--secondary" id="meal-view-toggle" aria-pressed="false"><i data-lucide="list" class="icon-sm" aria-hidden="true"></i><span>Timeline</span></button>
+          ${state.isAdmin ? '<button class="btn btn--secondary" id="meal-schedule"><i data-lucide="calendar-clock" class="icon-sm" aria-hidden="true"></i><span>Recurring schedule</span></button>' : ''}
           <button class="btn btn--secondary week-nav__today" id="week-today">${t('meals.today')}</button>
           <!-- Nur Desktop: klappt die Rezept-Spalte weg, damit alle sieben
                Tagesspalten in voller Breite ins Board passen. -->
@@ -267,7 +282,7 @@ export async function render(container, { user }) {
   const today  = todayKey();
   const monday = getMondayOf(today);
 
-  await Promise.all([loadWeek(monday), loadLists(), loadPreferences(), loadCategories(), loadRecipes()]);
+  await Promise.all([loadWeek(monday), loadLists(), loadPreferences(), loadCategories(), loadRecipes(), loadPlanning()]);
   renderWeekGrid();
   renderRecipeSidebar();
   wireNav();
@@ -350,6 +365,7 @@ function wireRailToggle() {
 function renderWeekGrid() {
   const grid = _container.querySelector('#week-grid');
   if (!grid) return;
+  grid.classList.toggle('meal-timeline', state.viewMode === 'timeline');
 
   _container.querySelector('#week-label').textContent =
     formatWeekLabel(state.currentWeek);
@@ -402,6 +418,11 @@ function renderWeekGrid() {
         }),
       },
     });
+    return;
+  }
+
+  if (state.viewMode === 'timeline') {
+    renderTimelineGrid(grid);
     return;
   }
 
@@ -487,6 +508,35 @@ function renderWeekGrid() {
       if (verdeckt) todayHeader.scrollIntoView({ inline: 'center', block: 'nearest' });
     }
   }
+}
+
+function renderTimelineGrid(grid) {
+  const weekDays = Array.from({ length: 7 }, (_, index) => addDays(state.currentWeek, index));
+  const dayNames = DAY_NAMES();
+  const typeLabels = Object.fromEntries(MEAL_TYPES().map((type) => [type.key, type.label]));
+  grid.classList.add('meal-timeline');
+  grid.replaceChildren();
+  grid.insertAdjacentHTML('beforeend', weekDays.map((date) => {
+    const dayMeals = state.meals.filter((meal) => meal.date === date).sort((a, b) =>
+      String(a.scheduled_time || a.preferred_time || '99:99').localeCompare(String(b.scheduled_time || b.preferred_time || '99:99'))
+    );
+    const dayNameIndex = (zonedWeekday(date) + 6) % 7;
+    return `<section class="meal-timeline__day ${isToday(date) ? 'meal-timeline__day--today' : ''}">
+      <header class="meal-timeline__header"><strong>${dayNames[dayNameIndex]}</strong><span>${formatDayDate(date)}</span></header>
+      <div class="meal-timeline__items">${dayMeals.map((meal) => {
+        const time = meal.scheduled_time || meal.preferred_time || 'Any time';
+        const roles = (meal.participants || []).map((participant) => `${participant.display_name} · ${participant.role}`).join(', ');
+        return `<button type="button" class="meal-timeline__item" data-action="edit-meal" data-meal-id="${meal.id}">
+          <span class="meal-timeline__time">${esc(time)}</span>
+          <span class="meal-timeline__copy"><strong>${esc(meal.title)}</strong><small>${esc(typeLabels[meal.meal_type] || meal.meal_type)}${roles ? ` · ${esc(roles)}` : ''}</small></span>
+          <i data-lucide="chevron-right" class="icon-sm" aria-hidden="true"></i>
+        </button>`;
+      }).join('') || `<button type="button" class="meal-timeline__empty" data-action="add-meal" data-date="${date}" data-type="${state.visibleMealTypes[0] || 'lunch'}"><i data-lucide="plus" class="icon-sm"></i> Add a meal</button>`}</div>
+    </section>`;
+  }).join(''));
+  grid.removeAttribute('aria-busy');
+  if (window.lucide) lucide.createIcons({ el: grid });
+  wireGrid(grid);
 }
 
 function renderRecipeSidebar() {
@@ -623,6 +673,11 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
     const recurrenceBadge = meal.recurrence_template_id
       ? `<span class="meal-card__recurrence" aria-label="${t('meals.recurrenceBadge')}"><i data-lucide="repeat-2" class="icon-sm" aria-hidden="true"></i></span>`
       : '';
+    const mealTime = meal.scheduled_time || meal.preferred_time || '';
+    const roleSummary = (meal.participants || [])
+      .filter((participant) => participant.role === 'chooser' || participant.role === 'cook')
+      .map((participant) => `${participant.display_name} · ${participant.role}`)
+      .join(', ');
 
     // Die Karte ist bewusst KEIN Button: sie trägt Buttons und einen Link, und
     // interaktiver Inhalt in einem Button ist invalides HTML - Screenreader
@@ -634,6 +689,7 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
            data-action="edit-meal"
            data-meal-id="${meal.id}">
           <span class="meal-card__title"><span class="meal-card__title-text">${esc(meal.title)}</span>${recurrenceBadge}</span>
+          ${mealTime || roleSummary ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}</span>` : ''}
           ${ingLabel ? `<span class="meal-card__meta">
             <span class="meal-card__ingredients-count">${ingLabel}${esc(ingDoneLabel)}</span>
           </span>` : ''}
@@ -686,7 +742,112 @@ function setWeekBusy() {
   _container.querySelector('#week-grid')?.setAttribute('aria-busy', 'true');
 }
 
+function openMealScheduleModal() {
+  const timingByType = new Map((state.planning.timing_defaults || []).map((row) => [row.meal_type, row]));
+  const slotByKey = new Map((state.planning.slots || []).map((row) => [`${row.weekday}:${row.meal_type}`, row]));
+  const members = state.planning.members || [];
+  const memberOptions = (selected) => `<option value="">Choose a member</option>${members.map((member) => `<option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${esc(member.display_name)}</option>`).join('')}`;
+  const timingRows = MEAL_TYPES().map((type) => {
+    const timing = timingByType.get(type.key) || {};
+    return `<div class="meal-timing-row" data-timing-type="${type.key}">
+      <strong>${type.label}</strong>
+      <label>Earliest<input class="form-input" type="time" data-timing-earliest value="${esc(timing.earliest_time || '')}"></label>
+      <label>Preferred<input class="form-input" type="time" data-timing-preferred value="${esc(timing.preferred_time || '')}"></label>
+      <label>Latest<input class="form-input" type="time" data-timing-latest value="${esc(timing.latest_time || '')}"></label>
+      <label>Minutes<input class="form-input" type="number" min="1" max="720" data-timing-duration value="${timing.expected_duration_minutes || 30}"></label>
+    </div>`;
+  }).join('');
+  const scheduleCells = Array.from({ length: 7 }, (_, weekday) => {
+    return `<section class="meal-schedule-day"><h3>${DAY_NAMES()[weekday]}</h3><div class="meal-schedule-day__slots">${MEAL_TYPES().map((type) => {
+      const slot = slotByKey.get(`${weekday}:${type.key}`) || {};
+      const selectedParticipants = new Set((slot.participant_ids || []).map(Number));
+      return `<details class="meal-schedule-cell" data-schedule-weekday="${weekday}" data-schedule-type="${type.key}" ${slot.active ? 'open' : ''}>
+        <summary><label><input type="checkbox" data-schedule-active ${slot.active ? 'checked' : ''}> <strong>${type.label}</strong></label><span>${slot.active ? 'Scheduled' : 'Off'}</span></summary>
+        <div class="meal-schedule-cell__fields">
+          <label>Selection policy<select class="form-input" data-schedule-policy>
+            <option value="fixed" ${slot.policy === 'fixed' || !slot.policy ? 'selected' : ''}>Fixed chooser</option>
+            <option value="round_robin" ${slot.policy === 'round_robin' ? 'selected' : ''}>Rotate choosers</option>
+            <option value="personal_choice" ${slot.policy === 'personal_choice' ? 'selected' : ''}>Each person chooses</option>
+          </select></label>
+          <label data-fixed-chooser>Chooser<select class="form-input" data-schedule-fixed>${memberOptions(slot.fixed_user_id)}</select></label>
+          <fieldset><legend>Participants</legend>${members.map((member) => `<label class="meal-schedule-person"><input type="checkbox" data-schedule-participant value="${member.id}" ${selectedParticipants.has(Number(member.id)) ? 'checked' : ''}> ${esc(member.display_name)}</label>`).join('') || '<small>No household members found.</small>'}</fieldset>
+          <label>Fallback chooser<select class="form-input" data-schedule-fallback>${memberOptions(slot.fallback_user_id)}</select></label>
+          <label class="meal-schedule-person"><input type="checkbox" data-schedule-presence ${slot.presence_required ? 'checked' : ''}> Only assign people marked available</label>
+        </div>
+      </details>`;
+    }).join('')}</div></section>`;
+  }).join('');
+
+  const content = `<form id="meal-schedule-form">
+    <p class="form-hint">Set the household's normal meal windows, then turn on the weekday slots you want Yuvomi to prepare automatically. Generated meals remain editable for that date.</p>
+    <h3>Default timing windows</h3><div class="meal-timing-grid">${timingRows}</div>
+    <h3>Weekly recurring plan</h3><div class="meal-schedule-grid">${scheduleCells}</div>
+    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-modal-close>Cancel</button><button type="submit" class="btn btn--primary">Save schedule</button></div>
+  </form>`;
+
+  openSharedModal({ title: 'Recurring meal schedule', content, size: 'xl', onSave(panel) {
+    const syncCell = (cell) => {
+      const policy = cell.querySelector('[data-schedule-policy]').value;
+      const fixed = cell.querySelector('[data-fixed-chooser]');
+      fixed.hidden = policy !== 'fixed';
+      const active = cell.querySelector('[data-schedule-active]').checked;
+      cell.querySelector('summary span').textContent = active ? 'Scheduled' : 'Off';
+    };
+    panel.querySelectorAll('[data-schedule-weekday]').forEach((cell) => {
+      syncCell(cell);
+      cell.querySelector('[data-schedule-policy]').addEventListener('change', () => syncCell(cell));
+      cell.querySelector('[data-schedule-active]').addEventListener('change', () => syncCell(cell));
+    });
+    panel.querySelector('[data-modal-close]')?.addEventListener('click', closeModal);
+    panel.querySelector('#meal-schedule-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const submit = event.currentTarget.querySelector('[type="submit"]');
+      submit.disabled = true;
+      const timing_defaults = [...panel.querySelectorAll('[data-timing-type]')].map((row) => ({
+        meal_type: row.dataset.timingType,
+        earliest_time: row.querySelector('[data-timing-earliest]').value || null,
+        preferred_time: row.querySelector('[data-timing-preferred]').value || null,
+        latest_time: row.querySelector('[data-timing-latest]').value || null,
+        expected_duration_minutes: Number(row.querySelector('[data-timing-duration]').value || 30),
+      }));
+      const slots = [...panel.querySelectorAll('[data-schedule-weekday]')].map((cell) => ({
+        weekday: Number(cell.dataset.scheduleWeekday), meal_type: cell.dataset.scheduleType,
+        active: cell.querySelector('[data-schedule-active]').checked,
+        policy: cell.querySelector('[data-schedule-policy]').value,
+        fixed_user_id: Number(cell.querySelector('[data-schedule-fixed]').value) || null,
+        fallback_user_id: Number(cell.querySelector('[data-schedule-fallback]').value) || null,
+        participant_ids: [...cell.querySelectorAll('[data-schedule-participant]:checked')].map((input) => Number(input.value)),
+        presence_required: cell.querySelector('[data-schedule-presence]').checked,
+      }));
+      try {
+        const response = await api.put('/meals/planning', { timing_defaults, slots });
+        state.planning = response.data;
+        await api.post('/meals/planning/materialize', { week: state.currentWeek });
+        await loadWeek(state.currentWeek);
+        closeModal({ force: true });
+        renderWeekGrid();
+        window.yuvomi?.showToast('Recurring meal schedule saved.', 'success');
+      } catch (error) {
+        window.yuvomi?.showToast(error.data?.error || error.message || 'Could not save the schedule.', 'danger');
+        submit.disabled = false;
+      }
+    });
+  }});
+}
+
 function wireNav() {
+  _container.querySelector('#meal-view-toggle')?.addEventListener('click', (event) => {
+    state.viewMode = state.viewMode === 'week' ? 'timeline' : 'week';
+    const button = event.currentTarget;
+    button.setAttribute('aria-pressed', String(state.viewMode === 'timeline'));
+    button.querySelector('span').textContent = state.viewMode === 'timeline' ? 'Weekly grid' : 'Timeline';
+    const icon = button.querySelector('svg, i');
+    icon?.remove();
+    button.insertAdjacentHTML('afterbegin', `<i data-lucide="${state.viewMode === 'timeline' ? 'layout-grid' : 'list'}" class="icon-sm" aria-hidden="true"></i>`);
+    if (window.lucide) lucide.createIcons({ el: button });
+    renderWeekGrid();
+  });
+  _container.querySelector('#meal-schedule')?.addEventListener('click', openMealScheduleModal);
   _container.querySelector('#week-prev')?.addEventListener('click', async () => {
     setWeekBusy();
     await loadWeek(addDays(state.currentWeek, -7));
@@ -1349,9 +1510,31 @@ function buildModalContent({ mode, date, mealType, meal }) {
       ...state.recipes.map(recipeOptionHtml),
     ].join('');
 
-  const advancedOpen = isEdit && (!!meal.recipe_id || !!meal.notes || !!meal.recipe_url || isRecurring);
+  const advancedOpen = isEdit && (!!meal.recipe_id || !!meal.notes || !!meal.recipe_url || isRecurring || !!meal.scheduled_time || !!meal.participants?.length);
+
+  const scopeOptions = [
+    ['household', 'Household meal'], ['personal', 'Personal meal'], ['restaurant', 'Restaurant'],
+    ['takeout', 'Takeout'], ['skipped', 'Skipped meal'], ['travel', 'Travel meal'],
+  ].map(([value, label]) => `<option value="${value}" ${(meal?.scope || 'household') === value ? 'selected' : ''}>${label}</option>`).join('');
+  const mealRoles = ['participant', 'chooser', 'cook', 'supervisor'];
+  const participantRows = (state.planning.members || []).map((member) => {
+    const roles = new Set((meal?.participants || []).filter((row) => Number(row.user_id) === Number(member.id)).map((row) => row.role));
+    return `<div class="meal-role-row" data-meal-role-user="${member.id}"><strong>${esc(member.display_name)}</strong>${mealRoles.map((role) => `<label><input type="checkbox" data-meal-role="${role}" ${roles.has(role) ? 'checked' : ''}> ${role[0].toUpperCase()}${role.slice(1)}</label>`).join('')}</div>`;
+  }).join('');
+
+  const planningFieldsHtml = `
+    <div class="form-group"><label class="form-label" for="modal-meal-scope">Meal type and location</label><select class="form-input" id="modal-meal-scope">${scopeOptions}</select></div>
+    <div class="modal-grid modal-grid--2 meal-planning-times">
+      <div class="form-group"><label class="form-label" for="modal-scheduled-time">Scheduled time</label><input class="form-input" type="time" id="modal-scheduled-time" value="${esc(meal?.scheduled_time || '')}"></div>
+      <div class="form-group"><label class="form-label" for="modal-duration">Expected minutes</label><input class="form-input" type="number" min="1" max="720" id="modal-duration" value="${meal?.expected_duration_minutes || ''}"></div>
+      <div class="form-group"><label class="form-label" for="modal-earliest-time">Earliest</label><input class="form-input" type="time" id="modal-earliest-time" value="${esc(meal?.earliest_time || '')}"></div>
+      <div class="form-group"><label class="form-label" for="modal-preferred-time">Preferred</label><input class="form-input" type="time" id="modal-preferred-time" value="${esc(meal?.preferred_time || '')}"></div>
+      <div class="form-group"><label class="form-label" for="modal-latest-time">Latest</label><input class="form-input" type="time" id="modal-latest-time" value="${esc(meal?.latest_time || '')}"></div>
+    </div>
+    <fieldset class="meal-role-grid"><legend class="form-label">People and roles</legend>${participantRows || '<p class="form-hint">Add household members to assign meal roles.</p>'}</fieldset>`;
 
   const advancedFieldsHtml = `
+    ${planningFieldsHtml}
     <div class="form-group">
       <label class="form-label" for="modal-recipe-id">${t('meals.savedRecipeLabel')}</label>
       <select class="form-input" id="modal-recipe-id">${recipeOptions}</select>
@@ -1484,14 +1667,25 @@ async function saveModal(overlay) {
   const notes     = overlay.querySelector('#modal-notes').value.trim() || null;
   const recipe_url = overlay.querySelector('#modal-recipe-url').value.trim() || null;
   const recipe_id = overlay.querySelector('#modal-recipe-id')?.value || null;
+  const meal_scope = overlay.querySelector('#modal-meal-scope')?.value || 'household';
+  const scheduled_time = overlay.querySelector('#modal-scheduled-time')?.value || null;
+  const earliest_time = overlay.querySelector('#modal-earliest-time')?.value || null;
+  const preferred_time = overlay.querySelector('#modal-preferred-time')?.value || null;
+  const latest_time = overlay.querySelector('#modal-latest-time')?.value || null;
+  const expected_duration_minutes = Number(overlay.querySelector('#modal-duration')?.value) || null;
+  const participants = [...overlay.querySelectorAll('[data-meal-role-user]')].flatMap((row) =>
+    [...row.querySelectorAll('[data-meal-role]:checked')].map((input) => ({
+      user_id: Number(row.dataset.mealRoleUser), role: input.dataset.mealRole, status: 'participating',
+    }))
+  );
   const repeat_weekly = state.modal?.mode === 'create'
     ? Boolean(overlay.querySelector('#modal-repeat-weekly')?.checked)
     : false;
-  const scope = overlay.querySelector('#modal-edit-scope')?.value || 'single';
+  const editScope = overlay.querySelector('#modal-edit-scope')?.value || 'single';
   // Das Wiederholungs-Ende zählt nur, solange die Serie im Spiel ist: beim
   // Anlegen mit gesetztem Schalter, beim Bearbeiten im Serien-Umfang. Sonst
   // steht im Feld zwar ein Wert, er gehört aber zu keiner der beiden Absichten.
-  const seriesScoped   = state.modal?.mode === 'create' ? repeat_weekly : scope === 'series';
+  const seriesScoped   = state.modal?.mode === 'create' ? repeat_weekly : editScope === 'series';
   const repeatUntilEl  = overlay.querySelector('#modal-repeat-until');
   const repeatUntilRaw = seriesScoped ? (repeatUntilEl?.value ?? '') : '';
   // Leeres Feld heißt „ohne Ende" und geht als leerer String raus: der Server
@@ -1527,15 +1721,23 @@ async function saveModal(overlay) {
     const { mode, meal } = state.modal;
 
     if (mode === 'create') {
-      const res     = await api.post('/meals', { date, meal_type, title, notes, recipe_url, recipe_id, ingredients, repeat_weekly, repeat_until });
+      const res = await api.post('/meals', {
+        date, meal_type, title, notes, recipe_url, recipe_id, ingredients, repeat_weekly, repeat_until,
+        scope: meal_scope, scheduled_time, earliest_time, preferred_time, latest_time,
+        expected_duration_minutes, participants,
+      });
       state.meals.push(res.data);
     } else {
-      if (scope === 'series') {
+      if (editScope === 'series') {
         // Ganze Serie: Template + alle Instanzen inkl. Zutaten serverseitig aktualisieren.
         await api.put(`/meals/${meal.id}?scope=series`, { meal_type, title, notes, recipe_url, recipe_id, ingredients, repeat_until });
       } else {
         // Nur diese Instanz
-        await api.put(`/meals/${meal.id}`, { date, meal_type, title, notes, recipe_url, recipe_id });
+        await api.put(`/meals/${meal.id}`, {
+          date, meal_type, title, notes, recipe_url, recipe_id,
+          scope: meal_scope, scheduled_time, earliest_time, preferred_time, latest_time,
+          expected_duration_minutes, participants,
+        });
 
         // Zutaten synchronisieren
         const existingIds = new Set((meal.ingredients ?? []).map((i) => i.id));

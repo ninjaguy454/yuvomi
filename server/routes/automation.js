@@ -34,6 +34,12 @@ const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);
 const VALID_WORKFLOW_INPUT_TYPES = new Set([
   'household_member', 'boolean', 'choice', 'select', 'text', 'number', 'date', 'time',
 ]);
+const SYSTEM_CONTEXT_VARIABLES = Object.freeze([
+  { key: 'context.current_date', label: 'Current date', type: 'date', description: 'The date when the template runs.' },
+  { key: 'context.day_of_week', label: 'Day of week', type: 'text', description: 'The local weekday when the template runs.' },
+  { key: 'context.current_time', label: 'Current time', type: 'time', description: 'The local time when the template runs.' },
+  { key: 'context.household_member', label: 'Selected household member', type: 'household_member', description: 'The person selected for the current activity or workflow.' },
+]);
 
 function text(value, { required = false, max = 200 } = {}) {
   const out = value == null ? '' : String(value).trim();
@@ -194,9 +200,20 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
     if (requestedDefinitionId && existingKey !== variableId) {
       throw new Error(`Workflow variable key "${existingKey}" cannot be changed during an ordinary edit.`);
     }
+    const reusableDefinitionId = intOrNull(
+      question.reusable_definition_id ?? existingDefinition?.reusable_definition_id,
+      { min: 1 },
+    );
+    if (reusableDefinitionId) {
+      const reusable = db.get().prepare('SELECT variable_key, type FROM household_variable_definitions WHERE id = ? AND active = 1').get(reusableDefinitionId);
+      if (!reusable || reusable.variable_key !== variableId || reusable.type !== type) {
+        throw new Error(`Reusable variable ${variableId} no longer matches its household definition.`);
+      }
+    }
     return {
       id: variableId,
       definition_id: existingDefinition ? Number(existingDefinition.definition_id) : null,
+      reusable_definition_id: reusableDefinitionId,
       label,
       type,
       options,
@@ -360,9 +377,69 @@ function normalizeWorkflowInput(d, body, existing = null) {
   };
 }
 
+function variableKey(value) {
+  const key = text(value, { required: true, max: 80 });
+  if (!/^[a-z][a-z0-9_]*$/.test(key)) {
+    throw new Error('Variable key must start with a letter and use lowercase letters, numbers, and underscores.');
+  }
+  return key;
+}
+
+function availableHouseholdVariableKey(d, label) {
+  const normalized = String(label || '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 72).replace(/_+$/g, '');
+  const base = /^[a-z]/.test(normalized) ? normalized : `value_${normalized || 'variable'}`;
+  let candidate = base;
+  let suffix = 2;
+  const exists = d.prepare('SELECT 1 FROM household_variable_definitions WHERE variable_key = ? COLLATE NOCASE');
+  while (exists.get(candidate)) candidate = `${base}_${suffix++}`;
+  return candidate;
+}
+
+function normalizeHouseholdVariable(body, existing = null) {
+  const key = variableKey(body.variable_key ?? existing?.variable_key);
+  const label = text(body.label ?? existing?.label, { required: true, max: 200 });
+  const description = text(body.description ?? existing?.description, { max: 1000 });
+  const requestedType = body.type ?? existing?.type ?? 'text';
+  const type = requestedType === 'select' ? 'choice' : requestedType;
+  if (!VALID_WORKFLOW_INPUT_TYPES.has(type)) throw new Error('Unsupported variable type.');
+  const kind = body.kind ?? existing?.kind ?? 'field';
+  if (!['value', 'field'].includes(kind)) throw new Error('Variable kind must be value or field.');
+  const options = type === 'choice'
+    ? [...new Set((Array.isArray(body.options) ? body.options : parseJsonSafe(existing?.options_json, []))
+      .map((option) => String(option).trim()).filter(Boolean))]
+    : [];
+  if (type === 'choice' && !options.length) throw new Error('Choice variables need at least one option.');
+  const defaultValue = body.default_value !== undefined
+    ? body.default_value
+    : parseJsonSafe(existing?.default_value_json, null);
+  return { key, label, description, type, kind, options, defaultValue, active: bool(body.active, existing ? !!existing.active : true) };
+}
+
+function parseJsonSafe(raw, fallback) {
+  if (raw == null || raw === '') return fallback;
+  try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return fallback; }
+}
+
+function householdVariableRows(d) {
+  return d.prepare(`
+    SELECT hv.*,
+           (SELECT COUNT(*) FROM workflow_variable_definitions wv WHERE wv.reusable_definition_id = hv.id) AS usage_count
+      FROM household_variable_definitions hv
+     ORDER BY hv.active DESC, hv.label COLLATE NOCASE, hv.id
+  `).all().map((row) => ({
+    ...row,
+    options: parseJsonSafe(row.options_json, []),
+    default_value: parseJsonSafe(row.default_value_json, null),
+    options_json: undefined,
+    default_value_json: undefined,
+  }));
+}
+
 function syncWorkflowVariableDefinitions(d, workflowId, questions) {
   const existing = d.prepare(`
-    SELECT id, variable_key
+    SELECT id, variable_key, reusable_definition_id
       FROM workflow_variable_definitions
      WHERE workflow_template_id = ?
   `).all(workflowId);
@@ -370,12 +447,12 @@ function syncWorkflowVariableDefinitions(d, workflowId, questions) {
   const existingByKey = new Map(existing.map((row) => [row.variable_key, row]));
   const insert = d.prepare(`
     INSERT INTO workflow_variable_definitions (
-      workflow_template_id, variable_key, label, type, options_json, scope
-    ) VALUES (?, ?, ?, ?, ?, 'workflow')
+      workflow_template_id, variable_key, label, type, options_json, scope, reusable_definition_id
+    ) VALUES (?, ?, ?, ?, ?, 'workflow', ?)
   `);
   const update = d.prepare(`
     UPDATE workflow_variable_definitions
-       SET label = ?, type = ?, options_json = ?,
+       SET label = ?, type = ?, options_json = ?, reusable_definition_id = ?,
            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
      WHERE id = ? AND workflow_template_id = ?
   `);
@@ -394,6 +471,7 @@ function syncWorkflowVariableDefinitions(d, workflowId, questions) {
         question.label,
         question.type,
         JSON.stringify(question.options ?? []),
+        question.reusable_definition_id || stored.reusable_definition_id || null,
         stored.id,
         workflowId,
       );
@@ -405,6 +483,7 @@ function syncWorkflowVariableDefinitions(d, workflowId, questions) {
         question.label,
         question.type,
         JSON.stringify(question.options ?? []),
+        question.reusable_definition_id || null,
       ).lastInsertRowid);
     }
     keptIds.push(definitionId);
@@ -627,6 +706,165 @@ router.put('/admin/skills/:skillId/members/:userId', requireAdmin, (req, res) =>
   }
 });
 
+router.get('/admin/variables', requireAdmin, (req, res) => {
+  try {
+    res.json({ data: householdVariableRows(db.get()), context: SYSTEM_CONTEXT_VARIABLES });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load reusable variables.', code: 500 });
+  }
+});
+
+router.post('/admin/variables', requireAdmin, (req, res) => {
+  try {
+    const d = db.get();
+    const input = normalizeHouseholdVariable({
+      ...req.body,
+      variable_key: req.body.variable_key || availableHouseholdVariableKey(d, req.body.label),
+    });
+    const result = d.prepare(`
+      INSERT INTO household_variable_definitions (
+        variable_key, label, description, type, kind, options_json,
+        default_value_json, active, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.key, input.label, input.description, input.type, input.kind,
+      JSON.stringify(input.options), input.defaultValue == null ? null : JSON.stringify(input.defaultValue),
+      input.active, currentUserId(req),
+    );
+    res.status(201).json({ data: householdVariableRows(d).find((row) => Number(row.id) === Number(result.lastInsertRowid)) });
+  } catch (err) {
+    const duplicate = /UNIQUE constraint failed/i.test(err.message);
+    res.status(duplicate ? 409 : 400).json({ error: duplicate ? 'That variable key is already in use.' : err.message, code: duplicate ? 409 : 400 });
+  }
+});
+
+router.put('/admin/variables/:id', requireAdmin, (req, res) => {
+  try {
+    const d = db.get();
+    const existing = d.prepare('SELECT * FROM household_variable_definitions WHERE id = ?').get(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Reusable variable not found.', code: 404 });
+    const input = normalizeHouseholdVariable({ ...req.body, variable_key: existing.variable_key }, existing);
+    d.prepare(`
+      UPDATE household_variable_definitions
+         SET label = ?, description = ?, type = ?, kind = ?, options_json = ?,
+             default_value_json = ?, active = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+       WHERE id = ?
+    `).run(
+      input.label, input.description, input.type, input.kind, JSON.stringify(input.options),
+      input.defaultValue == null ? null : JSON.stringify(input.defaultValue), input.active, existing.id,
+    );
+    res.json({ data: householdVariableRows(d).find((row) => Number(row.id) === Number(existing.id)) });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: 400 });
+  }
+});
+
+router.put('/admin/variables/:id/key', requireAdmin, (req, res) => {
+  try {
+    const d = db.get();
+    const existing = d.prepare('SELECT * FROM household_variable_definitions WHERE id = ?').get(req.params.id);
+    if (!existing) return res.status(404).json({ error: 'Reusable variable not found.', code: 404 });
+    const nextKey = variableKey(req.body.variable_key);
+    d.transaction(() => {
+      const linked = d.prepare(`
+        SELECT id, workflow_template_id, variable_key
+          FROM workflow_variable_definitions
+         WHERE reusable_definition_id = ?
+      `).all(existing.id);
+      const replaceToken = (value) => value == null ? value : String(value).replaceAll(`{{${existing.variable_key}}}`, `{{${nextKey}}}`);
+      for (const definition of linked) {
+        const collision = d.prepare(`
+          SELECT 1 FROM workflow_variable_definitions
+           WHERE workflow_template_id = ? AND variable_key = ? COLLATE NOCASE AND id != ?
+        `).get(definition.workflow_template_id, nextKey, definition.id);
+        if (collision) throw new Error(`Workflow ${definition.workflow_template_id} already uses the variable ID ${nextKey}.`);
+        const workflow = d.prepare('SELECT * FROM workflow_templates WHERE id = ?').get(definition.workflow_template_id);
+        const schema = parseJsonSafe(workflow.input_schema_json, []).map((question) => {
+          const questionDefinitionId = Number(question.definition_id);
+          const questionKey = question.id ?? question.key;
+          if (questionDefinitionId === Number(definition.id) || questionKey === existing.variable_key) {
+            return { ...question, id: nextKey, key: undefined };
+          }
+          return question;
+        });
+        d.prepare(`
+          UPDATE workflow_templates
+             SET name = ?, description = ?, input_schema_json = ?,
+                 updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+           WHERE id = ?
+        `).run(replaceToken(workflow.name), replaceToken(workflow.description), JSON.stringify(schema), workflow.id);
+        const steps = d.prepare('SELECT * FROM workflow_template_steps WHERE workflow_template_id = ?').all(workflow.id);
+        for (const step of steps) {
+          const condition = parseJsonSafe(step.condition_json, null);
+          if (condition?.variable_id === existing.variable_key) condition.variable_id = nextKey;
+          if (condition?.input === existing.variable_key) condition.input = nextKey;
+          d.prepare(`
+            UPDATE workflow_template_steps
+               SET title_override = ?, description_override = ?, subject_variable_id = ?, condition_json = ?
+             WHERE id = ?
+          `).run(
+            replaceToken(step.title_override), replaceToken(step.description_override),
+            step.subject_variable_id === existing.variable_key ? nextKey : step.subject_variable_id,
+            condition ? JSON.stringify(condition) : null, step.id,
+          );
+        }
+        d.prepare('UPDATE workflow_variable_definitions SET variable_key = ? WHERE id = ?').run(nextKey, definition.id);
+      }
+      d.prepare(`
+        UPDATE household_variable_definitions
+           SET variable_key = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+         WHERE id = ?
+      `).run(nextKey, existing.id);
+    })();
+    res.json({ data: householdVariableRows(d).find((row) => Number(row.id) === Number(existing.id)) });
+  } catch (err) {
+    const duplicate = /UNIQUE constraint failed/i.test(err.message);
+    res.status(duplicate ? 409 : 400).json({ error: duplicate ? 'That variable key is already in use.' : err.message, code: duplicate ? 409 : 400 });
+  }
+});
+
+router.delete('/admin/variables/:id', requireAdmin, (req, res) => {
+  try {
+    const d = db.get();
+    const usage = d.prepare('SELECT COUNT(*) AS n FROM workflow_variable_definitions WHERE reusable_definition_id = ?').get(req.params.id)?.n ?? 0;
+    if (usage) return res.status(409).json({ error: `This reusable variable is used by ${usage} workflow variable${usage === 1 ? '' : 's'}.`, code: 409 });
+    const result = d.prepare('DELETE FROM household_variable_definitions WHERE id = ?').run(req.params.id);
+    if (!result.changes) return res.status(404).json({ error: 'Reusable variable not found.', code: 404 });
+    res.status(204).end();
+  } catch (err) {
+    res.status(500).json({ error: 'Could not delete reusable variable.', code: 500 });
+  }
+});
+
+router.post('/admin/workflow-templates/:workflowId/variables/:definitionId/promote', requireAdmin, (req, res) => {
+  try {
+    const d = db.get();
+    const local = d.prepare(`
+      SELECT * FROM workflow_variable_definitions
+       WHERE id = ? AND workflow_template_id = ?
+    `).get(req.params.definitionId, req.params.workflowId);
+    if (!local) return res.status(404).json({ error: 'Workflow variable not found.', code: 404 });
+    const promotedId = d.transaction(() => {
+      let reusable = d.prepare('SELECT id, type FROM household_variable_definitions WHERE variable_key = ? COLLATE NOCASE').get(local.variable_key);
+      if (reusable && reusable.type !== local.type) throw new Error('A reusable variable with this key has a different type.');
+      if (!reusable) {
+        const result = d.prepare(`
+          INSERT INTO household_variable_definitions (
+            variable_key, label, type, kind, options_json, created_by
+          ) VALUES (?, ?, ?, 'field', ?, ?)
+        `).run(local.variable_key, local.label, local.type, local.options_json, currentUserId(req));
+        reusable = { id: Number(result.lastInsertRowid) };
+      }
+      d.prepare('UPDATE workflow_variable_definitions SET reusable_definition_id = ? WHERE id = ?')
+        .run(reusable.id, local.id);
+      return Number(reusable.id);
+    })();
+    res.json({ data: { reusable_definition_id: promotedId } });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: 400 });
+  }
+});
+
 router.get('/admin/activity-templates', requireAdmin, (req, res) => {
   try {
     const d = db.get();
@@ -635,6 +873,7 @@ router.get('/admin/activity-templates', requireAdmin, (req, res) => {
       skills: d.prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE').all(),
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
+      variables: householdVariableRows(d).filter((variable) => variable.active),
     });
   } catch (err) {
     res.status(500).json({ error: 'Could not load activity templates.', code: 500 });

@@ -328,11 +328,13 @@ test('jeder Weg zu einer bestehenden Aufgabe führt in die Detailansicht', async
   const detailCalls = [...src.matchAll(/openTaskDetail\(\{ task, users: state\.users, reminder \}, container\)/g)];
   assert.equal(detailCalls.length, 5, 'Listenzeile/Stift, Kanban, Wischen, Deep-Link und Verlauf');
 
-  // Übrig bleibt genau ein openTaskModal-Aufruf: der FAB für neue Aufgaben.
-  // Die Definition darüber trägt Defaults (`= {}`) und zählt nicht mit.
+  // Übrig bleiben genau zwei openTaskModal-Aufrufe: der FAB und der
+  // Activity-Template-Einstieg, beide für eine neue Aufgabe. Die Definition
+  // darüber trägt Defaults (`= {}`) und zählt nicht mit.
   const modalCalls = [...src.matchAll(/^\s+openTaskModal\(\{.*\}, container\);$/gm)];
-  assert.equal(modalCalls.length, 1, 'nur der Anlege-Pfad öffnet noch direkt das Formular');
-  assert.match(src, /openTaskModal\(\{ users: state\.users \}, container\)/, 'und zwar ohne task');
+  assert.equal(modalCalls.length, 2, 'nur neue Aufgaben öffnen noch direkt das Formular');
+  assert.match(src, /openTaskModal\(\{ users: state\.users \}, container\)/, 'der FAB öffnet ohne task');
+  assert.match(src, /openTaskModal\(\{ users: state\.users, presetActivityTemplate: activity \}, container\)/, 'der Template-Einstieg öffnet ohne task');
 });
 
 test('die Wisch-Geste heißt Ansehen, nicht Bearbeiten', async () => {
@@ -343,7 +345,7 @@ test('die Wisch-Geste heißt Ansehen, nicht Bearbeiten', async () => {
 
 test('die Aufgaben-Verdrahtung ist zweigeteilt und behält die Tag-Reihenfolge', async () => {
   const src = await tasksJs();
-  assert.match(src, /function wireTaskForm\(panel, \{ task = null, container \}\)/);
+  assert.match(src, /function wireTaskForm\(panel, \{ task = null, container(?:, presetActivityTemplate = null)? \}\)/);
 
   // modalTags ist ein Working-Set, das renderTagChips direkt nach dem Rendern
   // liest - es muss VOR renderModalContent gesetzt werden.

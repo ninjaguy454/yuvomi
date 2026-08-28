@@ -6584,6 +6584,152 @@ const FORK_MIGRATIONS = [
       WHERE COALESCE(json_extract(question.value, '$.id'), json_extract(question.value, '$.key')) IS NOT NULL;
     `,
   },
+  {
+    version: 10006,
+    description: 'Household planning: reusable variables and first-class meal plan',
+    up: `
+      CREATE TABLE IF NOT EXISTS household_variable_definitions (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        variable_key       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        label              TEXT    NOT NULL,
+        description        TEXT,
+        type               TEXT    NOT NULL DEFAULT 'text'
+                                CHECK(type IN ('household_member', 'boolean', 'choice', 'text', 'number', 'date', 'time')),
+        kind               TEXT    NOT NULL DEFAULT 'field'
+                                CHECK(kind IN ('value', 'field')),
+        options_json       TEXT    NOT NULL DEFAULT '[]',
+        default_value_json TEXT,
+        active             INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_household_variable_definitions_active
+        ON household_variable_definitions(active, label COLLATE NOCASE);
+
+      ALTER TABLE workflow_variable_definitions
+        ADD COLUMN reusable_definition_id INTEGER REFERENCES household_variable_definitions(id) ON DELETE SET NULL;
+      CREATE INDEX idx_workflow_variable_reusable
+        ON workflow_variable_definitions(reusable_definition_id);
+
+      CREATE TABLE IF NOT EXISTS meal_timing_defaults (
+        meal_type                TEXT PRIMARY KEY CHECK(meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')),
+        earliest_time            TEXT,
+        preferred_time           TEXT,
+        latest_time              TEXT,
+        expected_duration_minutes INTEGER NOT NULL DEFAULT 30 CHECK(expected_duration_minutes BETWEEN 1 AND 720),
+        updated_by               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      INSERT OR IGNORE INTO meal_timing_defaults
+        (meal_type, earliest_time, preferred_time, latest_time, expected_duration_minutes)
+      VALUES
+        ('breakfast', '06:00', '07:30', '10:00', 30),
+        ('lunch',     '11:00', '12:30', '15:00', 45),
+        ('dinner',    '16:30', '18:00', '21:00', 60),
+        ('snack',     '09:00', '15:00', '21:00', 15);
+
+      CREATE TABLE IF NOT EXISTS meal_schedule_slots (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        weekday                  INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+        meal_type                TEXT    NOT NULL CHECK(meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')),
+        policy                   TEXT    NOT NULL DEFAULT 'fixed'
+                                        CHECK(policy IN ('fixed', 'round_robin', 'personal_choice')),
+        fixed_user_id            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        fallback_user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        rotation_group           TEXT,
+        presence_required        INTEGER NOT NULL DEFAULT 0 CHECK(presence_required IN (0, 1)),
+        earliest_time            TEXT,
+        preferred_time           TEXT,
+        latest_time              TEXT,
+        expected_duration_minutes INTEGER CHECK(expected_duration_minutes IS NULL OR expected_duration_minutes BETWEEN 1 AND 720),
+        active                   INTEGER NOT NULL DEFAULT 0 CHECK(active IN (0, 1)),
+        revision                 INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+        created_by               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(weekday, meal_type)
+      );
+      CREATE INDEX idx_meal_schedule_slots_active ON meal_schedule_slots(active, weekday, meal_type);
+
+      CREATE TABLE IF NOT EXISTS meal_schedule_slot_participants (
+        schedule_slot_id INTEGER NOT NULL REFERENCES meal_schedule_slots(id) ON DELETE CASCADE,
+        user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY(schedule_slot_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS meal_schedule_exceptions (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        schedule_slot_id INTEGER NOT NULL REFERENCES meal_schedule_slots(id) ON DELETE CASCADE,
+        date             TEXT    NOT NULL,
+        action           TEXT    NOT NULL DEFAULT 'skip' CHECK(action IN ('skip', 'override')),
+        override_json    TEXT,
+        created_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(schedule_slot_id, date)
+      );
+
+      ALTER TABLE meals ADD COLUMN scope TEXT NOT NULL DEFAULT 'household'
+        CHECK(scope IN ('household', 'personal', 'restaurant', 'takeout', 'skipped', 'travel'));
+      ALTER TABLE meals ADD COLUMN scheduled_time TEXT;
+      ALTER TABLE meals ADD COLUMN earliest_time TEXT;
+      ALTER TABLE meals ADD COLUMN preferred_time TEXT;
+      ALTER TABLE meals ADD COLUMN latest_time TEXT;
+      ALTER TABLE meals ADD COLUMN expected_duration_minutes INTEGER
+        CHECK(expected_duration_minutes IS NULL OR expected_duration_minutes BETWEEN 1 AND 720);
+      ALTER TABLE meals ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'
+        CHECK(source IN ('manual', 'recurrence', 'schedule', 'workflow', 'import'));
+      ALTER TABLE meals ADD COLUMN source_key TEXT;
+      ALTER TABLE meals ADD COLUMN schedule_slot_id INTEGER REFERENCES meal_schedule_slots(id) ON DELETE SET NULL;
+      ALTER TABLE meals ADD COLUMN schedule_revision INTEGER;
+      ALTER TABLE meals ADD COLUMN provenance_json TEXT;
+      ALTER TABLE meals ADD COLUMN superseded_by_id INTEGER REFERENCES meals(id) ON DELETE SET NULL;
+      CREATE UNIQUE INDEX idx_meals_source_key ON meals(source_key) WHERE source_key IS NOT NULL;
+      CREATE INDEX idx_meals_schedule_slot ON meals(schedule_slot_id, date);
+
+      UPDATE meals
+         SET source = CASE WHEN recurrence_template_id IS NULL THEN 'manual' ELSE 'recurrence' END,
+             source_key = CASE
+               WHEN recurrence_template_id IS NULL THEN NULL
+               ELSE 'legacy-recurrence:' || recurrence_template_id || ':' || date
+             END,
+             provenance_json = json_object(
+               'source', CASE WHEN recurrence_template_id IS NULL THEN 'manual' ELSE 'recurrence' END,
+               'legacy_meal_id', id
+             );
+
+      CREATE TABLE IF NOT EXISTS meal_participants (
+        meal_id     INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role        TEXT    NOT NULL CHECK(role IN ('chooser', 'cook', 'participant', 'supervisor')),
+        status      TEXT    NOT NULL DEFAULT 'participating'
+                            CHECK(status IN ('participating', 'not_participating', 'away', 'needs_confirmation')),
+        source      TEXT    NOT NULL DEFAULT 'manual' CHECK(source IN ('manual', 'schedule', 'workflow')),
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(meal_id, user_id, role)
+      );
+      CREATE INDEX idx_meal_participants_user_date ON meal_participants(user_id, meal_id, role);
+
+      CREATE TABLE IF NOT EXISTS planning_obligations (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type       TEXT    NOT NULL,
+        entity_id         INTEGER NOT NULL,
+        logical_key       TEXT    NOT NULL UNIQUE,
+        role              TEXT    NOT NULL,
+        responsible_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        responsible_group TEXT,
+        due_at            TEXT,
+        status            TEXT    NOT NULL DEFAULT 'pending'
+                                  CHECK(status IN ('pending', 'accepted', 'declined', 'timed_out', 'fulfilled', 'cancelled', 'superseded')),
+        attempt           INTEGER NOT NULL DEFAULT 1 CHECK(attempt > 0),
+        fallback_source   TEXT,
+        created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_planning_obligations_entity ON planning_obligations(entity_type, entity_id, role);
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

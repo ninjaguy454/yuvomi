@@ -28,6 +28,108 @@
   overflow: hidden;
 }
 
+/* Phase 2 planning views and recurring schedule editor */
+.meal-card__planning {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-2);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.week-grid.meal-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3);
+  overflow: auto;
+}
+
+.meal-timeline__day {
+  overflow: hidden;
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.meal-timeline__day--today { border-color: var(--color-accent); }
+.meal-timeline__header {
+  display: flex;
+  justify-content: space-between;
+  padding: var(--space-3) var(--space-4);
+  border-bottom: var(--space-px) solid var(--color-border);
+}
+.meal-timeline__items { display: grid; }
+.meal-timeline__item,
+.meal-timeline__empty {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+  border: 0;
+  border-bottom: var(--space-px) solid var(--color-border-subtle);
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.meal-timeline__item:last-child { border-bottom: 0; }
+.meal-timeline__item:hover,
+.meal-timeline__empty:hover { background: var(--color-surface-hover); }
+.meal-timeline__time { color: var(--module-accent); font-weight: var(--font-weight-semibold); }
+.meal-timeline__copy { display: grid; gap: var(--space-1); min-width: 0; }
+.meal-timeline__copy small { overflow: hidden; color: var(--color-text-secondary); text-overflow: ellipsis; white-space: nowrap; }
+.meal-timeline__empty { grid-template-columns: auto 1fr; color: var(--color-text-secondary); }
+
+.meal-timing-grid { display: grid; gap: var(--space-2); margin-bottom: var(--space-5); }
+.meal-timing-row {
+  display: grid;
+  grid-template-columns: minmax(7rem, 1fr) repeat(4, minmax(7rem, 1fr));
+  gap: var(--space-2);
+  align-items: end;
+}
+.meal-timing-row label,
+.meal-schedule-cell__fields > label { display: grid; gap: var(--space-1); color: var(--color-text-secondary); font-size: var(--text-xs); }
+.meal-schedule-grid { display: grid; gap: var(--space-3); }
+.meal-schedule-day {
+  padding: var(--space-3);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+.meal-schedule-day h3 { margin: 0 0 var(--space-2); }
+.meal-schedule-day__slots { display: grid; grid-template-columns: repeat(4, minmax(12rem, 1fr)); gap: var(--space-2); }
+.meal-schedule-cell {
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--color-fill-well);
+}
+.meal-schedule-cell summary { display: flex; justify-content: space-between; gap: var(--space-2); cursor: pointer; }
+.meal-schedule-cell summary label { cursor: pointer; }
+.meal-schedule-cell summary > span { color: var(--color-text-secondary); font-size: var(--text-xs); }
+.meal-schedule-cell__fields { display: grid; gap: var(--space-2); padding-top: var(--space-3); }
+.meal-schedule-cell fieldset,
+.meal-role-grid { padding: var(--space-2); border: var(--space-px) solid var(--color-border); border-radius: var(--radius-md); }
+.meal-schedule-person { display: flex; align-items: center; gap: var(--space-1); margin-top: var(--space-1); }
+.meal-role-grid { display: grid; gap: var(--space-2); margin: 0 0 var(--space-4); }
+.meal-role-row { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); align-items: center; }
+.meal-role-row strong { min-width: 8rem; }
+.meal-role-row label { display: inline-flex; gap: var(--space-1); align-items: center; }
+
+@media (max-width: 768px) {
+  .meal-timing-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .meal-timing-row > strong { grid-column: 1 / -1; }
+  .meal-schedule-day__slots { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (max-width: 640px) {
+  .meal-timeline__item { grid-template-columns: 4rem minmax(0, 1fr) auto; padding-inline: var(--space-3); }
+  .meal-role-row { align-items: flex-start; flex-direction: column; }
+}
+
 .meals-layout {
   flex: 1;
   min-height: 0;

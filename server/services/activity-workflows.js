@@ -22,7 +22,7 @@ function parseJson(raw, fallback) {
 
 function workflowInputSchema(d, workflowTemplateId, rawSchema) {
   const definitions = d.prepare(`
-    SELECT id, variable_key, scope
+    SELECT id, variable_key, scope, reusable_definition_id
       FROM workflow_variable_definitions
      WHERE workflow_template_id = ?
      ORDER BY id
@@ -36,6 +36,7 @@ function workflowInputSchema(d, workflowTemplateId, rawSchema) {
       id: variableKey,
       definition_id: definition.id,
       scope: definition.scope,
+      reusable_definition_id: definition.reusable_definition_id,
     } : question;
   });
 }

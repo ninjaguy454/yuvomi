@@ -23,7 +23,7 @@ test('existing workflow variables receive immutable definition identities withou
     applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   )`);
   for (const migration of ALL_MIGRATIONS) {
-    if (migration.version === identityMigration.version) continue;
+    if (migration.version >= identityMigration.version) continue;
     applyMigration(database, migration);
   }
 

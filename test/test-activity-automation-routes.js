@@ -497,3 +497,47 @@ test('automation definitions delete only after their dependencies are removed', 
   assert.equal((await call('DELETE', `/automation/admin/activity-templates/${activity.body.data.id}`)).status, 404);
   assert.equal((await call('DELETE', `/automation/admin/workflow-templates/${workflow.body.data.id}`)).status, 404);
 });
+
+test('reusable variables get readable unique keys and can be linked into workflows', async () => {
+  const first = await call('POST', '/automation/admin/variables', {
+    label: 'Day of Week', description: 'The day being planned', type: 'choice',
+    kind: 'field', options: ['Monday', 'Tuesday'], active: true,
+  });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(first.body.data.variable_key, 'day_of_week');
+
+  const duplicateLabel = await call('POST', '/automation/admin/variables', {
+    label: 'Day of Week', type: 'text', kind: 'field', active: true,
+  });
+  assert.equal(duplicateLabel.status, 201, JSON.stringify(duplicateLabel.body));
+  assert.equal(duplicateLabel.body.data.variable_key, 'day_of_week_2');
+
+  const activity = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Reusable variable activity', title_template: 'Plan the day', category: 'misc',
+    assignment_strategy: 'fixed', subject_required: false, fixed_user_id: admin, skill_ids: [],
+  });
+  assert.equal(activity.status, 201, JSON.stringify(activity.body));
+  const workflow = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Plan {{day_of_week}}', category: 'misc', subject_required: false,
+    quick_add_enabled: true,
+    input_schema: [{
+      id: 'day_of_week', label: 'Day of Week', type: 'choice', options: ['Monday', 'Tuesday'],
+      reusable_definition_id: first.body.data.id,
+    }],
+    steps: [{ step_key: 'only', activity_template_id: activity.body.data.id, depends_on: [] }],
+  });
+  assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+  assert.equal(workflow.body.data.input_schema[0].reusable_definition_id, first.body.data.id);
+
+  const blocked = await call('DELETE', `/automation/admin/variables/${first.body.data.id}`);
+  assert.equal(blocked.status, 409);
+  assert.match(blocked.body.error, /used by 1 workflow variable/i);
+
+  const renamed = await call('PUT', `/automation/admin/variables/${first.body.data.id}/key`, { variable_key: 'planning_day' });
+  assert.equal(renamed.status, 200, JSON.stringify(renamed.body));
+  assert.equal(renamed.body.data.variable_key, 'planning_day');
+  const linked = db.prepare('SELECT variable_key, reusable_definition_id FROM workflow_variable_definitions WHERE workflow_template_id = ?').get(workflow.body.data.id);
+  assert.equal(linked.reusable_definition_id, first.body.data.id);
+  assert.equal(linked.variable_key, 'planning_day');
+  assert.equal(db.prepare('SELECT name FROM workflow_templates WHERE id = ?').get(workflow.body.data.id).name, 'Plan {{planning_day}}');
+});

@@ -1,5 +1,8 @@
 # Ensure shell scripts always use LF line endings (prevents CRLF breaking shebangs on Linux containers)
 *.sh text eol=lf
 
+# Locale formatting tests are byte-sensitive and production images run on Linux.
+public/locales/*.json text eol=lf
+
 # Default: normalize all text files to LF in the repo
 * text=auto

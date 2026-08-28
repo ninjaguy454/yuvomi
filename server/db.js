@@ -6535,6 +6535,55 @@ const FORK_MIGRATIONS = [
       ALTER TABLE workflow_template_steps ADD COLUMN subject_variable_id TEXT;
     `,
   },
+  {
+    version: 10005,
+    description: 'Household planning: immutable workflow variable definitions',
+    up: `
+      CREATE TABLE IF NOT EXISTS workflow_variable_definitions (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_template_id INTEGER NOT NULL REFERENCES workflow_templates(id) ON DELETE CASCADE,
+        variable_key         TEXT    NOT NULL,
+        label                TEXT    NOT NULL,
+        type                 TEXT    NOT NULL DEFAULT 'text'
+                                  CHECK(type IN ('household_member', 'boolean', 'choice', 'text', 'number', 'date', 'time')),
+        options_json         TEXT    NOT NULL DEFAULT '[]',
+        scope                TEXT    NOT NULL DEFAULT 'workflow'
+                                  CHECK(scope IN ('household', 'reusable', 'workflow', 'item', 'context')),
+        created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(workflow_template_id, variable_key)
+      );
+      CREATE INDEX idx_workflow_variable_definitions_template
+        ON workflow_variable_definitions(workflow_template_id, id);
+
+      INSERT OR IGNORE INTO workflow_variable_definitions (
+        workflow_template_id, variable_key, label, type, options_json, scope
+      )
+      SELECT
+        wt.id,
+        COALESCE(json_extract(question.value, '$.id'), json_extract(question.value, '$.key')),
+        COALESCE(
+          json_extract(question.value, '$.label'),
+          json_extract(question.value, '$.id'),
+          json_extract(question.value, '$.key')
+        ),
+        CASE json_extract(question.value, '$.type')
+          WHEN 'select' THEN 'choice'
+          ELSE COALESCE(json_extract(question.value, '$.type'), 'text')
+        END,
+        COALESCE(json_extract(question.value, '$.options'), '[]'),
+        'workflow'
+      FROM workflow_templates wt
+      JOIN json_each(
+        CASE
+          WHEN json_valid(wt.input_schema_json) AND json_type(wt.input_schema_json) = 'array'
+            THEN wt.input_schema_json
+          ELSE '[]'
+        END
+      ) AS question
+      WHERE COALESCE(json_extract(question.value, '$.id'), json_extract(question.value, '$.key')) IS NOT NULL;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

@@ -335,8 +335,55 @@ test('typed variables use stable IDs for member subjects, conditions, and substi
   });
   assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
   assert.equal(workflow.body.data.input_schema[0].id, 'traveler');
+  assert.ok(Number.isInteger(workflow.body.data.input_schema[0].definition_id));
+  assert.equal(workflow.body.data.input_schema[0].scope, 'workflow');
+  assert.equal(
+    db.prepare('SELECT COUNT(*) AS n FROM workflow_variable_definitions WHERE workflow_template_id = ?')
+      .get(workflow.body.data.id).n,
+    inputSchema.length,
+  );
   assert.equal(workflow.body.data.steps[0].subject_variable_id, 'traveler');
   assert.equal(workflow.body.data.steps[0].condition.variable_id, 'include_packing');
+
+  const travelerDefinitionId = workflow.body.data.input_schema[0].definition_id;
+  const relabeledSchema = workflow.body.data.input_schema.map((question) => ({
+    ...question,
+    label: question.id === 'traveler' ? 'Which household member is traveling?' : question.label,
+  }));
+  const relabeled = await call('PUT', `/automation/admin/workflow-templates/${workflow.body.data.id}`, {
+    name: workflow.body.data.name,
+    description: workflow.body.data.description,
+    category: workflow.body.data.category,
+    subject_required: false,
+    quick_add_enabled: true,
+    input_schema: relabeledSchema,
+    steps: [{
+      step_key: 'pack',
+      activity_template_id: activity.body.data.id,
+      subject_variable_id: 'traveler',
+      title_override: 'Pack {{bags}} bags for {subject}',
+      description_override: '{{note}} on {{depart_date}} at {{depart_time}} ({{meal}})',
+      condition: { variable_id: 'include_packing', equals: true },
+      depends_on: [],
+    }],
+  });
+  assert.equal(relabeled.status, 200, JSON.stringify(relabeled.body));
+  assert.equal(relabeled.body.data.input_schema[0].definition_id, travelerDefinitionId);
+  assert.equal(relabeled.body.data.input_schema[0].id, 'traveler');
+  assert.equal(relabeled.body.data.input_schema[0].label, 'Which household member is traveling?');
+
+  const ordinaryEditCannotRenameKey = await call(
+    'PUT',
+    `/automation/admin/workflow-templates/${workflow.body.data.id}`,
+    {
+      ...relabeled.body.data,
+      input_schema: relabeled.body.data.input_schema.map((question) => question.id === 'traveler'
+        ? { ...question, id: 'trip_member' }
+        : question),
+    },
+  );
+  assert.equal(ordinaryEditCannotRenameKey.status, 400, JSON.stringify(ordinaryEditCannotRenameKey.body));
+  assert.match(ordinaryEditCannotRenameKey.body.error, /cannot be changed during an ordinary edit/i);
 
   const inputs = {
     traveler: frank,

@@ -20,6 +20,26 @@ function parseJson(raw, fallback) {
   try { return JSON.parse(raw); } catch { return fallback; }
 }
 
+function workflowInputSchema(d, workflowTemplateId, rawSchema) {
+  const definitions = d.prepare(`
+    SELECT id, variable_key, scope
+      FROM workflow_variable_definitions
+     WHERE workflow_template_id = ?
+     ORDER BY id
+  `).all(workflowTemplateId);
+  const byKey = new Map(definitions.map((definition) => [definition.variable_key, definition]));
+  return parseJson(rawSchema, []).map((question) => {
+    const variableKey = question?.id ?? question?.key;
+    const definition = byKey.get(variableKey);
+    return definition ? {
+      ...question,
+      id: variableKey,
+      definition_id: definition.id,
+      scope: definition.scope,
+    } : question;
+  });
+}
+
 export function getActivityTemplate(d, id) {
   const row = d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id);
   if (!row) return null;
@@ -39,7 +59,7 @@ export function listActivityTemplates(d, { activeOnly = false } = {}) {
 export function getWorkflowTemplate(d, id) {
   const workflow = d.prepare('SELECT * FROM workflow_templates WHERE id = ?').get(id);
   if (!workflow) return null;
-  workflow.input_schema = parseJson(workflow.input_schema_json, []);
+  workflow.input_schema = workflowInputSchema(d, workflow.id, workflow.input_schema_json);
   delete workflow.input_schema_json;
 
   const steps = d.prepare(`
@@ -80,7 +100,7 @@ export function listWorkflowTemplates(d, { quickAddOnly = false, activeOnly = fa
                ORDER BY name COLLATE NOCASE, id`;
   return d.prepare(sql).all().map((row) => ({
     ...row,
-    input_schema: parseJson(row.input_schema_json, []),
+    input_schema: workflowInputSchema(d, row.id, row.input_schema_json),
     input_schema_json: undefined,
   }));
 }

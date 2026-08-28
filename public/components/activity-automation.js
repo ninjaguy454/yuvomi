@@ -851,8 +851,8 @@ function questionHtml(question = {}) {
   const existingVariableId = workflowVariableId(question);
   const variableId = existingVariableId || newWorkflowVariableId();
   const type = question.type === 'select' ? 'choice' : (question.type || 'text');
-  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}">
-    <code class="automation-variable-token" data-variable-token title="Stable ID used by this workflow">{{${h(variableId)}}}</code>
+  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-definition-id="${h(question.definition_id || '')}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}">
+    <code class="automation-variable-token" data-variable-token title="Readable key used by this workflow">{{${h(variableId)}}}</code>
     <input class="input" data-question-label placeholder="Question or variable name" aria-label="Question or variable name" value="${h(question.label || '')}">
     <select class="input" data-question-type>
       <option value="household_member" ${type === 'household_member' ? 'selected' : ''}>Household Member</option>
@@ -898,6 +898,7 @@ function openWorkflowForm(workflow, context, manager = null) {
         const type = row.querySelector('[data-question-type]').value;
         return {
           id: row.dataset.variableId,
+          definition_id: Number(row.dataset.variableDefinitionId) || null,
           label: row.querySelector('[data-question-label]').value.trim(),
           type,
           options: type === 'choice'

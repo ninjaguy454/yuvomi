@@ -152,8 +152,16 @@ function saveActivitySkills(d, activityId, skillIds) {
   skillIds.forEach((skillId, index) => insert.run(activityId, skillId, index));
 }
 
-function normalizeWorkflowInputSchema(raw) {
+function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
   if (!Array.isArray(raw)) throw new Error('input_schema must be an array.');
+  const existingByDefinitionId = new Map(
+    existingQuestions
+      .filter((question) => Number.isInteger(Number(question?.definition_id)))
+      .map((question) => [Number(question.definition_id), question]),
+  );
+  const existingByKey = new Map(
+    existingQuestions.map((question) => [question?.id ?? question?.key, question]),
+  );
   const questions = raw.map((question, index) => {
     if (!question || typeof question !== 'object' || Array.isArray(question)) {
       throw new Error(`Workflow question ${index + 1} must be an object.`);
@@ -175,7 +183,25 @@ function normalizeWorkflowInputSchema(raw) {
     if (type === 'choice' && !options.length) {
       throw new Error(`Workflow question ${variableId} needs at least one choice.`);
     }
-    return { id: variableId, label, type, options };
+    const requestedDefinitionId = intOrNull(question.definition_id, { min: 1 });
+    const existingDefinition = requestedDefinitionId
+      ? existingByDefinitionId.get(requestedDefinitionId)
+      : existingByKey.get(variableId);
+    if (requestedDefinitionId && !existingDefinition) {
+      throw new Error(`Workflow question ${variableId} has an invalid internal identity.`);
+    }
+    const existingKey = existingDefinition?.id ?? existingDefinition?.key;
+    if (requestedDefinitionId && existingKey !== variableId) {
+      throw new Error(`Workflow variable key "${existingKey}" cannot be changed during an ordinary edit.`);
+    }
+    return {
+      id: variableId,
+      definition_id: existingDefinition ? Number(existingDefinition.definition_id) : null,
+      label,
+      type,
+      options,
+      scope: 'workflow',
+    };
   });
   if (new Set(questions.map((question) => question.id)).size !== questions.length) {
     throw new Error('Workflow variable IDs must be unique.');
@@ -252,7 +278,7 @@ function normalizeWorkflowInput(d, body, existing = null) {
   const rawInputSchema = body.input_schema !== undefined
     ? body.input_schema
     : (existing?.input_schema ?? []);
-  const inputSchema = normalizeWorkflowInputSchema(rawInputSchema);
+  const inputSchema = normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? []);
   const questionsByKey = new Map(inputSchema.map((question) => [question.id, question]));
   validateVariableTemplate(name, questionsByKey, 'Workflow name');
   validateVariableTemplate(description, questionsByKey, 'Workflow description');
@@ -332,6 +358,69 @@ function normalizeWorkflowInput(d, body, existing = null) {
     inputSchema,
     steps: normalizedSteps,
   };
+}
+
+function syncWorkflowVariableDefinitions(d, workflowId, questions) {
+  const existing = d.prepare(`
+    SELECT id, variable_key
+      FROM workflow_variable_definitions
+     WHERE workflow_template_id = ?
+  `).all(workflowId);
+  const existingById = new Map(existing.map((row) => [Number(row.id), row]));
+  const existingByKey = new Map(existing.map((row) => [row.variable_key, row]));
+  const insert = d.prepare(`
+    INSERT INTO workflow_variable_definitions (
+      workflow_template_id, variable_key, label, type, options_json, scope
+    ) VALUES (?, ?, ?, ?, ?, 'workflow')
+  `);
+  const update = d.prepare(`
+    UPDATE workflow_variable_definitions
+       SET label = ?, type = ?, options_json = ?,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+     WHERE id = ? AND workflow_template_id = ?
+  `);
+  const keptIds = [];
+  const savedQuestions = questions.map((question) => {
+    const requestedId = Number(question.definition_id);
+    const stored = Number.isInteger(requestedId) && requestedId > 0
+      ? existingById.get(requestedId)
+      : existingByKey.get(question.id);
+    let definitionId;
+    if (stored) {
+      if (stored.variable_key !== question.id) {
+        throw new Error(`Workflow variable key "${stored.variable_key}" requires the dedicated Rename key action.`);
+      }
+      update.run(
+        question.label,
+        question.type,
+        JSON.stringify(question.options ?? []),
+        stored.id,
+        workflowId,
+      );
+      definitionId = Number(stored.id);
+    } else {
+      definitionId = Number(insert.run(
+        workflowId,
+        question.id,
+        question.label,
+        question.type,
+        JSON.stringify(question.options ?? []),
+      ).lastInsertRowid);
+    }
+    keptIds.push(definitionId);
+    return { ...question, definition_id: definitionId, scope: 'workflow' };
+  });
+
+  if (keptIds.length) {
+    const placeholders = keptIds.map(() => '?').join(',');
+    d.prepare(`
+      DELETE FROM workflow_variable_definitions
+       WHERE workflow_template_id = ? AND id NOT IN (${placeholders})
+    `).run(workflowId, ...keptIds);
+  } else {
+    d.prepare('DELETE FROM workflow_variable_definitions WHERE workflow_template_id = ?').run(workflowId);
+  }
+  return savedQuestions;
 }
 
 function replaceWorkflowSteps(d, workflowId, steps) {
@@ -654,6 +743,9 @@ router.post('/admin/workflow-templates', requireAdmin, (req, res) => {
         input.subjectRequired, JSON.stringify(input.inputSchema), input.active,
         currentUserId(req),
       );
+      const savedInputSchema = syncWorkflowVariableDefinitions(d, Number(result.lastInsertRowid), input.inputSchema);
+      d.prepare('UPDATE workflow_templates SET input_schema_json = ? WHERE id = ?')
+        .run(JSON.stringify(savedInputSchema), result.lastInsertRowid);
       replaceWorkflowSteps(d, result.lastInsertRowid, input.steps);
       return Number(result.lastInsertRowid);
     })();
@@ -671,6 +763,7 @@ router.put('/admin/workflow-templates/:id', requireAdmin, (req, res) => {
     const input = normalizeWorkflowInput(d, req.body, existing);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     d.transaction(() => {
+      const savedInputSchema = syncWorkflowVariableDefinitions(d, existing.id, input.inputSchema);
       d.prepare(`
         UPDATE workflow_templates
            SET name = ?, description = ?, category = ?, quick_add_enabled = ?,
@@ -679,7 +772,7 @@ router.put('/admin/workflow-templates/:id', requireAdmin, (req, res) => {
          WHERE id = ?
       `).run(
         input.name, input.description, input.category, input.quickAddEnabled,
-        input.subjectRequired, JSON.stringify(input.inputSchema), input.active,
+        input.subjectRequired, JSON.stringify(savedInputSchema), input.active,
         existing.id,
       );
       replaceWorkflowSteps(d, existing.id, input.steps);

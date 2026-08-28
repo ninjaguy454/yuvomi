@@ -278,8 +278,8 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'utf8',
   );
   assert.match(page, /renderAutomationManager/);
-  assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables'\]\)/,
-    'the Settings leaf must preserve the Variable Manager tab instead of falling back to Skills');
+  assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables', 'places', 'availability'\]\)/,
+    'the Settings leaf must preserve every Household Automation tab instead of falling back to Skills');
   assert.match(component, /export async function renderAutomationManager/);
   assert.doesNotMatch(component, /automation-manage-from-quick/);
   assert.match(component, /data-quick-activity/,
@@ -318,6 +318,8 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
   assert.doesNotMatch(component, /form\.querySelector\('button\[type="submit"\]'\)\.textContent/,
     'Quick Add must not dereference a submit button that was moved into the modal footer');
   assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.automation-question-row/);
+  assert.match(styles, /@media \(max-width: 640px\)[\s\S]*?\.automation-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)[\s\S]*?overflow-x:\s*visible/,
+    'all six Household Automation tabs must remain visible at phone widths');
 });
 
 test('navigation settings leaf reuses the canonical module-order helpers', async () => {

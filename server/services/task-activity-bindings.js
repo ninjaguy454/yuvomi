@@ -47,10 +47,16 @@ export function getTaskActivityBinding(d, taskId) {
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
            a.active AS activity_template_active,
+           pc.place_id AS activity_place_id,
+           p.name AS activity_place_name,
+           pc.presence_policy AS activity_presence_policy,
+           pc.presence_window AS activity_presence_window,
            u.display_name AS activity_subject_name
       FROM task_activity_bindings b
       JOIN activity_templates a ON a.id = b.activity_template_id
       LEFT JOIN users u ON u.id = b.subject_user_id
+      LEFT JOIN task_planning_context pc ON pc.task_id = b.task_id
+      LEFT JOIN places p ON p.id = pc.place_id
      WHERE b.task_id = ?
   `).get(taskId) ?? null;
 }
@@ -67,10 +73,16 @@ export function attachTaskActivityBindings(d, tasks) {
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
            a.active AS activity_template_active,
+           pc.place_id AS activity_place_id,
+           p.name AS activity_place_name,
+           pc.presence_policy AS activity_presence_policy,
+           pc.presence_window AS activity_presence_window,
            u.display_name AS activity_subject_name
       FROM task_activity_bindings b
       JOIN activity_templates a ON a.id = b.activity_template_id
       LEFT JOIN users u ON u.id = b.subject_user_id
+      LEFT JOIN task_planning_context pc ON pc.task_id = b.task_id
+      LEFT JOIN places p ON p.id = pc.place_id
      WHERE b.task_id IN (${placeholders})
   `).all(...ids);
   const byTask = new Map(rows.map((row) => [Number(row.task_id), row]));
@@ -83,6 +95,10 @@ export function attachTaskActivityBindings(d, tasks) {
     task.activity_template_active = binding?.activity_template_active ?? null;
     task.activity_subject_user_id = binding?.subject_user_id ?? null;
     task.activity_subject_name = binding?.activity_subject_name ?? null;
+    task.activity_place_id = binding?.activity_place_id ?? null;
+    task.activity_place_name = binding?.activity_place_name ?? null;
+    task.activity_presence_policy = binding?.activity_presence_policy ?? 'ignore';
+    task.activity_presence_window = binding?.activity_presence_window ?? 'due';
   }
   return tasks;
 }
@@ -146,6 +162,12 @@ export function previewTaskActivityBinding(d, {
       subjectUserId: subjectId,
       commitRotation: false,
       dateKey,
+      presence: {
+        policy: activity.presence_policy || 'ignore',
+        targetPlaceId: activity.location_mode === 'fixed' ? activity.place_id : null,
+        startAt: `${dateKey}T00:00:00`,
+        endAt: `${dateKey}T23:59:00`,
+      },
     });
     return { activity, subjectUserId: subjectId, resolution };
   } catch (err) {
@@ -187,6 +209,12 @@ export function applyTaskActivityBinding(d, taskId, {
       subjectUserId: preview.subjectUserId,
       commitRotation,
       dateKey: dateKey || task.due_date || todayKey(d),
+      presence: {
+        policy: preview.activity.presence_policy || 'ignore',
+        targetPlaceId: preview.activity.location_mode === 'fixed' ? preview.activity.place_id : null,
+        startAt: `${dateKey || task.start_date || task.due_date || todayKey(d)}T00:00:00`,
+        endAt: `${dateKey || task.due_date || todayKey(d)}T${task.due_time || '23:59'}:00`,
+      },
     });
   } catch (err) {
     throw new TaskActivityBindingError(err.message);
@@ -212,6 +240,23 @@ export function applyTaskActivityBinding(d, taskId, {
   `).run(resolution.primary?.id ?? null, task.id);
   d.prepare('DELETE FROM task_rotation_members WHERE task_id = ?').run(task.id);
   setAssignments(d, task.id, resolution.primary?.id ? [resolution.primary.id] : []);
+
+  const planningPlaceId = preview.activity.location_mode === 'fixed' ? preview.activity.place_id : null;
+  const planningPolicy = preview.activity.presence_policy || 'ignore';
+  if (planningPlaceId || planningPolicy !== 'ignore') {
+    d.prepare(`
+      INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
+      VALUES (?, ?, ?, ?, 'activity_template')
+      ON CONFLICT(task_id) DO UPDATE SET
+        place_id = excluded.place_id,
+        presence_policy = excluded.presence_policy,
+        presence_window = excluded.presence_window,
+        source = excluded.source,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    `).run(task.id, planningPlaceId, planningPolicy, preview.activity.presence_window || 'due');
+  } else {
+    d.prepare('DELETE FROM task_planning_context WHERE task_id = ?').run(task.id);
+  }
 
   deleteSupportTasks(d, task.id);
   let supportTaskId = null;
@@ -254,6 +299,7 @@ export function applyTaskActivityBinding(d, taskId, {
 export function clearTaskActivityBinding(d, taskId) {
   deleteSupportTasks(d, taskId);
   d.prepare('DELETE FROM task_activity_bindings WHERE task_id = ?').run(taskId);
+  d.prepare("DELETE FROM task_planning_context WHERE task_id = ? AND source = 'activity_template'").run(taskId);
 }
 
 /**

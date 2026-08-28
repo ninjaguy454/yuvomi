@@ -32,8 +32,12 @@ const VALID_PROFICIENCY = new Set(Object.values(PROFICIENCY));
 const VALID_AGE_PROMOTION = new Set([PROFICIENCY.SUPERVISED, PROFICIENCY.NORMAL]);
 const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);
 const VALID_WORKFLOW_INPUT_TYPES = new Set([
-  'household_member', 'boolean', 'choice', 'select', 'text', 'number', 'date', 'time',
+  'household_member', 'location', 'boolean', 'choice', 'select', 'text', 'number', 'date', 'time',
 ]);
+const VALID_LOCATION_MODES = new Set(['none', 'fixed', 'workflow']);
+const VALID_STEP_LOCATION_MODES = new Set(['inherit', 'none', 'fixed', 'workflow']);
+const VALID_PRESENCE_POLICIES = new Set(['ignore', 'must_be_home', 'must_be_at_location', 'must_be_away', 'available_before_due']);
+const VALID_PRESENCE_WINDOWS = new Set(['start', 'due', 'completion']);
 const SYSTEM_CONTEXT_VARIABLES = Object.freeze([
   { key: 'context.current_date', label: 'Current date', type: 'date', description: 'The date when the template runs.' },
   { key: 'context.day_of_week', label: 'Day of week', type: 'text', description: 'The local weekday when the template runs.' },
@@ -106,6 +110,11 @@ function validHouseholdUser(d, id) {
   `).get(id);
 }
 
+function validPlace(d, id, { activeOnly = false } = {}) {
+  if (!id) return false;
+  return !!d.prepare(`SELECT 1 FROM places WHERE id = ?${activeOnly ? ' AND active = 1' : ''}`).get(id);
+}
+
 function normalizeActivityInput(d, body, existing = null) {
   const name = text(body.name ?? existing?.name, { required: true, max: 120 });
   const titleTemplate = text(body.title_template ?? existing?.title_template ?? name, { required: true, max: 200 });
@@ -132,6 +141,23 @@ function normalizeActivityInput(d, body, existing = null) {
     if (found !== skillIds.length) throw new Error('One or more required skills do not exist.');
   }
 
+  const locationMode = body.location_mode ?? existing?.location_mode ?? 'none';
+  if (!VALID_LOCATION_MODES.has(locationMode)) throw new Error('Unknown activity location mode.');
+  const placeId = intOrNull(body.place_id ?? existing?.place_id, { min: 1 });
+  if (locationMode === 'fixed' && (!validPlace(d, placeId)
+      || (!validPlace(d, placeId, { activeOnly: true }) && Number(existing?.place_id) !== Number(placeId)))) {
+    throw new Error('Choose an active fixed place.');
+  }
+  const locationVariableId = text(body.location_variable_id ?? existing?.location_variable_id, { max: 80 });
+  if (locationMode === 'workflow' && !locationVariableId) throw new Error('Choose a Location workflow variable.');
+  const presencePolicy = body.presence_policy ?? existing?.presence_policy ?? 'ignore';
+  if (!VALID_PRESENCE_POLICIES.has(presencePolicy)) throw new Error('Unknown presence policy.');
+  const presenceWindow = body.presence_window ?? existing?.presence_window ?? 'due';
+  if (!VALID_PRESENCE_WINDOWS.has(presenceWindow)) throw new Error('Unknown presence evaluation window.');
+  if (presencePolicy === 'must_be_at_location' && locationMode === 'none') {
+    throw new Error('Must be at the activity location requires a fixed or workflow location.');
+  }
+
   return {
     name,
     titleTemplate,
@@ -146,6 +172,11 @@ function normalizeActivityInput(d, body, existing = null) {
     ),
     active: bool(body.active, existing ? !!existing.active : true),
     skillIds,
+    locationMode,
+    placeId: locationMode === 'fixed' ? placeId : null,
+    locationVariableId: locationMode === 'workflow' ? locationVariableId : null,
+    presencePolicy,
+    presenceWindow,
   };
 }
 
@@ -249,6 +280,13 @@ function normalizeWorkflowConditionValue(d, question, value) {
     }
     return memberId;
   }
+  if (question.type === 'location') {
+    const placeId = Number(value);
+    if (!Number.isInteger(placeId) || placeId <= 0 || !validPlace(d, placeId)) {
+      throw new Error(`Condition for ${question.id} must be a Place.`);
+    }
+    return placeId;
+  }
   return normalized;
 }
 
@@ -281,9 +319,13 @@ function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
 
 function validateVariableTemplate(value, questionsById, field) {
   if (!value) return;
-  for (const match of String(value).matchAll(/\{\{([A-Za-z][A-Za-z0-9_-]*)\}\}/g)) {
-    if (!questionsById.has(match[1])) {
+  for (const match of String(value).matchAll(/\{\{([A-Za-z][A-Za-z0-9_-]*)(?:\.([A-Za-z][A-Za-z0-9_-]*))?\}\}/g)) {
+    const question = questionsById.get(match[1]);
+    if (!question) {
       throw new Error(`${field} references unknown variable "${match[1]}".`);
+    }
+    if (match[2] && (question.type !== 'location' || !['name', 'id', 'parent', 'address'].includes(match[2]))) {
+      throw new Error(`${field} references unsupported property "${match[1]}.${match[2]}".`);
     }
   }
 }
@@ -305,6 +347,9 @@ function normalizeWorkflowInput(d, body, existing = null) {
   if (!steps.length) throw new Error('A workflow needs at least one activity step.');
 
   const normalizedSteps = steps.map((step, index) => {
+    const existingStep = existing?.steps?.find((candidate) => candidate.step_key === (step.step_key || step.key))
+      ?? existing?.steps?.[index]
+      ?? null;
     const activityTemplateId = intOrNull(step.activity_template_id, { min: 1 });
     if (!activityTemplateId) throw new Error(`Step ${index + 1} needs an activity template.`);
     const stepKey = text(step.step_key || step.key || `step_${index + 1}`, { required: true, max: 80 })
@@ -317,6 +362,24 @@ function normalizeWorkflowInput(d, body, existing = null) {
         throw new Error(`Workflow step ${stepKey} subject must use a Household Member variable.`);
       }
     }
+    const locationMode = step.location_mode ?? 'inherit';
+    if (!VALID_STEP_LOCATION_MODES.has(locationMode)) throw new Error(`Workflow step ${stepKey} has an invalid location mode.`);
+    const placeId = intOrNull(step.place_id, { min: 1 });
+    if (locationMode === 'fixed' && (!validPlace(d, placeId)
+        || (!validPlace(d, placeId, { activeOnly: true }) && Number(existingStep?.place_id) !== Number(placeId)))) {
+      throw new Error(`Workflow step ${stepKey} needs an active fixed Place.`);
+    }
+    const locationVariableId = text(step.location_variable_id, { max: 80 });
+    if (locationMode === 'workflow') {
+      const locationQuestion = questionsByKey.get(locationVariableId);
+      if (!locationQuestion || locationQuestion.type !== 'location') {
+        throw new Error(`Workflow step ${stepKey} location must use a Location variable.`);
+      }
+    }
+    const presencePolicyOverride = text(step.presence_policy_override, { max: 40 });
+    if (presencePolicyOverride && !VALID_PRESENCE_POLICIES.has(presencePolicyOverride)) {
+      throw new Error(`Workflow step ${stepKey} has an invalid presence policy.`);
+    }
     const titleOverride = text(step.title_override, { max: 200 });
     const descriptionOverride = text(step.description_override, { max: 2000 });
     validateVariableTemplate(titleOverride, questionsByKey, `Workflow step ${stepKey} title`);
@@ -327,6 +390,10 @@ function normalizeWorkflowInput(d, body, existing = null) {
       titleOverride,
       descriptionOverride,
       subjectVariableId,
+      locationMode,
+      placeId: locationMode === 'fixed' ? placeId : null,
+      locationVariableId: locationMode === 'workflow' ? locationVariableId : null,
+      presencePolicyOverride,
       condition: step.condition && typeof step.condition === 'object' ? step.condition : null,
       dependsOn: Array.isArray(step.depends_on)
         ? [...new Set(step.depends_on.map(String).filter(Boolean))]
@@ -338,7 +405,8 @@ function normalizeWorkflowInput(d, body, existing = null) {
   }
   for (const step of normalizedSteps) {
     const activity = d.prepare(`
-      SELECT name, title_template, description, supervision_title_template
+      SELECT name, title_template, description, supervision_title_template,
+             location_mode, location_variable_id, place_id, presence_policy
         FROM activity_templates
        WHERE id = ?
     `).get(step.activityTemplateId);
@@ -350,6 +418,18 @@ function normalizeWorkflowInput(d, body, existing = null) {
       questionsByKey,
       `Activity ${activity.name} supervision title`,
     );
+    const effectiveLocationMode = step.locationMode === 'inherit' ? activity.location_mode : step.locationMode;
+    const effectiveVariableId = step.locationMode === 'inherit' ? activity.location_variable_id : step.locationVariableId;
+    if (effectiveLocationMode === 'workflow') {
+      const locationQuestion = questionsByKey.get(effectiveVariableId);
+      if (!locationQuestion || locationQuestion.type !== 'location') {
+        throw new Error(`Activity ${activity.name} requires the Location variable "${effectiveVariableId || ''}".`);
+      }
+    }
+    const effectivePolicy = step.presencePolicyOverride || activity.presence_policy || 'ignore';
+    if (effectivePolicy === 'must_be_at_location' && effectiveLocationMode === 'none') {
+      throw new Error(`Workflow step ${step.stepKey} requires an activity location for its presence policy.`);
+    }
   }
   const keys = new Set(normalizedSteps.map((step) => step.stepKey));
   const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
@@ -507,8 +587,9 @@ function replaceWorkflowSteps(d, workflowId, steps) {
   const insert = d.prepare(`
       INSERT INTO workflow_template_steps (
         workflow_template_id, activity_template_id, step_key, sort_order,
-        title_override, description_override, subject_variable_id, condition_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        title_override, description_override, subject_variable_id, condition_json,
+        location_mode, place_id, location_variable_id, presence_policy_override
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const ids = new Map();
   steps.forEach((step, index) => {
@@ -521,6 +602,10 @@ function replaceWorkflowSteps(d, workflowId, steps) {
       step.descriptionOverride,
       step.subjectVariableId,
       step.condition ? JSON.stringify(step.condition) : null,
+      step.locationMode,
+      step.placeId,
+      step.locationVariableId,
+      step.presencePolicyOverride,
     );
     ids.set(step.stepKey, Number(result.lastInsertRowid));
   });
@@ -576,7 +661,12 @@ router.get('/quick-add', (req, res) => {
       assignment_strategy: activity.assignment_strategy,
       subject_required: activity.subject_required,
     }));
-    res.json({ data: templates, activities, members: householdMembers(d) });
+    res.json({
+      data: templates,
+      activities,
+      members: householdMembers(d),
+      places: d.prepare('SELECT * FROM places WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all(),
+    });
   } catch (err) {
     log.error('GET /quick-add:', err);
     res.status(500).json({ error: 'Could not load Quick Add templates.', code: 500 });
@@ -874,6 +964,7 @@ router.get('/admin/activity-templates', requireAdmin, (req, res) => {
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
       variables: householdVariableRows(d).filter((variable) => variable.active),
+      places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
     });
   } catch (err) {
     res.status(500).json({ error: 'Could not load activity templates.', code: 500 });
@@ -888,12 +979,15 @@ router.post('/admin/activity-templates', requireAdmin, (req, res) => {
       const result = d.prepare(`
         INSERT INTO activity_templates (
           name, title_template, description, category, assignment_strategy,
-          subject_required, fixed_user_id, supervision_title_template, active, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          subject_required, fixed_user_id, supervision_title_template, active, created_by,
+          location_mode, place_id, location_variable_id, presence_policy, presence_window
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
         input.assignmentStrategy, input.subjectRequired, input.fixedUserId,
         input.supervisionTitleTemplate, input.active, currentUserId(req),
+        input.locationMode, input.placeId, input.locationVariableId,
+        input.presencePolicy, input.presenceWindow,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
       return Number(result.lastInsertRowid);
@@ -915,13 +1009,16 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
         UPDATE activity_templates
            SET name = ?, title_template = ?, description = ?, category = ?,
                assignment_strategy = ?, subject_required = ?, fixed_user_id = ?,
-               supervision_title_template = ?, active = ?,
+               supervision_title_template = ?, active = ?, location_mode = ?,
+               place_id = ?, location_variable_id = ?, presence_policy = ?, presence_window = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
         input.assignmentStrategy, input.subjectRequired, input.fixedUserId,
-        input.supervisionTitleTemplate, input.active, existing.id,
+        input.supervisionTitleTemplate, input.active, input.locationMode,
+        input.placeId, input.locationVariableId, input.presencePolicy,
+        input.presenceWindow, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
     })();
@@ -955,6 +1052,8 @@ router.get('/admin/workflow-templates', requireAdmin, (req, res) => {
       activities: listActivityTemplates(d, { activeOnly: true }),
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
+      variables: householdVariableRows(d).filter((variable) => variable.active),
+      places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
     });
   } catch (err) {
     res.status(500).json({ error: 'Could not load workflow templates.', code: 500 });

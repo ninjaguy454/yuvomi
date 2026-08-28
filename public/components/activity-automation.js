@@ -35,11 +35,20 @@ function inputRow(label, control, hint = '') {
 }
 
 function workflowMentionOptions(panel) {
-  return [...panel.querySelectorAll('[data-workflow-question]')].map((row, index) => {
+  return [...panel.querySelectorAll('[data-workflow-question]')].flatMap((row, index) => {
     const id = row.dataset.variableId;
     const label = row.querySelector('[data-question-label]')?.value.trim() || `Variable ${index + 1}`;
-    return { id, label, detail: id, token: `{{${id}}}` };
-  }).filter((option) => option.id);
+    if (!id) return [];
+    const base = [{ id, label, detail: id, token: `{{${id}}}` }];
+    if (row.querySelector('[data-question-type]')?.value === 'location') {
+      base.push(
+        { id: `${id}.name`, label: `${label} name`, detail: `${id}.name`, token: `{{${id}.name}}` },
+        { id: `${id}.parent`, label: `${label} parent`, detail: `${id}.parent`, token: `{{${id}.parent}}` },
+        { id: `${id}.address`, label: `${label} address`, detail: `${id}.address`, token: `{{${id}.address}}` },
+      );
+    }
+    return base;
+  });
 }
 
 function mentionOptions(panel, field) {
@@ -207,6 +216,12 @@ function memberOptions(members, selected = null, emptyLabel = 'Choose…') {
   ).join('')}`;
 }
 
+function placeOptions(places, selected = null, emptyLabel = 'Choose a Place…') {
+  return `<option value="">${h(emptyLabel)}</option>${places.map((place) =>
+    `<option value="${place.id}" ${Number(selected) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(selected) !== Number(place.id) ? 'disabled' : ''}>${h(place.path_label || place.name)}${place.active ? '' : ' (inactive)'}</option>`
+  ).join('')}`;
+}
+
 function categoryOptions(categories, selected = 'misc') {
   return categories.map((category) => {
     const label = category.name || category.key;
@@ -217,7 +232,7 @@ function categoryOptions(categories, selected = 'misc') {
 function parseEquals(value, type = null) {
   const raw = String(value ?? '').trim();
   if (type === 'choice' || type === 'select' || type === 'text' || type === 'date' || type === 'time') return raw;
-  if (type === 'household_member' || type === 'number') return Number(raw);
+  if (type === 'household_member' || type === 'location' || type === 'number') return Number(raw);
   if (raw === 'true') return true;
   if (raw === 'false') return false;
   if (raw === 'null') return null;
@@ -235,6 +250,7 @@ export async function openQuickAdd({ onCreated = null, onActivitySelected = null
     const templates = response.data ?? [];
     const activities = response.activities ?? [];
     const members = response.members ?? [];
+    const places = response.places ?? [];
     const content = `
       <div class="automation-quick-section">
         <div class="automation-quick-section__heading">
@@ -283,7 +299,7 @@ export async function openQuickAdd({ onCreated = null, onActivitySelected = null
         panel.querySelectorAll('[data-quick-template]').forEach((button) => {
           button.addEventListener('click', () => {
             const template = templates.find((row) => Number(row.id) === Number(button.dataset.quickTemplate));
-            if (template) openQuickAddTemplate(template, members, onCreated);
+            if (template) openQuickAddTemplate(template, members, places, onCreated);
           });
         });
       },
@@ -297,7 +313,7 @@ function workflowVariableId(question) {
   return question?.id ?? question?.key ?? '';
 }
 
-function renderRuntimeQuestion(question, members) {
+function renderRuntimeQuestion(question, members, places) {
   const key = h(workflowVariableId(question));
   const label = h(question.label || workflowVariableId(question));
   if (question.type === 'boolean') {
@@ -316,6 +332,11 @@ function renderRuntimeQuestion(question, members) {
       ${memberOptions(members)}
     </select>`);
   }
+  if (question.type === 'location') {
+    return inputRow(label, `<select class="input" name="input_${key}" data-runtime-input="${key}" data-type="location" required>
+      ${placeOptions(places)}
+    </select>`);
+  }
   const inputType = ['number', 'date', 'time'].includes(question.type) ? question.type : 'text';
   const required = ['number', 'date', 'time'].includes(inputType) ? 'required' : '';
   return inputRow(label, `<input class="input" type="${inputType}" name="input_${key}" data-runtime-input="${key}" data-type="${h(question.type || 'text')}" ${required}>`);
@@ -326,13 +347,13 @@ function collectRuntimeInputs(form) {
   form.querySelectorAll('[data-runtime-input]').forEach((field) => {
     const key = field.dataset.runtimeInput;
     if (field.dataset.type === 'boolean') inputs[key] = field.value === 'true';
-    else if (field.dataset.type === 'household_member' || field.dataset.type === 'number') inputs[key] = Number(field.value);
+    else if (['household_member', 'location', 'number'].includes(field.dataset.type)) inputs[key] = Number(field.value);
     else inputs[key] = field.value;
   });
   return inputs;
 }
 
-function openQuickAddTemplate(template, members, onCreated) {
+function openQuickAddTemplate(template, members, places, onCreated) {
   const questions = Array.isArray(template.input_schema) ? template.input_schema : [];
   const content = `<form id="quick-add-form">
     ${template.description ? `<p class="form-hint automation-form-intro">${h(template.description)}</p>` : ''}
@@ -340,7 +361,7 @@ function openQuickAddTemplate(template, members, onCreated) {
       'Who is this for?',
       `<select class="input" id="quick-add-subject" required>${memberOptions(members)}</select>`,
     ) : ''}
-    ${questions.map((question) => renderRuntimeQuestion(question, members)).join('')}
+    ${questions.map((question) => renderRuntimeQuestion(question, members, places)).join('')}
     <div id="quick-add-preview" class="automation-quick-preview"></div>
     ${footer('Preview')}
   </form>`;
@@ -387,6 +408,7 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
           <div>
             <div>${h(step.title)}</div>
             <small class="form-hint">Assigned to ${h(step.assigned_to?.display_name || 'Unassigned')}${step.subject_proficiency ? ` · ${h(step.subject_proficiency)}` : ''}</small>
+            ${step.place ? `<br><small class="form-hint">Place: ${h(step.place.path_label || step.place.name)} · ${h(step.presence_policy || 'ignore')}</small>` : (step.presence_policy && step.presence_policy !== 'ignore' ? `<br><small class="form-hint">Presence: ${h(step.presence_policy)}</small>` : '')}
             ${step.supervisor ? `<br><small class="form-hint">+ ${h(step.supervisor_title)} → ${h(step.supervisor.display_name)}</small>` : ''}
             ${step.depends_on?.length ? `<br><small class="form-hint">After: ${h(step.depends_on.join(', '))}</small>` : ''}
           </div>
@@ -423,6 +445,8 @@ const AUTOMATION_TABS = [
   ['activities', 'Activities'],
   ['workflows', 'Quick Add templates'],
   ['variables', 'Variables'],
+  ['places', 'Places'],
+  ['availability', 'Availability'],
 ];
 
 function validAutomationTab(tab) {
@@ -470,7 +494,9 @@ async function loadManagerTab(panel, tab, manager) {
     if (tab === 'skills') await renderSkillsManager(body, manager);
     else if (tab === 'activities') await renderActivitiesManager(body, manager);
     else if (tab === 'workflows') await renderWorkflowsManager(body, manager);
-    else await renderVariablesManager(body, manager);
+    else if (tab === 'variables') await renderVariablesManager(body, manager);
+    else if (tab === 'places') await renderPlacesManager(body, manager);
+    else await renderAvailabilityManager(body, manager);
     if (window.lucide) window.lucide.createIcons({ el: body });
   } catch (error) {
     replaceHtml(body, `<p class="form-hint">${h(error.message || 'Could not load automation settings.')}</p>`);
@@ -488,7 +514,7 @@ function householdVariableTypeOptions(selected = 'text') {
   return [
     ['text', 'Text'], ['number', 'Number'], ['boolean', 'Yes/No'],
     ['choice', 'Choice'], ['date', 'Date'], ['time', 'Time'],
-    ['household_member', 'Household member'],
+    ['household_member', 'Household member'], ['location', 'Place / location'],
   ].map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
@@ -619,6 +645,139 @@ async function deleteAutomationDefinition({ name, noun, path, tab, manager }) {
   await manager?.navigate?.(tab);
 }
 
+function placeTypeOptions(selected = 'custom') {
+  return [['home', 'Home'], ['room', 'Room / area'], ['school', 'School'], ['work', 'Workplace'],
+    ['restaurant', 'Restaurant'], ['store', 'Store'], ['hotel', 'Hotel'],
+    ['destination', 'Destination'], ['custom', 'Custom']]
+    .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+async function renderPlacesManager(body, manager) {
+  const response = await api.get('/planning/admin/context');
+  const places = response.places ?? [];
+  replaceHtml(body, `${managerHeader('Reusable Places', 'automation-add-place', 'Add Place')}
+    <p class="form-hint automation-manager__hint">Places are stable household locations. Rename them freely; templates and schedules keep their links by ID. Rooms inherit missing address details from their parent.</p>
+    <div class="automation-list">${places.map((place) => {
+      const usage = Object.values(place.usage || {}).reduce((sum, count) => sum + Number(count || 0), 0);
+      return `<div class="automation-list-row">
+        <div class="automation-list-row__copy"><strong>${h(place.path_label || place.name)}</strong><br><small class="form-hint">${h(place.type)}${place.city ? ` · ${h(place.city)}` : ''}${place.active ? '' : ' · inactive'}${usage ? ` · ${usage} linked record${usage === 1 ? '' : 's'}` : ''}</small></div>
+        <div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-place="${place.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-place="${place.id}">Delete</button></div>
+      </div>`;
+    }).join('') || '<p class="form-hint">No Places yet. Start with Home, then add rooms or recurring destinations.</p>'}</div>`);
+  body.querySelector('#automation-add-place')?.addEventListener('click', () => openPlaceForm(null, places, manager));
+  body.querySelectorAll('[data-edit-place]').forEach((button) => button.addEventListener('click', () => openPlaceForm(places.find((row) => Number(row.id) === Number(button.dataset.editPlace)), places, manager)));
+  body.querySelectorAll('[data-delete-place]').forEach((button) => button.addEventListener('click', async () => {
+    const place = places.find((row) => Number(row.id) === Number(button.dataset.deletePlace));
+    if (!place || !await confirmOverModal(`Delete ${place.name}?`, { danger: true, confirmLabel: 'Delete Place', detail: t('settings.placeDeleteConfirmDetail') })) return;
+    try { await api.delete(`/planning/admin/places/${place.id}`); toast('Place deleted.'); await refreshAutomationManager(manager, 'places'); }
+    catch (error) { toast(error.message, 'danger'); }
+  }));
+}
+
+function openPlaceForm(place, places, manager) {
+  const parents = places.filter((candidate) => Number(candidate.id) !== Number(place?.id));
+  const content = `<form id="automation-place-form">
+    ${inputRow('Name', `<input class="input" name="name" required maxlength="120" value="${h(place?.name || '')}">`)}
+    ${inputRow('Type', `<select class="input" name="type">${placeTypeOptions(place?.type)}</select>`)}
+    ${inputRow('Parent Place', `<select class="input" name="parent_place_id">${placeOptions(parents, place?.parent_place_id, 'No parent')}</select>`, 'Rooms and areas inherit missing address details from their parent.')}
+    ${inputRow('Description', `<textarea class="input" name="description" rows="2">${h(place?.description || '')}</textarea>`)}
+    <div class="automation-workflow-condition">${inputRow('Street address', `<input class="input" name="street_address" value="${h(place?.street_address || '')}">`)}${inputRow('City', `<input class="input" name="city" value="${h(place?.city || '')}">`)}</div>
+    <div class="automation-workflow-condition">${inputRow('State / province', `<input class="input" name="region" value="${h(place?.region || '')}">`)}${inputRow('Postal code', `<input class="input" name="postal_code" value="${h(place?.postal_code || '')}">`)}</div>
+    ${inputRow('Country', `<input class="input" name="country" value="${h(place?.country || '')}">`)}
+    <div class="automation-workflow-condition">${inputRow('Latitude', `<input class="input" name="latitude" type="number" min="-90" max="90" step="any" value="${h(place?.latitude ?? '')}">`)}${inputRow('Longitude', `<input class="input" name="longitude" type="number" min="-180" max="180" step="any" value="${h(place?.longitude ?? '')}">`)}</div>
+    <label class="automation-check-row"><input type="checkbox" name="active" ${place?.active !== 0 ? 'checked' : ''}> Active and available for new schedules</label>${footer(place ? 'Save Place' : 'Create Place')}
+  </form>`;
+  openModal({ title: place ? 'Edit Place' : 'New Place', content, size: 'lg', onSave(panel) {
+    panel.querySelector('#automation-place-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault(); const data = new FormData(event.currentTarget);
+      const payload = Object.fromEntries(['name', 'type', 'description', 'street_address', 'city', 'region', 'postal_code', 'country'].map((key) => [key, data.get(key)]));
+      payload.parent_place_id = Number(data.get('parent_place_id')) || null;
+      payload.latitude = data.get('latitude') === '' ? null : Number(data.get('latitude'));
+      payload.longitude = data.get('longitude') === '' ? null : Number(data.get('longitude'));
+      payload.active = data.has('active');
+      try { if (place) await api.put(`/planning/admin/places/${place.id}`, payload); else await api.post('/planning/admin/places', payload); toast('Place saved.'); await refreshAutomationManager(manager, 'places'); }
+      catch (error) { toast(error.message, 'danger'); }
+    });
+  } });
+}
+
+const WEEKDAYS = [['Mon', 0], ['Tue', 1], ['Wed', 2], ['Thu', 3], ['Fri', 4], ['Sat', 5], ['Sun', 6]];
+
+function availabilityStateOptions(selected = 'available') {
+  return [['available', 'Available'], ['away', 'Away'], ['busy', 'Busy'], ['unknown', 'Unknown'], ['custom', 'Custom']]
+    .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function availabilityCategoryOptions(selected = 'general') {
+  return [['general', 'General'], ['school', 'School'], ['work', 'Work'], ['custody', 'Custody'], ['vacation', 'Vacation'], ['travel', 'Travel']]
+    .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
+}
+
+function localDateTimeValue(value) { return value ? String(value).slice(0, 16) : ''; }
+
+async function renderAvailabilityManager(body, manager) {
+  const response = await api.get('/planning/admin/context');
+  const { rules = [], periods = [], members = [], places = [] } = response;
+  const now = new Date().toISOString();
+  const snapshots = await Promise.all(members.map(async (member) => {
+    try { return { member, value: (await api.get(`/planning/presence/${member.id}?start_at=${encodeURIComponent(now)}&end_at=${encodeURIComponent(now)}`)).data }; }
+    catch { return { member, value: null }; }
+  }));
+  replaceHtml(body, `${managerHeader('Availability and Presence', 'automation-add-rule', 'Add weekly rule')}
+    <p class="form-hint automation-manager__hint">Manual overrides win over dated exceptions, workflow signals, recurring rules, and advisory Calendar events. Presence is evaluated for the activity’s useful time window—not merely where someone is now.</p>
+    <div class="automation-manager__header automation-workflow-step__header--section"><strong>Current household snapshot</strong><span></span></div>
+    <div class="automation-presence-grid">${snapshots.map(({ member, value }) => `<div class="automation-presence-card"><strong>${h(member.display_name)}</strong><span>${h(value?.effective?.custom_state || value?.effective?.state || 'Unknown')}</span><small>${h(value?.effective?.place?.path_label || value?.effective?.place_name || value?.effective?.source || 'No active signal')}</small></div>`).join('')}</div>
+    <div class="automation-manager__header automation-workflow-step__header--section"><strong>Weekly schedules</strong><span></span></div>
+    <div class="automation-list">${rules.map((rule) => `<div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(rule.display_name)} · ${h(rule.name)}</strong><br><small class="form-hint">${rule.weekdays.map((day) => WEEKDAYS.find((item) => item[1] === day)?.[0]).filter(Boolean).join(', ')} · ${h(rule.start_time)}–${h(rule.end_time)} · ${h(rule.custom_state || rule.state)}${rule.place_name ? ` at ${h(rule.place_name)}` : ''}${rule.active ? '' : ' · inactive'}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-rule="${rule.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-rule="${rule.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No recurring availability rules yet.</p>'}</div>
+    <div class="automation-manager__header automation-workflow-step__header--section"><strong>Dated exceptions and manual overrides</strong><button type="button" class="btn btn--secondary btn--sm" id="automation-add-period"><i data-lucide="calendar-plus" class="icon-md"></i>Add dated period</button></div>
+    <div class="automation-list">${periods.map((period) => `<div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(period.display_name)} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>`);
+  body.querySelector('#automation-add-rule')?.addEventListener('click', () => openAvailabilityRuleForm(null, { members, places }, manager));
+  body.querySelector('#automation-add-period')?.addEventListener('click', () => openAvailabilityPeriodForm(null, { members, places }, manager));
+  body.querySelectorAll('[data-edit-rule]').forEach((button) => button.addEventListener('click', () => openAvailabilityRuleForm(rules.find((row) => Number(row.id) === Number(button.dataset.editRule)), { members, places }, manager)));
+  body.querySelectorAll('[data-edit-period]').forEach((button) => button.addEventListener('click', () => openAvailabilityPeriodForm(periods.find((row) => Number(row.id) === Number(button.dataset.editPeriod)), { members, places }, manager)));
+  const wireDelete = (selector, rows, dataKey, path) => body.querySelectorAll(selector).forEach((button) => button.addEventListener('click', async () => {
+    const row = rows.find((item) => Number(item.id) === Number(button.dataset[dataKey]));
+    if (!row || !await confirmOverModal('Delete this availability entry?', { danger: true, confirmLabel: 'Delete', detail: t('settings.availabilityDeleteConfirmDetail') })) return;
+    try { await api.delete(`/planning/admin/${path}/${row.id}`); toast('Availability entry deleted.'); await refreshAutomationManager(manager, 'availability'); }
+    catch (error) { toast(error.message, 'danger'); }
+  }));
+  wireDelete('[data-delete-rule]', rules, 'deleteRule', 'rules'); wireDelete('[data-delete-period]', periods, 'deletePeriod', 'periods');
+}
+
+function wireCustomState(panel) {
+  const select = panel.querySelector('[name="state"]'); const row = panel.querySelector('[data-custom-state]');
+  const refresh = () => { if (row) row.hidden = select?.value !== 'custom'; };
+  select?.addEventListener('change', refresh); refresh();
+}
+
+function openAvailabilityRuleForm(rule, context, manager) {
+  const selectedDays = new Set((rule?.weekdays || []).map(Number));
+  const content = `<form id="automation-rule-form">
+    ${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(context.members, rule?.user_id)}</select>`)}${inputRow('Schedule name', `<input class="input" name="name" required value="${h(rule?.name || '')}" placeholder="School hours">`)}
+    <fieldset class="automation-fieldset"><legend class="label">Days</legend><div class="automation-weekday-grid">${WEEKDAYS.map(([label, day]) => `<label class="automation-check-row"><input type="checkbox" name="weekday" value="${day}" ${selectedDays.has(day) ? 'checked' : ''}>${label}</label>`).join('')}</div></fieldset>
+    <div class="automation-workflow-condition">${inputRow('Start time', `<input class="input" type="time" name="start_time" required value="${h(rule?.start_time || '09:00')}">`)}${inputRow('End time', `<input class="input" type="time" name="end_time" required value="${h(rule?.end_time || '17:00')}">`)}</div>
+    <div class="automation-workflow-condition">${inputRow('State', `<select class="input" name="state">${availabilityStateOptions(rule?.state)}</select>`)}${inputRow('Category', `<select class="input" name="category">${availabilityCategoryOptions(rule?.category)}</select>`)}</div>
+    <div data-custom-state>${inputRow('Custom state name', `<input class="input" name="custom_state" value="${h(rule?.custom_state || '')}">`)}</div>${inputRow('Place', `<select class="input" name="place_id">${placeOptions(context.places, rule?.place_id, 'No specific Place')}</select>`)}
+    <label class="automation-check-row"><input type="checkbox" name="active" ${rule?.active !== 0 ? 'checked' : ''}> Active</label>${footer(rule ? 'Save weekly rule' : 'Create weekly rule')}</form>`;
+  openModal({ title: rule ? 'Edit weekly availability' : 'New weekly availability', content, size: 'lg', onSave(panel) { wireCustomState(panel); panel.querySelector('#automation-rule-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { user_id: Number(data.get('user_id')), name: data.get('name'), weekdays: data.getAll('weekday').map(Number), start_time: data.get('start_time'), end_time: data.get('end_time'), state: data.get('state'), custom_state: data.get('custom_state'), category: data.get('category'), place_id: Number(data.get('place_id')) || null, active: data.has('active') };
+    try { if (rule) await api.put(`/planning/admin/rules/${rule.id}`, payload); else await api.post('/planning/admin/rules', payload); toast('Weekly availability saved.'); await refreshAutomationManager(manager, 'availability'); } catch (error) { toast(error.message, 'danger'); }
+  }); } });
+}
+
+function openAvailabilityPeriodForm(period, context, manager) {
+  const content = `<form id="automation-period-form">${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(context.members, period?.user_id)}</select>`)}
+    <div class="automation-workflow-condition">${inputRow('Entry type', `<select class="input" name="source"><option value="explicit" ${period?.source !== 'manual' ? 'selected' : ''}>Dated exception</option><option value="manual" ${period?.source === 'manual' ? 'selected' : ''}>Manual override</option></select>`)}${inputRow('Category', `<select class="input" name="category">${availabilityCategoryOptions(period?.category)}</select>`)}</div>
+    <div class="automation-workflow-condition">${inputRow('Starts', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(period?.starts_at) || localDateTimeValue(new Date().toISOString()))}">`)}${inputRow('Ends / expires', `<input class="input" type="datetime-local" name="ends_at" value="${h(localDateTimeValue(period?.ends_at))}">`, 'Optional for a manual override.')}</div>
+    <div class="automation-workflow-condition">${inputRow('State', `<select class="input" name="state">${availabilityStateOptions(period?.state || 'away')}</select>`)}${inputRow('Place', `<select class="input" name="place_id">${placeOptions(context.places, period?.place_id, 'No specific Place')}</select>`)}</div>
+    <div data-custom-state>${inputRow('Custom state name', `<input class="input" name="custom_state" value="${h(period?.custom_state || '')}">`)}</div>${inputRow('Note', `<textarea class="input" name="note" rows="2">${h(period?.note || '')}</textarea>`)}
+    <label class="automation-check-row"><input type="checkbox" name="active" ${period?.active !== 0 ? 'checked' : ''}> Active</label>${footer(period ? 'Save dated period' : 'Create dated period')}</form>`;
+  openModal({ title: period ? 'Edit availability period' : 'New availability period', content, size: 'lg', onSave(panel) { wireCustomState(panel); panel.querySelector('#automation-period-form')?.addEventListener('submit', async (event) => {
+    event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { user_id: Number(data.get('user_id')), source: data.get('source'), category: data.get('category'), state: data.get('state'), custom_state: data.get('custom_state'), place_id: Number(data.get('place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at') || null, note: data.get('note'), active: data.has('active') };
+    try { if (period) await api.put(`/planning/admin/periods/${period.id}`, payload); else await api.post('/planning/admin/periods', payload); toast('Availability period saved.'); await refreshAutomationManager(manager, 'availability'); } catch (error) { toast(error.message, 'danger'); }
+  }); } });
+}
+
 async function renderSkillsManager(body, manager) {
   const response = await api.get('/automation/admin/skills');
   const skills = response.data ?? [];
@@ -744,7 +903,7 @@ async function renderActivitiesManager(body, manager) {
           </div>
         </div>`).join('') || '<p class="form-hint">No activity templates yet.</p>'}
     </div>`);
-  const context = { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [] };
+  const context = { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [] };
   body.querySelector('#automation-add-activity')?.addEventListener('click', () => openActivityForm(null, context, manager));
   body.querySelectorAll('[data-edit-activity]').forEach((button) => {
     button.addEventListener('click', () => openActivityForm(
@@ -771,6 +930,7 @@ async function renderActivitiesManager(body, manager) {
 function openActivityForm(activity, context, manager = null) {
   const selectedSkills = new Set((activity?.skills ?? []).map((skill) => Number(skill.id)));
   const strategy = activity?.assignment_strategy || 'subject_skill';
+  const locationMode = activity?.location_mode || 'none';
   const content = `<form id="automation-activity-form">
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
     ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}">`, 'The title created on the actual task. Type @ to insert the person or Activity Template name.')}
@@ -786,6 +946,11 @@ function openActivityForm(activity, context, manager = null) {
     <fieldset class="automation-fieldset"><legend class="label">Required skills</legend>
       <div class="automation-skill-grid">${context.skills.map((skill) => `<label class="automation-check-row"><input type="checkbox" name="skill" value="${skill.id}" ${selectedSkills.has(Number(skill.id)) ? 'checked' : ''}> ${h(skill.name)}</label>`).join('') || '<small class="form-hint">Create skills first if this activity requires proficiency checks.</small>'}</div>
     </fieldset>
+    ${inputRow('Location', `<select class="input" name="location_mode" id="automation-location-mode"><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No required location</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Place chosen by a workflow variable</option></select>`)}
+    <div id="automation-fixed-place" ${locationMode === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed Place', `<select class="input" name="place_id">${placeOptions(context.places, activity?.place_id)}</select>`)}</div>
+    <div id="automation-location-variable" ${locationMode === 'workflow' ? '' : 'hidden'}>${inputRow('Location variable', `<select class="input" name="location_variable_id"><option value="">Choose a reusable Location variable…</option>${context.variables.filter((variable) => variable.type === 'location').map((variable) => `<option value="${h(variable.variable_key)}" ${variable.variable_key === activity?.location_variable_id ? 'selected' : ''}>${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select>`, 'The workflow using this activity must include the same Location variable.')}</div>
+    ${inputRow('Presence policy', `<select class="input" name="presence_policy"><option value="ignore" ${activity?.presence_policy === 'ignore' || !activity?.presence_policy ? 'selected' : ''}>Ignore location</option><option value="must_be_home" ${activity?.presence_policy === 'must_be_home' ? 'selected' : ''}>Must be home</option><option value="must_be_at_location" ${activity?.presence_policy === 'must_be_at_location' ? 'selected' : ''}>Must be at the activity location</option><option value="must_be_away" ${activity?.presence_policy === 'must_be_away' ? 'selected' : ''}>Must be away</option><option value="available_before_due" ${activity?.presence_policy === 'available_before_due' ? 'selected' : ''}>Expected available before due time</option></select>`, 'Existing activities default to Ignore location.')}
+    ${inputRow('Presence evaluation time', `<select class="input" name="presence_window"><option value="start" ${activity?.presence_window === 'start' ? 'selected' : ''}>At task start</option><option value="due" ${activity?.presence_window === 'due' || !activity?.presence_window ? 'selected' : ''}>At task due time</option><option value="completion" ${activity?.presence_window === 'completion' ? 'selected' : ''}>Across the useful completion window</option></select>`)}
     ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" data-variable-mentions="activity-supervision" aria-autocomplete="list" aria-expanded="false" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Type @ to insert the person or Activity Template name. Used only when the person requires supervision.')}
     ${footer(activity ? 'Save activity' : 'Create activity')}
   </form>`;
@@ -798,6 +963,11 @@ function openActivityForm(activity, context, manager = null) {
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
       strategySelect?.addEventListener('change', () => { fixed.hidden = strategySelect.value !== 'fixed'; });
+      const locationSelect = panel.querySelector('#automation-location-mode');
+      const fixedPlace = panel.querySelector('#automation-fixed-place');
+      const locationVariable = panel.querySelector('#automation-location-variable');
+      const refreshLocation = () => { fixedPlace.hidden = locationSelect.value !== 'fixed'; locationVariable.hidden = locationSelect.value !== 'workflow'; };
+      locationSelect?.addEventListener('change', refreshLocation);
       panel.querySelector('#automation-activity-form')?.addEventListener('submit', async (event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
@@ -809,6 +979,11 @@ function openActivityForm(activity, context, manager = null) {
           fixed_user_id: data.get('fixed_user_id') || null,
           skill_ids: data.getAll('skill').map(Number),
           supervision_title_template: data.get('supervision_title_template'),
+          location_mode: data.get('location_mode'),
+          place_id: Number(data.get('place_id')) || null,
+          location_variable_id: data.get('location_variable_id') || null,
+          presence_policy: data.get('presence_policy'),
+          presence_window: data.get('presence_window'),
           active: true,
         };
         try {
@@ -842,6 +1017,7 @@ async function renderWorkflowsManager(body, manager) {
     members: response.members ?? [],
     categories: response.categories ?? [],
     variables: response.variables ?? [],
+    places: response.places ?? [],
   };
   body.querySelector('#automation-add-workflow')?.addEventListener('click', () => openWorkflowForm(null, context, manager));
   body.querySelectorAll('[data-edit-workflow]').forEach((button) => {
@@ -919,14 +1095,14 @@ function renameWorkflowDraftVariable(panel, row, nextId) {
   });
 }
 
-function workflowVariableOptions(questions, selected = '', { memberOnly = false } = {}) {
+function workflowVariableOptions(questions, selected = '', { memberOnly = false, locationOnly = false } = {}) {
   return questions
-    .filter((question) => !memberOnly || question.type === 'household_member')
+    .filter((question) => (!memberOnly || question.type === 'household_member') && (!locationOnly || question.type === 'location'))
     .map((question) => `<option value="${h(workflowVariableId(question))}" ${workflowVariableId(question) === selected ? 'selected' : ''}>${h(question.label || workflowVariableId(question))}</option>`)
     .join('');
 }
 
-function conditionValueHtml(variableId, value, questions, members) {
+function conditionValueHtml(variableId, value, questions, members, places = []) {
   const question = questions.find((item) => workflowVariableId(item) === variableId);
   const stringValue = value == null ? '' : String(value);
   if (question?.type === 'boolean') {
@@ -938,15 +1114,20 @@ function conditionValueHtml(variableId, value, questions, members) {
   if (question?.type === 'household_member') {
     return `<select class="input" data-step-condition-value required>${memberOptions(members, Number(value), 'Choose a member…')}</select>`;
   }
+  if (question?.type === 'location') {
+    return `<select class="input" data-step-condition-value required>${placeOptions(places, Number(value))}</select>`;
+  }
   const type = ['number', 'date', 'time'].includes(question?.type) ? question.type : 'text';
   const required = variableId && type !== 'text' ? 'required' : '';
   return `<input class="input" type="${type}" data-step-condition-value placeholder="Equals" value="${h(stringValue)}" ${required}>`;
 }
 
-function workflowStepHtml(step, index, activities, questions, members) {
+function workflowStepHtml(step, index, activities, questions, members, places) {
   const workflowKey = step?.step_key || `draft_${++workflowDraftStepSequence}`;
   const initialDependency = step?.depends_on?.[0] || '';
   const subjectVariableId = step?.subject_variable_id || '';
+  const locationMode = step?.location_mode || 'inherit';
+  const locationVariableId = step?.location_variable_id || '';
   const conditionVariableId = step?.condition?.variable_id || step?.condition?.input || '';
   const conditionValue = step?.condition && Object.hasOwn(step.condition, 'equals') ? step.condition.equals : '';
   return `<div class="automation-workflow-step" data-workflow-step data-workflow-key="${h(workflowKey)}" data-initial-dependency="${h(initialDependency)}">
@@ -957,10 +1138,16 @@ function workflowStepHtml(step, index, activities, questions, members) {
     <select class="input automation-workflow-step__control" data-step-subject-variable>
       <option value="">Use the workflow subject</option>${workflowVariableOptions(questions, subjectVariableId, { memberOnly: true })}
     </select>
+    <div class="automation-workflow-condition" data-step-location-controls>
+      <select class="input" data-step-location-mode><option value="inherit" ${locationMode === 'inherit' ? 'selected' : ''}>Use Activity Template location</option><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No location for this step</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Use a fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Use a Location variable</option></select>
+      <select class="input" data-step-place ${locationMode === 'fixed' ? '' : 'hidden'}>${placeOptions(places, step?.place_id)}</select>
+      <select class="input" data-step-location-variable ${locationMode === 'workflow' ? '' : 'hidden'}><option value="">Choose a Location variable…</option>${workflowVariableOptions(questions, locationVariableId, { locationOnly: true })}</select>
+      <select class="input" data-step-presence-policy><option value="" ${!step?.presence_policy_override ? 'selected' : ''}>Use Activity Template presence policy</option><option value="ignore" ${step?.presence_policy_override === 'ignore' ? 'selected' : ''}>Ignore location</option><option value="must_be_home" ${step?.presence_policy_override === 'must_be_home' ? 'selected' : ''}>Must be home</option><option value="must_be_at_location" ${step?.presence_policy_override === 'must_be_at_location' ? 'selected' : ''}>Must be at step location</option><option value="must_be_away" ${step?.presence_policy_override === 'must_be_away' ? 'selected' : ''}>Must be away</option><option value="available_before_due" ${step?.presence_policy_override === 'available_before_due' ? 'selected' : ''}>Available before due</option></select>
+    </div>
     <select class="input automation-workflow-step__control" data-step-dependency><option value="">No dependency</option></select>
     <div class="automation-workflow-condition">
       <select class="input" data-step-condition-variable><option value="">Always include</option>${workflowVariableOptions(questions, conditionVariableId)}</select>
-      <div data-condition-value-slot>${conditionValueHtml(conditionVariableId, conditionValue, questions, members)}</div>
+      <div data-condition-value-slot>${conditionValueHtml(conditionVariableId, conditionValue, questions, members, places)}</div>
     </div>
   </div>`;
 }
@@ -974,6 +1161,7 @@ function questionHtml(question = {}, workflowId = null) {
     <input class="input" data-question-label placeholder="Question or variable name" aria-label="Question or variable name" value="${h(question.label || '')}">
     <select class="input" data-question-type>
       <option value="household_member" ${type === 'household_member' ? 'selected' : ''}>Household Member</option>
+      <option value="location" ${type === 'location' ? 'selected' : ''}>Place / Location</option>
       <option value="boolean" ${type === 'boolean' ? 'selected' : ''}>Yes/No</option>
       <option value="choice" ${type === 'choice' ? 'selected' : ''}>Choice</option>
       <option value="text" ${type === 'text' ? 'selected' : ''}>Text</option>
@@ -1003,7 +1191,7 @@ function openWorkflowForm(workflow, context, manager = null) {
     <div id="workflow-questions">${(workflow?.input_schema || []).map((question) => questionHtml(question, workflow?.id)).join('')}</div>
 
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>Activities</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-step">Add activity</button></div>
-    <div id="workflow-steps">${(workflow?.steps?.length ? workflow.steps : [{}]).map((step, index) => workflowStepHtml(step, index, context.activities, workflow?.input_schema || [], context.members)).join('')}</div>
+    <div id="workflow-steps">${(workflow?.steps?.length ? workflow.steps : [{}]).map((step, index) => workflowStepHtml(step, index, context.activities, workflow?.input_schema || [], context.members, context.places)).join('')}</div>
     ${footer(workflow ? 'Save workflow' : 'Create workflow')}
   </form>`;
 
@@ -1050,27 +1238,33 @@ function openWorkflowForm(workflow, context, manager = null) {
         const drafts = readQuestionDrafts();
         steps.querySelectorAll('[data-workflow-step]').forEach((row) => {
           const subjectSelect = row.querySelector('[data-step-subject-variable]');
+          const locationSelect = row.querySelector('[data-step-location-variable]');
           const conditionSelect = row.querySelector('[data-step-condition-variable]');
           const oldSubject = subjectSelect.value;
+          const oldLocation = locationSelect.value;
           const oldCondition = conditionSelect.value;
           const oldConditionValue = row.querySelector('[data-step-condition-value]')?.value ?? '';
           replaceHtml(subjectSelect, '<option value="">Use the workflow subject</option>'
             + workflowVariableOptions(drafts, oldSubject, { memberOnly: true }));
           replaceHtml(conditionSelect, '<option value="">Always include</option>'
             + workflowVariableOptions(drafts, oldCondition));
+          replaceHtml(locationSelect, '<option value="">Choose a Location variable…</option>'
+            + workflowVariableOptions(drafts, oldLocation, { locationOnly: true }));
           if ([...subjectSelect.options].some((option) => option.value === oldSubject)) subjectSelect.value = oldSubject;
           if ([...conditionSelect.options].some((option) => option.value === oldCondition)) conditionSelect.value = oldCondition;
+          if ([...locationSelect.options].some((option) => option.value === oldLocation)) locationSelect.value = oldLocation;
           replaceHtml(row.querySelector('[data-condition-value-slot]'), conditionValueHtml(
-            conditionSelect.value, oldConditionValue, drafts, context.members,
+            conditionSelect.value, oldConditionValue, drafts, context.members, context.places,
           ));
         });
       };
 
       refreshStepDependencies();
+      refreshStepVariables();
 
       panel.querySelector('#workflow-add-step')?.addEventListener('click', () => {
         steps.insertAdjacentHTML('beforeend', workflowStepHtml(
-          {}, steps.children.length, context.activities, readQuestionDrafts(), context.members,
+          {}, steps.children.length, context.activities, readQuestionDrafts(), context.members, context.places,
         ));
         refreshStepDependencies();
       });
@@ -1146,11 +1340,18 @@ function openWorkflowForm(workflow, context, manager = null) {
         }
       });
       steps.addEventListener('change', (event) => {
+        const locationMode = event.target.closest('[data-step-location-mode]');
+        if (locationMode) {
+          const row = locationMode.closest('[data-workflow-step]');
+          row.querySelector('[data-step-place]').hidden = locationMode.value !== 'fixed';
+          row.querySelector('[data-step-location-variable]').hidden = locationMode.value !== 'workflow';
+          return;
+        }
         const select = event.target.closest('[data-step-condition-variable]');
         if (!select) return;
         const row = select.closest('[data-workflow-step]');
         replaceHtml(row.querySelector('[data-condition-value-slot]'), conditionValueHtml(
-          select.value, '', readQuestionDrafts(), context.members,
+          select.value, '', readQuestionDrafts(), context.members, context.places,
         ));
       });
 
@@ -1175,6 +1376,10 @@ function openWorkflowForm(workflow, context, manager = null) {
             title_override: row.querySelector('[data-step-title]').value.trim() || null,
             description_override: row.querySelector('[data-step-description]').value.trim() || null,
             subject_variable_id: row.querySelector('[data-step-subject-variable]').value || null,
+            location_mode: row.querySelector('[data-step-location-mode]').value,
+            place_id: Number(row.querySelector('[data-step-place]').value) || null,
+            location_variable_id: row.querySelector('[data-step-location-variable]').value || null,
+            presence_policy_override: row.querySelector('[data-step-presence-policy]').value || null,
             depends_on: dependency ? [dependency] : [],
             condition: conditionVariableId ? {
               variable_id: conditionVariableId,

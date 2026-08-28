@@ -1463,6 +1463,8 @@
         "pageHouseholdAutomation": "Otomatisasi rumah tangga",
         "pageHouseholdAutomationDescription": "Kelola keterampilan, aktivitas, dan templat Tambah Cepat yang dapat digunakan kembali.",
         "automationDefinitionDeleteConfirmDetail": "Definisi yang dapat digunakan kembali ini beserta pengaturannya akan dihapus secara permanen. Yuvomi memblokir penghapusan selama templat lain atau tugas terjadwal masih bergantung padanya; tugas dan acara yang sudah dibuat tetap ada.",
+        "placeDeleteConfirmDetail": "Penghapusan diblokir selama jadwal, templat, ketersediaan, tugas, atau tempat turunan masih bergantung pada tempat ini. Anda dapat menonaktifkan tempat sebagai gantinya.",
+        "availabilityDeleteConfirmDetail": "Ini menghapus sinyal ketersediaan. Tugas dan makanan yang ada tidak dihapus.",
         "rewardsEnableTitle": "Visibilitas",
         "rewardsEnableLabel": "Aktifkan hadiah",
         "rewardsEnableHint": "Menampilkan modul hadiah di navigasi. Menonaktifkan tetap menyimpan semua data.",

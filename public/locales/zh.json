@@ -1451,6 +1451,8 @@
         "pageHouseholdAutomation": "家庭自动化",
         "pageHouseholdAutomationDescription": "管理可重复使用的技能、活动和快速添加模板。",
         "automationDefinitionDeleteConfirmDetail": "此可重复使用的定义及其设置将被永久删除。如果其他模板或计划任务仍依赖它，Yuvomi 会阻止删除；已创建的任务和事件会保留。",
+        "placeDeleteConfirmDetail": "当日程、模板、可用状态、任务或子地点仍依赖此地点时，无法删除。你可以改为停用此地点。",
+        "availabilityDeleteConfirmDetail": "这会移除可用状态信号。现有任务和餐食不会被删除。",
         "rewardsEnableTitle": "显示",
         "rewardsEnableLabel": "启用奖励",
         "rewardsEnableHint": "在导航中显示奖励模块。停用后将保留所有数据。",

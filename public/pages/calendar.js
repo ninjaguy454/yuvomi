@@ -547,6 +547,7 @@ let state = {
   scheduleEntries: [],
   scheduleWarnings: [],
   users:         [],
+  places:        [],
   rangeFrom:     '',
   rangeTo:       '',
   holidays:      [],       // cached entries from holiday_cache
@@ -1280,12 +1281,14 @@ export async function render(container, { user }) {
   }
 
   const { from, to } = getRangeForView(state.view, state.cursor);
-  const [,, prefsRes, documentOptionsRes] = await Promise.all([
+  const [,, prefsRes, documentOptionsRes, placesRes] = await Promise.all([
     loadRange(from, to),
     loadUsers(),
     api.get('/preferences').catch(() => ({ data: {} })),
     api.get('/documents/meta/options').catch(() => ({ data: {} })),
+    api.get('/planning/places?active=false').catch(() => ({ data: [] })),
   ]);
+  state.places = placesRes.data ?? [];
   state.holidayPrefs  = prefsRes.data ?? {};
   state.weekStart     = weekStartIndex(prefsRes.data?.week_start);
   state.defaultDuration = Number(prefsRes.data?.calendar_default_duration) || 60;
@@ -3989,6 +3992,15 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
              placeholder="${t('calendar.locationPlaceholder')}" value="${esc(isEdit && event.location ? event.location : '')}">
     </div>
 
+    ${state.places.length ? `<div class="form-group">
+      <label class="form-label" for="modal-place">Planner Place</label>
+      <select class="form-input" id="modal-place">
+        <option value="">No linked Place</option>
+        ${state.places.map((place) => `<option value="${place.id}" ${Number(event?.place_id) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(event?.place_id) !== Number(place.id) ? 'disabled' : ''}>${esc(place.path_label || place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}
+      </select>
+      <small class="cal-field-hint">Linking a Place lets availability treat this calendar event as an advisory location signal.</small>
+    </div>` : ''}
+
     <div class="form-group">
       ${renderUserMultiSelect(state.users, selectedUserIds, 'cal_assigned', 'calendar.assignedLabel')}
     </div>
@@ -4063,6 +4075,7 @@ async function saveEvent(overlay, mode, event, existingReminder = null, attachme
   const color   = colorToSave(overlay.querySelector('.color-swatch--active')?.dataset.color, event);
   const icon    = eventIconName(overlay.querySelector('#modal-icon')?.value);
   const location    = overlay.querySelector('#modal-location').value.trim() || null;
+  const place_id    = Number(overlay.querySelector('#modal-place')?.value) || null;
   const assigned_to = getSelectedUserIds(overlay, 'cal_assigned');
   const description = overlay.querySelector('#modal-description').value.trim() || null;
 
@@ -4166,7 +4179,7 @@ async function saveEvent(overlay, mode, event, existingReminder = null, attachme
     const body = {
       title, description, start_datetime, end_datetime,
       all_day: allday ? 1 : 0,
-      location, color, icon, assigned_to,
+      location, place_id, color, icon, assigned_to,
       visibility: overlay.querySelector('#modal-visibility')?.value || 'all',
       countdown: overlay.querySelector('#modal-countdown')?.checked ? 1 : 0,
       recurrence_rule: rrule.recurrence_rule,

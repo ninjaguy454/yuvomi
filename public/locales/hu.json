@@ -1451,6 +1451,8 @@
         "pageHouseholdAutomation": "Háztartási automatizálás",
         "pageHouseholdAutomationDescription": "Újrahasználható készségek, tevékenységek és Gyors hozzáadás sablonok kezelése.",
         "automationDefinitionDeleteConfirmDetail": "Ez az újrahasználható meghatározás és a beállításai véglegesen törlődnek. A Yuvomi nem engedi a törlést, amíg másik sablon vagy ütemezett feladat függ tőle; a már létrehozott feladatok és események megmaradnak.",
+        "placeDeleteConfirmDetail": "A törlés le van tiltva, amíg ütemezések, sablonok, elérhetőségek, feladatok vagy alárendelt helyek függenek ettől a helytől. Ehelyett inaktiválhatod a helyet.",
+        "availabilityDeleteConfirmDetail": "Ez eltávolítja az elérhetőségi jelzést. A meglévő feladatok és étkezések nem törlődnek.",
         "rewardsEnableTitle": "Láthatóság",
         "rewardsEnableLabel": "Jutalmak engedélyezése",
         "rewardsEnableHint": "Megjeleníti a jutalmak modult a navigációban. Kikapcsoláskor minden adat megmarad.",

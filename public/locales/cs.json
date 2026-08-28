@@ -1451,6 +1451,8 @@
         "pageHouseholdAutomation": "Automatizace domácnosti",
         "pageHouseholdAutomationDescription": "Správa opakovaně použitelných dovedností, aktivit a šablon Rychlého přidání.",
         "automationDefinitionDeleteConfirmDetail": "Tato opakovaně použitelná definice a její nastavení budou trvale odstraněny. Yuvomi odstranění zablokuje, dokud na ní závisí jiná šablona nebo naplánovaný úkol; již vytvořené úkoly a události zůstanou zachovány.",
+        "placeDeleteConfirmDetail": "Odstranění je blokováno, dokud na místě závisí rozvrhy, šablony, dostupnost, úkoly nebo podřízená místa. Místo toho můžete místo deaktivovat.",
+        "availabilityDeleteConfirmDetail": "Tím se odstraní signál dostupnosti. Existující úkoly a jídla se neodstraní.",
         "rewardsEnableTitle": "Viditelnost",
         "rewardsEnableLabel": "Povolit odměny",
         "rewardsEnableHint": "Zobrazí modul odměn v navigaci. Při vypnutí zůstanou všechna data zachována.",

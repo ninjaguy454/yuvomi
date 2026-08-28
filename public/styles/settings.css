@@ -1028,6 +1028,39 @@
   margin-bottom: 0;
 }
 
+.automation-weekday-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.automation-weekday-grid .automation-check-row {
+  justify-content: center;
+  min-height: var(--target-lg);
+  padding: var(--space-2);
+  margin: 0;
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+
+.automation-presence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: var(--space-2);
+}
+
+.automation-presence-card {
+  display: grid;
+  gap: var(--space-0h);
+  padding: var(--space-3);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.automation-presence-card span { color: var(--color-text-primary); }
+.automation-presence-card small { color: var(--color-text-tertiary); }
+
 .automation-workflow-step {
   padding: var(--space-3);
   margin-bottom: var(--space-2);
@@ -1106,6 +1139,18 @@
     padding-inline: var(--space-3);
   }
 
+  .automation-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    overflow-x: visible;
+  }
+
+  .automation-tabs .group-toggle__btn {
+    min-width: 0;
+    white-space: normal;
+  }
+
   .automation-manager__header,
   .automation-list-row {
     align-items: stretch;
@@ -1138,6 +1183,10 @@
 
   .automation-workflow-condition {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .automation-weekday-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .automation-workflow-step__header {

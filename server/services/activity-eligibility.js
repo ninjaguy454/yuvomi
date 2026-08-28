@@ -10,6 +10,7 @@
  */
 
 import { todayKey } from '../utils/timezone.js';
+import { evaluatePresence } from './presence.js';
 
 export const PROFICIENCY = Object.freeze({
   EXCLUDED: 'excluded',
@@ -248,6 +249,7 @@ export function resolveActivityAssignment(d, activity, {
   subjectUserId = null,
   commitRotation = false,
   dateKey = todayKey(d),
+  presence = null,
 } = {}) {
   const members = householdMembers(d);
   const subject = subjectUserId == null
@@ -257,6 +259,20 @@ export function resolveActivityAssignment(d, activity, {
   if (activity.subject_required && !subject) {
     throw new Error('This activity requires a household member subject.');
   }
+
+  const isPresent = (member) => {
+    const policy = presence?.policy || activity.presence_policy || 'ignore';
+    if (policy === 'ignore') return true;
+    try {
+      return evaluatePresence(d, {
+        userId: member.id,
+        startAt: presence?.startAt || `${dateKey}T00:00:00`,
+        endAt: presence?.endAt || `${dateKey}T23:59:00`,
+        targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null,
+        policy,
+      }).eligible;
+    } catch { return false; }
+  };
 
   if (activity.assignment_strategy === 'fixed') {
     const fixed = members.find((member) => Number(member.id) === Number(activity.fixed_user_id));
@@ -268,6 +284,7 @@ export function resolveActivityAssignment(d, activity, {
     if (fixedProficiency.proficiency !== PROFICIENCY.NORMAL) {
       throw new Error('The fixed assignee is not independently qualified for this activity.');
     }
+    if (!isPresent(fixed)) throw new Error('The fixed assignee does not meet this activity’s presence requirement.');
     return {
       primary: fixed,
       supervisor: null,
@@ -282,6 +299,7 @@ export function resolveActivityAssignment(d, activity, {
   if (activity.assignment_strategy === 'eligible_round_robin') {
     const eligible = members.filter((member) =>
       effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
+      && isPresent(member)
     );
     const primary = chooseRoundRobin(d, activity.id, 'primary', eligible, {
       commit: commitRotation,
@@ -303,14 +321,16 @@ export function resolveActivityAssignment(d, activity, {
   // helper when excluded, and gets a separate supervisor when supervised.
   if (!subject) throw new Error('Subject-based assignment requires a household member subject.');
   const subjectProficiency = effectiveActivityProficiency(d, activity.id, subject, dateKey);
+  const subjectMeetsPresence = isPresent(subject);
 
-  if (subjectProficiency.proficiency === PROFICIENCY.NORMAL) {
+  if (subjectProficiency.proficiency === PROFICIENCY.NORMAL && subjectMeetsPresence) {
     return { primary: subject, supervisor: null, subject, subjectProficiency, eligible: [subject] };
   }
 
   const eligibleHelpers = members.filter((member) =>
     Number(member.id) !== Number(subject.id)
     && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
+    && isPresent(member)
   );
   const purpose = subjectProficiency.proficiency === PROFICIENCY.SUPERVISED ? 'supervisor' : 'primary';
   const helper = chooseRoundRobin(d, activity.id, purpose, eligibleHelpers, {
@@ -319,7 +339,7 @@ export function resolveActivityAssignment(d, activity, {
   });
   if (!helper) throw new Error('No qualified household member is available to help with this activity.');
 
-  if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED) {
+  if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED && subjectMeetsPresence) {
     return {
       primary: subject,
       supervisor: helper,

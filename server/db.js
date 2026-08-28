@@ -7085,6 +7085,160 @@ const FORK_MIGRATIONS = [
       CREATE INDEX idx_planning_obligations_entity ON planning_obligations(entity_type, entity_id, role);
     `,
   },
+  {
+    version: 10007,
+    description: 'Household planning: reusable places, availability and time-aware presence',
+    up: `
+      ALTER TABLE household_variable_definitions RENAME TO household_variable_definitions_v10006;
+      ALTER TABLE workflow_variable_definitions RENAME TO workflow_variable_definitions_v10006;
+
+      CREATE TABLE household_variable_definitions (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        variable_key       TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+        label              TEXT    NOT NULL,
+        description        TEXT,
+        type               TEXT    NOT NULL DEFAULT 'text'
+                                CHECK(type IN ('household_member', 'location', 'boolean', 'choice', 'text', 'number', 'date', 'time')),
+        kind               TEXT    NOT NULL DEFAULT 'field'
+                                CHECK(kind IN ('value', 'field')),
+        options_json       TEXT    NOT NULL DEFAULT '[]',
+        default_value_json TEXT,
+        active             INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at         TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      INSERT INTO household_variable_definitions
+        SELECT * FROM household_variable_definitions_v10006;
+
+      CREATE TABLE workflow_variable_definitions (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        workflow_template_id INTEGER NOT NULL REFERENCES workflow_templates(id) ON DELETE CASCADE,
+        variable_key         TEXT    NOT NULL,
+        label                TEXT    NOT NULL,
+        type                 TEXT    NOT NULL DEFAULT 'text'
+                                  CHECK(type IN ('household_member', 'location', 'boolean', 'choice', 'text', 'number', 'date', 'time')),
+        options_json         TEXT    NOT NULL DEFAULT '[]',
+        scope                TEXT    NOT NULL DEFAULT 'workflow'
+                                  CHECK(scope IN ('household', 'reusable', 'workflow', 'item', 'context')),
+        created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        reusable_definition_id INTEGER REFERENCES household_variable_definitions(id) ON DELETE SET NULL,
+        UNIQUE(workflow_template_id, variable_key)
+      );
+      INSERT INTO workflow_variable_definitions
+        SELECT * FROM workflow_variable_definitions_v10006;
+
+      DROP TABLE workflow_variable_definitions_v10006;
+      DROP TABLE household_variable_definitions_v10006;
+      CREATE INDEX idx_household_variable_definitions_active
+        ON household_variable_definitions(active, label COLLATE NOCASE);
+      CREATE INDEX idx_workflow_variable_definitions_template
+        ON workflow_variable_definitions(workflow_template_id, id);
+      CREATE INDEX idx_workflow_variable_reusable
+        ON workflow_variable_definitions(reusable_definition_id);
+
+      CREATE TABLE places (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT    NOT NULL,
+        description     TEXT,
+        type            TEXT    NOT NULL DEFAULT 'custom'
+                              CHECK(type IN ('home', 'room', 'school', 'work', 'restaurant', 'store', 'hotel', 'destination', 'custom')),
+        parent_place_id INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        street_address  TEXT,
+        city            TEXT,
+        region          TEXT,
+        postal_code     TEXT,
+        country         TEXT,
+        latitude        REAL CHECK(latitude IS NULL OR latitude BETWEEN -90 AND 90),
+        longitude       REAL CHECK(longitude IS NULL OR longitude BETWEEN -180 AND 180),
+        active          INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(parent_place_id IS NULL OR parent_place_id != id)
+      );
+      CREATE INDEX idx_places_parent ON places(parent_place_id, active, name COLLATE NOCASE);
+      CREATE INDEX idx_places_active ON places(active, name COLLATE NOCASE);
+
+      CREATE TABLE availability_rules (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name         TEXT    NOT NULL,
+        weekdays_json TEXT   NOT NULL DEFAULT '[]' CHECK(json_valid(weekdays_json)),
+        start_time   TEXT    NOT NULL,
+        end_time     TEXT    NOT NULL,
+        state        TEXT    NOT NULL DEFAULT 'available'
+                            CHECK(state IN ('available', 'away', 'busy', 'unknown', 'custom')),
+        custom_state TEXT,
+        place_id     INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        category     TEXT    NOT NULL DEFAULT 'general'
+                            CHECK(category IN ('general', 'school', 'work', 'custody', 'vacation', 'travel')),
+        active       INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_availability_rules_user ON availability_rules(user_id, active);
+
+      CREATE TABLE availability_periods (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source       TEXT    NOT NULL DEFAULT 'explicit'
+                            CHECK(source IN ('manual', 'workflow', 'explicit')),
+        category     TEXT    NOT NULL DEFAULT 'general'
+                            CHECK(category IN ('general', 'school', 'work', 'custody', 'vacation', 'travel')),
+        state        TEXT    NOT NULL DEFAULT 'unknown'
+                            CHECK(state IN ('available', 'away', 'busy', 'unknown', 'custom')),
+        custom_state TEXT,
+        place_id     INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        starts_at    TEXT    NOT NULL,
+        ends_at      TEXT,
+        note         TEXT,
+        active       INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        created_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_availability_periods_user_window
+        ON availability_periods(user_id, starts_at, ends_at, active);
+
+      ALTER TABLE activity_templates ADD COLUMN location_mode TEXT NOT NULL DEFAULT 'none'
+        CHECK(location_mode IN ('none', 'fixed', 'workflow'));
+      ALTER TABLE activity_templates ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE RESTRICT;
+      ALTER TABLE activity_templates ADD COLUMN location_variable_id TEXT;
+      ALTER TABLE activity_templates ADD COLUMN presence_policy TEXT NOT NULL DEFAULT 'ignore'
+        CHECK(presence_policy IN ('ignore', 'must_be_home', 'must_be_at_location', 'must_be_away', 'available_before_due'));
+      ALTER TABLE activity_templates ADD COLUMN presence_window TEXT NOT NULL DEFAULT 'due'
+        CHECK(presence_window IN ('start', 'due', 'completion'));
+
+      ALTER TABLE workflow_template_steps ADD COLUMN location_mode TEXT NOT NULL DEFAULT 'inherit'
+        CHECK(location_mode IN ('inherit', 'none', 'fixed', 'workflow'));
+      ALTER TABLE workflow_template_steps ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE RESTRICT;
+      ALTER TABLE workflow_template_steps ADD COLUMN location_variable_id TEXT;
+      ALTER TABLE workflow_template_steps ADD COLUMN presence_policy_override TEXT
+        CHECK(presence_policy_override IS NULL OR presence_policy_override IN ('ignore', 'must_be_home', 'must_be_at_location', 'must_be_away', 'available_before_due'));
+
+      CREATE TABLE task_planning_context (
+        task_id          INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        place_id         INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        presence_policy  TEXT NOT NULL DEFAULT 'ignore'
+                              CHECK(presence_policy IN ('ignore', 'must_be_home', 'must_be_at_location', 'must_be_away', 'available_before_due')),
+        presence_window  TEXT NOT NULL DEFAULT 'due'
+                              CHECK(presence_window IN ('start', 'due', 'completion')),
+        source           TEXT NOT NULL DEFAULT 'manual'
+                              CHECK(source IN ('manual', 'activity_template', 'workflow', 'meal')),
+        created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_task_planning_place ON task_planning_context(place_id, presence_policy);
+
+      ALTER TABLE calendar_events ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE SET NULL;
+      CREATE INDEX idx_calendar_events_place ON calendar_events(place_id, start_datetime);
+      ALTER TABLE meals ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE SET NULL;
+      ALTER TABLE meal_schedule_slots ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE RESTRICT;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

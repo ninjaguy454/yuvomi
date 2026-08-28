@@ -683,6 +683,7 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
       .filter((participant) => participant.role === 'chooser' || participant.role === 'cook')
       .map((participant) => `${participant.display_name} · ${participant.role}`)
       .join(', ');
+    const mealPlace = (state.planning.places || []).find((place) => Number(place.id) === Number(meal.place_id));
 
     // Die Karte ist bewusst KEIN Button: sie trägt Buttons und einen Link, und
     // interaktiver Inhalt in einem Button ist invalides HTML - Screenreader
@@ -694,7 +695,7 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
            data-action="edit-meal"
            data-meal-id="${meal.id}">
           <span class="meal-card__title"><span class="meal-card__title-text">${esc(meal.title)}</span>${recurrenceBadge}</span>
-          ${mealTime || roleSummary ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}</span>` : ''}
+          ${mealTime || roleSummary || mealPlace ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${mealPlace ? `<span>${esc(mealPlace.name)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}</span>` : ''}
           ${ingLabel ? `<span class="meal-card__meta">
             <span class="meal-card__ingredients-count">${ingLabel}${esc(ingDoneLabel)}</span>
           </span>` : ''}
@@ -751,7 +752,9 @@ function openMealScheduleModal() {
   const timingByType = new Map((state.planning.timing_defaults || []).map((row) => [row.meal_type, row]));
   const slotByKey = new Map((state.planning.slots || []).map((row) => [`${row.weekday}:${row.meal_type}`, row]));
   const members = state.planning.members || [];
+  const places = state.planning.places || [];
   const memberOptions = (selected) => `<option value="">Choose a member</option>${members.map((member) => `<option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${esc(member.display_name)}</option>`).join('')}`;
+  const placeOptions = (selected) => `<option value="">No specific Place</option>${places.map((place) => `<option value="${place.id}" ${Number(selected) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(selected) !== Number(place.id) ? 'disabled' : ''}>${esc(place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}`;
   const timingRows = MEAL_TYPES().map((type) => {
     const timing = timingByType.get(type.key) || {};
     return `<div class="meal-timing-row" data-timing-type="${type.key}">
@@ -777,6 +780,7 @@ function openMealScheduleModal() {
           <label data-fixed-chooser>Chooser<select class="form-input" data-schedule-fixed>${memberOptions(slot.fixed_user_id)}</select></label>
           <fieldset><legend>Participants</legend>${members.map((member) => `<label class="meal-schedule-person"><input type="checkbox" data-schedule-participant value="${member.id}" ${selectedParticipants.has(Number(member.id)) ? 'checked' : ''}> ${esc(member.display_name)}</label>`).join('') || '<small>No household members found.</small>'}</fieldset>
           <label>Fallback chooser<select class="form-input" data-schedule-fallback>${memberOptions(slot.fallback_user_id)}</select></label>
+          <label>Meal Place<select class="form-input" data-schedule-place>${placeOptions(slot.place_id)}</select></label>
           <label class="meal-schedule-person"><input type="checkbox" data-schedule-presence ${slot.presence_required ? 'checked' : ''}> Only assign people marked available</label>
         </div>
       </details>`;
@@ -823,6 +827,7 @@ function openMealScheduleModal() {
         fallback_user_id: Number(cell.querySelector('[data-schedule-fallback]').value) || null,
         participant_ids: [...cell.querySelectorAll('[data-schedule-participant]:checked')].map((input) => Number(input.value)),
         presence_required: cell.querySelector('[data-schedule-presence]').checked,
+        place_id: Number(cell.querySelector('[data-schedule-place]').value) || null,
       }));
       try {
         const response = await api.put('/meals/planning', { timing_defaults, slots });
@@ -1515,7 +1520,7 @@ function buildModalContent({ mode, date, mealType, meal }) {
       ...state.recipes.map(recipeOptionHtml),
     ].join('');
 
-  const advancedOpen = isEdit && (!!meal.recipe_id || !!meal.notes || !!meal.recipe_url || isRecurring || !!meal.scheduled_time || !!meal.participants?.length);
+  const advancedOpen = isEdit && (!!meal.recipe_id || !!meal.notes || !!meal.recipe_url || isRecurring || !!meal.scheduled_time || !!meal.place_id || !!meal.participants?.length);
 
   const scopeOptions = [
     ['household', 'Household meal'], ['personal', 'Personal meal'], ['restaurant', 'Restaurant'],
@@ -1529,6 +1534,7 @@ function buildModalContent({ mode, date, mealType, meal }) {
 
   const planningFieldsHtml = `
     <div class="form-group"><label class="form-label" for="modal-meal-scope">Meal type and location</label><select class="form-input" id="modal-meal-scope">${scopeOptions}</select></div>
+    <div class="form-group"><label class="form-label" for="modal-meal-place">Place</label><select class="form-input" id="modal-meal-place"><option value="">No specific Place</option>${(state.planning.places || []).map((place) => `<option value="${place.id}" ${Number(meal?.place_id) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(meal?.place_id) !== Number(place.id) ? 'disabled' : ''}>${esc(place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}</select><small class="form-hint">Used with participant availability and meal timing windows.</small></div>
     <div class="modal-grid modal-grid--2 meal-planning-times">
       <div class="form-group"><label class="form-label" for="modal-scheduled-time">Scheduled time</label><input class="form-input" type="time" id="modal-scheduled-time" value="${esc(meal?.scheduled_time || '')}"></div>
       <div class="form-group"><label class="form-label" for="modal-duration">Expected minutes</label><input class="form-input" type="number" min="1" max="720" id="modal-duration" value="${meal?.expected_duration_minutes || ''}"></div>
@@ -1673,6 +1679,7 @@ async function saveModal(overlay) {
   const recipe_url = overlay.querySelector('#modal-recipe-url').value.trim() || null;
   const recipe_id = overlay.querySelector('#modal-recipe-id')?.value || null;
   const meal_scope = overlay.querySelector('#modal-meal-scope')?.value || 'household';
+  const place_id = Number(overlay.querySelector('#modal-meal-place')?.value) || null;
   const scheduled_time = overlay.querySelector('#modal-scheduled-time')?.value || null;
   const earliest_time = overlay.querySelector('#modal-earliest-time')?.value || null;
   const preferred_time = overlay.querySelector('#modal-preferred-time')?.value || null;
@@ -1729,7 +1736,7 @@ async function saveModal(overlay) {
       const res = await api.post('/meals', {
         date, meal_type, title, notes, recipe_url, recipe_id, ingredients, repeat_weekly, repeat_until,
         scope: meal_scope, scheduled_time, earliest_time, preferred_time, latest_time,
-        expected_duration_minutes, participants,
+        expected_duration_minutes, participants, place_id,
       });
       state.meals.push(res.data);
     } else {
@@ -1741,7 +1748,7 @@ async function saveModal(overlay) {
         await api.put(`/meals/${meal.id}`, {
           date, meal_type, title, notes, recipe_url, recipe_id,
           scope: meal_scope, scheduled_time, earliest_time, preferred_time, latest_time,
-          expected_duration_minutes, participants,
+          expected_duration_minutes, participants, place_id,
         });
 
         // Zutaten synchronisieren

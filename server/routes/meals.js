@@ -11,6 +11,7 @@ import { str, oneOf, date, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT, D
 import { addDays, mealWeekday, datesForTemplateInRange } from '../services/meal-recurrence.js';
 import { todayKey } from '../utils/timezone.js';
 import { requireAdmin } from '../auth.js';
+import { evaluatePresence } from '../services/presence.js';
 
 const log = createLogger('Meals');
 
@@ -159,6 +160,7 @@ function loadMealPlanning() {
     timing_defaults: timings,
     slots: slots.map((slot) => ({ ...slot, participant_ids: bySlot[slot.id] || [] })),
     members: householdPlanningMembers(),
+    places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
   };
 }
 
@@ -175,11 +177,12 @@ function materializeMealSchedule(from, to, actorId = null) {
       date, meal_type, title, scope, scheduled_time, earliest_time, preferred_time, latest_time,
       expected_duration_minutes, source, source_key, schedule_slot_id, schedule_revision,
       provenance_json, created_by
-    ) VALUES (?, ?, ?, 'household', ?, ?, ?, ?, ?, 'schedule', ?, ?, ?, ?, ?)
+      , place_id
+    ) VALUES (?, ?, ?, 'household', ?, ?, ?, ?, ?, 'schedule', ?, ?, ?, ?, ?, ?)
   `);
   const insertParticipant = d.prepare(`
     INSERT OR IGNORE INTO meal_participants (meal_id, user_id, role, status, source)
-    VALUES (?, ?, ?, 'participating', 'schedule')
+    VALUES (?, ?, ?, ?, 'schedule')
   `);
   const insertObligation = d.prepare(`
     INSERT OR IGNORE INTO planning_obligations (
@@ -194,10 +197,34 @@ function materializeMealSchedule(from, to, actorId = null) {
         if (mealWeekday(dateKey) !== slot.weekday || hasException.get(slot.id, dateKey) || hasMeal.get(dateKey, slot.meal_type)) continue;
         const timing = defaults[slot.meal_type] || {};
         const preferred = slot.preferred_time || timing.preferred_time || null;
+        const earliest = slot.earliest_time || timing.earliest_time || preferred || '00:00';
+        const latest = slot.latest_time || timing.latest_time || preferred || '23:59';
+        const presenceCandidates = [...new Set([
+          ...participants,
+          slot.fixed_user_id ? Number(slot.fixed_user_id) : null,
+          slot.fallback_user_id ? Number(slot.fallback_user_id) : null,
+        ].filter(Boolean))];
+        const availability = new Map(presenceCandidates.map((userId) => {
+          if (!slot.presence_required) return [userId, { eligible: true, effective: null }];
+          try {
+            return [userId, evaluatePresence(d, {
+              userId,
+              startAt: `${dateKey}T${earliest}:00`,
+              endAt: `${dateKey}T${latest}:00`,
+              targetPlaceId: slot.place_id || null,
+              policy: 'available_before_due',
+            })];
+          } catch { return [userId, { eligible: false, effective: null }]; }
+        }));
+        const eligibleParticipants = participants.filter((userId) => availability.get(userId)?.eligible);
         let chooserId = slot.fixed_user_id || null;
-        if (slot.policy === 'round_robin' && participants.length) {
+        if (slot.presence_required && chooserId && !availability.get(Number(chooserId))?.eligible) {
+          chooserId = slot.fallback_user_id && availability.get(Number(slot.fallback_user_id))?.eligible
+            ? Number(slot.fallback_user_id) : null;
+        }
+        if (slot.policy === 'round_robin' && eligibleParticipants.length) {
           const previous = d.prepare('SELECT COUNT(*) AS n FROM meals WHERE schedule_slot_id = ? AND date < ?').get(slot.id, dateKey).n;
-          chooserId = participants[previous % participants.length];
+          chooserId = eligibleParticipants[previous % eligibleParticipants.length];
         }
         const sourceKey = `meal-schedule:${slot.id}:${dateKey}`;
         const result = insertMeal.run(
@@ -208,13 +235,17 @@ function materializeMealSchedule(from, to, actorId = null) {
           sourceKey, slot.id, slot.revision,
           JSON.stringify({ source: 'schedule', slot_id: slot.id, revision: slot.revision, policy: slot.policy }),
           actorId || slot.created_by,
+          slot.place_id || null,
         );
         if (!result.changes) continue;
         const mealId = Number(result.lastInsertRowid);
-        for (const userId of participants) insertParticipant.run(mealId, userId, 'participant');
+        for (const userId of participants) {
+          const signal = availability.get(userId);
+          insertParticipant.run(mealId, userId, 'participant', signal?.eligible ? 'participating' : 'away');
+        }
         if (slot.policy === 'personal_choice') {
-          for (const userId of participants) insertParticipant.run(mealId, userId, 'chooser');
-        } else if (chooserId) insertParticipant.run(mealId, chooserId, 'chooser');
+          for (const userId of eligibleParticipants) insertParticipant.run(mealId, userId, 'chooser', 'participating');
+        } else if (chooserId) insertParticipant.run(mealId, chooserId, 'chooser', 'participating');
         if (chooserId || slot.policy === 'personal_choice') {
           insertObligation.run(
             mealId, `${sourceKey}:chooser`, chooserId,
@@ -386,6 +417,15 @@ router.put('/planning', requireAdmin, (req, res) => {
       for (const userId of (slot.participant_ids || []).map(Number)) {
         if (!validUsers.has(userId)) throw new Error('Choose valid meal participants.');
       }
+      if (slot.place_id) {
+        const placeId = Number(slot.place_id);
+        const place = d.prepare('SELECT active FROM places WHERE id = ?').get(placeId);
+        const existingSlot = d.prepare('SELECT place_id FROM meal_schedule_slots WHERE weekday = ? AND meal_type = ?')
+          .get(weekday, slot.meal_type);
+        if (!place || (!place.active && Number(existingSlot?.place_id) !== placeId)) {
+          throw new Error('Choose an active Place for the meal slot.');
+        }
+      }
     }
 
     d.transaction(() => {
@@ -408,14 +448,15 @@ router.put('/planning', requireAdmin, (req, res) => {
         INSERT INTO meal_schedule_slots (
           weekday, meal_type, policy, fixed_user_id, fallback_user_id, rotation_group,
           presence_required, earliest_time, preferred_time, latest_time,
-          expected_duration_minutes, active, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          expected_duration_minutes, active, created_by, place_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(weekday, meal_type) DO UPDATE SET
           policy = excluded.policy, fixed_user_id = excluded.fixed_user_id,
           fallback_user_id = excluded.fallback_user_id, rotation_group = excluded.rotation_group,
           presence_required = excluded.presence_required, earliest_time = excluded.earliest_time,
           preferred_time = excluded.preferred_time, latest_time = excluded.latest_time,
           expected_duration_minutes = excluded.expected_duration_minutes, active = excluded.active,
+          place_id = excluded.place_id,
           revision = meal_schedule_slots.revision + 1,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       `);
@@ -429,6 +470,7 @@ router.put('/planning', requireAdmin, (req, res) => {
           String(slot.rotation_group || '').trim() || null, slot.presence_required ? 1 : 0,
           slot.earliest_time || null, slot.preferred_time || null, slot.latest_time || null,
           Number(slot.expected_duration_minutes) || null, slot.active ? 1 : 0, actorId,
+          Number(slot.place_id) || null,
         );
         const scheduleSlotId = findSlot.get(Number(slot.weekday), slot.meal_type).id;
         clearParticipants.run(scheduleSlotId);
@@ -613,6 +655,10 @@ router.post('/', (req, res) => {
       const recipeExists = db.get().prepare('SELECT id FROM recipes WHERE id = ?').get(vRecipeId.value);
       if (!recipeExists) return res.status(400).json({ error: 'Rezept nicht gefunden.', code: 400 });
     }
+    const placeId = req.body.place_id == null || req.body.place_id === '' ? null : Number(req.body.place_id);
+    if (placeId != null && (!Number.isInteger(placeId) || !db.get().prepare('SELECT 1 FROM places WHERE id = ? AND active = 1').get(placeId))) {
+      return res.status(400).json({ error: 'Choose an active Place.', code: 400 });
+    }
 
     let cleanParticipants;
     try { cleanParticipants = normalizeMealParticipants(participants); }
@@ -654,7 +700,8 @@ router.post('/', (req, res) => {
           date, meal_type, title, notes, recipe_url, recipe_id, recurrence_template_id, created_by,
           scope, scheduled_time, earliest_time, preferred_time, latest_time,
           expected_duration_minutes, source, provenance_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          , place_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         vDate.value, vType.value, vTitle.value, vNotes.value, vRecipeUrl.value, vRecipeId.value,
         recurrenceTemplateId, req.authUserId || req.session.userId, vScope.value,
@@ -662,6 +709,7 @@ router.post('/', (req, res) => {
         req.body.preferred_time || null, req.body.latest_time || null, duration,
         recurrenceTemplateId ? 'recurrence' : 'manual',
         JSON.stringify({ source: recurrenceTemplateId ? 'recurrence' : 'manual', created_from: 'meal_editor' }),
+        placeId,
       );
 
       const mealId = result.lastInsertRowid;
@@ -785,6 +833,10 @@ router.put('/:id', (req, res) => {
       const recipeExists = db.get().prepare('SELECT id FROM recipes WHERE id = ?').get(req.body.recipe_id);
       if (!recipeExists) return res.status(400).json({ error: 'Rezept nicht gefunden.', code: 400 });
     }
+    const placeId = req.body.place_id === undefined ? meal.place_id : (req.body.place_id == null || req.body.place_id === '' ? null : Number(req.body.place_id));
+    if (placeId != null && (!Number.isInteger(placeId) || !db.get().prepare('SELECT 1 FROM places WHERE id = ?').get(placeId))) {
+      return res.status(400).json({ error: 'Choose a valid Place.', code: 400 });
+    }
 
     // scope=series schreibt die inhaltlichen Felder (nicht das Datum) auf das Template
     // und auf alle bereits materialisierten Instanzen zurück; Zutaten werden – falls
@@ -879,6 +931,7 @@ router.put('/:id', (req, res) => {
           preferred_time = ?,
           latest_time = ?,
           expected_duration_minutes = ?,
+          place_id = ?,
           provenance_json = ?
       WHERE id = ?
     `).run(
@@ -894,6 +947,7 @@ router.put('/:id', (req, res) => {
       req.body.preferred_time !== undefined ? (req.body.preferred_time || null) : meal.preferred_time,
       req.body.latest_time !== undefined ? (req.body.latest_time || null) : meal.latest_time,
       duration,
+      placeId,
       JSON.stringify({
         ...(meal.provenance_json ? (() => { try { return JSON.parse(meal.provenance_json); } catch { return {}; } })() : {}),
         last_edited_from: 'meal_editor',

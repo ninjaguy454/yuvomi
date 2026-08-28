@@ -8,6 +8,7 @@
  */
 
 import { todayKey } from '../utils/timezone.js';
+import { placeWithInheritedAddress } from './presence.js';
 import {
   householdMembers,
   loadSkillRequirements,
@@ -142,6 +143,13 @@ function normalizeRuntimeInputs(d, workflow, inputs) {
         throw new Error(`Workflow input ${variableId} must be a valid household member.`);
       }
       normalized[variableId] = memberId;
+    } else if (question.type === 'location') {
+      const placeId = Number(value);
+      const validPlace = d.prepare('SELECT 1 FROM places WHERE id = ? AND active = 1').get(placeId);
+      if (!Number.isInteger(placeId) || !validPlace) {
+        throw new Error(`Workflow input ${variableId} must be an active Place.`);
+      }
+      normalized[variableId] = placeId;
     } else if (question.type === 'number') {
       const number = Number(value);
       if (!Number.isFinite(number) || value === '') {
@@ -221,6 +229,14 @@ function workflowVariableLabels(d, workflow, inputs) {
     if (!Object.hasOwn(inputs, variableId)) continue;
     const value = inputs[variableId];
     if (question.type === 'household_member') labels[variableId] = userById(d, value)?.display_name ?? '';
+    else if (question.type === 'location') {
+      const place = placeWithInheritedAddress(d, d.prepare('SELECT * FROM places WHERE id = ?').get(value));
+      labels[variableId] = place?.name ?? '';
+      labels[`${variableId}.name`] = place?.name ?? '';
+      labels[`${variableId}.id`] = place?.id == null ? '' : String(place.id);
+      labels[`${variableId}.parent`] = place?.path?.length > 1 ? place.path.at(-2)?.name ?? '' : '';
+      labels[`${variableId}.address`] = [place?.street_address, place?.city, place?.region, place?.postal_code, place?.country].filter(Boolean).join(', ');
+    }
     else if (question.type === 'boolean') labels[variableId] = value ? 'Yes' : 'No';
     else labels[variableId] = String(value ?? '');
   }
@@ -229,7 +245,7 @@ function workflowVariableLabels(d, workflow, inputs) {
 
 function substituteWorkflowVariables(value, labels) {
   if (value == null) return null;
-  return String(value).replace(/\{\{([A-Za-z][A-Za-z0-9_-]*)\}\}/g, (_match, variableId) => (
+  return String(value).replace(/\{\{([A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)?)\}\}/g, (_match, variableId) => (
     Object.hasOwn(labels, variableId) ? labels[variableId] : ''
   ));
 }
@@ -264,6 +280,28 @@ function stepSubject(d, step, defaultSubject, inputs) {
   return userById(d, inputs[step.subject_variable_id]);
 }
 
+function stepPlanningContext(d, activity, step, inputs) {
+  const mode = step.location_mode && step.location_mode !== 'inherit'
+    ? step.location_mode
+    : (activity.location_mode || 'none');
+  let placeId = null;
+  let variableId = null;
+  if (mode === 'fixed') placeId = step.location_mode === 'fixed' ? step.place_id : activity.place_id;
+  if (mode === 'workflow') {
+    variableId = step.location_mode === 'workflow' ? step.location_variable_id : activity.location_variable_id;
+    placeId = Number(inputs?.[variableId]) || null;
+  }
+  const place = placeId ? d.prepare('SELECT * FROM places WHERE id = ?').get(placeId) ?? null : null;
+  return {
+    location_mode: mode,
+    location_variable_id: variableId,
+    place_id: place?.id ?? null,
+    place: placeWithInheritedAddress(d, place),
+    presence_policy: step.presence_policy_override || activity.presence_policy || 'ignore',
+    presence_window: activity.presence_window || 'due',
+  };
+}
+
 /** Pure preview. It intentionally does not advance any rotation cursor. */
 export function previewWorkflow(d, workflowId, {
   subjectUserId = null,
@@ -292,9 +330,16 @@ export function previewWorkflow(d, workflowId, {
         const activity = getActivityTemplate(d, step.activity_template_id);
         if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
         const activitySubject = stepSubject(d, step, subject, runtimeInputs);
+        const planning = stepPlanningContext(d, activity, step, runtimeInputs);
         const resolution = resolveActivityAssignment(d, activity, {
           subjectUserId: activitySubject?.id ?? null,
           commitRotation: true,
+          presence: {
+            policy: planning.presence_policy,
+            targetPlaceId: planning.place_id,
+            startAt: `${todayKey(d)}T00:00:00`,
+            endAt: `${todayKey(d)}T23:59:00`,
+          },
         });
         output.push({
           step_key: step.step_key,
@@ -309,6 +354,7 @@ export function previewWorkflow(d, workflowId, {
           subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
           depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
           category: activity.category,
+          ...planning,
         });
       }
       throw rollbackPreview;
@@ -413,9 +459,16 @@ export function instantiateWorkflow(d, workflowId, {
       const activity = getActivityTemplate(d, step.activity_template_id);
       if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
       const activitySubject = stepSubject(d, step, subject, runtimeInputs);
+      const planning = stepPlanningContext(d, activity, step, runtimeInputs);
       const resolution = resolveActivityAssignment(d, activity, {
         subjectUserId: activitySubject?.id ?? null,
         commitRotation: true,
+        presence: {
+          policy: planning.presence_policy,
+          targetPlaceId: planning.place_id,
+          startAt: `${todayKey(d)}T00:00:00`,
+          endAt: `${todayKey(d)}T23:59:00`,
+        },
       });
 
       const primaryTaskId = insertTask(d, {
@@ -432,6 +485,12 @@ export function instantiateWorkflow(d, workflowId, {
           workflow_instance_id, workflow_step_id, task_id, role
         ) VALUES (?, ?, ?, 'primary')
       `).run(instanceId, step.id, primaryTaskId);
+      if (planning.place_id || planning.presence_policy !== 'ignore') {
+        d.prepare(`
+          INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
+          VALUES (?, ?, ?, ?, 'workflow')
+        `).run(primaryTaskId, planning.place_id, planning.presence_policy, planning.presence_window);
+      }
 
       const stepTaskIds = [primaryTaskId];
       generated.push({
@@ -440,6 +499,7 @@ export function instantiateWorkflow(d, workflowId, {
         step_key: step.step_key,
         assigned_to: resolution.primary,
         subject: activitySubject,
+        ...planning,
       });
 
       if (resolution.supervisor) {
@@ -457,6 +517,12 @@ export function instantiateWorkflow(d, workflowId, {
             workflow_instance_id, workflow_step_id, task_id, role
           ) VALUES (?, ?, ?, 'supervisor')
         `).run(instanceId, step.id, supervisionTaskId);
+        if (planning.place_id || planning.presence_policy !== 'ignore') {
+          d.prepare(`
+            INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
+            VALUES (?, ?, ?, ?, 'workflow')
+          `).run(supervisionTaskId, planning.place_id, planning.presence_policy, planning.presence_window);
+        }
         stepTaskIds.push(supervisionTaskId);
         generated.push({
           task_id: supervisionTaskId,

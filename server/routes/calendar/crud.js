@@ -33,6 +33,10 @@ import {
 const log = createLogger('Calendar');
 const router = express.Router();
 
+function supportsPlaceColumn(database) {
+  return Boolean(database.prepare("SELECT 1 FROM pragma_table_info('calendar_events') WHERE name = 'place_id'").get());
+}
+
 // --------------------------------------------------------
 // GET /api/v1/calendar/:id
 // Einzelnen Termin abrufen.
@@ -104,6 +108,11 @@ router.post('/', async (req, res) => {
     const vColor = color(req.body.color, 'Farbe');
     const vIcon  = eventIcon(req.body.icon);
     const vLoc   = str(req.body.location, 'Ort', { max: MAX_TITLE, required: false });
+    const placeId = req.body.place_id == null || req.body.place_id === '' ? null : Number(req.body.place_id);
+    const placeSupported = supportsPlaceColumn(db.get());
+    if (placeId != null && (!placeSupported || !Number.isInteger(placeId) || !db.get().prepare('SELECT 1 FROM places WHERE id = ? AND active = 1').get(placeId))) {
+      return res.status(400).json({ error: 'place_id: choose an active Place.', code: 400 });
+    }
     const vRrule = rrule(req.body.recurrence_rule, 'Wiederholung');
     const vCaldav = caldavTarget(req.body);
     const vGoogle = googleTarget(req.body);
@@ -136,19 +145,21 @@ router.post('/', async (req, res) => {
         req.body,
         userId
       );
+      const placeColumn = placeSupported ? ', place_id' : '';
+      const placePlaceholder = placeSupported ? ', ?' : '';
       const result = db.get().prepare(`
         INSERT INTO calendar_events
           (title, description, start_datetime, end_datetime, all_day,
-           location, color, icon, assigned_to, created_by, recurrence_rule,
+           location${placeColumn}, color, icon, assigned_to, created_by, recurrence_rule,
            attachment_name, attachment_mime, attachment_size, attachment_data, attachment_document_id,
            target_caldav_account_id, target_caldav_calendar_url, target_google_calendar_id,
            target_outlook_account_id, target_outlook_calendar_id, visibility,
            countdown)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?${placePlaceholder}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         vTitle.value, vDesc.value,
         vStart.value, vEnd.value,
-        all_day ? 1 : 0, vLoc.value,
+        all_day ? 1 : 0, vLoc.value, ...(placeSupported ? [placeId] : []),
         vColor.value, vIcon, firstUid,
         userId, vRrule.value,
         req.body.attachment_name || null,
@@ -229,6 +240,14 @@ router.put('/:id', async (req, res) => {
     if (req.body.end_datetime   !== undefined) checks.push(datetime(req.body.end_datetime, 'Enddatum'));
     if (req.body.color          !== undefined) checks.push(color(req.body.color, 'Farbe'));
     if (req.body.location       !== undefined) checks.push(str(req.body.location, 'Ort', { max: MAX_TITLE, required: false }));
+    const placeTouched = Object.hasOwn(req.body, 'place_id');
+    const placeId = !placeTouched || req.body.place_id == null || req.body.place_id === '' ? null : Number(req.body.place_id);
+    const placeSupported = supportsPlaceColumn(db.get());
+    if (placeTouched && placeId != null && (!placeSupported || !Number.isInteger(placeId)
+        || !db.get().prepare('SELECT 1 FROM places WHERE id = ?').get(placeId)
+        || (!db.get().prepare('SELECT 1 FROM places WHERE id = ? AND active = 1').get(placeId) && Number(event.place_id) !== placeId))) {
+      return res.status(400).json({ error: 'place_id: choose an active Place.', code: 400 });
+    }
     // Der unveränderte Bestandswert kommt ohne Prüfung durch: Die Regel steht
     // bereits so in der Datenbank, und der Validator kennt nur das Vokabular der
     // eigenen Oberfläche (FREQ/INTERVAL/BYDAY/UNTIL/COUNT, ohne „RRULE:"-Präfix).
@@ -383,6 +402,9 @@ router.put('/:id', async (req, res) => {
       const attachmentData = replacementRequested || removalRequested
         ? null
         : event.attachment_data;
+      const placeAssignment = placeSupported
+        ? 'place_id = CASE WHEN ? THEN ? ELSE place_id END,'
+        : '';
       db.get().prepare(`
         UPDATE calendar_events
         SET title           = COALESCE(?, title),
@@ -391,6 +413,7 @@ router.put('/:id', async (req, res) => {
             end_datetime    = ?,
             all_day         = COALESCE(?, all_day),
             location        = ?,
+            ${placeAssignment}
             -- Nicht COALESCE: der Wert NULL ist hier eine AUSSAGE ("dieser Termin
             -- hat keine eigene Farbe", #891) und kein fehlender Parameter.
             -- COALESCE kann beides nicht auseinanderhalten und wuerde die
@@ -430,6 +453,7 @@ router.put('/:id', async (req, res) => {
         end_datetime !== undefined ? (end_datetime || null) : event.end_datetime,
         all_day !== undefined ? (all_day ? 1 : 0) : null,
         location !== undefined ? (location || null) : event.location,
+        ...(placeSupported ? [placeTouched ? 1 : 0, placeId] : []),
         colorTouched ? 1 : 0, colorVal ?? null,
         req.body.icon !== undefined ? vIcon : null,
         firstUid !== undefined ? firstUid : event.assigned_to,

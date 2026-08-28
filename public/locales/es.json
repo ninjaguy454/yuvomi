@@ -1451,6 +1451,8 @@
         "pageHouseholdAutomation": "Automatización del hogar",
         "pageHouseholdAutomationDescription": "Gestiona habilidades, actividades y plantillas de adición rápida reutilizables.",
         "automationDefinitionDeleteConfirmDetail": "Esta definición reutilizable y sus ajustes se eliminan de forma permanente. Yuvomi impide eliminarla mientras otra plantilla o tarea programada dependa de ella; las tareas y eventos ya creados se conservan.",
+        "placeDeleteConfirmDetail": "La eliminación se bloquea mientras dependan de este lugar horarios, plantillas, disponibilidad, tareas o lugares secundarios. Puedes desactivar el lugar en su lugar.",
+        "availabilityDeleteConfirmDetail": "Esto elimina la señal de disponibilidad. Las tareas y comidas existentes no se eliminan.",
         "rewardsEnableTitle": "Visibilidad",
         "rewardsEnableLabel": "Activar recompensas",
         "rewardsEnableHint": "Muestra el módulo de recompensas en la navegación. Al desactivarlo se conservan todos los datos.",

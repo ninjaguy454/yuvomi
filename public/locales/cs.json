@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Povolit modul odměn a řídit schvalování.",
         "pageHouseholdAutomation": "Automatizace domácnosti",
         "pageHouseholdAutomationDescription": "Správa opakovaně použitelných dovedností, aktivit a šablon Rychlého přidání.",
+        "automationDefinitionDeleteConfirmDetail": "Tato opakovaně použitelná definice a její nastavení budou trvale odstraněny. Yuvomi odstranění zablokuje, dokud na ní závisí jiná šablona nebo naplánovaný úkol; již vytvořené úkoly a události zůstanou zachovány.",
         "rewardsEnableTitle": "Viditelnost",
         "rewardsEnableLabel": "Povolit odměny",
         "rewardsEnableHint": "Zobrazí modul odměn v navigaci. Při vypnutí zůstanou všechna data zachována.",

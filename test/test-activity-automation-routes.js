@@ -147,6 +147,8 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   const quick = await call('GET', '/automation/quick-add');
   assert.equal(quick.status, 200);
   assert.ok(quick.body.data.some((row) => row.name === 'Soiled Sheets'));
+  assert.ok(quick.body.activities.some((row) => row.name === 'Make Bed'));
+  assert.equal(quick.body.activities.find((row) => row.name === 'Make Bed').title_template, "Make {subject}'s Bed");
 
   const preview = await call('POST', `/automation/quick-add/${workflow.body.data.id}/preview`, {
     subject_user_id: frank,
@@ -397,4 +399,52 @@ test('typed variables use stable IDs for member subjects, conditions, and substi
   });
   assert.equal(invalidSubjectType.status, 400, JSON.stringify(invalidSubjectType.body));
   assert.match(invalidSubjectType.body.error, /Household Member variable/i);
+});
+
+test('automation definitions delete only after their dependencies are removed', async () => {
+  const skill = await call('POST', '/automation/admin/skills', {
+    name: 'Deletion guard skill', minimum_age: 0, age_promotion: 'normal', active: true,
+  });
+  assert.equal(skill.status, 201, JSON.stringify(skill.body));
+
+  const activity = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Deletion guard activity',
+    title_template: 'Deletion guard activity',
+    category: 'misc',
+    assignment_strategy: 'fixed',
+    subject_required: false,
+    fixed_user_id: admin,
+    skill_ids: [skill.body.data.id],
+  });
+  assert.equal(activity.status, 201, JSON.stringify(activity.body));
+
+  const blockedSkill = await call('DELETE', `/automation/admin/skills/${skill.body.data.id}`);
+  assert.equal(blockedSkill.status, 409, JSON.stringify(blockedSkill.body));
+  assert.match(blockedSkill.body.error, /required by an activity template/i);
+
+  const workflow = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Deletion guard workflow',
+    category: 'misc',
+    subject_required: false,
+    quick_add_enabled: true,
+    input_schema: [],
+    steps: [{
+      step_key: 'only',
+      activity_template_id: activity.body.data.id,
+      depends_on: [],
+    }],
+  });
+  assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+
+  const blockedActivity = await call('DELETE', `/automation/admin/activity-templates/${activity.body.data.id}`);
+  assert.equal(blockedActivity.status, 409, JSON.stringify(blockedActivity.body));
+  assert.match(blockedActivity.body.error, /used by a workflow template/i);
+
+  assert.equal((await call('DELETE', `/automation/admin/workflow-templates/${workflow.body.data.id}`)).status, 204);
+  assert.equal((await call('DELETE', `/automation/admin/activity-templates/${activity.body.data.id}`)).status, 204);
+  assert.equal((await call('DELETE', `/automation/admin/skills/${skill.body.data.id}`)).status, 204);
+
+  assert.equal((await call('DELETE', `/automation/admin/skills/${skill.body.data.id}`)).status, 404);
+  assert.equal((await call('DELETE', `/automation/admin/activity-templates/${activity.body.data.id}`)).status, 404);
+  assert.equal((await call('DELETE', `/automation/admin/workflow-templates/${workflow.body.data.id}`)).status, 404);
 });

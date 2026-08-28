@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Enable the rewards module and control approvals.",
         "pageHouseholdAutomation": "Household automation",
         "pageHouseholdAutomationDescription": "Manage reusable skills, activities, and Quick Add templates.",
+        "automationDefinitionDeleteConfirmDetail": "This reusable definition and its settings are permanently removed. Yuvomi blocks deletion while another template or scheduled task still depends on it; tasks and events already created from it stay.",
         "rewardsEnableTitle": "Visibility",
         "rewardsEnableLabel": "Enable rewards",
         "rewardsEnableHint": "Shows the rewards module in the navigation. Disabling keeps all data.",

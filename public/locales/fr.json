@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Activer le module de récompenses et gérer les approbations.",
         "pageHouseholdAutomation": "Automatisation du foyer",
         "pageHouseholdAutomationDescription": "Gérer les compétences, activités et modèles d'ajout rapide réutilisables.",
+        "automationDefinitionDeleteConfirmDetail": "Cette définition réutilisable et ses réglages seront supprimés définitivement. Yuvomi bloque la suppression tant qu'un autre modèle ou une tâche planifiée en dépend ; les tâches et événements déjà créés sont conservés.",
         "rewardsEnableTitle": "Visibilité",
         "rewardsEnableLabel": "Activer les récompenses",
         "rewardsEnableHint": "Affiche le module de récompenses dans la navigation. La désactivation conserve toutes les données.",

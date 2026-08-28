@@ -1439,6 +1439,7 @@
         "pageRewardsModuleDescription": "보상 모듈을 활성화하고 승인을 관리합니다.",
         "pageHouseholdAutomation": "가정 자동화",
         "pageHouseholdAutomationDescription": "재사용 가능한 기술, 활동 및 빠른 추가 템플릿을 관리합니다.",
+        "automationDefinitionDeleteConfirmDetail": "이 재사용 가능한 정의와 설정은 영구적으로 삭제됩니다. 다른 템플릿이나 예약된 작업이 여기에 의존하는 동안에는 Yuvomi가 삭제를 차단하며, 이미 생성된 작업과 일정은 유지됩니다.",
         "rewardsEnableTitle": "표시",
         "rewardsEnableLabel": "보상 활성화",
         "rewardsEnableHint": "탐색에 보상 모듈을 표시합니다. 비활성화해도 모든 데이터는 유지됩니다.",

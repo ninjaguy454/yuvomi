@@ -16,6 +16,9 @@
  */
 
 const APP_RELEASE   = '2.45.0';
+// Updating this file makes browsers run install again and refresh the existing
+// versioned Cache API entries for the Phase 1.5 Tasks/Recipes UI.
+const STATIC_REFRESH = 'phase-1.5-4';
 const SHELL_CACHE   = `yuvomi-shell-${APP_RELEASE}`;
 const PAGES_CACHE   = `yuvomi-pages-${APP_RELEASE}`;
 const LOCALES_CACHE = `yuvomi-locales-${APP_RELEASE}`;

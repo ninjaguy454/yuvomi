@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Bật mô-đun phần thưởng và kiểm soát phê duyệt.",
         "pageHouseholdAutomation": "Tự động hóa gia đình",
         "pageHouseholdAutomationDescription": "Quản lý kỹ năng, hoạt động và mẫu Thêm nhanh có thể tái sử dụng.",
+        "automationDefinitionDeleteConfirmDetail": "Định nghĩa có thể tái sử dụng này và các cài đặt của nó sẽ bị xóa vĩnh viễn. Yuvomi chặn việc xóa khi một mẫu khác hoặc nhiệm vụ đã lên lịch vẫn phụ thuộc vào nó; các nhiệm vụ và sự kiện đã tạo vẫn được giữ lại.",
         "rewardsEnableTitle": "Hiển thị",
         "rewardsEnableLabel": "Bật phần thưởng",
         "rewardsEnableHint": "Hiển thị mô-đun phần thưởng trong điều hướng. Khi tắt, mọi dữ liệu vẫn được giữ.",

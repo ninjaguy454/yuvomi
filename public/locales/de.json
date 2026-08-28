@@ -1439,6 +1439,7 @@
         "pageRewardsModuleDescription": "Belohnungsmodul aktivieren und Freigaben steuern.",
         "pageHouseholdAutomation": "Haushaltsautomatisierung",
         "pageHouseholdAutomationDescription": "Wiederverwendbare Fähigkeiten, Aktivitäten und Schnellvorlagen verwalten.",
+        "automationDefinitionDeleteConfirmDetail": "Diese wiederverwendbare Definition und ihre Einstellungen werden dauerhaft gelöscht. Yuvomi verhindert das Löschen, solange eine andere Vorlage oder geplante Aufgabe davon abhängt; bereits erstellte Aufgaben und Termine bleiben bestehen.",
         "rewardsEnableTitle": "Sichtbarkeit",
         "rewardsEnableLabel": "Belohnungen aktivieren",
         "rewardsEnableHint": "Zeigt das Belohnungsmodul in der Navigation. Beim Deaktivieren bleiben alle Daten erhalten.",

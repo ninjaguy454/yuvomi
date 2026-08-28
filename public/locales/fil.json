@@ -1439,6 +1439,7 @@
         "pageRewardsModuleDescription": "I-enable ang modyul ng gantimpala at kontrolin ang mga pag-apruba.",
         "pageHouseholdAutomation": "Awtomasyon ng sambahayan",
         "pageHouseholdAutomationDescription": "Pamahalaan ang mga reusable na kasanayan, aktibidad, at template ng Quick Add.",
+        "automationDefinitionDeleteConfirmDetail": "Permanenteng aalisin ang reusable na depinisyong ito at ang mga setting nito. Pipigilan ng Yuvomi ang pag-delete habang may ibang template o naka-iskedyul na gawain na umaasa rito; mananatili ang mga nagawa nang gawain at event.",
         "rewardsEnableTitle": "Pagiging nakikita",
         "rewardsEnableLabel": "I-enable ang mga gantimpala",
         "rewardsEnableHint": "Ipinapakita ang modyul ng gantimpala sa nabigasyon. Nananatili ang lahat ng datos kapag na-disable.",

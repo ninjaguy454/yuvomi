@@ -18,7 +18,8 @@ import assert from 'node:assert/strict';
 import express from 'express';
 
 const dbmod = await import('../server/db.js');
-const { default: recipesRouter } = await import('../server/routes/recipes.js');
+const recipesModule = await import('../server/routes/recipes.js');
+const { default: recipesRouter, _setRecipeUrlImporter } = recipesModule;
 // Der Einkaufs-Router hängt mit drin, weil die Rücknahme eines Transfers über
 // ihn läuft (POST /shopping/items/undo-transfer) - ohne ihn wäre nur die halbe
 // Handlung getestet.
@@ -59,6 +60,23 @@ async function call(method, path, body) {
 function ingredientRows(recipeId) {
   return db.prepare('SELECT name, quantity, category FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id ASC').all(recipeId);
 }
+
+test('POST /url-preview returns a review draft without writing a recipe', async () => {
+  const before = db.prepare('SELECT COUNT(*) AS n FROM recipes').get().n;
+  _setRecipeUrlImporter(async (url) => ({
+    title: 'Imported Soup', notes: 'Stir gently.', recipe_url: url,
+    meal_types: ['dinner'], ingredients: [{ name: 'Carrot', quantity: '2', category: 'Obst & Gemüse' }],
+  }));
+  try {
+    const r = await call('POST', '/url-preview', { url: 'https://recipes.example/soup' });
+    assert.equal(r.status, 200);
+    assert.equal(r.body.data.title, 'Imported Soup');
+    assert.equal(r.body.data.ingredients[0].name, 'Carrot');
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM recipes').get().n, before);
+  } finally {
+    _setRecipeUrlImporter(null);
+  }
+});
 
 // --------------------------------------------------------------------------
 // GET / (Liste)

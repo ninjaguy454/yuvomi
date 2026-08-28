@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "De beloningenmodule inschakelen en goedkeuringen beheren.",
         "pageHouseholdAutomation": "Huishoudautomatisering",
         "pageHouseholdAutomationDescription": "Herbruikbare vaardigheden, activiteiten en sjablonen voor Snel toevoegen beheren.",
+        "automationDefinitionDeleteConfirmDetail": "Deze herbruikbare definitie en de instellingen worden permanent verwijderd. Yuvomi blokkeert verwijderen zolang een andere sjabloon of geplande taak ervan afhankelijk is; eerder gemaakte taken en afspraken blijven bestaan.",
         "rewardsEnableTitle": "Zichtbaarheid",
         "rewardsEnableLabel": "Beloningen inschakelen",
         "rewardsEnableHint": "Toont de beloningenmodule in de navigatie. Bij uitschakelen blijven alle gegevens behouden.",

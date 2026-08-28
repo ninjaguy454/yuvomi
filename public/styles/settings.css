@@ -805,6 +805,7 @@
 .settings-card--automation,
 .automation-manager,
 .automation-manager__body,
+.automation-quick-template > span,
 .automation-list-row__copy,
 .automation-list-button > span,
 .automation-preview__step > div {
@@ -822,6 +823,18 @@
 .automation-skill-grid {
   display: grid;
   gap: var(--space-2);
+}
+
+.automation-quick-section + .automation-quick-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: var(--space-px) solid var(--color-border-subtle);
+}
+
+.automation-quick-section__heading {
+  display: grid;
+  gap: var(--space-0h);
+  margin-bottom: var(--space-2);
 }
 
 .automation-quick-template {
@@ -859,6 +872,50 @@
 .automation-preview-create {
   width: 100%;
   margin-top: var(--space-3);
+}
+
+.automation-mention-menu {
+  position: fixed;
+  z-index: 10000;
+  display: grid;
+  max-width: calc(100vw - (2 * var(--space-3)));
+  max-height: 240px;
+  padding: var(--space-1);
+  overflow-y: auto;
+  background: var(--color-surface-raised);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.automation-mention-menu[hidden] {
+  display: none;
+}
+
+.automation-mention-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-3);
+  align-items: center;
+  min-height: var(--target-lg);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-mention-option small {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.automation-mention-option:hover,
+.automation-mention-option--active {
+  background: var(--color-surface-hover);
 }
 
 .automation-tabs {

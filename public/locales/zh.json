@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "启用奖励模块并管理审批。",
         "pageHouseholdAutomation": "家庭自动化",
         "pageHouseholdAutomationDescription": "管理可重复使用的技能、活动和快速添加模板。",
+        "automationDefinitionDeleteConfirmDetail": "此可重复使用的定义及其设置将被永久删除。如果其他模板或计划任务仍依赖它，Yuvomi 会阻止删除；已创建的任务和事件会保留。",
         "rewardsEnableTitle": "显示",
         "rewardsEnableLabel": "启用奖励",
         "rewardsEnableHint": "在导航中显示奖励模块。停用后将保留所有数据。",

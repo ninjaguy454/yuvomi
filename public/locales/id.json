@@ -1439,6 +1439,7 @@
         "pageRewardsModuleDescription": "Aktifkan modul hadiah dan kelola persetujuan.",
         "pageHouseholdAutomation": "Otomatisasi rumah tangga",
         "pageHouseholdAutomationDescription": "Kelola keterampilan, aktivitas, dan templat Tambah Cepat yang dapat digunakan kembali.",
+        "automationDefinitionDeleteConfirmDetail": "Definisi yang dapat digunakan kembali ini beserta pengaturannya akan dihapus secara permanen. Yuvomi memblokir penghapusan selama templat lain atau tugas terjadwal masih bergantung padanya; tugas dan acara yang sudah dibuat tetap ada.",
         "rewardsEnableTitle": "Visibilitas",
         "rewardsEnableLabel": "Aktifkan hadiah",
         "rewardsEnableHint": "Menampilkan modul hadiah di navigasi. Menonaktifkan tetap menyimpan semua data.",

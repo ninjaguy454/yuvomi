@@ -379,6 +379,9 @@ router.get('/activity-options', (_req, res) => {
     const activities = listActivityTemplates(db.get(), { activeOnly: true }).map((activity) => ({
       id: activity.id,
       name: activity.name,
+      title_template: activity.title_template,
+      description: activity.description,
+      category: activity.category,
       assignment_strategy: activity.assignment_strategy,
       subject_required: activity.subject_required,
     }));
@@ -396,7 +399,16 @@ router.get('/quick-add', (req, res) => {
       ...template,
       step_count: d.prepare('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE workflow_template_id = ?').get(template.id).n,
     }));
-    res.json({ data: templates, members: householdMembers(d) });
+    const activities = listActivityTemplates(d, { activeOnly: true }).map((activity) => ({
+      id: activity.id,
+      name: activity.name,
+      title_template: activity.title_template,
+      description: activity.description,
+      category: activity.category,
+      assignment_strategy: activity.assignment_strategy,
+      subject_required: activity.subject_required,
+    }));
+    res.json({ data: templates, activities, members: householdMembers(d) });
   } catch (err) {
     log.error('GET /quick-add:', err);
     res.status(500).json({ error: 'Could not load Quick Add templates.', code: 500 });

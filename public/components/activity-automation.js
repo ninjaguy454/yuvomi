@@ -1,5 +1,6 @@
 import { api } from '/api.js';
-import { openModal, closeModal } from '/components/modal.js';
+import { openModal, closeModal, confirmOverModal } from '/components/modal.js';
+import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
 
 const h = (value) => esc(String(value ?? ''));
@@ -21,6 +22,150 @@ function inputRow(label, control, hint = '') {
     ${control}
     ${hint ? `<small class="form-hint">${h(hint)}</small>` : ''}
   </div>`;
+}
+
+function workflowMentionOptions(panel) {
+  return [...panel.querySelectorAll('[data-workflow-question]')].map((row, index) => {
+    const id = row.dataset.variableId;
+    const label = row.querySelector('[data-question-label]')?.value.trim() || `Variable ${index + 1}`;
+    return { id, label, detail: id, token: `{{${id}}}` };
+  }).filter((option) => option.id);
+}
+
+function mentionOptions(panel, field) {
+  const context = field.dataset.variableMentions;
+  const variables = context?.startsWith('workflow') ? workflowMentionOptions(panel) : [];
+  const builtIns = [];
+  if (context === 'activity-title' || context === 'activity-supervision'
+      || context === 'workflow-step-title') {
+    builtIns.push({ id: 'subject', label: 'Subject', detail: 'Household member', token: '{subject}' });
+  }
+  if (context === 'activity-supervision') {
+    builtIns.push({ id: 'activity', label: 'Activity', detail: 'Activity template name', token: '{activity}' });
+  }
+  return [...builtIns, ...variables];
+}
+
+function activeMention(field) {
+  const caret = field.selectionStart;
+  if (!Number.isInteger(caret)) return null;
+  const before = field.value.slice(0, caret);
+  const at = before.lastIndexOf('@');
+  if (at < 0) return null;
+  const preceding = before[at - 1] || '';
+  if (preceding && /[A-Za-z0-9_]/.test(preceding)) return null;
+  const query = before.slice(at + 1);
+  if (/[^A-Za-z0-9 _-]/.test(query) || query.includes('\n')) return null;
+  return { start: at, end: caret, query: query.trim().toLocaleLowerCase() };
+}
+
+/**
+ * The stored syntax stays backwards-compatible ({subject}/{{variable_id}}),
+ * while authors type @ and choose a human-readable variable name.
+ */
+function wireVariableMentions(panel) {
+  const menu = document.createElement('div');
+  menu.className = 'automation-mention-menu';
+  menu.setAttribute('role', 'listbox');
+  menu.hidden = true;
+  panel.appendChild(menu);
+  let active = { field: null, mention: null, options: [], index: 0 };
+
+  const close = () => {
+    if (active.field) {
+      active.field.setAttribute('aria-expanded', 'false');
+      active.field.removeAttribute('aria-activedescendant');
+    }
+    menu.hidden = true;
+    menu.replaceChildren();
+    active = { field: null, mention: null, options: [], index: 0 };
+  };
+
+  const paint = () => {
+    menu.innerHTML = active.options.map((option, index) => `
+      <button type="button" role="option" id="automation-mention-${index}"
+              aria-selected="${index === active.index}" data-mention-index="${index}"
+              class="automation-mention-option ${index === active.index ? 'automation-mention-option--active' : ''}">
+        <span>${h(option.label)}</span>
+        <small>${h(option.detail)}</small>
+      </button>`).join('');
+    active.field?.setAttribute('aria-activedescendant', `automation-mention-${active.index}`);
+  };
+
+  const position = () => {
+    if (!active.field) return;
+    const rect = active.field.getBoundingClientRect();
+    menu.style.left = `${rect.left}px`;
+    menu.style.top = `${rect.bottom + 4}px`;
+    menu.style.width = `${Math.max(220, rect.width)}px`;
+  };
+
+  const open = (field, mention) => {
+    const options = mentionOptions(panel, field).filter((option) => (
+      !mention.query || `${option.label} ${option.id}`.toLocaleLowerCase().includes(mention.query)
+    ));
+    if (!options.length) { close(); return; }
+    active = { field, mention, options, index: 0 };
+    position();
+    menu.hidden = false;
+    field.setAttribute('aria-expanded', 'true');
+    paint();
+  };
+
+  const choose = (index = active.index) => {
+    const option = active.options[index];
+    const { field, mention } = active;
+    if (!option || !field || !mention) return;
+    const suffix = field.value.slice(mention.end);
+    const spacer = suffix && !/^\s/.test(suffix) ? ' ' : '';
+    field.value = `${field.value.slice(0, mention.start)}${option.token}${spacer}${suffix}`;
+    const caret = mention.start + option.token.length + spacer.length;
+    field.setSelectionRange(caret, caret);
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    close();
+    field.focus();
+  };
+
+  panel.addEventListener('input', (event) => {
+    const field = event.target.closest('[data-variable-mentions]');
+    if (!field) return;
+    const mention = activeMention(field);
+    if (mention) open(field, mention);
+    else close();
+  });
+  panel.addEventListener('keydown', (event) => {
+    if (menu.hidden || event.target !== active.field) return;
+    if (!['ArrowDown', 'ArrowUp', 'Enter', 'Tab', 'Escape'].includes(event.key)) return;
+    // The shared modal submits single-line inputs on Enter. Intercept picker
+    // navigation during capture so choosing a variable cannot save the form.
+    event.stopPropagation();
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      active.index = (active.index + direction + active.options.length) % active.options.length;
+      paint();
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      choose();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  }, { capture: true });
+  panel.addEventListener('focusin', (event) => {
+    if (!menu.hidden && event.target !== active.field && !menu.contains(event.target)) close();
+  });
+  menu.addEventListener('mousedown', (event) => event.preventDefault());
+  menu.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-mention-index]');
+    if (option) choose(Number(option.dataset.mentionIndex));
+  });
+  panel.addEventListener('focusout', () => setTimeout(() => {
+    if (!panel.contains(document.activeElement)) close();
+  }, 0));
+  panel.addEventListener('scroll', () => {
+    if (!menu.hidden) position();
+  }, { passive: true, capture: true });
 }
 
 function memberOptions(members, selected = null, emptyLabel = 'Choose…') {
@@ -51,19 +196,40 @@ function parseEquals(value, type = null) {
 // Quick Add
 // ---------------------------------------------------------------------------
 
-export async function openQuickAdd({ onCreated = null } = {}) {
+export async function openQuickAdd({ onCreated = null, onActivitySelected = null } = {}) {
   try {
     const response = await api.get('/automation/quick-add');
     const templates = response.data ?? [];
+    const activities = response.activities ?? [];
     const members = response.members ?? [];
     const content = `
-      <div class="automation-quick-list">
+      <div class="automation-quick-section">
+        <div class="automation-quick-section__heading">
+          <strong>Activity templates</strong>
+          <small class="form-hint">Create one task using its saved instructions and assignment rules.</small>
+        </div>
+        <div class="automation-quick-list">
+          ${activities.length ? activities.map((activity) => `
+            <button type="button" class="btn btn--secondary automation-quick-template" data-quick-activity="${activity.id}">
+              <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
+              <span><strong>${h(activity.name)}</strong>${activity.description ? `<br><small>${h(activity.description)}</small>` : ''}</span>
+            </button>
+          `).join('') : '<p class="form-hint">No activity templates are available yet.</p>'}
+        </div>
+      </div>
+      <div class="automation-quick-section">
+        <div class="automation-quick-section__heading">
+          <strong>Automated events</strong>
+          <small class="form-hint">Run a multi-step Quick Add workflow.</small>
+        </div>
+        <div class="automation-quick-list">
         ${templates.length ? templates.map((template) => `
           <button type="button" class="btn btn--secondary automation-quick-template" data-quick-template="${template.id}">
             <i data-lucide="zap" class="icon-md" aria-hidden="true"></i>
             <span><strong>${h(template.name)}</strong>${template.description ? `<br><small>${h(template.description)}</small>` : ''}</span>
           </button>
         `).join('') : `<p class="form-hint">No Quick Add templates have been enabled yet.</p>`}
+        </div>
       </div>`;
 
     openModal({
@@ -72,6 +238,14 @@ export async function openQuickAdd({ onCreated = null } = {}) {
       size: 'md',
       initialFocus: 'none',
       onSave(panel) {
+        panel.querySelectorAll('[data-quick-activity]').forEach((button) => {
+          button.addEventListener('click', async () => {
+            const activity = activities.find((row) => Number(row.id) === Number(button.dataset.quickActivity));
+            if (!activity || typeof onActivitySelected !== 'function') return;
+            await closeModal({ force: true });
+            await onActivitySelected(activity);
+          });
+        });
         panel.querySelectorAll('[data-quick-template]').forEach((button) => {
           button.addEventListener('click', () => {
             const template = templates.find((row) => Number(row.id) === Number(button.dataset.quickTemplate));
@@ -279,6 +453,26 @@ async function refreshAutomationManager(manager, tab) {
   await manager?.navigate?.(tab);
 }
 
+async function deleteAutomationDefinition({ name, noun, path, tab, manager }) {
+  const confirmed = await confirmOverModal(`Delete ${noun} “${name}”?`, {
+    danger: true,
+    confirmLabel: 'Delete',
+    detail: t('settings.automationDefinitionDeleteConfirmDetail'),
+  });
+  if (!confirmed) return;
+
+  try {
+    await api.delete(path);
+    toast(`${noun[0].toUpperCase()}${noun.slice(1)} deleted.`);
+  } catch (error) {
+    toast(error.message || `Could not delete this ${noun}.`, 'danger');
+  }
+  // A confirmation opened above a modal closes the parked manager only when
+  // deletion is confirmed. Re-render in both success and dependency-error
+  // cases so the user always returns to the definition list.
+  await manager?.navigate?.(tab);
+}
+
 async function renderSkillsManager(body, manager) {
   const response = await api.get('/automation/admin/skills');
   const skills = response.data ?? [];
@@ -291,6 +485,7 @@ async function renderSkillsManager(body, manager) {
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-skill-members="${skill.id}">Proficiency</button>
             <button type="button" class="btn btn--ghost btn--sm" data-edit-skill="${skill.id}">Edit</button>
+            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-skill="${skill.id}" aria-label="Delete ${h(skill.name)} skill">Delete</button>
           </div>
         </div>`).join('') || '<p class="form-hint">No skills yet.</p>'}
     </div>`;
@@ -300,6 +495,19 @@ async function renderSkillsManager(body, manager) {
   });
   body.querySelectorAll('[data-skill-members]').forEach((button) => {
     button.addEventListener('click', () => openSkillProficiency(skills.find((skill) => Number(skill.id) === Number(button.dataset.skillMembers)), manager));
+  });
+  body.querySelectorAll('[data-delete-skill]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const skill = skills.find((row) => Number(row.id) === Number(button.dataset.deleteSkill));
+      if (!skill) return;
+      deleteAutomationDefinition({
+        name: skill.name,
+        noun: 'skill',
+        path: `/automation/admin/skills/${skill.id}`,
+        tab: 'skills',
+        manager,
+      });
+    });
   });
 }
 
@@ -382,10 +590,13 @@ async function renderActivitiesManager(body, manager) {
     <p class="form-hint automation-manager__hint">Activities define work, required skills and how Yuvomi chooses an assignee.</p>
     <div class="automation-list">
       ${activities.map((activity) => `
-        <button type="button" class="btn btn--secondary automation-list-button" data-edit-activity="${activity.id}">
-          <span><strong>${h(activity.name)}</strong><br><small>${h(activity.assignment_strategy)} · ${(activity.skills ?? []).map((skill) => h(skill.name)).join(', ') || 'no skill requirement'}</small></span>
-          <i data-lucide="chevron-right" class="icon-md"></i>
-        </button>`).join('') || '<p class="form-hint">No activity templates yet.</p>'}
+        <div class="automation-list-row">
+          <div class="automation-list-row__copy"><strong>${h(activity.name)}</strong><br><small class="form-hint">${h(activity.assignment_strategy)} · ${(activity.skills ?? []).map((skill) => h(skill.name)).join(', ') || 'no skill requirement'}</small></div>
+          <div class="automation-list-row__actions">
+            <button type="button" class="btn btn--ghost btn--sm" data-edit-activity="${activity.id}">Edit</button>
+            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-activity="${activity.id}" aria-label="Delete ${h(activity.name)} activity template">Delete</button>
+          </div>
+        </div>`).join('') || '<p class="form-hint">No activity templates yet.</p>'}
     </div>`;
   const context = { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [] };
   body.querySelector('#automation-add-activity')?.addEventListener('click', () => openActivityForm(null, context, manager));
@@ -396,6 +607,19 @@ async function renderActivitiesManager(body, manager) {
       manager,
     ));
   });
+  body.querySelectorAll('[data-delete-activity]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const activity = activities.find((row) => Number(row.id) === Number(button.dataset.deleteActivity));
+      if (!activity) return;
+      deleteAutomationDefinition({
+        name: activity.name,
+        noun: 'activity template',
+        path: `/automation/admin/activity-templates/${activity.id}`,
+        tab: 'activities',
+        manager,
+      });
+    });
+  });
 }
 
 function openActivityForm(activity, context, manager = null) {
@@ -403,7 +627,7 @@ function openActivityForm(activity, context, manager = null) {
   const strategy = activity?.assignment_strategy || 'subject_skill';
   const content = `<form id="automation-activity-form">
     ${inputRow('Activity name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`)}
-    ${inputRow('Task title', `<input class="input" name="title_template" required value="${h(activity?.title_template || activity?.name || '')}">`, 'Use {subject} where the selected household member name should appear.')}
+    ${inputRow('Task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}">`, 'Type @ to insert the selected household member.')}
     ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3">${h(activity?.description || '')}</textarea>`)}
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
@@ -416,7 +640,7 @@ function openActivityForm(activity, context, manager = null) {
     <fieldset class="automation-fieldset"><legend class="label">Required skills</legend>
       <div class="automation-skill-grid">${context.skills.map((skill) => `<label class="automation-check-row"><input type="checkbox" name="skill" value="${skill.id}" ${selectedSkills.has(Number(skill.id)) ? 'checked' : ''}> ${h(skill.name)}</label>`).join('') || '<small class="form-hint">Create skills first if this activity requires proficiency checks.</small>'}</div>
     </fieldset>
-    ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Used only when the subject is Supervised.')}
+    ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" data-variable-mentions="activity-supervision" aria-autocomplete="list" aria-expanded="false" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Type @ to insert the subject or activity name. Used only when the subject is Supervised.')}
     ${footer(activity ? 'Save activity' : 'Create activity')}
   </form>`;
   openModal({
@@ -424,6 +648,7 @@ function openActivityForm(activity, context, manager = null) {
     content,
     size: 'lg',
     onSave(panel) {
+      wireVariableMentions(panel);
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
       strategySelect?.addEventListener('change', () => { fixed.hidden = strategySelect.value !== 'fixed'; });
@@ -458,10 +683,13 @@ async function renderWorkflowsManager(body, manager) {
     <p class="form-hint automation-manager__hint">Workflows arrange reusable activities into an on-demand event. Enabled workflows appear in Quick Add.</p>
     <div class="automation-list">
       ${workflows.map((workflow) => `
-        <button type="button" class="btn btn--secondary automation-list-button" data-edit-workflow="${workflow.id}">
-          <span><strong>${h(workflow.name)}</strong><br><small>${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Quick Add enabled' : 'hidden from Quick Add'}</small></span>
-          <i data-lucide="chevron-right" class="icon-md"></i>
-        </button>`).join('') || '<p class="form-hint">No workflow templates yet.</p>'}
+        <div class="automation-list-row">
+          <div class="automation-list-row__copy"><strong>${h(workflow.name)}</strong><br><small class="form-hint">${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Quick Add enabled' : 'hidden from Quick Add'}</small></div>
+          <div class="automation-list-row__actions">
+            <button type="button" class="btn btn--ghost btn--sm" data-edit-workflow="${workflow.id}">Edit</button>
+            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-workflow="${workflow.id}" aria-label="Delete ${h(workflow.name)} Quick Add template">Delete</button>
+          </div>
+        </div>`).join('') || '<p class="form-hint">No workflow templates yet.</p>'}
     </div>`;
   const context = {
     activities: response.activities ?? [],
@@ -475,6 +703,19 @@ async function renderWorkflowsManager(body, manager) {
       context,
       manager,
     ));
+  });
+  body.querySelectorAll('[data-delete-workflow]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const workflow = workflows.find((row) => Number(row.id) === Number(button.dataset.deleteWorkflow));
+      if (!workflow) return;
+      deleteAutomationDefinition({
+        name: workflow.name,
+        noun: 'Quick Add template',
+        path: `/automation/admin/workflow-templates/${workflow.id}`,
+        tab: 'workflows',
+        manager,
+      });
+    });
   });
 }
 
@@ -519,8 +760,8 @@ function workflowStepHtml(step, index, activities, questions, members) {
   return `<div class="automation-workflow-step" data-workflow-step data-workflow-key="${h(workflowKey)}" data-initial-dependency="${h(initialDependency)}">
     <div class="automation-workflow-step__header"><strong>Step ${index + 1}</strong><button type="button" class="btn btn--ghost btn--sm" data-remove-step>Remove</button></div>
     <select class="input" data-step-activity required>${activities.map((activity) => `<option value="${activity.id}" ${Number(step?.activity_template_id) === Number(activity.id) ? 'selected' : ''}>${h(activity.name)}</option>`).join('')}</select>
-    <input class="input automation-workflow-step__control" data-step-title placeholder="Optional task title override" value="${h(step?.title_override || '')}">
-    <textarea class="input automation-workflow-step__control" rows="2" data-step-description placeholder="Optional task description override">${h(step?.description_override || '')}</textarea>
+    <input class="input automation-workflow-step__control" data-step-title data-variable-mentions="workflow-step-title" aria-autocomplete="list" aria-expanded="false" placeholder="Optional task title override · type @ for variables" value="${h(step?.title_override || '')}">
+    <textarea class="input automation-workflow-step__control" rows="2" data-step-description data-variable-mentions="workflow-step-description" aria-autocomplete="list" aria-expanded="false" placeholder="Optional task description override · type @ for variables">${h(step?.description_override || '')}</textarea>
     <select class="input automation-workflow-step__control" data-step-subject-variable>
       <option value="">Use the workflow subject</option>${workflowVariableOptions(questions, subjectVariableId, { memberOnly: true })}
     </select>
@@ -554,8 +795,8 @@ function questionHtml(question = {}) {
 
 function openWorkflowForm(workflow, context, manager = null) {
   const content = `<form id="automation-workflow-form">
-    ${inputRow('Workflow name', `<input class="input" name="name" required value="${h(workflow?.name || '')}">`, 'Variable tokens such as {{variable_1}} are replaced when the workflow runs.')}
-    ${inputRow('Description', `<textarea class="input" name="description" rows="2">${h(workflow?.description || '')}</textarea>`, 'Use the stable token shown beside a question to insert its answer.')}
+    ${inputRow('Workflow name', `<input class="input" name="name" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false" required value="${h(workflow?.name || '')}">`, 'Type @ to insert an answer from a workflow variable.')}
+    ${inputRow('Description', `<textarea class="input" name="description" rows="2" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false">${h(workflow?.description || '')}</textarea>`, 'Type @ to insert an answer from a workflow variable.')}
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, workflow?.category || 'misc')}</select>`)}
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${workflow?.subject_required !== 0 ? 'checked' : ''}> Ask which household member this is for</label>
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${workflow?.quick_add_enabled !== 0 ? 'checked' : ''}> Show in Quick Add</label>
@@ -573,6 +814,7 @@ function openWorkflowForm(workflow, context, manager = null) {
     content,
     size: 'xl',
     onSave(panel) {
+      wireVariableMentions(panel);
       const steps = panel.querySelector('#workflow-steps');
       const questions = panel.querySelector('#workflow-questions');
 

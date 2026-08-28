@@ -1439,6 +1439,7 @@
         "pageRewardsModuleDescription": "Włącz moduł nagród i zarządzaj zatwierdzeniami.",
         "pageHouseholdAutomation": "Automatyzacja gospodarstwa domowego",
         "pageHouseholdAutomationDescription": "Zarządzaj umiejętnościami, aktywnościami i szablonami szybkiego dodawania wielokrotnego użytku.",
+        "automationDefinitionDeleteConfirmDetail": "Ta definicja wielokrotnego użytku i jej ustawienia zostaną trwale usunięte. Yuvomi blokuje usunięcie, dopóki zależy od niej inny szablon lub zaplanowane zadanie; utworzone wcześniej zadania i wydarzenia pozostają.",
         "rewardsEnableTitle": "Widoczność",
         "rewardsEnableLabel": "Włącz nagrody",
         "rewardsEnableHint": "Pokazuje moduł nagród w nawigacji. Wyłączenie zachowuje wszystkie dane.",

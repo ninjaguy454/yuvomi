@@ -273,9 +273,36 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     new URL('../public/styles/settings.css', import.meta.url),
     'utf8',
   );
+  const tasks = await readFile(
+    new URL('../public/pages/tasks.js', import.meta.url),
+    'utf8',
+  );
   assert.match(page, /renderAutomationManager/);
   assert.match(component, /export async function renderAutomationManager/);
   assert.doesNotMatch(component, /automation-manage-from-quick/);
+  assert.match(component, /data-quick-activity/,
+    'Quick Add should offer individual Activity Templates as well as workflows');
+  assert.match(component, /data-variable-mentions="workflow-step-title"/,
+    'workflow fields should expose the @ variable picker');
+  assert.match(component, /function wireVariableMentions/);
+  assert.match(component, /data-delete-skill/,
+    'skills need a visible guarded delete action');
+  assert.match(component, /data-delete-activity/,
+    'Activity Templates need a visible guarded delete action');
+  assert.match(component, /data-delete-workflow/,
+    'Quick Add workflow templates need a visible guarded delete action');
+  assert.match(component, /confirmOverModal/,
+    'definition deletion should require confirmation without losing an open manager modal');
+  assert.match(component, /addEventListener\('keydown',[\s\S]*?\{ capture: true \}\)/,
+    'the variable picker should intercept Enter before the shared modal submits');
+  assert.doesNotMatch(component, /addEventListener\('scroll', close/,
+    'normal modal auto-scrolling should reposition, not dismiss, variable suggestions');
+  assert.match(tasks, /id="btn-manage-automation"/,
+    'administrators need a direct Tasks entry point to Household Automation');
+  assert.match(tasks, /onActivitySelected/,
+    'selecting an Activity Template from Quick Add should open the Task flow');
+  assert.ok(tasks.indexOf('task-template-picker') < tasks.indexOf('id="task-title"'),
+    'the Activity Template picker should appear before the ordinary Task fields');
   assert.match(component, /panel\.querySelector\('button\[type="submit"\]'\)/,
     'the modal owns the submit button after its footer is mounted');
   assert.doesNotMatch(component, /form\.querySelector\('button\[type="submit"\]'\)\.textContent/,

@@ -439,3 +439,20 @@
 .recipe-meal-types__option {
   gap: var(--space-1);
 }
+.recipe-import-intro {
+  margin-bottom: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .recipes-import-button span {
+    display: none;
+  }
+
+  .recipes-import-button {
+    width: var(--target-base);
+    min-width: var(--target-base);
+    height: var(--target-base);
+    min-height: var(--target-base);
+    padding-inline: 0;
+  }
+}

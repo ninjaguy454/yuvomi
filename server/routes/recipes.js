@@ -10,9 +10,15 @@ import * as db from '../db.js';
 import { str, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT } from '../middleware/validate.js';
 import { normalizeRecipeMealTypes } from '../../public/utils/recipe-meal-types.js';
 import { getAdapter } from '../services/recipe-providers/index.js';
+import { importRecipeFromUrl, RecipeUrlImportError } from '../services/recipe-url-import.js';
 
 const log = createLogger('Recipes');
 const router = express.Router();
+let recipeUrlImporter = importRecipeFromUrl;
+
+export function _setRecipeUrlImporter(importer) {
+  recipeUrlImporter = importer || importRecipeFromUrl;
+}
 
 // Nicht-skriptfähige Rasterformate (kein SVG), dieselbe Allowlist wie der
 // DMS-Vorschau-Proxy (server/routes/dms.js) - dort wie hier landet ein
@@ -86,6 +92,29 @@ router.get('/', (_req, res) => {
   } catch (err) {
     log.error('GET / error:', err);
     res.status(500).json({ error: 'Internal error', code: 500 });
+  }
+});
+
+// Import is deliberately preview-only. The browser opens the ordinary native
+// recipe editor with this draft, and the user reviews it before POST / creates
+// anything in the household database.
+router.post('/url-preview', async (req, res) => {
+  try {
+    const url = String(req.body?.url || '').trim();
+    if (!url || url.length > MAX_TEXT) {
+      return res.status(400).json({ error: 'Enter a valid recipe URL.', code: 400 });
+    }
+    const draft = await recipeUrlImporter(url);
+    res.json({ data: draft });
+  } catch (err) {
+    const status = err instanceof RecipeUrlImportError
+      ? err.status
+      : (Number.isInteger(err?.status) ? err.status : 502);
+    log.warn('POST /url-preview:', err?.message || err);
+    res.status(status).json({
+      error: err?.message || 'The recipe page could not be imported.',
+      code: status,
+    });
   }
 });
 

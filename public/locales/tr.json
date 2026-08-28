@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Ödül modülünü etkinleştir ve onayları yönet.",
         "pageHouseholdAutomation": "Ev otomasyonu",
         "pageHouseholdAutomationDescription": "Yeniden kullanılabilir becerileri, etkinlikleri ve Hızlı Ekle şablonlarını yönetin.",
+        "automationDefinitionDeleteConfirmDetail": "Bu yeniden kullanılabilir tanım ve ayarları kalıcı olarak kaldırılır. Başka bir şablon veya zamanlanmış görev buna bağlı olduğu sürece Yuvomi silmeyi engeller; önceden oluşturulmuş görevler ve etkinlikler kalır.",
         "rewardsEnableTitle": "Görünürlük",
         "rewardsEnableLabel": "Ödülleri etkinleştir",
         "rewardsEnableHint": "Ödül modülünü gezinmede gösterir. Devre dışı bırakıldığında tüm veriler korunur.",

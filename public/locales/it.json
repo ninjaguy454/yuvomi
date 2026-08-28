@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Attiva il modulo ricompense e gestisci le approvazioni.",
         "pageHouseholdAutomation": "Automazione domestica",
         "pageHouseholdAutomationDescription": "Gestisci competenze, attività e modelli di Aggiunta rapida riutilizzabili.",
+        "automationDefinitionDeleteConfirmDetail": "Questa definizione riutilizzabile e le sue impostazioni vengono eliminate definitivamente. Yuvomi impedisce l'eliminazione finché un altro modello o un'attività pianificata ne dipende; le attività e gli eventi già creati restano.",
         "rewardsEnableTitle": "Visibilità",
         "rewardsEnableLabel": "Attiva le ricompense",
         "rewardsEnableHint": "Mostra il modulo ricompense nella navigazione. Disattivandolo si conservano tutti i dati.",

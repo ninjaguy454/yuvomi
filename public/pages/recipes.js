@@ -203,8 +203,17 @@ export async function render(container) {
   // dem Laden).
   const actions = document.createElement('div');
   actions.className = 'page-toolbar__actions';
-  actions.id = 'recipes-source-filter';
-  actions.hidden = true;
+  const importButton = document.createElement('button');
+  importButton.className = 'btn btn--secondary recipes-import-button';
+  importButton.type = 'button';
+  importButton.id = 'recipes-import-url';
+  importButton.setAttribute('aria-label', 'Import recipe from URL');
+  importButton.title = 'Import recipe from URL';
+  importButton.insertAdjacentHTML('beforeend', '<i data-lucide="link" class="icon-md" aria-hidden="true"></i><span>Import</span>');
+  const sourceFilter = document.createElement('div');
+  sourceFilter.id = 'recipes-source-filter';
+  sourceFilter.hidden = true;
+  actions.append(importButton, sourceFilter);
   toolbar.appendChild(actions);
 
   const list = document.createElement('div');
@@ -243,6 +252,7 @@ export async function render(container) {
   renderRecipeList();
 
   fab.addEventListener('click', () => openRecipeModal('create'));
+  importButton.addEventListener('click', openRecipeImportModal);
 
   // Handle im Modul halten: der Zurücksetzen-Pfad des Suchtreffer-Leerzustands
   // braucht `clear()`, nicht nur `input.value = ''` - sonst bliebe der
@@ -731,9 +741,10 @@ function renderRecipeList() {
 
 function openRecipeModal(mode, recipe = null) {
   const isEdit = mode === 'edit';
+  const isImport = mode === 'import';
 
   openSharedModal({
-    title: isEdit ? t('recipes.editRecipe') : t('recipes.addRecipe'),
+    title: isEdit ? t('recipes.editRecipe') : (isImport ? 'Review imported recipe' : t('recipes.addRecipe')),
     size: 'md',
     content: `
       <div class="form-group">
@@ -765,23 +776,23 @@ function openRecipeModal(mode, recipe = null) {
           <label class="form-label" for="recipe-url">${t('recipes.urlLabel')}</label>
           <input id="recipe-url" class="form-input" type="url" placeholder="${t('recipes.urlPlaceholder')}">
         </div>`,
-        { open: isEdit && (!!recipe.notes || !!recipe.recipe_url) })}
+        { open: (isEdit || isImport) && (!!recipe.notes || !!recipe.recipe_url) })}
       <div class="modal-panel__footer modal-panel__footer--plain">
         <button class="btn btn--secondary" id="recipe-cancel">${t('common.cancel')}</button>
         <button class="btn btn--primary" id="recipe-save">${isEdit ? t('common.save') : t('common.add')}</button>
       </div>
     `,
     onSave(panel) {
-      panel.querySelector('#recipe-title').value = isEdit ? recipe.title : '';
-      panel.querySelector('#recipe-notes').value = isEdit && recipe.notes ? recipe.notes : '';
-      panel.querySelector('#recipe-url').value = isEdit && recipe.recipe_url ? recipe.recipe_url : '';
-      const selectedMealTypes = normalizeRecipeMealTypes(isEdit ? recipe.meal_types : RECIPE_MEAL_TYPE_KEYS);
+      panel.querySelector('#recipe-title').value = (isEdit || isImport) ? recipe.title : '';
+      panel.querySelector('#recipe-notes').value = (isEdit || isImport) && recipe.notes ? recipe.notes : '';
+      panel.querySelector('#recipe-url').value = (isEdit || isImport) && recipe.recipe_url ? recipe.recipe_url : '';
+      const selectedMealTypes = normalizeRecipeMealTypes((isEdit || isImport) ? recipe.meal_types : RECIPE_MEAL_TYPE_KEYS);
       panel.querySelectorAll('#recipe-meal-types input[type="checkbox"]').forEach((input) => {
         input.checked = selectedMealTypes.includes(input.value);
       });
 
       const ingList = panel.querySelector('#recipe-ingredient-list');
-      if (isEdit && recipe.ingredients?.length) {
+      if ((isEdit || isImport) && recipe.ingredients?.length) {
         ingList.insertAdjacentHTML('beforeend', recipe.ingredients.map((i) => ingredientRowHTML({
           name: i.name,
           quantity: i.quantity ?? '',
@@ -807,6 +818,53 @@ function openRecipeModal(mode, recipe = null) {
       wireBlurValidation(panel);
 
       if (window.lucide) window.lucide.createIcons({ el: panel });
+    },
+  });
+}
+
+function openRecipeImportModal() {
+  openSharedModal({
+    title: 'Import recipe from URL',
+    size: 'sm',
+    content: `
+      <p class="form-hint recipe-import-intro">Paste a public recipe page. Yuvomi will extract its structured title, ingredients, and instructions, then let you review everything before saving.</p>
+      <div class="form-group">
+        <label class="form-label" for="recipe-import-url">Recipe page</label>
+        <input id="recipe-import-url" class="form-input" type="url" required autocomplete="url" placeholder="https://example.com/recipe">
+      </div>
+      <div class="modal-panel__footer modal-panel__footer--plain">
+        <button class="btn btn--secondary" type="button" id="recipe-import-cancel">${t('common.cancel')}</button>
+        <button class="btn btn--primary" type="button" id="recipe-import-submit">Import and review</button>
+      </div>`,
+    onSave(panel) {
+      const input = panel.querySelector('#recipe-import-url');
+      const submit = panel.querySelector('#recipe-import-submit');
+      panel.querySelector('#recipe-import-cancel')?.addEventListener('click', closeModal);
+      submit?.addEventListener('click', async () => {
+        const url = input?.value.trim() || '';
+        if (!url) {
+          reportFieldError(input, 'Enter a recipe URL.');
+          return;
+        }
+        submit.disabled = true;
+        submit.textContent = 'Importing…';
+        try {
+          const response = await api.post('/recipes/url-preview', { url });
+          closeModal({ force: true });
+          openRecipeModal('import', response.data);
+        } catch (error) {
+          submit.disabled = false;
+          submit.textContent = 'Import and review';
+          reportFieldError(input, error.data?.error ?? 'That recipe page could not be imported.');
+        }
+      });
+      input?.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submit?.click();
+        }
+      });
+      wireBlurValidation(panel);
     },
   });
 }
@@ -839,7 +897,7 @@ async function saveRecipe(panel, mode, recipe) {
   saveBtn.disabled = true;
 
   try {
-    if (mode === 'create') {
+    if (mode !== 'edit') {
       const res = await api.post('/recipes', { title, notes, recipe_url, meal_types, ingredients });
       state.recipes.push(res.data);
     } else {
@@ -850,7 +908,7 @@ async function saveRecipe(panel, mode, recipe) {
 
     closeModal({ force: true });
     renderRecipeList();
-    window.yuvomi?.showToast(mode === 'create' ? t('recipes.created') : t('recipes.updated'), 'success');
+    window.yuvomi?.showToast(mode !== 'edit' ? t('recipes.created') : t('recipes.updated'), 'success');
   } catch (err) {
     saveBtn.disabled = false;
     window.yuvomi?.showToast(err.data?.error ?? t('common.errorGeneric'), 'danger');

@@ -907,7 +907,7 @@ function wireTagBadgeFilter(container) {
   });
 }
 
-function renderModalContent({ task = null, users = [], reminder = null } = {}) {
+function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null } = {}) {
   const isEdit = !!task;
 
   const selectedIds = task?.assigned_users?.map((u) => u.id) ?? (task?.assigned_to ? [task.assigned_to] : []);
@@ -916,7 +916,9 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
   const rotationGroup = task?.rotation_group || '';
   const rotationPosition = Number(task?.rotation_slot ?? 0) + 1;
   const visibility  = task?.visibility || 'all';
-  const activityTemplateId = task?.activity_template_id ? Number(task.activity_template_id) : null;
+  const activityTemplateId = task?.activity_template_id
+    ? Number(task.activity_template_id)
+    : (presetActivityTemplate?.id ? Number(presetActivityTemplate.id) : null);
   const activitySubjectUserId = task?.activity_subject_user_id ? Number(task.activity_subject_user_id) : null;
   const activityTemplates = [...(state.activityTemplates ?? [])];
   if (activityTemplateId && !activityTemplates.some((item) => Number(item.id) === activityTemplateId)) {
@@ -934,7 +936,7 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
     `<option value="${user.id}" ${activitySubjectUserId === Number(user.id) ? 'selected' : ''}>${esc(user.display_name)}</option>`
   ).join('');
 
-  const selectedCat = task?.category ?? FALLBACK_CATEGORY;
+  const selectedCat = task?.category ?? presetActivityTemplate?.category ?? FALLBACK_CATEGORY;
   const categoryOptions = state.categories.map((c) =>
     `<option value="${esc(c.key)}" ${selectedCat === c.key ? 'selected' : ''}>${esc(catLabel(c.key))}</option>`
   ).join('');
@@ -1041,11 +1043,29 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
     <form id="task-form" novalidate>
       <input type="hidden" id="task-id" value="${task?.id ?? ''}">
 
+      <div class="form-group task-template-picker">
+        <label class="label" for="task-activity-template">Start from an Activity Template</label>
+        <select class="input" id="task-activity-template" name="activity_template_id">
+          <option value="">Blank task</option>
+          ${activityOptions}
+        </select>
+        <p class="task-field-hint">Templates fill the task instructions and use saved skills and proficiency to choose an assignee.</p>
+      </div>
+
+      <div class="form-group" id="task-activity-subject" hidden>
+        <label class="label" for="task-activity-subject-user">Who is this activity for?</label>
+        <select class="input" id="task-activity-subject-user" name="activity_subject_user_id">
+          <option value="">Choose a household member</option>
+          ${activitySubjectOptions}
+        </select>
+        <p class="task-field-hint">The template can use this person in its title and proficiency rules.</p>
+      </div>
+
       <div class="form-group">
         <div class="form-field">
           <label class="label" for="task-title">${t('tasks.titleLabel')}<span class="required-marker" aria-hidden="true"> *</span></label>
           <input class="input" type="text" id="task-title" name="title"
-                 value="${esc(task?.title)}" placeholder="${t('tasks.titlePlaceholder')}"
+                 value="${esc(task?.title ?? presetActivityTemplate?.title_template ?? presetActivityTemplate?.name ?? '')}" placeholder="${t('tasks.titlePlaceholder')}"
                  required autocomplete="off">
           <div class="form-field__error">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -1067,7 +1087,7 @@ function renderModalContent({ task = null, users = [], reminder = null } = {}) {
         ${renderMarkdownToolbar()}
         <textarea class="input" id="task-description" name="description"
                   rows="6" placeholder="${t('tasks.descriptionPlaceholder')}"
-                 >${esc(task?.description)}</textarea>
+                 >${esc(task?.description ?? presetActivityTemplate?.description ?? '')}</textarea>
         <small class="form-hint">${t('tasks.descriptionMarkdownHint')}</small>
       </div>
 ${syncTargetFieldHtml(task)}
@@ -1088,24 +1108,6 @@ ${syncTargetFieldHtml(task)}
            und „- Niemand -" (Critique 2026-08-10). Das Feld bleibt im DOM und
            behaelt seinen Wert, es wird nur verborgen - der Absende-Pfad liest
            es unveraendert (utils/household.js). -->
-      <div class="form-group" style="margin-top:var(--space-4)">
-        <label class="label" for="task-activity-template">Activity template</label>
-        <select class="input" id="task-activity-template" name="activity_template_id">
-          <option value="">Manual assignment</option>
-          ${activityOptions}
-        </select>
-        <p class="task-field-hint">When selected, skills and proficiency determine who owns each occurrence. Manual fixed and round-robin assignment are bypassed.</p>
-      </div>
-
-      <div class="form-group" id="task-activity-subject" style="margin-top:var(--space-4)" hidden>
-        <label class="label" for="task-activity-subject-user">Activity subject</label>
-        <select class="input" id="task-activity-subject-user" name="activity_subject_user_id">
-          <option value="">Choose a household member</option>
-          ${activitySubjectOptions}
-        </select>
-        <p class="task-field-hint">The subject is the household member this activity is being performed for or by.</p>
-      </div>
-
       <div class="form-group" id="task-manual-assignment-mode" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-assignment-mode">Assignment mode</label>
         <select class="input" id="task-assignment-mode" name="assignment_mode">
@@ -1481,6 +1483,53 @@ function wireAssignmentMode(panel) {
   update();
 }
 
+function renderActivityTemplateText(value, subjectName = '') {
+  return String(value || '').replaceAll('{subject}', subjectName || 'the selected member').trim();
+}
+
+/**
+ * Activity Templates used to be a buried assignment toggle: selecting one did
+ * not even fill the title or instructions that make it a template. Keep the
+ * ordinary Task editor, but let the template provide a useful starting point.
+ */
+function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplate = null } = {}) {
+  const select = panel.querySelector('#task-activity-template');
+  const subject = panel.querySelector('#task-activity-subject-user');
+  const title = panel.querySelector('#task-title');
+  const description = panel.querySelector('#task-description');
+  const category = panel.querySelector('#task-category');
+  if (!select || !title) return;
+
+  const selectedTemplate = () => state.activityTemplates.find(
+    (entry) => Number(entry.id) === Number(select.value),
+  ) ?? (Number(presetActivityTemplate?.id) === Number(select.value) ? presetActivityTemplate : null);
+  const subjectName = () => subject?.selectedOptions?.[0]?.value
+    ? subject.selectedOptions[0].textContent.trim()
+    : '';
+
+  const applyTemplate = () => {
+    const template = selectedTemplate();
+    if (!template) return;
+    title.value = renderActivityTemplateText(template.title_template || template.name, subjectName());
+    title.dataset.activityTemplateAutofill = String(template.id);
+    if (description) description.value = renderActivityTemplateText(template.description, subjectName());
+    if (category && [...category.options].some((option) => option.value === template.category)) {
+      category.value = template.category;
+    }
+  };
+
+  select.addEventListener('change', applyTemplate);
+  subject?.addEventListener('change', () => {
+    const template = selectedTemplate();
+    if (template && title.dataset.activityTemplateAutofill === String(template.id)) {
+      title.value = renderActivityTemplateText(template.title_template || template.name, subjectName());
+    }
+  });
+  title.addEventListener('input', () => delete title.dataset.activityTemplateAutofill);
+
+  if (!task && presetActivityTemplate) applyTemplate();
+}
+
 /**
  * Der Countdown-Schalter haengt an der Faelligkeit (#647).
  *
@@ -1515,17 +1564,17 @@ function wireCountdownGate(panel) {
   update();
 }
 
-function openTaskModal({ task = null, users = [], reminder = null } = {}, container) {
+function openTaskModal({ task = null, users = [], reminder = null, presetActivityTemplate = null } = {}, container) {
   const isEdit = !!task;
   // Working-Set VOR dem Rendern setzen: renderTagChips liest ihn direkt danach.
   modalTags = normalizeTagList(task?.tags);
   openSharedModal({
     title: isEdit ? t('tasks.editTask') : t('tasks.newTask'),
-    content: renderModalContent({ task, users, reminder }),
+    content: renderModalContent({ task, users, reminder, presetActivityTemplate }),
     size: 'lg',
     // Eine neue Aufgabe startet weiterhin mit dem Fokus im Titelfeld - hier ist
     // Tippen die Absicht.
-    onSave(panel) { wireTaskForm(panel, { task, container }); },
+    onSave(panel) { wireTaskForm(panel, { task, container, presetActivityTemplate }); },
   });
 }
 
@@ -1550,12 +1599,13 @@ function taskDocumentVisibility(panel) {
   return 'family';
 }
 
-function wireTaskForm(panel, { task = null, container }) {
+function wireTaskForm(panel, { task = null, container, presetActivityTemplate = null }) {
   panel.querySelector('.modal-panel__body')?.classList.add('modal-panel__body--tasks-fit');
   // RRULE-Events binden
   bindRRuleEvents(document, 'task');
   bindUserMultiSelect(panel, 'task_assigned');
   wireAssignmentMode(panel);
+  wireActivityTemplatePrefill(panel, { task, presetActivityTemplate });
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
   wireCountdownGate(panel);
 
@@ -4149,9 +4199,17 @@ function wireNewTaskBtn(container) {
 function wireQuickAddBtn(container) {
   container.querySelector('#btn-quick-add')?.addEventListener('click', () => {
     openQuickAdd({
-      isAdmin: state.isAdmin,
       onCreated: async () => loadTasks(container),
+      onActivitySelected: async (activity) => {
+        openTaskModal({ users: state.users, presetActivityTemplate: activity }, container);
+      },
     });
+  });
+}
+
+function wireAutomationBtn(container) {
+  container.querySelector('#btn-manage-automation')?.addEventListener('click', () => {
+    window.yuvomi?.navigate('/settings/modules/automation');
   });
 }
 
@@ -4442,8 +4500,12 @@ export async function render(container, { user }) {
                   aria-label="${t('tasks.manageTags')}" title="${t('tasks.manageTags')}">
             <i data-lucide="tags" class="icon-lg" aria-hidden="true"></i>
           </button>
+          ${state.isAdmin ? `<button class="btn btn--icon btn--ghost" id="btn-manage-automation"
+                  aria-label="Manage household automation" title="Manage household automation">
+            <i data-lucide="workflow" class="icon-lg" aria-hidden="true"></i>
+          </button>` : ''}
           <button class="btn btn--icon btn--ghost" id="btn-quick-add"
-                  aria-label="Quick Add" title="Quick Add">
+                  aria-label="Quick Add from a template" title="Quick Add from a template">
             <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
           </button>
           <button class="btn btn--primary toolbar-new-btn" id="btn-new-task" style="gap:var(--space-1)"
@@ -4575,6 +4637,7 @@ export async function render(container, { user }) {
   wireGroupToggle(container);
   wireNewTaskBtn(container);
   wireQuickAddBtn(container);
+  wireAutomationBtn(container);
   wireTaskList(container);
   wireBulkSelect(container);
   wireBulkCheckboxes(container);

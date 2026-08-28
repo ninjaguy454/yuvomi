@@ -1427,6 +1427,7 @@
         "pageRewardsModuleDescription": "Ativar o módulo de recompensas e controlar as aprovações.",
         "pageHouseholdAutomation": "Automação doméstica",
         "pageHouseholdAutomationDescription": "Gerencie habilidades, atividades e modelos de Adição rápida reutilizáveis.",
+        "automationDefinitionDeleteConfirmDetail": "Esta definição reutilizável e as suas definições são removidas permanentemente. O Yuvomi impede a eliminação enquanto outro modelo ou tarefa agendada depender dela; as tarefas e os eventos já criados permanecem.",
         "rewardsEnableTitle": "Visibilidade",
         "rewardsEnableLabel": "Ativar recompensas",
         "rewardsEnableHint": "Mostra o módulo de recompensas na navegação. Ao desativar, todos os dados são mantidos.",

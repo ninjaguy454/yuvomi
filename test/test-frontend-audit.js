@@ -13673,3 +13673,22 @@ test('ein Teilschritt lässt sich korrigieren und entfernen, nicht nur abhaken (
   assert.ok(block, '.subtask-item__action fehlt');
   assert.match(block[1], /min-height:\s*var\(--target-base\)/);
 });
+
+test('Quick Add keeps activity names visible and moves descriptions into a short tooltip', () => {
+  const automation = read('../public/components/activity-automation.js');
+
+  assert.match(automation, /function activityDescriptionTooltip[\s\S]*?\.slice\(0, 160\)\.join\(''\)/,
+    'the activity tooltip must be capped at 160 characters');
+  assert.ok(
+    automation.includes('title="${h(activityDescriptionTooltip(activity.description))}"'),
+    'activity descriptions must be exposed as hover tooltips',
+  );
+  assert.ok(
+    automation.includes('<span><strong>${h(activity.name)}</strong></span>'),
+    'the visible Quick Add activity label must be the Activity Template name',
+  );
+  assert.ok(
+    !automation.includes('<br><small>${h(activity.description)}</small>'),
+    'activity descriptions must not replace or visually compete with the activity name',
+  );
+});

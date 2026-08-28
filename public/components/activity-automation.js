@@ -5,6 +5,11 @@ import { esc } from '/utils/html.js';
 
 const h = (value) => esc(String(value ?? ''));
 
+function activityDescriptionTooltip(value) {
+  const description = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return [...description].slice(0, 160).join('');
+}
+
 function toast(message, type = 'success') {
   window.yuvomi?.showToast?.(message, type);
 }
@@ -210,9 +215,10 @@ export async function openQuickAdd({ onCreated = null, onActivitySelected = null
         </div>
         <div class="automation-quick-list">
           ${activities.length ? activities.map((activity) => `
-            <button type="button" class="btn btn--secondary automation-quick-template" data-quick-activity="${activity.id}">
+            <button type="button" class="btn btn--secondary automation-quick-template" data-quick-activity="${activity.id}"
+                    ${activity.description ? `title="${h(activityDescriptionTooltip(activity.description))}"` : ''}>
               <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
-              <span><strong>${h(activity.name)}</strong>${activity.description ? `<br><small>${h(activity.description)}</small>` : ''}</span>
+              <span><strong>${h(activity.name)}</strong></span>
             </button>
           `).join('') : '<p class="form-hint">No activity templates are available yet.</p>'}
         </div>

@@ -252,6 +252,17 @@ export const SETTINGS_LEAVES = freezeEntries([
     loader: () => import('/settings/pages/sync-contacts.js'),
   },
   {
+    id: 'sync-google-places',
+    domainId: 'sync',
+    path: '/settings/sync/google-places',
+    labelKey: 'settings.pageGooglePlaces',
+    descriptionKey: 'settings.pageGooglePlacesDescription',
+    icon: 'map-pinned',
+    module: 'contacts',
+    adminOnly: true,
+    loader: () => import('/settings/pages/sync-google-places.js'),
+  },
+  {
     id: 'sync-reminders',
     domainId: 'sync',
     path: '/settings/sync/reminders',

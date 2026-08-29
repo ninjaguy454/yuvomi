@@ -1,4 +1,5 @@
 import { api } from '/api.js';
+import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
 import { openModal, closeModal, confirmOverModal } from '/components/modal.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
@@ -654,7 +655,7 @@ function placeTypeOptions(selected = 'custom') {
     .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
-async function renderPlacesManager(body, manager) {
+export async function renderPlacesManager(body, manager) {
   const [response, searchResponse] = await Promise.all([
     api.get('/planning/admin/context'),
     api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
@@ -683,55 +684,22 @@ async function renderPlacesManager(body, manager) {
   }));
 }
 
-async function openGooglePlacesConfig(manager) {
-  let config;
-  try { config = (await api.get('/planning/admin/place-search-config')).data; }
-  catch (error) { toast(error.message, 'danger'); return; }
-  const managed = config.managed_by_environment || {};
-  const lockedHint = 'Managed by this Docker container and cannot be changed here.';
-  const lock = (field) => managed[field] ? ` disabled aria-describedby="google-${field}-managed"` : '';
-  const sourceLabel = config.api_key_source === 'environment'
-    ? 'An API key is supplied by the Docker environment.'
-    : config.api_key_configured ? 'A saved API key is configured. Leave this blank to keep it.' : 'No API key is saved yet.';
-  const content = `<form id="automation-google-places-config">
-    <p class="form-hint">Google search is optional. The API key stays on the Yuvomi server and is never returned to the browser after it is saved.</p>
-    ${inputRow('Google Maps Platform API key', `<input class="input" type="password" name="api_key" maxlength="500" autocomplete="off" placeholder="${config.api_key_configured ? 'Saved - leave blank to keep' : 'Paste API key'}"${lock('api_key')}>`, sourceLabel)}
-    ${managed.api_key ? `<p class="form-hint" id="google-api_key-managed">${lockedHint}</p>` : ''}
-    <label class="automation-check-row"><input type="checkbox" name="integration_enabled" ${config.integration_enabled ? 'checked' : ''}${lock('integration_enabled')}> Enable Google Places search</label>
-    ${managed.integration_enabled ? `<p class="form-hint" id="google-integration_enabled-managed">${lockedHint}</p>` : ''}
-    <label class="automation-check-row"><input type="checkbox" name="terms_accepted" ${config.terms_accepted ? 'checked' : ''}${lock('terms_accepted')}> I have reviewed and accept the Google Maps Platform terms for this household's use</label>
-    ${managed.terms_accepted ? `<p class="form-hint" id="google-terms_accepted-managed">${lockedHint}</p>` : ''}
-    <p class="form-hint"><a href="https://developers.google.com/maps/terms" target="_blank" rel="noopener noreferrer">Review Google Maps Platform terms</a>. Enable the Places API (New) and billing in the Google Cloud project for this key.</p>
-    <div class="automation-workflow-condition">
-      ${inputRow('Requests per person / minute', `<input class="input" type="number" name="per_user_per_minute" min="1" max="120" required value="${h(config.per_user_per_minute)}"${lock('per_user_per_minute')}>`, managed.per_user_per_minute ? lockedHint : 'Prevents repeated clicks or UI loops from running up requests.')}
-      ${inputRow('Household requests / day', `<input class="input" type="number" name="household_per_day" min="1" max="100000" required value="${h(config.household_per_day)}"${lock('household_per_day')}>`, managed.household_per_day ? lockedHint : 'A hard daily safeguard for all household members combined.')}
-    </div>
-    ${inputRow('Search radius in meters', `<input class="input" type="number" name="radius_meters" min="1" max="50000" required value="${h(config.radius_meters)}"${lock('radius_meters')}>`, managed.radius_meters ? lockedHint : 'Used only when the selected origin has coordinates; maximum 50,000 meters.')}
-    ${config.stored_api_key_configured && !managed.api_key ? '<label class="automation-check-row"><input type="checkbox" name="clear_api_key"> Remove the saved API key</label>' : ''}
-    ${footer('Save Google settings')}
-  </form>`;
-  openModal({ title: 'Configure Google search', content, size: 'lg', onSave(panel) {
-    panel.querySelector('#automation-google-places-config')?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget; const data = new FormData(form);
-      const payload = {
-        integration_enabled: managed.integration_enabled ? config.integration_enabled : data.has('integration_enabled'),
-        terms_accepted: managed.terms_accepted ? config.terms_accepted : data.has('terms_accepted'),
-        per_user_per_minute: managed.per_user_per_minute ? config.per_user_per_minute : Number(data.get('per_user_per_minute')),
-        household_per_day: managed.household_per_day ? config.household_per_day : Number(data.get('household_per_day')),
-        radius_meters: managed.radius_meters ? config.radius_meters : Number(data.get('radius_meters')),
-        clear_api_key: !managed.api_key && data.has('clear_api_key'),
-      };
-      const apiKey = String(data.get('api_key') || '').trim();
-      if (!managed.api_key && apiKey) payload.api_key = apiKey;
-      const submit = panel.querySelector('button[type="submit"]'); submit.disabled = true;
-      try {
-        const saved = (await api.put('/planning/admin/place-search-config', payload)).data;
-        toast(saved.configured ? 'Google Places search is ready.' : 'Google settings saved. Complete the remaining setup to enable search.');
-        await closeModal({ force: true }); await refreshAutomationManager(manager, 'places');
-      } catch (error) { toast(error.message, 'danger'); submit.disabled = false; }
-    });
-  } });
+function openGooglePlacesConfig(manager) {
+  openModal({
+    title: 'Configure Google search',
+    content: '<div data-google-places-settings></div>',
+    size: 'lg',
+    onSave(panel) {
+      const host = panel.querySelector('[data-google-places-settings]');
+      renderGooglePlacesSettings(host, {
+        modal: true,
+        onSaved: async () => {
+          await closeModal({ force: true });
+          await manager?.navigate?.('places');
+        },
+      });
+    },
+  });
 }
 
 function googleAttributionHtml(result) {

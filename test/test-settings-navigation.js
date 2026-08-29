@@ -131,7 +131,7 @@ test('die Blätter verteilen sich wie beschlossen auf die vier Domänen', () => 
   // Zugangsdaten des Haushalts.
   const perDomain = {};
   for (const leaf of SETTINGS_LEAVES) perDomain[leaf.domainId] = (perDomain[leaf.domainId] ?? 0) + 1;
-  assert.deepEqual(perDomain, { personal: 11, modules: 6, sync: 5, admin: 8 });
+  assert.deepEqual(perDomain, { personal: 11, modules: 6, sync: 6, admin: 8 });
   // Jedes Blatt hängt an einer existierenden Domäne.
   const domainIds = new Set(SETTINGS_DOMAINS.map((domain) => domain.id));
   for (const leaf of SETTINGS_LEAVES) {
@@ -269,6 +269,10 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     new URL('../public/components/activity-automation.js', import.meta.url),
     'utf8',
   );
+  const googlePlacesSettings = await readFile(
+    new URL('../public/components/google-places-settings.js', import.meta.url),
+    'utf8',
+  );
   const styles = await readFile(
     new URL('../public/styles/settings.css', import.meta.url),
     'utf8',
@@ -321,7 +325,7 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'the address book should expose provider search when it is configured');
   assert.match(component, /Configure Google search/,
     'administrators should be able to configure Google search without rebuilding Docker');
-  assert.match(component, /\/planning\/admin\/place-search-config/,
+  assert.match(googlePlacesSettings, /\/planning\/admin\/place-search-config/,
     'the Google configuration form should use the protected server-side settings API');
   assert.match(styles, /\.settings-module-kitchen__child\s*>\s*\.module-glyph\s*\{[\s\S]*?width:\s*var\(--icon-md\);[\s\S]*?height:\s*var\(--icon-md\);/,
     'nested Kitchen icons should use the standard icon scale instead of intrinsic SVG dimensions');
@@ -336,6 +340,30 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
   assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.automation-question-row/);
   assert.match(styles, /@media \(max-width: 640px\)[\s\S]*?\.automation-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)[\s\S]*?overflow-x:\s*visible/,
     'all six Household Automation tabs must remain visible at phone widths');
+});
+
+test('Places has a first-class People address book and Google setup is visible under Sync', async () => {
+  const leaf = SETTINGS_LEAVES.find((entry) => entry.id === 'sync-google-places');
+  assert.ok(leaf, 'Google Places settings leaf is missing');
+  assert.equal(leaf.domainId, 'sync');
+  assert.equal(leaf.module, 'contacts');
+  assert.equal(leaf.adminOnly, true);
+  assert.equal(findSettingsLeaf('/settings/sync/google-places', admin)?.id, 'sync-google-places');
+  assert.equal(findSettingsLeaf('/settings/sync/google-places', member), null);
+
+  const router = await readFile(new URL('../public/router.js', import.meta.url), 'utf8');
+  const placesPage = await readFile(new URL('../public/pages/places.js', import.meta.url), 'utf8');
+  const settingsPage = await readFile(new URL('../public/settings/pages/sync-google-places.js', import.meta.url), 'utf8');
+  assert.match(router, /path: '\/places'[\s\S]*?page: '\/pages\/places\.js'[\s\S]*?module: 'contacts'/,
+    'Places should share the Contacts/People permission family');
+  assert.match(router, /path: '\/places'[\s\S]*?orderId: 'contacts'[\s\S]*?navId: 'places'/,
+    'Places should sit beside Contacts while remaining its own mobile destination');
+  assert.match(placesPage, /renderPlacesManager/,
+    'administrators should get the existing reusable Places manager from the People address book');
+  assert.match(placesPage, /\/planning\/places\?active=false/,
+    'members should be able to view the household Places address book');
+  assert.match(settingsPage, /renderGooglePlacesSettings/,
+    'the Sync leaf should render the same protected Google configuration component');
 });
 
 test('navigation settings leaf reuses the canonical module-order helpers', async () => {

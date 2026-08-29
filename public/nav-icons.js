@@ -317,6 +317,7 @@ export const MODULE_ICON = {
   inventory:        'package',
   rewards:          'award',
   contacts:         'book-user',
+  places:           'map-pinned',
   birthdays:        'cake',
   health:           'heart-pulse',
   budget:           'wallet',

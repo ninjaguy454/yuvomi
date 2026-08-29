@@ -85,6 +85,7 @@ const ROUTES = [
   { path: '/inventory', page: '/pages/inventory.js', requiresAuth: true, module: 'inventory', titleKey: 'nav.inventory' },
   { path: '/schedule', page: '/pages/schedule.js', requiresAuth: true, module: 'schedule', titleKey: 'nav.schedule' },
   { path: '/contacts', page: '/pages/contacts.js',  requiresAuth: true, module: 'contacts',  titleKey: 'nav.contacts' },
+  { path: '/places',   page: '/pages/places.js',    requiresAuth: true, module: 'contacts',  titleKey: 'nav.places', style: '/styles/settings.css' },
   { path: '/budget',   page: '/pages/budget.js',    requiresAuth: true, module: 'budget',    titleKey: 'nav.budget' },
   { path: '/documents', page: '/pages/documents.js', requiresAuth: true, module: 'documents', titleKey: 'nav.documents' },
   { path: '/housekeeping', page: '/pages/housekeeping.js', requiresAuth: true, module: 'housekeeping', titleKey: 'nav.housekeeping' },
@@ -499,7 +500,7 @@ function syncNavigationHistory(state) {
 // --------------------------------------------------------
 
 const ROUTE_ORDER = ['/', '/calendar', '/schedule', '/tasks', '/meals', '/recipes', '/shopping', '/pantry',
-                     '/birthdays', '/notes', '/contacts', '/budget', '/inventory', '/documents', '/housekeeping', '/health', '/settings'];
+                     '/birthdays', '/notes', '/contacts', '/places', '/budget', '/inventory', '/documents', '/housekeeping', '/health', '/settings'];
 
 const MOBILE_FAVORITE_COUNT = 3;
 
@@ -3303,7 +3304,7 @@ function navItems({ catalog = false } = {}) {
    * und im Widget-Kopf eine Stecknadel, Haushaltshilfe hier einen Pinsel und
    * auf der Kachel Funkeln. Die Liste unten sagt jetzt, WAS es gibt und wo es
    * steht; WIE es aussieht, sagt eine Stelle. */
-  const withIcon = (item) => ({ ...item, icon: MODULE_ICON[item.module] });
+  const withIcon = (item) => ({ ...item, icon: item.icon ?? MODULE_ICON[item.module] });
   const baseItems = [
     // Overview
     { path: '/',          label: t('nav.dashboard'), module: 'dashboard', section: NAV_SECTION.overview },
@@ -3323,6 +3324,7 @@ function navItems({ catalog = false } = {}) {
     { path: '/rewards',   label: t('nav.rewards'),   module: 'rewards',     section: NAV_SECTION.household },
     // Menschen
     { path: '/contacts',  label: t('nav.contacts'),  module: 'contacts',    section: NAV_SECTION.people },
+    { path: '/places',    label: t('nav.places'),    module: 'contacts', icon: MODULE_ICON.places, orderId: 'contacts', navId: 'places', section: NAV_SECTION.people },
     { path: '/birthdays', label: t('nav.birthdays'), module: 'birthdays',   section: NAV_SECTION.people },
     { path: '/health',    label: t('nav.health'),    module: 'health',      section: NAV_SECTION.people },
     // Finanzen
@@ -3400,7 +3402,7 @@ function mobileNavigationCandidates() {
       }
       continue;
     }
-    candidates.push({ ...item, navId: item.module });
+    candidates.push({ ...item, navId: item.navId ?? item.module });
   }
 
   return candidates;

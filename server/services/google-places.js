@@ -5,6 +5,14 @@ const SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
 const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.attributions';
 const DETAILS_URL = 'https://places.googleapis.com/v1/places/';
 const INCLUDED_TYPES = new Set(['pharmacy', 'restaurant', 'dentist', 'lodging', 'store', 'hotel']);
+const CONFIG_KEYS = Object.freeze({
+  apiKey: 'google_maps_api_key',
+  integrationEnabled: 'google_maps_enabled',
+  termsAccepted: 'google_maps_terms_accepted',
+  perUserPerMinute: 'google_places_per_user_per_minute',
+  householdPerDay: 'google_places_per_household_per_day',
+  radiusMeters: 'google_places_search_radius_meters',
+});
 
 const inFlightUsers = new Set();
 const identicalInFlight = new Map();
@@ -30,24 +38,131 @@ function enabled(value) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
 }
 
-export function googlePlacesConfig() {
-  const apiKey = String(process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY || '').trim();
-  const integrationEnabled = enabled(process.env.GOOGLE_MAPS_ENABLED);
-  const termsAccepted = enabled(process.env.GOOGLE_MAPS_TERMS_ACCEPTED);
+function storedValue(database, key) {
+  if (!database) return null;
+  return database.prepare('SELECT value FROM sync_config WHERE key = ?').get(key)?.value ?? null;
+}
+
+function storeValue(database, key, value) {
+  database.prepare(`
+    INSERT INTO sync_config (key, value)
+    VALUES (?, ?)
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value,
+                                   updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+  `).run(key, String(value));
+}
+
+function deleteStoredValue(database, key) {
+  database.prepare('DELETE FROM sync_config WHERE key = ?').run(key);
+}
+
+function envSetting(...names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(process.env, name)
+        && String(process.env[name] ?? '').trim() !== '') {
+      return { managed: true, value: process.env[name] };
+    }
+  }
+  return { managed: false, value: null };
+}
+
+function configuredValue(database, key, environment, fallback = null) {
+  return environment.managed ? environment.value : (storedValue(database, key) ?? fallback);
+}
+
+export function googlePlacesConfig(database = null) {
+  const apiKeyEnv = envSetting('GOOGLE_MAPS_API_KEY', 'GOOGLE_PLACES_API_KEY');
+  const enabledEnv = envSetting('GOOGLE_MAPS_ENABLED');
+  const termsEnv = envSetting('GOOGLE_MAPS_TERMS_ACCEPTED');
+  const perUserEnv = envSetting('GOOGLE_PLACES_PER_USER_PER_MINUTE');
+  const householdEnv = envSetting('GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY');
+  const radiusEnv = envSetting('GOOGLE_PLACES_SEARCH_RADIUS_METERS');
+  const apiKey = String(configuredValue(database, CONFIG_KEYS.apiKey, apiKeyEnv, '') || '').trim();
+  const integrationEnabled = enabled(configuredValue(database, CONFIG_KEYS.integrationEnabled, enabledEnv, 'false'));
+  const termsAccepted = enabled(configuredValue(database, CONFIG_KEYS.termsAccepted, termsEnv, 'false'));
   return {
     apiKey,
     integrationEnabled,
     termsAccepted,
     configured: Boolean(apiKey) && integrationEnabled && termsAccepted,
-    perUserPerMinute: positiveInteger(process.env.GOOGLE_PLACES_PER_USER_PER_MINUTE, 10, { max: 120 }),
-    householdPerDay: positiveInteger(process.env.GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY, 100),
-    radiusMeters: positiveInteger(process.env.GOOGLE_PLACES_SEARCH_RADIUS_METERS, 50000, { max: 50000 }),
+    perUserPerMinute: positiveInteger(configuredValue(database, CONFIG_KEYS.perUserPerMinute, perUserEnv), 10, { max: 120 }),
+    householdPerDay: positiveInteger(configuredValue(database, CONFIG_KEYS.householdPerDay, householdEnv), 100),
+    radiusMeters: positiveInteger(configuredValue(database, CONFIG_KEYS.radiusMeters, radiusEnv), 50000, { max: 50000 }),
     timeoutMs: positiveInteger(process.env.GOOGLE_PLACES_TIMEOUT_MS, 8000, { min: 1000, max: 30000 }),
+    managedByEnvironment: {
+      api_key: apiKeyEnv.managed,
+      integration_enabled: enabledEnv.managed,
+      terms_accepted: termsEnv.managed,
+      per_user_per_minute: perUserEnv.managed,
+      household_per_day: householdEnv.managed,
+      radius_meters: radiusEnv.managed,
+    },
   };
 }
 
+export function googlePlacesAdminConfig(database) {
+  const config = googlePlacesConfig(database);
+  return {
+    provider: PROVIDER,
+    configured: config.configured,
+    api_key_configured: Boolean(config.apiKey),
+    stored_api_key_configured: Boolean(String(storedValue(database, CONFIG_KEYS.apiKey) || '').trim()),
+    api_key_source: config.managedByEnvironment.api_key ? 'environment' : (config.apiKey ? 'settings' : 'none'),
+    integration_enabled: config.integrationEnabled,
+    terms_accepted: config.termsAccepted,
+    per_user_per_minute: config.perUserPerMinute,
+    household_per_day: config.householdPerDay,
+    radius_meters: config.radiusMeters,
+    managed_by_environment: config.managedByEnvironment,
+  };
+}
+
+function requiredInteger(value, field, { min = 1, max = 100000 } = {}) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw new PlaceProviderError(`${field} must be a whole number from ${min} to ${max}.`, {
+      status: 400,
+      code: 'invalid_place_provider_config',
+    });
+  }
+  return parsed;
+}
+
+export function saveGooglePlacesAdminConfig(database, input = {}) {
+  if (!database || !input || typeof input !== 'object' || Array.isArray(input)) {
+    throw new PlaceProviderError('Google Places settings are invalid.', {
+      status: 400,
+      code: 'invalid_place_provider_config',
+    });
+  }
+  const apiKey = String(input.api_key || '').trim();
+  if (apiKey.length > 500) {
+    throw new PlaceProviderError('The Google Maps API key is too long.', {
+      status: 400,
+      code: 'invalid_place_provider_config',
+    });
+  }
+  const values = {
+    integrationEnabled: input.integration_enabled === true ? 'true' : 'false',
+    termsAccepted: input.terms_accepted === true ? 'true' : 'false',
+    perUserPerMinute: requiredInteger(input.per_user_per_minute, 'Per-user request limit', { max: 120 }),
+    householdPerDay: requiredInteger(input.household_per_day, 'Household daily request limit'),
+    radiusMeters: requiredInteger(input.radius_meters, 'Search radius', { max: 50000 }),
+  };
+  database.transaction(() => {
+    if (input.clear_api_key === true) deleteStoredValue(database, CONFIG_KEYS.apiKey);
+    else if (apiKey) storeValue(database, CONFIG_KEYS.apiKey, apiKey);
+    storeValue(database, CONFIG_KEYS.integrationEnabled, values.integrationEnabled);
+    storeValue(database, CONFIG_KEYS.termsAccepted, values.termsAccepted);
+    storeValue(database, CONFIG_KEYS.perUserPerMinute, values.perUserPerMinute);
+    storeValue(database, CONFIG_KEYS.householdPerDay, values.householdPerDay);
+    storeValue(database, CONFIG_KEYS.radiusMeters, values.radiusMeters);
+  })();
+  return googlePlacesAdminConfig(database);
+}
+
 export function googlePlacesStatus(database = null, userId = null, now = new Date()) {
-  const config = googlePlacesConfig();
+  const config = googlePlacesConfig(database);
   const householdUsed = database ? Number(database.prepare(`SELECT COALESCE(SUM(request_count), 0) AS n FROM place_provider_usage WHERE usage_date = ? AND provider = 'google'`).get(dateKey(now)).n) : null;
   const userUsed = database && userId ? Number(database.prepare(`SELECT COALESCE(SUM(request_count), 0) AS n FROM place_provider_usage WHERE usage_date = ? AND provider = 'google' AND user_id = ?`).get(dateKey(now), userId).n) : null;
   return {
@@ -159,7 +274,7 @@ export async function searchGooglePlaces(database, {
   fetchImpl = globalThis.fetch,
   now = new Date(),
 } = {}) {
-  const config = googlePlacesConfig();
+  const config = googlePlacesConfig(database);
   if (!config.configured) {
     throw new PlaceProviderError('Google Places is not configured for this Yuvomi instance.', {
       status: 503,
@@ -269,7 +384,7 @@ export async function refreshGooglePlaceId(placeId, {
   fetchImpl = globalThis.fetch,
   now = new Date(),
 } = {}) {
-  const config = googlePlacesConfig();
+  const config = googlePlacesConfig(database);
   if (!config.configured) throw new PlaceProviderError('Google Places is not configured.', { status: 503, code: 'place_provider_not_configured' });
   if (Date.now() < circuitOpenUntil) {
     throw new PlaceProviderError('Google Places is temporarily paused after repeated provider errors. Try again shortly.', { status: 503, code: 'place_provider_circuit_open' });

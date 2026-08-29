@@ -101,6 +101,78 @@ test('Google Places degrades cleanly when it is not configured', async () => {
   assert.equal(unavailable.body.reason, 'place_provider_not_configured');
 });
 
+test('administrators can configure Google Places in-app without exposing the API key', async () => {
+  const initial = await call('GET', '/planning/admin/place-search-config');
+  assert.equal(initial.status, 200);
+  assert.equal(initial.body.data.configured, false);
+  assert.equal('api_key' in initial.body.data, false);
+
+  const saved = await call('PUT', '/planning/admin/place-search-config', {
+    api_key: 'saved-test-key',
+    integration_enabled: true,
+    terms_accepted: true,
+    per_user_per_minute: 7,
+    household_per_day: 75,
+    radius_meters: 25000,
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.data.configured, true);
+  assert.equal(saved.body.data.api_key_configured, true);
+  assert.equal(saved.body.data.api_key_source, 'settings');
+  assert.equal(saved.body.data.per_user_per_minute, 7);
+  assert.equal('api_key' in saved.body.data, false);
+  assert.doesNotMatch(JSON.stringify(saved.body), /saved-test-key/);
+
+  const retained = await call('PUT', '/planning/admin/place-search-config', {
+    api_key: '',
+    integration_enabled: true,
+    terms_accepted: true,
+    per_user_per_minute: 8,
+    household_per_day: 80,
+    radius_meters: 30000,
+  });
+  assert.equal(retained.body.data.configured, true, 'a blank key field should retain the saved secret');
+  assert.equal(retained.body.data.per_user_per_minute, 8);
+  assert.equal((await call('GET', '/planning/place-search/status')).body.data.configured, true);
+
+  process.env.GOOGLE_MAPS_ENABLED = 'false';
+  const overridden = await call('GET', '/planning/admin/place-search-config');
+  assert.equal(overridden.body.data.integration_enabled, false);
+  assert.equal(overridden.body.data.managed_by_environment.integration_enabled, true);
+  delete process.env.GOOGLE_MAPS_ENABLED;
+
+  process.env.GOOGLE_MAPS_ENABLED = '';
+  const blankEnvironment = await call('GET', '/planning/admin/place-search-config');
+  assert.equal(blankEnvironment.body.data.integration_enabled, true,
+    'an empty Compose variable should not prevent in-app configuration');
+  assert.equal(blankEnvironment.body.data.managed_by_environment.integration_enabled, false);
+  delete process.env.GOOGLE_MAPS_ENABLED;
+
+  const invalid = await call('PUT', '/planning/admin/place-search-config', {
+    api_key: 'must-not-partially-save',
+    integration_enabled: false,
+    terms_accepted: false,
+    per_user_per_minute: 0,
+    household_per_day: 100,
+    radius_meters: 50000,
+  });
+  assert.equal(invalid.status, 400);
+  const afterInvalid = await call('GET', '/planning/admin/place-search-config');
+  assert.equal(afterInvalid.body.data.configured, true,
+    'invalid input should not partially overwrite otherwise valid settings');
+
+  const cleared = await call('PUT', '/planning/admin/place-search-config', {
+    clear_api_key: true,
+    integration_enabled: true,
+    terms_accepted: true,
+    per_user_per_minute: 10,
+    household_per_day: 100,
+    radius_meters: 50000,
+  });
+  assert.equal(cleared.body.data.api_key_configured, false);
+  assert.equal(cleared.body.data.configured, false);
+});
+
 test('Google Text Search uses a fixed minimal field mask, explicit origin, and ten-result cap', async () => {
   process.env.GOOGLE_MAPS_API_KEY = 'test-only-key';
   process.env.GOOGLE_MAPS_ENABLED = 'true';

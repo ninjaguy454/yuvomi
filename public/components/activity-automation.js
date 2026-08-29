@@ -663,7 +663,7 @@ async function renderPlacesManager(body, manager) {
   const searchStatus = searchResponse.data || { configured: false };
   replaceHtml(body, `${managerHeader('Places address book', 'automation-add-place', 'Add address manually')}
     <p class="form-hint automation-manager__hint">Save Home, Work, schools, shops, restaurants, hotels, and other reusable locations here. Rename them freely; Tasks, Calendar events, templates, and schedules keep their links by ID.</p>
-    <div class="detail-inline-actions" style="margin-bottom:var(--space-3)"><button type="button" class="btn btn--secondary btn--sm" id="automation-find-place" ${searchStatus.configured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Find with Google</button><span class="form-hint">${searchStatus.configured ? 'Search deliberately by name or category; no coordinates are required.' : 'Google search is not configured. Manual address entry still works.'}</span></div>
+    <div class="detail-inline-actions" style="margin-bottom:var(--space-3)"><button type="button" class="btn btn--secondary btn--sm" id="automation-find-place" ${searchStatus.configured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Find with Google</button><button type="button" class="btn btn--ghost btn--sm" id="automation-configure-google"><i data-lucide="settings-2" class="icon-sm"></i>Configure Google search</button><span class="form-hint">${searchStatus.configured ? 'Search deliberately by name or category; no coordinates are required.' : 'Google search is not configured yet. Add an API key here, or continue entering Places manually.'}</span></div>
     <div class="automation-list">${places.map((place) => {
       const usage = Object.values(place.usage || {}).reduce((sum, count) => sum + Number(count || 0), 0);
       return `<div class="list-row automation-list-row">
@@ -673,6 +673,7 @@ async function renderPlacesManager(body, manager) {
     }).join('') || '<p class="form-hint">No Places yet. Start with Home, then add rooms or recurring destinations.</p>'}</div>`);
   body.querySelector('#automation-add-place')?.addEventListener('click', () => openPlaceForm(null, places, manager));
   body.querySelector('#automation-find-place')?.addEventListener('click', () => openPlaceSearchForm(places, manager));
+  body.querySelector('#automation-configure-google')?.addEventListener('click', () => openGooglePlacesConfig(manager));
   body.querySelectorAll('[data-edit-place]').forEach((button) => button.addEventListener('click', () => openPlaceForm(places.find((row) => Number(row.id) === Number(button.dataset.editPlace)), places, manager)));
   body.querySelectorAll('[data-delete-place]').forEach((button) => button.addEventListener('click', async () => {
     const place = places.find((row) => Number(row.id) === Number(button.dataset.deletePlace));
@@ -680,6 +681,57 @@ async function renderPlacesManager(body, manager) {
     try { await api.delete(`/planning/admin/places/${place.id}`); toast('Place deleted.'); await refreshAutomationManager(manager, 'places'); }
     catch (error) { toast(error.message, 'danger'); }
   }));
+}
+
+async function openGooglePlacesConfig(manager) {
+  let config;
+  try { config = (await api.get('/planning/admin/place-search-config')).data; }
+  catch (error) { toast(error.message, 'danger'); return; }
+  const managed = config.managed_by_environment || {};
+  const lockedHint = 'Managed by this Docker container and cannot be changed here.';
+  const lock = (field) => managed[field] ? ` disabled aria-describedby="google-${field}-managed"` : '';
+  const sourceLabel = config.api_key_source === 'environment'
+    ? 'An API key is supplied by the Docker environment.'
+    : config.api_key_configured ? 'A saved API key is configured. Leave this blank to keep it.' : 'No API key is saved yet.';
+  const content = `<form id="automation-google-places-config">
+    <p class="form-hint">Google search is optional. The API key stays on the Yuvomi server and is never returned to the browser after it is saved.</p>
+    ${inputRow('Google Maps Platform API key', `<input class="input" type="password" name="api_key" maxlength="500" autocomplete="off" placeholder="${config.api_key_configured ? 'Saved - leave blank to keep' : 'Paste API key'}"${lock('api_key')}>`, sourceLabel)}
+    ${managed.api_key ? `<p class="form-hint" id="google-api_key-managed">${lockedHint}</p>` : ''}
+    <label class="automation-check-row"><input type="checkbox" name="integration_enabled" ${config.integration_enabled ? 'checked' : ''}${lock('integration_enabled')}> Enable Google Places search</label>
+    ${managed.integration_enabled ? `<p class="form-hint" id="google-integration_enabled-managed">${lockedHint}</p>` : ''}
+    <label class="automation-check-row"><input type="checkbox" name="terms_accepted" ${config.terms_accepted ? 'checked' : ''}${lock('terms_accepted')}> I have reviewed and accept the Google Maps Platform terms for this household's use</label>
+    ${managed.terms_accepted ? `<p class="form-hint" id="google-terms_accepted-managed">${lockedHint}</p>` : ''}
+    <p class="form-hint"><a href="https://developers.google.com/maps/terms" target="_blank" rel="noopener noreferrer">Review Google Maps Platform terms</a>. Enable the Places API (New) and billing in the Google Cloud project for this key.</p>
+    <div class="automation-workflow-condition">
+      ${inputRow('Requests per person / minute', `<input class="input" type="number" name="per_user_per_minute" min="1" max="120" required value="${h(config.per_user_per_minute)}"${lock('per_user_per_minute')}>`, managed.per_user_per_minute ? lockedHint : 'Prevents repeated clicks or UI loops from running up requests.')}
+      ${inputRow('Household requests / day', `<input class="input" type="number" name="household_per_day" min="1" max="100000" required value="${h(config.household_per_day)}"${lock('household_per_day')}>`, managed.household_per_day ? lockedHint : 'A hard daily safeguard for all household members combined.')}
+    </div>
+    ${inputRow('Search radius in meters', `<input class="input" type="number" name="radius_meters" min="1" max="50000" required value="${h(config.radius_meters)}"${lock('radius_meters')}>`, managed.radius_meters ? lockedHint : 'Used only when the selected origin has coordinates; maximum 50,000 meters.')}
+    ${config.stored_api_key_configured && !managed.api_key ? '<label class="automation-check-row"><input type="checkbox" name="clear_api_key"> Remove the saved API key</label>' : ''}
+    ${footer('Save Google settings')}
+  </form>`;
+  openModal({ title: 'Configure Google search', content, size: 'lg', onSave(panel) {
+    panel.querySelector('#automation-google-places-config')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget; const data = new FormData(form);
+      const payload = {
+        integration_enabled: managed.integration_enabled ? config.integration_enabled : data.has('integration_enabled'),
+        terms_accepted: managed.terms_accepted ? config.terms_accepted : data.has('terms_accepted'),
+        per_user_per_minute: managed.per_user_per_minute ? config.per_user_per_minute : Number(data.get('per_user_per_minute')),
+        household_per_day: managed.household_per_day ? config.household_per_day : Number(data.get('household_per_day')),
+        radius_meters: managed.radius_meters ? config.radius_meters : Number(data.get('radius_meters')),
+        clear_api_key: !managed.api_key && data.has('clear_api_key'),
+      };
+      const apiKey = String(data.get('api_key') || '').trim();
+      if (!managed.api_key && apiKey) payload.api_key = apiKey;
+      const submit = panel.querySelector('button[type="submit"]'); submit.disabled = true;
+      try {
+        const saved = (await api.put('/planning/admin/place-search-config', payload)).data;
+        toast(saved.configured ? 'Google Places search is ready.' : 'Google settings saved. Complete the remaining setup to enable search.');
+        await closeModal({ force: true }); await refreshAutomationManager(manager, 'places');
+      } catch (error) { toast(error.message, 'danger'); submit.disabled = false; }
+    });
+  } });
 }
 
 function googleAttributionHtml(result) {

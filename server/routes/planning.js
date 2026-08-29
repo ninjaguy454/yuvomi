@@ -4,9 +4,11 @@ import { requireAdmin } from '../auth.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import { evaluatePresence, placeWithInheritedAddress } from '../services/presence.js';
 import {
+  googlePlacesAdminConfig,
   googlePlacesStatus,
   PlaceProviderError,
   refreshGooglePlaceId,
+  saveGooglePlacesAdminConfig,
   searchGooglePlaces,
 } from '../services/google-places.js';
 import { createLogger } from '../logger.js';
@@ -232,6 +234,25 @@ router.get('/places', (req, res) => {
 
 router.get('/place-search/status', (req, res) => {
   res.json({ data: googlePlacesStatus(db.get(), currentUserId(req)) });
+});
+
+router.get('/admin/place-search-config', requireAdmin, (_req, res) => {
+  try { res.json({ data: googlePlacesAdminConfig(db.get()) }); }
+  catch (error) {
+    log.error('GET /admin/place-search-config', error);
+    res.status(500).json({ error: 'Could not load Google Places settings.', code: 500 });
+  }
+});
+
+router.put('/admin/place-search-config', requireAdmin, (req, res) => {
+  try { res.json({ data: saveGooglePlacesAdminConfig(db.get(), req.body) }); }
+  catch (error) {
+    if (error instanceof PlaceProviderError) {
+      return res.status(error.status).json({ error: error.message, code: error.status, reason: error.code });
+    }
+    log.error('PUT /admin/place-search-config', error);
+    res.status(500).json({ error: 'Could not save Google Places settings.', code: 500 });
+  }
 });
 
 router.post('/place-search', async (req, res) => {

@@ -319,6 +319,12 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'the reusable Places manager should present itself as the household address book');
   assert.match(component, /Find with Google/,
     'the address book should expose provider search when it is configured');
+  assert.match(component, /Configure Google search/,
+    'administrators should be able to configure Google search without rebuilding Docker');
+  assert.match(component, /\/planning\/admin\/place-search-config/,
+    'the Google configuration form should use the protected server-side settings API');
+  assert.match(styles, /\.settings-module-kitchen__child\s*>\s*\.module-glyph\s*\{[\s\S]*?width:\s*var\(--icon-md\);[\s\S]*?height:\s*var\(--icon-md\);/,
+    'nested Kitchen icons should use the standard icon scale instead of intrinsic SVG dimensions');
   assert.match(tasks, /onActivitySelected/,
     'selecting an Activity Template from Quick Add should open the Task flow');
   assert.ok(tasks.indexOf('task-template-picker') < tasks.indexOf('id="task-title"'),

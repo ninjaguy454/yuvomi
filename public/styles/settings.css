@@ -2851,6 +2851,15 @@
   min-width: 0;
 }
 
+/* Nested Kitchen glyphs are not inside the standard module-icon frame. Give
+   them the shared list-row size explicitly so an SVG cannot use its intrinsic
+   dimensions and overwhelm the expanded Settings card. */
+.settings-module-kitchen__child > .module-glyph {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex: 0 0 auto;
+}
+
 /* Der Gruppen-Knopf der Kueche fuellt die letzte Rasterspalte nicht, `auto`
    kollabierte dort auf 0 - gemessen stand er 42px rechts der Augenspalte aller
    anderen Zeilen. Er wird deshalb in dieselbe Spur gezwungen. */

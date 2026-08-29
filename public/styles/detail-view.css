@@ -116,6 +116,57 @@
   gap: var(--space-1);
 }
 
+.detail-checklist .detail-subtask {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.detail-subtask__toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.detail-subtask__toggle:hover {
+  background: var(--color-surface-2);
+}
+
+.detail-subtask__toggle:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
+}
+
+.detail-subtask__toggle--done {
+  color: var(--color-text-tertiary);
+  text-decoration: line-through;
+}
+
+.detail-subtask__toggle--done i {
+  color: var(--color-success);
+}
+
+.detail-subtask__actions {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.detail-subtask__add {
+  align-self: flex-start;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
 .detail-subtask {
   display: flex;
   align-items: center;

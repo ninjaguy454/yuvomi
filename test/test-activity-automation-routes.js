@@ -541,3 +541,89 @@ test('reusable variables get readable unique keys and can be linked into workflo
   assert.equal(linked.variable_key, 'planning_day');
   assert.equal(db.prepare('SELECT name FROM workflow_templates WHERE id = ?').get(workflow.body.data.id).name, 'Plan {{planning_day}}');
 });
+
+test('Activity Template checklists become editable Task-owned copies', async () => {
+  const activity = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Pack School Bag',
+    title_template: 'Pack school bag for {subject}',
+    description: 'Prepare tomorrow\'s bag.',
+    category: 'misc',
+    assignment_strategy: 'fixed',
+    subject_required: true,
+    fixed_user_id: admin,
+    skill_ids: [],
+    checklist: [
+      { title_template: 'Put {subject}\'s lunch in the bag' },
+      { title_template: 'Add supplies for {activity}' },
+    ],
+  });
+  assert.equal(activity.status, 201, JSON.stringify(activity.body));
+  assert.deepEqual(
+    activity.body.data.checklist.map((item) => item.title_template),
+    ['Put {subject}\'s lunch in the bag', 'Add supplies for {activity}'],
+  );
+
+  const firstTask = await call('POST', '/tasks', {
+    title: 'Pack school bag for Grace',
+    category: 'misc',
+    activity_template_id: activity.body.data.id,
+    activity_subject_user_id: grace,
+  });
+  assert.equal(firstTask.status, 201, JSON.stringify(firstTask.body));
+  const firstTaskDetail = await call('GET', `/tasks/${firstTask.body.data.id}`);
+  assert.equal(firstTaskDetail.status, 200, JSON.stringify(firstTaskDetail.body));
+  assert.deepEqual(
+    firstTaskDetail.body.data.subtasks.map((item) => item.title),
+    ['Put Grace\'s lunch in the bag', 'Add supplies for Pack School Bag'],
+  );
+
+  const firstChecklistIds = firstTaskDetail.body.data.subtasks.map((item) => item.id);
+  const updated = await call('PUT', `/automation/admin/activity-templates/${activity.body.data.id}`, {
+    ...activity.body.data,
+    checklist: [{ title_template: 'Use the new packing list for {subject}' }],
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.deepEqual(
+    db.prepare('SELECT id, title FROM tasks WHERE parent_task_id = ? ORDER BY id').all(firstTask.body.data.id),
+    [
+      { id: firstChecklistIds[0], title: 'Put Grace\'s lunch in the bag' },
+      { id: firstChecklistIds[1], title: 'Add supplies for Pack School Bag' },
+    ],
+    'editing the Activity Template must not rewrite an existing Task checklist',
+  );
+
+  const workflow = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'School morning {{day}}',
+    category: 'misc',
+    subject_required: true,
+    quick_add_enabled: true,
+    input_schema: [{ id: 'day', label: 'Day', type: 'text' }],
+    steps: [{ step_key: 'pack', activity_template_id: activity.body.data.id, depends_on: [] }],
+  });
+  assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+  const generated = await call('POST', `/automation/quick-add/${workflow.body.data.id}/create`, {
+    subject_user_id: grace,
+    inputs: { day: 'Monday' },
+  });
+  assert.equal(generated.status, 201, JSON.stringify(generated.body));
+  const primary = generated.body.data.tasks.find((item) => item.role === 'primary');
+  assert.ok(primary);
+  const generatedChecklist = db.prepare('SELECT id, title FROM tasks WHERE parent_task_id = ? ORDER BY id')
+    .all(primary.task_id);
+  assert.deepEqual(generatedChecklist.map((item) => item.title), ['Use the new packing list for Grace']);
+
+  // Workflow activities are already nested under a workflow container. They
+  // may still receive checklist items, but those items cannot be nested again.
+  const added = await call('POST', '/tasks', {
+    title: 'Water bottle',
+    category: 'misc',
+    parent_task_id: primary.task_id,
+  });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  const tooDeep = await call('POST', '/tasks', {
+    title: 'Bottle lid',
+    category: 'misc',
+    parent_task_id: added.body.data.id,
+  });
+  assert.equal(tooDeep.status, 400, JSON.stringify(tooDeep.body));
+});

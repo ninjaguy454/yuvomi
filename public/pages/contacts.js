@@ -167,6 +167,10 @@ export async function render(container, { user }) {
           </button>
         </div>
       </div>
+      <nav class="group-toggle address-book-tabs" aria-label="Address Book sections">
+        <a class="group-toggle__btn group-toggle__btn--active" aria-current="page" href="/contacts" data-route="/contacts">People</a>
+        <a class="group-toggle__btn" href="/places" data-route="/places">Places</a>
+      </nav>
       <div class="contacts-filters" id="contacts-filters" role="group" aria-label="${t('contacts.filterAll')}"></div>
       <div id="contacts-status" class="sr-only" role="status" aria-live="polite"></div>
       <div id="contacts-list" class="contacts-list page-scrollport" aria-busy="true">${renderSkeletonList({ rows: 6, lines: 2 })}</div>

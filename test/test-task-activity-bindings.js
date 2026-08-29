@@ -98,6 +98,10 @@ const laundryActivity = addActivity({
   subjectRequired: 0,
   skillIds: [laundrySkill],
 });
+db.prepare(`
+  INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order)
+  VALUES (?, 'Move laundry to the dryer', 0)
+`).run(laundryActivity);
 
 const app = express();
 app.use(express.json());
@@ -193,6 +197,10 @@ test('recurring Activity Template task re-resolves eligible round robin each occ
   const first = task(created.body.data.id);
   assert.ok([grace, mom].includes(first.assigned_to));
   assert.equal(first.assignment_mode, 'fixed');
+  assert.deepEqual(
+    db.prepare('SELECT title FROM tasks WHERE parent_task_id = ? ORDER BY id').all(first.id),
+    [{ title: 'Move laundry to the dryer' }],
+  );
 
   assert.equal((await call('PATCH', `/${first.id}/status`, { status: 'done' })).status, 200);
   const second = followupOf(first.id);
@@ -201,6 +209,11 @@ test('recurring Activity Template task re-resolves eligible round robin each occ
   assert.notEqual(second.assigned_to, first.assigned_to, 'activity-level RR advances');
   assert.equal(bindingOf(second.id).activity_template_id, laundryActivity);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM task_rotation_members WHERE task_id = ?').get(second.id).n, 0);
+  assert.deepEqual(
+    db.prepare('SELECT title FROM tasks WHERE parent_task_id = ? ORDER BY id').all(second.id),
+    [{ title: 'Move laundry to the dryer' }],
+    'recurrence copies the Task-owned checklist once instead of rematerializing a duplicate',
+  );
 
   // Eligibility is evaluated again for the next occurrence, not frozen as a
   // roster when the series was first created.

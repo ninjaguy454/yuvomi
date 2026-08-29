@@ -531,7 +531,7 @@ function renderTaskCard(task, opts = {}) {
                   data-status="${s.status}" aria-label="${t('tasks.subtaskMarkDone', { title: esc(s.title) })}">
             ${s.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
           </button>
-          <span class="subtask-item__title">${esc(s.title)}</span>
+          <button type="button" class="subtask-item__title" data-action="open-task" data-id="${s.id}">${esc(s.title)}</button>
           ${s.assigned_name ? `<span class="subtask-item__assignee">${esc(s.assigned_name)}</span>` : ''}
           ${canEditTaskDefinition(s, task) ? `
           <div class="subtask-item__actions">
@@ -562,10 +562,9 @@ function renderTaskCard(task, opts = {}) {
           <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
         </button>
 
-        <div class="task-card__body">
-          <button type="button" class="task-card__title u-card-title u-compact" data-action="open-task" data-id="${task.id}">
-            ${esc(task.title)}
-          </button>
+        <div class="task-card__body" data-action="open-task" data-id="${task.id}"
+             role="button" tabindex="0" aria-label="${esc(task.title)}">
+          <span class="task-card__title u-card-title u-compact">${esc(task.title)}</span>
           <div class="task-card__meta">
             ${archived ? `<span class="due-date task-card__archived"><i data-lucide="archive" class="icon-sm" aria-hidden="true"></i>${t('tasks.statusArchived')}</span>` : ''}
             ${renderPriorityBadge(task.priority)}
@@ -600,10 +599,6 @@ function renderTaskCard(task, opts = {}) {
           <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
         </button>` : ''}
         ${canEdit ? `
-        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action" data-action="edit-task" data-id="${task.id}"
-                aria-label="${t('tasks.editButton')}">
-          <i data-lucide="pencil" class="icon-md" aria-hidden="true"></i>
-        </button>
         <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action"
                 data-action="${archived ? 'unarchive-task' : 'archive-task'}" data-id="${task.id}"
                 aria-label="${archived ? t('tasks.unarchiveButton') : t('tasks.archiveButton')}"
@@ -1844,6 +1839,116 @@ function subtaskListNode(task, container) {
  * abfotografierter Zettel, und ein Dateiname beantwortet die Frage nicht, wegen
  * der man das Foto angehängt hat. Alles andere bleibt ein Chip mit Link.
  */
+function checklistNode(task, container) {
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-subtasks detail-checklist';
+
+  const paint = (button, status, title) => {
+    button.className = status === 'done'
+      ? 'detail-subtask__toggle detail-subtask__toggle--done'
+      : 'detail-subtask__toggle';
+    button.dataset.status = status;
+    button.setAttribute('aria-pressed', String(status === 'done'));
+    button.setAttribute('aria-label', t('tasks.subtaskMarkDone', { title }));
+    const icon = document.createElement('i');
+    icon.dataset.lucide = status === 'done' ? 'check-circle-2' : 'circle';
+    icon.className = 'icon-sm';
+    icon.setAttribute('aria-hidden', 'true');
+    const label = document.createElement('span');
+    label.textContent = title;
+    button.replaceChildren(icon, label);
+    if (window.lucide) window.lucide.createIcons({ el: button });
+  };
+
+  const renderRow = (subtask) => {
+    const row = document.createElement('div');
+    row.className = 'detail-subtask';
+    row.dataset.subtaskId = String(subtask.id);
+    const toggle = document.createElement('button');
+    toggle.type = 'button';
+    paint(toggle, subtask.status || 'open', subtask.title);
+    toggle.addEventListener('click', async () => {
+      const previous = toggle.dataset.status;
+      toggle.disabled = true;
+      paint(toggle, previous === 'done' ? 'open' : 'done', subtask.title);
+      try {
+        await toggleSubtaskStatus(subtask.id, previous);
+        subtask.status = previous === 'done' ? 'open' : 'done';
+        if (container) await loadTasks(container);
+      } catch (err) {
+        paint(toggle, previous, subtask.title);
+        window.yuvomi.showToast(err.message, 'danger');
+      } finally { toggle.disabled = false; }
+    });
+    row.appendChild(toggle);
+
+    if (canEditTaskDefinition(subtask, task)) {
+      const actions = document.createElement('div');
+      actions.className = 'detail-subtask__actions';
+      const rename = document.createElement('button');
+      rename.type = 'button';
+      rename.className = 'btn btn--ghost btn--icon btn--icon-sm';
+      rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
+      rename.insertAdjacentHTML('beforeend', '<i data-lucide="pencil" class="icon-sm" aria-hidden="true"></i>');
+      rename.addEventListener('click', async () => {
+        const nextTitle = await promptModal(t('tasks.subtaskRenamePrompt'), subtask.title);
+        if (!nextTitle || nextTitle.trim() === subtask.title) return;
+        try {
+          await api.put(`/tasks/${subtask.id}`, { title: nextTitle.trim() });
+          subtask.title = nextTitle.trim();
+          paint(toggle, subtask.status || 'open', subtask.title);
+          if (container) await loadTasks(container);
+        } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
+      });
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn btn--ghost btn--icon btn--icon-sm';
+      remove.setAttribute('aria-label', t('tasks.subtaskDelete', { title: subtask.title }));
+      remove.insertAdjacentHTML('beforeend', '<i data-lucide="trash-2" class="icon-sm" aria-hidden="true"></i>');
+      remove.addEventListener('click', async () => {
+        const ok = await confirmModal(t('tasks.subtaskDeleteConfirm', { title: subtask.title }), {
+          confirmLabel: t('common.delete'), danger: true, detail: t('tasks.subtaskDeleteDetail'),
+        });
+        if (!ok) return;
+        try {
+          await api.delete(`/tasks/${subtask.id}`);
+          task.subtasks = (task.subtasks ?? []).filter((item) => Number(item.id) !== Number(subtask.id));
+          row.remove();
+          if (container) await loadTasks(container);
+        } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
+      });
+      actions.append(rename, remove);
+      row.appendChild(actions);
+    }
+    wrap.appendChild(row);
+  };
+
+  (task.subtasks ?? []).forEach(renderRow);
+  if (canEditTaskDefinition(task)) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn btn--ghost btn--sm detail-subtask__add';
+    add.insertAdjacentHTML('beforeend', `<i data-lucide="list-plus" class="icon-sm" aria-hidden="true"></i>${t('tasks.subtaskAdd')}`);
+    add.addEventListener('click', async () => {
+      const title = await promptModal(t('tasks.subtaskPrompt'));
+      if (!title) return;
+      add.disabled = true;
+      try {
+        const response = await api.post('/tasks', { title, parent_task_id: task.id });
+        const created = { status: 'open', ...(response.data ?? response) };
+        task.subtasks = [...(task.subtasks ?? []), created];
+        renderRow(created);
+        wrap.appendChild(add);
+        if (container) await loadTasks(container);
+      } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
+      finally { add.disabled = false; }
+    });
+    wrap.appendChild(add);
+  }
+  if (window.lucide) window.lucide.createIcons({ el: wrap });
+  return wrap;
+}
+
 function documentListNode(docs) {
   const list = Array.isArray(docs) ? docs : [];
   if (!list.length) return null;
@@ -2280,7 +2385,7 @@ function renderTaskDetail(task, reminders = [], container = null) {
     assignedRow(task.assigned_users, t('tasks.assignedLabel')),
     { icon: 'award', label: t('tasks.pointsLabel'), value: task.points ? String(task.points) : '' },
     { icon: 'tag', label: t('tasks.tagsLabel'), node: tagChipsNode(task.tags) },
-    { icon: 'list-checks', label: t('tasks.subtasksLabel'), node: subtaskListNode(task, container) },
+    { icon: 'list-checks', label: t('tasks.subtasksLabel'), node: checklistNode(task, container) },
     { icon: 'paperclip', label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
     { icon: 'bell', label: t('reminders.sectionTitle'), value: taskReminderSummary(reminders) },
     { icon: 'map-pin', label: 'Location', node: taskLocationNode(task, container), multiline: true },
@@ -4219,10 +4324,6 @@ function wireAutomationBtn(container) {
   container.querySelector('#btn-manage-automation')?.addEventListener('click', () => {
     window.yuvomi?.navigate('/settings/modules/automation');
   });
-  container.querySelectorAll('[data-manage-places]').forEach((button) => button.addEventListener('click', async () => {
-    await closeModal({ force: true });
-    window.yuvomi?.navigate('/settings/modules/automation?tab=places');
-  }));
 }
 
 function taskLocationNode(task, container) {
@@ -4269,7 +4370,6 @@ function renderTaskLocationFields(task = null) {
   const setupMessage = 'Google place search is off. An administrator must configure GOOGLE_MAPS_API_KEY, enable the integration, and accept the Google Maps terms. You can still save ordinary addresses.';
   return `<fieldset class="form-group task-location" id="task-location-fieldset">
     <legend class="label">Location</legend>
-    ${state.isAdmin ? '<button class="btn btn--ghost btn--sm" type="button" data-manage-places style="margin-bottom:var(--space-2)"><i data-lucide="map-pin" class="icon-sm"></i>Manage saved Places</button>' : ''}
     <select class="input" id="task-location-kind" name="location_kind">
       <option value="none" ${kind === 'none' ? 'selected' : ''}>No location</option>
       <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Yuvomi Place</option>
@@ -4278,7 +4378,7 @@ function renderTaskLocationFields(task = null) {
     </select>
     <div data-location-pane="saved_place" style="margin-top:var(--space-3)">
       <select class="input" id="task-location-place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
-      ${state.isAdmin ? '<p class="task-field-hint">Don\'t see it? Open <button class="link-button" type="button" data-manage-places>saved Places</button> to add an address.</p>' : ''}
+      <p class="task-field-hint">Reusable locations are maintained in Address Book → Places.</p>
     </div>
     <div data-location-pane="manual" style="margin-top:var(--space-3)">
       <input class="input" id="task-location-label" maxlength="120" placeholder="Location name" value="${esc(kind === 'manual' ? location?.label || '' : '')}">
@@ -4320,10 +4420,6 @@ function readTaskLocation(form) {
 }
 
 function wireTaskLocationForm(panel) {
-  panel.querySelectorAll('[data-manage-places]').forEach((button) => button.addEventListener('click', async () => {
-    await closeModal({ force: true });
-    window.yuvomi?.navigate('/settings/modules/automation?tab=places');
-  }));
   const kind = panel.querySelector('#task-location-kind');
   const refresh = () => panel.querySelectorAll('[data-location-pane]').forEach((pane) => { pane.hidden = pane.dataset.locationPane !== kind?.value; });
   kind?.addEventListener('change', refresh); refresh();
@@ -4658,6 +4754,14 @@ function wireTaskList(container) {
       await handleDeleteSubtask(id, target.dataset.title, container);
     }
   });
+
+  listEl.addEventListener('keydown', (e) => {
+    if (!['Enter', ' '].includes(e.key)) return;
+    const target = e.target.closest('[data-action="open-task"]');
+    if (!target || target !== e.target) return;
+    e.preventDefault();
+    target.click();
+  });
 }
 
 // --------------------------------------------------------
@@ -4763,9 +4867,6 @@ export async function render(container, { user }) {
           ${state.isAdmin ? `<button class="btn btn--icon btn--ghost" id="btn-manage-automation"
                   aria-label="Manage household automation" title="Manage household automation">
             <i data-lucide="workflow" class="icon-lg" aria-hidden="true"></i>
-          </button><button class="btn btn--icon btn--ghost" data-manage-places
-                  aria-label="Manage saved Places" title="Manage saved Places">
-            <i data-lucide="map-pin" class="icon-lg" aria-hidden="true"></i>
           </button>` : ''}
           <button class="btn btn--icon btn--ghost" id="btn-assignment-requests"
                   aria-label="Assignment requests" title="Assignment requests">

@@ -3323,8 +3323,7 @@ function navItems({ catalog = false } = {}) {
     { path: '/inventory', label: t('nav.inventory'), module: 'inventory',   section: NAV_SECTION.household },
     { path: '/rewards',   label: t('nav.rewards'),   module: 'rewards',     section: NAV_SECTION.household },
     // Menschen
-    { path: '/contacts',  label: t('nav.contacts'),  module: 'contacts',    section: NAV_SECTION.people },
-    { path: '/places',    label: t('nav.places'),    module: 'contacts', icon: MODULE_ICON.places, orderId: 'contacts', navId: 'places', section: NAV_SECTION.people },
+    { path: '/contacts',  label: t('nav.contacts'), module: 'contacts', navId: 'contacts', section: NAV_SECTION.people },
     { path: '/birthdays', label: t('nav.birthdays'), module: 'birthdays',   section: NAV_SECTION.people },
     { path: '/health',    label: t('nav.health'),    module: 'health',      section: NAV_SECTION.people },
     // Finanzen
@@ -3903,7 +3902,8 @@ function updateNav(path) {
     }
     el.removeAttribute('aria-current');
     const isActiveKitchenDestination = el.dataset.navId === 'kitchen' && isKitchenRoute(path);
-    if (el.dataset.route === path || isActiveKitchenDestination) {
+    const isActiveAddressBook = el.dataset.navId === 'contacts' && ['/contacts', '/places'].includes(path);
+    if (el.dataset.route === path || isActiveKitchenDestination || isActiveAddressBook) {
       el.setAttribute('aria-current', 'page');
     }
   });
@@ -3941,7 +3941,9 @@ function updateNav(path) {
   const moreBtn = document.querySelector('#more-btn');
   if (moreBtn) {
     const activeSecondary = secondaryMobileItems().find((item) => (
-      item.navId === 'kitchen' ? isKitchenRoute(path) : item.path === path
+      item.navId === 'kitchen' ? isKitchenRoute(path)
+        : item.navId === 'contacts' ? ['/contacts', '/places'].includes(path)
+          : item.path === path
     ));
     setMoreButtonState(moreBtn, activeSecondary);
   }

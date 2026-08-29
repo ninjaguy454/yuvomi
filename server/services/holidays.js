@@ -3,10 +3,9 @@
  * Zweck: Fetch von der OpenHolidays API, Caching in holiday_cache-Tabelle,
  *        periodischer Sync. Kein API-Key erforderlich.
  * Quelle: https://openholidaysapi.org (open source, kostenlos)
- * Abhängigkeiten: node-fetch, server/db.js
+ * Abhängigkeiten: Node.js 22 fetch, server/db.js
  */
 
-import nodeFetch from 'node-fetch';
 import { createLogger } from '../logger.js';
 import * as db from '../db.js';
 
@@ -17,10 +16,10 @@ const FETCH_TIMEOUT_MS  = 15_000;
 const SYNC_YEARS_BACK   = 1;
 const SYNC_YEARS_AHEAD  = 2;
 
-// Injizierbare fetch-Implementierung (Default: node-fetch). Nur Tests
+// Injizierbare fetch-Implementierung (Default: Node.js 22 fetch). Nur Tests
 // überschreiben dies via __setFetchImpl, um die OpenHolidays-API zu mocken.
-let fetchImpl = nodeFetch;
-function __setFetchImpl(fn) { fetchImpl = fn ?? nodeFetch; }
+let fetchImpl = globalThis.fetch;
+function __setFetchImpl(fn) { fetchImpl = fn ?? globalThis.fetch; }
 
 // --------------------------------------------------------
 // API-Abfragen

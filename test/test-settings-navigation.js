@@ -282,8 +282,8 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'utf8',
   );
   assert.match(page, /renderAutomationManager/);
-  assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables', 'places', 'availability', 'trips'\]\)/,
-    'the Settings leaf must preserve every Household Automation tab instead of falling back to Skills');
+  assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables'\]\)/,
+    'the Settings leaf should contain automation authoring rather than unrelated planning destinations');
   assert.match(component, /export async function renderAutomationManager/);
   assert.doesNotMatch(component, /automation-manage-from-quick/);
   assert.match(component, /data-quick-activity/,
@@ -313,14 +313,14 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'normal modal auto-scrolling should reposition, not dismiss, variable suggestions');
   assert.match(tasks, /id="btn-manage-automation"/,
     'administrators need a direct Tasks entry point to Household Automation');
-  assert.match(tasks, /data-manage-places/,
-    'Tasks should link directly to the reusable Places address book');
+  assert.doesNotMatch(tasks, /data-manage-places/,
+    'Tasks should not duplicate the reusable Places address book navigation');
   assert.match(tasks, /Near an address, city, or ZIP/,
     'place discovery should accept a human-readable search origin');
   assert.doesNotMatch(tasks, /Enter origin coordinates/,
     'ordinary place discovery must not ask the user for exact coordinates');
-  assert.match(component, /Places address book/,
-    'the reusable Places manager should present itself as the household address book');
+  assert.match(component, /export async function renderPlacesManager/,
+    'the reusable Places manager should remain available to the Address Book surface');
   assert.match(component, /Find with Google/,
     'the address book should expose provider search when it is configured');
   assert.match(component, /Configure Google search/,
@@ -339,7 +339,7 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'Quick Add must not dereference a submit button that was moved into the modal footer');
   assert.match(styles, /@media \(max-width: 640px\)[\s\S]*\.automation-question-row/);
   assert.match(styles, /@media \(max-width: 640px\)[\s\S]*?\.automation-tabs\s*\{[\s\S]*?grid-template-columns:\s*repeat\(2, minmax\(0, 1fr\)\)[\s\S]*?overflow-x:\s*visible/,
-    'all six Household Automation tabs must remain visible at phone widths');
+    'all Household Automation authoring tabs must remain visible at phone widths');
 });
 
 test('Places has a first-class People address book and Google setup is visible under Sync', async () => {
@@ -356,8 +356,10 @@ test('Places has a first-class People address book and Google setup is visible u
   const settingsPage = await readFile(new URL('../public/settings/pages/sync-google-places.js', import.meta.url), 'utf8');
   assert.match(router, /path: '\/places'[\s\S]*?page: '\/pages\/places\.js'[\s\S]*?module: 'contacts'/,
     'Places should share the Contacts/People permission family');
-  assert.match(router, /path: '\/places'[\s\S]*?orderId: 'contacts'[\s\S]*?navId: 'places'/,
-    'Places should sit beside Contacts while remaining its own mobile destination');
+  assert.match(router, /navId === 'contacts'[\s\S]*?\['\/contacts', '\/places'\]\.includes\(path\)/,
+    'People and Places should share one Address Book navigation destination');
+  assert.doesNotMatch(router, /\{ path: '\/places',\s+label:/,
+    'Places should be a child surface rather than a duplicate top-level navigation item');
   assert.match(placesPage, /renderPlacesManager/,
     'administrators should get the existing reusable Places manager from the People address book');
   assert.match(placesPage, /\/planning\/places\?active=false/,

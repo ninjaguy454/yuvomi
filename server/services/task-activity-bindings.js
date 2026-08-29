@@ -11,6 +11,7 @@
 import { resolveActivityAssignment } from './activity-eligibility.js';
 import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
 import { todayKey } from '../utils/timezone.js';
+import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
 
 export class TaskActivityBindingError extends Error {}
 
@@ -20,7 +21,9 @@ function asPositiveInt(value) {
 }
 
 function activityTemplate(d, id) {
-  return d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id) ?? null;
+  const activity = d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id) ?? null;
+  if (activity) activity.checklist = loadActivityChecklist(d, activity.id);
+  return activity;
 }
 
 function taskRow(d, id) {
@@ -237,6 +240,10 @@ export function applyTaskActivityBinding(d, taskId, {
     throw new TaskActivityBindingError(err.message);
   }
 
+  // Read before the upsert: after it, every first-time binding would look
+  // existing and its authoring-time checklist would never be materialized.
+  const existingBinding = getTaskActivityBinding(d, task.id);
+
   d.prepare(`
     INSERT INTO task_activity_bindings (
       task_id, activity_template_id, subject_user_id, updated_at
@@ -274,7 +281,6 @@ export function applyTaskActivityBinding(d, taskId, {
   } else {
     d.prepare('DELETE FROM task_planning_context WHERE task_id = ?').run(task.id);
   }
-
   deleteSupportTasks(d, task.id);
   let supportTaskId = null;
   if (resolution.supervisor) {
@@ -307,6 +313,17 @@ export function applyTaskActivityBinding(d, taskId, {
   }
 
   recordTaskAssignment(d, task.id, preview.activity, resolution);
+
+  // Copy authoring-time checklist definitions exactly once. From this point on
+  // the subtasks belong to the Task and are never rewritten by template edits.
+  if (!existingBinding && ordinaryActivitySubtasks(d, task.id).length === 0) {
+    materializeActivityChecklist(d, {
+      activity: preview.activity,
+      parentTaskId: task.id,
+      subject: resolution.subject,
+      createdBy: task.created_by,
+    });
+  }
 
   return {
     binding: getTaskActivityBinding(d, task.id),

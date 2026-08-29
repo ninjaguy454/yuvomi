@@ -35,7 +35,7 @@ import { mentionedUserIds } from '../../public/utils/mentions.js';
 import { resolvePermissions } from '../permissions.js';
 import { pushService } from '../services/push.js';
 import { todayKey } from '../utils/timezone.js';
-import { requireAdmin } from '../auth.js';
+import { requireAdmin } from '../middleware/require-admin.js';
 import {
   attachTaskLocations,
   copyTaskLocation,
@@ -1260,8 +1260,19 @@ router.post('/', (req, res) => {
       const parent = db.get().prepare('SELECT id, parent_task_id, locked, created_by FROM tasks WHERE id = ?')
         .get(parent_task_id);
       if (!parent) return res.status(404).json({ error: 'Parent task not found.', code: 404 });
-      if (parent.parent_task_id)
-        return res.status(400).json({ error: 'Maximal 2 Verschachtelungsebenen erlaubt.', code: 400 });
+      // A generated workflow activity is already a child of the workflow's
+      // grouping task. Its Activity Template checklist is the one intentional
+      // exception to the normal one-level checklist limit.
+      if (parent.parent_task_id) {
+        const isWorkflowActivity = db.get().prepare(`
+          SELECT 1
+            FROM workflow_instance_tasks
+           WHERE task_id = ? AND role = 'primary'
+        `).get(parent.id);
+        if (!isWorkflowActivity) {
+          return res.status(400).json({ error: 'Maximal 2 Verschachtelungsebenen erlaubt.', code: 400 });
+        }
+      }
       // Einen Punkt an eine gesperrte Checkliste zu haengen aendert, was die
       // Aufgabe verlangt - der offensichtlichste Weg um die Sperre herum (#830).
       if (!mayEditTaskDefinition(parent, req)) return res.status(403).json(LOCKED_ERROR);

@@ -7507,6 +7507,23 @@ const FORK_MIGRATIONS = [
       DROP TABLE place_provider_usage_legacy;
     `,
   },
+  {
+    version: 10012,
+    description: 'Activity Template checklist definitions copied into generated Tasks',
+    up: `
+      CREATE TABLE activity_template_checklist_items (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        activity_template_id INTEGER NOT NULL REFERENCES activity_templates(id) ON DELETE CASCADE,
+        title_template       TEXT    NOT NULL,
+        sort_order           INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0),
+        created_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(activity_template_id, sort_order)
+      );
+      CREATE INDEX idx_activity_template_checklist_template
+        ON activity_template_checklist_items(activity_template_id, sort_order);
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

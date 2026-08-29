@@ -37,6 +37,7 @@ import { findPageFab } from '/utils/fab.js';
 import { nowFields, todayKey, zonedDateKey, zonedTimeKey } from '/utils/timezone.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 import { emptyStateHTML, emptyHintHTML, mountLoadError } from '/utils/empty-state.js';
+import { renderAvailabilityManager, renderTripsManager } from '/components/activity-automation.js';
 
 // --------------------------------------------------------
 // Konstanten
@@ -1239,7 +1240,49 @@ async function loadUsers() {
 // Entry Point
 // --------------------------------------------------------
 
+function calendarPlanningTabs(active = 'calendar') {
+  return `<nav class="group-toggle calendar-planning-tabs" aria-label="Calendar planning sections">
+    <a class="group-toggle__btn ${active === 'calendar' ? 'group-toggle__btn--active' : ''}" ${active === 'calendar' ? 'aria-current="page"' : ''} href="/calendar" data-calendar-planning-link>Calendar</a>
+    <a class="group-toggle__btn ${active === 'availability' ? 'group-toggle__btn--active' : ''}" ${active === 'availability' ? 'aria-current="page"' : ''} href="/calendar?section=availability" data-calendar-planning-link>Availability</a>
+    <a class="group-toggle__btn ${active === 'trips' ? 'group-toggle__btn--active' : ''}" ${active === 'trips' ? 'aria-current="page"' : ''} href="/calendar?section=trips" data-calendar-planning-link>Trips</a>
+  </nav>`;
+}
+
+function wireCalendarPlanningTabs(container) {
+  container.querySelectorAll('[data-calendar-planning-link]').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    window.yuvomi?.navigate(link.getAttribute('href'));
+  }));
+}
+
+async function renderCalendarPlanningSection(container, section, user) {
+  container.replaceChildren();
+  container.insertAdjacentHTML('beforeend', `<div class="calendar-planning-page page-measure--narrow">
+    <div class="page-toolbar page-toolbar--wrap page-toolbar--narrow"><h1 class="page-toolbar__title">Calendar</h1></div>
+    ${calendarPlanningTabs(section)}
+    <section class="settings-card settings-card--automation" data-calendar-planning-host></section>
+  </div>`);
+  const host = container.querySelector('[data-calendar-planning-host]');
+  wireCalendarPlanningTabs(container);
+  if (user?.role !== 'admin') {
+    host.replaceChildren();
+    host.insertAdjacentHTML('beforeend', '<p class="form-hint">Household administrators maintain availability and trip plans.</p>');
+    return;
+  }
+  const manager = { navigate: async () => {
+    if (section === 'availability') await renderAvailabilityManager(host, manager);
+    else await renderTripsManager(host, manager);
+  } };
+  await manager.navigate();
+  if (window.lucide) window.lucide.createIcons({ el: container });
+}
+
 export async function render(container, { user }) {
+  const requestedSection = new URLSearchParams(window.location.search).get('section');
+  if (['availability', 'trips'].includes(requestedSection)) {
+    await renderCalendarPlanningSection(container, requestedSection, user);
+    return;
+  }
   _container = container;
   // Die Uhr des Haushalts: state.today markiert die Heute-Zelle, die Jetzt-Linie
   // und den Vorschlag fuer einen neuen Termin - alle drei muessen denselben Tag
@@ -1252,12 +1295,14 @@ export async function render(container, { user }) {
   container.insertAdjacentHTML('beforeend', `
     <div class="calendar-page" id="calendar-page">
       <div class="page-toolbar page-toolbar--wrap cal-toolbar" id="cal-toolbar"></div>
+      ${calendarPlanningTabs('calendar')}
       <div id="cal-body" style="flex:1;display:flex;flex-direction:column;overflow:hidden;"></div>
       <button class="page-fab" id="fab-new-event" aria-label="${t('calendar.newEvent')}" data-dock-label="${t('newLabel.calendar')}">
         <i data-lucide="plus" class="icon-xl" aria-hidden="true"></i>
       </button>
     </div>
   `);
+  wireCalendarPlanningTabs(container);
 
   // Lade-Skeleton sofort einblenden, damit der erste Frame nicht leer bleibt,
   // während Termine/Präferenzen laden (Sichtbarkeit des Systemstatus). Wird von
@@ -3106,7 +3151,7 @@ async function openEventDetail(ev, anchor = null) {
         await close({ force: true });
         window.yuvomi.navigate(meal
           ? `/meals?week=${String(ev.start_datetime).slice(0, 10)}&open=${ev.plan_id}`
-          : `/settings/modules/automation?tab=trips&open=${ev.plan_id}`);
+          : `/calendar?section=trips&open=${ev.plan_id}`);
       },
     }];
     openDetailView({

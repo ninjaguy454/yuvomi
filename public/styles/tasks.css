@@ -1,3 +1,5 @@
+@import url('/styles/settings.css');
+
 /**
  * Modul: Aufgaben (Tasks)
  * Zweck: Styles für Listenansicht, Task-Cards, Subtasks, Filter-Panel, Modal
@@ -250,29 +252,8 @@
 }
 
 
-/* Gruppierungs-Toggle */
-.group-toggle {
-  display: flex;
-  background-color: var(--color-surface-3);
-  border-radius: var(--radius-sm);
-  padding: var(--space-0h);
-  gap: var(--space-0h);
-}
-
-.group-toggle__btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border-radius: calc(var(--radius-sm) - 2px);
-  font-size: var(--text-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-secondary);
-  transition: background-color var(--transition-fast), color var(--transition-fast);
-  min-height: var(--target-lg);
-  cursor: pointer;
-}
+/* Gruppierungs-Toggle: die geteilte Form lebt in layout.css; nur die
+ * Task-spezifischen kompakten Zustände bleiben in diesem Modul. */
 
 /* Die Gruppierungswahl folgt dem Chip neben ihr in dieselbe Höhenklasse.
  *
@@ -301,26 +282,6 @@
   }
 }
 
-/* Das Icon steht neben dem Label, nicht statt seiner - solange Platz ist.
- * Es ist der Teil, der bleibt, wenn das Label faellt (siehe die 640er-Regel). */
-.group-toggle__icon {
-  width: var(--icon-md);
-  height: var(--icon-md);
-  flex-shrink: 0;
-}
-
-.group-toggle__btn:hover:not(.group-toggle__btn--active) {
-  color: var(--color-text-primary);
-}
-
-/* Aktiv = erhabene Surface-Pille im Well, Modulton nur in der Tinte - dieselbe
- * Segment-Sprache wie .cal-toolbar__view-btn--active und .segmented__item
- * (Rezept: tokens.css, Abschnitt 6c). */
-.group-toggle__btn--active {
-  background-color: var(--seg-active-bg);
-  box-shadow: var(--seg-active-shadow);
-  color: color-mix(in srgb, var(--module-accent, var(--color-accent)) var(--tint-ink), var(--color-text-primary));
-}
 
 /* DER KOPF-UMSCHALTER TRAEGT SEIN LABEL ERST IN DER SIDEBAR-WELT.
  *
@@ -772,6 +733,13 @@
 .task-card__body {
   flex: 1;
   min-width: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.task-card__body:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .task-card__title {
@@ -1141,6 +1109,21 @@
   font-size: var(--text-sm);
   color: var(--color-text-primary);
   flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+
+.subtask-item__title:hover {
+  text-decoration: underline;
+}
+
+.subtask-item__title:focus-visible {
+  outline: var(--focus-ring-width) solid var(--color-accent);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .subtask-item--done .subtask-item__title {

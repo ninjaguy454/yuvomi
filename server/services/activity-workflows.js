@@ -16,6 +16,7 @@ import {
   renderActivityTitle,
 } from './activity-eligibility.js';
 import { recordTaskAssignment } from './assignment-responsibilities.js';
+import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
 
 function parseJson(raw, fallback) {
   if (raw == null || raw === '') return fallback;
@@ -47,6 +48,7 @@ export function getActivityTemplate(d, id) {
   const row = d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id);
   if (!row) return null;
   row.skills = loadSkillRequirements(d, row.id);
+  row.checklist = loadActivityChecklist(d, row.id);
   return row;
 }
 
@@ -56,7 +58,11 @@ export function listActivityTemplates(d, { activeOnly = false } = {}) {
     ${activeOnly ? 'WHERE active = 1' : ''}
     ORDER BY name COLLATE NOCASE, id
   `).all();
-  return rows.map((row) => ({ ...row, skills: loadSkillRequirements(d, row.id) }));
+  return rows.map((row) => ({
+    ...row,
+    skills: loadSkillRequirements(d, row.id),
+    checklist: loadActivityChecklist(d, row.id),
+  }));
 }
 
 export function getWorkflowTemplate(d, id) {
@@ -511,6 +517,18 @@ export function instantiateWorkflow(d, workflowId, {
         INSERT INTO task_activity_bindings (task_id, activity_template_id, subject_user_id)
         VALUES (?, ?, ?)
       `).run(primaryTaskId, activity.id, activitySubject?.id ?? null);
+      const checklistTaskIds = materializeActivityChecklist(d, {
+        activity,
+        parentTaskId: primaryTaskId,
+        subject: activitySubject,
+        variableLabels,
+        createdBy,
+      });
+      const requireChecklistItem = d.prepare(`
+        INSERT OR IGNORE INTO workflow_task_dependencies (task_id, depends_on_task_id)
+        VALUES (?, ?)
+      `);
+      checklistTaskIds.forEach((checklistTaskId) => requireChecklistItem.run(primaryTaskId, checklistTaskId));
       if (planning.place_id || planning.presence_policy !== 'ignore') {
         d.prepare(`
           INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
@@ -525,6 +543,7 @@ export function instantiateWorkflow(d, workflowId, {
       });
       generated.push({
         task_id: primaryTaskId,
+        checklist_task_ids: checklistTaskIds,
         role: 'primary',
         step_key: step.step_key,
         assigned_to: resolution.primary,

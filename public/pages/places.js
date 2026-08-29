@@ -28,7 +28,7 @@ async function renderReadOnlyAddressBook(host) {
     <div class="automation-list">${places.map((place) => {
       const destination = mapsUrl(place);
       return `<div class="list-row automation-list-row">
-        <div class="automation-list-row__copy"><strong>${esc(place.path_label || place.name)}</strong><br><small class="form-hint">${esc(place.type)}${place.city ? ` · ${esc(place.city)}` : ''}${place.active ? '' : ' · inactive'}</small></div>
+        <div class="automation-list-row__copy"><strong>${esc(place.path_label || place.name)}</strong><br><small class="form-hint">${esc(place.type)}${place.city ? ` · ${esc(place.city)}` : ''}${place.active ? '' : ' · inactive'}</small>${place.street_address ? `<br><small>${esc([place.street_address, place.city, place.region, place.postal_code, place.country].filter(Boolean).join(', '))}</small>` : ''}${place.description ? `<p class="form-hint">${esc(place.description)}</p>` : ''}</div>
         <div class="automation-list-row__actions">${destination ? `<a class="btn btn--ghost btn--sm" href="${esc(destination)}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>` : ''}</div>
       </div>`;
     }).join('') || '<p class="form-hint">No Places have been saved yet.</p>'}</div>`);
@@ -39,8 +39,12 @@ export async function render(container, { user } = {}) {
   container.insertAdjacentHTML('beforeend', `
     <div class="places-page page-measure--narrow">
       <div class="page-toolbar page-toolbar--wrap page-toolbar--narrow">
-        <h1 class="page-toolbar__title">${esc(t('nav.places'))}</h1>
+        <h1 class="page-toolbar__title">${esc(t('nav.contacts'))}</h1>
       </div>
+      <nav class="group-toggle address-book-tabs" aria-label="Address Book sections">
+        <a class="group-toggle__btn" href="/contacts" data-route="/contacts">People</a>
+        <a class="group-toggle__btn group-toggle__btn--active" aria-current="page" href="/places" data-route="/places">Places</a>
+      </nav>
       <section class="settings-card settings-card--automation" id="places-address-book"></section>
     </div>`);
 

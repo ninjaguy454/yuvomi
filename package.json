@@ -276,7 +276,7 @@
     "test:activity-automation": "node --experimental-sqlite --test test/test-activity-automation.js",
     "test:activity-automation-routes": "node --experimental-sqlite --test test/test-activity-automation-routes.js",
     "test:workflow-variable-identity": "node --experimental-sqlite --test test/test-workflow-variable-identity-migration.js",
-    "test:household-planning-migration": "node --experimental-sqlite --test test/test-household-planning-migration.js && node --experimental-sqlite --test test/test-phase3-planning.js && node --experimental-sqlite --test test/test-phase4-assignment-meals.js",
+    "test:household-planning-migration": "node --experimental-sqlite --test test/test-household-planning-migration.js && node --experimental-sqlite --test test/test-phase3-planning.js && node --experimental-sqlite --test test/test-phase4-assignment-meals.js && node --experimental-sqlite --test test/test-phase5-location-tasks.js",
     "test:task-activity-bindings": "node --experimental-sqlite --test test/test-task-activity-bindings.js",
     "test:fork-migration-remap": "node --experimental-sqlite --test test/test-fork-migration-remap.js",
     "test:recipe-url-import": "node --test test/test-recipe-url-import.js",

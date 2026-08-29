@@ -784,7 +784,26 @@ incremental runs. That run also merges appointments that earlier versions had st
 occurrences back into their series; an occurrence you had assigned to someone or given its own
 colour is kept as a separate entry instead.
 
-### Outlook Calendar Push — Microsoft Graph (Optional)
+### Google Places for Task Locations (Optional)
+
+Enable **Places API (New)** in a billing-enabled Google Maps Platform project and create an API key
+restricted to that API and to the server that runs Yuvomi. This integration is independent of
+Google Calendar OAuth. When it is not configured, saved and manual Yuvomi Places continue to work
+and the external search control reports that discovery is unavailable.
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `GOOGLE_PLACES_API_KEY` | Server-side key for Places API (New) Text Search | - | Yes for external discovery |
+| `GOOGLE_PLACES_PER_USER_PER_MINUTE` | Per-user deliberate-search safeguard | `10` | No |
+| `GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY` | Instance-wide daily search safeguard | `100` | No |
+| `GOOGLE_PLACES_SEARCH_RADIUS_METERS` | Search bias radius around the selected Yuvomi Place, up to 50 km | `50000` | No |
+| `GOOGLE_PLACES_TIMEOUT_MS` | Provider request timeout, 1–30 seconds | `8000` | No |
+
+Yuvomi uses Text Search only after the user presses Search, requests at most ten results with a
+fixed minimal field mask, never polls in the background, and keeps Google Place IDs separate from
+Yuvomi's own immutable Place IDs. Google Maps navigation links do not require the API key.
+
+### Outlook Calendar Push - Microsoft Graph (Optional)
 
 One-way push **Yuvomi → Outlook.com** for personal Microsoft accounts (outlook.com, hotmail.com, M365 Family). Outlook.com does not support CalDAV, so this provider uses the Microsoft Graph API. Yuvomi stays the source of truth: pushed events are created/updated/deleted in Outlook, and every sync run also checks the pushed events for remote drift (one cheap `changeKey` listing per calendar) — events edited in Outlook are reset to the Yuvomi state, events deleted in Outlook are re-created. Multiple family accounts can be connected.
 

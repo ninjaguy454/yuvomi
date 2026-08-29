@@ -76,8 +76,7 @@ function addTask(title) {
 }
 
 test('Phase 4 migration is additive and exposes durable responsibility tables', () => {
-  const version = database.prepare('SELECT MAX(version) AS version FROM schema_migrations').get().version;
-  assert.equal(version, 10008);
+  assert.ok(database.prepare('SELECT 1 FROM schema_migrations WHERE version = 10008').get());
   for (const table of ['assignment_rotation_state', 'task_assignment_context', 'task_responsibilities', 'planning_obligation_events', 'meal_selection_responses']) {
     assert.ok(database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table), table);
   }

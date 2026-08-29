@@ -3,6 +3,11 @@ import * as db from '../db.js';
 import { requireAdmin } from '../auth.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import { evaluatePresence, placeWithInheritedAddress } from '../services/presence.js';
+import {
+  googlePlacesStatus,
+  PlaceProviderError,
+  searchGooglePlaces,
+} from '../services/google-places.js';
 import { createLogger } from '../logger.js';
 
 const router = express.Router();
@@ -82,6 +87,7 @@ function placeUsage(database, id) {
     activity_templates: scalar('SELECT COUNT(*) AS n FROM activity_templates WHERE place_id = ?'),
     workflow_steps: scalar('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE place_id = ?'),
     task_contexts: scalar('SELECT COUNT(*) AS n FROM task_planning_context WHERE place_id = ?'),
+    task_locations: scalar('SELECT COUNT(*) AS n FROM task_locations WHERE place_id = ?'),
     meal_slots: scalar('SELECT COUNT(*) AS n FROM meal_schedule_slots WHERE place_id = ?'),
     calendar_events: scalar('SELECT COUNT(*) AS n FROM calendar_events WHERE place_id = ?'),
     meals: scalar('SELECT COUNT(*) AS n FROM meals WHERE place_id = ?'),
@@ -194,6 +200,38 @@ router.get('/places', (req, res) => {
   catch (error) { log.error('GET /places', error); res.status(500).json({ error: 'Could not load places.', code: 500 }); }
 });
 
+router.get('/place-search/status', (_req, res) => {
+  res.json({ data: googlePlacesStatus() });
+});
+
+router.post('/place-search', async (req, res) => {
+  try {
+    const database = db.get();
+    const originId = integer(req.body.origin_place_id, { required: true });
+    const origin = placeWithInheritedAddress(database, validPlace(database, originId, { includeInactive: false }));
+    if (!origin) return res.status(400).json({ error: 'Choose an active saved Place as the search origin.', code: 400 });
+    if (origin.latitude == null || origin.longitude == null) {
+      return res.status(400).json({
+        error: 'The selected search origin needs latitude and longitude in Yuvomi Places.',
+        code: 400,
+        reason: 'origin_coordinates_required',
+      });
+    }
+    const results = await searchGooglePlaces(database, {
+      userId: currentUserId(req),
+      query: req.body.query,
+      origin: { latitude: origin.latitude, longitude: origin.longitude },
+    });
+    res.json({ data: results, origin: { place_id: origin.id, label: origin.path_label } });
+  } catch (error) {
+    if (error instanceof PlaceProviderError) {
+      return res.status(error.status).json({ error: error.message, code: error.status, reason: error.code });
+    }
+    log.error('POST /place-search', error);
+    res.status(500).json({ error: 'Could not search Places.', code: 500 });
+  }
+});
+
 router.get('/admin/context', requireAdmin, (_req, res) => {
   try {
     const database = db.get();
@@ -221,11 +259,56 @@ router.post('/admin/places', requireAdmin, (req, res) => {
     const database = db.get();
     const input = normalizePlace(database, req.body);
     const result = database.prepare(`
-      INSERT INTO places (name, description, type, parent_place_id, street_address, city, region, postal_code, country, latitude, longitude, active, created_by)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(input.name, input.description, input.type, input.parentPlaceId, input.streetAddress, input.city, input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active, currentUserId(req));
+      INSERT INTO places (
+        name, description, type, parent_place_id, street_address, city, region, postal_code, country,
+        latitude, longitude, active, created_by, coordinate_source
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      input.name, input.description, input.type, input.parentPlaceId, input.streetAddress, input.city,
+      input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active,
+      currentUserId(req), input.latitude != null && input.longitude != null ? 'user' : null,
+    );
     res.status(201).json({ data: placeWithInheritedAddress(database, validPlace(database, result.lastInsertRowid)) });
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
+});
+
+router.post('/admin/places/from-google', requireAdmin, (req, res) => {
+  try {
+    const database = db.get();
+    const externalPlaceId = string(req.body.external_place_id, { required: true, max: 250 });
+    const existing = database.prepare(`
+      SELECT * FROM places WHERE external_provider = 'google' AND external_place_id = ?
+    `).get(externalPlaceId);
+    if (existing) {
+      return res.status(409).json({
+        error: 'That Google place is already saved in Yuvomi Places.',
+        code: 409,
+        data: placeWithInheritedAddress(database, existing),
+      });
+    }
+    // Name and address remain explicitly user-maintained Yuvomi fields. We do
+    // not silently turn the transient Google result payload into an address-book entry.
+    const input = normalizePlace(database, req.body);
+    const coordinateExpiry = input.latitude != null && input.longitude != null
+      ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      : null;
+    const result = database.prepare(`
+      INSERT INTO places (
+        name, description, type, parent_place_id, street_address, city, region, postal_code, country,
+        latitude, longitude, active, created_by, external_provider, external_place_id,
+        external_place_id_checked_at, coordinate_source, coordinates_expires_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'google', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?, ?)
+    `).run(
+      input.name, input.description, input.type, input.parentPlaceId, input.streetAddress, input.city,
+      input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active,
+      currentUserId(req), externalPlaceId,
+      input.latitude != null && input.longitude != null ? 'google' : null,
+      coordinateExpiry,
+    );
+    res.status(201).json({ data: placeWithInheritedAddress(database, validPlace(database, result.lastInsertRowid)) });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 400 });
+  }
 });
 
 router.put('/admin/places/:id', requireAdmin, (req, res) => {
@@ -234,9 +317,17 @@ router.put('/admin/places/:id', requireAdmin, (req, res) => {
     const existing = validPlace(database, integer(req.params.id, { required: true }));
     if (!existing) return res.status(404).json({ error: 'Place not found.', code: 404 });
     const input = normalizePlace(database, req.body, existing);
+    const coordinatesTouched = Object.hasOwn(req.body, 'latitude') || Object.hasOwn(req.body, 'longitude');
     database.prepare(`
-      UPDATE places SET name = ?, description = ?, type = ?, parent_place_id = ?, street_address = ?, city = ?, region = ?, postal_code = ?, country = ?, latitude = ?, longitude = ?, active = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
-    `).run(input.name, input.description, input.type, input.parentPlaceId, input.streetAddress, input.city, input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active, existing.id);
+      UPDATE places SET name = ?, description = ?, type = ?, parent_place_id = ?, street_address = ?, city = ?, region = ?, postal_code = ?, country = ?, latitude = ?, longitude = ?, active = ?,
+        coordinate_source = CASE WHEN ? THEN 'user' ELSE coordinate_source END,
+        coordinates_expires_at = CASE WHEN ? THEN NULL ELSE coordinates_expires_at END,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
+    `).run(
+      input.name, input.description, input.type, input.parentPlaceId, input.streetAddress, input.city,
+      input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active,
+      coordinatesTouched ? 1 : 0, coordinatesTouched ? 1 : 0, existing.id,
+    );
     res.json({ data: placeWithInheritedAddress(database, validPlace(database, existing.id)) });
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });

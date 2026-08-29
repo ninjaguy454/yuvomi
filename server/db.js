@@ -7352,6 +7352,54 @@ const FORK_MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 10009,
+    description: 'Location-aware tasks and Google Places provider references',
+    up: `
+      ALTER TABLE places ADD COLUMN external_provider TEXT
+        CHECK(external_provider IS NULL OR external_provider IN ('google'));
+      ALTER TABLE places ADD COLUMN external_place_id TEXT;
+      ALTER TABLE places ADD COLUMN external_place_id_checked_at TEXT;
+      ALTER TABLE places ADD COLUMN coordinate_source TEXT
+        CHECK(coordinate_source IS NULL OR coordinate_source IN ('user', 'google'));
+      ALTER TABLE places ADD COLUMN coordinates_expires_at TEXT;
+      CREATE UNIQUE INDEX idx_places_external_identity
+        ON places(external_provider, external_place_id)
+        WHERE external_provider IS NOT NULL AND external_place_id IS NOT NULL;
+
+      CREATE TABLE IF NOT EXISTS task_locations (
+        task_id          INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        kind             TEXT NOT NULL CHECK(kind IN ('saved_place', 'google_place', 'manual')),
+        place_id         INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        external_provider TEXT CHECK(external_provider IS NULL OR external_provider IN ('google')),
+        external_place_id TEXT,
+        user_label       TEXT,
+        manual_address   TEXT,
+        latitude         REAL CHECK(latitude IS NULL OR latitude BETWEEN -90 AND 90),
+        longitude        REAL CHECK(longitude IS NULL OR longitude BETWEEN -180 AND 180),
+        created_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(
+          (kind = 'saved_place' AND place_id IS NOT NULL AND external_place_id IS NULL)
+          OR (kind = 'google_place' AND place_id IS NULL AND external_provider = 'google' AND external_place_id IS NOT NULL AND user_label IS NOT NULL)
+          OR (kind = 'manual' AND place_id IS NULL AND external_place_id IS NULL AND user_label IS NOT NULL)
+        )
+      );
+      CREATE INDEX idx_task_locations_place ON task_locations(place_id);
+      CREATE INDEX idx_task_locations_external ON task_locations(external_provider, external_place_id);
+
+      CREATE TABLE IF NOT EXISTS place_provider_usage (
+        usage_date    TEXT NOT NULL,
+        provider      TEXT NOT NULL CHECK(provider IN ('google')),
+        operation     TEXT NOT NULL CHECK(operation IN ('text_search')),
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        request_count INTEGER NOT NULL DEFAULT 0 CHECK(request_count >= 0),
+        updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(usage_date, provider, operation, user_id)
+      );
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

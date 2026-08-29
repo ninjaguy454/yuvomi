@@ -36,6 +36,14 @@ import { resolvePermissions } from '../permissions.js';
 import { pushService } from '../services/push.js';
 import { todayKey } from '../utils/timezone.js';
 import {
+  attachTaskLocations,
+  copyTaskLocation,
+  normalizeTaskLocation,
+  setTaskLocation,
+  storedTaskLocation,
+  TaskLocationError,
+} from '../services/task-locations.js';
+import {
   allTags, applyTagChanges, loadTags, loadTagsFor, normalizeTags,
   removeTagEverywhere, renameTag, setTags, tagKey, tagsKey, taskIdsWithTag,
 } from '../utils/task-tags.js';
@@ -1092,6 +1100,7 @@ router.get('/', (req, res) => {
 
     const rows = db.get().prepare(sql).all(...params).map(task => ({ ...task, subtasks: JSON.parse(task.subtasks || '[]') })).map(addAssignedUsers);
     attachTaskActivityBindings(db.get(), rows);
+    attachTaskLocations(db.get(), rows);
     res.json({ data: attachTags(attachDocumentCounts(rows, me)) });
   } catch (err) {
     log.error('GET / error:', err);
@@ -1129,6 +1138,7 @@ router.get('/:id', (req, res) => {
     // Sichtbarkeitsprüfung.
     task.documents = loadTaskDocuments(task.id, me);
     attachTaskActivityBindings(db.get(), [task]);
+    attachTaskLocations(db.get(), [task]);
     attachTags([task]);
     res.json({ data: task });
   } catch (err) {
@@ -1179,6 +1189,13 @@ router.post('/', (req, res) => {
     }
     const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone());
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
+
+    const taskLocation = req.body.location === undefined
+      ? undefined
+      : normalizeTaskLocation(db.get(), req.body.location);
+    if (taskLocation !== undefined && parent_task_id) {
+      return res.status(400).json({ error: 'Locations can only be attached to top-level tasks.', code: 400 });
+    }
 
     const assignmentMode = activityBinding ? 'fixed' : (req.body.assignment_mode ?? 'fixed');
     const rotationUserIds = activityBinding ? [] : parseRotationUserIds(req.body.rotation_user_ids);
@@ -1268,6 +1285,9 @@ router.post('/', (req, res) => {
           'UPDATE tasks SET target_caldav_account_id = ?, target_caldav_list_url = ? WHERE id = ?'
         ).run(syncTarget.accountId, syncTarget.listUrl, result.lastInsertRowid);
       }
+      if (taskLocation !== undefined) {
+        setTaskLocation(db.get(), Number(result.lastInsertRowid), taskLocation, req.authUserId || req.session.userId);
+      }
       return result.lastInsertRowid;
     })();
 
@@ -1280,11 +1300,12 @@ router.post('/', (req, res) => {
 
     addAssignedUsers(task);
     attachTaskActivityBindings(db.get(), [task]);
+    attachTaskLocations(db.get(), [task]);
     attachTags([task]);
     res.status(201).json({ data: task });
     if (syncTarget) pushToCalDAV('Neue Aufgabe');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError) {
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('POST / error:', err);
@@ -1332,6 +1353,12 @@ router.put('/:id', (req, res) => {
     const visibility = req.body.visibility !== undefined
       ? normalizeVisibility(req.body.visibility, task.visibility)
       : task.visibility;
+    const taskLocation = req.body.location === undefined
+      ? undefined
+      : normalizeTaskLocation(db.get(), req.body.location);
+    if (taskLocation !== undefined && task.parent_task_id) {
+      return res.status(400).json({ error: 'Locations can only be attached to top-level tasks.', code: 400 });
+    }
 
     // `status: 'archived'` aus einem Bestandsclient legt ab, statt den Status zu
     // überschreiben (#688). Das Statusfeld selbst kennt den Wert nicht mehr.
@@ -1474,6 +1501,10 @@ router.put('/:id', (req, res) => {
           && tagsKey(normalizeTags(req.body.tags)) !== tagsKey(tagsBefore)) touchesDefinition = true;
       if (!sameIdOrder(rotationUserIds, rotationBefore)) touchesDefinition = true;
       if (bindingChanged) touchesDefinition = true;
+      if (taskLocation !== undefined
+          && JSON.stringify(taskLocation) !== JSON.stringify(storedTaskLocation(db.get(), task.id))) {
+        touchesDefinition = true;
+      }
 
       if (syncTarget !== undefined
           && (!sameFieldValue(syncTarget?.accountId ?? null, task.target_caldav_account_id)
@@ -1558,6 +1589,9 @@ router.put('/:id', (req, res) => {
         db.get().prepare("UPDATE task_responsibilities SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'fulfilled'").run(task.id);
         db.get().prepare("UPDATE task_assignment_context SET state = CASE WHEN strategy = 'open_claimable' AND (SELECT assigned_to FROM tasks WHERE id = ?) IS NULL THEN 'open' ELSE 'assigned' END, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(task.id, task.id);
       }
+      if (taskLocation !== undefined) {
+        setTaskLocation(db.get(), task.id, taskLocation, req.authUserId || req.session.userId);
+      }
 
       // Auch über das Bearbeiten-Formular lässt sich ein Abhaken zurücknehmen -
       // die Folgeinstanz muss dann genauso verschwinden wie beim Klick auf die
@@ -1595,13 +1629,14 @@ router.put('/:id', (req, res) => {
 
     addAssignedUsers(updated);
     attachTaskActivityBindings(db.get(), [updated]);
+    attachTaskLocations(db.get(), [updated]);
     updated.subtasks = loadSubtasks(updated.id, req.authUserId || req.session.userId);
 
     res.json({ data: updated });
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError) {
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('PUT /:id error:', err);
@@ -1862,6 +1897,7 @@ function spawnRecurrenceFollowupSingle(task) {
         dateKey: nextDate,
       });
     }
+    copyTaskLocation(db.get(), task.id, Number(newTask.lastInsertRowid), task.created_by);
   })();
 }
 

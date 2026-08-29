@@ -25,7 +25,7 @@ import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 // Renderer mit den Vorrats-Texten füllt.
 import { emptyStateEl as emptyStateComponentEl, mountLoadError } from '/utils/empty-state.js';
 import { scheduleUndoableDelete, vibrate, wireScrollFade } from '/utils/ux.js';
-import { todayKey } from '/utils/date.js';
+import { startOfLocalWeekKey, todayKey } from '/utils/date.js';
 import { DEFAULT_CATEGORY_NAME, categoryLabel } from '/utils/shopping-categories.js';
 import { locationLabel } from '/utils/pantry-locations.js';
 import { setBulkPill, clearBulkPill } from '/utils/bulk-pill.js';
@@ -239,6 +239,9 @@ export async function render(container) {
       })}
     </div>
     <div class="page-toolbar__actions">
+      <button class="btn btn--secondary" data-action="add-leftovers">
+        <i data-lucide="sandwich" class="icon-sm" aria-hidden="true"></i><span>${esc(t('pantry.addLeftovers'))}</span>
+      </button>
       <button class="btn btn--ghost btn--icon" data-action="manage-locations"
               aria-label="${esc(t('pantry.manageLocations'))}" title="${esc(t('pantry.manageLocations'))}">
         <i data-lucide="archive" class="icon-md" aria-hidden="true"></i>
@@ -291,6 +294,7 @@ export async function render(container) {
   });
 
   toolbar.querySelector('[data-action="manage-locations"]').addEventListener('click', openLocationManager);
+  toolbar.querySelector('[data-action="add-leftovers"]').addEventListener('click', openLeftoverModal);
   fab.addEventListener('click', () => openItemModal('create'));
 
   filters.addEventListener('click', (e) => {
@@ -1005,6 +1009,71 @@ async function sendToShopping(items, btn) {
 // Artikel-Formular
 // --------------------------------------------------------
 
+async function openLeftoverModal() {
+  let meals = [];
+  try {
+    const response = await api.get(`/meals?week=${startOfLocalWeekKey(todayKey(), 1)}`);
+    meals = Array.isArray(response.data) ? response.data : [];
+  } catch {
+    // A manual leftover does not require a linked Meal.
+  }
+  const mealOptions = meals.map((meal) => `<option value="${meal.id}">${esc(formatDate(meal.date))} · ${esc(meal.title)}</option>`).join('');
+  const locationOptions = state.locations.map((location) => `<option value="${location.id}">${esc(locationLabel(location.name))}</option>`).join('');
+  const unitOptions = PANTRY_UNITS.map((unit) => `<option value="${esc(unit)}">${esc(unitLabel(unit))}</option>`).join('');
+  const categoryOptions = state.categories.map((category) => `<option value="${esc(category.name)}">${esc(categoryLabel(category.name))}</option>`).join('');
+
+  openSharedModal({
+    title: t('pantry.addLeftovers'),
+    size: 'md',
+    content: `<form id="pantry-leftover-form">
+      <p class="form-hint">${esc(t('pantry.leftoversDescription'))}</p>
+      <label class="form-label">${esc(t('pantry.sourceMeal'))}<select class="form-input" name="meal_id"><option value="">${esc(t('pantry.noSourceMeal'))}</option>${mealOptions}</select></label>
+      <label class="form-label">${esc(t('pantry.leftoverNameLabel'))}<input class="form-input" name="name" required maxlength="200" placeholder="${esc(t('pantry.leftoverNamePlaceholder'))}"></label>
+      <div class="form-grid form-grid--2"><label class="form-label">${esc(t('pantry.quantityLabel'))}<input class="form-input" name="quantity" type="number" min="0.01" step="any" value="1" required></label><label class="form-label">${esc(t('pantry.unitLabel'))}<select class="form-input" name="unit">${unitOptions}</select></label></div>
+      <label class="form-label">${esc(t('pantry.locationLabel'))}<select class="form-input" name="location_id"><option value="">${esc(t('pantry.unlocated'))}</option>${locationOptions}</select></label>
+      <label class="form-label">${esc(t('pantry.categoryLabel'))}<select class="form-input" name="category">${categoryOptions}</select></label>
+      <label class="form-label">${esc(t('pantry.expiresLabel'))}<input class="form-input" name="expires_on" type="date"></label>
+      <label class="form-label">${esc(t('pantry.notesLabel'))}<textarea class="form-input" name="notes" rows="2"></textarea></label>
+      <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-modal-close>${esc(t('common.cancel'))}</button><button type="submit" class="btn btn--primary">${esc(t('pantry.saveLeftovers'))}</button></div>
+    </form>`,
+    onSave(panel) {
+      const form = panel.querySelector('#pantry-leftover-form');
+      panel.querySelector('[data-modal-close]')?.addEventListener('click', () => closeSharedModal());
+      form.querySelector('[name="meal_id"]')?.addEventListener('change', (event) => {
+        const meal = meals.find((entry) => Number(entry.id) === Number(event.currentTarget.value));
+        const name = form.querySelector('[name="name"]');
+        if (meal && !name.value.trim()) name.value = `${meal.title} ${t('pantry.leftoversSuffix')}`;
+      });
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const submit = form.querySelector('[type="submit"]');
+        const data = new FormData(form);
+        submit.disabled = true;
+        try {
+          await api.post('/pantry/leftovers', {
+            meal_id: Number(data.get('meal_id')) || null,
+            name: String(data.get('name') || '').trim(),
+            quantity: Number(data.get('quantity')),
+            unit: data.get('unit'),
+            location_id: Number(data.get('location_id')) || null,
+            category: data.get('category'),
+            expires_on: data.get('expires_on') || null,
+            notes: String(data.get('notes') || '').trim() || null,
+          });
+          await loadPantry();
+          renderFilters();
+          renderList();
+          closeSharedModal({ force: true });
+          window.yuvomi?.showToast(t('pantry.leftoversSavedToast'), 'success');
+        } catch (error) {
+          window.yuvomi?.showToast(error.data?.error || error.message || t('common.errorGeneric'), 'danger');
+          submit.disabled = false;
+        }
+      });
+    },
+  });
+}
+
 function openItemModal(mode, item = null) {
   const isEdit = mode === 'edit';
   const locations = state.locations;
@@ -1070,6 +1139,7 @@ function openItemModal(mode, item = null) {
       { open: isEdit && (item.min_quantity != null || !!item.notes) })}
       <div class="modal-panel__footer modal-panel__footer--plain">
         ${isEdit ? `<button type="button" class="btn btn--danger-ghost pantry-form__delete" id="pantry-delete">${esc(t('common.delete'))}</button>` : ''}
+        ${isEdit && pantryItemStatus(item, state.todayKey).expiry === 'expired' && Number(item.quantity) > 0 ? `<button type="button" class="btn btn--secondary" id="pantry-discard-expired">${esc(t('pantry.discardExpired'))}</button>` : ''}
         <button type="button" class="btn btn--secondary" data-action="close-modal">${esc(t('common.cancel'))}</button>
         <button type="button" class="btn btn--primary" id="pantry-save">${esc(isEdit ? t('common.save') : t('common.add'))}</button>
       </div>`,
@@ -1088,6 +1158,20 @@ function openItemModal(mode, item = null) {
       panel.querySelector('#pantry-delete')?.addEventListener('click', async () => {
         closeSharedModal({ force: true });
         await removeItem(item);
+      });
+      panel.querySelector('#pantry-discard-expired')?.addEventListener('click', async (event) => {
+        event.currentTarget.disabled = true;
+        try {
+          await api.post(`/pantry/${item.id}/discard-expired`, {});
+          await loadPantry();
+          closeSharedModal({ force: true });
+          renderFilters();
+          renderList();
+          window.yuvomi?.showToast(t('pantry.expiredDiscardedToast'), 'success');
+        } catch (error) {
+          event.currentTarget.disabled = false;
+          window.yuvomi?.showToast(error.data?.error || error.message || t('common.errorGeneric'), 'danger');
+        }
       });
 
       wireBlurValidation(panel);

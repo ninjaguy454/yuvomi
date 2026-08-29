@@ -1435,3 +1435,94 @@
 .meal-choice-card .modal-panel__footer {
   margin-top: 0;
 }
+
+/* Phase 6: one guided automation surface from schedule to execution. */
+.meal-automation-form,
+.meal-automation-form section,
+.meal-execution-detail,
+.meal-execution-summary {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.meal-automation-form section {
+  padding: var(--space-4);
+  border: 1px solid var(--glass-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg-card);
+}
+
+.meal-automation__master,
+.meal-automation__toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+
+.meal-automation__master span,
+.meal-automation__toggle span {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.meal-automation__master small,
+.meal-automation__toggle small,
+.meal-execution-task small {
+  color: var(--color-text-secondary);
+}
+
+.meal-automation__roles,
+.meal-automation__timing,
+.meal-execution-summary__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.meal-execution-summary__stats > div {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg-card);
+  text-align: center;
+}
+
+.meal-execution-summary__stats strong {
+  font-size: var(--text-3xl);
+}
+
+.meal-execution-summary__status,
+.meal-execution-task {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.meal-execution-detail__tasks {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.meal-execution-task {
+  width: 100%;
+  padding: var(--space-3);
+  border: 1px solid var(--glass-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg-card);
+  color: inherit;
+  text-align: left;
+}
+
+.meal-execution-task span {
+  display: grid;
+  gap: var(--space-1);
+}
+
+@media (max-width: 640px) {
+  .meal-automation__roles,
+  .meal-automation__timing,
+  .meal-execution-summary__stats {
+    grid-template-columns: 1fr;
+  }
+}

@@ -535,7 +535,7 @@ test('ein fehlgeschlagener Start bleibt nicht ewig in der Pull-Phase', async () 
 
   // Und spawnStart meldet den Exit ueberhaupt weiter. r.code stammt
   // ausschliesslich aus dem onExit-Callback - kommt er nicht an, bleibt er null.
-  const r = await spawnUndWarten('sh', ['-c', 'exit 3']);
+  const r = await spawnUndWarten(process.execPath, ['-e', 'process.exit(3)']);
   assert.equal(r.ok, true, 'der Spawn selbst gelingt');
   assert.equal(r.code, 3, 'der Exit-Code muss den onExit-Callback erreichen');
 });

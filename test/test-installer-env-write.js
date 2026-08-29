@@ -402,7 +402,11 @@ test('install.html erzeugt für bewahrte Schlüssel keinen neuen Wert', () => {
   assert.match(src, /await preflightDone/, 'die Schlüsselerzeugung wartet nicht auf den Preflight');
 });
 
-test('install.sh übernimmt einen bestehenden Schlüssel aus der .env', () => {
+test('install.sh übernimmt einen bestehenden Schlüssel aus der .env', (t) => {
+  if (process.platform === 'win32') {
+    t.skip('install.sh is exercised on Unix; Windows bash may be an unavailable WSL shim');
+    return;
+  }
   // Die Helper-Funktion isoliert ausführen: install.sh selbst startet am Ende
   // den interaktiven Wizard, lässt sich also nicht einfach sourcen.
   const src = readFileSync(new URL('../install.sh', import.meta.url), 'utf8');

@@ -12,6 +12,15 @@ import express from 'express';
 import * as db from '../db.js';
 import { str, oneOf, url, date, collectErrors, MAX_TITLE, MAX_SHORT, MAX_TEXT } from '../middleware/validate.js';
 import { aggregateMealIngredients } from '../services/shopping-import.js';
+import {
+  createOrRefreshGroceryRun,
+  finalizeGroceryRun,
+  listGroceryRuns,
+  loadGroceryRun,
+  publishGroceryRun,
+  syncPurchasesFromShopping,
+  updatePurchase,
+} from '../services/meal-grocery-runs.js';
 import { loadItemTagsFor } from '../utils/task-tags.js';
 import {
   flushOutbound, markTodoOutbound, queueTodoDeletions,
@@ -280,6 +289,98 @@ router.get('/suggestions', (req, res) => {
 });
 
 // --------------------------------------------------------
+// Phase 6: Meal Plan -> durable grocery run -> Shopping
+//
+// A grocery run is intentionally separate from shopping_items. Drafts may be
+// recalculated while the Meal Plan is still changing; finalized/published runs
+// are frozen so a later reconciliation can never rewrite a checked purchase.
+// --------------------------------------------------------
+router.get('/grocery-runs', (req, res) => {
+  try {
+    res.json({ data: listGroceryRuns(db.get(), { listId: req.query.list_id, limit: req.query.limit }) });
+  } catch (err) {
+    log.error('GET /grocery-runs error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
+  }
+});
+
+router.get('/grocery-runs/:runId', (req, res) => {
+  try {
+    const run = loadGroceryRun(db.get(), Number(req.params.runId));
+    if (!run) return res.status(404).json({ error: 'Grocery run not found.', code: 'GROCERY_RUN_NOT_FOUND' });
+    res.json({ data: run });
+  } catch (err) {
+    log.error('GET /grocery-runs/:runId error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+router.post('/:listId/grocery-runs', (req, res) => {
+  try {
+    const vFrom = date(req.body?.from, 'From date', true);
+    const vTo = date(req.body?.to, 'To date', true);
+    const errors = collectErrors([vFrom, vTo]);
+    if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
+    if (vFrom.value > vTo.value) {
+      return res.status(400).json({ error: 'From date must be before or equal to end date.', code: 400 });
+    }
+    const result = createOrRefreshGroceryRun(db.get(), {
+      listId: Number(req.params.listId),
+      from: vFrom.value,
+      to: vTo.value,
+      logicalKey: req.body?.logical_key,
+      userId: req.authUserId || req.session.userId,
+    });
+    res.status(result.reused ? 200 : 201).json({ data: result.run, meta: { reused: result.reused, refreshed: result.refreshed } });
+  } catch (err) {
+    log.error('POST /:listId/grocery-runs error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
+  }
+});
+
+router.post('/grocery-runs/:runId/finalize', (req, res) => {
+  try {
+    res.json({ data: finalizeGroceryRun(db.get(), Number(req.params.runId)) });
+  } catch (err) {
+    log.error('POST /grocery-runs/:runId/finalize error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
+  }
+});
+
+router.post('/grocery-runs/:runId/add-to-shopping', (req, res) => {
+  try {
+    const result = publishGroceryRun(db.get(), Number(req.params.runId));
+    res.json({ data: result.run, meta: { added_ids: result.added_ids } });
+  } catch (err) {
+    log.error('POST /grocery-runs/:runId/add-to-shopping error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
+  }
+});
+
+router.post('/grocery-runs/:runId/sync-purchases', (req, res) => {
+  try {
+    res.json({ data: syncPurchasesFromShopping(db.get(), Number(req.params.runId)) });
+  } catch (err) {
+    log.error('POST /grocery-runs/:runId/sync-purchases error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
+  }
+});
+
+router.patch('/grocery-runs/:runId/items/:itemId/purchase', (req, res) => {
+  try {
+    const result = updatePurchase(db.get(), Number(req.params.runId), Number(req.params.itemId), {
+      purchasedQuantity: req.body?.purchased_quantity,
+      remainingQuantity: req.body?.remaining_quantity,
+      purchaseStatus: req.body?.purchase_status,
+    });
+    res.json({ data: result });
+  } catch (err) {
+    log.error('PATCH /grocery-runs/:runId/items/:itemId/purchase error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
+  }
+});
+
+// --------------------------------------------------------
 // PATCH /api/v1/shopping/items/:itemId
 // Artikel aktualisieren (is_checked, name, quantity, category, notes, url).
 // Body: { is_checked?, name?, quantity?, category?, notes?, url? }
@@ -334,6 +435,16 @@ router.patch('/items/:itemId', (req, res) => {
     const updated = db.get()
       .prepare('SELECT * FROM shopping_items WHERE id = ?')
       .get(req.params.itemId);
+
+    // Phase 6 grocery outputs advance automatically as the household checks
+    // them off in the ordinary Shopping UI. The run keeps the historical
+    // purchase even if checked rows are later cleared from the list.
+    if (updated.is_checked) {
+      const output = db.get().prepare(`
+        SELECT grocery_run_id FROM meal_grocery_items WHERE shopping_item_id = ?
+      `).get(updated.id);
+      if (output) syncPurchasesFromShopping(db.get(), output.grocery_run_id);
+    }
 
     // Abhaken oder Umbenennen eines gespiegelten Artikels zieht auf dem
     // CalDAV-Server nach (#617).

@@ -14,6 +14,7 @@
  */
 
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
 import { str, oneOf, num, date, id as idParam, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT } from '../middleware/validate.js';
@@ -73,6 +74,28 @@ function loadItems() {
       pi.name COLLATE NOCASE ASC,
       pi.id ASC
   `).all();
+}
+
+function movementSnapshotForMeal(mealId) {
+  if (!mealId) return null;
+  return db.get().prepare(`
+    SELECT id FROM meal_execution_snapshots WHERE meal_id = ? ORDER BY id DESC LIMIT 1
+  `).get(mealId) || null;
+}
+
+function movementKey(prefix, supplied) {
+  const value = String(supplied || '').trim();
+  return value ? `${prefix}:${value.slice(0, 160)}` : `${prefix}:${randomUUID()}`;
+}
+
+function positiveQuantity(value, label = 'Quantity') {
+  const quantity = normalizePantryQuantity(value, { fallback: NaN });
+  if (!Number.isFinite(quantity) || quantity <= 0) {
+    const error = new Error(`${label} must be greater than zero.`);
+    error.status = 400;
+    throw error;
+  }
+  return quantity;
 }
 
 /**
@@ -406,6 +429,259 @@ router.post('/import-shopping', (req, res) => {
 });
 
 // --------------------------------------------------------
+// Phase 6 Pantry execution ledger
+// --------------------------------------------------------
+router.get('/movements', (req, res) => {
+  try {
+    const itemId = Number(req.query.item_id) || null;
+    const mealId = Number(req.query.meal_id) || null;
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 250);
+    const clauses = [];
+    const params = [];
+    if (itemId) { clauses.push('pm.pantry_item_id = ?'); params.push(itemId); }
+    if (mealId) { clauses.push('pm.meal_id = ?'); params.push(mealId); }
+    params.push(limit);
+    const rows = db.get().prepare(`
+      SELECT pm.*, pi.name AS pantry_item_name, m.title AS meal_title
+      FROM pantry_movements pm
+      LEFT JOIN pantry_items pi ON pi.id = pm.pantry_item_id
+      LEFT JOIN meals m ON m.id = pm.meal_id
+      ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+      ORDER BY pm.created_at DESC, pm.id DESC LIMIT ?
+    `).all(...params);
+    res.json({ data: rows });
+  } catch (err) {
+    log.error('GET /movements error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+router.post('/reconcile-grocery-run', (req, res) => {
+  try {
+    const runId = Number(req.body?.grocery_run_id);
+    const run = db.get().prepare('SELECT * FROM meal_grocery_runs WHERE id = ?').get(runId);
+    if (!run) return res.status(404).json({ error: 'Grocery run not found.', code: 'GROCERY_RUN_NOT_FOUND' });
+    if (!['added_to_shopping', 'purchased', 'reconciled'].includes(run.status)) {
+      return res.status(409).json({ error: 'Record purchases before reconciling them with Pantry.', code: 'GROCERY_RUN_NOT_PURCHASED' });
+    }
+    const entries = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!entries.length) return res.json({ data: { run, added: 0, merged: 0, skipped: 0, reconciled: 0 } });
+    const actorId = req.authUserId || req.session.userId;
+    const categoryNames = validCategoryNames();
+    const fallbackCategory = categoryNames.at(-1) || 'Sonstiges';
+    const access = resolvePantryAccess(db.get());
+    const today = householdToday(db.get());
+
+    const result = db.get().transaction(() => {
+      const findGrocery = db.get().prepare(`
+        SELECT * FROM meal_grocery_items WHERE id = ? AND grocery_run_id = ?
+      `);
+      const findMatch = db.get().prepare(`
+        SELECT * FROM pantry_items WHERE name = ? COLLATE NOCASE AND unit = ?
+          AND location_id IS ? AND expires_on IS ? LIMIT 1
+      `);
+      const insertPantry = db.get().prepare(`
+        INSERT INTO pantry_items (name, quantity, unit, location_id, category, expires_on, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const updatePantry = db.get().prepare('UPDATE pantry_items SET quantity = ? WHERE id = ?');
+      const findMovement = db.get().prepare('SELECT id FROM pantry_movements WHERE logical_key = ?');
+      const insertMovement = db.get().prepare(`
+        INSERT INTO pantry_movements (
+          logical_key, pantry_item_id, grocery_run_id, grocery_item_id, movement_type,
+          quantity, unit, name_snapshot, quantity_before, quantity_after,
+          expires_on_snapshot, notes, created_by
+        ) VALUES (?, ?, ?, ?, 'purchase', ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      let added = 0, merged = 0, skipped = 0, reconciled = 0;
+      const changedItems = [];
+      for (const entry of entries) {
+        const grocery = findGrocery.get(Number(entry?.grocery_item_id), runId);
+        if (!grocery || grocery.purchase_status !== 'purchased' || grocery.reconciled_at) {
+          skipped += 1;
+          continue;
+        }
+        const key = `grocery:${runId}:item:${grocery.id}:purchase`;
+        if (findMovement.get(key)) {
+          skipped += 1;
+          continue;
+        }
+        const quantity = positiveQuantity(entry.quantity ?? grocery.purchased_quantity ?? grocery.planned_quantity ?? 1);
+        const unit = normalizePantryUnit(entry.unit || grocery.unit);
+        const locationId = Number(entry.location_id) || null;
+        if (locationId && !db.get().prepare('SELECT 1 FROM pantry_locations WHERE id = ?').get(locationId)) {
+          throw Object.assign(new Error('Pantry location not found.'), { status: 404 });
+        }
+        const expiresOn = date(entry.expires_on, 'Best-before date').value;
+        const category = categoryNames.includes(grocery.category) ? grocery.category : fallbackCategory;
+        let pantryItem = findMatch.get(grocery.name, unit, locationId, expiresOn);
+        const before = Number(pantryItem?.quantity || 0);
+        const after = normalizePantryQuantity(before + quantity, { fallback: quantity });
+        if (pantryItem) {
+          updatePantry.run(after, pantryItem.id);
+          merged += 1;
+        } else {
+          const info = insertPantry.run(grocery.name, quantity, unit, locationId, category, expiresOn, actorId);
+          pantryItem = getItem(info.lastInsertRowid);
+          added += 1;
+        }
+        insertMovement.run(
+          key, pantryItem.id, runId, grocery.id, quantity, unit, grocery.name,
+          before, after, expiresOn, entry.notes || null, actorId,
+        );
+        db.get().prepare(`
+          UPDATE meal_grocery_items SET pantry_item_id = ?, reconciled_quantity = ?,
+            reconciled_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
+        `).run(pantryItem.id, quantity, grocery.id);
+        changedItems.push(pantryItem.id);
+        reconciled += 1;
+      }
+      const counts = db.get().prepare(`
+        SELECT COUNT(*) AS total,
+          SUM(CASE WHEN purchase_status = 'purchased' AND reconciled_at IS NOT NULL THEN 1 ELSE 0 END) AS done
+        FROM meal_grocery_items WHERE grocery_run_id = ?
+      `).get(runId);
+      if (counts.total > 0 && counts.total === counts.done) {
+        db.get().prepare(`
+          UPDATE meal_grocery_runs SET status = 'reconciled',
+            reconciled_at = COALESCE(reconciled_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
+        `).run(runId);
+      }
+      return { added, merged, skipped, reconciled, changedItems };
+    })();
+    for (const itemId of result.changedItems) syncReminder(getItem(itemId), access, today);
+    const freshRun = db.get().prepare('SELECT * FROM meal_grocery_runs WHERE id = ?').get(runId);
+    res.json({ data: { ...result, changedItems: undefined, run: freshRun } });
+  } catch (err) {
+    log.error('POST /reconcile-grocery-run error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.status || 500 });
+  }
+});
+
+router.post('/leftovers', (req, res) => {
+  try {
+    const quantity = positiveQuantity(req.body?.quantity);
+    const unit = normalizePantryUnit(req.body?.unit);
+    const name = str(req.body?.name, 'Name', { max: MAX_TITLE });
+    if (name.error) return res.status(400).json({ error: name.error, code: 400 });
+    const mealId = Number(req.body?.meal_id) || null;
+    if (mealId && !db.get().prepare('SELECT 1 FROM meals WHERE id = ?').get(mealId)) {
+      return res.status(404).json({ error: 'Meal not found.', code: 'MEAL_NOT_FOUND' });
+    }
+    const locationId = Number(req.body?.location_id) || null;
+    if (locationId && !db.get().prepare('SELECT 1 FROM pantry_locations WHERE id = ?').get(locationId)) {
+      return res.status(404).json({ error: 'Pantry location not found.', code: 404 });
+    }
+    const expiresOn = date(req.body?.expires_on, 'Best-before date').value;
+    const categoryNames = validCategoryNames();
+    const category = categoryNames.includes(req.body?.category) ? req.body.category : (categoryNames.at(-1) || 'Sonstiges');
+    const actorId = req.authUserId || req.session.userId;
+    const logicalKey = movementKey(`meal:${mealId || 'manual'}:leftover`, req.body?.logical_key);
+    const existingMovement = db.get().prepare('SELECT pantry_item_id FROM pantry_movements WHERE logical_key = ?').get(logicalKey);
+    if (existingMovement) return res.json({ data: { item: getItem(existingMovement.pantry_item_id), reused: true } });
+    const snapshot = movementSnapshotForMeal(mealId);
+    const item = db.get().transaction(() => {
+      let pantry = db.get().prepare(`
+        SELECT * FROM pantry_items WHERE name = ? COLLATE NOCASE AND unit = ?
+          AND location_id IS ? AND expires_on IS ? LIMIT 1
+      `).get(name.value, unit, locationId, expiresOn);
+      const before = Number(pantry?.quantity || 0);
+      const after = normalizePantryQuantity(before + quantity, { fallback: quantity });
+      if (pantry) db.get().prepare('UPDATE pantry_items SET quantity = ? WHERE id = ?').run(after, pantry.id);
+      else {
+        const info = db.get().prepare(`
+          INSERT INTO pantry_items (name, quantity, unit, location_id, category, expires_on, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(name.value, quantity, unit, locationId, category, expiresOn, actorId);
+        pantry = getItem(info.lastInsertRowid);
+      }
+      db.get().prepare(`
+        INSERT INTO pantry_movements (
+          logical_key, pantry_item_id, meal_id, meal_snapshot_id, movement_type,
+          quantity, unit, name_snapshot, quantity_before, quantity_after,
+          expires_on_snapshot, notes, created_by
+        ) VALUES (?, ?, ?, ?, 'leftover', ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        logicalKey, pantry.id, mealId, snapshot?.id || null, quantity, unit, name.value,
+        before, after, expiresOn, req.body?.notes || null, actorId,
+      );
+      return getItem(pantry.id);
+    })();
+    syncReminder(item);
+    res.status(201).json({ data: { item, reused: false } });
+  } catch (err) {
+    log.error('POST /leftovers error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.status || 500 });
+  }
+});
+
+router.post('/:itemId/consume', (req, res) => {
+  try {
+    const item = getItem(Number(req.params.itemId));
+    if (!item) return res.status(404).json({ error: 'Item not found.', code: 404 });
+    const quantity = positiveQuantity(req.body?.quantity);
+    if (quantity > Number(item.quantity)) {
+      return res.status(409).json({ error: 'Cannot consume more than the Pantry contains.', code: 'PANTRY_QUANTITY_EXCEEDED' });
+    }
+    const mealId = Number(req.body?.meal_id) || null;
+    const snapshot = movementSnapshotForMeal(mealId);
+    const actorId = req.authUserId || req.session.userId;
+    const logicalKey = movementKey(`pantry:${item.id}:consume`, req.body?.logical_key);
+    const existing = db.get().prepare('SELECT id FROM pantry_movements WHERE logical_key = ?').get(logicalKey);
+    if (existing) return res.json({ data: { item, reused: true } });
+    const updated = db.get().transaction(() => {
+      const after = normalizePantryQuantity(Number(item.quantity) - quantity, { fallback: 0 });
+      db.get().prepare('UPDATE pantry_items SET quantity = ? WHERE id = ?').run(after, item.id);
+      db.get().prepare(`
+        INSERT INTO pantry_movements (
+          logical_key, pantry_item_id, meal_id, meal_snapshot_id, movement_type,
+          quantity, unit, name_snapshot, quantity_before, quantity_after, notes, created_by
+        ) VALUES (?, ?, ?, ?, 'consume', ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        logicalKey, item.id, mealId, snapshot?.id || null, quantity, item.unit, item.name,
+        item.quantity, after, req.body?.notes || null, actorId,
+      );
+      return getItem(item.id);
+    })();
+    syncReminder(updated);
+    res.json({ data: { item: updated, reused: false } });
+  } catch (err) {
+    log.error('POST /:itemId/consume error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.status || 500 });
+  }
+});
+
+router.post('/:itemId/discard-expired', (req, res) => {
+  try {
+    const item = getItem(Number(req.params.itemId));
+    if (!item) return res.status(404).json({ error: 'Item not found.', code: 404 });
+    if (Number(item.quantity) <= 0) return res.json({ data: { item, reused: true } });
+    const actorId = req.authUserId || req.session.userId;
+    const logicalKey = movementKey(`pantry:${item.id}:expire`, req.body?.logical_key);
+    const updated = db.get().transaction(() => {
+      db.get().prepare('UPDATE pantry_items SET quantity = 0 WHERE id = ?').run(item.id);
+      db.get().prepare(`
+        INSERT INTO pantry_movements (
+          logical_key, pantry_item_id, movement_type, quantity, unit, name_snapshot,
+          quantity_before, quantity_after, expires_on_snapshot, notes, created_by
+        ) VALUES (?, ?, 'expire', ?, ?, ?, ?, 0, ?, ?, ?)
+      `).run(
+        logicalKey, item.id, item.quantity, item.unit, item.name, item.quantity,
+        item.expires_on, req.body?.notes || null, actorId,
+      );
+      return getItem(item.id);
+    })();
+    syncReminder(updated);
+    res.json({ data: { item: updated, reused: false } });
+  } catch (err) {
+    log.error('POST /:itemId/discard-expired error:', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.status || 500 });
+  }
+});
+
+// --------------------------------------------------------
 // GET /api/v1/pantry
 // Alle Vorratsartikel plus Lagerorte und Kategorien in einem Roundtrip.
 // Der Ablauf-/Bestands-Status wird bewusst NICHT hier berechnet: "abgelaufen"
@@ -483,6 +759,21 @@ router.put('/:itemId', (req, res) => {
         values.category, values.expires_on, values.min_quantity, values.notes, item.id
       );
       const fresh = getItem(item.id);
+      if (values.quantity != null && Number(values.quantity) !== Number(item.quantity)) {
+        const difference = Number(values.quantity) - Number(item.quantity);
+        db.get().prepare(`
+          INSERT INTO pantry_movements (
+            logical_key, pantry_item_id, movement_type, quantity, unit, name_snapshot,
+            quantity_before, quantity_after, expires_on_snapshot, notes, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          `pantry:${item.id}:quantity:${randomUUID()}`, item.id,
+          difference < 0 ? 'consume' : 'adjust', Math.abs(difference), item.unit,
+          item.name, item.quantity, fresh.quantity, item.expires_on,
+          difference < 0 ? 'Pantry quantity stepper' : 'Pantry quantity adjustment',
+          req.authUserId || req.session.userId,
+        );
+      }
       syncReminder(fresh);
       return fresh;
     })();

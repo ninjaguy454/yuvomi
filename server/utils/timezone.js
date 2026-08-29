@@ -42,7 +42,8 @@ export function serverTimeZone() {
   const envTz = (process.env.TZ || '').trim();
   if (envTz && isValidTimeZone(envTz)) return envTz;
   try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    const systemTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return isValidTimeZone(systemTz) ? systemTz : 'UTC';
   } catch { return 'UTC'; }
 }
 

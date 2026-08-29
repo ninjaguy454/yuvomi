@@ -117,6 +117,10 @@ describe('Backup Scheduler', () => {
     // back to the relative default './backups' under /app, where the unprivileged
     // node user cannot create anything. The raw EACCES only named the relative path,
     // which sent people looking at their (correctly mounted) host folder.
+    if (process.platform === 'win32') {
+      t.skip('Windows does not enforce POSIX chmod write bits');
+      return;
+    }
     if (typeof process.getuid === 'function' && process.getuid() === 0) {
       t.skip('running as root bypasses directory permissions');
       return;

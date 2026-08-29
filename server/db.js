@@ -7524,6 +7524,177 @@ const FORK_MIGRATIONS = [
         ON activity_template_checklist_items(activity_template_id, sort_order);
     `,
   },
+  {
+    version: 10013,
+    description: 'Meal grocery runs with lifecycle, provenance and durable Shopping outputs',
+    up: `
+      CREATE TABLE IF NOT EXISTS meal_grocery_runs (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        logical_key              TEXT    NOT NULL UNIQUE,
+        shopping_list_id         INTEGER REFERENCES shopping_lists(id) ON DELETE SET NULL,
+        start_date               TEXT    NOT NULL,
+        end_date                 TEXT    NOT NULL,
+        status                   TEXT    NOT NULL DEFAULT 'draft'
+                                         CHECK(status IN ('draft', 'finalized', 'added_to_shopping', 'purchased', 'reconciled')),
+        source_fingerprint       TEXT    NOT NULL,
+        revision                 INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+        created_by               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        finalized_at             TEXT,
+        added_to_shopping_at     TEXT,
+        purchased_at             TEXT,
+        reconciled_at            TEXT,
+        created_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(start_date <= end_date)
+      );
+      CREATE INDEX idx_meal_grocery_runs_list_status
+        ON meal_grocery_runs(shopping_list_id, status, start_date, end_date);
+
+      CREATE TABLE IF NOT EXISTS meal_grocery_items (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        grocery_run_id           INTEGER NOT NULL REFERENCES meal_grocery_runs(id) ON DELETE CASCADE,
+        logical_key              TEXT    NOT NULL,
+        name                     TEXT    NOT NULL,
+        quantity                 TEXT,
+        category                 TEXT    NOT NULL DEFAULT 'Sonstiges',
+        planned_quantity         REAL CHECK(planned_quantity IS NULL OR planned_quantity >= 0),
+        unit                     TEXT,
+        purchased_quantity       REAL    NOT NULL DEFAULT 0 CHECK(purchased_quantity >= 0),
+        remaining_quantity       REAL CHECK(remaining_quantity IS NULL OR remaining_quantity >= 0),
+        purchase_status          TEXT    NOT NULL DEFAULT 'pending'
+                                         CHECK(purchase_status IN ('pending', 'partial', 'purchased')),
+        shopping_item_id         INTEGER REFERENCES shopping_items(id) ON DELETE SET NULL,
+        published_at             TEXT,
+        created_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(grocery_run_id, logical_key),
+        UNIQUE(shopping_item_id)
+      );
+      CREATE INDEX idx_meal_grocery_items_run_status
+        ON meal_grocery_items(grocery_run_id, purchase_status);
+
+      CREATE TABLE IF NOT EXISTS meal_grocery_item_sources (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        grocery_item_id          INTEGER NOT NULL REFERENCES meal_grocery_items(id) ON DELETE CASCADE,
+        source_key               TEXT    NOT NULL,
+        source_kind              TEXT    NOT NULL CHECK(source_kind IN ('meal_ingredient', 'recipe_ingredient')),
+        meal_id                  INTEGER REFERENCES meals(id) ON DELETE SET NULL,
+        meal_ingredient_id       INTEGER REFERENCES meal_ingredients(id) ON DELETE SET NULL,
+        recipe_id                INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+        recipe_ingredient_id     INTEGER REFERENCES recipe_ingredients(id) ON DELETE SET NULL,
+        meal_date_snapshot       TEXT    NOT NULL,
+        meal_title_snapshot      TEXT    NOT NULL,
+        recipe_title_snapshot    TEXT,
+        ingredient_name_snapshot TEXT    NOT NULL,
+        quantity_snapshot        TEXT,
+        category_snapshot        TEXT,
+        created_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(grocery_item_id, source_key)
+      );
+      CREATE INDEX idx_meal_grocery_sources_meal
+        ON meal_grocery_item_sources(meal_id, grocery_item_id);
+      CREATE INDEX idx_meal_grocery_sources_recipe
+        ON meal_grocery_item_sources(recipe_id, grocery_item_id);
+    `,
+  },
+  {
+    version: 10014,
+    description: 'Meal execution automation, historical snapshots and Pantry movement ledger',
+    up: `
+      CREATE TABLE IF NOT EXISTS meal_execution_settings (
+        id                         INTEGER PRIMARY KEY CHECK(id = 1),
+        enabled                    INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        default_shopping_list_id   INTEGER REFERENCES shopping_lists(id) ON DELETE SET NULL,
+        auto_create_grocery_draft  INTEGER NOT NULL DEFAULT 1 CHECK(auto_create_grocery_draft IN (0, 1)),
+        auto_finalize_grocery      INTEGER NOT NULL DEFAULT 0 CHECK(auto_finalize_grocery IN (0, 1)),
+        generate_preparation       INTEGER NOT NULL DEFAULT 1 CHECK(generate_preparation IN (0, 1)),
+        generate_cooking           INTEGER NOT NULL DEFAULT 1 CHECK(generate_cooking IN (0, 1)),
+        generate_supervision       INTEGER NOT NULL DEFAULT 1 CHECK(generate_supervision IN (0, 1)),
+        generate_serving           INTEGER NOT NULL DEFAULT 1 CHECK(generate_serving IN (0, 1)),
+        generate_cleanup           INTEGER NOT NULL DEFAULT 1 CHECK(generate_cleanup IN (0, 1)),
+        preparation_lead_minutes   INTEGER NOT NULL DEFAULT 60 CHECK(preparation_lead_minutes BETWEEN 0 AND 1440),
+        cooking_lead_minutes       INTEGER NOT NULL DEFAULT 30 CHECK(cooking_lead_minutes BETWEEN 0 AND 1440),
+        cleanup_delay_minutes      INTEGER NOT NULL DEFAULT 60 CHECK(cleanup_delay_minutes BETWEEN 0 AND 1440),
+        updated_by                 INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      INSERT OR IGNORE INTO meal_execution_settings (id) VALUES (1);
+
+      CREATE TABLE IF NOT EXISTS meal_execution_snapshots (
+        id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+        logical_key                TEXT NOT NULL UNIQUE,
+        meal_id                    INTEGER REFERENCES meals(id) ON DELETE SET NULL,
+        source_fingerprint         TEXT NOT NULL,
+        revision                   INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+        status                     TEXT NOT NULL DEFAULT 'planned'
+                                      CHECK(status IN ('planned', 'in_progress', 'completed', 'cancelled', 'superseded')),
+        meal_date_snapshot         TEXT NOT NULL,
+        meal_type_snapshot         TEXT NOT NULL,
+        meal_title_snapshot        TEXT NOT NULL,
+        scheduled_time_snapshot    TEXT,
+        recipe_id                  INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+        recipe_title_snapshot      TEXT,
+        snapshot_json              TEXT NOT NULL CHECK(json_valid(snapshot_json)),
+        frozen_at                  TEXT,
+        completed_at               TEXT,
+        created_by                 INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_meal_execution_snapshots_meal
+        ON meal_execution_snapshots(meal_id, status);
+
+      CREATE TABLE IF NOT EXISTS meal_execution_tasks (
+        id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_snapshot_id           INTEGER NOT NULL REFERENCES meal_execution_snapshots(id) ON DELETE CASCADE,
+        meal_id                    INTEGER REFERENCES meals(id) ON DELETE SET NULL,
+        role                       TEXT NOT NULL CHECK(role IN ('preparation', 'cooking', 'supervision', 'serving', 'cleanup')),
+        logical_key                TEXT NOT NULL UNIQUE,
+        task_id                    INTEGER UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+        assigned_user_id_snapshot  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        title_snapshot             TEXT NOT NULL,
+        due_date_snapshot          TEXT,
+        due_time_snapshot          TEXT,
+        created_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_snapshot_id, role)
+      );
+      CREATE INDEX idx_meal_execution_tasks_meal_role
+        ON meal_execution_tasks(meal_id, role);
+
+      CREATE TABLE IF NOT EXISTS pantry_movements (
+        id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+        logical_key                TEXT NOT NULL UNIQUE,
+        pantry_item_id             INTEGER REFERENCES pantry_items(id) ON DELETE SET NULL,
+        grocery_run_id             INTEGER REFERENCES meal_grocery_runs(id) ON DELETE SET NULL,
+        grocery_item_id            INTEGER REFERENCES meal_grocery_items(id) ON DELETE SET NULL,
+        meal_id                    INTEGER REFERENCES meals(id) ON DELETE SET NULL,
+        meal_snapshot_id           INTEGER REFERENCES meal_execution_snapshots(id) ON DELETE SET NULL,
+        task_id                    INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        movement_type              TEXT NOT NULL
+                                      CHECK(movement_type IN ('purchase', 'consume', 'leftover', 'adjust', 'expire', 'reconcile')),
+        quantity                   REAL NOT NULL CHECK(quantity > 0),
+        unit                       TEXT NOT NULL,
+        name_snapshot              TEXT NOT NULL,
+        quantity_before            REAL,
+        quantity_after             REAL,
+        expires_on_snapshot        TEXT,
+        notes                      TEXT,
+        created_by                 INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_pantry_movements_item_time
+        ON pantry_movements(pantry_item_id, created_at, id);
+      CREATE INDEX idx_pantry_movements_meal
+        ON pantry_movements(meal_id, meal_snapshot_id, created_at);
+      CREATE INDEX idx_pantry_movements_grocery
+        ON pantry_movements(grocery_run_id, grocery_item_id);
+
+      ALTER TABLE meal_grocery_items ADD COLUMN pantry_item_id INTEGER REFERENCES pantry_items(id) ON DELETE SET NULL;
+      ALTER TABLE meal_grocery_items ADD COLUMN reconciled_quantity REAL CHECK(reconciled_quantity IS NULL OR reconciled_quantity >= 0);
+      ALTER TABLE meal_grocery_items ADD COLUMN reconciled_at TEXT;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

@@ -49,7 +49,7 @@ let state = {
   recipes:          [],
   lists:            [],     // Einkaufslisten für Transfer-Dropdown
   categories:       [],     // Einkaufskategorien für Zutaten
-  planning:         { timing_defaults: [], slots: [], members: [] },
+  planning:         { timing_defaults: [], slots: [], members: [], execution_settings: null },
   selectionRequests: [],
   viewMode:         'week',
   isAdmin:          false,
@@ -211,9 +211,9 @@ async function loadPreferences() {
 async function loadPlanning() {
   try {
     const res = await api.get('/meals/planning');
-    state.planning = res.data || { timing_defaults: [], slots: [], members: [] };
+    state.planning = res.data || { timing_defaults: [], slots: [], members: [], execution_settings: null };
   } catch {
-    state.planning = { timing_defaults: [], slots: [], members: [] };
+    state.planning = { timing_defaults: [], slots: [], members: [], execution_settings: null };
   }
 }
 
@@ -259,7 +259,8 @@ export async function render(container, { user }) {
         <div class="page-toolbar__actions">
           <button class="btn btn--secondary" id="meal-choices"><i data-lucide="inbox" class="icon-sm" aria-hidden="true"></i><span>Meal choices</span><span class="badge" id="meal-choice-count" hidden></span></button>
           <button class="btn btn--secondary" id="meal-view-toggle" aria-pressed="false"><i data-lucide="list" class="icon-sm" aria-hidden="true"></i><span>Timeline</span></button>
-          ${state.isAdmin ? '<button class="btn btn--secondary" id="meal-schedule"><i data-lucide="calendar-clock" class="icon-sm" aria-hidden="true"></i><span>Recurring schedule</span></button>' : ''}
+          ${state.isAdmin ? `<button class="btn btn--primary" id="meal-automation"><i data-lucide="wand-sparkles" class="icon-sm" aria-hidden="true"></i><span>${t('meals.automationButton')}</span></button>` : ''}
+          <button class="btn btn--secondary" id="meal-prepare-week"><i data-lucide="list-checks" class="icon-sm" aria-hidden="true"></i><span>${t('meals.prepareWeek')}</span></button>
           <button class="btn btn--secondary week-nav__today" id="week-today">${t('meals.today')}</button>
           <!-- Nur Desktop: klappt die Rezept-Spalte weg, damit alle sieben
                Tagesspalten in voller Breite ins Board passen. -->
@@ -701,6 +702,9 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
       .join(', ');
     const mealPlace = (state.planning.places || []).find((place) => Number(place.id) === Number(meal.place_id));
     const activeConflicts = (meal.calendar_conflicts || []).filter((conflict) => conflict.active);
+    const executionProgress = meal.execution
+      ? t('meals.executionProgress', { done: Number(meal.execution.task_done || 0), total: Number(meal.execution.task_total || 0) })
+      : '';
 
     // Die Karte ist bewusst KEIN Button: sie trägt Buttons und einen Link, und
     // interaktiver Inhalt in einem Button ist invalides HTML - Screenreader
@@ -712,12 +716,13 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
            data-action="edit-meal"
            data-meal-id="${meal.id}">
           <span class="meal-card__title"><span class="meal-card__title-text">${esc(meal.title)}</span>${recurrenceBadge}</span>
-          ${mealTime || roleSummary || mealPlace || activeConflicts.length ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${mealPlace ? `<span>${esc(mealPlace.name)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}${activeConflicts.length ? `<span>${activeConflicts.length} Calendar conflict${activeConflicts.length === 1 ? '' : 's'}</span>` : ''}</span>` : ''}
+          ${mealTime || roleSummary || mealPlace || activeConflicts.length || executionProgress ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${mealPlace ? `<span>${esc(mealPlace.name)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}${activeConflicts.length ? `<span>${activeConflicts.length} Calendar conflict${activeConflicts.length === 1 ? '' : 's'}</span>` : ''}${executionProgress ? `<span>${esc(executionProgress)}</span>` : ''}</span>` : ''}
           ${ingLabel ? `<span class="meal-card__meta">
             <span class="meal-card__ingredients-count">${ingLabel}${esc(ingDoneLabel)}</span>
           </span>` : ''}
         </button>
         <div class="meal-card__actions">
+          ${meal.selection_status === 'selected' ? `<button class="meal-card__action-btn" data-action="meal-execution" data-meal-id="${meal.id}" aria-label="${esc(t('meals.executionButtonNamed', { title: meal.title }))}"><i data-lucide="list-checks" class="icon-sm" aria-hidden="true"></i></button>` : ''}
           ${activeConflicts.length ? `<button class="meal-card__action-btn" data-action="resolve-conflicts" data-meal-id="${meal.id}" aria-label="Review Calendar conflicts for ${esc(meal.title)}"><i data-lucide="triangle-alert" class="icon-sm" aria-hidden="true"></i></button>` : ''}
           ${meal.recipe_url ? `<a class="meal-card__action-btn meal-card__action-btn--recipe"
             data-action="open-recipe"
@@ -799,6 +804,160 @@ function setWeekBusy() {
   // Sichtbares Lade-Feedback beim Wochenwechsel (dimmt das Raster via CSS,
   // meldet Screenreadern „busy"), bis renderWeekGrid das Attribut wieder entfernt.
   _container.querySelector('#week-grid')?.setAttribute('aria-busy', 'true');
+}
+
+function executionSummaryCounts(execution) {
+  const meals = Array.isArray(execution?.meals) ? execution.meals : [];
+  const tasks = meals.flatMap((meal) => meal?.tasks || []);
+  return {
+    meals: meals.length,
+    tasks: tasks.filter((task) => task.task_id).length,
+    groceryItems: Number(execution?.grocery_run?.items?.length || execution?.grocery_run?.item_count || 0),
+  };
+}
+
+function openExecutionSummary(execution) {
+  const counts = executionSummaryCounts(execution);
+  const grocery = execution?.grocery_run;
+  const content = `<div class="meal-execution-summary">
+    <p class="form-hint">${esc(t('meals.executionSummaryDescription'))}</p>
+    <div class="meal-execution-summary__stats">
+      <div><strong>${counts.meals}</strong><span>${esc(t('meals.executionMeals'))}</span></div>
+      <div><strong>${counts.tasks}</strong><span>${esc(t('meals.executionTasks'))}</span></div>
+      <div><strong>${counts.groceryItems}</strong><span>${esc(t('meals.executionGroceries'))}</span></div>
+    </div>
+    ${grocery ? `<p class="meal-execution-summary__status"><i data-lucide="shopping-cart" class="icon-sm" aria-hidden="true"></i>${esc(t('meals.groceryRunStatus', { status: grocery.status }))}</p>` : `<p class="form-hint">${esc(t('meals.noGroceryListConfigured'))}</p>`}
+    <div class="modal-panel__footer modal-panel__footer--plain">
+      <button type="button" class="btn btn--secondary" data-open-tasks>${esc(t('meals.openTasks'))}</button>
+      ${grocery ? `<button type="button" class="btn btn--primary" data-open-shopping>${esc(t('meals.openShopping'))}</button>` : ''}
+    </div>
+  </div>`;
+  openSharedModal({ title: t('meals.executionSummaryTitle'), content, size: 'md', onSave(panel) {
+    panel.querySelector('[data-open-tasks]')?.addEventListener('click', () => {
+      closeSharedModal({ force: true });
+      window.yuvomi?.navigate('/tasks');
+    });
+    panel.querySelector('[data-open-shopping]')?.addEventListener('click', () => {
+      closeSharedModal({ force: true });
+      window.yuvomi?.navigate('/shopping');
+    });
+    if (window.lucide) window.lucide.createIcons({ el: panel });
+  }});
+}
+
+function openMealExecutionDetail(execution) {
+  const roleLabels = {
+    preparation: t('meals.rolePreparation'), cooking: t('meals.roleCooking'),
+    supervision: t('meals.roleSupervision'), serving: t('meals.roleServing'), cleanup: t('meals.roleCleanup'),
+  };
+  const tasks = execution?.tasks || [];
+  const content = `<div class="meal-execution-detail">
+    <p class="form-hint">${esc(t('meals.executionRevision', { revision: execution?.revision || 1, status: execution?.status || 'planned' }))}</p>
+    <div class="meal-execution-detail__tasks">${tasks.map((task) => `<button type="button" class="meal-execution-task" data-task-id="${task.task_id || ''}" ${task.task_id ? '' : 'disabled'}>
+      <i data-lucide="${task.task_status === 'done' ? 'circle-check-big' : 'circle'}" class="icon-sm" aria-hidden="true"></i>
+      <span><strong>${esc(roleLabels[task.role] || task.role)}</strong><small>${esc(task.title_snapshot)} · ${esc(task.due_date_snapshot)} ${esc(task.due_time_snapshot || '')}${task.assigned_name ? ` · ${esc(task.assigned_name)}` : ''}</small></span>
+    </button>`).join('') || `<p class="form-hint">${esc(t('meals.noExecutionTasks'))}</p>`}</div>
+    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-open-pantry>${esc(t('meals.openPantry'))}</button><button type="button" class="btn btn--primary" data-open-tasks>${esc(t('meals.openTasks'))}</button></div>
+  </div>`;
+  openSharedModal({ title: execution?.meal_title_snapshot || t('meals.executionSummaryTitle'), content, size: 'md', onSave(panel) {
+    panel.querySelectorAll('[data-task-id]').forEach((button) => button.addEventListener('click', () => {
+      closeSharedModal({ force: true });
+      window.yuvomi?.navigate(`/tasks?open=${button.dataset.taskId}`);
+    }));
+    panel.querySelector('[data-open-tasks]')?.addEventListener('click', () => {
+      closeSharedModal({ force: true });
+      window.yuvomi?.navigate('/tasks');
+    });
+    panel.querySelector('[data-open-pantry]')?.addEventListener('click', () => {
+      closeSharedModal({ force: true });
+      window.yuvomi?.navigate('/pantry');
+    });
+    if (window.lucide) window.lucide.createIcons({ el: panel });
+  }});
+}
+
+async function prepareCurrentWeek(button) {
+  if (button) button.disabled = true;
+  try {
+    const response = await api.post('/meals/planning/materialize', { week: state.currentWeek });
+    await Promise.all([loadWeek(state.currentWeek), loadPlanning()]);
+    renderWeekGrid();
+    if (response.data?.execution) openExecutionSummary(response.data.execution);
+    else window.yuvomi?.showToast(t('meals.automationDisabledToast'), 'warning');
+  } catch (error) {
+    window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+function openMealAutomationModal() {
+  const settings = state.planning.execution_settings || {};
+  const listOptions = state.lists.map((list) => `<option value="${list.id}" ${Number(settings.default_shopping_list_id) === Number(list.id) ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
+  const roleToggle = (key, labelKey) => `<label class="meal-automation__toggle"><input type="checkbox" name="generate_${key}" ${settings[`generate_${key}`] !== 0 ? 'checked' : ''}><span>${esc(t(labelKey))}</span></label>`;
+  const content = `<form id="meal-automation-form" class="meal-automation-form">
+    <p class="form-hint">${esc(t('meals.automationDescription'))}</p>
+    <label class="meal-automation__master"><input type="checkbox" name="enabled" ${settings.enabled ? 'checked' : ''}><span><strong>${esc(t('meals.enableAutomation'))}</strong><small>${esc(t('meals.enableAutomationHint'))}</small></span></label>
+    <section>
+      <h3>${esc(t('meals.groceryAutomation'))}</h3>
+      <label class="form-label">${esc(t('meals.defaultShoppingList'))}<select class="form-input" name="default_shopping_list_id"><option value="">${esc(t('meals.noDefaultShoppingList'))}</option>${listOptions}</select></label>
+      <label class="meal-automation__toggle"><input type="checkbox" name="auto_create_grocery_draft" ${settings.auto_create_grocery_draft !== 0 ? 'checked' : ''}><span>${esc(t('meals.autoCreateGroceryDraft'))}</span></label>
+      <label class="meal-automation__toggle"><input type="checkbox" name="auto_finalize_grocery" ${settings.auto_finalize_grocery ? 'checked' : ''}><span>${esc(t('meals.autoFinalizeGrocery'))}<small>${esc(t('meals.autoFinalizeGroceryHint'))}</small></span></label>
+    </section>
+    <section>
+      <h3>${esc(t('meals.executionTaskRoles'))}</h3>
+      <div class="meal-automation__roles">
+        ${roleToggle('preparation', 'meals.rolePreparation')}
+        ${roleToggle('cooking', 'meals.roleCooking')}
+        ${roleToggle('supervision', 'meals.roleSupervision')}
+        ${roleToggle('serving', 'meals.roleServing')}
+        ${roleToggle('cleanup', 'meals.roleCleanup')}
+      </div>
+      <div class="meal-automation__timing">
+        <label>${esc(t('meals.preparationLead'))}<input class="form-input" type="number" min="0" max="1440" name="preparation_lead_minutes" value="${Number(settings.preparation_lead_minutes ?? 60)}"></label>
+        <label>${esc(t('meals.cookingLead'))}<input class="form-input" type="number" min="0" max="1440" name="cooking_lead_minutes" value="${Number(settings.cooking_lead_minutes ?? 30)}"></label>
+        <label>${esc(t('meals.cleanupDelay'))}<input class="form-input" type="number" min="0" max="1440" name="cleanup_delay_minutes" value="${Number(settings.cleanup_delay_minutes ?? 30)}"></label>
+      </div>
+    </section>
+    <div class="modal-panel__footer modal-panel__footer--plain">
+      <button type="button" class="btn btn--secondary" data-modal-close>${esc(t('common.cancel'))}</button>
+      <button type="submit" class="btn btn--primary">${esc(t('meals.saveAndConfigureSchedule'))}</button>
+    </div>
+  </form>`;
+  openSharedModal({ title: t('meals.automationTitle'), content, size: 'lg', onSave(panel) {
+    panel.querySelector('[data-modal-close]')?.addEventListener('click', () => closeSharedModal({ force: true }));
+    panel.querySelector('#meal-automation-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const submit = panel.querySelector('[type="submit"]');
+      if (submit) submit.disabled = true;
+      const data = new FormData(form);
+      const payload = {
+        enabled: data.has('enabled'),
+        default_shopping_list_id: Number(data.get('default_shopping_list_id')) || null,
+        auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
+        auto_finalize_grocery: data.has('auto_finalize_grocery'),
+        generate_preparation: data.has('generate_preparation'),
+        generate_cooking: data.has('generate_cooking'),
+        generate_supervision: data.has('generate_supervision'),
+        generate_serving: data.has('generate_serving'),
+        generate_cleanup: data.has('generate_cleanup'),
+        preparation_lead_minutes: Number(data.get('preparation_lead_minutes')),
+        cooking_lead_minutes: Number(data.get('cooking_lead_minutes')),
+        cleanup_delay_minutes: Number(data.get('cleanup_delay_minutes')),
+      };
+      try {
+        const response = await api.put('/meals/execution-settings', payload);
+        state.planning.execution_settings = response.data;
+        closeSharedModal({ force: true });
+        openMealScheduleModal();
+        window.yuvomi?.showToast(t('meals.automationSavedToast'), 'success');
+      } catch (error) {
+        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
+        if (submit) submit.disabled = false;
+      }
+    });
+  }});
 }
 
 function openMealScheduleModal() {
@@ -895,11 +1054,12 @@ function openMealScheduleModal() {
       try {
         const response = await api.put('/meals/planning', { timing_defaults, slots });
         state.planning = response.data;
-        await api.post('/meals/planning/materialize', { week: state.currentWeek });
+        const materialized = await api.post('/meals/planning/materialize', { week: state.currentWeek });
         await loadWeek(state.currentWeek);
         closeModal({ force: true });
         renderWeekGrid();
         window.yuvomi?.showToast('Recurring meal schedule saved.', 'success');
+        if (materialized.data?.execution) openExecutionSummary(materialized.data.execution);
       } catch (error) {
         window.yuvomi?.showToast(error.data?.error || error.message || 'Could not save the schedule.', 'danger');
         submit.disabled = false;
@@ -977,7 +1137,8 @@ function wireNav() {
     if (window.lucide) lucide.createIcons({ el: button });
     renderWeekGrid();
   });
-  _container.querySelector('#meal-schedule')?.addEventListener('click', openMealScheduleModal);
+  _container.querySelector('#meal-automation')?.addEventListener('click', openMealAutomationModal);
+  _container.querySelector('#meal-prepare-week')?.addEventListener('click', (event) => prepareCurrentWeek(event.currentTarget));
   _container.querySelector('#week-prev')?.addEventListener('click', async () => {
     setWeekBusy();
     await loadWeek(addDays(state.currentWeek, -7));
@@ -1035,6 +1196,20 @@ function wireGrid(grid) {
     if (action === 'resolve-conflicts') {
       const meal = state.meals.find((entry) => Number(entry.id) === Number(btn.dataset.mealId));
       if (meal) openConflictModal(meal);
+      return;
+    }
+
+    if (action === 'meal-execution') {
+      btn.disabled = true;
+      try {
+        const response = await api.post(`/meals/${Number(btn.dataset.mealId)}/execution-tasks`, {});
+        await loadWeek(state.currentWeek);
+        renderWeekGrid();
+        openMealExecutionDetail(response.data);
+      } catch (error) {
+        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
+        btn.disabled = false;
+      }
       return;
     }
 

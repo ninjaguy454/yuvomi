@@ -81,10 +81,8 @@ await new Promise((r) => setTimeout(r, 400));
 const BASE = 'http://localhost:13100';
 
 after(() => {
+  db.get().close();
   rmSync(tmpDir, { recursive: true, force: true });
-  // Verzögert beenden: der Server hält Scheduler-Timer offen, ein sofortiges
-  // process.exit() würde die Meldung des letzten Tests abschneiden.
-  setTimeout(() => process.exit(0), 50);
 });
 
 function cookieHeader(setCookie) {

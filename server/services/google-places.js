@@ -170,12 +170,17 @@ export async function searchGooglePlaces(database, {
   if (!Number.isInteger(normalizedUserId) || normalizedUserId < 1) {
     throw new PlaceProviderError('A signed-in user is required.', { status: 401, code: 'authentication_required' });
   }
-  const normalizedQuery = cleanText(query, 'Search', 120);
+  // The route may add a human-readable origin (for example "near 27513") to
+  // the user's deliberately submitted query. This avoids a second geocoding
+  // request and lets Text Search resolve an address, city, or ZIP itself.
+  const normalizedQuery = cleanText(query, 'Search', 300);
   if (normalizedQuery.length < 3) {
     throw new PlaceProviderError('Search must contain at least three characters.', { code: 'invalid_search' });
   }
-  const latitude = coordinate(origin?.latitude, -90, 90, 'Origin latitude');
-  const longitude = coordinate(origin?.longitude, -180, 180, 'Origin longitude');
+  const hasCoordinateOrigin = origin?.latitude !== undefined && origin?.latitude !== null && origin?.latitude !== ''
+    && origin?.longitude !== undefined && origin?.longitude !== null && origin?.longitude !== '';
+  const latitude = hasCoordinateOrigin ? coordinate(origin.latitude, -90, 90, 'Origin latitude') : null;
+  const longitude = hasCoordinateOrigin ? coordinate(origin.longitude, -180, 180, 'Origin longitude') : null;
 
   const normalizedType = includedType && INCLUDED_TYPES.has(String(includedType)) ? String(includedType) : null;
   const requestKey = JSON.stringify([normalizedUserId, normalizedQuery.toLowerCase(), latitude, longitude, normalizedType]);
@@ -207,13 +212,15 @@ export async function searchGooglePlaces(database, {
       body: JSON.stringify({
         textQuery: normalizedQuery,
         pageSize: 10,
-        rankPreference: 'DISTANCE',
-        locationBias: {
+        ...(hasCoordinateOrigin ? {
+          rankPreference: 'DISTANCE',
+          locationBias: {
           circle: {
             center: { latitude, longitude },
             radius: config.radiusMeters,
           },
-        },
+          },
+        } : {}),
         ...(normalizedType ? { includedType: normalizedType, strictTypeFiltering: false } : {}),
       }),
       signal: controller.signal,
@@ -229,7 +236,7 @@ export async function searchGooglePlaces(database, {
     failureCount = 0;
     return (payload.places || []).map(normalizeResult).filter(Boolean).slice(0, 10).map((place) => ({
       ...place,
-      distance_meters: place.latitude != null && place.longitude != null
+      distance_meters: hasCoordinateOrigin && place.latitude != null && place.longitude != null
         ? distanceMeters({ latitude, longitude }, place) : null,
     }));
   } catch (error) {

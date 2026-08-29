@@ -34,16 +34,17 @@ Bounty presentation, reward settlement, and advanced visual workflow branching b
 
 ## Phase 5 — Calendar Coordination, Locations, Travel, and Reader Mode
 
-Status: complete pending final live deployment verification.
+Status: complete; follow-up usability improvements verified for deployment.
 
 - Planned meals and trip stages appear on the main Calendar as read-only planning overlays.
 - Meal conflicts are participant-specific, fingerprinted, advisory, and reopen only after material changes.
 - Focused resolutions include keeping time/window, moving the meal, changing participation, assigning backup, creating a personal alternative, and ignoring.
 - Tasks support no location, a saved Yuvomi Place, a manual use-once location, or a Google Place reference.
-- Google Places search is deliberate, origin-aware, field-mask limited, quota controlled, server-side, and optional. It degrades to saved/manual locations when unconfigured.
+- Google Places search is deliberate, origin-aware, field-mask limited, quota controlled, server-side, and optional. Search origins may be a reusable Place, an address/city/ZIP, or unspecified; users are not required to provide coordinates. It degrades to saved/manual locations when unconfigured.
+- The reusable Places catalog is exposed from Tasks as a household address book, with manual address entry and an optional Google-backed discovery action.
 - Use-once results can be promoted atomically into the Phase 3 Places catalog without changing Yuvomi's immutable Place identity.
 - Trips support travelers, destination/lodging Places, departure/return times, Away periods, six itinerary stages, Calendar overlays, and optional relative Tasks.
-- `/reader` provides a server-rendered, no-JavaScript, read-only Today/Tasks/Calendar/Meals view for older e-readers and browsers, with local-password and two-factor sign-in support.
+- `/reader` provides a server-rendered, no-JavaScript interface for older e-readers and browsers, with local-password and two-factor sign-in support. It includes Today, Tasks, task creation, a navigable month Calendar with event details, Meals, and recipe browsing.
 - Migrations 10009–10011 and the Phase 5 integration and Reader suites cover location identity, provider safeguards, conflicts, travel, and compatibility.
 
 ## Verification boundary

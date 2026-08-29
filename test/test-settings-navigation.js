@@ -309,6 +309,16 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'normal modal auto-scrolling should reposition, not dismiss, variable suggestions');
   assert.match(tasks, /id="btn-manage-automation"/,
     'administrators need a direct Tasks entry point to Household Automation');
+  assert.match(tasks, /data-manage-places/,
+    'Tasks should link directly to the reusable Places address book');
+  assert.match(tasks, /Near an address, city, or ZIP/,
+    'place discovery should accept a human-readable search origin');
+  assert.doesNotMatch(tasks, /Enter origin coordinates/,
+    'ordinary place discovery must not ask the user for exact coordinates');
+  assert.match(component, /Places address book/,
+    'the reusable Places manager should present itself as the household address book');
+  assert.match(component, /Find with Google/,
+    'the address book should expose provider search when it is configured');
   assert.match(tasks, /onActivitySelected/,
     'selecting an Activity Template from Quick Add should open the Task flow');
   assert.ok(tasks.indexOf('task-template-picker') < tasks.indexOf('id="task-title"'),

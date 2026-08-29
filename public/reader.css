@@ -13,8 +13,20 @@ section { page-break-inside: avoid; }
 .items li:first-child { border-top: 0; }
 p { margin: .35em 0; line-height: 1.45; }
 label { display: block; font-weight: bold; margin: 1em 0; }
-input { display: block; box-sizing: border-box; width: 100%; font: inherit; border: 2px solid #111; padding: .55em; margin-top: .35em; background: #fff; color: #000; }
+input, textarea, select { display: block; box-sizing: border-box; width: 100%; font: inherit; border: 2px solid #111; padding: .55em; margin-top: .35em; background: #fff; color: #000; }
+.check input { display: inline; width: auto; margin-right: .4em; }
 button { font: inherit; font-weight: bold; border: 2px solid #111; padding: .55em .9em; background: #fff; color: #000; }
+.action { display: inline-block; border: 2px solid #111; padding: .45em .7em; color: #000; font-weight: bold; }
+.calendar-nav { display: table; width: 100%; margin: .8em 0; }
+.calendar-nav > * { display: table-cell; width: 33%; text-align: center; }
+.calendar-nav > *:first-child { text-align: left; }
+.calendar-nav > *:last-child { text-align: right; }
+.calendar-grid { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.calendar-grid th, .calendar-grid td { border: 1px solid #777; padding: .3em; text-align: left; vertical-align: top; }
+.calendar-grid td { height: 3.2em; }
+.calendar-grid td.selected { border: 3px solid #111; }
+.calendar-grid td small { display: block; overflow: hidden; white-space: nowrap; }
+.prewrap { white-space: pre-wrap; line-height: 1.45; }
 .notice { border: 2px solid #111; padding: .6em; }
 footer { border-top: 1px solid #777; margin-top: 2em; padding-top: .7em; font-size: .85em; }
-@media (max-width: 480px) { html { font-size: 16px; } .page { padding: .65em; } nav a { display: inline-block; margin-right: .6em; } }
+@media (max-width: 480px) { html { font-size: 16px; } .page { padding: .65em; } nav a { display: inline-block; margin-right: .6em; } .calendar-grid th { font-size: .7em; } .calendar-grid td { height: 2.4em; padding: .15em; } .calendar-grid td small { display: none; } }

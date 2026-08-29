@@ -139,6 +139,24 @@ test('Google Text Search uses a fixed minimal field mask, explicit origin, and t
   assert.equal(database.prepare('SELECT SUM(request_count) AS n FROM place_provider_usage').get().n, 1);
 });
 
+test('Google Text Search accepts a human-readable or originless search without coordinate bias', async () => {
+  _resetGooglePlacesLimitsForTests();
+  let request;
+  const results = await searchGooglePlaces(database, {
+    userId: admin,
+    query: 'pharmacy near 27513',
+    now: new Date('2026-08-29T12:00:00Z'),
+    fetchImpl: async (_url, options) => {
+      request = JSON.parse(options.body);
+      return { ok: true, async json() { return { places: [{ id: 'originless', displayName: { text: 'Pharmacy' }, location: { latitude: 35.7, longitude: -78.8 } }] }; } };
+    },
+  });
+  assert.equal(request.textQuery, 'pharmacy near 27513');
+  assert.equal('locationBias' in request, false);
+  assert.equal('rankPreference' in request, false);
+  assert.equal(results[0].distance_meters, null);
+});
+
 test('Place ID refresh requests only ID fields and are counted separately', async () => {
   let request;
   const refreshed = await refreshGooglePlaceId('old-google-id', {

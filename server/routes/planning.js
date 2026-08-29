@@ -128,6 +128,12 @@ function listPlaces(database, { activeOnly = false } = {}) {
   }));
 }
 
+function placeSearchText(place) {
+  if (!place) return '';
+  return [place.street_address, place.city, place.region, place.postal_code, place.country]
+    .filter(Boolean).join(', ') || place.path_label || place.name || '';
+}
+
 function normalizePlace(database, body, existing = null) {
   const parentPlaceId = integer(body.parent_place_id ?? existing?.parent_place_id);
   if (parentPlaceId && !validPlace(database, parentPlaceId)) throw new Error('Parent place does not exist.');
@@ -232,36 +238,37 @@ router.post('/place-search', async (req, res) => {
   try {
     const database = db.get();
     const originId = integer(req.body.origin_place_id);
+    const typedOrigin = string(req.body.origin_text, { max: 160 });
     let originPlace = originId ? validPlace(database, originId, { includeInactive: false }) : null;
     if (originPlace && googleIdentityNeedsRefresh(originPlace)) {
       originPlace = await refreshSavedGoogleIdentity(database, originPlace, currentUserId(req));
     }
-    const origin = originId
-      ? placeWithInheritedAddress(database, originPlace)
-      : {
-        latitude: optionalNumber(req.body.origin?.latitude, -90, 90, 'Origin latitude'),
-        longitude: optionalNumber(req.body.origin?.longitude, -180, 180, 'Origin longitude'),
-        path_label: string(req.body.origin?.label, { max: 120 }) || 'Manual origin',
-      };
-    if (originId && !origin) return res.status(400).json({ error: 'Choose an active saved Place as the search origin.', code: 400 });
-    if (origin.latitude == null || origin.longitude == null) {
-      return res.status(400).json({
-        error: 'The selected search origin needs latitude and longitude in Yuvomi Places.',
-        code: 400,
-        reason: 'origin_coordinates_required',
-      });
+    if (originId && !originPlace) return res.status(400).json({ error: 'Choose an active saved Place as the search origin.', code: 400 });
+    const savedOrigin = originPlace ? placeWithInheritedAddress(database, originPlace) : null;
+    const legacyOrigin = req.body.origin || {};
+    const legacyLatitude = optionalNumber(legacyOrigin.latitude, -90, 90, 'Origin latitude');
+    const legacyLongitude = optionalNumber(legacyOrigin.longitude, -180, 180, 'Origin longitude');
+    if ((legacyLatitude == null) !== (legacyLongitude == null)) {
+      return res.status(400).json({ error: 'Both origin coordinates are required when using the legacy coordinate option.', code: 400 });
     }
-    if (originId && origin.coordinate_source === 'google' && origin.coordinates_expires_at
-        && new Date(origin.coordinates_expires_at).getTime() <= Date.now()) {
-      return res.status(400).json({ error: 'This saved Google origin needs refreshed coordinates or user-maintained coordinates before it can be used.', code: 400, reason: 'origin_coordinates_expired' });
+    if (originId && savedOrigin.coordinate_source === 'google' && savedOrigin.coordinates_expires_at
+        && new Date(savedOrigin.coordinates_expires_at).getTime() <= Date.now()) {
+      savedOrigin.latitude = null;
+      savedOrigin.longitude = null;
     }
+    const coordinateOrigin = savedOrigin?.latitude != null && savedOrigin?.longitude != null
+      ? { latitude: savedOrigin.latitude, longitude: savedOrigin.longitude }
+      : legacyLatitude != null ? { latitude: legacyLatitude, longitude: legacyLongitude } : null;
+    const originLabel = savedOrigin?.path_label || typedOrigin || string(legacyOrigin.label, { max: 120 }) || null;
+    const originText = savedOrigin && !coordinateOrigin ? placeSearchText(savedOrigin) : typedOrigin;
+    const query = string(req.body.query, { required: true, max: 120 });
     const results = await searchGooglePlaces(database, {
       userId: currentUserId(req),
-      query: req.body.query,
-      origin: { latitude: origin.latitude, longitude: origin.longitude },
+      query: originText ? `${query} near ${originText}` : query,
+      origin: coordinateOrigin,
       includedType: req.body.included_type,
     });
-    res.json({ data: results, origin: { place_id: origin.id || null, label: origin.path_label } });
+    res.json({ data: results, origin: { place_id: savedOrigin?.id || null, label: originLabel } });
   } catch (error) {
     if (error instanceof PlaceProviderError) {
       return res.status(error.status).json({ error: error.message, code: error.status, reason: error.code });

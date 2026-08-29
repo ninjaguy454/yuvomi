@@ -655,10 +655,15 @@ function placeTypeOptions(selected = 'custom') {
 }
 
 async function renderPlacesManager(body, manager) {
-  const response = await api.get('/planning/admin/context');
+  const [response, searchResponse] = await Promise.all([
+    api.get('/planning/admin/context'),
+    api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
+  ]);
   const places = response.places ?? [];
-  replaceHtml(body, `${managerHeader('Reusable Places', 'automation-add-place', 'Add Place')}
-    <p class="form-hint automation-manager__hint">Places are stable household locations. Rename them freely; templates and schedules keep their links by ID. Rooms inherit missing address details from their parent.</p>
+  const searchStatus = searchResponse.data || { configured: false };
+  replaceHtml(body, `${managerHeader('Places address book', 'automation-add-place', 'Add address manually')}
+    <p class="form-hint automation-manager__hint">Save Home, Work, schools, shops, restaurants, hotels, and other reusable locations here. Rename them freely; Tasks, Calendar events, templates, and schedules keep their links by ID.</p>
+    <div class="detail-inline-actions" style="margin-bottom:var(--space-3)"><button type="button" class="btn btn--secondary btn--sm" id="automation-find-place" ${searchStatus.configured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Find with Google</button><span class="form-hint">${searchStatus.configured ? 'Search deliberately by name or category; no coordinates are required.' : 'Google search is not configured. Manual address entry still works.'}</span></div>
     <div class="automation-list">${places.map((place) => {
       const usage = Object.values(place.usage || {}).reduce((sum, count) => sum + Number(count || 0), 0);
       return `<div class="list-row automation-list-row">
@@ -667,6 +672,7 @@ async function renderPlacesManager(body, manager) {
       </div>`;
     }).join('') || '<p class="form-hint">No Places yet. Start with Home, then add rooms or recurring destinations.</p>'}</div>`);
   body.querySelector('#automation-add-place')?.addEventListener('click', () => openPlaceForm(null, places, manager));
+  body.querySelector('#automation-find-place')?.addEventListener('click', () => openPlaceSearchForm(places, manager));
   body.querySelectorAll('[data-edit-place]').forEach((button) => button.addEventListener('click', () => openPlaceForm(places.find((row) => Number(row.id) === Number(button.dataset.editPlace)), places, manager)));
   body.querySelectorAll('[data-delete-place]').forEach((button) => button.addEventListener('click', async () => {
     const place = places.find((row) => Number(row.id) === Number(button.dataset.deletePlace));
@@ -674,6 +680,61 @@ async function renderPlacesManager(body, manager) {
     try { await api.delete(`/planning/admin/places/${place.id}`); toast('Place deleted.'); await refreshAutomationManager(manager, 'places'); }
     catch (error) { toast(error.message, 'danger'); }
   }));
+}
+
+function googleAttributionHtml(result) {
+  const thirdParty = (result.attributions || []).map((attribution) => {
+    const name = attribution?.displayName || attribution?.provider || attribution?.name;
+    const uri = attribution?.uri || attribution?.providerUri;
+    if (!name) return '';
+    return typeof uri === 'string' && /^https:\/\//i.test(uri)
+      ? `<a href="${h(uri)}" target="_blank" rel="noopener noreferrer">${h(name)}</a>` : h(name);
+  }).filter(Boolean);
+  return `<small class="form-hint">Results from Google Maps${thirdParty.length ? ` · Attribution: ${thirdParty.join(', ')}` : ''}</small>`;
+}
+
+function openPlaceSearchForm(places, manager) {
+  const origin = places.find((place) => place.type === 'home') || places[0];
+  const content = `<form id="automation-place-search-form">
+    ${inputRow('What are you looking for?', '<input class="input" name="query" minlength="3" maxlength="120" required placeholder="UPS Store, pharmacy, restaurant, dentist">')}
+    ${inputRow('Search area', `<select class="input" name="origin_mode"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>`)}
+    <div data-place-search-origin="saved">${inputRow('Saved Place', `<select class="input" name="origin_place_id"><option value="">Choose a Place</option>${placeOptions(places, origin?.id)}</select>`)}</div>
+    <div data-place-search-origin="text" hidden>${inputRow('Address, city, or ZIP', '<input class="input" name="origin_text" maxlength="160" placeholder="27513 or Raleigh, NC">')}</div>
+    <p class="form-hint">Your search and selected origin are sent to Google only when you press Search. Results are not saved until you choose one.</p>
+    <div class="detail-inline-actions"><button class="btn btn--primary" type="submit"><i data-lucide="search" class="icon-sm"></i>Search Google Places</button><button class="btn btn--secondary" type="button" data-action="close-modal">Cancel</button></div>
+    <p class="form-hint" data-place-search-status></p><div class="automation-list" data-place-search-results></div>
+  </form>`;
+  openModal({ title: 'Find a Place', content, size: 'lg', onSave(panel) {
+    const form = panel.querySelector('#automation-place-search-form');
+    const mode = form.querySelector('[name="origin_mode"]');
+    const refresh = () => form.querySelectorAll('[data-place-search-origin]').forEach((pane) => { pane.hidden = pane.dataset.placeSearchOrigin !== mode.value; });
+    mode.addEventListener('change', refresh); refresh();
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = new FormData(form); const status = form.querySelector('[data-place-search-status]');
+      const submit = form.querySelector('[type="submit"]');
+      const payload = { query: data.get('query') };
+      if (mode.value === 'saved') payload.origin_place_id = Number(data.get('origin_place_id')) || null;
+      else if (mode.value === 'text') payload.origin_text = String(data.get('origin_text') || '').trim() || null;
+      submit.disabled = true; status.textContent = 'Searching Google Places…';
+      try {
+        const response = await api.post('/planning/place-search', payload); const results = response.data || [];
+        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}" aria-label="Saved Place name"></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
+        status.textContent = results.length ? `${results.length} live result${results.length === 1 ? '' : 's'} from Google.` : '';
+        list.querySelectorAll('[data-save-google-place]').forEach((button) => button.addEventListener('click', async () => {
+          const index = Number(button.dataset.saveGooglePlace); const result = results[index];
+          const name = list.querySelector(`[data-place-name="${index}"]`)?.value.trim();
+          if (!name) { status.textContent = 'Give this saved Place a name.'; return; }
+          button.disabled = true;
+          try {
+            await api.post('/planning/admin/places/from-google', { external_place_id: result.external_place_id, name, type: 'custom', latitude: result.latitude, longitude: result.longitude });
+            toast('Place saved to the address book.'); await closeModal({ force: true }); await refreshAutomationManager(manager, 'places');
+          } catch (error) { status.textContent = error.message; button.disabled = false; }
+        }));
+      } catch (error) { status.textContent = error.message; }
+      finally { submit.disabled = false; }
+    });
+  } });
 }
 
 function placeMapsUrl(place) {
@@ -759,7 +820,7 @@ function openPlaceForm(place, places, manager) {
     <div class="automation-workflow-condition">${inputRow('Street address', `<input class="input" name="street_address" value="${h(place?.street_address || '')}">`)}${inputRow('City', `<input class="input" name="city" value="${h(place?.city || '')}">`)}</div>
     <div class="automation-workflow-condition">${inputRow('State / province', `<input class="input" name="region" value="${h(place?.region || '')}">`)}${inputRow('Postal code', `<input class="input" name="postal_code" value="${h(place?.postal_code || '')}">`)}</div>
     ${inputRow('Country', `<input class="input" name="country" value="${h(place?.country || '')}">`)}
-    <div class="automation-workflow-condition">${inputRow('Latitude', `<input class="input" name="latitude" type="number" min="-90" max="90" step="any" value="${h(place?.latitude ?? '')}">`)}${inputRow('Longitude', `<input class="input" name="longitude" type="number" min="-180" max="180" step="any" value="${h(place?.longitude ?? '')}">`)}</div>
+    <details><summary class="form-hint">Advanced coordinates (optional)</summary><div class="automation-workflow-condition">${inputRow('Latitude', `<input class="input" name="latitude" type="number" min="-90" max="90" step="any" value="${h(place?.latitude ?? '')}">`)}${inputRow('Longitude', `<input class="input" name="longitude" type="number" min="-180" max="180" step="any" value="${h(place?.longitude ?? '')}">`)}</div></details>
     <label class="automation-check-row"><input type="checkbox" name="active" ${place?.active !== 0 ? 'checked' : ''}> Active and available for new schedules</label>${footer(place ? 'Save Place' : 'Create Place')}
   </form>`;
   openModal({ title: place ? 'Edit Place' : 'New Place', content, size: 'lg', onSave(panel) {

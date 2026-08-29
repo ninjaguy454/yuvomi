@@ -4219,6 +4219,10 @@ function wireAutomationBtn(container) {
   container.querySelector('#btn-manage-automation')?.addEventListener('click', () => {
     window.yuvomi?.navigate('/settings/modules/automation');
   });
+  container.querySelectorAll('[data-manage-places]').forEach((button) => button.addEventListener('click', async () => {
+    await closeModal({ force: true });
+    window.yuvomi?.navigate('/settings/modules/automation?tab=places');
+  }));
 }
 
 function taskLocationNode(task, container) {
@@ -4260,10 +4264,12 @@ function googleAttributionHtml(result) {
 function renderTaskLocationFields(task = null) {
   const location = task?.location || null;
   const kind = location?.kind || 'none';
-  const origin = state.places.find((place) => place.type === 'home' && place.latitude != null && place.longitude != null)
-    || state.places.find((place) => place.latitude != null && place.longitude != null);
+  const origin = state.places.find((place) => place.type === 'home') || state.places[0];
+  const searchConfigured = Boolean(state.placeSearchStatus?.configured);
+  const setupMessage = 'Google place search is off. An administrator must configure GOOGLE_MAPS_API_KEY, enable the integration, and accept the Google Maps terms. You can still save ordinary addresses.';
   return `<fieldset class="form-group task-location" id="task-location-fieldset">
     <legend class="label">Location</legend>
+    ${state.isAdmin ? '<button class="btn btn--ghost btn--sm" type="button" data-manage-places style="margin-bottom:var(--space-2)"><i data-lucide="map-pin" class="icon-sm"></i>Manage saved Places</button>' : ''}
     <select class="input" id="task-location-kind" name="location_kind">
       <option value="none" ${kind === 'none' ? 'selected' : ''}>No location</option>
       <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Yuvomi Place</option>
@@ -4272,20 +4278,22 @@ function renderTaskLocationFields(task = null) {
     </select>
     <div data-location-pane="saved_place" style="margin-top:var(--space-3)">
       <select class="input" id="task-location-place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
+      ${state.isAdmin ? '<p class="task-field-hint">Don\'t see it? Open <button class="link-button" type="button" data-manage-places>saved Places</button> to add an address.</p>' : ''}
     </div>
     <div data-location-pane="manual" style="margin-top:var(--space-3)">
       <input class="input" id="task-location-label" maxlength="120" placeholder="Location name" value="${esc(kind === 'manual' ? location?.label || '' : '')}">
       <textarea class="input" id="task-location-address" rows="2" placeholder="Address or directions" style="margin-top:var(--space-2)">${esc(kind === 'manual' ? location?.address || '' : '')}</textarea>
-      <div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div>
+      <details style="margin-top:var(--space-2)"><summary class="task-field-hint">Advanced coordinates (optional)</summary><div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div></details>
     </div>
     <div data-location-pane="google_place" style="margin-top:var(--space-3)">
       <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Yuvomi server. Search runs only when you press Search.</p>
       <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
-      <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Use a saved Place as origin</option><option value="manual">Enter origin coordinates</option></select>
+      <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>
       <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
-      <div data-origin-pane="manual" class="modal-grid modal-grid--2" style="margin-top:var(--space-2)" hidden><input class="input" id="task-origin-latitude" type="number" step="any" min="-90" max="90" placeholder="Origin latitude"><input class="input" id="task-origin-longitude" type="number" step="any" min="-180" max="180" placeholder="Origin longitude"></div>
-      <button class="btn btn--secondary btn--sm" type="button" id="task-place-search" style="margin-top:var(--space-2)"><i data-lucide="search" class="icon-sm"></i>Search Google Places</button>
-      <p class="task-field-hint" id="task-place-search-status">${state.placeSearchStatus?.configured ? `${state.placeSearchStatus.usage?.household_today ?? 0} of ${state.placeSearchStatus.limits?.household_per_day ?? 100} household searches used today.` : 'Google Places is not configured. Saved and manual locations remain available.'}</p>
+      <div data-origin-pane="text" style="margin-top:var(--space-2)" hidden><input class="input" id="task-origin-text" maxlength="160" placeholder="Address, city, or ZIP (for example, 27513)"></div>
+      <div data-origin-pane="anywhere" hidden></div>
+      <button class="btn btn--secondary btn--sm" type="button" id="task-place-search" style="margin-top:var(--space-2)" ${searchConfigured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Search Google Places</button>
+      <p class="task-field-hint" id="task-place-search-status">${searchConfigured ? `${state.placeSearchStatus.usage?.household_today ?? 0} of ${state.placeSearchStatus.limits?.household_per_day ?? 100} household searches used today.` : setupMessage}</p>
       <input type="hidden" id="task-location-external-id" value="${esc(kind === 'google_place' ? location?.external_place_id || '' : '')}">
       <input type="hidden" id="task-location-external-label" value="${esc(kind === 'google_place' ? location?.label || '' : '')}">
       <div id="task-place-selected" class="task-field-hint">${kind === 'google_place' ? `Selected for this Task: <strong>${esc(location?.label || 'Google place')}</strong>` : ''}</div>
@@ -4312,6 +4320,10 @@ function readTaskLocation(form) {
 }
 
 function wireTaskLocationForm(panel) {
+  panel.querySelectorAll('[data-manage-places]').forEach((button) => button.addEventListener('click', async () => {
+    await closeModal({ force: true });
+    window.yuvomi?.navigate('/settings/modules/automation?tab=places');
+  }));
   const kind = panel.querySelector('#task-location-kind');
   const refresh = () => panel.querySelectorAll('[data-location-pane]').forEach((pane) => { pane.hidden = pane.dataset.locationPane !== kind?.value; });
   kind?.addEventListener('change', refresh); refresh();
@@ -4325,7 +4337,7 @@ function wireTaskLocationForm(panel) {
     if (query.length < 3) { status.textContent = 'Enter at least three characters.'; return; }
     const body = { query, included_type: panel.querySelector('#task-place-category')?.value || null };
     if (originMode.value === 'saved') body.origin_place_id = Number(panel.querySelector('#task-place-origin')?.value) || null;
-    else body.origin = { latitude: panel.querySelector('#task-origin-latitude')?.value, longitude: panel.querySelector('#task-origin-longitude')?.value, label: 'Manual origin' };
+    else if (originMode.value === 'text') body.origin_text = panel.querySelector('#task-origin-text')?.value.trim() || null;
     search.disabled = true; status.textContent = 'Searching Google Places…';
     try {
       const response = await api.post('/planning/place-search', body);
@@ -4751,6 +4763,9 @@ export async function render(container, { user }) {
           ${state.isAdmin ? `<button class="btn btn--icon btn--ghost" id="btn-manage-automation"
                   aria-label="Manage household automation" title="Manage household automation">
             <i data-lucide="workflow" class="icon-lg" aria-hidden="true"></i>
+          </button><button class="btn btn--icon btn--ghost" data-manage-places
+                  aria-label="Manage saved Places" title="Manage saved Places">
+            <i data-lucide="map-pin" class="icon-lg" aria-hidden="true"></i>
           </button>` : ''}
           <button class="btn btn--icon btn--ghost" id="btn-assignment-requests"
                   aria-label="Assignment requests" title="Assignment requests">

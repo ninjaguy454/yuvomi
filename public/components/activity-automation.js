@@ -526,7 +526,7 @@ async function renderVariablesManager(body, manager) {
     <p class="form-hint automation-manager__hint">Define values and reusable fields once, then use the same readable ID across household templates. IDs stay stable unless an admin deliberately renames one.</p>
     <div class="automation-list">
       ${variables.map((variable) => `
-        <div class="automation-list-row">
+        <div class="list-row automation-list-row">
           <div class="automation-list-row__copy">
             <strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.variable_key)}}}</code><br>
             <small class="form-hint">${h(variable.type)} · ${variable.kind === 'value' ? 'Household value' : 'Reusable field'}${variable.usage_count ? ` · used by ${variable.usage_count} workflow variable${variable.usage_count === 1 ? '' : 's'}` : ''}</small>
@@ -541,7 +541,7 @@ async function renderVariablesManager(body, manager) {
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>System context</strong></div>
     <p class="form-hint automation-manager__hint">These values are supplied automatically when a template runs and do not need to be maintained.</p>
     <div class="automation-list">${context.map((variable) => `
-      <div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`);
+      <div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`);
 
   body.querySelector('#automation-add-variable')?.addEventListener('click', () => openVariableForm(null, manager));
   body.querySelectorAll('[data-edit-variable]').forEach((button) => button.addEventListener('click', () => {
@@ -659,7 +659,7 @@ async function renderPlacesManager(body, manager) {
     <p class="form-hint automation-manager__hint">Places are stable household locations. Rename them freely; templates and schedules keep their links by ID. Rooms inherit missing address details from their parent.</p>
     <div class="automation-list">${places.map((place) => {
       const usage = Object.values(place.usage || {}).reduce((sum, count) => sum + Number(count || 0), 0);
-      return `<div class="automation-list-row">
+      return `<div class="list-row automation-list-row">
         <div class="automation-list-row__copy"><strong>${h(place.path_label || place.name)}</strong><br><small class="form-hint">${h(place.type)}${place.city ? ` · ${h(place.city)}` : ''}${place.active ? '' : ' · inactive'}${usage ? ` · ${usage} linked record${usage === 1 ? '' : 's'}` : ''}</small></div>
         <div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-place="${place.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-place="${place.id}">Delete</button></div>
       </div>`;
@@ -728,9 +728,9 @@ async function renderAvailabilityManager(body, manager) {
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Current household snapshot</strong><span></span></div>
     <div class="automation-presence-grid">${snapshots.map(({ member, value }) => `<div class="automation-presence-card"><strong>${h(member.display_name)}</strong><span>${h(value?.effective?.custom_state || value?.effective?.state || 'Unknown')}</span><small>${h(value?.effective?.place?.path_label || value?.effective?.place_name || value?.effective?.source || 'No active signal')}</small></div>`).join('')}</div>
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Weekly schedules</strong><span></span></div>
-    <div class="automation-list">${rules.map((rule) => `<div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(rule.display_name)} · ${h(rule.name)}</strong><br><small class="form-hint">${rule.weekdays.map((day) => WEEKDAYS.find((item) => item[1] === day)?.[0]).filter(Boolean).join(', ')} · ${h(rule.start_time)}–${h(rule.end_time)} · ${h(rule.custom_state || rule.state)}${rule.place_name ? ` at ${h(rule.place_name)}` : ''}${rule.active ? '' : ' · inactive'}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-rule="${rule.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-rule="${rule.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No recurring availability rules yet.</p>'}</div>
+    <div class="automation-list">${rules.map((rule) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(rule.display_name)} · ${h(rule.name)}</strong><br><small class="form-hint">${rule.weekdays.map((day) => WEEKDAYS.find((item) => item[1] === day)?.[0]).filter(Boolean).join(', ')} · ${h(rule.start_time)}–${h(rule.end_time)} · ${h(rule.custom_state || rule.state)}${rule.place_name ? ` at ${h(rule.place_name)}` : ''}${rule.active ? '' : ' · inactive'}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-rule="${rule.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-rule="${rule.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No recurring availability rules yet.</p>'}</div>
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Dated exceptions and manual overrides</strong><button type="button" class="btn btn--secondary btn--sm" id="automation-add-period"><i data-lucide="calendar-plus" class="icon-md"></i>Add dated period</button></div>
-    <div class="automation-list">${periods.map((period) => `<div class="automation-list-row"><div class="automation-list-row__copy"><strong>${h(period.display_name)} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>`);
+    <div class="automation-list">${periods.map((period) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(period.display_name)} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>`);
   body.querySelector('#automation-add-rule')?.addEventListener('click', () => openAvailabilityRuleForm(null, { members, places }, manager));
   body.querySelector('#automation-add-period')?.addEventListener('click', () => openAvailabilityPeriodForm(null, { members, places }, manager));
   body.querySelectorAll('[data-edit-rule]').forEach((button) => button.addEventListener('click', () => openAvailabilityRuleForm(rules.find((row) => Number(row.id) === Number(button.dataset.editRule)), { members, places }, manager)));
@@ -785,7 +785,7 @@ async function renderSkillsManager(body, manager) {
     <p class="form-hint automation-manager__hint">Age provides the automatic baseline. Admin overrides on each member take precedence, except adult-only safety rules.</p>
     <div class="automation-list">
       ${skills.map((skill) => `
-        <div class="automation-list-row">
+        <div class="list-row automation-list-row">
           <div class="automation-list-row__copy"><strong>${h(skill.name)}</strong><br><small class="form-hint">Min age: ${skill.minimum_age ?? 0} · age → ${h(skill.age_promotion)}${skill.adult_only ? ' · adult only' : ''}</small></div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-skill-members="${skill.id}">Proficiency</button>
@@ -895,8 +895,8 @@ async function renderActivitiesManager(body, manager) {
     <p class="form-hint automation-manager__hint">Activities define work, required skills and how Yuvomi chooses an assignee.</p>
     <div class="automation-list">
       ${activities.map((activity) => `
-        <div class="automation-list-row">
-          <div class="automation-list-row__copy"><strong>${h(activity.name)}</strong><br><small class="form-hint">${h(activity.assignment_strategy)} · ${(activity.skills ?? []).map((skill) => h(skill.name)).join(', ') || 'no skill requirement'}</small></div>
+        <div class="list-row automation-list-row">
+          <div class="automation-list-row__copy"><strong>${h(activity.name)}</strong><br><small class="form-hint">${h(activity.assignment_policy || activity.assignment_strategy)} · ${(activity.skills ?? []).map((skill) => h(skill.name)).join(', ') || 'no skill requirement'}</small></div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-edit-activity="${activity.id}">Edit</button>
             <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-activity="${activity.id}" aria-label="Delete ${h(activity.name)} activity template">Delete</button>
@@ -929,7 +929,7 @@ async function renderActivitiesManager(body, manager) {
 
 function openActivityForm(activity, context, manager = null) {
   const selectedSkills = new Set((activity?.skills ?? []).map((skill) => Number(skill.id)));
-  const strategy = activity?.assignment_strategy || 'subject_skill';
+  const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
   const locationMode = activity?.location_mode || 'none';
   const content = `<form id="automation-activity-form">
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
@@ -939,10 +939,16 @@ function openActivityForm(activity, context, manager = null) {
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
       <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper, based on proficiency</option>
       <option value="eligible_round_robin" ${strategy === 'eligible_round_robin' ? 'selected' : ''}>Eligible round robin</option>
+      <option value="eligible_random" ${strategy === 'eligible_random' ? 'selected' : ''}>Random eligible member</option>
+      <option value="open_claimable" ${strategy === 'open_claimable' ? 'selected' : ''}>Open / claimable</option>
+      <option value="rotating_multi" ${strategy === 'rotating_multi' ? 'selected' : ''}>Rotating group</option>
       <option value="fixed" ${strategy === 'fixed' ? 'selected' : ''}>Fixed household member</option>
     </select>`)}
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${activity?.subject_required !== 0 ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed assignee', `<select class="input" name="fixed_user_id">${memberOptions(context.members, activity?.fixed_user_id)}</select>`)}</div>
+    <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
+    <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Rotation group', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Optional. Activities with the same group share one rotation cursor.')}</div>
+    <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${activity?.allow_assignment_override !== 0 ? 'checked' : ''}> Allow an admin to reassign this activity</label>
     <fieldset class="automation-fieldset"><legend class="label">Required skills</legend>
       <div class="automation-skill-grid">${context.skills.map((skill) => `<label class="automation-check-row"><input type="checkbox" name="skill" value="${skill.id}" ${selectedSkills.has(Number(skill.id)) ? 'checked' : ''}> ${h(skill.name)}</label>`).join('') || '<small class="form-hint">Create skills first if this activity requires proficiency checks.</small>'}</div>
     </fieldset>
@@ -962,7 +968,14 @@ function openActivityForm(activity, context, manager = null) {
       wireVariableMentions(panel);
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
-      strategySelect?.addEventListener('change', () => { fixed.hidden = strategySelect.value !== 'fixed'; });
+      const participantCount = panel.querySelector('#automation-participant-count');
+      const rotationGroup = panel.querySelector('#automation-rotation-group');
+      const refreshAssignment = () => {
+        fixed.hidden = strategySelect.value !== 'fixed';
+        participantCount.hidden = strategySelect.value !== 'rotating_multi';
+        rotationGroup.hidden = !['eligible_round_robin', 'rotating_multi'].includes(strategySelect.value);
+      };
+      strategySelect?.addEventListener('change', refreshAssignment);
       const locationSelect = panel.querySelector('#automation-location-mode');
       const fixedPlace = panel.querySelector('#automation-fixed-place');
       const locationVariable = panel.querySelector('#automation-location-variable');
@@ -977,6 +990,9 @@ function openActivityForm(activity, context, manager = null) {
           assignment_strategy: data.get('assignment_strategy'),
           subject_required: data.has('subject_required'),
           fixed_user_id: data.get('fixed_user_id') || null,
+          allow_assignment_override: data.has('allow_assignment_override'),
+          participant_count: Number(data.get('participant_count')) || 1,
+          rotation_group: data.get('rotation_group') || null,
           skill_ids: data.getAll('skill').map(Number),
           supervision_title_template: data.get('supervision_title_template'),
           location_mode: data.get('location_mode'),
@@ -1004,7 +1020,7 @@ async function renderWorkflowsManager(body, manager) {
     <p class="form-hint automation-manager__hint">Workflows arrange reusable activities into an on-demand event. Enabled workflows appear in Quick Add.</p>
     <div class="automation-list">
       ${workflows.map((workflow) => `
-        <div class="automation-list-row">
+        <div class="list-row automation-list-row">
           <div class="automation-list-row__copy"><strong>${h(workflow.name)}</strong><br><small class="form-hint">${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Quick Add enabled' : 'hidden from Quick Add'}</small></div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-edit-workflow="${workflow.id}">Edit</button>
@@ -1128,6 +1144,9 @@ function workflowStepHtml(step, index, activities, questions, members, places) {
   const subjectVariableId = step?.subject_variable_id || '';
   const locationMode = step?.location_mode || 'inherit';
   const locationVariableId = step?.location_variable_id || '';
+  const assignmentPolicy = step?.assignment_policy_override || '';
+  const assignmentVariableId = step?.assignment_variable_id || '';
+  const assignmentPolicyVariableId = step?.assignment_policy_variable_id || '';
   const conditionVariableId = step?.condition?.variable_id || step?.condition?.input || '';
   const conditionValue = step?.condition && Object.hasOwn(step.condition, 'equals') ? step.condition.equals : '';
   return `<div class="automation-workflow-step" data-workflow-step data-workflow-key="${h(workflowKey)}" data-initial-dependency="${h(initialDependency)}">
@@ -1138,6 +1157,20 @@ function workflowStepHtml(step, index, activities, questions, members, places) {
     <select class="input automation-workflow-step__control" data-step-subject-variable>
       <option value="">Use the workflow subject</option>${workflowVariableOptions(questions, subjectVariableId, { memberOnly: true })}
     </select>
+    <div class="automation-workflow-condition" data-step-assignment-controls>
+      <select class="input" data-step-assignment-policy>
+        <option value="" ${!assignmentPolicy ? 'selected' : ''}>Use Activity Template assignment</option>
+        <option value="eligible_round_robin" ${assignmentPolicy === 'eligible_round_robin' ? 'selected' : ''}>Eligible round robin</option>
+        <option value="eligible_random" ${assignmentPolicy === 'eligible_random' ? 'selected' : ''}>Random eligible member</option>
+        <option value="open_claimable" ${assignmentPolicy === 'open_claimable' ? 'selected' : ''}>Open / claimable</option>
+        <option value="rotating_multi" ${assignmentPolicy === 'rotating_multi' ? 'selected' : ''}>Rotating group</option>
+        <option value="fixed" ${assignmentPolicy === 'fixed' ? 'selected' : ''}>Fixed household member</option>
+        <option value="subject_skill" ${assignmentPolicy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper</option>
+      </select>
+      <select class="input" data-step-assignment-user>${memberOptions(members, step?.assignment_user_id, 'No fixed member')}</select>
+      <select class="input" data-step-assignment-variable><option value="">No member variable</option>${workflowVariableOptions(questions, assignmentVariableId, { memberOnly: true })}</select>
+      <select class="input" data-step-assignment-policy-variable><option value="">No runtime policy question</option>${workflowVariableOptions(questions, assignmentPolicyVariableId)}</select>
+    </div>
     <div class="automation-workflow-condition" data-step-location-controls>
       <select class="input" data-step-location-mode><option value="inherit" ${locationMode === 'inherit' ? 'selected' : ''}>Use Activity Template location</option><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No location for this step</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Use a fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Use a Location variable</option></select>
       <select class="input" data-step-place ${locationMode === 'fixed' ? '' : 'hidden'}>${placeOptions(places, step?.place_id)}</select>
@@ -1240,9 +1273,13 @@ function openWorkflowForm(workflow, context, manager = null) {
           const subjectSelect = row.querySelector('[data-step-subject-variable]');
           const locationSelect = row.querySelector('[data-step-location-variable]');
           const conditionSelect = row.querySelector('[data-step-condition-variable]');
+          const assignmentVariable = row.querySelector('[data-step-assignment-variable]');
+          const assignmentPolicyVariable = row.querySelector('[data-step-assignment-policy-variable]');
           const oldSubject = subjectSelect.value;
           const oldLocation = locationSelect.value;
           const oldCondition = conditionSelect.value;
+          const oldAssignmentVariable = assignmentVariable.value;
+          const oldAssignmentPolicyVariable = assignmentPolicyVariable.value;
           const oldConditionValue = row.querySelector('[data-step-condition-value]')?.value ?? '';
           replaceHtml(subjectSelect, '<option value="">Use the workflow subject</option>'
             + workflowVariableOptions(drafts, oldSubject, { memberOnly: true }));
@@ -1250,9 +1287,15 @@ function openWorkflowForm(workflow, context, manager = null) {
             + workflowVariableOptions(drafts, oldCondition));
           replaceHtml(locationSelect, '<option value="">Choose a Location variable…</option>'
             + workflowVariableOptions(drafts, oldLocation, { locationOnly: true }));
+          replaceHtml(assignmentVariable, '<option value="">No member variable</option>'
+            + workflowVariableOptions(drafts, oldAssignmentVariable, { memberOnly: true }));
+          replaceHtml(assignmentPolicyVariable, '<option value="">No runtime policy question</option>'
+            + workflowVariableOptions(drafts, oldAssignmentPolicyVariable));
           if ([...subjectSelect.options].some((option) => option.value === oldSubject)) subjectSelect.value = oldSubject;
           if ([...conditionSelect.options].some((option) => option.value === oldCondition)) conditionSelect.value = oldCondition;
           if ([...locationSelect.options].some((option) => option.value === oldLocation)) locationSelect.value = oldLocation;
+          if ([...assignmentVariable.options].some((option) => option.value === oldAssignmentVariable)) assignmentVariable.value = oldAssignmentVariable;
+          if ([...assignmentPolicyVariable.options].some((option) => option.value === oldAssignmentPolicyVariable)) assignmentPolicyVariable.value = oldAssignmentPolicyVariable;
           replaceHtml(row.querySelector('[data-condition-value-slot]'), conditionValueHtml(
             conditionSelect.value, oldConditionValue, drafts, context.members, context.places,
           ));
@@ -1380,6 +1423,10 @@ function openWorkflowForm(workflow, context, manager = null) {
             place_id: Number(row.querySelector('[data-step-place]').value) || null,
             location_variable_id: row.querySelector('[data-step-location-variable]').value || null,
             presence_policy_override: row.querySelector('[data-step-presence-policy]').value || null,
+            assignment_policy_override: row.querySelector('[data-step-assignment-policy]').value || null,
+            assignment_user_id: Number(row.querySelector('[data-step-assignment-user]').value) || null,
+            assignment_variable_id: row.querySelector('[data-step-assignment-variable]').value || null,
+            assignment_policy_variable_id: row.querySelector('[data-step-assignment-policy-variable]').value || null,
             depends_on: dependency ? [dependency] : [],
             condition: conditionVariableId ? {
               variable_id: conditionVariableId,

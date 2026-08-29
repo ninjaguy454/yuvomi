@@ -9,6 +9,7 @@
  */
 
 import { resolveActivityAssignment } from './activity-eligibility.js';
+import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
 import { todayKey } from '../utils/timezone.js';
 
 export class TaskActivityBindingError extends Error {}
@@ -51,11 +52,16 @@ export function getTaskActivityBinding(d, taskId) {
            p.name AS activity_place_name,
            pc.presence_policy AS activity_presence_policy,
            pc.presence_window AS activity_presence_window,
+           ac.strategy AS activity_assignment_policy,
+           ac.state AS activity_assignment_state,
+           ac.override_allowed AS activity_assignment_override_allowed,
+           ac.beneficiary_user_id AS activity_beneficiary_user_id,
            u.display_name AS activity_subject_name
       FROM task_activity_bindings b
       JOIN activity_templates a ON a.id = b.activity_template_id
       LEFT JOIN users u ON u.id = b.subject_user_id
       LEFT JOIN task_planning_context pc ON pc.task_id = b.task_id
+      LEFT JOIN task_assignment_context ac ON ac.task_id = b.task_id
       LEFT JOIN places p ON p.id = pc.place_id
      WHERE b.task_id = ?
   `).get(taskId) ?? null;
@@ -77,15 +83,21 @@ export function attachTaskActivityBindings(d, tasks) {
            p.name AS activity_place_name,
            pc.presence_policy AS activity_presence_policy,
            pc.presence_window AS activity_presence_window,
+           ac.strategy AS activity_assignment_policy,
+           ac.state AS activity_assignment_state,
+           ac.override_allowed AS activity_assignment_override_allowed,
+           ac.beneficiary_user_id AS activity_beneficiary_user_id,
            u.display_name AS activity_subject_name
       FROM task_activity_bindings b
       JOIN activity_templates a ON a.id = b.activity_template_id
       LEFT JOIN users u ON u.id = b.subject_user_id
       LEFT JOIN task_planning_context pc ON pc.task_id = b.task_id
+      LEFT JOIN task_assignment_context ac ON ac.task_id = b.task_id
       LEFT JOIN places p ON p.id = pc.place_id
      WHERE b.task_id IN (${placeholders})
   `).all(...ids);
   const byTask = new Map(rows.map((row) => [Number(row.task_id), row]));
+  const responsibilities = listTaskResponsibilities(d, ids);
   for (const task of tasks) {
     const binding = byTask.get(Number(task.id));
     task.activity_template_id = binding?.activity_template_id ?? null;
@@ -99,6 +111,11 @@ export function attachTaskActivityBindings(d, tasks) {
     task.activity_place_name = binding?.activity_place_name ?? null;
     task.activity_presence_policy = binding?.activity_presence_policy ?? 'ignore';
     task.activity_presence_window = binding?.activity_presence_window ?? 'due';
+    task.activity_assignment_policy = binding?.activity_assignment_policy ?? binding?.activity_assignment_strategy ?? null;
+    task.activity_assignment_state = binding?.activity_assignment_state ?? null;
+    task.activity_assignment_override_allowed = binding?.activity_assignment_override_allowed ?? null;
+    task.activity_beneficiary_user_id = binding?.activity_beneficiary_user_id ?? null;
+    task.activity_responsibilities = responsibilities[task.id] || [];
   }
   return tasks;
 }
@@ -289,6 +306,8 @@ export function applyTaskActivityBinding(d, taskId, {
     `).run(task.id, supportTaskId);
   }
 
+  recordTaskAssignment(d, task.id, preview.activity, resolution);
+
   return {
     binding: getTaskActivityBinding(d, task.id),
     resolution,
@@ -298,6 +317,9 @@ export function applyTaskActivityBinding(d, taskId, {
 
 export function clearTaskActivityBinding(d, taskId) {
   deleteSupportTasks(d, taskId);
+  d.prepare("UPDATE planning_obligations SET status = 'cancelled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status IN ('pending', 'accepted')").run(taskId);
+  d.prepare('DELETE FROM task_responsibilities WHERE task_id = ?').run(taskId);
+  d.prepare('DELETE FROM task_assignment_context WHERE task_id = ?').run(taskId);
   d.prepare('DELETE FROM task_activity_bindings WHERE task_id = ?').run(taskId);
   d.prepare("DELETE FROM task_planning_context WHERE task_id = ? AND source = 'activity_template'").run(taskId);
 }

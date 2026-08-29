@@ -256,6 +256,35 @@ function setAssignments(d, taskId, userIds) {
   d.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
   const ins = d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)');
   for (const uid of userIds) ins.run(taskId, uid);
+
+  const task = d.prepare('SELECT parent_task_id FROM tasks WHERE id = ?').get(taskId);
+  if (!task?.parent_task_id) return;
+  d.prepare("DELETE FROM task_responsibilities WHERE task_id = ? AND role = 'subtask_assignee'").run(taskId);
+  const responsibility = d.prepare(`
+    INSERT OR IGNORE INTO task_responsibilities (task_id, user_id, role, source)
+    VALUES (?, ?, ?, ?)
+  `);
+  for (const uid of userIds) responsibility.run(taskId, uid, 'subtask_assignee', 'subtask');
+
+  const previous = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id = ? AND role = 'participant' AND source = 'subtasks'")
+    .all(task.parent_task_id).map((row) => Number(row.user_id));
+  d.prepare("DELETE FROM task_responsibilities WHERE task_id = ? AND role = 'participant' AND source = 'subtasks'")
+    .run(task.parent_task_id);
+  const current = d.prepare(`
+    SELECT DISTINCT ta.user_id
+      FROM tasks child
+      JOIN task_assignments ta ON ta.task_id = child.id
+     WHERE child.parent_task_id = ?
+  `).all(task.parent_task_id).map((row) => Number(row.user_id));
+  for (const uid of current) {
+    responsibility.run(task.parent_task_id, uid, 'participant', 'subtasks');
+    ins.run(task.parent_task_id, uid);
+  }
+  for (const uid of previous.filter((id) => !current.includes(id))) {
+    const otherRole = d.prepare("SELECT 1 FROM task_responsibilities WHERE task_id = ? AND user_id = ? AND status = 'active'")
+      .get(task.parent_task_id, uid);
+    if (!otherRole) d.prepare('DELETE FROM task_assignments WHERE task_id = ? AND user_id = ?').run(task.parent_task_id, uid);
+  }
 }
 
 function parseTaskActivityBinding(body, existing = null) {
@@ -1521,6 +1550,14 @@ router.put('/:id', (req, res) => {
       // Verlaufseintrag gilt für jede Aufgabe und nennt die handelnde Person.
       syncTaskCompletion(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
       syncWorkflowInstanceForTask(db.get(), task.id);
+      if (status === 'done' && task.status !== 'done') {
+        db.get().prepare("UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status IN ('pending', 'accepted')").run(task.id);
+        db.get().prepare("UPDATE task_responsibilities SET status = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'active'").run(task.id);
+        db.get().prepare("UPDATE task_assignment_context SET state = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(task.id);
+      } else if (task.status === 'done' && status !== 'done') {
+        db.get().prepare("UPDATE task_responsibilities SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'fulfilled'").run(task.id);
+        db.get().prepare("UPDATE task_assignment_context SET state = CASE WHEN strategy = 'open_claimable' AND (SELECT assigned_to FROM tasks WHERE id = ?) IS NULL THEN 'open' ELSE 'assigned' END, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(task.id, task.id);
+      }
 
       // Auch über das Bearbeiten-Formular lässt sich ein Abhaken zurücknehmen -
       // die Folgeinstanz muss dann genauso verschwinden wie beim Klick auf die
@@ -1914,6 +1951,17 @@ router.patch('/:id/status', (req, res) => {
       // dreifach: Checkbox, Swipe und die Sammelaktion gehen alle hier durch.
       syncTaskCompletion(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
       syncWorkflowInstanceForTask(db.get(), Number(req.params.id));
+      if (status === 'done' && prev.status !== 'done') {
+        db.get().prepare("UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status IN ('pending', 'accepted')")
+          .run(req.params.id);
+        db.get().prepare("UPDATE task_responsibilities SET status = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'active'")
+          .run(req.params.id);
+        db.get().prepare("UPDATE task_assignment_context SET state = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?")
+          .run(req.params.id);
+      } else if (prev.status === 'done' && status !== 'done') {
+        db.get().prepare("UPDATE task_responsibilities SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'fulfilled'").run(req.params.id);
+        db.get().prepare("UPDATE task_assignment_context SET state = CASE WHEN strategy = 'open_claimable' AND (SELECT assigned_to FROM tasks WHERE id = ?) IS NULL THEN 'open' ELSE 'assigned' END, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(req.params.id, req.params.id);
+      }
 
       // Zurückgenommenes Abhaken macht auch die Folgeinstanz rückgängig (#650).
       // Sonst stünde die beim Erledigen erzeugte nächste Instanz neben der wieder

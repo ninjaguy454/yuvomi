@@ -1418,3 +1418,20 @@
     display: none;
   }
 }
+.meal-choice-list {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.meal-choice-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--glass-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg-card);
+}
+
+.meal-choice-card .modal-panel__footer {
+  margin-top: 0;
+}

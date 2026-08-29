@@ -7239,6 +7239,119 @@ const FORK_MIGRATIONS = [
       ALTER TABLE meal_schedule_slots ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE RESTRICT;
     `,
   },
+  {
+    version: 10008,
+    description: 'Household planning: assignment participation and meal selection automation',
+    up: `
+      ALTER TABLE activity_templates ADD COLUMN assignment_policy TEXT;
+      ALTER TABLE activity_templates ADD COLUMN allow_assignment_override INTEGER NOT NULL DEFAULT 1
+        CHECK(allow_assignment_override IN (0, 1));
+      ALTER TABLE activity_templates ADD COLUMN participant_count INTEGER NOT NULL DEFAULT 1
+        CHECK(participant_count BETWEEN 1 AND 50);
+      ALTER TABLE activity_templates ADD COLUMN rotation_group TEXT;
+
+      UPDATE activity_templates
+         SET assignment_policy = assignment_strategy
+       WHERE assignment_policy IS NULL;
+
+      ALTER TABLE workflow_template_steps ADD COLUMN assignment_policy_override TEXT;
+      ALTER TABLE workflow_template_steps ADD COLUMN assignment_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE workflow_template_steps ADD COLUMN assignment_variable_id TEXT;
+      ALTER TABLE workflow_template_steps ADD COLUMN assignment_policy_variable_id TEXT;
+
+      CREATE TABLE IF NOT EXISTS assignment_rotation_state (
+        rotation_key    TEXT PRIMARY KEY,
+        cursor_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        occurrence_count INTEGER NOT NULL DEFAULT 0 CHECK(occurrence_count >= 0),
+        updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS task_assignment_context (
+        task_id          INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        strategy         TEXT NOT NULL,
+        state            TEXT NOT NULL DEFAULT 'assigned'
+                              CHECK(state IN ('assigned', 'open', 'unavailable', 'fulfilled', 'cancelled')),
+        override_allowed INTEGER NOT NULL DEFAULT 1 CHECK(override_allowed IN (0, 1)),
+        beneficiary_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        source            TEXT NOT NULL DEFAULT 'activity_template',
+        rotation_key      TEXT,
+        created_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_task_assignment_context_state ON task_assignment_context(state, strategy);
+
+      CREATE TABLE IF NOT EXISTS task_responsibilities (
+        task_id      INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role         TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'active'
+                          CHECK(status IN ('active', 'declined', 'fulfilled', 'cancelled', 'superseded')),
+        source       TEXT NOT NULL DEFAULT 'assignment',
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(task_id, user_id, role)
+      );
+      CREATE INDEX idx_task_responsibilities_user ON task_responsibilities(user_id, role, status);
+
+      ALTER TABLE planning_obligations ADD COLUMN task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE;
+      ALTER TABLE planning_obligations ADD COLUMN parent_obligation_id INTEGER REFERENCES planning_obligations(id) ON DELETE SET NULL;
+      ALTER TABLE planning_obligations ADD COLUMN response_deadline TEXT;
+      ALTER TABLE planning_obligations ADD COLUMN reminder_at TEXT;
+      ALTER TABLE planning_obligations ADD COLUMN responded_at TEXT;
+      ALTER TABLE planning_obligations ADD COLUMN response_note TEXT;
+      ALTER TABLE planning_obligations ADD COLUMN metadata_json TEXT;
+      CREATE INDEX idx_planning_obligations_responsible
+        ON planning_obligations(responsible_user_id, status, response_deadline);
+
+      CREATE TABLE IF NOT EXISTS planning_obligation_events (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        obligation_id INTEGER NOT NULL REFERENCES planning_obligations(id) ON DELETE CASCADE,
+        event          TEXT NOT NULL,
+        actor_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        details_json   TEXT,
+        created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_planning_obligation_events_obligation
+        ON planning_obligation_events(obligation_id, id);
+
+      ALTER TABLE meal_schedule_slots ADD COLUMN selection_deadline_minutes INTEGER NOT NULL DEFAULT 1440
+        CHECK(selection_deadline_minutes BETWEEN 0 AND 10080);
+      ALTER TABLE meal_schedule_slots ADD COLUMN reminder_minutes INTEGER NOT NULL DEFAULT 120
+        CHECK(reminder_minutes BETWEEN 0 AND 10080);
+      ALTER TABLE meal_schedule_slots ADD COLUMN snack_choice_limit INTEGER NOT NULL DEFAULT 3
+        CHECK(snack_choice_limit BETWEEN 1 AND 20);
+      ALTER TABLE meal_schedule_slots ADD COLUMN cook_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE meal_schedule_slots ADD COLUMN supervisor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
+      ALTER TABLE meals ADD COLUMN parent_meal_id INTEGER REFERENCES meals(id) ON DELETE CASCADE;
+      ALTER TABLE meals ADD COLUMN selection_status TEXT NOT NULL DEFAULT 'selected'
+        CHECK(selection_status IN ('awaiting_choice', 'selected', 'declined', 'timed_out', 'superseded'));
+      CREATE INDEX idx_meals_parent_scope ON meals(parent_meal_id, scope);
+
+      CREATE TABLE IF NOT EXISTS meal_selection_responses (
+        obligation_id INTEGER PRIMARY KEY REFERENCES planning_obligations(id) ON DELETE CASCADE,
+        meal_id        INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        recipe_id      INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+        title          TEXT,
+        notes          TEXT,
+        scope          TEXT NOT NULL DEFAULT 'household'
+                            CHECK(scope IN ('household', 'personal')),
+        responded_by   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+
+      CREATE TABLE IF NOT EXISTS meal_selection_response_items (
+        obligation_id INTEGER NOT NULL REFERENCES planning_obligations(id) ON DELETE CASCADE,
+        position      INTEGER NOT NULL CHECK(position >= 0),
+        meal_id       INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        recipe_id     INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+        title         TEXT NOT NULL,
+        notes         TEXT,
+        PRIMARY KEY(obligation_id, position)
+      );
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

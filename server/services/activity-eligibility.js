@@ -21,6 +21,9 @@ export const PROFICIENCY = Object.freeze({
 export const ASSIGNMENT_STRATEGIES = Object.freeze([
   'subject_skill',
   'eligible_round_robin',
+  'eligible_random',
+  'open_claimable',
+  'rotating_multi',
   'fixed',
 ]);
 
@@ -238,6 +241,67 @@ function chooseRoundRobin(d, activityTemplateId, purpose, eligible, {
   return selected;
 }
 
+function assignmentPolicy(activity, override = null) {
+  return override || activity.assignment_policy || activity.assignment_strategy || 'subject_skill';
+}
+
+function rotationKey(activity, purpose = 'primary') {
+  return activity.rotation_group
+    ? `activity-group:${activity.rotation_group}:${purpose}`
+    : `activity:${activity.id}:${purpose}`;
+}
+
+function chooseRotatingMembers(d, activity, eligible, count, {
+  commit = false,
+  purpose = 'primary',
+  orderedMembers = eligible,
+} = {}) {
+  if (!eligible.length || count < 1) return [];
+  const key = rotationKey(activity, purpose);
+  const eligibleById = new Map(eligible.map((member) => [Number(member.id), member]));
+  const order = orderedMembers.map((member) => Number(member.id));
+  const state = d.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key = ?').get(key);
+  const previous = state?.cursor_user_id == null ? -1 : order.indexOf(Number(state.cursor_user_id));
+  const selected = [];
+  for (let offset = 1; offset <= order.length && selected.length < Math.min(count, eligible.length); offset += 1) {
+    const member = eligibleById.get(order[(previous + offset + order.length) % order.length]);
+    if (member && !selected.some((row) => Number(row.id) === Number(member.id))) selected.push(member);
+  }
+  if (commit && selected.length) {
+    d.prepare(`
+      INSERT INTO assignment_rotation_state (rotation_key, cursor_user_id, occurrence_count, updated_at)
+      VALUES (?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ON CONFLICT(rotation_key) DO UPDATE SET
+        cursor_user_id = excluded.cursor_user_id,
+        occurrence_count = assignment_rotation_state.occurrence_count + 1,
+        updated_at = excluded.updated_at
+    `).run(key, selected.at(-1).id);
+  }
+  return selected;
+}
+
+export function eligibleMembersForActivity(d, activity, {
+  dateKey = todayKey(d),
+  presence = null,
+  includeSupervised = false,
+} = {}) {
+  return householdMembers(d).filter((member) => {
+    const proficiency = effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency;
+    if (proficiency !== PROFICIENCY.NORMAL && !(includeSupervised && proficiency === PROFICIENCY.SUPERVISED)) return false;
+    const policy = presence?.policy || activity.presence_policy || 'ignore';
+    if (policy === 'ignore') return true;
+    try {
+      return evaluatePresence(d, {
+        userId: member.id,
+        startAt: presence?.startAt || `${dateKey}T00:00:00`,
+        endAt: presence?.endAt || `${dateKey}T23:59:00`,
+        targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null,
+        policy,
+      }).eligible;
+    } catch { return false; }
+  });
+}
+
 /**
  * Resolve one activity into concrete work.
  *
@@ -250,6 +314,9 @@ export function resolveActivityAssignment(d, activity, {
   commitRotation = false,
   dateKey = todayKey(d),
   presence = null,
+  assignmentPolicyOverride = null,
+  fixedUserIdOverride = null,
+  random = Math.random,
 } = {}) {
   const members = householdMembers(d);
   const subject = subjectUserId == null
@@ -274,8 +341,11 @@ export function resolveActivityAssignment(d, activity, {
     } catch { return false; }
   };
 
-  if (activity.assignment_strategy === 'fixed') {
-    const fixed = members.find((member) => Number(member.id) === Number(activity.fixed_user_id));
+  const policy = assignmentPolicy(activity, assignmentPolicyOverride);
+
+  if (policy === 'fixed') {
+    const fixedId = fixedUserIdOverride ?? activity.fixed_user_id;
+    const fixed = members.find((member) => Number(member.id) === Number(fixedId));
     if (!fixed) throw new Error('The fixed assignee is no longer available.');
     // Fixed means "this specific qualified person", not "ignore the skill
     // engine". Otherwise an adult-only requirement could be bypassed simply by
@@ -296,15 +366,21 @@ export function resolveActivityAssignment(d, activity, {
     };
   }
 
-  if (activity.assignment_strategy === 'eligible_round_robin') {
-    const eligible = members.filter((member) =>
-      effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
-      && isPresent(member)
-    );
-    const primary = chooseRoundRobin(d, activity.id, 'primary', eligible, {
-      commit: commitRotation,
-      orderedMembers: members,
-    });
+  const eligible = members.filter((member) =>
+    effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
+    && isPresent(member)
+  );
+
+  if (policy === 'eligible_round_robin') {
+    const primary = activity.rotation_group
+      ? chooseRotatingMembers(d, activity, eligible, 1, {
+        commit: commitRotation,
+        orderedMembers: members,
+      })[0]
+      : chooseRoundRobin(d, activity.id, 'primary', eligible, {
+        commit: commitRotation,
+        orderedMembers: members,
+      });
     if (!primary) throw new Error('No household member is currently qualified for this activity.');
     return {
       primary,
@@ -317,6 +393,41 @@ export function resolveActivityAssignment(d, activity, {
     };
   }
 
+  if (policy === 'eligible_random') {
+    if (!eligible.length) throw new Error('No household member is currently qualified for this activity.');
+    const bounded = Math.min(0.999999999999, Math.max(0, Number(random()) || 0));
+    const primary = eligible[Math.floor(bounded * eligible.length)];
+    return { primary, supervisor: null, participants: [primary], subject, subjectProficiency: subject
+      ? effectiveActivityProficiency(d, activity.id, subject, dateKey) : null, eligible, strategy: policy };
+  }
+
+  if (policy === 'open_claimable') {
+    return {
+      primary: null,
+      supervisor: null,
+      participants: [],
+      subject,
+      subjectProficiency: subject ? effectiveActivityProficiency(d, activity.id, subject, dateKey) : null,
+      eligible,
+      strategy: policy,
+      unavailable: eligible.length === 0,
+    };
+  }
+
+  if (policy === 'rotating_multi') {
+    const requested = Math.max(1, Number(activity.participant_count) || 1);
+    const selected = chooseRotatingMembers(d, activity, eligible, requested, {
+      commit: commitRotation,
+      orderedMembers: members,
+    });
+    if (!selected.length) throw new Error('No household member is currently qualified for this activity.');
+    return {
+      primary: selected[0], supervisor: null, participants: selected, subject,
+      subjectProficiency: subject ? effectiveActivityProficiency(d, activity.id, subject, dateKey) : null,
+      eligible, strategy: policy,
+    };
+  }
+
   // subject_skill: the subject does work they can do normally, gets a Normal
   // helper when excluded, and gets a separate supervisor when supervised.
   if (!subject) throw new Error('Subject-based assignment requires a household member subject.');
@@ -324,7 +435,7 @@ export function resolveActivityAssignment(d, activity, {
   const subjectMeetsPresence = isPresent(subject);
 
   if (subjectProficiency.proficiency === PROFICIENCY.NORMAL && subjectMeetsPresence) {
-    return { primary: subject, supervisor: null, subject, subjectProficiency, eligible: [subject] };
+    return { primary: subject, supervisor: null, participants: [subject], subject, subjectProficiency, eligible: [subject], strategy: policy };
   }
 
   const eligibleHelpers = members.filter((member) =>
@@ -343,6 +454,7 @@ export function resolveActivityAssignment(d, activity, {
     return {
       primary: subject,
       supervisor: helper,
+      participants: [subject],
       subject,
       subjectProficiency,
       eligible: eligibleHelpers,
@@ -352,10 +464,24 @@ export function resolveActivityAssignment(d, activity, {
   return {
     primary: helper,
     supervisor: null,
+    participants: [helper],
     subject,
     subjectProficiency,
     eligible: eligibleHelpers,
   };
+}
+
+export function assertEligibleActivityMember(d, activity, userId, options = {}) {
+  const member = householdMembers(d).find((row) => Number(row.id) === Number(userId));
+  if (!member) throw new Error('Choose a valid household member.');
+  const proficiency = effectiveActivityProficiency(d, activity.id, member, options.dateKey || todayKey(d));
+  if (proficiency.proficiency !== PROFICIENCY.NORMAL) {
+    throw new Error('That household member is not independently qualified for this activity.');
+  }
+  if (!eligibleMembersForActivity(d, activity, options).some((row) => Number(row.id) === Number(member.id))) {
+    throw new Error('That household member does not meet this activity\'s availability or presence requirements.');
+  }
+  return member;
 }
 
 export function renderActivityTitle(activity, subject) {

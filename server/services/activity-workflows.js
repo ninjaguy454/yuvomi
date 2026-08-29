@@ -15,6 +15,7 @@ import {
   resolveActivityAssignment,
   renderActivityTitle,
 } from './activity-eligibility.js';
+import { recordTaskAssignment } from './assignment-responsibilities.js';
 
 function parseJson(raw, fallback) {
   if (raw == null || raw === '') return fallback;
@@ -302,6 +303,20 @@ function stepPlanningContext(d, activity, step, inputs) {
   };
 }
 
+function stepAssignment(activity, step, inputs) {
+  const allowed = new Set(['subject_skill', 'eligible_round_robin', 'eligible_random', 'open_claimable', 'rotating_multi', 'fixed']);
+  const runtimePolicy = step.assignment_policy_variable_id
+    ? String(inputs?.[step.assignment_policy_variable_id] || '')
+    : '';
+  const policy = allowed.has(runtimePolicy)
+    ? runtimePolicy
+    : (step.assignment_policy_override || activity.assignment_policy || activity.assignment_strategy);
+  const fixedUserId = step.assignment_variable_id
+    ? Number(inputs?.[step.assignment_variable_id]) || null
+    : (step.assignment_user_id || null);
+  return { policy, fixedUserId };
+}
+
 /** Pure preview. It intentionally does not advance any rotation cursor. */
 export function previewWorkflow(d, workflowId, {
   subjectUserId = null,
@@ -331,9 +346,12 @@ export function previewWorkflow(d, workflowId, {
         if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
         const activitySubject = stepSubject(d, step, subject, runtimeInputs);
         const planning = stepPlanningContext(d, activity, step, runtimeInputs);
+        const assignment = stepAssignment(activity, step, runtimeInputs);
         const resolution = resolveActivityAssignment(d, activity, {
           subjectUserId: activitySubject?.id ?? null,
           commitRotation: true,
+          assignmentPolicyOverride: assignment.policy,
+          fixedUserIdOverride: assignment.fixedUserId,
           presence: {
             policy: planning.presence_policy,
             targetPlaceId: planning.place_id,
@@ -352,6 +370,7 @@ export function previewWorkflow(d, workflowId, {
           supervisor: resolution.supervisor,
           supervisor_title: resolution.supervisor ? supervisorTitle(activity, activitySubject, variableLabels) : null,
           subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
+          assignment_policy: assignment.policy,
           depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
           category: activity.category,
           ...planning,
@@ -460,9 +479,12 @@ export function instantiateWorkflow(d, workflowId, {
       if (!activity || !activity.active) throw new Error(`Activity template unavailable: ${step.activity_name}`);
       const activitySubject = stepSubject(d, step, subject, runtimeInputs);
       const planning = stepPlanningContext(d, activity, step, runtimeInputs);
+      const assignment = stepAssignment(activity, step, runtimeInputs);
       const resolution = resolveActivityAssignment(d, activity, {
         subjectUserId: activitySubject?.id ?? null,
         commitRotation: true,
+        assignmentPolicyOverride: assignment.policy,
+        fixedUserIdOverride: assignment.fixedUserId,
         presence: {
           policy: planning.presence_policy,
           targetPlaceId: planning.place_id,
@@ -485,6 +507,10 @@ export function instantiateWorkflow(d, workflowId, {
           workflow_instance_id, workflow_step_id, task_id, role
         ) VALUES (?, ?, ?, 'primary')
       `).run(instanceId, step.id, primaryTaskId);
+      d.prepare(`
+        INSERT INTO task_activity_bindings (task_id, activity_template_id, subject_user_id)
+        VALUES (?, ?, ?)
+      `).run(primaryTaskId, activity.id, activitySubject?.id ?? null);
       if (planning.place_id || planning.presence_policy !== 'ignore') {
         d.prepare(`
           INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
@@ -493,11 +519,16 @@ export function instantiateWorkflow(d, workflowId, {
       }
 
       const stepTaskIds = [primaryTaskId];
+      recordTaskAssignment(d, primaryTaskId, activity, resolution, {
+        source: 'workflow',
+        strategy: assignment.policy,
+      });
       generated.push({
         task_id: primaryTaskId,
         role: 'primary',
         step_key: step.step_key,
         assigned_to: resolution.primary,
+        participants: resolution.participants || [],
         subject: activitySubject,
         ...planning,
       });
@@ -553,10 +584,18 @@ export function instantiateWorkflow(d, workflowId, {
     const parentParticipant = d.prepare(
       'INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)'
     );
-    const participantIds = new Set(
-      generated.map((item) => Number(item.assigned_to?.id)).filter((id) => Number.isInteger(id) && id > 0)
-    );
-    for (const userId of participantIds) parentParticipant.run(parentTaskId, userId);
+    const participantIds = new Set(generated.flatMap((item) => [
+      Number(item.assigned_to?.id),
+      ...(item.participants || []).map((participant) => Number(participant.id)),
+    ]).filter((id) => Number.isInteger(id) && id > 0));
+    const parentResponsibility = d.prepare(`
+      INSERT OR IGNORE INTO task_responsibilities (task_id, user_id, role, source)
+      VALUES (?, ?, 'participant', 'workflow')
+    `);
+    for (const userId of participantIds) {
+      parentParticipant.run(parentTaskId, userId);
+      parentResponsibility.run(parentTaskId, userId);
+    }
 
     // The parent is an event container, not an independently completable piece
     // of work. Reuse the existing dependency guard so a user cannot manually

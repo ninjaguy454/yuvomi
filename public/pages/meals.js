@@ -16,7 +16,7 @@ import { resolveShoppingTarget, announceTransfer, mountMissingShoppingList } fro
 import { ingredientRowHTML } from '/utils/ingredient-row.js';
 import { addLocalDays, startOfLocalWeekKey, todayKey } from '/utils/date.js';
 import { normalizeRecipeMealTypes, recipeSupportsMealType, recipeAllowsMealType } from '/utils/recipe-meal-types.js';
-import { mountEmptyState, mountLoadError, emptyStateEl } from '/utils/empty-state.js';
+import { mountEmptyState, mountLoadError, emptyStateEl, emptyStateHTML } from '/utils/empty-state.js';
 import { mealPayloadFromRecipe } from '/utils/recipe-to-meal.js';
 import { findPageFab } from '/utils/fab.js';
 import { zonedWeekday } from '/utils/timezone.js';
@@ -50,6 +50,7 @@ let state = {
   lists:            [],     // Einkaufslisten für Transfer-Dropdown
   categories:       [],     // Einkaufskategorien für Zutaten
   planning:         { timing_defaults: [], slots: [], members: [] },
+  selectionRequests: [],
   viewMode:         'week',
   isAdmin:          false,
   modal:            null,
@@ -216,6 +217,15 @@ async function loadPlanning() {
   }
 }
 
+async function loadSelectionRequests() {
+  try {
+    const res = await api.get('/meals/selection-requests');
+    state.selectionRequests = Array.isArray(res.data) ? res.data : [];
+  } catch {
+    state.selectionRequests = [];
+  }
+}
+
 // --------------------------------------------------------
 // Render
 // --------------------------------------------------------
@@ -247,6 +257,7 @@ export async function render(container, { user }) {
           </button>
         </div>
         <div class="page-toolbar__actions">
+          <button class="btn btn--secondary" id="meal-choices"><i data-lucide="inbox" class="icon-sm" aria-hidden="true"></i><span>Meal choices</span><span class="badge" id="meal-choice-count" hidden></span></button>
           <button class="btn btn--secondary" id="meal-view-toggle" aria-pressed="false"><i data-lucide="list" class="icon-sm" aria-hidden="true"></i><span>Timeline</span></button>
           ${state.isAdmin ? '<button class="btn btn--secondary" id="meal-schedule"><i data-lucide="calendar-clock" class="icon-sm" aria-hidden="true"></i><span>Recurring schedule</span></button>' : ''}
           <button class="btn btn--secondary week-nav__today" id="week-today">${t('meals.today')}</button>
@@ -282,7 +293,12 @@ export async function render(container, { user }) {
   const today  = todayKey();
   const monday = getMondayOf(today);
 
-  await Promise.all([loadWeek(monday), loadLists(), loadPreferences(), loadCategories(), loadRecipes(), loadPlanning()]);
+  await Promise.all([loadWeek(monday), loadLists(), loadPreferences(), loadCategories(), loadRecipes(), loadPlanning(), loadSelectionRequests()]);
+  const choiceCount = container.querySelector('#meal-choice-count');
+  if (state.selectionRequests.length && choiceCount) {
+    choiceCount.hidden = false;
+    choiceCount.textContent = String(state.selectionRequests.length);
+  }
   renderWeekGrid();
   renderRecipeSidebar();
   wireNav();
@@ -780,6 +796,11 @@ function openMealScheduleModal() {
           <label data-fixed-chooser>Chooser<select class="form-input" data-schedule-fixed>${memberOptions(slot.fixed_user_id)}</select></label>
           <fieldset><legend>Participants</legend>${members.map((member) => `<label class="meal-schedule-person"><input type="checkbox" data-schedule-participant value="${member.id}" ${selectedParticipants.has(Number(member.id)) ? 'checked' : ''}> ${esc(member.display_name)}</label>`).join('') || '<small>No household members found.</small>'}</fieldset>
           <label>Fallback chooser<select class="form-input" data-schedule-fallback>${memberOptions(slot.fallback_user_id)}</select></label>
+          <label>Cook<select class="form-input" data-schedule-cook>${memberOptions(slot.cook_user_id)}</select></label>
+          <label>Supervisor<select class="form-input" data-schedule-supervisor>${memberOptions(slot.supervisor_user_id)}</select></label>
+          <label>Choice due before meal (minutes)<input class="form-input" type="number" min="0" max="10080" data-schedule-deadline value="${Number(slot.selection_deadline_minutes ?? 1440)}"></label>
+          <label>Reminder before deadline (minutes)<input class="form-input" type="number" min="0" max="10080" data-schedule-reminder value="${Number(slot.reminder_minutes ?? 120)}"></label>
+          <label data-snack-limit ${type.key === 'snack' ? '' : 'hidden'}>Personal snack choices<input class="form-input" type="number" min="1" max="20" data-schedule-snack-limit value="${Number(slot.snack_choice_limit ?? 3)}"></label>
           <label>Meal Place<select class="form-input" data-schedule-place>${placeOptions(slot.place_id)}</select></label>
           <label class="meal-schedule-person"><input type="checkbox" data-schedule-presence ${slot.presence_required ? 'checked' : ''}> Only assign people marked available</label>
         </div>
@@ -825,6 +846,11 @@ function openMealScheduleModal() {
         policy: cell.querySelector('[data-schedule-policy]').value,
         fixed_user_id: Number(cell.querySelector('[data-schedule-fixed]').value) || null,
         fallback_user_id: Number(cell.querySelector('[data-schedule-fallback]').value) || null,
+        cook_user_id: Number(cell.querySelector('[data-schedule-cook]').value) || null,
+        supervisor_user_id: Number(cell.querySelector('[data-schedule-supervisor]').value) || null,
+        selection_deadline_minutes: Number(cell.querySelector('[data-schedule-deadline]').value || 1440),
+        reminder_minutes: Number(cell.querySelector('[data-schedule-reminder]').value || 120),
+        snack_choice_limit: Number(cell.querySelector('[data-schedule-snack-limit]').value || 3),
         participant_ids: [...cell.querySelectorAll('[data-schedule-participant]:checked')].map((input) => Number(input.value)),
         presence_required: cell.querySelector('[data-schedule-presence]').checked,
         place_id: Number(cell.querySelector('[data-schedule-place]').value) || null,
@@ -845,7 +871,64 @@ function openMealScheduleModal() {
   }});
 }
 
+function openMealChoicesModal() {
+  const requests = state.selectionRequests;
+  const recipeOptions = state.recipes.map((recipe) => `<option value="${recipe.id}">${esc(recipe.title)}</option>`).join('');
+  const content = requests.length ? `<div class="meal-choice-list">${requests.map((request) => `
+    <section class="meal-choice-card" data-meal-choice="${request.id}" data-choice-limit="${request.policy === 'personal_choice' && request.meal_type === 'snack' ? Number(request.snack_choice_limit || 3) : 1}">
+      <div><strong>${esc(request.meal_type)} · ${esc(request.date)}</strong><br><small>${request.reminder_due ? 'Due soon · ' : ''}Choose for ${esc(request.policy === 'personal_choice' ? 'yourself' : 'the household')}${request.responsible_name ? ` · ${esc(request.responsible_name)}` : ''}</small></div>
+      <label class="form-label">Recipe (optional)<select class="form-input" data-choice-recipe><option value="">Write a meal name</option>${recipeOptions}</select></label>
+      ${request.policy === 'personal_choice' && request.meal_type === 'snack'
+        ? `<label class="form-label">Snack choices (one per line, up to ${Number(request.snack_choice_limit || 3)})<textarea class="form-input" data-choice-title rows="3" placeholder="Apple slices\nYogurt"></textarea></label>`
+        : '<label class="form-label">Meal name<input class="form-input" data-choice-title maxlength="200" placeholder="What should we eat?"></label>'}
+      <label class="form-label">Notes<textarea class="form-input" data-choice-notes rows="2"></textarea></label>
+      <div class="modal-panel__footer modal-panel__footer--plain">
+        <button type="button" class="btn btn--ghost" data-choice-decline>Decline</button>
+        <button type="button" class="btn btn--primary" data-choice-submit>Choose meal</button>
+      </div>
+    </section>`).join('')}</div>` : emptyStateHTML({
+      icon: 'circle-check-big',
+      title: 'You are all caught up',
+      description: 'There are no meal choices waiting for you.',
+    });
+  openSharedModal({ title: 'Meal choices', content, size: 'lg', onSave(panel) {
+    panel.querySelectorAll('[data-meal-choice]').forEach((card) => {
+      const recipeSelect = card.querySelector('[data-choice-recipe]');
+      const titleInput = card.querySelector('[data-choice-title]');
+      recipeSelect.addEventListener('change', () => {
+        const recipe = state.recipes.find((row) => Number(row.id) === Number(recipeSelect.value));
+        if (recipe && !titleInput.value.trim()) titleInput.value = recipe.title;
+      });
+      card.querySelector('[data-choice-submit]').addEventListener('click', async () => {
+        try {
+          const titles = titleInput.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+          const notes = card.querySelector('[data-choice-notes]').value;
+          const recipeId = Number(recipeSelect.value) || null;
+          const payload = Number(card.dataset.choiceLimit) > 1
+            ? { action: 'choose', choices: titles.map((title, index) => ({ title, notes, recipe_id: index === 0 ? recipeId : null })) }
+            : { action: 'choose', recipe_id: recipeId, title: titles[0] || '', notes };
+          await api.post(`/meals/selection-requests/${card.dataset.mealChoice}/respond`, payload);
+          await Promise.all([loadSelectionRequests(), loadWeek(state.currentWeek)]);
+          closeModal({ force: true });
+          renderWeekGrid();
+          window.yuvomi?.showToast('Meal choice saved.', 'success');
+        } catch (error) { window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
+      });
+      card.querySelector('[data-choice-decline]').addEventListener('click', async () => {
+        try {
+          await api.post(`/meals/selection-requests/${card.dataset.mealChoice}/respond`, { action: 'decline' });
+          await loadSelectionRequests();
+          closeModal({ force: true });
+          window.yuvomi?.showToast('Meal choice declined.', 'success');
+        } catch (error) { window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
+      });
+    });
+    if (window.lucide) window.lucide.createIcons({ el: panel });
+  }});
+}
+
 function wireNav() {
+  _container.querySelector('#meal-choices')?.addEventListener('click', openMealChoicesModal);
   _container.querySelector('#meal-view-toggle')?.addEventListener('click', (event) => {
     state.viewMode = state.viewMode === 'week' ? 'timeline' : 'week';
     const button = event.currentTarget;

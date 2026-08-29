@@ -980,10 +980,7 @@
 }
 
 .automation-list-row {
-  display: flex;
-  align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
   padding: var(--space-3);
   border: var(--space-px) solid var(--color-border);
   border-radius: var(--radius-md);

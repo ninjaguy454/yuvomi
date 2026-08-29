@@ -582,11 +582,16 @@ function renderTaskCard(task, opts = {}) {
             ${task.locked ? `<span class="due-date" role="img" aria-label="${esc(t('tasks.lockedBadge'))}" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
             ${renderVisibilityBadge(task.visibility)}
             ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date task-card__category">${esc(catLabel(task.category))}</span>` : ''}
+            ${task.activity_assignment_state === 'open' ? '<span class="due-date task-card__category">Open · claimable</span>' : ''}
+            ${task.activity_assignment_state === 'unavailable' ? '<span class="due-date task-card__category">Needs an eligible person</span>' : ''}
+            ${(task.activity_responsibilities || []).filter((row) => ['beneficiary', 'supervisor'].includes(row.role)).map((row) => `<span class="due-date">${esc(row.role)}: ${esc(row.display_name)}</span>`).join('')}
             ${renderTagBadges(task.tags, ROW_TAG_BADGES_VISIBLE, task.priority)}
           </div>
         </div>
 
         ${renderAvatarStack(task.assigned_users ?? [], { size: 28 })}
+
+        ${task.activity_assignment_state === 'open' ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">Claim</button>` : ''}
 
         ${canEdit && !(task.subtask_total > 0) && !archived && !task.parent_task_id ? `
         <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action task-card__add-subtask" data-action="add-subtask" data-parent="${task.id}"
@@ -1061,6 +1066,12 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         <p class="task-field-hint">The template can use this person in its title and proficiency rules.</p>
       </div>
 
+      ${isEdit && task?.activity_template_id ? `<section class="form-group">
+        <label class="label">Activity responsibility</label>
+        <p class="task-field-hint">${(task.activity_responsibilities || []).map((row) => `${esc(row.role)}: ${esc(row.display_name)}`).join(' · ') || (task.activity_assignment_state === 'open' ? 'Open for an eligible household member to claim.' : 'No active responsibility recorded.')}</p>
+        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(user.display_name)}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Yuvomi will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
+      </section>` : ''}
+
       <div class="form-group">
         <div class="form-field">
           <label class="label" for="task-title">${t('tasks.titleLabel')}<span class="required-marker" aria-hidden="true"> *</span></label>
@@ -1256,6 +1267,8 @@ let state = {
   categories:      [],
   allTags:         [],       // [{ tag, count }] für Filterleiste und Vorschläge (#586)
   defaultPoints:   0,        // Haushalt-Standard für neue Aufgaben (#578), 0 = aus
+  activityTemplates: [],
+  assignmentRequests: [],
   currentUserId:   null,
   isAdmin:         false,    // darf fremde Kommentare entfernen (#734)
   // `tags` ist eine Liste, keine Auswahl: mehrere Tags engen UND-verknüpft ein,
@@ -1608,6 +1621,19 @@ function wireTaskForm(panel, { task = null, container, presetActivityTemplate = 
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate });
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
   wireCountdownGate(panel);
+  panel.querySelector('[data-activity-reassign-submit]')?.addEventListener('click', async (event) => {
+    const userId = Number(panel.querySelector('[data-activity-reassign]')?.value);
+    event.currentTarget.disabled = true;
+    try {
+      await api.put(`/automation/tasks/${event.currentTarget.dataset.taskId}/assignment`, { user_id: userId });
+      window.yuvomi.showToast('Assignment updated.', 'success');
+      closeSharedModal({ force: true });
+      await loadTasks(container);
+    } catch (err) {
+      window.yuvomi.showToast(err.data?.error || err.message, 'danger');
+      event.currentTarget.disabled = false;
+    }
+  });
 
   // Tag-Editor (#586)
   renderTagChips(panel);
@@ -4188,6 +4214,37 @@ function wireAutomationBtn(container) {
   });
 }
 
+function wireAssignmentRequestsBtn(container) {
+  container.querySelector('#btn-assignment-requests')?.addEventListener('click', () => {
+    const content = state.assignmentRequests.length ? `<div class="automation-list">${state.assignmentRequests.map((request) => `
+      <section class="list-row automation-list-row" data-assignment-request="${request.id}">
+        <div class="automation-list-row__copy"><strong>${esc(request.task_title || 'Assignment request')}</strong><br><small class="form-hint">${request.status === 'accepted' ? 'Accepted' : 'Waiting for your response'}${request.response_deadline ? ` · due ${esc(request.response_deadline)}` : ''}</small></div>
+        <div class="automation-list-row__actions"><button class="btn btn--ghost btn--sm" data-request-action="decline">Decline</button><button class="btn btn--primary btn--sm" data-request-action="accept">Accept</button></div>
+      </section>`).join('')}</div>` : emptyStateHTML({
+        icon: 'circle-check-big',
+        title: 'You are all caught up',
+        description: 'There are no assignment requests waiting for you.',
+      });
+    openSharedModal({ title: 'Assignment requests', content, size: 'md', onSave(panel) {
+      panel.querySelectorAll('[data-request-action]').forEach((button) => button.addEventListener('click', async () => {
+        const row = button.closest('[data-assignment-request]');
+        button.disabled = true;
+        try {
+          await api.post(`/automation/obligations/${row.dataset.assignmentRequest}/respond`, { action: button.dataset.requestAction });
+          state.assignmentRequests = (await api.get('/automation/obligations')).data || [];
+          closeSharedModal({ force: true });
+          await loadTasks(container);
+          window.yuvomi.showToast(button.dataset.requestAction === 'accept' ? 'Assignment accepted.' : 'Assignment declined.', 'success');
+        } catch (err) {
+          window.yuvomi.showToast(err.data?.error || err.message, 'danger');
+          button.disabled = false;
+        }
+      }));
+      if (window.lucide) window.lucide.createIcons({ el: panel });
+    }});
+  });
+}
+
 function updateBulkActionsBar(container) {
   const bar = container.querySelector('#bulk-actions-bar');
   const count = container.querySelector('#bulk-count');
@@ -4371,6 +4428,18 @@ function wireTaskList(container) {
       }
     }
 
+    if (action === 'claim-activity') {
+      target.disabled = true;
+      try {
+        await api.post(`/automation/tasks/${id}/claim`, {});
+        window.yuvomi.showToast('Task claimed.', 'success');
+        await loadTasks(container);
+      } catch (err) {
+        window.yuvomi.showToast(err.data?.error || err.message, 'danger');
+        target.disabled = false;
+      }
+    }
+
     if (action === 'toggle-subtasks') {
       const subtaskList = document.getElementById(`subtasks-${id}`);
       if (subtaskList) {
@@ -4529,6 +4598,10 @@ export async function render(container, { user }) {
                   aria-label="Manage household automation" title="Manage household automation">
             <i data-lucide="workflow" class="icon-lg" aria-hidden="true"></i>
           </button>` : ''}
+          <button class="btn btn--icon btn--ghost" id="btn-assignment-requests"
+                  aria-label="Assignment requests" title="Assignment requests">
+            <i data-lucide="inbox" class="icon-lg" aria-hidden="true"></i>
+          </button>
           <button class="btn btn--icon btn--ghost" id="btn-quick-add"
                   aria-label="Quick Add from a template" title="Quick Add from a template">
             <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
@@ -4619,7 +4692,7 @@ export async function render(container, { user }) {
 
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
-    const [tasksData, metaData, preferencesData, activityData] = await Promise.all([
+    const [tasksData, metaData, preferencesData, activityData, assignmentData] = await Promise.all([
       api.get(`/tasks${taskQuery()}`),
       api.get('/tasks/meta/options'),
       // Reine Anzeigepräferenz: ein Fehler hier darf die Aufgabenliste nicht
@@ -4628,6 +4701,7 @@ export async function render(container, { user }) {
       // Activity Templates augment assignment; a catalogue failure must not
       // make the ordinary task list look unavailable.
       api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } })),
+      api.get('/automation/obligations').catch(() => ({ data: [] })),
     ]);
     state.loadError = null;
     state.tasks = tasksData.data ?? [];
@@ -4636,6 +4710,7 @@ export async function render(container, { user }) {
     state.allTags = metaData.tags ?? [];
     state.defaultPoints = Number(metaData.default_points) || 0;
     state.activityTemplates = activityData.data?.activities ?? [];
+    state.assignmentRequests = assignmentData.data ?? [];
     state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
     state.defaultSyncTarget = preferencesData.data?.tasks_default_target || '';
   } catch (err) {
@@ -4653,6 +4728,7 @@ export async function render(container, { user }) {
     state.allTags = [];
     state.defaultPoints = 0;
     state.activityTemplates = [];
+    state.assignmentRequests = [];
     state.subtasksExpandedByDefault = false;
     state.defaultSyncTarget = '';
   }
@@ -4663,6 +4739,7 @@ export async function render(container, { user }) {
   wireNewTaskBtn(container);
   wireQuickAddBtn(container);
   wireAutomationBtn(container);
+  wireAssignmentRequestsBtn(container);
   wireTaskList(container);
   wireBulkSelect(container);
   wireBulkCheckboxes(container);

@@ -24,6 +24,12 @@ import {
   instantiateWorkflow,
 } from '../services/activity-workflows.js';
 import { createLogger } from '../logger.js';
+import {
+  claimTask,
+  obligationInbox,
+  overrideTaskAssignment,
+  respondToTaskObligation,
+} from '../services/assignment-responsibilities.js';
 
 const router = express.Router();
 const log = createLogger('Automation');
@@ -123,7 +129,7 @@ function normalizeActivityInput(d, body, existing = null) {
   const categoryExists = d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(category);
   if (!categoryExists) throw new Error('Unknown task category.');
 
-  const assignmentStrategy = body.assignment_strategy ?? existing?.assignment_strategy ?? 'subject_skill';
+  const assignmentStrategy = body.assignment_strategy ?? existing?.assignment_policy ?? existing?.assignment_strategy ?? 'subject_skill';
   if (!VALID_ASSIGNMENT.has(assignmentStrategy)) throw new Error('Unknown assignment strategy.');
   const subjectRequired = assignmentStrategy === 'subject_skill'
     ? 1
@@ -164,6 +170,11 @@ function normalizeActivityInput(d, body, existing = null) {
     description,
     category,
     assignmentStrategy,
+    legacyAssignmentStrategy: ['subject_skill', 'eligible_round_robin', 'fixed'].includes(assignmentStrategy)
+      ? assignmentStrategy : 'eligible_round_robin',
+    allowAssignmentOverride: bool(body.allow_assignment_override, existing ? !!existing.allow_assignment_override : true),
+    participantCount: intOrNull(body.participant_count ?? existing?.participant_count ?? 1, { min: 1, max: 50 }),
+    rotationGroup: text(body.rotation_group ?? existing?.rotation_group, { max: 100 }),
     subjectRequired,
     fixedUserId: assignmentStrategy === 'fixed' ? fixedUserId : null,
     supervisionTitleTemplate: text(
@@ -380,6 +391,22 @@ function normalizeWorkflowInput(d, body, existing = null) {
     if (presencePolicyOverride && !VALID_PRESENCE_POLICIES.has(presencePolicyOverride)) {
       throw new Error(`Workflow step ${stepKey} has an invalid presence policy.`);
     }
+    const assignmentPolicyOverride = text(step.assignment_policy_override, { max: 40 });
+    if (assignmentPolicyOverride && !VALID_ASSIGNMENT.has(assignmentPolicyOverride)) {
+      throw new Error(`Workflow step ${stepKey} has an invalid assignment policy.`);
+    }
+    const assignmentUserId = intOrNull(step.assignment_user_id, { min: 1 });
+    if (assignmentPolicyOverride === 'fixed' && assignmentUserId && !validHouseholdUser(d, assignmentUserId)) {
+      throw new Error(`Workflow step ${stepKey} has an invalid fixed assignee.`);
+    }
+    const assignmentVariableId = text(step.assignment_variable_id, { max: 80 });
+    if (assignmentVariableId && questionsByKey.get(assignmentVariableId)?.type !== 'household_member') {
+      throw new Error(`Workflow step ${stepKey} assignment must use a Household Member variable.`);
+    }
+    const assignmentPolicyVariableId = text(step.assignment_policy_variable_id, { max: 80 });
+    if (assignmentPolicyVariableId && !questionsByKey.has(assignmentPolicyVariableId)) {
+      throw new Error(`Workflow step ${stepKey} references an unknown assignment-policy variable.`);
+    }
     const titleOverride = text(step.title_override, { max: 200 });
     const descriptionOverride = text(step.description_override, { max: 2000 });
     validateVariableTemplate(titleOverride, questionsByKey, `Workflow step ${stepKey} title`);
@@ -394,6 +421,10 @@ function normalizeWorkflowInput(d, body, existing = null) {
       placeId: locationMode === 'fixed' ? placeId : null,
       locationVariableId: locationMode === 'workflow' ? locationVariableId : null,
       presencePolicyOverride,
+      assignmentPolicyOverride,
+      assignmentUserId,
+      assignmentVariableId,
+      assignmentPolicyVariableId,
       condition: step.condition && typeof step.condition === 'object' ? step.condition : null,
       dependsOn: Array.isArray(step.depends_on)
         ? [...new Set(step.depends_on.map(String).filter(Boolean))]
@@ -589,7 +620,9 @@ function replaceWorkflowSteps(d, workflowId, steps) {
         workflow_template_id, activity_template_id, step_key, sort_order,
         title_override, description_override, subject_variable_id, condition_json,
         location_mode, place_id, location_variable_id, presence_policy_override
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        , assignment_policy_override, assignment_user_id, assignment_variable_id,
+        assignment_policy_variable_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   const ids = new Map();
   steps.forEach((step, index) => {
@@ -606,6 +639,10 @@ function replaceWorkflowSteps(d, workflowId, steps) {
       step.placeId,
       step.locationVariableId,
       step.presencePolicyOverride,
+      step.assignmentPolicyOverride,
+      step.assignmentUserId,
+      step.assignmentVariableId,
+      step.assignmentPolicyVariableId,
     );
     ids.set(step.stepKey, Number(result.lastInsertRowid));
   });
@@ -624,6 +661,53 @@ function replaceWorkflowSteps(d, workflowId, steps) {
 // Runtime endpoints
 // ---------------------------------------------------------------------------
 
+router.get('/obligations', (req, res) => {
+  try {
+    res.json({ data: obligationInbox(db.get(), currentUserId(req)) });
+  } catch (err) {
+    log.error('GET /obligations:', err);
+    res.status(500).json({ error: 'Could not load assignment requests.', code: 500 });
+  }
+});
+
+router.get('/admin/obligations', requireAdmin, (req, res) => {
+  try {
+    res.json({ data: obligationInbox(db.get(), currentUserId(req), { includeAll: true }) });
+  } catch (err) {
+    res.status(500).json({ error: 'Could not load household assignment requests.', code: 500 });
+  }
+});
+
+router.post('/tasks/:id/claim', (req, res) => {
+  try {
+    res.json({ data: claimTask(db.get(), Number(req.params.id), currentUserId(req)) });
+  } catch (err) {
+    res.status(409).json({ error: err.message, code: 409 });
+  }
+});
+
+router.put('/tasks/:id/assignment', requireAdmin, (req, res) => {
+  try {
+    const userId = intOrNull(req.body.user_id, { min: 1 });
+    if (!userId) throw new Error('Choose a household member.');
+    res.json({ data: overrideTaskAssignment(db.get(), Number(req.params.id), userId, currentUserId(req)) });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: 400 });
+  }
+});
+
+router.post('/obligations/:id/respond', (req, res) => {
+  try {
+    const action = String(req.body.action || '');
+    if (!['accept', 'decline'].includes(action)) throw new Error('Choose accept or decline.');
+    res.json({ data: respondToTaskObligation(
+      db.get(), Number(req.params.id), action, currentUserId(req), text(req.body.note, { max: 500 }),
+    ) });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: 400 });
+  }
+});
+
 // Minimal reusable Activity Template catalogue for ordinary Task scheduling.
 // Assignment still resolves server-side; the client only chooses the reusable
 // definition and, when required, its subject.
@@ -636,6 +720,7 @@ router.get('/activity-options', (_req, res) => {
       description: activity.description,
       category: activity.category,
       assignment_strategy: activity.assignment_strategy,
+      assignment_policy: activity.assignment_policy || activity.assignment_strategy,
       subject_required: activity.subject_required,
     }));
     res.json({ data: { activities } });
@@ -980,14 +1065,16 @@ router.post('/admin/activity-templates', requireAdmin, (req, res) => {
         INSERT INTO activity_templates (
           name, title_template, description, category, assignment_strategy,
           subject_required, fixed_user_id, supervision_title_template, active, created_by,
-          location_mode, place_id, location_variable_id, presence_policy, presence_window
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          location_mode, place_id, location_variable_id, presence_policy, presence_window,
+          assignment_policy, allow_assignment_override, participant_count, rotation_group
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
-        input.assignmentStrategy, input.subjectRequired, input.fixedUserId,
+        input.legacyAssignmentStrategy, input.subjectRequired, input.fixedUserId,
         input.supervisionTitleTemplate, input.active, currentUserId(req),
         input.locationMode, input.placeId, input.locationVariableId,
-        input.presencePolicy, input.presenceWindow,
+        input.presencePolicy, input.presenceWindow, input.assignmentStrategy,
+        input.allowAssignmentOverride, input.participantCount, input.rotationGroup,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
       return Number(result.lastInsertRowid);
@@ -1011,14 +1098,16 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
                assignment_strategy = ?, subject_required = ?, fixed_user_id = ?,
                supervision_title_template = ?, active = ?, location_mode = ?,
                place_id = ?, location_variable_id = ?, presence_policy = ?, presence_window = ?,
+               assignment_policy = ?, allow_assignment_override = ?, participant_count = ?, rotation_group = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
-        input.assignmentStrategy, input.subjectRequired, input.fixedUserId,
+        input.legacyAssignmentStrategy, input.subjectRequired, input.fixedUserId,
         input.supervisionTitleTemplate, input.active, input.locationMode,
         input.placeId, input.locationVariableId, input.presencePolicy,
-        input.presenceWindow, existing.id,
+        input.presenceWindow, input.assignmentStrategy, input.allowAssignmentOverride,
+        input.participantCount, input.rotationGroup, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
     })();

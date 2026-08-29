@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "Den här återanvändbara definitionen och dess inställningar tas bort permanent. Yuvomi blockerar borttagningen så länge en annan mall eller schemalagd uppgift är beroende av den; redan skapade uppgifter och händelser finns kvar.",
         "placeDeleteConfirmDetail": "Borttagning blockeras så länge scheman, mallar, tillgänglighet, uppgifter eller underordnade platser är beroende av platsen. Du kan inaktivera platsen i stället.",
         "availabilityDeleteConfirmDetail": "Detta tar bort tillgänglighetssignalen. Befintliga uppgifter och måltider tas inte bort.",
+        "tripDeleteConfirmDetail": "Resan och dess resplanslänkar tas bort. Skapade uppgifter finns kvar i Uppgifter tills du tar bort dem där.",
         "rewardsEnableTitle": "Synlighet",
         "rewardsEnableLabel": "Aktivera belöningar",
         "rewardsEnableHint": "Visar belöningsmodulen i navigeringen. Vid inaktivering behålls alla data.",

@@ -1,7 +1,7 @@
 import { renderAutomationManager } from '/components/activity-automation.js';
 import { t } from '/i18n.js';
 
-const AUTOMATION_TABS = new Set(['skills', 'activities', 'workflows', 'variables', 'places', 'availability']);
+const AUTOMATION_TABS = new Set(['skills', 'activities', 'workflows', 'variables', 'places', 'availability', 'trips']);
 
 function selectedTab(query) {
   const tab = query?.get('tab');

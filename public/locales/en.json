@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "This reusable definition and its settings are permanently removed. Yuvomi blocks deletion while another template or scheduled task still depends on it; tasks and events already created from it stay.",
         "placeDeleteConfirmDetail": "Deletion is blocked while schedules, templates, availability, tasks, or child Places depend on it. You can make the Place inactive instead.",
         "availabilityDeleteConfirmDetail": "This removes the availability signal. Existing tasks and meals are not deleted.",
+        "tripDeleteConfirmDetail": "The trip and its itinerary links will be removed. Generated Tasks remain in Tasks unless you delete them there.",
         "rewardsEnableTitle": "Visibility",
         "rewardsEnableLabel": "Enable rewards",
         "rewardsEnableHint": "Shows the rewards module in the navigation. Disabling keeps all data.",

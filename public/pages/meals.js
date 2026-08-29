@@ -700,6 +700,7 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
       .map((participant) => `${participant.display_name} · ${participant.role}`)
       .join(', ');
     const mealPlace = (state.planning.places || []).find((place) => Number(place.id) === Number(meal.place_id));
+    const activeConflicts = (meal.calendar_conflicts || []).filter((conflict) => conflict.active);
 
     // Die Karte ist bewusst KEIN Button: sie trägt Buttons und einen Link, und
     // interaktiver Inhalt in einem Button ist invalides HTML - Screenreader
@@ -711,12 +712,13 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
            data-action="edit-meal"
            data-meal-id="${meal.id}">
           <span class="meal-card__title"><span class="meal-card__title-text">${esc(meal.title)}</span>${recurrenceBadge}</span>
-          ${mealTime || roleSummary || mealPlace ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${mealPlace ? `<span>${esc(mealPlace.name)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}</span>` : ''}
+          ${mealTime || roleSummary || mealPlace || activeConflicts.length ? `<span class="meal-card__planning">${mealTime ? `<span>${esc(mealTime)}</span>` : ''}${mealPlace ? `<span>${esc(mealPlace.name)}</span>` : ''}${roleSummary ? `<span>${esc(roleSummary)}</span>` : ''}${activeConflicts.length ? `<span>${activeConflicts.length} Calendar conflict${activeConflicts.length === 1 ? '' : 's'}</span>` : ''}</span>` : ''}
           ${ingLabel ? `<span class="meal-card__meta">
             <span class="meal-card__ingredients-count">${ingLabel}${esc(ingDoneLabel)}</span>
           </span>` : ''}
         </button>
         <div class="meal-card__actions">
+          ${activeConflicts.length ? `<button class="meal-card__action-btn" data-action="resolve-conflicts" data-meal-id="${meal.id}" aria-label="Review Calendar conflicts for ${esc(meal.title)}"><i data-lucide="triangle-alert" class="icon-sm" aria-hidden="true"></i></button>` : ''}
           ${meal.recipe_url ? `<a class="meal-card__action-btn meal-card__action-btn--recipe"
             data-action="open-recipe"
             href="${esc(meal.recipe_url)}"
@@ -757,6 +759,41 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
 // --------------------------------------------------------
 // Event-Delegation
 // --------------------------------------------------------
+
+function openConflictModal(meal) {
+  const conflicts = (meal.calendar_conflicts || []).filter((conflict) => conflict.active);
+  const members = state.planning.members || [];
+  const content = `<div class="meal-conflicts"><p class="form-hint">These overlaps are advisory. Resolve each affected person independently; changing a Calendar title or description will not reopen a resolved conflict.</p>${conflicts.map((conflict) => `<form class="meal-conflict" data-conflict-id="${conflict.id}"><strong>${esc(conflict.user_name)} • ${esc(conflict.calendar_title || 'Calendar event')}</strong><p class="form-hint">${esc(conflict.occurrence_start)} → ${esc(conflict.occurrence_end || '')}</p><select class="form-input" name="resolution"><option value="participating">Still participating</option><option value="not_participating">Not participating</option><option value="time_changed">Move meal within its window</option><option value="backup_assigned">Assign a backup participant</option><option value="personal_alternative">Create a personal alternative</option><option value="keep_preferred_time">Keep preferred time</option><option value="keep_window">Keep acceptable window</option><option value="ignore">Ignore this conflict</option></select><div data-conflict-extra style="margin-top:var(--space-2)"></div><button class="btn btn--primary btn--sm" type="submit">Save resolution</button></form>`).join('')}</div>`;
+  openSharedModal({ title: `Calendar conflicts • ${meal.title}`, content, size: 'lg', onSave(panel) {
+    panel.querySelectorAll('[data-conflict-id]').forEach((form) => {
+      const select = form.querySelector('[name="resolution"]'); const extra = form.querySelector('[data-conflict-extra]');
+      const renderExtra = () => {
+        extra.replaceChildren();
+        if (select.value === 'time_changed') extra.insertAdjacentHTML('beforeend', `<label class="label">New meal time<input class="form-input" name="scheduled_time" type="time" required></label>`);
+        else if (select.value === 'backup_assigned') extra.insertAdjacentHTML('beforeend', `<label class="label">Backup person<select class="form-input" name="user_id">${members.map((member) => `<option value="${member.id}">${esc(member.display_name)}</option>`).join('')}</select></label>`);
+        else if (select.value === 'personal_alternative') extra.insertAdjacentHTML('beforeend', `<label class="label">Alternative meal<input class="form-input" name="title" required placeholder="Personal meal"></label><label class="label">Notes<textarea class="form-input" name="notes" rows="2"></textarea></label>`);
+      };
+      select.addEventListener('change', renderExtra); renderExtra();
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault(); const data = new FormData(form); const submit = form.querySelector('button[type="submit"]'); submit.disabled = true;
+        const payload = {};
+        if (data.get('scheduled_time')) payload.scheduled_time = data.get('scheduled_time');
+        if (data.get('user_id')) payload.user_id = Number(data.get('user_id'));
+        if (data.get('title')) payload.title = data.get('title');
+        if (data.get('notes')) payload.notes = data.get('notes');
+        try {
+          await api.post(`/meals/conflicts/${form.dataset.conflictId}/resolve`, { resolution: data.get('resolution'), payload });
+          form.replaceChildren();
+          const confirmation = document.createElement('p');
+          confirmation.className = 'form-hint';
+          confirmation.textContent = 'Resolved.';
+          form.appendChild(confirmation);
+          await loadWeek(state.currentWeek); renderWeekGrid();
+        } catch (error) { window.yuvomi?.showToast(error.message, 'danger'); submit.disabled = false; }
+      });
+    });
+  }});
+}
 
 function setWeekBusy() {
   // Sichtbares Lade-Feedback beim Wochenwechsel (dimmt das Raster via CSS,
@@ -993,6 +1030,11 @@ function wireGrid(grid) {
       const mealId = parseInt(btn.dataset.mealId, 10);
       const meal   = state.meals.find((m) => m.id === mealId);
       if (meal) openMealModal({ mode: 'edit', meal, date: meal.date, mealType: meal.meal_type });
+      return;
+    }
+    if (action === 'resolve-conflicts') {
+      const meal = state.meals.find((entry) => Number(entry.id) === Number(btn.dataset.mealId));
+      if (meal) openConflictModal(meal);
       return;
     }
 

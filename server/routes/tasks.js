@@ -35,10 +35,12 @@ import { mentionedUserIds } from '../../public/utils/mentions.js';
 import { resolvePermissions } from '../permissions.js';
 import { pushService } from '../services/push.js';
 import { todayKey } from '../utils/timezone.js';
+import { requireAdmin } from '../auth.js';
 import {
   attachTaskLocations,
   copyTaskLocation,
   normalizeTaskLocation,
+  promoteTaskGoogleLocation,
   setTaskLocation,
   storedTaskLocation,
   TaskLocationError,
@@ -1144,6 +1146,17 @@ router.get('/:id', (req, res) => {
   } catch (err) {
     log.error('GET /:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+router.post('/:id/location/promote', requireAdmin, (req, res) => {
+  try {
+    const task = db.get().prepare('SELECT id FROM tasks WHERE id = ? AND parent_task_id IS NULL').get(req.params.id);
+    if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
+    res.json({ data: promoteTaskGoogleLocation(db.get(), task.id, req.body || {}, req.authUserId || req.session.userId) });
+  } catch (err) {
+    const missing = /does not have/i.test(err.message);
+    res.status(missing ? 404 : 400).json({ error: err.message, code: missing ? 404 : 400 });
   }
 });
 

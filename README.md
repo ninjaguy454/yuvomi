@@ -99,6 +99,15 @@ readable-from-across-the-room display, and an **Immich screensaver** rotates you
 the screen goes idle. Every module in full detail is in the [spec](docs/SPEC.md); building your own
 drop-in module is covered in the [module guide](MODULES.md).
 
+### E-readers and older browsers
+
+Open `/reader` on the end of your normal Yuvomi address for a lightweight, server-rendered view of
+Today, Tasks, Calendar, and Meals. It does not require JavaScript, so it works on browsers such as
+the Kindle Paperwhite 3 browser that cannot run the full application. Reader mode is intentionally
+read-only and uses local password sign-in (including two-factor authentication when enabled); it
+cannot complete modern single-sign-on flows. From another device, use the Yuvomi server's LAN name
+or address rather than `127.0.0.1`, which always refers to the device currently opening the page.
+
 ---
 
 ## Install

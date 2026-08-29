@@ -2669,4 +2669,4 @@ setInterval(() => {
   try { defaultInviteService.cleanupExpired(); } catch { /* best effort */ }
 }, 60 * 60_000).unref();
 
-export { router, sessionMiddleware, requireAuth, requireAdmin, syncFamilyMemberArtifacts, normalizeAvatarData };
+export { router, sessionMiddleware, requireAuth, requireAdmin, setupAuthSession, syncFamilyMemberArtifacts, normalizeAvatarData };

@@ -12,6 +12,11 @@ import { addDays, mealWeekday, datesForTemplateInRange } from '../services/meal-
 import { todayKey } from '../utils/timezone.js';
 import { requireAdmin } from '../auth.js';
 import { evaluatePresence } from '../services/presence.js';
+import {
+  listMealCalendarConflicts,
+  reconcileMealCalendarConflicts,
+  resolveMealCalendarConflict,
+} from '../services/meal-calendar-conflicts.js';
 
 const log = createLogger('Meals');
 
@@ -795,6 +800,33 @@ router.post('/planning/reconcile', requireAdmin, (req, res) => {
   }
 });
 
+router.get('/conflicts', (req, res) => {
+  try {
+    const refDate = req.query.week && DATE_RE.test(req.query.week) ? req.query.week : todayKey(db.get());
+    const from = weekStart(refDate);
+    const to = weekEnd(refDate);
+    const data = req.query.refresh === 'false'
+      ? listMealCalendarConflicts(db.get(), { from, to })
+      : reconcileMealCalendarConflicts(db.get(), { from, to });
+    res.json({ data, weekStart: from, weekEnd: to });
+  } catch (err) {
+    res.status(400).json({ error: err.message, code: 400 });
+  }
+});
+
+router.post('/conflicts/:id/resolve', (req, res) => {
+  try {
+    const data = resolveMealCalendarConflict(
+      db.get(), Number(req.params.id), String(req.body.resolution || ''),
+      req.body.payload || {}, req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    const missing = /not found/i.test(err.message);
+    res.status(missing ? 404 : 400).json({ error: err.message, code: missing ? 404 : 400 });
+  }
+});
+
 // --------------------------------------------------------
 // Routen - Wochenübersicht
 // --------------------------------------------------------
@@ -819,6 +851,7 @@ router.get('/', (req, res) => {
 
     materializeRecurringMeals(from, to);
     materializeMealSchedule(from, to, req.authUserId || req.session.userId);
+    const conflicts = reconcileMealCalendarConflicts(db.get(), { from, to });
 
     // recurrence_end_date kommt aus der Vorlage mit: die Oberfläche zeigt im
     // Bearbeiten-Dialog, bis wann die Serie läuft, und muss dafür nicht pro Karte
@@ -878,11 +911,16 @@ router.get('/', (req, res) => {
     }
 
     const participantMap = loadMealParticipants(mealIds);
+    const conflictsByMeal = conflicts.reduce((map, conflict) => {
+      (map[conflict.meal_id] ||= []).push(conflict);
+      return map;
+    }, {});
     const result = meals.map((m) => ({
       ...m,
       ingredients: ingredientMap[m.id] || [],
       recipe_ingredient_count: recipeCountMap[m.id] ?? 0,
       participants: participantMap[m.id] || [],
+      calendar_conflicts: conflictsByMeal[m.id] || [],
     }));
 
     res.json({ data: result, weekStart: from, weekEnd: to });

@@ -1465,6 +1465,7 @@
         "automationDefinitionDeleteConfirmDetail": "이 재사용 가능한 정의와 설정은 영구적으로 삭제됩니다. 다른 템플릿이나 예약된 작업이 여기에 의존하는 동안에는 Yuvomi가 삭제를 차단하며, 이미 생성된 작업과 일정은 유지됩니다.",
         "placeDeleteConfirmDetail": "일정, 템플릿, 가용성, 작업 또는 하위 장소가 이 장소를 참조하는 동안에는 삭제할 수 없습니다. 대신 장소를 비활성화할 수 있습니다.",
         "availabilityDeleteConfirmDetail": "가용성 신호가 제거됩니다. 기존 작업과 식사는 삭제되지 않습니다.",
+        "tripDeleteConfirmDetail": "여행과 일정 링크가 삭제됩니다. 생성된 작업은 작업에서 직접 삭제할 때까지 남아 있습니다.",
         "rewardsEnableTitle": "표시",
         "rewardsEnableLabel": "보상 활성화",
         "rewardsEnableHint": "탐색에 보상 모듈을 표시합니다. 비활성화해도 모든 데이터는 유지됩니다.",

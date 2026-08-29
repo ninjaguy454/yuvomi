@@ -793,7 +793,9 @@ and the external search control reports that discovery is unavailable.
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
-| `GOOGLE_PLACES_API_KEY` | Server-side key for Places API (New) Text Search | - | Yes for external discovery |
+| `GOOGLE_MAPS_API_KEY` | Server-side key for Places API (New) Text Search (`GOOGLE_PLACES_API_KEY` remains a legacy alias) | - | Yes for external discovery |
+| `GOOGLE_MAPS_ENABLED` | Explicitly enable Google place discovery after reviewing the data flow | `false` | Yes for external discovery |
+| `GOOGLE_MAPS_TERMS_ACCEPTED` | Record the administrator's acceptance of Google's attribution and data-handling requirements | `false` | Yes for external discovery |
 | `GOOGLE_PLACES_PER_USER_PER_MINUTE` | Per-user deliberate-search safeguard | `10` | No |
 | `GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY` | Instance-wide daily search safeguard | `100` | No |
 | `GOOGLE_PLACES_SEARCH_RADIUS_METERS` | Search bias radius around the selected Yuvomi Place, up to 50 km | `50000` | No |
@@ -801,7 +803,11 @@ and the external search control reports that discovery is unavailable.
 
 Yuvomi uses Text Search only after the user presses Search, requests at most ten results with a
 fixed minimal field mask, never polls in the background, and keeps Google Place IDs separate from
-Yuvomi's own immutable Place IDs. Google Maps navigation links do not require the API key.
+Yuvomi's own immutable Place IDs. Enable a billing account and **Places API (New)** only; Maps
+JavaScript, Routes, Geocoding, and Navigation APIs are not needed. Restrict the key to Places API
+(New) and, when practical, the deployment server's source IP. Configure Google Cloud quotas and
+budget alerts in addition to Yuvomi's local safeguards. Google Maps navigation links do not
+require the API key.
 
 ### Outlook Calendar Push - Microsoft Graph (Optional)
 

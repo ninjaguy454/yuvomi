@@ -1152,16 +1152,17 @@ async function loadRange(from, to) {
   const win     = fetchWindow(from, to);
   const calPath = `/calendar?from=${win.from}&to=${win.to}`;
   try {
-    const [evRes, taskRes, holRes, scheduleRes] = await Promise.all([
+    const [evRes, taskRes, holRes, scheduleRes, planningRes] = await Promise.all([
       api.get(calPath),
       api.get("/tasks?include_future=1").catch((err) => { console.warn("[Calendar] Tasks fetch failed:", err); return { data: [] }; }),
       api.get(`/calendar/holidays?from=${from}&to=${to}`).catch(() => ({ data: [] })),
       scheduleEnabled()
         ? api.get(`/schedule/entries?from=${from}&to=${to}`).catch(() => ({ data: { entries: [] } }))
         : Promise.resolve({ data: { entries: [] } }),
+      api.get(`/planning/calendar-context?from=${from}&to=${to}`).catch(() => ({ data: [] })),
     ]);
     state.loadError = null;
-    state.events = (evRes.data ?? []).map(localizeBirthdayEvent);
+    state.events = [...(evRes.data ?? []).map(localizeBirthdayEvent), ...(planningRes.data ?? [])];
     state.tasks = filterTasksForCalendar(taskRes.data ?? []);
     state.holidays = holRes.data ?? [];
     state.scheduleEntries = scheduleRes.data?.entries ?? [];
@@ -1194,8 +1195,11 @@ async function reloadCalendarEventsOnly() {
   if (!state.rangeFrom || !state.rangeTo) return;
   try {
     const win = fetchWindow(state.rangeFrom, state.rangeTo);
-    const res = await api.get(`/calendar?from=${win.from}&to=${win.to}`);
-    state.events = (res.data ?? []).map(localizeBirthdayEvent);
+    const [res, planning] = await Promise.all([
+      api.get(`/calendar?from=${win.from}&to=${win.to}`),
+      api.get(`/planning/calendar-context?from=${state.rangeFrom}&to=${state.rangeTo}`).catch(() => ({ data: [] })),
+    ]);
+    state.events = [...(res.data ?? []).map(localizeBirthdayEvent), ...(planning.data ?? [])];
   } catch (err) {
     console.error('[Calendar] reloadCalendarEventsOnly Fehler:', err);
   }
@@ -3089,13 +3093,38 @@ function renderEventDetail(ev, reminders = []) {
  * Suchtreffer) wird daraus ein Sheet, mit Anker am Desktop ein Popover.
  */
 async function openEventDetail(ev, anchor = null) {
-  // Haushaltshilfe-Besuche werden in ihrem eigenen Modul bearbeitet; der Umweg
-  // über eine Detailansicht führte sonst ins Leere.
   if (ev?.housekeeping_visit_id) {
     window.yuvomi.navigate(`/housekeeping?editVisit=${ev.housekeeping_visit_id}`);
     return;
   }
-
+  if (ev?.plan_kind) {
+    const meal = ev.plan_kind === 'meal';
+    const actions = [{
+      id: 'detail-open-plan', label: meal ? 'Open Meal Plan' : 'Open trip itinerary',
+      variant: 'primary', icon: meal ? 'utensils' : 'plane',
+      onClick: async ({ close }) => {
+        await close({ force: true });
+        window.yuvomi.navigate(meal
+          ? `/meals?week=${String(ev.start_datetime).slice(0, 10)}&open=${ev.plan_id}`
+          : `/settings/modules/automation?tab=trips&open=${ev.plan_id}`);
+      },
+    }];
+    openDetailView({
+      title: ev.title, accentColor: ev.color, anchor,
+      sections: [
+        { icon: meal ? 'utensils' : 'plane', label: meal ? 'Meal Plan' : 'Travel plan', value: ev.cal_name },
+        { icon: 'clock', label: t('calendar.detailWhen'), value: `${formatDate(ev.start_datetime)} ${formatTime(ev.start_datetime)}` },
+        { icon: 'map-pin', label: t('calendar.locationLabel'), value: ev.location || '' },
+        assignedRow(ev.assigned_users, t('calendar.assignedLabel'), ev.assigned_name || ''),
+        { icon: 'triangle-alert', label: 'Calendar conflicts', value: meal && ev.conflict_count ? `${ev.conflict_count} needs review` : '' },
+        { icon: 'align-left', label: t('calendar.descriptionLabel'), value: ev.description || '', multiline: true },
+      ],
+      actions,
+    });
+    return;
+  }
+  // Haushaltshilfe-Besuche werden in ihrem eigenen Modul bearbeitet; der Umweg
+  // über eine Detailansicht führte sonst ins Leere.
   // Die Erinnerungen kosten einen eigenen Serveraufruf; alles andere steckt
   // schon im Termin. Früher wurde davor gewartet, und der Antipp-Moment - der
   // einzige, dessen ganzer Zweck Leichtigkeit ist - blieb einen Roundtrip lang

@@ -7400,6 +7400,113 @@ const FORK_MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 10010,
+    description: 'Calendar meal conflicts, coordinated trips and itinerary stages',
+    up: `
+      CREATE TABLE IF NOT EXISTS meal_calendar_conflicts (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_id               INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        user_id               INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        calendar_event_id     INTEGER REFERENCES calendar_events(id) ON DELETE SET NULL,
+        occurrence_key        TEXT NOT NULL,
+        occurrence_start      TEXT NOT NULL,
+        occurrence_end        TEXT,
+        material_fingerprint  TEXT NOT NULL,
+        detection_state       TEXT NOT NULL DEFAULT 'open'
+          CHECK(detection_state IN ('open', 'needs_review', 'resolved', 'ignored', 'superseded', 'reopened')),
+        resolution            TEXT
+          CHECK(resolution IS NULL OR resolution IN (
+            'participating', 'not_participating', 'time_changed', 'backup_assigned',
+            'personal_alternative', 'keep_preferred_time', 'keep_window', 'ignore'
+          )),
+        resolution_payload_json TEXT,
+        detected_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        reviewed_at           TEXT,
+        updated_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_id, user_id, occurrence_key)
+      );
+      CREATE INDEX idx_meal_conflicts_window
+        ON meal_calendar_conflicts(occurrence_start, occurrence_end, detection_state);
+      CREATE INDEX idx_meal_conflicts_meal
+        ON meal_calendar_conflicts(meal_id, detection_state);
+
+      CREATE TABLE IF NOT EXISTS trip_plans (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        name                  TEXT NOT NULL,
+        destination_place_id  INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        lodging_place_id      INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        starts_at             TEXT NOT NULL,
+        ends_at               TEXT NOT NULL,
+        trip_type             TEXT NOT NULL DEFAULT 'vacation'
+          CHECK(trip_type IN ('vacation', 'business', 'family', 'road_trip', 'other')),
+        status                TEXT NOT NULL DEFAULT 'planning'
+          CHECK(status IN ('planning', 'active', 'completed', 'cancelled')),
+        create_away_periods   INTEGER NOT NULL DEFAULT 1 CHECK(create_away_periods IN (0, 1)),
+        notes                 TEXT,
+        created_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(ends_at > starts_at)
+      );
+      CREATE INDEX idx_trip_plans_window ON trip_plans(starts_at, ends_at, status);
+
+      CREATE TABLE IF NOT EXISTS trip_participants (
+        trip_id                INTEGER NOT NULL REFERENCES trip_plans(id) ON DELETE CASCADE,
+        user_id                INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        availability_period_id INTEGER REFERENCES availability_periods(id) ON DELETE SET NULL,
+        PRIMARY KEY(trip_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS trip_stages (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id     INTEGER NOT NULL REFERENCES trip_plans(id) ON DELETE CASCADE,
+        phase       TEXT NOT NULL CHECK(phase IN (
+          'before_departure', 'departure', 'during_trip', 'before_return', 'return_home', 'post_trip'
+        )),
+        title       TEXT NOT NULL,
+        starts_at   TEXT NOT NULL,
+        place_id    INTEGER REFERENCES places(id) ON DELETE SET NULL,
+        notes       TEXT,
+        sort_order  INTEGER NOT NULL DEFAULT 0,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_trip_stages_trip_time ON trip_stages(trip_id, starts_at, sort_order);
+
+      CREATE TABLE IF NOT EXISTS trip_tasks (
+        trip_id    INTEGER NOT NULL REFERENCES trip_plans(id) ON DELETE CASCADE,
+        task_id    INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+        phase      TEXT NOT NULL CHECK(phase IN (
+          'before_departure', 'departure', 'during_trip', 'before_return', 'return_home', 'post_trip'
+        )),
+        PRIMARY KEY(trip_id, task_id)
+      );
+    `,
+  },
+  {
+    version: 10011,
+    description: 'Track Google Place ID refresh usage separately from discovery searches',
+    up: `
+      ALTER TABLE place_provider_usage RENAME TO place_provider_usage_legacy;
+      CREATE TABLE place_provider_usage (
+        usage_date    TEXT NOT NULL,
+        provider      TEXT NOT NULL CHECK(provider IN ('google')),
+        operation     TEXT NOT NULL CHECK(operation IN ('text_search', 'id_refresh')),
+        user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        request_count INTEGER NOT NULL DEFAULT 0 CHECK(request_count >= 0),
+        updated_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(usage_date, provider, operation, user_id)
+      );
+      INSERT INTO place_provider_usage (
+        usage_date, provider, operation, user_id, request_count, updated_at
+      ) SELECT usage_date, provider, operation, user_id, request_count, updated_at
+          FROM place_provider_usage_legacy;
+      DROP TABLE place_provider_usage_legacy;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

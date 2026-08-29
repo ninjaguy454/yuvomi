@@ -585,6 +585,7 @@ function renderTaskCard(task, opts = {}) {
             ${task.activity_assignment_state === 'open' ? '<span class="due-date task-card__category">Open · claimable</span>' : ''}
             ${task.activity_assignment_state === 'unavailable' ? '<span class="due-date task-card__category">Needs an eligible person</span>' : ''}
             ${(task.activity_responsibilities || []).filter((row) => ['beneficiary', 'supervisor'].includes(row.role)).map((row) => `<span class="due-date">${esc(row.role)}: ${esc(row.display_name)}</span>`).join('')}
+            ${task.location ? `<span class="due-date task-card__location" title="${esc(task.location.address || task.location.label || '')}"><i data-lucide="map-pin" class="icon-sm" aria-hidden="true"></i>${esc(task.location.label || task.location.address || 'Location')}</span>` : ''}
             ${renderTagBadges(task.tags, ROW_TAG_BADGES_VISIBLE, task.priority)}
           </div>
         </div>
@@ -1101,6 +1102,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
                  >${esc(task?.description ?? presetActivityTemplate?.description ?? '')}</textarea>
         <small class="form-hint">${t('tasks.descriptionMarkdownHint')}</small>
       </div>
+      ${renderTaskLocationFields(task)}
 ${syncTargetFieldHtml(task)}
       <div class="modal-grid modal-grid--2">
         <div class="form-group">
@@ -1269,6 +1271,8 @@ let state = {
   defaultPoints:   0,        // Haushalt-Standard für neue Aufgaben (#578), 0 = aus
   activityTemplates: [],
   assignmentRequests: [],
+  places: [],
+  placeSearchStatus: null,
   currentUserId:   null,
   isAdmin:         false,    // darf fremde Kommentare entfernen (#734)
   // `tags` ist eine Liste, keine Auswahl: mehrere Tags engen UND-verknüpft ein,
@@ -1621,6 +1625,7 @@ function wireTaskForm(panel, { task = null, container, presetActivityTemplate = 
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate });
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
   wireCountdownGate(panel);
+  wireTaskLocationForm(panel);
   panel.querySelector('[data-activity-reassign-submit]')?.addEventListener('click', async (event) => {
     const userId = Number(panel.querySelector('[data-activity-reassign]')?.value);
     event.currentTarget.disabled = true;
@@ -2278,6 +2283,7 @@ function renderTaskDetail(task, reminders = [], container = null) {
     { icon: 'list-checks', label: t('tasks.subtasksLabel'), node: subtaskListNode(task, container) },
     { icon: 'paperclip', label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
     { icon: 'bell', label: t('reminders.sectionTitle'), value: taskReminderSummary(reminders) },
+    { icon: 'map-pin', label: 'Location', node: taskLocationNode(task, container), multiline: true },
     visibilityRow(task.visibility),
     // Nur wenn markiert (#647) - eine Zeile „Countdown: nein" an jeder Aufgabe
     // erklärte ein Feld, statt eine Frage zu beantworten.
@@ -2646,6 +2652,7 @@ async function handleFormSubmit(e, container) {
     countdown:       form.querySelector('#task-countdown')?.checked ? 1 : 0,
     locked:          form.querySelector('#task-locked')?.checked ? 1 : 0,
     points:          Math.max(0, Math.trunc(Number(form.points?.value)) || 0),
+    location:        readTaskLocation(form),
   };
   // Das Feld fehlt bei Unteraufgaben und bei bereits gespiegelten Aufgaben - in
   // beiden Fällen soll gar kein Ziel mitgeschickt werden, sonst nähme der Server
@@ -4214,6 +4221,153 @@ function wireAutomationBtn(container) {
   });
 }
 
+function taskLocationNode(task, container) {
+  if (!task.location) return null;
+  const wrap = document.createElement('div');
+  const saved = task.location.kind === 'saved_place';
+  wrap.insertAdjacentHTML('beforeend', `<strong>${esc(task.location.label || 'Task location')}</strong>${task.location.address ? `<br><span>${esc(task.location.address)}</span>` : ''}<div class="detail-inline-actions" style="margin-top:var(--space-2)">${task.location.navigation_url ? `<a class="btn btn--secondary btn--sm" href="${esc(task.location.navigation_url)}" target="_blank" rel="noopener noreferrer"><i data-lucide="navigation" class="icon-sm"></i>Open in Google Maps</a>` : ''}${state.isAdmin && !saved && task.location.kind === 'google_place' ? '<button type="button" class="btn btn--secondary btn--sm" data-promote-task-place>Save to Yuvomi Places</button>' : ''}${saved ? '<span class="form-hint">Saved Place</span>' : '<span class="form-hint">Used only for this Task</span>'}</div>`);
+  wrap.querySelector('[data-promote-task-place]')?.addEventListener('click', async (event) => {
+    event.currentTarget.disabled = true;
+    try {
+      await api.post(`/tasks/${task.id}/location/promote`, { name: task.location.label, type: 'custom' });
+      window.yuvomi.showToast('Location saved to Yuvomi Places.', 'success');
+      await closeDetailView({ force: true });
+      await loadTasks(container);
+    } catch (error) { window.yuvomi.showToast(error.message, 'danger'); event.currentTarget.disabled = false; }
+  });
+  return wrap;
+}
+
+function placeSelectOptions(selected = null) {
+  return state.places.filter((place) => place.active !== 0).map((place) =>
+    `<option value="${place.id}" ${Number(selected) === Number(place.id) ? 'selected' : ''}>${esc(place.path_label || place.name)}</option>`
+  ).join('');
+}
+
+function googleAttributionHtml(result) {
+  const thirdParty = (result.attributions || []).map((attribution) => {
+    const name = attribution?.displayName || attribution?.provider || attribution?.name;
+    const uri = attribution?.uri || attribution?.providerUri;
+    if (!name) return '';
+    if (typeof uri === 'string' && /^https:\/\//i.test(uri)) {
+      return `<a href="${esc(uri)}" target="_blank" rel="noopener noreferrer">${esc(name)}</a>`;
+    }
+    return esc(name);
+  }).filter(Boolean);
+  return `<small class="form-hint">Results from Google Maps${thirdParty.length ? ` · Attribution: ${thirdParty.join(', ')}` : ''}</small>`;
+}
+
+function renderTaskLocationFields(task = null) {
+  const location = task?.location || null;
+  const kind = location?.kind || 'none';
+  const origin = state.places.find((place) => place.type === 'home' && place.latitude != null && place.longitude != null)
+    || state.places.find((place) => place.latitude != null && place.longitude != null);
+  return `<fieldset class="form-group task-location" id="task-location-fieldset">
+    <legend class="label">Location</legend>
+    <select class="input" id="task-location-kind" name="location_kind">
+      <option value="none" ${kind === 'none' ? 'selected' : ''}>No location</option>
+      <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Yuvomi Place</option>
+      <option value="manual" ${kind === 'manual' ? 'selected' : ''}>One-use manual location</option>
+      <option value="google_place" ${kind === 'google_place' ? 'selected' : ''}>Find a business or place</option>
+    </select>
+    <div data-location-pane="saved_place" style="margin-top:var(--space-3)">
+      <select class="input" id="task-location-place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
+    </div>
+    <div data-location-pane="manual" style="margin-top:var(--space-3)">
+      <input class="input" id="task-location-label" maxlength="120" placeholder="Location name" value="${esc(kind === 'manual' ? location?.label || '' : '')}">
+      <textarea class="input" id="task-location-address" rows="2" placeholder="Address or directions" style="margin-top:var(--space-2)">${esc(kind === 'manual' ? location?.address || '' : '')}</textarea>
+      <div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div>
+    </div>
+    <div data-location-pane="google_place" style="margin-top:var(--space-3)">
+      <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Yuvomi server. Search runs only when you press Search.</p>
+      <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
+      <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Use a saved Place as origin</option><option value="manual">Enter origin coordinates</option></select>
+      <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
+      <div data-origin-pane="manual" class="modal-grid modal-grid--2" style="margin-top:var(--space-2)" hidden><input class="input" id="task-origin-latitude" type="number" step="any" min="-90" max="90" placeholder="Origin latitude"><input class="input" id="task-origin-longitude" type="number" step="any" min="-180" max="180" placeholder="Origin longitude"></div>
+      <button class="btn btn--secondary btn--sm" type="button" id="task-place-search" style="margin-top:var(--space-2)"><i data-lucide="search" class="icon-sm"></i>Search Google Places</button>
+      <p class="task-field-hint" id="task-place-search-status">${state.placeSearchStatus?.configured ? `${state.placeSearchStatus.usage?.household_today ?? 0} of ${state.placeSearchStatus.limits?.household_per_day ?? 100} household searches used today.` : 'Google Places is not configured. Saved and manual locations remain available.'}</p>
+      <input type="hidden" id="task-location-external-id" value="${esc(kind === 'google_place' ? location?.external_place_id || '' : '')}">
+      <input type="hidden" id="task-location-external-label" value="${esc(kind === 'google_place' ? location?.label || '' : '')}">
+      <div id="task-place-selected" class="task-field-hint">${kind === 'google_place' ? `Selected for this Task: <strong>${esc(location?.label || 'Google place')}</strong>` : ''}</div>
+      <div id="task-place-results" class="automation-list" style="margin-top:var(--space-2)"></div>
+    </div>
+  </fieldset>`;
+}
+
+function readTaskLocation(form) {
+  const kind = form.querySelector('#task-location-kind')?.value || 'none';
+  if (kind === 'none') return { kind: 'none' };
+  if (kind === 'saved_place') return { kind, place_id: Number(form.querySelector('#task-location-place')?.value) || null };
+  if (kind === 'manual') return {
+    kind, user_label: form.querySelector('#task-location-label')?.value.trim(),
+    manual_address: form.querySelector('#task-location-address')?.value.trim() || null,
+    latitude: form.querySelector('#task-location-latitude')?.value || null,
+    longitude: form.querySelector('#task-location-longitude')?.value || null,
+  };
+  return {
+    kind: 'google_place', external_provider: 'google',
+    external_place_id: form.querySelector('#task-location-external-id')?.value,
+    user_label: form.querySelector('#task-location-external-label')?.value,
+  };
+}
+
+function wireTaskLocationForm(panel) {
+  const kind = panel.querySelector('#task-location-kind');
+  const refresh = () => panel.querySelectorAll('[data-location-pane]').forEach((pane) => { pane.hidden = pane.dataset.locationPane !== kind?.value; });
+  kind?.addEventListener('change', refresh); refresh();
+  const originMode = panel.querySelector('#task-place-origin-mode');
+  const refreshOrigin = () => panel.querySelectorAll('[data-origin-pane]').forEach((pane) => { pane.hidden = pane.dataset.originPane !== originMode?.value; });
+  originMode?.addEventListener('change', refreshOrigin); refreshOrigin();
+  const search = panel.querySelector('#task-place-search');
+  search?.addEventListener('click', async () => {
+    const query = panel.querySelector('#task-place-query')?.value.trim() || '';
+    const status = panel.querySelector('#task-place-search-status');
+    if (query.length < 3) { status.textContent = 'Enter at least three characters.'; return; }
+    const body = { query, included_type: panel.querySelector('#task-place-category')?.value || null };
+    if (originMode.value === 'saved') body.origin_place_id = Number(panel.querySelector('#task-place-origin')?.value) || null;
+    else body.origin = { latitude: panel.querySelector('#task-origin-latitude')?.value, longitude: panel.querySelector('#task-origin-longitude')?.value, label: 'Manual origin' };
+    search.disabled = true; status.textContent = 'Searching Google Places…';
+    try {
+      const response = await api.post('/planning/place-search', body);
+      const results = response.data || [];
+      status.textContent = results.length ? `${results.length} live result${results.length === 1 ? '' : 's'} from Google.` : 'No matching places found.';
+      const list = panel.querySelector('#task-place-results');
+      list.replaceChildren();
+      results.forEach((result, index) => {
+        const row = document.createElement('div');
+        row.className = 'list-row automation-list-row';
+        const distance = result.distance_meters == null ? '' : ` • ${(result.distance_meters / 1609.344).toFixed(1)} mi`;
+        row.insertAdjacentHTML('beforeend', `<div class="automation-list-row__copy"><strong>${esc(result.display_name)}</strong><br><small class="form-hint">${esc(result.formatted_address || '')}${esc(distance)}${result.primary_type ? ` • ${esc(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-save-name="${index}" maxlength="120" value="${esc(result.display_name)}" aria-label="Yuvomi Place name"></div><div class="automation-list-row__actions"><button type="button" class="btn btn--primary btn--sm" data-use-place="${index}">Use for Task</button>${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-save-place="${index}">Save to Places</button>` : ''}</div>`);
+        list.appendChild(row);
+      });
+      list.querySelectorAll('[data-use-place]').forEach((button) => button.addEventListener('click', () => {
+        const result = results[Number(button.dataset.usePlace)];
+        panel.querySelector('#task-location-external-id').value = result.external_place_id;
+        panel.querySelector('#task-location-external-label').value = result.display_name;
+        const selected = panel.querySelector('#task-place-selected');
+        selected.replaceChildren(document.createTextNode('Selected for this Task: '));
+        const name = document.createElement('strong');
+        name.textContent = result.display_name;
+        selected.appendChild(name);
+      }));
+      list.querySelectorAll('[data-save-place]').forEach((button) => button.addEventListener('click', async () => {
+        const index = Number(button.dataset.savePlace); const result = results[index];
+        const name = list.querySelector(`[data-place-save-name="${index}"]`)?.value.trim();
+        if (!name) { status.textContent = 'Give the saved Yuvomi Place a name.'; return; }
+        button.disabled = true;
+        try {
+          const saved = await api.post('/planning/admin/places/from-google', { external_place_id: result.external_place_id, name, type: 'custom', latitude: result.latitude, longitude: result.longitude });
+          state.places.push(saved.data); kind.value = 'saved_place'; refresh();
+          const select = panel.querySelector('#task-location-place');
+          select.insertAdjacentHTML('beforeend', `<option value="${saved.data.id}">${esc(saved.data.path_label || saved.data.name)}</option>`); select.value = String(saved.data.id);
+          status.textContent = 'Saved to Yuvomi Places and selected for this Task.';
+        } catch (error) { status.textContent = error.message; button.disabled = false; }
+      }));
+    } catch (error) { status.textContent = error.message; }
+    finally { search.disabled = false; }
+  });
+}
+
 function wireAssignmentRequestsBtn(container) {
   container.querySelector('#btn-assignment-requests')?.addEventListener('click', () => {
     const content = state.assignmentRequests.length ? `<div class="automation-list">${state.assignmentRequests.map((request) => `
@@ -4692,7 +4846,7 @@ export async function render(container, { user }) {
 
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
-    const [tasksData, metaData, preferencesData, activityData, assignmentData] = await Promise.all([
+    const [tasksData, metaData, preferencesData, activityData, assignmentData, placesData, placeStatusData] = await Promise.all([
       api.get(`/tasks${taskQuery()}`),
       api.get('/tasks/meta/options'),
       // Reine Anzeigepräferenz: ein Fehler hier darf die Aufgabenliste nicht
@@ -4702,6 +4856,8 @@ export async function render(container, { user }) {
       // make the ordinary task list look unavailable.
       api.get('/automation/activity-options').catch(() => ({ data: { activities: [] } })),
       api.get('/automation/obligations').catch(() => ({ data: [] })),
+      api.get('/planning/places?active=false').catch(() => ({ data: [] })),
+      api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
     ]);
     state.loadError = null;
     state.tasks = tasksData.data ?? [];
@@ -4711,6 +4867,8 @@ export async function render(container, { user }) {
     state.defaultPoints = Number(metaData.default_points) || 0;
     state.activityTemplates = activityData.data?.activities ?? [];
     state.assignmentRequests = assignmentData.data ?? [];
+    state.places = placesData.data ?? [];
+    state.placeSearchStatus = placeStatusData.data ?? { configured: false };
     state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
     state.defaultSyncTarget = preferencesData.data?.tasks_default_target || '';
   } catch (err) {
@@ -4729,6 +4887,8 @@ export async function render(container, { user }) {
     state.defaultPoints = 0;
     state.activityTemplates = [];
     state.assignmentRequests = [];
+    state.places = [];
+    state.placeSearchStatus = { configured: false };
     state.subtasksExpandedByDefault = false;
     state.defaultSyncTarget = '';
   }

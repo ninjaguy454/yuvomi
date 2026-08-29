@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "Cette définition réutilisable et ses réglages seront supprimés définitivement. Yuvomi bloque la suppression tant qu'un autre modèle ou une tâche planifiée en dépend ; les tâches et événements déjà créés sont conservés.",
         "placeDeleteConfirmDetail": "La suppression est bloquée tant que des horaires, modèles, disponibilités, tâches ou lieux enfants en dépendent. Vous pouvez désactiver le lieu à la place.",
         "availabilityDeleteConfirmDetail": "Cela supprime le signal de disponibilité. Les tâches et repas existants ne sont pas supprimés.",
+        "tripDeleteConfirmDetail": "Le voyage et les liens de son itinéraire seront supprimés. Les tâches générées restent dans Tâches jusqu’à ce que vous les y supprimiez.",
         "rewardsEnableTitle": "Visibilité",
         "rewardsEnableLabel": "Activer les récompenses",
         "rewardsEnableHint": "Affiche le module de récompenses dans la navigation. La désactivation conserve toutes les données.",

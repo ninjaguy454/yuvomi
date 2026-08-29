@@ -278,7 +278,7 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'utf8',
   );
   assert.match(page, /renderAutomationManager/);
-  assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables', 'places', 'availability'\]\)/,
+  assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables', 'places', 'availability', 'trips'\]\)/,
     'the Settings leaf must preserve every Household Automation tab instead of falling back to Skills');
   assert.match(component, /export async function renderAutomationManager/);
   assert.doesNotMatch(component, /automation-manage-from-quick/);

@@ -183,3 +183,38 @@ export function attachTaskLocations(database, tasks) {
   for (const task of tasks) task.location = byTask.get(Number(task.id)) ?? null;
   return tasks;
 }
+
+export function promoteTaskGoogleLocation(database, taskId, value, actorId) {
+  const row = database.prepare(`SELECT * FROM task_locations WHERE task_id = ? AND kind = 'google_place'`).get(taskId);
+  if (!row) throw new TaskLocationError('This Task does not have a one-use Google location to save.');
+  const name = text(value?.name || row.user_label, { required: true, max: 120 });
+  const existing = database.prepare(`SELECT * FROM places WHERE external_provider = 'google' AND external_place_id = ?`).get(row.external_place_id);
+  let placeId = existing?.id ? Number(existing.id) : null;
+  database.transaction(() => {
+    if (!placeId) {
+      const latitude = coordinate(value?.latitude, -90, 90, 'Latitude');
+      const longitude = coordinate(value?.longitude, -180, 180, 'Longitude');
+      if ((latitude == null) !== (longitude == null)) throw new TaskLocationError('Saved coordinates need both latitude and longitude.');
+      const expiry = latitude == null ? null : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+      const result = database.prepare(`
+        INSERT INTO places (
+          name, description, type, street_address, city, region, postal_code, country,
+          latitude, longitude, active, created_by, external_provider, external_place_id,
+          external_place_id_checked_at, coordinate_source, coordinates_expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, 'google', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), ?, ?)
+      `).run(name, text(value?.description, { max: 1000 }), text(value?.type, { max: 40 }) || 'custom',
+        text(value?.street_address, { max: 250 }), text(value?.city, { max: 120 }),
+        text(value?.region, { max: 120 }), text(value?.postal_code, { max: 40 }), text(value?.country, { max: 120 }),
+        latitude, longitude, actorId, row.external_place_id, latitude == null ? null : 'google', expiry);
+      placeId = Number(result.lastInsertRowid);
+    }
+    database.prepare(`
+      UPDATE task_locations SET kind = 'saved_place', place_id = ?, external_provider = NULL,
+        external_place_id = NULL, user_label = NULL, manual_address = NULL, latitude = NULL,
+        longitude = NULL, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?
+    `).run(placeId, taskId);
+  })();
+  const task = { id: Number(taskId) };
+  attachTaskLocations(database, [task]);
+  return { place_id: placeId, location: task.location, reused: Boolean(existing) };
+}

@@ -6,9 +6,11 @@ import { evaluatePresence, placeWithInheritedAddress } from '../services/presenc
 import {
   googlePlacesStatus,
   PlaceProviderError,
+  refreshGooglePlaceId,
   searchGooglePlaces,
 } from '../services/google-places.js';
 import { createLogger } from '../logger.js';
+import { deleteTrip, listTrips, saveTrip, tripItinerary } from '../services/trips.js';
 
 const router = express.Router();
 const log = createLogger('Planning');
@@ -64,6 +66,28 @@ function validMember(database, userId) {
 function validPlace(database, placeId, { includeInactive = true } = {}) {
   if (!placeId) return null;
   return database.prepare(`SELECT * FROM places WHERE id = ?${includeInactive ? '' : ' AND active = 1'}`).get(placeId) ?? null;
+}
+
+function googleIdentityNeedsRefresh(place, now = Date.now()) {
+  if (place?.external_provider !== 'google' || !place.external_place_id) return false;
+  const checkedAt = new Date(place.external_place_id_checked_at || 0).getTime();
+  return !Number.isFinite(checkedAt) || checkedAt <= now - 365 * 24 * 60 * 60 * 1000;
+}
+
+async function refreshSavedGoogleIdentity(database, place, userId) {
+  if (!googleIdentityNeedsRefresh(place)) return place;
+  const refreshed = await refreshGooglePlaceId(place.external_place_id, { database, userId });
+  const duplicate = database.prepare("SELECT id FROM places WHERE external_provider = 'google' AND external_place_id = ? AND id != ?").get(refreshed, place.id);
+  if (duplicate) {
+    throw new PlaceProviderError('This Google identity now belongs to another saved Yuvomi Place. An administrator needs to reconcile the two saved Places.', { status: 409, code: 'place_identity_conflict' });
+  }
+  database.prepare(`
+    UPDATE places SET external_place_id = ?,
+      external_place_id_checked_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
+      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+    WHERE id = ?
+  `).run(refreshed, place.id);
+  return validPlace(database, place.id, { includeInactive: false });
 }
 
 function createsPlaceCycle(database, id, parentId) {
@@ -200,16 +224,26 @@ router.get('/places', (req, res) => {
   catch (error) { log.error('GET /places', error); res.status(500).json({ error: 'Could not load places.', code: 500 }); }
 });
 
-router.get('/place-search/status', (_req, res) => {
-  res.json({ data: googlePlacesStatus() });
+router.get('/place-search/status', (req, res) => {
+  res.json({ data: googlePlacesStatus(db.get(), currentUserId(req)) });
 });
 
 router.post('/place-search', async (req, res) => {
   try {
     const database = db.get();
-    const originId = integer(req.body.origin_place_id, { required: true });
-    const origin = placeWithInheritedAddress(database, validPlace(database, originId, { includeInactive: false }));
-    if (!origin) return res.status(400).json({ error: 'Choose an active saved Place as the search origin.', code: 400 });
+    const originId = integer(req.body.origin_place_id);
+    let originPlace = originId ? validPlace(database, originId, { includeInactive: false }) : null;
+    if (originPlace && googleIdentityNeedsRefresh(originPlace)) {
+      originPlace = await refreshSavedGoogleIdentity(database, originPlace, currentUserId(req));
+    }
+    const origin = originId
+      ? placeWithInheritedAddress(database, originPlace)
+      : {
+        latitude: optionalNumber(req.body.origin?.latitude, -90, 90, 'Origin latitude'),
+        longitude: optionalNumber(req.body.origin?.longitude, -180, 180, 'Origin longitude'),
+        path_label: string(req.body.origin?.label, { max: 120 }) || 'Manual origin',
+      };
+    if (originId && !origin) return res.status(400).json({ error: 'Choose an active saved Place as the search origin.', code: 400 });
     if (origin.latitude == null || origin.longitude == null) {
       return res.status(400).json({
         error: 'The selected search origin needs latitude and longitude in Yuvomi Places.',
@@ -217,12 +251,17 @@ router.post('/place-search', async (req, res) => {
         reason: 'origin_coordinates_required',
       });
     }
+    if (originId && origin.coordinate_source === 'google' && origin.coordinates_expires_at
+        && new Date(origin.coordinates_expires_at).getTime() <= Date.now()) {
+      return res.status(400).json({ error: 'This saved Google origin needs refreshed coordinates or user-maintained coordinates before it can be used.', code: 400, reason: 'origin_coordinates_expired' });
+    }
     const results = await searchGooglePlaces(database, {
       userId: currentUserId(req),
       query: req.body.query,
       origin: { latitude: origin.latitude, longitude: origin.longitude },
+      includedType: req.body.included_type,
     });
-    res.json({ data: results, origin: { place_id: origin.id, label: origin.path_label } });
+    res.json({ data: results, origin: { place_id: origin.id || null, label: origin.path_label } });
   } catch (error) {
     if (error instanceof PlaceProviderError) {
       return res.status(error.status).json({ error: error.message, code: error.status, reason: error.code });
@@ -332,6 +371,22 @@ router.put('/admin/places/:id', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
+router.post('/admin/places/:id/refresh-external-id', requireAdmin, async (req, res) => {
+  try {
+    const database = db.get();
+    const place = validPlace(database, integer(req.params.id, { required: true }));
+    if (!place || place.external_provider !== 'google' || !place.external_place_id) return res.status(404).json({ error: 'Google-backed Place not found.', code: 404 });
+    const refreshed = await refreshGooglePlaceId(place.external_place_id, { database, userId: currentUserId(req) });
+    const duplicate = database.prepare("SELECT id FROM places WHERE external_provider = 'google' AND external_place_id = ? AND id != ?").get(refreshed, place.id);
+    if (duplicate) return res.status(409).json({ error: 'The refreshed Google identity already belongs to another saved Place.', code: 409, existing_place_id: duplicate.id });
+    database.prepare(`UPDATE places SET external_place_id = ?, external_place_id_checked_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`).run(refreshed, place.id);
+    res.json({ data: placeWithInheritedAddress(database, validPlace(database, place.id)) });
+  } catch (error) {
+    if (error instanceof PlaceProviderError) return res.status(error.status).json({ error: error.message, code: error.status, reason: error.code });
+    res.status(400).json({ error: error.message, code: 400 });
+  }
+});
+
 router.delete('/admin/places/:id', requireAdmin, (req, res) => {
   try {
     const database = db.get();
@@ -406,6 +461,77 @@ router.delete('/admin/periods/:id', requireAdmin, (req, res) => {
   const result = db.get().prepare('DELETE FROM availability_periods WHERE id = ?').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'Availability period not found.', code: 404 });
   res.status(204).end();
+});
+
+router.get('/trips', (req, res) => {
+  try {
+    const from = req.query.from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
+    const to = req.query.to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+    res.json({ data: listTrips(db.get(), { from, to }) });
+  } catch (error) {
+    res.status(500).json({ error: 'Could not load trips.', code: 500 });
+  }
+});
+
+router.post('/admin/trips', requireAdmin, (req, res) => {
+  try { res.status(201).json({ data: saveTrip(db.get(), req.body, currentUserId(req)) }); }
+  catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
+});
+
+router.put('/admin/trips/:id', requireAdmin, (req, res) => {
+  try { res.json({ data: saveTrip(db.get(), req.body, currentUserId(req), integer(req.params.id, { required: true })) }); }
+  catch (error) { res.status(/not found/i.test(error.message) ? 404 : 400).json({ error: error.message, code: /not found/i.test(error.message) ? 404 : 400 }); }
+});
+
+router.delete('/admin/trips/:id', requireAdmin, (req, res) => {
+  try {
+    if (!deleteTrip(db.get(), integer(req.params.id, { required: true }))) return res.status(404).json({ error: 'Trip not found.', code: 404 });
+    res.status(204).end();
+  } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
+});
+
+router.get('/trips/:id/itinerary', (req, res) => {
+  try { res.json({ data: tripItinerary(db.get(), integer(req.params.id, { required: true })) }); }
+  catch (error) { res.status(/not found/i.test(error.message) ? 404 : 400).json({ error: error.message, code: /not found/i.test(error.message) ? 404 : 400 }); }
+});
+
+router.get('/calendar-context', (req, res) => {
+  try {
+    const from = String(req.query.from || '');
+    const to = String(req.query.to || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to)) throw new Error('Choose a valid Calendar range.');
+    const database = db.get();
+    const meals = database.prepare(`
+      SELECT m.*, p.name AS place_name,
+        (SELECT COUNT(*) FROM meal_calendar_conflicts c WHERE c.meal_id = m.id AND c.detection_state IN ('open','needs_review','reopened')) AS conflict_count
+        FROM meals m LEFT JOIN places p ON p.id = m.place_id
+       WHERE m.date BETWEEN ? AND ? AND m.superseded_by_id IS NULL
+       ORDER BY m.date, COALESCE(m.scheduled_time, m.preferred_time), m.id
+    `).all(from, to).filter((meal) => meal.scheduled_time || meal.preferred_time).map((meal) => {
+      const time = meal.scheduled_time || meal.preferred_time;
+      const start = `${meal.date}T${time}:00`;
+      const endDate = new Date(start);
+      endDate.setMinutes(endDate.getMinutes() + (Number(meal.expected_duration_minutes) || 60));
+      const assigned = database.prepare(`SELECT u.id, u.display_name, u.avatar_color AS color FROM meal_participants mp JOIN users u ON u.id = mp.user_id WHERE mp.meal_id = ? AND mp.role = 'participant' AND mp.status IN ('participating','needs_confirmation') ORDER BY u.display_name`).all(meal.id);
+      return {
+        id: -Number(meal.id), title: `${meal.meal_type}: ${meal.title}`, description: meal.notes,
+        start_datetime: start, end_datetime: endDate.toISOString().slice(0, 19), all_day: 0,
+        location: meal.place_name || null, color: '#f59e0b', icon: 'utensils',
+        assigned_users: assigned, assigned_name: assigned[0]?.display_name || null,
+        external_source: 'local', visibility: 'all', plan_kind: 'meal', plan_id: Number(meal.id),
+        conflict_count: Number(meal.conflict_count || 0), cal_name: 'Meal Plan',
+      };
+    });
+    const trips = listTrips(database, { from, to });
+    const stages = trips.flatMap((trip) => trip.stages.filter((stage) => stage.starts_at.slice(0, 10) >= from && stage.starts_at.slice(0, 10) <= to).map((stage) => ({
+      id: -(100000000 + Number(stage.id)), title: `${trip.name}: ${stage.title}`, description: stage.notes || trip.notes,
+      start_datetime: stage.starts_at, end_datetime: null, all_day: 0, location: stage.place_name || trip.destination_name || null,
+      color: '#0ea5e9', icon: 'plane', assigned_users: trip.participants.map((person) => ({ id: person.user_id, display_name: person.display_name, color: person.avatar_color })),
+      assigned_name: trip.participants[0]?.display_name || null, external_source: 'local', visibility: 'all',
+      plan_kind: 'trip_stage', plan_id: Number(trip.id), stage_id: Number(stage.id), cal_name: 'Travel',
+    })));
+    res.json({ data: [...meals, ...stages].sort((a, b) => a.start_datetime.localeCompare(b.start_datetime)) });
+  } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
 router.get('/presence/:userId', (req, res) => {

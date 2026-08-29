@@ -152,6 +152,20 @@ const INTENTIONALLY_NOT_IN_INSTALLER = {
   IMMICH_API_KEY: 'Geheimnis, das in der App gesetzt und dort auch getestet wird.',
   IMMICH_SCREENSAVER_ALBUM_ID: 'Optionale Album-Einschränkung, in der App wählbar.',
 
+  // Google Places is a billed, optional provider whose activation requires an
+  // explicit terms/data-handling acknowledgement and deployment-specific key
+  // restrictions. Keep it in the administrator's Docker/environment workflow
+  // for now rather than turning the general first-run wizard into a billing and
+  // legal-consent surface. The Portainer descriptor and installation guide
+  // document every value, while saved/manual Yuvomi Places remain available.
+  GOOGLE_MAPS_API_KEY: 'Optional billed provider; configured deliberately in the deployment environment.',
+  GOOGLE_MAPS_ENABLED: 'Explicit deployment-level opt-in for the optional billed provider.',
+  GOOGLE_MAPS_TERMS_ACCEPTED: 'Explicit administrator acknowledgement; not inferred by the installer.',
+  GOOGLE_PLACES_PER_USER_PER_MINUTE: 'Advanced provider cost and abuse control.',
+  GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY: 'Advanced provider cost and abuse control.',
+  GOOGLE_PLACES_SEARCH_RADIUS_METERS: 'Advanced provider search tuning.',
+  GOOGLE_PLACES_TIMEOUT_MS: 'Advanced provider reliability tuning.',
+
   // Betriebs-Feinjustage, keine Installationsentscheidung.
   LOG_LEVEL: 'Betriebs-Feinjustage.',
   ENABLE_API_DOCS: 'Betriebs-Feinjustage.',

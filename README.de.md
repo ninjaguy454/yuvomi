@@ -100,6 +100,17 @@ Fotos laufen, wenn der Bildschirm still steht. Jedes Modul im Detail steht in de
 [Spezifikation](docs/SPEC.md); wie du ein eigenes Modul einhängst, steht im
 [Modulhandbuch](MODULES.md).
 
+### E-Reader und ältere Browser
+
+Hänge `/reader` an deine normale Yuvomi-Adresse an. Dort gibt es eine schlanke,
+serverseitig erzeugte Ansicht für Heute, Aufgaben, Kalender und Mahlzeiten. Sie benötigt kein
+JavaScript und funktioniert deshalb auch in Browsern wie dem des Kindle Paperwhite 3, die die
+vollständige App nicht ausführen können. Der Lesemodus ist bewusst schreibgeschützt und nutzt die
+lokale Anmeldung mit Passwort, einschließlich Zwei-Faktor-Anmeldung, falls sie aktiviert ist.
+Moderne Single-Sign-on-Abläufe werden nicht unterstützt. Nutze auf einem anderen Gerät den
+LAN-Namen oder die LAN-Adresse des Yuvomi-Servers statt `127.0.0.1`, denn diese Adresse bezeichnet
+immer das Gerät, auf dem die Seite gerade geöffnet wird.
+
 ---
 
 ## Installieren

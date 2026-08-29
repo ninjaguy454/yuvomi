@@ -8,6 +8,9 @@ process.env.DB_PATH = ':memory:';
 process.env.TZ = 'UTC';
 process.env.SESSION_SECRET ??= 'phase-five-test-session-secret-32-chars';
 delete process.env.GOOGLE_PLACES_API_KEY;
+delete process.env.GOOGLE_MAPS_API_KEY;
+delete process.env.GOOGLE_MAPS_ENABLED;
+delete process.env.GOOGLE_MAPS_TERMS_ACCEPTED;
 
 const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: planningRouter } = await import('../server/routes/planning.js');
@@ -15,6 +18,7 @@ const { default: tasksRouter } = await import('../server/routes/tasks.js');
 const {
   _resetGooglePlacesLimitsForTests,
   GOOGLE_PLACES_FIELD_MASK,
+  refreshGooglePlaceId,
   searchGooglePlaces,
 } = await import('../server/services/google-places.js');
 
@@ -98,7 +102,9 @@ test('Google Places degrades cleanly when it is not configured', async () => {
 });
 
 test('Google Text Search uses a fixed minimal field mask, explicit origin, and ten-result cap', async () => {
-  process.env.GOOGLE_PLACES_API_KEY = 'test-only-key';
+  process.env.GOOGLE_MAPS_API_KEY = 'test-only-key';
+  process.env.GOOGLE_MAPS_ENABLED = 'true';
+  process.env.GOOGLE_MAPS_TERMS_ACCEPTED = 'true';
   _resetGooglePlacesLimitsForTests();
   let request;
   const results = await searchGooglePlaces(database, {
@@ -131,6 +137,38 @@ test('Google Text Search uses a fixed minimal field mask, explicit origin, and t
   assert.equal(results.length, 10);
   assert.equal(results[0].external_place_id, 'google-place-0');
   assert.equal(database.prepare('SELECT SUM(request_count) AS n FROM place_provider_usage').get().n, 1);
+});
+
+test('Place ID refresh requests only ID fields and are counted separately', async () => {
+  let request;
+  const refreshed = await refreshGooglePlaceId('old-google-id', {
+    database,
+    userId: admin,
+    now: new Date('2026-08-28T12:05:00Z'),
+    fetchImpl: async (url, options) => {
+      request = { url, options };
+      return { ok: true, async json() { return { id: 'old-google-id', movedPlaceId: 'new-google-id' }; } };
+    },
+  });
+  assert.equal(refreshed, 'new-google-id');
+  assert.match(request.url, /old-google-id$/);
+  assert.equal(request.options.headers['X-Goog-FieldMask'], 'id,movedPlaceId');
+  assert.equal(database.prepare("SELECT request_count FROM place_provider_usage WHERE operation = 'id_refresh'").get().request_count, 1);
+});
+
+test('repeated Google provider failures open the short circuit breaker', async () => {
+  _resetGooglePlacesLimitsForTests();
+  let calls = 0;
+  const fail = () => searchGooglePlaces(database, {
+    userId: admin,
+    query: `failure ${calls}`,
+    origin: { latitude: 38.9, longitude: -77.04 },
+    fetchImpl: async () => { calls += 1; return { ok: false, status: 500 }; },
+  });
+  for (let attempt = 0; attempt < 3; attempt += 1) await assert.rejects(fail, { code: 'place_provider_failed' });
+  await assert.rejects(fail, { code: 'place_provider_circuit_open' });
+  assert.equal(calls, 3);
+  _resetGooglePlacesLimitsForTests();
 });
 
 test('Tasks support saved, one-use Google, and manual locations while Place rename stays stable', async () => {

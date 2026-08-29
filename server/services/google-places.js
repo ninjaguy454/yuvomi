@@ -1,10 +1,16 @@
 const PROVIDER = 'google';
 const OPERATION = 'text_search';
+const REFRESH_OPERATION = 'id_refresh';
 const SEARCH_URL = 'https://places.googleapis.com/v1/places:searchText';
 const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.location,places.primaryType,places.attributions';
+const DETAILS_URL = 'https://places.googleapis.com/v1/places/';
+const INCLUDED_TYPES = new Set(['pharmacy', 'restaurant', 'dentist', 'lodging', 'store', 'hotel']);
 
 const inFlightUsers = new Set();
+const identicalInFlight = new Map();
 const minuteWindows = new Map();
+let failureCount = 0;
+let circuitOpenUntil = 0;
 
 export class PlaceProviderError extends Error {
   constructor(message, { status = 400, code = 'place_provider_error' } = {}) {
@@ -20,9 +26,19 @@ function positiveInteger(value, fallback, { min = 1, max = 100000 } = {}) {
   return Number.isInteger(parsed) && parsed >= min && parsed <= max ? parsed : fallback;
 }
 
+function enabled(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase());
+}
+
 export function googlePlacesConfig() {
+  const apiKey = String(process.env.GOOGLE_MAPS_API_KEY || process.env.GOOGLE_PLACES_API_KEY || '').trim();
+  const integrationEnabled = enabled(process.env.GOOGLE_MAPS_ENABLED);
+  const termsAccepted = enabled(process.env.GOOGLE_MAPS_TERMS_ACCEPTED);
   return {
-    configured: Boolean(String(process.env.GOOGLE_PLACES_API_KEY || '').trim()),
+    apiKey,
+    integrationEnabled,
+    termsAccepted,
+    configured: Boolean(apiKey) && integrationEnabled && termsAccepted,
     perUserPerMinute: positiveInteger(process.env.GOOGLE_PLACES_PER_USER_PER_MINUTE, 10, { max: 120 }),
     householdPerDay: positiveInteger(process.env.GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY, 100),
     radiusMeters: positiveInteger(process.env.GOOGLE_PLACES_SEARCH_RADIUS_METERS, 50000, { max: 50000 }),
@@ -30,17 +46,26 @@ export function googlePlacesConfig() {
   };
 }
 
-export function googlePlacesStatus() {
+export function googlePlacesStatus(database = null, userId = null, now = new Date()) {
   const config = googlePlacesConfig();
+  const householdUsed = database ? Number(database.prepare(`SELECT COALESCE(SUM(request_count), 0) AS n FROM place_provider_usage WHERE usage_date = ? AND provider = 'google'`).get(dateKey(now)).n) : null;
+  const userUsed = database && userId ? Number(database.prepare(`SELECT COALESCE(SUM(request_count), 0) AS n FROM place_provider_usage WHERE usage_date = ? AND provider = 'google' AND user_id = ?`).get(dateKey(now), userId).n) : null;
   return {
     provider: PROVIDER,
     configured: config.configured,
+    setup: {
+      api_key_configured: Boolean(config.apiKey),
+      integration_enabled: config.integrationEnabled,
+      terms_accepted: config.termsAccepted,
+    },
     search_mode: 'deliberate_text_search',
     result_limit: 10,
     limits: {
       per_user_per_minute: config.perUserPerMinute,
       household_per_day: config.householdPerDay,
     },
+    usage: { household_today: householdUsed, user_today: userUsed },
+    privacy_notice: 'Search terms and the selected origin are sent to Google Places through this Yuvomi server.',
   };
 }
 
@@ -78,12 +103,12 @@ function takeMinuteSlot(userId, limit, now) {
   minuteWindows.set(key, recent);
 }
 
-function takeDailySlot(database, userId, limit, now) {
+function takeDailySlot(database, userId, limit, now, operation = OPERATION) {
   const used = database.prepare(`
     SELECT COALESCE(SUM(request_count), 0) AS count
       FROM place_provider_usage
-     WHERE usage_date = ? AND provider = ? AND operation = ?
-  `).get(dateKey(now), PROVIDER, OPERATION).count;
+     WHERE usage_date = ? AND provider = ?
+  `).get(dateKey(now), PROVIDER).count;
   if (Number(used) >= limit) {
     throw new PlaceProviderError('The household Place-search limit has been reached for today.', {
       status: 429,
@@ -96,7 +121,12 @@ function takeDailySlot(database, userId, limit, now) {
     ON CONFLICT(usage_date, provider, operation, user_id) DO UPDATE SET
       request_count = request_count + 1,
       updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-  `).run(dateKey(now), PROVIDER, OPERATION, userId);
+  `).run(dateKey(now), PROVIDER, operation, userId);
+}
+
+function noteProviderFailure() {
+  failureCount += 1;
+  if (failureCount >= 3) circuitOpenUntil = Date.now() + 60_000;
 }
 
 function normalizeResult(place) {
@@ -113,10 +143,19 @@ function normalizeResult(place) {
   };
 }
 
+function distanceMeters(a, b) {
+  const rad = (value) => value * Math.PI / 180;
+  const dLat = rad(b.latitude - a.latitude);
+  const dLon = rad(b.longitude - a.longitude);
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.latitude)) * Math.cos(rad(b.latitude)) * Math.sin(dLon / 2) ** 2;
+  return Math.round(6371000 * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x)));
+}
+
 export async function searchGooglePlaces(database, {
   userId,
   query,
   origin,
+  includedType = null,
   fetchImpl = globalThis.fetch,
   now = new Date(),
 } = {}) {
@@ -132,12 +171,18 @@ export async function searchGooglePlaces(database, {
     throw new PlaceProviderError('A signed-in user is required.', { status: 401, code: 'authentication_required' });
   }
   const normalizedQuery = cleanText(query, 'Search', 120);
-  if (normalizedQuery.length < 2) {
-    throw new PlaceProviderError('Search must contain at least two characters.', { code: 'invalid_search' });
+  if (normalizedQuery.length < 3) {
+    throw new PlaceProviderError('Search must contain at least three characters.', { code: 'invalid_search' });
   }
   const latitude = coordinate(origin?.latitude, -90, 90, 'Origin latitude');
   const longitude = coordinate(origin?.longitude, -180, 180, 'Origin longitude');
 
+  const normalizedType = includedType && INCLUDED_TYPES.has(String(includedType)) ? String(includedType) : null;
+  const requestKey = JSON.stringify([normalizedUserId, normalizedQuery.toLowerCase(), latitude, longitude, normalizedType]);
+  if (identicalInFlight.has(requestKey)) return identicalInFlight.get(requestKey);
+  if (Date.now() < circuitOpenUntil) {
+    throw new PlaceProviderError('Google Places is temporarily paused after repeated provider errors. Try again shortly.', { status: 503, code: 'place_provider_circuit_open' });
+  }
   if (inFlightUsers.has(normalizedUserId)) {
     throw new PlaceProviderError('A Place search is already running for this user.', {
       status: 429,
@@ -147,15 +192,16 @@ export async function searchGooglePlaces(database, {
   takeMinuteSlot(normalizedUserId, config.perUserPerMinute, now);
   takeDailySlot(database, normalizedUserId, config.householdPerDay, now);
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
-  inFlightUsers.add(normalizedUserId);
-  try {
+  const operation = (async () => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+    inFlightUsers.add(normalizedUserId);
+    try {
     const response = await fetchImpl(SEARCH_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Goog-Api-Key': String(process.env.GOOGLE_PLACES_API_KEY).trim(),
+        'X-Goog-Api-Key': config.apiKey,
         'X-Goog-FieldMask': FIELD_MASK,
       },
       body: JSON.stringify({
@@ -168,25 +214,34 @@ export async function searchGooglePlaces(database, {
             radius: config.radiusMeters,
           },
         },
+        ...(normalizedType ? { includedType: normalizedType, strictTypeFiltering: false } : {}),
       }),
       signal: controller.signal,
     });
     if (!response.ok) {
+      noteProviderFailure();
       throw new PlaceProviderError('Google Places could not complete the search.', {
         status: response.status === 429 ? 429 : 502,
         code: response.status === 429 ? 'place_provider_rate_limited' : 'place_provider_failed',
       });
     }
     const payload = await response.json();
-    return (payload.places || []).map(normalizeResult).filter(Boolean).slice(0, 10);
+    failureCount = 0;
+    return (payload.places || []).map(normalizeResult).filter(Boolean).slice(0, 10).map((place) => ({
+      ...place,
+      distance_meters: place.latitude != null && place.longitude != null
+        ? distanceMeters({ latitude, longitude }, place) : null,
+    }));
   } catch (error) {
     if (error instanceof PlaceProviderError) throw error;
     if (error?.name === 'AbortError') {
+      noteProviderFailure();
       throw new PlaceProviderError('Google Places took too long to respond.', {
         status: 504,
         code: 'place_provider_timeout',
       });
     }
+    noteProviderFailure();
     throw new PlaceProviderError('Google Places is temporarily unavailable.', {
       status: 502,
       code: 'place_provider_unavailable',
@@ -195,12 +250,71 @@ export async function searchGooglePlaces(database, {
     clearTimeout(timeout);
     inFlightUsers.delete(normalizedUserId);
   }
+  })();
+  identicalInFlight.set(requestKey, operation);
+  try { return await operation; }
+  finally { identicalInFlight.delete(requestKey); }
 }
+
+export async function refreshGooglePlaceId(placeId, {
+  database = null,
+  userId = null,
+  fetchImpl = globalThis.fetch,
+  now = new Date(),
+} = {}) {
+  const config = googlePlacesConfig();
+  if (!config.configured) throw new PlaceProviderError('Google Places is not configured.', { status: 503, code: 'place_provider_not_configured' });
+  if (Date.now() < circuitOpenUntil) {
+    throw new PlaceProviderError('Google Places is temporarily paused after repeated provider errors. Try again shortly.', { status: 503, code: 'place_provider_circuit_open' });
+  }
+  const clean = cleanText(placeId, 'Place ID', 250);
+  if (database && userId) takeDailySlot(database, Number(userId), config.householdPerDay, now, REFRESH_OPERATION);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+  try {
+    const response = await fetchImpl(`${DETAILS_URL}${encodeURIComponent(clean)}`, {
+      headers: { 'X-Goog-Api-Key': config.apiKey, 'X-Goog-FieldMask': 'id,movedPlaceId' },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      noteProviderFailure();
+      throw new PlaceProviderError('Google could not refresh this Place ID.', {
+        status: response.status === 429 ? 429 : 502,
+        code: response.status === 429 ? 'place_provider_rate_limited' : 'place_id_refresh_failed',
+      });
+    }
+    const payload = await response.json();
+    failureCount = 0;
+    return String(payload.movedPlaceId || payload.id || clean);
+  } catch (error) {
+    if (error instanceof PlaceProviderError) throw error;
+    noteProviderFailure();
+    if (error?.name === 'AbortError') {
+      throw new PlaceProviderError('Google Places took too long to respond.', { status: 504, code: 'place_provider_timeout' });
+    }
+    throw new PlaceProviderError('Google Places is temporarily unavailable.', { status: 502, code: 'place_provider_unavailable' });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export const GooglePlaceSearchProvider = Object.freeze({
+  provider: PROVIDER,
+  searchText: searchGooglePlaces,
+  getPlace: refreshGooglePlaceId,
+  refreshExternalId: refreshGooglePlaceId,
+  navigationUrl(placeId, label = 'Google Maps place') {
+    const params = new URLSearchParams({ api: '1', query: label, query_place_id: placeId });
+    return `https://www.google.com/maps/search/?${params.toString()}`;
+  },
+});
 
 export function _resetGooglePlacesLimitsForTests() {
   inFlightUsers.clear();
+  identicalInFlight.clear();
   minuteWindows.clear();
+  failureCount = 0;
+  circuitOpenUntil = 0;
 }
 
 export const GOOGLE_PLACES_FIELD_MASK = FIELD_MASK;
-

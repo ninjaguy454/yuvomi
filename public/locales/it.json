@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "Questa definizione riutilizzabile e le sue impostazioni vengono eliminate definitivamente. Yuvomi impedisce l'eliminazione finché un altro modello o un'attività pianificata ne dipende; le attività e gli eventi già creati restano.",
         "placeDeleteConfirmDetail": "L'eliminazione è bloccata finché pianificazioni, modelli, disponibilità, attività o luoghi figli dipendono da questo luogo. Puoi invece disattivarlo.",
         "availabilityDeleteConfirmDetail": "Questo rimuove il segnale di disponibilità. Le attività e i pasti esistenti non vengono eliminati.",
+        "tripDeleteConfirmDetail": "Il viaggio e i collegamenti all’itinerario verranno rimossi. Le attività generate restano in Attività finché non le elimini lì.",
         "rewardsEnableTitle": "Visibilità",
         "rewardsEnableLabel": "Attiva le ricompense",
         "rewardsEnableHint": "Mostra il modulo ricompense nella navigazione. Disattivandolo si conservano tutti i dati.",

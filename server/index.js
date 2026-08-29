@@ -75,6 +75,7 @@ import permissionsRouter from './routes/permissions.js';
 import changelogRouter from './routes/changelog.js';
 import mcpRouter from './mcp/server.js';
 import scheduleRouter from './routes/schedule.js';
+import readerRouter from './routes/reader.js';
 import { moduleForPath, requiredAccess, tokenAllows } from './scopes.js';
 import { moduleAccessVerdict, MODULE_ACCESS_DENIED, MODULE_ACCESS_READ_ONLY } from './permissions.js';
 import { BODY_LIMIT, MAX_UPLOAD_BYTES, MAX_UPLOAD_MB } from './utils/upload-limit.js';
@@ -237,6 +238,7 @@ app.use('/api/', apiLimiter);
 // API-Routen
 // --------------------------------------------------------
 app.use('/api/v1/auth', authRouter);
+app.use('/reader', readerRouter);
 
 function buildVersionPayload(includeVersion = false) {
   let appName = DEFAULT_APP_NAME;

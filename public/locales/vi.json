@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "Định nghĩa có thể tái sử dụng này và các cài đặt của nó sẽ bị xóa vĩnh viễn. Yuvomi chặn việc xóa khi một mẫu khác hoặc nhiệm vụ đã lên lịch vẫn phụ thuộc vào nó; các nhiệm vụ và sự kiện đã tạo vẫn được giữ lại.",
         "placeDeleteConfirmDetail": "Không thể xóa khi lịch, mẫu, trạng thái sẵn sàng, nhiệm vụ hoặc địa điểm con còn phụ thuộc vào địa điểm này. Bạn có thể chuyển địa điểm sang trạng thái không hoạt động.",
         "availabilityDeleteConfirmDetail": "Thao tác này xóa tín hiệu sẵn sàng. Các nhiệm vụ và bữa ăn hiện có không bị xóa.",
+        "tripDeleteConfirmDetail": "Chuyến đi và các liên kết lịch trình sẽ bị xóa. Các nhiệm vụ đã tạo vẫn ở mục Nhiệm vụ cho đến khi bạn xóa chúng tại đó.",
         "rewardsEnableTitle": "Hiển thị",
         "rewardsEnableLabel": "Bật phần thưởng",
         "rewardsEnableHint": "Hiển thị mô-đun phần thưởng trong điều hướng. Khi tắt, mọi dữ liệu vẫn được giữ.",

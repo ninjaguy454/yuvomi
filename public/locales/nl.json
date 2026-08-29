@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "Deze herbruikbare definitie en de instellingen worden permanent verwijderd. Yuvomi blokkeert verwijderen zolang een andere sjabloon of geplande taak ervan afhankelijk is; eerder gemaakte taken en afspraken blijven bestaan.",
         "placeDeleteConfirmDetail": "Verwijderen is geblokkeerd zolang planningen, sjablonen, beschikbaarheid, taken of onderliggende plaatsen hiervan afhankelijk zijn. Je kunt de plaats in plaats daarvan inactief maken.",
         "availabilityDeleteConfirmDetail": "Hiermee wordt het beschikbaarheidssignaal verwijderd. Bestaande taken en maaltijden worden niet verwijderd.",
+        "tripDeleteConfirmDetail": "De reis en de koppelingen naar het reisplan worden verwijderd. Gegenereerde taken blijven in Taken staan totdat je ze daar verwijdert.",
         "rewardsEnableTitle": "Zichtbaarheid",
         "rewardsEnableLabel": "Beloningen inschakelen",
         "rewardsEnableHint": "Toont de beloningenmodule in de navigatie. Bij uitschakelen blijven alle gegevens behouden.",

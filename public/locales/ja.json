@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "この再利用可能な定義と設定は完全に削除されます。別のテンプレートや予定済みタスクが依存している間は Yuvomi が削除を防ぎ、すでに作成されたタスクと予定は残ります。",
         "placeDeleteConfirmDetail": "スケジュール、テンプレート、在席情報、タスク、または子の場所が依存している間は削除できません。代わりに場所を無効にできます。",
         "availabilityDeleteConfirmDetail": "在席情報のシグナルが削除されます。既存のタスクや食事は削除されません。",
+        "tripDeleteConfirmDetail": "旅行と旅程へのリンクが削除されます。生成されたタスクは、タスク画面で削除するまで残ります。",
         "rewardsEnableTitle": "表示",
         "rewardsEnableLabel": "ごほうびを有効にする",
         "rewardsEnableHint": "ナビゲーションにごほうびモジュールを表示します。無効にしてもすべてのデータは保持されます。",

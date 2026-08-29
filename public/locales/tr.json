@@ -1453,6 +1453,7 @@
         "automationDefinitionDeleteConfirmDetail": "Bu yeniden kullanılabilir tanım ve ayarları kalıcı olarak kaldırılır. Başka bir şablon veya zamanlanmış görev buna bağlı olduğu sürece Yuvomi silmeyi engeller; önceden oluşturulmuş görevler ve etkinlikler kalır.",
         "placeDeleteConfirmDetail": "Programlar, şablonlar, uygunluk kayıtları, görevler veya alt konumlar bu yere bağlıyken silme engellenir. Bunun yerine yeri devre dışı bırakabilirsiniz.",
         "availabilityDeleteConfirmDetail": "Bu işlem uygunluk sinyalini kaldırır. Mevcut görevler ve öğünler silinmez.",
+        "tripDeleteConfirmDetail": "Gezi ve gezi programı bağlantıları kaldırılır. Oluşturulan görevler, Görevler bölümünden silinene kadar kalır.",
         "rewardsEnableTitle": "Görünürlük",
         "rewardsEnableLabel": "Ödülleri etkinleştir",
         "rewardsEnableHint": "Ödül modülünü gezinmede gösterir. Devre dışı bırakıldığında tüm veriler korunur.",

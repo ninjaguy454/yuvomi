@@ -10,7 +10,7 @@ import { openModal as openSharedModal, closeModal, wireBlurValidation, validateA
 import { stagger, vibrate, scheduleUndoableDelete, animationSettled } from '/utils/ux.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
-import { esc } from '/utils/html.js';
+import { esc, renderMarkdownLight } from '/utils/html.js';
 import { renderMarkdownToolbar, wireMarkdownToolbar } from '/utils/markdown-toolbar.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';

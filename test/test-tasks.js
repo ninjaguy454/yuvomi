@@ -46,6 +46,14 @@ test('Bulk-Aktionsleiste ist standardmäßig verborgen und zeigt Nullauswahl nur
   assert(/button\.disabled\s*=\s*selected\s*===\s*0/.test(source), 'Bulk-Buttons müssen bei 0 Auswahl deaktiviert sein');
 });
 
+test('Task cards import the renderer used for Markdown descriptions', () => {
+  const source = readFileSync(new URL('../public/pages/tasks.js', import.meta.url), 'utf8');
+  assert(/import\s*\{[^}]*\brenderMarkdownLight\b[^}]*\}\s*from\s*['"]\/utils\/html\.js['"]/.test(source),
+    'renderTaskCard must not call renderMarkdownLight without importing it');
+  assert(/activity-card__description[^`]*\$\{renderMarkdownLight\(task\.description\)\}/s.test(source),
+    'expanded task descriptions must use the shared Markdown renderer');
+});
+
 // --------------------------------------------------------
 // Erstellen
 // --------------------------------------------------------

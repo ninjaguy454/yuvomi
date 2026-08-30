@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 
-process.env.DB_PATH = path.join(os.tmpdir(), `oikos-subscriptions-${process.pid}.db`);
+import { freshTestDbPath } from './tmp-db.js';
+freshTestDbPath('subscriptions');
 process.env.SESSION_SECRET = 'subscription-test-session-secret-32-bytes';
 
 const service = await import('../server/services/subscriptions.js');

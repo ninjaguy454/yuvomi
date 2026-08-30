@@ -24,6 +24,24 @@ Every table: `id INTEGER PRIMARY KEY`, `created_at TEXT`, `updated_at TEXT` (ISO
 | oidc_provider | TEXT | OIDC issuer URL of the provider that set `oidc_sub`, nullable. Partial UNIQUE index on `(oidc_sub, oidc_provider)` WHERE NOT NULL. |
 | calendar_feed_token | TEXT | Secret token authenticating the user's read-only ICS export feed, nullable. Partial UNIQUE index on `calendar_feed_token` WHERE NOT NULL. |
 | calendar_feed_show_assignees | INTEGER | Opt-in flag (0/1, default 0): when set, the read-only ICS export feed appends the assigned members to each event's `SUMMARY`, e.g. `Pool party (Mom, Dad)`. |
+| onboarding_version | INTEGER | NOT NULL, default 0 (migration v168) — the walkthrough version this account has seen |
+
+**The onboarding walkthrough is remembered per account, not per browser (v2.52.0).** The marker used
+to live only in `localStorage`, so a new device or a private window showed the walkthrough again to
+an account that had long dismissed it. `/auth/me` and `/auth/login` therefore carry
+`onboarding_pending`, computed as `onboarding_version < CURRENT_ONBOARDING_VERSION`
+(`server/auth.js`); `POST /api/v1/auth/onboarding-seen` records the current version on the calling
+account.
+
+A number rather than a flag, because "seen" alone allows no later extension: if a future release
+warrants showing the walkthrough again, a maintenance commit raises `CURRENT_ONBOARDING_VERSION` and
+every account below it sees it once more — no further migration. Migration v168 backfills existing
+accounts to 1 (they have seen the current walkthrough by definition) while the column default stays
+0, so every future `INSERT INTO users` gets the right behaviour for a new account without its own
+change. The `localStorage` key remains as an **additional** condition rather than a replacement: it
+is how the visual-probe harness suppresses the dialog without marking a test account server-side.
+The install-to-home-screen banner is deliberately untouched — whether a device has the PWA installed
+is a property of that device, so it keeps its local 7-day snooze.
 
 ### Two-Factor Authentication (migration v159, #672)
 
@@ -110,7 +128,7 @@ One pending invitation per row. The `users` row is only created when the invitat
 | recurrence_rule | TEXT | iCal RRULE |
 | recurrence_from_completion | INTEGER | NOT NULL DEFAULT 0 (migration v127, #658) — 1 anchors the next due date to the day the task was ticked off instead of to its due date |
 | parent_task_id | INTEGER | FK → Tasks (max 2 levels) |
-| recurrence_origin_id | INTEGER | FK → Tasks, ON DELETE SET NULL (migration v122) — the completed instance whose completion created this one. Deliberately not `parent_task_id`, which means "subtask" |
+| recurrence_origin_id | INTEGER | FK → Tasks, ON DELETE SET NULL (migration v122) — the completed instance whose completion created this one. Deliberately not `parent_task_id`, which means "subtask". **The column carries two meanings and `parent_task_id` tells them apart** (v2.52.1, #924): on a root task it means "I am the next run of X", on a subtask copied into a follow-up (v2.8.4, #742) it means "I am the copy of Y in this run". Only the first is a follow-up, so every read that acts on one must filter for `parent_task_id IS NULL` |
 | points | INTEGER | NOT NULL DEFAULT 0 — reward points credited to assigned members on completion (Rewards module, migration v69) |
 | visibility | TEXT | NOT NULL DEFAULT `all` — `all` \| `assignees` \| `private`; who may see the task (migration v78) |
 | locked | INTEGER | NOT NULL DEFAULT 0 (migration v155, #830) — 1 closes the task **definition** to everyone but its creator and admins, while ticking off, commenting, and assigning oneself stay open for all. A subtask inherits its parent's lock |
@@ -129,7 +147,7 @@ Recurring tasks keep only one open instance: the next instance is created on com
 
 The flag is copied onto the follow-up instance; without that the series would fall back to the due-date grid from its second run on, and it would do so silently, because the follow-up looks complete either way. The completion day is read in the household's own zone (`TZ`, see `server/utils/timezone.js`): ticking a task off at 00:30 must count as the new day, or a weekly task would come back six days later. The anchor is local to Yuvomi and does not travel over CalDAV, because RFC 5545 has no way to express it and a mirrored VTODO carries the rule alone. The shared calculation lives in `nextDueAfterCompletion()` in `server/services/recurrence.js`, deliberately separate from the route because resettable countdowns want the same "counts from the moment you touched it" arithmetic (#647).
 
-**Undoing a completion (migration v122, #650):** ticking a series off is reversible. The follow-up instance records which completion created it (`recurrence_origin_id`), so moving a task back out of `done` — via the checkbox or the edit dialog — removes that follow-up again instead of leaving it standing next to the reopened task. Only an untouched follow-up is withdrawn: one that is still `open` and has not itself been completed. Since the follow-up carries copied subtasks of its own (v2.8.4, #742), "untouched" is a comparison rather than a head count: each subtask is checked against the one it was copied from, and any difference — a changed status, an edited field or date, one added or removed — keeps the follow-up standing. Merely *having* subtasks no longer protects it, or a checklist series could never be un-ticked; editing one still does, because that is work a click on the predecessor must not discard. Once work has accumulated on it, a click on its predecessor must not throw that away. The same link makes the creation idempotent: a completion never adds a second follow-up.
+**Undoing a completion (migration v122, #650):** ticking a series off is reversible. The follow-up instance records which completion created it (`recurrence_origin_id`), so moving a task back out of `done` — via the checkbox or the edit dialog — removes that follow-up again instead of leaving it standing next to the reopened task. Only an untouched follow-up is withdrawn: one that is still `open` and has not itself been completed. Since the follow-up carries copied subtasks of its own (v2.8.4, #742), "untouched" is a comparison rather than a head count: each subtask is checked against the one it was copied from, and any difference — a changed status, an edited field or date, one added or removed — keeps the follow-up standing. Merely *having* subtasks no longer protects it, or a checklist series could never be un-ticked; editing one still does, because that is work a click on the predecessor must not discard. Once work has accumulated on it, a click on its predecessor must not throw that away. The same link makes the creation idempotent: a completion never adds a second follow-up. **Only a whole occurrence counts as a follow-up** (v2.52.1, #924): the copied subtasks carry `recurrence_origin_id` as well, so until then unticking a subtask *on the finished occurrence* looked up its own copy in the next one, found an untouched row, and deleted it — a four-step series came back as 0/4 and dropped to 0/3, then 0/2. The lookup is restricted to root tasks; a tick on a past run is a fact about that run alone. Occurrences that already lost a step this way stay as they are, since the row was really deleted.
 
 **Category default repaired (migration v114, #586):** v83 moved the categories into their own table and migrated existing rows from `Sonstiges` to the key `misc`, but left the column default at `Sonstiges` — a key that never existed in `task_categories`. Every row created without an explicit category (notably every task arriving through the CalDAV mirror) therefore carried a key that appeared in no dropdown and no filter, and jumped silently to the first real category on the first save. v114 rebuilds the table with the correct default and re-homes every orphaned key.
 
@@ -1352,7 +1370,8 @@ Per-user reminders attached to tasks, calendar events, subscriptions, inventory 
 | remind_at | TEXT | ISO 8601 datetime, NOT NULL |
 | dismissed | INTEGER | 0/1, default 0 |
 | pushed_at | TEXT | ISO 8601 datetime, nullable — set once all active notification targets have been sent, skipped, or exhausted, so the reminder is not processed indefinitely |
-| created_by | INTEGER | FK → Users (CASCADE delete), NOT NULL |
+| created_by | INTEGER | FK → Users (CASCADE delete), NOT NULL — whose reminder this row *is*: who gets notified, and who may change or dismiss it |
+| assigned_from | INTEGER | FK → Users (SET NULL), nullable (migration v169) — whose action the row was derived from. `NULL` means self-set, which is what every pre-v169 row is |
 
 All types except `pantry_item` can be set and deleted through `POST`/`PUT`/`DELETE
 /api/v1/reminders`. Four of them are **derived** - their module recreates the reminder whenever the
@@ -1384,6 +1403,30 @@ The event dialog manages the set via `GET /api/v1/reminders/all?entity_type=even
 (returns the full list) and `PUT /api/v1/reminders?entity_type=event&entity_id=…` with
 `{ remind_ats: [...] }` (replace-set semantics: deduplicated, max 5). Tasks and subscriptions keep
 using the single-reminder endpoints (`GET`/`POST /api/v1/reminders`).
+
+**A reminder on a shared event reaches its assignees (v2.52.0).** A reminder set by the member who
+**created** the event is written for everyone assigned to it as a row of their own, so it is
+delivered to them and appears when they open the event. Rows of their own rather than one row with a
+recipient list, because everything hanging off a reminder is per-person: `dismissed`, `pushed_at`,
+and the time itself, which each member may move. A shared row would have needed a second table for
+each of those three, and the delivery path already keys on `created_by`.
+
+Only the event's author distributes. Anyone else setting a reminder on a shared event sets it for
+themselves — otherwise one member making a note would notify the household. Four rules bound the
+fan-out, all of them about what must *not* happen:
+
+- A reminder an assignee set for themselves (`assigned_from IS NULL`) is never overwritten, and its
+  presence stops the fan-out to that person entirely: they have already decided when to be reminded.
+- A dismissed row is not resurrected while the set of times is unchanged. Dismissing means "I have
+  seen this", not "I want nothing about this event", so a *changed* time does reach them.
+- Removing someone from the event deletes their inherited rows, but not one they set themselves.
+- Deleting the author's own reminders removes the inherited ones with them — leaving a notification
+  standing that the author just abolished would be a promise without cover.
+
+Both triggers — writing a reminder (`server/routes/reminders.js`) and changing the assignment
+(`setEventAssignments` in `server/routes/calendar/helpers.js`) — go through one service,
+`server/services/event-reminder-fanout.js`. Two implementations would be unusually expensive here: a
+reminder that does **not** arrive does not announce itself.
 
 ### Push Subscriptions
 
@@ -2545,6 +2588,18 @@ Responsive grid: 1 column on mobile, 2 on tablet, 3 on desktop.
 
 **The day program (v2.4.0):** "Today at a glance" is a chronological day program instead of three module aggregates: today's remaining appointments (with their time), tasks due today ("by 17:00"; overdue first, then all-day, then date-only), the next planned meal at a nominal slot time, and open shopping as a timeless closing row — each row carrying its module seal, the assignee's avatar (seal∩avatar mark) and `data-object-kind`/`data-object-id` anchors. The task row opens the same quick-action dialog as the tasks widget (done/edit); the calendar row keeps its `?open=` deep link; the meal row needs no special path because `/meals` already scrolls today's slot into view. Capped at 6 rows with a "+N more today" footnote. An empty day answers instead of disappearing: "Free today" / "All done for today", with an outlook naming whichever comes first — the next appointment or the next due task; a complete program closes with "Nothing else today", which names tomorrow's first due task when one exists. The echo rule still applies throughout: a visible widget of a domain removes that domain's cockpit rows and carries its own warnings. Two server slices feed this: `memberTodayTasks` (per-member open count due today or overdue, visibility-filtered for the viewer) and `tasksDoneToday` (needed to tell "all done" from "nothing was ever due"). Weather moved from a card into a quiet masthead line under the greeting; the card remains as a wall-tablet opt-in and, when visible, silences the line (no echo). The family widget shows per member what today holds (next appointment, open-task count) and, on free days, each member's next upcoming appointment instead of stacking identical "Free today" lines. Dashboard content refreshes silently on tab reactivation and every 15 minutes while the tab stays visible (never while customizing). The module hairline sits on every widget card regardless of size, and a card whose action link and origin diverge names its seal tone explicitly (family → contacts).
 
+**The task row opens the whole task (v2.53.0, #918):** the note above says a task row opens "the same
+quick-action dialog as the tasks widget (done/edit)". That dialog is gone. Both the cockpit row and
+the rows of the tasks and countdown widgets now open the full reading view from
+`components/task-detail.js` — the same one the Tasks module opens — with subtasks, comments,
+documents, the tickable checkboxes in the description and the complete action set, and the dashboard
+refreshes its own tiles afterwards instead of navigating anywhere. The two-button card was never a
+design decision; it was the only thing reachable while that view lived inside `pages/tasks.js`. See
+[Tasks](#tasks-tasks) for what the view needs from its surroundings. The `data-object-kind` /
+`data-object-id` anchors keep their meaning and gained a second reader: deleting a task hides every
+representation of it for the length of the undo strip, and the Overview names its objects with those
+attributes while the widget rows use `data-task-id` — the same task can stand in two tiles at once.
+
 **The board carries its module colours (v2.6.0):** module identity on a widget card was a 2px hairline along its top edge, which the dark theme swallowed - seventeen modules' worth of colour read as a wall of grey rectangles. The card header carries the family tone as a wash band (`--tint-wash`, the scale rung defined for a tint sitting *under* foreign content), and the seal on that band receives the band as its own `--seal-base`; without it the disc mixes against the card surface and sits at 1.06:1 on the tint. The hairline stays. The day programme takes the larger card radius and one elevation step above the grid - it had been sitting one step *below* the widgets it leads - and its rows tint in their own module tone on hover instead of neutral grey. On phones the programme no longer shrinks in padding or title size; only the page gutter narrows. The minimum grid column is 280px, because at 270 the ellipse cut through real names ("Aunt Claire Bec…").
 
 **The header band is as tall as its title line (v2.6.1):** the band measured 73px for a 17px title and a 24px seal - between 18% and 29.9% of the card at 390×844 - because the "Alle" link claimed a full 48px touch box inside a 12px-padded row. A free-standing target owes its size in **one** axis, so the link takes it in the width (`min-width: --target-lg`) while its box drops to `--target-sm` and its hit area stays 48px through a `::before` that bleeds into the header padding. Band 73px → 49px at an unchanged 48px hit height; the title line carries the measure so the error tile without a link lands on the same value. The title stays 17px - the row was bulky, not the type.
@@ -2575,6 +2630,8 @@ tone): light 3.65-5.18:1, dark 7.42-12.24:1, all above the 3:1 asked of graphics
 
 **Per-widget options: what a tile shows, not just whether and how big (v2.35.0 · #814):** the calendar widget can be limited to appointments assigned to me, and the tasks widget to chosen categories. Both live in the same per-user object as order, visibility and size - a widget entry is now `{id, visible, order, size, options?}` - so narrowing your own overview cannot change what anyone else sees. **The server stores `options` without knowing what is in them.** It validates the storage form only (a flat object, at most 8 keys, values boolean / finite number / short string / list of short strings, no nesting) and rejects everything else; which widget understands which option is the browser's business, the same way widget ids have always been the browser's business, so that adding a widget never requires a matching backend change. An empty options object is dropped on both sides, so a layout that opened the dialog and chose nothing is stored identically to one that never saw it. The browser translates the options into query parameters the route already understands - `?events_scope=mine`, `?tasks_category=` (repeatable) - rather than filtering the response: `urgentTasks` caps at five while the metric tiles count without a limit, so filtering afterwards would put two rows under a tile that says seven (the #647 lesson, one level up). For the same reason the filters apply to **every** task slice of the payload (the countdown tile excepted: an entry is there because somebody explicitly marked it, not because it is in a list, and a category filter that made a marked task disappear would undo a deliberate decision), not only the tasks widget's list - tasks appear in four places on that page and events in three, and a page that filters some of them contradicts itself. "Assigned to me" means exactly what it means in the calendar module (`belongsToMe`): among the assignees, so an unassigned event is not "mine". The filters go into the SQL through the same shared fragment the Tasks module uses (`taskCategoryWhere` in `services/task-scope.js`, which is why the category filter moved into that service - it stopped being a wish only one side knew); `GET /api/v1/tasks?category=` now accepts several values, OR-combined like status, priority and assignee (#671), where before a second `category` parameter made the statement fail outright. The two tiles that carry options are hidden by default - the cockpit already covers their domains - so the options button sits on the tile **and** on its chip in the hidden-widgets tray: their filters keep applying to the cockpit and the header band while the tile is away, and having to un-hide a tile in order to configure what it does not show would be the wrong way round (`test:frontend-audit` holds that rule, keyed to the overlap between `COCKPIT_COVERED_WIDGETS` and the widgets that have options). Since the options only arrive with the preferences response, the first dashboard request would not know them - so the device-scoped layout hint (`utils/dashboard-layout-hint.js`, already used to predict the skeleton, dropped on logout) remembers the query path too; a wrong prediction is corrected before the first render, and the steady state stays at one request.
 
+**Birthdays in the calendar tile (#927):** the calendar widget's options dialog carries a second switch, "Birthdays", worded exactly as the layer switch in the calendar module's filter sheet. A household that keeps the Birthdays tile on the overview otherwise reads every birthday twice - once there, once between the next appointments. It is a widget option and **not** a reading of the calendar module's layer switch, which lives in `localStorage` under `yuvomi:calendar:layer:birthdays`: that one is scoped to the device, widget options are scoped to the account, and one value with two scopes would mean unchecking it on the phone silently decided what the wall tablet shows - or did not, depending on which of the two is read. Only the removal travels (`?events_birthdays=hide`), the same rule under which `scope: 'all'` is not stored: birthdays are in unless somebody takes them out. `getUpcomingEvents` filters them **before** the cap, next to the `assignedTo` filter and for the same reason, so the freed rows fill with the next real appointments rather than leaving a shorter list. A birthday is recognised by `birthday_name` - the `LEFT JOIN` on `birthdays`, the same condition `isVisibleLayer` uses in the calendar module - never by its title, which is stored in the household's data language (#524) and would match nothing in a household that does not speak German. The Birthdays tile, the birthday metric and the countdowns are untouched: they are their own domain with their own switch, and this option is about the one place where birthdays ride along.
+
 **The overview selects the same tasks as the module (v2.32.0 · #825):** both answer "what is up?", and each had its own copy of the rules. `GET /api/v1/tasks` leaves out subtasks (`parent_task_id IS NULL`) and anything whose `start_date` is still ahead; the dashboard route knew neither, so a subtask stood in the list as a context-free row of its own and a task starting next week was already there today. The two shared rules now live in `server/services/task-scope.js` and are applied by the tasks route, all five task queries of the dashboard and the MCP tool - the same arrangement `calendar-events.js` has always had between the calendar route and the dashboard. **The metric tiles run the filter too, not just the list:** `urgentTasks` caps at five while `openTaskCount`, `overdueTaskCount`, `memberTodayTasks` and `tasksDoneToday` count without a limit, so filtering only the list would leave two rows under a tile claiming four. What stays with the individual route are the viewer's filters - status, priority, person, category, tags and the archive axis - because those say what someone wants to see, not what a list may contain. The day is passed in as a local calendar key rather than read from SQLite's `date('now')`: `start_date` is a locally entered day, and the UTC one differs from it for part of every day west and east of UTC.
 
 **Widgets:**
@@ -2583,7 +2640,7 @@ tone): light 3.65-5.18:1, dark 7.42-12.24:1, all above the 3:1 asked of graphics
 - Upcoming events: next 3–5, color-coded by person; each row navigates to `/calendar?open=<id>&date=YYYY-MM-DD` so the event detail popup opens on the displayed occurrence, including recurring series instances
 - Urgent tasks: priority urgent/high + due_date ≤48h
 - Today's meals: meals for the current day
-- Pinboard preview: 2–3 pinned notes (Markdown formatting rendered)
+- Pinboard preview: pinned notes first, then the most recently changed, with Markdown formatting rendered. The payload supplies five and the tile decides how many appear (`listRowCap`, same as birthdays) - three rows for a one-row tile, five for a taller one. It used to cut at three on the server for every size, which made three the ceiling for the 1×2 default the tile ships at: a household with five pinned notes saw three, with the metric tile beside it saying "5 pinned" (#928). The list is a **preview and not a filter** - past what the tile holds, `/notes` is where the rest lives, and the pin ordering plus the `updated_at` touch a pin write causes means a freshly pinned note is always at the front of it
 - Birthdays: the payload supplies the five nearest; how many appear is the tile's decision (`listRowCap`, v2.6.0) - three rows for a one-row tile, five for a taller one. The server used to cut at three for every size, which left the 1×2 default a third empty with no material to fill it
 - Key dates (v2.18.0 · #647): the flagged calendar events and the flagged tasks in one list sorted by how near they are, each row leading back to its own **object** — the task quick-action for a task, the calendar day for an event. The wording is coarse while the date is far off and exact once it is near — exact days up to 30, then about-weeks / about-months / about-years, with no threshold setting — and the **colour says how soon**, while the origin colour sits on the mark at the left. A date that has passed stays a week as "3 days ago" and sorts to the top; recurring entries are exempt and point at their next turn. Unlike every other tile it has **no "All" link in its header**: it belongs to two modules, so a header link would have to pick one and be wrong for the other half of the list; what does not fit is named as "+N more" instead. It is **not offered while nothing is flagged** — like Family in a single-person household it then falls out of both the grid and the Customize tray, rather than rendering an empty card on every dashboard, and it returns to its saved position with the first countdown. Its `permissions.js` entry carries `module: null` for the same reason as the metrics row; the individual rows check their own module
 - Budget: the monthly balance as a stacked readout (label above, 28px figure below - it used to be a 22px amount at the right end of a caption line, built like the supporting metric under it), the savings rate with its track, and a quiet income/expenses line
@@ -2640,7 +2697,31 @@ The surface carries four things, in this order: **the time**, large (this is whe
 - View mode persisted in localStorage; URL parameter `?view=kanban` (or `?view=history`) overrides (useful for tablet kiosk setups)
 
 **Features:**
-- CRUD + subtasks (max 2 levels, checkbox list, progress bar). Subtasks are tickable **wherever they are visible** — on the task card and, since v1.78.1 (#671), in the detail view too. Read-only rows there had assumed the list next door would carry the interaction, but that list keeps them behind a collapsed progress bar, so a freshly created subtask could end up visible and unreachable at the same time
+- CRUD + subtasks (max 2 levels, checkbox list, progress bar). Subtasks are tickable **wherever they are visible** — on the task card and, since v1.78.1 (#671), in the detail view too. Read-only rows there had assumed the list next door would carry the interaction, but that list keeps them behind a collapsed progress bar, so a freshly created subtask could end up visible and unreachable at the same time. **Adding one works wherever the task is open, including the first** (v2.52.1, #925): the detail view offers "add subtask" on the same terms as the card row (may edit the task, not archived, not itself a subtask), and its section now stands even when empty — the same rule the comments below it follow. The card hides its inline actions below 640px by design, and the "add" button for the *first* subtask hung on nothing else, so on a phone every later subtask could be added and the first could not. This is the second instance of one pattern: a view that assumes the view next door carries the interaction, while that one is closed on exactly the device in question. `test:frontend-audit` reads the card's inline actions out of the markup and requires a reachable path for each in the detail view
+- **One reading view, wherever a task is shown (v2.53.0, #918):** clicking a task in the **Overview**
+  or on a task chip in any of the four **Calendar** views opens the same detail view the Tasks module
+  opens, in place. Before this, the Overview brought up a card with two buttons ("Edit", which
+  navigated into the Tasks module, and "Mark as done"), and a calendar chip navigated away outright —
+  everything else a task carries (subtasks, comments, attached documents, the tickable checkboxes in
+  its description, due date, assignee, points, history) was neither visible nor reachable from there.
+  That weighed more than two missing buttons sound like: the Overview is where the app stands open
+  during the day, the Tasks module is where tasks get created and groomed, and the view with fewer
+  capabilities was the one used more often. The view lives in `public/components/task-detail.js` and
+  the surrounding view tells it what it cannot know — who is looking (`currentUserId`, `isAdmin`),
+  what it can resolve (`users`, `categories`), and how to refresh itself (`onChanged`, so the
+  calendar refreshes its day and the widget its tile rather than navigating anywhere). What a field
+  of a task *means* (archived, editable under the lock, how its due date reads, its category label)
+  moved alongside into `public/utils/task-fields.js`; those rules had already been copied into
+  `dashboard.js` once, which is the drift this prevents. Permission checks travel with the view: a
+  locked task (#830) stays uneditable from the Overview, and a read-only member gets the conversation
+  without an input field. **The edit form stays with its module** and is handed to the view as a
+  mounter — a caller that gives none gets a reading view without an Edit button rather than one that
+  leads nowhere, and the same applies when `/tasks/meta/options` fails, since a category select with
+  no options produces a save the server rejects. `pages/tasks.js` exports `openTaskById(taskId, {
+  user, container, onChanged })` as the single outside entry point, loaded dynamically so the task
+  form's weight stays out of the Overview's startup — **and it ensures `/styles/tasks.css` and waits
+  for it**, because the router keeps exactly one page stylesheet loaded and both the reading view and
+  the form take their appearance from there.
 - **Renaming and removing a subtask (v2.12.0 · #748):** each subtask row carries a rename and a delete action beside its checkbox, at the same size and in the same restrained tone as the actions on the task row above it. Deliberately **not hover-only** — a touch device has no hover, and correcting a typo is exactly where a phone is the likely device. Deleting asks first and names what it removes, since ticking off is reversible and this is not. The server needed nothing for this: a subtask is an ordinary task with a `parent_task_id`, so `PUT`/`DELETE /api/v1/tasks/:id` already covered both.
 - **Subtasks expanded by default (#623):** a household-wide preference (`tasks_subtasks_expanded` in `sync_config`, admin-gated, default off) decides whether the subtask list of a task starts open instead of collapsed behind its progress bar. Manual expand and collapse still work per task; the preference only sets the starting state. Settings → Modules → Module options.
 - **Multi-person assignment:** tasks can be assigned to multiple family members simultaneously via `UserMultiSelect` checkbox dropdown; stacked avatar circles (up to 3 visible + `+N` overflow badge) shown on task cards and Kanban — each circle shows the member's profile photo if set, otherwise coloured initials
@@ -2667,6 +2748,22 @@ The surface carries four things, in this order: **the time**, large (this is whe
 - **Mobile swipe (sides swapped in this release):** swiping towards the row's **start** (right in LTR, left in RTL) marks the task done or reopens it; swiping towards its **end** opens the task. The panels are addressed as `leading`/`trailing` in `public/utils/swipe-row.js`, not as left/right, so the gesture mirrors correctly in RTL. Existing users are told once via `common.swipeSidesSwapped`.
 - **Sync target on a new task (#695):** the task dialog carries a "sync target" field, the same shape the event dialog has had since #620, listing only the reminder lists the household enabled *for tasks*. Prefilled from `tasks_default_target`. It is absent for subtasks (they carry no target of their own) and replaced by a sentence on a task that is already mirrored — moving a task between lists is deliberately not offered, so a dropdown there would promise something the sync does not do. `GET /api/v1/tasks/sync-targets` serves the options to every logged-in member, with no credentials or server URLs in the payload.
 - **The note is a note (#731):** the free-text field is six rows, not two, and the read view renders it as Markdown through the same `renderMarkdownLight()` the notes module and the dashboard use — so a checklist, a heading or a bold word looks the same wherever it appears. The editor carries the same `.md-toolbar` the notes module does — not a copy of it but the shared component both draw from, so a checkbox written in a task is the same characters as one written in a note.
+- **Tappable checklists in the description (#917, v2.52.0):** the rendered `- [ ]` boxes are real
+  controls in the task detail view, the same way they have been in Notes since #704 — the same rule
+  from `public/utils/markdown-checklist.js`, imported by both browser and server, one more caller
+  rather than a second implementation. `PATCH /api/v1/tasks/:id/check` rewrites exactly the one
+  source line, so two members ticking different items in the same minute both keep their tick; a
+  full-body `PUT` would have let the later save drop the earlier one silently. Addressed by source
+  line number (`data-md-line`), never by item text, with the line the client saw sent as `expect` and
+  a mismatch answered `409`.
+
+  Two rules diverge from a plain description edit. **The lock (#830) does not stop a tick:** it
+  covers what the task *is*, not how far it has come — `PATCH /:id/status` deliberately has no lock
+  check either, and `toggleChecklistLine` cannot change anything but the one character between the
+  brackets. **Visibility does apply**, answering 404 rather than 403 so a guessed id says nothing.
+  And because `description` is a *mirrored* CalDAV field, a tick marks the row for outbound push —
+  without that it would stay local and the next inbound would bring the unticked line back. A
+  repeated tick on an item already in that state changes nothing and announces nothing.
 - Badge for overdue tasks
 
 ### Shopping Lists (`/shopping`)
@@ -2740,6 +2837,12 @@ soon" (#596).
 ### Calendar (`/calendar`)
 
 **Views:** Month (default on desktop, dot indicators), Week (hour grid), Day (timeline), Agenda (list). On mobile the first load defaults to Agenda view; after the user manually switches views the selected view is persisted for subsequent visits.
+
+**Choosing a view persists it, drilling into one does not (v2.51.0).** Tapping a day cell opens the day view for that date, but leaves the stored default alone - `setSavedCalendarView()` belongs in the tablist's `onChange`, where the user *chooses*, and nowhere else. Until v2.51.0 the drill-in wrote it too, so a navigation gesture silently changed a setting: three taps on a month cell and the calendar opened in day view from then on, with no feedback and no way back other than noticing it.
+
+**The view switcher is a real tablist (v2.51.1).** The bar carries `role="tablist"` with one `role="tab"` per view, and `#cal-body` is its `tabpanel`. The relationship is deliberately asymmetric: the calendar has **one** body whose content is replaced, not four panels to show and hide, so the panel names the tab that currently labels it (`aria-labelledby`) and only the *active* tab carries `aria-controls`. An inactive tab pointing at the same element would promise that it holds *its* content. The shared `syncTabPanels()` helper (`utils/sub-tabs.js`) is therefore not used here - it manages N panels and hides the inactive ones.
+
+**The agenda shows today even when today is empty (v2.51.1).** It otherwise lists only days that hold something, which is right for the weeks ahead and wrong for the first day: the header announces "From \<date\>" and the first row was the day after. A day that goes missing exactly when the answer is "nothing" reads as a loading error, not as a free day; it now carries a quiet `calendar.agendaDayEmpty` line instead. The exception is **today only** - every empty day as a row would be a list of emptiness. The `agenda-day__header--today` rule existed long before this and simply could never fire.
 
 - CRUD: title, description, start/end, all-day, location, color, assignment
 - **Flexible time entry (Discussion #442):** the time inputs accept compact (`0930`, `930`) and separator (`09.30`, `9,30`, `9h30`) notation in addition to `09:30`, `9`, and `9 am`; on blur the value is normalized to the locale's display format. Centralized in `parseTimeInput()`/`toTimeParts()` (`public/i18n.js`), so it applies to every time input in the app (calendar, tasks).
@@ -3212,6 +3315,23 @@ modules/
 ## API Documentation
 
 An OpenAPI 3.0 specification is served at `/api/v1/openapi.json` and `/openapi.json` to **signed-in admins** (both endpoints require an admin session or API token). Append `?download=1` to download as a file. The spec covers all authenticated endpoints and can be imported into any OpenAPI-compatible client (Insomnia, Postman, etc.). The interactive `/docs` page follows the same admin gate and is hidden entirely in production unless `ENABLE_API_DOCS=true`.
+
+**"Covers all endpoints" is now a checked claim (v2.52.0).** It had not been one: 40 of 297 routes
+were missing, among them four entire modules that had never had a line of specification — quick
+links, screensaver, recipe providers, and the permissions endpoints behind the rights matrix. The
+existing guard (`test:openapi-structure`) verifies that the spec's own fragment files are imported
+and spread, never that they match the routers. `test:openapi-coverage` compares the two in both
+directions: a route without documentation fails, and so does a documented route no router serves —
+the second kind is otherwise found only by the integrator who calls it.
+
+The guard follows the *routers* rather than a file list, which matters because four modules split
+their routes across sub-files and `inventory/index.js` mounts five sub-routers under prefixes of
+their own. Three blind spots had to be closed while building it, and each would have made the guard
+look **greener** rather than redder: sub-mounts (without them it invents paths and reports those as
+gaps), named imports (`import { router as authRouter }` — missing it drops the whole `/auth` branch
+from the check), and the router variable that is called `targetRouter` in `server/auth.js`. Its
+exception list is empty and each entry would have to carry its reason on the spot: an exception
+without a justification is a gap with better camouflage.
 
 Authentication options for external integrations:
 - **Session cookie:** standard browser session after login

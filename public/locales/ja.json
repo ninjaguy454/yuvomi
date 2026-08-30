@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "タスク{{count}}件",
         "manage": "管理",
         "todayNothingElseTomorrow": "今日はこの後予定はありません。明日: {{title}}",
-        "weatherHighLow": "最高 {{max}}°、最低 {{min}}°"
+        "weatherHighLow": "最高 {{max}}°、最低 {{min}}°",
+        "optionCalendarBirthdaysHint": "チェックを外すと、このタイルに誕生日は表示されません。カレンダーには残ります。"
     },
     "tasks": {
         "manageCategories": "カテゴリーを管理",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "アクティビティテンプレート",
+        "assignmentLabel": "割り当て",
+        "assignmentOverrideAllowed": "再割り当て可",
+        "responsibilitiesLabel": "担当",
+        "availabilityPlaceLabel": "空き状況と場所",
+        "locationLabel": "場所",
+        "taskLocationFallback": "タスクの場所",
+        "openInGoogleMaps": "Google マップで開く",
+        "saveToYuvomiPlaces": "Yuvomi の場所に保存",
+        "locationSavedToYuvomiPlaces": "場所を Yuvomi の場所に保存しました。",
+        "savedPlaceLabel": "保存済みの場所",
+        "oneUseLocationLabel": "このタスクでのみ使用",
+        "claimedToast": "タスクを引き受けました。",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "項目にチェックを入れる",
+        "checkConflict": "タスクはその間に変更されました。もう一度開いてください。"
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "フィルター {{count}} 件が有効",
         "filtersActive_one": "フィルター 1 件が有効",
         "filtersReset": "すべてのフィルターを解除",
-        "filtersDisplay": "表示"
+        "filtersDisplay": "表示",
+        "agendaDayEmpty": "予定なし"
     },
     "notes": {
         "title": "メモボード",
@@ -2838,7 +2855,8 @@
         "customHours": "Hours",
         "customDays": "Days",
         "customWeeks": "Weeks",
-        "sectionTitlePlural": "リマインダー"
+        "sectionTitlePlural": "リマインダー",
+        "sharedWithAssignees": "この予定に割り当てられた人にも、このリマインダーが届きます。"
     },
     "onboarding": {
         "step1Title": "{{name}}へようこそ",

@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} задача",
         "manage": "Управлять",
         "todayNothingElseTomorrow": "Больше на сегодня ничего нет - завтра: {{title}}",
-        "weatherHighLow": "Максимум {{max}}°, минимум {{min}}°"
+        "weatherHighLow": "Максимум {{max}}°, минимум {{min}}°",
+        "optionCalendarBirthdaysHint": "Без галочки дни рождения не показываются в этой карточке, в календаре они остаются."
     },
     "tasks": {
         "manageCategories": "Управление категориями",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Шаблон действия",
+        "assignmentLabel": "Назначение",
+        "assignmentOverrideAllowed": "Переназначение разрешено",
+        "responsibilitiesLabel": "Обязанности",
+        "availabilityPlaceLabel": "Доступность и место",
+        "locationLabel": "Место",
+        "taskLocationFallback": "Место задачи",
+        "openInGoogleMaps": "Открыть в Google Картах",
+        "saveToYuvomiPlaces": "Сохранить в местах Yuvomi",
+        "locationSavedToYuvomiPlaces": "Место сохранено в местах Yuvomi.",
+        "savedPlaceLabel": "Сохранённое место",
+        "oneUseLocationLabel": "Используется только для этой задачи",
+        "claimedToast": "Задача принята.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Отметить пункт",
+        "checkConflict": "Задача была изменена. Откройте её заново."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "Активных фильтров: {{count}}",
         "filtersActive_one": "1 активный фильтр",
         "filtersReset": "Снять все фильтры",
-        "filtersDisplay": "Отображение"
+        "filtersDisplay": "Отображение",
+        "agendaDayEmpty": "Ничего не запланировано"
     },
     "notes": {
         "title": "Заметки",
@@ -2838,7 +2855,8 @@
         "customHours": "Hours",
         "customDays": "Days",
         "customWeeks": "Weeks",
-        "sectionTitlePlural": "Напоминания"
+        "sectionTitlePlural": "Напоминания",
+        "sharedWithAssignees": "Участники, назначенные на это событие, тоже получат это напоминание."
     },
     "onboarding": {
         "step1Title": "Добро пожаловать в {{name}}",

@@ -726,3 +726,39 @@ test('Erledigungsverankerte Serie ohne Fälligkeitsdatum datiert die Subtask neu
 
   assert.notEqual(sub.start_date, dayKey(-30), `start_date der neuen Subtask: ${sub.start_date}`);
 });
+
+// --------------------------------------------------------
+// Das Enthaken einer Unteraufgabe ist keine Rücknahme der Serie (#924)
+// --------------------------------------------------------
+test('Enthaken einer Subtask der erledigten Instanz lässt die Folgeinstanz vollständig (#924)', async () => {
+  const parent = insertTask({
+    title: 'Wochenroutine', status: 'open', due_date: dayKey(-1), created_by: uid,
+    is_recurring: 1, recurrence_rule: 'FREQ=WEEKLY',
+  });
+  const names = ['Alpha', 'Bravo', 'Charlie', 'Delta'];
+  const subs = names.map((title) => insertTask({
+    title, status: 'open', due_date: dayKey(-1), created_by: uid, parent_task_id: parent,
+  }));
+
+  // Alpha und Charlie erledigen, dann die Elternaufgabe
+  await call('PATCH', `/${subs[0]}/status`, { status: 'done' });
+  await call('PATCH', `/${subs[2]}/status`, { status: 'done' });
+  await call('PATCH', `/${parent}/status`, { status: 'done' });
+
+  const followup = openInstances('Wochenroutine')[0];
+  assert.equal(
+    db.prepare('SELECT COUNT(*) c FROM tasks WHERE parent_task_id = ?').get(followup.id).c, 4,
+    'die Folgeinstanz startet mit allen vier Unteraufgaben',
+  );
+
+  // Auf der abgeschlossenen Instanz wird Alpha wieder enthakt
+  await call('PATCH', `/${subs[0]}/status`, { status: 'open' });
+
+  const remaining = db.prepare(
+    'SELECT title FROM tasks WHERE parent_task_id = ? ORDER BY id',
+  ).all(followup.id).map((r) => r.title);
+  assert.deepEqual(
+    remaining, names,
+    'die Unteraufgabe der Folgeinstanz gehört dem neuen Durchlauf, nicht dem alten Haken',
+  );
+});

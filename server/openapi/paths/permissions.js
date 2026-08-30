@@ -1,0 +1,75 @@
+import { op, jsonBody } from '../helpers.js';
+
+/** Der Rollen-Name ist kein numerischer Bezeichner - idParam() passt hier nicht. */
+const familyRoleParam = {
+  name: 'familyRole',
+  in: 'path',
+  required: true,
+  schema: { type: 'string', enum: ['dad', 'mom', 'parent', 'child', 'grandparent', 'relative', 'other'] },
+  description: 'Family role the profile belongs to.',
+};
+
+const userIdParam = {
+  name: 'userId',
+  in: 'path',
+  required: true,
+  schema: { type: 'integer' },
+  description: 'Member the overrides belong to.',
+};
+
+const BODY = 'Body: { modules, widgets } - `modules` maps a module key to `none`, `read` or `write`, '
+  + '`widgets` maps a widget id to `none` or `allow`. The set is replaced as a whole; entries that '
+  + 'match the default are not stored, so a profile only ever holds what actually deviates.';
+
+export function permissionsPaths() {
+  return {
+    '/api/v1/permissions/catalog': {
+      get: op({
+        summary: 'Get the permission catalog',
+        tag: 'Permissions',
+        admin: true,
+        description: 'Modules, widgets, roles and the member list for the rights matrix. The catalog '
+          + 'is the authoritative list of what can be granted - the enforcing side reads the same one, '
+          + 'so the two cannot drift apart.',
+      }),
+    },
+    '/api/v1/permissions/role/{familyRole}': {
+      get: op({
+        summary: 'Get the stored rights of a role profile',
+        tag: 'Permissions',
+        admin: true,
+        params: [familyRoleParam],
+        description: 'Only the deviations from the default are stored, so an empty answer means '
+          + '"this role uses the defaults", not "this role has nothing".',
+      }),
+      put: op({
+        summary: 'Replace a role profile',
+        tag: 'Permissions',
+        admin: true,
+        stateChanging: true,
+        params: [familyRoleParam],
+        requestBody: jsonBody(null),
+        description: BODY,
+      }),
+    },
+    '/api/v1/permissions/user/{userId}': {
+      get: op({
+        summary: 'Get the stored overrides of one member',
+        tag: 'Permissions',
+        admin: true,
+        params: [userIdParam],
+        description: 'Member overrides sit on top of the role profile. An empty answer means the '
+          + 'member inherits their role unchanged.',
+      }),
+      put: op({
+        summary: 'Replace the overrides of one member',
+        tag: 'Permissions',
+        admin: true,
+        stateChanging: true,
+        params: [userIdParam],
+        requestBody: jsonBody(null),
+        description: `${BODY} Empty maps mean "inherit from the role" - they remove every override.`,
+      }),
+    },
+  };
+}

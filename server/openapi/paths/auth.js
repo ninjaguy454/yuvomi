@@ -352,6 +352,16 @@ export function authPaths() {
         },
       }),
     },
+    '/api/v1/auth/onboarding-seen': {
+      post: op({
+        summary: 'Mark the onboarding walkthrough as seen',
+        tag: 'Auth',
+        stateChanging: true,
+        description: 'Records the current onboarding version on the calling account, so the '
+          + 'walkthrough does not reappear on another device or in a private window. Affects only '
+          + 'the calling account and takes no body.',
+      }),
+    },
     '/api/v1/auth/me/password': {
       patch: op({
         summary: 'Change current user password',

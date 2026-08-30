@@ -48,6 +48,10 @@ db.prepare("INSERT INTO users (username, display_name, password_hash, role) VALU
 
 const LIST_URL = 'https://dav.example/dav/u/reminders/';
 const OBJ_URL  = `${LIST_URL}todo-1.ics`;
+// Explizit statt ueber `TZ=...` im npm-Skript: Git Bash reicht `TZ` unter
+// Windows nicht an native Programme weiter. Die Unit-Tests muessen unabhaengig
+// von der Zone des Rechners bleiben, auf dem sie laufen.
+const BERLIN_TZ = 'Europe/Berlin';
 
 // ── Fixtures ────────────────────────────────────────────────────────────────────
 
@@ -160,12 +164,12 @@ function indexOf(uid, data = serverTodo(), url = OBJ_URL, etag = 'etag-1') {
 // ── Feld-Abbildung ──────────────────────────────────────────────────────────────
 
 test('DUE ohne Uhrzeit ist ein reines Datum, mit Uhrzeit ein UTC-Zeitstempel', () => {
-  assert.deepStrictEqual(dueField('2026-08-04', null), { value: '20260804', params: ';VALUE=DATE' });
+  assert.deepStrictEqual(dueField('2026-08-04', null, BERLIN_TZ), { value: '20260804', params: ';VALUE=DATE' });
   // due_time ist Wanduhrzeit im Haushalt (hier Europe/Berlin, Sommerzeit UTC+2).
-  assert.deepStrictEqual(dueField('2026-08-04', '14:30'), { value: '20260804T123000Z', params: '' });
+  assert.deepStrictEqual(dueField('2026-08-04', '14:30', BERLIN_TZ), { value: '20260804T123000Z', params: '' });
   // Im Winter greift derselbe Weg mit einem anderen Offset (UTC+1).
-  assert.deepStrictEqual(dueField('2026-01-14', '14:30'), { value: '20260114T133000Z', params: '' });
-  assert.strictEqual(dueField(null, '14:30'), null);
+  assert.deepStrictEqual(dueField('2026-01-14', '14:30', BERLIN_TZ), { value: '20260114T133000Z', params: '' });
+  assert.strictEqual(dueField(null, '14:30', BERLIN_TZ), null);
 });
 
 test('Eine Fälligkeit mit Uhrzeit überlebt den Roundtrip als derselbe Zeitpunkt', () => {
@@ -177,10 +181,10 @@ test('Eine Fälligkeit mit Uhrzeit überlebt den Roundtrip als derselbe Zeitpunk
     'DUE;TZID=Europe/Berlin:20260804T143000', 'END:VTODO', 'END:VCALENDAR',
   ].join('\r\n'));
 
-  const { date, time } = splitDue(todo.due);
+  const { date, time } = splitDue(todo.due, BERLIN_TZ);
   assert.deepStrictEqual({ date, time }, { date: '2026-08-04', time: '14:30' },
     'Yuvomi zeigt die Uhrzeit, die auch der Server-Client zeigt');
-  assert.deepStrictEqual(dueField(date, time), { value: '20260804T123000Z', params: '' });
+  assert.deepStrictEqual(dueField(date, time, BERLIN_TZ), { value: '20260804T123000Z', params: '' });
   assert.strictEqual(
     new Date('20260804T123000Z'.replace(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/, '$1-$2-$3T$4:$5:$6Z')).toISOString(),
     new Date(todo.due).toISOString(),
@@ -407,7 +411,11 @@ test('Wiederöffnen entfernt COMPLETED, sonst bliebe die Aufgabe erledigt', () =
 
 test('Fällt die Fälligkeit weg, verschwindet auch DUE', () => {
   const withDue = patchICSTodo(serverTodo(), 'todo-1@test',
-    icsFieldsForTask({ title: 'x', status: 'open', due_date: '2026-08-04', due_time: '14:30' }));
+    icsFieldsForTask(
+      { title: 'x', status: 'open', due_date: '2026-08-04', due_time: '14:30' },
+      false,
+      BERLIN_TZ
+    ));
   assert.ok(withDue.includes('DUE:20260804T123000Z'));
 
   const withoutDue = patchICSTodo(withDue, 'todo-1@test',

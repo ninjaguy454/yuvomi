@@ -301,7 +301,8 @@
         "memberOpenTasks_one": "{{count}} zadanie",
         "manage": "Zarządzaj",
         "todayNothingElseTomorrow": "Nic więcej na dziś - jutro: {{title}}",
-        "weatherHighLow": "Najwyższa {{max}}°, najniższa {{min}}°"
+        "weatherHighLow": "Najwyższa {{max}}°, najniższa {{min}}°",
+        "optionCalendarBirthdaysHint": "Bez zaznaczenia urodziny nie pojawiają się na tym kaflu - w kalendarzu zostają."
     },
     "tasks": {
         "manageCategories": "Zarządzaj kategoriami",
@@ -535,9 +536,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Szablon aktywności",
+        "assignmentLabel": "Przypisanie",
+        "assignmentOverrideAllowed": "Ponowne przypisanie dozwolone",
+        "responsibilitiesLabel": "Obowiązki",
+        "availabilityPlaceLabel": "Dostępność i miejsce",
+        "locationLabel": "Lokalizacja",
+        "taskLocationFallback": "Lokalizacja zadania",
+        "openInGoogleMaps": "Otwórz w Mapach Google",
+        "saveToYuvomiPlaces": "Zapisz w miejscach Yuvomi",
+        "locationSavedToYuvomiPlaces": "Lokalizację zapisano w miejscach Yuvomi.",
+        "savedPlaceLabel": "Zapisane miejsce",
+        "oneUseLocationLabel": "Używane tylko dla tego zadania",
+        "claimedToast": "Zadanie zostało przejęte.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Odhacz pozycję",
+        "checkConflict": "Zadanie zostało w międzyczasie zmienione. Otwórz je ponownie."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -1008,7 +1024,8 @@
         "filtersActive": "Aktywne filtry: {{count}}",
         "filtersActive_one": "1 aktywny filtr",
         "filtersReset": "Wyczyść wszystkie filtry",
-        "filtersDisplay": "Wyświetlanie"
+        "filtersDisplay": "Wyświetlanie",
+        "agendaDayEmpty": "Nic zaplanowane"
     },
     "notes": {
         "title": "Notatki",
@@ -2749,7 +2766,8 @@
         "customHours": "Godziny",
         "customDays": "Dni",
         "customWeeks": "Tygodnie",
-        "sectionTitlePlural": "Przypomnienia"
+        "sectionTitlePlural": "Przypomnienia",
+        "sharedWithAssignees": "Osoby przypisane do tego wydarzenia również otrzymają to przypomnienie."
     },
     "birthdays": {
         "inDays": "za {{days}} dni",

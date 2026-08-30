@@ -424,5 +424,11 @@ export function documentsPaths() {
         },
       }),
     },
+    '/api/v1/documents/{id}/thumbnail': {
+      get: op({ summary: 'Fetch the thumbnail of a document', tag: 'Documents', params: [idParam()], description: 'Subject to the same visibility rules as the document itself.' }),
+    },
+    '/api/v1/documents/dms/thumbnail': {
+      get: op({ summary: 'Fetch a thumbnail from the connected DMS', tag: 'Documents', description: 'Proxies the image from Paperless/Papra so the browser never needs the DMS credentials.' }),
+    },
   };
 }

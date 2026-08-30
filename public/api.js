@@ -262,6 +262,7 @@ const auth = {
   },
   updateUser: (id, data) => api.patch(`/auth/users/${id}`, data),
   updateProfile: (data) => api.patch('/auth/me/profile', data),
+  markOnboardingSeen: () => api.post('/auth/onboarding-seen', {}),
   deleteUser: async (id) => {
     const res = await api.delete(`/auth/users/${id}`);
     await auth.me().catch(() => {});

@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} task",
         "manage": "Manage",
         "todayNothingElseTomorrow": "Nothing else today - tomorrow: {{title}}",
-        "weatherHighLow": "High {{max}}°, low {{min}}°"
+        "weatherHighLow": "High {{max}}°, low {{min}}°",
+        "optionCalendarBirthdaysHint": "Unchecked, birthdays stay out of this tile - the calendar still shows them."
     },
     "tasks": {
         "manageCategories": "Manage categories",
@@ -458,7 +459,7 @@
         "detailStart": "Start",
         "detailFinish": "Complete",
         "detailReopen": "Reopen",
-        "subtasksLabel": "Checklist",
+        "subtasksLabel": "Subtasks",
         "swipeView": "View",
         "descriptionMarkdownHint": "Markdown is supported.",
         "countdownToggle": "Count down on the overview",
@@ -522,10 +523,25 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Activity template",
+        "assignmentLabel": "Assignment",
+        "assignmentOverrideAllowed": "Reassignment allowed",
+        "responsibilitiesLabel": "Responsibilities",
+        "availabilityPlaceLabel": "Availability and Place",
+        "locationLabel": "Location",
+        "taskLocationFallback": "Task location",
+        "openInGoogleMaps": "Open in Google Maps",
+        "saveToYuvomiPlaces": "Save to Yuvomi Places",
+        "locationSavedToYuvomiPlaces": "Location saved to Yuvomi Places.",
+        "savedPlaceLabel": "Saved Place",
+        "oneUseLocationLabel": "Used only for this Task",
+        "claimedToast": "Task claimed.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
-        "listLoadError": "Tasks could not be loaded."
+        "listLoadError": "Tasks could not be loaded.",
+        "checklistToggle": "Tick item",
+        "checkConflict": "The task has changed in the meantime. Please open it again."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "{{count}} filters active",
         "filtersActive_one": "1 filter active",
         "filtersReset": "Clear all filters",
-        "filtersDisplay": "Display"
+        "filtersDisplay": "Display",
+        "agendaDayEmpty": "Nothing planned"
     },
     "notes": {
         "title": "Board",
@@ -2737,7 +2754,8 @@
         "customHours": "Hours",
         "customDays": "Days",
         "customWeeks": "Weeks",
-        "sectionTitlePlural": "Reminders"
+        "sectionTitlePlural": "Reminders",
+        "sharedWithAssignees": "Anyone assigned to this event gets this reminder too."
     },
     "birthdays": {
         "inDays": "in {{days}} days",

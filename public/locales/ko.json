@@ -301,7 +301,8 @@
         "memberOpenTasks_one": "할 일 {{count}}개",
         "manage": "관리",
         "todayNothingElseTomorrow": "오늘은 더 이상 일정이 없습니다. 내일: {{title}}",
-        "weatherHighLow": "최고 {{max}}°, 최저 {{min}}°"
+        "weatherHighLow": "최고 {{max}}°, 최저 {{min}}°",
+        "optionCalendarBirthdaysHint": "체크를 해제하면 이 타일에 생일이 표시되지 않습니다. 캘린더에는 그대로 남습니다."
     },
     "tasks": {
         "manageCategories": "카테고리 관리",
@@ -535,9 +536,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "활동 템플릿",
+        "assignmentLabel": "배정",
+        "assignmentOverrideAllowed": "재배정 허용",
+        "responsibilitiesLabel": "담당 역할",
+        "availabilityPlaceLabel": "가용 여부 및 장소",
+        "locationLabel": "위치",
+        "taskLocationFallback": "할 일 위치",
+        "openInGoogleMaps": "Google 지도에서 열기",
+        "saveToYuvomiPlaces": "Yuvomi 장소에 저장",
+        "locationSavedToYuvomiPlaces": "위치를 Yuvomi 장소에 저장했습니다.",
+        "savedPlaceLabel": "저장된 장소",
+        "oneUseLocationLabel": "이 할 일에만 사용",
+        "claimedToast": "할 일을 맡았습니다.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "항목 체크",
+        "checkConflict": "그 사이에 할 일이 변경되었습니다. 다시 열어 주세요."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -1008,7 +1024,8 @@
         "filtersActive": "필터 {{count}}개 적용됨",
         "filtersActive_one": "필터 1개 적용됨",
         "filtersReset": "모든 필터 해제",
-        "filtersDisplay": "표시"
+        "filtersDisplay": "표시",
+        "agendaDayEmpty": "예정된 일정 없음"
     },
     "notes": {
         "title": "메모",
@@ -2749,7 +2766,8 @@
         "customHours": "시간",
         "customDays": "일",
         "customWeeks": "주",
-        "sectionTitlePlural": "알림"
+        "sectionTitlePlural": "알림",
+        "sharedWithAssignees": "이 일정에 배정된 사람도 이 알림을 받습니다."
     },
     "birthdays": {
         "inDays": "{{days}}일 후",

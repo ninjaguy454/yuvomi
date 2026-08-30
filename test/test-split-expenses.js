@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-process.env.DB_PATH = path.join(os.tmpdir(), `oikos-split-expenses-${process.pid}.db`);
+import { freshTestDbPath } from './tmp-db.js';
+freshTestDbPath('split-expenses');
 
 const service = await import('../server/services/split-expenses.js');
 const db = await import('../server/db.js');

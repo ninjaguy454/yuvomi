@@ -116,10 +116,11 @@
   gap: var(--space-1);
 }
 
-.detail-checklist .detail-subtask {
+.detail-task-subtasks .detail-subtask {
   display: flex;
   align-items: center;
   gap: var(--space-1);
+  cursor: default;
 }
 
 .detail-subtask__toggle {
@@ -159,6 +160,17 @@
 .detail-subtask__actions {
   display: flex;
   flex: 0 0 auto;
+}
+
+.detail-subtask__meta {
+  flex: 0 1 auto;
+  color: var(--color-text-tertiary);
+  font-size: var(--text-xs);
+  text-align: end;
+}
+
+.detail-task-subtasks .detail-subtask:hover {
+  background: transparent;
 }
 
 .detail-subtask__add {
@@ -211,6 +223,27 @@
 
 .detail-subtask--done i {
   color: var(--color-success);
+}
+
+/* Der Einstieg steht IN der Liste, nicht daneben: die Karte blendet ihre
+   Inline-Aktionen unter 640px aus, und ohne diesen Knopf gab es auf dem
+   Telefon keinen Weg zur ersten Teilaufgabe (#925). Gestrichelt und in
+   Sekundaerfarbe wie sein Gegenstueck in der aufgeklappten Kartenliste
+   (.subtask-item__add) - er ist eine Einladung, kein Teilschritt. */
+.detail-subtask--add {
+  color: var(--color-text-secondary);
+  border: var(--space-px) dashed var(--color-border);
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.detail-subtask--add:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  background: none;
+}
+
+.detail-subtask--add:hover i {
+  color: var(--color-accent);
 }
 
 /* --------------------------------------------------------

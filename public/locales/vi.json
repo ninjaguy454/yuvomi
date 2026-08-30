@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} việc",
         "manage": "Quản lý",
         "todayNothingElseTomorrow": "Hôm nay không còn gì khác - ngày mai: {{title}}",
-        "weatherHighLow": "Cao nhất {{max}}°, thấp nhất {{min}}°"
+        "weatherHighLow": "Cao nhất {{max}}°, thấp nhất {{min}}°",
+        "optionCalendarBirthdaysHint": "Nếu bỏ chọn, sinh nhật sẽ không xuất hiện trong thẻ này - trên lịch vẫn còn."
     },
     "tasks": {
         "manageCategories": "Quản lý danh mục",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Mẫu hoạt động",
+        "assignmentLabel": "Phân công",
+        "assignmentOverrideAllowed": "Cho phép phân công lại",
+        "responsibilitiesLabel": "Trách nhiệm",
+        "availabilityPlaceLabel": "Tình trạng sẵn sàng và địa điểm",
+        "locationLabel": "Địa điểm",
+        "taskLocationFallback": "Địa điểm công việc",
+        "openInGoogleMaps": "Mở trong Google Maps",
+        "saveToYuvomiPlaces": "Lưu vào Địa điểm Yuvomi",
+        "locationSavedToYuvomiPlaces": "Đã lưu địa điểm vào Địa điểm Yuvomi.",
+        "savedPlaceLabel": "Địa điểm đã lưu",
+        "oneUseLocationLabel": "Chỉ dùng cho công việc này",
+        "claimedToast": "Đã nhận công việc.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Đánh dấu mục",
+        "checkConflict": "Công việc đã thay đổi trong lúc này. Vui lòng mở lại."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "{{count}} bộ lọc đang bật",
         "filtersActive_one": "1 bộ lọc đang bật",
         "filtersReset": "Xóa tất cả bộ lọc",
-        "filtersDisplay": "Hiển thị"
+        "filtersDisplay": "Hiển thị",
+        "agendaDayEmpty": "Không có kế hoạch"
     },
     "notes": {
         "title": "Bảng ghi chú",
@@ -2737,7 +2754,8 @@
         "customHours": "Giờ",
         "customDays": "Ngày",
         "customWeeks": "Tuần",
-        "sectionTitlePlural": "Lời nhắc"
+        "sectionTitlePlural": "Lời nhắc",
+        "sharedWithAssignees": "Những người được giao sự kiện này cũng nhận được lời nhắc này."
     },
     "birthdays": {
         "inDays": "trong {{days}} ngày",

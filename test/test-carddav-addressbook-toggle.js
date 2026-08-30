@@ -28,7 +28,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const pageSrc = readFileSync(path.join(here, '..', 'public/settings/pages/sync-contacts.js'), 'utf8');
 const routerSrc = readFileSync(path.join(here, '..', 'server/routes/cardav.js'), 'utf8');
 
-process.env.DB_PATH = path.join(os.tmpdir(), `yuvomi-cardav-toggle-${process.pid}.db`);
+import { freshTestDbPath } from './tmp-db.js';
+freshTestDbPath('cardav-toggle');
 process.env.SESSION_SECRET = 'cardav-toggle-test-secret-32bytes-long';
 
 const db = await import('../server/db.js');

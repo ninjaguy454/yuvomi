@@ -29,7 +29,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const pageSrc = readFileSync(path.join(here, '..', 'public/settings/pages/sync-contacts.js'), 'utf8');
 const serviceSrc = readFileSync(path.join(here, '..', 'server/services/cardav-sync.js'), 'utf8');
 
-process.env.DB_PATH = path.join(os.tmpdir(), `yuvomi-cardav-lifecycle-${process.pid}.db`);
+import { freshTestDbPath } from './tmp-db.js';
+freshTestDbPath('cardav-lifecycle');
 process.env.SESSION_SECRET = 'cardav-lifecycle-test-secret-32bytes';
 
 const db = await import('../server/db.js');

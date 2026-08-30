@@ -7,6 +7,9 @@
 import { StorageError } from '../../services/document-storage.js';
 import { ensureModuleFolder } from '../../services/document-folders.js';
 import { MAX_UPLOAD_BYTES, MAX_UPLOAD_MB } from '../../utils/upload-limit.js';
+import {
+  fanOutEventReminders, dropInheritedEventReminders, eventAuthorId,
+} from '../../services/event-reminder-fanout.js';
 
 export const VALID_SOURCES  = ['local', 'google', 'apple', 'ics'];
 // Ein Termin-Anhang ist ein Upload wie jeder andere und teilt deshalb die
@@ -216,9 +219,32 @@ export function syncAttachmentDocumentAccess(d, documentId, eventVisibility, use
 }
 
 export function setEventAssignments(d, eventId, userIds) {
+  // Wer VORHER dranstand - gebraucht wird das eine Zeile weiter unten, um die
+  // Erinnerungen derer abzuraeumen, die nicht mehr dranstehen (#921). Deshalb
+  // hier und nicht erst nach dem DELETE, das die Auskunft vernichtet.
+  const before = d.prepare('SELECT user_id FROM event_assignments WHERE event_id = ?')
+    .all(eventId).map((r) => r.user_id);
+
   d.prepare('DELETE FROM event_assignments WHERE event_id = ?').run(eventId);
   const ins = d.prepare('INSERT OR IGNORE INTO event_assignments (event_id, user_id) VALUES (?, ?)');
   for (const uid of userIds) ins.run(eventId, uid);
+
+  /* DIE ERINNERUNGEN FOLGEN DER ZUWEISUNG (#921).
+   *
+   * Hier und nicht in den beiden Routen, die diese Funktion rufen: eine
+   * Zuweisung, die die Erinnerung NICHT mitbringt, meldet sich nicht - sie
+   * aeussert sich als ein Termin, von dem jemand nichts erfahren hat. Genau so
+   * war der Fall gemeldet. An der einen Schreibstelle kann kein Aufrufer sie
+   * vergessen.
+   *
+   * Beim ANLEGEN eines Termins ist hier noch nichts zu verteilen: das Formular
+   * speichert erst den Termin und dann die Erinnerungen, und der zweite Schritt
+   * fuehrt denselben Abgleich noch einmal aus. Beide Wege enden gleich. */
+  const author = eventAuthorId(d, eventId);
+  const removed = before.filter((uid) => !userIds.includes(uid));
+  dropInheritedEventReminders(d, eventId, removed);
+  if (author !== null) fanOutEventReminders(d, eventId, author);
+
   const event = d.prepare(`
     SELECT attachment_document_id, visibility
     FROM calendar_events

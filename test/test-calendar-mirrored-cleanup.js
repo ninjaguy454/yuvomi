@@ -46,6 +46,7 @@ function connectApple() {
 }
 
 beforeEach(() => {
+  db.prepare('DELETE FROM reminders').run();
   db.prepare('DELETE FROM calendar_events').run();
   db.prepare('DELETE FROM sync_config').run();
 });
@@ -62,16 +63,23 @@ describe('Aufräumen übernommener Termine: der Schnitt liegt an der Quelle (#82
   });
 
   it('löscht nur die eigene Quelle - lokale und fremde Termine bleiben', () => {
-    seedEvent('google', 'G1');
+    const googleId = seedEvent('google', 'G1');
     seedEvent('apple', 'A1');
     seedEvent('caldav', 'C1');
     seedEvent('ics', 'I1');
     seedEvent('local', 'L1');
+    db.prepare(`
+      INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+      VALUES ('event', ?, '2026-06-24T09:00:00Z', 1)
+    `).run(googleId);
 
     assert.equal(deleteSourceEvents(db, 'google'), 1);
     // Die drei anderen Sync-Quellen haben eigene Wege (Abo löschen, Konto
     // löschen) - ein Aufräumen, das sie mitnimmt, wäre stiller Datenverlust.
     assert.deepEqual(titles(), ['A1', 'C1', 'I1', 'L1']);
+    assert.equal(db.prepare(
+      "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+    ).get(googleId).n, 0, 'provider disconnect cleanup removes the Event reminder too');
   });
 
   it('ohne passende Termine ist es ein No-Op, kein Fehler', () => {

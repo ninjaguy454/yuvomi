@@ -108,6 +108,18 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
     ? resolution.participants
     : (resolution.primary ? [resolution.primary] : []);
   const state = resolution.unavailable ? 'unavailable' : (resolution.primary ? 'assigned' : 'open');
+  // A first-class subtask can make somebody a participant of its parent even
+  // when that person is not selected by the parent's Activity policy. Those
+  // rows are authored by the Task/subtask model, not by this binding. Keep
+  // them active while the Activity-owned responsibilities are refreshed and
+  // retain the same people in the legacy visibility assignment table.
+  const subtaskParticipantIds = d.prepare(`
+    SELECT user_id
+      FROM task_responsibilities
+     WHERE task_id = ? AND role = 'participant'
+       AND source = 'subtasks' AND status = 'active'
+     ORDER BY user_id
+  `).all(taskId).map((row) => Number(row.user_id));
   d.prepare(`
     INSERT INTO task_assignment_context (
       task_id, strategy, state, override_allowed, beneficiary_user_id, source, rotation_key, updated_at
@@ -124,13 +136,21 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
     activity.rotation_group || `activity:${activity.id}`,
   );
 
-  d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND status = 'active'`)
+  d.prepare(`
+    UPDATE task_responsibilities
+       SET status = 'superseded', updated_at = ${nowSql()}
+     WHERE task_id = ? AND status = 'active'
+       AND NOT (role = 'participant' AND source = 'subtasks')
+  `)
     .run(taskId);
   if (resolution.primary) addResponsibility(d, taskId, resolution.primary.id, 'primary', source);
   for (const participant of participants) addResponsibility(d, taskId, participant.id, 'participant', source);
   if (resolution.subject) addResponsibility(d, taskId, resolution.subject.id, 'beneficiary', source);
   if (resolution.supervisor) addResponsibility(d, taskId, resolution.supervisor.id, 'supervisor', source);
-  replaceLegacyAssignments(d, taskId, participants.map((row) => row.id));
+  replaceLegacyAssignments(d, taskId, [
+    ...participants.map((row) => row.id),
+    ...subtaskParticipantIds,
+  ]);
 
   d.prepare(`UPDATE planning_obligations SET status = 'superseded', responded_at = ${nowSql()}, updated_at = ${nowSql()} WHERE task_id = ? AND status IN ('pending', 'accepted')`)
     .run(taskId);

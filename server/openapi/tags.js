@@ -33,4 +33,10 @@ export const apiTags = [
       { name: 'Health' },
       { name: 'Rewards' },
       { name: 'Schedule' },
+      { name: 'Quick links' },
+      { name: 'Screensaver' },
+      { name: 'Recipe providers' },
+      { name: 'Permissions' },
+      { name: 'Automation' },
+      { name: 'Planning' },
 ];

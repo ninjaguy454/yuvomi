@@ -6,7 +6,9 @@ import { isPasswordLoginEnabled, setupAuthSession } from '../auth.js';
 import { verifyPassword } from '../utils/password.js';
 import * as twoFactor from '../services/two-factor.js';
 import { expandRecurringEvents, loadEventExceptions } from '../services/calendar-events.js';
-import { todayKey } from '../utils/timezone.js';
+import {
+  hasExplicitZone, householdTimeZone, shiftDateKey, todayKey, utcToWall,
+} from '../utils/timezone.js';
 import { visibilityWhere } from '../services/visibility.js';
 
 const router = express.Router();
@@ -47,9 +49,41 @@ function csrfValid(req) {
   return sent.length === 64 && sent === expected;
 }
 
-function dateTime(value) {
-  if (!value) return '';
-  return String(value).replace('T', ' ').replace(/:00(?:Z)?$/, '');
+function isDateKey(value) {
+  const raw = String(value || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) return false;
+  const parsed = new Date(`${raw}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === raw;
+}
+
+function wallDateTime(value, timeZone) {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  if (hasExplicitZone(raw)) return utcToWall(raw, timeZone);
+  const match = /^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(raw);
+  if (!match || !isDateKey(match[1])) return null;
+  return {
+    date: match[1],
+    time: match[2] ? `${match[2]}:${match[3]}:${match[4] || '00'}` : '',
+  };
+}
+
+function dateTime(value, timeZone) {
+  const wall = wallDateTime(value, timeZone);
+  if (!wall) return '';
+  return wall.time ? `${wall.date} ${wall.time.slice(0, 5)}` : wall.date;
+}
+
+function eventDateRange(event, timeZone) {
+  const start = wallDateTime(event.start_datetime, timeZone);
+  if (!start) return null;
+  const end = wallDateTime(event.end_datetime, timeZone);
+  let endDate = end?.date || start.date;
+  if (!event.all_day && event.end_datetime?.includes('T') && end?.time === '00:00:00' && endDate > start.date) {
+    endDate = shiftDateKey(endDate, -1);
+  }
+  if (endDate < start.date) endDate = start.date;
+  return { start: start.date, end: endDate };
 }
 
 function tasksFor(database, userId) {
@@ -65,14 +99,30 @@ function tasksFor(database, userId) {
 }
 
 function calendarFor(database, userId, startDate, endDate = startDate) {
+  // Zoned instants can cross a household-date boundary, so fetch a one-day
+  // cushion and then apply the authoritative household-wall-date overlap below.
+  const queryStart = shiftDateKey(startDate, -1);
+  const queryEnd = shiftDateKey(endDate, 1);
   const rows = database.prepare(`
     SELECT e.* FROM calendar_events e
      WHERE ((e.recurrence_rule IS NULL AND date(e.start_datetime) <= ? AND date(COALESCE(e.end_datetime,e.start_datetime)) >= ?)
        OR (e.recurrence_rule IS NOT NULL AND date(e.start_datetime) <= ?))
+       AND (
+         e.external_source IS NULL
+         OR e.external_source <> 'ics'
+         OR e.subscription_id IN (
+           SELECT id FROM ics_subscriptions WHERE shared = 1 OR created_by = ?
+         )
+       )
        AND ${visibilityWhere('e', 'event_assignments', 'event_id')}
-  `).all(endDate, startDate, endDate, userId, userId);
+  `).all(queryEnd, queryStart, queryEnd, userId, userId, userId);
   const recurring = rows.filter((row) => row.recurrence_rule).map((row) => row.id);
-  return expandRecurringEvents(rows, startDate, endDate, loadEventExceptions(database, recurring));
+  const timeZone = householdTimeZone(database);
+  return expandRecurringEvents(rows, queryStart, queryEnd, loadEventExceptions(database, recurring))
+    .filter((event) => {
+      const range = eventDateRange(event, timeZone);
+      return range && range.start <= endDate && range.end >= startDate;
+    });
 }
 
 function mealsFor(database, date) {
@@ -93,9 +143,9 @@ function taskList(rows) {
   return `<p><a class="action" href="/reader?view=add-task">Add a Task</a></p><ul class="items">${rows.map((task) => { const map = mapsUrl(task); return `<li><strong>${h(task.title)}</strong>${task.due_date ? `<br><span>Due ${h(task.due_date)}${task.due_time ? ` ${h(task.due_time)}` : ''}</span>` : ''}${task.description ? `<p>${h(task.description)}</p>` : ''}${task.place_name || task.location_label || task.manual_address ? `<p>Location: ${h(task.place_name || task.location_label || task.manual_address)}${map ? ` - <a href="${h(map)}">Map</a>` : ''}</p>` : ''}</li>`; }).join('')}</ul>`;
 }
 
-function eventList(rows, date) {
+function eventList(rows, date, timeZone) {
   if (!rows.length) return '<p>No Calendar events today.</p>';
-  return `<ul class="items">${rows.map((event) => `<li><a href="/reader?view=event&amp;id=${event.id}&amp;date=${h(date)}"><strong>${h(event.title)}</strong></a><br><span>${event.all_day ? 'All day' : h(dateTime(event.start_datetime))}</span></li>`).join('')}</ul>`;
+  return `<ul class="items">${rows.map((event) => `<li><a href="/reader?view=event&amp;id=${event.id}&amp;date=${h(date)}"><strong>${h(event.title)}</strong></a><br><span>${event.all_day ? 'All day' : h(dateTime(event.start_datetime, timeZone))}</span></li>`).join('')}</ul>`;
 }
 
 function mealList(rows) {
@@ -104,18 +154,25 @@ function mealList(rows) {
 }
 
 function isoDate(value, fallback) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '')) && !Number.isNaN(new Date(`${value}T12:00:00Z`).getTime())
-    ? String(value) : fallback;
+  return isDateKey(value) ? String(value) : fallback;
 }
 
 function monthCalendar(database, userId, selectedDate) {
   const year = Number(selectedDate.slice(0, 4)); const monthIndex = Number(selectedDate.slice(5, 7)) - 1;
   const first = new Date(Date.UTC(year, monthIndex, 1)); const last = new Date(Date.UTC(year, monthIndex + 1, 0));
   const start = first.toISOString().slice(0, 10); const end = last.toISOString().slice(0, 10);
+  const timeZone = householdTimeZone(database);
   const grouped = new Map();
   calendarFor(database, userId, start, end).forEach((event) => {
-    const key = String(event.start_datetime).slice(0, 10);
-    if (!grouped.has(key)) grouped.set(key, []); grouped.get(key).push(event);
+    const range = eventDateRange(event, timeZone);
+    if (!range) return;
+    let key = range.start < start ? start : range.start;
+    const lastKey = range.end > end ? end : range.end;
+    while (key <= lastKey) {
+      if (!grouped.has(key)) grouped.set(key, []);
+      grouped.get(key).push(event);
+      key = shiftDateKey(key, 1);
+    }
   });
   const previous = new Date(Date.UTC(year, monthIndex - 1, 1)).toISOString().slice(0, 10);
   const next = new Date(Date.UTC(year, monthIndex + 1, 1)).toISOString().slice(0, 10);
@@ -127,7 +184,7 @@ function monthCalendar(database, userId, selectedDate) {
   }
   while (cells.length % 7) cells.push('<td class="empty">&nbsp;</td>');
   const rows = []; for (let index = 0; index < cells.length; index += 7) rows.push(`<tr>${cells.slice(index, index + 7).join('')}</tr>`);
-  return `<div class="calendar-nav"><a href="/reader?view=calendar&amp;date=${previous}">&larr; Previous month</a><strong>${first.toLocaleString('en', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</strong><a href="/reader?view=calendar&amp;date=${next}">Next month &rarr;</a></div><table class="calendar-grid"><thead><tr>${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((day) => `<th>${day}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table><h2>${h(selectedDate)}</h2>${eventList(grouped.get(selectedDate) || [], selectedDate)}`;
+  return `<div class="calendar-nav"><a href="/reader?view=calendar&amp;date=${previous}">&larr; Previous month</a><strong>${first.toLocaleString('en', { month: 'long', year: 'numeric', timeZone: 'UTC' })}</strong><a href="/reader?view=calendar&amp;date=${next}">Next month &rarr;</a></div><table class="calendar-grid"><thead><tr>${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((day) => `<th>${day}</th>`).join('')}</tr></thead><tbody>${rows.join('')}</tbody></table><h2>${h(selectedDate)}</h2>${eventList(grouped.get(selectedDate) || [], selectedDate, timeZone)}`;
 }
 
 function recipeList(database) {
@@ -150,14 +207,15 @@ function taskForm(token, message = '', values = {}) {
 router.get('/', (req, res) => {
   if (!req.authUserId) return res.type('html').send(loginPage(req.query.error || ''));
   const database = db.get(); const today = todayKey(database); const date = isoDate(req.query.date, today); const view = String(req.query.view || 'today');
+  const timeZone = householdTimeZone(database);
   const sections = [];
   if (view === 'today' || view === 'tasks') sections.push(`<section><h1>Open Tasks</h1>${taskList(tasksFor(database, req.authUserId))}</section>`);
-  if (view === 'today') sections.push(`<section><h1>Calendar - ${h(date)}</h1>${eventList(calendarFor(database, req.authUserId, date), date)}<p><a href="/reader?view=calendar&amp;date=${h(date)}">Open Calendar</a></p></section>`);
+  if (view === 'today') sections.push(`<section><h1>Calendar - ${h(date)}</h1>${eventList(calendarFor(database, req.authUserId, date), date, timeZone)}<p><a href="/reader?view=calendar&amp;date=${h(date)}">Open Calendar</a></p></section>`);
   if (view === 'calendar') sections.push(`<section><h1>Calendar</h1>${monthCalendar(database, req.authUserId, date)}</section>`);
   if (view === 'today' || view === 'meals') sections.push(`<section><h1>Meals - ${h(date)}</h1>${mealList(mealsFor(database, date))}</section>`);
   if (view === 'event') {
     const event = calendarFor(database, req.authUserId, date).find((row) => Number(row.id) === Number(req.query.id));
-    sections.push(event ? `<p><a href="/reader?view=calendar&amp;date=${h(date)}">&larr; Back to Calendar</a></p><h1>${h(event.title)}</h1><p>${event.all_day ? 'All day' : `${h(dateTime(event.start_datetime))}${event.end_datetime ? ` to ${h(dateTime(event.end_datetime))}` : ''}`}</p>${event.location ? `<p><strong>Location:</strong> ${h(event.location)}</p>` : ''}${event.description ? `<h2>Details</h2><div class="prewrap">${h(event.description)}</div>` : ''}` : '<p>Event not found for this date.</p>');
+    sections.push(event ? `<p><a href="/reader?view=calendar&amp;date=${h(date)}">&larr; Back to Calendar</a></p><h1>${h(event.title)}</h1><p>${event.all_day ? 'All day' : `${h(dateTime(event.start_datetime, timeZone))}${event.end_datetime ? ` to ${h(dateTime(event.end_datetime, timeZone))}` : ''}`}</p>${event.location ? `<p><strong>Location:</strong> ${h(event.location)}</p>` : ''}${event.description ? `<h2>Details</h2><div class="prewrap">${h(event.description)}</div>` : ''}` : '<p>Event not found for this date.</p>');
   }
   if (view === 'add-task') sections.push(taskForm(csrf(req), req.query.created ? 'Task created.' : ''));
   if (view === 'recipes') sections.push(`<section><h1>Recipes</h1>${recipeList(database)}</section>`);
@@ -171,7 +229,7 @@ router.post('/tasks', (req, res) => {
   const title = String(req.body.title || '').trim(); const description = String(req.body.description || '').trim() || null;
   const dueDate = String(req.body.due_date || '').trim() || null; const dueTime = String(req.body.due_time || '').trim() || null;
   const priorities = new Set(['none', 'low', 'medium', 'high']); const priority = priorities.has(req.body.priority) ? req.body.priority : 'none';
-  if (!title || title.length > 200 || description?.length > 10000 || (dueDate && !/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) || (dueTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dueTime))) {
+  if (!title || title.length > 200 || description?.length > 10000 || (dueDate && !isDateKey(dueDate)) || (dueTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dueTime))) {
     return res.status(400).type('html').send(page('Add Task', taskForm(csrf(req), 'Check the title, date, and time.', req.body), { signedIn: true, csrf: csrf(req) }));
   }
   const assignee = req.body.assign_to_me ? req.authUserId : null;

@@ -50,6 +50,9 @@ export function budgetPaths() {
       put: op({ summary: 'Update loan', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
       delete: op({ summary: 'Delete loan and linked repayment entries', tag: 'Budget', params: [idParam()], stateChanging: true }),
     },
+    '/api/v1/budget/loans/preview': {
+      post: op({ summary: 'Preview a loan without saving it', tag: 'Budget', stateChanging: true, requestBody: jsonBody(null), description: 'Computes the monthly instalment, term, total interest and remaining debt for the values in the dialog, without writing anything. The server stays the single source of the interest maths - duplicating the formula in the client would give two answers that drift.' }),
+    },
     '/api/v1/budget/loans/{id}/payments': {
       post: op({ summary: 'Record loan repayment', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
     },
@@ -74,6 +77,9 @@ export function budgetPaths() {
       put: op({ summary: 'Update budget entry (`attachment_document_ids` replaces the receipt links; omit the field to leave them untouched)', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
       delete: op({ summary: 'Delete budget entry', tag: 'Budget', params: [idParam()], stateChanging: true }),
     },
+    '/api/v1/budget/{id}/confirm': {
+      patch: op({ summary: 'Confirm a booked entry, correcting amount and date', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: { amount?, date? }, both optional. Amount and date are editable here precisely because their deviation is the occasion: services rarely debit on the day and to the cent a series predicts. A plain "confirmed" tick would have left the very discrepancy against the bank statement that this is about.' }),
+    },
     '/api/v1/budget/{id}/series': {
       put: op({ summary: 'Update recurring budget entry series (receipts stay with the single entry and are not part of the series)', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
       delete: op({ summary: 'Delete recurring budget entry series', tag: 'Budget', params: [idParam()], stateChanging: true }),
@@ -95,8 +101,16 @@ export function budgetPaths() {
     '/api/v1/budget/subscriptions/categories': {
       post: op({ summary: 'Create subscription category', tag: 'Budget', stateChanging: true, requestBody: jsonBody(null) }),
     },
+    '/api/v1/budget/subscriptions/categories/{id}': {
+      put: op({ summary: 'Rename a subscription category', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+      delete: op({ summary: 'Delete a subscription category', tag: 'Budget', params: [idParam()], stateChanging: true }),
+    },
     '/api/v1/budget/subscriptions/payment-methods': {
       post: op({ summary: 'Create subscription payment method', tag: 'Budget', stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/budget/subscriptions/payment-methods/{id}': {
+      put: op({ summary: 'Rename a subscription payment method', tag: 'Budget', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+      delete: op({ summary: 'Delete a subscription payment method', tag: 'Budget', params: [idParam()], stateChanging: true }),
     },
     '/api/v1/budget/subscriptions/meta/order': {
       put: op({ summary: 'Reorder subscription categories and payment methods', tag: 'Budget', stateChanging: true, requestBody: jsonBody(null) }),

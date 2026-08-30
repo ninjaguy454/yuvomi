@@ -14,6 +14,7 @@ import {
   stageDocumentUpload,
 } from '../../services/document-storage.js';
 import { queueEventDeletion, markEventOutbound, flushOutbound } from '../../services/calendar-outbound.js';
+import { dropEventReminders } from '../../services/event-reminder-fanout.js';
 import {
   ASSIGNED_USERS_SQL,
   getUserId,
@@ -618,9 +619,12 @@ router.delete('/:id', (req, res) => {
   try {
     const id    = parseInt(req.params.id, 10);
     const event = db.get().prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
-    const queued = event ? queueEventDeletion(event) : false;
-
-    const result = db.get().prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
+    let queued = false;
+    const result = db.get().transaction(() => {
+      queued = event ? queueEventDeletion(event) : false;
+      dropEventReminders(db.get(), id);
+      return db.get().prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
+    })();
     if (result.changes === 0)
       return res.status(404).json({ error: 'Termin nicht gefunden', code: 404 });
 

@@ -6688,6 +6688,69 @@ const MIGRATIONS = [
       UPDATE calendar_events SET color_modified = user_modified;
     `,
   },
+  {
+    version: 168,
+    description: 'Users: onboarding walkthrough remembered per account instead of per browser',
+    // WARUM PRO KONTO UND NICHT PRO GERAET. Der Merker lag bisher allein in
+    // localStorage: ein neues Geraet oder ein privates Fenster kennt ihn nicht
+    // und zeigt die Einfuehrung erneut, obwohl das Konto sie laengst gesehen
+    // hat - genau das war gemeldet.
+    //
+    // EINE ZAHL STATT EINES SCHALTERS, weil "gesehen" allein keine spaetere
+    // Erweiterung erlaubt: bringt eine kuenftige Version eine grosse
+    // Verhaltensaenderung, die eine erneute Einfuehrung rechtfertigt, hebt ein
+    // Wartungscommit nur CURRENT_ONBOARDING_VERSION in server/auth.js an, und
+    // jedes Konto mit einer kleineren gespeicherten Zahl sieht sie erneut -
+    // ohne eine weitere Migration.
+    //
+    // DER BACKFILL LAEUFT AUF 1, NICHT AUF 0: Bestandskonten haben die
+    // Einfuehrung (in ihrer bisherigen, geraetegebundenen Form) bereits
+    // gesehen und sollen sie nicht erneut bekommen, nur weil der Merker jetzt
+    // im Konto statt im Browser lebt. Die Spalten-DEFAULT bleibt 0 (= "noch
+    // nicht gesehen"), damit jedes kuenftige INSERT INTO users - und davon
+    // gibt es mehrere Stellen im Code - ohne eigene Aenderung das richtige
+    // Verhalten fuer ein neues Konto bekommt.
+    up: `
+      ALTER TABLE users ADD COLUMN onboarding_version INTEGER NOT NULL DEFAULT 0;
+      UPDATE users SET onboarding_version = 1;
+    `,
+  },
+  {
+    version: 169,
+    description: 'Reminders: a reminder on a shared event reaches its assignees, not only its author (#921)',
+    // GEMELDET WAR EIN VERPASSTER TERMIN, KEIN FEHLBEDIENUNGSFALL. Eine Frau
+    // legt einen Termin an, weist ihn beiden zu und setzt eine Erinnerung. Sie
+    // bekommt sie, er bekommt nichts - und wenn er denselben Termin oeffnet,
+    // steht das Erinnerungsfeld LEER da. Beide hielten sie fuer geteilt.
+    //
+    // Der Grund steht im Schema: `reminders` kennt nur `created_by`. Es gab
+    // keine Zeile fuer ihn, also gab es auch nichts zu zeigen und nichts
+    // zuzustellen. Das Feld log nicht - es hatte schlicht keine Auskunft, und
+    // genau das ist der Schaden: eine leere Anzeige liest sich als "es ist
+    // keine gesetzt", nicht als "deine ist keine gesetzt".
+    //
+    // EINE ZEILE JE PERSON, NICHT EINE ZEILE MIT MEHREREN EMPFAENGERN. Was an
+    // einer Erinnerung haengt, ist durchweg persoenlich: `dismissed` (wer sie
+    // weggewischt hat), `pushed_at` (wem sie schon zugestellt wurde) und die
+    // Uhrzeit selbst, die jeder fuer sich verschieben darf. Eine geteilte Zeile
+    // mit einer Empfaengerliste braeuchte fuer jedes dieser drei Felder eine
+    // zweite Tabelle - und die Abfragen, die heute auf `created_by` stehen,
+    // muessten alle umgeschrieben werden.
+    //
+    // WOFUER assigned_from GEBRAUCHT WIRD. Die Spalte haelt fest, aus WESSEN
+    // Geste eine Zeile entstanden ist; NULL heisst "selbst gesetzt", und das
+    // sind alle Bestandszeilen. Ohne sie liessen sich zwei Faelle nicht
+    // auseinanderhalten, die verschieden ausgehen muessen: eine Erinnerung, die
+    // jemand sich SELBST auf 10 Minuten gestellt hat, darf beim naechsten
+    // Speichern des Erstellers nicht auf dessen Wert zurueckspringen - eine
+    // geerbte darf es. Der Fremdschluessel steht auf SET NULL: verlaesst die
+    // Person den Haushalt, bleibt die Erinnerung ihres Kollegen bestehen und
+    // gilt ab dann als seine eigene.
+    up: `
+      ALTER TABLE reminders ADD COLUMN assigned_from INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_reminders_assigned_from ON reminders(assigned_from);
+    `,
+  },
 ];
 
 // Fork-only migrations use a separate namespace so upstream can keep its canonical sequence.

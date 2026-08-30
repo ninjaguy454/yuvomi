@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} завдання",
         "manage": "Керувати",
         "todayNothingElseTomorrow": "Більше на сьогодні нічого немає - завтра: {{title}}",
-        "weatherHighLow": "Максимум {{max}}°, мінімум {{min}}°"
+        "weatherHighLow": "Максимум {{max}}°, мінімум {{min}}°",
+        "optionCalendarBirthdaysHint": "Без позначки дні народження не показуються в цій картці, у календарі вони залишаються."
     },
     "tasks": {
         "manageCategories": "Керування категоріями",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Шаблон активності",
+        "assignmentLabel": "Призначення",
+        "assignmentOverrideAllowed": "Перепризначення дозволено",
+        "responsibilitiesLabel": "Обов’язки",
+        "availabilityPlaceLabel": "Доступність і місце",
+        "locationLabel": "Місце",
+        "taskLocationFallback": "Місце завдання",
+        "openInGoogleMaps": "Відкрити в Google Maps",
+        "saveToYuvomiPlaces": "Зберегти в «Місцях Yuvomi»",
+        "locationSavedToYuvomiPlaces": "Місце збережено в «Місцях Yuvomi».",
+        "savedPlaceLabel": "Збережене місце",
+        "oneUseLocationLabel": "Використовується лише для цього завдання",
+        "claimedToast": "Завдання прийнято.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Позначити пункт",
+        "checkConflict": "Завдання тим часом змінено. Відкрийте його ще раз."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "Активних фільтрів: {{count}}",
         "filtersActive_one": "1 активний фільтр",
         "filtersReset": "Зняти всі фільтри",
-        "filtersDisplay": "Відображення"
+        "filtersDisplay": "Відображення",
+        "agendaDayEmpty": "Нічого не заплановано"
     },
     "notes": {
         "title": "Нотатки",
@@ -2737,7 +2754,8 @@
         "customHours": "Години",
         "customDays": "Днів",
         "customWeeks": "Тижнів",
-        "sectionTitlePlural": "Нагадування"
+        "sectionTitlePlural": "Нагадування",
+        "sharedWithAssignees": "Ті, кому призначено цю подію, також отримають це нагадування."
     },
     "recipes": {
         "mealTypeNone": "Без прийому їжі",

@@ -301,7 +301,8 @@
         "memberOpenTasks_one": "{{count}} tugas",
         "manage": "Kelola",
         "todayNothingElseTomorrow": "Tidak ada lagi hari ini - besok: {{title}}",
-        "weatherHighLow": "Tertinggi {{max}}°, terendah {{min}}°"
+        "weatherHighLow": "Tertinggi {{max}}°, terendah {{min}}°",
+        "optionCalendarBirthdaysHint": "Tanpa centang, ulang tahun tidak muncul di kartu ini - di kalender tetap ada."
     },
     "tasks": {
         "manageCategories": "Kelola kategori",
@@ -535,9 +536,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Templat aktivitas",
+        "assignmentLabel": "Penugasan",
+        "assignmentOverrideAllowed": "Penugasan ulang diizinkan",
+        "responsibilitiesLabel": "Tanggung jawab",
+        "availabilityPlaceLabel": "Ketersediaan dan tempat",
+        "locationLabel": "Lokasi",
+        "taskLocationFallback": "Lokasi tugas",
+        "openInGoogleMaps": "Buka di Google Maps",
+        "saveToYuvomiPlaces": "Simpan ke Yuvomi Places",
+        "locationSavedToYuvomiPlaces": "Lokasi disimpan ke Yuvomi Places.",
+        "savedPlaceLabel": "Tempat tersimpan",
+        "oneUseLocationLabel": "Hanya digunakan untuk tugas ini",
+        "claimedToast": "Tugas diklaim.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Centang item",
+        "checkConflict": "Tugas telah berubah sementara itu. Silakan buka kembali."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -1008,7 +1024,8 @@
         "filtersActive": "{{count}} filter aktif",
         "filtersActive_one": "1 filter aktif",
         "filtersReset": "Hapus semua filter",
-        "filtersDisplay": "Tampilan"
+        "filtersDisplay": "Tampilan",
+        "agendaDayEmpty": "Tidak ada rencana"
     },
     "notes": {
         "title": "Catatan",
@@ -2749,7 +2766,8 @@
         "customHours": "Jam",
         "customDays": "Hari",
         "customWeeks": "Minggu",
-        "sectionTitlePlural": "Pengingat"
+        "sectionTitlePlural": "Pengingat",
+        "sharedWithAssignees": "Orang yang ditugaskan ke acara ini juga menerima pengingat ini."
     },
     "birthdays": {
         "inDays": "dalam {{days}} hari",

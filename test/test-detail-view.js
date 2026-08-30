@@ -22,11 +22,24 @@ import { readFile, readdir } from 'node:fs/promises';
 const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), 'utf8'))
   .replace(/\r\n/g, '\n');
 
+/**
+ * Einen Namen als Literal in ein RegExp setzen.
+ *
+ * VOLLSTAENDIG, nicht nur das Zeichen, das gerade stoert: Hier stand einmal
+ * `.replace(/-/g, '\\-')`, weil Klassennamen Bindestriche tragen - und liess
+ * jedes andere Metazeichen durch, den Backslash zuerst. Aus einem Namen wird
+ * dann ein Muster, das etwas anderes sucht als den Namen, und ein Guard, der
+ * still am Falschen vorbeimisst (CodeQL js/incomplete-sanitization).
+ */
+const reLiteral = (s) => s.replace(/[.*+?^${}()|[\]\\-]/g, (ch) => `\\${ch}`);
+
 const detailJs   = () => read('public/components/detail-view.js');
 const detailCss  = () => read('public/styles/detail-view.css');
 const modalJs    = () => read('public/components/modal.js');
 const calendarJs = () => read('public/pages/calendar.js');
 const tasksJs    = () => read('public/pages/tasks.js');
+const taskDetailJs = () => read('public/components/task-detail.js');
+const dashboardJs  = () => read('public/pages/dashboard.js');
 const contactsJs = () => read('public/pages/contacts.js');
 const rruleJs    = () => read('public/rrule-ui.js');
 
@@ -319,22 +332,26 @@ test('die Weiterleitung für Haushaltshilfe-Besuche greift vor der Detailansicht
 
 test('jeder Weg zu einer bestehenden Aufgabe führt in die Detailansicht', async () => {
   const src = await tasksJs();
-  assert.match(src, /function openTaskDetail\(\{ task, users = \[\], reminder = null \}, container\)/);
+  // Die Ansicht selbst wohnt seit #918 in der geteilten Komponente, damit die
+  // Übersicht und der Kalender dieselbe öffnen können statt einer kleineren.
+  assert.match(await taskDetailJs(), /export function openTaskDetail\(\{/);
 
   // Nur Aufrufe zählen, nicht die Definition darüber.
   // Die Zahl steht hier als BUCHFÜHRUNG, nicht als Obergrenze: ein neuer
   // Einstieg soll diesen Test rot machen, damit jemand entscheidet, wohin er
   // führt. Beim Verlauf (#791) hat er genau das getan.
-  const detailCalls = [...src.matchAll(/openTaskDetail\(\{ task, users: state\.users, reminder \}, container\)/g)];
+  const detailCalls = [...src.matchAll(/^\s+openTaskView\(task, reminder, container\);$/gm)];
   assert.equal(detailCalls.length, 5, 'Listenzeile/Stift, Kanban, Wischen, Deep-Link und Verlauf');
 
-  // Übrig bleiben genau zwei openTaskModal-Aufrufe: der FAB und der
-  // Activity-Template-Einstieg, beide für eine neue Aufgabe. Die Definition
-  // darüber trägt Defaults (`= {}`) und zählt nicht mit.
+  // Three creation paths remain: the FAB, Activity Template Quick Add, and the
+  // Schedule selection that pre-fills dates. All three create a new Task. The definition
+  // above carries defaults and is not counted.
   const modalCalls = [...src.matchAll(/^\s+openTaskModal\(\{.*\}, container\);$/gm)];
-  assert.equal(modalCalls.length, 2, 'nur neue Aufgaben öffnen noch direkt das Formular');
+  assert.equal(modalCalls.length, 3, 'only new Tasks open the authoring form directly');
   assert.match(src, /openTaskModal\(\{ users: state\.users \}, container\)/, 'der FAB öffnet ohne task');
   assert.match(src, /openTaskModal\(\{ users: state\.users, presetActivityTemplate: activity \}, container\)/, 'der Template-Einstieg öffnet ohne task');
+  assert.match(src, /openTaskModal\(\{ users: state\.users, presetDates: state\.calendarSelection \}, container\)/,
+    'the Schedule selection creates a Task with its selected dates');
 });
 
 test('die Wisch-Geste heißt Ansehen, nicht Bearbeiten', async () => {
@@ -345,10 +362,12 @@ test('die Wisch-Geste heißt Ansehen, nicht Bearbeiten', async () => {
 
 test('die Aufgaben-Verdrahtung ist zweigeteilt und behält die Tag-Reihenfolge', async () => {
   const src = await tasksJs();
-  assert.match(src, /function wireTaskForm\(panel, \{ task = null, container(?:, presetActivityTemplate = null)? \}\)/);
+  assert.match(src, /function wireTaskForm\(panel, \{\s*task = null,\s*container = null,\s*presetActivityTemplate = null,\s*onChanged = \(\) => loadTasks\(container\),\s*\}\)/);
 
   // modalTags ist ein Working-Set, das renderTagChips direkt nach dem Rendern
-  // liest - es muss VOR renderModalContent gesetzt werden.
+  // liest - es muss VOR renderModalContent gesetzt werden. Der Mount-Block
+  // steht seit #918 in dieser Datei und nicht mehr in der Ansicht: das Formular
+  // gehört dem Modul, die Leseansicht bekommt es gereicht.
   const mountStart = src.indexOf('mount: (panel, pane) =>');
   const mount = src.slice(mountStart, src.indexOf('wireTaskForm(panel, { task, container });', mountStart));
   assert.ok(mount.length > 0, 'der Mount-Block muss auffindbar sein');
@@ -357,8 +376,200 @@ test('die Aufgaben-Verdrahtung ist zweigeteilt und behält die Tag-Reihenfolge',
   assert.ok(tags > -1 && render > -1 && tags < render, 'modalTags wird vor dem Rendern gesetzt');
 });
 
-test('der Status lässt sich aus der Detailansicht weiterschalten', async () => {
+test('fork Task enrichments live in the canonical shared detail component', async () => {
+  const detail = await taskDetailJs();
+  const tasks = await tasksJs();
+
+  for (const field of [
+    'activity_template_name', 'activity_subject_name', 'activity_assignment_policy',
+    'activity_assignment_state', 'activity_responsibilities', 'activity_presence_policy',
+    'activity_place_name', 'location', 'points', 'tags', 'documents',
+  ]) {
+    assert.match(detail, new RegExp(reLiteral(field)), `${field} is missing from shared Task Details`);
+  }
+  assert.match(detail, /\/automation\/tasks\/\$\{task\.id\}\/claim/, 'claiming is shared');
+  assert.match(detail, /\/tasks\/\$\{task\.id\}\/location\/promote/, 'Place promotion is shared');
+  assert.match(detail, /navigation_url/, 'navigation is shared');
+  assert.match(detail, /export async function renameSubtask\(/, 'subtask rename is shared');
+  assert.match(detail, /export async function deleteSubtask\(/, 'subtask delete is shared');
+
+  assert.doesNotMatch(tasks, /function openTaskDetail\(/, 'the Tasks page no longer owns a second detail implementation');
+  assert.doesNotMatch(tasks, /function taskLocationNode\(/, 'location detail is not duplicated in the Tasks page');
+  assert.doesNotMatch(tasks, /function handleRenameSubtask\(/, 'subtask mutation logic is not duplicated in the Tasks page');
+  assert.doesNotMatch(tasks, /function handleDeleteSubtask\(/, 'subtask mutation logic is not duplicated in the Tasks page');
+});
+
+test('Markdown checklist lines and first-class subtasks remain separate models', async () => {
+  const detail = await taskDetailJs();
+  const subtasks = detail.slice(detail.indexOf('function subtaskListNode'), detail.indexOf('function documentListNode'));
+  const description = detail.slice(detail.indexOf('function descriptionNode'), detail.indexOf('export function openTaskDetail'));
+
+  assert.match(subtasks, /detail-task-subtasks/, 'child Tasks have an explicit first-class section');
+  assert.match(subtasks, /subtaskParticipants\(/, 'child Tasks retain their own assignees');
+  assert.match(subtasks, /subtask\.points/, 'child Tasks retain their own points');
+  assert.match(subtasks, /renameSubtask\(/, 'child Tasks retain Task rename semantics');
+  assert.match(subtasks, /deleteSubtask\(/, 'child Tasks retain Task delete semantics');
+  assert.doesNotMatch(subtasks, /note-md-|\/check`/, 'child Tasks are not Markdown checklist lines');
+
+  assert.match(description, /renderMarkdownLight\(text/, 'description Markdown is rendered as text content');
+  assert.match(description, /checklist:\s*\{ interactive: true/, 'description checklist syntax stays interactive');
+  assert.match(description, /\/tasks\/\$\{task\.id\}\/check/, 'description checks use the line-toggle route');
+  assert.doesNotMatch(description, /parent_task_id/, 'description checks do not create child Tasks');
+});
+
+test('external Task entry hydrates fork authoring catalogues', async () => {
   const src = await tasksJs();
+  const block = src.slice(src.indexOf('export async function openTaskById('));
+  for (const route of [
+    '/tasks/meta/options', '/automation/activity-options', '/planning/places?active=false',
+    '/planning/place-search/status', '/preferences',
+  ]) {
+    assert.match(block, new RegExp(reLiteral(route)), `${route} is required for the complete external Task form`);
+  }
+  assert.match(block, /wireTaskForm\(panel, \{ task, container, onChanged \}\)/,
+    'the surrounding Calendar or Dashboard refresh callback reaches the authoring form');
+});
+
+
+test('die Leseansicht ist nicht an ihr Modul genagelt (#918)', async () => {
+  const detail = await taskDetailJs();
+  // Was nur eine Ansicht wissen kann, kommt im Aufruf und nicht aus einem
+  // Seiten-State: sonst kann sie nur oeffnen, wer diesen State haelt - und
+  // genau deshalb bot die Uebersicht ein eigenes Kaertchen mit zwei Knoepfen an.
+  assert.doesNotMatch(detail, /\bstate\.\w/, 'die Komponente liest keinen fremden Seiten-State');
+  assert.doesNotMatch(detail, /loadTasks\(/, 'sie laedt keine fremde Liste nach');
+  for (const field of ['users', 'currentUserId', 'isAdmin', 'categories', 'onChanged']) {
+    assert.match(detail, new RegExp('\\b' + reLiteral(field) + '\\b'), field + ' kommt ueber den Aufruf');
+  }
+
+  // Und die zwei Ansichten, die vorher eine kleinere Fassung bauten oder
+  // wegnavigierten, oeffnen jetzt genau diese.
+  const dash = await dashboardJs();
+  assert.match(dash, /openTaskById\(taskId, \{ user, container, onChanged: rerender \}\)/,
+    'die Uebersicht oeffnet die geteilte Ansicht');
+  assert.doesNotMatch(dash, /openTaskQuickAction/,
+    'das Zwei-Knopf-Kaertchen ist ersetzt, nicht daneben stehen geblieben');
+
+  // DER BETRACHTER REIST MIT. Ohne ihn faellt `mine` bei jedem Kommentar auf
+  // false und eine gesperrte Aufgabe (#830) sieht fuer ihre eigene Autorin
+  // gesperrt aus: die Ansicht boete weniger an, als erlaubt ist, und zwar
+  // still. Er kommt aus dem Router-Argument der Seite, nicht aus einem Global.
+  assert.match(await taskDetailJs(), /currentUserId,\s*isAdmin,/,
+    'die Komponente nimmt den Betrachter entgegen');
+
+  const cal = await calendarJs();
+  assert.match(cal, /user: state\.user,/, 'der Kalender reicht den Betrachter durch');
+  assert.doesNotMatch(cal, /navigate\(`\/tasks\?open=/,
+    'ein Aufgaben-Chip wirft den Nutzer nicht mehr aus dem Kalender');
+  assert.match(cal, /openTaskFromCalendar\(taskChip\.dataset\.taskId\)/,
+    'er oeffnet die Aufgabe an Ort und Stelle');
+});
+
+test('der Kontext erreicht JEDEN Knoten der Leseansicht (#918)', async () => {
+  const detail = await taskDetailJs();
+  // Ein einziger vergessener Durchgriff reicht: `commentRowNode` liest
+  // `ctx.currentUserId` in seiner ersten Zeile, und der Abbrechen-Weg des
+  // Kommentar-Editors baute die Zeile ohne ctx neu. Der Kommentar blieb dann
+  // im Bearbeiten-Zustand stecken - ein TypeError, den keine Route sieht.
+  const calls = detail.match(/commentRowNode\(comment,\s*\{[^}]*\}/g) ?? [];
+  assert.ok(calls.length >= 2, 'beide Aufrufer von commentRowNode muessen auffindbar sein');
+  for (const call of calls) {
+    assert.match(call, /\bctx\b/, `commentRowNode ohne Kontext: ${call}`);
+  }
+  for (const fn of ['commentTextNode', 'wireMentionSuggest', 'subtaskListNode', 'commentsNode']) {
+    for (const call of detail.match(new RegExp(reLiteral(fn) + '\\([^)]*\\)', 'g')) ?? []) {
+      if (call.startsWith(fn + '(function') || /^\w+\(\s*\w+\s*,\s*ctx\s*\)$/.test(call)) continue;
+      assert.match(call, /\bctx\b/, `${fn} ohne Kontext: ${call}`);
+    }
+  }
+});
+
+test('der Rueckgaengig-Streifen blendet JEDE Darstellung der Aufgabe aus (#918)', async () => {
+  const detail = await taskDetailJs();
+  const fn = detail.slice(detail.indexOf('function taskRowsIn('),
+                          detail.indexOf('export async function deleteTaskWithUndo('));
+  assert.ok(fn.length > 0, 'taskRowsIn ist nicht mehr auffindbar');
+
+  // DIE UEBERSICHT NENNT IHR OBJEKT ANDERS. Eine Cockpit-Zeile kann jedes
+  // Modul meinen und traegt `data-object-kind`/`data-object-id`; ein Selektor
+  // nur auf `data-task-id` findet dort nichts, und der Streifen sagte fuenf
+  // Sekunden lang „geloescht", waehrend die Zeile klickbar stehen blieb.
+  assert.match(fn, /data-task-id=/, 'die Listen-Schreibweise');
+  assert.match(fn, /data-object-kind="task"/, 'die Uebersicht-Schreibweise');
+  assert.match(fn, /querySelectorAll/,
+    'dieselbe Aufgabe kann zugleich im Cockpit und im Dringend-Widget stehen');
+
+  // Und die Uebersicht muss diese Namen wirklich vergeben - sonst liefe der
+  // Guard ueber eine leere Menge.
+  const dash = await dashboardJs();
+  assert.match(dash, /data-object-kind="\$\{esc\(row\.kind\)\}" data-object-id=/,
+    'die Cockpit-Zeile benennt ihr Objekt');
+  assert.match(dash, /class="task-item" data-task-id=/, 'die Widget-Zeile nennt ihre Aufgabe');
+});
+
+test('wer die Aufgabe von aussen oeffnet, bekommt ihr Blatt (#918)', async () => {
+  // DER ROUTER HAELT GENAU EIN SEITEN-BLATT (loadPageStyle in router.js). Auf
+  // der Uebersicht ist das dashboard.css, im Kalender calendar.css - tasks.css
+  // ist dort NICHT geladen, und von dort kommt das Aussehen der Leseansicht
+  // UND des Formulars. Gemessen ohne dieses Blatt: ein Etikett mit
+  // `border-radius: 0px` statt `9999px`, eine Autorenzeile mit Gewicht 400.
+  const src = await tasksJs();
+  assert.match(src, /function ensureTaskStyles\(\)/, 'der Einstieg von aussen stellt das Blatt sicher');
+  const fn = src.slice(src.indexOf('function ensureTaskStyles()'),
+                       src.indexOf('export async function openTaskById('));
+  assert.match(fn, /link\.onload/, 'und WARTET darauf - sonst steht der Inhalt einmal roh da');
+  assert.match(fn, /link\.onerror/, 'ein fehlendes Blatt darf die Aufgabe nicht verschlucken');
+  assert.match(src, /ensureTaskStyles\(\),/,
+    'der Aufruf haengt im selben await wie das Laden der Aufgabe');
+
+  // Und die Gegenprobe zur Regel: die Klassen, die Ansicht und Formular
+  // vergeben, muessen wirklich aus einem Blatt kommen, das sonst fehlte -
+  // sonst liefe der Guard ueber eine leere Menge und sicherte nichts.
+  const { eachRule } = await import('./css-rules.js');
+  const selektoren = [...eachRule(await read('public/styles/tasks.css'))]
+    .map((r) => r.selector).join('\n');
+  const detail = await taskDetailJs();
+  const klassen = new Set();
+  for (const m of detail.matchAll(/className = '([^']+)'/g)) {
+    for (const c of m[1].split(/\s+/)) if (c) klassen.add(c);
+  }
+  assert.ok(klassen.size >= 15,
+    `nur ${klassen.size} Klassen gefunden - das Muster passt nicht mehr auf die Komponente`);
+  // UEBER DIE SELEKTOREN, nicht ueber den Dateitext: eine Klasse, die nur in
+  // einem KOMMENTAR steht, ist keine Regel. Genau daran war die erste Fassung
+  // dieses Guards blind und liess `.priority-badge` durch.
+  const ausTasksCss = [...klassen].filter((c) =>
+    new RegExp('\\.' + reLiteral(c) + '(?![\\w-])').test(selektoren));
+  assert.ok(ausTasksCss.length >= 5,
+    'die Leseansicht bezieht kaum noch etwas aus tasks.css - dann sichert dieser Guard nichts: '
+    + ausTasksCss.join(', '));
+});
+test('derselbe Loeschbefehl verhaelt sich auf beiden Wegen gleich (#918)', async () => {
+  const src = await tasksJs();
+  // Der Container hat ZWEI Zwecke: eine Liste nachladen (die die Uebersicht
+  // nicht hat) und die Zeile beim Loeschen ausblenden (die sie sehr wohl hat).
+  // Wurde er wegen des ersten auf null gesetzt, fiel das zweite mit weg, und
+  // Loeschen ueber das Formular liess die Zeile den ganzen Streifen lang stehen.
+  const block = src.slice(src.indexOf('export async function openTaskById('));
+  assert.match(block, /wireTaskForm\(panel, \{ task, container, onChanged \}\)/,
+    'das von aussen gemountete Formular bekommt seinen Container');
+  assert.doesNotMatch(block, /container: null/,
+    'ein genullter Container nimmt dem Loeschen sein optimistisches Ausblenden');
+});
+
+test('ohne Auswahl wird kein Bearbeiten angeboten (#918)', async () => {
+  const src = await tasksJs();
+  const block = src.slice(src.indexOf('export async function openTaskById('));
+  // Scheitert /tasks/meta/options, ist die Kategorienliste leer. Ein Formular
+  // darauf schickte eine leere Kategorie an einen Server, der sie ablehnt -
+  // nachdem wartende Datei-Uploads schon durch sind.
+  assert.match(block, /const canOfferEdit = state\.categories\.length > 0/,
+    'die Bedingung fuer ein brauchbares Formular ist benannt');
+  assert.match(block, /edit: !canOfferEdit \? null :/,
+    'ohne sie faellt der Bearbeiten-Knopf weg statt in einen Fehler zu fuehren');
+});
+test('der Status lässt sich aus der Detailansicht weiterschalten', async () => {
+  const src = await taskDetailJs();
   assert.match(src, /const NEXT_STATUS = \{/, 'die Kette open → in_progress → done ist benannt');
   assert.match(src, /open:\s*\{ status: 'in_progress'/);
   assert.match(src, /in_progress:\s*\{ status: 'done'/);
@@ -372,12 +583,12 @@ test('der Status lässt sich aus der Detailansicht weiterschalten', async () => 
 });
 
 test('die Aufgaben-Detailansicht führt die Leseinformationen der Karte', async () => {
-  const src = await tasksJs();
-  const fn = src.slice(src.indexOf('function renderTaskDetail'), src.indexOf('function openTaskDetail'));
+  const src = await taskDetailJs();
+  const fn = src.slice(src.indexOf('function renderTaskDetail'), src.indexOf('export function openTaskDetail'));
   for (const key of ['tasks.statusLabel', 'tasks.priorityLabel', 'tasks.dueDateLabel', 'tasks.startDateLabel',
     'tasks.categoryLabel', 'tasks.pointsLabel', 'tasks.tagsLabel',
     'tasks.subtasksLabel', 'tasks.documentsLabel', 'tasks.descriptionLabel']) {
-    assert.match(fn, new RegExp(key.replace('.', '\\.')), `${key} fehlt in der Detailansicht`);
+    assert.match(fn, new RegExp(reLiteral(key)), `${key} fehlt in der Detailansicht`);
   }
   // Der Anker ab Erledigung reist als zweites Argument mit (#658), die Zeile
   // bleibt aber die geteilte - deshalb offen bis zur Klammer statt exakt.

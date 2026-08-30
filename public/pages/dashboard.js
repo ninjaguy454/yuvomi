@@ -4,7 +4,7 @@
  * Abhängigkeiten: /api.js
  */
 
-import { api } from '/api.js';
+import { api, auth } from '/api.js';
 import { canSeeWidget } from '/permissions.js';
 import { t, formatDate, formatTime, timeSuffix, getLocale, getNumberFormat } from '/i18n.js';
 import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
@@ -45,6 +45,9 @@ let _fabController = null;
 // ── Onboarding ──────────────────────────────────────────────────────────────
 
 const ONBOARDING_KEY = 'yuvomi-onboarded';
+function onboardingStorageKey(userId) {
+  return `${ONBOARDING_KEY}:${String(userId ?? 'anonymous')}`;
+}
 // Der Dialog benennt sich ueber seinen Schritt-Titel; die id steht hier, weil
 // beide Seiten der Verknuepfung sie brauchen (Overlay und `renderStep()`).
 const ONBOARDING_TITLE_ID = 'onboarding-step-title';
@@ -97,7 +100,7 @@ function getOnboardingSteps() {
   ];
 }
 
-function showOnboarding(appContainer, onDone) {
+function showOnboarding(appContainer, userId, onDone) {
   const steps = getOnboardingSteps();
   let current = 0;
 
@@ -213,7 +216,13 @@ function showOnboarding(appContainer, onDone) {
     if (finished) return;
     finished = true;
     document.removeEventListener('keydown', onKeydown);
-    localStorage.setItem(ONBOARDING_KEY, '1');
+    localStorage.setItem(onboardingStorageKey(userId), '1');
+    // Am Konto vermerken, nicht nur am Geraet: sonst zeigt ein neues Geraet
+    // oder ein privates Fenster den Rundgang erneut, obwohl das Konto ihn
+    // schon gesehen hat. Bewusst fire-and-forget - ein Netzwerkfehler hier
+    // darf den Dialog nicht am Schliessen hindern; der lokale Merker faengt
+    // den aktuellen Browser ohnehin ab.
+    auth.markOnboardingSeen().catch(() => {});
     // Fokus dorthin zurückgeben, wo er vor dem Dialog lag (sonst neutral auf
     // den Body), damit Tastatur-/SR-Nutzer nicht im entfernten Overlay hängen.
     const restoreTarget = (previouslyFocused && document.contains(previouslyFocused))
@@ -1161,7 +1170,16 @@ function renderTodayMeals(meals, visibleMealTypes = MEAL_ORDER) {
   </div>`;
 }
 
-function renderPinnedNotes(notes) {
+function renderPinnedNotes(allNotes, size) {
+  /* WIE VIELE ZEILEN, ENTSCHEIDET DIE KACHEL - wie bei jeder anderen
+   * Listenkachel (`listRowCap`). Die Notizen waren die einzige, die ihre Groesse
+   * gar nicht las: der Server schnitt bei drei, und drei war damit die
+   * Obergrenze fuer jede Fassung. Ab Werk steht die Kachel auf 1x2, also hoch -
+   * unter drei Zeilen blieb rund ein Drittel der Karte leer, und wer fuenf
+   * Notizen angepinnt hatte, sah drei davon und keinen Hinweis auf die
+   * uebrigen (#928). Dieselbe Korrektur haben die Geburtstage schon bekommen;
+   * die Notizen wurden dabei uebersehen. */
+  const notes = allNotes.slice(0, listRowCap(size));
   if (!notes.length) {
     return `<div class="widget widget--notes">
       ${widgetHeader('notes', t('nav.notes'), 0, '/notes')}
@@ -2369,6 +2387,14 @@ async function openWidgetOptions(id, current = {}) {
           <input type="radio" name="cal-scope" value="mine" ${options.scope === 'mine' ? 'checked' : ''}>
           <span>${t('calendar.assignedToMe')}</span>
         </label>
+      </fieldset>
+      <fieldset class="form-group widget-options__group">
+        <legend class="form-label">${t('calendar.filtersLayers')}</legend>
+        <p class="widget-options__hint">${t('dashboard.optionCalendarBirthdaysHint')}</p>
+        <label class="widget-options__choice">
+          <input type="checkbox" name="cal-birthdays" ${options.birthdays === 'hide' ? '' : 'checked'}>
+          <span>${t('calendar.toggleBirthdays')}</span>
+        </label>
       </fieldset>`
     : `
       <fieldset class="form-group widget-options__group">
@@ -2412,6 +2438,9 @@ async function openWidgetOptions(id, current = {}) {
             // nicht gespeichert - sonst stuende in jedem Layout ein Feld, das
             // den Auslieferungszustand wiederholt.
             if (scope === 'mine') next.scope = 'mine';
+            // Dasselbe eine Zeile tiefer, nur andersherum notiert: gespeichert
+            // wird das ABWAEHLEN, nicht das Haekchen (#927).
+            if (!panel.querySelector('input[name="cal-birthdays"]')?.checked) next.birthdays = 'hide';
           } else {
             const picked = [...panel.querySelectorAll('input[name="task-category"]:checked')].map((el) => el.value);
             // Keine Auswahl heisst „alle" - eine leere Liste als Filter waere
@@ -2535,7 +2564,7 @@ function renderDashboardLayout(cfg, data, weather, currency, { editing = false, 
     housekeeping: () => renderHousekeepingWidget(data.housekeeping ?? {}, currency),
     family: () => renderFamilyWidget(data.users ?? [], data),
     meals: () => renderTodayMeals(data.todayMeals ?? [], visibleMealTypes),
-    notes: () => renderPinnedNotes(data.pinnedNotes ?? []),
+    notes: (size) => renderPinnedNotes(data.pinnedNotes ?? [], size),
     shopping: () => renderShoppingLists(data.shoppingLists ?? []),
     weather: () => (weather ? renderWeatherWidget(weather) : ''),
     clock: () => renderClockWidget(),
@@ -3516,62 +3545,57 @@ function initFab(signal) {
 }
 
 // --------------------------------------------------------
-// Task Quick-Action Modal
+// Eine Aufgabe aus der Übersicht öffnen (#918)
 // --------------------------------------------------------
 
-function openTaskQuickAction(taskId, taskTitle, rerender) {
-  openModal({
-    title: taskTitle,
-    size: 'sm',
-    content: `
-      <div class="modal-actions">
-        <button type="button" class="btn btn--ghost" data-action="edit">
-          <i data-lucide="edit-2" class="icon-md" aria-hidden="true"></i>
-          ${t('common.edit')}
-        </button>
-        <button type="button" class="btn btn--primary" data-action="done">
-          <i data-lucide="check-circle" class="icon-md" aria-hidden="true"></i>
-          ${t('tasks.kanbanMoveToDone')}
-        </button>
-      </div>
-    `,
-    onSave: (panel) => {
-      panel.querySelector('[data-action="done"]').addEventListener('click', async () => {
-        try {
-          await api.patch(`/tasks/${taskId}/status`, { status: 'done' });
-          closeModal({ force: true });
-          window.yuvomi?.showToast(t('tasks.swipedDoneToast'), 'success');
-          rerender();
-        } catch (err) {
-          window.yuvomi?.showToast(err.message, 'danger');
-        }
-      });
-      panel.querySelector('[data-action="edit"]').addEventListener('click', () => {
-        closeModal({ force: true });
-        window.yuvomi.navigate(`/tasks?open=${taskId}`);
-      });
-    },
-  });
+/**
+ * Dieselbe Leseansicht, die das Aufgabenmodul öffnet.
+ *
+ * Hier stand ein eigenes Kärtchen mit zwei Knöpfen: „Bearbeiten" schickte den
+ * Nutzer ins Aufgabenmodul, „Erledigt" hakte ab. Alles andere, was an einer
+ * Aufgabe hängt - Teilaufgaben, Kommentare, Dokumente, die abhakbaren Zeilen
+ * in der Beschreibung, die Fälligkeit, die Zuweisung - war von hier aus nicht
+ * zu sehen und nicht zu erreichen.
+ *
+ * Das wog schwerer, als die zwei fehlenden Knöpfe klingen: Die Übersicht ist
+ * die Ansicht, in der die App im Alltag steht. Das Aufgabenmodul ist die, in
+ * der Aufgaben angelegt und aufgeräumt werden. Die eine bot weniger an als die
+ * andere, obwohl sie öfter offen ist.
+ *
+ * Das Modul wird nachgeladen statt mitgeladen: Es zieht das Aufgabenformular
+ * mit sich, und dessen Gewicht gehört nicht in den Start der Startseite.
+ *
+ * `rerender` frischt die Kachel auf, aus der geöffnet wurde - der Nutzer
+ * bleibt, wo er war, statt im Aufgabenmodul zu landen. `user` reist mit,
+ * weil an ihm haengt, wem seine eigenen Kommentare gehoeren und wer eine
+ * gesperrte Aufgabe umschreiben darf.
+ */
+async function openTaskFromOverview(taskId, container, rerender, user) {
+  try {
+    const { openTaskById } = await import('/pages/tasks.js');
+    await openTaskById(taskId, { user, container, onChanged: rerender });
+  } catch (err) {
+    console.error('[Dashboard] Aufgabe konnte nicht geöffnet werden:', err);
+    window.yuvomi?.showToast(err.message ?? t('tasks.loadError'), 'danger');
+  }
 }
 
 // --------------------------------------------------------
 // Navigations-Links verdrahten
 // --------------------------------------------------------
 
-function wireLinks(container, rerender, { editing = false } = {}) {
+function wireLinks(container, rerender, { editing = false, user = null } = {}) {
   container.querySelectorAll('[data-route]').forEach((el) => {
     if (el.id === 'fab-main' || el.closest('#fab-actions')) return;
     if (editing && el.closest('.widget-wrapper--editing')) return;
     // Objekt-Deep-Link (Paket 2): die Cockpit-Aufgabenzeile nennt EIN Objekt,
-    // also trifft der Klick auch dieses Objekt - Quick-Action-Modal (Erledigt/
-    // Bearbeiten) wie bei den Zeilen des Tasks-Widgets, statt den Nutzer in
-    // der Aufgabenliste erneut suchen zu lassen (Critique P3). Der Titel kommt
-    // aus dem DOM: line-clamp kürzt nur visuell, textContent bleibt voll.
+    // also trifft der Klick auch dieses Objekt - die Leseansicht der Aufgabe
+    // wie bei den Zeilen des Tasks-Widgets, statt den Nutzer in der
+    // Aufgabenliste erneut suchen zu lassen (Critique P3).
     // Essen-Zeile bewusst ohne Sonderweg: /meals öffnet die aktuelle Woche und
     // scrollt den Heute-Slot selbst in den Blick (meals.js, day-header--today).
     if (!editing && el.dataset.objectKind === 'task' && el.dataset.objectId) {
-      const title = el.querySelector('.today-cockpit-card__value')?.textContent?.trim() ?? '';
-      const show = () => openTaskQuickAction(el.dataset.objectId, title, rerender);
+      const show = () => openTaskFromOverview(el.dataset.objectId, container, rerender, user);
       el.addEventListener('click', show);
       el.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
@@ -3607,13 +3631,13 @@ function wireLinks(container, rerender, { editing = false } = {}) {
     });
   }
 
-  // Task-Items öffnen Quick-Action-Modal statt direkt zu navigieren
+  // Task-Items öffnen die Leseansicht statt zu navigieren (#918)
   if (editing) return;
   // Die Countdown-Zeile einer Aufgabe hängt an demselben Griff (#647): sie
   // nennt ein Objekt, also trifft der Klick dieses Objekt. Ein eigener Handler
   // daneben wäre ein zweiter Weg zur selben Handlung.
   container.querySelectorAll('.task-item[data-task-id], .countdown-item[data-task-id]').forEach((el) => {
-    const show = () => openTaskQuickAction(el.dataset.taskId, el.dataset.taskTitle, rerender);
+    const show = () => openTaskFromOverview(el.dataset.taskId, container, rerender, user);
     el.addEventListener('click', show);
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); show(); }
@@ -4194,7 +4218,7 @@ export async function render(container, { user }) {
       </section>
       ${renderDashboardLayout(cfg, data, weather, currency, { editing: isCustomizing, visibleMealTypes, glanceHidden: !glanceVisible })}
     `);
-    wireLinks(container, rerender, { editing: isCustomizing });
+    wireLinks(container, rerender, { editing: isCustomizing, user });
     // Retry einer isolierten Widget-Fehlerkachel: da /dashboard aggregiert lädt,
     // ist „erneut versuchen" ein voller Neuaufbau (wie der Page-Level-Retry).
     container.querySelectorAll('[data-widget-retry]').forEach((btn) =>
@@ -4339,14 +4363,21 @@ export async function render(container, { user }) {
   // Einfuehrung dann, wenn sie ihm etwas nuetzt.
   if (wallMode) return;
 
-  if (!localStorage.getItem(ONBOARDING_KEY)) {
-    setTimeout(() => showOnboarding(container, () => maybeHintCustomize(container)), 400);
+  // Das Konto entscheidet (onboarding_pending aus /auth/me), nicht mehr allein
+  // das Geraet - sonst zeigt ein neues Geraet oder ein privates Fenster den
+  // Rundgang erneut, obwohl das Konto ihn schon gesehen hat. Der lokale
+  // Schluessel bleibt eine ZUSAETZLICHE Bedingung statt zu entfallen, ist aber
+  // zwingend kontobezogen: ein bereits eingefuehrtes Konto auf demselben
+  // Browser darf den Rundgang fuer ein neues Haushaltsmitglied nicht
+  // unterdruecken.
+  if (user?.onboarding_pending && !localStorage.getItem(onboardingStorageKey(user.id))) {
+    setTimeout(() => showOnboarding(container, user.id, () => maybeHintCustomize(container)), 400);
   } else {
     maybeHintCustomize(container);
   }
 }
 
-export const __test = { buildTodayHighlights, buildTodayProgram, buildTodayCockpitModel, renderTodayCockpit, renderPinnedNotes, renderFamilyWidget, formatDueDate, normalizeVisibleMealTypes, renderTodayMeals, calendarEventRoute, eventOccurrenceDateKey, eventStartDate, renderWallSurface, renderWallWho, selectMetricTiles, METRIC_TILE_ORDER, PROGRAM_ROW_CAP, WALL_ROW_CAP, weatherToneKey, weatherMotionAttr, weatherTempBand, weatherSpanModel, weatherDayLabel, weatherTodayRange, renderWeatherWidget, renderWallWeather, relativeDateLabel };
+export const __test = { buildTodayHighlights, buildTodayProgram, buildTodayCockpitModel, renderTodayCockpit, renderPinnedNotes, renderFamilyWidget, formatDueDate, normalizeVisibleMealTypes, renderTodayMeals, calendarEventRoute, eventOccurrenceDateKey, eventStartDate, renderWallSurface, renderWallWho, selectMetricTiles, METRIC_TILE_ORDER, PROGRAM_ROW_CAP, WALL_ROW_CAP, weatherToneKey, weatherMotionAttr, weatherTempBand, weatherSpanModel, weatherDayLabel, weatherTodayRange, renderWeatherWidget, renderWallWeather, relativeDateLabel, onboardingStorageKey };
 
 function wireWeatherRefresh(container, onUpdated = null) {
   const refreshBtn = container.querySelector('#weather-refresh-btn');

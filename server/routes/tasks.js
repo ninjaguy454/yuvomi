@@ -19,6 +19,7 @@ import {
   clearTaskActivityBinding,
   copyTaskActivityBinding,
   getTaskActivityBinding,
+  matchesGeneratedActivitySupportTask,
   ordinaryActivitySubtasks,
   previewTaskActivityBinding,
 } from '../services/task-activity-bindings.js';
@@ -32,6 +33,7 @@ import { uniqueKey } from '../utils/category-slug.js';
 import { toLocalDateKey } from '../../public/utils/date.js';
 import { parseSyncTargetValue } from '../../public/utils/sync-target.js';
 import { mentionedUserIds } from '../../public/utils/mentions.js';
+import { toggleChecklistLine } from '../../public/utils/markdown-checklist.js';
 import { resolvePermissions } from '../permissions.js';
 import { pushService } from '../services/push.js';
 import { todayKey } from '../utils/timezone.js';
@@ -1685,10 +1687,21 @@ router.put('/:id', (req, res) => {
  * Die Folgeinstanz, die beim Erledigen dieser Aufgabe entstanden ist (#650) -
  * oder null. Es gibt höchstens eine: der Spawn legt nur an, wenn hier nichts
  * steht.
+ *
+ * `parent_task_id IS NULL` ist keine Beschleunigung, sondern die Bedingung
+ * selbst: `recurrence_origin_id` trägt seit #742 zwei Bedeutungen. An einer
+ * Wurzelaufgabe heißt es "ich bin der nächste Durchlauf von X", an einer
+ * Unteraufgabe nur "ich bin die Kopie von Y in diesem Durchlauf". Ohne die
+ * Einschränkung fand das Enthaken einer Unteraufgabe der erledigten Instanz
+ * deren Kopie im neuen Durchlauf, hielt sie für die Folgeinstanz und löschte
+ * sie - die nächste Instanz verlor lautlos eine Unteraufgabe (#924). Nur die
+ * erste Bedeutung ist eine Folgeinstanz.
  */
 function recurrenceFollowupOf(taskId) {
   return db.get().prepare(
-    'SELECT * FROM tasks WHERE recurrence_origin_id = ? ORDER BY id LIMIT 1'
+    `SELECT * FROM tasks
+      WHERE recurrence_origin_id = ? AND parent_task_id IS NULL
+      ORDER BY id LIMIT 1`
   ).get(taskId) ?? null;
 }
 
@@ -1706,11 +1719,31 @@ function isFollowupSubtasksTouched(followup) {
   // Supervision is regenerated from current proficiency for each occurrence.
   // It therefore must not be compared by assignee against the previous cycle,
   // but completed/edited generated work still makes undo conservative.
-  for (const support of activitySupportTasks(db.get(), followup.id)) {
+  const supportTasks = activitySupportTasks(db.get(), followup.id)
+    .filter((support) => support.role === 'supervisor');
+  const activeSupervisors = db.get().prepare(`
+    SELECT user_id
+      FROM task_responsibilities
+     WHERE task_id = ? AND role = 'supervisor' AND status = 'active'
+  `).all(followup.id);
+  // The parent responsibility survives when somebody deletes generated
+  // support work, giving recurrence undo a durable deletion signal.
+  if (supportTasks.length !== activeSupervisors.length) return true;
+  for (const support of supportTasks) {
     if (support.status !== 'open') return true;
-    if (!support.recurrence_origin_id) continue;
+    if (!support.recurrence_origin_id) return true;
     const origin = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(support.recurrence_origin_id);
     if (!origin) return true;
+    // Normal -> supervised has no prior support Task. copyTaskActivityBinding
+    // points this first support row at the prior root occurrence, while the
+    // binding/responsibility data supplies its deterministic baseline.
+    if (!origin.parent_task_id) {
+      if (Number(origin.id) !== Number(originTaskId)
+          || !matchesGeneratedActivitySupportTask(
+            db.get(), followup.id, support, originTaskId,
+          )) return true;
+      continue;
+    }
     if (
       support.title !== origin.title ||
       (support.description || '') !== (origin.description || '') ||
@@ -2088,6 +2121,84 @@ router.patch('/:id/archive', (req, res) => {
     res.json({ data: { id: task.id, status: task.status, archived_at: archivedAt } });
   } catch (err) {
     log.error('PATCH /:id/archive error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+/**
+ * PATCH /api/v1/tasks/:id/check
+ * Einen Checklisten-Eintrag in der Beschreibung ab- oder anhaken, ohne den
+ * Rest des Textes zu berühren (#917).
+ *
+ * DIESELBE REGEL WIE BEI DEN NOTIZEN, NICHT EINE ZWEITE. `toggleChecklistLine`
+ * kommt aus public/utils/markdown-checklist.js - derselben Datei, nach der der
+ * Renderer im Browser entscheidet, welche Zeile überhaupt ein Kästchen bekommt.
+ * Wären das zwei Regeln, gäbe es eine Zeile, die gezeichnet, aber nicht
+ * geschrieben wird (#704 hat das für die Notizen schon entschieden).
+ *
+ * WARUM NICHT ÜBER PUT: PUT schreibt die ganze Aufgabe. Zwei Mitglieder, die im
+ * selben Moment verschiedene Punkte derselben Liste abhaken, ließen damit den
+ * letzten Schreiber gewinnen - der andere Haken verschwände still. Hier ändert
+ * der Server genau eine Zeile des gespeicherten Standes.
+ *
+ * WARUM DIE SPERRE HIER NICHT GILT (#830). Gesperrt ist, was die Aufgabe zu dem
+ * macht, was sie ist - nicht der Vermerk, wie weit sie gediehen ist. Genau
+ * dieselbe Grenze zieht `PATCH /:id/status`, der ebenfalls ohne
+ * `mayEditTaskDefinition` auskommt: abhaken darf jeder, der die Aufgabe sieht.
+ * Ein Haken in einer Checkliste ist derselbe Vorgang eine Ebene tiefer, und
+ * `toggleChecklistLine` kann konstruktionsbedingt nichts anderes ändern als das
+ * eine Zeichen zwischen den Klammern. Die SICHTBARKEIT gilt dagegen sehr wohl:
+ * eine geratene id darf keine fremde private Aufgabe anfassen (Muster aus #769).
+ *
+ * Body: { line: number, checked: boolean, expect?: string }
+ * Response: { data: { id, description } } | 409 { code: 409, reason }
+ */
+router.patch('/:id/check', (req, res) => {
+  try {
+    const id   = parseInt(req.params.id, 10);
+    const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
+    // 404 statt 403: ob es die Aufgabe gibt, ist selbst schon eine Auskunft.
+    if (!mayAccessTask(task, req.authUserId || req.session.userId)) {
+      return res.status(404).json({ error: 'Task not found.', code: 404 });
+    }
+
+    const { line, checked, expect } = req.body;
+    if (!Number.isInteger(line) || line < 0)
+      return res.status(400).json({ error: 'Invalid line number.', code: 400 });
+    if (typeof checked !== 'boolean')
+      return res.status(400).json({ error: 'Invalid state.', code: 400 });
+    if (expect !== undefined && expect !== null && typeof expect !== 'string')
+      return res.status(400).json({ error: 'Invalid line check.', code: 400 });
+
+    const result = toggleChecklistLine(task.description, line, checked, expect);
+    if (!result.ok) {
+      return res.status(409).json({
+        error: 'The task has changed in the meantime.',
+        code:  409,
+        reason: result.reason,
+      });
+    }
+
+    // `changed: false` heißt, der Punkt stand schon so - dann bleibt die Zeile
+    // unangetastet, sonst zöge ein folgenloser Tap `updated_at` hoch und
+    // meldete der CalDAV-Gegenstelle eine Änderung, die keine ist.
+    let pending = false;
+    if (result.changed) {
+      db.get().transaction(() => {
+        db.get().prepare('UPDATE tasks SET description = ? WHERE id = ?').run(result.content, id);
+        // Die Beschreibung ist ein gespiegeltes Feld: ohne diesen Marker bliebe
+        // ein Haken auf einer CalDAV-Aufgabe lokal und der nächste Inbound
+        // überschriebe ihn wieder.
+        pending = markTodoOutbound('tasks', task, { ...task, description: result.content });
+      })();
+    }
+
+    res.json({ data: { id, description: result.content } });
+
+    if (pending) pushToCalDAV('Checklisten-Haken');
+  } catch (err) {
+    log.error('PATCH /:id/check error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });

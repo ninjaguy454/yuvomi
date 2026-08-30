@@ -301,7 +301,8 @@
         "memberOpenTasks_one": "{{count}} na mga gawain",
         "manage": "Pamahalaan",
         "todayNothingElseTomorrow": "Wala nang iba ngayon - bukas: {{title}}",
-        "weatherHighLow": "Pinakamataas {{max}}°, pinakamababa {{min}}°"
+        "weatherHighLow": "Pinakamataas {{max}}°, pinakamababa {{min}}°",
+        "optionCalendarBirthdaysHint": "Kapag hindi nakatsek, hindi lumalabas ang mga kaarawan sa tile na ito - nasa kalendaryo pa rin sila."
     },
     "tasks": {
         "manageCategories": "Pamahalaan ang mga kategorya",
@@ -535,9 +536,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Template ng aktibidad",
+        "assignmentLabel": "Pagtatalaga",
+        "assignmentOverrideAllowed": "Pinapayagan ang muling pagtatalaga",
+        "responsibilitiesLabel": "Mga responsibilidad",
+        "availabilityPlaceLabel": "Pagiging available at lokasyon",
+        "locationLabel": "Lokasyon",
+        "taskLocationFallback": "Lokasyon ng gawain",
+        "openInGoogleMaps": "Buksan sa Google Maps",
+        "saveToYuvomiPlaces": "I-save sa Yuvomi Places",
+        "locationSavedToYuvomiPlaces": "Na-save ang lokasyon sa Yuvomi Places.",
+        "savedPlaceLabel": "Naka-save na lugar",
+        "oneUseLocationLabel": "Ginagamit lang para sa gawaing ito",
+        "claimedToast": "Inako na ang gawain.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Markahan ang item",
+        "checkConflict": "Nabago ang gawain samantala. Pakibuksan itong muli."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -1008,7 +1024,8 @@
         "filtersActive": "{{count}} aktibong filter",
         "filtersActive_one": "1 aktibong filter",
         "filtersReset": "Alisin ang lahat ng filter",
-        "filtersDisplay": "Pagpapakita"
+        "filtersDisplay": "Pagpapakita",
+        "agendaDayEmpty": "Walang nakaplano"
     },
     "notes": {
         "title": "Board",
@@ -2749,7 +2766,8 @@
         "customHours": "Oras",
         "customDays": "Araw",
         "customWeeks": "Linggo",
-        "sectionTitlePlural": "Mga Paalala"
+        "sectionTitlePlural": "Mga Paalala",
+        "sharedWithAssignees": "Nakukuha rin ng mga nakatalaga sa kaganapang ito ang paalalang ito."
     },
     "birthdays": {
         "inDays": "sa loob ng {{days}} araw",

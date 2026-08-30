@@ -26,6 +26,7 @@ import { nearestColorId } from '../utils/ical-color.js';
 // Fallback-Zone für den Outbound-Sync, wenn Google für den Zielkalender keine liefert.
 import { householdTimeZone } from '../utils/timezone.js';
 import { assignDefaultToEvent } from './sync-assignment.js';
+import { dropEventReminders } from './event-reminder-fanout.js';
 import { countSourceEvents, deleteSourceEvents } from './calendar-prune.js';
 import { readSyncOutcome, withSyncOutcome } from './sync-outcome.js';
 import { rruleValue } from './recurrence.js';
@@ -357,26 +358,35 @@ function setCalendarEnabled(calendarId, enabled, meta = {}) {
   const id = calendarId.trim();
   const flag = enabled ? 1 : 0;
 
-  db.get().prepare(`
-    INSERT INTO google_calendar_selection (calendar_id, name, color, enabled)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(calendar_id) DO UPDATE SET
-      enabled = excluded.enabled,
-      name    = COALESCE(excluded.name, google_calendar_selection.name),
-      color   = COALESCE(excluded.color, google_calendar_selection.color)
-  `).run(id, meta.name || id, meta.color || null, flag);
-
-  if (!enabled) {
+  db.get().transaction(() => {
     db.get().prepare(`
-      DELETE FROM calendar_events
-      WHERE external_source = 'google' AND calendar_ref_id IN (
-        SELECT id FROM external_calendars WHERE source = 'google' AND external_id = ?
-      )
-    `).run(id);
-    db.get().prepare(
-      'UPDATE google_calendar_selection SET sync_token = NULL, last_sync = NULL WHERE calendar_id = ?'
-    ).run(id);
-  }
+      INSERT INTO google_calendar_selection (calendar_id, name, color, enabled)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(calendar_id) DO UPDATE SET
+        enabled = excluded.enabled,
+        name    = COALESCE(excluded.name, google_calendar_selection.name),
+        color   = COALESCE(excluded.color, google_calendar_selection.color)
+    `).run(id, meta.name || id, meta.color || null, flag);
+
+    if (!enabled) {
+      const eventIds = db.get().prepare(`
+        SELECT id FROM calendar_events
+        WHERE external_source = 'google' AND calendar_ref_id IN (
+          SELECT id FROM external_calendars WHERE source = 'google' AND external_id = ?
+        )
+      `).all(id).map((row) => row.id);
+      dropEventReminders(db.get(), eventIds);
+      db.get().prepare(`
+        DELETE FROM calendar_events
+        WHERE external_source = 'google' AND calendar_ref_id IN (
+          SELECT id FROM external_calendars WHERE source = 'google' AND external_id = ?
+        )
+      `).run(id);
+      db.get().prepare(
+        'UPDATE google_calendar_selection SET sync_token = NULL, last_sync = NULL WHERE calendar_id = ?'
+      ).run(id);
+    }
+  })();
 }
 
 /** Per-Kalender-Sync-Token + last_sync nach erfolgreichem Inbound speichern. */
@@ -816,6 +826,17 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
     WHERE external_calendar_id = ? AND external_source = 'google'
       AND (? IS NULL OR calendar_ref_id IS NULL OR calendar_ref_id = ?)
   `);
+  const findForDelete = db.get().prepare(`
+    SELECT id FROM calendar_events
+    WHERE external_calendar_id = ? AND external_source = 'google'
+      AND (? IS NULL OR calendar_ref_id IS NULL OR calendar_ref_id = ?)
+  `);
+  const deleteGoogleEvent = (externalId, scopedCalRefId) => {
+    const ids = findForDelete.all(externalId, scopedCalRefId, scopedCalRefId)
+      .map((row) => row.id);
+    dropEventReminders(db.get(), ids);
+    return del.run(externalId, scopedCalRefId, scopedCalRefId);
+  };
 
   // Standard-Zuweisung dieses Kalenders (#459) — einmal auflösen.
   const defaultAssignee = calRefId
@@ -830,7 +851,6 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
     `SELECT 1 FROM calendar_pending_deletions WHERE source = 'google' AND event_external_id = ?`
   );
 
-  const dropRow = db.get().prepare('DELETE FROM calendar_events WHERE id = ?');
   // Ausgenommene Vorkommen einer Serie (#489). Additiv: eine vom Nutzer lokal
   // gesetzte Ausnahme wird dabei nicht entfernt.
   const insException = db.get().prepare(
@@ -861,13 +881,13 @@ function upsertGoogleEvents(items, calRefId = null, calColor = GOOGLE_COLOR, col
         const date   = originalStartDate(item);
         if (master && date) insException.run(master.id, date);
       }
-      del.run(item.id, calRefId, calRefId);
+      deleteGoogleEvent(item.id, calRefId);
       return;
     }
     // Tombstone: diese Event-ID darf lokal gar nicht existieren, unabhängig vom
     // Kalender - der Nutzer hat den Termin gelöscht.
     if (pendingDeletion.get(item.id)) {
-      del.run(item.id, null, null);
+      deleteGoogleEvent(item.id, null);
       return;
     }
     // Geändertes Einzelvorkommen: als eigenständiger Termin führen und sein
@@ -1054,6 +1074,7 @@ function retireLegacyInstances(masterExternalId, seen) {
     if (seen.has(row.external_calendar_id)) continue;
 
     if (row.user_modified === 0 && row.assignments === 0) {
+      dropEventReminders(db.get(), row.id);
       drop.run(row.id);
       removed++;
     } else {

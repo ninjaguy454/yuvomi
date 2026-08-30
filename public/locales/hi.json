@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} कार्य",
         "manage": "प्रबंधित करें",
         "todayNothingElseTomorrow": "आज और कुछ नहीं - कल: {{title}}",
-        "weatherHighLow": "अधिकतम {{max}}°, न्यूनतम {{min}}°"
+        "weatherHighLow": "अधिकतम {{max}}°, न्यूनतम {{min}}°",
+        "optionCalendarBirthdaysHint": "बिना निशान के जन्मदिन इस टाइल में नहीं दिखते - कैलेंडर में वे बने रहते हैं।"
     },
     "tasks": {
         "manageCategories": "श्रेणियाँ प्रबंधित करें",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "गतिविधि टेम्पलेट",
+        "assignmentLabel": "असाइनमेंट",
+        "assignmentOverrideAllowed": "फिर से असाइन करने की अनुमति",
+        "responsibilitiesLabel": "जिम्मेदारियाँ",
+        "availabilityPlaceLabel": "उपलब्धता और स्थान",
+        "locationLabel": "स्थान",
+        "taskLocationFallback": "कार्य का स्थान",
+        "openInGoogleMaps": "Google Maps में खोलें",
+        "saveToYuvomiPlaces": "Yuvomi Places में सहेजें",
+        "locationSavedToYuvomiPlaces": "स्थान Yuvomi Places में सहेजा गया।",
+        "savedPlaceLabel": "सहेजा गया स्थान",
+        "oneUseLocationLabel": "केवल इस कार्य के लिए उपयोग किया गया",
+        "claimedToast": "कार्य स्वीकार किया गया।",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "आइटम पर निशान लगाएं",
+        "checkConflict": "कार्य इस बीच बदल गया है। कृपया इसे फिर से खोलें।"
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "{{count}} फ़िल्टर सक्रिय",
         "filtersActive_one": "1 फ़िल्टर सक्रिय",
         "filtersReset": "सभी फ़िल्टर हटाएँ",
-        "filtersDisplay": "प्रदर्शन"
+        "filtersDisplay": "प्रदर्शन",
+        "agendaDayEmpty": "कुछ भी नियोजित नहीं"
     },
     "notes": {
         "title": "नोट बोर्ड",
@@ -2838,7 +2855,8 @@
         "customHours": "Hours",
         "customDays": "Days",
         "customWeeks": "Weeks",
-        "sectionTitlePlural": "अनुस्मारक"
+        "sectionTitlePlural": "अनुस्मारक",
+        "sharedWithAssignees": "इस कार्यक्रम को सौंपे गए लोगों को भी यह अनुस्मारक मिलता है।"
     },
     "onboarding": {
         "step1Title": "{{name}} में आपका स्वागत है",

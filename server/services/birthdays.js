@@ -1,6 +1,7 @@
 import { formatDateKey, resolveHouseholdFormats, translate } from '../utils/i18n.js';
 import { householdTimeZone, localToUTC, todayKey } from '../utils/timezone.js';
 import { OUTBOUND_SOURCES, markEventOutbound, queueEventDeletion } from './calendar-outbound.js';
+import { dropEventReminders } from './event-reminder-fanout.js';
 
 const BIRTHDAY_COLOR = '#E11D48';
 const BIRTHDAY_RRULE = 'FREQ=YEARLY;INTERVAL=1';
@@ -124,6 +125,7 @@ function eventDescription(name, birthDate, locale, dateFormat) {
 function deleteCalendarEvent(database, eventId) {
   const event = database.prepare('SELECT * FROM calendar_events WHERE id = ?').get(eventId);
   if (event) queueEventDeletion(event, database);
+  dropEventReminders(database, eventId);
   database.prepare('DELETE FROM calendar_events WHERE id = ?').run(eventId);
 }
 

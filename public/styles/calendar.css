@@ -702,10 +702,27 @@
 /* Leerer Tag: dezenter Hinweis in der Stundenfläche, klick-transparent -
  * ein Tipp auf die Uhrzeit legt weiterhin direkt einen Termin an
  * (Audit A1-18). Position (top) setzt renderDayView an Now-Linie bzw. 9 Uhr. */
+/* DER HINWEIS LIEGT AUF DEM RASTER, ALSO DECKT ER ES AB.
+ *
+ * Er stand als reiner Text absolut positioniert im Stundengitter und wurde
+ * von der naechsten Stundenlinie quer durchschnitten - gemessen schnitt die
+ * 14:00-Linie mitten durch den Satz. Ein Text, durch den eine Linie laeuft,
+ * liest sich als Fehler, nicht als Hinweis.
+ *
+ * Die Flaeche ist die des Rasters selbst (`--color-surface-work`), nicht eine
+ * eigene Farbe: der Hinweis ist ein Leerzustand, und die Gegenrichtung der
+ * Vollton-Regel gilt - wer nichts nennt, bleibt neutral. `inline-block` per
+ * `width: max-content` statt der vollen Zeilenbreite, damit die Flaeche nur
+ * den Text deckt und nicht das halbe Gitter ausblendet. */
 .day-view__empty-hint {
   position: absolute;
-  left: var(--space-4);
-  right: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 2 * var(--space-4));
+  width: max-content;
+  padding: var(--space-1h) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-work);
   text-align: center;
   font-size: var(--text-sm);
   color: var(--color-text-tertiary);
@@ -1035,6 +1052,21 @@
 /* Der Kopf fluchtet mit dem Träger der Tageszeilen (.list-rows aus
  * list-row.css, mit dem app-weit einen Lesemaß) - sonst stünde das Datum
  * breiter als die Zeilen, die es benennt. */
+/* Der freie Tag sagt, dass er frei ist.
+ *
+ * Die Agenda listet nur Tage mit Inhalt - richtig fuer die kommenden Wochen,
+ * falsch fuer heute: der Kopf kuendigt „Ab <heute>" an, und die erste Zeile
+ * war der Folgetag. Ein Tag, der genau dann fehlt, wenn die Antwort „nichts"
+ * lautet, sieht aus wie ein Ladefehler. Die Zeile ist bewusst leise - sie
+ * traegt Sekundaertinte und keine eigene Flaeche; sie beantwortet eine Frage,
+ * sie stellt keine. */
+.agenda-day__empty {
+  margin: 0;
+  padding: var(--space-2) 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
 .agenda-day__header {
   display: flex;
   align-items: baseline;
@@ -1521,9 +1553,15 @@
   flex-shrink: 0;
 }
 
+/* Die Beschriftung füllt die Zeitspalte, statt 48px in einer 64px-Spur zu
+ * stehen. #920 hat die SPUR auf --cal-gutter-width gebracht, die Beschriftung
+ * darin blieb auf --space-12: sie ist rechtsbündig, endete also 16px zu früh
+ * und stand damit weiter neben den Stundenzahlen, die genau darunter beginnen.
+ * Ihr padding-right ist deshalb dasselbe wie in .week-view__time-slot - beide
+ * Texte enden auf derselben senkrechten Kante. */
 .calendar-all-day-label {
-  width: var(--space-12);
-  padding: var(--space-0h) var(--space-1) var(--space-0h) 0;
+  width: var(--cal-gutter-width);
+  padding: var(--space-0h) var(--space-2) var(--space-0h) 0;
   font-size: var(--text-xs);
   color: var(--color-text-secondary);
   text-align: right;

@@ -575,6 +575,50 @@ test('clickedTime: eine Spalte ohne messbare Höhe legt nichts Falsches an', () 
  * Regex: das alte Muster war dreimal blind und jedes Mal war der Guard grün. */
 const calendarCss = readFileSync(new URL('../public/styles/calendar.css', import.meta.url), 'utf8');
 
+test('Wochenraster: Kopf, Ganztagszeile und Stunden verwenden dieselbe Zeitspaltenbreite', () => {
+  const src = readFileSync(new URL('../public/pages/calendar.js', import.meta.url), 'utf8');
+  const renderWeekView = src.slice(
+    src.indexOf('function renderWeekView'),
+    src.indexOf('function renderDayView'),
+  );
+  const gutterColumns = renderWeekView.match(
+    /grid-template-columns:var\(--cal-gutter-width\) repeat\(\$\{colCount\},1fr\)/g,
+  ) ?? [];
+  const timeGutter = [...eachRule(calendarCss)]
+    .find((rule) => rule.selector.trim() === '.week-view__times');
+
+  assert(gutterColumns.length === 2,
+    'Kopf und Ganztagszeile müssen --cal-gutter-width verwenden; die Stundenleiste darunter '
+    + 'verwendet dasselbe Token und sonst laufen die Tagesgrenzen auseinander');
+  assert(timeGutter && /width:\s*var\(--cal-gutter-width\)/.test(timeGutter.body),
+    'die Stundenleiste muss ihre Breite aus --cal-gutter-width beziehen');
+  assert(!renderWeekView.includes('grid-template-columns:var(--space-12)'),
+    'die Wochenansicht darf nicht auf die alte 48px-Sprosse zurückfallen');
+});
+
+/* EINE SPUR IN DER RICHTIGEN BREITE IST NOCH KEINE FLUCHTLINIE.
+ *
+ * Die Prüfung darüber sichert die SPALTE. Was in ihr steht, hat sie nicht
+ * gesehen: die Ganztags-Beschriftung stand auf --space-12 (48px) in der
+ * 64px-Spur, ist rechtsbündig und endete deshalb 16px links von den
+ * Stundenzahlen, die genau darunter anfangen - der Versatz überlebte den Fix
+ * für die Spalten. Beide Texte enden nur dann auf derselben Kante, wenn sie
+ * dieselbe Breite UND dasselbe padding-right haben. */
+test('Ganztags-Beschriftung endet auf derselben Kante wie die Stundenzahlen', () => {
+  const rules = [...eachRule(calendarCss)];
+  const label = rules.find((rule) => rule.selector.trim() === '.calendar-all-day-label');
+  const slot = rules.find((rule) => rule.selector.trim() === '.week-view__time-slot');
+
+  assert(label && slot, 'Beschriftung und Stundenschlitz müssen beide eine eigene Regel haben');
+  assert(/width:\s*var\(--cal-gutter-width\)/.test(label.body),
+    'die Ganztags-Beschriftung muss die volle Zeitspalte füllen, nicht --space-12');
+
+  const paddingRight = (body) => body.match(/padding(?:-right)?:\s*([^;]+)/)?.[1]?.trim() ?? '';
+  const labelPad = paddingRight(label.body).split(/\s+/)[1] ?? paddingRight(label.body);
+  assert(labelPad === paddingRight(slot.body),
+    `rechter Innenabstand läuft auseinander: Beschriftung ${labelPad}, Stunde ${paddingRight(slot.body)}`);
+});
+
 function zIndexOf(selector) {
   for (const rule of eachRule(calendarCss)) {
     if (!rule.selector.split(',').map((s) => s.trim()).includes(selector)) continue;

@@ -14,7 +14,6 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-const chain = pkg.scripts.test;
 const suiteScripts = Object.keys(pkg.scripts).filter((k) => k.startsWith('test:'));
 
 const suiteFile = (name) => pkg.scripts[name].match(/test\/[\w.-]+\.js/)?.[0];
@@ -52,28 +51,97 @@ function needsBrowser(name) {
   return imports.some((spec) => spec === 'puppeteer' || spec.includes('document-guards-harness'));
 }
 
-const runsIn = (script, name) => {
-  if (script.includes(`npm run ${name}`)) return true;
+function invokedScripts(script) {
+  return script.split(/\s*&&\s*/).flatMap((command) => {
+    const match = command.match(/^npm run ([\w:-]+)(?:\s+--.*)?$/);
+    return match ? [match[1]] : [];
+  });
+}
+
+/**
+ * Follow npm-script edges recursively. The full suite is split into short
+ * chains for Windows, so inspecting only `scripts.test` is no longer enough.
+ * Exact tokens matter: `test:search` is not `test:search-diacritics`.
+ */
+function collectChain(entry) {
+  const scripts = new Set();
+  const files = new Set();
+  const missing = new Set();
+  const cycles = [];
+
+  function visit(name, path = []) {
+    if (path.includes(name)) {
+      cycles.push([...path, name].join(' -> '));
+      return;
+    }
+    if (scripts.has(name)) return;
+
+    const script = pkg.scripts[name];
+    if (!script) {
+      missing.add(name);
+      return;
+    }
+
+    scripts.add(name);
+    for (const match of script.matchAll(/test\/[\w.-]+\.js/g)) files.add(match[0]);
+    for (const child of invokedScripts(script)) visit(child, [...path, name]);
+  }
+
+  visit(entry);
+  return { scripts, files, missing, cycles };
+}
+
+const testChain = collectChain('test');
+const browserChain = collectChain(BROWSER_CHAIN);
+
+const runsIn = (chain, name) => {
+  if (chain.scripts.has(name)) return true;
   const file = suiteFile(name);
-  return Boolean(file && script.includes(file));
+  return Boolean(file && chain.files.has(file));
 };
 
 test('jedes test:*-Script hängt in genau einer Kette', () => {
   // Die Kette ruft Suiten entweder als `npm run test:x` oder inlined sie als
   // direktes node-Kommando - dann genügt der Testdatei-Pfad als Nachweis.
-  const wrong = [];
+  const wrong = [
+    ...[...testChain.missing].map((name) => `npm test references missing script ${name}`),
+    ...testChain.cycles.map((cycle) => `cycle in npm test: ${cycle}`),
+    ...[...browserChain.missing].map((name) => `${BROWSER_CHAIN} references missing script ${name}`),
+    ...browserChain.cycles.map((cycle) => `cycle in ${BROWSER_CHAIN}: ${cycle}`),
+  ];
   for (const name of suiteScripts) {
     if (name === BROWSER_CHAIN) continue; // die Kette selbst, siehe oben
     const browser = needsBrowser(name);
-    const inChain = runsIn(chain, name);
-    if (browser && inChain) {
+    const inTestChain = runsIn(testChain, name);
+    const inBrowserChain = runsIn(browserChain, name);
+    if (browser && inTestChain) {
       wrong.push(`${name} fährt einen Browser und hängt trotzdem in npm test - dort ist kein Server`);
     }
-    if (!browser && !inChain) {
+    if (browser && !inBrowserChain) {
+      wrong.push(`${name} needs a browser but is not reachable from ${BROWSER_CHAIN}`);
+    }
+    if (!browser && inBrowserChain) {
+      wrong.push(`${name} does not need a browser but is reachable from ${BROWSER_CHAIN}`);
+    }
+    if (!browser && !inTestChain) {
       wrong.push(`${name} läuft nirgends - in die test-Kette einhängen (Schritt 3 in docs/test-suites.md)`);
     }
   }
   assert.deepEqual(wrong, [], wrong.join('\n  '));
+});
+
+test('jede npm-test-Teilkette passt sicher in die Windows-Kommandozeile', () => {
+  // cmd.exe permits 8,191 characters. Leave room for npm's shell prefix,
+  // quoting, and the path to the npm installation.
+  const safeLimit = 7500;
+  const oversized = [...testChain.scripts]
+    .filter((name) => pkg.scripts[name].length > safeLimit)
+    .map((name) => `${name} (${pkg.scripts[name].length})`);
+  assert.deepEqual(
+    oversized,
+    [],
+    `npm-test script exceeds the safe Windows limit: ${oversized.join(', ')}`,
+  );
 });
 
 test('die Browser-Suiten laufen unter test:document-guards', () => {
@@ -90,7 +158,7 @@ test('die Browser-Suiten laufen unter test:document-guards', () => {
   // Falschmeldung statt eines Befunds.
   assert.ok(needsBrowser(BROWSER_CHAIN),
     'needsBrowser() erkennt den Browserbedarf nicht mehr - ab hier prueft dieser Test nichts');
-  const missing = browserSuites.filter((n) => !runsIn(entry, n));
+  const missing = browserSuites.filter((n) => !runsIn(browserChain, n));
   assert.deepEqual(
     missing,
     [],
@@ -109,5 +177,36 @@ test('jede test/test-*.js-Datei hat ein npm-Script', () => {
     orphans,
     [],
     `Testdateien ohne test:-Script - anlegen und in die Kette einhängen: ${orphans.join(', ')}`,
+  );
+});
+
+/* EINE DATEI-DATENBANK IM TEMP-ORDNER IST EINE FALLE, WENN SIE LIEGEN BLEIBT.
+ *
+ * Neun Suiten legen ihre Datenbank als `<name>-${process.pid}.db` ab. Wer erst
+ * am ENDE aufraeumt, raeumt genau dann nicht auf, wenn es zaehlt: bricht ein
+ * Lauf ab, bleibt die Datei stehen. Betriebssysteme vergeben PIDs wieder, und
+ * irgendwann oeffnet ein neuer Lauf die volle Datenbank eines alten - er
+ * migriert sie, findet Bestandsdaten und scheitert an einem UNIQUE-Constraint,
+ * den sein eigener Code nie verletzt haette.
+ *
+ * Gemessen am 2026-08-29: 182 verwaiste Dateien, aelteste vier Tage alt, und
+ * ein roter Lauf, der isoliert nicht zu reproduzieren war. Das ist die teuerste
+ * Sorte Fehlschlag - er zeigt auf die Aenderung, die gerade entsteht.
+ *
+ * Der Guard prueft die REIHENFOLGE-REGEL, nicht eine Liste von Dateinamen:
+ * wer `DB_PATH` auf den Temp-Ordner setzt, tut das ueber `freshTestDbPath()`,
+ * und die raeumt VOR dem Oeffnen weg. */
+test('keine Suite baut ihren Temp-DB-Pfad von Hand zusammen', () => {
+  const offenders = readdirSync(new URL('../test', import.meta.url))
+    .filter((f) => f.startsWith('test-') && f.endsWith('.js'))
+    .filter((f) => {
+      const src = readFileSync(new URL(`../test/${f}`, import.meta.url), 'utf8');
+      return /process\.env\.DB_PATH\s*=\s*path\.join\(os\.tmpdir\(\)/.test(src);
+    });
+  assert.deepEqual(
+    offenders,
+    [],
+    'DB_PATH im Temp-Ordner gehoert ueber freshTestDbPath() aus test/tmp-db.js - '
+    + `sonst erbt ein Lauf die Datei eines abgebrochenen mit derselben PID: ${offenders.join(', ')}`,
   );
 });

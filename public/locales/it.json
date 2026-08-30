@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} attività",
         "manage": "Gestisci",
         "todayNothingElseTomorrow": "Nient'altro per oggi - domani: {{title}}",
-        "weatherHighLow": "Massima {{max}}°, minima {{min}}°"
+        "weatherHighLow": "Massima {{max}}°, minima {{min}}°",
+        "optionCalendarBirthdaysHint": "Senza spunta i compleanni restano fuori da questa scheda; nel calendario ci sono ancora."
     },
     "tasks": {
         "manageCategories": "Gestisci categorie",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Modello di attività",
+        "assignmentLabel": "Assegnazione",
+        "assignmentOverrideAllowed": "Riassegnazione consentita",
+        "responsibilitiesLabel": "Responsabilità",
+        "availabilityPlaceLabel": "Disponibilità e luogo",
+        "locationLabel": "Luogo",
+        "taskLocationFallback": "Luogo dell'attività",
+        "openInGoogleMaps": "Apri in Google Maps",
+        "saveToYuvomiPlaces": "Salva nei luoghi di Yuvomi",
+        "locationSavedToYuvomiPlaces": "Luogo salvato nei luoghi di Yuvomi.",
+        "savedPlaceLabel": "Luogo salvato",
+        "oneUseLocationLabel": "Usato solo per questa attività",
+        "claimedToast": "Attività presa in carico.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Spunta elemento",
+        "checkConflict": "L’attività è stata modificata nel frattempo. Riaprila."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "{{count}} filtri attivi",
         "filtersActive_one": "1 filtro attivo",
         "filtersReset": "Rimuovi tutti i filtri",
-        "filtersDisplay": "Visualizzazione"
+        "filtersDisplay": "Visualizzazione",
+        "agendaDayEmpty": "Niente in programma"
     },
     "notes": {
         "title": "Bacheca",
@@ -2838,7 +2855,8 @@
         "customHours": "Ore",
         "customDays": "Giorni",
         "customWeeks": "Settimane",
-        "sectionTitlePlural": "Promemoria"
+        "sectionTitlePlural": "Promemoria",
+        "sharedWithAssignees": "Anche chi è assegnato a questo evento riceve questo promemoria."
     },
     "onboarding": {
         "step1Title": "Benvenuto in {{name}}",

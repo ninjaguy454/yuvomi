@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} tarea",
         "manage": "Gestionar",
         "todayNothingElseTomorrow": "Nada más por hoy - mañana: {{title}}",
-        "weatherHighLow": "Máxima {{max}}°, mínima {{min}}°"
+        "weatherHighLow": "Máxima {{max}}°, mínima {{min}}°",
+        "optionCalendarBirthdaysHint": "Sin marcar, los cumpleaños no aparecen en esta tarjeta; en el calendario siguen estando."
     },
     "tasks": {
         "manageCategories": "Gestionar categorías",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Plantilla de actividad",
+        "assignmentLabel": "Asignación",
+        "assignmentOverrideAllowed": "Se permite reasignar",
+        "responsibilitiesLabel": "Responsabilidades",
+        "availabilityPlaceLabel": "Disponibilidad y lugar",
+        "locationLabel": "Ubicación",
+        "taskLocationFallback": "Ubicación de la tarea",
+        "openInGoogleMaps": "Abrir en Google Maps",
+        "saveToYuvomiPlaces": "Guardar en Lugares de Yuvomi",
+        "locationSavedToYuvomiPlaces": "Ubicación guardada en Lugares de Yuvomi.",
+        "savedPlaceLabel": "Lugar guardado",
+        "oneUseLocationLabel": "Solo se usa para esta tarea",
+        "claimedToast": "Tarea reclamada.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Marcar elemento",
+        "checkConflict": "La tarea ha cambiado mientras tanto. Vuelve a abrirla."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "{{count}} filtros activos",
         "filtersActive_one": "1 filtro activo",
         "filtersReset": "Quitar todos los filtros",
-        "filtersDisplay": "Visualización"
+        "filtersDisplay": "Visualización",
+        "agendaDayEmpty": "Nada planeado"
     },
     "notes": {
         "title": "Notas",
@@ -2838,7 +2855,8 @@
         "customHours": "Hours",
         "customDays": "Days",
         "customWeeks": "Weeks",
-        "sectionTitlePlural": "Recordatorios"
+        "sectionTitlePlural": "Recordatorios",
+        "sharedWithAssignees": "Quien esté asignado a este evento también recibe este recordatorio."
     },
     "onboarding": {
         "step1Title": "Bienvenido a {{name}}",

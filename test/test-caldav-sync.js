@@ -243,14 +243,19 @@ describe('pruneDeletedEvents (#508)', () => {
         external_source      TEXT NOT NULL DEFAULT 'local',
         calendar_ref_id      INTEGER
       );
+      CREATE TABLE reminders (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity_type TEXT NOT NULL,
+        entity_id   INTEGER NOT NULL
+      );
     `);
   }
 
   function addEvent(title, uid, source, calRefId) {
-    db.prepare(`
+    return db.prepare(`
       INSERT INTO calendar_events (title, external_calendar_id, external_source, calendar_ref_id)
       VALUES (?, ?, ?, ?)
-    `).run(title, uid, source, calRefId);
+    `).run(title, uid, source, calRefId).lastInsertRowid;
   }
 
   function titles() {
@@ -266,6 +271,25 @@ describe('pruneDeletedEvents (#508)', () => {
 
     assert.strictEqual(removed, 1);
     assert.deepStrictEqual(titles(), ['Bleibt']);
+  });
+
+  it('deletes reminder rows with a remotely pruned CalDAV event', () => {
+    setup();
+    const keptId  = addEvent('Bleibt', 'uid-1', 'caldav', 1);
+    const staleId = addEvent('Remote geloescht', 'uid-2', 'caldav', 1);
+    db.prepare("INSERT INTO reminders (entity_type, entity_id) VALUES ('event', ?)").run(keptId);
+    db.prepare("INSERT INTO reminders (entity_type, entity_id) VALUES ('event', ?)").run(staleId);
+
+    assert.strictEqual(
+      pruneDeletedEvents(db, { calRefId: 1, calendarUids: new Set(['uid-1']) }),
+      1,
+    );
+    assert.deepStrictEqual(
+      db.prepare("SELECT entity_id FROM reminders WHERE entity_type='event' ORDER BY entity_id")
+        .all().map((row) => row.entity_id),
+      [keptId],
+      'only the deleted Event reminder is removed',
+    );
   });
 
   it('returns 0 and deletes nothing when the server still has every event', () => {

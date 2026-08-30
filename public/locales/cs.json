@@ -289,7 +289,8 @@
         "memberOpenTasks_one": "{{count}} úkol",
         "manage": "Spravovat",
         "todayNothingElseTomorrow": "Dnes už nic dalšího - zítra: {{title}}",
-        "weatherHighLow": "Nejvyšší {{max}}°, nejnižší {{min}}°"
+        "weatherHighLow": "Nejvyšší {{max}}°, nejnižší {{min}}°",
+        "optionCalendarBirthdaysHint": "Bez zaškrtnutí narozeniny z této dlaždice zmizí, v kalendáři zůstanou."
     },
     "tasks": {
         "manageCategories": "Spravovat kategorie",
@@ -523,9 +524,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "Šablona aktivity",
+        "assignmentLabel": "Přiřazení",
+        "assignmentOverrideAllowed": "Změna přiřazení povolena",
+        "responsibilitiesLabel": "Odpovědnosti",
+        "availabilityPlaceLabel": "Dostupnost a místo",
+        "locationLabel": "Poloha",
+        "taskLocationFallback": "Místo úkolu",
+        "openInGoogleMaps": "Otevřít v Mapách Google",
+        "saveToYuvomiPlaces": "Uložit do míst Yuvomi",
+        "locationSavedToYuvomiPlaces": "Místo bylo uloženo do míst Yuvomi.",
+        "savedPlaceLabel": "Uložené místo",
+        "oneUseLocationLabel": "Použito pouze pro tento úkol",
+        "claimedToast": "Úkol byl převzat.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "Odškrtnout položku",
+        "checkConflict": "Úkol byl mezitím změněn. Otevřete jej prosím znovu."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -996,7 +1012,8 @@
         "filtersActive": "Aktivní filtry: {{count}}",
         "filtersActive_one": "1 aktivní filtr",
         "filtersReset": "Zrušit všechny filtry",
-        "filtersDisplay": "Zobrazení"
+        "filtersDisplay": "Zobrazení",
+        "agendaDayEmpty": "Nic naplánováno"
     },
     "notes": {
         "title": "Nástěnka",
@@ -3260,7 +3277,8 @@
         "customHours": "Hodiny",
         "customDays": "Dny",
         "customWeeks": "Týdny",
-        "sectionTitlePlural": "Připomínky"
+        "sectionTitlePlural": "Připomínky",
+        "sharedWithAssignees": "Toto připomenutí dostanou i osoby přiřazené k této události."
     },
     "birthdays": {
         "inDays": "za {{days}} dní",

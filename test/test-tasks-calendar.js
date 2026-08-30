@@ -58,6 +58,11 @@ test('Kalenderdatum bevorzugt Fälligkeit und fällt auf Startdatum zurück', ()
   assert.equal(tasks.taskCalendarDate({}), null);
 });
 
+test('task week rundown formats its compact date range without a runtime error', () => {
+  assert.match(tasks.formatDayMonth('2026-08-24'), /08.*24|24.*08/);
+  assert.match(tasks.formatDayMonth('2026-08-30'), /08.*30|30.*08/);
+});
+
 test('Kalenderabfrage fordert zukünftige Aufgaben an und behält Statusfilter', () => {
   const snapshot = {
     viewMode: tasks.state.viewMode,

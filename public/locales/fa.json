@@ -301,7 +301,8 @@
         "memberOpenTasks_one": "{{count}} وظیفه",
         "manage": "مدیریت",
         "todayNothingElseTomorrow": "امروز دیگر برنامه‌ای نیست - فردا: {{title}}",
-        "weatherHighLow": "بیشینه {{max}}°، کمینه {{min}}°"
+        "weatherHighLow": "بیشینه {{max}}°، کمینه {{min}}°",
+        "optionCalendarBirthdaysHint": "بدون تیک، تولدها در این کارت نمایش داده نمی‌شوند؛ در تقویم همچنان هستند."
     },
     "tasks": {
         "manageCategories": "مدیریت دسته‌ها",
@@ -535,9 +536,24 @@
         "subtaskProgress": "{{done}} of {{total}} complete",
         "activityDetailsToggle": "Show activity details",
         "claimTask": "Claim",
+        "activityTemplateLabel": "قالب فعالیت",
+        "assignmentLabel": "واگذاری",
+        "assignmentOverrideAllowed": "واگذاری مجدد مجاز است",
+        "responsibilitiesLabel": "مسئولیت‌ها",
+        "availabilityPlaceLabel": "دسترس‌پذیری و مکان",
+        "locationLabel": "مکان",
+        "taskLocationFallback": "مکان وظیفه",
+        "openInGoogleMaps": "باز کردن در Google Maps",
+        "saveToYuvomiPlaces": "ذخیره در مکان‌های Yuvomi",
+        "locationSavedToYuvomiPlaces": "مکان در بخش مکان‌های Yuvomi ذخیره شد.",
+        "savedPlaceLabel": "مکان ذخیره‌شده",
+        "oneUseLocationLabel": "فقط برای این وظیفه استفاده می‌شود",
+        "claimedToast": "وظیفه پذیرفته شد.",
         "personalBoardEmpty": "No tasks to show",
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
-        "moveBetweenBucketsHint": "Open the task details to change its participants or group."
+        "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
+        "checklistToggle": "علامت‌زدن مورد",
+        "checkConflict": "وظیفه در این میان تغییر کرده است. لطفاً دوباره آن را باز کنید."
     },
     "shopping": {
         "refreshGroceryDraft": "Refresh draft",
@@ -1008,7 +1024,8 @@
         "filtersActive": "{{count}} فیلتر فعال",
         "filtersActive_one": "۱ فیلتر فعال",
         "filtersReset": "برداشتن همه فیلترها",
-        "filtersDisplay": "نمایش"
+        "filtersDisplay": "نمایش",
+        "agendaDayEmpty": "چیزی برنامه‌ریزی نشده"
     },
     "notes": {
         "title": "یادداشت‌ها",
@@ -2749,7 +2766,8 @@
         "customHours": "ساعت",
         "customDays": "روز",
         "customWeeks": "هفته",
-        "sectionTitlePlural": "یادآورها"
+        "sectionTitlePlural": "یادآورها",
+        "sharedWithAssignees": "هر کسی که به این رویداد اختصاص داده شده باشد نیز این یادآوری را دریافت می‌کند."
     },
     "birthdays": {
         "inDays": "{{days}} روز دیگر",

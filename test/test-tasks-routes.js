@@ -120,6 +120,30 @@ test('POST: Subtask unter Parent erlaubt; unbekannter Parent → 404', async () 
   assert.equal(missing.status, 404);
 });
 
+test('GET /: list cards receive rich subtask data and all subtask assignees', async () => {
+  const updated = await call('PUT', `/${SUB}`, {
+    as: { id: ALICE, role: 'admin' },
+    body: {
+      title: 'Unteraufgabe mit Details',
+      description: 'Schrittweise Beschreibung',
+      priority: 'high',
+      points: 7,
+      assigned_to: [ALICE, BOB],
+    },
+  });
+  assert.equal(updated.status, 200);
+
+  const listed = await call('GET', '/?include_future=1', { as: { id: ALICE, role: 'admin' } });
+  assert.equal(listed.status, 200);
+  const parent = listed.body.data.find((task) => task.id === PARENT);
+  const subtask = parent?.subtasks.find((task) => task.id === SUB);
+  assert.equal(subtask?.description, 'Schrittweise Beschreibung');
+  assert.equal(subtask?.priority, 'high');
+  assert.equal(subtask?.points, 7);
+  assert.deepEqual(subtask?.assigned_users.map((user) => user.id).sort((a, b) => a - b), [ALICE, BOB].sort((a, b) => a - b));
+  assert.ok(subtask.assigned_users.every((user) => Object.hasOwn(user, 'avatar_data')));
+});
+
 test('POST: dritte Verschachtelungsebene → 400', async () => {
   const r = await call('POST', '/', { as: { id: ALICE, role: 'admin' }, body: { title: 'Zu tief', parent_task_id: SUB } });
   assert.equal(r.status, 400);
@@ -234,6 +258,10 @@ test('GET /meta/options: Nutzer (ohne Housekeeping-Kraft) + Enum-Listen', async 
   const ids = r.body.users.map((u) => u.id);
   assert.ok(ids.includes(ALICE) && ids.includes(BOB));
   assert.ok(!ids.includes(WORKER), 'Housekeeping-Kraft ausgeschlossen');
+  assert.ok(r.body.users.every((user) => Object.hasOwn(user, 'avatar_data')));
+  assert.ok(r.body.users.every((user) => Object.hasOwn(user, 'family_role')));
+  assert.ok(r.body.users.every((user) => Object.hasOwn(user, 'phone')));
+  assert.ok(r.body.users.every((user) => Object.hasOwn(user, 'email')));
   assert.deepEqual(r.body.priorities, ['none', 'low', 'medium', 'high', 'urgent']);
   assert.deepEqual(r.body.statuses, ['open', 'in_progress', 'done', 'archived']);
   assert.ok(Array.isArray(r.body.categories) && r.body.categories.length >= 2);

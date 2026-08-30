@@ -281,6 +281,10 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     new URL('../public/pages/tasks.js', import.meta.url),
     'utf8',
   );
+  const router = await readFile(
+    new URL('../public/router.js', import.meta.url),
+    'utf8',
+  );
   assert.match(page, /renderAutomationManager/);
   assert.match(page, /new Set\(\['skills', 'activities', 'workflows', 'variables'\]\)/,
     'the Settings leaf should contain automation authoring rather than unrelated planning destinations');
@@ -311,8 +315,12 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'the variable picker should intercept Enter before the shared modal submits');
   assert.doesNotMatch(component, /addEventListener\('scroll', close/,
     'normal modal auto-scrolling should reposition, not dismiss, variable suggestions');
-  assert.match(tasks, /id="btn-manage-automation"/,
-    'administrators need a direct Tasks entry point to Household Automation');
+  assert.doesNotMatch(tasks, /id="btn-manage-automation"/,
+    'Household Automation should not compete with task-list controls');
+  assert.match(router, /navId: 'household-automation'[\s\S]*?adminOnly: true[\s\S]*?pinnedEnd: true/,
+    'administrators need a pinned global Household Automation destination');
+  assert.match(router, /path: '\/settings\/modules\/automation'[\s\S]*?path: '\/settings'/,
+    'Household Automation should sit immediately before Settings in the global navigation');
   assert.doesNotMatch(tasks, /data-manage-places/,
     'Tasks should not duplicate the reusable Places address book navigation');
   assert.match(tasks, /Near an address, city, or ZIP/,

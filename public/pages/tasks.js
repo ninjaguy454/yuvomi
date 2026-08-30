@@ -5,7 +5,7 @@
  */
 
 import { api } from '/api.js';
-import { renderRRuleFields, bindRRuleEvents, getRRuleValues, recurrenceRow } from '/rrule-ui.js';
+import { renderRRuleFields, bindRRuleEvents, getRRuleValues, recurrenceRow, describeRRule } from '/rrule-ui.js';
 import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, promptModal, confirmModal, advancedSection } from '/components/modal.js';
 import { openDetailView, closeDetailView, visibilityRow, assignedRow } from '/components/detail-view.js';
 import { stagger, vibrate, scheduleUndoableDelete, animationSettled } from '/utils/ux.js';
@@ -27,9 +27,13 @@ import '/components/category-manager.js';
 import '/components/tag-manager.js';
 import { findPageFab } from '/utils/fab.js';
 import { isSoloHousehold } from '/utils/household.js';
-import { todayKey, parseLocalDateKey, addLocalDays } from '/utils/date.js';
+import {
+  todayKey, parseLocalDateKey, addLocalDays, toLocalDateKey,
+  startOfLocalWeekKey, weekStartIndex, weekdayOrder, isWeekendKey,
+} from '/utils/date.js';
 import { nowFields, zonedDateKey, zonedUTCProxy } from '/utils/timezone.js';
 import { isNavModuleReadOnly } from '/permissions.js';
+import { isWallModeEnabled } from '/utils/wall-mode.js';
 
 // --------------------------------------------------------
 // Konstanten
@@ -117,6 +121,37 @@ function catSortIndex(key, categories = state.categories) {
 const PRIORITY_LABELS = () => Object.fromEntries(PRIORITIES().map((p) => [p.value, p.label]));
 const STATUS_LABELS   = () => Object.fromEntries(FILTER_STATUSES().map((s) => [s.value, s.label]));
 
+const TASK_GROUP_MODES_KEY = 'yuvomi:taskGroupModes';
+const TASK_SORT_STATE_KEY = 'yuvomi:taskSortState';
+const TASK_PROGRESS_MODE_KEY = 'yuvomi:taskProgressMode';
+
+const GROUP_FIELDS = () => [
+  { value: 'none', label: t('tasks.groupNone'), icon: 'rows-3' },
+  { value: 'assignee', label: t('tasks.groupAssignee'), icon: 'users' },
+  { value: 'category', label: t('tasks.categoryLabel'), icon: 'folder' },
+  { value: 'due', label: t('tasks.dueDateLabel'), icon: 'calendar-clock' },
+  { value: 'location', label: t('tasks.groupLocation'), icon: 'map-pin' },
+  { value: 'status', label: t('tasks.statusLabel'), icon: 'circle-dot' },
+];
+
+const SORT_FIELDS = () => [
+  { value: 'default', label: t('tasks.sortDefault') },
+  { value: 'title', label: t('tasks.titleLabel') },
+  { value: 'assignees', label: t('tasks.sortAssignees') },
+  { value: 'points', label: t('tasks.sortPoints') },
+  { value: 'subtasks', label: t('tasks.sortSubtasks') },
+  { value: 'category', label: t('tasks.categoryLabel') },
+  { value: 'due', label: t('tasks.dueDateLabel') },
+  { value: 'location', label: t('tasks.groupLocation') },
+  { value: 'progress', label: t('tasks.sortProgress') },
+];
+
+const PROGRESS_MODES = () => [
+  { value: 'percent', label: t('tasks.progressPercent') },
+  { value: 'count', label: t('tasks.progressCount') },
+  { value: 'points', label: t('tasks.progressPoints') },
+];
+
 // --------------------------------------------------------
 // Verknüpfte Dokumente (#503, #733)
 //
@@ -156,6 +191,187 @@ function docIcon(doc) {
 
 function initials(name = '') {
   return name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+}
+
+function normalizeParticipant(user, role = 'participant') {
+  if (!user?.id) return null;
+  return {
+    id: Number(user.id),
+    display_name: user.display_name || user.assigned_name || '',
+    color: user.color || user.avatar_color || user.assigned_color || '#64748b',
+    avatar_data: user.avatar_data || user.assigned_avatar || null,
+    role,
+  };
+}
+
+/** One person once, even when Phase 4 records both assignment and responsibility roles. */
+function taskParticipants(task) {
+  const people = new Map();
+  const add = (user, role) => {
+    const normalized = normalizeParticipant(user, role);
+    if (!normalized) return;
+    const current = people.get(normalized.id);
+    if (!current || current.role === 'participant') people.set(normalized.id, normalized);
+  };
+  (task.assigned_users || []).forEach((user) => add(user, 'assignee'));
+  (task.activity_responsibilities || []).forEach((user) => add(user, user.role || 'participant'));
+  if (!people.size && task.assigned_to) {
+    add({
+      id: task.assigned_to,
+      display_name: task.assigned_name,
+      avatar_color: task.assigned_color,
+      avatar_data: task.assigned_avatar,
+    }, 'assignee');
+  }
+  return [...people.values()];
+}
+
+function subtaskParticipants(subtask) {
+  if (subtask.assigned_users?.length) return subtask.assigned_users.map((user) => normalizeParticipant(user, 'assignee')).filter(Boolean);
+  if (!subtask.assigned_to) return [];
+  const known = state.users.find((user) => Number(user.id) === Number(subtask.assigned_to));
+  return [normalizeParticipant(known || {
+    id: subtask.assigned_to,
+    display_name: subtask.assigned_name,
+  }, 'assignee')].filter(Boolean);
+}
+
+function completionCounts(task) {
+  const subtasks = task.subtasks || [];
+  if (subtasks.length) {
+    return {
+      done: subtasks.filter((subtask) => subtask.status === 'done').length,
+      total: subtasks.length,
+      earnedPoints: subtasks.filter((subtask) => subtask.status === 'done')
+        .reduce((sum, subtask) => sum + Number(subtask.points || 0), 0),
+      totalPoints: subtasks.reduce((sum, subtask) => sum + Number(subtask.points || 0), 0),
+    };
+  }
+  return {
+    done: task.status === 'done' ? 1 : 0,
+    total: 1,
+    earnedPoints: task.status === 'done' ? Number(task.points || 0) : 0,
+    totalPoints: Number(task.points || 0),
+  };
+}
+
+function participantCompletion(task, userId) {
+  const assigned = (task.subtasks || []).filter((subtask) =>
+    subtaskParticipants(subtask).some((user) => Number(user.id) === Number(userId))
+  );
+  if (!assigned.length) return completionCounts(task);
+  return {
+    done: assigned.filter((subtask) => subtask.status === 'done').length,
+    total: assigned.length,
+    earnedPoints: assigned.filter((subtask) => subtask.status === 'done')
+      .reduce((sum, subtask) => sum + Number(subtask.points || 0), 0),
+    totalPoints: assigned.reduce((sum, subtask) => sum + Number(subtask.points || 0), 0),
+  };
+}
+
+function progressLabel(progress) {
+  if (state.progressMode === 'count') return t('tasks.progressCountValue', progress);
+  if (state.progressMode === 'points' && progress.totalPoints > 0) {
+    return t('tasks.progressPointsValue', progress);
+  }
+  const percent = progress.total ? Math.round((progress.done / progress.total) * 100) : 0;
+  return t('tasks.progressPercentValue', { percent });
+}
+
+function taskProgress(task) {
+  const progress = completionCounts(task);
+  return progress.total ? progress.done / progress.total : 0;
+}
+
+function taskLocationLabel(task) {
+  return task.location?.label || task.location?.address || task.activity_place_name || '';
+}
+
+function compareTaskField(a, b, field) {
+  const collator = new Intl.Collator(getLocale(), { numeric: true, sensitivity: 'base' });
+  const text = (value) => String(value || '');
+  const number = (value) => Number(value || 0);
+  if (field === 'title') return collator.compare(text(a.title), text(b.title));
+  if (field === 'assignees') return taskParticipants(a).length - taskParticipants(b).length;
+  if (field === 'points') return number(a.points) - number(b.points);
+  if (field === 'subtasks') return number(a.subtask_total) - number(b.subtask_total);
+  if (field === 'category') return collator.compare(catLabel(a.category), catLabel(b.category));
+  if (field === 'location') return collator.compare(taskLocationLabel(a), taskLocationLabel(b));
+  if (field === 'progress') return taskProgress(a) - taskProgress(b);
+  if (field === 'due') {
+    const av = effectiveDue(a)?.getTime() ?? Number.POSITIVE_INFINITY;
+    const bv = effectiveDue(b)?.getTime() ?? Number.POSITIVE_INFINITY;
+    return av - bv;
+  }
+  return sortTasks(a, b, new Date());
+}
+
+function sortedTasks(tasks, bucketKey = null) {
+  const local = bucketKey ? state.bucketSorts.get(bucketKey) : null;
+  const sort = local || state.sheetSort;
+  const field = sort?.field || 'default';
+  const direction = sort?.direction === 'desc' ? -1 : 1;
+  return [...tasks].sort((a, b) => {
+    const compared = compareTaskField(a, b, field);
+    if (compared) return compared * direction;
+    const title = String(a.title || '').localeCompare(String(b.title || ''), getLocale(), { sensitivity: 'base' });
+    return title || Number(a.id) - Number(b.id);
+  });
+}
+
+function boardTasks() {
+  const tasks = filteredTasks();
+  if (state.boardScope !== 'personal') return tasks;
+  return tasks.filter((task) => task.activity_assignment_state === 'open'
+    || taskParticipants(task).some((user) => Number(user.id) === Number(state.currentUserId)));
+}
+
+function taskBuckets(tasks, mode, { includeEmptyAssignees = false } = {}) {
+  if (mode === 'none') return [{ id: 'all', label: t('tasks.groupAll'), tasks }];
+  if (mode === 'assignee') {
+    const buckets = new Map();
+    if (includeEmptyAssignees) {
+      state.users.forEach((user) => buckets.set(`user-${user.id}`, { id: `user-${user.id}`, label: user.display_name, tasks: [], user }));
+    }
+    for (const task of tasks) {
+      const people = taskParticipants(task);
+      if (!people.length) {
+        const bucket = buckets.get('unassigned') || { id: 'unassigned', label: t('tasks.groupUnassigned'), tasks: [] };
+        bucket.tasks.push(task);
+        buckets.set('unassigned', bucket);
+        continue;
+      }
+      for (const user of people) {
+        const key = `user-${user.id}`;
+        const bucket = buckets.get(key) || { id: key, label: user.display_name, tasks: [], user };
+        bucket.tasks.push(task);
+        buckets.set(key, bucket);
+      }
+    }
+    return [...buckets.values()];
+  }
+  if (mode === 'category') return groupBy(tasks, 'category');
+  if (mode === 'due') return groupBy(tasks, 'due');
+  if (mode === 'status') {
+    const order = [...STATUSES(), { value: 'archived', label: t('tasks.statusArchived') }];
+    return order.map((status) => ({
+      id: status.value,
+      label: status.label,
+      tasks: tasks.filter((task) => kanbanColumnOf(task) === status.value),
+    })).filter((bucket) => bucket.tasks.length);
+  }
+  if (mode === 'location') {
+    const buckets = new Map();
+    for (const task of tasks) {
+      const label = taskLocationLabel(task) || t('tasks.groupNoLocation');
+      const id = task.location?.place_id ? `place-${task.location.place_id}` : `location-${label.toLocaleLowerCase()}`;
+      const bucket = buckets.get(id) || { id, label, tasks: [] };
+      bucket.tasks.push(task);
+      buckets.set(id, bucket);
+    }
+    return [...buckets.values()].sort((a, b) => a.label.localeCompare(b.label, getLocale(), { sensitivity: 'base' }));
+  }
+  return [{ id: 'all', label: t('tasks.groupAll'), tasks }];
 }
 
 // Sichtbarkeits-Indikator (#474): nur für eingeschränkte Elemente ein dezentes
@@ -511,7 +727,7 @@ async function wireSyncTarget(panel, task) {
  * Anhänge werden zur reinen Glyphe: die Zahl daneben war die einzige Stelle der
  * Zeile, an der eine Anzahl OHNE ihren Gegenstand stand.
  */
-function renderTaskCard(task, opts = {}) {
+function renderLegacyTaskCard(task, opts = {}) {
   const { expandedSubtasks = false, showCheckbox = false, isChecked = false, showCategory = true } = opts;
   const isDone = task.status === 'done';
   const archived = isArchived(task);
@@ -629,6 +845,172 @@ function renderTaskCard(task, opts = {}) {
 }
 
 // Effektive Fälligkeit: mit due_time wenn vorhanden, sonst 23:59:59 des Tages
+function renderResponsiveTagBadges(task) {
+  let tags = [...(task.tags || [])];
+  const priority = task.priority && task.priority !== 'none' ? PRIORITY_LABELS()[task.priority] : null;
+  if (priority) {
+    const normalized = String(priority).trim().toLocaleLowerCase();
+    tags = tags.filter((tag) => String(tag).trim().toLocaleLowerCase() !== normalized);
+  }
+  if (!tags.length) return '';
+  return `<div class="activity-card__tags" data-responsive-tags>
+    ${tags.map((tag) => `<button type="button" class="task-tag task-tag--filter" data-responsive-tag
+      data-tag-filter="${esc(tag)}" title="${esc(tag)}"
+      aria-label="${esc(t('tasks.tagFilterBy', { tag }))}">${esc(tag)}</button>`).join('')}
+    <span class="task-tag task-tag--more" data-tag-overflow hidden></span>
+  </div>`;
+}
+
+function renderProfileAvatarButton(participant, size = 34) {
+  if (!participant?.id) return '';
+  const name = participant.display_name || t('tasks.filterGroupPerson');
+  return `<button type="button" class="activity-card__participant-profile" data-action="show-participant-profile"
+    data-user-id="${Number(participant.id)}" aria-haspopup="dialog" aria-label="${esc(name)}" title="${esc(name)}">
+    ${renderAvatarStack([participant], { size, maxVisible: 1 })}
+  </button>`;
+}
+
+function renderParticipantStrip(task, participants) {
+  if (!participants.length) return '';
+  return `<div class="activity-card__participants" aria-label="${esc(t('tasks.participantsLabel'))}">
+    ${participants.map((participant) => `<div class="activity-card__participant">
+      ${renderProfileAvatarButton(participant, 34)}
+      <span class="activity-card__participant-progress">${esc(progressLabel(participantCompletion(task, participant.id)))}</span>
+    </div>`).join('')}
+  </div>`;
+}
+
+function renderActivitySubtasks(task, expanded) {
+  const subtasks = task.subtasks || [];
+  if (!subtasks.length) return '';
+  const done = subtasks.filter((subtask) => subtask.status === 'done').length;
+  const rows = subtasks.map((subtask) => {
+    const assignees = subtaskParticipants(subtask);
+    return `<div class="subtask-item ${subtask.status === 'done' ? 'subtask-item--done' : ''}" data-subtask-id="${subtask.id}">
+      <button class="subtask-item__checkbox ${subtask.status === 'done' ? 'subtask-item__checkbox--done' : ''}"
+        data-action="toggle-subtask" data-id="${subtask.id}" data-status="${subtask.status}"
+        aria-label="${esc(t('tasks.subtaskMarkDone', { title: subtask.title }))}">
+        ${subtask.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
+      </button>
+      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}</button>
+      <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: Number(subtask.points || 0) }))}</span>
+      ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
+        ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
+    </div>`;
+  }).join('');
+  return `<div class="activity-card__subtasks">
+    <button type="button" class="activity-card__subtasks-toggle" data-action="toggle-subtasks" data-id="${task.id}"
+      aria-expanded="${expanded}" aria-controls="subtasks-${task.id}">
+      <i data-lucide="chevron-right" class="activity-card__chevron${expanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
+      <span>${esc(t('tasks.subtasksLabel'))}</span>
+      <span class="activity-card__subtasks-progress">${esc(t('tasks.subtaskProgress', { done, total: subtasks.length }))}</span>
+    </button>
+    <div class="subtask-list${expanded ? ' subtask-list--visible' : ''}" id="subtasks-${task.id}">${rows}</div>
+  </div>`;
+}
+
+function renderTaskCard(task, opts = {}) {
+  const {
+    expandedSubtasks = isSubtasksExpanded(task.id),
+    showCheckbox = false,
+    isChecked = false,
+    showCategory = true,
+    board = false,
+  } = opts;
+  const isDone = task.status === 'done';
+  const archived = isArchived(task);
+  const participants = taskParticipants(task);
+  const detailsExpanded = state.expandedTasks.has(Number(task.id));
+  const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
+  const due = formatDueDate(task.due_date, task.due_time, isDone || archived);
+  const location = taskLocationLabel(task);
+
+  return `<article class="task-card activity-card${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
+      data-task-id="${task.id}"${board ? ' draggable="true"' : ''}>
+    <div class="activity-card__summary">
+      <span class="activity-card__leading">
+        ${showCheckbox ? `<input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
+          aria-label="${esc(t('tasks.selectTask'))}">` : ''}
+        ${hasDetails ? `<button type="button" class="activity-card__details-toggle" data-action="toggle-activity-details" data-id="${task.id}"
+          aria-expanded="${detailsExpanded}" aria-controls="activity-details-${task.id}" aria-label="${esc(t('tasks.activityDetailsToggle'))}">
+          <i data-lucide="chevron-right" class="activity-card__chevron${detailsExpanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
+        </button>` : '<span class="activity-card__leading-spacer" aria-hidden="true"></span>'}
+      </span>
+      <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}">
+        <span class="activity-card__title u-card-title u-compact">${esc(task.title)}</span>
+        <span class="activity-card__when">
+          ${due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i>${esc(due.label)}</span>` : (renderStartDateBadge(task.start_date) || '')}
+          ${location ? `<span class="due-date activity-card__location" title="${esc(task.location?.address || location)}"><i data-lucide="map-pin" class="icon-sm" aria-hidden="true"></i>${esc(location)}</span>` : ''}
+        </span>
+      </button>
+      <span class="activity-card__points">${esc(t('tasks.pointsSummary', { count: Number(task.points || 0) }))}</span>
+      <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}"
+        aria-label="${esc(isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title }))}">
+        <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
+      </button>
+    </div>
+
+    ${detailsExpanded && hasDetails ? `<div class="activity-card__details" id="activity-details-${task.id}">
+      ${task.description ? `<div class="activity-card__description">${renderMarkdownLight(task.description)}</div>` : ''}
+      ${renderParticipantStrip(task, participants)}
+    </div>` : ''}
+
+    <div class="activity-card__metadata">
+      ${renderPriorityBadge(task.priority)}
+      ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date activity-card__category">${esc(catLabel(task.category))}</span>` : ''}
+      ${task.is_recurring ? `<span class="due-date" title="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i></span>` : ''}
+      ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
+      ${renderVisibilityBadge(task.visibility)}
+      ${task.activity_assignment_state === 'open' ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(t('tasks.claimTask'))}</button>` : ''}
+    </div>
+    ${renderResponsiveTagBadges(task)}
+    ${renderActivitySubtasks(task, expandedSubtasks)}
+  </article>`;
+}
+
+function wireResponsiveTaskTags(root) {
+  state.tagResizeObserver?.disconnect();
+  const rows = [...root.querySelectorAll('[data-responsive-tags]')];
+  const fit = (row) => {
+    const tags = [...row.querySelectorAll('[data-responsive-tag]')];
+    const overflow = row.querySelector('[data-tag-overflow]');
+    if (!overflow || !tags.length) return;
+    tags.forEach((tag) => { tag.hidden = false; });
+    overflow.hidden = false;
+    overflow.textContent = `+${tags.length}`;
+    const style = getComputedStyle(row);
+    const gap = Number.parseFloat(style.columnGap || style.gap) || 0;
+    const available = row.clientWidth;
+    const maximum = available < 280 ? 2 : available < 420 ? 3 : available < 620 ? 4 : 6;
+    const overflowWidth = overflow.getBoundingClientRect().width;
+    let used = 0;
+    let shown = 0;
+    for (const [index, tag] of tags.entries()) {
+      const width = tag.getBoundingClientRect().width;
+      const remainingAfter = tags.length - index - 1;
+      const needsOverflow = remainingAfter > 0 || index + 1 > maximum;
+      const next = used + (shown ? gap : 0) + width + (needsOverflow ? gap + overflowWidth : 0);
+      if (shown < maximum && (next <= available || shown === 0)) {
+        used += (shown ? gap : 0) + width;
+        shown++;
+      } else {
+        tag.hidden = true;
+      }
+    }
+    const hidden = tags.length - shown;
+    overflow.hidden = hidden === 0;
+    overflow.textContent = `+${hidden}`;
+    overflow.title = hidden ? tags.slice(shown).map((tag) => tag.textContent.trim()).join(', ') : '';
+  };
+  rows.forEach(fit);
+  if (typeof ResizeObserver === 'function') {
+    state.tagResizeObserver = new ResizeObserver((entries) => entries.forEach((entry) => fit(entry.target)));
+    rows.forEach((row) => state.tagResizeObserver.observe(row));
+  } else {
+    state.tagResizeObserver = null;
+  }
+}
+
 function effectiveDue(task) {
   if (!task.due_date) return null;
   return task.due_time
@@ -674,10 +1056,9 @@ function renderTaskGroups(tasks, groupMode) {
       });
   }
 
-  const now = new Date();
-  const groups = groupBy(tasks, groupMode);
+  const groups = taskBuckets(tasks, groupMode);
   return groups.map(({ id, label, tasks: groupTasks }) => {
-    const sorted = [...groupTasks].sort((a, b) => sortTasks(a, b, now));
+    const sorted = sortedTasks(groupTasks, `list:${groupMode}:${id}`);
     const collapsed = isGroupCollapsed(groupMode, id);
     return `
     <div class="task-group list-group">
@@ -709,7 +1090,7 @@ function renderTaskGroups(tasks, groupMode) {
         ${sorted.map((t) => renderSwipeRow(t, renderTaskCard(t, {
           showCheckbox: state.bulkSelectMode,
           isChecked: state.selectedTaskIds.has(t.id),
-          expandedSubtasks: state.subtasksExpandedByDefault,
+          expandedSubtasks: isSubtasksExpanded(t.id),
           showCategory: groupMode !== 'category',
         }))).join('')}
       </div>`}
@@ -908,8 +1289,10 @@ function wireTagBadgeFilter(container) {
   });
 }
 
-function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null } = {}) {
+function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null } = {}) {
   const isEdit = !!task;
+  const presetStartDate = isEdit ? task?.start_date : (presetDates?.start_date || null);
+  const presetDueDate = isEdit ? task?.due_date : (presetDates?.due_date || null);
 
   const selectedIds = task?.assigned_users?.map((u) => u.id) ?? (task?.assigned_to ? [task.assigned_to] : []);
   const rotationIds = task?.rotation_user_ids ?? [];
@@ -984,7 +1367,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   if (isEdit && task.category && task.category !== FALLBACK_CATEGORY) {
     advancedSummary.push(catLabel(task.category));
   }
-  if (isEdit && task.start_date) advancedSummary.push(formatDate(task.start_date));
+  if (presetStartDate) advancedSummary.push(formatDate(presetStartDate));
   const summaryPoints = isEdit ? Number(task.points) : prefillPoints;
   if (summaryPoints > 0) advancedSummary.push(t('tasks.pointsSummary', { count: summaryPoints }));
   if (isEdit && task.tags?.length) advancedSummary.push(task.tags.join(', '));
@@ -1013,7 +1396,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         <div class="form-group">
           <label class="label" for="task-start-date">${t('tasks.startDateLabel')}</label>
           <yuvomi-datepicker type="date" id="task-start-date" name="start_date"
-                 value="${esc(formatDateInput(task?.start_date))}"></yuvomi-datepicker>
+                 value="${esc(formatDateInput(presetStartDate))}"></yuvomi-datepicker>
         </div>
         <div class="form-group">
           <label class="label" for="task-points">${t('tasks.pointsLabel')}</label>
@@ -1103,7 +1486,7 @@ ${syncTargetFieldHtml(task)}
         <div class="form-group">
           <label class="label" for="task-due-date">${t('tasks.dueDateLabel')}</label>
           <yuvomi-datepicker type="date" id="task-due-date" name="due_date"
-                 value="${esc(formatDateInput(task?.due_date))}"></yuvomi-datepicker>
+                 value="${esc(formatDateInput(presetDueDate))}"></yuvomi-datepicker>
         </div>
         <div class="form-group">
           <label class="label" for="task-due-time">${t('tasks.dueTimeLabel')}</label>
@@ -1209,7 +1592,7 @@ ${syncTargetFieldHtml(task)}
         <p class="task-field-hint field-hint--warn" id="task-countdown-warning" role="status" hidden><i data-lucide="alert-triangle" aria-hidden="true"></i><span>${t('tasks.countdownNeedsDue')}</span></p>
       </div>
 
-      ${advancedSection(advancedFieldsHtml, { label: advancedLabel })}
+      ${advancedSection(advancedFieldsHtml, { label: advancedLabel, open: !!(!isEdit && presetStartDate) })}
 
       ${isEdit ? `
         <div class="form-group">
@@ -1276,7 +1659,12 @@ let state = {
   // Achse wirken sie ODER, zwischen den Achsen UND. Tags bleiben UND-verknüpft.
   filters:         { status: ['open'], priority: [], assigned_to: [], tags: [] },
   groupMode:       'category',   // 'category' | 'due'
-  viewMode:        'list',       // 'list' | 'kanban' | 'history' (resolved at render time)
+  viewMode:        'list',       // 'list' | 'kanban' | 'calendar' | 'history'
+  boardScope:      'personal',   // personal device board | household hub board
+  groupModes:      { list: 'category', personal: 'category', household: 'assignee', calendar: 'category' },
+  sheetSort:       { field: 'default', direction: 'asc' },
+  bucketSorts:     new Map(),
+  progressMode:    'percent',
   // Der Verlauf (#791) hat einen eigenen Bestand, weil er etwas anderes zeigt
   // als `tasks`: nicht Aufgaben, sondern Vorgänge. Er wird geblättert statt
   // gefiltert - deshalb ein Cursor und kein Seitenindex.
@@ -1287,15 +1675,88 @@ let state = {
   // lokal. Wird beim Öffnen des Dialogs als Vorauswahl gesetzt.
   defaultSyncTarget: '',
   expandedTasks:   new Set(),
+  expandedSubtasks: new Set(),
+  collapsedSubtasks: new Set(),
+  collapsedBoardSections: new Set(),
+  expandedBoardSections: new Set(),
+  tagResizeObserver: null,
   // Eingeklappte Gruppen (#812), als "<modus>:<gruppen-id>" - derselbe Name
   // kann in beiden Gruppierungen vorkommen und meint dort Verschiedenes.
   collapsedGroups: new Set(),
   dragTaskId:      null,
+  dragBucketKey:   null,
   filterPanelOpen: false,
   bulkSelectMode:  false,
   selectedTaskIds: new Set(),
   searchQuery:     '',
+  calendarCursor:  `${todayKey().slice(0, 7)}-01`,
+  calendarFocusDate: todayKey(),
+  calendarWeekStart: 1,
+  calendarSelection: null,
+  calendarPickerYear: parseLocalDateKey(todayKey()).getFullYear(),
+  calendarEventsAbort: null,
+  calendarShowAllUnscheduled: false,
 };
+
+function activeLayoutKey() {
+  if (state.viewMode === 'calendar') return 'calendar';
+  if (state.viewMode !== 'kanban') return 'list';
+  return state.boardScope;
+}
+
+function deviceTaskBoardScope() {
+  return isWallModeEnabled() ? 'household' : 'personal';
+}
+
+function isSubtasksExpanded(taskId) {
+  const id = Number(taskId);
+  return state.expandedSubtasks.has(id)
+    || (state.subtasksExpandedByDefault && !state.collapsedSubtasks.has(id));
+}
+
+function syncActiveGroupMode() {
+  state.groupMode = state.groupModes[activeLayoutKey()] || 'category';
+}
+
+function persistTaskLayoutState() {
+  try {
+    localStorage.setItem(TASK_GROUP_MODES_KEY, JSON.stringify(state.groupModes));
+    localStorage.setItem(TASK_SORT_STATE_KEY, JSON.stringify({
+      sheet: state.sheetSort,
+      buckets: [...state.bucketSorts.entries()],
+    }));
+    localStorage.setItem(TASK_PROGRESS_MODE_KEY, state.progressMode);
+  } catch {}
+}
+
+function loadTaskLayoutState() {
+  const groupValues = new Set(GROUP_FIELDS().map((field) => field.value));
+  const sortValues = new Set(SORT_FIELDS().map((field) => field.value));
+  // Board scope is a device-mode decision, not a Tasks preference. A hub that
+  // has Wall mode enabled always receives the household board; every other
+  // device receives the personal board.
+  state.boardScope = deviceTaskBoardScope();
+  try {
+    const storedGroups = JSON.parse(localStorage.getItem(TASK_GROUP_MODES_KEY) || '{}');
+    for (const key of ['list', 'personal', 'household', 'calendar']) {
+      if (groupValues.has(storedGroups[key])) state.groupModes[key] = storedGroups[key];
+    }
+
+    const storedSort = JSON.parse(localStorage.getItem(TASK_SORT_STATE_KEY) || '{}');
+    if (sortValues.has(storedSort.sheet?.field) && ['asc', 'desc'].includes(storedSort.sheet?.direction)) {
+      state.sheetSort = storedSort.sheet;
+    }
+    state.bucketSorts = new Map((Array.isArray(storedSort.buckets) ? storedSort.buckets : []).filter(([key, value]) =>
+      typeof key === 'string' && sortValues.has(value?.field) && ['asc', 'desc'].includes(value?.direction)
+    ));
+
+    const progressMode = localStorage.getItem(TASK_PROGRESS_MODE_KEY);
+    if (PROGRESS_MODES().some((mode) => mode.value === progressMode)) state.progressMode = progressMode;
+  } catch {
+    state.bucketSorts = new Map();
+  }
+  syncActiveGroupMode();
+}
 
 /**
  * Aufgaben nach der Toolbar-Suche gefiltert. Rein clientseitig über Titel und
@@ -1340,7 +1801,7 @@ function taskQuery() {
   state.filters.priority.forEach((v) => params.append('priority', v));
   state.filters.assigned_to.forEach((v) => params.append('assigned_to', v));
   state.filters.tags.forEach((tag) => params.append('tag', tag));
-  if (state.showFuture)          params.set('include_future', '1');
+  if (state.showFuture || state.viewMode === 'calendar') params.set('include_future', '1');
   return params.toString() ? `?${params}` : '';
 }
 
@@ -1576,13 +2037,13 @@ function wireCountdownGate(panel) {
   update();
 }
 
-function openTaskModal({ task = null, users = [], reminder = null, presetActivityTemplate = null } = {}, container) {
+function openTaskModal({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null } = {}, container) {
   const isEdit = !!task;
   // Working-Set VOR dem Rendern setzen: renderTagChips liest ihn direkt danach.
   modalTags = normalizeTagList(task?.tags);
   openSharedModal({
     title: isEdit ? t('tasks.editTask') : t('tasks.newTask'),
-    content: renderModalContent({ task, users, reminder, presetActivityTemplate }),
+    content: renderModalContent({ task, users, reminder, presetActivityTemplate, presetDates }),
     size: 'lg',
     // Eine neue Aufgabe startet weiterhin mit dem Fokus im Titelfeld - hier ist
     // Tippen die Absicht.
@@ -3060,7 +3521,7 @@ function renderKanbanCard(task) {
     </div>`;
 }
 
-function renderKanban(container) {
+function renderLegacyKanban(container) {
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
 
@@ -3137,6 +3598,101 @@ function renderKanban(container) {
   wireKanbanTouch(container);
 }
 
+function isBoardSectionCollapsed(key, status) {
+  if (state.expandedBoardSections.has(key)) return false;
+  if (state.collapsedBoardSections.has(key)) return true;
+  return status !== 'open';
+}
+
+function renderBoardStatusSection(bucketKey, status, tasks) {
+  const statusLabel = status === 'archived'
+    ? t('tasks.statusArchived')
+    : (STATUS_LABELS()[status] || status);
+  const sectionKey = `${bucketKey}:${status}`;
+  const collapsed = isBoardSectionCollapsed(sectionKey, status);
+  const sorted = sortedTasks(tasks, bucketKey);
+  return `<section class="task-status-bucket${collapsed ? ' task-status-bucket--collapsed' : ''}" data-board-section="${esc(sectionKey)}">
+    <h3 class="task-status-bucket__heading">
+      <button type="button" class="task-status-bucket__toggle" data-action="toggle-board-section"
+        data-section-key="${esc(sectionKey)}" data-section-status="${status}" aria-expanded="${!collapsed}">
+        <i data-lucide="chevron-right" class="activity-card__chevron${collapsed ? '' : ' activity-card__chevron--open'}" aria-hidden="true"></i>
+        <span>${esc(statusLabel)}</span>
+      </button>
+      <span class="task-status-bucket__count">${tasks.length}</span>
+    </h3>
+    ${collapsed ? '' : `<div class="kanban-col__body task-status-bucket__body" data-drop-zone="${status}">
+      ${sorted.length ? sorted.map((task) => renderTaskCard(task, {
+        board: true,
+        expandedSubtasks: isSubtasksExpanded(task.id),
+        showCategory: state.groupMode !== 'category',
+      })).join('') : `<div class="kanban-col__empty"><span class="kanban-col__empty-idle">${esc(t('tasks.kanbanColEmpty'))}</span><span class="kanban-col__empty-drop">${esc(t('tasks.kanbanDropHint'))}</span></div>`}
+      <div class="kanban-drop-placeholder" hidden></div>
+    </div>`}
+  </section>`;
+}
+
+function renderKanban(container) {
+  const listEl = container.querySelector('#task-list');
+  if (!listEl) return;
+  state.boardScope = deviceTaskBoardScope();
+  syncActiveGroupMode();
+  const tasks = boardTasks();
+  const buckets = taskBuckets(tasks, state.groupMode, {
+    includeEmptyAssignees: state.boardScope === 'household' && state.groupMode === 'assignee',
+  });
+  const isSearch = state.searchQuery.trim().length > 0;
+  if (!buckets.length || (isSearch && !tasks.length)) {
+    listEl.replaceChildren();
+    listEl.insertAdjacentHTML('beforeend', emptyStateHTML({
+      variant: isSearch ? 'no-results' : 'empty',
+      icon: isSearch ? undefined : 'circle-check-big',
+      title: isSearch ? t('tasks.noResultsTitle') : t('tasks.personalBoardEmpty'),
+      description: isSearch
+        ? t('tasks.noResultsDescription', { query: state.searchQuery })
+        : t('tasks.personalBoardEmptyDescription'),
+    }));
+    if (window.lucide) window.lucide.createIcons({ el: listEl });
+    return;
+  }
+
+  const boardClass = state.boardScope === 'household' ? ' task-board--household' : ' task-board--personal';
+  listEl.replaceChildren();
+  listEl.insertAdjacentHTML('beforeend', `<div class="kanban-board task-board${boardClass}" data-board-scope="${state.boardScope}">
+    ${buckets.map((bucket) => {
+      const bucketKey = `${state.boardScope}:${state.groupMode}:${bucket.id}`;
+      const bucketSort = state.bucketSorts.get(bucketKey);
+      const byStatus = new Map([
+        ['open', []], ['in_progress', []], ['done', []], ['archived', []],
+      ]);
+      bucket.tasks.forEach((task) => (byStatus.get(kanbanColumnOf(task)) || byStatus.get('open')).push(task));
+      return `<section class="kanban-col task-board__bucket" data-bucket-key="${esc(bucketKey)}">
+        <header class="kanban-col__header task-board__bucket-header">
+          <div class="task-board__bucket-title">
+            ${bucket.user ? renderAvatarStack([normalizeParticipant(bucket.user)], { size: 30, maxVisible: 1 }) : ''}
+            <h2 class="kanban-col__title">${esc(bucket.label)}</h2>
+            <span class="kanban-col__count">${bucket.tasks.length}</span>
+          </div>
+          <button type="button" class="btn btn--ghost btn--icon btn--icon-sm task-board__bucket-sort${bucketSort ? ' task-board__bucket-sort--active' : ''}"
+            data-action="open-bucket-sort" data-bucket-key="${esc(bucketKey)}"
+            aria-label="${esc(t('tasks.bucketSort'))}" aria-expanded="false">
+            <i data-lucide="${bucketSort?.locked ? 'lock' : 'arrow-up-down'}" class="icon-sm" aria-hidden="true"></i>
+          </button>
+        </header>
+        <div class="task-board__bucket-scroll">
+          ${renderBoardStatusSection(bucketKey, 'open', byStatus.get('open'))}
+          ${renderBoardStatusSection(bucketKey, 'in_progress', byStatus.get('in_progress'))}
+          ${renderBoardStatusSection(bucketKey, 'done', byStatus.get('done'))}
+          ${byStatus.get('archived').length ? renderBoardStatusSection(bucketKey, 'archived', byStatus.get('archived')) : ''}
+        </div>
+      </section>`;
+    }).join('')}
+  </div>`);
+  if (window.lucide) window.lucide.createIcons({ el: listEl });
+  wireKanbanDrag(container);
+  wireKanbanTouch(container);
+  wireResponsiveTaskTags(listEl);
+}
+
 function wireKanbanDrag(container) {
   const board = container.querySelector('.kanban-board');
   if (!board) return;
@@ -3145,6 +3701,7 @@ function wireKanbanDrag(container) {
     const card = e.target.closest('.kanban-card[data-task-id]');
     if (!card) return;
     state.dragTaskId = card.dataset.taskId;
+    state.dragBucketKey = card.closest('[data-bucket-key]')?.dataset.bucketKey || null;
     card.classList.add('kanban-card--dragging');
     board.classList.add('kanban-board--dragging');
     e.dataTransfer.effectAllowed = 'move';
@@ -3159,6 +3716,7 @@ function wireKanbanDrag(container) {
       el.classList.remove('kanban-col__body--over')
     );
     state.dragTaskId = null;
+    state.dragBucketKey = null;
   });
 
   board.addEventListener('dragover', (e) => {
@@ -3186,6 +3744,11 @@ function wireKanbanDrag(container) {
     zone.classList.remove('kanban-col__body--over');
 
     const column = zone.dataset.dropZone;
+    const targetBucketKey = zone.closest('[data-bucket-key]')?.dataset.bucketKey || null;
+    if (state.dragBucketKey && targetBucketKey && state.dragBucketKey !== targetBucketKey) {
+      window.yuvomi.showToast(t('tasks.moveBetweenBucketsHint'), 'default');
+      return;
+    }
     const task   = state.tasks.find((t) => String(t.id) === String(state.dragTaskId));
     if (!task || kanbanColumnOf(task) === column) return;
 
@@ -3206,6 +3769,8 @@ function wireKanbanDrag(container) {
       await runColumnMove(task, statusBtn.dataset.nextStatus, container);
       return;
     }
+
+    if (e.target.closest('[data-action], [data-tag-filter]')) return;
 
     // Klick auf Kanban-Card öffnet Edit-Modal
     if (e.target.closest('[draggable]')) {
@@ -3238,6 +3803,7 @@ function wireKanbanTouch(container) {
   let originX = 0, originY = 0;
   let originLeft = 0, originTop = 0;
   let activeZone = null;
+  let sourceBucketKey = null;
   let started = false;
 
   function cleanup() {
@@ -3254,13 +3820,15 @@ function wireKanbanTouch(container) {
     activeZone = null;
     started = false;
     taskId = null;
+    sourceBucketKey = null;
   }
 
   board.addEventListener('touchstart', (e) => {
     const card = e.target.closest('.kanban-card[data-task-id]');
-    if (!card || e.target.closest('[data-next-status]')) return;
+    if (!card || e.target.closest('[data-action], [data-next-status], [data-tag-filter]')) return;
     dragging = card;
     taskId = card.dataset.taskId;
+    sourceBucketKey = card.closest('[data-bucket-key]')?.dataset.bucketKey || null;
     const touch = e.touches[0];
     originX = touch.clientX;
     originY = touch.clientY;
@@ -3314,10 +3882,16 @@ function wireKanbanTouch(container) {
     if (!dragging) return;
     const zone = activeZone;
     const tid = taskId;
+    const fromBucketKey = sourceBucketKey;
     const task = state.tasks.find((tk) => String(tk.id) === String(tid));
     cleanup();
 
     if (!zone || !task) return;
+    const targetBucketKey = zone.closest('[data-bucket-key]')?.dataset.bucketKey || null;
+    if (fromBucketKey && targetBucketKey && fromBucketKey !== targetBucketKey) {
+      window.yuvomi.showToast(t('tasks.moveBetweenBucketsHint'), 'default');
+      return;
+    }
     const column = zone.dataset.dropZone;
     if (kanbanColumnOf(task) === column) return;
 
@@ -3634,6 +4208,407 @@ function seriesHistoryNode(task) {
 // Partielle DOM-Updates
 // --------------------------------------------------------
 
+/**
+ * Tasks use start_date as a visibility boundary and due_date as their deadline.
+ * A calendar selection fills both fields, but the task is rendered only on its
+ * deadline (or on start_date when it has no deadline). It is not an event bar.
+ */
+function taskCalendarDate(task) {
+  return task?.due_date || task?.start_date || null;
+}
+
+function normalizeTaskCalendarRange(first, last = first) {
+  return first <= last
+    ? { start_date: first, due_date: last }
+    : { start_date: last, due_date: first };
+}
+
+function buildTaskMonthDays(cursor, weekStart = 1) {
+  const monthStart = `${String(cursor).slice(0, 7)}-01`;
+  const first = parseLocalDateKey(monthStart);
+  const offset = (first.getDay() - weekStart + 7) % 7;
+  const gridStart = addLocalDays(monthStart, -offset);
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = addLocalDays(gridStart, index);
+    return {
+      date,
+      inMonth: date.slice(0, 7) === monthStart.slice(0, 7),
+      weekend: isWeekendKey(date),
+    };
+  });
+}
+
+function taskCalendarMonthLabel(dateKey, style = 'long') {
+  return new Intl.DateTimeFormat(getLocale(), { month: style, year: style === 'long' ? 'numeric' : undefined })
+    .format(parseLocalDateKey(dateKey));
+}
+
+function taskCalendarDayLabel(dateKey, weekday = 'long') {
+  return new Intl.DateTimeFormat(getLocale(), {
+    weekday,
+    month: 'short',
+    day: 'numeric',
+    year: weekday === 'long' ? 'numeric' : undefined,
+  }).format(parseLocalDateKey(dateKey));
+}
+
+function taskCalendarWeekdayLabel(dayIndex) {
+  return new Intl.DateTimeFormat(getLocale(), { weekday: 'short' })
+    .format(new Date(2024, 0, 7 + dayIndex));
+}
+
+function taskCalendarTasksOn(dateKey) {
+  return sortedTasks(filteredTasks().filter((task) => taskCalendarDate(task) === dateKey));
+}
+
+function taskCalendarRangeContains(dateKey) {
+  const range = state.calendarSelection;
+  return !!range && dateKey >= range.start_date && dateKey <= range.due_date;
+}
+
+function renderTaskCalendarChip(task) {
+  const time = task.due_time ? task.due_time.slice(0, 5) : '';
+  const priority = task.priority && task.priority !== 'none'
+    ? `<span class="priority-dot priority-dot--${esc(task.priority)}" aria-hidden="true"></span>`
+    : '';
+  return `<button type="button" class="task-calendar-chip" data-action="open-task" data-id="${task.id}"
+      title="${esc(task.title)}${time ? ` - ${esc(time)}` : ''}">
+    ${priority}<span class="task-calendar-chip__title">${esc(task.title)}</span>
+    ${time ? `<span class="task-calendar-chip__time">${esc(time)}</span>` : ''}
+  </button>`;
+}
+
+function renderTaskCalendarDay(day) {
+  const tasks = taskCalendarTasksOn(day.date);
+  const shown = tasks.slice(0, 1);
+  const more = tasks.length - shown.length;
+  const selected = taskCalendarRangeContains(day.date);
+  const isToday = day.date === todayKey();
+  const isFocus = day.date === state.calendarFocusDate;
+  const range = state.calendarSelection;
+  return `<div class="task-calendar-day${day.inMonth ? '' : ' task-calendar-day--outside'}${day.weekend ? ' task-calendar-day--weekend' : ''}${isToday ? ' task-calendar-day--today' : ''}${isFocus ? ' task-calendar-day--focus' : ''}${selected ? ' task-calendar-day--selected' : ''}${range?.start_date === day.date ? ' task-calendar-day--range-start' : ''}${range?.due_date === day.date ? ' task-calendar-day--range-end' : ''}"
+      role="gridcell" data-task-calendar-cell data-date="${day.date}" aria-selected="${selected}">
+    <button type="button" class="task-calendar-day__date" data-task-calendar-date="${day.date}"
+      aria-label="${esc(taskCalendarDayLabel(day.date))}"${isToday ? ' aria-current="date"' : ''}>
+      <span>${parseLocalDateKey(day.date).getDate()}</span>
+    </button>
+    <div class="task-calendar-day__tasks">${shown.map(renderTaskCalendarChip).join('')}</div>
+    ${more > 0 ? `<span class="task-calendar-day__more">${esc(t('calendar.moreEvents', { count: more }))}</span>` : ''}
+  </div>`;
+}
+
+function renderTaskCalendarMonthPicker(year) {
+  const currentMonth = state.calendarCursor.slice(0, 7);
+  const months = Array.from({ length: 12 }, (_, month) => {
+    const date = new Date(year, month, 1);
+    const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const label = new Intl.DateTimeFormat(getLocale(), { month: 'short' }).format(date);
+    return `<button type="button" class="task-calendar-month-option${key === currentMonth ? ' task-calendar-month-option--active' : ''}"
+      data-task-calendar-month="${month + 1}" data-task-calendar-year="${year}" aria-pressed="${key === currentMonth}">${esc(label)}</button>`;
+  }).join('');
+  return `<div class="task-calendar-month-picker__year">
+      <button type="button" class="btn btn--icon btn--ghost btn--icon-sm" data-task-calendar-picker-year="-1" aria-label="${esc(t('tasks.calendarPreviousYear'))}">
+        <i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i>
+      </button>
+      <strong>${year}</strong>
+      <button type="button" class="btn btn--icon btn--ghost btn--icon-sm" data-task-calendar-picker-year="1" aria-label="${esc(t('tasks.calendarNextYear'))}">
+        <i data-lucide="chevron-up" class="icon-sm" aria-hidden="true"></i>
+      </button>
+    </div>
+    <div class="task-calendar-month-picker__months">${months}</div>`;
+}
+
+function taskCalendarRule(task) {
+  const recurrence = describeRRule(task.recurrence_rule, {
+    fromCompletion: !!task.recurrence_from_completion,
+  });
+  if (recurrence) return recurrence;
+  if (task.activity_template_name) return task.activity_template_name;
+  if (task.assignment_mode === 'round_robin') return 'Round robin';
+  return '';
+}
+
+function renderTaskCalendarAgendaRow(task) {
+  const rule = taskCalendarRule(task);
+  const time = task.due_time ? task.due_time.slice(0, 5) : '';
+  const people = taskParticipants(task);
+  return `<button type="button" class="task-calendar-agenda-task" data-action="open-task" data-id="${task.id}">
+    <span class="task-calendar-agenda-task__main">
+      <span class="task-calendar-agenda-task__title">${esc(task.title)}</span>
+      <span class="task-calendar-agenda-task__facts">
+        ${time ? `<span>${esc(time)}</span>` : ''}
+        ${Number(task.points || 0) > 0 ? `<span>${esc(t('tasks.pointsSummary', { count: Number(task.points) }))}</span>` : ''}
+      </span>
+      ${rule ? `<span class="task-calendar-agenda-task__rule"><i data-lucide="repeat-2" class="icon-sm" aria-hidden="true"></i>${esc(rule)}</span>` : ''}
+    </span>
+    ${people.length ? `<span class="task-calendar-agenda-task__people">${renderAvatarStack(people, { size: 24, maxVisible: 3 })}</span>` : ''}
+  </button>`;
+}
+
+function renderTaskCalendarAgendaGroups(tasks) {
+  if (!tasks.length) return `<p class="task-calendar-agenda__empty">${esc(t('tasks.kanbanColEmpty'))}</p>`;
+  const buckets = taskBuckets(tasks, state.groupMode).filter((bucket) => bucket.tasks.length);
+  return buckets.map((bucket) => `<div class="task-calendar-agenda-group">
+    ${state.groupMode === 'none' ? '' : `<span class="task-calendar-agenda-group__label">${esc(bucket.label)}</span>`}
+    ${sortedTasks(bucket.tasks).map(renderTaskCalendarAgendaRow).join('')}
+  </div>`).join('');
+}
+
+function renderTaskCalendarWeekRundown() {
+  const focus = state.calendarFocusDate || todayKey();
+  const from = startOfLocalWeekKey(focus, state.calendarWeekStart);
+  const to = addLocalDays(from, 6);
+  const days = Array.from({ length: 7 }, (_, index) => addLocalDays(from, index));
+  const unscheduled = sortedTasks(filteredTasks().filter((task) => !taskCalendarDate(task)));
+  return `<aside class="task-calendar-agenda" aria-label="${esc(t('tasks.calendarWeekTitle'))}">
+    <header class="task-calendar-agenda__header">
+      <div>
+        <span class="task-calendar-agenda__eyebrow">${esc(t('tasks.calendarWeekTitle'))}</span>
+        <h2>${esc(t('calendar.dayRangeLabel', { from: formatDayMonth(from), to: formatDayMonth(to) }))}</h2>
+      </div>
+      <div class="task-calendar-agenda__nav">
+        <button type="button" class="btn btn--icon btn--ghost btn--icon-sm" data-task-calendar-week="-1" aria-label="${esc(t('meals.prevWeek'))}">
+          <i data-lucide="chevron-left" class="icon-sm" aria-hidden="true"></i>
+        </button>
+        <button type="button" class="btn btn--icon btn--ghost btn--icon-sm" data-task-calendar-week="1" aria-label="${esc(t('meals.nextWeek'))}">
+          <i data-lucide="chevron-right" class="icon-sm" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+    <div class="task-calendar-agenda__days">
+      ${days.map((date) => {
+        const tasks = taskCalendarTasksOn(date);
+        return `<section class="task-calendar-agenda-day${date === focus ? ' task-calendar-agenda-day--focus' : ''}${date === todayKey() ? ' task-calendar-agenda-day--today' : ''}">
+          <h3><span>${esc(taskCalendarDayLabel(date, 'short'))}</span><span>${tasks.length}</span></h3>
+          ${renderTaskCalendarAgendaGroups(tasks)}
+        </section>`;
+      }).join('')}
+    </div>
+    ${unscheduled.length ? `<section class="task-calendar-unscheduled">
+      <h3><i data-lucide="inbox" class="icon-sm" aria-hidden="true"></i>${esc(t('tasks.calendarUnscheduled'))}<span>${unscheduled.length}</span></h3>
+      ${(state.calendarShowAllUnscheduled ? unscheduled : unscheduled.slice(0, 5)).map(renderTaskCalendarAgendaRow).join('')}
+      ${!state.calendarShowAllUnscheduled && unscheduled.length > 5 ? `<button type="button" class="btn btn--ghost btn--sm task-calendar-unscheduled__more" data-task-calendar-show-unscheduled>${esc(t('calendar.moreEvents', { count: unscheduled.length - 5 }))}</button>` : ''}
+    </section>` : ''}
+  </aside>`;
+}
+
+function renderTaskCalendar(container) {
+  const listEl = container.querySelector('#task-list');
+  if (!listEl) return;
+  state.calendarEventsAbort?.abort();
+  const days = buildTaskMonthDays(state.calendarCursor, state.calendarWeekStart);
+  const range = state.calendarSelection;
+  listEl.replaceChildren();
+  listEl.insertAdjacentHTML('beforeend', `<div class="task-calendar-layout">
+    <section class="task-calendar" aria-label="${esc(t('tasks.calendarView'))}">
+      <header class="task-calendar__header">
+        <div class="task-calendar__navigation">
+          <button type="button" class="btn btn--icon btn--ghost" data-task-calendar-month-shift="-1" aria-label="${esc(t('datepicker.previousMonth'))}">
+            <i data-lucide="chevron-left" class="icon-md" aria-hidden="true"></i>
+          </button>
+          <div class="task-calendar__month-control">
+            <button type="button" class="task-calendar__month-button" data-task-calendar-picker-toggle aria-expanded="false" aria-controls="task-calendar-month-picker">
+              <span>${esc(taskCalendarMonthLabel(state.calendarCursor))}</span>
+              <i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i>
+            </button>
+            <div class="task-calendar-month-picker" id="task-calendar-month-picker" hidden>
+              ${renderTaskCalendarMonthPicker(state.calendarPickerYear)}
+            </div>
+          </div>
+          <button type="button" class="btn btn--icon btn--ghost" data-task-calendar-month-shift="1" aria-label="${esc(t('datepicker.nextMonth'))}">
+            <i data-lucide="chevron-right" class="icon-md" aria-hidden="true"></i>
+          </button>
+          <button type="button" class="btn btn--ghost task-calendar__today" data-task-calendar-today>${esc(t('calendar.today'))}</button>
+        </div>
+        <p class="task-calendar__hint" data-task-calendar-selection-status aria-live="polite">
+          <i data-lucide="mouse-pointer-2" class="icon-sm" aria-hidden="true"></i>
+          ${range
+            ? esc(t('tasks.calendarRangeSelected', { from: formatDate(range.start_date), to: formatDate(range.due_date) }))
+            : esc(t('tasks.calendarSelectHint'))}
+        </p>
+      </header>
+      <div class="task-calendar__weekdays" role="row">
+        ${weekdayOrder(state.calendarWeekStart).map((index) => `<span role="columnheader">${esc(taskCalendarWeekdayLabel(index))}</span>`).join('')}
+      </div>
+      <div class="task-calendar__grid" role="grid" aria-label="${esc(taskCalendarMonthLabel(state.calendarCursor))}">
+        ${days.map(renderTaskCalendarDay).join('')}
+      </div>
+    </section>
+    ${renderTaskCalendarWeekRundown()}
+  </div>`);
+  window.lucide?.createIcons({ el: listEl });
+  wireTaskCalendar(container);
+}
+
+function shiftTaskCalendarMonth(delta) {
+  const cursor = parseLocalDateKey(`${state.calendarCursor.slice(0, 7)}-01`);
+  cursor.setMonth(cursor.getMonth() + delta);
+  state.calendarCursor = toLocalDateKey(cursor);
+  state.calendarFocusDate = state.calendarCursor;
+  state.calendarSelection = null;
+  state.calendarPickerYear = cursor.getFullYear();
+}
+
+function paintTaskCalendarSelection(grid) {
+  const range = state.calendarSelection;
+  grid.querySelectorAll('[data-task-calendar-cell]').forEach((cell) => {
+    const date = cell.dataset.date;
+    const selected = !!range && date >= range.start_date && date <= range.due_date;
+    cell.classList.toggle('task-calendar-day--selected', selected);
+    cell.classList.toggle('task-calendar-day--range-start', range?.start_date === date);
+    cell.classList.toggle('task-calendar-day--range-end', range?.due_date === date);
+    cell.setAttribute('aria-selected', String(selected));
+  });
+  const status = grid.closest('.task-calendar')?.querySelector('[data-task-calendar-selection-status]');
+  if (status && range) {
+    status.lastChild.textContent = ` ${t('tasks.calendarRangeSelected', {
+      from: formatDate(range.start_date),
+      to: formatDate(range.due_date),
+    })}`;
+  } else if (status) {
+    status.lastChild.textContent = ` ${t('tasks.calendarSelectHint')}`;
+  }
+}
+
+function openTaskCalendarSelection(range, container) {
+  state.calendarSelection = normalizeTaskCalendarRange(range.start_date, range.due_date);
+  state.calendarFocusDate = state.calendarSelection.start_date;
+  renderTaskCalendar(container);
+  openTaskModal({ users: state.users, presetDates: state.calendarSelection }, container);
+}
+
+function wireTaskCalendar(container) {
+  const calendar = container.querySelector('.task-calendar-layout');
+  const grid = calendar?.querySelector('.task-calendar__grid');
+  if (!calendar || !grid) return;
+  const controller = new AbortController();
+  state.calendarEventsAbort = controller;
+  const { signal } = controller;
+  let drag = null;
+  let suppressClick = false;
+
+  calendar.addEventListener('click', (event) => {
+    const taskAction = event.target.closest('[data-action="open-task"]');
+    if (taskAction) return;
+    const shift = event.target.closest('[data-task-calendar-month-shift]');
+    if (shift) {
+      shiftTaskCalendarMonth(Number(shift.dataset.taskCalendarMonthShift));
+      renderTaskCalendar(container);
+      return;
+    }
+    if (event.target.closest('[data-task-calendar-today]')) {
+      const today = todayKey();
+      state.calendarCursor = `${today.slice(0, 7)}-01`;
+      state.calendarFocusDate = today;
+      state.calendarSelection = null;
+      state.calendarPickerYear = parseLocalDateKey(today).getFullYear();
+      renderTaskCalendar(container);
+      return;
+    }
+    const week = event.target.closest('[data-task-calendar-week]');
+    if (week) {
+      state.calendarFocusDate = addLocalDays(state.calendarFocusDate || todayKey(), Number(week.dataset.taskCalendarWeek) * 7);
+      state.calendarCursor = `${state.calendarFocusDate.slice(0, 7)}-01`;
+      state.calendarPickerYear = parseLocalDateKey(state.calendarFocusDate).getFullYear();
+      state.calendarSelection = null;
+      renderTaskCalendar(container);
+      return;
+    }
+    if (event.target.closest('[data-task-calendar-show-unscheduled]')) {
+      state.calendarShowAllUnscheduled = true;
+      renderTaskCalendar(container);
+      return;
+    }
+    const pickerToggle = event.target.closest('[data-task-calendar-picker-toggle]');
+    if (pickerToggle) {
+      const panel = calendar.querySelector('#task-calendar-month-picker');
+      panel.hidden = !panel.hidden;
+      pickerToggle.setAttribute('aria-expanded', String(!panel.hidden));
+      return;
+    }
+    const yearShift = event.target.closest('[data-task-calendar-picker-year]');
+    if (yearShift) {
+      state.calendarPickerYear += Number(yearShift.dataset.taskCalendarPickerYear);
+      const panel = calendar.querySelector('#task-calendar-month-picker');
+      panel.replaceChildren();
+      panel.insertAdjacentHTML('beforeend', renderTaskCalendarMonthPicker(state.calendarPickerYear));
+      window.lucide?.createIcons({ el: panel });
+      return;
+    }
+    const month = event.target.closest('[data-task-calendar-month]');
+    if (month) {
+      const monthNumber = String(month.dataset.taskCalendarMonth).padStart(2, '0');
+      state.calendarCursor = `${month.dataset.taskCalendarYear}-${monthNumber}-01`;
+      state.calendarFocusDate = state.calendarCursor;
+      state.calendarSelection = null;
+      renderTaskCalendar(container);
+      return;
+    }
+    const dateTarget = event.target.closest('[data-task-calendar-date], [data-task-calendar-cell]');
+    if (!dateTarget) return;
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    const date = dateTarget.dataset.taskCalendarDate || dateTarget.dataset.date;
+    openTaskCalendarSelection({ start_date: date, due_date: date }, container);
+  }, { signal });
+
+  grid.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.pointerType === 'touch' || event.target.closest('[data-action]')) return;
+    const cell = event.target.closest('[data-task-calendar-cell]');
+    if (!cell) return;
+    drag = { pointerId: event.pointerId, anchor: cell.dataset.date, current: cell.dataset.date, moved: false };
+    state.calendarSelection = normalizeTaskCalendarRange(drag.anchor, drag.current);
+    state.calendarFocusDate = drag.anchor;
+    grid.setPointerCapture?.(event.pointerId);
+    paintTaskCalendarSelection(grid);
+  }, { signal });
+
+  grid.addEventListener('pointermove', (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const hit = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-task-calendar-cell]');
+    if (!hit || !grid.contains(hit)) return;
+    const date = hit.dataset.date;
+    if (date === drag.current) return;
+    drag.current = date;
+    drag.moved = drag.moved || date !== drag.anchor;
+    state.calendarSelection = normalizeTaskCalendarRange(drag.anchor, drag.current);
+    state.calendarFocusDate = date;
+    paintTaskCalendarSelection(grid);
+  }, { signal });
+
+  grid.addEventListener('pointerup', (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const finished = drag;
+    drag = null;
+    grid.releasePointerCapture?.(event.pointerId);
+    // Pointer capture deliberately belongs to the grid so a drag can cross
+    // child cells without being lost. Browsers may consequently retarget the
+    // synthetic `click` to that grid instead of the date button, though. Open
+    // a one-day selection here as well, rather than relying on the later click
+    // handler for mouse and pen input. Touch never enters this branch and keeps
+    // its ordinary click path so vertical scrolling remains natural.
+    suppressClick = true;
+    openTaskCalendarSelection(normalizeTaskCalendarRange(finished.anchor, finished.current), container);
+  }, { signal });
+
+  grid.addEventListener('pointercancel', (event) => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    drag = null;
+    state.calendarSelection = null;
+    paintTaskCalendarSelection(grid);
+  }, { signal });
+
+  document.addEventListener('click', (event) => {
+    const panel = calendar.querySelector('#task-calendar-month-picker');
+    const toggle = calendar.querySelector('[data-task-calendar-picker-toggle]');
+    if (!panel || panel.hidden || panel.contains(event.target) || toggle?.contains(event.target)) return;
+    panel.hidden = true;
+    toggle?.setAttribute('aria-expanded', 'false');
+  }, { signal });
+}
+
 function renderTaskList(container) {
   // VOR dem Ladefehler der Aufgaben: der Verlauf hat seinen eigenen Bestand und
   // seinen eigenen Fehler. Ein gescheitertes `/tasks` sagt nichts darüber, ob
@@ -3668,11 +4643,17 @@ function renderTaskList(container) {
     renderKanban(container);
     return;
   }
+  if (state.viewMode === 'calendar') {
+    renderTaskCalendar(container);
+    return;
+  }
+  state.calendarEventsAbort?.abort();
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
   listEl.replaceChildren();
   listEl.insertAdjacentHTML('beforeend', renderTaskGroups(filteredTasks(), state.groupMode));
   if (window.lucide) window.lucide.createIcons({ el: listEl });
+  wireResponsiveTaskTags(listEl);
   stagger(listEl.querySelectorAll('.swipe-row, .kanban-card'));
   updateBulkActionsBar(container);
   wireSwipeGestures(container);
@@ -3717,10 +4698,11 @@ function makeChip({ label, active = false, extraClass = '', pressed = undefined,
   return chip;
 }
 
-function renderFilters(container) {
+function renderLegacyFilters(container) {
   const bar   = container.querySelector('#filter-bar');
   const panel = container.querySelector('#filter-panel');
   if (!bar || !panel) return;
+  const panelOpen = isTaskPopoverOpen(panel);
 
   const statusLabels   = STATUS_LABELS();
   const priorityLabels = PRIORITY_LABELS();
@@ -3813,8 +4795,8 @@ function renderFilters(container) {
   // der Knopf stand mit einer eigenen, zeichengleichen Kopie derselben vierzehn
   // Deklarationen daneben (siehe tasks.css) und war damit der vierte Chip, den
   // die geteilte Datei eigentlich abgelöst hat.
-  toggleBtn.className = `filter-chip filter-toggle-btn${state.filterPanelOpen ? ' filter-toggle-btn--open' : ''}${activeCount > 0 ? ' filter-toggle-btn--active' : ''}`;
-  toggleBtn.setAttribute('aria-expanded', String(state.filterPanelOpen));
+  toggleBtn.className = `filter-chip filter-toggle-btn${panelOpen ? ' filter-toggle-btn--open' : ''}${activeCount > 0 ? ' filter-toggle-btn--active' : ''}`;
+  toggleBtn.setAttribute('aria-expanded', String(panelOpen));
   toggleBtn.setAttribute('aria-controls', 'filter-panel');
 
   const iconWrap = document.createElement('i');
@@ -3865,10 +4847,10 @@ function renderFilters(container) {
   if (window.lucide) window.lucide.createIcons({ el: bar });
 
   // ---- Filter-Panel: Gruppen mit allen Optionen ----
-  panel.hidden = !state.filterPanelOpen;
+  panel.hidden = false;
   panel.replaceChildren();
 
-  if (state.filterPanelOpen) {
+  {
     // Im Kanban entfällt die Status-Gruppe: die Spalten übernehmen diese
     // Achse bereits (Audit A1-07).
     const groups = [
@@ -3940,6 +4922,117 @@ function renderFilters(container) {
     if (window.lucide) window.lucide.createIcons({ el: panel });
   }
 
+  wireFilterChips(container);
+}
+
+function renderFilters(container) {
+  const toggleBtn = container.querySelector('#filter-toggle-btn');
+  const panel = container.querySelector('#filter-panel');
+  if (!toggleBtn || !panel) return;
+
+  // In Kanban, status is already represented by status sections. A status
+  // choice retained from List is dormant rather than an active board filter.
+  const activeCount = (state.viewMode === 'kanban' ? 0 : state.filters.status.length)
+    + state.filters.priority.length
+    + state.filters.assigned_to.length
+    + state.filters.tags.length
+    + (state.showFuture ? 1 : 0);
+  const panelOpen = isTaskPopoverOpen(panel);
+
+  toggleBtn.classList.toggle('filter-toggle-btn--open', panelOpen);
+  toggleBtn.classList.toggle('filter-toggle-btn--active', activeCount > 0);
+  toggleBtn.setAttribute('aria-expanded', String(panelOpen));
+  toggleBtn.replaceChildren();
+  toggleBtn.insertAdjacentHTML('beforeend', `<i data-lucide="sliders-horizontal" class="icon-sm" aria-hidden="true"></i>
+    <span class="tasks-toolbar-control__label">${esc(t('tasks.filterBtn'))}</span>
+    ${activeCount > 0 ? `<span class="filter-toggle-btn__count" aria-label="${activeCount}">${activeCount}</span>` : ''}`);
+  window.lucide?.createIcons({ el: toggleBtn });
+
+  panel.hidden = false;
+  panel.replaceChildren();
+
+  const quick = document.createElement('div');
+  quick.className = 'filter-panel__quick';
+  quick.setAttribute('role', 'group');
+  quick.setAttribute('aria-label', t('tasks.filterBtn'));
+
+  if (state.users.length > 1 && state.currentUserId != null) {
+    const meActive = isAssignedToMe();
+    const meChip = makeChip({ label: null, active: meActive, extraClass: 'filter-chip--toggle' });
+    meChip.id = 'filter-assigned-me';
+    meChip.insertAdjacentHTML('beforeend', `<i data-lucide="user" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.assignedToMe'))}</span>`);
+    if (meActive) meChip.appendChild(makeRemoveSpan());
+    quick.appendChild(meChip);
+  }
+
+  const futureChip = makeChip({ label: null, active: state.showFuture, extraClass: 'filter-chip--toggle' });
+  futureChip.id = 'filter-show-future';
+  futureChip.insertAdjacentHTML('beforeend', `<i data-lucide="calendar-clock" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.showFuture'))}</span>`);
+  if (state.showFuture) futureChip.appendChild(makeRemoveSpan());
+  quick.appendChild(futureChip);
+  panel.appendChild(quick);
+
+  const groups = [
+    ...(state.viewMode !== 'kanban' ? [{
+      key: 'status',
+      label: t('tasks.filterGroupStatus'),
+      items: FILTER_STATUSES().map((item) => ({ value: item.value, label: item.label })),
+    }] : []),
+    {
+      key: 'priority',
+      label: t('tasks.filterGroupPriority'),
+      items: PRIORITIES().map((item) => ({ value: item.value, label: item.label })),
+    },
+  ];
+  if (state.users.length > 1) {
+    groups.push({
+      key: 'assigned_to',
+      label: t('tasks.filterGroupPerson'),
+      items: state.users.map((user) => ({ value: String(user.id), label: user.display_name })),
+    });
+  }
+  if (state.allTags.length) {
+    groups.push({
+      key: 'tag',
+      label: t('tasks.filterGroupTag'),
+      items: state.allTags.map((entry) => ({ value: entry.tag, label: entry.tag })),
+    });
+  }
+
+  groups.forEach((group) => {
+    const section = document.createElement('div');
+    section.className = 'filter-panel__group';
+    section.setAttribute('role', 'group');
+    section.setAttribute('aria-label', group.label);
+
+    const heading = document.createElement('div');
+    heading.className = 'filter-panel__label';
+    heading.textContent = group.label;
+    section.appendChild(heading);
+
+    const row = document.createElement('div');
+    row.className = 'filter-panel__chips';
+    group.items.forEach((item) => {
+      const active = group.key === 'tag' ? hasTagFilter(item.value) : hasFilter(group.key, item.value);
+      const chip = makeChip({ label: item.label, active, withRemove: active });
+      chip.dataset.filter = group.key;
+      chip.dataset.value = item.value;
+      row.appendChild(chip);
+    });
+    section.appendChild(row);
+    panel.appendChild(section);
+  });
+
+  if (activeCount > 0) {
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'filter-panel__clear';
+    clearBtn.id = 'filter-clear-all';
+    clearBtn.textContent = t('tasks.filterClearAll');
+    panel.appendChild(clearBtn);
+  }
+
+  window.lucide?.createIcons({ el: panel });
   wireFilterChips(container);
 }
 
@@ -4127,16 +5220,92 @@ function wireSwipeGestures(container) {
 // Event-Verdrahtung
 // --------------------------------------------------------
 
-function wireFilterChips(container) {
-  // Toggle-Button öffnet/schließt das Panel
-  container.querySelector('#filter-toggle-btn')?.addEventListener('click', () => {
-    state.filterPanelOpen = !state.filterPanelOpen;
-    renderFilters(container);
+function isTaskPopoverOpen(panel) {
+  if (!panel) return false;
+  try {
+    if (panel.matches(':popover-open')) return true;
+  } catch {}
+  return panel.dataset.fallbackOpen === 'true';
+}
+
+function syncTaskPopoverButton(container, panel) {
+  const button = container.querySelector(`[aria-controls="${panel.id}"]`);
+  if (!button) return;
+  const open = isTaskPopoverOpen(panel);
+  button.setAttribute('aria-expanded', String(open));
+  button.classList.toggle('task-control-btn--open', open);
+  if (button.id === 'filter-toggle-btn') button.classList.toggle('filter-toggle-btn--open', open);
+}
+
+function closeTaskPopover(container, panel) {
+  if (!panel || !isTaskPopoverOpen(panel)) return;
+  try {
+    if (typeof panel.hidePopover === 'function' && panel.matches(':popover-open')) panel.hidePopover();
+    else delete panel.dataset.fallbackOpen;
+  } catch {
+    delete panel.dataset.fallbackOpen;
+  }
+  syncTaskPopoverButton(container, panel);
+}
+
+function positionTaskPopover(panel, anchor) {
+  if (!panel || !anchor) return;
+  const anchorRect = anchor.getBoundingClientRect();
+  const panelRect = panel.getBoundingClientRect();
+  const gutter = 8;
+  const width = Math.min(panelRect.width || 320, window.innerWidth - gutter * 2);
+  let left = document.dir === 'rtl' ? anchorRect.left : anchorRect.right - width;
+  left = Math.max(gutter, Math.min(left, window.innerWidth - width - gutter));
+  let top = anchorRect.bottom + gutter;
+  if (top + panelRect.height > window.innerHeight - gutter && anchorRect.top > panelRect.height + gutter) {
+    top = anchorRect.top - panelRect.height - gutter;
+  }
+  panel.style.left = `${Math.round(left)}px`;
+  panel.style.top = `${Math.round(Math.max(gutter, top))}px`;
+  panel.style.maxHeight = `${Math.max(160, window.innerHeight - Math.max(gutter, top) - gutter)}px`;
+}
+
+function openTaskControlPopover(container, panel, anchor) {
+  if (!panel || !anchor) return;
+  container.querySelectorAll('.task-control-popover').forEach((other) => {
+    if (other !== panel) closeTaskPopover(container, other);
   });
+  if (!panel.dataset.taskPopoverWired) {
+    panel.dataset.taskPopoverWired = 'true';
+    panel.addEventListener('toggle', () => syncTaskPopoverButton(container, panel));
+  }
+  try {
+    if (typeof panel.showPopover === 'function') panel.showPopover();
+    else panel.dataset.fallbackOpen = 'true';
+  } catch {
+    panel.dataset.fallbackOpen = 'true';
+  }
+  syncTaskPopoverButton(container, panel);
+  requestAnimationFrame(() => positionTaskPopover(panel, anchor));
+}
+
+function toggleTaskControlPopover(container, panel, anchor) {
+  if (isTaskPopoverOpen(panel)) closeTaskPopover(container, panel);
+  else openTaskControlPopover(container, panel, anchor);
+}
+
+function wireFilterChips(container) {
+  // The toolbar button survives renderFilters(); wire it once while the
+  // option chips below are safely rewired after panel.replaceChildren().
+  const toggle = container.querySelector('#filter-toggle-btn');
+  if (toggle && !toggle.dataset.taskFilterWired) {
+    toggle.dataset.taskFilterWired = 'true';
+    toggle.addEventListener('click', (event) => {
+      toggleTaskControlPopover(container, container.querySelector('#filter-panel'), event.currentTarget);
+    });
+  }
 
   // Alle Filter zurücksetzen
   container.querySelector('#filter-clear-all')?.addEventListener('click', async () => {
     state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
+    state.showFuture = false;
+    try { localStorage.setItem(SHOW_FUTURE_KEY, '0'); } catch {}
+    persistAssignedToMe();
     renderFilters(container);
     await loadTasks(container);
   });
@@ -4197,33 +5366,32 @@ function syncViewChrome(container) {
   const isList = mode === 'list';
   const isHistory = mode === 'history';
 
-  container.querySelectorAll('#view-toggle [data-view]').forEach((b) => {
-    const on = b.dataset.view === mode;
-    b.classList.toggle('group-toggle__btn--active', on);
-    b.setAttribute('aria-pressed', String(on));
-  });
+  renderTaskViewPanel(container);
 
   // Der Kopf fluchtet mit dem Koerper, den er ueberschreibt - und der wechselt
   // hier die Breite. Liste und Verlauf sind aufs Lesemass gekappt (720px), das
   // Kanban-Board nimmt die volle Content-Spalte (gemessen 1156px bei 1440px
   // Fensterbreite); ein fester Modifier im Markup stimmte in genau einer der
   // Ansichten (Critique 2026-08-13).
-  container.querySelector('.tasks-toolbar')?.classList.toggle('page-toolbar--narrow', !isKanbanMode());
+  container.querySelector('.tasks-toolbar')?.classList.toggle('page-toolbar--narrow', !isWideTaskView());
 
   // Suche, Filterleiste, Gruppierung und Sammelauswahl fragen alle nach
   // AUFGABEN. Der Verlauf zeigt Vorgaenge - ein Statusfilter darueber waere
   // eine Auswahl, die nichts veraendern kann.
   const search = container.querySelector('.tasks-toolbar__search');
   if (search) search.hidden = isHistory;
-  const filtersRow = container.querySelector('.tasks-filters-row');
-  if (filtersRow) filtersRow.hidden = isHistory;
+  const filterButton = container.querySelector('#filter-toggle-btn');
+  if (filterButton) filterButton.hidden = isHistory;
   // Das aufgeklappte Filter-Panel ist ein GESCHWISTER der Zeile, kein Kind -
   // die Zeile zu verstecken laesst es stehen, und dann schwebten Status- und
   // Prioritaets-Chips ueber einer Liste von Vorgaengen.
-  const filterPanel = container.querySelector('#filter-panel');
-  if (filterPanel && isHistory) filterPanel.hidden = true;
-  const groupToggle = container.querySelector('#group-mode-toggle');
-  if (groupToggle) groupToggle.hidden = !isList;
+  if (isHistory) {
+    container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
+  }
+  const groupButton = container.querySelector('#group-mode-toggle');
+  if (groupButton) groupButton.hidden = isHistory;
+  const sortButton = container.querySelector('#task-sort-btn');
+  if (sortButton) sortButton.hidden = isHistory;
   const bulkSelectBtn = container.querySelector('#btn-bulk-select');
   if (bulkSelectBtn) {
     bulkSelectBtn.hidden = !isList;
@@ -4242,19 +5410,28 @@ function syncViewChrome(container) {
 }
 
 /** Nimmt die Ansicht die volle Content-Spalte ein? */
-function isKanbanMode() {
-  return state.viewMode === 'kanban';
+function isWideTaskView() {
+  return state.viewMode === 'kanban' || state.viewMode === 'calendar';
 }
 
-function wireViewToggle(container) {
+function wireLegacyViewToggle(container) {
   const toggle = container.querySelector('#view-toggle');
   if (!toggle) return;
   syncViewChrome(container);
   toggle.querySelectorAll('[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
+      // A control panel belongs to the layout that opened it. Keeping it open
+      // while moving between List, Kanban, and History leaves an orphaned
+      // menu over controls whose meaning (especially Group) has just changed.
+      container.querySelectorAll('.task-control-popover').forEach((panel) => {
+        closeTaskPopover(container, panel);
+      });
       state.viewMode = btn.dataset.view;
       localStorage.setItem('yuvomi-tasks-view', state.viewMode);
+      syncActiveGroupMode();
+      persistTaskLayoutState();
       renderFilters(container);
+      renderTaskControlPanels(container);
       syncViewChrome(container);
 
       // Skeleton-Flash: einen Frame Render-Feedback geben, dann Ansicht aufbauen
@@ -4285,19 +5462,250 @@ function wireViewToggle(container) {
   });
 }
 
-function wireGroupToggle(container) {
-  const toggle = container.querySelector('#group-mode-toggle');
-  if (!toggle) return;
-  toggle.querySelectorAll('.group-toggle__btn').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      state.groupMode = btn.dataset.mode;
-      toggle.querySelectorAll('.group-toggle__btn').forEach((b) => {
-        const on = b.dataset.mode === state.groupMode;
-        b.classList.toggle('group-toggle__btn--active', on);
-        b.setAttribute('aria-pressed', String(on));
-      });
-      renderTaskList(container);
+function taskViewValue() {
+  return state.viewMode;
+}
+
+function TASK_VIEW_OPTIONS() {
+  return [
+    { value: 'list', label: t('tasks.listView'), icon: 'list' },
+    { value: 'kanban', label: t('tasks.kanbanView'), icon: 'columns-3' },
+    { value: 'calendar', label: t('tasks.calendarView'), icon: 'calendar-days' },
+    // History remains available, but it is no longer a competing segmented
+    // control permanently occupying the Tasks header.
+    { value: 'history', label: t('tasks.historyView'), icon: 'history' },
+  ];
+}
+
+function renderTaskViewPanel(container) {
+  const panel = container.querySelector('#task-view-panel');
+  const anchor = container.querySelector('#task-view-btn');
+  if (!panel || !anchor) return;
+  const selected = taskViewValue();
+  const selectedOption = TASK_VIEW_OPTIONS().find((item) => item.value === selected);
+  anchor.title = selectedOption?.label || t('tasks.viewToggleLabel');
+  panel.replaceChildren();
+  panel.insertAdjacentHTML('beforeend', `<section class="task-control-section">
+    <h3>${esc(t('tasks.viewToggleLabel'))}</h3>
+    ${renderTaskChoiceButtons(TASK_VIEW_OPTIONS(), selected, 'data-task-view')}
+  </section>`);
+  window.lucide?.createIcons({ el: panel });
+}
+
+function activateTaskView(container, value) {
+  const nextMode = value;
+
+  container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
+  state.viewMode = nextMode;
+  state.boardScope = deviceTaskBoardScope();
+  localStorage.setItem('yuvomi-tasks-view', state.viewMode);
+  syncActiveGroupMode();
+  persistTaskLayoutState();
+  renderFilters(container);
+  renderTaskControlPanels(container);
+  syncViewChrome(container);
+
+  const listEl = container.querySelector('#task-list');
+  if (listEl) listEl.style.opacity = '0.4';
+  const restore = () => {
+    const el = container.querySelector('#task-list');
+    if (el) { el.style.transition = 'opacity 0.15s'; el.style.opacity = ''; }
+  };
+  requestAnimationFrame(() => {
+    if (state.viewMode === 'history') {
+      loadHistory(container).finally(restore);
+      return;
+    }
+    loadTasks(container).catch(() => renderTaskList(container)).finally(() => {
+      updateBulkActionsBar(container);
+      restore();
     });
+  });
+}
+
+function wireViewToggle(container) {
+  const anchor = container.querySelector('#task-view-btn');
+  const panel = container.querySelector('#task-view-panel');
+  if (!anchor || !panel) return;
+  renderTaskViewPanel(container);
+  syncViewChrome(container);
+  anchor.addEventListener('click', (event) => {
+    renderTaskViewPanel(container);
+    toggleTaskControlPopover(container, panel, event.currentTarget);
+  });
+  panel.addEventListener('click', (event) => {
+    const option = event.target.closest('[data-task-view]');
+    if (!option) return;
+    activateTaskView(container, option.dataset.taskView);
+  });
+}
+
+function renderTaskChoiceButtons(items, currentValue, dataAttribute) {
+  return `<div class="task-control-options">${items.map((item) => `<button type="button"
+      class="task-control-option${item.value === currentValue ? ' task-control-option--active' : ''}"
+      ${dataAttribute}="${esc(item.value)}" aria-pressed="${item.value === currentValue}">
+      ${item.icon ? `<i data-lucide="${item.icon}" class="icon-sm" aria-hidden="true"></i>` : ''}
+      <span>${esc(item.label)}</span>
+      ${item.value === currentValue ? '<i data-lucide="check" class="icon-sm task-control-option__check" aria-hidden="true"></i>' : ''}
+    </button>`).join('')}</div>`;
+}
+
+function renderTaskGroupPanel(container) {
+  const panel = container.querySelector('#task-group-panel');
+  if (!panel) return;
+  const anchor = container.querySelector('#group-mode-toggle');
+  if (anchor) {
+    anchor.dataset.mode = state.groupMode;
+  }
+  const fields = GROUP_FIELDS().filter((field) => state.viewMode !== 'kanban' || field.value !== 'status');
+  panel.replaceChildren();
+  panel.insertAdjacentHTML('beforeend', `<section class="task-control-section">
+      <h3>${esc(t('tasks.groupBy'))}</h3>
+      ${renderTaskChoiceButtons(fields, state.groupMode, 'data-task-group')}
+    </section>
+    <section class="task-control-section">
+      <h3>${esc(t('tasks.progressDisplay'))}</h3>
+      ${renderTaskChoiceButtons(PROGRESS_MODES(), state.progressMode, 'data-task-progress')}
+    </section>`);
+  if (window.lucide) window.lucide.createIcons({ el: panel });
+}
+
+function activeBucketSort(bucketKey) {
+  return bucketKey ? (state.bucketSorts.get(bucketKey) || state.sheetSort) : state.sheetSort;
+}
+
+function renderTaskSortPanel(container, bucketKey = null) {
+  const panel = container.querySelector('#task-sort-panel');
+  if (!panel) return;
+  if (bucketKey) panel.dataset.bucketKey = bucketKey;
+  else delete panel.dataset.bucketKey;
+  const selected = activeBucketSort(bucketKey);
+  const local = bucketKey ? state.bucketSorts.get(bucketKey) : null;
+  panel.replaceChildren();
+  panel.insertAdjacentHTML('beforeend', `<section class="task-control-section">
+      <div class="task-sort-header">
+        <h3>${esc(bucketKey ? t('tasks.bucketSort') : t('tasks.sheetSort'))}</h3>
+        <div class="task-sort-header__actions">
+          <div class="task-sort-directions" role="group" aria-label="${esc(t('tasks.sortDirection'))}">
+            ${[
+              { value: 'asc', label: t('tasks.sortAscending'), icon: 'arrow-up' },
+              { value: 'desc', label: t('tasks.sortDescending'), icon: 'arrow-down' },
+            ].map((direction) => `<button type="button"
+              class="btn btn--ghost btn--icon btn--icon-sm task-sort-direction${direction.value === selected.direction ? ' task-sort-direction--active' : ''}"
+              data-task-sort-direction="${direction.value}" aria-pressed="${direction.value === selected.direction}"
+              aria-label="${esc(direction.label)}" title="${esc(direction.label)}">
+              <i data-lucide="${direction.icon}" class="icon-sm" aria-hidden="true"></i>
+            </button>`).join('')}
+          </div>
+          ${bucketKey ? `<button type="button"
+            class="btn btn--ghost btn--icon btn--icon-sm task-sort-lock${local?.locked ? ' task-sort-lock--active' : ''}"
+            data-task-sort-lock aria-pressed="${!!local?.locked}"
+            aria-label="${esc(local?.locked ? t('tasks.bucketSortInherit') : t('tasks.bucketSortKeep'))}"
+            title="${esc(local?.locked ? t('tasks.bucketSortInherit') : t('tasks.bucketSortKeep'))}">
+            <i data-lucide="${local?.locked ? 'lock' : 'lock-open'}" class="icon-sm" aria-hidden="true"></i>
+          </button>` : ''}
+        </div>
+      </div>
+      ${renderTaskChoiceButtons(SORT_FIELDS(), selected.field, 'data-task-sort-field')}
+    </section>
+    ${bucketKey ? '' : `<p class="task-control-hint">${esc(t('tasks.sheetSortHint'))}</p>`}`);
+  if (window.lucide) window.lucide.createIcons({ el: panel });
+}
+
+function renderTaskControlPanels(container) {
+  renderTaskViewPanel(container);
+  renderTaskGroupPanel(container);
+  renderTaskSortPanel(container);
+}
+
+function removeUnlockedBucketSorts() {
+  state.bucketSorts.forEach((sort, key) => {
+    if (!sort.locked) state.bucketSorts.delete(key);
+  });
+}
+
+function applyTaskSortChoice(container, patch) {
+  const panel = container.querySelector('#task-sort-panel');
+  const bucketKey = panel?.dataset.bucketKey || null;
+  if (bucketKey) {
+    const current = activeBucketSort(bucketKey);
+    // A group-specific choice starts unlocked: it remains local until the
+    // next overall Sheet Sort. The adjacent lock is what deliberately makes
+    // it survive future Sheet Sort changes.
+    state.bucketSorts.set(bucketKey, { ...current, ...patch, locked: !!state.bucketSorts.get(bucketKey)?.locked });
+    persistTaskLayoutState();
+    closeTaskPopover(container, panel);
+    renderTaskList(container);
+    return;
+  }
+  state.sheetSort = { ...state.sheetSort, ...patch };
+  removeUnlockedBucketSorts();
+  persistTaskLayoutState();
+  renderTaskList(container);
+  renderTaskSortPanel(container);
+  positionTaskPopover(panel, container.querySelector('#task-sort-btn'));
+}
+
+function openTaskSortPopover(container, anchor, bucketKey = null) {
+  renderTaskSortPanel(container, bucketKey);
+  openTaskControlPopover(container, container.querySelector('#task-sort-panel'), anchor);
+}
+
+function wireGroupToggle(container) {
+  renderTaskControlPanels(container);
+
+  container.querySelector('#group-mode-toggle')?.addEventListener('click', (event) => {
+    renderTaskGroupPanel(container);
+    toggleTaskControlPopover(container, container.querySelector('#task-group-panel'), event.currentTarget);
+  });
+  container.querySelector('#task-sort-btn')?.addEventListener('click', (event) => {
+    renderTaskSortPanel(container);
+    toggleTaskControlPopover(container, container.querySelector('#task-sort-panel'), event.currentTarget);
+  });
+
+  container.querySelector('#task-group-panel')?.addEventListener('click', (event) => {
+    const group = event.target.closest('[data-task-group]');
+    if (group) {
+      state.groupMode = group.dataset.taskGroup;
+      state.groupModes[activeLayoutKey()] = state.groupMode;
+      persistTaskLayoutState();
+      renderTaskGroupPanel(container);
+      renderTaskList(container);
+      positionTaskPopover(container.querySelector('#task-group-panel'), container.querySelector('#group-mode-toggle'));
+      return;
+    }
+    const progress = event.target.closest('[data-task-progress]');
+    if (progress) {
+      state.progressMode = progress.dataset.taskProgress;
+      persistTaskLayoutState();
+      renderTaskGroupPanel(container);
+      renderTaskList(container);
+      positionTaskPopover(container.querySelector('#task-group-panel'), container.querySelector('#group-mode-toggle'));
+    }
+  });
+
+  container.querySelector('#task-sort-panel')?.addEventListener('click', (event) => {
+    const field = event.target.closest('[data-task-sort-field]');
+    if (field) {
+      applyTaskSortChoice(container, { field: field.dataset.taskSortField });
+      return;
+    }
+    const direction = event.target.closest('[data-task-sort-direction]');
+    if (direction) {
+      applyTaskSortChoice(container, { direction: direction.dataset.taskSortDirection });
+      return;
+    }
+    if (event.target.closest('[data-task-sort-lock]')) {
+      const panel = container.querySelector('#task-sort-panel');
+      const bucketKey = panel?.dataset.bucketKey;
+      if (!bucketKey) return;
+      const local = state.bucketSorts.get(bucketKey);
+      if (local?.locked) state.bucketSorts.delete(bucketKey);
+      else state.bucketSorts.set(bucketKey, { ...activeBucketSort(bucketKey), locked: true });
+      persistTaskLayoutState();
+      closeTaskPopover(container, panel);
+      renderTaskList(container);
+    }
   });
 }
 
@@ -4311,18 +5719,13 @@ function wireNewTaskBtn(container) {
 
 function wireQuickAddBtn(container) {
   container.querySelector('#btn-quick-add')?.addEventListener('click', () => {
+    container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
     openQuickAdd({
       onCreated: async () => loadTasks(container),
       onActivitySelected: async (activity) => {
         openTaskModal({ users: state.users, presetActivityTemplate: activity }, container);
       },
     });
-  });
-}
-
-function wireAutomationBtn(container) {
-  container.querySelector('#btn-manage-automation')?.addEventListener('click', () => {
-    window.yuvomi?.navigate('/settings/modules/automation');
   });
 }
 
@@ -4634,6 +6037,45 @@ function handleBulkDelete(taskIds, container) {
   });
 }
 
+function openParticipantProfile(container, userId, anchor) {
+  const panel = container.querySelector('#task-profile-popover');
+  const user = state.users.find((entry) => Number(entry.id) === Number(userId));
+  if (!panel || !user || !anchor) return;
+
+  const participant = normalizeParticipant(user);
+  const rows = [
+    user.phone ? `<a class="task-profile-popover__contact" href="tel:${esc(user.phone)}">
+      <i data-lucide="phone" class="icon-sm" aria-hidden="true"></i>
+      <span><small>${esc(t('contacts.phoneLabel'))}</small>${esc(user.phone)}</span>
+    </a>` : '',
+    user.email ? `<a class="task-profile-popover__contact" href="mailto:${esc(user.email)}">
+      <i data-lucide="mail" class="icon-sm" aria-hidden="true"></i>
+      <span><small>${esc(t('contacts.emailLabel'))}</small>${esc(user.email)}</span>
+    </a>` : '',
+  ].filter(Boolean).join('');
+
+  panel.setAttribute('aria-label', user.display_name);
+  panel.replaceChildren();
+  panel.insertAdjacentHTML('beforeend', `<div class="task-profile-popover__identity">
+      ${renderAvatarStack([participant], { size: 52, maxVisible: 1 })}
+      <span class="task-profile-popover__name">${esc(user.display_name)}</span>
+      ${user.family_role ? `<span class="task-profile-popover__role">${esc(user.family_role)}</span>` : ''}
+    </div>
+    ${rows ? `<div class="task-profile-popover__contacts">${rows}</div>` : ''}`);
+  window.lucide?.createIcons({ el: panel });
+  openTaskControlPopover(container, panel, anchor);
+  requestAnimationFrame(() => {
+    const anchorRect = anchor.getBoundingClientRect();
+    const panelRect = panel.getBoundingClientRect();
+    const contentRect = container.closest('.app-content')?.getBoundingClientRect();
+    const gutter = 8;
+    const minimum = Math.max(gutter, (contentRect?.left || 0) + gutter);
+    const maximum = window.innerWidth - panelRect.width - gutter;
+    const preferred = document.dir === 'rtl' ? anchorRect.right - panelRect.width : anchorRect.left;
+    panel.style.left = `${Math.round(Math.max(minimum, Math.min(preferred, maximum)))}px`;
+  });
+}
+
 function wireTaskList(container) {
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
@@ -4643,6 +6085,35 @@ function wireTaskList(container) {
     if (!target) return;
     const action = target.dataset.action;
     const id     = target.dataset.id;
+
+    if (action === 'show-participant-profile') {
+      openParticipantProfile(container, target.dataset.userId, target);
+      return;
+    }
+
+    if (action === 'toggle-activity-details') {
+      const taskId = Number(id);
+      if (state.expandedTasks.has(taskId)) state.expandedTasks.delete(taskId);
+      else state.expandedTasks.add(taskId);
+      renderTaskList(container);
+      return;
+    }
+
+    if (action === 'toggle-board-section') {
+      const key = target.dataset.sectionKey;
+      const collapsed = isBoardSectionCollapsed(key, target.dataset.sectionStatus);
+      state.collapsedBoardSections.delete(key);
+      state.expandedBoardSections.delete(key);
+      if (collapsed) state.expandedBoardSections.add(key);
+      else state.collapsedBoardSections.add(key);
+      renderKanban(container);
+      return;
+    }
+
+    if (action === 'open-bucket-sort') {
+      openTaskSortPopover(container, target, target.dataset.bucketKey);
+      return;
+    }
 
     if (action === 'toggle-status') {
       const status = target.dataset.status;
@@ -4703,11 +6174,14 @@ function wireTaskList(container) {
     }
 
     if (action === 'toggle-subtasks') {
-      const subtaskList = document.getElementById(`subtasks-${id}`);
-      if (subtaskList) {
-        const open = subtaskList.classList.toggle('subtask-list--visible');
-        target.setAttribute('aria-expanded', String(open));
-      }
+      const taskId = Number(id);
+      const open = isSubtasksExpanded(taskId);
+      state.expandedSubtasks.delete(taskId);
+      state.collapsedSubtasks.delete(taskId);
+      if (open) state.collapsedSubtasks.add(taskId);
+      else state.expandedSubtasks.add(taskId);
+      renderTaskList(container);
+      return;
     }
 
     if (action === 'toggle-subtask') {
@@ -4788,10 +6262,11 @@ export async function render(container, { user }) {
   // View-Mode: URL-Parameter > localStorage > Default 'list'
   const urlView = new URLSearchParams(window.location.search).get('view');
   const savedView = localStorage.getItem('yuvomi-tasks-view');
-  const KNOWN_VIEWS = ['list', 'kanban', 'history'];
+  const KNOWN_VIEWS = ['list', 'kanban', 'calendar', 'history'];
   state.viewMode = KNOWN_VIEWS.includes(urlView) ? urlView
     : KNOWN_VIEWS.includes(savedView) ? savedView
     : 'list';
+  loadTaskLayoutState();
 
   // showFuture aus localStorage wiederherstellen
   try { state.showFuture = localStorage.getItem(SHOW_FUTURE_KEY) === '1'; } catch {}
@@ -4832,23 +6307,26 @@ export async function render(container, { user }) {
                DESIGN.md. Damit trennt jetzt auch der Text, was vorher nur die
                Behaelterform andeutete: benannte Ansichten in der Gruppe,
                unbenannte Werkzeuge daneben. -->
-          <div class="group-toggle group-toggle--icons" id="view-toggle" role="group" aria-label="${t('tasks.viewToggleLabel')}">
-            <button type="button" class="group-toggle__btn ${isKanban || isHistory ? '' : 'group-toggle__btn--active'}" data-view="list"
-                    title="${t('tasks.listView')}" aria-label="${t('tasks.listView')}" aria-pressed="${!isKanban && !isHistory}">
-              <i data-lucide="list" class="icon-md group-toggle__icon" aria-hidden="true"></i>
-              <span class="group-toggle__label">${t('tasks.listView')}</span>
-            </button>
-            <button type="button" class="group-toggle__btn ${isKanban ? 'group-toggle__btn--active' : ''}" data-view="kanban"
-                    title="${t('tasks.kanbanView')}" aria-label="${t('tasks.kanbanView')}" aria-pressed="${isKanban}">
-              <i data-lucide="columns" class="icon-md group-toggle__icon" aria-hidden="true"></i>
-              <span class="group-toggle__label">${t('tasks.kanbanView')}</span>
-            </button>
-            <button type="button" class="group-toggle__btn ${isHistory ? 'group-toggle__btn--active' : ''}" data-view="history"
-                    title="${t('tasks.historyView')}" aria-label="${t('tasks.historyView')}" aria-pressed="${isHistory}">
-              <i data-lucide="history" class="icon-md group-toggle__icon" aria-hidden="true"></i>
-              <span class="group-toggle__label">${t('tasks.historyView')}</span>
-            </button>
-          </div>
+          <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar-control filter-toggle-btn" id="filter-toggle-btn"
+                  aria-label="${t('tasks.filterBtn')}" aria-expanded="false" aria-controls="filter-panel">
+            <i data-lucide="sliders-horizontal" class="icon-sm" aria-hidden="true"></i>
+            <span class="tasks-toolbar-control__label">${t('tasks.filterBtn')}</span>
+          </button>
+          <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar-control" id="task-sort-btn"
+                  aria-label="${t('tasks.sheetSort')}" aria-expanded="false" aria-controls="task-sort-panel">
+            <i data-lucide="arrow-up-down" class="icon-sm" aria-hidden="true"></i>
+            <span class="tasks-toolbar-control__label">${t('tasks.sheetSort')}</span>
+          </button>
+          <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar-control" id="group-mode-toggle"
+                  data-mode="category" aria-label="${t('tasks.groupToggleLabel')}" aria-expanded="false" aria-controls="task-group-panel">
+            <i data-lucide="group" class="icon-sm" aria-hidden="true"></i>
+            <span class="tasks-toolbar-control__label">${t('tasks.groupToggleLabel')}</span>
+          </button>
+          <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar-control" id="task-view-btn"
+                  aria-label="${t('tasks.viewToggleLabel')}" aria-expanded="false" aria-controls="task-view-panel">
+            <i data-lucide="layout-grid" class="icon-sm" aria-hidden="true"></i>
+            <span class="tasks-toolbar-control__label">${t('tasks.viewToggleLabel')}</span>
+          </button>
           <button class="btn btn--ghost btn--icon" id="btn-bulk-select"
                   title="${t('tasks.bulkSelect')}" aria-label="${t('tasks.bulkSelect')}" aria-pressed="false">
             <i data-lucide="list-checks" class="icon-lg" aria-hidden="true"></i>
@@ -4864,51 +6342,27 @@ export async function render(container, { user }) {
                   aria-label="${t('tasks.manageTags')}" title="${t('tasks.manageTags')}">
             <i data-lucide="tags" class="icon-lg" aria-hidden="true"></i>
           </button>
-          ${state.isAdmin ? `<button class="btn btn--icon btn--ghost" id="btn-manage-automation"
-                  aria-label="Manage household automation" title="Manage household automation">
-            <i data-lucide="workflow" class="icon-lg" aria-hidden="true"></i>
-          </button>` : ''}
           <button class="btn btn--icon btn--ghost" id="btn-assignment-requests"
                   aria-label="Assignment requests" title="Assignment requests">
             <i data-lucide="inbox" class="icon-lg" aria-hidden="true"></i>
-          </button>
-          <button class="btn btn--icon btn--ghost" id="btn-quick-add"
-                  aria-label="Quick Add from a template" title="Quick Add from a template">
-            <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
           </button>
           <button class="btn btn--primary toolbar-new-btn" id="btn-new-task" style="gap:var(--space-1)"
                   aria-label="${t('tasks.newTask')}">
             <i data-lucide="plus" class="icon-lg" aria-hidden="true"></i> <span class="toolbar-new-btn__label">${t('newLabel.tasks')}</span>
           </button>
+          <button class="btn btn--icon btn--ghost" id="btn-quick-add"
+                  aria-label="Quick Add from a template" title="Quick Add from a template">
+            <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
+          </button>
         </div>
       </div>
 
       <div class="tasks-body">
-        <div class="tasks-filters-row">
-          <div class="tasks-filters" id="filter-bar" role="group" aria-label="${t('tasks.filterBtn')}"></div>
-          <div class="tasks-filters__end">
-            <!-- Icon PLUS Label, nicht Icon ODER Label: unter 640px faellt das
-                 Label weg (Label-Verlust-Regel, tasks.css), und dann traegt das
-                 Icon allein. Das aria-label steht deshalb IMMER da - der
-                 zugaengliche Name darf nicht an einer Media-Query haengen. -->
-            <div class="group-toggle" id="group-mode-toggle" role="group"
-                 aria-label="${t('tasks.groupToggleLabel')}">
-              <button type="button" class="group-toggle__btn group-toggle__btn--active"
-                      data-mode="category" aria-pressed="true"
-                      aria-label="${t('tasks.categoryLabel')}">
-                <i data-lucide="folder" class="group-toggle__icon" aria-hidden="true"></i>
-                <span class="group-toggle__label">${t('tasks.categoryLabel')}</span>
-              </button>
-              <button type="button" class="group-toggle__btn"
-                      data-mode="due" aria-pressed="false"
-                      aria-label="${t('tasks.dueDateLabel')}">
-                <i data-lucide="calendar-clock" class="group-toggle__icon" aria-hidden="true"></i>
-                <span class="group-toggle__label">${t('tasks.dueDateLabel')}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-        <div class="filter-panel" id="filter-panel" hidden></div>
+        <div class="filter-panel task-control-popover" id="filter-panel" popover="auto"></div>
+        <div class="task-control-popover" id="task-sort-panel" popover="auto"></div>
+        <div class="task-control-popover" id="task-group-panel" popover="auto"></div>
+        <div class="task-control-popover" id="task-view-panel" popover="auto"></div>
+        <div class="task-control-popover task-profile-popover" id="task-profile-popover" popover="auto" role="dialog"></div>
         <div class="bulk-actions-bar" id="bulk-actions-bar" hidden>
           <span class="bulk-actions-bar__count" id="bulk-count"></span>
           <div class="bulk-actions-bar__actions">
@@ -4987,6 +6441,7 @@ export async function render(container, { user }) {
     state.placeSearchStatus = placeStatusData.data ?? { configured: false };
     state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
     state.defaultSyncTarget = preferencesData.data?.tasks_default_target || '';
+    state.calendarWeekStart = weekStartIndex(preferencesData.data?.week_start);
   } catch (err) {
     console.error('[Tasks] Ladefehler:', err.message);
     // Der Toast allein war die falsche Antwort: er verging, und darunter blieb
@@ -5014,7 +6469,6 @@ export async function render(container, { user }) {
   wireGroupToggle(container);
   wireNewTaskBtn(container);
   wireQuickAddBtn(container);
-  wireAutomationBtn(container);
   wireAssignmentRequestsBtn(container);
   wireTaskList(container);
   wireBulkSelect(container);
@@ -5052,4 +6506,13 @@ export async function render(container, { user }) {
 }
 
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.
-export const __test = { groupBy, groupKey, formatDueDate };
+export const __test = {
+  groupBy,
+  groupKey,
+  formatDueDate,
+  buildTaskMonthDays,
+  normalizeTaskCalendarRange,
+  taskCalendarDate,
+  taskQuery,
+  state,
+};

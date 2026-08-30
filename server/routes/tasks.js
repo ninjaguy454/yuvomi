@@ -985,10 +985,23 @@ router.get('/', (req, res) => {
         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.status = 'done'
            AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_done,
         (SELECT json_group_array(json_object(
-                  'id', s.id, 'title', s.title, 'status', s.status,
-                  'assigned_to', s.assigned_to, 'assigned_name', s.assigned_name
+                  'id', s.id, 'title', s.title, 'description', s.description,
+                  'status', s.status, 'priority', s.priority,
+                  'due_date', s.due_date, 'due_time', s.due_time,
+                  'points', s.points, 'assigned_to', s.assigned_to,
+                  'assigned_name', s.assigned_name,
+                  'assigned_users', json(s.assigned_users_json)
                 ))
-           FROM (SELECT s.id, s.title, s.status, s.assigned_to, su.display_name AS assigned_name
+           FROM (SELECT s.id, s.title, s.description, s.status, s.priority,
+                        s.due_date, s.due_time, s.points, s.assigned_to,
+                        su.display_name AS assigned_name,
+                        (SELECT json_group_array(json_object(
+                          'id', au.id, 'display_name', au.display_name,
+                          'color', au.avatar_color, 'avatar_data', au.avatar_data
+                        ))
+                           FROM task_assignments sta
+                           JOIN users au ON au.id = sta.user_id
+                          WHERE sta.task_id = s.id) AS assigned_users_json
                    FROM tasks s
                    LEFT JOIN users su ON su.id = s.assigned_to
                   WHERE s.parent_task_id = t.id
@@ -2419,7 +2432,10 @@ router.delete('/:id/comments/:commentId', (req, res) => {
 router.get('/meta/options', (req, res) => {
   try {
     const users = db.get().prepare(
-      `SELECT id, display_name, avatar_color FROM users u
+      `SELECT id, display_name, avatar_color, avatar_data, family_role,
+         (SELECT phone FROM contacts c WHERE c.family_user_id = u.id LIMIT 1) AS phone,
+         (SELECT email FROM contacts c WHERE c.family_user_id = u.id LIMIT 1) AS email
+       FROM users u
        WHERE NOT EXISTS (SELECT 1 FROM housekeeping_workers hw WHERE hw.user_id = u.id)
        ORDER BY display_name`
     ).all();

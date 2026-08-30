@@ -161,7 +161,7 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
 export function listTaskResponsibilities(d, taskIds) {
   if (!taskIds.length) return {};
   const rows = d.prepare(`
-    SELECT tr.*, u.display_name, u.avatar_color
+    SELECT tr.*, u.display_name, u.avatar_color, u.avatar_data
       FROM task_responsibilities tr
       JOIN users u ON u.id = tr.user_id
      WHERE tr.task_id IN (${taskIds.map(() => '?').join(',')}) AND tr.status = 'active'

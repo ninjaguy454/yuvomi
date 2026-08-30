@@ -5648,7 +5648,7 @@ test('phase 3 high-frequency controls use tokenized touch targets', () => {
   assert.match(notes, /\.note-card__delete[\s\S]*width:\s*var\(--target-base\)/);
 });
 
-test('Tasks toolbar keeps secondary controls visible instead of an overflow slider', () => {
+test('Tasks toolbar exposes the specification controls as anchored popovers', () => {
   const tasksPage = read('../public/pages/tasks.js');
   const tasksCss = read('../public/styles/tasks.css');
 
@@ -5665,13 +5665,15 @@ test('Tasks toolbar keeps secondary controls visible instead of an overflow slid
   assert.match(tasksPage, /class="page-toolbar[^"]*\bpage-toolbar--wrap\b[^"]*\btasks-toolbar\b/);
 
   // Ansichtswechsel bleibt im Kopf, Gruppierung wandert in die Filterzeile.
-  assert.match(tasksPage, /<div class="page-toolbar__actions">[\s\S]*id="view-toggle"[\s\S]*id="btn-bulk-select"/);
-  assert.match(tasksPage, /<div class="tasks-filters-row">[\s\S]*id="filter-bar"[\s\S]*id="group-mode-toggle"/);
-  assert.match(tasksCss, /\.tasks-filters-row\s*\{[\s\S]*display:\s*flex/);
+  assert.match(tasksPage, /<div class="page-toolbar__actions">[\s\S]*id="filter-toggle-btn"[\s\S]*id="task-sort-btn"[\s\S]*id="group-mode-toggle"[\s\S]*id="task-view-btn"[\s\S]*id="btn-bulk-select"/);
+  assert.match(tasksPage, /id="filter-panel" popover="auto"[\s\S]*id="task-sort-panel" popover="auto"[\s\S]*id="task-group-panel" popover="auto"[\s\S]*id="task-view-panel" popover="auto"/);
+  assert.doesNotMatch(tasksPage, /<div class="tasks-filters-row"/);
+  assert.doesNotMatch(tasksPage, /id="view-toggle"/);
 
   // [hidden] muss gegen display:flex/inline-flex gewinnen, sonst bleiben die in
   // der Kanban-Ansicht ausgeblendeten Controls sichtbar.
-  assert.match(tasksCss, /\.tasks-filters-row \[hidden\]\s*\{[\s\S]*display:\s*none/);
+  assert.match(tasksCss, /\.tasks-toolbar-control\[hidden\]\s*\{[\s\S]*display:\s*none/);
+  assert.match(tasksCss, /\.task-control-popover:popover-open[\s\S]*display:\s*flex/);
 });
 
 test('Tasks and Notes expose every click target as a real control', () => {
@@ -5686,18 +5688,18 @@ test('Tasks and Notes expose every click target as a real control', () => {
 
   // Titel öffnet die Aufgabe, Fortschrittsbalken klappt die Unteraufgaben auf,
   // Kanban-Titel öffnet die Karte — alle drei waren Divs.
-  assert.match(tasksPage, /class="task-card__body" data-action="open-task"[\s\S]*?role="button" tabindex="0"/);
-  assert.match(tasksPage, /<span class="task-card__title/);
-  assert.match(tasksPage, /\['Enter', ' '\]\.includes\(e\.key\)[\s\S]*?closest\('\[data-action="open-task"\]'\)/);
-  assert.match(tasksPage, /<button type="button" class="subtask-progress"[\s\S]*aria-expanded=/);
-  assert.match(tasksPage, /<button type="button" class="kanban-card__title/);
+  assert.match(tasksPage, /<button type="button" class="activity-card__open" data-action="open-task"/);
+  assert.match(tasksPage, /<button type="button" class="activity-card__details-toggle"[\s\S]*aria-expanded=/);
+  assert.match(tasksPage, /<button type="button" class="activity-card__subtasks-toggle"[\s\S]*aria-expanded=/);
+  assert.match(tasksPage, /class="activity-card__participant-profile" data-action="show-participant-profile"/);
 
   // Notizkarte: der einzige Tastaturweg in die Notiz.
   assert.match(notesPage, /class="note-card__open" data-action="open"/);
 
   // Umschalter melden ihren Zustand nicht nur über Farbe.
-  assert.match(tasksPage, /data-view="list"[\s\S]*aria-pressed=/);
-  assert.match(tasksPage, /data-mode="category" aria-pressed="true"/);
+  assert.match(tasksPage, /function renderTaskChoiceButtons[\s\S]*aria-pressed="\$\{item\.value === currentValue\}"/);
+  assert.match(tasksPage, /renderTaskChoiceButtons\(TASK_VIEW_OPTIONS\(\), selected, 'data-task-view'\)/);
+  assert.match(tasksPage, /renderTaskChoiceButtons\(fields, state\.groupMode, 'data-task-group'\)/);
 });
 
 test('showToast is never called with an unsupported variant', () => {
@@ -13951,6 +13953,17 @@ test('Quick Add keeps activity names visible and moves descriptions into a short
     !automation.includes('<br><small>${h(activity.description)}</small>'),
     'activity descriptions must not replace or visually compete with the activity name',
   );
+});
+
+test('Tasks calendar mouse clicks survive grid pointer capture', () => {
+  const tasksPage = read('../public/pages/tasks.js');
+  const pointerUp = /grid\.addEventListener\('pointerup',[\s\S]*?\}, \{ signal \}\);/.exec(tasksPage);
+
+  assert.ok(pointerUp, 'the Tasks calendar pointer-up handler is missing');
+  assert.doesNotMatch(pointerUp[0], /if \(!finished\.moved\) return/,
+    'a stationary pointer must open a one-day Task instead of only selecting its calendar cell');
+  assert.match(pointerUp[0], /suppressClick = true;[\s\S]*?openTaskCalendarSelection/,
+    'pointer-up must own both one-day clicks and dragged ranges when the grid captures the pointer');
 });
 
 test('Recipes expose Markdown export through both row-action layouts', () => {

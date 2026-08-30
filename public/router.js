@@ -1438,15 +1438,16 @@ function buildMoreSheetBody() {
   // der Hilfe (buildHelpRows), nicht mehr als Dauer-Zeile über dem Grid — das
   // hält das Sheet ruhig und kompakt.
 
-  // Einstellungen ist ein System-Ziel, kein Inhalts-Modul — es wandert aus dem
-  // farbigen Grid in den System-Cluster, damit das Grid sauber aufgeht.
+  // Gepinnte Ziele sind Systemebene, keine Inhaltsmodule. Household
+  // Automation and Settings therefore share the quiet system cluster instead
+  // of appearing in the colored module grid.
   const secondary = secondaryMobileItems();
-  const settingsItem = secondary.find((item) => item.module === 'settings');
+  const pinnedItems = secondary.filter((item) => item.pinnedEnd);
 
   // Ein flaches Raster in der Reihenfolge der Sidebar. Die Sortierung nach
   // Sektion steckt schon in secondaryMobileItems(); hier wird sie nur nicht
   // mehr mit Überschriften nachgezeichnet.
-  const modules = secondary.filter((item) => item.module !== 'settings');
+  const modules = secondary.filter((item) => !item.pinnedEnd);
   const grid = document.createElement('div');
   grid.className = 'more-sheet__grid';
   modules.forEach((item) => grid.appendChild(moreItemEl(item)));
@@ -1460,14 +1461,14 @@ function buildMoreSheetBody() {
   // System-Reihe im selben Vierer-Raster (Icon-über-Label, monochrom).
   const system = document.createElement('div');
   system.className = 'more-sheet__system';
-  if (settingsItem) {
+  pinnedItems.forEach((item) => {
     system.appendChild(moreActionEl({
-      labelKey: 'nav.settings',
-      icon: settingsItem.icon || 'settings',
-      route: settingsItem.path,
-      navHref: settingsItem.navHref,
+      labelKey: item.labelKey,
+      icon: item.icon || 'settings',
+      route: item.path,
+      navHref: item.navHref,
     }));
-  }
+  });
   system.appendChild(moreActionEl({
     labelKey: 'nav.help',
     icon: 'circle-help',
@@ -3328,8 +3329,22 @@ function navItems({ catalog = false } = {}) {
     { path: '/health',    label: t('nav.health'),    module: 'health',      section: NAV_SECTION.people },
     // Finanzen
     { path: '/budget',    label: t('nav.budget'),    module: 'budget',      section: NAV_SECTION.finance },
+    // Household Automation is a global workspace destination rather than a
+    // task-list tool. Keep it next to Settings without turning it into a
+    // second Tasks-toolbar entry.
+    {
+      path: '/settings/modules/automation',
+      label: t('settings.pageHouseholdAutomation'),
+      labelKey: 'settings.pageHouseholdAutomation',
+      icon: 'workflow',
+      module: 'tasks',
+      navId: 'household-automation',
+      section: NAV_SECTION.household,
+      adminOnly: true,
+      pinnedEnd: true,
+    },
     // Settings ist am Ende gepinnt (siehe unten).
-    { path: '/settings',  navHref: '/settings?view=domains', label: t('nav.settings'),  module: 'settings',    section: NAV_SECTION.household },
+    { path: '/settings',  navHref: '/settings?view=domains', label: t('nav.settings'), labelKey: 'nav.settings', module: 'settings', section: NAV_SECTION.household, pinnedEnd: true },
   ].map(withIcon);
   const thirdPartyItems = _thirdPartyModules
     .filter((module) => module.enabled && module.status === 'enabled' && module.menu?.show && module.route?.path)
@@ -3344,7 +3359,6 @@ function navItems({ catalog = false } = {}) {
       section: NAV_SECTION.customModules,
     }))
     .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
-  const settings = baseItems.find((item) => item.module === 'settings');
   /* DER KATALOG IST NICHT DIE NAVIGATION.
    *
    * `navItems()` ist eine Liste von Zielen, die jemand ANKLICKEN kann - also
@@ -3358,16 +3372,19 @@ function navItems({ catalog = false } = {}) {
    * (Codex-Review zu PR #790). */
   const all = [...baseItems, ...thirdPartyItems];
   if (catalog) return all;
+  const canShow = (item) => (
+    !item.adminOnly || currentUser?.role === 'admin'
+  ) && !_disabledModules.has(item.module)
+    && !_hiddenModules.has(item.module)
+    && canAccessNavModule(item.module);
   const sortable = [
     ...baseItems.filter((item) =>
-      item.module !== 'settings'
-      && !_disabledModules.has(item.module)
-      && !_hiddenModules.has(item.module)
-      && canAccessNavModule(item.module)),
+      !item.pinnedEnd && canShow(item)),
     ...thirdPartyItems,
   ];
   const ordered = sortNavigationItems(sortable, _moduleOrder);
-  return settings ? [...ordered, settings] : ordered;
+  const pinned = baseItems.filter((item) => item.pinnedEnd && canShow(item));
+  return [...ordered, ...pinned];
 }
 
 /** Alle Module mit ihren Metadaten - ungefiltert. Fuer Label und Symbol. */
@@ -3385,7 +3402,7 @@ function mobileNavigationCandidates() {
   let kitchenAdded = false;
 
   for (const item of navItems()) {
-    if (item.module === 'dashboard' || item.module === 'settings') continue;
+    if (item.module === 'dashboard' || item.pinnedEnd) continue;
     if (item.kitchenGroup) {
       if (!kitchenAdded) {
         const kitchen = currentKitchenDestination();
@@ -3417,10 +3434,10 @@ function mobileFavoriteItems() {
 
 function secondaryMobileItems() {
   const favoriteIds = new Set(mobileFavoriteItems().map((item) => item.navId));
-  const settings = navItems().find((item) => item.module === 'settings');
+  const pinned = navItems().filter((item) => item.pinnedEnd);
   return [
     ...mobileNavigationCandidates().filter((item) => !favoriteIds.has(item.navId)),
-    ...(settings ? [{ ...settings, navId: settings.module }] : []),
+    ...pinned.map((item) => ({ ...item, navId: item.navId ?? item.module })),
   ];
 }
 
@@ -3478,10 +3495,10 @@ function sidebarNavItems() {
   };
 
   navItems().forEach((item) => {
-    // Settings ist gepinnt und gehört zu keiner sichtbaren Sektionsgruppe —
+    // Globale Systemziele sind gepinnt und gehören zu keiner sichtbaren Sektionsgruppe -
     // der Aufrufer hebt es aus der Liste heraus und hängt es als Geschwister
     // an die Sidebar-Spalte (siehe dort, und layout.css zum entfallenen Rand).
-    if (item.module !== 'settings') startSection(item.section);
+    if (!item.pinnedEnd) startSection(item.section);
 
     if (item.kitchenGroup) {
       if (!kitchenAdded) {
@@ -3491,7 +3508,7 @@ function sidebarNavItems() {
       return;
     }
     const el = navItemEl(item);
-    if (item.module === 'settings') {
+    if (item.pinnedEnd) {
       // Ans Sidebar-Ende pinnen — über eine explizite Klasse statt
       // ":last-child a". Der Aufrufer erkennt sie und hängt den Eintrag
       // ausserhalb des Scrollers ein.
@@ -4300,8 +4317,22 @@ function rebuildNavigation({ updateLabels = true } = {}) {
     // Springen zwischen erstem und letztem Eintrag.
     const previousScrollTop = navSidebarItems.scrollTop;
     const sidebarEls = sidebarNavItems();
-    navSidebarItems.replaceChildren(...sidebarEls);
-    if (window.lucide) window.lucide.createIcons({ el: navSidebarItems });
+    const pinnedSidebarEls = sidebarEls.filter((el) => el.classList?.contains('nav-item--pinned-end'));
+    const scrollingSidebarEls = sidebarEls.filter((el) => !el.classList?.contains('nav-item--pinned-end'));
+    navSidebarItems.replaceChildren(...scrollingSidebarEls);
+
+    // Pinned routes live outside the scrolling module list. Rebuilds used to
+    // put Settings back inside that scroller; with two pinned destinations the
+    // mismatch would also reverse the requested Automation -> Settings order
+    // after a locale or module change.
+    if (navSidebar) {
+      [...navSidebar.children]
+        .filter((el) => el.classList?.contains('nav-item--pinned-end'))
+        .forEach((el) => el.remove());
+      const footer = navSidebar.querySelector(':scope > .nav-sidebar__footer-actions');
+      pinnedSidebarEls.forEach((el) => navSidebar.insertBefore(el, footer || null));
+    }
+    if (window.lucide) window.lucide.createIcons({ el: navSidebar || navSidebarItems });
     requestAnimationFrame(() => {
       navSidebarItems.scrollTop = Math.min(
         previousScrollTop,

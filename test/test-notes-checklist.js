@@ -181,12 +181,26 @@ test('das Dashboard rendert Notizen NICHT interaktiv', async () => {
   }
 });
 
-test('die Aufgaben rendern ihre Notiz NICHT interaktiv', async () => {
-  const src = await readFile(new URL('../public/pages/tasks.js', import.meta.url), 'utf8');
-  for (const c of src.match(/renderMarkdownLight\([^)]*\)/g) ?? []) {
-    assert.doesNotMatch(c, /checklist|interactive/,
-      'die Aufgaben haben keinen zeilengenauen Rueckschreibweg');
-  }
+/* DIESER GUARD STAND FRUEHER ANDERSHERUM.
+ *
+ * Er hielt fest, dass die Aufgaben ihre Beschreibung NICHT interaktiv rendern -
+ * und die Begruendung war "sie haben keinen zeilengenauen Rueckschreibweg".
+ * Das war eine Aussage ueber den STAND, nicht ueber die Absicht: mit #917 haben
+ * sie einen (PATCH /tasks/:id/check, dieselbe Regel aus markdown-checklist.js).
+ * Die Bedingung, die wirklich gilt, ist eine andere und steht unveraendert im
+ * Renderer: interaktiv darf nur, wer den VOLLSTAENDIGEN Text zeigt. Genau die
+ * prueft der Guard jetzt - das Dashboard darueber faellt weiterhin darunter.
+ *
+ * Die eigenen Faelle der Aufgaben liegen in test-tasks-checklist.js. */
+test('die Aufgaben rendern ihre Notiz interaktiv - sie zeigen den ganzen Text', async () => {
+  // Die Leseansicht wohnt seit #918 in der geteilten Komponente. Die Bedingung
+  // bleibt dieselbe - sie zeigt den vollstaendigen Text und kennt die Id -,
+  // und sie gilt jetzt auch dort, wo die Uebersicht die Aufgabe oeffnet.
+  const src = await readFile(new URL('../public/components/task-detail.js', import.meta.url), 'utf8');
+  const calls = src.match(/renderMarkdownLight\([^)]*\)/g) ?? [];
+  assert.ok(calls.length > 0, 'die Aufgaben rendern ihre Beschreibung');
+  assert.ok(calls.some((c) => /interactive:\s*true/.test(c)),
+    'die Detailansicht kennt die Aufgaben-Id und zeigt den vollen Text - sie darf');
 });
 
 test('die Notizenseite schaltet die Kaestchen frei und faengt den Klick ab', async () => {

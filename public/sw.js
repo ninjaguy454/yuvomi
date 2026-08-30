@@ -15,7 +15,7 @@
  *   → bypassCacheUntil (in-memory + Cache API für SW-Restart-Robustheit)
  */
 
-const APP_RELEASE   = '2.51.0';
+const APP_RELEASE   = '2.54.0';
 const SHELL_CACHE   = `yuvomi-shell-${APP_RELEASE}`;
 const PAGES_CACHE   = `yuvomi-pages-${APP_RELEASE}`;
 const LOCALES_CACHE = `yuvomi-locales-${APP_RELEASE}`;
@@ -97,6 +97,7 @@ const APP_SHELL = [
   '/components/modal.js',
   '/components/photo-screensaver.js',
   '/components/quick-links-manager.js',
+  '/components/task-detail.js',
   '/components/user-multi-select.js',
   '/components/user-rotation-order.js',
   '/utils/birthday-event.js',
@@ -110,6 +111,7 @@ const APP_SHELL = [
   '/utils/dashboard-layout-hint.js',
   '/utils/dashboard-widgets.js',
   '/utils/date.js',
+  '/utils/day-label.js',
   '/utils/currency-codes.js',
   '/utils/document-preview.js',
   '/utils/event-color.js',
@@ -159,6 +161,7 @@ const APP_SHELL = [
   '/utils/swipe-row.js',
   '/utils/sync-target.js',
   '/utils/tablist.js',
+  '/utils/task-fields.js',
   '/utils/timezone.js',
   '/utils/toast-surface.js',
   '/utils/ux.js',
@@ -218,6 +221,7 @@ const PAGE_MODULES = [
   '/pages/calendar.js',
   '/pages/notes.js',
   '/pages/contacts.js',
+  '/pages/places.js',
   '/pages/birthdays.js',
   '/pages/budget.js',
   '/pages/documents.js',
@@ -235,6 +239,7 @@ const PAGE_MODULES = [
   '/components/category-manager.js',
   '/components/icon-picker.js',
   '/components/tag-manager.js',
+  '/components/google-places-settings.js',
   '/utils/lucide-icons.js',
   '/utils/sortable.js',
   '/vendor/sortablejs/sortable.esm.min.js',
@@ -272,6 +277,7 @@ const PAGE_MODULES = [
   '/settings/pages/modules-automation.js',
   '/settings/pages/sync-calendar.js',
   '/settings/pages/sync-contacts.js',
+  '/settings/pages/sync-google-places.js',
   '/settings/pages/sync-reminders.js',
   '/settings/pages/notifications.js',
   '/settings/pages/documents-storage.js',
@@ -363,10 +369,13 @@ self.addEventListener('activate', (event) => {
         }));
       } catch { /* Fehler ignorieren */ }
 
-      self.clients.claim();
-      self.clients.matchAll({ type: 'window' }).then((clients) => {
-        clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED' }));
-      });
+      // Keep both takeover steps inside event.waitUntil. Without awaiting them,
+      // the browser may terminate the activated worker after cache cleanup but
+      // before it claims the open page or announces the update, leaving the
+      // old module graph in place until somebody performs a hard reload.
+      await self.clients.claim();
+      const clients = await self.clients.matchAll({ type: 'window' });
+      clients.forEach((client) => client.postMessage({ type: 'SW_UPDATED' }));
     })
   );
 });

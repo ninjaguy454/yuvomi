@@ -16,6 +16,170 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Place discovery no longer asks households to supply exact coordinates.** Searches can use a saved Place—even one containing only an address—a typed address/city/ZIP, or no explicit origin. Latitude and longitude remain available only under an optional advanced disclosure.
 
+## [2.54.0] - 2026-08-29
+
+### Added
+
+- **The Calendar tile on the Overview can leave birthdays out.** A household that keeps the
+  Birthdays tile on the Overview read every birthday twice - once under Birthdays, once between the
+  next appointments - and the layer switch in the Calendar module did nothing about it. The tile's
+  options dialog (Customise, the sliders button) now carries the same "Birthdays" switch the
+  Calendar filter sheet has, worded identically. It is its own setting rather than a reading of the
+  Calendar module's: that switch lives in the browser's local storage and applies to the device,
+  while widget options live in your preferences and apply to the account, so one value serving both
+  would mean unchecking it on the phone silently decided what the wall tablet shows, or did not,
+  depending on which of the two you happened to read. Birthdays stay in unless you take them out.
+  Filtered before the five-item cap, not after, so taking them out fills the freed rows with the
+  next real appointments instead of leaving a shorter list; recognised by the birthday entry behind
+  the event, not by its title, which is stored in the household's data language.
+
+### Fixed
+
+- **The Notes tile on the Overview shows as many notes as it has room for.** It was the only list
+  tile that never read its own size: the route capped the supply at three, so three was the ceiling
+  for every size the tile can take. Since the tile ships at 1×2 - tall - that left roughly a third
+  of the card empty, and a household with five pinned notes saw three of them and no hint that
+  there were more, while the metric tile beside it said "5 pinned". Reported as pinned notes not
+  appearing on the dashboard (#928). The row count now comes from the size class the way it does
+  for birthdays, tasks and appointments (`listRowCap`), and the route supplies five - the amount
+  the largest version can hold. Exactly the same correction the birthday tile got when it had the
+  same defect; the notes were missed at the time.
+
+## [2.53.0] - 2026-08-29
+
+### Changed
+
+- **A task opened from the Overview or the Calendar is now the same task you see in the Tasks
+  module.** Clicking one in the Overview used to bring up a card with two buttons - "Edit", which
+  navigated you into the Tasks module, and "Mark as done". Everything else a task carries -
+  subtasks, comments, attached documents, the tickable checkboxes in its description, its due date,
+  who it is assigned to, its history - was neither visible nor reachable from there. A task chip in
+  any of the four calendar views did not even offer that much: it navigated away, and the month you
+  were reading was gone. That mattered more than two missing buttons sound like, because the
+  Overview is where the app actually stands open during the day, while the Tasks module is where
+  tasks get created and groomed. The view with fewer capabilities was the one being used more
+  often. Every entry point now opens the full reading view, in place, and returns you to where you
+  were: check something off in the Calendar and the day updates around you.
+- **The reading view of a task lives in one place instead of two.** It sat inside the Tasks page and
+  could therefore only be opened from there; every other view had the choice of building a smaller
+  card of its own or sending the user away, and both were in use. Duplicating the markup would have
+  guaranteed the two drift apart at the next change, so the view moved into a shared component and
+  the surrounding view now tells it what it cannot know: who is looking, which members and
+  categories exist, and how to refresh itself. What a field of a task *means* - is it archived, may
+  I rewrite it, how does its due date read - moved alongside into a shared module, because those
+  same rules had already been copied into the Overview once.
+- **Opening a task from outside the Tasks module brings its stylesheet along.** The router keeps
+  exactly one page stylesheet loaded - `dashboard.css` on the Overview, `calendar.css` in the
+  Calendar - and both the reading view and the edit form take their appearance from `tasks.css`.
+  Measured without it: a tag chip came out at `border-radius: 0` instead of fully rounded, a
+  comment's author line at weight 400 instead of 600. The sheet is now ensured and waited for
+  before the view opens, so nothing is shown raw first. One sheet rather than two halves, on
+  purpose: splitting the rules between a shared and a page stylesheet would mean filing each new
+  rule correctly forever, and that filing quietly went wrong twice while this was being built.
+
+## [2.52.1] - 2026-08-29
+
+### Fixed
+
+- **Unchecking a subtask on a finished occurrence no longer takes it out of the next one.** A weekly
+  task with four steps would come back with all four reset, as it should. Go back to the occurrence
+  you just finished, untick one step there, and that step disappeared from the upcoming occurrence:
+  0/4 became 0/3, and doing it again took another one. The cause was a column carrying two meanings.
+  `recurrence_origin_id` says "I am the next run of X" on a task and "I am the copy of Y in this
+  run" on a subtask, and the code that undoes a follow-up when you un-finish a series read both the
+  same way. Unticking a subtask made it look up its own copy in the next occurrence, mistake it for
+  a follow-up nobody had touched, and delete it. Only whole occurrences count as follow-ups now, so
+  a tick on a past run stays on that run.
+- **On a phone there is now a way to add the FIRST subtask to a task.** Every later one worked: once
+  a task had a subtask, the expanded list offered "add subtask" and it went through. The first one
+  hung on a button in the task row, and the row hides its inline buttons below 640px on purpose -
+  three 44px targets squeezed the title into two lines. The replacement was meant to be the reading
+  view, which is what tapping a task opens, except that view only drew its subtask section when
+  there were already subtasks to draw. So the entrance existed on an iPad and nowhere on an iPhone.
+  The section now stands even when it is empty, as long as it has something to offer, which is the
+  same rule the comments at the bottom have always followed.
+
+## [2.52.0] - 2026-08-29
+
+### Added
+
+- **A reminder on a shared event now reaches the people it was shared with.** Reminders were tied to
+  whoever created them, and nothing else. Someone would create an event, assign it to both partners,
+  set a reminder for the day before - and only they would be reminded. Worse, when the other person
+  opened the same event the reminder field was simply empty, which reads as "none is set" rather
+  than "yours is not set". Both assumed it was shared, and an appointment was missed. A reminder set
+  by the person who created the event is now written for each assignee as a row of their own, so it
+  arrives by push and shows up when they open it. Rows of their own, because everything attached to
+  a reminder is personal: whether it was dismissed, whether it was already delivered, and the time
+  itself, which each person may move. A reminder somebody set for themselves is never overwritten by
+  this, a dismissed one does not come back unless the time actually changed, and dropping someone
+  from the event drops the inherited reminder with it. Anyone who is not the event's author still
+  sets reminders for themselves alone - otherwise half the household would be notified because one
+  person made themselves a note.
+- **Checklists in a task's description can be ticked off where they are shown.** The boxes rendered
+  from `- [ ]` were already there and already inert: ticking one meant opening the editor and
+  hand-editing raw Markdown, which is enough friction that in practice the checklist stops being
+  maintained and the task's real state stops being visible to anyone else. They are now real
+  controls, exactly as they have been in Notes since v2.42.0 - the same rule, the same file, one
+  more caller rather than a second implementation. The server rewrites only the one source line, so
+  two members ticking different items at the same moment both keep their tick; saving the whole
+  description would have let the later writer discard the earlier one silently. A locked task stays
+  tickable on purpose, for the same reason marking one done does: the lock covers what the task is,
+  not how far it has come.
+
+### Changed
+
+- **Forty routes that existed only in the code now exist in the API specification too.** `/api/v1`
+  has been a documented surface since v2.7.1, and what is not in the specification does not exist
+  for anyone integrating against it. Four whole modules had never had a line of it: quick links, the
+  screensaver, recipe providers, and the permissions endpoints behind the rights matrix. Nothing was
+  broken, and nothing reported it either - the existing guard checks that the specification's own
+  files are wired up correctly, never that they match the routers. A new one now compares the two in
+  both directions, so neither a route without documentation nor a documented route without a route
+  handler can appear again.
+
+### Fixed
+
+- **The onboarding walkthrough is remembered per account, not per device.** It used to live only in
+  `localStorage`, so a new device or a private browsing window showed it again even though the
+  account had already dismissed it. Dismissing it now also updates the account, and a version number
+  (rather than a plain seen/unseen flag) means a later release can intentionally show it again to
+  everyone if a large enough change warrants it - no new migration required, just raising the current
+  version. The install-to-home-screen banner is unchanged: whether a device has the app installed is
+  a property of that device, not the account, so it keeps its existing local 7-day snooze.
+- **Week-view day headings align with the hourly calendar columns.** The header and all-day row
+  now share the hourly grid's gutter width.
+- **The all-day label lines up with the hours below it.** The row it sits in was corrected above,
+  but the label inside it kept the old 48px width in a 64px column. It is right-aligned, so it
+  ended 16px short of the hour figures that start directly underneath: the column boundaries
+  matched and the two labels still did not. Both texts now end on the same vertical edge.
+
+## [2.51.2] - 2026-08-29
+
+### Changed
+
+- **Documentation only, no change to the application.** `docs/SPEC.md` now records three calendar
+  behaviours it did not carry: that choosing a view persists it while drilling into one does not
+  (v2.51.0), how the view switcher and the calendar body relate as tablist and panel, and that the
+  agenda shows today even when today is empty (both v2.51.1). The first of these is the reason the
+  matching bug stayed invisible for a release: the specification described the intention, the code
+  did more, and nobody reading the spec would have found a contradiction.
+
+## [2.51.1] - 2026-08-29
+
+### Fixed
+
+- **The agenda no longer skips today in silence.** It lists only days that hold something, which is
+  right for the coming weeks and wrong for the first one: the header announced "From 28 August" and
+  the first row was the 29th. The day being asked about went missing precisely when the answer was
+  "nothing", and a missing day reads as a loading error rather than a free one. Today now appears
+  with a quiet "Nothing planned"; every other empty day stays out, since a list of emptiness helps
+  nobody.
+- **The calendar's view switcher tells assistive technology what it switches.** The bar carried
+  `role="tablist"` with four tabs, but there was no `role="tabpanel"` anywhere in the document and
+  no `aria-controls` - the relationship ended at the tab, and what it changed was nowhere stated.
+- **The empty-day hint in the day view is no longer cut in half by an hour line.** It sat as plain
+  text in the time grid, and the next line ran straight through the sentence.
 ## [2.51.0] - 2026-08-28
 
 ### Added

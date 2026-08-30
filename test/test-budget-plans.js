@@ -8,7 +8,8 @@ import os from 'node:os';
 import path from 'node:path';
 import express from 'express';
 
-process.env.DB_PATH = path.join(os.tmpdir(), `oikos-budget-plans-${process.pid}.db`);
+import { freshTestDbPath } from './tmp-db.js';
+freshTestDbPath('budget-plans');
 process.env.SESSION_SECRET = 'budget-plans-test-session-secret-32-bytes';
 
 const db = await import('../server/db.js');

@@ -1196,6 +1196,28 @@ mass 1,085:1. **Die Regel sagt, was passiert, wenn ein Label faellt. Sie sagt ni
 fallen muss** - und wo ein Blatt Platz hat, ist das Label die bessere Antwort als die beste
 Icon-Form.
 
+**DIE BLATT-REGEL (2026-08-28).** Traegt eine Werkzeugzeile mehr als zwei gleichrangige
+Schalter, gehoeren sie in ein Blatt hinter EINEN Knopf, und der Knopf traegt die ZAHL der
+aktiven. Drei Gruende, alle drei gemessen und alle drei im Kalenderkopf zugleich aufgetreten:
+die Zeile kostet Hoehe, die auf dem Telefon der Inhalt bezahlt (56px = 6,6 % der
+Viewporthoehe); die Schalter verlieren unter 640px ihr Label und werden zu Kreisen, die
+sehend nicht mehr auseinanderzuhalten sind; und ihr Zustand muss dann von einer Toenung
+getragen werden, die ihn nicht tragen kann.
+
+Der Zaehler ist dabei kein Schmuck, sondern die eigentliche Leistung: er beantwortet die
+einzige Frage, die der Kopf beantworten MUSS („nehme ich gerade etwas weg?"), und er tut es
+mit einer Zahl statt mit einem Farbunterschied - lesbar auch dort, wo eine Waschung keine
+Farbe tragen kann. **Was ein Blatt nicht aufnimmt, sind Meldungen.** Die
+Ueberlappungswarnung des Schichtplans (`role="status"`) blieb im Kopf: eine Warnung, die man
+erst aufklappen muss, ist keine.
+
+**Ein leeres Filterset heisst ALLE, nie KEINE.** Die Umkehrung erzeugt einen Zustand, aus dem
+die leere Flaeche selbst nicht mehr herausfuehrt - wer alle Haekchen entfernt, saehe nichts
+mehr und haette ausserhalb des Blatts keinen Hinweis darauf, warum. Aus derselben Ueberlegung
+faellt beim Laden jede gespeicherte Auswahl weg, die es nicht mehr gibt (ein ausgetretenes
+Mitglied), und eine Auswahl, die wieder alle umfasst, wird zu „kein Filter" zurueckgesetzt -
+sonst zaehlte der Knopf einen Filter, der nichts wegnimmt.
+
 NICHT geregelt ist, WANN ein Label faellt: das entscheidet die Leiste, in der das Element
 steht, denn es haengt daran, was sonst noch in ihr liegt. Kalender und Geburtstage geben ihr
 Label bei 640px ab, die Dokumente bei 768px, und die Einstellungen genau umgekehrt - dort
@@ -2134,9 +2156,34 @@ Fuellung plus eine 1px-Kante auf halber Deckung ist dieselbe Beimischungs-Falle,
 Absenderband zerbrochen ist - **eine Waschung hellt auf, sie faerbt nicht.** Fuellung
 (`--tint-surface`) und Tinte (38 % im Wochen- und Tagesblock, 35 % im Ganztages-Balken und
 im Monat) bleiben bei ihren gemessenen Rezepten unveraendert; die Farbe wandert in die Kante,
-wo die User-Farben-Regel sie ausdruecklich zulaesst. Das Monatsraster bleibt kantenlos: bei
-20px Chiphoehe waere die Kante ein Viertel des Blocks und die Regel gegen sich selbst
-gerichtet.
+wo die User-Farben-Regel sie ausdruecklich zulaesst.
+
+**Hier stand bis 2026-08-28 „Das Monatsraster bleibt kantenlos", und das war seit der
+Umsetzung falsch.** Alle VIER Blockarten tragen die Kante - `.month-day__event` genauso wie
+`.week-event`, `.day-event` und `.allday-event`; im Quelltext ist sie am Monatschip
+begruendet, nur hier war die Ausnahme stehengeblieben. Zwei Wahrheiten in zwei Dateien, und
+die Datei mit dem Anspruch, die Quelle zu sein, war die falsche. Der befuerchtete Effekt
+(„bei 20px Chiphoehe waere die Kante ein Viertel des Blocks") ist gemessen nicht
+eingetreten: 3px auf 20,8px sind ein Siebtel, und der Chip liest als Balken mit Kante, nicht
+als Kante mit Rest.
+
+**DER PUNKT BRAUCHT EINEN RING, DIE KANTE NICHT** (2026-08-28). Unter 640px faellt der
+Monatschip auf einen Punkt zusammen, und damit wird die freie Nutzerfarbe vom Beiwerk zum
+EINZIGEN Informationstraeger der Hauptansicht - ab da schuldet sie 3:1 nach WCAG 1.4.11,
+und das kann sie nicht halten: von den neun Seed-Terminfarben fielen FUENF gegen die helle
+Arbeitsflaeche durch (Amber 2,15:1, Cyan 2,43:1, Teal 2,49:1, Gruen 2,54:1, Orange 2,80:1),
+gegen die Wochenendflaeche zusaetzlich Rot. Im Dark bestanden alle - **eine Invariante, die
+nur in einem Theme haelt, ist keine.** Die Antwort ist nicht, die Farbe nachzudunkeln: sie
+gehoert dem Haushalt. Ein Ring in `--color-text-tertiary` traegt die Abgrenzung stattdessen
+selbst (light 4,74-5,64:1, dark 5,88:1), und der Punkt waechst dafuer von 8 auf 10px, damit
+Ring UND Farbe nebeneinander lesbar bleiben. Alle 24 gemessenen Kombinationen liegen danach
+bei mindestens 4,69:1.
+
+Die Regel dahinter, und sie gilt ueber den Kalender hinaus: **wo eine freie Nutzerfarbe zum
+alleinigen Traeger einer Information wird, traegt nicht sie den Kontrast, sondern ihre
+Fassung.** Die User-Farben-Regel kannte bis dahin den Textfall (verboten) und den
+Flaechenfall (gemessene Mix-Rezepte); fuer den Punkt, der zur einzigen Auskunft wird, gab es
+kein Rezept. Jetzt gibt es eines.
 
 ### Der Wand-Modus (Signature Component)
 **Der WACHE Zustand des Dashboards - keine zweite Seite, sondern dieselbe Flaeche in anderer

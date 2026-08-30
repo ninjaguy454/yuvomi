@@ -20,7 +20,7 @@ export function calendarPaths() {
         summary: 'Create calendar event',
         tag: 'Calendar',
         stateChanging: true,
-        description: 'Supports optional document-storage attachments via `attachment_name`, `attachment_mime`, `attachment_size`, and `attachment_data` (base64 data URL). New attachments are linked through `attachment_document_id`; legacy events may still return `attachment_data`. Set `target_caldav_account_id` and `target_caldav_calendar_url` to push the event to a CalDAV calendar (omit or null for a local-only event).',
+        description: 'Supports optional document-storage attachments via `attachment_name`, `attachment_mime`, `attachment_size`, and `attachment_data` (base64 data URL). New attachments are linked through `attachment_document_id`; legacy events may still return `attachment_data`. `place_id` may reference an active immutable Yuvomi Place while `location` remains editable display text. Set `target_caldav_account_id` and `target_caldav_calendar_url` to push the event to a CalDAV calendar (omit or null for a local-only event).',
         requestBody: jsonBody(null),
         responses: {
           201: {
@@ -148,7 +148,7 @@ export function calendarPaths() {
         tag: 'Calendar',
         params: [idParam()],
         stateChanging: true,
-        description: 'Supports document-storage attachments. Omit attachment fields to preserve the current attachment, send new `attachment_data` to create and link a document, or set `remove_attachment` to true to unlink it without deleting the library document. Legacy events may still return `attachment_data`. Changing a mirrored field (title, description, location, color, all-day, start/end, recurrence) of an event synced to Google pushes the change there, and switching `target_google_calendar_id` moves it to the other Google calendar. The remote call runs after the response and is retried by the next sync run if it fails.',
+        description: 'Supports document-storage attachments. Omit attachment fields to preserve the current attachment, send new `attachment_data` to create and link a document, or set `remove_attachment` to true to unlink it without deleting the library document. Legacy events may still return `attachment_data`. Omit `place_id` to preserve the Yuvomi Place reference, set it to null to detach it, or send an active Place ID; renaming that Place does not change Event identity. Changing a mirrored field (title, description, location, color, all-day, start/end, recurrence) of an event synced to Google pushes the change there, and switching `target_google_calendar_id` moves it to the other Google calendar. The remote call runs after the response and is retried by the next sync run if it fails.',
         requestBody: jsonBody(null),
         responses: {
           200: {
@@ -174,6 +174,9 @@ export function calendarPaths() {
     },
     '/api/v1/calendar/{id}/exceptions': {
       post: op({ summary: 'Exclude a single occurrence of a recurring event (EXDATE)', tag: 'Calendar', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/calendar/external-calendars': {
+      patch: op({ summary: 'Set the default assignee of an external calendar', tag: 'Calendar', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Body: { source, external_id, default_assignee_user_id }. Events arriving from that calendar are assigned to this member. Without it the first batch of a newly enabled calendar came in unassigned and had to be filled in by hand (#730). The sync only refreshes name and colour on conflict, so the assignment set here stays.' }),
     },
   };
 }

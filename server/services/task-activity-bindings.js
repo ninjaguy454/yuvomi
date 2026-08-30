@@ -11,6 +11,7 @@
 import { resolveActivityAssignment } from './activity-eligibility.js';
 import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
 import { todayKey } from '../utils/timezone.js';
+import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
 
 export class TaskActivityBindingError extends Error {}
 
@@ -20,7 +21,9 @@ function asPositiveInt(value) {
 }
 
 function activityTemplate(d, id) {
-  return d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id) ?? null;
+  const activity = d.prepare('SELECT * FROM activity_templates WHERE id = ?').get(id) ?? null;
+  if (activity) activity.checklist = loadActivityChecklist(d, activity.id);
+  return activity;
 }
 
 function taskRow(d, id) {
@@ -39,6 +42,64 @@ function supervisorTitle(activity, subject) {
     .replaceAll('{subject}', subject?.display_name || '')
     .replaceAll('{activity}', activity.name || 'activity')
     .trim();
+}
+
+function supportTaskDefinition(activity, subject, supervisorId, parent, recurrenceOriginId = null) {
+  return {
+    title: supervisorTitle(activity, subject),
+    description: `Supervise ${subject?.display_name || 'the household member'} while they complete: ${activity.name}`,
+    category: activity.category || parent.category || 'misc',
+    priority: 'none',
+    status: 'open',
+    start_date: parent.start_date ?? null,
+    due_date: parent.due_date ?? null,
+    due_time: parent.due_time ?? null,
+    assigned_to: Number(supervisorId),
+    created_by: Number(parent.created_by),
+    parent_task_id: Number(parent.id),
+    is_recurring: 0,
+    recurrence_rule: null,
+    assignment_mode: 'fixed',
+    rotation_index: 0,
+    points: 0,
+    visibility: parent.visibility,
+    countdown: 0,
+    recurrence_origin_id: recurrenceOriginId ? Number(recurrenceOriginId) : null,
+  };
+}
+
+/**
+ * A newly appearing supervisor has no supervisor Task in the previous
+ * occurrence to compare with. Its recurrence origin therefore points to the
+ * previous root occurrence, and this deterministic definition is the touch
+ * baseline used by recurrence undo.
+ */
+export function matchesGeneratedActivitySupportTask(d, parentTaskId, support, recurrenceOriginTaskId) {
+  const parent = taskRow(d, parentTaskId);
+  const binding = getTaskActivityBinding(d, parentTaskId);
+  if (!parent || !binding || !support) return false;
+  const activity = activityTemplate(d, binding.activity_template_id);
+  if (!activity) return false;
+  const subject = binding.subject_user_id
+    ? d.prepare('SELECT id, display_name FROM users WHERE id = ?').get(binding.subject_user_id)
+    : null;
+  const supervisors = d.prepare(`
+    SELECT user_id
+      FROM task_responsibilities
+     WHERE task_id = ? AND role = 'supervisor' AND status = 'active'
+     ORDER BY user_id
+  `).all(parentTaskId);
+  if (supervisors.length !== 1) return false;
+  const expected = supportTaskDefinition(
+    activity,
+    subject,
+    supervisors[0].user_id,
+    parent,
+    recurrenceOriginTaskId,
+  );
+  return Object.entries(expected).every(([key, value]) => (
+    (support[key] ?? null) === (value ?? null)
+  ));
 }
 
 export function getTaskActivityBinding(d, taskId) {
@@ -206,6 +267,7 @@ export function applyTaskActivityBinding(d, taskId, {
   dateKey = null,
   allowInactive = false,
   supportOriginTaskId = null,
+  materializeChecklist = true,
 } = {}) {
   const task = taskRow(d, taskId);
   if (!task) throw new TaskActivityBindingError('Task not found.');
@@ -236,6 +298,10 @@ export function applyTaskActivityBinding(d, taskId, {
   } catch (err) {
     throw new TaskActivityBindingError(err.message);
   }
+
+  // Read before the upsert: after it, every first-time binding would look
+  // existing and its authoring-time checklist would never be materialized.
+  const existingBinding = getTaskActivityBinding(d, task.id);
 
   d.prepare(`
     INSERT INTO task_activity_bindings (
@@ -274,10 +340,16 @@ export function applyTaskActivityBinding(d, taskId, {
   } else {
     d.prepare('DELETE FROM task_planning_context WHERE task_id = ?').run(task.id);
   }
-
   deleteSupportTasks(d, task.id);
   let supportTaskId = null;
   if (resolution.supervisor) {
+    const supportDefinition = supportTaskDefinition(
+      preview.activity,
+      resolution.subject,
+      resolution.supervisor.id,
+      task,
+      supportOriginTaskId,
+    );
     const support = d.prepare(`
       INSERT INTO tasks (
         title, description, category, priority, status,
@@ -286,17 +358,17 @@ export function applyTaskActivityBinding(d, taskId, {
         points, visibility, countdown, recurrence_origin_id
       ) VALUES (?, ?, ?, 'none', 'open', ?, ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, ?)
     `).run(
-      supervisorTitle(preview.activity, resolution.subject),
-      `Supervise ${resolution.subject?.display_name || 'the household member'} while they complete: ${preview.activity.name}`,
-      preview.activity.category || task.category || 'misc',
-      task.start_date,
-      task.due_date,
-      task.due_time,
-      resolution.supervisor.id,
-      task.created_by,
-      task.id,
-      task.visibility,
-      supportOriginTaskId || null,
+      supportDefinition.title,
+      supportDefinition.description,
+      supportDefinition.category,
+      supportDefinition.start_date,
+      supportDefinition.due_date,
+      supportDefinition.due_time,
+      supportDefinition.assigned_to,
+      supportDefinition.created_by,
+      supportDefinition.parent_task_id,
+      supportDefinition.visibility,
+      supportDefinition.recurrence_origin_id,
     );
     supportTaskId = Number(support.lastInsertRowid);
     setAssignments(d, supportTaskId, [resolution.supervisor.id]);
@@ -307,6 +379,17 @@ export function applyTaskActivityBinding(d, taskId, {
   }
 
   recordTaskAssignment(d, task.id, preview.activity, resolution);
+
+  // Copy authoring-time checklist definitions exactly once. From this point on
+  // the subtasks belong to the Task and are never rewritten by template edits.
+  if (materializeChecklist && !existingBinding && ordinaryActivitySubtasks(d, task.id).length === 0) {
+    materializeActivityChecklist(d, {
+      activity: preview.activity,
+      parentTaskId: task.id,
+      subject: resolution.subject,
+      createdBy: task.created_by,
+    });
+  }
 
   return {
     binding: getTaskActivityBinding(d, task.id),
@@ -344,6 +427,13 @@ export function copyTaskActivityBinding(d, sourceTaskId, targetTaskId, {
     // Existing series continue even if an admin later deactivates the template;
     // deactivation blocks new bindings, not already-scheduled household work.
     allowInactive: true,
-    supportOriginTaskId: sourceSupport?.id ?? null,
+    // A supervisor that existed in the prior cycle links to that support Task.
+    // If supervision appears only now, link it to the prior root occurrence so
+    // recurrence undo still has a traceable generated baseline.
+    supportOriginTaskId: sourceSupport?.id ?? sourceTaskId,
+    // The concrete Task occurrence owns its checklist, including an empty one
+    // after the household deleted every item. Never consult the current
+    // Activity template again while carrying a recurring binding forward.
+    materializeChecklist: false,
   });
 }

@@ -32,10 +32,12 @@ describe('VTODO field mapping', () => {
   it('rechnet einen UTC-Instant in die Wanduhrzeit des Haushalts um', () => {
     // Der Parser liefert UTC, die Aufgabe zeigt eine reine Wanduhrzeit an: ohne
     // Umrechnung stand eine um 16:30 fällige Aufgabe in Yuvomi um 14:30 (#617).
-    // TZ=Europe/Berlin ist im npm-Skript gesetzt, im Juli also UTC+2.
-    assert.deepStrictEqual(splitDue('2026-07-01T14:30:00Z'), { date: '2026-07-01', time: '16:30' });
+    // Die Zone wird ausdrücklich übergeben: Git Bash exportiert `TZ` auf Windows
+    // nicht an native Programme, deshalb darf dieser Unit-Test nicht von der
+    // Zeitzone des Test-Rechners abhängen. Berlin liegt im Juli bei UTC+2.
+    assert.deepStrictEqual(splitDue('2026-07-01T14:30:00Z', 'Europe/Berlin'), { date: '2026-07-01', time: '16:30' });
     // Über Mitternacht wandert auch das Datum mit.
-    assert.deepStrictEqual(splitDue('2026-07-01T23:30:00Z'), { date: '2026-07-02', time: '01:30' });
+    assert.deepStrictEqual(splitDue('2026-07-01T23:30:00Z', 'Europe/Berlin'), { date: '2026-07-02', time: '01:30' });
   });
 
   it('lässt eine Fälligkeit ohne Zonenangabe unangetastet', () => {

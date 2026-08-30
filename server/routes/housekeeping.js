@@ -24,6 +24,7 @@ import {
   mirroredFieldsChanged,
   queueEventDeletion,
 } from '../services/calendar-outbound.js';
+import { dropEventReminders } from '../services/event-reminder-fanout.js';
 
 const log = createLogger('Housekeeping');
 const router = express.Router();
@@ -381,6 +382,7 @@ function deleteVisitLinks(database, session) {
     // spielte ihn womöglich wieder ein.
     const event = database.prepare('SELECT * FROM calendar_events WHERE id = ?').get(session.calendar_event_id);
     if (event) queueEventDeletion(event, database);
+    dropEventReminders(database, session.calendar_event_id);
     database.prepare('DELETE FROM calendar_events WHERE id = ?').run(session.calendar_event_id);
   }
   if (session.payment_task_id) database.prepare('DELETE FROM tasks WHERE id = ?').run(session.payment_task_id);

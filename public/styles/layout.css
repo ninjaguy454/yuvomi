@@ -1745,6 +1745,56 @@ html:has(.list-bulkbar) yuvomi-install-prompt {
   fill: color-mix(in srgb, currentColor 30%, transparent);
 }
 
+.group-toggle {
+  display: flex;
+  gap: var(--space-0h);
+  padding: var(--space-0h);
+  background-color: var(--color-surface-3);
+  border-radius: var(--radius-sm);
+}
+
+.group-toggle__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--target-lg);
+  padding: var(--space-1) var(--space-3);
+  border-radius: calc(var(--radius-sm) - 2px);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.group-toggle__icon {
+  width: var(--icon-md);
+  height: var(--icon-md);
+  flex-shrink: 0;
+}
+
+.group-toggle__btn:hover:not(.group-toggle__btn--active) {
+  color: var(--color-text-primary);
+}
+
+.group-toggle__btn--active {
+  color: color-mix(in srgb, var(--module-accent, var(--color-accent)) var(--tint-ink), var(--color-text-primary));
+  background-color: var(--seg-active-bg);
+  box-shadow: var(--seg-active-shadow);
+}
+
+.address-book-tabs,
+.calendar-planning-tabs {
+  align-self: flex-start;
+  margin: 0 0 var(--space-4);
+}
+
+.address-book-tabs .group-toggle__btn,
+.calendar-planning-tabs .group-toggle__btn {
+  text-decoration: none;
+}
+
 /* Bottom-Nav aktiv: die gleitende Indikatorfläche übernimmt den Zustand. */
 .nav-bottom .nav-item[aria-current="page"],
 .nav-bottom .nav-item--active {

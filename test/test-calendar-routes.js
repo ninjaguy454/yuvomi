@@ -746,11 +746,84 @@ test('PUT /:id — nicht mitgeschickte Sync-Ziele bleiben erhalten (COALESCE)', 
   assert.equal(res.body.data.target_caldav_calendar_url, 'https://dav.test/keep/');
 });
 
-test('PUT /:id — externes Event wird als user_modified markiert', async () => {
+test('PUT /:id - externes Event wird als user_modified markiert', async () => {
   const id = insertEvent({ title: 'PUT-EXT', start_datetime: '2041-05-01T09:00', external_source: 'google', user_modified: 0 });
   const res = await call('PUT', `/${id}`, { body: { title: 'Lokal geändert' } });
   assert.equal(res.status, 200);
   assert.equal(res.body.data.user_modified, 1, 'Bearbeitung eines externen Events setzt user_modified');
+});
+
+test('PUT /:id - assignment fan-out preserves recurring external, Place, planning and outbound identity', async () => {
+  const placeId = Number(db.prepare(`
+    INSERT INTO places (name, type, street_address, created_by)
+    VALUES ('Route regression place', 'custom', '4 Integration Way', ?)
+  `).run(ADMIN.id).lastInsertRowid);
+  const eventId = Number(db.prepare(`
+    INSERT INTO calendar_events (
+      title, start_datetime, end_datetime, created_by, visibility,
+      assigned_to, external_source, external_calendar_id, recurrence_rule,
+      place_id, target_google_calendar_id, external_object_url,
+      user_modified, outbound_dirty, outbound_attempts, color_modified
+    ) VALUES (
+      'Route recurring external event', '2041-06-01T10:00:00', '2041-06-01T11:00:00', ?, 'all',
+      ?, 'google', 'route-google-event-id', 'FREQ=WEEKLY;COUNT=4',
+      ?, 'route-google-calendar-id', 'https://calendar.example/events/route-stable',
+      1, 1, 2, 1
+    )
+  `).run(ADMIN.id, ADMIN.id, placeId).lastInsertRowid);
+  assignEvent(eventId, ADMIN.id);
+  assignEvent(eventId, MARIA.id);
+  db.prepare(`
+    INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+    VALUES ('event', ?, '2041-05-31T10:00:00', ?)
+  `).run(eventId, ADMIN.id);
+
+  const mealId = Number(db.prepare(`
+    INSERT INTO meals (date, meal_type, title, created_by, place_id)
+    VALUES ('2041-06-01', 'dinner', 'Route conflict meal', ?, ?)
+  `).run(ADMIN.id, placeId).lastInsertRowid);
+  const conflictId = Number(db.prepare(`
+    INSERT INTO meal_calendar_conflicts (
+      meal_id, user_id, calendar_event_id, occurrence_key,
+      occurrence_start, occurrence_end, material_fingerprint
+    ) VALUES (?, ?, ?, '2041-06-01:maria', '2041-06-01T10:00:00', '2041-06-01T11:00:00', 'route-stable')
+  `).run(mealId, MARIA.id, eventId).lastInsertRowid);
+
+  const identity = () => db.prepare(`
+    SELECT external_source, external_calendar_id, recurrence_rule, place_id,
+           target_google_calendar_id, external_object_url, user_modified,
+           outbound_dirty, outbound_attempts, color_modified
+    FROM calendar_events WHERE id = ?
+  `).get(eventId);
+  const before = identity();
+
+  const response = await call('PUT', `/${eventId}`, {
+    actor: ADMIN,
+    body: { assigned_to: [ADMIN.id, MARIA.id, TOM.id] },
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.data.assigned_users.map((user) => user.id).sort(),
+    [ADMIN.id, MARIA.id, TOM.id]);
+  assert.deepEqual(identity(), before, 'assignment-only route update preserves Event identity and outbound state');
+  assert.deepEqual(db.prepare(`
+    SELECT meal_id, user_id, calendar_event_id, occurrence_key, material_fingerprint
+    FROM meal_calendar_conflicts WHERE id = ?
+  `).get(conflictId), {
+    meal_id: mealId,
+    user_id: MARIA.id,
+    calendar_event_id: eventId,
+    occurrence_key: '2041-06-01:maria',
+    material_fingerprint: 'route-stable',
+  });
+  for (const userId of [MARIA.id, TOM.id]) {
+    assert.deepEqual(db.prepare(`
+      SELECT remind_at, assigned_from FROM reminders
+      WHERE entity_type = 'event' AND entity_id = ? AND created_by = ?
+    `).get(eventId, userId), {
+      remind_at: '2041-05-31T10:00:00',
+      assigned_from: ADMIN.id,
+    }, `Calendar route fans the reminder out to assignee ${userId}`);
+  }
 });
 
 // ── color_modified: die Farbe fuehrt ihren eigenen Zustand (#899) ──────────────
@@ -881,6 +954,13 @@ test('POST /:id/exceptions — 403 fremd + 201 EXDATE angelegt', async () => {
 test('DELETE /:id — 404 + 204', async () => {
   assert.equal((await call('DELETE', '/9999999')).status, 404);
   const id = insertEvent({ title: 'TO-DELETE', start_datetime: '2043-01-01T09:00' });
+  db.prepare(`
+    INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+    VALUES ('event', ?, '2042-12-31T09:00:00', ?)
+  `).run(id, ADMIN.id);
   assert.equal((await call('DELETE', `/${id}`)).status, 204);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM calendar_events WHERE id=?').get(id).n, 0);
+  assert.equal(db.prepare(
+    "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+  ).get(id).n, 0, 'local Event deletion leaves no pending reminder orphan');
 });

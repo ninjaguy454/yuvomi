@@ -90,7 +90,7 @@ Turn on what your household needs; the rest stays out of the way.
 | **Notes &amp; Contacts** | Colored Markdown sticky notes with checklists you tick off by tapping them, plus a contact directory with CardDAV sync and vCard import/export. |
 | **Birthdays** | Birthday tracker with automatic calendar events, age display and reminders. |
 | **Family** | Member profiles with roles, photos and contact details. New members join through an invite link and pick their own password. |
-| **Reminders** | Reminders on tasks, events, subscription renewals, warranties, inventory deadlines and best-before dates, via in-app badges, opt-in push, and household Gotify, ntfy or webhook channels. |
+| **Reminders** | Reminders on tasks, events, subscription renewals, warranties, inventory deadlines and best-before dates, via in-app badges, opt-in push, and household Gotify, ntfy or webhook channels. A reminder on a shared event reaches everyone assigned to it, each with their own copy to move or dismiss. |
 | **API Tokens** | Bearer / X-API-Key tokens with an OpenAPI 3.0 spec and a built-in MCP endpoint for AI agents. Writes are retry-safe via an optional `Idempotency-Key` header. |
 | **Backup** | Manual and scheduled backup/restore with pre-restore rollback and optional cloud upload. |
 
@@ -103,10 +103,11 @@ drop-in module is covered in the [module guide](MODULES.md).
 
 Open `/reader` on the end of your normal Yuvomi address for a lightweight, server-rendered view of
 Today, Tasks, Calendar, and Meals. It does not require JavaScript, so it works on browsers such as
-the Kindle Paperwhite 3 browser that cannot run the full application. Reader mode is intentionally
-read-only and uses local password sign-in (including two-factor authentication when enabled); it
-cannot complete modern single-sign-on flows. From another device, use the Yuvomi server's LAN name
-or address rather than `127.0.0.1`, which always refers to the device currently opening the page.
+the Kindle Paperwhite 3 browser that cannot run the full application. Reader mode supports Calendar
+navigation and event details, recipe browsing, and creating simple Tasks. It uses local password
+sign-in (including two-factor authentication when enabled) and cannot complete modern single-sign-on
+flows. From another device, use the Yuvomi server's LAN name or address rather than `127.0.0.1`, which
+always refers to the device currently opening the page.
 
 ---
 

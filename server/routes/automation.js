@@ -163,6 +163,17 @@ function normalizeActivityInput(d, body, existing = null) {
   if (presencePolicy === 'must_be_at_location' && locationMode === 'none') {
     throw new Error('Must be at the activity location requires a fixed or workflow location.');
   }
+  const rawChecklist = body.checklist ?? existing?.checklist ?? [];
+  if (!Array.isArray(rawChecklist) || rawChecklist.length > 50) {
+    throw new Error('An Activity Template checklist must contain at most 50 items.');
+  }
+  const checklist = rawChecklist.map((item, index) => ({
+    titleTemplate: text(
+      typeof item === 'string' ? item : item?.title_template,
+      { required: true, max: 200 },
+    ),
+    sortOrder: index,
+  }));
 
   return {
     name,
@@ -188,6 +199,7 @@ function normalizeActivityInput(d, body, existing = null) {
     locationVariableId: locationMode === 'workflow' ? locationVariableId : null,
     presencePolicy,
     presenceWindow,
+    checklist,
   };
 }
 
@@ -299,6 +311,15 @@ function normalizeWorkflowConditionValue(d, question, value) {
     return placeId;
   }
   return normalized;
+}
+
+function saveActivityChecklist(d, activityId, checklist) {
+  d.prepare('DELETE FROM activity_template_checklist_items WHERE activity_template_id = ?').run(activityId);
+  const insert = d.prepare(`
+    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order)
+    VALUES (?, ?, ?)
+  `);
+  checklist.forEach((item) => insert.run(activityId, item.titleTemplate, item.sortOrder));
 }
 
 function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
@@ -1077,6 +1098,7 @@ router.post('/admin/activity-templates', requireAdmin, (req, res) => {
         input.allowAssignmentOverride, input.participantCount, input.rotationGroup,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
+      saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
       return Number(result.lastInsertRowid);
     })();
     res.status(201).json({ data: getActivityTemplate(d, id) });
@@ -1110,6 +1132,7 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
         input.participantCount, input.rotationGroup, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
+      saveActivityChecklist(d, existing.id, input.checklist);
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });
   } catch (err) {

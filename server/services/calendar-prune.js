@@ -11,7 +11,27 @@
 // --------------------------------------------------------
 
 import { createLogger } from '../logger.js';
+import { dropEventReminders } from './event-reminder-fanout.js';
 const log = createLogger('CalendarPrune');
+
+// Production uses better-sqlite3; a few service-level consumers/tests pass the
+// compatible node:sqlite handle, which has no `.transaction()` helper.
+function atomic(database, operation) {
+  // Callers such as account deletion already own the transaction. Joining it
+  // keeps Event rows and their reminders in the same commit without nesting a
+  // second BEGIN on node:sqlite test/adapter connections.
+  if (database.inTransaction || database.isTransaction) return operation();
+  if (typeof database.transaction === 'function') return database.transaction(operation)();
+  database.exec('BEGIN');
+  try {
+    const result = operation();
+    database.exec('COMMIT');
+    return result;
+  } catch (err) {
+    database.exec('ROLLBACK');
+    throw err;
+  }
+}
 
 /**
  * Entfernt lokal die Termine eines externen Kalenders, die der Server nicht mehr
@@ -63,10 +83,14 @@ export function pruneDeletedEvents(database, {
     return 0;
   }
 
-  const del = database.prepare('DELETE FROM calendar_events WHERE id = ?');
-  for (const ev of stale) del.run(ev.id);
-
-  return stale.length;
+  return atomic(database, () => {
+    const ids = stale.map((ev) => ev.id);
+    dropEventReminders(database, ids);
+    const del = database.prepare('DELETE FROM calendar_events WHERE id = ?');
+    let removed = 0;
+    for (const id of ids) removed += del.run(id).changes;
+    return removed;
+  });
 }
 
 // --------------------------------------------------------
@@ -133,11 +157,17 @@ export function deleteMirroredEvents(database, externalIds) {
   const refIds = calendarRefIds(database, externalIds);
   if (!refIds.length) return 0;
   const marks = refIds.map(() => '?').join(',');
-  const result = database.prepare(
-    `DELETE FROM calendar_events
-     WHERE calendar_ref_id IN (${marks}) AND external_source IN ('caldav','apple')`
-  ).run(...refIds);
-  const removed = Number(result.changes) || 0;
+  const removed = atomic(database, () => {
+    const ids = database.prepare(
+      `SELECT id FROM calendar_events
+       WHERE calendar_ref_id IN (${marks}) AND external_source IN ('caldav','apple')`
+    ).all(...refIds).map((row) => row.id);
+    dropEventReminders(database, ids);
+    return Number(database.prepare(
+      `DELETE FROM calendar_events
+       WHERE calendar_ref_id IN (${marks}) AND external_source IN ('caldav','apple')`
+    ).run(...refIds).changes) || 0;
+  });
   if (removed) log.info(`Removed ${removed} mirrored event(s) on user request.`);
   return removed;
 }
@@ -180,10 +210,15 @@ export function countSourceEvents(database, source) {
  * @returns {number} Anzahl gelöschter Termine
  */
 export function deleteSourceEvents(database, source) {
-  const result = database.prepare(
-    'DELETE FROM calendar_events WHERE external_source = ?'
-  ).run(source);
-  const removed = Number(result.changes) || 0;
+  const removed = atomic(database, () => {
+    const ids = database.prepare(
+      'SELECT id FROM calendar_events WHERE external_source = ?'
+    ).all(source).map((row) => row.id);
+    dropEventReminders(database, ids);
+    return Number(database.prepare(
+      'DELETE FROM calendar_events WHERE external_source = ?'
+    ).run(source).changes) || 0;
+  });
   if (removed) log.info(`Removed ${removed} mirrored ${source} event(s) on user request.`);
   return removed;
 }

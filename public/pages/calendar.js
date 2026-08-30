@@ -37,6 +37,7 @@ import { findPageFab } from '/utils/fab.js';
 import { nowFields, todayKey, zonedDateKey, zonedTimeKey } from '/utils/timezone.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 import { emptyStateHTML, emptyHintHTML, mountLoadError } from '/utils/empty-state.js';
+import { renderAvailabilityManager, renderTripsManager } from '/components/activity-automation.js';
 
 // --------------------------------------------------------
 // Konstanten
@@ -562,6 +563,11 @@ let state = {
   offlineSince:  null,     // Date des letzten Cache-Stands, wenn offline bedient
   defaultDuration: 60,     // Standard-Termindauer (Minuten) aus den Präferenzen
   currentUserId: null,     // eigene User-ID für „Mir zugewiesen"-Filter
+  // Der angemeldete Mensch, wie der Router ihn hereingibt. Gehalten fuer die
+  // Aufgaben-Leseansicht (#918): an ihm haengt, wem seine eigenen Kommentare
+  // gehoeren und wer eine gesperrte Aufgabe umschreiben darf. `currentUserId`
+  // allein reichte dafuer nicht - die Rolle steht nicht darin.
+  user: null,
   assignedToMe:  false,    // nur Termine/Aufgaben zeigen, die mir zugewiesen sind
   // Gewaehlte Personen als Set von User-IDs; LEER heisst ALLE, nicht KEINE.
   //
@@ -1187,6 +1193,41 @@ async function loadRange(from, to) {
 }
 
 /**
+ * Eine Aufgabe aus dem Kalender öffnen (#918).
+ *
+ * Bis dahin sprang ein Klick auf einen Aufgaben-Chip ins Aufgabenmodul: Der
+ * Kalender war weg, der Monat, den man gerade las, auch, und der Weg zurück
+ * ging über die Navigation. Für das Abhaken einer Aufgabe, die man auf ihrem
+ * Tag stehen sieht, war das der ganze Vorgang.
+ *
+ * Jetzt öffnet dieselbe Leseansicht, die das Aufgabenmodul öffnet - über den
+ * einen Einstieg dort, nicht über eine zweite, kleinere Fassung hier. Das
+ * Modul wird dafür nachgeladen und nicht mit importiert: Es zieht das
+ * Aufgabenformular mit sich, und dessen Gewicht gehört nicht in den Start des
+ * Kalenders.
+ *
+ * Nach einer Änderung wird der sichtbare Bereich neu geholt statt nur neu
+ * gezeichnet: Abhaken, Ablegen und Löschen ändern, WELCHE Aufgaben auf einem
+ * Tag stehen, nicht nur wie sie aussehen.
+ */
+async function openTaskFromCalendar(taskId) {
+  try {
+    const { openTaskById } = await import('/pages/tasks.js');
+    await openTaskById(taskId, {
+      user: state.user,
+      container: _container,
+      onChanged: async () => {
+        await loadRange(state.rangeFrom, state.rangeTo);
+        renderView();
+      },
+    });
+  } catch (err) {
+    console.error('[Calendar] Aufgabe konnte nicht geöffnet werden:', err);
+    window.yuvomi?.showToast(err.message ?? t('tasks.loadError'), 'danger');
+  }
+}
+
+/**
  * Nur die Kalender-Events des aktuellen Bereichs neu laden (ohne Tasks/Feiertage).
  * Für serienweite Bearbeitungen (#532), bei denen sich lediglich die Expansion
  * ändert - vermeidet das Überholen unveränderter Tasks/Feiertage aus loadRange.
@@ -1239,7 +1280,49 @@ async function loadUsers() {
 // Entry Point
 // --------------------------------------------------------
 
+function calendarPlanningTabs(active = 'calendar') {
+  return `<nav class="group-toggle calendar-planning-tabs" aria-label="Calendar planning sections">
+    <a class="group-toggle__btn ${active === 'calendar' ? 'group-toggle__btn--active' : ''}" ${active === 'calendar' ? 'aria-current="page"' : ''} href="/calendar" data-calendar-planning-link>Calendar</a>
+    <a class="group-toggle__btn ${active === 'availability' ? 'group-toggle__btn--active' : ''}" ${active === 'availability' ? 'aria-current="page"' : ''} href="/calendar?section=availability" data-calendar-planning-link>Availability</a>
+    <a class="group-toggle__btn ${active === 'trips' ? 'group-toggle__btn--active' : ''}" ${active === 'trips' ? 'aria-current="page"' : ''} href="/calendar?section=trips" data-calendar-planning-link>Trips</a>
+  </nav>`;
+}
+
+function wireCalendarPlanningTabs(container) {
+  container.querySelectorAll('[data-calendar-planning-link]').forEach((link) => link.addEventListener('click', (event) => {
+    event.preventDefault();
+    window.yuvomi?.navigate(link.getAttribute('href'));
+  }));
+}
+
+async function renderCalendarPlanningSection(container, section, user) {
+  container.replaceChildren();
+  container.insertAdjacentHTML('beforeend', `<div class="calendar-planning-page page-measure--narrow">
+    <div class="page-toolbar page-toolbar--wrap page-toolbar--narrow"><h1 class="page-toolbar__title">Calendar</h1></div>
+    ${calendarPlanningTabs(section)}
+    <section class="settings-card settings-card--automation" data-calendar-planning-host></section>
+  </div>`);
+  const host = container.querySelector('[data-calendar-planning-host]');
+  wireCalendarPlanningTabs(container);
+  if (user?.role !== 'admin') {
+    host.replaceChildren();
+    host.insertAdjacentHTML('beforeend', '<p class="form-hint">Household administrators maintain availability and trip plans.</p>');
+    return;
+  }
+  const manager = { navigate: async () => {
+    if (section === 'availability') await renderAvailabilityManager(host, manager);
+    else await renderTripsManager(host, manager);
+  } };
+  await manager.navigate();
+  if (window.lucide) window.lucide.createIcons({ el: container });
+}
+
 export async function render(container, { user }) {
+  const requestedSection = new URLSearchParams(window.location.search).get('section');
+  if (['availability', 'trips'].includes(requestedSection)) {
+    await renderCalendarPlanningSection(container, requestedSection, user);
+    return;
+  }
   _container = container;
   // Die Uhr des Haushalts: state.today markiert die Heute-Zelle, die Jetzt-Linie
   // und den Vorschlag fuer einen neuen Termin - alle drei muessen denselben Tag
@@ -1252,12 +1335,14 @@ export async function render(container, { user }) {
   container.insertAdjacentHTML('beforeend', `
     <div class="calendar-page" id="calendar-page">
       <div class="page-toolbar page-toolbar--wrap cal-toolbar" id="cal-toolbar"></div>
+      ${calendarPlanningTabs('calendar')}
       <div id="cal-body" style="flex:1;display:flex;flex-direction:column;overflow:hidden;"></div>
       <button class="page-fab" id="fab-new-event" aria-label="${t('calendar.newEvent')}" data-dock-label="${t('newLabel.calendar')}">
         <i data-lucide="plus" class="icon-xl" aria-hidden="true"></i>
       </button>
     </div>
   `);
+  wireCalendarPlanningTabs(container);
 
   // Lade-Skeleton sofort einblenden, damit der erste Frame nicht leer bleibt,
   // während Termine/Präferenzen laden (Sichtbarkeit des Systemstatus). Wird von
@@ -1310,6 +1395,7 @@ export async function render(container, { user }) {
   state.layerSchedule = localStorage.getItem(LAYER_SCHEDULE_KEY) !== 'false';
   state.scheduleDisplay = localStorage.getItem(SCHEDULE_DISPLAY_KEY) === 'blocks' ? 'blocks' : 'compact';
   state.currentUserId = user?.id ?? null;
+  state.user          = user ?? null;
   state.assignedToMe  = localStorage.getItem(ASSIGNED_TO_ME_KEY) === '1';
   state.people = restorePeopleFilter(state.users);
 
@@ -1418,7 +1504,9 @@ function renderToolbar() {
       <div class="cal-toolbar__views" role="tablist" aria-label="${t('nav.calendar')}">
         ${VIEWS.map((v) => `
           <button class="cal-toolbar__view-btn ${v === state.view ? 'cal-toolbar__view-btn--active' : ''}"
-                  role="tab" data-tab-id="${v}" aria-selected="${v === state.view ? 'true' : 'false'}"
+                  role="tab" id="cal-view-tab-${v}" data-tab-id="${v}"
+                  aria-selected="${v === state.view ? 'true' : 'false'}"
+                  ${v === state.view ? 'aria-controls="cal-body"' : ''}
                   tabindex="${v === state.view ? '0' : '-1'}">${VIEW_LABELS()[v]}</button>
         `).join('')}
       </div>
@@ -1480,6 +1568,36 @@ function updateLabel() {
   if (state.view === 'agenda') lbl.textContent = t('calendar.agendaFrom', { date: formatDate(state.cursor) });
 
   syncTodayButton();
+  syncViewPanel();
+}
+
+/**
+ * DER KOERPER IST DAS PANEL DER TABLEISTE - EINES, NICHT VIER.
+ *
+ * Die Leiste trug `role="tablist"` mit vier `role="tab"`, aber es gab kein
+ * `role="tabpanel"` im Dokument und kein `aria-controls`: fuer einen
+ * Screenreader endete die Beziehung beim Tab, und was er umschaltet, stand
+ * nirgends.
+ *
+ * Der geteilte Helfer `syncTabPanels` (utils/sub-tabs.js) passt hier nicht,
+ * und das ist kein Versehen: er verwaltet N Panels und versteckt die
+ * inaktiven per `hidden`. Der Kalender hat EIN `#cal-body`, dessen INHALT bei
+ * jedem Wechsel ersetzt wird - es gibt kein zweites Panel zum Verstecken. Die
+ * Beziehung ist deshalb umgekehrt gerichtet: das Panel nennt den Tab, der es
+ * gerade beschriftet, und nur der aktive Tab traegt `aria-controls`. Ein
+ * inaktiver Tab, der auf dasselbe Panel zeigt, waere die Zusage, dass es
+ * SEINEN Inhalt enthaelt - und die ist falsch.
+ */
+function syncViewPanel() {
+  const body = _container?.querySelector('#cal-body');
+  if (!body) return;
+  body.setAttribute('role', 'tabpanel');
+  body.setAttribute('aria-labelledby', `cal-view-tab-${state.view}`);
+
+  for (const btn of _container.querySelectorAll('.cal-toolbar__view-btn')) {
+    if (btn.dataset.tabId === state.view) btn.setAttribute('aria-controls', 'cal-body');
+    else btn.removeAttribute('aria-controls');
+  }
 }
 
 /**
@@ -1793,7 +1911,7 @@ function renderMonthView(container) {
       const taskChip = e.target.closest('.cal-task-chip');
       if (taskChip) {
         e.stopPropagation();
-        window.yuvomi.navigate(`/tasks?open=${taskChip.dataset.taskId}`);
+        openTaskFromCalendar(taskChip.dataset.taskId);
         return;
       }
       const evEl = e.target.closest('.month-day__event');
@@ -1997,7 +2115,7 @@ function renderWeekView(container) {
   container.insertAdjacentHTML('beforeend', `
     <div class="week-view">
       <div class="week-view__header" id="week-header"
-           style="display:grid;grid-template-columns:var(--space-12) repeat(${colCount},1fr);">
+           style="display:grid;grid-template-columns:var(--cal-gutter-width) repeat(${colCount},1fr);">
         <div class="week-view__time-gutter"></div>
         ${days.map((d) => {
           const dt = new Date(d + 'T00:00:00');
@@ -2008,7 +2126,7 @@ function renderWeekView(container) {
         }).join('')}
       </div>
       <!-- Ganztägige Ereignisse -->
-      <div class="allday-row" style="display:grid;grid-template-columns:var(--space-12) repeat(${colCount},1fr);">
+      <div class="allday-row" style="display:grid;grid-template-columns:var(--cal-gutter-width) repeat(${colCount},1fr);">
         <div class="calendar-all-day-label">${t('calendar.allDayShort')}</div>
         ${days.map((d, i) => `
           <div class="allday-cell">
@@ -2078,7 +2196,7 @@ function renderWeekView(container) {
   container.querySelector('.allday-row').addEventListener('click', (e) => {
     const taskChip = e.target.closest('.cal-task-chip');
     if (taskChip) {
-      window.yuvomi.navigate(`/tasks?open=${taskChip.dataset.taskId}`);
+      openTaskFromCalendar(taskChip.dataset.taskId);
       return;
     }
     const evEl = e.target.closest('.allday-event');
@@ -2290,7 +2408,7 @@ function renderDayView(container) {
   container.querySelector('.allday-row')?.addEventListener('click', (e) => {
     const taskChip = e.target.closest('.cal-task-chip');
     if (taskChip) {
-      window.yuvomi.navigate(`/tasks?open=${taskChip.dataset.taskId}`);
+      openTaskFromCalendar(taskChip.dataset.taskId);
       return;
     }
     const evEl = e.target.closest('.allday-event');
@@ -2366,9 +2484,25 @@ function renderAgendaView(container) {
   const { from, to } = getAgendaRange(state.cursor);
   const days = Array.from({ length: 31 }, (_, i) => addDays(from, i));
 
+  /* HEUTE WIRD NICHT STILL UEBERSPRUNGEN.
+   *
+   * Die Agenda listet nur Tage, an denen etwas steht - richtig fuer die
+   * naechsten Wochen, falsch fuer den ersten. Der Kopf kuendigt „Ab
+   * 28.08.2026" an, und die erste Zeile war der 29.: der Tag, nach dem
+   * gefragt wird, fehlte genau dann, wenn die Antwort „nichts" lautet - und
+   * ein fehlender Tag sieht aus wie ein Ladefehler, nicht wie ein freier Tag.
+   * Die CSS-Regel `agenda-day__header--today` gab es laengst, sie konnte nur
+   * nie feuern.
+   *
+   * NUR HEUTE, und nur wenn heute im Bereich liegt. Jeder leere Tag als Zeile
+   * waere eine Liste aus Leere; „heute" ist der eine Tag, dessen Abwesenheit
+   * eine Frage offen laesst. */
+  const todayInRange = state.today >= from && state.today <= to;
+
   const groups = days
     .map((d) => ({ date: d, events: eventsOnDay(d), tasks: tasksOnDay(d), holidays: holidaysOnDay(d), schedule: scheduleEntriesOnDay(d) }))
-    .filter((g) => g.events.length > 0 || g.tasks.length > 0 || g.holidays.length > 0 || g.schedule.length > 0);
+    .filter((g) => g.events.length > 0 || g.tasks.length > 0 || g.holidays.length > 0 || g.schedule.length > 0
+      || (todayInRange && g.date === state.today));
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -2395,6 +2529,8 @@ function renderAgendaView(container) {
             ${schedule.length ? `<div class="agenda-holidays">${schedule.map((entry) => renderScheduleChip(entry, 'agenda-holiday')).join('')}</div>` : ''}
             ${events.length ? `<div class="list-rows">${events.map((ev) => renderAgendaEvent(ev, date)).join('')}</div>` : ''}
             ${tasks.length ? `<div class="agenda-tasks">${tasks.map(renderTaskChip).join('')}</div>` : ''}
+            ${(!events.length && !tasks.length && !holidays.length && !schedule.length)
+              ? `<p class="agenda-day__empty">${t('calendar.agendaDayEmpty')}</p>` : ''}
           </div>
         `).join('')
       }
@@ -2410,7 +2546,7 @@ function renderAgendaView(container) {
     }
     const taskChip = e.target.closest('.cal-task-chip');
     if (taskChip) {
-      window.yuvomi.navigate(`/tasks?open=${taskChip.dataset.taskId}`);
+      openTaskFromCalendar(taskChip.dataset.taskId);
       return;
     }
     const evEl = e.target.closest('.agenda-event');
@@ -3106,7 +3242,7 @@ async function openEventDetail(ev, anchor = null) {
         await close({ force: true });
         window.yuvomi.navigate(meal
           ? `/meals?week=${String(ev.start_datetime).slice(0, 10)}&open=${ev.plan_id}`
-          : `/settings/modules/automation?tab=trips&open=${ev.plan_id}`);
+          : `/calendar?section=trips&open=${ev.plan_id}`);
       },
     }];
     openDetailView({
@@ -3319,6 +3455,12 @@ function renderCalendarReminderSection(reminders = [], event = null, defaultOffs
   const enabled = rows.length > 0;
   const rowsHtml = (enabled ? rows : [{ offset: '0', amount: 1, unit: 'days' }])
     .map((r) => reminderRowHtml(r)).join('');
+  /* NUR WER DEN TERMIN ANGELEGT HAT, TEILT SEINE ERINNERUNG (#921) - und nur
+   * der bekommt den Hinweis. Fuer alle anderen waere er unwahr: wer sich an
+   * einem fremden Termin einen Merker setzt, setzt ihn fuer sich, damit nicht
+   * der halbe Haushalt eine Meldung bekommt, weil ein Einzelner sich etwas
+   * notiert hat. Ein neuer Termin gehoert dem, der ihn gerade anlegt. */
+  const sharesReminder = !event || event.created_by === state.currentUserId;
   return `
     <div class="reminder-section">
       <div class="reminder-section__header">
@@ -3336,6 +3478,7 @@ function renderCalendarReminderSection(reminders = [], event = null, defaultOffs
           <i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>
           ${t('reminders.addReminder')}
         </button>
+        ${sharesReminder ? `<p class="form-hint">${t('reminders.sharedWithAssignees')}</p>` : ''}
       </div>
     </div>`;
 }

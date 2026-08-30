@@ -9,6 +9,7 @@ import express from 'express';
 import * as db from '../db.js';
 import * as v from '../middleware/validate.js';
 import { syncAllBirthdayReminders } from '../services/birthdays.js';
+import { fanOutEventReminders, eventAuthorId } from '../services/event-reminder-fanout.js';
 import { deniedModules } from '../permissions.js';
 import { tokenAllows } from '../scopes.js';
 
@@ -16,6 +17,24 @@ const log    = createLogger('Reminders');
 const router = express.Router();
 
 const VALID_ENTITY_TYPES = ['task', 'event', 'subscription', 'inventory_item', 'inventory_tracked_date', 'pantry_item'];
+
+/**
+ * Nach jedem Schreibvorgang an den Erinnerungen eines Termins: die Zugewiesenen
+ * nachziehen (#921).
+ *
+ * EINE ZEILE HINTER JEDEM DER VIER WEGE, weil die Regel dieselbe ist. Setzen,
+ * Ersetzen, einzeln Loeschen und Alles-Loeschen enden alle hier, und
+ * `fanOutEventReminders` liest die Vorlage jedes Mal frisch: nach einem
+ * Loeschen ist sie leer, und dann raeumt derselbe Aufruf die geerbten Zeilen
+ * ab, statt Meldungen stehen zu lassen, die der Ersteller gerade abgeschafft
+ * hat. Verteilt wird nur, wenn der Aufrufer den Termin ANGELEGT hat - wer sich
+ * sonst eine Erinnerung setzt, setzt sie fuer sich.
+ */
+function syncEventFanout(entityType, entityId, userId) {
+  if (entityType !== 'event') return;
+  if (eventAuthorId(db.get(), entityId) !== userId) return;
+  fanOutEventReminders(db.get(), entityId, userId);
+}
 
 /**
  * HERKÜNFTE, DIE EIN LAUF LAUFEND HERSTELLT und die deshalb keine Handeingabe
@@ -245,18 +264,24 @@ router.post('/', (req, res) => {
 
     const entityId = parseInt(entity_id, 10);
 
-    // Bestehende nicht-verworfene Erinnerungen für diese Entität löschen
-    db.get().prepare(`
-      DELETE FROM reminders
-      WHERE entity_type = ? AND entity_id = ? AND created_by = ?
-    `).run(entity_type, entityId, userId);
+    // Author write and inherited fan-out are one unit: either every assignee is
+    // synchronized or the caller's replacement is rolled back as well.
+    const reminderId = db.get().transaction(() => {
+      db.get().prepare(`
+        DELETE FROM reminders
+        WHERE entity_type = ? AND entity_id = ? AND created_by = ?
+      `).run(entity_type, entityId, userId);
 
-    const result = db.get().prepare(`
-      INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
-      VALUES (?, ?, ?, ?)
-    `).run(entity_type, entityId, remind_at, userId);
+      const result = db.get().prepare(`
+        INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+        VALUES (?, ?, ?, ?)
+      `).run(entity_type, entityId, remind_at, userId);
 
-    const row = db.get().prepare('SELECT * FROM reminders WHERE id = ?').get(result.lastInsertRowid);
+      syncEventFanout(entity_type, entityId, userId);
+      return result.lastInsertRowid;
+    })();
+
+    const row = db.get().prepare('SELECT * FROM reminders WHERE id = ?').get(reminderId);
     res.status(201).json({ data: row });
   } catch (err) {
     log.error('Error creating reminder:', err.message);
@@ -318,6 +343,7 @@ router.put('/', (req, res) => {
       for (const remindAt of values) {
         insert.run(entityType, entityId, remindAt, userId);
       }
+      syncEventFanout(entityType, entityId, userId);
     });
     replace(unique);
 
@@ -385,7 +411,7 @@ router.delete('/:id', (req, res) => {
     }
 
     const reminder = db.get().prepare(
-      'SELECT id, entity_type FROM reminders WHERE id = ? AND created_by = ?'
+      'SELECT id, entity_type, entity_id FROM reminders WHERE id = ? AND created_by = ?'
     ).get(reminderId, userId);
 
     if (!reminder) {
@@ -400,7 +426,10 @@ router.delete('/:id', (req, res) => {
       return res.status(400).json({ error: derivedTypeError(reminder.entity_type), code: 400 });
     }
 
-    db.get().prepare('DELETE FROM reminders WHERE id = ?').run(reminderId);
+    db.get().transaction(() => {
+      db.get().prepare('DELETE FROM reminders WHERE id = ?').run(reminderId);
+      syncEventFanout(reminder.entity_type, reminder.entity_id, userId);
+    })();
     res.status(204).end();
   } catch (err) {
     log.error('Error deleting reminder:', err.message);
@@ -435,10 +464,13 @@ router.delete('/', (req, res) => {
       return res.status(400).json({ error: derivedTypeError(entityType), code: 400 });
     }
 
-    db.get().prepare(`
-      DELETE FROM reminders
-      WHERE entity_type = ? AND entity_id = ? AND created_by = ?
-    `).run(entityType, entityId, userId);
+    db.get().transaction(() => {
+      db.get().prepare(`
+        DELETE FROM reminders
+        WHERE entity_type = ? AND entity_id = ? AND created_by = ?
+      `).run(entityType, entityId, userId);
+      syncEventFanout(entityType, entityId, userId);
+    })();
 
     res.status(204).end();
   } catch (err) {

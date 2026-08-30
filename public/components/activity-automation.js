@@ -1,4 +1,5 @@
 import { api } from '/api.js';
+import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
 import { openModal, closeModal, confirmOverModal } from '/components/modal.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
@@ -445,9 +446,6 @@ const AUTOMATION_TABS = [
   ['activities', 'Activities'],
   ['workflows', 'Quick Add templates'],
   ['variables', 'Variables'],
-  ['places', 'Places'],
-  ['availability', 'Availability'],
-  ['trips', 'Trips'],
 ];
 
 function validAutomationTab(tab) {
@@ -654,7 +652,7 @@ function placeTypeOptions(selected = 'custom') {
     .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
-async function renderPlacesManager(body, manager) {
+export async function renderPlacesManager(body, manager) {
   const [response, searchResponse] = await Promise.all([
     api.get('/planning/admin/context'),
     api.get('/planning/place-search/status').catch(() => ({ data: { configured: false } })),
@@ -667,7 +665,7 @@ async function renderPlacesManager(body, manager) {
     <div class="automation-list">${places.map((place) => {
       const usage = Object.values(place.usage || {}).reduce((sum, count) => sum + Number(count || 0), 0);
       return `<div class="list-row automation-list-row">
-        <div class="automation-list-row__copy"><strong>${h(place.path_label || place.name)}</strong><br><small class="form-hint">${h(place.type)}${place.city ? ` · ${h(place.city)}` : ''}${place.active ? '' : ' · inactive'}${usage ? ` · ${usage} linked record${usage === 1 ? '' : 's'}` : ''}</small></div>
+        <div class="automation-list-row__copy"><strong>${h(place.path_label || place.name)}</strong><br><small class="form-hint">${h(place.type)}${place.city ? ` · ${h(place.city)}` : ''}${place.active ? '' : ' · inactive'}${usage ? ` · ${usage} linked record${usage === 1 ? '' : 's'}` : ''}</small>${place.street_address ? `<br><small>${h([place.street_address, place.city, place.region, place.postal_code, place.country].filter(Boolean).join(', '))}</small>` : ''}${place.description ? `<p class="form-hint">${h(place.description)}</p>` : ''}</div>
         <div class="automation-list-row__actions">${placeMapsUrl(place) ? `<a class="btn btn--ghost btn--sm" href="${h(placeMapsUrl(place))}" target="_blank" rel="noopener noreferrer">Open in Google Maps</a>` : ''}<button type="button" class="btn btn--ghost btn--sm" data-edit-place="${place.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-place="${place.id}">Delete</button></div>
       </div>`;
     }).join('') || '<p class="form-hint">No Places yet. Start with Home, then add rooms or recurring destinations.</p>'}</div>`);
@@ -683,55 +681,22 @@ async function renderPlacesManager(body, manager) {
   }));
 }
 
-async function openGooglePlacesConfig(manager) {
-  let config;
-  try { config = (await api.get('/planning/admin/place-search-config')).data; }
-  catch (error) { toast(error.message, 'danger'); return; }
-  const managed = config.managed_by_environment || {};
-  const lockedHint = 'Managed by this Docker container and cannot be changed here.';
-  const lock = (field) => managed[field] ? ` disabled aria-describedby="google-${field}-managed"` : '';
-  const sourceLabel = config.api_key_source === 'environment'
-    ? 'An API key is supplied by the Docker environment.'
-    : config.api_key_configured ? 'A saved API key is configured. Leave this blank to keep it.' : 'No API key is saved yet.';
-  const content = `<form id="automation-google-places-config">
-    <p class="form-hint">Google search is optional. The API key stays on the Yuvomi server and is never returned to the browser after it is saved.</p>
-    ${inputRow('Google Maps Platform API key', `<input class="input" type="password" name="api_key" maxlength="500" autocomplete="off" placeholder="${config.api_key_configured ? 'Saved - leave blank to keep' : 'Paste API key'}"${lock('api_key')}>`, sourceLabel)}
-    ${managed.api_key ? `<p class="form-hint" id="google-api_key-managed">${lockedHint}</p>` : ''}
-    <label class="automation-check-row"><input type="checkbox" name="integration_enabled" ${config.integration_enabled ? 'checked' : ''}${lock('integration_enabled')}> Enable Google Places search</label>
-    ${managed.integration_enabled ? `<p class="form-hint" id="google-integration_enabled-managed">${lockedHint}</p>` : ''}
-    <label class="automation-check-row"><input type="checkbox" name="terms_accepted" ${config.terms_accepted ? 'checked' : ''}${lock('terms_accepted')}> I have reviewed and accept the Google Maps Platform terms for this household's use</label>
-    ${managed.terms_accepted ? `<p class="form-hint" id="google-terms_accepted-managed">${lockedHint}</p>` : ''}
-    <p class="form-hint"><a href="https://developers.google.com/maps/terms" target="_blank" rel="noopener noreferrer">Review Google Maps Platform terms</a>. Enable the Places API (New) and billing in the Google Cloud project for this key.</p>
-    <div class="automation-workflow-condition">
-      ${inputRow('Requests per person / minute', `<input class="input" type="number" name="per_user_per_minute" min="1" max="120" required value="${h(config.per_user_per_minute)}"${lock('per_user_per_minute')}>`, managed.per_user_per_minute ? lockedHint : 'Prevents repeated clicks or UI loops from running up requests.')}
-      ${inputRow('Household requests / day', `<input class="input" type="number" name="household_per_day" min="1" max="100000" required value="${h(config.household_per_day)}"${lock('household_per_day')}>`, managed.household_per_day ? lockedHint : 'A hard daily safeguard for all household members combined.')}
-    </div>
-    ${inputRow('Search radius in meters', `<input class="input" type="number" name="radius_meters" min="1" max="50000" required value="${h(config.radius_meters)}"${lock('radius_meters')}>`, managed.radius_meters ? lockedHint : 'Used only when the selected origin has coordinates; maximum 50,000 meters.')}
-    ${config.stored_api_key_configured && !managed.api_key ? '<label class="automation-check-row"><input type="checkbox" name="clear_api_key"> Remove the saved API key</label>' : ''}
-    ${footer('Save Google settings')}
-  </form>`;
-  openModal({ title: 'Configure Google search', content, size: 'lg', onSave(panel) {
-    panel.querySelector('#automation-google-places-config')?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget; const data = new FormData(form);
-      const payload = {
-        integration_enabled: managed.integration_enabled ? config.integration_enabled : data.has('integration_enabled'),
-        terms_accepted: managed.terms_accepted ? config.terms_accepted : data.has('terms_accepted'),
-        per_user_per_minute: managed.per_user_per_minute ? config.per_user_per_minute : Number(data.get('per_user_per_minute')),
-        household_per_day: managed.household_per_day ? config.household_per_day : Number(data.get('household_per_day')),
-        radius_meters: managed.radius_meters ? config.radius_meters : Number(data.get('radius_meters')),
-        clear_api_key: !managed.api_key && data.has('clear_api_key'),
-      };
-      const apiKey = String(data.get('api_key') || '').trim();
-      if (!managed.api_key && apiKey) payload.api_key = apiKey;
-      const submit = panel.querySelector('button[type="submit"]'); submit.disabled = true;
-      try {
-        const saved = (await api.put('/planning/admin/place-search-config', payload)).data;
-        toast(saved.configured ? 'Google Places search is ready.' : 'Google settings saved. Complete the remaining setup to enable search.');
-        await closeModal({ force: true }); await refreshAutomationManager(manager, 'places');
-      } catch (error) { toast(error.message, 'danger'); submit.disabled = false; }
-    });
-  } });
+function openGooglePlacesConfig(manager) {
+  openModal({
+    title: 'Configure Google search',
+    content: '<div data-google-places-settings></div>',
+    size: 'lg',
+    onSave(panel) {
+      const host = panel.querySelector('[data-google-places-settings]');
+      renderGooglePlacesSettings(host, {
+        modal: true,
+        onSaved: async () => {
+          await closeModal({ force: true });
+          await manager?.navigate?.('places');
+        },
+      });
+    },
+  });
 }
 
 function googleAttributionHtml(result) {
@@ -743,6 +708,15 @@ function googleAttributionHtml(result) {
       ? `<a href="${h(uri)}" target="_blank" rel="noopener noreferrer">${h(name)}</a>` : h(name);
   }).filter(Boolean);
   return `<small class="form-hint">Results from Google Maps${thirdParty.length ? ` · Attribution: ${thirdParty.join(', ')}` : ''}</small>`;
+}
+
+function placeTypeFromGoogle(primaryType = '') {
+  const type = String(primaryType).toLowerCase();
+  if (type.includes('restaurant') || type.includes('cafe') || type.includes('meal')) return 'restaurant';
+  if (type.includes('store') || type.includes('pharmacy') || type.includes('shopping')) return 'store';
+  if (type.includes('hotel') || type.includes('lodging')) return 'hotel';
+  if (type.includes('school') || type.includes('university')) return 'school';
+  return 'custom';
 }
 
 function openPlaceSearchForm(places, manager) {
@@ -771,7 +745,7 @@ function openPlaceSearchForm(places, manager) {
       submit.disabled = true; status.textContent = 'Searching Google Places…';
       try {
         const response = await api.post('/planning/place-search', payload); const results = response.data || [];
-        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}" aria-label="Saved Place name"></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
+        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row automation-google-place-result"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<div class="automation-google-place-result__fields"><label class="form-hint">Yuvomi name<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}"></label><label class="form-hint">Type<select class="input" data-place-type="${index}">${placeTypeOptions(placeTypeFromGoogle(result.primary_type))}</select></label><label class="form-hint">Address you want to keep<input class="input" data-place-address="${index}" maxlength="250" value="${h(result.formatted_address || '')}"></label><label class="form-hint">Your notes / description<textarea class="input" data-place-description="${index}" maxlength="1000" rows="2"></textarea></label></div><small class="form-hint">Review these Yuvomi-owned fields before saving. The Google Place ID remains the external identity; the editable name, address, type, and notes belong to your address book.</small></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
         status.textContent = results.length ? `${results.length} live result${results.length === 1 ? '' : 's'} from Google.` : '';
         list.querySelectorAll('[data-save-google-place]').forEach((button) => button.addEventListener('click', async () => {
           const index = Number(button.dataset.saveGooglePlace); const result = results[index];
@@ -779,7 +753,15 @@ function openPlaceSearchForm(places, manager) {
           if (!name) { status.textContent = 'Give this saved Place a name.'; return; }
           button.disabled = true;
           try {
-            await api.post('/planning/admin/places/from-google', { external_place_id: result.external_place_id, name, type: 'custom', latitude: result.latitude, longitude: result.longitude });
+            await api.post('/planning/admin/places/from-google', {
+              external_place_id: result.external_place_id,
+              name,
+              type: list.querySelector(`[data-place-type="${index}"]`)?.value || 'custom',
+              street_address: list.querySelector(`[data-place-address="${index}"]`)?.value.trim() || null,
+              description: list.querySelector(`[data-place-description="${index}"]`)?.value.trim() || null,
+              latitude: result.latitude,
+              longitude: result.longitude,
+            });
             toast('Place saved to the address book.'); await closeModal({ force: true }); await refreshAutomationManager(manager, 'places');
           } catch (error) { status.textContent = error.message; button.disabled = false; }
         }));
@@ -810,7 +792,7 @@ const TRIP_TASKS = [
   ['post_trip', 'Unpack'], ['post_trip', 'Start travel laundry'],
 ];
 
-async function renderTripsManager(body, manager) {
+export async function renderTripsManager(body, manager) {
   const [tripsResponse, context] = await Promise.all([api.get('/planning/trips'), api.get('/planning/admin/context')]);
   const trips = tripsResponse.data || [];
   replaceHtml(body, `${managerHeader('Trips and itineraries', 'automation-add-trip', 'Plan trip')}
@@ -903,7 +885,7 @@ function availabilityCategoryOptions(selected = 'general') {
 
 function localDateTimeValue(value) { return value ? String(value).slice(0, 16) : ''; }
 
-async function renderAvailabilityManager(body, manager) {
+export async function renderAvailabilityManager(body, manager) {
   const response = await api.get('/planning/admin/context');
   const { rules = [], periods = [], members = [], places = [] } = response;
   const now = new Date().toISOString();
@@ -1115,14 +1097,33 @@ async function renderActivitiesManager(body, manager) {
   });
 }
 
+function activityChecklistRow(item = {}, index = 0) {
+  return `<div class="automation-checklist-row" data-activity-checklist-row>
+    <span class="automation-checklist-row__handle" aria-hidden="true"><i data-lucide="grip-vertical" class="icon-sm"></i></span>
+    <input class="input" data-activity-checklist-title data-variable-mentions="activity-title"
+           aria-label="Checklist item ${index + 1}" maxlength="200"
+           placeholder="Checklist item, for example: Put pillows in place"
+           value="${h(item?.title_template || '')}">
+    <button type="button" class="btn btn--ghost btn--icon btn--icon-sm" data-checklist-up aria-label="Move checklist item up"><i data-lucide="arrow-up" class="icon-sm"></i></button>
+    <button type="button" class="btn btn--ghost btn--icon btn--icon-sm" data-checklist-down aria-label="Move checklist item down"><i data-lucide="arrow-down" class="icon-sm"></i></button>
+    <button type="button" class="btn btn--danger-ghost btn--icon btn--icon-sm" data-checklist-remove aria-label="Remove checklist item"><i data-lucide="trash-2" class="icon-sm"></i></button>
+  </div>`;
+}
+
 function openActivityForm(activity, context, manager = null) {
   const selectedSkills = new Set((activity?.skills ?? []).map((skill) => Number(skill.id)));
   const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
   const locationMode = activity?.location_mode || 'none';
   const content = `<form id="automation-activity-form">
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
-    ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}">`, 'The title created on the actual task. Type @ to insert the person or Activity Template name.')}
+    ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}"><small class="form-hint" data-activity-title-preview></small>`, 'This is the Task title, separate from the reusable Template name above. A person is included only when you explicitly insert the person variable with @.')}
     ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3" data-variable-mentions="activity-description" aria-autocomplete="list" aria-expanded="false">${h(activity?.description || '')}</textarea>`, 'Type @ to insert the person or Activity Template name.')}
+    <fieldset class="automation-fieldset automation-checklist-editor">
+      <legend class="sr-only">Checklist copied into each Task</legend>
+      <div class="automation-workflow-step__header"><strong>Checklist copied into each Task</strong><button type="button" class="btn btn--ghost btn--sm" data-add-activity-checklist><i data-lucide="list-plus" class="icon-sm"></i>Add item</button></div>
+      <p class="form-hint automation-manager__hint">Each generated Task gets its own editable subtask copies. Later changes to this template do not rewrite existing Tasks. Type @ to insert the person or Activity Template name; workflow variables are also resolved when a workflow runs.</p>
+      <div data-activity-checklist>${(activity?.checklist || []).map(activityChecklistRow).join('')}</div>
+    </fieldset>
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
       <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper, based on proficiency</option>
@@ -1154,6 +1155,40 @@ function openActivityForm(activity, context, manager = null) {
     size: 'lg',
     onSave(panel) {
       wireVariableMentions(panel);
+      const checklist = panel.querySelector('[data-activity-checklist]');
+      const refreshChecklistLabels = () => checklist?.querySelectorAll('[data-activity-checklist-title]').forEach((input, index) => input.setAttribute('aria-label', `Checklist item ${index + 1}`));
+      panel.querySelector('[data-add-activity-checklist]')?.addEventListener('click', () => {
+        checklist.insertAdjacentHTML('beforeend', activityChecklistRow({}, checklist.children.length));
+        refreshChecklistLabels();
+        if (window.lucide) window.lucide.createIcons({ el: checklist.lastElementChild });
+        checklist.lastElementChild?.querySelector('input')?.focus();
+      });
+      checklist?.addEventListener('click', (event) => {
+        const row = event.target.closest('[data-activity-checklist-row]');
+        if (!row) return;
+        if (event.target.closest('[data-checklist-remove]')) row.remove();
+        else if (event.target.closest('[data-checklist-up]') && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+        else if (event.target.closest('[data-checklist-down]') && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+        refreshChecklistLabels();
+      });
+      const templateName = panel.querySelector('[name="name"]');
+      const generatedTitle = panel.querySelector('[name="title_template"]');
+      const titlePreview = panel.querySelector('[data-activity-title-preview]');
+      let generatedTitleFollowsName = !activity && !generatedTitle?.value.trim();
+      const refreshTitlePreview = () => {
+        const example = String(generatedTitle?.value || templateName?.value || 'Untitled Task')
+          .replaceAll('{subject}', 'Alex').replaceAll('{activity}', templateName?.value || 'this activity');
+        titlePreview.textContent = `Example generated Task: ${example || templateName?.value || 'Untitled Task'}`;
+      };
+      templateName?.addEventListener('input', () => {
+        if (generatedTitleFollowsName) generatedTitle.value = templateName.value;
+        refreshTitlePreview();
+      });
+      generatedTitle?.addEventListener('input', () => {
+        generatedTitleFollowsName = false;
+        refreshTitlePreview();
+      });
+      refreshTitlePreview();
       const strategySelect = panel.querySelector('#automation-assignment-strategy');
       const fixed = panel.querySelector('#automation-fixed-user');
       const participantCount = panel.querySelector('#automation-participant-count');
@@ -1188,6 +1223,9 @@ function openActivityForm(activity, context, manager = null) {
           location_variable_id: data.get('location_variable_id') || null,
           presence_policy: data.get('presence_policy'),
           presence_window: data.get('presence_window'),
+          checklist: [...panel.querySelectorAll('[data-activity-checklist-title]')]
+            .map((input) => ({ title_template: input.value.trim() }))
+            .filter((item) => item.title_template),
           active: true,
         };
         try {

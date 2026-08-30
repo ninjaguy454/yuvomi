@@ -515,6 +515,31 @@ test('Notiz-Widget: nur der Auszug landet im DOM, nie der Volltext (Paket 3)', a
   nodeAssert.match(html, /…/, 'der Auszug endet mit einer Ellipse');
 });
 
+test('Notiz-Widget: die Zeilenzahl kommt aus der Kachelgroesse, nicht aus einer festen Drei (#928)', async () => {
+  const { __test } = await import('../public/pages/dashboard.js');
+  // Fuenf angepinnte Notizen - der Vorrat, den die Route seit #928 liefert.
+  const notes = ['A', 'B', 'C', 'D', 'E'].map((titel, i) => ({
+    id: i + 1, title: `Notiz ${titel}`, content: titel, pinned: 1,
+  }));
+  const zeilen = (html) => (html.match(/class="note-item"/g) || []).length;
+
+  // Die Standardgroesse der Kachel ist 1x2, also hoch: dort passen fuenf.
+  // Genau hier stand der Fehler - die Kachel hatte den Platz und bekam drei.
+  nodeAssert.equal(zeilen(__test.renderPinnedNotes(notes, '1x2')), 5,
+    'die hohe Kachel zeigt nicht alle fuenf');
+  nodeAssert.equal(zeilen(__test.renderPinnedNotes(notes, '2x2')), 5,
+    'die grosse Kachel zeigt nicht alle fuenf');
+  // Gegenprobe: die flache Kachel deckelt weiterhin, sonst quillt sie ueber.
+  nodeAssert.equal(zeilen(__test.renderPinnedNotes(notes, '1x1')), 3,
+    'die flache Kachel deckelt nicht mehr');
+  nodeAssert.equal(zeilen(__test.renderPinnedNotes(notes, '2x1')), 3,
+    'die breite flache Kachel deckelt nicht mehr');
+  // Ohne Groesse (aeltere Aufrufer, __test-Tor) bleibt es beim flachen Wert -
+  // die Kachel darf nicht ins Unbegrenzte kippen, nur weil niemand fragt.
+  nodeAssert.equal(zeilen(__test.renderPinnedNotes(notes)), 3,
+    'ohne Groesse wird nicht gedeckelt');
+});
+
 test('Tagesprogramm: Aufgaben-Zeile trägt den Quick-Action-Anker (Paket 2)', async () => {
   const { __test } = await import('../public/pages/dashboard.js');
   const todayStr = toLocalDateKey(new Date());
@@ -1489,6 +1514,10 @@ test('getUpcomingEvents: private ICS-Termine fremder User werden ausgeblendet', 
     const evId = bdb.prepare(
       `INSERT INTO calendar_events (title, start_datetime, all_day, created_by) VALUES ('Geburtstag Hans', '1985-03-15', 1, ?)`
     ).run(bUserId).lastInsertRowid;
+    bdb.prepare(`
+      INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+      VALUES ('event', ?, '1985-03-14T09:00:00Z', ?)
+    `).run(evId, bUserId);
     const bdId = bdb.prepare(
       `INSERT INTO birthdays (name, birth_date, created_by, calendar_event_id, reminder_offset) VALUES ('Hans', '1985-03-15', ?, ?, '')`
     ).run(bUserId, evId).lastInsertRowid;
@@ -1496,6 +1525,9 @@ test('getUpcomingEvents: private ICS-Termine fremder User werden ausgeblendet', 
     syncBirthdayArtifacts(bdb, bd);
     const ev = bdb.prepare('SELECT * FROM calendar_events WHERE id = ?').get(evId);
     assert(!ev, 'Vorhandenes Kalender-Event muss gelöscht worden sein');
+    assert(bdb.prepare(
+      "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+    ).get(evId).n === 0, 'Gelöschtes Geburtstags-Event darf keine Erinnerung hinterlassen');
     const updated = bdb.prepare('SELECT calendar_event_id FROM birthdays WHERE id = ?').get(bdId);
     assert(updated.calendar_event_id === null, 'calendar_event_id in birthdays muss NULL sein');
   });
@@ -1862,6 +1894,15 @@ test('dashboardQuery uebersetzt Optionen in Parameter, die die Route versteht (#
     `Kalender-Parameter falsch: ${widgets.dashboardQuery(mit('calendar', { scope: 'mine' }))}`);
   assert(widgets.dashboardQuery(mit('calendar', { scope: 'all' })) === '/dashboard',
     '„alle" ist die Abwesenheit einer Einschraenkung, kein Parameter');
+  // Die Geburtstags-Abwahl (#927) folgt derselben Regel, nur andersherum
+  // notiert: gespeichert und geschickt wird das Wegnehmen, nicht das Haekchen.
+  assert(widgets.dashboardQuery(mit('calendar', { birthdays: 'hide' })) === '/dashboard?events_birthdays=hide',
+    `Geburtstags-Parameter falsch: ${widgets.dashboardQuery(mit('calendar', { birthdays: 'hide' }))}`);
+  assert(widgets.dashboardQuery(mit('calendar', { birthdays: 'show' })) === '/dashboard',
+    'die Zustimmung ist der Auslieferungszustand und braucht keinen Parameter');
+  const beide = widgets.dashboardQuery(mit('calendar', { scope: 'mine', birthdays: 'hide' }));
+  assert(beide === '/dashboard?events_scope=mine&events_birthdays=hide',
+    `beide Kalender-Optionen zusammen falsch: ${beide}`);
   const zwei = widgets.dashboardQuery(mit('tasks', { categories: ['household', 'school'] }));
   assert(zwei === '/dashboard?tasks_category=household&tasks_category=school',
     `Kategorien falsch: ${zwei}`);

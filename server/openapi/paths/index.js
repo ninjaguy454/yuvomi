@@ -29,6 +29,12 @@ import { pushPaths } from './push.js';
 import { notificationsPaths } from './notifications.js';
 import { healthPaths } from './health.js';
 import { schedulePaths } from './schedule.js';
+import { quickLinksPaths } from './quicklinks.js';
+import { screensaverPaths } from './screensaver.js';
+import { recipeProvidersPaths } from './recipeproviders.js';
+import { permissionsPaths } from './permissions.js';
+import { automationPaths } from './automation.js';
+import { planningPaths } from './planning.js';
 
 export function buildPaths() {
   return {
@@ -63,5 +69,11 @@ export function buildPaths() {
     ...notificationsPaths(),
     ...healthPaths(),
     ...schedulePaths(),
+    ...quickLinksPaths(),
+    ...screensaverPaths(),
+    ...recipeProvidersPaths(),
+    ...permissionsPaths(),
+    ...automationPaths(),
+    ...planningPaths(),
   };
 }

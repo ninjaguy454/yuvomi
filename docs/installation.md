@@ -239,9 +239,9 @@ docker compose up -d
 Docker pulls `ghcr.io/ulsklyc/yuvomi:latest` automatically. No build step, no Node.js installation needed.
 
 > **Pinning a version.** Every release is also published under immutable tags:
-> `2.51.0` (exact version), `2.51` (latest patch of that minor), plus a moving `main`
+> `2.54.0` (exact version), `2.54` (latest patch of that minor), plus a moving `main`
 > tag for the current development state. To pin production to a known-good release,
-> set `image: ghcr.io/ulsklyc/yuvomi:2.51.0` in your compose file and bump it
+> set `image: ghcr.io/ulsklyc/yuvomi:2.54.0` in your compose file and bump it
 > deliberately; `latest` always points at the newest release.
 
 Continue with [Step 4 — Verify](#4-verify-the-container-is-running).
@@ -287,7 +287,7 @@ docker compose logs -f
 You should see output like:
 
 ```
-yuvomi  | [Yuvomi] Server running on port 3000 | Version 2.51.0
+yuvomi  | [Yuvomi] Server running on port 3000 | Version 2.54.0
 yuvomi  | [Yuvomi] Environment: production
 yuvomi  | [Sync] Auto-sync active every 15 minutes.
 ```
@@ -887,6 +887,8 @@ If codes are rejected on a device whose clock drifts, sync the clock rather than
 ### SSO / OpenID Connect (Optional)
 
 Enable single sign-on via any OpenID Connect provider (Authentik, Keycloak, Google, Microsoft Entra, etc.).
+
+Pocket ID documents Yuvomi as one of its [client examples](https://pocket-id.org/docs/client-examples/yuvomi), which is a working set of values for the four variables below if you run that provider.
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|

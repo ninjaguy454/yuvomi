@@ -14,7 +14,8 @@ const db = (await import('../server/db.js')).get();
 const { __test } = await import('../server/services/google-calendar.js');
 const { localEventToGoogle, googleAllDayEndToInclusive, localAllDayEndToExclusive,
         upsertGoogleEvents, upsertExternalCalendar,
-        setReadonly, isReadonly, fetchEventColorMap, householdTimeZone } = __test;
+        setReadonly, isReadonly, setCalendarEnabled,
+        fetchEventColorMap, householdTimeZone } = __test;
 const { nearestColorId } = await import('../server/utils/ical-color.js');
 const { expandRecurringEvents } = await import('../server/services/calendar-events.js');
 
@@ -615,6 +616,46 @@ test('Re-Sync mit geändertem Titel kommt weiterhin an', () => {
     'SELECT title FROM calendar_events WHERE external_calendar_id = ?'
   ).get('evt-changed');
   assertEqual(row.title, 'Team-Meeting (verschoben)', 'Titeländerung muss ankommen');
+});
+
+test('Google cancellation removes the Event reminder with the mirrored row', () => {
+  const item = { ...gEvent, id: 'evt-reminder-cancelled' };
+  const calRefId = upsertExternalCalendar('google', 'reminder-cancel-calendar', 'Reminder cleanup', '#FF0000');
+  upsertGoogleEvents([item], calRefId, '#FF0000', COLOR_MAP);
+  const eventId = db.prepare(
+    'SELECT id FROM calendar_events WHERE external_calendar_id = ?'
+  ).get(item.id).id;
+  db.prepare(`
+    INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+    VALUES ('event', ?, '2026-06-24T09:00:00Z', 1)
+  `).run(eventId);
+
+  upsertGoogleEvents([{ ...item, status: 'cancelled' }], calRefId, '#FF0000', COLOR_MAP);
+  assertEqual(db.prepare('SELECT id FROM calendar_events WHERE id = ?').get(eventId), undefined);
+  assertEqual(db.prepare(
+    "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+  ).get(eventId).n, 0, 'cancelled provider Event leaves no pending reminder orphan');
+});
+
+test('disabling one Google calendar removes reminders only with its Events', () => {
+  const calendarId = 'reminder-disabled-calendar';
+  const calRefId = upsertExternalCalendar('google', calendarId, 'Disabled reminder cleanup', '#FF0000');
+  const item = { ...gEvent, id: 'evt-reminder-disabled' };
+  upsertGoogleEvents([item], calRefId, '#FF0000', COLOR_MAP);
+  const eventId = db.prepare(
+    'SELECT id FROM calendar_events WHERE external_calendar_id = ?'
+  ).get(item.id).id;
+  db.prepare(`
+    INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+    VALUES ('event', ?, '2026-06-24T09:00:00Z', 1)
+  `).run(eventId);
+
+  setCalendarEnabled(calendarId, true, { name: 'Disabled reminder cleanup' });
+  setCalendarEnabled(calendarId, false);
+  assertEqual(db.prepare('SELECT id FROM calendar_events WHERE id = ?').get(eventId), undefined);
+  assertEqual(db.prepare(
+    "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+  ).get(eventId).n, 0, 'calendar deselection removes its reminder rows atomically');
 });
 
 // --------------------------------------------------------

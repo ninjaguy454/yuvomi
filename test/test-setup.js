@@ -9,13 +9,15 @@ const tmpDir = mkdtempSync(join(tmpdir(), 'oikos-setup-test-'));
 process.env.SESSION_SECRET = 'test-setup-secret-minimum-32-chars-x';
 process.env.DB_PATH = join(tmpDir, 'test.db');
 process.env.SESSION_SECURE = 'false';
-process.env.PORT = '13099';
+process.env.PORT = '13201';
+process.env.RATE_LIMIT_MAX_ATTEMPTS = '100';
 
 // Dynamic import so env vars are set before module initialization
 const { default: app } = await import('../server/index.js');
+const db = await import('../server/db.js');
 await new Promise(r => setTimeout(r, 400));
 
-const BASE = 'http://localhost:13099';
+const BASE = 'http://localhost:13201';
 
 function cookieHeader(setCookie) {
   return String(setCookie || '')
@@ -26,8 +28,8 @@ function cookieHeader(setCookie) {
 }
 
 after(() => {
+  db.get().close();
   rmSync(tmpDir, { recursive: true, force: true });
-  process.exit(0);
 });
 
 // Validation tests run first (DB is empty at this point)

@@ -250,7 +250,7 @@ console.log('\n[ICS-Subscription-Test] Unveränderte Läufe schreiben nicht\n');
 await (async () => {
   const { MIGRATIONS } = await import('../server/db.js');
   const dbModule = await import('../server/db.js');
-  const { sync } = await import('../server/services/ics-subscription.js');
+  const { sync, remove } = await import('../server/services/ics-subscription.js');
 
   // Eigene, voll migrierte DB: der Upsert braucht den UNIQUE-Index aus
   // Migration 12, damit ON CONFLICT überhaupt greift. Hier better-sqlite3
@@ -361,6 +361,50 @@ await (async () => {
         'SELECT title FROM calendar_events WHERE subscription_id = ?'
       ).get(subId);
       assert(row.title === 'Zahnarzt (verschoben)', `Titel blieb "${row.title}"`);
+    });
+
+    await atest('Ein im ICS-Feed entfernter Termin hinterlaesst keine Erinnerung', async () => {
+      const eventId = syncDb.prepare(
+        'SELECT id FROM calendar_events WHERE subscription_id = ?'
+      ).get(subId).id;
+      syncDb.prepare(`
+        INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+        VALUES ('event', ?, '2030-01-01T09:00:00Z', 1)
+      `).run(eventId);
+      body = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Test//EN', 'END:VCALENDAR', ''].join('\r\n');
+      await sync(subId);
+      const events = syncDb.prepare(
+        'SELECT COUNT(*) AS n FROM calendar_events WHERE subscription_id = ?'
+      ).get(subId).n;
+      const reminders = syncDb.prepare(
+        "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+      ).get(eventId).n;
+      assert(events === 0, 'stale ICS Event wurde nicht entfernt');
+      assert(reminders === 0, 'stale ICS Event hinterliess eine Erinnerung');
+    });
+
+    await atest('Abo-Loeschung raeumt Erinnerungen vor dem Event-Cascade auf', async () => {
+      const tmpSubId = syncDb.prepare(`
+        INSERT INTO ics_subscriptions (name, url, color, created_by)
+        VALUES ('Remove test', 'https://example.test/remove.ics', '#123456', 1)
+      `).run().lastInsertRowid;
+      const eventId = syncDb.prepare(`
+        INSERT INTO calendar_events (
+          title, start_datetime, all_day, external_source,
+          external_calendar_id, subscription_id, created_by
+        ) VALUES ('Remove me', '2030-01-02', 1, 'ics', 'remove@test', ?, 1)
+      `).run(tmpSubId).lastInsertRowid;
+      syncDb.prepare(`
+        INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+        VALUES ('event', ?, '2030-01-01T09:00:00Z', 1)
+      `).run(eventId);
+
+      assert(remove(1, tmpSubId, false) === true, 'Abo wurde nicht entfernt');
+      assert(syncDb.prepare('SELECT id FROM calendar_events WHERE id = ?').get(eventId) === undefined,
+        'Abo-Cascade entfernte das Event nicht');
+      assert(syncDb.prepare(
+        "SELECT COUNT(*) AS n FROM reminders WHERE entity_type='event' AND entity_id=?"
+      ).get(eventId).n === 0, 'Abo-Cascade hinterliess eine Erinnerung');
     });
   } finally {
     dbModule._resetTestDatabase();

@@ -354,10 +354,14 @@ export const schemas = {
         },
         CalendarEvent: {
           type: 'object',
-          description: 'Calendar event. New attachments use document URLs; attachment_data remains available for legacy stored blobs.',
+          description: 'Calendar event. New attachments use document URLs; attachment_data remains available for legacy stored blobs. `place_id` is the immutable Yuvomi Place reference while `location` remains the human-readable Event location.',
           properties: {
             id: { type: 'integer' },
             title: { type: 'string' },
+            place_id: {
+              type: ['integer', 'null'],
+              description: 'Optional immutable Yuvomi Place ID. A Place rename does not break the Event reference.',
+            },
             color: {
               type: ['string', 'null'],
               description: 'The event\'s own colour as #RRGGBB, or null when it has none. Null is the normal state for an event nobody picked a colour for: it then borrows the colour of the first assigned member, and failing that cal_color. On PUT the field distinguishes two cases - omit it to leave the colour untouched, send null to deliberately clear it.',
@@ -443,6 +447,12 @@ export const schemas = {
             phone: { type: ['string', 'null'] },
             email: { type: ['string', 'null'] },
             birth_date: { type: ['string', 'null'], format: 'date' },
+            onboarding_pending: {
+              type: 'boolean',
+              description: 'Whether this account still needs the onboarding walkthrough. Derived from '
+                + 'the account, not from the browser, so a new device does not repeat it. '
+                + 'POST /auth/onboarding-seen clears it.',
+            },
             sso_only: {
               type: 'boolean',
               description: 'Only present on GET /auth/users for administrators: the account carries no '

@@ -10,7 +10,7 @@ export function tasksPaths() {
       get: op({
         summary: 'List tasks',
         tag: 'Tasks',
-        description: 'Several tags narrow the result: a task must carry all of them. Tag matching ignores case, including non-ASCII letters. Archived tasks are omitted unless asked for.',
+        description: 'Several tags narrow the result: a task must carry all of them. Tag matching ignores case, including non-ASCII letters. Archived tasks are omitted unless asked for. Rows also carry flattened Activity Template/subject/assignment metadata, responsibility records, rotation members, first-class subtasks and a normalized saved, Google, or manual `location` with navigation URL.',
         params: [
           { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'archived'] }, description: 'Repeatable; several values are OR-ed. "archived" is not a status but the separate archive axis and behaves like the `archived` parameter.' },
           { name: 'archived',    in: 'query', required: false, schema: { type: 'string', enum: ['1', 'only'] }, description: 'Archived tasks are hidden by default. `1` includes them, `only` returns just the archive. A task keeps its own status while archived.' },
@@ -29,7 +29,7 @@ export function tasksPaths() {
           { name: 'include_future', in: 'query', required: false, schema: { type: 'string' }, description: 'Any non-empty value also returns tasks whose start date lies in the future.' },
         ],
       }),
-      post: op({ summary: 'Create task', tag: 'Tasks', stateChanging: true, requestBody: jsonBody(null), description: 'Body accepts `locked: true` to close the task definition to everyone but its creator and administrators (#830). A subtask under a locked parent inherits the lock, and adding one requires the same rights.' }),
+      post: op({ summary: 'Create task', tag: 'Tasks', stateChanging: true, requestBody: jsonBody(null), description: 'Body accepts `locked: true` to close the task definition to everyone but its creator and administrators (#830). A subtask under a locked parent inherits the lock, and adding one requires the same rights. Top-level Tasks may also use `activity_template_id`/`activity_subject_user_id`, fixed or round-robin assignment fields, and `location` (`saved_place`, one-use `google_place`, or `manual`). Attaching an Activity Template lets its assignment/supervision rules own the occurrence and materializes its first-class Task subtasks once.' }),
     },
     '/api/v1/tasks/meta/options': { get: op({ summary: 'Get task metadata', tag: 'Tasks' }) },
     '/api/v1/tasks/completions': {
@@ -80,15 +80,41 @@ export function tasksPaths() {
       delete: op({ summary: 'Remove a task tag everywhere', tag: 'Tasks', params: [stringPathParam('tag', 'Tag name')], stateChanging: true, description: 'Detaches the tag from every task the caller can see. The tasks themselves stay. Locked tasks the caller may not edit keep the tag and are counted in `skipped`. Unlike categories there is no in-use guard: a tag is nothing but its uses.' }),
     },
     '/api/v1/tasks/{id}': {
-      get: op({ summary: 'Get task', tag: 'Tasks', params: [idParam()] }),
-      put: op({ summary: 'Update task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'On a locked task (`locked: 1`) only the creator and administrators may change the definition - title, description, category, priority, dates, recurrence, points, visibility, tags, sync target, the lock itself, and assigning other members. Everyone else may still send the full body as long as the outcome differs only in `status` or in their own entry in `assigned_to`; anything else answers 403. The comparison is against the stored values, not against which fields were sent.' }),
+      get: op({ summary: 'Get task', tag: 'Tasks', params: [idParam()], description: 'Returns the same enriched Task contract used by Tasks, Calendar and Dashboard, including Activity Template, assignment/responsibility, participants, rotation, subtasks, documents and normalized Place/location information.' }),
+      put: op({ summary: 'Update task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'On a locked task (`locked: 1`) only the creator and administrators may change the definition - title, description, category, priority, dates, recurrence, points, visibility, tags, sync target, the lock itself, and assigning other members. Everyone else may still send the full body as long as the outcome differs only in `status` or in their own entry in `assigned_to`; anything else answers 403. The comparison is against the stored values, not against which fields were sent. Activity Template bindings, rotation groups/members, and saved/Google/manual `location` are definition fields; updating them preserves immutable Task identity and validates the referenced household data.' }),
       delete: op({ summary: 'Delete task', tag: 'Tasks', params: [idParam()], stateChanging: true, description: 'On a locked task, the creator and administrators only (403 otherwise).' }),
+    },
+    '/api/v1/tasks/{id}/location/promote': {
+      post: op({
+        summary: 'Promote a one-use Google Task location into Yuvomi Places',
+        tag: 'Tasks',
+        admin: true,
+        params: [idParam()],
+        stateChanging: true,
+        requestBody: jsonBody(null),
+        description: 'Creates or reuses a Yuvomi Place keyed by Google external_place_id, then changes only the Task location reference to the immutable Yuvomi Place ID. The Task itself is not recreated.',
+      }),
     },
     '/api/v1/tasks/{id}/status': {
       patch: op({ summary: 'Update task status', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: { status }. Sending `archived` files the task away without touching its status - use PATCH /archive instead. Deliberately open on a locked task: ticking one off is the interaction the lock exists to preserve.' }),
     },
     '/api/v1/tasks/{id}/archive': {
       patch: op({ summary: 'Archive or restore a task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Archives the task by default. Send `{ "archived": false }` to bring it back. The status is left untouched: a task that was done stays done, and no reward booking changes. Filing a task removes it from everyone\'s view, so on a locked task this is the creator and administrators only.' }),
+    },
+    '/api/v1/tasks/{id}/check': {
+      patch: op({
+        summary: 'Tick one checklist item in the description, addressed by its source line',
+        tag: 'Tasks',
+        params: [idParam()],
+        stateChanging: true,
+        requestBody: jsonBody(null),
+        description: 'Body: { line, checked, expect? }. Rewrites exactly the one `- [ ]` / `- [x]` line at '
+          + '`line` in the description and leaves the rest of the text byte for byte, so two members ticking '
+          + 'different items at the same time do not overwrite each other - which PUT would do. `expect` is the '
+          + 'line as the caller saw it; if it no longer matches, the answer is 409 rather than a tick on the '
+          + 'wrong line. Deliberately open on a locked task, for the same reason PATCH /status is: the lock '
+          + 'covers what the task is, not how far it has come.',
+      }),
     },
     '/api/v1/tasks/{id}/documents': {
       get: op({ summary: 'List documents linked to a task', tag: 'Tasks', params: [idParam()], description: 'Returns family documents linked to the task that are visible to the current user.' }),

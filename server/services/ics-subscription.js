@@ -12,6 +12,7 @@ import { isIP } from 'node:net';
 import { createLogger } from '../logger.js';
 import * as db from '../db.js';
 import { assignDefaultToEvent } from './sync-assignment.js';
+import { dropEventReminders } from './event-reminder-fanout.js';
 import { parseICS, expandRRULE, normalizeRecurrenceOverrides } from './ics-parser.js';
 import { isBlockedAddress, readPrivateNetworkOptIn, createGuardedLookup } from '../utils/ssrf.js';
 import { safeRequest } from '../utils/http.js';
@@ -210,6 +211,12 @@ async function syncOne(sub) {
         AND external_calendar_id NOT IN (SELECT value FROM json_each(?))
         AND user_modified = 0
     `);
+    const findStale = db.get().prepare(`
+      SELECT id FROM calendar_events
+      WHERE subscription_id = ?
+        AND external_calendar_id NOT IN (SELECT value FROM json_each(?))
+        AND user_modified = 0
+    `);
 
     // Zählt, was den lokalen Stand wirklich verändert hat. Gesehen ist nicht
     // geändert: ein Abo mit 200 Terminen liefert bei jedem Lauf 200 Events,
@@ -239,7 +246,10 @@ async function syncOne(sub) {
           }
         } catch (err) { log.error(`Upsert UID ${ev.uid}: ${err.message}`); }
       }
-      changedEvents += deleteStale.run(sub.id, JSON.stringify([...seenUids])).changes;
+      const seenJson = JSON.stringify([...seenUids]);
+      const staleIds = findStale.all(sub.id, seenJson).map((row) => row.id);
+      dropEventReminders(db.get(), staleIds);
+      changedEvents += deleteStale.run(sub.id, seenJson).changes;
 
       // #459: neu importierte Termine der Standard-Person zuweisen.
       if (sub.default_assignee_user_id) {
@@ -434,7 +444,13 @@ function remove(userId, subId, isAdmin) {
   const sub = db.get().prepare('SELECT * FROM ics_subscriptions WHERE id = ?').get(subId);
   if (!sub) return false;
   if (!isAdmin && sub.created_by !== userId) throw new Error('Not authorized.');
-  db.get().prepare('DELETE FROM ics_subscriptions WHERE id = ?').run(subId);
+  db.get().transaction(() => {
+    const eventIds = db.get().prepare(
+      'SELECT id FROM calendar_events WHERE subscription_id = ?'
+    ).all(subId).map((row) => row.id);
+    dropEventReminders(db.get(), eventIds);
+    db.get().prepare('DELETE FROM ics_subscriptions WHERE id = ?').run(subId);
+  })();
   return true;
 }
 

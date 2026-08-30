@@ -83,7 +83,47 @@ jobs:
           # findet, und Inline-Anmerkungen, wenn doch. Erst dadurch wird der
           # Nachweis-Schritt weiter unten zu einer richtigen Zusicherung -
           # vorher haette er auch einen sauberen PR rot gefaerbt.
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
+          # DIE ZWEITE ZEILE IST DER GRUND, WARUM SIE VIERMAL HINTEREINANDER
+          # NICHTS HINTERLASSEN HAT (#865, 2026-08-25).
+          #
+          # Das Plugin arbeitet fast nur mit Subagenten ("Launch 4 agents in
+          # parallel to review ..."), und die starten inzwischen ASYNCHRON. Im
+          # Job-Log steht es woertlich:
+          #
+          #   "Async agent launched successfully ... The agent is working in the
+          #    background. You will be notified automatically when it completes."
+          #
+          # In einer interaktiven Sitzung kommt diese Benachrichtigung als neuer
+          # Turn zurueck. HIER GIBT ES KEINEN. Die Hauptsession sagt "ich warte"
+          # und ist damit fertig - es gibt niemanden, der sie am Leben haelt,
+          # also stirbt sie samt ihren Agenten, bevor irgendein Befund entsteht.
+          # Genau dieser Satz stand in allen vier result-Objekten:
+          #
+          #   Lauf 1 (5 Turns):  "Waiting for both to complete before proceeding."
+          #   Lauf 2 (56 Turns): "No action needed - I'll be notified automatically
+          #                       when the two background review agents finish."
+          #   Lauf 4 (7 Turns):  "I'll wait for both background agents to complete
+          #                       before continuing."
+          #
+          # Reruns helfen deshalb nicht: die Ursache ist nicht sprunghaft,
+          # sondern strukturell. Drei Anlaeufe gingen dafuer drauf, bevor das
+          # Muster im result-Text auffiel - er ist das Erkennungsmerkmal,
+          # nicht die Turn-Zahl und nicht die Verweigerungen (Lauf 2 hatte
+          # welche, aber nur fuer `git clone`-Umwege, die mit der Pruefung
+          # nichts zu tun haben).
+          #
+          # DIE ANWEISUNG STEHT IM PROMPT UND NICHT IN claude_args, weil es
+          # kein Werkzeug-Problem ist: `Task` ist erlaubt und wird benutzt. Es
+          # geht darum, WIE es benutzt wird.
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
+
+            Fahre jeden Subagenten SYNCHRON: setze `run_in_background: false` und
+            warte sein Ergebnis ab, bevor du weitermachst. Dieser Lauf ist nicht
+            interaktiv - eine Benachrichtigung ueber einen fertigen
+            Hintergrund-Agenten trifft auf keinen Turn mehr und erreicht dich
+            nie. Sobald du "ich warte auf die Agenten" denkst und nichts weiter
+            tust, endet der Lauf, und die Pruefung hinterlaesst nichts.
           allowed_bots: 'dependabot[bot]'
           # DIESE LISTE ERSETZT, SIE ERGÄNZT NICHT. Das war die Annahme, die den
           # zweiten Anlauf gekostet hat: `--allowed-tools` verdrängt die acht

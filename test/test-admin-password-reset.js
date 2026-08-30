@@ -18,6 +18,7 @@ process.env.SESSION_SECURE = 'false';
 process.env.PORT = '13098';
 
 const { default: app } = await import('../server/index.js');
+const db = await import('../server/db.js');
 await new Promise((r) => setTimeout(r, 400));
 
 const BASE = 'http://localhost:13098';
@@ -31,8 +32,8 @@ function cookieHeader(setCookie) {
 }
 
 after(() => {
+  db.get().close();
   rmSync(tmpDir, { recursive: true, force: true });
-  process.exit(0);
 });
 
 async function login(username, password) {

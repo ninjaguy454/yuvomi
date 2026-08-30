@@ -1229,6 +1229,24 @@ async function openPantryTransfer(container) {
     return;
   }
 
+  // Resolve durable Phase 6 grocery outputs before rendering. Checked items
+  // from a grocery run are reconciled through its ledger; ordinary Shopping
+  // items continue to use the original import path.
+  const groceryByShoppingItem = new Map();
+  try {
+    const runsResponse = await api.get(`/shopping/grocery-runs?list_id=${state.activeListId}&limit=25`);
+    const candidateRuns = (runsResponse.data || []).filter((run) => ['added_to_shopping', 'purchased', 'reconciled'].includes(run.status));
+    const details = await Promise.all(candidateRuns.map((run) => api.get(`/shopping/grocery-runs/${run.id}`)));
+    for (const response of details) {
+      for (const item of response.data?.items || []) {
+        if (item.shopping_item_id) groceryByShoppingItem.set(Number(item.shopping_item_id), { runId: Number(response.data.id), groceryItemId: Number(item.id) });
+      }
+    }
+  } catch {
+    // Degrade to the legacy Shopping-to-Pantry transfer. Pantry storage must
+    // remain available even if grocery-run history cannot be loaded.
+  }
+
   const { PANTRY_UNITS } = await import('/utils/pantry-units.js');
   const { locationLabel } = await import('/utils/pantry-locations.js');
 
@@ -1296,8 +1314,28 @@ async function openPantryTransfer(container) {
 
         btn.disabled = true;
         try {
-          const res = await api.post('/pantry/import-shopping', { list_id: listId, items });
-          const stored = (res.data?.added ?? 0) + (res.data?.merged ?? 0);
+          const ordinaryItems = items.filter((item) => !groceryByShoppingItem.has(item.shopping_item_id));
+          const groceryGroups = new Map();
+          for (const item of items) {
+            const link = groceryByShoppingItem.get(item.shopping_item_id);
+            if (!link) continue;
+            if (!groceryGroups.has(link.runId)) groceryGroups.set(link.runId, []);
+            groceryGroups.get(link.runId).push({
+              grocery_item_id: link.groceryItemId,
+              quantity: item.quantity,
+              unit: item.unit,
+              location_id: item.location_id,
+            });
+          }
+          let stored = 0;
+          if (ordinaryItems.length) {
+            const res = await api.post('/pantry/import-shopping', { list_id: listId, items: ordinaryItems });
+            stored += (res.data?.added ?? 0) + (res.data?.merged ?? 0);
+          }
+          for (const [runId, runItems] of groceryGroups) {
+            const res = await api.post('/pantry/reconcile-grocery-run', { grocery_run_id: runId, items: runItems });
+            stored += (res.data?.added ?? 0) + (res.data?.merged ?? 0);
+          }
 
           if (clearList && stored) {
             // Zweiter, getrennter Aufruf: der Vorrats-Router räumt bewusst
@@ -1447,7 +1485,7 @@ function updateListCounter(listId, totalDelta, checkedDelta) {
   }
 }
 
-function openMealPlanImport(container) {
+function openMealPlanImportLegacy(container) {
   if (!state.activeListId) return;
   const today = todayKey();
   const defaultTo = addLocalDays(today, 6);
@@ -1536,6 +1574,97 @@ function openMealPlanImport(container) {
           window.yuvomi.showToast(t('meals.transferSuccess', { count }), 'success');
         } catch (err) {
           window.yuvomi.showToast(err.data?.error ?? t('common.errorGeneric'), 'danger');
+        }
+      });
+    },
+  });
+}
+
+function openMealPlanImport(container) {
+  if (!state.activeListId) return;
+  const today = todayKey();
+  const defaultTo = addLocalDays(today, 6);
+
+  openModal({
+    title: t('shopping.importMealsTitle'),
+    size: 'md',
+    content: `<form id="shopping-grocery-run-form" class="shopping-import-meals-form" novalidate autocomplete="off">
+      <div class="form-group"><label class="form-label" for="shopping-grocery-from">${t('calendar.fromLabel')}</label><yuvomi-datepicker type="date" id="shopping-grocery-from" value="${esc(today)}"></yuvomi-datepicker></div>
+      <div class="form-group"><label class="form-label" for="shopping-grocery-to">${t('calendar.toLabel')}</label><yuvomi-datepicker type="date" id="shopping-grocery-to" value="${esc(defaultTo)}"></yuvomi-datepicker></div>
+      <p class="form-hint" id="shopping-grocery-status" role="status" aria-live="polite"></p>
+      <div class="shopping-grocery-draft" id="shopping-grocery-draft"></div>
+      <div class="modal-actions">
+        <button type="button" class="btn btn--secondary" data-modal-close>${t('common.cancel')}</button>
+        <button type="button" class="btn btn--secondary" id="shopping-grocery-refresh">${t('shopping.refreshGroceryDraft')}</button>
+        <button type="submit" class="btn btn--primary" id="shopping-grocery-submit" disabled>${t('shopping.finalizeAndAdd')}</button>
+      </div>
+    </form>`,
+    onSave: (panel) => {
+      const form = panel.querySelector('#shopping-grocery-run-form');
+      const statusEl = panel.querySelector('#shopping-grocery-status');
+      const draftEl = panel.querySelector('#shopping-grocery-draft');
+      const submitBtn = panel.querySelector('#shopping-grocery-submit');
+      const refreshBtn = panel.querySelector('#shopping-grocery-refresh');
+      let currentRun = null;
+
+      panel.querySelector('[data-modal-close]')?.addEventListener('click', () => closeModal());
+      const renderDraft = (run) => {
+        const items = run?.items || [];
+        statusEl.textContent = items.length
+          ? t('shopping.groceryDraftPreview', { count: items.length, status: run.status })
+          : t('shopping.importMealsEmpty');
+        draftEl.replaceChildren();
+        draftEl.insertAdjacentHTML('beforeend', items.map((item) => {
+          const meals = [...new Set((item.sources || []).map((source) => source.meal_title_snapshot).filter(Boolean))];
+          return `<article class="shopping-grocery-draft__item"><span><strong>${esc(item.name)}</strong>${item.quantity ? `<small>${esc(item.quantity)}</small>` : ''}</span><small>${esc(meals.join(', '))}</small></article>`;
+        }).join(''));
+        submitBtn.disabled = !items.length || !['draft', 'finalized'].includes(run?.status);
+        submitBtn.textContent = run?.status === 'finalized' ? t('shopping.addFinalizedToShopping') : t('shopping.finalizeAndAdd');
+      };
+      const updateDraft = async () => {
+        const from = panel.querySelector('#shopping-grocery-from')?.value || '';
+        const to = panel.querySelector('#shopping-grocery-to')?.value || '';
+        if (!from || !to) return;
+        refreshBtn.disabled = true;
+        submitBtn.disabled = true;
+        statusEl.textContent = t('common.loading');
+        try {
+          const response = await api.post(`/shopping/${state.activeListId}/grocery-runs`, { from, to });
+          currentRun = response.data;
+          renderDraft(currentRun);
+        } catch (error) {
+          currentRun = null;
+          draftEl.replaceChildren();
+          statusEl.textContent = error.data?.error || error.message || t('common.errorGeneric');
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      };
+
+      updateDraft();
+      panel.querySelector('#shopping-grocery-from')?.addEventListener('change', updateDraft);
+      panel.querySelector('#shopping-grocery-to')?.addEventListener('change', updateDraft);
+      refreshBtn?.addEventListener('click', updateDraft);
+      form?.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (!currentRun?.id) return;
+        submitBtn.disabled = true;
+        try {
+          if (currentRun.status === 'draft') {
+            const finalized = await api.post(`/shopping/grocery-runs/${currentRun.id}/finalize`, {});
+            currentRun = finalized.data;
+          }
+          const published = await api.post(`/shopping/grocery-runs/${currentRun.id}/add-to-shopping`, {});
+          currentRun = published.data;
+          await Promise.all([loadLists(), loadItems(state.activeListId)]);
+          renderTabs(container);
+          renderListContent(container);
+          wireListContentEvents(container);
+          closeModal({ force: true });
+          window.yuvomi.showToast(t('shopping.groceryRunAddedToast', { count: Number(published.meta?.added_ids?.length) || 0 }), 'success');
+        } catch (error) {
+          window.yuvomi.showToast(error.data?.error ?? t('common.errorGeneric'), 'danger');
+          submitBtn.disabled = false;
         }
       });
     },

@@ -68,6 +68,15 @@ function householdSize(database) {
   return database.prepare(HOUSEHOLD_SIZE_SQL).get()?.n ?? 1;
 }
 
+/**
+ * Die Einfuehrungs-Version, die ein Konto gesehen haben muss, damit der
+ * Onboarding-Rundgang nicht erneut erscheint. Ein Konto mit einer kleineren
+ * gespeicherten `users.onboarding_version` bekommt ihn wieder vorgesetzt -
+ * angehoben werden muss diese Zahl nur dort, wo eine kuenftige Aenderung eine
+ * erneute Einfuehrung rechtfertigt (siehe Migration 168 in db.js).
+ */
+const CURRENT_ONBOARDING_VERSION = 1;
+
 const USER_PUBLIC_COLUMNS = `
   id,
   username,
@@ -76,6 +85,7 @@ const USER_PUBLIC_COLUMNS = `
   avatar_data,
   role,
   family_role,
+  onboarding_version,
   CASE WHEN EXISTS (
     SELECT 1 FROM split_expense_guest_users sg WHERE sg.user_id = users.id
   ) THEN 'split_guest' ELSE 'family' END AS access_scope,
@@ -335,6 +345,10 @@ function publicUser(row) {
     email: row.email ?? null,
     birth_date: row.birth_date ?? null,
     created_at: row.created_at,
+    // Ob DIESES Konto den Onboarding-Rundgang noch braucht - jede Abfrage
+    // ueber USER_PUBLIC_COLUMNS traegt die Spalte, daher hier unbedingt statt
+    // ueber die `!== undefined`-Bedingung der beiden Felder darunter.
+    onboarding_pending: row.onboarding_version < CURRENT_ONBOARDING_VERSION,
     // Nur wenn die Query das Flag mitselektiert (GET /users); andere
     // publicUser-Pfade behalten ihre bisherige Feldmenge.
     ...(row.is_worker !== undefined && { is_worker: Boolean(row.is_worker) }),
@@ -672,6 +686,9 @@ function loginPayload(req, user) {
       role:         user.role,
       family_role:  user.family_role,
       access_scope: db.get().prepare('SELECT 1 FROM split_expense_guest_users WHERE user_id = ?').get(user.id) ? 'split_guest' : 'family',
+      // Auch hier, aus demselben Grund wie householdSize unten: der Router
+      // fragt nach dem Login nicht extra /me, bevor die Uebersicht rendert.
+      onboarding_pending: user.onboarding_version < CURRENT_ONBOARDING_VERSION,
     },
     permissions: clientPermissions(db.get(), user),
     // Auch hier, nicht nur an /me: nach dem Login navigiert der Router
@@ -1799,6 +1816,23 @@ router.get('/me', requireAuth, (req, res) => {
     });
   } catch (err) {
     log.error('/me error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+/**
+ * POST /api/v1/auth/onboarding-seen
+ * Merkt das Konto als "hat den aktuellen Onboarding-Rundgang gesehen" vor -
+ * am Konto, nicht am Geraet, damit er auf einem neuen Geraet oder in einem
+ * privaten Fenster nicht erneut erscheint.
+ */
+router.post('/onboarding-seen', requireAuth, csrfMiddleware, (req, res) => {
+  try {
+    db.get().prepare('UPDATE users SET onboarding_version = ? WHERE id = ?')
+      .run(CURRENT_ONBOARDING_VERSION, req.authUserId);
+    res.json({ ok: true });
+  } catch (err) {
+    log.error('/onboarding-seen error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });

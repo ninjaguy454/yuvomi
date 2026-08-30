@@ -17,6 +17,14 @@ import {
   reconcileMealCalendarConflicts,
   resolveMealCalendarConflict,
 } from '../services/meal-calendar-conflicts.js';
+import {
+  ensureMealExecution,
+  getSettings as getMealExecutionSettings,
+  loadExecution as loadMealExecution,
+  prepareMealExecutionRange,
+  refreshExecutionStatus,
+  saveSettings as saveMealExecutionSettings,
+} from '../services/meal-execution.js';
 
 const log = createLogger('Meals');
 
@@ -197,6 +205,7 @@ function loadMealPlanning() {
     slots: slots.map((slot) => ({ ...slot, participant_ids: bySlot[slot.id] || [] })),
     members: householdPlanningMembers(),
     places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
+    execution_settings: getMealExecutionSettings(d),
   };
 }
 
@@ -714,13 +723,82 @@ router.put('/planning', requireAdmin, (req, res) => {
   }
 });
 
+router.get('/execution-settings', (_req, res) => {
+  try {
+    res.json({ data: getMealExecutionSettings(db.get()) });
+  } catch (err) {
+    log.error('GET /execution-settings', err);
+    res.status(500).json({ error: 'Could not load meal execution settings.', code: 500 });
+  }
+});
+
+router.put('/execution-settings', requireAdmin, (req, res) => {
+  try {
+    const data = saveMealExecutionSettings(
+      db.get(), req.body || {}, req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    res.status(err.status || 400).json({ error: err.message, code: err.code || 400 });
+  }
+});
+
+router.post('/execution/prepare', (req, res) => {
+  try {
+    const vFrom = date(req.body?.from, 'From date', true);
+    const vTo = date(req.body?.to, 'To date', true);
+    const errors = collectErrors([vFrom, vTo]);
+    if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
+    if (vFrom.value > vTo.value) return res.status(400).json({ error: 'From date must be before end date.', code: 400 });
+    const data = prepareMealExecutionRange(db.get(), {
+      from: vFrom.value,
+      to: vTo.value,
+      actorId: req.authUserId || req.session.userId,
+      listId: req.body?.shopping_list_id,
+      logicalKey: req.body?.logical_key,
+    });
+    res.json({ data });
+  } catch (err) {
+    log.error('POST /execution/prepare', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not prepare meal execution.', code: err.code || 500 });
+  }
+});
+
+router.get('/:id/execution', (req, res) => {
+  try {
+    const data = refreshExecutionStatus(db.get(), Number(req.params.id));
+    if (!data) return res.status(404).json({ error: 'Meal execution not found.', code: 'MEAL_EXECUTION_NOT_FOUND' });
+    res.json({ data });
+  } catch (err) {
+    log.error('GET /:id/execution', err);
+    res.status(500).json({ error: 'Could not load meal execution.', code: 500 });
+  }
+});
+
+router.post('/:id/execution-tasks', (req, res) => {
+  try {
+    const data = ensureMealExecution(
+      db.get(), Number(req.params.id), req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    log.error('POST /:id/execution-tasks', err);
+    res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not create meal execution Tasks.', code: err.code || 500 });
+  }
+});
+
 router.post('/planning/materialize', (req, res) => {
   try {
     const refDate = req.body.week && DATE_RE.test(req.body.week) ? req.body.week : todayKey(db.get());
     const from = weekStart(refDate);
     const to = weekEnd(refDate);
-    const created = materializeMealSchedule(from, to, req.authUserId || req.session.userId);
-    res.json({ data: { created, weekStart: from, weekEnd: to } });
+    const actorId = req.authUserId || req.session.userId;
+    const created = materializeMealSchedule(from, to, actorId);
+    const settings = getMealExecutionSettings(db.get());
+    const execution = settings?.enabled
+      ? prepareMealExecutionRange(db.get(), { from, to, actorId })
+      : null;
+    res.json({ data: { created, weekStart: from, weekEnd: to, execution } });
   } catch (err) {
     log.error('POST /planning/materialize', err);
     res.status(500).json({ error: 'Could not prepare the meal plan.', code: 500 });
@@ -746,9 +824,21 @@ router.get('/selection-requests-household', requireAdmin, (req, res) => {
 
 router.post('/selection-requests/:id/respond', (req, res) => {
   try {
-    res.json({ data: respondToMealSelection(
+    const actorId = req.authUserId || req.session.userId;
+    const data = respondToMealSelection(
       Number(req.params.id), req.body || {}, req.authUserId || req.session.userId,
-    ) });
+    );
+    const selectedMealIds = data.meal_ids || (data.meal_id ? [data.meal_id] : []);
+    const selectedMeals = selectedMealIds.length
+      ? db.get().prepare(`SELECT id, date FROM meals WHERE id IN (${selectedMealIds.map(() => '?').join(',')}) AND selection_status = 'selected'`).all(...selectedMealIds)
+      : [];
+    if (selectedMeals.length && getMealExecutionSettings(db.get())?.enabled) {
+      const from = weekStart(selectedMeals[0].date);
+      data.execution = prepareMealExecutionRange(db.get(), {
+        from, to: weekEnd(from), actorId,
+      });
+    }
+    res.json({ data });
   } catch (err) {
     res.status(400).json({ error: err.message, code: 400 });
   }
@@ -911,6 +1001,20 @@ router.get('/', (req, res) => {
     }
 
     const participantMap = loadMealParticipants(mealIds);
+    const executionMap = {};
+    if (mealIds.length) {
+      const rows = db.get().prepare(`
+        SELECT mes.meal_id, mes.status, mes.revision,
+          COUNT(met.id) AS task_total,
+          SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS task_done
+        FROM meal_execution_snapshots mes
+        LEFT JOIN meal_execution_tasks met ON met.meal_snapshot_id = mes.id
+        LEFT JOIN tasks t ON t.id = met.task_id
+        WHERE mes.meal_id IN (${mealIds.map(() => '?').join(',')})
+        GROUP BY mes.id
+      `).all(...mealIds);
+      for (const row of rows) executionMap[row.meal_id] = row;
+    }
     const conflictsByMeal = conflicts.reduce((map, conflict) => {
       (map[conflict.meal_id] ||= []).push(conflict);
       return map;
@@ -921,6 +1025,7 @@ router.get('/', (req, res) => {
       recipe_ingredient_count: recipeCountMap[m.id] ?? 0,
       participants: participantMap[m.id] || [],
       calendar_conflicts: conflictsByMeal[m.id] || [],
+      execution: executionMap[m.id] || null,
     }));
 
     res.json({ data: result, weekStart: from, weekEnd: to });

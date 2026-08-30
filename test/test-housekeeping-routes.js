@@ -529,6 +529,10 @@ test('im Nur-Lesen-Modus bleibt der verschobene Besuch gegen den Inbound geschü
 
 test('ein gelöschter Besuch räumt die Kopie beim Provider mit ab', async () => {
   const row = db.prepare('SELECT calendar_event_id FROM housekeeping_work_sessions WHERE id = ?').get(LOCALIZED_SESSION);
+  db.prepare(`
+    INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+    VALUES ('event', ?, '2025-06-08T09:00:00Z', ?)
+  `).run(row.calendar_event_id, ADMIN);
   const before = db.prepare('SELECT COUNT(*) AS c FROM calendar_pending_deletions').get().c;
 
   const r = await call('DELETE', `/visits/${LOCALIZED_SESSION}`, { as: ADM });
@@ -539,6 +543,9 @@ test('ein gelöschter Besuch räumt die Kopie beim Provider mit ab', async () =>
     0,
     'lokal gelöscht',
   );
+  assert.equal(db.prepare(
+    "SELECT COUNT(*) AS c FROM reminders WHERE entity_type='event' AND entity_id=?"
+  ).get(row.calendar_event_id).c, 0, 'gelöschter Besuch hinterlässt keine Erinnerung');
   assert.ok(
     db.prepare('SELECT COUNT(*) AS c FROM calendar_pending_deletions').get().c > before,
     'die Löschung beim Provider muss vorgemerkt sein, sonst bleibt der Termin dort stehen',

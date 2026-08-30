@@ -66,8 +66,16 @@ function setsDbPathInTime(entry) {
   // Die rechte Seite ist oft ein berechneter Pfad (join(os.tmpdir(), …)), nicht
   // bloß ein Literal. Abgelehnt wird nur der nachweislich wirkungslose Fall:
   // der leere String, den db.js wie "nicht gesetzt" behandelt.
-  const assignment = /process\.env\.DB_PATH\s*=\s*([^;\n]+)/.exec(src);
-  if (!assignment || /^(['"])\s*\1$/.test(assignment[1].trim())) return false;
+  //
+  // ZWEITE FORM: `freshTestDbPath()` aus test/tmp-db.js. Sie setzt DB_PATH
+  // ebenfalls, nur eine Datei weiter - und räumt zusätzlich die Datei eines
+  // abgebrochenen Vorlaufs weg, bevor sie sie öffnet. Dieser Guard prüfte
+  // vorher die SCHREIBWEISE und nicht die Regel: als die neun Datei-Suiten auf
+  // den Helfer umzogen, meldete er sie alle als Verstoß, obwohl sie DB_PATH
+  // strenger setzen als zuvor. Was zählt, ist "gesetzt, bevor db.js lädt".
+  const assignment = /process\.env\.DB_PATH\s*=\s*([^;\n]+)|freshTestDbPath\s*\(\s*['"][^'"]+['"]\s*\)/.exec(src);
+  if (!assignment) return false;
+  if (assignment[1] !== undefined && /^(['"])\s*\1$/.test(assignment[1].trim())) return false;
 
   const loadPositions = [...src.matchAll(DYNAMIC_IMPORT)]
     .filter((m) => reachableFiles(resolve(dirname(entry), m[1])).has(DB_MODULE))
@@ -154,6 +162,18 @@ test('die Reihenfolgeprüfung erkennt wirkungslose Zuweisungen', () => {
     const computed = write('computed.js',
       `process.env.DB_PATH = join(tmpdir(), 'x.db');\nconst db = await import('${dbPath}');\n`);
     assert.strictEqual(setsDbPathInTime(computed), true, 'berechneter Pfad zählt');
+
+    // Der Helfer setzt DB_PATH eine Datei weiter - er zählt genauso, sonst
+    // meldet der Guard eine Suite als Verstoß, die es strenger macht als die
+    // Form, die er kennt.
+    const viaHelper = write('helper.js',
+      `import { freshTestDbPath } from './tmp-db.js';\nfreshTestDbPath('x');\nconst db = await import('${dbPath}');\n`);
+    assert.strictEqual(setsDbPathInTime(viaHelper), true, 'freshTestDbPath zählt');
+
+    // Aber auch er hilft nicht, wenn db.js schon statisch geladen wurde.
+    const helperTooLate = write('helper-late.js',
+      `import * as db from '${dbPath}';\nimport { freshTestDbPath } from './tmp-db.js';\nfreshTestDbPath('x');\n`);
+    assert.strictEqual(setsDbPathInTime(helperTooLate), false, 'statischer Import schlägt auch den Helfer');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

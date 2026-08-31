@@ -12,9 +12,18 @@ import { buildMatchQuery } from '../../services/search.js';
 import { visibilityWhere } from '../../services/visibility.js';
 import { VALID_SOURCES, ASSIGNED_USERS_SQL, getUserId, serializeEvent } from './helpers.js';
 import { shiftDateKey, todayKey } from '../../utils/timezone.js';
+import { getCalendarTravelDetails } from '../../services/calendar-travel.js';
 
 const log = createLogger('Calendar');
 const router = express.Router();
+
+function serializeCalendarEvent(database, event) {
+  const serialized = serializeEvent(event);
+  if (serialized?.event_kind === 'travel') {
+    serialized.travel_details = getCalendarTravelDetails(database, serialized.id);
+  }
+  return serialized;
+}
 
 // --------------------------------------------------------
 // GET /api/v1/calendar
@@ -91,7 +100,8 @@ router.get('/', (req, res) => {
     const rawEvents  = db.get().prepare(sql).all(...params);
     const recurringIds = rawEvents.filter((e) => e.recurrence_rule).map((e) => e.id);
     const exceptions   = loadEventExceptions(db.get(), recurringIds);
-    const events    = expandRecurringEvents(rawEvents, from, to, exceptions).map(serializeEvent);
+    const events = expandRecurringEvents(rawEvents, from, to, exceptions)
+      .map((event) => serializeCalendarEvent(db.get(), event));
     res.json({ data: events, from, to });
   } catch (err) {
     log.error('', err);
@@ -109,7 +119,7 @@ router.get('/upcoming', (req, res) => {
   try {
     const limit    = Math.min(parseInt(req.query.limit, 10) || 5, 20);
     const expanded = getUpcomingEvents(db.get(), { userId: getUserId(req), limit })
-      .map(serializeEvent);
+      .map((event) => serializeCalendarEvent(db.get(), event));
 
     res.json({ data: expanded });
   } catch (err) {
@@ -197,7 +207,7 @@ router.get('/search', (req, res) => {
     // die tatsächlichen (nicht die Master-)Daten in Reihenfolge zeigt.
     resolved.sort((a, b) => String(a.start_datetime).localeCompare(String(b.start_datetime)));
 
-    res.json({ data: resolved.map(serializeEvent), total });
+    res.json({ data: resolved.map((event) => serializeCalendarEvent(db.get(), event)), total });
   } catch (err) {
     log.error('', err);
     res.status(500).json({ error: 'Interner Fehler', code: 500 });

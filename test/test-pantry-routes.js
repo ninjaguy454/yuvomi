@@ -161,6 +161,41 @@ test('POST /pantry: ungültiges MHD-Format → 400', async () => {
   assert.equal(r.status, 400);
 });
 
+test('POST/GET /pantry: optional SKU and preferred Store Place round-trip', async () => {
+  const storeId = db.prepare(`
+    INSERT INTO places (name, type, active) VALUES ('Neighborhood Market', 'store', 1)
+  `).run().lastInsertRowid;
+  const r = await call('POST', '/pantry', {
+    name: 'Tomatoes', sku: ' produce-404 ', preferred_store_place_id: storeId,
+  });
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.data.sku, 'produce-404');
+  assert.equal(r.body.data.preferred_store_place_id, storeId);
+  assert.equal(r.body.data.preferred_store_place_name, 'Neighborhood Market');
+
+  const list = await call('GET', '/pantry');
+  const saved = list.body.data.find((item) => item.id === r.body.data.id);
+  assert.equal(saved.sku, 'produce-404');
+  assert.equal(saved.preferred_store_place_name, 'Neighborhood Market');
+  assert.ok(list.body.store_places.some((place) => place.id === storeId));
+});
+
+test('Pantry preferred store requires a saved active Store Place', async () => {
+  const homeId = db.prepare("SELECT id FROM places WHERE type = 'home' AND active = 1 ORDER BY id LIMIT 1").get().id;
+  const wrongType = await call('POST', '/pantry', {
+    name: 'Wrong place type', preferred_store_place_id: homeId,
+  });
+  assert.equal(wrongType.status, 400);
+  assert.match(wrongType.body.error, /active saved Store Place/);
+
+  const inactiveStoreId = db.prepare(`
+    INSERT INTO places (name, type, active) VALUES ('Closed Market', 'store', 0)
+  `).run().lastInsertRowid;
+  assert.equal((await call('POST', '/pantry', {
+    name: 'Closed-store item', preferred_store_place_id: inactiveStoreId,
+  })).status, 400);
+});
+
 // --------------------------------------------------------------------------
 // GET (Sortierung + Join)
 // --------------------------------------------------------------------------
@@ -199,6 +234,26 @@ test('PATCH /pantry/:id: Teil-Update rührt andere Felder nicht an', async () =>
   assert.equal(r.body.data.unit, 'pkg');
   assert.equal(r.body.data.notes, 'im Fach oben');
   assert.equal(r.body.data.min_quantity, 1);
+});
+
+test('PATCH preserves omitted Pantry identity fields; PUT clears omitted optional identity', async () => {
+  const storeId = db.prepare(`
+    INSERT INTO places (name, type, active) VALUES ('Bulk Foods', 'store', 1)
+  `).run().lastInsertRowid;
+  const created = await call('POST', '/pantry', {
+    name: 'Rice', quantity: 2, sku: 'RICE-10', preferred_store_place_id: storeId,
+  });
+  const id = created.body.data.id;
+
+  const patched = await call('PATCH', `/pantry/${id}`, { quantity: 3 });
+  assert.equal(patched.status, 200, JSON.stringify(patched.body));
+  assert.equal(patched.body.data.sku, 'RICE-10');
+  assert.equal(patched.body.data.preferred_store_place_id, storeId);
+
+  const replaced = await call('PUT', `/pantry/${id}`, { name: 'Rice', quantity: 3, unit: 'kg' });
+  assert.equal(replaced.status, 200, JSON.stringify(replaced.body));
+  assert.equal(replaced.body.data.sku, null);
+  assert.equal(replaced.body.data.preferred_store_place_id, null);
 });
 
 test('PATCH /pantry/:id: leerer Body lässt den Artikel unverändert', async () => {

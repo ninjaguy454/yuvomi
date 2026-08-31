@@ -25,17 +25,103 @@ import {
   refreshExecutionStatus,
   saveSettings as saveMealExecutionSettings,
 } from '../services/meal-execution.js';
+import {
+  applyLegacyMealScheduleEdits,
+  attachMealPlanToContext,
+  buildMealStatus,
+  buildMealWeekModel,
+  createMealMenuItem,
+  createMealPlan,
+  deleteMealMenuItem,
+  deleteMealPlan,
+  detachMealPlanFromContext,
+  ensureContextMealPlanAssociation,
+  ensureContextMealPlanAssociationsForRange,
+  getGrocerySettings,
+  getMealPlan,
+  getMealPlanDefaultSettings,
+  listMealMenuItems,
+  listMealPlans,
+  materializeMealPlanOccurrences,
+  replaceMealMenuItems,
+  repairMealChooser,
+  saveGrocerySettings,
+  saveMealDecision,
+  saveMealPlanDefaultSettings,
+  syncGrocerySettingsFromLegacy,
+  advanceMealChooserFallback,
+  updateMealMenuItem,
+  updateMealPlan,
+} from '../services/meal-plans.js';
+import {
+  finalizedDinerCount,
+  normalizeDishSelection,
+  normalizePortions,
+  presentDishSelection,
+  recipeIngredientsForPortions,
+  syncAutoPortions,
+} from '../services/meal-dishes.js';
 
 const log = createLogger('Meals');
 
 const router  = express.Router();
 
-const VALID_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
+const VALID_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack', 'custom'];
 const VALID_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6]; // 0 = Monday, 6 = Sunday
 const VALID_MEAL_SCOPES = ['household', 'personal', 'restaurant', 'takeout', 'skipped', 'travel'];
+const NEW_MEAL_SCOPES = ['household', 'personal', 'restaurant', 'takeout', 'travel'];
 const VALID_SCHEDULE_POLICIES = ['fixed', 'round_robin', 'personal_choice'];
 const VALID_PARTICIPANT_ROLES = ['chooser', 'cook', 'participant', 'supervisor'];
 const VALID_PARTICIPANT_STATUSES = ['participating', 'not_participating', 'away', 'needs_confirmation'];
+
+function requestedMealRange(query, database) {
+  const validDate = (value) => {
+    const parsed = new Date(`${value}T00:00:00Z`);
+    return DATE_RE.test(value) && !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+  const requestedWeek = String(query.week || '');
+  const fallback = validDate(requestedWeek) ? requestedWeek : todayKey(database);
+  const from = query.start == null || query.start === '' ? weekStart(fallback) : String(query.start);
+  if (!validDate(from)) throw new Error('Meal range dates must use a valid YYYY-MM-DD date.');
+  const to = query.end == null || query.end === '' ? (query.start ? addDays(from, 6) : weekEnd(fallback)) : String(query.end);
+  if (!validDate(from) || !validDate(to)) throw new Error('Meal range dates must use a valid YYYY-MM-DD date.');
+  if (to < from) throw new Error('End date must not precede start date.');
+  if (new Date(`${to}T00:00:00Z`) - new Date(`${from}T00:00:00Z`) > 62 * 86400000) {
+    throw new Error('Meal views may cover at most 63 days at a time.');
+  }
+  return { from, to };
+}
+
+function requestedContextId(value) {
+  if (value == null || value === '') return null;
+  const contextId = Number(value);
+  if (!Number.isInteger(contextId) || contextId <= 0) throw new Error('Choose a valid planning context.');
+  return contextId;
+}
+
+function requestedContextFromQuery(query) {
+  const value = [query.context_id, query.context, query.planning_context_id]
+    .find((candidate) => candidate != null && candidate !== '');
+  return requestedContextId(value);
+}
+
+function validateMealPlanningContext(database, value, dateKey) {
+  const contextId = requestedContextId(value);
+  if (contextId == null) return null;
+  const context = database.prepare(`
+    SELECT * FROM planning_contexts
+     WHERE id = ? AND status NOT IN ('cancelled', 'completed')
+       AND julianday(starts_at) < julianday(? || 'T00:00:00', '+1 day')
+       AND julianday(ends_at) > julianday(? || 'T00:00:00')
+  `).get(contextId, dateKey, dateKey);
+  if (!context) throw new Error('Choose an active planning context that includes this meal date.');
+  return context;
+}
+
+function mealDomainError(res, err, fallback = 'Could not complete the Meal Plan request.') {
+  const status = Number(err.status || err.statusCode) || 400;
+  res.status(status).json({ error: err.message || fallback, code: err.code || status });
+}
 
 // --------------------------------------------------------
 // Hilfsfunktionen
@@ -86,16 +172,85 @@ function sanitizedIngredients(ingredients) {
 function loadMealWithIngredients(id) {
   const meal = db.get().prepare(`
     SELECT m.*, u.display_name AS creator_name, u.avatar_color AS creator_color,
-           mrt.end_date AS recurrence_end_date
+           mrt.end_date AS recurrence_end_date,
+           pc.name AS context_name, pc.context_type,
+           place.name AS place_name
     FROM meals m
     LEFT JOIN users u ON u.id = m.created_by
     LEFT JOIN meal_recurrence_templates mrt ON mrt.id = m.recurrence_template_id
+    LEFT JOIN planning_contexts pc ON pc.id = m.planning_context_id
+    LEFT JOIN places place ON place.id = m.place_id
     WHERE m.id = ?
   `).get(id);
   if (!meal) return null;
   const ingredients = db.get().prepare('SELECT * FROM meal_ingredients WHERE meal_id = ? ORDER BY id ASC').all(id);
   const participants = loadMealParticipants([id])[id] || [];
-  return { ...meal, ingredients, participants };
+  const menuItems = listMealMenuItems(db.get(), id);
+  return {
+    ...meal,
+    portions: meal.portions_mode === 'fixed' ? Number(meal.portions) : null,
+    effective_portions: Number(meal.portions) || 1,
+    ingredients_manual_override: Boolean(meal.ingredients_manual_override),
+    dish: presentDishSelection(meal),
+    menu_items: menuItems,
+    ingredients,
+    participants,
+  };
+}
+
+function preferredMealMenu(body, currentMeal = null) {
+  if (!Array.isArray(body?.menu_items)) return null;
+  const entrees = body.menu_items.filter((item) => String(item?.item_type || 'entree') === 'entree');
+  if (entrees.length !== 1) {
+    const error = new Error('Add/Edit Meal requires exactly one entree and may include up to three sides.');
+    error.status = 400;
+    error.code = 'MEAL_ENTREE_REQUIRED';
+    throw error;
+  }
+  const dish = normalizeDishSelection(db.get(), entrees[0], currentMeal);
+  return {
+    dish,
+    items: body.menu_items.map((item) => (
+      item === entrees[0] ? { ...item, title: dish.title, recipe_id: dish.recipe_id } : item
+    )),
+  };
+}
+
+function applyMealPortions(mealId, body, currentMeal = null) {
+  const database = db.get();
+  const autoCount = finalizedDinerCount(database, mealId);
+  const hasPortionWrite = Object.hasOwn(body || {}, 'portions_mode') || Object.hasOwn(body || {}, 'portions');
+  let rawPortions;
+  if (hasPortionWrite) {
+    const mode = body.portions_mode || (body.portions == null ? 'auto' : 'fixed');
+    rawPortions = mode === 'auto' ? { mode: 'auto' } : { mode: 'fixed', count: body.portions };
+  }
+  const normalized = normalizePortions(rawPortions, {
+    currentMode: currentMeal?.portions_mode || 'auto',
+    currentCount: currentMeal?.portions,
+    autoCount,
+  });
+  const ingredientWrite = Array.isArray(body?.ingredients);
+  const manualOverride = Object.hasOwn(body || {}, 'ingredients_manual_override')
+    ? Boolean(body.ingredients_manual_override)
+    : (ingredientWrite ? true : Boolean(currentMeal?.ingredients_manual_override));
+  const dishChanged = currentMeal
+    ? (Number(currentMeal.recipe_id || 0) !== Number(body.recipe_id || currentMeal.recipe_id || 0))
+    : true;
+  const shouldMaterialize = !manualOverride && (hasPortionWrite || dishChanged || !currentMeal);
+
+  database.prepare(`
+    UPDATE meals SET portions_mode = ?, portions = ?, ingredients_manual_override = ? WHERE id = ?
+  `).run(normalized.mode, normalized.count, manualOverride ? 1 : 0, Number(mealId));
+
+  if (ingredientWrite || shouldMaterialize) {
+    database.prepare('DELETE FROM meal_ingredients WHERE meal_id = ?').run(Number(mealId));
+    const meal = database.prepare('SELECT recipe_id FROM meals WHERE id = ?').get(Number(mealId));
+    const ingredients = ingredientWrite
+      ? sanitizedIngredients(body.ingredients)
+      : recipeIngredientsForPortions(database, meal?.recipe_id, normalized.count);
+    insertMealIngredients(mealId, ingredients);
+  }
 }
 
 function householdPlanningMembers() {
@@ -342,7 +497,8 @@ function mealSelectionRequests(userId, { household = false } = {}) {
   return d.prepare(`
     SELECT o.*, m.date, m.meal_type, m.title AS meal_title, m.scope AS meal_scope,
            m.selection_status, m.schedule_slot_id, u.display_name AS responsible_name,
-           s.policy, s.snack_choice_limit,
+           COALESCE(s.policy, json_extract(o.metadata_json, '$.policy')) AS policy,
+           COALESCE(s.snack_choice_limit, json_extract(o.metadata_json, '$.snack_choice_limit'), 3) AS snack_choice_limit,
            CASE WHEN o.reminder_at IS NOT NULL AND o.reminder_at <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now') THEN 1 ELSE 0 END AS reminder_due
       FROM planning_obligations o
       JOIN meals m ON m.id = o.entity_id AND o.entity_type = 'meal'
@@ -363,9 +519,15 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
   return d.transaction(() => {
     const obligation = d.prepare(`
       SELECT o.*, m.date, m.meal_type, m.scope AS meal_scope, m.schedule_slot_id,
-             s.policy, s.fallback_user_id, s.snack_choice_limit
+             COALESCE(m.selection_policy_override, json_extract(o.metadata_json, '$.policy'), r.policy, s.policy) AS policy,
+             COALESCE(json_extract(o.metadata_json, '$.chooser_backup_strategy'), r.chooser_backup_strategy,
+               CASE WHEN s.fallback_user_id IS NULL THEN 'next_eligible' ELSE 'fixed' END) AS chooser_backup_strategy,
+             COALESCE(json_extract(o.metadata_json, '$.fallback_user_id'), r.fallback_user_id,
+               s.fallback_user_id) AS fallback_user_id,
+             COALESCE(s.snack_choice_limit, json_extract(o.metadata_json, '$.snack_choice_limit'), 3) AS snack_choice_limit
         FROM planning_obligations o
         JOIN meals m ON m.id = o.entity_id
+        LEFT JOIN meal_plan_rules r ON r.id = m.meal_plan_rule_id
         LEFT JOIN meal_schedule_slots s ON s.id = m.schedule_slot_id
        WHERE o.id = ? AND o.entity_type = 'meal' AND o.role = 'chooser'
     `).get(obligationId);
@@ -375,9 +537,10 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
       throw new Error('This meal-selection request belongs to another household member.');
     }
     const action = timeout ? 'timeout' : String(body.action || 'choose');
+    const metadata = (() => { try { return JSON.parse(obligation.metadata_json || '{}'); } catch { return {}; } })();
+    const selectionPolicy = obligation.policy || metadata.policy || null;
     if (action === 'choose') {
-      const metadata = (() => { try { return JSON.parse(obligation.metadata_json || '{}'); } catch { return {}; } })();
-      const personal = obligation.policy === 'personal_choice' || metadata.participant_user_id;
+      const personal = selectionPolicy === 'personal_choice' || metadata.participant_user_id;
       const rawChoices = Array.isArray(body.choices) && body.choices.length
         ? body.choices
         : [{ title: body.title, recipe_id: body.recipe_id, notes: body.notes }];
@@ -395,7 +558,33 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
       let targetMealId = Number(obligation.entity_id);
       const targetMealIds = [];
       if (personal) {
-        choices.forEach((choice, index) => {
+        // Legacy selection requests and the redesigned My Choices card now
+        // converge on the same audited decision transaction. The first choice
+        // is the canonical personal Meal; additional snack choices remain
+        // compatible response items without creating a second primary Meal.
+        const primary = saveMealDecision(d, obligation.entity_id, {
+          beneficiary_user_id: Number(obligation.responsible_user_id),
+          participation: 'participating',
+          choice_kind: 'personal',
+          selected_meal_title: choices[0].title,
+          selected_recipe_id: choices[0].recipeId,
+          notes: choices[0].notes,
+          confirmed: true,
+        }, {
+          actorId,
+          isAdmin: false,
+          deviceKey: body.device_key || null,
+        });
+        targetMealId = Number(primary.selected_meal_id);
+        targetMealIds.push(targetMealId);
+        d.prepare(`
+          INSERT INTO meal_selection_response_items
+            (obligation_id, position, meal_id, recipe_id, title, notes)
+          VALUES (?, 0, ?, ?, ?, ?)
+        `).run(obligation.id, targetMealId, choices[0].recipeId, choices[0].title, choices[0].notes);
+
+        choices.slice(1).forEach((choice, offset) => {
+          const index = offset + 1;
           const sourceKey = `meal-choice:${obligation.id}:${index}`;
           const result = d.prepare(`
             INSERT OR IGNORE INTO meals (
@@ -415,7 +604,6 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
           d.prepare(`INSERT INTO meal_selection_response_items (obligation_id, position, meal_id, recipe_id, title, notes) VALUES (?, ?, ?, ?, ?, ?)`)
             .run(obligation.id, index, mealId, choice.recipeId, choice.title, choice.notes);
         });
-        targetMealId = targetMealIds[0];
       } else {
         d.prepare(`UPDATE meals SET title = ?, notes = COALESCE(?, notes), recipe_id = ?, selection_status = 'selected' WHERE id = ?`)
           .run(choices[0].title, choices[0].notes, choices[0].recipeId, obligation.entity_id);
@@ -428,8 +616,10 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
           title = excluded.title, notes = excluded.notes, scope = excluded.scope,
           responded_by = excluded.responded_by, updated_at = excluded.updated_at
       `).run(obligation.id, targetMealId, choices[0].recipeId, choices[0].title, choices[0].notes, personal ? 'personal' : 'household', actorId);
-      d.prepare(`UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`).run(obligation.id);
-      addObligationEvent(d, obligation.id, 'meal_selected', actorId, { meal_ids: targetMealIds, personal });
+      if (!personal) {
+        d.prepare(`UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`).run(obligation.id);
+        addObligationEvent(d, obligation.id, 'meal_selected', actorId, { meal_ids: targetMealIds, personal: false });
+      }
       return { obligation_id: obligation.id, meal_id: targetMealId, meal_ids: targetMealIds, status: 'fulfilled', personal };
     }
 
@@ -438,34 +628,39 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
     d.prepare(`UPDATE planning_obligations SET status = ?, responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), response_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`)
       .run(status, selectionText(body.note, { max: 500 }), obligation.id);
     addObligationEvent(d, obligation.id, status, actorId);
-    const metadata = (() => { try { return JSON.parse(obligation.metadata_json || '{}'); } catch { return {}; } })();
-    if (obligation.policy === 'personal_choice' || metadata.participant_user_id) {
-      d.prepare(`UPDATE meal_participants SET status = 'not_participating', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE meal_id = ? AND user_id = ? AND role = 'participant'`)
-        .run(obligation.entity_id, obligation.responsible_user_id);
+    if (selectionPolicy === 'personal_choice' || metadata.participant_user_id) {
+      if (!timeout) {
+        saveMealDecision(d, obligation.entity_id, {
+          beneficiary_user_id: Number(obligation.responsible_user_id),
+          participation: 'not_participating',
+          choice_kind: 'household',
+          notes: body.note || null,
+          confirmed: true,
+        }, { actorId, isAdmin: false, deviceKey: body.device_key || null });
+        // Declining responsibility is still distinct from resolving a choice.
+        // Preserve the explicit decline status after the decision audit runs.
+        d.prepare(`UPDATE planning_obligations SET status = ?, responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`)
+          .run(status, obligation.id);
+      } else {
+        d.prepare(`UPDATE meal_participants SET status = 'not_participating', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE meal_id = ? AND user_id = ? AND role = 'participant'`)
+          .run(obligation.entity_id, obligation.responsible_user_id);
+        syncAutoPortions(d, obligation.entity_id);
+      }
       return { obligation_id: obligation.id, status, fallback: null };
     }
-    const fallbackId = Number(obligation.fallback_user_id) || Number(String(obligation.fallback_source || '').match(/^user:(\d+)$/)?.[1]) || null;
-    if (!fallbackId || fallbackId === Number(obligation.responsible_user_id)) {
-      d.prepare("UPDATE meals SET selection_status = 'timed_out' WHERE id = ?").run(obligation.entity_id);
-      return { obligation_id: obligation.id, status, fallback: null };
-    }
-    const attempt = Number(obligation.attempt || 1) + 1;
-    const result = d.prepare(`
-      INSERT OR IGNORE INTO planning_obligations (
-        entity_type, entity_id, logical_key, role, responsible_user_id, due_at,
-        response_deadline, reminder_at, status, attempt, parent_obligation_id,
-        fallback_source, metadata_json
-      ) VALUES ('meal', ?, ?, 'chooser', ?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-    `).run(
-      obligation.entity_id, `meal-schedule:${obligation.schedule_slot_id}:${obligation.date}:chooser:attempt:${attempt}`,
-      fallbackId, obligation.due_at, obligation.response_deadline, obligation.reminder_at,
-      attempt, obligation.id, `${status}:${obligation.responsible_user_id}`, obligation.metadata_json,
-    );
-    d.prepare("DELETE FROM meal_participants WHERE meal_id = ? AND role = 'chooser'").run(obligation.entity_id);
-    d.prepare(`INSERT OR IGNORE INTO meal_participants (meal_id, user_id, role, status, source) VALUES (?, ?, 'chooser', 'participating', 'schedule')`)
-      .run(obligation.entity_id, fallbackId);
-    if (result.changes) addObligationEvent(d, Number(result.lastInsertRowid), 'fallback_assigned', actorId, { previous_obligation_id: obligation.id });
-    return { obligation_id: obligation.id, status, fallback: { user_id: fallbackId }, replacement_obligation_id: result.changes ? Number(result.lastInsertRowid) : null };
+    const advanced = advanceMealChooserFallback(d, obligation.entity_id, {
+      sourceObligationId: obligation.id,
+      actorId,
+      reason: status === 'timed_out' ? 'chooser_timed_out' : 'chooser_declined',
+    });
+    return {
+      ...advanced,
+      obligation_id: obligation.id,
+      status,
+      chooser_status: advanced.status,
+      // Keep the released response shape while returning richer repair state.
+      fallback: advanced.fallback || null,
+    };
   })();
 }
 
@@ -489,12 +684,22 @@ function deleteMealOccurrence(meal, actorId) {
   db.get().prepare('DELETE FROM meals WHERE id = ?').run(meal.id);
 }
 
-function createMealRecord({ date, meal_type, title, notes, recipe_url, recipe_id, ingredients = [] }, actorId) {
+function createMealRecord({
+  date, meal_type, custom_label = null, title, notes, recipe_url, recipe_id, ingredients = [],
+  planning_context_id = null,
+}, actorId) {
   const cleanIngredients = sanitizedIngredients(ingredients);
   const result = db.get().prepare(`
-    INSERT INTO meals (date, meal_type, title, notes, recipe_url, recipe_id, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(date, meal_type, title, notes, recipe_url, recipe_id, actorId);
+    INSERT INTO meals (
+      date, meal_type, custom_label, title, notes, recipe_url, recipe_id, created_by,
+      planning_context_id, source, provenance_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'manual', ?)
+  `).run(
+    date, meal_type, meal_type === 'custom' ? custom_label : null,
+    title, notes, recipe_url, recipe_id, actorId,
+    planning_context_id,
+    JSON.stringify({ source: 'manual', created_from: 'recipe_assignment', planning_context_id }),
+  );
   insertMealIngredients(result.lastInsertRowid, cleanIngredients);
   return loadMealWithIngredients(result.lastInsertRowid);
 }
@@ -529,9 +734,9 @@ function materializeRecurringMeals(from, to) {
     `);
     const insertMeal = db.get().prepare(`
       INSERT INTO meals (
-        date, meal_type, title, notes, recipe_url, recipe_id, recurrence_template_id,
+        date, meal_type, custom_label, title, notes, recipe_url, recipe_id, recurrence_template_id,
         created_by, source, source_key, provenance_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'recurrence', ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'recurrence', ?, ?)
     `);
 
     for (const template of templates) {
@@ -542,6 +747,7 @@ function materializeRecurringMeals(from, to) {
         const result = insertMeal.run(
           date,
           template.meal_type,
+          template.meal_type === 'custom' ? template.custom_label : null,
           template.title,
           template.notes,
           template.recipe_url,
@@ -586,6 +792,274 @@ router.get('/suggestions', (req, res) => {
   } catch (err) {
     log.error('', err);
     res.status(500).json({ error: 'Interner Fehler', code: 500 });
+  }
+});
+
+// --------------------------------------------------------
+// Named Meal Plans and weekly decision read models
+// --------------------------------------------------------
+
+router.get('/plans', (req, res) => {
+  try {
+    res.json({ data: listMealPlans(db.get(), { includeDeleted: req.query.include_deleted === '1' }) });
+  } catch (err) {
+    log.error('GET /plans', err);
+    mealDomainError(res, err);
+  }
+});
+
+router.get('/plans/:id', (req, res) => {
+  try {
+    const data = getMealPlan(db.get(), Number(req.params.id));
+    if (!data) return res.status(404).json({ error: 'Meal Plan not found.', code: 'MEAL_PLAN_NOT_FOUND' });
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.post('/plans', requireAdmin, (req, res) => {
+  try {
+    const data = createMealPlan(db.get(), req.body || {}, req.authUserId || req.session.userId);
+    res.status(201).json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.put('/plans/:id', requireAdmin, (req, res) => {
+  try {
+    const data = updateMealPlan(
+      db.get(), Number(req.params.id), req.body || {}, req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.delete('/plans/:id', requireAdmin, (req, res) => {
+  try {
+    const data = deleteMealPlan(db.get(), Number(req.params.id), req.authUserId || req.session.userId);
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.put('/plans/:id/contexts/:contextId', requireAdmin, (req, res) => {
+  try {
+    const data = attachMealPlanToContext(
+      db.get(), Number(req.params.id), Number(req.params.contextId), req.body || {},
+      req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.delete('/plans/:id/contexts/:contextId', requireAdmin, (req, res) => {
+  try {
+    const data = detachMealPlanFromContext(
+      db.get(), Number(req.params.id), Number(req.params.contextId),
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.get('/week-model', (req, res) => {
+  try {
+    const d = db.get();
+    const { from, to } = requestedMealRange(req.query, d);
+    const contextId = requestedContextFromQuery(req.query);
+    const actorId = req.authUserId || req.session.userId;
+    const contextPlan = contextId
+      ? ensureContextMealPlanAssociation(d, contextId, actorId)
+      : null;
+    const contextPlans = contextId
+      ? [{ context_id: contextId, ...contextPlan }]
+      : ensureContextMealPlanAssociationsForRange(d, { from, to, actorId });
+    materializeRecurringMeals(from, to);
+    materializeMealPlanOccurrences(d, { from, to, contextId, actorId });
+    // The named-plan materializer adopts migration-backed legacy slots first.
+    // This fallback then handles only slots added after migration 10015.
+    if (!contextId) materializeMealSchedule(from, to, actorId);
+    const data = buildMealWeekModel(d, {
+      from,
+      to,
+      contextId,
+      memberId: req.query.member_id || actorId,
+      actorId,
+      isAdmin: req.authRole === 'admin',
+    });
+    data.context_plan = contextPlan;
+    data.context_plans = contextPlans;
+    res.json({ data, weekStart: from, weekEnd: to });
+  } catch (err) {
+    log.error('GET /week-model', err);
+    mealDomainError(res, err, 'Could not load My Choices.');
+  }
+});
+
+router.get('/status', (req, res) => {
+  try {
+    const d = db.get();
+    const { from, to } = requestedMealRange(req.query, d);
+    const contextId = requestedContextFromQuery(req.query);
+    const actorId = req.authUserId || req.session.userId;
+    const contextPlan = contextId
+      ? ensureContextMealPlanAssociation(d, contextId, actorId)
+      : null;
+    const contextPlans = contextId
+      ? [{ context_id: contextId, ...contextPlan }]
+      : ensureContextMealPlanAssociationsForRange(d, { from, to, actorId });
+    materializeRecurringMeals(from, to);
+    materializeMealPlanOccurrences(d, { from, to, contextId, actorId });
+    if (!contextId) materializeMealSchedule(from, to, actorId);
+    const data = buildMealStatus(d, { from, to, contextId });
+    data.context_plan = contextPlan;
+    data.context_plans = contextPlans;
+    res.json({ data, weekStart: from, weekEnd: to });
+  } catch (err) {
+    log.error('GET /status', err);
+    mealDomainError(res, err, 'Could not load Meal Status.');
+  }
+});
+
+router.get('/plan-defaults', (_req, res) => {
+  try {
+    res.json({ data: getMealPlanDefaultSettings(db.get()) });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not load Meal Plan Default Settings.');
+  }
+});
+
+router.put('/plan-defaults', requireAdmin, (req, res) => {
+  try {
+    const data = saveMealPlanDefaultSettings(
+      db.get(), req.body || {}, req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not save Meal Plan Default Settings.');
+  }
+});
+
+router.get('/grocery-settings', (_req, res) => {
+  try {
+    res.json({ data: getGrocerySettings(db.get()) });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not load grocery settings.');
+  }
+});
+
+router.put('/grocery-settings', requireAdmin, (req, res) => {
+  try {
+    const data = saveGrocerySettings(
+      db.get(), req.body || {}, req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not save grocery settings.');
+  }
+});
+
+router.post('/:id/chooser/repair', requireAdmin, (req, res) => {
+  try {
+    const data = repairMealChooser(db.get(), Number(req.params.id), {
+      actorId: req.authUserId || req.session.userId,
+    });
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not repair the Meal chooser.');
+  }
+});
+
+router.post('/:id/decisions', (req, res) => {
+  try {
+    const data = saveMealDecision(db.get(), Number(req.params.id), req.body || {}, {
+      actorId: req.authUserId || req.session.userId,
+      isAdmin: req.authRole === 'admin',
+      deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+    });
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not save the meal decision.');
+  }
+});
+
+router.get('/:id/menu-items', (req, res) => {
+  try {
+    res.json({ data: listMealMenuItems(db.get(), Number(req.params.id)) });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.post('/:id/menu-items', (req, res) => {
+  try {
+    const data = createMealMenuItem(
+      db.get(), Number(req.params.id), req.body || {}, req.authUserId || req.session.userId,
+      {
+        isAdmin: req.authRole === 'admin',
+        beneficiaryId: req.body?.beneficiary_user_id,
+        deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+      },
+    );
+    res.status(201).json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.put('/:id/menu-items', (req, res) => {
+  try {
+    const data = replaceMealMenuItems(
+      db.get(), Number(req.params.id), req.body || {}, req.authUserId || req.session.userId,
+      {
+        isAdmin: req.authRole === 'admin',
+        beneficiaryId: req.body?.beneficiary_user_id,
+        deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+      },
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.put('/:id/menu-items/:itemId', (req, res) => {
+  try {
+    const data = updateMealMenuItem(
+      db.get(), Number(req.params.id), Number(req.params.itemId), req.body || {},
+      req.authUserId || req.session.userId, {
+        isAdmin: req.authRole === 'admin',
+        beneficiaryId: req.body?.beneficiary_user_id,
+        deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+      },
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
+router.delete('/:id/menu-items/:itemId', (req, res) => {
+  try {
+    const data = deleteMealMenuItem(
+      db.get(), Number(req.params.id), Number(req.params.itemId),
+      req.authUserId || req.session.userId, {
+        isAdmin: req.authRole === 'admin',
+        beneficiaryId: req.body?.beneficiary_user_id ?? req.query?.beneficiary_user_id,
+        deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+      },
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
   }
 });
 
@@ -684,6 +1158,7 @@ router.put('/planning', requireAdmin, (req, res) => {
       const findSlot = d.prepare('SELECT id FROM meal_schedule_slots WHERE weekday = ? AND meal_type = ?');
       const clearParticipants = d.prepare('DELETE FROM meal_schedule_slot_participants WHERE schedule_slot_id = ?');
       const addParticipant = d.prepare('INSERT OR IGNORE INTO meal_schedule_slot_participants (schedule_slot_id, user_id) VALUES (?, ?)');
+      const changedSlotIds = [];
       for (const slot of slots) {
         saveSlot.run(
           Number(slot.weekday), slot.meal_type, slot.policy || 'fixed',
@@ -699,15 +1174,22 @@ router.put('/planning', requireAdmin, (req, res) => {
           Number(slot.supervisor_user_id) || null,
         );
         const scheduleSlotId = findSlot.get(Number(slot.weekday), slot.meal_type).id;
+        changedSlotIds.push(Number(scheduleSlotId));
         clearParticipants.run(scheduleSlotId);
         for (const userId of [...new Set((slot.participant_ids || []).map(Number))]) addParticipant.run(scheduleSlotId, userId);
       }
+      applyLegacyMealScheduleEdits(d, { actorId, slotIds: changedSlotIds });
 
       // Reconcile only untouched generated placeholders. Meals that the household
       // has named or otherwise customized are dated overrides and remain intact.
       const stale = d.prepare(`
-        SELECT id FROM meals
-         WHERE source = 'schedule' AND date >= ? AND title = 'Choose ' || meal_type
+        SELECT m.id FROM meals m
+         WHERE m.source = 'schedule' AND m.date >= ? AND m.title = 'Choose ' || m.meal_type
+           AND m.schedule_slot_id IS NOT NULL AND m.meal_plan_id IS NULL
+           AND m.planning_context_id IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM meal_occurrence_assignments oa WHERE oa.meal_id = m.id
+           )
       `).all(todayKey(d));
       const deleteObligations = d.prepare("DELETE FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ?");
       const deleteMeal = d.prepare('DELETE FROM meals WHERE id = ?');
@@ -734,9 +1216,11 @@ router.get('/execution-settings', (_req, res) => {
 
 router.put('/execution-settings', requireAdmin, (req, res) => {
   try {
+    const actorId = req.authUserId || req.session.userId;
     const data = saveMealExecutionSettings(
-      db.get(), req.body || {}, req.authUserId || req.session.userId,
+      db.get(), req.body || {}, actorId,
     );
+    syncGrocerySettingsFromLegacy(db.get(), data, actorId);
     res.json({ data });
   } catch (err) {
     res.status(err.status || 400).json({ error: err.message, code: err.code || 400 });
@@ -793,7 +1277,8 @@ router.post('/planning/materialize', (req, res) => {
     const from = weekStart(refDate);
     const to = weekEnd(refDate);
     const actorId = req.authUserId || req.session.userId;
-    const created = materializeMealSchedule(from, to, actorId);
+    const planned = materializeMealPlanOccurrences(db.get(), { from, to, actorId });
+    const created = planned.created + materializeMealSchedule(from, to, actorId);
     const settings = getMealExecutionSettings(db.get());
     const execution = settings?.enabled
       ? prepareMealExecutionRange(db.get(), { from, to, actorId })
@@ -840,7 +1325,7 @@ router.post('/selection-requests/:id/respond', (req, res) => {
     }
     res.json({ data });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    mealDomainError(res, err, 'Could not respond to the Meal choice request.');
   }
 });
 
@@ -859,7 +1344,7 @@ router.post('/selection-requests/process-timeouts', requireAdmin, (req, res) => 
     ));
     res.json({ data: { processed: results.length, results } });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    mealDomainError(res, err, 'Could not process overdue Meal choice requests.');
   }
 });
 
@@ -871,11 +1356,16 @@ router.post('/planning/reconcile', requireAdmin, (req, res) => {
     if (mealType && !VALID_MEAL_TYPES.includes(mealType)) throw new Error('Choose a valid meal type.');
     const d = db.get();
     const rows = d.prepare(`
-      SELECT id FROM meals
-       WHERE source = 'schedule' AND date = ?
-         AND (? IS NULL OR meal_type = ?)
-         AND title = 'Choose ' || meal_type
-         AND selection_status = 'awaiting_choice'
+      SELECT m.id FROM meals m
+       WHERE m.source = 'schedule' AND m.date = ?
+         AND (? IS NULL OR m.meal_type = ?)
+         AND m.title = 'Choose ' || m.meal_type
+         AND m.selection_status = 'awaiting_choice'
+         AND m.schedule_slot_id IS NOT NULL AND m.meal_plan_id IS NULL
+         AND m.planning_context_id IS NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM meal_occurrence_assignments oa WHERE oa.meal_id = m.id
+         )
     `).all(dateKey, mealType, mealType);
     d.transaction(() => {
       for (const row of rows) {
@@ -940,6 +1430,9 @@ router.get('/', (req, res) => {
     const to   = weekEnd(refDate);
 
     materializeRecurringMeals(from, to);
+    materializeMealPlanOccurrences(db.get(), {
+      from, to, actorId: req.authUserId || req.session.userId,
+    });
     materializeMealSchedule(from, to, req.authUserId || req.session.userId);
     const conflicts = reconcileMealCalendarConflicts(db.get(), { from, to });
 
@@ -948,10 +1441,14 @@ router.get('/', (req, res) => {
     // nachfragen. NULL heißt unbegrenzt.
     const meals = db.get().prepare(`
       SELECT m.*, u.display_name AS creator_name, u.avatar_color AS creator_color,
-             mrt.end_date AS recurrence_end_date
+             mrt.end_date AS recurrence_end_date,
+             pc.name AS context_name, pc.context_type,
+             place.name AS place_name
       FROM meals m
       LEFT JOIN users u ON u.id = m.created_by
       LEFT JOIN meal_recurrence_templates mrt ON mrt.id = m.recurrence_template_id
+      LEFT JOIN planning_contexts pc ON pc.id = m.planning_context_id
+      LEFT JOIN places place ON place.id = m.place_id
       WHERE m.date BETWEEN ? AND ?
       ORDER BY m.date ASC,
         CASE m.meal_type
@@ -1021,6 +1518,11 @@ router.get('/', (req, res) => {
     }, {});
     const result = meals.map((m) => ({
       ...m,
+      portions: m.portions_mode === 'fixed' ? Number(m.portions) : null,
+      effective_portions: Number(m.portions) || 1,
+      ingredients_manual_override: Boolean(m.ingredients_manual_override),
+      dish: presentDishSelection(m),
+      menu_items: listMealMenuItems(db.get(), m.id),
       ingredients: ingredientMap[m.id] || [],
       recipe_ingredient_count: recipeCountMap[m.id] ?? 0,
       participants: participantMap[m.id] || [],
@@ -1048,13 +1550,24 @@ router.get('/', (req, res) => {
 router.post('/', (req, res) => {
   try {
     const { ingredients = [], participants = [] } = req.body;
+    const preferredMenu = preferredMealMenu(req.body);
+    if (preferredMenu && (req.body.repeat_weekly === true || req.body.scope === 'skipped')) {
+      return res.status(400).json({
+        error: 'New Meals use Meal Plans for recurrence and participant decisions for non-participation.',
+        code: 'LEGACY_MEAL_WRITE_NOT_ALLOWED',
+      });
+    }
     const vDate       = date(req.body.date, 'Datum', true);
     const vType       = oneOf(req.body.meal_type, VALID_MEAL_TYPES, 'Mahlzeit-Typ');
-    const vTitle      = str(req.body.title, 'Titel', { max: MAX_TITLE });
+    const vCustomLabel = str(req.body.custom_label, 'Custom meal label', { max: MAX_TITLE, required: false });
+    const vTitle      = str(preferredMenu?.dish.title ?? req.body.title, 'Titel', { max: MAX_TITLE });
     const vNotes      = str(req.body.notes, 'Notizen', { max: MAX_TEXT, required: false });
     const vRecipeUrl  = str(req.body.recipe_url, 'Rezept-URL', { max: MAX_TEXT, required: false });
-    const vRecipeId   = num(req.body.recipe_id, 'Rezept-ID', { required: false });
-    const vScope      = oneOf(req.body.scope || 'household', VALID_MEAL_SCOPES, 'Meal scope');
+    const vRecipeId   = num(preferredMenu?.dish.recipe_id ?? req.body.recipe_id, 'Rezept-ID', { required: false });
+    const vScope      = oneOf(req.body.scope || 'household', preferredMenu ? NEW_MEAL_SCOPES : VALID_MEAL_SCOPES, 'Meal scope');
+    let planningContextId = null;
+    try { planningContextId = requestedContextId(req.body.planning_context_id); }
+    catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
     const duration = req.body.expected_duration_minutes == null || req.body.expected_duration_minutes === ''
       ? null : Number(req.body.expected_duration_minutes);
     const repeatWeekly = req.body.repeat_weekly === true;
@@ -1063,8 +1576,9 @@ router.post('/', (req, res) => {
     const vRepeatUntil = repeatWeekly
       ? date(req.body.repeat_until, 'Wiederholungs-Ende')
       : { value: null, error: null };
-    const errors = collectErrors([vDate, vType, vTitle, vNotes, vRecipeUrl, vRecipeId, vScope, vRepeatUntil]);
+    const errors = collectErrors([vDate, vType, vCustomLabel, vTitle, vNotes, vRecipeUrl, vRecipeId, vScope, vRepeatUntil]);
     if (!req.body.meal_type) errors.push('Mahlzeit-Typ ist erforderlich.');
+    if (vType.value === 'custom' && !vCustomLabel.value) errors.push('Custom meal label is required.');
     if (![req.body.scheduled_time, req.body.earliest_time, req.body.preferred_time, req.body.latest_time].every(validTime)) {
       errors.push('Meal times must use HH:MM.');
     }
@@ -1077,6 +1591,9 @@ router.post('/', (req, res) => {
     if (vRepeatUntil.value && vDate.value && vRepeatUntil.value < vDate.value) {
       errors.push('Wiederholungs-Ende darf nicht vor dem Datum liegen.');
     }
+    if (repeatWeekly && planningContextId) {
+      errors.push('A context-specific Meal is dated once. Use a Meal Plan for recurring travel meals.');
+    }
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
     if (vRecipeId.value !== null) {
@@ -1087,6 +1604,8 @@ router.post('/', (req, res) => {
     if (placeId != null && (!Number.isInteger(placeId) || !db.get().prepare('SELECT 1 FROM places WHERE id = ? AND active = 1').get(placeId))) {
       return res.status(400).json({ error: 'Choose an active Place.', code: 400 });
     }
+    try { validateMealPlanningContext(db.get(), planningContextId, vDate.value); }
+    catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
 
     let cleanParticipants;
     try { cleanParticipants = normalizeMealParticipants(participants); }
@@ -1099,13 +1618,14 @@ router.post('/', (req, res) => {
       if (repeatWeekly) {
         const template = db.get().prepare(`
           INSERT INTO meal_recurrence_templates
-            (start_date, end_date, weekday, meal_type, title, notes, recipe_url, recipe_id, created_by)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (start_date, end_date, weekday, meal_type, custom_label, title, notes, recipe_url, recipe_id, created_by)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           vDate.value,
           vRepeatUntil.value,
           mealWeekday(vDate.value),
           vType.value,
+          vType.value === 'custom' ? vCustomLabel.value : null,
           vTitle.value,
           vNotes.value,
           vRecipeUrl.value,
@@ -1125,33 +1645,53 @@ router.post('/', (req, res) => {
 
       const result = db.get().prepare(`
         INSERT INTO meals (
-          date, meal_type, title, notes, recipe_url, recipe_id, recurrence_template_id, created_by,
+          date, meal_type, custom_label, title, notes, recipe_url, recipe_id, recurrence_template_id, created_by,
           scope, scheduled_time, earliest_time, preferred_time, latest_time,
           expected_duration_minutes, source, provenance_json
-          , place_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          , place_id, planning_context_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
-        vDate.value, vType.value, vTitle.value, vNotes.value, vRecipeUrl.value, vRecipeId.value,
+        vDate.value, vType.value, vType.value === 'custom' ? vCustomLabel.value : null,
+        vTitle.value, vNotes.value, vRecipeUrl.value, vRecipeId.value,
         recurrenceTemplateId, req.authUserId || req.session.userId, vScope.value,
         req.body.scheduled_time || null, req.body.earliest_time || null,
         req.body.preferred_time || null, req.body.latest_time || null, duration,
         recurrenceTemplateId ? 'recurrence' : 'manual',
-        JSON.stringify({ source: recurrenceTemplateId ? 'recurrence' : 'manual', created_from: 'meal_editor' }),
-        placeId,
+        JSON.stringify({
+          source: recurrenceTemplateId ? 'recurrence' : 'manual',
+          created_from: 'meal_editor',
+          planning_context_id: planningContextId,
+        }),
+        placeId, planningContextId,
       );
 
       const mealId = result.lastInsertRowid;
 
-      insertMealIngredients(mealId, cleanIngredients);
       replaceMealParticipants(mealId, cleanParticipants);
+
+      const actorId = req.authUserId || req.session.userId;
+      if (preferredMenu) {
+        replaceMealMenuItems(db.get(), mealId, preferredMenu.items, actorId, {
+          isAdmin: req.authRole === 'admin',
+          deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+        });
+      }
+      if (preferredMenu || Object.hasOwn(req.body, 'portions_mode') || Object.hasOwn(req.body, 'portions')) {
+        applyMealPortions(mealId, {
+          ...req.body,
+          recipe_id: vRecipeId.value,
+          ingredients: Array.isArray(req.body.ingredients) ? cleanIngredients : undefined,
+        });
+      } else {
+        insertMealIngredients(mealId, cleanIngredients);
+      }
 
       return loadMealWithIngredients(mealId);
     });
 
     res.status(201).json({ data: meal });
   } catch (err) {
-    log.error('', err);
-    res.status(500).json({ error: 'Interner Fehler', code: 500 });
+    mealDomainError(res, err, 'Could not create the Meal.');
   }
 });
 
@@ -1159,6 +1699,9 @@ router.post('/apply-plan', (req, res) => {
   try {
     const assignments = Array.isArray(req.body.assignments) ? req.body.assignments : [];
     const replaceExisting = req.body.replace_existing === true;
+    let defaultContextId = null;
+    try { defaultContextId = requestedContextId(req.body.planning_context_id); }
+    catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
     if (!assignments.length) {
       return res.status(400).json({ error: 'Mindestens eine Mahlzeit ist erforderlich.', code: 400 });
     }
@@ -1168,22 +1711,36 @@ router.post('/apply-plan', (req, res) => {
     for (const assignment of assignments) {
       const vDate = date(assignment.date, 'Datum', true);
       const vType = oneOf(assignment.meal_type, VALID_MEAL_TYPES, 'Mahlzeit-Typ');
+      const vCustomLabel = str(assignment.custom_label, 'Custom meal label', { max: MAX_TITLE, required: false });
       const vTitle = str(assignment.title, 'Titel', { max: MAX_TITLE });
       const vNotes = str(assignment.notes, 'Notizen', { max: MAX_TEXT, required: false });
       const vRecipeUrl = str(assignment.recipe_url, 'Rezept-URL', { max: MAX_TEXT, required: false });
       const vRecipeId = num(assignment.recipe_id, 'Rezept-ID', { required: false });
-      const errors = collectErrors([vDate, vType, vTitle, vNotes, vRecipeUrl, vRecipeId]);
+      let planningContextId = defaultContextId;
+      try {
+        if (Object.prototype.hasOwnProperty.call(assignment, 'planning_context_id')) {
+          planningContextId = requestedContextId(assignment.planning_context_id);
+        }
+      } catch (error) {
+        return res.status(400).json({ error: error.message, code: 400 });
+      }
+      const errors = collectErrors([vDate, vType, vCustomLabel, vTitle, vNotes, vRecipeUrl, vRecipeId]);
       if (!assignment.meal_type) errors.push('Mahlzeit-Typ ist erforderlich.');
+      if (vType.value === 'custom' && !vCustomLabel.value) errors.push('Custom meal label is required.');
       if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
+      try { validateMealPlanningContext(db.get(), planningContextId, vDate.value); }
+      catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
       if (vRecipeId.value !== null) recipeIds.add(vRecipeId.value);
       prepared.push({
         date: vDate.value,
         meal_type: vType.value,
+        custom_label: vType.value === 'custom' ? vCustomLabel.value : null,
         title: vTitle.value,
         notes: vNotes.value,
         recipe_url: vRecipeUrl.value,
         recipe_id: vRecipeId.value,
         ingredients: assignment.ingredients || [],
+        planning_context_id: planningContextId,
       });
     }
 
@@ -1195,11 +1752,27 @@ router.post('/apply-plan', (req, res) => {
     const created = db.transaction(() => {
       const actorId = req.authUserId || req.session.userId;
       if (replaceExisting) {
-        const slots = [...new Set(prepared.map((assignment) => `${assignment.date}\u0000${assignment.meal_type}`))];
-        const selectMeals = db.get().prepare('SELECT * FROM meals WHERE date = ? AND meal_type = ? ORDER BY id ASC');
+        const slots = [...new Set(prepared.map((assignment) => (
+          `${assignment.date}\u0000${assignment.meal_type}\u0000${assignment.planning_context_id ?? 'home'}`
+        )))];
+        const selectHomeMeals = db.get().prepare(`
+          SELECT * FROM meals
+           WHERE date = ? AND meal_type = ? AND planning_context_id IS NULL
+             AND parent_meal_id IS NULL AND meal_plan_id IS NULL
+           ORDER BY id ASC
+        `);
+        const selectContextMeals = db.get().prepare(`
+          SELECT * FROM meals
+           WHERE date = ? AND meal_type = ? AND planning_context_id = ?
+             AND parent_meal_id IS NULL AND meal_plan_id IS NULL
+           ORDER BY id ASC
+        `);
         for (const slot of slots) {
-          const [slotDate, slotType] = slot.split('\u0000');
-          const existingMeals = selectMeals.all(slotDate, slotType);
+          const [slotDate, slotType, rawContext] = slot.split('\u0000');
+          const contextId = rawContext === 'home' ? null : Number(rawContext);
+          const existingMeals = contextId == null
+            ? selectHomeMeals.all(slotDate, slotType)
+            : selectContextMeals.all(slotDate, slotType, contextId);
           for (const meal of existingMeals) deleteMealOccurrence(meal, actorId);
         }
       }
@@ -1225,16 +1798,34 @@ router.put('/:id', (req, res) => {
     const id   = parseInt(req.params.id, 10);
     const meal = db.get().prepare('SELECT * FROM meals WHERE id = ?').get(id);
     if (!meal) return res.status(404).json({ error: 'Mahlzeit nicht gefunden', code: 404 });
+    const preferredMenu = preferredMealMenu(req.body, meal);
+    if (preferredMenu && (req.query.scope === 'series' || req.body.scope === 'skipped')) {
+      return res.status(400).json({
+        error: 'The Add/Edit Meal contract edits one dated Meal and does not write the legacy skipped scope.',
+        code: 'LEGACY_MEAL_WRITE_NOT_ALLOWED',
+      });
+    }
+    const writeBody = preferredMenu ? {
+      ...req.body,
+      title: preferredMenu.dish.title,
+      recipe_id: preferredMenu.dish.recipe_id,
+    } : req.body;
 
     const checks = [];
-    if (req.body.date       !== undefined) checks.push(date(req.body.date, 'Datum'));
-    if (req.body.meal_type  !== undefined) checks.push(oneOf(req.body.meal_type, VALID_MEAL_TYPES, 'Mahlzeit-Typ'));
-    if (req.body.title      !== undefined) checks.push(str(req.body.title, 'Titel', { max: MAX_TITLE, required: false }));
-    if (req.body.notes      !== undefined) checks.push(str(req.body.notes, 'Notizen', { max: MAX_TEXT, required: false }));
-    if (req.body.recipe_url !== undefined) checks.push(str(req.body.recipe_url, 'Rezept-URL', { max: MAX_TEXT, required: false }));
-    if (req.body.recipe_id  !== undefined) checks.push(num(req.body.recipe_id, 'Rezept-ID', { required: false }));
-    if (req.body.scope !== undefined) checks.push(oneOf(req.body.scope, VALID_MEAL_SCOPES, 'Meal scope'));
+    if (writeBody.date       !== undefined) checks.push(date(writeBody.date, 'Datum'));
+    if (writeBody.meal_type  !== undefined) checks.push(oneOf(writeBody.meal_type, VALID_MEAL_TYPES, 'Mahlzeit-Typ'));
+    if (writeBody.custom_label !== undefined) checks.push(str(writeBody.custom_label, 'Custom meal label', { max: MAX_TITLE, required: false }));
+    if (writeBody.title      !== undefined) checks.push(str(writeBody.title, 'Titel', { max: MAX_TITLE, required: false }));
+    if (writeBody.notes      !== undefined) checks.push(str(writeBody.notes, 'Notizen', { max: MAX_TEXT, required: false }));
+    if (writeBody.recipe_url !== undefined) checks.push(str(writeBody.recipe_url, 'Rezept-URL', { max: MAX_TEXT, required: false }));
+    if (writeBody.recipe_id  !== undefined) checks.push(num(writeBody.recipe_id, 'Rezept-ID', { required: false }));
+    if (writeBody.scope !== undefined) checks.push(oneOf(writeBody.scope, preferredMenu ? NEW_MEAL_SCOPES : VALID_MEAL_SCOPES, 'Meal scope'));
     const errors = collectErrors(checks);
+    const nextMealType = req.body.meal_type ?? meal.meal_type;
+    const nextCustomLabel = req.body.custom_label === undefined
+      ? meal.custom_label
+      : (String(req.body.custom_label || '').trim() || null);
+    if (nextMealType === 'custom' && !nextCustomLabel) errors.push('Custom meal label is required.');
     if (![req.body.scheduled_time, req.body.earliest_time, req.body.preferred_time, req.body.latest_time].every(validTime)) {
       errors.push('Meal times must use HH:MM.');
     }
@@ -1257,8 +1848,8 @@ router.put('/:id', (req, res) => {
       catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
     }
 
-    if (req.body.recipe_id !== undefined && req.body.recipe_id !== null && req.body.recipe_id !== '') {
-      const recipeExists = db.get().prepare('SELECT id FROM recipes WHERE id = ?').get(req.body.recipe_id);
+    if (writeBody.recipe_id !== undefined && writeBody.recipe_id !== null && writeBody.recipe_id !== '') {
+      const recipeExists = db.get().prepare('SELECT id FROM recipes WHERE id = ?').get(writeBody.recipe_id);
       if (!recipeExists) return res.status(400).json({ error: 'Rezept nicht gefunden.', code: 400 });
     }
     const placeId = req.body.place_id === undefined ? meal.place_id : (req.body.place_id == null || req.body.place_id === '' ? null : Number(req.body.place_id));
@@ -1274,6 +1865,9 @@ router.put('/:id', (req, res) => {
       const tpl = db.get().prepare('SELECT * FROM meal_recurrence_templates WHERE id = ?').get(templateId);
 
       const nMealType  = req.body.meal_type  !== undefined ? req.body.meal_type                 : tpl.meal_type;
+      const nCustomLabel = req.body.custom_label !== undefined
+        ? (String(req.body.custom_label || '').trim() || null)
+        : tpl.custom_label;
       const nTitle     = req.body.title      !== undefined ? (req.body.title?.trim() || tpl.title) : tpl.title;
       const nNotes     = req.body.notes      !== undefined ? (req.body.notes      || null)       : tpl.notes;
       const nRecipeUrl = req.body.recipe_url !== undefined ? (req.body.recipe_url || null)       : tpl.recipe_url;
@@ -1294,9 +1888,10 @@ router.put('/:id', (req, res) => {
       db.transaction(() => {
         db.get().prepare(`
           UPDATE meal_recurrence_templates
-          SET meal_type = ?, title = ?, notes = ?, recipe_url = ?, recipe_id = ?, end_date = ?
+          SET meal_type = ?, custom_label = ?, title = ?, notes = ?, recipe_url = ?, recipe_id = ?, end_date = ?
           WHERE id = ?
-        `).run(nMealType, nTitle, nNotes, nRecipeUrl, nRecipeId, nEndDate, templateId);
+        `).run(nMealType, nMealType === 'custom' ? nCustomLabel : null,
+          nTitle, nNotes, nRecipeUrl, nRecipeId, nEndDate, templateId);
 
         // Ein neu gesetztes (oder vorgezogenes) Ende muss die bereits
         // materialisierten Instanzen dahinter mitnehmen - sonst bliebe die Serie
@@ -1310,9 +1905,10 @@ router.put('/:id', (req, res) => {
 
         db.get().prepare(`
           UPDATE meals
-          SET meal_type = ?, title = ?, notes = ?, recipe_url = ?, recipe_id = ?
+          SET meal_type = ?, custom_label = ?, title = ?, notes = ?, recipe_url = ?, recipe_id = ?
           WHERE recurrence_template_id = ?
-        `).run(nMealType, nTitle, nNotes, nRecipeUrl, nRecipeId, templateId);
+        `).run(nMealType, nMealType === 'custom' ? nCustomLabel : null,
+          nTitle, nNotes, nRecipeUrl, nRecipeId, templateId);
 
         if (Array.isArray(req.body.ingredients)) {
           const cleanIngredients = sanitizedIngredients(req.body.ingredients);
@@ -1345,10 +1941,12 @@ router.put('/:id', (req, res) => {
       `).run(meal.recurrence_template_id, meal.date, req.authUserId || req.session.userId);
     }
 
-    db.get().prepare(`
-      UPDATE meals
+    db.transaction(() => {
+      db.get().prepare(`
+        UPDATE meals
       SET date       = COALESCE(?, date),
           meal_type  = COALESCE(?, meal_type),
+          custom_label = ?,
           title      = COALESCE(?, title),
           notes      = ?,
           recipe_url = ?,
@@ -1362,14 +1960,15 @@ router.put('/:id', (req, res) => {
           place_id = ?,
           provenance_json = ?
       WHERE id = ?
-    `).run(
-      req.body.date      ?? null,
-      req.body.meal_type ?? null,
-      req.body.title?.trim() ?? null,
-      req.body.notes       !== undefined ? (req.body.notes || null)       : meal.notes,
-      req.body.recipe_url  !== undefined ? (req.body.recipe_url || null)  : meal.recipe_url,
-      req.body.recipe_id   !== undefined ? (req.body.recipe_id || null)   : meal.recipe_id,
-      req.body.scope !== undefined ? req.body.scope : meal.scope,
+      `).run(
+      writeBody.date      ?? null,
+      writeBody.meal_type ?? null,
+      nextMealType === 'custom' ? nextCustomLabel : null,
+      writeBody.title?.trim() ?? null,
+      writeBody.notes       !== undefined ? (writeBody.notes || null)       : meal.notes,
+      writeBody.recipe_url  !== undefined ? (writeBody.recipe_url || null)  : meal.recipe_url,
+      writeBody.recipe_id   !== undefined ? (writeBody.recipe_id || null)   : meal.recipe_id,
+      writeBody.scope !== undefined ? writeBody.scope : meal.scope,
       req.body.scheduled_time !== undefined ? (req.body.scheduled_time || null) : meal.scheduled_time,
       req.body.earliest_time !== undefined ? (req.body.earliest_time || null) : meal.earliest_time,
       req.body.preferred_time !== undefined ? (req.body.preferred_time || null) : meal.preferred_time,
@@ -1385,10 +1984,19 @@ router.put('/:id', (req, res) => {
 
     if (cleanParticipants) replaceMealParticipants(id, cleanParticipants);
 
+      const actorId = req.authUserId || req.session.userId;
+      if (preferredMenu) {
+        replaceMealMenuItems(db.get(), id, preferredMenu.items, actorId, {
+          isAdmin: req.authRole === 'admin',
+          deviceKey: req.body?.device_key || req.get('x-device-key') || null,
+        });
+      }
+      applyMealPortions(id, writeBody, meal);
+    });
+
     res.json({ data: loadMealWithIngredients(id) });
   } catch (err) {
-    log.error('', err);
-    res.status(500).json({ error: 'Interner Fehler', code: 500 });
+    mealDomainError(res, err, 'Could not update the Meal.');
   }
 });
 
@@ -1479,6 +2087,7 @@ router.post('/:id/ingredients', (req, res) => {
     const result = db.get().prepare(`
       INSERT INTO meal_ingredients (meal_id, name, quantity, category) VALUES (?, ?, ?, ?)
     `).run(mealId, name.trim(), quantity?.trim() || null, String(category || '').trim() || 'Sonstiges');
+    db.get().prepare('UPDATE meals SET ingredients_manual_override = 1 WHERE id = ?').run(mealId);
 
     const ing = db.get().prepare(
       'SELECT * FROM meal_ingredients WHERE id = ?'
@@ -1519,6 +2128,9 @@ router.patch('/ingredients/:ingId', (req, res) => {
       on_shopping_list !== undefined ? (on_shopping_list ? 1 : 0) : null,
       ingId
     );
+    if (name !== undefined || quantity !== undefined || category !== undefined) {
+      db.get().prepare('UPDATE meals SET ingredients_manual_override = 1 WHERE id = ?').run(ing.meal_id);
+    }
 
     const updated = db.get().prepare(
       'SELECT * FROM meal_ingredients WHERE id = ?'
@@ -1539,9 +2151,11 @@ router.patch('/ingredients/:ingId', (req, res) => {
 router.delete('/ingredients/:ingId', (req, res) => {
   try {
     const ingId  = parseInt(req.params.ingId, 10);
+    const ingredient = db.get().prepare('SELECT meal_id FROM meal_ingredients WHERE id = ?').get(ingId);
     const result = db.get().prepare('DELETE FROM meal_ingredients WHERE id = ?').run(ingId);
     if (result.changes === 0)
       return res.status(404).json({ error: 'Zutat nicht gefunden', code: 404 });
+    db.get().prepare('UPDATE meals SET ingredients_manual_override = 1 WHERE id = ?').run(ingredient.meal_id);
     res.status(204).end();
   } catch (err) {
     log.error('', err);

@@ -3,8 +3,18 @@ import { op, jsonBody, idParam } from '../helpers.js';
 export function pantryPaths() {
   return {
     '/api/v1/pantry': {
-      get: op({ summary: 'List pantry items with storage locations and categories', tag: 'Pantry' }),
-      post: op({ summary: 'Create pantry item', tag: 'Pantry', stateChanging: true, requestBody: jsonBody(null) }),
+      get: op({
+        summary: 'List pantry items with storage locations, categories and Store Places',
+        tag: 'Pantry',
+        description: 'Each item includes optional `sku` and `preferred_store_place_id`; the response also includes `store_places` for the preferred-store selector. A preferred store is a reusable Yuvomi Place whose type is `store`.',
+      }),
+      post: op({
+        summary: 'Create pantry item',
+        tag: 'Pantry',
+        stateChanging: true,
+        requestBody: jsonBody(null),
+        description: 'Accepts optional `sku` (up to 100 characters) and `preferred_store_place_id`, which must reference an active saved Place of type `store`.',
+      }),
     },
     '/api/v1/pantry/locations': {
       get: op({ summary: 'List storage locations', tag: 'Pantry' }),
@@ -83,8 +93,8 @@ export function pantryPaths() {
       }),
     },
     '/api/v1/pantry/{itemId}': {
-      put: op({ summary: 'Replace pantry item', tag: 'Pantry', params: [idParam('itemId', 'Item ID')], stateChanging: true, requestBody: jsonBody(null) }),
-      patch: op({ summary: 'Partially update pantry item', tag: 'Pantry', params: [idParam('itemId', 'Item ID')], stateChanging: true, requestBody: jsonBody(null) }),
+      put: op({ summary: 'Replace pantry item', tag: 'Pantry', params: [idParam('itemId', 'Item ID')], stateChanging: true, requestBody: jsonBody(null), description: 'Supports optional `sku` and an active Store Place in `preferred_store_place_id`. Omitted optional fields are cleared by a full replacement.' }),
+      patch: op({ summary: 'Partially update pantry item', tag: 'Pantry', params: [idParam('itemId', 'Item ID')], stateChanging: true, requestBody: jsonBody(null), description: 'Partially updates Pantry fields, including optional `sku` and `preferred_store_place_id`, without changing omitted values.' }),
       delete: op({ summary: 'Delete pantry item', tag: 'Pantry', params: [idParam('itemId', 'Item ID')], stateChanging: true }),
     },
   };

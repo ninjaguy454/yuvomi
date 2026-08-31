@@ -2055,7 +2055,7 @@ test('Meals page adds a recipe sidebar and randomize planner controls', () => {
   const mealsPage = read('../public/pages/meals.js');
   const mealsCss = read('../public/styles/meals.css');
 
-  assert.match(mealsPage, /id="week-randomize"/);
+  assert.match(mealsPage, /data-plan-randomize/);
   assert.match(mealsPage, /id="recipe-sidebar"/);
   assert.match(mealsPage, /recipes\.dragToMealsHint/);
   assert.match(mealsPage, /function renderRecipeSidebar/);
@@ -2065,7 +2065,6 @@ test('Meals page adds a recipe sidebar and randomize planner controls', () => {
   assert.match(mealsPage, /recipeSupportsMealType/);
   assert.match(mealsCss, /\.meals-layout\s*\{/);
   assert.match(mealsCss, /\.recipe-sidebar\s*\{/);
-  assert.match(mealsCss, /\.week-nav__randomize\s*\{/);
   assertKeysExistInEveryLocale([
     'meals.randomizePlan',
     'meals.randomizeTitle',
@@ -7990,6 +7989,184 @@ test('mobile meal actions remain visible and touch-safe after the full cascade',
   assert.match(
     meals,
     /@media \(hover:\s*none\),\s*\(max-width:\s*640px\)[\s\S]*?\.meal-card__action-btn\s*\{[\s\S]*?color:\s*var\(--color-text-secondary\)/,
+  );
+});
+
+test('desktop Meal cards open shared dialogs while mobile keeps the compact inline disclosure', () => {
+  const mealsPage = read('../public/pages/meals.js');
+  const mealsCss = read('../public/styles/meals.css');
+
+  assert.match(mealsPage, /function usesDesktopOccurrenceDialog\(\)[\s\S]*min-width: 1024px/);
+  assert.match(mealsPage, /const inlineExpanded = expanded && !usesDesktopOccurrenceDialog\(\)/);
+  assert.match(mealsPage, /aria-haspopup="dialog"/);
+  assert.match(mealsPage, /function openOccurrenceDialog\(key\)[\s\S]*openSharedModal\(\{/);
+  assert.match(mealsPage, /renderChoiceOccurrenceDetails\(occurrence, activeWeekModel\(\), \{ includeActingNotice: true \}\)/);
+  assert.match(mealsPage, /function wireOccurrenceDialog\(panel, key\)/);
+  assert.match(mealsPage, /refreshDirtySnapshot\(\)/, 'saved dialog values must become the new dirty-check baseline');
+  assert.match(mealsCss, /\.meal-occurrence-dialog__details\s*\{[^}]*border-top:\s*0[^}]*background:\s*transparent/);
+});
+
+test('Meals preserves acting-for audit disclosure and consolidates plan actions in the manager', () => {
+  const mealsPage = read('../public/pages/meals.js');
+
+  assert.match(mealsPage, /Acting for \{\{name\}\}\. Your account remains the recorded actor\./);
+  assert.match(mealsPage, /renderMealActingForNotice\(model, 'meal-acting-banner--dialog'\)/);
+  assert.doesNotMatch(mealsPage, /id="meal-plan-add"|id="meal-automation-settings"|id="week-randomize"|id="fab-new-meal"/);
+  assert.match(mealsPage, /data-plan-create/);
+  assert.match(mealsPage, /data-plan-defaults/);
+  assert.match(mealsPage, /data-plan-randomize/);
+  assert.match(mealsPage, /id="week-next"[\s\S]*id="week-today"[\s\S]*<\/div>\s*<div class="page-toolbar__actions">/);
+  assert.match(mealsPage, /class="day-add meal-experience-day__add"/, 'each day retains the one-off Add meal path');
+});
+
+test('Meal Plan editor groups reusable weekdays and exposes the four guided rule sections', () => {
+  const mealsPage = read('../public/pages/meals.js');
+  const mealsCss = read('../public/styles/meals.css');
+
+  assert.match(mealsPage, /function mealPlanRulesForEditor\(plan\)[\s\S]*plan\?\.slot_groups/);
+  assert.match(mealsPage, /data-slot-group-key="\$\{esc\(rule\.slot_group_key \|\| ''\)\}"/);
+  assert.match(mealsPage, /slot_group_key:\s*rule\.dataset\.slotGroupKey \|\| null/);
+  assert.match(mealsPage, /weekdays:\s*\[\.\.\.new Set\(rule\.weekdays\)\]/);
+  for (const section of ['day-meal', 'who', 'what', 'deadlines']) {
+    assert.match(mealsPage, new RegExp(`data-rule-section="${section}"`));
+  }
+  assert.match(mealsPage, /name="rule_weekday"[\s\S]*type="checkbox"|type="checkbox"[\s\S]*name="rule_weekday"/);
+  assert.match(mealsPage, /custom_label:\s*value\('rule_meal_type'\) === 'custom'/);
+  assert.match(mealsPage, /customLabel\.required = mealType === 'custom'/);
+  assert.match(mealsPage, /chooser_fallback_user_ids:\s*policy === 'personal_choice' \? \[\] : fallbackUserIds/);
+  assert.match(mealsPage, /chooser_backup_strategy:\s*policy !== 'personal_choice' && fallbackUserIds\.length \? 'fixed' : 'next_eligible'/);
+  assert.match(mealsPage, /fallback_user_id:\s*policy !== 'personal_choice' \? fallbackUserIds\[0\] \|\| null : null/);
+  assert.match(mealsPage, /cook_strategy:\s*cookStrategy/);
+  assert.match(mealsPage, /supervisor_strategy:\s*supervisorStrategy/);
+  assert.match(mealsPage, /deadline_mode:\s*deadlineMode/);
+  assert.match(mealsPage, /selection_deadline_value:\s*deadlineValue/);
+  assert.match(mealsPage, /selection_deadline_unit:\s*deadlineUnit/);
+  assert.match(mealsPage, /execution_assignment_strategies:\s*executionAssignmentStrategies/);
+  assert.match(mealsPage, /\['open_claimable', mealText\('meals\.assignOpenClaimable', 'Open \/ claimable'\)\]/);
+  assert.match(mealsPage, /data-participant-override/);
+  assert.match(mealsCss, /\.meal-plan-rule__section[\s\S]*\.meal-plan-rule__weekdays/);
+  assert.match(mealsCss, /\.meal-plan-editor \[hidden\],[\s\S]*?\.meal-default-settings \[hidden\]\s*\{[^}]*display:\s*none !important/);
+});
+
+test('Meal choice surfaces keep shared chooser, Backup Meal, and Personal Choice semantics separate', () => {
+  const mealsPage = read('../public/pages/meals.js');
+
+  assert.match(mealsPage, /const personalPolicy = policy === 'personal_choice'/);
+  assert.match(mealsPage, /const chooserMode = !personalPolicy && selectedMemberIsOccurrenceChooser\(occurrence\)/);
+  assert.match(mealsPage, /const allowBackup = !personalPolicy && !chooserMode/);
+  assert.match(mealsPage, /data-choice-surface="\$\{personalPolicy \? 'personal' : chooserMode \? 'chooser' : 'backup'\}"/);
+  assert.match(mealsPage, /chooserMode \? occurrence\.menu_items\.filter\(\(item\) => item\.kind === 'entree'\) : \[\]/);
+  assert.match(mealsPage, /name="meal_choice" value="backup"/);
+  assert.match(mealsPage, /data-backup-recipe/);
+  assert.match(mealsPage, /name="backup_meal_title"/);
+  assert.match(mealsPage, /const backupSelected = decision\?\.choice_kind === 'backup' && decision\?\.is_current_choice !== false/);
+  assert.match(mealsPage, /const backupMealTitle = backupSelected \? \(decision\?\.selected_meal_title \|\| ''\) : ''/);
+  assert.match(mealsPage, /choice:[\s\S]*backup \? 'backup' : 'assigned'/);
+  assert.match(mealsPage, /selectedMealTitle:[\s\S]*participating && backup \? backupMealTitle : null/);
+  assert.match(mealsPage, /selectedRecipeId:[\s\S]*participating && backup \? backupRecipeId : null/);
+  assert.doesNotMatch(mealsPage, /const legacyBackupItems = items\.filter/);
+  assert.doesNotMatch(mealsPage, /desiredItems\.push\(\.\.\.legacyBackupItems\.map/);
+  assert.match(mealsPage, /items = items\.filter\(\(item\) => \(item\.item_type \|\| item\.kind\) !== 'backup'\)/);
+  assert.doesNotMatch(mealsPage, /name="menu_item_type"[^\n]*option value="backup"/);
+  assert.match(mealsPage, /const courseLimits = mealCourseLimits\(occurrence\)/);
+  assert.match(mealsPage, /mealMenuOptionLimitState\(values, occurrence\)/);
+  assert.match(mealsPage, /data-menu-editor-add="entree"/);
+  assert.match(mealsPage, /data-menu-editor-add="side"/);
+  assert.doesNotMatch(mealsPage, /\(counts\.entree \|\| 0\) > 1 \|\| \(counts\.side \|\| 0\) > 3/);
+  assert.match(mealsPage, /decision\.menu_items \|\| \[\]/,
+    'backend decision.menu_items must lock already selected current-generation rows');
+  assert.match(mealsPage, /data-max-side-choices="\$\{courseLimits\.max_side_choices\}"/);
+  assert.match(mealsPage, /Number\(form\.dataset\.maxSideChoices \?\? 3\)/);
+  assert.match(mealsPage, /occurrenceSelectionPolicy\(occurrence\) !== 'personal_choice'[\s\S]*selectedMemberIsOccurrenceChooser\(occurrence\)/);
+  assert.match(mealsPage, /mealText\('meals\.editMenuOptions', 'Edit entrée and sides'\)/);
+  assert.match(mealsPage, /api\.put\(`\/meals\/\$\{mealId\}\/menu-items`, \{[\s\S]*beneficiary_user_id:\s*Number\(state\.selectedMemberId\)[\s\S]*device_key:\s*stableMealDeviceKey\(\)/);
+  assert.doesNotMatch(mealsPage, /state\.isAdmin \|\| occurrence\.controls\?\.choose_shared_meal/);
+});
+
+test('Meal cards, ingredient scale, participant roles, and automation use the refined shared UI', () => {
+  const mealsPage = read('../public/pages/meals.js');
+  const mealsCss = read('../public/styles/meals.css');
+
+  assert.doesNotMatch(mealsPage, /meal-choice-card__chevron/);
+  assert.doesNotMatch(mealsCss, /meal-choice-card__chevron/);
+  assert.match(mealsPage, /class="meal-choice-card__toggle"[\s\S]*data-action="toggle-occurrence"[\s\S]*aria-expanded=/);
+  assert.match(mealsPage, /function occurrenceHasActiveChooser\(occurrence\)/);
+  assert.match(mealsPage, /if \(!occurrenceHasActiveChooser\(occurrence\)\) return ''/);
+  assert.match(mealsPage, /chooserStatusLabel\(occurrenceHasActiveChooser\(occurrence\) \? occurrence\.chooser_status : 'needs_fallback'\)/);
+  assert.match(mealsPage, /const fallbackOption = !hasActiveChooser \|\| selectionOptions\.length/);
+  assert.match(mealsPage, /state\.mode === 'choices'[\s\S]*: occurrenceMealTitle\(occurrence\)/);
+
+  assert.match(mealsCss, /\.meal-role-row\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*minmax\(7rem,\s*1\.25fr\) repeat\(4,/);
+  assert.match(mealsCss, /@media \(max-width:\s*640px\)[\s\S]*\.meal-role-row\s*\{[^}]*grid-template-columns:\s*repeat\(2,/);
+  assert.match(mealsPage, /title: isEdit \? t\('meals\.editMeal'\) : t\('meals\.addMealTitle'\),[\s\S]*?size: 'lg'/);
+
+  const ingredientsGroup = mealsPage.match(/<div class="form-group meal-ingredients-group">[\s\S]*?<\/div>\s*\$\{advancedSection/)?.[0] || '';
+  assert.match(ingredientsGroup, /meal-ingredients-heading/);
+  assert.match(ingredientsGroup, /id="modal-recipe-scale"/);
+  assert.match(ingredientsGroup, /id="ingredient-list"/);
+  assert.equal((mealsPage.match(/id="modal-recipe-scale"/g) || []).length, 1);
+  assert.match(mealsPage, /const finalizedParticipantIds = new Set\(finalizedMealParticipantIds\(meal\?\.participants \|\| \[\]\)\)/);
+  assert.match(mealsPage, /const initialIngredientScale = Math\.max\(Number\(meal\?\.portions\) \|\| finalizedParticipantIds\.size, 1\)/);
+  assert.match(mealsPage, /const portionsModeSelect = panel\.querySelector\('#modal-portions-mode'\)/);
+  assert.match(mealsPage, /if \(portionsModeSelect\?\.value === 'auto'\) syncPortionControls\(\)/);
+  assert.match(mealsPage, /let currentAppliedRecipe = state\.recipes\.find/);
+  assert.match(mealsPage, /const rescaleVisibleIngredients = \(nextScale\) =>/);
+  assert.match(mealsPage, /const factor = normalizedScale \/ Math\.max\(lastAppliedScale, 0\.1\)/);
+  assert.match(mealsPage, /quantityInput\.value = scaleMealIngredientQuantity\(quantityInput\.value, factor\)/);
+  assert.match(mealsPage, /data-meal-role-present="\$\{roleState\.present\}"/);
+  assert.match(mealsPage, /data-meal-role-status="\$\{esc\(roleState\.status\)\}"/);
+  assert.match(mealsPage, /input\.dataset\.mealRoleTouched = 'true'/);
+  assert.match(mealsPage, /mealEditorRolePayload\(\{/);
+  assert.match(mealsPage, /await api\.put\(`\/meals\/\$\{meal\.id\}`, \{[\s\S]*ingredients, menu_items,[\s\S]*portions_mode, portions/);
+
+  const automation = mealsPage.match(/function openMealAutomationModal\(\)[\s\S]*?\n}\n\nfunction openMealScheduleModal/)?.[0] || '';
+  assert.match(automation, /await openMealPlanManager\(\)/);
+  assert.doesNotMatch(automation, /openMealScheduleModal\(\);/);
+});
+
+test('all locales include the guided Meal Plan and chooser audit labels', () => {
+  const required = [
+    'sectionDayMeal', 'sectionWho', 'sectionWhat', 'sectionDeadlines',
+    'weekdaysLabel', 'customMealName', 'backupChooserStrategy', 'assignOpenClaimable', 'cookStrategy',
+    'supervisorStrategy', 'manualParticipants', 'deadlineMode', 'deadlineUnit',
+    'planActivationHint', 'editMenuOptions', 'backupChoiceTitle',
+    'backupChoiceHint', 'chooserSharedMealHint',
+  ];
+  const localeFiles = readdirSync(new URL('../public/locales/', import.meta.url))
+    .filter((file) => file.endsWith('.json'));
+  for (const file of localeFiles) {
+    const meals = JSON.parse(read(`../public/locales/${file}`)).meals;
+    for (const key of required) assert.equal(typeof meals?.[key], 'string', `${file}: missing meals.${key}`);
+  }
+});
+
+test('the redesigned meal week keeps compact cards on a horizontally scrollable day rail', () => {
+  const meals = read('../public/styles/meals.css');
+
+  assert.match(
+    meals,
+    /\.meal-choice-card__headline strong\s*\{[^}]*font-size:\s*var\(--text-sm\)[^}]*line-height:\s*var\(--line-height-snug\)/,
+    'collapsed meal-card headlines should use the compact type role',
+  );
+  assert.match(
+    meals,
+    /--meal-day-column-width:\s*clamp\(12rem,\s*16vw,\s*14rem\)/,
+    'desktop day columns need a responsive readable width',
+  );
+  assert.match(
+    meals,
+    /grid-template-columns:\s*repeat\(7,\s*minmax\(var\(--meal-day-column-width\),\s*1fr\)\)/,
+    'all seven day columns should share the responsive rail width',
+  );
+  assert.match(
+    meals,
+    /@media \(max-width:\s*1023px\)[\s\S]*?\.meals-page > \.page-toolbar--wrap > \.page-toolbar__actions\s*\{[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/,
+    'narrow Meal actions need a swipeable row instead of clipped controls',
+  );
+  assert.match(
+    meals,
+    /\.meals-page > \.page-toolbar--wrap > \.page-toolbar__actions\s*\{[^}]*flex-wrap:\s*wrap[^}]*row-gap:/,
+    'desktop Meal actions should wrap cleanly when their labels need more room',
   );
 });
 

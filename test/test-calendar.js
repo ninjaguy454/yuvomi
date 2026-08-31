@@ -83,6 +83,15 @@ test('Kalender-Ansicht: ungültige gespeicherte Werte fallen auf Geräte-Default
   assert(calendarHelpers.defaultCalendarViewFromState({ savedView: null, isMobile: false }) === 'month', 'Desktop fällt auf Monat zurück');
 });
 
+test('month navigation clamps the day to the target month', () => {
+  assert(calendarHelpers.addMonths('2026-08-31', 1) === '2026-09-30',
+    'August 31 does not skip September');
+  assert(calendarHelpers.addMonths('2024-01-31', 1) === '2024-02-29',
+    'leap-year February is clamped correctly');
+  assert(calendarHelpers.addMonths('2026-03-31', -1) === '2026-02-28',
+    'backward navigation clamps as well');
+});
+
 // --------------------------------------------------------
 // Termin-CRUD
 // --------------------------------------------------------

@@ -135,7 +135,7 @@ export function attachTaskActivityBindings(d, tasks) {
   if (!ids.length) return tasks;
   const placeholders = ids.map(() => '?').join(',');
   const rows = d.prepare(`
-    SELECT b.task_id, b.activity_template_id, b.subject_user_id,
+    SELECT t.id AS task_id, b.activity_template_id, b.subject_user_id,
            a.name AS activity_template_name,
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
@@ -149,13 +149,14 @@ export function attachTaskActivityBindings(d, tasks) {
            ac.override_allowed AS activity_assignment_override_allowed,
            ac.beneficiary_user_id AS activity_beneficiary_user_id,
            u.display_name AS activity_subject_name
-      FROM task_activity_bindings b
-      JOIN activity_templates a ON a.id = b.activity_template_id
+      FROM tasks t
+      LEFT JOIN task_activity_bindings b ON b.task_id = t.id
+      LEFT JOIN activity_templates a ON a.id = b.activity_template_id
       LEFT JOIN users u ON u.id = b.subject_user_id
-      LEFT JOIN task_planning_context pc ON pc.task_id = b.task_id
-      LEFT JOIN task_assignment_context ac ON ac.task_id = b.task_id
+      LEFT JOIN task_planning_context pc ON pc.task_id = t.id
+      LEFT JOIN task_assignment_context ac ON ac.task_id = t.id
       LEFT JOIN places p ON p.id = pc.place_id
-     WHERE b.task_id IN (${placeholders})
+     WHERE t.id IN (${placeholders})
   `).all(...ids);
   const byTask = new Map(rows.map((row) => [Number(row.task_id), row]));
   const responsibilities = listTaskResponsibilities(d, ids);

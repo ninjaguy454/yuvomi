@@ -28,8 +28,12 @@ const { addDays, mealWeekday } = await import('../server/services/meal-recurrenc
 const db = dbmod.get();
 
 const U = db.prepare(`INSERT INTO users (username, display_name, password_hash, role) VALUES ('u','U','x','member')`).run().lastInsertRowid;
+const U2 = db.prepare(`INSERT INTO users (username, display_name, password_hash, role) VALUES ('u2','U2','x','member')`).run().lastInsertRowid;
 const LIST = db.prepare(`INSERT INTO shopping_lists (name, created_by) VALUES ('REWE', ?)`).run(U).lastInsertRowid;
 const RECIPE = db.prepare(`INSERT INTO recipes (title, created_by) VALUES ('Suppe', ?)`).run(U).lastInsertRowid;
+const PORTION_RECIPE = db.prepare(`INSERT INTO recipes (title, created_by) VALUES ('Portion soup', ?)`).run(U).lastInsertRowid;
+db.prepare(`INSERT INTO recipe_ingredients (recipe_id, name, quantity, category) VALUES (?, 'Stock', '1.5 cups', 'Pantry')`)
+  .run(PORTION_RECIPE);
 
 let actor = { id: U, role: 'member' };
 const app = express();
@@ -222,6 +226,147 @@ test('POST /apply-plan mit replace_existing: ersetzt Meals im selben Slot', asyn
   const rows = db.prepare(`SELECT title FROM meals WHERE date = '2026-04-13' AND meal_type = 'dinner'`).all();
   assert.equal(rows.length, 1);
   assert.equal(rows[0].title, 'Neu');
+});
+
+test('preferred Add/Edit Meal contract persists entree, sides and participant-derived portions', async () => {
+  actor = { id: U, role: 'member' };
+  const created = await createMeal({
+    title: undefined,
+    menu_items: [
+      { item_type: 'entree', title: 'Family soup', recipe_id: PORTION_RECIPE, position: 0 },
+      { item_type: 'side', title: 'Crusty bread', recipe_id: null, position: 0 },
+    ],
+    portions_mode: 'auto',
+    portions: null,
+    participants: [
+      { user_id: U, role: 'participant', status: 'participating' },
+      { user_id: U2, role: 'participant', status: 'needs_confirmation' },
+    ],
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(created.body.data.title, 'Family soup', 'custom display text survives recipe selection');
+  assert.equal(created.body.data.recipe_id, PORTION_RECIPE);
+  assert.equal(created.body.data.portions_mode, 'auto');
+  assert.equal(created.body.data.portions, null);
+  assert.equal(created.body.data.effective_portions, 1, 'pending diners are not finalized portions');
+  assert.deepEqual(created.body.data.menu_items.map((item) => item.title), ['Family soup', 'Crusty bread']);
+  assert.equal(created.body.data.ingredients[0].quantity, '1.5 cups');
+
+  actor = { id: U2, role: 'member' };
+  const joined = await call('POST', `/${created.body.data.id}/decisions`, {
+    participation: 'participating', choice_kind: 'household', confirmed: true,
+  });
+  assert.equal(joined.status, 200, JSON.stringify(joined.body));
+  const afterJoin = await call('GET', `/?week=${created.body.data.date}`);
+  const synchronized = afterJoin.body.data.find((meal) => meal.id === created.body.data.id);
+  assert.equal(synchronized.effective_portions, 2);
+  assert.equal(synchronized.ingredients[0].quantity, '3 cups');
+
+  assert.equal((await call('PATCH', `/ingredients/${synchronized.ingredients[0].id}`, {
+    quantity: '9 cups',
+  })).status, 200);
+  assert.equal((await call('POST', `/${created.body.data.id}/decisions`, {
+    participation: 'not_participating', choice_kind: 'household', confirmed: true,
+  })).status, 200);
+  const afterManualLeave = await call('GET', `/?week=${created.body.data.date}`);
+  const manual = afterManualLeave.body.data.find((meal) => meal.id === created.body.data.id);
+  assert.equal(manual.effective_portions, 1);
+  assert.equal(manual.ingredients[0].quantity, '9 cups', 'manual ingredient quantities are not rescaled');
+  assert.equal((await call('POST', `/${created.body.data.id}/decisions`, {
+    participation: 'participating', choice_kind: 'household', confirmed: true,
+  })).status, 200);
+
+  actor = { id: U, role: 'member' };
+  const updated = await call('PUT', `/${created.body.data.id}`, {
+    menu_items: [
+      { item_type: 'entree', title: 'Family soup v2', recipe_id: PORTION_RECIPE, position: 0 },
+      { item_type: 'side', title: 'Crusty bread', recipe_id: null, position: 0 },
+    ],
+    portions_mode: 'fixed',
+    portions: 4,
+    ingredients_manual_override: false,
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.equal(updated.body.data.menu_items.length, 2, 'slot-based retry updates rather than duplicating options');
+  assert.equal(updated.body.data.title, 'Family soup v2');
+  assert.equal(updated.body.data.portions, 4);
+  assert.equal(updated.body.data.effective_portions, 4);
+  assert.equal(updated.body.data.ingredients[0].quantity, '6 cups');
+
+  actor = { id: U2, role: 'member' };
+  assert.equal((await call('POST', `/${created.body.data.id}/decisions`, {
+    participation: 'not_participating', choice_kind: 'household', confirmed: true,
+  })).status, 200);
+  const afterLeave = await call('GET', `/?week=${created.body.data.date}`);
+  const fixed = afterLeave.body.data.find((meal) => meal.id === created.body.data.id);
+  assert.equal(fixed.effective_portions, 4, 'participation changes do not alter fixed portions');
+  assert.equal(fixed.ingredients[0].quantity, '6 cups');
+  actor = { id: U, role: 'member' };
+});
+
+test('preferred Add Meal rejects legacy skipped/repeat writes but flat legacy records remain compatible', async () => {
+  const menu_items = [{ item_type: 'entree', title: 'One-off', recipe_id: null, position: 0 }];
+  assert.equal((await createMeal({ title: undefined, scope: 'skipped', menu_items })).status, 400);
+  assert.equal((await createMeal({ title: undefined, repeat_weekly: true, menu_items })).status, 400);
+  assert.equal((await createMeal({ title: 'Legacy skipped', scope: 'skipped' })).status, 201);
+});
+
+test('one-off Meals retain their selected planning context and reject dates outside it', async () => {
+  const contextId = Number(db.prepare(`
+    INSERT INTO planning_contexts (context_key, name, context_type, starts_at, ends_at, created_by)
+    VALUES ('route-trip-one-off', 'Trip A', 'travel', '2042-04-10T00:00:00', '2042-04-13T00:00:00', ?)
+  `).run(U).lastInsertRowid);
+  const created = await createMeal({
+    date: '2042-04-11',
+    meal_type: 'dinner',
+    title: 'Travel supper',
+    planning_context_id: contextId,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  assert.equal(Number(created.body.data.planning_context_id), contextId);
+  const outside = await createMeal({
+    date: '2042-04-13',
+    meal_type: 'dinner',
+    title: 'Too late',
+    planning_context_id: contextId,
+  });
+  assert.equal(outside.status, 400);
+});
+
+test('apply-plan replacement is scoped to one context and preserves named-plan output', async () => {
+  const contextA = Number(db.prepare(`
+    INSERT INTO planning_contexts (context_key, name, context_type, starts_at, ends_at, created_by)
+    VALUES ('route-trip-a', 'Trip A', 'travel', '2042-05-01T00:00:00', '2042-05-08T00:00:00', ?)
+  `).run(U).lastInsertRowid);
+  const contextB = Number(db.prepare(`
+    INSERT INTO planning_contexts (context_key, name, context_type, starts_at, ends_at, created_by)
+    VALUES ('route-trip-b', 'Trip B', 'travel', '2042-05-01T00:00:00', '2042-05-08T00:00:00', ?)
+  `).run(U).lastInsertRowid);
+  await createMeal({ date: '2042-05-04', meal_type: 'dinner', title: 'Home dinner' });
+  await createMeal({ date: '2042-05-04', meal_type: 'dinner', title: 'Trip A manual', planning_context_id: contextA });
+  await createMeal({ date: '2042-05-04', meal_type: 'dinner', title: 'Trip B dinner', planning_context_id: contextB });
+  const planId = Number(db.prepare("INSERT INTO meal_plans (name, created_by) VALUES ('Protected plan', ?)").run(U).lastInsertRowid);
+  db.prepare(`
+    INSERT INTO meals (date, meal_type, title, created_by, planning_context_id, meal_plan_id, source)
+    VALUES ('2042-05-04', 'dinner', 'Trip A generated', ?, ?, ?, 'schedule')
+  `).run(U, contextA, planId);
+
+  const replaced = await call('POST', '/apply-plan', {
+    replace_existing: true,
+    planning_context_id: contextA,
+    assignments: [{ date: '2042-05-04', meal_type: 'dinner', title: 'Trip A replacement' }],
+  });
+  assert.equal(replaced.status, 201, JSON.stringify(replaced.body));
+  const rows = db.prepare(`
+    SELECT title, planning_context_id, meal_plan_id FROM meals
+     WHERE date = '2042-05-04' AND meal_type = 'dinner'
+     ORDER BY title
+  `).all();
+  assert.ok(rows.some((row) => row.title === 'Home dinner' && row.planning_context_id == null));
+  assert.ok(rows.some((row) => row.title === 'Trip B dinner' && Number(row.planning_context_id) === contextB));
+  assert.ok(rows.some((row) => row.title === 'Trip A generated' && Number(row.meal_plan_id) === planId));
+  assert.ok(rows.some((row) => row.title === 'Trip A replacement' && Number(row.planning_context_id) === contextA));
+  assert.ok(!rows.some((row) => row.title === 'Trip A manual'));
 });
 
 // --------------------------------------------------------------------------
@@ -476,10 +621,14 @@ test('PATCH /ingredients/:ingId: unbekannt → 404', async () => {
 test('PATCH /ingredients/:ingId: setzt on_shopping_list-Flag + Menge', async () => {
   const m = (await createMeal({ date: '2026-05-20', title: 'Ing3', ingredients: [{ name: 'Salz', quantity: '1TL' }] })).body.data;
   const ingId = m.ingredients[0].id;
-  const r = await call('PATCH', `/ingredients/${ingId}`, { on_shopping_list: true, quantity: '2TL' });
+  const r = await call('PATCH', `/ingredients/${ingId}`, {
+    name: 'Finishing salt', category: 'Custom pantry', on_shopping_list: true, quantity: '2TL',
+  });
   assert.equal(r.status, 200);
   assert.equal(r.body.data.on_shopping_list, 1);
   assert.equal(r.body.data.quantity, '2TL');
+  assert.equal(r.body.data.name, 'Finishing salt');
+  assert.equal(r.body.data.category, 'Custom pantry');
 });
 
 test('DELETE /ingredients/:ingId: unbekannt → 404', async () => {
@@ -690,6 +839,35 @@ test('Phase 2 meal details persist timing, scope, participants and roles', async
   assert.equal(r.body.data.scope, 'takeout');
   assert.equal(r.body.data.scheduled_time, '18:15');
   assert.deepEqual(r.body.data.participants.map((row) => row.role).sort(), ['chooser', 'cook']);
+});
+
+test('Meal editor updates preserve explicit non-final participant statuses', async () => {
+  const created = await createMeal({
+    date: '2040-06-06', meal_type: 'dinner', title: 'Status-safe dinner',
+    participants: [
+      { user_id: U, role: 'participant', status: 'needs_confirmation' },
+      { user_id: U, role: 'cook', status: 'away' },
+    ],
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+
+  const updated = await call('PUT', `/${created.body.data.id}`, {
+    title: 'Status-safe dinner',
+    participants: [
+      { user_id: U, role: 'participant', status: 'needs_confirmation' },
+      { user_id: U, role: 'cook', status: 'away' },
+    ],
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.deepEqual(
+    updated.body.data.participants
+      .map(({ role, status }) => ({ role, status }))
+      .sort((a, b) => a.role.localeCompare(b.role)),
+    [
+      { role: 'cook', status: 'away' },
+      { role: 'participant', status: 'needs_confirmation' },
+    ],
+  );
 });
 
 test('Phase 2 recurring schedule materializes one stable occurrence and preserves a deletion exception', async () => {

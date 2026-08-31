@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { expandRecurringEvents, loadEventExceptions } from './calendar-events.js';
+import { syncAutoPortions } from './meal-dishes.js';
 
 const ACTIVE_STATES = new Set(['open', 'needs_review', 'reopened']);
 const RESOLUTIONS = new Set([
@@ -208,6 +209,9 @@ export function resolveMealCalendarConflict(database, conflictId, resolution, pa
         actorId, conflict.place_id);
       database.prepare(`INSERT INTO meal_participants (meal_id, user_id, role, status, source) VALUES (?, ?, 'participant', 'participating', 'manual')`).run(created.lastInsertRowid, conflict.user_id);
       payload.personal_meal_id = Number(created.lastInsertRowid);
+    }
+    if (['participating', 'not_participating', 'backup_assigned'].includes(resolution)) {
+      syncAutoPortions(database, conflict.meal_id);
     }
     const state = resolution === 'ignore' ? 'ignored' : 'resolved';
     database.prepare(`

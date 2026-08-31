@@ -258,6 +258,33 @@ function attachTags(tasks) {
   return tasks;
 }
 
+/**
+ * Attach an optional typed action to a Task without teaching the Tasks module
+ * about Meals, Trips, or any other destination. The link remains generic and
+ * the shared Task detail component can expose it from every origin.
+ */
+function attachTaskActionLinks(tasks) {
+  if (!tasks.length) return tasks;
+  const supported = db.get().prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_action_links'"
+  ).get();
+  if (!supported) return tasks;
+  const ids = tasks.map((task) => Number(task.id)).filter(Number.isInteger);
+  if (!ids.length) return tasks;
+  const rows = db.get().prepare(`
+    SELECT task_id, action_type, label, path, params_json, source_type, source_id
+      FROM task_action_links
+     WHERE task_id IN (${ids.map(() => '?').join(',')})
+  `).all(...ids);
+  const byTask = new Map(rows.map((row) => {
+    let params = {};
+    try { params = JSON.parse(row.params_json || '{}'); } catch { params = {}; }
+    return [Number(row.task_id), { ...row, params }];
+  }));
+  for (const task of tasks) task.action_link = byTask.get(Number(task.id)) || null;
+  return tasks;
+}
+
 function parseAssignedTo(val) {
   if (Array.isArray(val)) return val.map(Number).filter(Boolean);
   if (val !== null && val !== undefined && val !== '') return [Number(val)].filter(Boolean);
@@ -1118,6 +1145,7 @@ router.get('/', (req, res) => {
     const rows = db.get().prepare(sql).all(...params).map(task => ({ ...task, subtasks: JSON.parse(task.subtasks || '[]') })).map(addAssignedUsers);
     attachTaskActivityBindings(db.get(), rows);
     attachTaskLocations(db.get(), rows);
+    attachTaskActionLinks(rows);
     res.json({ data: attachTags(attachDocumentCounts(rows, me)) });
   } catch (err) {
     log.error('GET / error:', err);
@@ -1156,6 +1184,7 @@ router.get('/:id', (req, res) => {
     task.documents = loadTaskDocuments(task.id, me);
     attachTaskActivityBindings(db.get(), [task]);
     attachTaskLocations(db.get(), [task]);
+    attachTaskActionLinks([task]);
     attachTags([task]);
     res.json({ data: task });
   } catch (err) {

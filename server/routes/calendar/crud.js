@@ -16,6 +16,12 @@ import {
 import { queueEventDeletion, markEventOutbound, flushOutbound } from '../../services/calendar-outbound.js';
 import { dropEventReminders } from '../../services/event-reminder-fanout.js';
 import {
+  CalendarTravelValidationError,
+  getCalendarTravelDetails,
+  removeCalendarTravelProjection,
+  saveCalendarTravelProjection,
+} from '../../services/calendar-travel.js';
+import {
   ASSIGNED_USERS_SQL,
   getUserId,
   isAdminUser,
@@ -36,6 +42,19 @@ const router = express.Router();
 
 function supportsPlaceColumn(database) {
   return Boolean(database.prepare("SELECT 1 FROM pragma_table_info('calendar_events') WHERE name = 'place_id'").get());
+}
+
+function eventKind(value, fallback = 'general') {
+  const kind = value == null || value === '' ? fallback : String(value).trim();
+  return kind === 'general' || kind === 'travel' ? kind : null;
+}
+
+function serializeCalendarEvent(database, event) {
+  const serialized = serializeEvent(event);
+  if (serialized?.event_kind === 'travel') {
+    serialized.travel_details = getCalendarTravelDetails(database, serialized.id);
+  }
+  return serialized;
 }
 
 // --------------------------------------------------------
@@ -70,7 +89,7 @@ router.get('/:id', (req, res) => {
     `).get(id, getUserId(req), getUserId(req));
 
     if (!event) return res.status(404).json({ error: 'Termin nicht gefunden', code: 404 });
-    res.json({ data: serializeEvent(event) });
+    res.json({ data: serializeCalendarEvent(db.get(), event) });
   } catch (err) {
     log.error('', err);
     res.status(500).json({ error: 'Interner Fehler', code: 500 });
@@ -115,6 +134,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'place_id: choose an active Place.', code: 400 });
     }
     const vRrule = rrule(req.body.recurrence_rule, 'Wiederholung');
+    const kind = eventKind(req.body.event_kind);
+    if (!kind) return res.status(400).json({ error: 'event_kind: choose general or travel.', code: 400 });
     const vCaldav = caldavTarget(req.body);
     const vGoogle = googleTarget(req.body);
     const vOutlook = outlookTarget(req.body);
@@ -155,8 +176,8 @@ router.post('/', async (req, res) => {
            attachment_name, attachment_mime, attachment_size, attachment_data, attachment_document_id,
            target_caldav_account_id, target_caldav_calendar_url, target_google_calendar_id,
            target_outlook_account_id, target_outlook_calendar_id, visibility,
-           countdown)
-        VALUES (?, ?, ?, ?, ?, ?${placePlaceholder}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           event_kind, countdown)
+        VALUES (?, ?, ?, ?, ?, ?${placePlaceholder}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         vTitle.value, vDesc.value,
         vStart.value, vEnd.value,
@@ -174,9 +195,18 @@ router.post('/', async (req, res) => {
         vOutlook.value.accountId,
         vOutlook.value.calendarId,
         normalizeVisibility(req.body.visibility),
+        kind,
         req.body.countdown ? 1 : 0
       );
       setEventAssignments(db.get(), result.lastInsertRowid, userIds);
+      if (kind === 'travel') {
+        saveCalendarTravelProjection(
+          db.get(),
+          result.lastInsertRowid,
+          req.body.travel_details || {},
+          userId,
+        );
+      }
       return result.lastInsertRowid;
     })();
 
@@ -198,8 +228,11 @@ router.post('/', async (req, res) => {
       WHERE e.id = ?
     `).get(eventId);
 
-    res.status(201).json({ data: serializeEvent(event) });
+    res.status(201).json({ data: serializeCalendarEvent(db.get(), event) });
   } catch (err) {
+    if (err instanceof CalendarTravelValidationError) {
+      return res.status(400).json({ error: err.message, code: 400 });
+    }
     if (err instanceof StorageError && !stagedUpload) {
       log.error('POST / storage error:', err);
       return sendStorageError(res, err, 'Calendar attachment storage upload failed.');
@@ -233,6 +266,8 @@ router.put('/:id', async (req, res) => {
     const id    = parseInt(req.params.id, 10);
     const event = db.get().prepare('SELECT * FROM calendar_events WHERE id = ?').get(id);
     if (!event) return res.status(404).json({ error: 'Termin nicht gefunden', code: 404 });
+    const kind = eventKind(req.body.event_kind, event.event_kind || 'general');
+    if (!kind) return res.status(400).json({ error: 'event_kind: choose general or travel.', code: 400 });
 
     const checks = [];
     if (req.body.title          !== undefined) checks.push(str(req.body.title, 'Titel', { max: MAX_TITLE, required: false }));
@@ -438,6 +473,7 @@ router.put('/:id', async (req, res) => {
             target_outlook_account_id  = ?,
             target_outlook_calendar_id = ?,
             visibility      = ?,
+            event_kind      = ?,
             -- Anzeigeeinstellung, kein gespiegeltes Feld (#647): sie steht nicht
             -- in MIRRORED_FIELDS und löst deshalb keinen Push aus. Wie bei den
             -- Nachbarfeldern gilt „nicht mitgeschickt" als „nicht angefasst" -
@@ -472,12 +508,18 @@ router.put('/:id', async (req, res) => {
         req.body.visibility !== undefined
           ? normalizeVisibility(req.body.visibility, event.visibility)
           : event.visibility,
+        kind,
         req.body.countdown !== undefined ? (req.body.countdown ? 1 : 0) : event.countdown,
         userModified,
         colorModified,
         id
       );
       setEventAssignments(db.get(), id, userIds);
+      if (kind === 'travel') {
+        saveCalendarTravelProjection(db.get(), id, req.body.travel_details || {}, getUserId(req));
+      } else if (event.event_kind === 'travel') {
+        removeCalendarTravelProjection(db.get(), id, getUserId(req));
+      }
     })();
 
     const updated = db.get().prepare(`
@@ -503,13 +545,16 @@ router.put('/:id', async (req, res) => {
     // Wie beim Löschen: vormerken, antworten, danach best effort ausführen.
     const pending = markEventOutbound(event, updated);
 
-    res.json({ data: serializeEvent(updated) });
+    res.json({ data: serializeCalendarEvent(db.get(), updated) });
 
     if (pending) {
       flushOutbound()
         .catch((e) => log.warn('Änderung vorgemerkt, Sofortversuch fehlgeschlagen:', e.message));
     }
   } catch (err) {
+    if (err instanceof CalendarTravelValidationError) {
+      return res.status(400).json({ error: err.message, code: 400 });
+    }
     if (err instanceof StorageError && !stagedUpload) {
       log.error('PUT /:id storage error:', err);
       return sendStorageError(res, err, 'Calendar attachment storage upload failed.');
@@ -622,6 +667,9 @@ router.delete('/:id', (req, res) => {
     let queued = false;
     const result = db.get().transaction(() => {
       queued = event ? queueEventDeletion(event) : false;
+      if (event?.event_kind === 'travel') {
+        removeCalendarTravelProjection(db.get(), id, getUserId(req));
+      }
       dropEventReminders(db.get(), id);
       return db.get().prepare('DELETE FROM calendar_events WHERE id = ?').run(id);
     })();

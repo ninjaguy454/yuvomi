@@ -205,6 +205,26 @@ test('jeder statisch geschriebene t()-Schlüssel steht auch in der Referenz-Loca
   );
 });
 
+// Die neu gestaltete Mahlzeitenansicht nutzt mealText(key, fallback), damit ein
+// teilweise aktualisierter Browser während eines Service-Worker-Upgrades nicht
+// rohe Schlüssel anzeigt. Der Fallback darf aber nicht dazu führen, dass neue
+// Texte dauerhaft außerhalb der Locale-Dateien leben und damit für alle anderen
+// Sprachen unsichtbar bleiben. Die allgemeine t()-Prüfung oben sieht diese
+// Aufrufe nicht, weil sie syntaktisch mealText() heißen.
+test('jeder statisch geschriebene mealText()-Schlüssel steht in der Referenz-Locale', () => {
+  const source = readFileSync(new URL('../public/pages/meals.js', import.meta.url), 'utf8');
+  const matches = [...source.matchAll(/\bmealText\(\s*(['"])(meals\.[a-zA-Z0-9_.]+)\1/g)];
+  const keys = [...new Set(matches.map(match => match[2]))];
+  const missing = keys.filter(key => !reference.has(key));
+
+  // Reichweiten-Nachweis: Ein versehentlich wirkungsloser Selektor soll nicht
+  // als grüner Guard über null geprüfte Aufrufe durchlaufen.
+  assert.ok(matches.length >= 200,
+    `zu wenige mealText()-Aufrufe gefunden (${matches.length}) - greift der Selektor noch?`);
+  assert.deepEqual(missing, [],
+    `Diese mealText()-Schlüssel fehlen in ${REFERENCE}.json:\n  ${missing.join('\n  ')}`);
+});
+
 test('Modulnamen sind in nav und in den API-Token-Scopes wortgleich', () => {
   const drift = [];
   let compared = 0;

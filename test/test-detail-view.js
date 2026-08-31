@@ -668,6 +668,32 @@ test('Fußzeilen-Aktionen schließen die Detailansicht mit force', async () => {
     'close() einer Fußzeilen-Aktion braucht { force: true } - siehe closeDetailView');
 });
 
+test('Travel-Meal-Deep-Link überlässt den Overlay-Abbau dem Router', async () => {
+  const src = await calendarJs();
+  const start = src.indexOf("id: 'detail-travel-meals'");
+  assert.notEqual(start, -1, 'Travel-Meal-Aktion fehlt');
+  const block = src.slice(start, start + 650);
+
+  assert.match(block, /window\.yuvomi\.navigate\(ev\.travel_details\.meal_plan_path\)/,
+    'Travel-Meal-Aktion navigiert auf den kanonischen Kontextpfad');
+  assert.doesNotMatch(block, /\bclose\s*\(/,
+    'Modal nicht vor navigate() schließen: sonst kann history.back() den Kontextpfad überschreiben');
+});
+
+test('Travel-Konfliktauflösung aktualisiert den unveränderten Kalenderbereich', async () => {
+  const src = await calendarJs();
+  const start = src.indexOf("id: `detail-travel-conflict-");
+  assert.notEqual(start, -1, 'Travel-Konfliktaktion fehlt');
+  const block = src.slice(start, start + 1500);
+
+  assert.match(block, /await reloadCalendarEventsOnly\(\)/,
+    'Konfliktauflösung lädt die Travel-Metadaten des aktuellen Bereichs neu');
+  assert.match(block, /renderView\(\)/,
+    'Konfliktauflösung zeichnet die bereinigten Events sofort neu');
+  assert.doesNotMatch(block, /await reloadForView\(\)/,
+    'reloadForView() wäre bei unverändertem Datumsbereich wirkungslos');
+});
+
 // --------------------------------------------------------
 // Kontakte
 // --------------------------------------------------------

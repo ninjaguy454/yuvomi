@@ -46,6 +46,7 @@ const state = {
   items: [],
   locations: [],
   categories: [],
+  storePlaces: [],
   /** Einkaufslisten - erst beim ersten „Auf die Einkaufsliste" nachgeladen. */
   lists: null,
   query: '',
@@ -130,6 +131,12 @@ async function loadPantry() {
   state.items = res.data ?? [];
   state.locations = res.locations ?? [];
   state.categories = res.categories ?? [];
+  state.storePlaces = res.store_places ?? [];
+}
+
+function pantryText(key, fallback) {
+  const translated = t(key);
+  return translated === key ? fallback : translated;
 }
 
 /** Einkaufslisten nachladen (erst wenn eine Übergabe ansteht). */
@@ -150,7 +157,9 @@ function visibleItems() {
     if (!matchesPantryFilter(item, state.filter, state.todayKey)) return false;
     if (!q) return true;
     return item.name?.toLowerCase().includes(q)
+      || item.sku?.toLowerCase().includes(q)
       || item.notes?.toLowerCase().includes(q)
+      || item.preferred_store_place_name?.toLowerCase().includes(q)
       || (item.location_name && locationLabel(item.location_name).toLowerCase().includes(q));
   });
 }
@@ -1089,6 +1098,10 @@ function openItemModal(mode, item = null) {
   const categoryOptions = categories
     .map((cat) => `<option value="${esc(cat.name)}">${esc(categoryLabel(cat.name))}</option>`)
     .join('');
+  const storeOptions = [
+    `<option value="">${esc(pantryText('pantry.noPreferredStore', 'No preferred store'))}</option>`,
+    ...state.storePlaces.map((place) => `<option value="${place.id}" ${!place.active ? 'disabled' : ''}>${esc(place.name)}${place.active ? '' : ` (${esc(pantryText('common.inactive', 'inactive'))})`}</option>`),
+  ].join('');
 
   openSharedModal({
     title: isEdit ? t('common.editItem') : t('pantry.addItem'),
@@ -1126,6 +1139,18 @@ function openItemModal(mode, item = null) {
         <p class="form-hint">${esc(t('pantry.expiresHint'))}</p>
       </div>
       ${advancedSection(`
+        <div class="pantry-form-row">
+          <div class="form-group">
+            <label class="form-label" for="pantry-sku">${esc(pantryText('pantry.skuLabel', 'SKU (optional)'))}</label>
+            <input id="pantry-sku" class="form-input" type="text" maxlength="100"
+                   placeholder="${esc(pantryText('pantry.skuPlaceholder', 'e.g. store or manufacturer code'))}">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="pantry-preferred-store">${esc(pantryText('pantry.preferredStoreLabel', 'Preferred store location (optional)'))}</label>
+            <select id="pantry-preferred-store" class="form-input">${storeOptions}</select>
+            <p class="form-hint">${esc(pantryText('pantry.preferredStoreHint', 'Choose a saved Place with the Store type.'))}</p>
+          </div>
+        </div>
         <div class="form-group">
           <label class="form-label" for="pantry-min">${esc(t('pantry.minQuantityLabel'))}</label>
           <input id="pantry-min" class="form-input" type="number" min="0" step="any" inputmode="decimal">
@@ -1136,7 +1161,7 @@ function openItemModal(mode, item = null) {
           <textarea id="pantry-notes" class="form-input" rows="3"
                     placeholder="${esc(t('pantry.notesPlaceholder'))}"></textarea>
         </div>`,
-      { open: isEdit && (item.min_quantity != null || !!item.notes) })}
+      { open: isEdit && (item.min_quantity != null || !!item.notes || !!item.sku || !!item.preferred_store_place_id) })}
       <div class="modal-panel__footer modal-panel__footer--plain">
         ${isEdit ? `<button type="button" class="btn btn--danger-ghost pantry-form__delete" id="pantry-delete">${esc(t('common.delete'))}</button>` : ''}
         ${isEdit && pantryItemStatus(item, state.todayKey).expiry === 'expired' && Number(item.quantity) > 0 ? `<button type="button" class="btn btn--secondary" id="pantry-discard-expired">${esc(t('pantry.discardExpired'))}</button>` : ''}
@@ -1153,6 +1178,10 @@ function openItemModal(mode, item = null) {
         : (categories.find((c) => c.name === DEFAULT_CATEGORY_NAME)?.name ?? categories[0]?.name ?? DEFAULT_CATEGORY_NAME);
       panel.querySelector('#pantry-min').value = isEdit && item.min_quantity != null ? String(item.min_quantity) : '';
       panel.querySelector('#pantry-notes').value = isEdit && item.notes ? item.notes : '';
+      panel.querySelector('#pantry-sku').value = isEdit && item.sku ? item.sku : '';
+      panel.querySelector('#pantry-preferred-store').value = isEdit && item.preferred_store_place_id
+        ? String(item.preferred_store_place_id)
+        : '';
 
       panel.querySelector('#pantry-save').addEventListener('click', () => saveItem(panel, mode, item));
       panel.querySelector('#pantry-delete')?.addEventListener('click', async () => {
@@ -1200,6 +1229,8 @@ async function saveItem(panel, mode, item) {
     expires_on: panel.querySelector('#pantry-expires').value || null,
     min_quantity: minRaw === '' ? null : normalizePantryQuantity(minRaw, { fallback: 0 }),
     notes: panel.querySelector('#pantry-notes').value.trim() || null,
+    sku: panel.querySelector('#pantry-sku').value.trim() || null,
+    preferred_store_place_id: panel.querySelector('#pantry-preferred-store').value || null,
   };
 
   saveBtn.disabled = true;

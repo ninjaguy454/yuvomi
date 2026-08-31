@@ -7758,6 +7758,750 @@ const FORK_MIGRATIONS = [
       ALTER TABLE meal_grocery_items ADD COLUMN reconciled_at TEXT;
     `,
   },
+  {
+    version: 10015,
+    description: 'Meal plans, scoped planning contexts, travel coordination and audited meal choices',
+    up: `
+      -- Named Meal Plans are versioned independently from their dated outputs.
+      -- Existing meal_schedule_slots remain intact as the legacy compatibility
+      -- surface; canonical plan rules intentionally do not inherit its global
+      -- UNIQUE(weekday, meal_type) limitation.
+      CREATE TABLE IF NOT EXISTS meal_plans (
+        id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+        name                     TEXT NOT NULL,
+        description              TEXT,
+        status                   TEXT NOT NULL DEFAULT 'active'
+                                   CHECK(status IN ('active', 'archived', 'deleted')),
+        current_revision         INTEGER NOT NULL DEFAULT 1 CHECK(current_revision > 0),
+        effective_from           TEXT,
+        effective_until          TEXT,
+        legacy_schedule_slot_id  INTEGER UNIQUE REFERENCES meal_schedule_slots(id) ON DELETE SET NULL,
+        created_by               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        deleted_by               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        deleted_at               TEXT,
+        created_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at               TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(effective_until IS NULL OR effective_from IS NULL OR effective_until >= effective_from)
+      );
+      CREATE INDEX idx_meal_plans_status ON meal_plans(status, name COLLATE NOCASE);
+
+      CREATE TABLE IF NOT EXISTS meal_plan_revisions (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_plan_id     INTEGER NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+        revision         INTEGER NOT NULL CHECK(revision > 0),
+        snapshot_json    TEXT NOT NULL CHECK(json_valid(snapshot_json)),
+        change_note      TEXT,
+        created_by       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at       TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_plan_id, revision)
+      );
+
+      CREATE TABLE IF NOT EXISTS meal_plan_rules (
+        id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_plan_id               INTEGER NOT NULL REFERENCES meal_plans(id) ON DELETE CASCADE,
+        weekday                    INTEGER NOT NULL CHECK(weekday BETWEEN 0 AND 6),
+        meal_type                  TEXT NOT NULL CHECK(meal_type IN ('breakfast', 'lunch', 'dinner', 'snack')),
+        label                      TEXT,
+        policy                     TEXT NOT NULL DEFAULT 'fixed'
+                                     CHECK(policy IN ('fixed', 'round_robin', 'personal_choice')),
+        fixed_user_id              INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        fallback_user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        rotation_group             TEXT,
+        presence_required          INTEGER NOT NULL DEFAULT 0 CHECK(presence_required IN (0, 1)),
+        place_id                   INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        earliest_time              TEXT,
+        preferred_time             TEXT,
+        latest_time                TEXT,
+        expected_duration_minutes  INTEGER CHECK(expected_duration_minutes IS NULL OR expected_duration_minutes BETWEEN 1 AND 720),
+        selection_deadline_minutes INTEGER NOT NULL DEFAULT 1440 CHECK(selection_deadline_minutes BETWEEN 0 AND 10080),
+        reminder_minutes           INTEGER NOT NULL DEFAULT 120 CHECK(reminder_minutes BETWEEN 0 AND 10080),
+        choice_limit               INTEGER NOT NULL DEFAULT 3 CHECK(choice_limit BETWEEN 1 AND 20),
+        cook_user_id               INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        supervisor_user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        generate_preparation       INTEGER NOT NULL DEFAULT 1 CHECK(generate_preparation IN (0, 1)),
+        generate_cooking           INTEGER NOT NULL DEFAULT 1 CHECK(generate_cooking IN (0, 1)),
+        generate_supervision       INTEGER NOT NULL DEFAULT 1 CHECK(generate_supervision IN (0, 1)),
+        generate_serving           INTEGER NOT NULL DEFAULT 1 CHECK(generate_serving IN (0, 1)),
+        generate_cleanup           INTEGER NOT NULL DEFAULT 1 CHECK(generate_cleanup IN (0, 1)),
+        preparation_duration_minutes INTEGER NOT NULL DEFAULT 60 CHECK(preparation_duration_minutes BETWEEN 0 AND 1440),
+        cooking_duration_minutes   INTEGER NOT NULL DEFAULT 30 CHECK(cooking_duration_minutes BETWEEN 0 AND 1440),
+        cleanup_duration_minutes   INTEGER NOT NULL DEFAULT 60 CHECK(cleanup_duration_minutes BETWEEN 0 AND 1440),
+        active                     INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+        sort_order                 INTEGER NOT NULL DEFAULT 0,
+        created_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_plan_id, weekday, meal_type, sort_order)
+      );
+      CREATE INDEX idx_meal_plan_rules_week ON meal_plan_rules(meal_plan_id, weekday, meal_type, active);
+
+      CREATE TABLE IF NOT EXISTS meal_plan_rule_participants (
+        meal_plan_rule_id INTEGER NOT NULL REFERENCES meal_plan_rules(id) ON DELETE CASCADE,
+        user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        PRIMARY KEY(meal_plan_rule_id, user_id)
+      );
+
+      -- Generic planning contexts partition household planning without turning
+      -- ordinary overlapping Calendar Events into errors. Several source Events
+      -- may reference the same context. Only two distinct contexts claiming the
+      -- same member and meal period create a conflict record.
+      CREATE TABLE IF NOT EXISTS planning_contexts (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        context_key          TEXT NOT NULL UNIQUE,
+        name                 TEXT NOT NULL,
+        context_type         TEXT NOT NULL DEFAULT 'home'
+                               CHECK(context_type IN ('home', 'travel', 'custom')),
+        starts_at            TEXT NOT NULL,
+        ends_at              TEXT NOT NULL,
+        place_id             INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        status               TEXT NOT NULL DEFAULT 'active'
+                               CHECK(status IN ('active', 'conflict', 'resolved', 'completed', 'cancelled')),
+        revision             INTEGER NOT NULL DEFAULT 1 CHECK(revision > 0),
+        created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(ends_at > starts_at)
+      );
+      CREATE INDEX idx_planning_contexts_window ON planning_contexts(starts_at, ends_at, status);
+
+      CREATE TABLE IF NOT EXISTS planning_context_sources (
+        planning_context_id INTEGER NOT NULL REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        source_type         TEXT NOT NULL CHECK(source_type IN ('calendar_event', 'trip', 'manual')),
+        source_id           INTEGER,
+        source_key          TEXT NOT NULL,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(planning_context_id, source_type, source_key),
+        UNIQUE(source_type, source_key)
+      );
+      CREATE INDEX idx_planning_context_sources_lookup ON planning_context_sources(source_type, source_id);
+
+      CREATE TABLE IF NOT EXISTS planning_context_members (
+        planning_context_id     INTEGER NOT NULL REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        user_id                 INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        membership_status       TEXT NOT NULL DEFAULT 'active'
+                                  CHECK(membership_status IN ('active', 'conflict', 'released')),
+        added_by                INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at              TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(planning_context_id, user_id)
+      );
+      CREATE INDEX idx_planning_context_members_user ON planning_context_members(user_id, membership_status, planning_context_id);
+
+      CREATE TABLE IF NOT EXISTS planning_context_conflicts (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id              INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        first_context_id     INTEGER NOT NULL REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        second_context_id    INTEGER NOT NULL REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        overlap_starts_at    TEXT NOT NULL,
+        overlap_ends_at      TEXT NOT NULL,
+        meal_periods_json    TEXT NOT NULL DEFAULT '[]' CHECK(json_valid(meal_periods_json)),
+        status               TEXT NOT NULL DEFAULT 'open'
+                               CHECK(status IN ('open', 'resolved', 'superseded')),
+        resolution           TEXT,
+        resolved_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        resolved_at          TEXT,
+        created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        CHECK(first_context_id < second_context_id),
+        CHECK(overlap_ends_at > overlap_starts_at),
+        UNIQUE(user_id, first_context_id, second_context_id, overlap_starts_at, overlap_ends_at)
+      );
+      CREATE INDEX idx_planning_context_conflicts_open ON planning_context_conflicts(status, user_id, overlap_starts_at);
+
+      CREATE TABLE IF NOT EXISTS planning_context_meal_plans (
+        planning_context_id INTEGER NOT NULL REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        meal_plan_id        INTEGER NOT NULL REFERENCES meal_plans(id) ON DELETE RESTRICT,
+        effective_from      TEXT,
+        effective_until     TEXT,
+        is_primary          INTEGER NOT NULL DEFAULT 1 CHECK(is_primary IN (0, 1)),
+        created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(planning_context_id, meal_plan_id),
+        CHECK(effective_until IS NULL OR effective_from IS NULL OR effective_until >= effective_from)
+      );
+
+      -- Rotation decisions are immutable and scoped to an occurrence/context.
+      -- A temporary context can therefore never consume the household cursor.
+      CREATE TABLE IF NOT EXISTS meal_occurrence_assignments (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        occurrence_key       TEXT NOT NULL UNIQUE,
+        meal_plan_rule_id    INTEGER REFERENCES meal_plan_rules(id) ON DELETE SET NULL,
+        planning_context_id  INTEGER REFERENCES planning_contexts(id) ON DELETE SET NULL,
+        meal_id              INTEGER REFERENCES meals(id) ON DELETE SET NULL,
+        assigned_user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        base_rotation_key    TEXT,
+        scoped_rotation_key  TEXT,
+        cursor_before_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        cursor_after_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        committed            INTEGER NOT NULL DEFAULT 0 CHECK(committed IN (0, 1)),
+        created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        committed_at         TEXT
+      );
+      CREATE INDEX idx_meal_occurrence_assignments_context ON meal_occurrence_assignments(planning_context_id, occurrence_key);
+
+      ALTER TABLE meal_schedule_slots ADD COLUMN meal_plan_id INTEGER REFERENCES meal_plans(id) ON DELETE SET NULL;
+      ALTER TABLE meals ADD COLUMN meal_plan_id INTEGER REFERENCES meal_plans(id) ON DELETE SET NULL;
+      ALTER TABLE meals ADD COLUMN meal_plan_revision_id INTEGER REFERENCES meal_plan_revisions(id) ON DELETE SET NULL;
+      ALTER TABLE meals ADD COLUMN meal_plan_rule_id INTEGER REFERENCES meal_plan_rules(id) ON DELETE SET NULL;
+      ALTER TABLE meals ADD COLUMN planning_context_id INTEGER REFERENCES planning_contexts(id) ON DELETE SET NULL;
+      ALTER TABLE meals ADD COLUMN user_modified INTEGER NOT NULL DEFAULT 0 CHECK(user_modified IN (0, 1));
+      CREATE INDEX idx_meals_plan_context_date ON meals(meal_plan_id, planning_context_id, date, meal_type);
+
+      -- Participation and food choice are deliberately separate from chooser
+      -- responsibility. Acting on behalf records both the beneficiary and actor.
+      CREATE TABLE IF NOT EXISTS meal_person_decisions (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_id               INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        beneficiary_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        participation         TEXT NOT NULL DEFAULT 'participating'
+                                CHECK(participation IN ('participating', 'not_participating', 'away', 'pending')),
+        choice_kind           TEXT NOT NULL DEFAULT 'household'
+                                CHECK(choice_kind IN ('household', 'backup', 'personal', 'restaurant', 'takeout', 'pending')),
+        selected_meal_id      INTEGER REFERENCES meals(id) ON DELETE SET NULL,
+        notes                 TEXT,
+        confirmed             INTEGER NOT NULL DEFAULT 0 CHECK(confirmed IN (0, 1)),
+        entered_by_user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        entered_by_device_key TEXT,
+        entered_via           TEXT NOT NULL DEFAULT 'self'
+                                CHECK(entered_via IN ('self', 'administrator', 'hub', 'automation')),
+        created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_id, beneficiary_user_id)
+      );
+      CREATE INDEX idx_meal_person_decisions_member ON meal_person_decisions(beneficiary_user_id, meal_id);
+
+      CREATE TABLE IF NOT EXISTS meal_person_decision_events (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        decision_id           INTEGER NOT NULL REFERENCES meal_person_decisions(id) ON DELETE CASCADE,
+        event                 TEXT NOT NULL,
+        beneficiary_user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        actor_user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        actor_device_key      TEXT,
+        before_json           TEXT CHECK(before_json IS NULL OR json_valid(before_json)),
+        after_json            TEXT CHECK(after_json IS NULL OR json_valid(after_json)),
+        created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_meal_decision_events_decision ON meal_person_decision_events(decision_id, id);
+
+      CREATE TABLE IF NOT EXISTS meal_menu_items (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_id     INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        item_type   TEXT NOT NULL CHECK(item_type IN ('entree', 'side', 'backup')),
+        position    INTEGER NOT NULL DEFAULT 0 CHECK(position >= 0),
+        title       TEXT NOT NULL,
+        recipe_id   INTEGER REFERENCES recipes(id) ON DELETE SET NULL,
+        notes       TEXT,
+        created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_id, item_type, position)
+      );
+
+      CREATE TABLE IF NOT EXISTS meal_person_menu_selections (
+        decision_id  INTEGER NOT NULL REFERENCES meal_person_decisions(id) ON DELETE CASCADE,
+        menu_item_id INTEGER NOT NULL REFERENCES meal_menu_items(id) ON DELETE CASCADE,
+        selected     INTEGER NOT NULL DEFAULT 1 CHECK(selected IN (0, 1)),
+        PRIMARY KEY(decision_id, menu_item_id)
+      );
+
+      ALTER TABLE meal_selection_responses ADD COLUMN beneficiary_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE meal_selection_responses ADD COLUMN entered_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+      ALTER TABLE meal_selection_responses ADD COLUMN entered_by_device_key TEXT;
+      UPDATE meal_selection_responses
+         SET beneficiary_user_id = COALESCE(
+               (SELECT responsible_user_id FROM planning_obligations WHERE id = meal_selection_responses.obligation_id),
+               responded_by
+             ),
+             entered_by_user_id = responded_by
+       WHERE beneficiary_user_id IS NULL OR entered_by_user_id IS NULL;
+      ALTER TABLE meal_selection_response_items ADD COLUMN item_type TEXT NOT NULL DEFAULT 'entree'
+        CHECK(item_type IN ('entree', 'side', 'backup'));
+
+      -- Calendar Travel Events extend Events; Tasks and Events remain separate.
+      ALTER TABLE calendar_events ADD COLUMN event_kind TEXT NOT NULL DEFAULT 'general'
+        CHECK(event_kind IN ('general', 'travel'));
+      CREATE INDEX idx_calendar_events_kind_window ON calendar_events(event_kind, start_datetime, end_datetime);
+
+      CREATE TABLE IF NOT EXISTS calendar_travel_details (
+        calendar_event_id             INTEGER PRIMARY KEY REFERENCES calendar_events(id) ON DELETE CASCADE,
+        planning_context_id           INTEGER REFERENCES planning_contexts(id) ON DELETE SET NULL,
+        destination_place_id          INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        lodging_place_id              INTEGER REFERENCES places(id) ON DELETE RESTRICT,
+        arrival_at_destination        TEXT,
+        return_departure_at           TEXT,
+        return_arrival_at_home        TEXT,
+        create_away_periods           INTEGER NOT NULL DEFAULT 1 CHECK(create_away_periods IN (0, 1)),
+        created_at                    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at                    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_calendar_travel_context ON calendar_travel_details(planning_context_id);
+
+      ALTER TABLE trip_plans ADD COLUMN planning_context_id INTEGER REFERENCES planning_contexts(id) ON DELETE SET NULL;
+      ALTER TABLE trip_plans ADD COLUMN calendar_event_id INTEGER REFERENCES calendar_events(id) ON DELETE SET NULL;
+      CREATE INDEX idx_trip_plans_context ON trip_plans(planning_context_id, status);
+
+      -- One context-keyed claimable Task can be shared by the whole travel group.
+      CREATE TABLE IF NOT EXISTS task_claim_eligibility (
+        task_id     INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        source      TEXT NOT NULL DEFAULT 'manual',
+        created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        PRIMARY KEY(task_id, user_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS task_action_links (
+        task_id      INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        action_type  TEXT NOT NULL,
+        label        TEXT NOT NULL,
+        path         TEXT NOT NULL,
+        params_json  TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(params_json)),
+        source_type  TEXT,
+        source_id    INTEGER,
+        created_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated_at   TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE INDEX idx_task_action_links_source ON task_action_links(source_type, source_id);
+
+      -- Grocery defaults now have a Shopping-owned record. The legacy columns
+      -- remain as a compatibility surface and are copied once on migration.
+      CREATE TABLE IF NOT EXISTS meal_grocery_settings (
+        id                        INTEGER PRIMARY KEY CHECK(id = 1),
+        enabled                   INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0, 1)),
+        default_shopping_list_id  INTEGER REFERENCES shopping_lists(id) ON DELETE SET NULL,
+        auto_create_grocery_draft INTEGER NOT NULL DEFAULT 1 CHECK(auto_create_grocery_draft IN (0, 1)),
+        auto_finalize_grocery     INTEGER NOT NULL DEFAULT 0 CHECK(auto_finalize_grocery IN (0, 1)),
+        grocery_lead_minutes      INTEGER NOT NULL DEFAULT 1440 CHECK(grocery_lead_minutes BETWEEN 0 AND 10080),
+        aggregation_mode          TEXT NOT NULL DEFAULT 'ingredient'
+                                    CHECK(aggregation_mode IN ('ingredient', 'meal', 'recipe')),
+        updated_by                INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      INSERT OR IGNORE INTO meal_grocery_settings (
+        id, enabled, default_shopping_list_id, auto_create_grocery_draft,
+        auto_finalize_grocery, updated_by, updated_at
+      )
+      SELECT id, enabled, default_shopping_list_id, auto_create_grocery_draft,
+             auto_finalize_grocery, updated_by, updated_at
+        FROM meal_execution_settings WHERE id = 1;
+      INSERT OR IGNORE INTO meal_grocery_settings (id) VALUES (1);
+
+      -- Compatibility backfill: one named plan and immutable revision per
+      -- released legacy slot, with no changes to existing dated meals/cursors.
+      INSERT INTO meal_plans (
+        name, description, status, current_revision, legacy_schedule_slot_id,
+        created_by, created_at, updated_at
+      )
+      SELECT
+        CASE s.meal_type
+          WHEN 'breakfast' THEN 'Breakfast'
+          WHEN 'lunch' THEN 'Lunch'
+          WHEN 'dinner' THEN 'Dinner'
+          ELSE 'Snack'
+        END || ' - ' || CASE s.weekday
+          WHEN 0 THEN 'Monday' WHEN 1 THEN 'Tuesday' WHEN 2 THEN 'Wednesday'
+          WHEN 3 THEN 'Thursday' WHEN 4 THEN 'Friday' WHEN 5 THEN 'Saturday'
+          ELSE 'Sunday' END,
+        'Imported from the existing recurring Meal schedule.',
+        CASE WHEN s.active = 1 THEN 'active' ELSE 'archived' END,
+        s.revision, s.id, s.created_by, s.created_at, s.updated_at
+        FROM meal_schedule_slots s
+       WHERE NOT EXISTS (SELECT 1 FROM meal_plans p WHERE p.legacy_schedule_slot_id = s.id);
+
+      INSERT INTO meal_plan_rules (
+        meal_plan_id, weekday, meal_type, policy, fixed_user_id, fallback_user_id,
+        rotation_group, presence_required, place_id, earliest_time, preferred_time,
+        latest_time, expected_duration_minutes, selection_deadline_minutes,
+        reminder_minutes, choice_limit, cook_user_id, supervisor_user_id, active,
+        generate_preparation, generate_cooking, generate_supervision,
+        generate_serving, generate_cleanup, preparation_duration_minutes,
+        cooking_duration_minutes, cleanup_duration_minutes, sort_order, created_at, updated_at
+      )
+      SELECT p.id, s.weekday, s.meal_type, s.policy, s.fixed_user_id, s.fallback_user_id,
+             s.rotation_group, s.presence_required, s.place_id, s.earliest_time,
+             s.preferred_time, s.latest_time, s.expected_duration_minutes,
+             s.selection_deadline_minutes, s.reminder_minutes, s.snack_choice_limit,
+             s.cook_user_id, s.supervisor_user_id, s.active,
+             (SELECT generate_preparation FROM meal_execution_settings WHERE id = 1),
+             (SELECT generate_cooking FROM meal_execution_settings WHERE id = 1),
+             (SELECT generate_supervision FROM meal_execution_settings WHERE id = 1),
+             (SELECT generate_serving FROM meal_execution_settings WHERE id = 1),
+             (SELECT generate_cleanup FROM meal_execution_settings WHERE id = 1),
+             (SELECT preparation_lead_minutes FROM meal_execution_settings WHERE id = 1),
+             (SELECT cooking_lead_minutes FROM meal_execution_settings WHERE id = 1),
+             (SELECT cleanup_delay_minutes FROM meal_execution_settings WHERE id = 1),
+             0, s.created_at, s.updated_at
+        FROM meal_schedule_slots s
+        JOIN meal_plans p ON p.legacy_schedule_slot_id = s.id
+       WHERE NOT EXISTS (
+         SELECT 1 FROM meal_plan_rules r
+          WHERE r.meal_plan_id = p.id AND r.weekday = s.weekday
+            AND r.meal_type = s.meal_type AND r.sort_order = 0
+       );
+
+      INSERT OR IGNORE INTO meal_plan_rule_participants (meal_plan_rule_id, user_id)
+      SELECT r.id, sp.user_id
+        FROM meal_schedule_slot_participants sp
+        JOIN meal_plans p ON p.legacy_schedule_slot_id = sp.schedule_slot_id
+        JOIN meal_plan_rules r ON r.meal_plan_id = p.id;
+
+      UPDATE meal_schedule_slots
+         SET meal_plan_id = (SELECT id FROM meal_plans WHERE legacy_schedule_slot_id = meal_schedule_slots.id)
+       WHERE meal_plan_id IS NULL;
+
+      INSERT OR IGNORE INTO meal_plan_revisions (
+        meal_plan_id, revision, snapshot_json, change_note, created_by, created_at
+      )
+      SELECT p.id, p.current_revision,
+             json_object(
+               'name', p.name,
+               'legacy_schedule_slot_id', p.legacy_schedule_slot_id,
+               'rules', json_array(json_object(
+                 'id', r.id, 'weekday', r.weekday, 'meal_type', r.meal_type,
+                 'policy', r.policy, 'rotation_group', r.rotation_group,
+                 'active', r.active
+               ))
+             ),
+             'Compatibility snapshot from migration 10015.', p.created_by, p.created_at
+        FROM meal_plans p
+        JOIN meal_plan_rules r ON r.meal_plan_id = p.id
+      WHERE p.legacy_schedule_slot_id IS NOT NULL;
+    `,
+  },
+  {
+    version: 10016,
+    description: 'Stable Meal Plan rule identity and compatibility reconciliation',
+    up: `
+      -- Rules remain stable mutable heads while the already-immutable Meal Plan
+      -- revision snapshots retain each historical definition. Dated outputs can
+      -- therefore keep their rule FK and use the stable key for idempotency.
+      ALTER TABLE meal_plan_rules ADD COLUMN rule_key TEXT;
+      ALTER TABLE meal_plan_rules ADD COLUMN retired_at TEXT;
+      UPDATE meal_plan_rules
+         SET rule_key = CASE
+           WHEN EXISTS (
+             SELECT 1 FROM meal_plans p
+              WHERE p.id = meal_plan_rules.meal_plan_id
+                AND p.legacy_schedule_slot_id IS NOT NULL
+           ) THEN 'legacy-slot:' || (
+             SELECT p.legacy_schedule_slot_id FROM meal_plans p
+              WHERE p.id = meal_plan_rules.meal_plan_id
+           )
+           ELSE 'rule:' || id
+         END
+       WHERE rule_key IS NULL;
+      CREATE UNIQUE INDEX idx_meal_plan_rules_stable_key
+        ON meal_plan_rules(meal_plan_id, rule_key) WHERE rule_key IS NOT NULL;
+      CREATE INDEX idx_meal_plan_rules_current
+        ON meal_plan_rules(meal_plan_id, retired_at, active, weekday, meal_type, sort_order);
+    `,
+  },
+  {
+    version: 10017,
+    description: 'Reusable Meal Plan slots, delegated roles, weekly deadlines and custom meal types',
+    foreignKeysOff: true,
+    up(database) {
+      // SQLite cannot widen an existing CHECK constraint. Rebuild only the two
+      // tables whose persisted meal_type domain changes, preserving their exact
+      // released columns, data, indexes and triggers before adding new fields.
+      const widenMealType = (table) => {
+        const source = database.prepare(`
+          SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?
+        `).get(table)?.sql;
+        if (!source) throw new Error(`Migration 10017 could not find ${table}.`);
+        const temp = `${table}_m10017`;
+        let create = source.replace(
+          new RegExp(`^CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?[\\"\\[]?${table}[\\"\\]]?`, 'i'),
+          `CREATE TABLE ${temp}`,
+        );
+        const oldDomain = /CHECK\s*\(\s*meal_type\s+IN\s*\(\s*'breakfast'\s*,\s*'lunch'\s*,\s*'dinner'\s*,\s*'snack'\s*\)\s*\)/i;
+        if (!oldDomain.test(create)) throw new Error(`Migration 10017 could not widen ${table}.meal_type.`);
+        create = create.replace(
+          oldDomain,
+          "CHECK(meal_type IN ('breakfast', 'lunch', 'dinner', 'snack', 'custom'))",
+        );
+        const dependentSql = database.prepare(`
+          SELECT sql FROM sqlite_master
+           WHERE tbl_name = ? AND type IN ('index', 'trigger') AND sql IS NOT NULL
+           ORDER BY CASE type WHEN 'index' THEN 0 ELSE 1 END, name
+        `).all(table).map((row) => row.sql);
+        const columns = database.prepare(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+        const quoted = columns.map((column) => `"${column.replaceAll('"', '""')}"`).join(', ');
+        database.exec(create);
+        database.exec(`INSERT INTO ${temp} (${quoted}) SELECT ${quoted} FROM ${table}`);
+        database.exec(`DROP TABLE ${table}`);
+        database.exec(`ALTER TABLE ${temp} RENAME TO ${table}`);
+        for (const sql of dependentSql) database.exec(sql);
+      };
+
+      widenMealType('meal_plan_rules');
+      widenMealType('meals');
+      widenMealType('meal_recurrence_templates');
+
+      database.exec(`
+        ALTER TABLE meal_plan_rules ADD COLUMN slot_group_key TEXT;
+        ALTER TABLE meal_plan_rules ADD COLUMN custom_label TEXT;
+        ALTER TABLE meal_plan_rules ADD COLUMN chooser_backup_strategy TEXT NOT NULL DEFAULT 'next_eligible'
+          CHECK(chooser_backup_strategy IN ('next_eligible', 'random_eligible', 'fixed'));
+        ALTER TABLE meal_plan_rules ADD COLUMN cook_strategy TEXT NOT NULL DEFAULT 'none'
+          CHECK(cook_strategy IN ('none', 'fixed', 'round_robin'));
+        ALTER TABLE meal_plan_rules ADD COLUMN cook_rotation_group TEXT;
+        ALTER TABLE meal_plan_rules ADD COLUMN supervisor_strategy TEXT NOT NULL DEFAULT 'none'
+          CHECK(supervisor_strategy IN ('none', 'fixed', 'round_robin'));
+        ALTER TABLE meal_plan_rules ADD COLUMN supervisor_rotation_group TEXT;
+        ALTER TABLE meal_plan_rules ADD COLUMN deadline_mode TEXT NOT NULL DEFAULT 'relative'
+          CHECK(deadline_mode IN ('relative', 'weekly_cutoff'));
+        ALTER TABLE meal_plan_rules ADD COLUMN deadline_weekday INTEGER
+          CHECK(deadline_weekday IS NULL OR deadline_weekday BETWEEN 0 AND 6);
+        ALTER TABLE meal_plan_rules ADD COLUMN deadline_time TEXT;
+        ALTER TABLE meal_plan_rules ADD COLUMN execution_assignment_strategies_json TEXT NOT NULL DEFAULT '{}'
+          CHECK(json_valid(execution_assignment_strategies_json));
+
+        UPDATE meal_plan_rules
+           SET slot_group_key = COALESCE(rule_key, 'rule:' || id),
+               chooser_backup_strategy = CASE WHEN fallback_user_id IS NULL THEN 'next_eligible' ELSE 'fixed' END,
+               cook_strategy = CASE WHEN cook_user_id IS NULL THEN 'none' ELSE 'fixed' END,
+               supervisor_strategy = CASE WHEN supervisor_user_id IS NULL THEN 'none' ELSE 'fixed' END;
+
+        CREATE UNIQUE INDEX idx_meal_plan_rules_group_day
+          ON meal_plan_rules(meal_plan_id, slot_group_key, weekday)
+          WHERE slot_group_key IS NOT NULL AND retired_at IS NULL;
+
+        ALTER TABLE meals ADD COLUMN custom_label TEXT;
+        ALTER TABLE meal_recurrence_templates ADD COLUMN custom_label TEXT;
+
+        CREATE TRIGGER trg_meal_plan_rules_custom_label_insert
+          BEFORE INSERT ON meal_plan_rules
+          WHEN NEW.meal_type = 'custom' AND trim(COALESCE(NEW.custom_label, '')) = ''
+          BEGIN SELECT RAISE(ABORT, 'custom meal rules require a custom label'); END;
+        CREATE TRIGGER trg_meal_plan_rules_custom_label_update
+          BEFORE UPDATE OF meal_type, custom_label ON meal_plan_rules
+          WHEN NEW.meal_type = 'custom' AND trim(COALESCE(NEW.custom_label, '')) = ''
+          BEGIN SELECT RAISE(ABORT, 'custom meal rules require a custom label'); END;
+        CREATE TRIGGER trg_meals_custom_label_insert
+          BEFORE INSERT ON meals
+          WHEN NEW.meal_type = 'custom' AND trim(COALESCE(NEW.custom_label, '')) = ''
+          BEGIN SELECT RAISE(ABORT, 'custom meals require a custom label'); END;
+        CREATE TRIGGER trg_meals_custom_label_update
+          BEFORE UPDATE OF meal_type, custom_label ON meals
+          WHEN NEW.meal_type = 'custom' AND trim(COALESCE(NEW.custom_label, '')) = ''
+          BEGIN SELECT RAISE(ABORT, 'custom meals require a custom label'); END;
+        CREATE TRIGGER trg_meal_recurrence_custom_label_insert
+          BEFORE INSERT ON meal_recurrence_templates
+          WHEN NEW.meal_type = 'custom' AND trim(COALESCE(NEW.custom_label, '')) = ''
+          BEGIN SELECT RAISE(ABORT, 'custom recurring meals require a custom label'); END;
+        CREATE TRIGGER trg_meal_recurrence_custom_label_update
+          BEFORE UPDATE OF meal_type, custom_label ON meal_recurrence_templates
+          WHEN NEW.meal_type = 'custom' AND trim(COALESCE(NEW.custom_label, '')) = ''
+          BEGIN SELECT RAISE(ABORT, 'custom recurring meals require a custom label'); END;
+
+        CREATE TABLE meal_occurrence_role_assignments (
+          id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+          occurrence_assignment_id   INTEGER NOT NULL REFERENCES meal_occurrence_assignments(id) ON DELETE CASCADE,
+          role                       TEXT NOT NULL CHECK(role IN ('cook', 'supervisor')),
+          strategy                   TEXT NOT NULL CHECK(strategy IN ('none', 'fixed', 'round_robin')),
+          assigned_user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          base_rotation_key          TEXT,
+          scoped_rotation_key        TEXT,
+          cursor_before_user_id      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          cursor_after_user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          committed                  INTEGER NOT NULL DEFAULT 1 CHECK(committed IN (0, 1)),
+          created_at                 TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+          committed_at               TEXT,
+          UNIQUE(occurrence_assignment_id, role)
+        );
+        CREATE INDEX idx_meal_occurrence_role_user
+          ON meal_occurrence_role_assignments(role, assigned_user_id, committed);
+
+        ALTER TABLE meal_execution_tasks ADD COLUMN assignment_strategy_snapshot TEXT;
+        ALTER TABLE meal_execution_tasks ADD COLUMN assignment_rotation_key TEXT;
+        ALTER TABLE meal_execution_tasks ADD COLUMN cursor_before_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+        ALTER TABLE meal_execution_tasks ADD COLUMN cursor_after_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+        ALTER TABLE meal_execution_tasks ADD COLUMN eligible_user_ids_json TEXT CHECK(eligible_user_ids_json IS NULL OR json_valid(eligible_user_ids_json));
+
+        CREATE TABLE meal_menu_item_events (
+          id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+          meal_id               INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+          menu_item_id          INTEGER REFERENCES meal_menu_items(id) ON DELETE SET NULL,
+          event                 TEXT NOT NULL CHECK(event IN ('created', 'updated', 'deleted', 'replaced')),
+          beneficiary_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          actor_user_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          actor_device_key      TEXT,
+          before_json           TEXT CHECK(before_json IS NULL OR json_valid(before_json)),
+          after_json            TEXT CHECK(after_json IS NULL OR json_valid(after_json)),
+          created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        );
+        CREATE INDEX idx_meal_menu_item_events_meal
+          ON meal_menu_item_events(meal_id, id);
+      `);
+    },
+  },
+  {
+    version: 10018,
+    description: 'Chooser-scoped Meal menu generations and durable released menu history',
+    up: `
+      -- Keep the released menu table, row IDs, foreign keys and uniqueness
+      -- constraint intact. The physical position remains globally unique for
+      -- compatibility; generation_position is the chooser-facing position.
+      ALTER TABLE meals ADD COLUMN current_menu_generation INTEGER NOT NULL DEFAULT 1
+        CHECK(current_menu_generation >= 1);
+      ALTER TABLE meal_menu_items ADD COLUMN menu_generation INTEGER NOT NULL DEFAULT 1
+        CHECK(menu_generation >= 1);
+      ALTER TABLE meal_menu_items ADD COLUMN generation_position INTEGER;
+      UPDATE meal_menu_items SET generation_position = position
+       WHERE generation_position IS NULL;
+      CREATE UNIQUE INDEX idx_meal_menu_items_generation_position
+        ON meal_menu_items(meal_id, menu_generation, item_type, generation_position)
+        WHERE generation_position IS NOT NULL;
+      CREATE INDEX idx_meal_menu_items_generation
+        ON meal_menu_items(meal_id, menu_generation, item_type, position);
+
+      CREATE TABLE meal_menu_generations (
+        id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_id               INTEGER NOT NULL REFERENCES meals(id) ON DELETE CASCADE,
+        generation            INTEGER NOT NULL CHECK(generation >= 1),
+        chooser_user_id       INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        chooser_obligation_id INTEGER REFERENCES planning_obligations(id) ON DELETE SET NULL,
+        status                TEXT NOT NULL DEFAULT 'open'
+                                CHECK(status IN ('open', 'fulfilled', 'released')),
+        release_reason        TEXT,
+        opened_at             TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        fulfilled_at          TEXT,
+        released_at           TEXT,
+        UNIQUE(meal_id, generation)
+      );
+      CREATE INDEX idx_meal_menu_generations_chooser
+        ON meal_menu_generations(meal_id, chooser_user_id, status);
+
+      -- A selected entree is stronger evidence of the released generation's
+      -- owner than the current assignment: the database may already have been
+      -- captured after that chooser was superseded. Runtime synchronization
+      -- opens a blank next generation without rewriting this history.
+      INSERT INTO meal_menu_generations (
+        meal_id, generation, chooser_user_id, chooser_obligation_id, status,
+        opened_at, fulfilled_at
+      )
+      SELECT
+        m.id,
+        1,
+        COALESCE(
+          (SELECT d.beneficiary_user_id
+             FROM meal_person_decisions d
+             JOIN meal_person_menu_selections pms ON pms.decision_id = d.id AND pms.selected = 1
+             JOIN meal_menu_items mi ON mi.id = pms.menu_item_id AND mi.item_type = 'entree'
+            WHERE d.meal_id = m.id ORDER BY d.updated_at DESC, d.id DESC LIMIT 1),
+          oa.assigned_user_id,
+          (SELECT mp.user_id FROM meal_participants mp
+            WHERE mp.meal_id = m.id AND mp.role = 'chooser'
+              AND mp.status = 'participating'
+            ORDER BY mp.updated_at DESC, mp.user_id DESC LIMIT 1)
+        ),
+        (SELECT po.id FROM planning_obligations po
+          WHERE po.entity_type = 'meal' AND po.entity_id = m.id
+            AND po.role = 'chooser' AND po.status = 'fulfilled'
+          ORDER BY po.id DESC LIMIT 1),
+        CASE WHEN EXISTS (
+          SELECT 1
+            FROM meal_person_decisions d
+            JOIN meal_person_menu_selections pms ON pms.decision_id = d.id AND pms.selected = 1
+            JOIN meal_menu_items mi ON mi.id = pms.menu_item_id AND mi.item_type = 'entree'
+           WHERE d.meal_id = m.id
+        ) OR EXISTS (
+          SELECT 1 FROM planning_obligations po
+           WHERE po.entity_type = 'meal' AND po.entity_id = m.id
+             AND po.role = 'chooser' AND po.status = 'fulfilled'
+        ) THEN 'fulfilled' ELSE 'open' END,
+        COALESCE(m.created_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        (SELECT po.responded_at FROM planning_obligations po
+          WHERE po.entity_type = 'meal' AND po.entity_id = m.id
+            AND po.role = 'chooser' AND po.status = 'fulfilled'
+          ORDER BY po.id DESC LIMIT 1)
+      FROM meals m
+      LEFT JOIN meal_occurrence_assignments oa ON oa.meal_id = m.id;
+    `,
+  },
+  {
+    version: 10019,
+    description: 'Meal chooser fallback chains, terminal defaults and per-course limits',
+    up: `
+      -- Rule-owned ordered fallbacks remain part of each immutable plan
+      -- revision. The legacy single fallback column stays intact as the first
+      -- compatibility entry.
+      ALTER TABLE meal_plan_rules ADD COLUMN chooser_fallback_user_ids_json TEXT NOT NULL DEFAULT '[]'
+        CHECK(json_valid(chooser_fallback_user_ids_json));
+      ALTER TABLE meal_plan_rules ADD COLUMN max_entree_choices INTEGER NOT NULL DEFAULT 1
+        CHECK(max_entree_choices BETWEEN 0 AND 9);
+      ALTER TABLE meal_plan_rules ADD COLUMN max_side_choices INTEGER NOT NULL DEFAULT 3
+        CHECK(max_side_choices BETWEEN 0 AND 9);
+      UPDATE meal_plan_rules
+         SET chooser_fallback_user_ids_json = CASE
+               WHEN fallback_user_id IS NULL THEN '[]'
+               ELSE json_array(fallback_user_id)
+             END,
+             max_entree_choices = 1,
+             max_side_choices = MIN(9, MAX(0, choice_limit));
+
+      -- Terminal behavior is one household-level Meal Plan default. Every
+      -- occurrence snapshots the resolved values into its chooser obligation,
+      -- so later settings edits cannot rewrite released planning history.
+      CREATE TABLE meal_plan_default_settings (
+        id                                INTEGER PRIMARY KEY CHECK(id = 1),
+        chooser_terminal_strategy         TEXT NOT NULL DEFAULT 'eligible_round_robin'
+                                                CHECK(chooser_terminal_strategy IN ('personal_choice', 'eligible_round_robin', 'fixed')),
+        chooser_terminal_user_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        chooser_round_robin_user_ids_json TEXT NOT NULL DEFAULT '[]'
+                                                CHECK(json_valid(chooser_round_robin_user_ids_json)),
+        updated_by                        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at                        TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      INSERT INTO meal_plan_default_settings (id) VALUES (1);
+
+      -- Personal Choice is an occurrence-level terminal mode, not a mutation
+      -- of the reusable plan or its released revision.
+      ALTER TABLE meals ADD COLUMN selection_policy_override TEXT
+        CHECK(selection_policy_override IS NULL OR selection_policy_override IN ('personal_choice'));
+    `,
+  },
+  {
+    version: 10020,
+    description: 'Meal portions for canonical Add/Edit menu options',
+    up: `
+      -- Portion count is the effective snapshot used for ingredient scaling.
+      -- Old Meals read as one automatic portion and retain their existing
+      -- ingredient rows; only a new write opts into rematerialization.
+      ALTER TABLE meals ADD COLUMN portions_mode TEXT NOT NULL DEFAULT 'auto'
+        CHECK(portions_mode IN ('auto', 'fixed'));
+      ALTER TABLE meals ADD COLUMN portions INTEGER NOT NULL DEFAULT 1
+        CHECK(portions >= 1);
+      ALTER TABLE meals ADD COLUMN ingredients_manual_override INTEGER NOT NULL DEFAULT 0
+        CHECK(ingredients_manual_override IN (0, 1));
+    `,
+  },
+  {
+    version: 10021,
+    description: 'Places and Pantry: default Home plus product and preferred-store identity',
+    up: `
+      -- Home is a reusable Yuvomi Place even before the household records an
+      -- address. Preserve an existing active Home (including a renamed one),
+      -- and seed only households that do not have one.
+      INSERT INTO places (name, type, active)
+      SELECT 'Home', 'home', 1
+       WHERE NOT EXISTS (
+         SELECT 1 FROM places WHERE type = 'home' AND active = 1
+       );
+
+      -- SKU describes the product/packaging and is intentionally not unique:
+      -- separate Pantry lots can share one code. Preferred store reuses the
+      -- canonical Place identity; the API restricts new links to Store Places.
+      ALTER TABLE pantry_items ADD COLUMN sku TEXT;
+      ALTER TABLE pantry_items ADD COLUMN preferred_store_place_id INTEGER
+        REFERENCES places(id) ON DELETE SET NULL;
+      CREATE INDEX idx_pantry_items_sku
+        ON pantry_items(sku COLLATE NOCASE)
+        WHERE sku IS NOT NULL;
+      CREATE INDEX idx_pantry_items_preferred_store
+        ON pantry_items(preferred_store_place_id)
+        WHERE preferred_store_place_id IS NOT NULL;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

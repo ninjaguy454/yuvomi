@@ -37,12 +37,29 @@ function loadCategories() {
   return db.get().prepare('SELECT * FROM shopping_categories ORDER BY sort_order ASC').all();
 }
 
+function loadStorePlaces() {
+  return db.get().prepare(`
+    SELECT id, name, active
+      FROM places
+     WHERE type = 'store'
+     ORDER BY active DESC, name COLLATE NOCASE, id
+  `).all();
+}
+
 function validCategoryNames() {
   return loadCategories().map((c) => c.name);
 }
 
 function getItem(itemId) {
-  return db.get().prepare('SELECT * FROM pantry_items WHERE id = ?').get(itemId);
+  return db.get().prepare(`
+    SELECT pi.*, pl.name AS location_name, pl.icon AS location_icon,
+           store.name AS preferred_store_place_name,
+           store.active AS preferred_store_place_active
+      FROM pantry_items pi
+      LEFT JOIN pantry_locations pl ON pl.id = pi.location_id
+      LEFT JOIN places store ON store.id = pi.preferred_store_place_id
+     WHERE pi.id = ?
+  `).get(itemId);
 }
 
 /**
@@ -65,9 +82,12 @@ function syncReminder(item, access = null, today = null) {
  */
 function loadItems() {
   return db.get().prepare(`
-    SELECT pi.*, pl.name AS location_name, pl.icon AS location_icon
+    SELECT pi.*, pl.name AS location_name, pl.icon AS location_icon,
+           store.name AS preferred_store_place_name,
+           store.active AS preferred_store_place_active
     FROM pantry_items pi
     LEFT JOIN pantry_locations pl ON pl.id = pi.location_id
+    LEFT JOIN places store ON store.id = pi.preferred_store_place_id
     ORDER BY
       CASE WHEN pi.location_id IS NULL THEN 1 ELSE 0 END,
       pl.sort_order ASC,
@@ -178,6 +198,30 @@ function validateItemFields(body, { partial = false, current = null } = {}) {
     const vNotes = str(body.notes, 'Notiz', { max: MAX_TEXT, required: false });
     results.push(vNotes);
     values.notes = vNotes.value;
+  }
+
+  if (!partial || body.sku !== undefined) {
+    const vSku = str(body.sku, 'SKU', { max: MAX_SHORT, required: false });
+    results.push(vSku);
+    values.sku = vSku.value;
+  }
+
+  if (!partial || body.preferred_store_place_id !== undefined) {
+    if (body.preferred_store_place_id === null || body.preferred_store_place_id === ''
+        || body.preferred_store_place_id === undefined) {
+      values.preferred_store_place_id = null;
+    } else {
+      const vStore = idParam(body.preferred_store_place_id, 'Preferred store Place');
+      results.push(vStore);
+      if (vStore.value !== null) {
+        const store = db.get().prepare("SELECT id, active, type FROM places WHERE id = ?").get(vStore.value);
+        const preservesInactiveStore = Number(current?.preferred_store_place_id) === Number(vStore.value);
+        if (!store || store.type !== 'store' || (!store.active && !preservesInactiveStore)) {
+          results.push({ error: 'Preferred store must be an active saved Store Place.' });
+        }
+      }
+      values.preferred_store_place_id = vStore.value;
+    }
   }
 
   return { values, errors: collectErrors(results) };
@@ -690,7 +734,12 @@ router.post('/:itemId/discard-expired', (req, res) => {
 // --------------------------------------------------------
 router.get('/', (_req, res) => {
   try {
-    res.json({ data: loadItems(), locations: loadLocations(), categories: loadCategories() });
+    res.json({
+      data: loadItems(),
+      locations: loadLocations(),
+      categories: loadCategories(),
+      store_places: loadStorePlaces(),
+    });
   } catch (err) {
     log.error('GET / error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -699,7 +748,7 @@ router.get('/', (_req, res) => {
 
 // --------------------------------------------------------
 // POST /api/v1/pantry
-// Body: { name, quantity?, unit?, location_id?, category?, expires_on?, min_quantity?, notes? }
+// Body: { name, quantity?, unit?, location_id?, category?, expires_on?, min_quantity?, notes?, sku?, preferred_store_place_id? }
 // Response: { data: PantryItem }
 // --------------------------------------------------------
 router.post('/', (req, res) => {
@@ -713,11 +762,13 @@ router.post('/', (req, res) => {
     const created = db.get().transaction(() => {
       const result = db.get().prepare(`
         INSERT INTO pantry_items
-          (name, quantity, unit, location_id, category, expires_on, min_quantity, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (name, quantity, unit, location_id, category, expires_on, min_quantity, notes,
+           sku, preferred_store_place_id, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         values.name, values.quantity, values.unit, values.location_id,
         values.category, values.expires_on, values.min_quantity, values.notes,
+        values.sku, values.preferred_store_place_id,
         req.authUserId || req.session.userId
       );
       const item = getItem(result.lastInsertRowid);
@@ -752,11 +803,13 @@ router.put('/:itemId', (req, res) => {
       db.get().prepare(`
         UPDATE pantry_items
         SET name = ?, quantity = ?, unit = ?, location_id = ?, category = ?,
-            expires_on = ?, min_quantity = ?, notes = ?
+            expires_on = ?, min_quantity = ?, notes = ?, sku = ?,
+            preferred_store_place_id = ?
         WHERE id = ?
       `).run(
         values.name, values.quantity, values.unit, values.location_id,
-        values.category, values.expires_on, values.min_quantity, values.notes, item.id
+        values.category, values.expires_on, values.min_quantity, values.notes,
+        values.sku, values.preferred_store_place_id, item.id
       );
       const fresh = getItem(item.id);
       if (values.quantity != null && Number(values.quantity) !== Number(item.quantity)) {

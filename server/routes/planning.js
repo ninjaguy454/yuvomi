@@ -13,6 +13,14 @@ import {
 } from '../services/google-places.js';
 import { createLogger } from '../logger.js';
 import { deleteTrip, listTrips, saveTrip, tripItinerary } from '../services/trips.js';
+import { ensureDefaultHomePlace } from '../services/places.js';
+import {
+  getPlanningContext,
+  listPlanningContexts,
+  reconcilePlanningContextConflicts,
+  resolvePlanningContextConflict,
+  savePlanningContext,
+} from '../services/planning-contexts.js';
 
 const router = express.Router();
 const log = createLogger('Planning');
@@ -121,6 +129,7 @@ function placeUsage(database, id) {
 }
 
 function listPlaces(database, { activeOnly = false } = {}) {
+  ensureDefaultHomePlace(database);
   return database.prepare(`
     SELECT * FROM places ${activeOnly ? 'WHERE active = 1' : ''}
      ORDER BY name COLLATE NOCASE, id
@@ -335,6 +344,7 @@ router.post('/admin/places', requireAdmin, (req, res) => {
       input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active,
       currentUserId(req), input.latitude != null && input.longitude != null ? 'user' : null,
     );
+    ensureDefaultHomePlace(database);
     res.status(201).json({ data: placeWithInheritedAddress(database, validPlace(database, result.lastInsertRowid)) });
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
@@ -372,6 +382,7 @@ router.post('/admin/places/from-google', requireAdmin, (req, res) => {
       input.latitude != null && input.longitude != null ? 'google' : null,
       coordinateExpiry,
     );
+    ensureDefaultHomePlace(database);
     res.status(201).json({ data: placeWithInheritedAddress(database, validPlace(database, result.lastInsertRowid)) });
   } catch (error) {
     res.status(400).json({ error: error.message, code: 400 });
@@ -395,6 +406,7 @@ router.put('/admin/places/:id', requireAdmin, (req, res) => {
       input.region, input.postalCode, input.country, input.latitude, input.longitude, input.active,
       coordinatesTouched ? 1 : 0, coordinatesTouched ? 1 : 0, existing.id,
     );
+    ensureDefaultHomePlace(database);
     res.json({ data: placeWithInheritedAddress(database, validPlace(database, existing.id)) });
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
@@ -425,6 +437,7 @@ router.delete('/admin/places/:id', requireAdmin, (req, res) => {
     const guarded = Object.entries(usage).filter(([key, count]) => !['calendar_events', 'meals'].includes(key) && count > 0);
     if (guarded.length) return res.status(409).json({ error: 'This place is still used by schedules, templates, tasks, or child places. Make it inactive instead.', code: 409, usage });
     database.prepare('DELETE FROM places WHERE id = ?').run(id);
+    ensureDefaultHomePlace(database);
     res.status(204).end();
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
@@ -498,6 +511,82 @@ router.get('/trips', (req, res) => {
     res.json({ data: listTrips(db.get(), { from, to }) });
   } catch (error) {
     res.status(500).json({ error: 'Could not load trips.', code: 500 });
+  }
+});
+
+router.get('/contexts', (req, res) => {
+  try {
+    const from = req.query.from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
+    const to = req.query.to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
+    reconcilePlanningContextConflicts(db.get());
+    res.json({ data: listPlanningContexts(db.get(), { from, to, includeCancelled: req.query.include_cancelled === '1' }) });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 400 });
+  }
+});
+
+router.get('/contexts/:id', (req, res) => {
+  try {
+    const context = getPlanningContext(db.get(), integer(req.params.id, { required: true }));
+    if (!context) return res.status(404).json({ error: 'Planning context not found.', code: 404 });
+    res.json({ data: context });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 400 });
+  }
+});
+
+router.post('/admin/contexts', requireAdmin, (req, res) => {
+  try {
+    res.status(201).json({ data: savePlanningContext(db.get(), req.body || {}, currentUserId(req)) });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 400 });
+  }
+});
+
+router.put('/admin/contexts/:id', requireAdmin, (req, res) => {
+  try {
+    const id = integer(req.params.id, { required: true });
+    if (!getPlanningContext(db.get(), id)) return res.status(404).json({ error: 'Planning context not found.', code: 404 });
+    res.json({ data: savePlanningContext(db.get(), req.body || {}, currentUserId(req), id) });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 400 });
+  }
+});
+
+router.get('/context-conflicts', (req, res) => {
+  try {
+    reconcilePlanningContextConflicts(db.get());
+    const status = req.query.status === 'resolved' ? 'resolved' : (req.query.status === 'superseded' ? 'superseded' : 'open');
+    const rows = db.get().prepare(`
+      SELECT conflict.*, member.display_name AS member_name,
+             first_context.name AS first_context_name,
+             second_context.name AS second_context_name
+        FROM planning_context_conflicts conflict
+        JOIN users member ON member.id = conflict.user_id
+        JOIN planning_contexts first_context ON first_context.id = conflict.first_context_id
+        JOIN planning_contexts second_context ON second_context.id = conflict.second_context_id
+       WHERE conflict.status = ?
+       ORDER BY conflict.overlap_starts_at, conflict.user_id, conflict.id
+    `).all(status).map((row) => ({ ...row, meal_periods: JSON.parse(row.meal_periods_json || '[]') }));
+    res.json({ data: rows });
+  } catch (error) {
+    res.status(400).json({ error: error.message, code: 400 });
+  }
+});
+
+router.post('/admin/context-conflicts/:id/resolve', requireAdmin, (req, res) => {
+  try {
+    res.json({ data: resolvePlanningContextConflict(
+      db.get(),
+      integer(req.params.id, { required: true }),
+      req.body?.resolution,
+      currentUserId(req),
+    ) });
+  } catch (error) {
+    res.status(/not found/i.test(error.message) ? 404 : 400).json({
+      error: error.message,
+      code: /not found/i.test(error.message) ? 404 : 400,
+    });
   }
 });
 

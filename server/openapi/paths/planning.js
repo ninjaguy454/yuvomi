@@ -8,7 +8,7 @@ export function planningPaths() {
         summary: 'List reusable Yuvomi Places',
         tag: 'Planning',
         params: [{ name: 'active', in: 'query', required: false, schema: { type: 'string', enum: ['true', 'false'] }, description: 'Defaults to active Places only. Set false to include inactive Places.' }],
-        description: 'Returns immutable Yuvomi Place IDs, inherited address information and any permitted external-provider identity. Renaming a Place does not change references to it.',
+        description: 'Returns immutable Yuvomi Place IDs, inherited address information and any permitted external-provider identity. Every household has an active, address-optional Home Place; the endpoint idempotently restores that default if the last active Home was removed. Renaming a Place does not change references to it.',
       }),
     },
     '/api/v1/planning/place-search/status': {
@@ -38,7 +38,7 @@ export function planningPaths() {
       get: op({ summary: 'Get the household Place and availability authoring context', tag: 'Planning', admin: true, description: 'Returns Places, household members, recurring Availability Rules and dated Availability Periods for the administration UI.' }),
     },
     '/api/v1/planning/admin/places': {
-      post: op({ summary: 'Create a user-maintained Yuvomi Place', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Creates a reusable Place with immutable Yuvomi identity, optional parent Place, address and coordinates.' }),
+      post: op({ summary: 'Create a user-maintained Yuvomi Place', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Creates a reusable Place with immutable Yuvomi identity, optional parent Place, address and coordinates. Home Places do not require an address.' }),
     },
     '/api/v1/planning/admin/places/from-google': {
       post: op({
@@ -80,6 +80,38 @@ export function planningPaths() {
           { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date' } },
         ],
       }),
+    },
+    '/api/v1/planning/contexts': {
+      get: op({
+        summary: 'List general household planning contexts',
+        tag: 'Planning',
+        params: [
+          { name: 'from', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'Inclusive window start.' },
+          { name: 'to', in: 'query', required: false, schema: { type: 'string', format: 'date' }, description: 'Exclusive window end.' },
+          { name: 'include_cancelled', in: 'query', required: false, schema: { type: 'string', enum: ['0', '1'] }, description: 'Set to 1 to include cancelled contexts.' },
+        ],
+        description: 'Lists home, travel and custom contexts with members, source Events/Trips, Meal Plan bindings and unresolved conflicts. Multiple related Calendar Events may share one context.',
+      }),
+    },
+    '/api/v1/planning/contexts/{id}': {
+      get: op({ summary: 'Get one planning context with members, sources and conflicts', tag: 'Planning', params: [idParam()] }),
+    },
+    '/api/v1/planning/admin/contexts': {
+      post: op({ summary: 'Create a manual planning context', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/planning/admin/contexts/{id}': {
+      put: op({ summary: 'Update a planning context and reconcile member conflicts', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/planning/context-conflicts': {
+      get: op({
+        summary: 'List planning-context membership conflicts awaiting resolution',
+        tag: 'Planning',
+        params: [{ name: 'status', in: 'query', required: false, schema: { type: 'string', enum: ['open', 'resolved', 'superseded'] }, description: 'Defaults to open.' }],
+        description: 'A conflict is created only when distinct contexts claim the same member for overlapping meal periods; ordinary overlapping Calendar Events are not conflicts.',
+      }),
+    },
+    '/api/v1/planning/admin/context-conflicts/{id}/resolve': {
+      post: op({ summary: 'Explicitly resolve an overlapping planning-context claim', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body resolution is `keep_first` or `keep_second`. The selected context keeps the member and the other releases them; distinct overlapping contexts can never both claim the same person, and Yuvomi never chooses silently.' }),
     },
     '/api/v1/planning/admin/trips': {
       post: op({ summary: 'Create a Trip with stages and participants', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null) }),

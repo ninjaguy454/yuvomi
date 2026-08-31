@@ -549,6 +549,7 @@ let state = {
   scheduleWarnings: [],
   users:         [],
   places:        [],
+  travelPlanningContexts: [],
   rangeFrom:     '',
   rangeTo:       '',
   holidays:      [],       // cached entries from holiday_cache
@@ -668,7 +669,14 @@ function localTime(str) {
 
 function addMonths(dateStr, n) {
   const d = new Date(dateStr + 'T00:00:00');
+  const day = d.getDate();
+  // Move through day 1 so 31 August + 1 month cannot overflow across
+  // September into October. Restore the original day, clamped to the target
+  // month's last valid date.
+  d.setDate(1);
   d.setMonth(d.getMonth() + n);
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  d.setDate(Math.min(day, lastDay));
   return isoDate(d);
 }
 
@@ -1276,6 +1284,19 @@ async function loadUsers() {
   }
 }
 
+async function refreshTravelPlanningContexts() {
+  try {
+    const response = await api.get('/planning/contexts');
+    state.travelPlanningContexts = (response.data ?? []).filter((context) => (
+      context.context_type === 'travel'
+      && ['active', 'conflict', 'resolved'].includes(context.status)
+    ));
+  } catch (err) {
+    console.warn('[Calendar] Travel planning contexts could not be loaded:', err);
+    state.travelPlanningContexts = [];
+  }
+}
+
 // --------------------------------------------------------
 // Entry Point
 // --------------------------------------------------------
@@ -1376,6 +1397,7 @@ export async function render(container, { user }) {
     api.get('/preferences').catch(() => ({ data: {} })),
     api.get('/documents/meta/options').catch(() => ({ data: {} })),
     api.get('/planning/places?active=false').catch(() => ({ data: [] })),
+    refreshTravelPlanningContexts(),
   ]);
   state.places = placesRes.data ?? [];
   state.holidayPrefs  = prefsRes.data ?? {};
@@ -3059,6 +3081,7 @@ export const __test = {
   deepLinkTargetDate,
   findDeepLinkedOccurrence,
   validDateParam,
+  addMonths,
   hasAttachment,
   attachmentUrls,
   clickedTime,
@@ -3185,6 +3208,47 @@ function reminderSummary(ev, reminders) {
     .join(', ');
 }
 
+function openTravelContextConflicts(travel) {
+  return (travel?.context_conflicts ?? []).filter((conflict) => conflict.status === 'open');
+}
+
+function planningWindowDateLabel(startsAt, endsAt) {
+  const startDate = startsAt ? String(startsAt).slice(0, 10) : '';
+  let endDate = endsAt ? String(endsAt).slice(0, 10) : '';
+  const rawEnd = String(endsAt || '');
+  const exclusiveDayStart = /^\d{4}-\d{2}-\d{2}$/.test(rawEnd)
+    || /T00:00(?::00(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?$/.test(rawEnd);
+  if (startDate && endDate > startDate && exclusiveDayStart) endDate = addDays(endDate, -1);
+  return [startDate, endDate]
+    .filter(Boolean)
+    .map((dateKey) => formatPreferredDate(dateKey))
+    .join(' - ');
+}
+
+function travelPlanningContextDescriptor(context, side = '') {
+  const prefix = side ? `${side}_context_` : '';
+  const name = context?.[`${prefix}name`] || 'Unnamed travel plan';
+  const place = context?.[`${prefix}place_name`];
+  const dates = planningWindowDateLabel(
+    context?.[`${prefix}starts_at`],
+    context?.[`${prefix}ends_at`],
+  );
+  return [name, place, dates].filter(Boolean).join(' · ');
+}
+
+function travelConflictRows(travel) {
+  return openTravelContextConflicts(travel).map((conflict) => {
+    const first = travelPlanningContextDescriptor(conflict, 'first');
+    const second = travelPlanningContextDescriptor(conflict, 'second');
+    return {
+      icon: 'triangle-alert',
+      label: 'Travel-plan decision',
+      value: `${conflict.user_name || 'A traveler'} is included in plan A (${first}) and plan B (${second}). Keep one plan for this overlap.`,
+      multiline: true,
+    };
+  });
+}
+
 /**
  * Die Leseinformationen eines Termins.
  *
@@ -3198,11 +3262,17 @@ function renderEventDetail(ev, reminders = []) {
     : formatDateTime(ev.start_datetime)
       + (ev.end_datetime ? ` – ${formatTime(ev.end_datetime)} ${timeSuffix()}`.trimEnd() : '');
 
+  const travel = ev.event_kind === 'travel' ? (ev.travel_details || {}) : null;
   return [
+    travel ? { icon: 'luggage', label: 'Event type', value: 'Travel Event' } : null,
     { icon: 'calendar', label: t('calendar.detailCalendar'), node: calendarChipNode(ev) },
     { icon: 'clock', label: t('calendar.detailWhen'), value: timeStr },
     recurrenceRow(ev.recurrence_rule),
     { icon: 'map-pin', label: t('calendar.locationLabel'), value: ev.location ? fmtLocation(ev.location) : '' },
+    travel ? { icon: 'map-pinned', label: 'Destination', value: travel.destination_name || '' } : null,
+    travel ? { icon: 'bed-double', label: 'Lodging', value: travel.lodging_name || '' } : null,
+    travel ? { icon: 'route', label: 'Planning context', value: travel.context_name || travel.context_status || '' } : null,
+    ...(travel ? travelConflictRows(travel) : []),
     assignedRow(ev.assigned_users, t('calendar.assignedLabel'), ev.assigned_name || ''),
     {
       icon: 'bell',
@@ -3283,8 +3353,55 @@ async function openEventDetail(ev, anchor = null) {
     onClick: async ({ close }) => { await close({ force: true }); await requestDeleteEvent(ev); },
   }];
 
+  if (ev.event_kind === 'travel' && ev.travel_details?.meal_plan_path) {
+    actions.push({
+      id: 'detail-travel-meals',
+      label: 'Plan travel meals',
+      variant: 'primary',
+      icon: 'utensils',
+      onClick: () => {
+        // Navigation owns overlay teardown. Closing first lets the overlay
+        // history marker schedule history.back() before the router can replace
+        // it, leaving the Meals screen rendered under the old Calendar URL.
+        window.yuvomi.navigate(ev.travel_details.meal_plan_path);
+      },
+    });
+  }
+
   // ICS-Abos: Ein lokal geänderter Termin lässt sich auf das Original
   // zurücksetzen. Die Aktion gehört zum Objekt, also in die Fußzeile.
+  if (ev.event_kind === 'travel' && state.user?.role === 'admin') {
+    for (const conflict of openTravelContextConflicts(ev.travel_details)) {
+      for (const [resolution, planLabel, contextDescription] of [
+        ['keep_first', 'plan A', travelPlanningContextDescriptor(conflict, 'first')],
+        ['keep_second', 'plan B', travelPlanningContextDescriptor(conflict, 'second')],
+      ]) {
+        actions.push({
+          id: `detail-travel-conflict-${conflict.id}-${resolution}`,
+          label: `Keep ${planLabel}: ${contextDescription} for ${conflict.user_name || 'traveler'}`,
+          variant: 'secondary',
+          icon: 'route',
+          onClick: async ({ close }) => {
+            try {
+              await api.post(`/planning/admin/context-conflicts/${conflict.id}/resolve`, { resolution });
+              await close({ force: true });
+              await refreshTravelPlanningContexts();
+              // The visible date range has not changed, so reloadForView()
+              // intentionally no-ops. Conflict resolution changes the travel
+              // metadata on the Events already in that range; force-refresh
+              // those rows so a closed conflict cannot remain actionable.
+              await reloadCalendarEventsOnly();
+              renderView();
+              window.yuvomi?.showToast(`Kept ${planLabel} for ${conflict.user_name || 'the traveler'}.`, 'success');
+            } catch (err) {
+              window.yuvomi?.showToast(err.data?.error ?? 'Could not resolve the travel-plan conflict.', 'danger');
+            }
+          },
+        });
+      }
+    }
+  }
+
   if (ev.external_source === 'ics' && ev.user_modified === 1) {
     actions.push({
       id: 'detail-ics-reset',
@@ -3711,6 +3828,45 @@ function wireEventForm(panel, { mode, event = null, reminder = null }) {
   bindUserMultiSelect(panel, 'cal_assigned');
   wireVisibilityWarning(panel, '#modal-visibility', 'cal_assigned', '#modal-visibility-warning');
 
+  // Travel is an explicit Event designation. Ordinary events with a location
+  // remain ordinary advisory Calendar signals; only this choice creates or
+  // updates a planning context.
+  const eventKind = panel.querySelector('#modal-event-kind');
+  const travelFields = panel.querySelector('#modal-travel-fields');
+  const syncTravelFields = () => {
+    const travel = eventKind?.value === 'travel';
+    if (travelFields) travelFields.hidden = !travel;
+    panel.querySelector('#modal-travel-hint')?.toggleAttribute('hidden', !travel);
+  };
+  eventKind?.addEventListener('change', syncTravelFields);
+  syncTravelFields();
+
+  const travelContext = panel.querySelector('#modal-travel-context');
+  const travelDestination = panel.querySelector('#modal-travel-destination');
+  const travelContextHint = panel.querySelector('#modal-travel-context-hint');
+  const originalTravelDestination = String(
+    event?.travel_details?.destination_place_id || event?.place_id || '',
+  );
+  const syncTravelContext = () => {
+    const selected = state.travelPlanningContexts.find(
+      (context) => Number(context.id) === Number(travelContext?.value),
+    );
+    if (selected?.place_id && travelDestination) {
+      travelDestination.value = String(selected.place_id);
+    } else if (isEdit && travelDestination) {
+      travelDestination.value = originalTravelDestination;
+    }
+    if (travelContextHint) {
+      travelContextHint.textContent = selected
+        ? `This Event will share “${selected.name}”. Its dates and travelers will expand to include this segment.`
+        : (isEdit
+          ? 'This Event remains in its current travel plan. Choose another plan only when both Events belong to the same trip.'
+          : 'A new travel plan will be created. Choose an existing plan only when this Event is another segment of the same trip.');
+    }
+  };
+  travelContext?.addEventListener('change', syncTravelContext);
+  syncTravelContext();
+
   // Der Farbwaehler war bis v2.35.0 ausgegraut, sobald jemand zugewiesen war,
   // mit dem Hinweis, die Farbe der Person schlage sie ohnehin. Seit #815 steht
   // die Terminfarbe in resolveEventColor VORN, womit der Hinweis unwahr wurde -
@@ -4015,6 +4171,20 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
     ? (event.assigned_users?.map((u) => u.id) ?? (event.assigned_to ? [event.assigned_to] : []))
     : (state.defaultAssignMe && state.currentUserId != null ? [state.currentUserId] : []);
   const visibility = (isEdit ? event.visibility : null) || 'all';
+  const eventKind = isEdit && event?.event_kind === 'travel' ? 'travel' : 'general';
+  const travel = event?.travel_details || {};
+  const travelDateTime = (value) => value ? esc(String(value).slice(0, 16)) : '';
+  const travelPlaceOptions = (selectedId, emptyLabel) => `
+    <option value="">${esc(emptyLabel)}</option>
+    ${state.places.map((place) => `<option value="${place.id}" ${Number(selectedId) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(selectedId) !== Number(place.id) ? 'disabled' : ''}>${esc(place.path_label || place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}`;
+  const selectedTravelContextId = Number(travel.planning_context_id) || null;
+  const travelContextLabel = (context) => {
+    const conflict = context.status === 'conflict' ? ' · needs a decision' : '';
+    return `${travelPlanningContextDescriptor(context)}${conflict}`;
+  };
+  const travelContextOptions = state.travelPlanningContexts
+    .map((context) => `<option value="${context.id}" ${selectedTravelContextId === Number(context.id) ? 'selected' : ''}>${esc(travelContextLabel(context))}</option>`)
+    .join('');
 
   // Sekundärfelder: wandern hinter „Weitere Einstellungen". Beim Bearbeiten
   // automatisch geöffnet, falls bereits Werte gesetzt sind. Der Ort steht als
@@ -4115,6 +4285,14 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
       </div>
     </div>
     <div class="form-group">
+      <label class="form-label" for="modal-event-kind">Event type</label>
+      <select class="form-input" id="modal-event-kind">
+        <option value="general" ${eventKind === 'general' ? 'selected' : ''}>Event</option>
+        <option value="travel" ${eventKind === 'travel' ? 'selected' : ''}>Travel Event</option>
+      </select>
+      <small class="cal-field-hint">Travel Events create explicit availability and planning context; a normal Event with a location does not.</small>
+    </div>
+    <div class="form-group">
       <label class="toggle">
         <input type="checkbox" id="modal-allday" ${isEdit && event.all_day ? 'checked' : ''}>
         <span class="toggle__track"></span>
@@ -4172,6 +4350,51 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
       </select>
       <small class="cal-field-hint">Linking a Place lets availability treat this calendar event as an advisory location signal.</small>
     </div>` : ''}
+
+    <section class="calendar-travel-fields" id="modal-travel-fields" ${eventKind === 'travel' ? '' : 'hidden'} aria-label="Travel planning">
+      <div class="calendar-travel-fields__heading">
+        <div><strong>Travel planning</strong><p class="cal-field-hint">Assigned household members are the travelers. The start time is departure; omitted times are treated as all-day travel.</p></div>
+        <i data-lucide="luggage" aria-hidden="true"></i>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="modal-travel-context">Shared travel plan</label>
+        <select class="form-input" id="modal-travel-context" aria-describedby="modal-travel-context-hint">
+          <option value="">${isEdit ? 'Keep this Event in its current travel plan' : 'Create a new travel plan'}</option>
+          ${travelContextOptions}
+        </select>
+        <small class="cal-field-hint" id="modal-travel-context-hint">Choose an existing travel plan when this Event is another segment of the same trip. Separate overlapping trips stay separate and ask which plan keeps each traveler.</small>
+      </div>
+      <div class="modal-grid modal-grid--2">
+        <div class="form-group">
+          <label class="form-label" for="modal-travel-destination">Destination Place</label>
+          <select class="form-input" id="modal-travel-destination">${travelPlaceOptions(travel.destination_place_id || event?.place_id, 'No saved destination')}</select>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="modal-travel-lodging">Lodging Place</label>
+          <select class="form-input" id="modal-travel-lodging">${travelPlaceOptions(travel.lodging_place_id, 'No saved lodging')}</select>
+        </div>
+      </div>
+      <div class="modal-grid modal-grid--2">
+        <div class="form-group">
+          <label class="form-label" for="modal-travel-arrival">Arrival at destination (optional)</label>
+          <input class="form-input" type="datetime-local" id="modal-travel-arrival" value="${travelDateTime(travel.arrival_at_destination)}">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="modal-travel-return-departure">Return departure (optional)</label>
+          <input class="form-input" type="datetime-local" id="modal-travel-return-departure" value="${travelDateTime(travel.return_departure_at)}">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label" for="modal-travel-return-arrival">Return arrival at home (optional)</label>
+        <input class="form-input" type="datetime-local" id="modal-travel-return-arrival" value="${travelDateTime(travel.return_arrival_at_home)}">
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="modal-travel-away-periods" ${travel.create_away_periods !== 0 ? 'checked' : ''}>
+        <span class="toggle__track"></span>
+        <span>Create matching Away periods for travelers</span>
+      </label>
+      <p class="cal-field-hint" id="modal-travel-hint">One shared, claimable “Create travel meal plan” Task will be created for this travel group.</p>
+    </section>
 
     <div class="form-group">
       ${renderUserMultiSelect(state.users, selectedUserIds, 'cal_assigned', 'calendar.assignedLabel')}
@@ -4352,6 +4575,7 @@ async function saveEvent(overlay, mode, event, existingReminder = null, attachme
       title, description, start_datetime, end_datetime,
       all_day: allday ? 1 : 0,
       location, place_id, color, icon, assigned_to,
+      event_kind: overlay.querySelector('#modal-event-kind')?.value || 'general',
       visibility: overlay.querySelector('#modal-visibility')?.value || 'all',
       countdown: overlay.querySelector('#modal-countdown')?.checked ? 1 : 0,
       recurrence_rule: rrule.recurrence_rule,
@@ -4361,6 +4585,15 @@ async function saveEvent(overlay, mode, event, existingReminder = null, attachme
       target_outlook_account_id,
       target_outlook_calendar_id,
     };
+    body.travel_details = body.event_kind === 'travel' ? {
+      planning_context_id: Number(overlay.querySelector('#modal-travel-context')?.value) || null,
+      destination_place_id: Number(overlay.querySelector('#modal-travel-destination')?.value) || null,
+      lodging_place_id: Number(overlay.querySelector('#modal-travel-lodging')?.value) || null,
+      arrival_at_destination: overlay.querySelector('#modal-travel-arrival')?.value || null,
+      return_departure_at: overlay.querySelector('#modal-travel-return-departure')?.value || null,
+      return_arrival_at_home: overlay.querySelector('#modal-travel-return-arrival')?.value || null,
+      create_away_periods: Boolean(overlay.querySelector('#modal-travel-away-periods')?.checked),
+    } : null;
     if (attachmentPayload) {
       Object.assign(body, {
         attachment_name: attachmentPayload.name,
@@ -4464,6 +4697,9 @@ async function saveEvent(overlay, mode, event, existingReminder = null, attachme
     if (reloadAfter) {
       await reloadCalendarEventsOnly();
     }
+    if (body.event_kind === 'travel' || event?.event_kind === 'travel') {
+      await refreshTravelPlanningContexts();
+    }
 
     closeModal({ force: true });
     renderView();
@@ -4488,7 +4724,8 @@ async function deleteEvent(id) {
     commit: async ({ keepalive }) => {
       await api.delete(`/calendar/${id}`, { keepalive });
       api.delete(`/reminders?entity_type=event&entity_id=${id}`, { keepalive }).catch(() => {});
-      if (keepalive) return; // Seite verschwindet — kein UI-Refresh mehr
+      if (keepalive) return; // Seite verschwindet - kein UI-Refresh mehr
+      if (event?.event_kind === 'travel') await refreshTravelPlanningContexts();
       refreshReminders();
     },
     restore: (err) => {

@@ -201,5 +201,12 @@ test('Personal Choice creates one durable request per participant and remains id
   assert.equal(answer.status, 200, JSON.stringify(answer.body));
   const alternative = database.prepare("SELECT * FROM meals WHERE parent_meal_id = ? AND scope = 'personal'").get(meal.id);
   assert.equal(alternative.title, 'Tacos');
+  assert.equal(alternative.source_key, `meal-person-decision:${meal.id}:${admin}`);
+  const canonicalDecision = database.prepare(`
+    SELECT * FROM meal_person_decisions WHERE meal_id = ? AND beneficiary_user_id = ?
+  `).get(meal.id, admin);
+  assert.ok(canonicalDecision, 'legacy response also writes the canonical audited decision');
+  assert.equal(Number(canonicalDecision.selected_meal_id), Number(alternative.id));
+  assert.equal(database.prepare(`SELECT COUNT(*) AS count FROM meals WHERE parent_meal_id = ? AND scope = 'personal'`).get(meal.id).count, 1);
   assert.equal(database.prepare('SELECT title FROM meals WHERE id = ?').get(meal.id).title, 'Choose dinner');
 });

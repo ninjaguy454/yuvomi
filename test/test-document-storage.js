@@ -26,6 +26,7 @@ import express from 'express';
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'document-storage-test-secret';
 const {
+  ALL_MIGRATIONS,
   MIGRATIONS,
   get,
   _setTestDatabase,
@@ -39,7 +40,7 @@ const {
 const { default: calendarRouter } = await import('../server/routes/calendar.js');
 
 const moduleDatabase = get();
-const suiteDatabase = buildMigratedDatabase(MIGRATIONS);
+const suiteDatabase = buildMigratedDatabase(ALL_MIGRATIONS);
 _setTestDatabase(suiteDatabase);
 moduleDatabase.close();
 

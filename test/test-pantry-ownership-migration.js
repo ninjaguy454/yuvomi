@@ -49,6 +49,8 @@ test('der Rebuild hat Indizes und Trigger wieder angelegt', () => {
     'idx_pantry_items_expires',
     'idx_pantry_items_location',
     'idx_pantry_items_name',
+    'idx_pantry_items_preferred_store',
+    'idx_pantry_items_sku',
   ]);
 
   const triggers = db.prepare(`

@@ -593,6 +593,15 @@ test('Wochenberechnung: Montag der aktuellen Woche', () => {
   assert(getMondayOf('2026-03-30') === '2026-03-30', 'Nächster Montag');
 });
 
+test('compact day headers remove only terminal date punctuation', () => {
+  assert(mealsUi.normalizeDayHeaderDateLabel('31.08.') === '31.08',
+    'German terminal full stop is removed');
+  assert(mealsUi.normalizeDayHeaderDateLabel('Aug 31') === 'Aug 31',
+    'a locale without terminal punctuation remains unchanged');
+  assert(mealsUi.normalizeDayHeaderDateLabel('31\uFF0E08\uFF0E') === '31\uFF0E08',
+    'only the terminal full-width stop is removed');
+});
+
 // --------------------------------------------------------
 // Ergebnis
 // --------------------------------------------------------

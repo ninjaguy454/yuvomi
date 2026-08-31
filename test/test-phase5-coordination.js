@@ -107,6 +107,14 @@ test('trip planning creates stages, traveler Away periods, linked Tasks, Calenda
   assert.equal(trip.body.data.participants.length, 2);
   assert.equal(trip.body.data.stages.length, 6);
   assert.equal(trip.body.data.tasks.length, 3);
+  assert.ok(trip.body.data.tasks.every((task) => Number(task.assigned_to) === admin),
+    'generic Trip Tasks keep the legacy first-traveler default');
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS n
+      FROM task_assignments ta
+      JOIN trip_tasks tt ON tt.task_id = ta.task_id
+     WHERE tt.trip_id = ? AND ta.user_id = ?
+  `).get(trip.body.data.id, admin).n, 3);
   assert.equal(database.prepare("SELECT COUNT(*) AS n FROM availability_periods WHERE category = 'travel' AND state = 'away'").get().n, 2);
   const located = database.prepare('SELECT COUNT(*) AS n FROM task_locations tl JOIN trip_tasks tt ON tt.task_id = tl.task_id WHERE tt.trip_id = ?').get(trip.body.data.id).n;
   assert.ok(located >= 1);

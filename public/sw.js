@@ -15,7 +15,7 @@
  *   → bypassCacheUntil (in-memory + Cache API für SW-Restart-Robustheit)
  */
 
-const APP_RELEASE   = '2.54.0';
+const APP_RELEASE   = '2.54.0-kitchen.5';
 const SHELL_CACHE   = `yuvomi-shell-${APP_RELEASE}`;
 const PAGES_CACHE   = `yuvomi-pages-${APP_RELEASE}`;
 const LOCALES_CACHE = `yuvomi-locales-${APP_RELEASE}`;
@@ -28,7 +28,7 @@ const ALL_CACHES    = [SHELL_CACHE, PAGES_CACHE, LOCALES_CACHE, ASSETS_CACHE];
 
 // GET-API-Pfade (nach /api/v1), die für Read-only-Offline gecacht werden dürfen.
 // NUR Lese-Endpunkte — niemals /auth/* oder Mutationen. Prefix-Match.
-const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/contacts', '/dashboard'];
+const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/contacts', '/dashboard'];
 
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
@@ -134,6 +134,7 @@ const APP_SHELL = [
   '/utils/kitchen-transfer.js',
   '/utils/markdown-checklist.js',
   '/utils/markdown-toolbar.js',
+  '/utils/meal-week-model.js',
   '/utils/mentions.js',
   '/utils/module-accent.js',
   '/utils/metric-card.js',

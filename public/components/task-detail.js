@@ -1058,6 +1058,24 @@ function taskReminderSummary(reminders) {
     .join(', ');
 }
 
+function taskActionNode(task) {
+  const action = task.action_link;
+  if (!action?.path) return null;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn--secondary btn--sm task-detail__linked-action';
+  button.textContent = action.label || 'Open';
+  button.addEventListener('click', () => {
+    const url = new URL(action.path, window.location.origin);
+    for (const [key, value] of Object.entries(action.params || {})) {
+      if (value !== null && value !== undefined && value !== '') url.searchParams.set(key, String(value));
+    }
+    closeDetailView();
+    window.yuvomi?.navigate(`${url.pathname}${url.search}${url.hash}`);
+  });
+  return button;
+}
+
 function renderTaskDetail(task, reminders = [], ctx) {
   const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task));
 
@@ -1088,6 +1106,7 @@ function renderTaskDetail(task, reminders = [], ctx) {
     { icon: 'bell', label: t('reminders.sectionTitle'), value: taskReminderSummary(reminders) },
     { icon: 'map-pin-check', label: t('tasks.availabilityPlaceLabel'), value: presenceSummary(task) },
     { icon: 'map-pin', label: t('tasks.locationLabel'), node: taskLocationNode(task, ctx), multiline: true },
+    { icon: 'external-link', label: 'Open', node: taskActionNode(task) },
     visibilityRow(task.visibility),
     // Nur wenn markiert (#647) - eine Zeile „Countdown: nein" an jeder Aufgabe
     // erklärte ein Feld, statt eine Frage zu beantworten.

@@ -90,10 +90,26 @@ test('Phase 3 migration adds reusable planning tables and Location variable type
   assert.ok(database.prepare('PRAGMA table_info(meals)').all().some((column) => column.name === 'place_id'));
 });
 
-test('Places preserve stable hierarchy references across rename and guard dependent deletion', async () => {
-  const createHome = await call('POST', '/planning/admin/places', { name: 'Home', type: 'home', city: 'Springfield' });
-  assert.equal(createHome.status, 201, JSON.stringify(createHome.body));
-  home = createHome.body.data;
+test('Places seed one address-optional Home idempotently, preserve hierarchy references, and guard dependent deletion', async () => {
+  const firstList = await call('GET', '/planning/places?active=false');
+  const seededHomes = firstList.body.data.filter((place) => place.type === 'home' && place.active);
+  assert.equal(seededHomes.length, 1, JSON.stringify(firstList.body));
+  assert.equal(seededHomes[0].name, 'Home');
+  assert.equal(seededHomes[0].street_address, null);
+  assert.equal(seededHomes[0].city, null);
+
+  const secondList = await call('GET', '/planning/places?active=false');
+  assert.deepEqual(
+    secondList.body.data.filter((place) => place.type === 'home' && place.active).map((place) => place.id),
+    [seededHomes[0].id],
+    'listing Places repeatedly must not duplicate the default Home',
+  );
+
+  const configureHome = await call('PUT', `/planning/admin/places/${seededHomes[0].id}`, {
+    name: 'Home', type: 'home', city: 'Springfield', active: true,
+  });
+  assert.equal(configureHome.status, 200, JSON.stringify(configureHome.body));
+  home = configureHome.body.data;
   const createKitchen = await call('POST', '/planning/admin/places', { name: 'Kitchen', type: 'room', parent_place_id: home.id });
   assert.equal(createKitchen.status, 201, JSON.stringify(createKitchen.body));
   kitchen = createKitchen.body.data;

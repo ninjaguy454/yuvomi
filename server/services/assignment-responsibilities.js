@@ -38,6 +38,17 @@ function taskWindow(d, taskId) {
   };
 }
 
+function eligibleStandaloneClaimMember(d, taskId, userId) {
+  const eligible = d.prepare(`
+    SELECT u.id, u.display_name, u.avatar_color, u.avatar_data, u.role, u.family_role
+      FROM task_claim_eligibility tce
+      JOIN users u ON u.id = tce.user_id
+     WHERE tce.task_id = ? AND tce.user_id = ?
+  `).get(taskId, userId);
+  if (!eligible) throw new Error('You are not eligible for this task.');
+  return eligible;
+}
+
 function replaceLegacyAssignments(d, taskId, userIds) {
   d.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
   const insert = d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)');
@@ -199,9 +210,22 @@ export function claimTask(d, taskId, userId) {
     if (!context) throw new Error('This task is not claimable.');
     if (context.state !== 'open') throw new Error('This task has already been claimed.');
     const activity = activityForTask(d, taskId);
-    if (!activity) throw new Error('The Activity Template for this task is unavailable.');
-    const window = taskWindow(d, taskId);
-    const member = assertEligibleActivityMember(d, activity, userId, window);
+    let member;
+    if (activity) {
+      // Activity-backed claimability keeps its full skill, supervision and
+      // presence checks. A stray standalone eligibility row must never weaken
+      // those existing safety rules.
+      const window = taskWindow(d, taskId);
+      member = assertEligibleActivityMember(d, activity, userId, window);
+    } else {
+      if (!['planning_context', 'meal_execution'].includes(context.source)) {
+        throw new Error('The Activity Template for this task is unavailable.');
+      }
+      // Planning contexts can intentionally create a claimable Task without an
+      // Activity Template. Their explicit eligibility rows are the complete,
+      // occurrence-local pool; absence from that pool is a hard denial.
+      member = eligibleStandaloneClaimMember(d, taskId, userId);
+    }
     const changed = d.prepare(`
       UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()}
        WHERE task_id = ? AND state = 'open'
@@ -227,8 +251,15 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
     if (!context) throw new Error('This task is not managed by an assignment policy.');
     if (!context.override_allowed) throw new Error('Assignment overrides are disabled for this activity.');
     const activity = activityForTask(d, taskId);
-    if (!activity) throw new Error('The Activity Template for this task is unavailable.');
-    const member = assertEligibleActivityMember(d, activity, targetUserId, taskWindow(d, taskId));
+    // Context-backed open Tasks have no Activity Template. Their explicit
+    // claim pool is still a hard eligibility boundary for administrator
+    // reassignment, just as Activity-backed Tasks retain their full checks.
+    if (!activity && !['planning_context', 'meal_execution'].includes(context.source)) {
+      throw new Error('The Activity Template for this task is unavailable.');
+    }
+    const member = activity
+      ? assertEligibleActivityMember(d, activity, targetUserId, taskWindow(d, taskId))
+      : eligibleStandaloneClaimMember(d, taskId, targetUserId);
     supersedeActiveTaskObligations(d, taskId);
     d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`).run(taskId);
     d.prepare(`UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()} WHERE task_id = ?`).run(taskId);

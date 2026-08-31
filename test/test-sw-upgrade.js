@@ -121,28 +121,35 @@ async function dispatchLifecycle(listener) {
   await completion;
 }
 
-test('2.51.0 cache upgrades atomically to 2.54.0 with shared Task modules', async () => {
+test('2.54.0 through Kitchen .4 caches upgrade atomically to Kitchen .5 with shared Meal and Task modules', async () => {
   const env = loadWorker();
-  const oldCaches = [
-    'yuvomi-shell-2.51.0',
-    'yuvomi-pages-2.51.0',
-    'yuvomi-locales-2.51.0',
-    'yuvomi-assets-2.51.0',
-    'yuvomi-api-2.51.0',
-  ];
+  const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4'];
+  const oldCaches = oldReleases.flatMap((release) => [
+    `yuvomi-shell-${release}`,
+    `yuvomi-pages-${release}`,
+    `yuvomi-locales-${release}`,
+    `yuvomi-assets-${release}`,
+    `yuvomi-api-${release}`,
+  ]);
   for (const name of oldCaches) await env.caches.open(name);
-  await (await env.caches.open('yuvomi-pages-2.51.0')).put('/pages/tasks.js', new MockResponse('stale tasks'));
-  await (await env.caches.open('yuvomi-pages-2.51.0')).put('/pages/calendar.js', new MockResponse('stale calendar'));
+  for (const release of oldReleases) {
+    const oldPages = await env.caches.open(`yuvomi-pages-${release}`);
+    await oldPages.put('/pages/tasks.js', new MockResponse(`stale tasks:${release}`));
+    await oldPages.put('/pages/calendar.js', new MockResponse(`stale calendar:${release}`));
+    await oldPages.put('/pages/meals.js', new MockResponse(`stale meals:${release}`));
+  }
 
   await dispatchLifecycle(env.listeners.install[0]);
   assert.equal(env.signals.skipped, 1, 'the installed worker must activate immediately');
 
-  const shell = await env.caches.open('yuvomi-shell-2.54.0');
-  const pages = await env.caches.open('yuvomi-pages-2.54.0');
+  const shell = await env.caches.open('yuvomi-shell-2.54.0-kitchen.5');
+  const pages = await env.caches.open('yuvomi-pages-2.54.0-kitchen.5');
   assert.ok(await shell.match('/components/task-detail.js'));
   assert.ok(await shell.match('/utils/task-fields.js'));
+  assert.ok(await shell.match('/utils/meal-week-model.js'));
   assert.ok(await pages.match('/pages/tasks.js'));
   assert.ok(await pages.match('/pages/calendar.js'));
+  assert.ok(await pages.match('/pages/meals.js'));
 
   await dispatchLifecycle(env.listeners.activate[0]);
   for (const name of oldCaches) {
@@ -153,6 +160,7 @@ test('2.51.0 cache upgrades atomically to 2.54.0 with shared Task modules', asyn
   assert.equal(JSON.stringify(env.signals.messages), JSON.stringify([{ type: 'SW_UPDATED' }]));
   assert.equal((await pages.match('/pages/tasks.js')).body, 'fresh:/pages/tasks.js');
   assert.equal((await pages.match('/pages/calendar.js')).body, 'fresh:/pages/calendar.js');
+  assert.equal((await pages.match('/pages/meals.js')).body, 'fresh:/pages/meals.js');
 });
 
 test('controller change reloads once without requiring a hard reload', async () => {

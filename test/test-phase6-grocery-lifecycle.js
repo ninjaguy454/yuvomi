@@ -77,14 +77,14 @@ async function callApi(method, path, body) {
   return { status: response.status, body: raw ? JSON.parse(raw) : null };
 }
 
-function seedRecipeMeal({ date, title, quantity }) {
+function seedRecipeMeal({ date, title, quantity, ingredient = 'Milk', category = 'Milchprodukte' }) {
   const recipeId = Number(database.prepare(`
     INSERT INTO recipes (title, created_by) VALUES (?, ?)
   `).run(`${title} recipe`, admin).lastInsertRowid);
   database.prepare(`
     INSERT INTO recipe_ingredients (recipe_id, name, quantity, category)
-    VALUES (?, 'Milk', ?, 'Milchprodukte')
-  `).run(recipeId, quantity);
+    VALUES (?, ?, ?, ?)
+  `).run(recipeId, ingredient, quantity, category);
   const mealId = Number(database.prepare(`
     INSERT INTO meals (date, meal_type, title, recipe_id, created_by)
     VALUES (?, 'dinner', ?, ?, ?)
@@ -125,6 +125,55 @@ test('draft grocery runs aggregate quantities while retaining every Meal and Rec
   assert.equal(retry.body.data.id, created.body.data.id);
   assert.equal(database.prepare('SELECT COUNT(*) AS n FROM meal_grocery_runs WHERE logical_key = ?').get('week-2032-03-03').n, 1);
   assert.equal(database.prepare('SELECT COUNT(*) AS n FROM meal_grocery_items WHERE grocery_run_id = ?').get(created.body.data.id).n, 2);
+});
+
+test('grocery grouping settings shape generated drafts and survive draft refreshes', async () => {
+  seedRecipeMeal({ date: '2034-06-05', title: 'Group soup', quantity: '1 l' });
+  seedRecipeMeal({ date: '2034-06-06', title: 'Group pasta', quantity: '1 l' });
+  seedRecipeMeal({
+    date: '2034-06-07', title: 'Group bread', quantity: '500 g',
+    ingredient: 'Flour', category: 'Backwaren',
+  });
+
+  try {
+    const categorySettings = await callApi('PUT', '/meals/grocery-settings', {
+      grouping_mode: 'category',
+    });
+    assert.equal(categorySettings.status, 200, JSON.stringify(categorySettings.body));
+    const byCategory = await call('POST', `/${listId}/grocery-runs`, {
+      from: '2034-06-05', to: '2034-06-11', logical_key: 'grouping-week-2034-06-05',
+    });
+    assert.equal(byCategory.status, 201, JSON.stringify(byCategory.body));
+    assert.equal(byCategory.body.data.grouping_mode, 'category');
+    assert.deepEqual(
+      [...new Set(byCategory.body.data.items.map((item) => item.group_label))].sort(),
+      ['Backwaren', 'Milchprodukte'],
+    );
+    assert.equal(byCategory.body.data.items.find((item) => item.name === 'Milk').quantity, '2 l');
+
+    const mealSettings = await callApi('PUT', '/meals/grocery-settings', {
+      grouping_mode: 'meal',
+    });
+    assert.equal(mealSettings.status, 200, JSON.stringify(mealSettings.body));
+    const byMeal = await call('POST', `/${listId}/grocery-runs`, {
+      from: '2034-06-05', to: '2034-06-11', logical_key: 'grouping-week-2034-06-05',
+    });
+    assert.equal(byMeal.status, 200, JSON.stringify(byMeal.body));
+    assert.equal(byMeal.body.meta.refreshed, true);
+    assert.equal(byMeal.body.data.id, byCategory.body.data.id);
+    assert.equal(byMeal.body.data.grouping_mode, 'meal');
+    assert.equal(byMeal.body.data.items.length, 3,
+      'identical ingredients remain separate when the draft is grouped by Meal');
+    assert.deepEqual(
+      byMeal.body.data.items.map((item) => item.group_label).sort(),
+      ['2034-06-05 · Group soup', '2034-06-06 · Group pasta', '2034-06-07 · Group bread'],
+    );
+  } finally {
+    const restored = await callApi('PUT', '/meals/grocery-settings', {
+      grouping_mode: 'ingredient',
+    });
+    assert.equal(restored.status, 200, JSON.stringify(restored.body));
+  }
 });
 
 test('fractional recipe quantities remain numeric and aggregate accurately', async () => {

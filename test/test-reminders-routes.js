@@ -20,7 +20,7 @@ import Database from 'better-sqlite3-multiple-ciphers';
 
 process.env.DB_PATH = ':memory:';
 
-const { MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: remindersRouter } = await import('../server/routes/reminders.js');
 
 // --------------------------------------------------------
@@ -32,10 +32,15 @@ function buildTestDb() {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY, description TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
-  for (const m of MIGRATIONS) {
-    if (typeof m.up === 'function') m.up(db); else db.exec(m.up);
-    if (typeof m.afterUp === 'function') m.afterUp(db);
-    db.prepare('INSERT INTO schema_migrations (version, description) VALUES (?, ?)').run(m.version, m.description);
+  for (const m of ALL_MIGRATIONS) {
+    if (m.foreignKeysOff) db.pragma('foreign_keys = OFF');
+    try {
+      if (typeof m.up === 'function') m.up(db); else db.exec(m.up);
+      if (typeof m.afterUp === 'function') m.afterUp(db);
+      db.prepare('INSERT INTO schema_migrations (version, description) VALUES (?, ?)').run(m.version, m.description);
+    } finally {
+      if (m.foreignKeysOff) db.pragma('foreign_keys = ON');
+    }
   }
   return db;
 }
@@ -76,6 +81,11 @@ function makeInventoryItem(owner, name = 'Kühlschrank') {
   ).run(name, owner).lastInsertRowid;
 }
 // remind_at direkt einfügen (umgeht die Route, um Fälligkeit/dismissed frei zu setzen)
+function makeMeal(owner, title = 'Dinner menu') {
+  return db.prepare(
+    `INSERT INTO meals (date, meal_type, title, created_by) VALUES ('2070-01-06', 'dinner', ?, ?)`,
+  ).run(title, owner).lastInsertRowid;
+}
 function insertReminder(owner, entityType, entityId, remindAt, dismissed = 0) {
   return db.prepare(
     `INSERT INTO reminders (entity_type, entity_id, remind_at, created_by, dismissed) VALUES (?, ?, ?, ?, ?)`,
@@ -242,7 +252,7 @@ test('POST / lehnt ungültigen entity_type ab (400)', async () => {
   // naechsten Zweig ab, weil ein Lauf es minuetlich wieder herstellt. Die drei
   // uebrigen abgeleiteten Herkuenfte bleiben setzbar - dort haelt ein
   // handgesetzter Termin bis zur naechsten Aenderung ihres Objekts.
-  assert.doesNotMatch(res.body.error, /pantry_item/);
+  assert.doesNotMatch(res.body.error, /pantry_item|meal/);
 });
 
 test('POST / lehnt fehlenden entity_type ab (400)', async () => {
@@ -380,6 +390,52 @@ test('DELETE /?entity löscht alle eigenen Erinnerungen der Entität, fremde ble
 // Pfad-Guard in server/index.js fragt also nur danach. Ausgeliefert werden aber
 // Aufgabentitel, Abo-Namen, Inventar-Gegenstaende und Vorratsartikel.
 // --------------------------------------------------------------------------
+test('Meal reminders expose their title only to the Meals scope and remain dismissible', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  const mealId = makeMeal(owner, 'Changed household dinner');
+  const reminderId = insertReminder(owner, 'meal', mealId, PAST);
+
+  currentScopes = ['calendar:read'];
+  try {
+    const hidden = await call('GET', '/pending');
+    assert.equal(hidden.status, 200);
+    assert.ok(!hidden.body.data.some((row) => row.entity_type === 'meal'));
+  } finally {
+    currentScopes = null;
+  }
+
+  currentScopes = ['meals:read'];
+  try {
+    const visible = await call('GET', '/pending');
+    assert.equal(visible.status, 200);
+    const mealReminder = visible.body.data.find((row) => Number(row.id) === Number(reminderId));
+    assert.equal(mealReminder.entity_title, 'Changed household dinner');
+  } finally {
+    currentScopes = null;
+  }
+
+  currentScopes = ['meals:write'];
+  try {
+    const dismissed = await call('PATCH', `/${reminderId}/dismiss`);
+    assert.equal(dismissed.status, 200, JSON.stringify(dismissed.body));
+  } finally {
+    currentScopes = null;
+  }
+});
+
+test('generic reminder writes reject Meal-change reminders owned by the decision opt-in', async () => {
+  const owner = freshUser();
+  currentUid = owner;
+  const res = await call('POST', '', {
+    entity_type: 'meal',
+    entity_id: makeMeal(owner),
+    remind_at: at(9, 0),
+  });
+  assert.equal(res.status, 400);
+  assert.match(res.body.error, /decision opt-in/i);
+});
+
 test('ein calendar-Token liest ueber /pending keine fremden Modultitel', async () => {
   const owner = freshUser();
   currentUid = owner;

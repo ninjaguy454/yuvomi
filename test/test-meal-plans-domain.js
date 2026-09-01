@@ -632,10 +632,10 @@ test('fixed chooser menu ownership rejects crafted non-chooser choices and audit
   assert.equal((await call('DELETE', `/plans/${plan.body.data.id}`)).status, 200);
 });
 
-test('a reassigned chooser authors a blank generation while released menus and selections remain history', async () => {
+test('a published menu stays live through a three-person chooser handoff and replacements preserve history', async () => {
   actor = { id: admin, role: 'admin' };
   const plan = await call('POST', '/plans', {
-    name: 'Fresh chooser confirmation',
+    name: 'Published chooser handoff',
     effective_from: '2050-01-03',
     effective_until: '2050-01-03',
     rules: [{
@@ -643,7 +643,8 @@ test('a reassigned chooser authors a blank generation while released menus and s
       meal_type: 'dinner',
       policy: 'fixed',
       fixed_user_id: sam,
-      participant_ids: [sam, jamie],
+      chooser_fallback_user_ids: [jamie],
+      participant_ids: [admin, sam, jamie],
     }],
   });
   assert.equal(plan.status, 201, JSON.stringify(plan.body));
@@ -670,129 +671,114 @@ test('a reassigned chooser authors a blank generation while released menus and s
   `).get(meal.id, sam);
   assert.equal(originalObligation.status, 'fulfilled');
 
-  // Model the transactional result of a later eligibility/fallback change.
-  // Released menu and decision rows remain intact, while the new assignee has
-  // a fresh pending obligation.
-  let replacementObligationId;
-  database.transaction(() => {
-    database.prepare(`
-      UPDATE planning_obligations SET status = 'superseded',
-        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
-    `).run(originalObligation.id);
-    database.prepare("DELETE FROM meal_participants WHERE meal_id = ? AND role = 'chooser'").run(meal.id);
-    database.prepare(`
-      INSERT INTO meal_participants (meal_id, user_id, role, status, source)
-      VALUES (?, ?, 'chooser', 'participating', 'schedule')
-    `).run(meal.id, jamie);
-    database.prepare('UPDATE meal_occurrence_assignments SET assigned_user_id = ? WHERE meal_id = ?')
-      .run(jamie, meal.id);
-    replacementObligationId = Number(database.prepare(`
-      INSERT INTO planning_obligations (
-        entity_type, entity_id, logical_key, role, responsible_user_id,
-        status, attempt, parent_obligation_id
-      ) VALUES ('meal', ?, ?, 'chooser', ?, 'pending', 2, ?)
-    `).run(meal.id, `fresh-chooser:${meal.id}:attempt:2`, jamie, originalObligation.id).lastInsertRowid);
-  })();
+  // A declines participation after publishing. B receives an editable copy,
+  // while the published generation remains live for the third participant.
+  const handoff = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'not_participating', choice_kind: 'household',
+    menu_item_ids: [], confirmed: true,
+  });
+  assert.equal(handoff.status, 200, JSON.stringify(handoff.body));
+  assert.equal(handoff.body.data.chooser_result.fallback.user_id, jamie);
+  const replacementObligation = database.prepare(`
+    SELECT * FROM planning_obligations
+     WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser'
+       AND responsible_user_id = ? AND status = 'pending'
+     ORDER BY id DESC LIMIT 1
+  `).get(meal.id, jamie);
+  assert.ok(replacementObligation);
 
   const pending = await call('GET', `/week-model?start=2050-01-03&end=2050-01-03&member_id=${jamie}`);
   assert.equal(pending.status, 200, JSON.stringify(pending.body));
   const pendingOccurrence = pending.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
-  assert.equal(pendingOccurrence.shared_choice_active, false);
-  assert.equal(pendingOccurrence.title, null);
-  assert.equal(pendingOccurrence.selection_status, 'awaiting_choice');
-  assert.deepEqual(pendingOccurrence.menu_items, []);
-  assert.deepEqual(pendingOccurrence.historical_menu_items.map((item) => item.title), ['Original casserole']);
+  assert.equal(pendingOccurrence.shared_choice_active, true);
+  assert.equal(pendingOccurrence.title, 'Original casserole');
+  assert.equal(pendingOccurrence.selection_status, 'selected');
+  assert.deepEqual(pendingOccurrence.menu_items.map((item) => item.title), ['Original casserole']);
+  assert.deepEqual(pendingOccurrence.published_menu_items.map((item) => item.title), ['Original casserole']);
+  assert.deepEqual(pendingOccurrence.draft_menu_items.map((item) => item.title), ['Original casserole']);
+  assert.notEqual(pendingOccurrence.draft_menu_items[0].id, entree.body.data.id,
+    'the incoming chooser edits a private copy rather than released menu IDs');
+  assert.equal(pendingOccurrence.published_menu_generation, 1);
+  assert.equal(pendingOccurrence.draft_menu_generation, 2);
+  assert.equal(pendingOccurrence.menu_status, 'open');
+  assert.equal(pendingOccurrence.published_menu_status, 'fulfilled');
+  assert.deepEqual(pendingOccurrence.historical_menu_items, []);
   assert.equal(pendingOccurrence.current_menu_generation, 2);
   assert.deepEqual(database.prepare(`
     SELECT generation, chooser_user_id, status FROM meal_menu_generations
      WHERE meal_id = ? ORDER BY generation
   `).all(meal.id), [
-    { generation: 1, chooser_user_id: sam, status: 'released' },
+    { generation: 1, chooser_user_id: sam, status: 'fulfilled' },
     { generation: 2, chooser_user_id: jamie, status: 'open' },
   ]);
   const historicalSamDecision = pendingOccurrence.decisions.find((decision) => (
     Number(decision.beneficiary_user_id) === sam
   ));
-  assert.equal(historicalSamDecision.choice_kind, 'pending');
-  assert.equal(historicalSamDecision.historical_choice_kind, 'household');
-  assert.equal(historicalSamDecision.is_current_choice, false);
+  assert.equal(historicalSamDecision.choice_kind, 'household');
+  assert.equal(historicalSamDecision.is_current_choice, true);
   assert.ok(database.prepare('SELECT 1 FROM meal_person_decisions WHERE id = ?').get(original.body.data.id));
 
-  actor = { id: jamie, role: 'member' };
-  const staleSelection = await call('POST', `/${meal.id}/decisions`, {
+  actor = { id: admin, role: 'admin' };
+  const sharedDuringHandoff = await call('POST', `/${meal.id}/decisions`, {
     participation: 'participating', choice_kind: 'household',
-    menu_item_ids: [entree.body.data.id], confirmed: true,
+    menu_item_ids: [], confirmed: true,
   });
-  assert.equal(staleSelection.status, 409, JSON.stringify(staleSelection.body));
-  assert.equal(staleSelection.body.code, 'MEAL_MENU_GENERATION_RELEASED');
-  assert.equal(database.prepare('SELECT status FROM planning_obligations WHERE id = ?')
-    .get(replacementObligationId).status, 'pending');
+  assert.equal(sharedDuringHandoff.status, 200, JSON.stringify(sharedDuringHandoff.body));
+  const backupDuringHandoff = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating', choice_kind: 'backup', menu_item_ids: [],
+    selected_meal_title: 'Admin soup', confirmed: true,
+  });
+  assert.equal(backupDuringHandoff.status, 200, JSON.stringify(backupDuringHandoff.body));
+  const handoffStatus = await call('GET', '/status?start=2050-01-03&end=2050-01-03');
+  const handoffStatusOccurrence = handoffStatus.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
+  assert.ok(handoffStatusOccurrence.choices.some((choice) => (
+    choice.type === 'backup' && choice.title === 'Admin soup'
+      && choice.people.some((person) => Number(person.user_id) === admin)
+  )), 'retained shared selections never mask the beneficiary\'s current Backup Meal');
 
-  const staleReplacement = await call('PUT', `/${meal.id}/menu-items`, {
+  actor = { id: jamie, role: 'member' };
+  const freshMenu = await call('PUT', `/${meal.id}/menu-items`, {
     items: [{
-      id: entree.body.data.id,
-      item_type: 'entree',
-      title: 'Original casserole',
-      position: 0,
+      id: pendingOccurrence.draft_menu_items[0].id,
+      item_type: 'entree', title: 'Fresh tacos', position: 0,
     }],
   });
-  assert.equal(staleReplacement.status, 409, JSON.stringify(staleReplacement.body));
-  assert.equal(staleReplacement.body.code, 'MEAL_MENU_GENERATION_RELEASED');
-
-  const freshEntree = await call('POST', `/${meal.id}/menu-items`, {
-    item_type: 'entree', title: 'Fresh tacos', position: 0,
-  });
-  assert.equal(freshEntree.status, 201, JSON.stringify(freshEntree.body));
-  const freshSides = [];
-  for (const [position, title] of ['Rice', 'Beans', 'Salad'].entries()) {
-    const side = await call('POST', `/${meal.id}/menu-items`, {
-      item_type: 'side', title, position,
-    });
-    assert.equal(side.status, 201, JSON.stringify(side.body));
-    freshSides.push(side.body.data);
-  }
-  const tooManySides = await call('POST', `/${meal.id}/menu-items`, {
-    item_type: 'side', title: 'Chips', position: 3,
-  });
-  assert.equal(tooManySides.status, 409, JSON.stringify(tooManySides.body));
-  assert.equal(tooManySides.body.code, 'MEAL_SIDE_LIMIT_EXCEEDED');
-  assert.notEqual(freshEntree.body.data.storage_position, entree.body.data.storage_position,
-    'released physical positions cannot collide with the fresh generation');
+  assert.equal(freshMenu.status, 200, JSON.stringify(freshMenu.body));
+  const freshEntree = freshMenu.body.data.find((item) => item.item_type === 'entree');
+  assert.ok(freshEntree);
+  assert.notEqual(freshEntree.storage_position, entree.body.data.storage_position,
+    'published physical positions cannot collide with the replacement draft');
 
   const draft = await call('GET', `/week-model?start=2050-01-03&end=2050-01-03&member_id=${jamie}`);
   const draftOccurrence = draft.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
-  assert.equal(draftOccurrence.title, null);
-  assert.equal(draftOccurrence.selection_status, 'awaiting_choice');
-  assert.equal(draftOccurrence.shared_choice_active, false);
-  assert.deepEqual(
-    draftOccurrence.menu_items.map((item) => item.title),
-    ['Fresh tacos', 'Rice', 'Beans', 'Salad'],
-    'the current chooser can select the unconfirmed current-generation draft',
-  );
-  assert.deepEqual(draftOccurrence.draft_menu_items.map((item) => item.title),
-    ['Fresh tacos', 'Rice', 'Beans', 'Salad']);
-  assert.deepEqual(draftOccurrence.historical_menu_items.map((item) => item.title), ['Original casserole']);
+  assert.equal(draftOccurrence.title, 'Original casserole');
+  assert.equal(draftOccurrence.selection_status, 'selected');
+  assert.equal(draftOccurrence.shared_choice_active, true);
+  assert.deepEqual(draftOccurrence.menu_items.map((item) => item.title), ['Original casserole']);
+  assert.deepEqual(draftOccurrence.draft_menu_items.map((item) => item.title), ['Fresh tacos']);
 
+  actor = { id: sam, role: 'member' };
   const bystander = await call('GET', `/week-model?start=2050-01-03&end=2050-01-03&member_id=${sam}`);
   const bystanderOccurrence = bystander.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
-  assert.equal(bystanderOccurrence.title, null);
-  assert.deepEqual(bystanderOccurrence.menu_items, [],
-    'nonchoosers never see an unconfirmed draft as the household choice');
+  assert.equal(bystanderOccurrence.title, 'Original casserole');
+  assert.deepEqual(bystanderOccurrence.menu_items.map((item) => item.title), ['Original casserole'],
+    'nonchoosers keep the published menu while the incoming chooser drafts');
+  assert.equal(bystanderOccurrence.controls.choose_backup, true,
+    'the former chooser returns to ordinary participant controls after handoff');
 
+  actor = { id: jamie, role: 'member' };
   const fresh = await call('POST', `/${meal.id}/decisions`, {
     participation: 'participating', choice_kind: 'household',
-    menu_item_ids: [freshEntree.body.data.id, ...freshSides.map((item) => item.id)],
-    confirmed: true,
+    menu_item_ids: [freshEntree.id], confirmed: true,
   });
   assert.equal(fresh.status, 200, JSON.stringify(fresh.body));
   assert.equal(database.prepare('SELECT status FROM planning_obligations WHERE id = ?')
-    .get(replacementObligationId).status, 'fulfilled');
+    .get(replacementObligation.id).status, 'fulfilled');
   const restored = await call('GET', `/week-model?start=2050-01-03&end=2050-01-03&member_id=${jamie}`);
   const restoredOccurrence = restored.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
   assert.equal(restoredOccurrence.shared_choice_active, true);
   assert.equal(restoredOccurrence.title, 'Fresh tacos');
-  assert.deepEqual(restoredOccurrence.menu_items.map((item) => item.title),
-    ['Fresh tacos', 'Rice', 'Beans', 'Salad']);
+  assert.deepEqual(restoredOccurrence.menu_items.map((item) => item.title), ['Fresh tacos']);
   assert.deepEqual(restoredOccurrence.historical_menu_items.map((item) => item.title), ['Original casserole']);
   assert.ok(database.prepare('SELECT 1 FROM meal_menu_items WHERE id = ? AND menu_generation = 1')
     .get(entree.body.data.id), 'released menu item ID remains durable');
@@ -803,45 +789,142 @@ test('a reassigned chooser authors a blank generation while released menus and s
   assert.ok(database.prepare('SELECT 1 FROM planning_obligations WHERE id = ?').get(originalObligation.id),
     'superseded responsibility remains durable history');
 
-  // A new obligation for the same person is still a new chooser round. One
-  // synchronization opens generation 3; retries with the same obligation are
-  // idempotent and never create generation 4.
-  let sameChooserObligationId;
-  database.transaction(() => {
-    database.prepare(`
-      UPDATE planning_obligations SET status = 'superseded',
-        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
-    `).run(replacementObligationId);
-    sameChooserObligationId = Number(database.prepare(`
-      INSERT INTO planning_obligations (
-        entity_type, entity_id, logical_key, role, responsible_user_id,
-        status, attempt, parent_obligation_id
-      ) VALUES ('meal', ?, ?, 'chooser', ?, 'pending', 3, ?)
-    `).run(
-      meal.id, `fresh-chooser:${meal.id}:same-user-attempt:3`, jamie,
-      replacementObligationId,
-    ).lastInsertRowid);
-  })();
-  for (let retry = 0; retry < 2; retry += 1) {
-    const sameChooserPending = await call(
-      'GET',
-      `/week-model?start=2050-01-03&end=2050-01-03&member_id=${jamie}`,
-    );
-    const occurrence = sameChooserPending.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
-    assert.equal(occurrence.current_menu_generation, 3);
-    assert.equal(occurrence.title, null);
-    assert.deepEqual(occurrence.menu_items, []);
-    assert.deepEqual(occurrence.historical_menu_items.map((item) => item.title),
-      ['Original casserole', 'Fresh tacos', 'Rice', 'Beans', 'Salad']);
-  }
-  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM meal_menu_generations WHERE meal_id = ?')
-    .get(meal.id).count, 3);
-  assert.equal(database.prepare(`
-    SELECT chooser_obligation_id FROM meal_menu_generations
-     WHERE meal_id = ? AND generation = 3
-  `).get(meal.id).chooser_obligation_id, sameChooserObligationId);
+  // Confirmation publishes, but it does not make the chooser's menu
+  // uneditable. Opening the editor clones a replacement while generation 2
+  // remains live; only an explicit chooser submission activates generation 3.
+  const editable = await call('GET', `/${meal.id}/menu-items`);
+  assert.equal(editable.status, 200, JSON.stringify(editable.body));
+  assert.equal(database.prepare('SELECT current_menu_generation FROM meals WHERE id = ?')
+    .get(meal.id).current_menu_generation, 3);
+  const clonedEntree = editable.body.data.find((item) => item.item_type === 'entree');
+  assert.ok(clonedEntree);
+  assert.notEqual(clonedEntree.id, freshEntree.id);
+  const revised = await call('PUT', `/${meal.id}/menu-items`, {
+    items: [{
+      id: clonedEntree.id, item_type: 'entree', position: 0,
+      title: 'Fresh tacos revised',
+    }],
+  });
+  assert.equal(revised.status, 200, JSON.stringify(revised.body));
+  const duringRevision = await call('GET', `/week-model?start=2050-01-03&end=2050-01-03&member_id=${admin}`);
+  const duringRevisionOccurrence = duringRevision.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
+  assert.deepEqual(duringRevisionOccurrence.menu_items.map((item) => item.title), ['Fresh tacos']);
+  assert.deepEqual(duringRevisionOccurrence.draft_menu_items.map((item) => item.title), ['Fresh tacos revised']);
+  const republished = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating', choice_kind: 'household',
+    menu_item_ids: [revised.body.data[0].id], confirmed: true,
+  });
+  assert.equal(republished.status, 200, JSON.stringify(republished.body));
+  const finalGenerationState = database.prepare(`
+    SELECT generation, status FROM meal_menu_generations
+     WHERE meal_id = ? ORDER BY generation
+  `).all(meal.id);
+  assert.deepEqual(finalGenerationState, [
+    { generation: 1, status: 'released' },
+    { generation: 2, status: 'released' },
+    { generation: 3, status: 'fulfilled' },
+  ]);
+
+  // The configured closeout—not chooser confirmation—is the lock boundary.
+  database.prepare(`
+    UPDATE planning_obligations SET response_deadline = '2000-01-01T00:00:00Z'
+     WHERE id = ?
+  `).run(replacementObligation.id);
+  const closed = await call('GET', `/week-model?start=2050-01-03&end=2050-01-03&member_id=${jamie}`);
+  const closedOccurrence = closed.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
+  assert.equal(closedOccurrence.menu_locked, true);
+  assert.equal(closedOccurrence.menu_closeout_at, '2000-01-01T00:00:00Z');
+  assert.equal(closedOccurrence.controls.can_edit_shared_menu, false);
+  assert.equal(closedOccurrence.controls.choose_shared_meal, false);
+  assert.equal(closedOccurrence.controls.set_participation, true,
+    'menu closeout does not erase the participant interaction surface');
+  const generationBeforeClosedEdit = database.prepare(
+    'SELECT current_menu_generation FROM meals WHERE id = ?',
+  ).get(meal.id).current_menu_generation;
+  const closedEdit = await call('GET', `/${meal.id}/menu-items`);
+  assert.equal(closedEdit.status, 409, JSON.stringify(closedEdit.body));
+  assert.equal(closedEdit.body.code, 'MEAL_MENU_CLOSED');
+  assert.equal(database.prepare('SELECT current_menu_generation FROM meals WHERE id = ?')
+    .get(meal.id).current_menu_generation, generationBeforeClosedEdit,
+    'a rejected post-closeout editor open cannot create another generation');
 
   actor = { id: admin, role: 'admin' };
+  assert.equal((await call('DELETE', `/plans/${plan.body.data.id}`)).status, 200);
+});
+
+test('a chooser handoff without an initial menu keeps participant backup controls usable', async () => {
+  actor = { id: admin, role: 'admin' };
+  const plan = await call('POST', '/plans', {
+    name: 'No initial menu handoff',
+    effective_from: '2050-01-10',
+    effective_until: '2050-01-10',
+    rules: [{
+      weekday: 0, meal_type: 'dinner', policy: 'fixed', fixed_user_id: sam,
+      chooser_fallback_user_ids: [jamie], participant_ids: [admin, sam, jamie],
+    }],
+  });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  assert.equal((await call('GET', `/week-model?start=2050-01-10&end=2050-01-10&member_id=${sam}`)).status, 200);
+  const meal = database.prepare(`
+    SELECT * FROM meals WHERE meal_plan_id = ? AND date = '2050-01-10'
+  `).get(plan.body.data.id);
+
+  actor = { id: sam, role: 'member' };
+  const declined = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'not_participating', choice_kind: 'household',
+    menu_item_ids: [], confirmed: true,
+  });
+  assert.equal(declined.status, 200, JSON.stringify(declined.body));
+  assert.equal(declined.body.data.chooser_result.fallback.user_id, jamie);
+
+  actor = { id: admin, role: 'admin' };
+  const pending = await call('GET', `/week-model?start=2050-01-10&end=2050-01-10&member_id=${admin}`);
+  const occurrence = pending.body.data.occurrences.find((row) => Number(row.id) === Number(meal.id));
+  assert.equal(occurrence.shared_choice_active, false);
+  assert.equal(occurrence.published_menu_generation, null);
+  assert.deepEqual(occurrence.menu_items, []);
+  assert.equal(occurrence.controls.choose_backup, true);
+  const prematureHousehold = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating', choice_kind: 'household',
+    menu_item_ids: [], confirmed: true,
+  });
+  assert.equal(prematureHousehold.status, 200, JSON.stringify(prematureHousehold.body));
+  assert.equal(prematureHousehold.body.data.choice_kind, 'household');
+  assert.equal(prematureHousehold.body.data.confirmed, false,
+    'a household intent stays pending until a shared menu is published');
+  const pendingIntent = await call('GET', `/week-model?start=2050-01-10&end=2050-01-10&member_id=${admin}`);
+  const pendingIntentOccurrence = pendingIntent.body.data.occurrences
+    .find((row) => Number(row.id) === Number(meal.id));
+  assert.equal(pendingIntentOccurrence.my_decision.choice_kind, 'pending');
+  assert.equal(pendingIntentOccurrence.my_decision.is_current_choice, false);
+  assert.equal(database.prepare(`
+    SELECT choice_kind FROM meal_person_decisions
+     WHERE meal_id = ? AND beneficiary_user_id = ?
+  `).get(meal.id, admin).choice_kind, 'household',
+  'the pending projection preserves the participant\'s household intent');
+  const backup = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating', choice_kind: 'backup', menu_item_ids: [],
+    selected_meal_title: 'Freezer pasta', confirmed: true,
+  });
+  assert.equal(backup.status, 200, JSON.stringify(backup.body));
+
+  actor = { id: jamie, role: 'member' };
+  const entree = await call('POST', `/${meal.id}/menu-items`, {
+    item_type: 'entree', title: 'New chooser curry', position: 0,
+  });
+  assert.equal(entree.status, 201, JSON.stringify(entree.body));
+  const published = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating', choice_kind: 'household',
+    menu_item_ids: [entree.body.data.id], confirmed: true,
+  });
+  assert.equal(published.status, 200, JSON.stringify(published.body));
+
+  actor = { id: admin, role: 'admin' };
+  const household = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating', choice_kind: 'household',
+    menu_item_ids: [], confirmed: true,
+  });
+  assert.equal(household.status, 200, JSON.stringify(household.body));
   assert.equal((await call('DELETE', `/plans/${plan.body.data.id}`)).status, 200);
 });
 
@@ -1687,9 +1770,10 @@ test('context conflicts reconcile pending materialized meals in both creation or
   const conflictedOccurrence = conflictedProjection.body.data.occurrences.find((row) => (
     Number(row.id) === Number(firstMeal.id)
   ));
-  assert.equal(conflictedOccurrence.title, null);
-  assert.deepEqual(conflictedOccurrence.menu_items, []);
-  assert.deepEqual(conflictedOccurrence.historical_menu_items.map((item) => item.title), ['Travel curry']);
+  assert.equal(conflictedOccurrence.title, 'Travel curry');
+  assert.deepEqual(conflictedOccurrence.menu_items.map((item) => item.title), ['Travel curry']);
+  assert.deepEqual(conflictedOccurrence.published_menu_items.map((item) => item.title), ['Travel curry']);
+  assert.deepEqual(conflictedOccurrence.historical_menu_items, []);
 
   const keepFirst = Number(lateConflict.first_context_id) === Number(first.id)
     ? 'keep_first'
@@ -1817,16 +1901,76 @@ test('context conflicts reconcile pending materialized meals in both creation or
 
 test('grocery settings are independently editable while the legacy settings remain synchronized', async () => {
   actor = { id: admin, role: 'admin' };
+  const empty = await call('GET', '/grocery-settings');
+  assert.equal(empty.status, 200, JSON.stringify(empty.body));
+  assert.equal(empty.body.data.default_shopping_list_id, null);
+  assert.equal(empty.body.data.shopping_list_action, 'create');
+
   const saved = await call('PUT', '/grocery-settings', {
     enabled: true,
+    new_shopping_list_name: 'Weekly groceries',
     auto_create_grocery_draft: false,
     auto_finalize_grocery: true,
     grocery_lead_minutes: 2880,
     aggregation_mode: 'recipe',
+    grouping_mode: 'category',
+    timing_mode: 'weekly',
+    draft_weekday: 5,
+    draft_time: '09:00',
+    finalization_weekday: 6,
+    finalization_time: '09:00',
   });
   assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.equal(saved.body.data.default_shopping_list.name, 'Weekly groceries');
+  assert.equal(saved.body.data.shopping_list_action, 'use_existing');
   assert.equal(saved.body.data.grocery_lead_minutes, 2880);
   assert.equal(saved.body.data.aggregation_mode, 'recipe');
+  assert.equal(saved.body.data.grouping_mode, 'category');
+  assert.equal(saved.body.data.weekly_timing.target, 'following_week');
+  assert.equal(saved.body.data.weekly_timing.automatic_execution, false);
+  assert.equal(saved.body.data.finalization_weekday, 6);
+
+  database.prepare(`INSERT INTO shopping_lists (name, created_by) VALUES ('Alpha groceries', ?)`).run(admin);
+  const alphabeticalDefault = await call('PUT', '/grocery-settings', {
+    default_shopping_list_id: null,
+  });
+  assert.equal(alphabeticalDefault.status, 200, JSON.stringify(alphabeticalDefault.body));
+  assert.equal(alphabeticalDefault.body.data.default_shopping_list.name, 'Alpha groceries');
+  assert.deepEqual(
+    alphabeticalDefault.body.data.shopping_lists.map((list) => list.name),
+    ['Alpha groceries', 'Weekly groceries'],
+  );
+
+  const invalidOrder = await call('PUT', '/grocery-settings', {
+    draft_weekday: 6,
+    draft_time: '10:00',
+    finalization_weekday: 6,
+    finalization_time: '09:00',
+  });
+  assert.equal(invalidOrder.status, 409, JSON.stringify(invalidOrder.body));
+  assert.equal(invalidOrder.body.code, 'GROCERY_WEEKLY_TIMING_ORDER');
+
+  const defaults = await call('GET', '/plan-defaults');
+  assert.equal(defaults.status, 200, JSON.stringify(defaults.body));
+  assert.equal(defaults.body.data.grocery_settings.grouping_mode, 'category');
+  assert.equal(defaults.body.data.grocery_settings.default_shopping_list.name, 'Alpha groceries');
+
+  const invalidCombined = await call('PUT', '/plan-defaults', {
+    default_cook_strategy: 'none',
+    grocery_settings: {
+      draft_weekday: 6,
+      draft_time: '10:00',
+      finalization_weekday: 6,
+      finalization_time: '09:00',
+    },
+  });
+  assert.equal(invalidCombined.status, 409, JSON.stringify(invalidCombined.body));
+  assert.equal(
+    (await call('GET', '/plan-defaults')).body.data.default_cook_strategy,
+    'round_robin',
+    'the combined defaults write is atomic when grocery timing is invalid',
+  );
+
   const legacy = database.prepare('SELECT * FROM meal_execution_settings WHERE id = 1').get();
   assert.equal(legacy.auto_create_grocery_draft, 0);
   assert.equal(legacy.auto_finalize_grocery, 1);
@@ -1842,6 +1986,71 @@ test('grocery settings are independently editable while the legacy settings rema
   assert.equal(separate.auto_finalize_grocery, 0);
   assert.equal(separate.grocery_lead_minutes, 2880, 'legacy writes preserve new grocery-only fields');
   assert.equal(separate.aggregation_mode, 'recipe');
+  assert.equal(separate.grouping_mode, 'category');
+  assert.equal(separate.finalization_weekday, 6);
+  assert.equal(separate.finalization_time, '09:00');
+});
+
+test('new Meal rules default Cook to the presence-aware rotation and keep Supervisor opt-in', async () => {
+  actor = { id: admin, role: 'admin' };
+  const defaults = await call('PUT', '/plan-defaults', {
+    default_cook_strategy: 'round_robin',
+    default_supervisor_strategy: 'none',
+  });
+  assert.equal(defaults.status, 200, JSON.stringify(defaults.body));
+  assert.equal(defaults.body.data.default_cook_strategy, 'round_robin');
+  assert.equal(defaults.body.data.default_supervisor_strategy, 'none');
+
+  const created = await call('POST', '/plans', {
+    name: 'Safe role defaults',
+    effective_from: '2060-01-05',
+    effective_until: '2060-01-05',
+    rules: [{
+      weekday: 0,
+      meal_type: 'dinner',
+      policy: 'fixed',
+      fixed_user_id: admin,
+      participant_ids: [admin, sam],
+    }],
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const planId = Number(created.body.data.id);
+  assert.equal(created.body.data.rules[0].cook_strategy, 'round_robin');
+  assert.equal(created.body.data.rules[0].supervisor_strategy, 'none');
+  assert.equal(created.body.data.rules[0].generate_supervision, false);
+
+  const materialized = await call('GET', '/week-model?start=2060-01-05&end=2060-01-05');
+  assert.equal(materialized.status, 200, JSON.stringify(materialized.body));
+  const roleAssignments = database.prepare(`
+    SELECT role.role, role.strategy, role.assigned_user_id
+      FROM meal_occurrence_role_assignments role
+      JOIN meal_occurrence_assignments occurrence
+        ON occurrence.id = role.occurrence_assignment_id
+      JOIN meals meal ON meal.id = occurrence.meal_id
+     WHERE meal.meal_plan_id = ?
+     ORDER BY role.role
+  `).all(planId);
+  const cook = roleAssignments.find((row) => row.role === 'cook');
+  const supervisor = roleAssignments.find((row) => row.role === 'supervisor');
+  assert.equal(cook.strategy, 'round_robin');
+  assert.ok([admin, sam].includes(Number(cook.assigned_user_id)));
+  assert.equal(supervisor.strategy, 'none');
+  assert.equal(supervisor.assigned_user_id, null);
+
+  const explicitNone = await call('POST', '/plans', {
+    name: 'Explicitly unassigned cook',
+    status: 'archived',
+    rules: [{
+      weekday: 1,
+      meal_type: 'dinner',
+      policy: 'fixed',
+      fixed_user_id: admin,
+      participant_ids: [admin],
+      cook_strategy: 'none',
+    }],
+  });
+  assert.equal(explicitNone.status, 201, JSON.stringify(explicitNone.body));
+  assert.equal(explicitNone.body.data.rules[0].cook_strategy, 'none');
 });
 
 test('two same-date named Meal Plans decline and time out into distinct fallback obligations', async () => {
@@ -2310,4 +2519,158 @@ test('ordered chooser fallbacks preserve draft history, snapshot terminal defaul
     chooser_terminal_user_id: null,
     chooser_round_robin_user_ids: [],
   });
+});
+
+test('a nonparticipant can opt into one existing-pipeline reminder per actual published menu change', async () => {
+  actor = { id: admin, role: 'admin' };
+  const plan = await call('POST', '/plans', {
+    name: 'Menu change notification proof',
+    effective_from: '2070-01-06',
+    effective_until: '2070-01-06',
+    rules: [{
+      weekday: 0,
+      meal_type: 'dinner',
+      policy: 'fixed',
+      fixed_user_id: admin,
+      participant_ids: [admin, sam, jamie],
+    }],
+  });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  const materialized = await call(
+    'GET', `/week-model?start=2070-01-06&end=2070-01-06&member_id=${admin}`,
+  );
+  assert.equal(materialized.status, 200, JSON.stringify(materialized.body));
+  const meal = database.prepare(`
+    SELECT * FROM meals WHERE meal_plan_id = ? AND date = '2070-01-06'
+  `).get(plan.body.data.id);
+  assert.ok(meal);
+
+  actor = { id: sam, role: 'member' };
+  const optedIn = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'not_participating',
+    choice_kind: 'household',
+    menu_item_ids: [],
+    confirmed: true,
+    notify_on_menu_change: true,
+  });
+  assert.equal(optedIn.status, 200, JSON.stringify(optedIn.body));
+  assert.equal(optedIn.body.data.notify_on_menu_change, true);
+  assert.equal(database.prepare(`
+    SELECT notify_on_menu_change FROM meal_person_decisions
+     WHERE meal_id = ? AND beneficiary_user_id = ?
+  `).get(meal.id, sam).notify_on_menu_change, 1);
+
+  const projected = await call(
+    'GET', `/week-model?start=2070-01-06&end=2070-01-06&member_id=${sam}`,
+  );
+  const projectedMeal = projected.body.data.occurrences
+    .find((occurrence) => Number(occurrence.id) === Number(meal.id));
+  assert.equal(projectedMeal.my_decision.notify_on_menu_change, true);
+
+  actor = { id: jamie, role: 'member' };
+  const stayedOut = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'not_participating',
+    choice_kind: 'household',
+    menu_item_ids: [],
+    confirmed: true,
+    notify_on_menu_change: false,
+  });
+  assert.equal(stayedOut.status, 200, JSON.stringify(stayedOut.body));
+
+  actor = { id: admin, role: 'admin' };
+  const firstEntree = await call('POST', `/${meal.id}/menu-items`, {
+    item_type: 'entree', title: 'First published menu', position: 0,
+  });
+  assert.equal(firstEntree.status, 201, JSON.stringify(firstEntree.body));
+  const firstPublish = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating',
+    choice_kind: 'household',
+    menu_item_ids: [firstEntree.body.data.id],
+    confirmed: true,
+  });
+  assert.equal(firstPublish.status, 200, JSON.stringify(firstPublish.body));
+  let reminders = database.prepare(`
+    SELECT * FROM reminders WHERE entity_type = 'meal' AND entity_id = ? ORDER BY id
+  `).all(meal.id);
+  assert.equal(reminders.length, 1);
+  assert.equal(Number(reminders[0].created_by), sam,
+    'only the opted-in nonparticipant is the reminder beneficiary');
+  const coalescedReminderId = Number(reminders[0].id);
+
+  const identicalRetry = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating',
+    choice_kind: 'household',
+    menu_item_ids: [firstEntree.body.data.id],
+    confirmed: true,
+  });
+  assert.equal(identicalRetry.status, 200, JSON.stringify(identicalRetry.body));
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS n FROM reminders WHERE entity_type = 'meal' AND entity_id = ?
+  `).get(meal.id).n, 1, 'an identical publication is not another Meal change');
+
+  const secondDraft = await call('GET', `/${meal.id}/menu-items`);
+  assert.equal(secondDraft.status, 200, JSON.stringify(secondDraft.body));
+  const secondEntree = secondDraft.body.data.find((item) => item.item_type === 'entree');
+  const changedOnce = await call('PUT', `/${meal.id}/menu-items`, {
+    items: [{
+      id: secondEntree.id,
+      item_type: 'entree',
+      position: 0,
+      title: 'Second published menu',
+    }],
+  });
+  assert.equal(changedOnce.status, 200, JSON.stringify(changedOnce.body));
+  const secondPublish = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating',
+    choice_kind: 'household',
+    menu_item_ids: [changedOnce.body.data[0].id],
+    confirmed: true,
+  });
+  assert.equal(secondPublish.status, 200, JSON.stringify(secondPublish.body));
+  reminders = database.prepare(`
+    SELECT * FROM reminders WHERE entity_type = 'meal' AND entity_id = ? ORDER BY id
+  `).all(meal.id);
+  assert.equal(reminders.length, 1, 'changes coalesce while the reminder is still undelivered');
+  assert.equal(Number(reminders[0].id), coalescedReminderId);
+
+  database.prepare(`
+    UPDATE reminders SET pushed_at = '2070-01-01T00:00:00Z' WHERE id = ?
+  `).run(coalescedReminderId);
+  const thirdDraft = await call('GET', `/${meal.id}/menu-items`);
+  assert.equal(thirdDraft.status, 200, JSON.stringify(thirdDraft.body));
+  const thirdEntree = thirdDraft.body.data.find((item) => item.item_type === 'entree');
+  const changedAgain = await call('PUT', `/${meal.id}/menu-items`, {
+    items: [{
+      id: thirdEntree.id,
+      item_type: 'entree',
+      position: 0,
+      title: 'Third published menu',
+    }],
+  });
+  assert.equal(changedAgain.status, 200, JSON.stringify(changedAgain.body));
+  const thirdPublish = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating',
+    choice_kind: 'household',
+    menu_item_ids: [changedAgain.body.data[0].id],
+    confirmed: true,
+  });
+  assert.equal(thirdPublish.status, 200, JSON.stringify(thirdPublish.body));
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS n FROM reminders WHERE entity_type = 'meal' AND entity_id = ?
+  `).get(meal.id).n, 2, 'a later change may notify again after the previous reminder delivered');
+
+  actor = { id: sam, role: 'member' };
+  const rejoined = await call('POST', `/${meal.id}/decisions`, {
+    participation: 'participating',
+    choice_kind: 'household',
+    menu_item_ids: [],
+    confirmed: true,
+    notify_on_menu_change: true,
+  });
+  assert.equal(rejoined.status, 200, JSON.stringify(rejoined.body));
+  assert.equal(rejoined.body.data.notify_on_menu_change, false,
+    'the opt-in cannot remain active after the person rejoins');
+
+  actor = { id: admin, role: 'admin' };
+  assert.equal((await call('DELETE', `/plans/${plan.body.data.id}`)).status, 200);
 });

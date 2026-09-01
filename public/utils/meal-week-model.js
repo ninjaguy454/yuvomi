@@ -244,6 +244,15 @@ export function normalizeMealOccurrence(raw = {}, index = 0) {
   const context = raw.context || raw.planning_context || {};
   const plan = raw.plan || raw.meal_plan || {};
   const menu = asArray(first(raw.choices, raw.menu_items, meal.menu_items, raw.options)).map(normalizeMenuItem);
+  const publishedMenuSource = first(raw.published_menu_items, raw.publishedMenuItems);
+  const draftMenuSource = first(raw.draft_menu_items, raw.draftMenuItems);
+  const historicalMenuSource = first(raw.historical_menu_items, raw.historicalMenuItems);
+  const publishedMenu = publishedMenuSource == null
+    ? null : asArray(publishedMenuSource).map(normalizeMenuItem);
+  const draftMenu = draftMenuSource == null
+    ? null : asArray(draftMenuSource).map(normalizeMenuItem);
+  const historicalMenu = historicalMenuSource == null
+    ? null : asArray(historicalMenuSource).map(normalizeMenuItem);
   const decisions = asArray(first(raw.decisions, raw.person_decisions)).map(normalizeDecision);
   if (raw.my_decision && !decisions.some((decision) =>
     Number(decision.id) === Number(raw.my_decision.id))) {
@@ -305,6 +314,9 @@ export function normalizeMealOccurrence(raw = {}, index = 0) {
     supervisors: supervisors.filter(Boolean),
     decisions,
     menu_items: menu.sort((a, b) => a.position - b.position),
+    published_menu_items: publishedMenu?.sort((a, b) => a.position - b.position) ?? null,
+    draft_menu_items: draftMenu?.sort((a, b) => a.position - b.position) ?? null,
+    historical_menu_items: historicalMenu?.sort((a, b) => a.position - b.position) ?? null,
     applicable: first(raw.applicable, true) !== false,
     unavailable_reason: first(raw.unavailable_reason, raw.availability?.reason, null),
     pending_people: asArray(first(raw.pending_people, raw.missing_responders)).map(normalizedPerson),
@@ -387,6 +399,7 @@ export function mealDecisionPayload({
   selectedRecipeId = null,
   notes,
   deviceKey = null,
+  notifyOnMenuChange = false,
 }) {
   const payload = {
     beneficiary_user_id: numberOrNull(memberId),
@@ -396,6 +409,7 @@ export function mealDecisionPayload({
     choice: String(choice || 'assigned'),
     menu_item_ids: asArray(menuItemIds).map(numberOrNull).filter((id) => id !== null),
     notes: String(notes || '').trim(),
+    notify_on_menu_change: Boolean(notifyOnMenuChange),
   };
   if (['personal', 'restaurant', 'takeout', 'backup'].includes(payload.choice)) {
     payload.selected_meal_title = selectedMealTitle == null ? null : String(selectedMealTitle).trim();

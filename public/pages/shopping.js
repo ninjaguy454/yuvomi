@@ -1614,9 +1614,15 @@ function openMealPlanImport(container) {
           ? t('shopping.groceryDraftPreview', { count: items.length, status: run.status })
           : t('shopping.importMealsEmpty');
         draftEl.replaceChildren();
+        let previousGroup = null;
         draftEl.insertAdjacentHTML('beforeend', items.map((item) => {
           const meals = [...new Set((item.sources || []).map((source) => source.meal_title_snapshot).filter(Boolean))];
-          return `<article class="shopping-grocery-draft__item"><span><strong>${esc(item.name)}</strong>${item.quantity ? `<small>${esc(item.quantity)}</small>` : ''}</span><small>${esc(meals.join(', '))}</small></article>`;
+          const group = run.grouping_mode !== 'ingredient' && item.group_label
+            ? String(item.group_label) : null;
+          const heading = group && group !== previousGroup
+            ? `<h4 class="shopping-grocery-draft__group">${esc(group)}</h4>` : '';
+          previousGroup = group;
+          return `${heading}<article class="shopping-grocery-draft__item"><span><strong>${esc(item.name)}</strong>${item.quantity ? `<small>${esc(item.quantity)}</small>` : ''}</span><small>${esc(meals.join(', '))}</small></article>`;
         }).join(''));
         submitBtn.disabled = !items.length || !['draft', 'finalized'].includes(run?.status);
         submitBtn.textContent = run?.status === 'finalized' ? t('shopping.addFinalizedToShopping') : t('shopping.finalizeAndAdd');

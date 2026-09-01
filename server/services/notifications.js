@@ -97,6 +97,7 @@ const REMINDER_ORIGINS = {
   inventory_item:         { titleKey: 'nav.inventory',          url: '/inventory' },
   inventory_tracked_date: { titleKey: 'nav.inventory',          url: '/inventory' },
   pantry_item:            { titleKey: 'nav.pantry',             url: '/pantry' },
+  meal:                   { titleKey: 'nav.meals',              url: '/meals' },
 };
 
 /**
@@ -313,6 +314,7 @@ export async function processDueNotifications({
           WHERE d.id = r.entity_id
         )
         WHEN 'pantry_item' THEN (SELECT name FROM pantry_items WHERE id = r.entity_id)
+        WHEN 'meal' THEN (SELECT title FROM meals WHERE id = r.entity_id)
       END AS entity_title,
       CASE WHEN r.entity_type = 'inventory_item'
         THEN (SELECT purchase_date FROM inventory_items WHERE id = r.entity_id) END AS inv_purchase_date,

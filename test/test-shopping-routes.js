@@ -98,6 +98,15 @@ test('GET /: liefert Listen mit item_total/item_checked-Zählern', async () => {
   assert.equal(found.item_checked, 1);
 });
 
+test('GET /: orders Shopping lists alphabetically for Meal Plan default selection', async () => {
+  await newList('Zulu groceries');
+  await newList('alpha groceries');
+  const r = await call('GET', '/');
+  assert.equal(r.status, 200);
+  const names = r.body.data.map((list) => list.name);
+  assert.ok(names.indexOf('alpha groceries') < names.indexOf('Zulu groceries'));
+});
+
 test('PUT /:listId: leerer Name → 400', async () => {
   const list = await newList();
   const r = await call('PUT', `/${list}`, { name: '' });

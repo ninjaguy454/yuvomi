@@ -283,7 +283,7 @@ test('migration 10018 preserves released menu IDs, selection/event FKs, and is r
   }
 });
 
-test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10021 exactly once', () => {
+test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10023 exactly once', () => {
   // Keep the disposable proof beside the worktree. On managed Windows hosts
   // the OS temp directory can permit creation but reject recursive cleanup
   // from a child test process, leaving an otherwise successful proof red.
@@ -621,15 +621,17 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
     assert.match(firstLog, /Migration 10019 applied:/);
     assert.match(firstLog, /Migration 10020 applied:/);
     assert.match(firstLog, /Migration 10021 applied:/);
+    assert.match(firstLog, /Migration 10022 applied:/);
+    assert.match(firstLog, /Migration 10023 applied:/);
     assert.doesNotMatch(firstLog, /Migration 100(?:0\d|1[0-4]) applied:/, 'released fork migrations must not replay');
 
     const afterFirst = new Database(databasePath, { readonly: true, fileMustExist: true });
     const firstHistory = afterFirst.prepare(`
       SELECT version, description, applied_at FROM schema_migrations ORDER BY version
     `).all();
-    assert.equal(firstHistory.length, 191, 'only migrations 168, 169 and 10015-10021 are added');
+    assert.equal(firstHistory.length, 193, 'only migrations 168, 169 and 10015-10023 are added');
     assert.deepEqual(
-      firstHistory.filter((row) => ![168, 169, 10015, 10016, 10017, 10018, 10019, 10020, 10021].includes(row.version)),
+      firstHistory.filter((row) => ![168, 169, 10015, 10016, 10017, 10018, 10019, 10020, 10021, 10022, 10023].includes(row.version)),
       originalHistory,
       'all released core/fork migration records and timestamps remain byte-for-byte logical matches',
     );
@@ -651,6 +653,10 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
       'Meal portions for canonical Add/Edit menu options');
     assert.equal(firstHistory.find((row) => row.version === 10021)?.description,
       'Places and Pantry: default Home plus product and preferred-store identity');
+    assert.equal(firstHistory.find((row) => row.version === 10022)?.description,
+      'Meal defaults: weekly grocery cutoffs, department grouping and safe role assignment');
+    assert.equal(firstHistory.find((row) => row.version === 10023)?.description,
+      'Meal menu-change opt-ins through the existing reminder pipeline');
     assert.equal(afterFirst.prepare('SELECT onboarding_version FROM users WHERE id = ?').get(userId).onboarding_version, 1);
     assert.equal(afterFirst.prepare('SELECT assigned_from FROM reminders WHERE entity_type = ? AND entity_id = ?')
       .get('event', eventId).assigned_from, null);
@@ -658,11 +664,14 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
     assert.equal(afterFirst.prepare('SELECT COUNT(*) AS n FROM users').get().n, 2);
     assert.equal(afterFirst.prepare('SELECT COUNT(*) AS n FROM calendar_events').get().n, 1);
     assert.equal(afterFirst.prepare('SELECT COUNT(*) AS n FROM reminders').get().n, 1);
-    assert.equal(afterFirst.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 10021,
+    assert.equal(afterFirst.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 10023,
       'fork namespace remains the numeric maximum; direct 168/169 row checks are authoritative');
     assert.ok(afterFirst.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meal_plans'").get());
     assert.ok(afterFirst.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'planning_contexts'").get());
     assert.ok(afterFirst.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meal_person_decision_events'").get());
+    assert.ok(afterFirst.pragma('table_info(meal_person_decisions)')
+      .some((column) => column.name === 'notify_on_menu_change'));
+    assert.ok(afterFirst.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'idx_reminders_meal_pending'").get());
     assert.ok(afterFirst.pragma('table_info(meal_plan_rules)').some((column) => column.name === 'rule_key'));
     assert.ok(afterFirst.pragma('table_info(meal_plan_rules)').some((column) => column.name === 'retired_at'));
     const ruleColumns = new Set(afterFirst.pragma('table_info(meal_plan_rules)').map((column) => column.name));
@@ -742,7 +751,7 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
     assert.deepEqual(
       afterLegacyState,
       originalFixtureState,
-      '10015-10021 preserve every pre-existing Kitchen, travel, planning, grocery and execution value',
+      '10015-10023 preserve every pre-existing Kitchen, travel, planning, grocery and execution value',
     );
     assert.equal(afterFirst.prepare(`
       SELECT COUNT(*) AS n FROM places WHERE type = 'home' AND active = 1
@@ -992,6 +1001,25 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
       updated_by: userId,
       updated_at: '2031-12-03T08:14:00Z',
     });
+    assert.deepEqual(afterFirst.prepare(`
+      SELECT timing_mode, draft_weekday, draft_time,
+             finalization_weekday, finalization_time, grouping_mode
+        FROM meal_grocery_settings WHERE id = 1
+    `).get(), {
+      timing_mode: 'weekly',
+      draft_weekday: 5,
+      draft_time: '09:00',
+      finalization_weekday: 6,
+      finalization_time: '09:00',
+      grouping_mode: 'ingredient',
+    });
+    assert.deepEqual(afterFirst.prepare(`
+      SELECT default_cook_strategy, default_supervisor_strategy
+        FROM meal_plan_default_settings WHERE id = 1
+    `).get(), {
+      default_cook_strategy: 'round_robin',
+      default_supervisor_strategy: 'none',
+    });
     assert.equal(afterFirst.prepare('SELECT event_kind FROM calendar_events WHERE id = ?').get(eventId).event_kind, 'general');
     assert.deepEqual(afterFirst.prepare(`
       SELECT planning_context_id, calendar_event_id FROM trip_plans WHERE id = ?
@@ -1050,5 +1078,33 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
       // or error code because those can signal a real resource leak.
       if (!(process.platform === 'win32' && err?.code === 'EPERM')) throw err;
     }
+  }
+});
+
+test('migration 10022 preserves an existing Meal or Recipe grocery grouping preference', () => {
+  const database = new Database(':memory:');
+  try {
+    database.exec(`
+      CREATE TABLE schema_migrations (
+        version INTEGER PRIMARY KEY,
+        description TEXT NOT NULL,
+        applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+      CREATE TABLE meal_grocery_settings (
+        id INTEGER PRIMARY KEY,
+        aggregation_mode TEXT NOT NULL
+      );
+      INSERT INTO meal_grocery_settings (id, aggregation_mode) VALUES (1, 'recipe');
+      CREATE TABLE meal_plan_default_settings (id INTEGER PRIMARY KEY);
+      INSERT INTO meal_plan_default_settings (id) VALUES (1);
+    `);
+    const migration = FORK_MIGRATIONS.find((candidate) => candidate.version === 10022);
+    assert.ok(migration);
+    applyMigration(database, migration);
+    assert.equal(database.prepare(`
+      SELECT grouping_mode FROM meal_grocery_settings WHERE id = 1
+    `).get().grouping_mode, 'recipe');
+  } finally {
+    database.close();
   }
 });

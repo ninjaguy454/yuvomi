@@ -8050,20 +8050,29 @@ test('Meal Plan editor groups reusable weekdays and exposes the four guided rule
 
 test('Meal choice surfaces keep shared chooser, Backup Meal, and Personal Choice semantics separate', () => {
   const mealsPage = read('../public/pages/meals.js');
+  const mealsCss = read('../public/styles/meals.css');
 
   assert.match(mealsPage, /const personalPolicy = policy === 'personal_choice'/);
   assert.match(mealsPage, /const chooserMode = !personalPolicy && selectedMemberIsOccurrenceChooser\(occurrence\)/);
   assert.match(mealsPage, /const allowBackup = !personalPolicy && !chooserMode/);
   assert.match(mealsPage, /data-choice-surface="\$\{personalPolicy \? 'personal' : chooserMode \? 'chooser' : 'backup'\}"/);
-  assert.match(mealsPage, /chooserMode \? occurrence\.menu_items\.filter\(\(item\) => item\.kind === 'entree'\) : \[\]/);
+  assert.match(mealsPage, /const entreeItems = chooserMode \? editableMenuItems\(occurrence\)\.filter\(\(item\) => item\.kind === 'entree'\) : \[\]/);
+  assert.match(mealsPage, /if \(Array\.isArray\(draft\)\) return draft/,
+    'an explicit empty incoming-chooser draft must not reuse released published menu IDs');
+  assert.match(mealsPage, /renderPublishedHouseholdMenu\(occurrence\)/,
+    'participants must see the published household menu while chooser work remains separate');
   assert.match(mealsPage, /name="meal_choice" value="backup"/);
-  assert.match(mealsPage, /data-backup-recipe/);
   assert.match(mealsPage, /name="backup_meal_title"/);
+  assert.match(mealsPage, /name="backup_meal_title" list="\$\{recipeListId\}"/,
+    'Backup Meal is one searchable select-or-create text control');
+  assert.match(mealsPage, /const backupRecipe = state\.recipes\.find\(\(recipe\) => recipe\.title\.localeCompare/);
   assert.match(mealsPage, /const backupSelected = decision\?\.choice_kind === 'backup' && decision\?\.is_current_choice !== false/);
   assert.match(mealsPage, /const backupMealTitle = backupSelected \? \(decision\?\.selected_meal_title \|\| ''\) : ''/);
   assert.match(mealsPage, /choice:[\s\S]*backup \? 'backup' : 'assigned'/);
   assert.match(mealsPage, /selectedMealTitle:[\s\S]*participating && backup \? backupMealTitle : null/);
   assert.match(mealsPage, /selectedRecipeId:[\s\S]*participating && backup \? backupRecipeId : null/);
+  assert.match(mealsCss, /\.meal-notify-menu-change\[hidden\]\s*\{[^}]*display:\s*none/,
+    'the menu-change opt-in stays hidden until the person chooses not to participate');
   assert.doesNotMatch(mealsPage, /const legacyBackupItems = items\.filter/);
   assert.doesNotMatch(mealsPage, /desiredItems\.push\(\.\.\.legacyBackupItems\.map/);
   assert.match(mealsPage, /items = items\.filter\(\(item\) => \(item\.item_type \|\| item\.kind\) !== 'backup'\)/);
@@ -8119,9 +8128,8 @@ test('Meal cards, ingredient scale, participant roles, and automation use the re
   assert.match(mealsPage, /mealEditorRolePayload\(\{/);
   assert.match(mealsPage, /await api\.put\(`\/meals\/\$\{meal\.id\}`, \{[\s\S]*ingredients, menu_items,[\s\S]*portions_mode, portions/);
 
-  const automation = mealsPage.match(/function openMealAutomationModal\(\)[\s\S]*?\n}\n\nfunction openMealScheduleModal/)?.[0] || '';
-  assert.match(automation, /await openMealPlanManager\(\)/);
-  assert.doesNotMatch(automation, /openMealScheduleModal\(\);/);
+  assert.doesNotMatch(mealsPage, /function openMealAutomationModal\(/,
+    'legacy duplicate automation settings must stay consolidated into Meal Plan Default Settings');
 });
 
 test('all locales include the guided Meal Plan and chooser audit labels', () => {

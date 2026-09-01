@@ -74,9 +74,13 @@ function makeDb({ withNotificationTables = true } = {}) {
       expires_on TEXT,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL
     );
+    CREATE TABLE meals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT
+    );
     CREATE TABLE reminders (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      entity_type TEXT NOT NULL CHECK(entity_type IN ('task','event','subscription','inventory_item','inventory_tracked_date','pantry_item')),
+      entity_type TEXT NOT NULL CHECK(entity_type IN ('task','event','subscription','inventory_item','inventory_tracked_date','pantry_item','meal')),
       entity_id INTEGER NOT NULL,
       remind_at TEXT NOT NULL,
       dismissed INTEGER NOT NULL DEFAULT 0,
@@ -509,6 +513,46 @@ test('a notification names its origin in the title, in the household language', 
     'Jede Meldung nennt ihr Herkunftsmodul im Titel, uebersetzt in die Datensprache des Haushalts.');
   // Und der Body bleibt die Sache selbst - der Titel ersetzt ihn nicht.
   assert.deepEqual(payloads.map((p) => p.body), ['Müll rausbringen', 'Zahnarzt', 'Netflix']);
+});
+
+test('Meal-change reminders reuse the existing delivery pipeline and link back to Meals', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+  store.createChannel({
+    provider: 'ntfy',
+    name: 'ntfy',
+    enabled: true,
+    config: { baseUrl: 'https://ntfy.test', topic: 'family' },
+    secrets: {},
+  });
+  db.prepare("INSERT INTO meals (id, title) VALUES (1, 'Vegetable tacos and cilantro rice')").run();
+  db.prepare("INSERT INTO reminders (id, entity_type, entity_id, remind_at, created_by) VALUES (1, 'meal', 1, ?, 1)")
+    .run('2026-06-19T09:59:00.000Z');
+  const payloads = [];
+  const providers = {
+    ntfy: {
+      id: 'ntfy',
+      send: async ({ payload }) => {
+        payloads.push(payload);
+        return { ok: true, status: 200 };
+      },
+    },
+  };
+
+  await processDueNotifications({
+    database: db,
+    channelStore: store,
+    pushService: { sendPushToUser: async () => 0 },
+    providers,
+    now: new Date('2026-06-19T10:00:00.000Z'),
+  });
+
+  assert.equal(payloads.length, 1);
+  assert.equal(payloads[0].title, 'Meals');
+  assert.equal(payloads[0].body, 'Vegetable tacos and cilantro rice');
+  assert.equal(payloads[0].url, '/meals');
 });
 
 test('subscription reminders degrade to the bare name when amount or date are missing (#581)', async () => {

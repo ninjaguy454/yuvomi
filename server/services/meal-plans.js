@@ -2,6 +2,11 @@ import { createHash, randomUUID } from 'node:crypto';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
 import { normalizeDishSelection, syncAutoPortions } from './meal-dishes.js';
+import {
+  getGrocerySettings as getIndependentGrocerySettings,
+  saveGrocerySettings as saveIndependentGrocerySettings,
+  syncGrocerySettingsFromLegacy as syncIndependentGrocerySettingsFromLegacy,
+} from './meal-grocery-settings.js';
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const TIME_RE = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
@@ -183,6 +188,18 @@ export function saveMealPlanDefaultSettings(database, body, actorId) {
     body?.chooser_round_robin_user_ids ?? current.chooser_round_robin_user_ids,
     { field: 'Eligible round-robin group', duplicateCode: 'DUPLICATE_CHOOSER_ROUND_ROBIN_MEMBER' },
   );
+  const defaultCookStrategy = String(
+    body?.default_cook_strategy ?? current.default_cook_strategy ?? 'round_robin',
+  );
+  const defaultSupervisorStrategy = String(
+    body?.default_supervisor_strategy ?? current.default_supervisor_strategy ?? 'none',
+  );
+  if (!['none', 'round_robin'].includes(defaultCookStrategy)) {
+    throw mealPlanError('Choose no default Cook or eligible round robin for the default Cook policy.');
+  }
+  if (!['none', 'round_robin'].includes(defaultSupervisorStrategy)) {
+    throw mealPlanError('Choose no default Supervisor or eligible round robin for the default Supervisor policy.');
+  }
   assertUserIds(database, [terminalUserId, ...roundRobinIds]);
   if (strategy === 'fixed' && !terminalUserId) {
     throw mealPlanError(
@@ -194,13 +211,16 @@ export function saveMealPlanDefaultSettings(database, body, actorId) {
   database.prepare(`
     UPDATE meal_plan_default_settings
        SET chooser_terminal_strategy = ?, chooser_terminal_user_id = ?,
-           chooser_round_robin_user_ids_json = ?, updated_by = ?,
+           chooser_round_robin_user_ids_json = ?, default_cook_strategy = ?,
+           default_supervisor_strategy = ?, updated_by = ?,
            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
      WHERE id = 1
   `).run(
     strategy,
     strategy === 'fixed' ? terminalUserId : null,
     JSON.stringify(roundRobinIds),
+    defaultCookStrategy,
+    defaultSupervisorStrategy,
     actorId || null,
   );
   return getMealPlanDefaultSettings(database);
@@ -221,12 +241,19 @@ function normalizeRule(database, raw, index, current = null) {
       ?? ((raw?.fallback_user_id ?? current?.fallback_user_id) ? 'fixed' : 'next_eligible'),
   );
   if (!BACKUP_STRATEGIES.has(chooserBackupStrategy)) throw mealPlanError('Choose a valid chooser backup strategy.');
+  const roleDefaults = current ? null : getMealPlanDefaultSettings(database);
   const cookStrategy = String(
-    raw?.cook_strategy ?? current?.cook_strategy ?? ((raw?.cook_user_id ?? current?.cook_user_id) ? 'fixed' : 'none'),
+    raw?.cook_strategy
+      ?? current?.cook_strategy
+      ?? ((raw?.cook_user_id ?? current?.cook_user_id)
+        ? 'fixed'
+        : (roleDefaults?.default_cook_strategy || 'round_robin')),
   );
   const supervisorStrategy = String(
     raw?.supervisor_strategy ?? current?.supervisor_strategy
-      ?? ((raw?.supervisor_user_id ?? current?.supervisor_user_id) ? 'fixed' : 'none'),
+      ?? ((raw?.supervisor_user_id ?? current?.supervisor_user_id)
+        ? 'fixed'
+        : (roleDefaults?.default_supervisor_strategy || 'none')),
   );
   if (!DELEGATION_STRATEGIES.has(cookStrategy) || !DELEGATION_STRATEGIES.has(supervisorStrategy)) {
     throw mealPlanError('Choose none, fixed, or round robin for cook and supervisor delegation.');
@@ -360,7 +387,10 @@ function normalizeRule(database, raw, index, current = null) {
     execution_assignment_strategies_json: JSON.stringify(executionAssignments),
     generate_preparation: bool(raw?.generate_preparation, true) ? 1 : 0,
     generate_cooking: bool(raw?.generate_cooking, true) ? 1 : 0,
-    generate_supervision: bool(raw?.generate_supervision, true) ? 1 : 0,
+    generate_supervision: bool(
+      raw?.generate_supervision ?? current?.generate_supervision,
+      supervisorStrategy !== 'none',
+    ) ? 1 : 0,
     generate_serving: bool(raw?.generate_serving, true) ? 1 : 0,
     generate_cleanup: bool(raw?.generate_cleanup, true) ? 1 : 0,
     preparation_duration_minutes: integer(raw?.preparation_duration_minutes ?? raw?.preparation_minutes, { fallback: 60, min: 0, max: 1440, field: 'Preparation duration' }),
@@ -1625,6 +1655,14 @@ function latestContextSuspension(database, obligationId) {
 }
 
 function reconcileContextOccurrence(database, assignment, context, actorId) {
+  // Closed planning contexts are durable history, not another opportunity to
+  // run chooser fallback. Their open requests are superseded by the context
+  // cleanup performed by reconcilePlanningContextMealOccurrences; preserving
+  // the assignment, menu generation, participants, and portions here keeps a
+  // cancelled/completed trip auditable without silently creating new work.
+  if (!['active', 'conflict', 'resolved'].includes(context.status)) {
+    return { changed: false, assignment };
+  }
   const rule = loadRuleForOccurrence(
     database,
     assignment.meal_plan_rule_id,
@@ -1851,6 +1889,89 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
 }
 
 /**
+ * Close chooser requests whose Meal can no longer be acted on.
+ *
+ * This is intentionally an audit-preserving status transition rather than a
+ * delete. It covers released Meal occurrences, cancelled/completed planning
+ * contexts, and legacy orphan rows that may predate current foreign-key and
+ * reconciliation behavior. Repeated calls are idempotent because only open
+ * requests are considered.
+ */
+export function supersedeStaleMealChooserObligations(database, {
+  contextIds = null,
+  actorId = null,
+} = {}) {
+  const ids = Array.isArray(contextIds)
+    ? [...new Set(contextIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))]
+    : null;
+  if (Array.isArray(ids) && !ids.length) return { superseded: 0, obligation_ids: [] };
+  const contextFilter = ids
+    ? `AND m.planning_context_id IN (${ids.map(() => '?').join(',')})`
+    : '';
+  const rows = database.prepare(`
+    SELECT o.id, o.status, o.entity_id AS meal_id, o.responsible_user_id,
+           m.id AS existing_meal_id, m.superseded_by_id, m.planning_context_id,
+           pc.id AS existing_context_id, pc.status AS context_status
+      FROM planning_obligations o
+      LEFT JOIN meals m ON m.id = o.entity_id AND o.entity_type = 'meal'
+      LEFT JOIN planning_contexts pc ON pc.id = m.planning_context_id
+     WHERE o.entity_type = 'meal' AND o.role = 'chooser'
+       AND o.status IN ('pending', 'accepted')
+       AND (
+         m.id IS NULL
+         OR m.superseded_by_id IS NOT NULL
+         OR (
+           m.planning_context_id IS NOT NULL
+           AND (pc.id IS NULL OR pc.status NOT IN ('active', 'conflict', 'resolved'))
+         )
+       )
+       ${contextFilter}
+     ORDER BY o.id
+  `).all(...(ids || []));
+  const update = database.prepare(`
+    UPDATE planning_obligations
+       SET status = 'superseded',
+           responded_at = COALESCE(responded_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+           response_note = COALESCE(response_note, ?),
+           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+     WHERE id = ? AND status IN ('pending', 'accepted')
+  `);
+  const closed = [];
+  for (const row of rows) {
+    let reason = 'meal_missing';
+    let note = 'This Meal no longer exists.';
+    if (row.existing_meal_id && row.superseded_by_id) {
+      reason = 'meal_superseded';
+      note = 'This Meal occurrence was superseded.';
+    } else if (row.existing_meal_id && row.planning_context_id && !row.existing_context_id) {
+      reason = 'planning_context_missing';
+      note = 'This Meal\'s planning context no longer exists.';
+    } else if (row.existing_meal_id && row.planning_context_id) {
+      reason = 'planning_context_closed';
+      note = `This Meal\'s planning context is ${row.context_status || 'closed'}.`;
+    }
+    if (!update.run(note, row.id).changes) continue;
+    occurrenceReconciliationEvent(
+      database,
+      row.id,
+      'meal_choice_request_superseded',
+      actorId,
+      {
+        reason,
+        meal_id: Number(row.meal_id) || null,
+        planning_context_id: Number(row.planning_context_id) || null,
+        planning_context_status: row.context_status || null,
+        superseded_by_meal_id: Number(row.superseded_by_id) || null,
+        previous_status: row.status,
+        responsible_user_id: Number(row.responsible_user_id) || null,
+      },
+    );
+    closed.push(Number(row.id));
+  }
+  return { superseded: closed.length, obligation_ids: closed };
+}
+
+/**
  * Rebuild schedule-owned context occurrences after context membership/conflict
  * changes. Rows and decision history are retained: roles become Away and
  * obligations are superseded with audit events. A pending request can be
@@ -1863,6 +1984,10 @@ export function reconcilePlanningContextMealOccurrences(database, {
   const ids = [...new Set(contextIds.map(Number).filter((id) => Number.isInteger(id) && id > 0))];
   if (!ids.length) return { reconciled: 0, changed: 0, assignments: [] };
   const work = () => {
+    const cleanup = supersedeStaleMealChooserObligations(database, {
+      contextIds: ids,
+      actorId,
+    });
     const rows = database.prepare(`
       SELECT oa.*, m.date, m.selection_status, m.user_modified, m.superseded_by_id,
              m.source, m.meal_plan_revision_id
@@ -1883,7 +2008,12 @@ export function reconcilePlanningContextMealOccurrences(database, {
       if (result.changed) changed += 1;
       assignments.push(result.assignment);
     }
-    return { reconciled: rows.length, changed, assignments };
+    return {
+      reconciled: rows.length,
+      changed,
+      assignments,
+      superseded_obligations: cleanup.superseded,
+    };
   };
   return database.inTransaction ? work() : database.transaction(work)();
 }
@@ -2199,7 +2329,10 @@ function canonicalMealChooser(database, mealId) {
 function chooserObligationForGeneration(database, mealId, chooserId) {
   if (!chooserId) return null;
   return database.prepare(`
-    SELECT id, status, responded_at
+    SELECT id, status, responded_at, response_deadline,
+           CASE WHEN response_deadline IS NOT NULL
+                  AND julianday(response_deadline) <= julianday('now')
+                THEN 1 ELSE 0 END AS closeout_reached
       FROM planning_obligations
      WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser'
        AND responsible_user_id = ?
@@ -2236,12 +2369,49 @@ function ensureMealMenuGeneration(database, mealId) {
   return current;
 }
 
+function publishedMealMenuGeneration(database, mealId) {
+  return database.prepare(`
+    SELECT * FROM meal_menu_generations
+     WHERE meal_id = ? AND status = 'fulfilled'
+     ORDER BY generation DESC LIMIT 1
+  `).get(Number(mealId)) || null;
+}
+
+function nextMealMenuGeneration(database, mealId) {
+  return Number(database.prepare(`
+    SELECT COALESCE(MAX(generation), 0) + 1 AS generation
+      FROM meal_menu_generations WHERE meal_id = ?
+  `).get(Number(mealId)).generation);
+}
+
+function openMealMenuGeneration(database, mealId, chooserId, obligationId, {
+  preservePublishedMeal = false,
+} = {}) {
+  const generation = nextMealMenuGeneration(database, mealId);
+  database.prepare(`
+    INSERT INTO meal_menu_generations (
+      meal_id, generation, chooser_user_id, chooser_obligation_id, status
+    ) VALUES (?, ?, ?, ?, 'open')
+  `).run(Number(mealId), generation, Number(chooserId) || null, Number(obligationId) || null);
+  database.prepare(`
+    UPDATE meals
+       SET current_menu_generation = ?,
+           selection_status = CASE WHEN ? THEN selection_status ELSE 'awaiting_choice' END,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+     WHERE id = ?
+  `).run(generation, preservePublishedMeal ? 1 : 0, Number(mealId));
+  return database.prepare(`
+    SELECT * FROM meal_menu_generations WHERE meal_id = ? AND generation = ?
+  `).get(Number(mealId), generation);
+}
+
 /**
  * Align the current editable menu generation with the canonical occurrence
- * chooser. Any authored draft or fulfilled menu stays owned by the chooser
- * responsibility that created it. A changed chooser or obligation releases
- * that generation as immutable history and receives a genuinely blank one;
- * only a truly empty generation may be reassigned in place.
+ * chooser. An unsubmitted draft stays owned by the chooser responsibility that
+ * created it and is released on handoff. A fulfilled generation is the live,
+ * published household menu: it remains available while the incoming chooser
+ * receives a private editable copy. Only publishing that replacement retires
+ * the previously published generation.
  */
 export function synchronizeMealMenuGeneration(database, mealId, {
   chooserId = undefined,
@@ -2296,46 +2466,126 @@ export function synchronizeMealMenuGeneration(database, mealId, {
     return { changed: true, released: false, generation: Number(current.generation), current: updated };
   }
 
-  const nextGeneration = Number(current.generation) + 1;
-  database.prepare(`
-    UPDATE meal_menu_generations
-       SET status = 'released', release_reason = ?,
-            fulfilled_at = CASE WHEN status = 'fulfilled'
-              THEN COALESCE(fulfilled_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-              ELSE fulfilled_at END,
-            released_at = COALESCE(released_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-     WHERE id = ?
-  `).run(reason, current.id);
-  database.prepare(`
-    INSERT OR IGNORE INTO meal_menu_generations (
-      meal_id, generation, chooser_user_id, chooser_obligation_id, status
-    ) VALUES (?, ?, ?, ?, 'open')
-  `).run(numericMealId, nextGeneration, canonical, nextObligationId);
-  database.prepare(`
-    UPDATE meals
-       SET current_menu_generation = ?, selection_status = 'awaiting_choice',
-           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-     WHERE id = ?
-  `).run(nextGeneration, numericMealId);
+  const published = publishedMealMenuGeneration(database, numericMealId);
+  // A published menu is an active participant-facing state, not a draft to
+  // discard merely because responsibility moved. The replacement starts as an
+  // editable copy and becomes active only when its chooser explicitly submits it.
+  if (current.status !== 'fulfilled') {
+    database.prepare(`
+      UPDATE meal_menu_generations
+         SET status = 'released', release_reason = ?,
+             released_at = COALESCE(released_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+       WHERE id = ?
+    `).run(reason, current.id);
+  }
+  const next = openMealMenuGeneration(
+    database,
+    numericMealId,
+    canonical,
+    nextObligationId,
+    { preservePublishedMeal: Boolean(published || current.status === 'fulfilled') },
+  );
+  const copySource = published || (current.status === 'fulfilled' ? current : null);
+  if (copySource) {
+    copyMealMenuGenerationItems(
+      database,
+      numericMealId,
+      Number(copySource.generation),
+      Number(next.generation),
+      canonical,
+    );
+  }
   return {
     changed: true,
-    released: true,
-    generation: nextGeneration,
-    current: database.prepare(`
-      SELECT * FROM meal_menu_generations WHERE meal_id = ? AND generation = ?
-    `).get(numericMealId, nextGeneration),
+    released: current.status !== 'fulfilled',
+    generation: Number(next.generation),
+    current: next,
   };
+}
+
+function mealMenuGenerationSignature(database, mealId, generation) {
+  if (!Number.isInteger(Number(generation)) || Number(generation) <= 0) return null;
+  const items = database.prepare(`
+    SELECT item_type, COALESCE(generation_position, position) AS position,
+           title, recipe_id, notes
+      FROM meal_menu_items
+     WHERE meal_id = ? AND menu_generation = ? AND item_type IN ('entree', 'side')
+     ORDER BY CASE item_type WHEN 'entree' THEN 0 ELSE 1 END,
+              COALESCE(generation_position, position), id
+  `).all(Number(mealId), Number(generation)).map((item) => ({
+    item_type: item.item_type,
+    position: Number(item.position),
+    title: item.title,
+    recipe_id: Number(item.recipe_id) || null,
+    notes: item.notes || null,
+  }));
+  return JSON.stringify(items);
+}
+
+function enqueueMealMenuChangeReminders(database, mealId) {
+  const subscribers = database.prepare(`
+    SELECT beneficiary_user_id
+      FROM meal_person_decisions
+     WHERE meal_id = ? AND participation = 'not_participating'
+       AND notify_on_menu_change = 1
+     ORDER BY beneficiary_user_id
+  `).all(Number(mealId));
+  const now = database.prepare(`
+    SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now') AS value
+  `).get().value;
+  const pending = database.prepare(`
+    SELECT id FROM reminders
+     WHERE entity_type = 'meal' AND entity_id = ? AND created_by = ?
+       AND dismissed = 0 AND pushed_at IS NULL
+     ORDER BY id DESC LIMIT 1
+  `);
+  const refresh = database.prepare(`
+    UPDATE reminders SET remind_at = ? WHERE id = ?
+  `);
+  const insert = database.prepare(`
+    INSERT INTO reminders (entity_type, entity_id, remind_at, created_by)
+    VALUES ('meal', ?, ?, ?)
+  `);
+  for (const subscriber of subscribers) {
+    const beneficiaryId = Number(subscriber.beneficiary_user_id);
+    const existing = pending.get(Number(mealId), beneficiaryId);
+    if (existing) refresh.run(now, existing.id);
+    else insert.run(Number(mealId), now, beneficiaryId);
+  }
 }
 
 function fulfillMealMenuGeneration(database, mealId, chooserId, obligationIds = []) {
   const synchronized = synchronizeMealMenuGeneration(database, mealId, { chooserId });
   const obligationId = obligationIds.map(Number).filter(Number.isInteger).at(-1) || null;
+  const previousPublished = publishedMealMenuGeneration(database, mealId);
+  const previousSignature = mealMenuGenerationSignature(
+    database, mealId, previousPublished?.generation,
+  );
+  const submittedSignature = mealMenuGenerationSignature(
+    database, mealId, synchronized.generation,
+  );
+  // Atomically activate the submitted replacement. Earlier fulfilled menus and
+  // their selections remain durable history, but only one generation is live.
+  database.prepare(`
+    UPDATE meal_menu_generations
+       SET status = 'released', release_reason = 'replacement_published',
+           released_at = COALESCE(released_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+     WHERE meal_id = ? AND generation != ? AND status = 'fulfilled'
+  `).run(Number(mealId), Number(synchronized.generation));
   database.prepare(`
     UPDATE meal_menu_generations
        SET chooser_user_id = ?, chooser_obligation_id = COALESCE(?, chooser_obligation_id),
-           status = 'fulfilled', fulfilled_at = COALESCE(fulfilled_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+           status = 'fulfilled', release_reason = NULL, released_at = NULL,
+           fulfilled_at = COALESCE(fulfilled_at, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
      WHERE meal_id = ? AND generation = ?
   `).run(Number(chooserId) || null, obligationId, Number(mealId), synchronized.generation);
+  // A retry of the same fulfilled generation, or a newly authored generation
+  // identical to the last published menu, is not a change. Initial publication
+  // is a change from "no shared menu" and can therefore notify someone who
+  // opted out before the chooser finished.
+  if (previousSignature !== submittedSignature) {
+    enqueueMealMenuChangeReminders(database, mealId);
+  }
   return synchronized.generation;
 }
 
@@ -2413,6 +2663,10 @@ function loadOccurrenceData(database, from, to, contextId = null) {
     SELECT * FROM meal_menu_items WHERE meal_id IN (${placeholders})
      ORDER BY meal_id, CASE item_type WHEN 'entree' THEN 0 WHEN 'side' THEN 1 ELSE 2 END, position, id
   `).all(...mealIds);
+  const generationRows = database.prepare(`
+    SELECT * FROM meal_menu_generations WHERE meal_id IN (${placeholders})
+     ORDER BY meal_id, generation
+  `).all(...mealIds);
   const decisionIds = decisionRows.map((row) => Number(row.id));
   const selectionRows = decisionIds.length ? database.prepare(`
     SELECT s.decision_id, i.*
@@ -2423,7 +2677,10 @@ function loadOccurrenceData(database, from, to, contextId = null) {
   `).all(...decisionIds) : [];
   const obligationRows = database.prepare(`
     SELECT id, entity_id AS meal_id, responsible_user_id, status, response_deadline,
-           responded_at, attempt, parent_obligation_id, created_at, updated_at
+           responded_at, attempt, parent_obligation_id, created_at, updated_at,
+           CASE WHEN response_deadline IS NOT NULL
+                  AND julianday(response_deadline) <= julianday('now')
+                THEN 1 ELSE 0 END AS closeout_reached
       FROM planning_obligations
      WHERE entity_type = 'meal' AND role = 'chooser' AND entity_id IN (${placeholders})
      ORDER BY entity_id, id
@@ -2439,6 +2696,15 @@ function loadOccurrenceData(database, from, to, contextId = null) {
       : null;
     const historicalRule = (name, fallback = null) => revisionRule?.[name] ?? meal[name] ?? fallback;
     const occurrencePolicy = meal.selection_policy_override || historicalRule('policy', meal.policy);
+    const occurrenceGenerations = generationRows
+      .filter((row) => Number(row.meal_id) === Number(meal.id));
+    const currentGeneration = Number(meal.current_menu_generation) || 1;
+    const currentGenerationRow = occurrenceGenerations.find((row) => (
+      Number(row.generation) === currentGeneration
+    )) || null;
+    const publishedGenerationRow = [...occurrenceGenerations]
+      .reverse().find((row) => row.status === 'fulfilled') || null;
+    const publishedGeneration = Number(publishedGenerationRow?.generation) || null;
     // Read from the latest chooser-obligation snapshot first. This keeps a
     // dated occurrence's authoring/selection contract stable after the Meal
     // Plan is edited, while still covering legacy and one-off Meals.
@@ -2471,6 +2737,7 @@ function loadOccurrenceData(database, from, to, contextId = null) {
         return {
           ...decision,
           confirmed: Boolean(decision.confirmed),
+          notify_on_menu_change: Boolean(decision.notify_on_menu_change),
           menu_items: occurrencePolicy === 'personal_choice'
             ? []
             : selectedItems.filter((row) => row.item_type !== 'backup'),
@@ -2509,9 +2776,13 @@ function loadOccurrenceData(database, from, to, contextId = null) {
       ))
       .sort((left, right) => Number(right.id) - Number(left.id))[0])
       .filter(Boolean);
-    const sharedChoiceActive = !strictSharedChoice || Boolean(
-      choosers.length && currentObligations.some((row) => row.status === 'fulfilled'),
-    );
+    const sharedChoiceActive = !strictSharedChoice || Boolean(publishedGeneration);
+    const menuCloseoutAt = currentObligations
+      .map((row) => row.response_deadline)
+      .filter(Boolean)
+      .sort()[0] || null;
+    const menuLocked = strictSharedChoice
+      && currentObligations.some((row) => Boolean(row.closeout_reached));
     const chooserStatuses = currentObligations.map((row) => row.status);
     const chooserStatus = strictSharedChoice
       ? (!choosers.length ? 'needs_fallback'
@@ -2525,11 +2796,19 @@ function loadOccurrenceData(database, from, to, contextId = null) {
             : 'pending');
     const decisions = rawDecisions.map((decision) => {
       const releasedSharedSelection = decision.menu_items.some((item) => (
-        Number(item.menu_generation || 1) !== Number(meal.current_menu_generation || 1)
+        Number(item.menu_generation || 1) !== publishedGeneration
       ));
       const staleSharedChoice = strictSharedChoice
         && (!sharedChoiceActive || releasedSharedSelection)
         && decision.choice_kind === 'household';
+      if (decision.choice_kind === 'backup') {
+        return {
+          ...decision,
+          historical_menu_items: decision.menu_items,
+          menu_items: [],
+          is_current_choice: !decision.legacy_backup_choice,
+        };
+      }
       return staleSharedChoice ? {
         ...decision,
         historical_choice_kind: decision.choice_kind,
@@ -2550,18 +2829,25 @@ function loadOccurrenceData(database, from, to, contextId = null) {
     const occurrenceMenuItems = menuRows
       .filter((row) => Number(row.meal_id) === Number(meal.id))
       .map(presentMenuItem);
-    const currentGeneration = Number(meal.current_menu_generation) || 1;
     const authoredMenuItems = occurrencePolicy === 'personal_choice'
       ? []
       : occurrenceMenuItems.filter((row) => (
         row.item_type !== 'backup' && Number(row.menu_generation || 1) === currentGeneration
       ));
+    const publishedMenuItems = occurrencePolicy === 'personal_choice' || !publishedGeneration
+      ? []
+      : occurrenceMenuItems.filter((row) => (
+        row.item_type !== 'backup' && Number(row.menu_generation || 1) === publishedGeneration
+      ));
     const releasedMenuItems = occurrencePolicy === 'personal_choice'
       ? []
       : occurrenceMenuItems.filter((row) => (
-        row.item_type !== 'backup' && Number(row.menu_generation || 1) !== currentGeneration
+        row.item_type !== 'backup'
+        && Number(row.menu_generation || 1) !== currentGeneration
+        && Number(row.menu_generation || 1) !== publishedGeneration
       ));
-    const visibleMenuItems = strictSharedChoice && !sharedChoiceActive ? [] : authoredMenuItems;
+    const visibleMenuItems = strictSharedChoice ? publishedMenuItems : authoredMenuItems;
+    const draftMenuItems = currentGenerationRow?.status === 'open' ? authoredMenuItems : [];
     const legacyBackupMenuItems = occurrenceMenuItems.filter((row) => row.item_type === 'backup')
       .map((row) => ({ ...row, legacy_only: true }));
     const projectedMeal = strictSharedChoice && !sharedChoiceActive ? {
@@ -2635,7 +2921,14 @@ function loadOccurrenceData(database, from, to, contextId = null) {
       chooser_obligations: chooserObligations,
       decisions,
       menu_items: visibleMenuItems,
-      draft_menu_items: authoredMenuItems,
+      published_menu_items: publishedMenuItems,
+      draft_menu_items: draftMenuItems,
+      published_menu_generation: publishedGeneration,
+      draft_menu_generation: currentGenerationRow?.status === 'open' ? currentGeneration : null,
+      menu_status: currentGenerationRow?.status || 'open',
+      published_menu_status: publishedGenerationRow?.status || 'none',
+      menu_closeout_at: menuCloseoutAt,
+      menu_locked: menuLocked,
       historical_menu_items: releasedMenuItems,
       legacy_backup_menu_items: legacyBackupMenuItems,
     };
@@ -2646,34 +2939,36 @@ function withPersonalState(occurrence, memberId, canActFor) {
   const member = occurrence.participants.find((row) => Number(row.user_id) === Number(memberId)) || null;
   const decision = occurrence.decisions.find((row) => Number(row.beneficiary_user_id) === Number(memberId)) || null;
   const participant = Boolean(member?.roles.includes('participant'));
-  const chooser = Boolean(member?.is_chooser);
+  const chooser = Boolean(occurrence.choosers?.some((row) => (
+    Number(row.user_id) === Number(memberId)
+  )));
   const unscopedHouseholdMeal = !occurrence.meal_plan_rule_id
     && !occurrence.planning_context_id
     && occurrence.scope === 'household'
     && occurrence.participants.length === 0;
   const applicable = Boolean((member && member.status !== 'away') || unscopedHouseholdMeal);
   const personalChoice = occurrence.rule?.policy === 'personal_choice';
-  const chooserDraftItems = Boolean(
-    canActFor && applicable && chooser && !personalChoice && !occurrence.shared_choice_active,
-  ) ? (occurrence.draft_menu_items || []) : occurrence.menu_items;
   return {
     ...occurrence,
-    // Only the current chooser (or an administrator explicitly acting for that
-    // chooser) may see/select an unconfirmed current-generation draft. Status
-    // and other participants continue to see the household Meal as Pending.
-    menu_items: chooserDraftItems,
+    // `menu_items` remains the published participant-facing contract. The
+    // active chooser's editable replacement is exposed separately as
+    // `draft_menu_items`, so a handoff cannot leak a draft to diners.
     my_participant: member,
     my_decision: decision,
     applicable,
     can_act_for: canActFor,
     controls: {
-      choose_shared_meal: Boolean(canActFor && applicable && chooser && !personalChoice),
+      choose_shared_meal: Boolean(
+        canActFor && applicable && chooser && !personalChoice && !occurrence.menu_locked
+      ),
       choose_personal_meal: Boolean(canActFor && applicable && chooser && personalChoice),
       set_participation: Boolean(canActFor && participant),
       choose_backup: Boolean(
         canActFor && applicable && participant && !chooser && !personalChoice
       ),
-      can_edit_shared_menu: Boolean(canActFor && applicable && chooser && !personalChoice),
+      can_edit_shared_menu: Boolean(
+        canActFor && applicable && chooser && !personalChoice && !occurrence.menu_locked
+      ),
       skip: Boolean(canActFor && participant),
       add_notes: Boolean(canActFor && (participant || chooser)),
     },
@@ -2719,14 +3014,17 @@ function optionForPerson(occurrence, participant) {
   if (occurrence.rule?.policy === 'personal_choice' && decision.choice_kind === 'backup') {
     return { key: 'pending', type: 'pending', title: 'Pending' };
   }
-  const selected = decision.menu_items.filter((item) => item.item_type !== 'side');
-  const first = selected[0];
-  if (first) return { key: `menu:${first.id}`, type: first.item_type, title: first.title, menu_item_id: first.id };
+  // A member may switch from a previously selected shared menu to an
+  // individual Backup Meal while that published generation remains immutable
+  // history. Their current decision wins over those retained selection rows.
   if (decision.choice_kind === 'backup') {
     if (!decision.selected_meal_id) return { key: 'pending', type: 'pending', title: 'Pending' };
     const title = decision.selected_meal_title || decision.notes || 'Backup Meal';
     return { key: `backup:${decision.selected_meal_id}`, type: 'backup', title };
   }
+  const selected = decision.menu_items.filter((item) => item.item_type !== 'side');
+  const first = selected[0];
+  if (first) return { key: `menu:${first.id}`, type: first.item_type, title: first.title, menu_item_id: first.id };
   if (['personal', 'restaurant', 'takeout'].includes(decision.choice_kind)) {
     const title = decision.selected_meal_title || decision.notes || `${decision.choice_kind[0].toUpperCase()}${decision.choice_kind.slice(1)} meal`;
     return { key: `${decision.choice_kind}:${title}`, type: decision.choice_kind, title };
@@ -3118,7 +3416,10 @@ export function advanceMealChooserFallback(database, mealId, {
 
     if (!selected) {
       database.prepare(`
-        UPDATE meals SET selection_status = 'awaiting_choice',
+        UPDATE meals SET selection_status = CASE WHEN EXISTS (
+            SELECT 1 FROM meal_menu_generations
+             WHERE meal_id = meals.id AND status = 'fulfilled'
+          ) THEN selection_status ELSE 'awaiting_choice' END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
       `).run(Number(meal.id));
       setMealChooserRoles(database, meal.id, []);
@@ -3161,7 +3462,10 @@ export function advanceMealChooserFallback(database, mealId, {
     });
     database.prepare(`
       UPDATE meals SET selection_policy_override = NULL,
-        selection_status = 'awaiting_choice',
+        selection_status = CASE WHEN EXISTS (
+          SELECT 1 FROM meal_menu_generations
+           WHERE meal_id = meals.id AND status = 'fulfilled'
+        ) THEN selection_status ELSE 'awaiting_choice' END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
     `).run(Number(meal.id));
     setMealChooserRoles(database, meal.id, [selected], {
@@ -3325,6 +3629,7 @@ function normalizeDecision(database, meal, body, current = null, {
   const participating = participation === 'participating';
   const backups = selectedMenu.filter((item) => item.item_type === 'backup');
   const sharedItems = selectedMenu.filter((item) => item.item_type === 'entree' || item.item_type === 'side');
+  let pendingSharedHousehold = false;
   if (policy === 'personal_choice') {
     if (choiceKind === 'backup' || backups.length) {
       throw mealPlanError('Backup Meals are not available for Personal Choice slots.', 409, 'PERSONAL_CHOICE_BACKUP_NOT_ALLOWED');
@@ -3373,6 +3678,11 @@ function normalizeDecision(database, meal, body, current = null, {
         if (menuIds.length) {
           throw mealPlanError('The shared household choice does not accept menu item IDs.', 409, 'HOUSEHOLD_MENU_IDS_NOT_ALLOWED');
         }
+        // A participant may commit to the household meal before the incoming
+        // chooser publishes a menu. Keep that intent pending rather than
+        // rejecting it or binding it to the chooser's private draft.
+        pendingSharedHousehold = participating
+          && !publishedMealMenuGeneration(database, meal.id);
       } else if (participating) {
         throw mealPlanError('Choose the shared household meal or the Backup Meal.', 409, 'SHARED_OR_BACKUP_REQUIRED');
       }
@@ -3400,7 +3710,16 @@ function normalizeDecision(database, meal, body, current = null, {
     selected_meal_title: selectedMealTitle,
     selected_recipe_id: selectedRecipeId,
     notes: text(body?.notes ?? current?.notes, { max: 4000, field: 'Notes' }),
-    confirmed: bool(body?.confirmed, Boolean(current?.confirmed)) ? 1 : 0,
+    confirmed: pendingSharedHousehold
+      ? 0
+      : (bool(body?.confirmed, Boolean(current?.confirmed)) ? 1 : 0),
+    notify_on_menu_change: participation === 'not_participating'
+      && bool(
+        body?.notify_on_menu_change
+          ?? body?.notifyOnMenuChange
+          ?? current?.notify_on_menu_change,
+        false,
+      ) ? 1 : 0,
     menu_item_ids: menuIds,
   };
 }
@@ -3480,6 +3799,23 @@ export function saveMealDecision(database, mealId, body, {
     );
   }
   const normalized = normalizeDecision(database, meal, body, current, { policy, isChooser });
+  const currentMenuGeneration = database.prepare(`
+    SELECT status FROM meal_menu_generations
+     WHERE meal_id = ? AND generation = ?
+  `).get(meal.id, Number(meal.current_menu_generation) || 1);
+  const publishingSharedDraft = isChooser
+    && ['fixed', 'round_robin'].includes(policy)
+    && currentMenuGeneration?.status === 'open'
+    && normalized.choice_kind === 'household'
+    && normalized.menu_item_ids.length > 0;
+  if (publishingSharedDraft
+      && chooserObligationForGeneration(database, meal.id, beneficiaryId)?.closeout_reached) {
+    throw mealPlanError(
+      'The Meal selection deadline has passed; the shared menu is closed.',
+      409,
+      'MEAL_MENU_CLOSED',
+    );
+  }
   const chooserSkipping = ['fixed', 'round_robin'].includes(policy) && isChooser
     && (!isParticipatingMember || normalized.participation !== 'participating');
   let decisionId;
@@ -3567,33 +3903,44 @@ export function saveMealDecision(database, mealId, body, {
     database.prepare(`
       INSERT INTO meal_person_decisions (
         meal_id, beneficiary_user_id, participation, choice_kind, selected_meal_id,
-        notes, confirmed, entered_by_user_id, entered_by_device_key, entered_via, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+        notes, confirmed, notify_on_menu_change, entered_by_user_id,
+        entered_by_device_key, entered_via, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       ON CONFLICT(meal_id, beneficiary_user_id) DO UPDATE SET
         participation = excluded.participation, choice_kind = excluded.choice_kind,
         selected_meal_id = excluded.selected_meal_id, notes = excluded.notes,
-        confirmed = excluded.confirmed, entered_by_user_id = excluded.entered_by_user_id,
+        confirmed = excluded.confirmed,
+        notify_on_menu_change = excluded.notify_on_menu_change,
+        entered_by_user_id = excluded.entered_by_user_id,
         entered_by_device_key = excluded.entered_by_device_key, entered_via = excluded.entered_via,
         updated_at = excluded.updated_at
     `).run(
       meal.id, beneficiaryId, normalized.participation, normalized.choice_kind,
       normalized.selected_meal_id, normalized.notes, normalized.confirmed,
-      actorId || null, text(deviceKey, { max: 500, field: 'Device key' }), enteredVia,
+      normalized.notify_on_menu_change, actorId || null,
+      text(deviceKey, { max: 500, field: 'Device key' }), enteredVia,
     );
     const decision = database.prepare(`
       SELECT * FROM meal_person_decisions WHERE meal_id = ? AND beneficiary_user_id = ?
     `).get(meal.id, beneficiaryId);
     decisionId = Number(decision.id);
     if (policy !== 'personal_choice') {
-      // Keep selections from released chooser generations as immutable audit
-      // history. A decision update replaces only the current generation.
-      database.prepare(`
-        DELETE FROM meal_person_menu_selections
-         WHERE decision_id = ? AND menu_item_id IN (
-           SELECT id FROM meal_menu_items
-            WHERE meal_id = ? AND menu_generation = ?
-         )
-      `).run(decisionId, meal.id, Number(meal.current_menu_generation) || 1);
+      // Published selections remain audit history when a person skips or moves
+      // to a Backup Meal. Only an explicit shared-menu selection replaces rows
+      // in the live generation; open-draft selections remain freely editable.
+      const publishedGeneration = Number(
+        publishedMealMenuGeneration(database, meal.id)?.generation,
+      ) || null;
+      const currentGeneration = Number(meal.current_menu_generation) || 1;
+      if (currentGeneration !== publishedGeneration || normalized.menu_item_ids.length) {
+        database.prepare(`
+          DELETE FROM meal_person_menu_selections
+           WHERE decision_id = ? AND menu_item_id IN (
+             SELECT id FROM meal_menu_items
+              WHERE meal_id = ? AND menu_generation = ?
+           )
+        `).run(decisionId, meal.id, currentGeneration);
+      }
       const insertSelection = database.prepare(`
         INSERT INTO meal_person_menu_selections (decision_id, menu_item_id, selected) VALUES (?, ?, 1)
       `);
@@ -3742,16 +4089,21 @@ export function saveMealDecision(database, mealId, body, {
       LEFT JOIN meals selected ON selected.id = d.selected_meal_id
      WHERE d.id = ?
   `).get(decisionId);
+  const responseGeneration = decision.choice_kind === 'household'
+    ? (Number(publishedMealMenuGeneration(database, meal.id)?.generation)
+      || Number(meal.current_menu_generation) || 1)
+    : (Number(meal.current_menu_generation) || 1);
   decision.menu_items = database.prepare(`
     SELECT i.* FROM meal_person_menu_selections s
     JOIN meal_menu_items i ON i.id = s.menu_item_id
     WHERE s.decision_id = ? AND s.selected = 1 AND i.menu_generation = ?
     ORDER BY i.item_type, i.generation_position, i.id
-  `).all(decisionId, Number(meal.current_menu_generation) || 1).map(presentMenuItem);
+  `).all(decisionId, responseGeneration).map(presentMenuItem);
   if (policy === 'personal_choice' || decision.choice_kind === 'backup') decision.menu_items = [];
   return {
     ...decision,
     confirmed: Boolean(decision.confirmed),
+    notify_on_menu_change: Boolean(decision.notify_on_menu_change),
     audit_event_id: eventId,
     chooser_result: chooserResult,
   };
@@ -3788,6 +4140,74 @@ function releasedMenuItemError() {
     409,
     'MEAL_MENU_GENERATION_RELEASED',
   );
+}
+
+function clonePublishedMenuForEditing(database, mealId, chooserId) {
+  const current = ensureMealMenuGeneration(database, mealId);
+  if (current.status !== 'fulfilled') return current;
+  const draft = openMealMenuGeneration(
+    database,
+    mealId,
+    chooserId,
+    current.chooser_obligation_id,
+    { preservePublishedMeal: true },
+  );
+  copyMealMenuGenerationItems(
+    database,
+    mealId,
+    Number(current.generation),
+    Number(draft.generation),
+    chooserId,
+  );
+  return draft;
+}
+
+function copyMealMenuGenerationItems(
+  database,
+  mealId,
+  sourceGeneration,
+  targetGeneration,
+  chooserId,
+) {
+  const publishedItems = database.prepare(`
+    SELECT * FROM meal_menu_items
+     WHERE meal_id = ? AND menu_generation = ? AND item_type != 'backup'
+     ORDER BY item_type, COALESCE(generation_position, position), id
+  `).all(Number(mealId), Number(sourceGeneration));
+  const insert = database.prepare(`
+    INSERT INTO meal_menu_items (
+      meal_id, menu_generation, item_type, position, generation_position,
+      title, recipe_id, notes, created_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  for (const item of publishedItems) {
+    insert.run(
+      Number(mealId), Number(targetGeneration), item.item_type,
+      nextPhysicalMenuPosition(database, mealId, item.item_type),
+      Number(item.generation_position ?? item.position), item.title,
+      item.recipe_id || null, item.notes || null, Number(chooserId) || item.created_by || null,
+    );
+  }
+  return publishedItems.length;
+}
+
+function editableMenuItemAlias(database, mealId, generation, itemId) {
+  const requested = database.prepare(`
+    SELECT * FROM meal_menu_items WHERE id = ? AND meal_id = ?
+  `).get(Number(itemId), Number(mealId));
+  if (!requested) return null;
+  if (Number(requested.menu_generation || 1) === Number(generation)) return requested;
+  const published = publishedMealMenuGeneration(database, mealId);
+  if (!published || Number(requested.menu_generation || 1) !== Number(published.generation)) return null;
+  return database.prepare(`
+    SELECT * FROM meal_menu_items
+     WHERE meal_id = ? AND menu_generation = ? AND item_type = ?
+       AND COALESCE(generation_position, position) = ?
+     ORDER BY id DESC LIMIT 1
+  `).get(
+    Number(mealId), Number(generation), requested.item_type,
+    Number(requested.generation_position ?? requested.position),
+  ) || null;
 }
 
 function assertCanManageMenu(database, mealId, actorId, isAdmin, requestedBeneficiaryId = null) {
@@ -3854,28 +4274,54 @@ function assertCanManageMenu(database, mealId, actorId, isAdmin, requestedBenefi
       'MEAL_CHOOSER_REPAIR_REQUIRED',
     );
   }
+  const obligation = chooserObligationForGeneration(database, mealId, beneficiaryId);
+  if (obligation?.closeout_reached) {
+    throw mealPlanError(
+      'The Meal selection deadline has passed; the shared menu is closed.',
+      409,
+      'MEAL_MENU_CLOSED',
+    );
+  }
+  const editable = clonePublishedMenuForEditing(database, mealId, beneficiaryId);
   return {
     beneficiaryId,
     policy,
-    generation: Number(meal.current_menu_generation) || 1,
+    generation: Number(editable.generation) || 1,
   };
 }
 
-export function listMealMenuItems(database, mealId) {
+export function listMealMenuItems(database, mealId, {
+  editable = false, actorId = null, isAdmin = false, beneficiaryId = null,
+} = {}) {
   synchronizeMealMenuGeneration(database, mealId);
-  const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
+  let meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
   if (!meal) {
     throw mealPlanError('Meal not found.', 404, 'MEAL_NOT_FOUND');
   }
   const personalChoice = mealSelectionPolicy(database, meal) === 'personal_choice';
   if (personalChoice) return [];
+  let generation;
+  if (editable) {
+    const requested = Number(beneficiaryId)
+      || (isAdmin ? canonicalMealChooser(database, mealId) : null);
+    generation = assertCanManageMenu(
+      database, mealId, actorId, isAdmin, requested,
+    ).generation;
+    meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
+  } else {
+    const policy = mealMenuPolicy(database, mealId);
+    const published = ['fixed', 'round_robin'].includes(policy)
+      ? publishedMealMenuGeneration(database, mealId) : null;
+    generation = Number(published?.generation)
+      || Number(meal.current_menu_generation) || 1;
+  }
   return database.prepare(`
     SELECT * FROM meal_menu_items
      WHERE meal_id = ?
        AND (menu_generation = ? OR item_type = 'backup')
      ORDER BY CASE item_type WHEN 'entree' THEN 0 WHEN 'side' THEN 1 ELSE 2 END,
               menu_generation DESC, COALESCE(generation_position, position), id
-  `).all(Number(mealId), Number(meal.current_menu_generation) || 1).map((raw) => ({
+  `).all(Number(mealId), Number(generation) || 1).map((raw) => ({
     ...presentMenuItem(raw),
     legacy_only: raw.item_type === 'backup',
   }));
@@ -3925,9 +4371,19 @@ function normalizeCompleteMenu(database, mealId, body, currentItems) {
     const slotMatch = !hasId && requestedPosition != null
       ? currentItems.find((item) => item.item_type === requestedType && Number(item.position) === requestedPosition)
       : null;
-    const id = hasId
+    let id = hasId
       ? integer(raw.id, { min: 1, field: 'Menu item ID' })
       : (slotMatch ? Number(slotMatch.id) : null);
+    if (id != null && !currentById.has(id)) {
+      const alias = editableMenuItemAlias(
+        database,
+        mealId,
+        Number(database.prepare('SELECT current_menu_generation FROM meals WHERE id = ?')
+          .get(Number(mealId)).current_menu_generation) || 1,
+        id,
+      );
+      if (alias) id = Number(alias.id);
+    }
     if (id != null && referencedIds.has(id)) {
       throw mealPlanError('Each existing menu item may appear only once.', 400, 'DUPLICATE_MEAL_MENU_ITEM');
     }
@@ -4195,7 +4651,12 @@ export function replaceMealMenuItems(database, mealId, body, actorId, {
     throw error;
   }
 
-  return listMealMenuItems(database, numericMealId);
+  return listMealMenuItems(database, numericMealId, {
+    editable: true,
+    actorId,
+    isAdmin,
+    beneficiaryId: authorization.beneficiaryId,
+  });
 }
 
 export function createMealMenuItem(database, mealId, body, actorId, {
@@ -4261,10 +4722,13 @@ export function updateMealMenuItem(database, mealId, itemId, body, actorId, {
   isAdmin = false, beneficiaryId = null, deviceKey = null,
 } = {}) {
   const authorization = assertCanManageMenu(database, mealId, actorId, isAdmin, beneficiaryId);
+  const editableItem = editableMenuItemAlias(
+    database, mealId, authorization.generation, itemId,
+  );
   const currentRaw = database.prepare(`
     SELECT * FROM meal_menu_items
      WHERE id = ? AND meal_id = ? AND menu_generation = ?
-  `).get(Number(itemId), Number(mealId), authorization.generation);
+  `).get(Number(editableItem?.id || itemId), Number(mealId), authorization.generation);
   if (!currentRaw) {
     if (database.prepare('SELECT 1 FROM meal_menu_items WHERE id = ? AND meal_id = ?')
       .get(Number(itemId), Number(mealId))) throw releasedMenuItemError();
@@ -4335,10 +4799,13 @@ export function deleteMealMenuItem(database, mealId, itemId, actorId, {
   isAdmin = false, beneficiaryId = null, deviceKey = null,
 } = {}) {
   const authorization = assertCanManageMenu(database, mealId, actorId, isAdmin, beneficiaryId);
+  const editableItem = editableMenuItemAlias(
+    database, mealId, authorization.generation, itemId,
+  );
   const currentRaw = database.prepare(`
     SELECT * FROM meal_menu_items
      WHERE id = ? AND meal_id = ? AND menu_generation = ?
-  `).get(Number(itemId), Number(mealId), authorization.generation);
+  `).get(Number(editableItem?.id || itemId), Number(mealId), authorization.generation);
   if (!currentRaw) {
     if (database.prepare('SELECT 1 FROM meal_menu_items WHERE id = ? AND meal_id = ?')
       .get(Number(itemId), Number(mealId))) throw releasedMenuItemError();
@@ -4365,69 +4832,15 @@ export function deleteMealMenuItem(database, mealId, itemId, actorId, {
 }
 
 export function getGrocerySettings(database) {
-  return database.prepare('SELECT * FROM meal_grocery_settings WHERE id = 1').get();
+  return getIndependentGrocerySettings(database);
 }
 
 export function saveGrocerySettings(database, body, actorId) {
-  const current = getGrocerySettings(database);
-  if (!current) throw mealPlanError('Meal grocery settings are unavailable.', 500, 'MEAL_GROCERY_SETTINGS_MISSING');
-  const hasListId = Object.prototype.hasOwnProperty.call(body || {}, 'default_shopping_list_id');
-  const listId = !hasListId
-    ? (Number(current.default_shopping_list_id) || null)
-    : body.default_shopping_list_id == null || body.default_shopping_list_id === ''
-      ? null : Number(body.default_shopping_list_id);
-  if (listId && !database.prepare('SELECT 1 FROM shopping_lists WHERE id = ?').get(listId)) {
-    throw mealPlanError('Default Shopping list not found.', 404, 'SHOPPING_LIST_NOT_FOUND');
-  }
-  const lead = integer(body?.grocery_lead_minutes, {
-    fallback: Number(current.grocery_lead_minutes), min: 0, max: 10080, field: 'Grocery lead time',
-  });
-  const aggregation = String(body?.aggregation_mode ?? current.aggregation_mode);
-  if (!['ingredient', 'meal', 'recipe'].includes(aggregation)) throw mealPlanError('Choose a valid grocery aggregation mode.');
-  const values = {
-    enabled: bool(body?.enabled, Boolean(current.enabled)) ? 1 : 0,
-    default_shopping_list_id: listId,
-    auto_create_grocery_draft: bool(body?.auto_create_grocery_draft, Boolean(current.auto_create_grocery_draft)) ? 1 : 0,
-    auto_finalize_grocery: bool(body?.auto_finalize_grocery, Boolean(current.auto_finalize_grocery)) ? 1 : 0,
-    grocery_lead_minutes: lead,
-    aggregation_mode: aggregation,
-  };
-  database.transaction(() => {
-    database.prepare(`
-      UPDATE meal_grocery_settings SET enabled = ?, default_shopping_list_id = ?,
-        auto_create_grocery_draft = ?, auto_finalize_grocery = ?, grocery_lead_minutes = ?,
-        aggregation_mode = ?, updated_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-      WHERE id = 1
-    `).run(
-      values.enabled, values.default_shopping_list_id, values.auto_create_grocery_draft,
-      values.auto_finalize_grocery, values.grocery_lead_minutes, values.aggregation_mode,
-      actorId || null,
-    );
-    // Keep the legacy mixed settings surface working during the transition.
-    database.prepare(`
-      UPDATE meal_execution_settings SET default_shopping_list_id = ?,
-        auto_create_grocery_draft = ?, auto_finalize_grocery = ?, updated_by = ?,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = 1
-    `).run(
-      values.default_shopping_list_id, values.auto_create_grocery_draft,
-      values.auto_finalize_grocery, actorId || null,
-    );
-  })();
-  return getGrocerySettings(database);
+  return saveIndependentGrocerySettings(database, body, actorId);
 }
 
 export function syncGrocerySettingsFromLegacy(database, legacy, actorId) {
-  if (!legacy || !getGrocerySettings(database)) return null;
-  database.prepare(`
-    UPDATE meal_grocery_settings SET enabled = ?, default_shopping_list_id = ?,
-      auto_create_grocery_draft = ?, auto_finalize_grocery = ?, updated_by = ?,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = 1
-  `).run(
-    legacy.enabled ? 1 : 0, legacy.default_shopping_list_id || null,
-    legacy.auto_create_grocery_draft ? 1 : 0, legacy.auto_finalize_grocery ? 1 : 0,
-    actorId || null,
-  );
-  return getGrocerySettings(database);
+  return syncIndependentGrocerySettingsFromLegacy(database, legacy, actorId);
 }
 
 export { mealPlanError };

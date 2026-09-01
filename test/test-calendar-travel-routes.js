@@ -8,6 +8,7 @@ process.env.TZ = 'UTC';
 
 const dbmod = await import('../server/db.js');
 const { default: calendarRouter } = await import('../server/routes/calendar.js');
+const { default: mealsRouter } = await import('../server/routes/meals.js');
 const { default: planningRouter } = await import('../server/routes/planning.js');
 const database = dbmod.get();
 
@@ -48,6 +49,7 @@ app.use((req, _res, next) => {
 });
 app.use(express.json());
 app.use('/planning', planningRouter);
+app.use('/meals', mealsRouter);
 app.use('/', calendarRouter);
 
 const server = app.listen(0);
@@ -227,6 +229,46 @@ test('Calendar Travel HTTP lifecycle preserves one shared context and reconciles
   `).get(secondEventId).n, 0);
   assert.equal(database.prepare('SELECT status FROM planning_contexts WHERE id = ?').get(contextId).status, 'active');
 
+  const plan = await call('POST', '/meals/plans', {
+    body: {
+      name: 'Route Test Travel Meals',
+      effective_from: '2040-09-01',
+      effective_until: '2040-09-30',
+      rules: [{
+        weekday: 0,
+        meal_type: 'dinner',
+        policy: 'fixed',
+        fixed_user_id: SAM.id,
+        participant_ids: [ADMIN.id, SAM.id],
+      }],
+    },
+  });
+  assert.equal(plan.status, 201, plan.body?.error);
+  const planId = Number(plan.body.data.id);
+  const attached = await call('PUT', `/meals/plans/${planId}/contexts/${contextId}`, {
+    body: { is_primary: true },
+  });
+  assert.equal(attached.status, 200, attached.body?.error);
+  const materialized = await call(
+    'GET',
+    `/meals/week-model?start=2040-09-10&end=2040-09-10&planning_context_id=${contextId}`,
+  );
+  assert.equal(materialized.status, 200, materialized.body?.error);
+  const travelMeal = database.prepare(`
+    SELECT m.*, oa.assigned_user_id
+      FROM meals m
+      JOIN meal_occurrence_assignments oa ON oa.meal_id = m.id
+     WHERE m.planning_context_id = ? AND m.meal_plan_id = ? AND m.date = '2040-09-10'
+  `).get(contextId, planId);
+  assert.ok(travelMeal, 'the context Meal occurrence was materialized');
+  assert.equal(Number(travelMeal.assigned_user_id), SAM.id);
+  const travelChoice = database.prepare(`
+    SELECT * FROM planning_obligations
+     WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser'
+       AND status IN ('pending', 'accepted')
+  `).get(travelMeal.id);
+  assert.ok(travelChoice, 'the travel Meal has a live chooser request before cancellation');
+
   const deleted = await call('DELETE', `/${firstEventId}`);
   assert.equal(deleted.status, 204);
   assert.equal((await call('GET', `/${firstEventId}`)).status, 404);
@@ -245,6 +287,75 @@ test('Calendar Travel HTTP lifecycle preserves one shared context and reconciles
        AND tal.action_type = 'travel_meal_plan'
   `).get(contextId);
   assert.equal(taskState.state, 'cancelled');
+  assert.equal(database.prepare('SELECT status FROM planning_obligations WHERE id = ?')
+    .get(travelChoice.id).status, 'superseded');
+  assert.equal(database.prepare(`
+    SELECT COUNT(*) AS n
+      FROM planning_obligations o
+      JOIN meals m ON m.id = o.entity_id AND o.entity_type = 'meal'
+     WHERE m.planning_context_id = ? AND o.role = 'chooser'
+       AND o.status IN ('pending', 'accepted')
+  `).get(contextId).n, 0, 'cancelling travel cannot invoke chooser fallback');
+  assert.equal(database.prepare(`
+    SELECT assigned_user_id FROM meal_occurrence_assignments WHERE meal_id = ?
+  `).get(travelMeal.id).assigned_user_id, SAM.id, 'historical assignment remains auditable');
+  assert.ok(database.prepare(`
+    SELECT 1 FROM planning_obligation_events
+     WHERE obligation_id = ? AND event = 'meal_choice_request_superseded'
+  `).get(travelChoice.id));
+
+  const staleContextChoiceId = Number(database.prepare(`
+    INSERT INTO planning_obligations (
+      entity_type, entity_id, logical_key, role, responsible_user_id,
+      due_at, response_deadline, status
+    ) VALUES ('meal', ?, ?, 'chooser', ?, '2040-09-09T18:00:00Z',
+              '2040-09-09T18:00:00Z', 'pending')
+  `).run(
+    travelMeal.id,
+    `legacy-cancelled-travel:${contextId}:chooser`,
+    SAM.id,
+  ).lastInsertRowid);
+  const orphanChoiceId = Number(database.prepare(`
+    INSERT INTO planning_obligations (
+      entity_type, entity_id, logical_key, role, responsible_user_id,
+      due_at, response_deadline, status
+    ) VALUES ('meal', 987654321, ?, 'chooser', ?, '2020-01-01T00:00:00Z',
+              '2020-01-01T00:00:00Z', 'pending')
+  `).run(`legacy-orphan-meal:${contextId}:chooser`, ADMIN.id).lastInsertRowid);
+  const homeMealId = Number(database.prepare(`
+    INSERT INTO meals (date, meal_type, title, created_by, selection_status)
+    VALUES ('2040-09-10', 'lunch', 'Still actionable at home', ?, 'awaiting_choice')
+  `).run(ADMIN.id).lastInsertRowid);
+  const homeChoiceId = Number(database.prepare(`
+    INSERT INTO planning_obligations (
+      entity_type, entity_id, logical_key, role, responsible_user_id,
+      due_at, response_deadline, status
+    ) VALUES ('meal', ?, ?, 'chooser', ?, '2040-09-10T11:00:00Z',
+              '2040-09-10T11:00:00Z', 'pending')
+  `).run(homeMealId, `active-home-meal:${contextId}:chooser`, ADMIN.id).lastInsertRowid);
+  const inbox = await call('GET', '/meals/selection-requests-household');
+  assert.equal(inbox.status, 200, inbox.body?.error);
+  const inboxIds = inbox.body.data.map((row) => Number(row.id));
+  assert.ok(inboxIds.includes(homeChoiceId));
+  assert.ok(!inboxIds.includes(staleContextChoiceId));
+  assert.ok(!inboxIds.includes(orphanChoiceId));
+  assert.deepEqual(database.prepare(`
+    SELECT id, status FROM planning_obligations WHERE id IN (?, ?) ORDER BY id
+  `).all(staleContextChoiceId, orphanChoiceId), [
+    { id: staleContextChoiceId, status: 'superseded' },
+    { id: orphanChoiceId, status: 'superseded' },
+  ]);
+  const repeatedInbox = await call('GET', '/meals/selection-requests-household');
+  assert.equal(repeatedInbox.status, 200, repeatedInbox.body?.error);
+  assert.deepEqual(database.prepare(`
+    SELECT obligation_id, COUNT(*) AS n
+      FROM planning_obligation_events
+     WHERE obligation_id IN (?, ?) AND event = 'meal_choice_request_superseded'
+     GROUP BY obligation_id ORDER BY obligation_id
+  `).all(staleContextChoiceId, orphanChoiceId), [
+    { obligation_id: staleContextChoiceId, n: 1 },
+    { obligation_id: orphanChoiceId, n: 1 },
+  ], 'legacy cleanup remains idempotent across repeated inbox reads');
   assert.deepEqual(database.pragma('foreign_key_check'), []);
 });
 

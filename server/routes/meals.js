@@ -26,6 +26,11 @@ import {
   saveSettings as saveMealExecutionSettings,
 } from '../services/meal-execution.js';
 import {
+  getGrocerySettings,
+  saveGrocerySettings,
+  syncGrocerySettingsFromLegacy,
+} from '../services/meal-grocery-settings.js';
+import {
   applyLegacyMealScheduleEdits,
   attachMealPlanToContext,
   buildMealStatus,
@@ -37,7 +42,6 @@ import {
   detachMealPlanFromContext,
   ensureContextMealPlanAssociation,
   ensureContextMealPlanAssociationsForRange,
-  getGrocerySettings,
   getMealPlan,
   getMealPlanDefaultSettings,
   listMealMenuItems,
@@ -45,10 +49,9 @@ import {
   materializeMealPlanOccurrences,
   replaceMealMenuItems,
   repairMealChooser,
-  saveGrocerySettings,
   saveMealDecision,
   saveMealPlanDefaultSettings,
-  syncGrocerySettingsFromLegacy,
+  supersedeStaleMealChooserObligations,
   advanceMealChooserFallback,
   updateMealMenuItem,
   updateMealPlan,
@@ -483,12 +486,22 @@ function materializeMealSchedule(from, to, actorId = null) {
 
 function mealSelectionRequests(userId, { household = false } = {}) {
   const d = db.get();
+  // Old deployments could leave an open request behind when a travel context
+  // was cancelled or its Meal occurrence was superseded. Close those rows with
+  // an audit event before timeout processing so one stale record cannot break
+  // the entire Meal Choices inbox.
+  supersedeStaleMealChooserObligations(d);
   const expired = d.prepare(`
-    SELECT id FROM planning_obligations
-     WHERE entity_type = 'meal' AND role = 'chooser' AND status IN ('pending', 'accepted')
-       AND response_deadline IS NOT NULL
-       AND response_deadline <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-     ORDER BY id
+    SELECT o.id
+      FROM planning_obligations o
+      JOIN meals m ON m.id = o.entity_id AND o.entity_type = 'meal'
+      LEFT JOIN planning_contexts pc ON pc.id = m.planning_context_id
+     WHERE o.role = 'chooser' AND o.status IN ('pending', 'accepted')
+       AND m.superseded_by_id IS NULL
+       AND (m.planning_context_id IS NULL OR pc.status IN ('active', 'conflict', 'resolved'))
+       AND o.response_deadline IS NOT NULL
+       AND o.response_deadline <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+     ORDER BY o.id
   `).all();
   for (const row of expired) {
     try { respondToMealSelection(row.id, { action: 'timeout' }, null, { timeout: true }); } catch { /* surface unresolved requests below */ }
@@ -504,7 +517,11 @@ function mealSelectionRequests(userId, { household = false } = {}) {
       JOIN meals m ON m.id = o.entity_id AND o.entity_type = 'meal'
       LEFT JOIN meal_schedule_slots s ON s.id = m.schedule_slot_id
       LEFT JOIN users u ON u.id = o.responsible_user_id
-     WHERE o.role = 'chooser' AND o.status IN ('pending', 'accepted') ${filter}
+      LEFT JOIN planning_contexts pc ON pc.id = m.planning_context_id
+     WHERE o.role = 'chooser' AND o.status IN ('pending', 'accepted')
+       AND m.superseded_by_id IS NULL
+       AND (m.planning_context_id IS NULL OR pc.status IN ('active', 'conflict', 'resolved'))
+       ${filter}
      ORDER BY COALESCE(o.response_deadline, o.due_at, m.date), o.id
   `).all(...(household ? [] : [userId]));
 }
@@ -605,8 +622,54 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
             .run(obligation.id, index, mealId, choice.recipeId, choice.title, choice.notes);
         });
       } else {
-        d.prepare(`UPDATE meals SET title = ?, notes = COALESCE(?, notes), recipe_id = ?, selection_status = 'selected' WHERE id = ?`)
-          .run(choices[0].title, choices[0].notes, choices[0].recipeId, obligation.entity_id);
+        // Keep the legacy inbox response on the same generation-aware path as
+        // the Meal dialog. The chooser's explicit submission publishes a real
+        // menu generation instead of fulfilling an obligation beside an empty
+        // generation that participants cannot use.
+        const currentMenu = listMealMenuItems(d, obligation.entity_id, {
+          editable: true,
+          actorId,
+          beneficiaryId: Number(obligation.responsible_user_id),
+        }).filter((item) => item.item_type !== 'backup');
+        const desiredMenu = [{
+          item_type: 'entree', position: 0, title: choices[0].title,
+          recipe_id: choices[0].recipeId, notes: choices[0].notes,
+        }, ...currentMenu.filter((item) => item.item_type === 'side').map((item) => ({
+          id: item.id,
+          item_type: item.item_type,
+          position: item.position,
+          title: item.title,
+          recipe_id: item.recipe_id,
+          notes: item.notes,
+        }))];
+        const submittedMenu = replaceMealMenuItems(
+          d,
+          obligation.entity_id,
+          { items: desiredMenu, beneficiary_user_id: Number(obligation.responsible_user_id) },
+          actorId,
+          {
+            beneficiaryId: Number(obligation.responsible_user_id),
+            deviceKey: body.device_key || null,
+          },
+        );
+        const entree = submittedMenu.find((item) => item.item_type === 'entree');
+        saveMealDecision(d, obligation.entity_id, {
+          beneficiary_user_id: Number(obligation.responsible_user_id),
+          participation: 'participating',
+          choice_kind: 'household',
+          menu_item_ids: entree ? [Number(entree.id)] : [],
+          notes: choices[0].notes,
+          confirmed: true,
+        }, {
+          actorId,
+          isAdmin: false,
+          deviceKey: body.device_key || null,
+        });
+        d.prepare(`
+          UPDATE meals SET notes = COALESCE(?, notes),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+           WHERE id = ?
+        `).run(choices[0].notes, obligation.entity_id);
         targetMealIds.push(targetMealId);
       }
       d.prepare(`
@@ -616,10 +679,6 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
           title = excluded.title, notes = excluded.notes, scope = excluded.scope,
           responded_by = excluded.responded_by, updated_at = excluded.updated_at
       `).run(obligation.id, targetMealId, choices[0].recipeId, choices[0].title, choices[0].notes, personal ? 'personal' : 'household', actorId);
-      if (!personal) {
-        d.prepare(`UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?`).run(obligation.id);
-        addObligationEvent(d, obligation.id, 'meal_selected', actorId, { meal_ids: targetMealIds, personal: false });
-      }
       return { obligation_id: obligation.id, meal_id: targetMealId, meal_ids: targetMealIds, status: 'fulfilled', personal };
     }
 
@@ -931,7 +990,13 @@ router.get('/status', (req, res) => {
 
 router.get('/plan-defaults', (_req, res) => {
   try {
-    res.json({ data: getMealPlanDefaultSettings(db.get()) });
+    const d = db.get();
+    res.json({
+      data: {
+        ...getMealPlanDefaultSettings(d),
+        grocery_settings: getGrocerySettings(d),
+      },
+    });
   } catch (err) {
     mealDomainError(res, err, 'Could not load Meal Plan Default Settings.');
   }
@@ -939,9 +1004,17 @@ router.get('/plan-defaults', (_req, res) => {
 
 router.put('/plan-defaults', requireAdmin, (req, res) => {
   try {
-    const data = saveMealPlanDefaultSettings(
-      db.get(), req.body || {}, req.authUserId || req.session.userId,
-    );
+    const d = db.get();
+    const body = req.body || {};
+    const actorId = req.authUserId || req.session.userId;
+    const data = d.transaction(() => {
+      const planDefaults = saveMealPlanDefaultSettings(d, body, actorId);
+      const groceryBody = body.grocery_settings || body.grocery_timing || null;
+      const grocerySettings = groceryBody
+        ? saveGrocerySettings(d, groceryBody, actorId)
+        : getGrocerySettings(d);
+      return { ...planDefaults, grocery_settings: grocerySettings };
+    })();
     res.json({ data });
   } catch (err) {
     mealDomainError(res, err, 'Could not save Meal Plan Default Settings.');
@@ -993,7 +1066,25 @@ router.post('/:id/decisions', (req, res) => {
 
 router.get('/:id/menu-items', (req, res) => {
   try {
-    res.json({ data: listMealMenuItems(db.get(), Number(req.params.id)) });
+    const database = db.get();
+    let data;
+    try {
+      data = listMealMenuItems(database, Number(req.params.id), {
+        editable: true,
+        actorId: req.authUserId || req.session.userId,
+        isAdmin: req.authRole === 'admin',
+        beneficiaryId: req.query?.beneficiary_user_id,
+      });
+    } catch (error) {
+      if (!['MEAL_MENU_NOT_ALLOWED', 'MEAL_CHOOSER_REPAIR_REQUIRED', 'ACTING_FOR_CHOOSER_REQUIRED']
+        .includes(error.code)) throw error;
+      // Reading the published menu remains available to participants. Only the
+      // active chooser's editor request creates or exposes a replacement draft.
+      data = listMealMenuItems(database, Number(req.params.id));
+    }
+    res.json({
+      data,
+    });
   } catch (err) {
     mealDomainError(res, err);
   }

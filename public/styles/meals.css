@@ -577,13 +577,12 @@
   flex-direction: column;
   align-items: stretch;
   text-align: left;
+  border: var(--space-px) solid transparent;
+  border-radius: var(--radius-sm);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
   /* cursor bleibt auf der Karte: auch außerhalb des Titel-Buttons ist sie
    * per Pointer greifbar (Drag & Drop, wireDragDrop). */
   cursor: pointer;
-}
-
-.meal-card + .meal-card {
-  border-top: 1px solid var(--color-border-subtle);
 }
 
 /* Die Titelfläche ist der Öffnen-Button der Karte (edit-meal). Sie trägt das
@@ -601,6 +600,10 @@
   color: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+.meal-card__open:hover {
+  background: transparent;
 }
 
 .meal-card__title {
@@ -908,14 +911,15 @@
 
 /* Zutaten-Bereich */
 .meal-ingredients-heading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: var(--space-3);
 }
 
 .meal-ingredient-scale {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(9rem, 1fr) 5rem;
   align-items: end;
   gap: var(--space-2);
   color: var(--color-text-secondary);
@@ -1515,6 +1519,30 @@
   margin-top: 0;
 }
 
+.meal-choice-request-card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: var(--space-px) solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.meal-choice-request-card__context {
+  display: grid;
+  gap: var(--space-0h);
+}
+
+.meal-choice-request-card__context > span,
+.meal-choice-request-card__context > small {
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.meal-choice-request-card .modal-panel__footer {
+  margin-top: var(--space-1);
+}
+
 /* Phase 6: one guided automation surface from schedule to execution. */
 .meal-automation-form,
 .meal-automation-form section,
@@ -1577,6 +1605,14 @@
   gap: var(--space-3);
 }
 
+.meal-default-role-policies,
+.meal-grocery-weekly-timing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: var(--space-3);
+}
+
 .meal-execution-summary__stats > div {
   display: grid;
   gap: var(--space-1);
@@ -1620,6 +1656,8 @@
 @media (max-width: 640px) {
   .meal-automation__roles,
   .meal-automation__timing,
+  .meal-default-role-policies,
+  .meal-grocery-weekly-timing,
   .meal-execution-summary__stats {
     grid-template-columns: 1fr;
   }
@@ -1682,6 +1720,12 @@
   min-width: 10rem;
   min-height: var(--target-md);
   padding-block: var(--space-1);
+}
+
+.meal-context-filter small {
+  max-width: 28rem;
+  color: var(--color-text-tertiary);
+  line-height: var(--line-height-snug);
 }
 
 .meal-acting-banner {
@@ -1794,6 +1838,12 @@
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
+}
+
+.meal-card:hover,
+.meal-card:focus-within {
+  border-color: var(--module-accent);
+  box-shadow: 0 0 0 var(--space-px) var(--module-accent);
 }
 
 .meal-experience-day__add:hover {
@@ -2039,6 +2089,58 @@
   font-weight: var(--font-weight-semibold);
 }
 
+.meal-notify-menu-change {
+  margin-inline-start: calc(var(--space-4) + var(--space-1));
+  padding-top: var(--space-2);
+  border-top: var(--space-px) solid var(--color-border-subtle);
+}
+
+.meal-notify-menu-change[hidden] {
+  display: none;
+}
+
+.meal-published-menu {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+}
+
+.meal-published-menu__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.meal-published-menu__heading span,
+.meal-published-menu__courses span {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.meal-published-menu__courses,
+.meal-published-menu__courses > div {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.meal-published-menu__courses {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.meal-published-menu__courses ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding-inline-start: var(--space-4);
+}
+
 .meal-choice-form__section:disabled,
 .meal-choice-form textarea:disabled,
 .meal-personal-choice-fields :disabled,
@@ -2089,6 +2191,10 @@
   background: var(--color-fill-well);
 }
 
+.meal-backup-choice-fields[hidden] {
+  display: none;
+}
+
 .meal-personal-choice-fields .label:last-child {
   grid-column: 1 / -1;
 }
@@ -2125,8 +2231,8 @@
 
 .meal-menu-editor__row {
   display: grid;
-  grid-template-columns: minmax(7rem, 1fr) minmax(12rem, 3fr) auto;
-  align-items: end;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(16rem, 3fr) auto;
+  align-items: start;
   gap: var(--space-2);
   padding: var(--space-3);
   border-radius: var(--radius-md);
@@ -2147,7 +2253,8 @@
 }
 
 .meal-menu-editor__remove {
-  align-self: end;
+  align-self: start;
+  margin-top: calc(1.5em + var(--space-1));
   min-width: var(--target-md);
   min-height: var(--target-md);
   color: var(--color-danger);
@@ -2259,13 +2366,12 @@
 }
 
 /* --------------------------------------------------------
- * Meal Plan manager/editor and independent grocery settings
+ * Meal Plan manager/editor and combined household defaults
  * -------------------------------------------------------- */
 
 .meal-plan-manager,
 .meal-plan-manager__empty,
-.meal-plan-editor,
-.meal-grocery-settings {
+.meal-plan-editor {
   display: grid;
   gap: var(--space-4);
 }
@@ -2520,6 +2626,30 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
   align-items: start;
   gap: var(--space-3);
+}
+
+.meal-plan-role-assignments {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.meal-plan-role-assignment {
+  display: grid;
+  grid-template-columns: minmax(10rem, 0.35fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-top: var(--space-px) solid var(--color-border-subtle);
+}
+
+.meal-plan-role-assignment__heading {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.meal-plan-role-assignment__heading small {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
 }
 
 .meal-plan-fallbacks {
@@ -2914,6 +3044,11 @@
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .meal-published-menu__courses,
+  .meal-plan-role-assignment {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .meal-personal-choice-fields .label:last-child {
     grid-column: auto;
   }
@@ -2951,12 +3086,12 @@
 
   .meal-ingredients-heading {
     align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .meal-ingredient-scale {
     align-items: stretch;
-    flex-wrap: wrap;
+    grid-template-columns: minmax(0, 1fr) 5rem;
   }
 
   .meal-sides-heading {

@@ -331,7 +331,10 @@ router.post('/:listId/grocery-runs', (req, res) => {
       logicalKey: req.body?.logical_key,
       userId: req.authUserId || req.session.userId,
     });
-    res.status(result.reused ? 200 : 201).json({ data: result.run, meta: { reused: result.reused, refreshed: result.refreshed } });
+    res.status(result.reused || result.refreshed ? 200 : 201).json({
+      data: result.run,
+      meta: { reused: result.reused, refreshed: result.refreshed },
+    });
   } catch (err) {
     log.error('POST /:listId/grocery-runs error:', err);
     res.status(err.status || 500).json({ error: err.status ? err.message : 'Internal server error.', code: err.code || 500 });
@@ -557,7 +560,7 @@ router.get('/', (req, res) => {
       FROM shopping_lists sl
       LEFT JOIN shopping_items si ON si.list_id = sl.id
       GROUP BY sl.id
-      ORDER BY sl.created_at ASC
+      ORDER BY sl.name COLLATE NOCASE, sl.id
     `).all();
     res.json({ data: lists });
   } catch (err) {

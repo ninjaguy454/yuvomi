@@ -166,6 +166,39 @@ test('direct backend occurrence shape normalizes policy, context, responsibiliti
   assert.deepEqual(selectedMenuItems(occurrence, decision).map((item) => item.id), [103]);
 });
 
+test('week model keeps published, draft and historical menu projections separate', () => {
+  const [occurrence] = normalizeMealWeekModel({ data: { occurrences: [{
+    id: 42,
+    date: '2026-09-01',
+    meal_type: 'dinner',
+    menu_status: 'editing',
+    published_menu_status: 'fulfilled',
+    menu_items: [
+      { id: 201, item_type: 'entree', title: 'Published curry', position: 0 },
+      { id: 202, item_type: 'side', title: 'Published rice', position: 1 },
+    ],
+    published_menu_items: [
+      { id: 202, item_type: 'side', title: 'Published rice', position: 1 },
+      { id: 201, item_type: 'entree', title: 'Published curry', position: 0 },
+    ],
+    draft_menu_items: [
+      { id: 302, item_type: 'side', title: 'Draft salad', position: 1 },
+      { id: 301, item_type: 'entree', title: 'Draft pasta', position: 0 },
+    ],
+    historical_menu_items: [
+      { id: 101, item_type: 'entree', title: 'Older soup', position: 0 },
+    ],
+  }] } }).occurrences;
+
+  assert.equal(occurrence.menu_status, 'editing');
+  assert.equal(occurrence.published_menu_status, 'fulfilled');
+  assert.deepEqual(occurrence.menu_items.map((item) => item.label), ['Published curry', 'Published rice']);
+  assert.deepEqual(occurrence.published_menu_items.map((item) => item.label), ['Published curry', 'Published rice']);
+  assert.deepEqual(occurrence.draft_menu_items.map((item) => item.label), ['Draft pasta', 'Draft salad']);
+  assert.deepEqual(occurrence.historical_menu_items.map((item) => item.label), ['Older soup']);
+  assert.notStrictEqual(occurrence.published_menu_items[0], occurrence.draft_menu_items[0]);
+});
+
 test('course limits preserve explicit zeroes and separate menu authoring from diner selection', () => {
   const occurrence = {
     menu_limits: { max_entree_choices: 2, max_side_choices: 0 },
@@ -235,7 +268,7 @@ test('date grouping keeps simultaneous contexts distinct and orders by meal time
   assert.equal(grouped.size, 7);
 });
 
-test('decision payload keeps participation and food choice independent and records acting-for device', () => {
+test('decision payload keeps participation and food choice independent and records notification opt-in', () => {
   const payload = mealDecisionPayload({
     occurrence: { id: 31, context: { id: 7 } },
     memberId: 2,
@@ -244,6 +277,7 @@ test('decision payload keeps participation and food choice independent and recor
     menuItemIds: [9, '10', null],
     notes: '  Use the shelf-stable option.  ',
     deviceKey: 'wall-kitchen-01',
+    notifyOnMenuChange: true,
   });
   assert.deepEqual(payload, {
     beneficiary_user_id: 2,
@@ -253,6 +287,7 @@ test('decision payload keeps participation and food choice independent and recor
     choice: 'assigned',
     menu_item_ids: [9, 10],
     notes: 'Use the shelf-stable option.',
+    notify_on_menu_change: true,
     device_key: 'wall-kitchen-01',
   });
 });
@@ -279,6 +314,7 @@ test('personal decision payload carries a named choice and optional saved recipe
     selected_meal_title: 'Corner Cafe',
     selected_recipe_id: 12,
     notes: 'Window table',
+    notify_on_menu_change: false,
     device_key: 'wall-kitchen-02',
   });
 });
@@ -305,6 +341,7 @@ test('Backup Meal payload carries an individual saved recipe or custom name with
     selected_meal_title: 'Tomato soup',
     selected_recipe_id: 19,
     notes: 'Individual fallback',
+    notify_on_menu_change: false,
     device_key: 'wall-kitchen-02',
   });
 });

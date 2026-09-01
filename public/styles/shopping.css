@@ -866,6 +866,12 @@
   overflow-y: auto;
 }
 
+.shopping-grocery-draft__group {
+  margin: var(--space-2) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
 .shopping-grocery-draft__item {
   display: flex;
   justify-content: space-between;

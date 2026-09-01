@@ -476,9 +476,10 @@ export async function render(container, { user }) {
               <option value="${state.selectedMemberId || ''}">${esc(user?.display_name || user?.username || mealText('meals.meLabel', 'Me'))}</option>
             </select>
           </label>
-          <label class="meal-context-filter" for="meal-context-select" hidden>
+          <label class="meal-context-filter" for="meal-context-select">
             <span>${mealText('meals.contextLabel', 'Planning context')}</span>
             <select class="form-input" id="meal-context-select"></select>
+            <small>${mealText('meals.contextSelectorHint', 'Home uses the normal household schedule. Trips use their own dated plan; All is an overview.')}</small>
           </label>
         </div>
       </div>
@@ -749,22 +750,22 @@ function renderWeekExperienceHeader() {
   const contextLabel = _container.querySelector('.meal-context-filter');
   const contextSelect = _container.querySelector('#meal-context-select');
   if (contextLabel && contextSelect) {
-    contextLabel.hidden = contexts.length === 0;
+    contextLabel.hidden = false;
     contextSelect.replaceChildren();
     const all = document.createElement('option');
     all.value = '';
-    all.textContent = mealText('meals.allContexts', 'All contexts');
+    all.textContent = mealText('meals.allContexts', 'All home and trips');
     all.selected = state.selectedContextId == null;
     contextSelect.appendChild(all);
     const home = document.createElement('option');
     home.value = 'home';
-    home.textContent = mealText('meals.homeContext', 'Home');
+    home.textContent = mealText('meals.homeContext', 'Home only');
     home.selected = state.selectedContextId === 'home';
     contextSelect.appendChild(home);
     contexts.forEach((context) => {
       const option = document.createElement('option');
       option.value = String(context.id);
-      option.textContent = context.name || mealText('meals.homeContext', 'Home');
+      option.textContent = `${mealText('meals.tripContextPrefix', 'Trip')} · ${context.name || mealText('meals.travelContext', 'Travel')}`;
       option.selected = Number(context.id) === Number(state.selectedContextId);
       contextSelect.appendChild(option);
     });
@@ -880,7 +881,6 @@ function selectedMemberIsOccurrenceChooser(occurrence) {
   // assignments. A stale participant role or stale client control must never
   // make the selected member look like the active chooser.
   if (!occurrenceHasActiveChooser(occurrence)) return false;
-  if (occurrence.controls?.choose_shared_meal === false) return false;
   const selectedMemberId = Number(state.selectedMemberId);
   if (Number(occurrence.chooser?.user_id ?? occurrence.chooser?.id) === selectedMemberId) return true;
   return (occurrence.participants || []).some((person) => (
@@ -898,11 +898,50 @@ function occurrenceHasActiveChooser(occurrence) {
 }
 
 function occurrenceMealTitle(occurrence) {
-  // An unassigned household meal has no food yet. Showing "Pending" as the
-  // meal name made it look as though a menu already existed and merely needed
-  // approval.
+  const publishedEntree = publishedMenuItems(occurrence).find((item) => item.kind === 'entree');
+  if (publishedEntree?.label) return publishedEntree.label;
+  // An unassigned household meal with no published menu has no food yet.
+  // Showing "Pending" as the meal name made it look as though a menu already
+  // existed and merely needed approval.
   if (!occurrenceHasActiveChooser(occurrence)) return '';
   return mealDisplayTitle(occurrence, mealText('meals.pending', 'Pending'));
+}
+
+function publishedMenuItems(occurrence) {
+  const explicit = occurrence?.published_menu_items;
+  if (Array.isArray(explicit)) return explicit;
+  return Array.isArray(occurrence?.menu_items) ? occurrence.menu_items : [];
+}
+
+function editableMenuItems(occurrence) {
+  const draft = occurrence?.draft_menu_items;
+  // An explicit draft (including an empty one when no menu has ever been
+  // published) owns different IDs from the participant-facing generation.
+  if (Array.isArray(draft)) return draft;
+  return publishedMenuItems(occurrence);
+}
+
+function renderPublishedHouseholdMenu(occurrence) {
+  const items = publishedMenuItems(occurrence);
+  const entrees = items.filter((item) => item.kind === 'entree');
+  const sides = items.filter((item) => item.kind === 'side');
+  const chooserName = occurrence?.chooser?.display_name
+    || occurrence?.chooser?.username
+    || mealText('meals.chooserFallbackName', 'The chooser');
+  const handoffPending = occurrenceHasActiveChooser(occurrence)
+    && !['fulfilled', 'selected'].includes(String(occurrence.chooser_status || '').toLowerCase());
+  const status = items.length
+    ? (handoffPending
+      ? mealText('meals.publishedMenuUpdatePending', 'Update pending')
+      : mealText('meals.publishedMenuStatus', 'Current selection'))
+    : mealText('meals.sharedMenuPending', 'Waiting for meal selection');
+  return `<section class="meal-published-menu" aria-label="${esc(mealText('meals.publishedHouseholdMenu', 'Household Meal'))}">
+    <div class="meal-published-menu__heading"><strong>${mealText('meals.publishedHouseholdMenu', 'Household Meal')}</strong><span>${esc(status)}</span></div>
+    ${items.length ? `<div class="meal-published-menu__courses">
+      ${entrees.length ? `<div><span>${mealText('meals.entree', 'Entrée')}</span>${entrees.map((item) => `<strong>${esc(item.label)}</strong>`).join('')}</div>` : ''}
+      ${sides.length ? `<div><span>${mealText('meals.sides', 'Sides')}</span><ul>${sides.map((item) => `<li>${esc(item.label)}</li>`).join('')}</ul></div>` : ''}
+    </div>` : `<p class="form-hint">${esc(mealText('meals.noPublishedMenuHint', "{{name}} hasn't chosen the household meal yet. You can wait for their choice, select a Backup Meal, or opt out.", { name: chooserName }))}</p>`}
+  </section>`;
 }
 
 function renderChooserRepairAction(occurrence) {
@@ -928,12 +967,11 @@ function renderChoiceForm(occurrence, decision, canAct) {
   const allowPersonal = personalPolicy && (!explicitControls || controls.choose_personal_meal);
   const allowBackup = !personalPolicy && !chooserMode && (!explicitControls || controls.choose_backup);
   const allowNotes = !explicitControls || controls.add_notes;
-  const allowSkip = !explicitControls || controls.skip;
-  if (![allowParticipation, chooserMode, allowPersonal, allowBackup, allowNotes, allowSkip].some(Boolean)) return '';
+  if (![allowParticipation, chooserMode, allowPersonal, allowBackup, allowNotes].some(Boolean)) return '';
   const selectedIds = new Set(selectedMenuItems(occurrence, decision).map((item) => Number(item.id)));
   const courseLimits = mealCourseLimits(occurrence);
-  const entreeItems = chooserMode ? occurrence.menu_items.filter((item) => item.kind === 'entree') : [];
-  const sideItems = chooserMode ? occurrence.menu_items.filter((item) => item.kind === 'side') : [];
+  const entreeItems = chooserMode ? editableMenuItems(occurrence).filter((item) => item.kind === 'entree') : [];
+  const sideItems = chooserMode ? editableMenuItems(occurrence).filter((item) => item.kind === 'side') : [];
   const personalKinds = new Set(['personal', 'restaurant', 'takeout']);
   const personalKind = personalKinds.has(decision?.choice_kind) ? decision.choice_kind : 'personal';
   const personalRecipeOptions = state.recipes
@@ -955,8 +993,10 @@ function renderChoiceForm(occurrence, decision, canAct) {
     <datalist id="${recipeListId}">${personalRecipeOptions}</datalist>
     ${allowParticipation ? `<fieldset class="meal-choice-form__section">
       <legend>${mealText('meals.participationTitle', 'Participation')}</legend>
-      <label class="meal-inline-choice"><input type="radio" name="participation" value="participating" ${participation !== 'not_participating' ? 'checked' : ''}><span>${mealText('meals.joinMeal', 'I will join this meal')}</span></label>
-      <label class="meal-inline-choice"><input type="radio" name="participation" value="not_participating" ${participation === 'not_participating' ? 'checked' : ''}><span>${mealText('meals.notJoiningMeal', 'I will not join')}</span></label>
+      <label class="meal-inline-choice"><input type="radio" name="participation" value="participating" ${participation !== 'not_participating' ? 'checked' : ''}><span>${mealText('meals.joinMeal', 'Opt in')}</span></label>
+      <label class="meal-inline-choice"><input type="radio" name="participation" value="not_participating" ${participation === 'not_participating' ? 'checked' : ''}><span>${mealText('meals.notJoiningMeal', 'Opt out')}</span></label>
+      <label class="meal-inline-choice meal-notify-menu-change" data-notify-menu-change ${participation === 'not_participating' ? '' : 'hidden'}><input type="checkbox" name="notify_on_menu_change" ${decision?.notify_on_menu_change ? 'checked' : ''}><span>${mealText('meals.notifyMenuChange', 'Notify me if this meal changes')}</span></label>
+      ${chooserMode ? `<small class="form-hint">${mealText('meals.notJoiningPassesChooser', 'Opting out passes chooser responsibility to the next backup.')}</small>` : ''}
     </fieldset>` : `<input type="hidden" name="participation" value="${esc(participation)}">`}
     ${chooserMode ? `<fieldset class="meal-choice-form__section" data-meal-food-section ${participation === 'not_participating' ? 'disabled' : ''}>
       <legend>${mealText('meals.householdMeal', 'Household meal')}</legend>
@@ -964,12 +1004,12 @@ function renderChoiceForm(occurrence, decision, canAct) {
       ${entreeItems.map((item) => `<label class="meal-option-choice meal-option-choice--entree"><input type="radio" name="meal_choice" value="${item.id}" ${selectedIds.has(Number(item.id)) ? 'checked' : ''}><span><strong>${esc(item.label)}</strong></span></label>`).join('') || (courseLimits.max_entree_choices > 0 ? `<p class="form-hint">${mealText('meals.noEntreeOptions', 'Use Edit entrée & sides to add the shared meal.')}</p>` : '')}
       ${sideItems.length ? `<div class="meal-side-choices"><span class="meal-side-choices__label">${mealText('meals.maxSides', 'Maximum sides')}: ${courseLimits.max_side_choices}</span>${sideItems.map((item) => `<label class="meal-inline-choice"><input type="checkbox" name="menu_side" value="${item.id}" data-menu-side ${selectedIds.has(Number(item.id)) ? 'checked' : ''}><span>${esc(item.label)}</span></label>`).join('')}</div>` : ''}
     </fieldset>` : ''}
+    ${!personalPolicy && !chooserMode ? renderPublishedHouseholdMenu(occurrence) : ''}
     ${allowBackup ? `<fieldset class="meal-choice-form__section" data-meal-food-section ${participation === 'not_participating' ? 'disabled' : ''}>
-      <legend>${mealText('meals.backupChoiceTitle', 'Backup Meal')}</legend>
-      <p class="form-hint">${mealText('meals.backupChoiceHint', 'Join the household meal, or choose an individual saved recipe or custom Backup Meal for yourself.')}</p>
-      <label class="meal-option-choice meal-option-choice--household"><input type="radio" name="meal_choice" value="household" ${backupSelected ? '' : 'checked'}><span><strong>${mealText('meals.householdMeal', 'Household meal')}</strong><small>${mealText('meals.householdMealHint', 'Use the shared meal instead of Backup Meal')}</small></span></label>
-      <label class="meal-option-choice meal-option-choice--backup"><input type="radio" name="meal_choice" value="backup" ${backupSelected ? 'checked' : ''}><span><strong>${mealText('meals.backupMeal', 'Backup Meal')}</strong><small>${mealText('meals.backupChoiceHint', 'Choose an individual meal just for you')}</small></span></label>
-      <div class="meal-backup-choice-fields" data-backup-choice-fields>
+      <legend>${mealText('meals.backupChoiceTitle', 'Meal Choice')}</legend>
+      <label class="meal-option-choice meal-option-choice--household"><input type="radio" name="meal_choice" value="household" ${backupSelected ? '' : 'checked'}><span><strong>${mealText('meals.householdMeal', 'Household Meal')}</strong></span></label>
+      <label class="meal-option-choice meal-option-choice--backup"><input type="radio" name="meal_choice" value="backup" ${backupSelected ? 'checked' : ''}><span><strong>${mealText('meals.backupMeal', 'Backup Meal')}</strong></span></label>
+      <div class="meal-backup-choice-fields" data-backup-choice-fields ${backupSelected && participation !== 'not_participating' ? '' : 'hidden'}>
         <label class="label">${mealText('meals.backupMealChoice', 'Backup meal choice')}<input class="form-input" name="backup_meal_title" list="${recipeListId}" maxlength="300" value="${esc(backupMealTitle)}" placeholder="${esc(mealText('meals.recipeOrCustomPlaceholder', 'Choose a recipe or type a new meal'))}" ${participation === 'not_participating' || !backupSelected ? 'disabled' : ''}><input type="hidden" name="backup_recipe_id" value="${Number(decision?.selected_recipe_id) || ''}"><small class="form-hint">${mealText('meals.backupMealChoiceHint', 'Saved recipes filter as you type; a new meal name is also accepted.')}</small></label>
       </div>
     </fieldset>` : ''}
@@ -990,19 +1030,17 @@ function renderChoiceForm(occurrence, decision, canAct) {
     ${allowNotes ? `<label class="label">${t('meals.notesLabel')}<textarea class="form-input" name="notes" rows="2" data-meal-notes placeholder="${t('meals.notesPlaceholder')}" ${participation === 'not_participating' ? 'disabled' : ''}>${esc(decision?.notes || '')}</textarea></label>` : ''}
     <div class="meal-choice-form__actions">
       <button type="submit" class="btn btn--primary">${mealText('meals.confirmChoices', 'Confirm choices')}</button>
-      ${allowSkip ? `<button type="button" class="btn btn--secondary" data-action="skip-meal-decision" data-meal-id="${mealId}" data-occurrence-key="${esc(occurrence.key)}">${mealText('meals.skipMeal', 'Skip this meal')}</button>` : ''}
       ${ownPendingObligation && !personalPolicy ? `<button type="button" class="btn btn--ghost" data-action="decline-meal-choice" data-obligation-id="${ownPendingObligation.id}">${mealText('meals.declineChooserResponsibility', 'Decline chooser responsibility')}</button>` : ''}
     </div>
-    ${allowSkip ? `<p class="form-hint">${chooserMode
-    ? mealText('meals.skipChooserResponsibilityHint', 'If you skip or do not participate, Yuvomi passes chooser responsibility to the next configured backup.')
-    : mealText('meals.skipResponsibilityHint', 'Skipping records that you will not participate in this meal.')}</p>` : ''}
   </form>`;
 }
 
 function canEditOccurrenceMenu(occurrence) {
+  const controls = occurrence.controls || {};
+  const explicitControls = Object.keys(controls).length > 0;
   return occurrenceSelectionPolicy(occurrence) !== 'personal_choice'
     && selectedMemberIsOccurrenceChooser(occurrence)
-    && Boolean(occurrence.controls?.choose_shared_meal || !Object.keys(occurrence.controls || {}).length);
+    && Boolean(!explicitControls || controls.can_edit_shared_menu);
 }
 
 function decisionFoodSummary(occurrence, decision) {
@@ -1044,10 +1082,11 @@ function decisionFoodSummary(occurrence, decision) {
       foods: [{ kind: 'backup', label: title }],
     };
   }
+  const householdFoods = foods.length ? foods : publishedMenuItems(occurrence);
   return {
     title: occurrenceMealTitle(occurrence),
     detail: participationLabel(decision.participation),
-    foods: occurrenceHasActiveChooser(occurrence) ? foods : [],
+    foods: householdFoods,
   };
 }
 
@@ -1842,6 +1881,7 @@ function renderMealMenuEditorRow(item = {}, occurrence = null) {
 
 async function openMealMenuEditor(occurrence) {
   const mealId = Number(occurrence.meal?.id || occurrence.id);
+  const returnOccurrenceKey = occurrence.key;
   if (!mealId) return;
   let items;
   try {
@@ -1868,7 +1908,36 @@ async function openMealMenuEditor(occurrence) {
     <div class="meal-menu-editor__add-actions"><button type="button" class="btn btn--secondary" data-menu-editor-add="entree"><i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.entree', 'Entrée')}</button><button type="button" class="btn btn--secondary" data-menu-editor-add="side"><i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.side', 'Side')}</button></div>
     <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-action="close-modal">${t('common.cancel')}</button><button type="submit" class="btn btn--primary">${t('common.save')}</button></div>
   </form>`;
-  openSharedModal({ title: mealText('meals.menuEditorTitle', 'Meal options'), content, size: 'lg', onSave(panel) {
+  openSharedModal({
+    title: mealText('meals.menuEditorTitle', 'Meal options'),
+    content,
+    size: 'lg',
+    onClose() {
+      // Meal Options is a child workflow of the occurrence card. Saving,
+      // cancelling, or using the header close returns to that exact meal.
+      if (returnOccurrenceKey && occurrenceByKey(returnOccurrenceKey) && usesDesktopOccurrenceDialog()) {
+        // The shared modal invokes onClose before it finishes removing the
+        // current overlay. Defer the parent dialog until that teardown is
+        // complete so the old modal cannot consume the replacement.
+        setTimeout(() => {
+          if (occurrenceByKey(returnOccurrenceKey)) openOccurrenceDialog(returnOccurrenceKey);
+        }, 0);
+      } else if (returnOccurrenceKey && occurrenceByKey(returnOccurrenceKey)) {
+        // Mobile uses a closing animation. Restore and focus the originating
+        // card after the overlay has left the accessibility tree.
+        setTimeout(() => {
+          if (!occurrenceByKey(returnOccurrenceKey)) return;
+          state.expandedOccurrences.add(returnOccurrenceKey);
+          state.deepLinkOpenKey = returnOccurrenceKey;
+          renderWeekGrid();
+          syncMealRouteState();
+          requestAnimationFrame(() => _container
+            ?.querySelector(`[data-occurrence-key="${CSS.escape(returnOccurrenceKey)}"] [data-action="toggle-occurrence"]`)
+            ?.focus());
+        }, 420);
+      }
+    },
+    onSave(panel) {
     const list = panel.querySelector('[data-menu-editor-items]');
     const currentLimitState = () => mealMenuOptionLimitState(
       [...list.querySelectorAll('[data-menu-editor-row]')].map((row) => ({
@@ -1974,7 +2043,8 @@ async function openMealMenuEditor(occurrence) {
       }
     });
     if (window.lucide) lucide.createIcons({ el: panel });
-  }});
+    },
+  });
 }
 
 async function loadMealPlans() {
@@ -2181,7 +2251,7 @@ function renderMealPlanRule(rule = {}) {
     ? rule.chooser_fallback_user_ids
     : rule.fallback_user_id ? [rule.fallback_user_id] : [])
     .map(Number).filter((id) => Number.isInteger(id) && id > 0))];
-  const cookStrategy = rule.cook_strategy || (rule.cook_user_id ? 'fixed' : 'none');
+  const cookStrategy = rule.cook_strategy || (rule.cook_user_id ? 'fixed' : 'round_robin');
   const supervisorStrategy = rule.supervisor_strategy || (rule.supervisor_user_id ? 'fixed' : 'none');
   const deadlineMode = rule.deadline_mode || 'relative';
   const deadline = durationEditorValue(rule.selection_deadline_value != null
@@ -2231,16 +2301,18 @@ function renderMealPlanRule(rule = {}) {
             <small class="form-hint">${mealText('meals.defaultFailsafeManagedElsewhere', 'The final failsafe is configured once in Meal Plan Default Settings.')}</small>
           </div>
         </fieldset>
-        <fieldset class="meal-plan-responsibility-group"><legend>${mealText('meals.cookAssignment', 'Cook assignment')}</legend><div class="meal-plan-assignment-row">
-          <label class="label"><span>${mealText('meals.assignmentMethod', 'Assignment method')}</span><select class="form-input" name="rule_cook_strategy">${strategyOptions(cookStrategy, [['none', mealText('meals.strategyNone', 'None')], ['fixed', mealText('meals.fixedMember', 'Fixed member')], ['round_robin', mealText('meals.eligibleRoundRobin', 'Eligible round robin')]])}</select></label>
-          <label class="label" data-plan-cook-fixed ${cookStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.cookLabel', 'Cook')}</span><select class="form-input" name="rule_cook_user_id">${planMemberOptions(rule.cook_user_id)}</select></label>
-          <label class="label" data-plan-cook-rotation ${cookStrategy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.roundRobinGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_cook_rotation_group" maxlength="160" value="${esc(rule.cook_rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.roleRotationFallbackHint', 'Leave blank for eligible household members; an empty group falls back to that default.')}</small></label>
-        </div></fieldset>
-        <fieldset class="meal-plan-responsibility-group"><legend>${mealText('meals.supervisorAssignment', 'Supervisor assignment')}</legend><div class="meal-plan-assignment-row">
-          <label class="label"><span>${mealText('meals.assignmentMethod', 'Assignment method')}</span><select class="form-input" name="rule_supervisor_strategy">${strategyOptions(supervisorStrategy, [['none', mealText('meals.strategyNone', 'None')], ['fixed', mealText('meals.fixedMember', 'Fixed member')], ['round_robin', mealText('meals.eligibleRoundRobin', 'Eligible round robin')]])}</select></label>
-          <label class="label" data-plan-supervisor-fixed ${supervisorStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.supervisorLabel', 'Supervisor')}</span><select class="form-input" name="rule_supervisor_user_id">${planMemberOptions(rule.supervisor_user_id)}</select></label>
-          <label class="label" data-plan-supervisor-rotation ${supervisorStrategy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.roundRobinGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_supervisor_rotation_group" maxlength="160" value="${esc(rule.supervisor_rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.roleRotationFallbackHint', 'Leave blank for eligible household members; an empty group falls back to that default.')}</small></label>
-        </div></fieldset>
+        <div class="meal-plan-role-assignments">
+          <section class="meal-plan-role-assignment" aria-labelledby="meal-plan-cook-${sequence}"><div class="meal-plan-role-assignment__heading"><strong id="meal-plan-cook-${sequence}">${mealText('meals.cookAssignment', 'Cook assignment')}</strong><small>${mealText('meals.cookAssignmentHint', 'Defaults to eligible household members in round-robin order.')}</small></div><div class="meal-plan-assignment-row">
+            <label class="label"><span>${mealText('meals.assignmentMethod', 'Assignment method')}</span><select class="form-input" name="rule_cook_strategy">${strategyOptions(cookStrategy, [['none', mealText('meals.strategyNone', 'None')], ['fixed', mealText('meals.fixedMember', 'Fixed member')], ['round_robin', mealText('meals.eligibleRoundRobin', 'Eligible round robin')]])}</select></label>
+            <label class="label" data-plan-cook-fixed ${cookStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.cookLabel', 'Cook')}</span><select class="form-input" name="rule_cook_user_id">${planMemberOptions(rule.cook_user_id)}</select></label>
+            <label class="label" data-plan-cook-rotation ${cookStrategy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.roundRobinGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_cook_rotation_group" maxlength="160" value="${esc(rule.cook_rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.roleRotationFallbackHint', 'Leave blank for eligible household members; an empty group falls back to that default.')}</small></label>
+          </div></section>
+          <section class="meal-plan-role-assignment" aria-labelledby="meal-plan-supervisor-${sequence}"><div class="meal-plan-role-assignment__heading"><strong id="meal-plan-supervisor-${sequence}">${mealText('meals.supervisorAssignment', 'Supervisor assignment')}</strong><small>${mealText('meals.supervisorAssignmentHint', 'Leave unassigned unless this meal needs supervision.')}</small></div><div class="meal-plan-assignment-row">
+            <label class="label"><span>${mealText('meals.assignmentMethod', 'Assignment method')}</span><select class="form-input" name="rule_supervisor_strategy">${strategyOptions(supervisorStrategy, [['none', mealText('meals.strategyNone', 'None')], ['fixed', mealText('meals.fixedMember', 'Fixed member')], ['round_robin', mealText('meals.eligibleRoundRobin', 'Eligible round robin')]])}</select></label>
+            <label class="label" data-plan-supervisor-fixed ${supervisorStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.supervisorLabel', 'Supervisor')}</span><select class="form-input" name="rule_supervisor_user_id">${planMemberOptions(rule.supervisor_user_id)}</select></label>
+            <label class="label" data-plan-supervisor-rotation ${supervisorStrategy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.roundRobinGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_supervisor_rotation_group" maxlength="160" value="${esc(rule.supervisor_rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.roleRotationFallbackHint', 'Leave blank for eligible household members; an empty group falls back to that default.')}</small></label>
+          </div></section>
+        </div>
         <label class="meal-inline-choice meal-plan-rule__presence"><input type="checkbox" name="rule_presence_required" ${rule.presence_required ? 'checked' : ''}><span>${mealText('meals.presenceRequired', 'Only assign people who are available in this context')}</span></label>
         <details class="meal-plan-rule__participants" data-participant-override ${allParticipants ? '' : 'open'}><summary><span><strong>${mealText('meals.manualParticipants', 'Manual participant override')}</strong><small>${mealText('meals.manualParticipantsHint', 'By default, every household member participates and new members are included automatically.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><label class="meal-inline-choice meal-plan-rule__all-participants"><input type="checkbox" name="rule_all_participants" ${allParticipants ? 'checked' : ''}><span>${mealText('meals.allHouseholdMembers', 'All household members')}</span></label><div data-plan-participant-list ${allParticipants ? 'hidden' : ''}>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="rule_participant" value="${member.id}" ${participants.has(Number(member.id)) ? 'checked' : ''} ${allParticipants ? 'disabled' : ''}><span>${esc(member.display_name || member.name)}</span></label>`).join('') || `<span class="form-hint">${mealText('meals.noMembers', 'No household members found.')}</span>`}</div></div></details>
       </div></details>
@@ -2373,7 +2445,6 @@ function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
     </div>
     <div class="meal-plan-editor__heading"><h3>${mealText('meals.planSlots', 'Meal slots')}</h3>${readOnly ? '' : `<button type="button" class="btn btn--secondary btn--sm" data-plan-rule-add><i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.addSlot', 'Add slot')}</button>`}</div>
     <div class="meal-plan-editor__rules" data-plan-rules>${rules.map(renderMealPlanRule).join('')}</div>
-    ${renderMealPlanRevisionHistory(plan)}
     <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-action="close-modal">${readOnly ? t('common.close') : t('common.cancel')}</button>${readOnly ? '' : `<button type="submit" class="btn btn--primary">${plan?.id ? t('common.save') : mealText('meals.createMealPlan', 'Create Meal Plan')}</button>`}</div>
   </form>`;
   openSharedModal({ title: readOnly ? mealText('meals.viewMealPlanTitle', 'Meal Plan details') : plan?.id ? mealText('meals.editMealPlan', 'Edit Meal Plan') : mealText('meals.addMealPlan', 'Meal Plan'), content, size: 'xl', onSave(panel) {
@@ -2560,74 +2631,31 @@ function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
   }});
 }
 
-async function openMealGrocerySettings() {
-  let settings;
-  try {
-    const response = await api.get('/meals/grocery-settings');
-    settings = response?.data ?? response ?? {};
-    state.grocerySettings = settings;
-  } catch (error) {
-    window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
-    return;
-  }
-  const listOptions = state.lists.map((list) => `<option value="${list.id}" ${Number(settings.default_shopping_list_id) === Number(list.id) ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
-  const content = `<form id="meal-grocery-settings-form" class="meal-grocery-settings">
-    <p class="form-hint">${mealText('meals.grocerySettingsHint', 'These Shopping defaults are independent from Meal Plan schedules and cooking responsibilities.')}</p>
-    <label class="meal-automation__master"><input type="checkbox" name="enabled" ${settings.enabled !== false && settings.enabled !== 0 ? 'checked' : ''}><span><strong>${mealText('meals.enableGroceryPreparation', 'Enable grocery preparation')}</strong><small>${t('meals.enableAutomationHint')}</small></span></label>
-    <label class="form-label">${t('meals.defaultShoppingList')}<select class="form-input" name="default_shopping_list_id"><option value="">${t('meals.noDefaultShoppingList')}</option>${listOptions}</select></label>
-    <label class="meal-automation__toggle"><input type="checkbox" name="auto_create_grocery_draft" ${settings.auto_create_grocery_draft !== false && settings.auto_create_grocery_draft !== 0 ? 'checked' : ''}><span>${t('meals.autoCreateGroceryDraft')}</span></label>
-    <label class="meal-automation__toggle"><input type="checkbox" name="auto_finalize_grocery" ${settings.auto_finalize_grocery ? 'checked' : ''}><span>${t('meals.autoFinalizeGrocery')}<small>${t('meals.autoFinalizeGroceryHint')}</small></span></label>
-    <label class="label">${mealText('meals.groceryLeadMinutes', 'Prepare grocery draft before meals (minutes)')}<input class="form-input" type="number" min="0" max="10080" name="grocery_lead_minutes" value="${Number(settings.grocery_lead_minutes ?? 1440)}"></label>
-    <label class="label">${mealText('meals.groceryAggregation', 'Group grocery items by')}<select class="form-input" name="aggregation_mode"><option value="ingredient" ${settings.aggregation_mode === 'ingredient' || !settings.aggregation_mode ? 'selected' : ''}>${mealText('meals.aggregateIngredient', 'Ingredient')}</option><option value="meal" ${settings.aggregation_mode === 'meal' ? 'selected' : ''}>${mealText('meals.aggregateMeal', 'Meal')}</option><option value="recipe" ${settings.aggregation_mode === 'recipe' ? 'selected' : ''}>${mealText('meals.aggregateRecipe', 'Recipe')}</option></select></label>
-    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-action="close-modal">${t('common.cancel')}</button><button type="submit" class="btn btn--primary">${t('common.save')}</button></div>
-  </form>`;
-  openSharedModal({ title: mealText('meals.grocerySettings', 'Grocery settings'), content, size: 'md', onSave(panel) {
-    panel.querySelector('#meal-grocery-settings-form')?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const data = new FormData(event.currentTarget);
-      const submit = panel.querySelector('[type="submit"]');
-      submit.disabled = true;
-      try {
-        const response = await api.put('/meals/grocery-settings', {
-          enabled: data.has('enabled'),
-          default_shopping_list_id: Number(data.get('default_shopping_list_id')) || null,
-          auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
-          auto_finalize_grocery: data.has('auto_finalize_grocery'),
-          grocery_lead_minutes: Number(data.get('grocery_lead_minutes') || 0),
-          aggregation_mode: data.get('aggregation_mode'),
-        });
-        state.grocerySettings = response?.data ?? response;
-        closeSharedModal({ force: true });
-        window.yuvomi?.showToast(mealText('meals.grocerySettingsSaved', 'Grocery settings saved.'), 'success');
-      } catch (error) {
-        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
-        submit.disabled = false;
-      }
-    });
-  }});
-}
-
 async function openMealDefaultSettingsModal() {
-  const [groceryResult, defaultsResult] = await Promise.allSettled([
-    api.get('/meals/grocery-settings'),
-    api.get('/meals/plan-defaults'),
-  ]);
-  if (groceryResult.status === 'rejected' || defaultsResult.status === 'rejected') {
-    const error = groceryResult.status === 'rejected' ? groceryResult.reason : defaultsResult.reason;
+  let defaults;
+  try {
+    const response = await api.get('/meals/plan-defaults');
+    defaults = response?.data ?? response ?? {};
+  } catch (error) {
     window.yuvomi?.showToast(error?.data?.error || error?.message || t('common.unknownError'), 'danger');
     return;
   }
   const execution = state.planning.execution_settings || {};
-  const grocery = groceryResult.value?.data ?? groceryResult.value ?? {};
-  const defaults = defaultsResult.value?.data ?? defaultsResult.value ?? {};
+  const grocery = defaults.grocery_settings || {};
   state.grocerySettings = grocery;
   const members = state.weekModel?.members?.length ? state.weekModel.members : (state.planning.members || []);
   const terminalStrategy = defaults.chooser_terminal_strategy || 'eligible_round_robin';
   const terminalRotation = new Set((defaults.chooser_round_robin_user_ids || []).map(Number));
+  const shoppingLists = [...(grocery.shopping_lists || state.lists || [])]
+    .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
+  state.lists = shoppingLists;
   const selectedListId = Number(grocery.default_shopping_list_id || execution.default_shopping_list_id) || null;
-  const listOptions = state.lists.map((list) => `<option value="${list.id}" ${selectedListId === Number(list.id) ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
+  const listOptions = shoppingLists.map((list) => `<option value="${list.id}" ${selectedListId === Number(list.id) ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
   const roleToggle = (key, labelKey) => `<label class="meal-automation__toggle"><input type="checkbox" name="generate_${key}" ${execution[`generate_${key}`] !== 0 ? 'checked' : ''}><span>${esc(t(labelKey))}</span></label>`;
-  const noLists = state.lists.length === 0;
+  const noLists = shoppingLists.length === 0;
+  const weekdayOptions = (selected) => DAY_NAMES().map((day, index) => `<option value="${index}" ${Number(selected) === index ? 'selected' : ''}>${esc(day)}</option>`).join('');
+  const groupingMode = grocery.grouping_mode || grocery.aggregation_mode || 'ingredient';
+  const groupingOptions = grocery.grouping_options || { ingredient: true, category: false, meal: true, recipe: true };
   const content = `<form id="meal-default-settings-form" class="meal-automation-form meal-default-settings">
     <p class="form-hint">${mealText('meals.planDefaultSettingsHint', 'These household defaults are used when a Meal Plan does not provide a more specific value.')}</p>
     <section>
@@ -2639,16 +2667,27 @@ async function openMealDefaultSettingsModal() {
     </section>
     <section>
       <h3>${mealText('meals.groceryPreparation', 'Grocery preparation')}</h3>
-      ${noLists ? `<div class="meal-settings-empty"><i data-lucide="shopping-basket" class="icon-sm" aria-hidden="true"></i><span><strong>${mealText('meals.noShoppingListsYet', 'No Shopping lists yet')}</strong><small>${mealText('meals.createListHereHint', 'Create the first list here, then Yuvomi can prepare grocery drafts for it.')}</small></span></div>` : ''}
+      <p class="form-hint">${mealText('meals.weeklyGroceryTimingHint', 'Set targets for preparing the following week. Choice deadlines stay on each Meal Plan slot; these grocery targets are kept here with the household defaults.')}</p>
       <label class="meal-automation__toggle"><input type="checkbox" name="grocery_enabled" ${grocery.enabled !== false && grocery.enabled !== 0 ? 'checked' : ''}><span><strong>${mealText('meals.enableGroceryPreparation', 'Enable grocery preparation')}</strong></span></label>
-      <label class="label"><span>${esc(t('meals.defaultShoppingList'))}</span><select class="form-input" name="default_shopping_list_id"><option value="">${noLists ? mealText('meals.noShoppingListsYet', 'No Shopping lists yet') : esc(t('meals.noDefaultShoppingList'))}</option>${listOptions}<option value="__create__">${mealText('meals.createNewShoppingList', '+ Create a new Shopping list…')}</option></select></label>
-      <label class="label" data-new-shopping-list hidden><span>${mealText('meals.newShoppingListName', 'New list name')}</span><input class="form-input" name="new_shopping_list_name" maxlength="120" placeholder="${mealText('meals.shoppingListNamePlaceholder', 'e.g. Weekly groceries')}"></label>
+      <label class="label"><span>${esc(t('meals.defaultShoppingList'))}</span><select class="form-input" name="default_shopping_list_id">${listOptions}<option value="__create__" ${noLists ? 'selected' : ''}>${mealText('meals.createNewShoppingList', '+ Create a new Shopping list…')}</option></select></label>
+      <label class="label" data-new-shopping-list ${noLists ? '' : 'hidden'}><span>${mealText('meals.newShoppingListName', 'New list name')}</span><input class="form-input" name="new_shopping_list_name" maxlength="200" placeholder="${mealText('meals.shoppingListNamePlaceholder', 'e.g. Weekly groceries')}"></label>
       <label class="meal-automation__toggle"><input type="checkbox" name="auto_create_grocery_draft" ${grocery.auto_create_grocery_draft !== false && grocery.auto_create_grocery_draft !== 0 ? 'checked' : ''}><span>${esc(t('meals.autoCreateGroceryDraft'))}</span></label>
       <label class="meal-automation__toggle"><input type="checkbox" name="auto_finalize_grocery" ${grocery.auto_finalize_grocery ? 'checked' : ''}><span>${esc(t('meals.autoFinalizeGrocery'))}<small>${esc(t('meals.autoFinalizeGroceryHint'))}</small></span></label>
-      <div class="meal-automation__timing"><label class="label"><span>${mealText('meals.groceryLeadMinutes', 'Prepare grocery draft before meals (minutes)')}</span><input class="form-input" type="number" min="0" max="10080" name="grocery_lead_minutes" value="${Number(grocery.grocery_lead_minutes ?? 1440)}"></label><label class="label"><span>${mealText('meals.groceryAggregation', 'Group grocery items by')}</span><select class="form-input" name="aggregation_mode"><option value="ingredient" ${grocery.aggregation_mode === 'ingredient' || !grocery.aggregation_mode ? 'selected' : ''}>${mealText('meals.aggregateIngredient', 'Ingredient')}</option><option value="meal" ${grocery.aggregation_mode === 'meal' ? 'selected' : ''}>${mealText('meals.aggregateMeal', 'Meal')}</option><option value="recipe" ${grocery.aggregation_mode === 'recipe' ? 'selected' : ''}>${mealText('meals.aggregateRecipe', 'Recipe')}</option></select></label></div>
+      <div class="meal-grocery-weekly-timing">
+        <label class="label"><span>${mealText('meals.groceryDraftDay', 'Draft target day')}</span><select class="form-input" name="draft_weekday">${weekdayOptions(grocery.draft_weekday ?? 5)}</select></label>
+        <label class="label"><span>${mealText('meals.groceryDraftTime', 'Draft target time')}</span><input class="form-input" type="time" name="draft_time" value="${esc(grocery.draft_time || '09:00')}"></label>
+        <label class="label"><span>${mealText('meals.groceryFinalizationDay', 'Finalized target day')}</span><select class="form-input" name="finalization_weekday">${weekdayOptions(grocery.finalization_weekday ?? 6)}</select></label>
+        <label class="label"><span>${mealText('meals.groceryFinalizationTime', 'Finalized target time')}</span><input class="form-input" type="time" name="finalization_time" value="${esc(grocery.finalization_time || '09:00')}"></label>
+      </div>
+      <small class="form-hint">${mealText('meals.groceryTimingManualHint', 'These are following-week planning targets. Preparing the week remains a manual action in this version; the targets do not run a clock-driven scheduler.')}</small>
+      <label class="label"><span>${mealText('meals.groceryAggregation', 'Group grocery items by')}</span><select class="form-input" name="grouping_mode"><option value="ingredient" ${groupingMode === 'ingredient' ? 'selected' : ''}>${mealText('meals.aggregateIngredient', 'Ingredient')}</option><option value="category" ${groupingMode === 'category' ? 'selected' : ''} ${groupingOptions.category ? '' : 'disabled'}>${mealText('meals.aggregateCategory', 'Ingredient category / department')}${groupingOptions.category ? '' : ` - ${mealText('meals.groupingUnavailable', 'unavailable')}`}</option><option value="meal" ${groupingMode === 'meal' ? 'selected' : ''}>${mealText('meals.aggregateMeal', 'Meal')}</option><option value="recipe" ${groupingMode === 'recipe' ? 'selected' : ''}>${mealText('meals.aggregateRecipe', 'Recipe')}</option></select><small class="form-hint">${groupingOptions.category ? mealText('meals.categoryGroupingHint', 'Category grouping uses the Shopping department assigned to each ingredient.') : mealText('meals.categoryGroupingUnavailableHint', 'Create a Shopping category before grouping ingredients by department.')}</small></label>
     </section>
     <section>
       <h3>${esc(t('meals.executionTaskRoles'))}</h3>
+      <div class="meal-default-role-policies">
+        <label class="label"><span>${mealText('meals.defaultCookAssignment', 'Default Cook assignment')}</span><select class="form-input" name="default_cook_strategy"><option value="round_robin" ${defaults.default_cook_strategy !== 'none' ? 'selected' : ''}>${mealText('meals.eligibleRoundRobin', 'Eligible round robin')}</option><option value="none" ${defaults.default_cook_strategy === 'none' ? 'selected' : ''}>${mealText('meals.assignmentNone', 'None')}</option></select><small class="form-hint">${mealText('meals.defaultCookAssignmentHint', 'New Meal Plan slots rotate among eligible household members unless the slot specifies someone else.')}</small></label>
+        <label class="label"><span>${mealText('meals.defaultSupervisorAssignment', 'Default Supervisor assignment')}</span><select class="form-input" name="default_supervisor_strategy"><option value="none" ${defaults.default_supervisor_strategy !== 'round_robin' ? 'selected' : ''}>${mealText('meals.assignmentNone', 'None')}</option><option value="round_robin" ${defaults.default_supervisor_strategy === 'round_robin' ? 'selected' : ''}>${mealText('meals.eligibleRoundRobin', 'Eligible round robin')}</option></select><small class="form-hint">${mealText('meals.defaultSupervisorAssignmentHint', 'Leave this as None unless new slots normally require supervision; individual slots can opt in.')}</small></label>
+      </div>
       <label class="meal-automation__master"><input type="checkbox" name="enabled" ${execution.enabled ? 'checked' : ''}><span><strong>${esc(t('meals.enableAutomation'))}</strong><small>${esc(t('meals.enableAutomationHint'))}</small></span></label>
       <p class="form-hint">${mealText('meals.executionDefaultsHint', 'These defaults create practical household Tasks when a week is prepared; an individual Meal Plan slot can choose different assignments.')}</p>
       <div class="meal-automation__roles">${roleToggle('preparation', 'meals.rolePreparation')}${roleToggle('cooking', 'meals.roleCooking')}${roleToggle('supervision', 'meals.roleSupervision')}${roleToggle('serving', 'meals.roleServing')}${roleToggle('cleanup', 'meals.roleCleanup')}</div>
@@ -2679,50 +2718,59 @@ async function openMealDefaultSettingsModal() {
       const submit = form.querySelector('[type="submit"]');
       submit.disabled = true;
       try {
-        let shoppingListId = Number(data.get('default_shopping_list_id')) || null;
-        if (data.get('default_shopping_list_id') === '__create__') {
-          const name = String(data.get('new_shopping_list_name') || '').trim();
-          if (!name) {
+        const creatingShoppingList = data.get('default_shopping_list_id') === '__create__';
+        const newShoppingListName = String(data.get('new_shopping_list_name') || '').trim();
+        if (creatingShoppingList && !newShoppingListName) {
             reportFieldError(form.querySelector('[name="new_shopping_list_name"]'), t('common.nameRequired'));
             submit.disabled = false;
             return;
-          }
-          const created = await api.post('/shopping', { name });
-          const list = created?.data ?? created;
-          shoppingListId = Number(list.id);
-          state.lists.push(list);
         }
+        const shoppingListId = creatingShoppingList
+          ? null
+          : (Number(data.get('default_shopping_list_id')) || null);
         const terminal = data.get('chooser_terminal_strategy');
         if (terminal === 'fixed' && !Number(data.get('chooser_terminal_user_id'))) {
           reportFieldError(form.querySelector('[name="chooser_terminal_user_id"]'), mealText('meals.chooseLastResortPerson', 'Choose the fixed last-resort person.'));
           submit.disabled = false;
           return;
         }
-        const commonGrocery = {
-          default_shopping_list_id: shoppingListId,
+        const defaultsResponse = await api.put('/meals/plan-defaults', {
+          chooser_terminal_strategy: terminal,
+          chooser_terminal_user_id: terminal === 'fixed' ? Number(data.get('chooser_terminal_user_id')) : null,
+          chooser_round_robin_user_ids: data.getAll('chooser_round_robin_user_id').map(Number),
+          default_cook_strategy: data.get('default_cook_strategy'),
+          default_supervisor_strategy: data.get('default_supervisor_strategy'),
+          grocery_settings: {
+            enabled: data.has('grocery_enabled'),
+            default_shopping_list_id: shoppingListId,
+            ...(creatingShoppingList ? { new_shopping_list_name: newShoppingListName } : {}),
+            auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
+            auto_finalize_grocery: data.has('auto_finalize_grocery'),
+            timing_mode: 'weekly',
+            draft_weekday: Number(data.get('draft_weekday')),
+            draft_time: data.get('draft_time'),
+            finalization_weekday: Number(data.get('finalization_weekday')),
+            finalization_time: data.get('finalization_time'),
+            grouping_mode: data.get('grouping_mode'),
+          },
+        });
+        const savedDefaults = defaultsResponse?.data ?? defaultsResponse ?? {};
+        const savedGrocery = savedDefaults.grocery_settings || {};
+        const effectiveShoppingListId = Number(savedGrocery.default_shopping_list_id) || null;
+        const executionResponse = await api.put('/meals/execution-settings', {
+          enabled: data.has('enabled'),
+          default_shopping_list_id: effectiveShoppingListId,
           auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
           auto_finalize_grocery: data.has('auto_finalize_grocery'),
-        };
-        const [executionResponse, groceryResponse] = await Promise.all([
-          api.put('/meals/execution-settings', {
-            enabled: data.has('enabled'), ...commonGrocery,
-            generate_preparation: data.has('generate_preparation'), generate_cooking: data.has('generate_cooking'), generate_supervision: data.has('generate_supervision'), generate_serving: data.has('generate_serving'), generate_cleanup: data.has('generate_cleanup'),
-            preparation_lead_minutes: Number(data.get('preparation_lead_minutes')), cooking_lead_minutes: Number(data.get('cooking_lead_minutes')), cleanup_delay_minutes: Number(data.get('cleanup_delay_minutes')),
-          }),
-          api.put('/meals/grocery-settings', {
-            enabled: data.has('grocery_enabled'), ...commonGrocery,
-            grocery_lead_minutes: Number(data.get('grocery_lead_minutes') || 0), aggregation_mode: data.get('aggregation_mode'),
-          }),
-          api.put('/meals/plan-defaults', {
-            chooser_terminal_strategy: terminal,
-            chooser_terminal_user_id: terminal === 'fixed' ? Number(data.get('chooser_terminal_user_id')) : null,
-            chooser_round_robin_user_ids: data.getAll('chooser_round_robin_user_id').map(Number),
-          }),
-        ]);
+          generate_preparation: data.has('generate_preparation'), generate_cooking: data.has('generate_cooking'), generate_supervision: data.has('generate_supervision'), generate_serving: data.has('generate_serving'), generate_cleanup: data.has('generate_cleanup'),
+          preparation_lead_minutes: Number(data.get('preparation_lead_minutes')), cooking_lead_minutes: Number(data.get('cooking_lead_minutes')), cleanup_delay_minutes: Number(data.get('cleanup_delay_minutes')),
+        });
         state.planning.execution_settings = executionResponse?.data ?? executionResponse;
-        state.grocerySettings = groceryResponse?.data ?? groceryResponse;
+        state.grocerySettings = savedGrocery;
+        state.lists = [...(savedGrocery.shopping_lists || state.lists || [])]
+          .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
         closeSharedModal({ force: true });
-        await openMealPlanManager();
+        setTimeout(() => openMealPlanManager(), window.innerWidth < 768 ? 420 : 0);
         window.yuvomi?.showToast(mealText('meals.planDefaultsSaved', 'Meal Plan defaults saved.'), 'success');
       } catch (error) {
         window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
@@ -2730,75 +2778,6 @@ async function openMealDefaultSettingsModal() {
       }
     });
     if (window.lucide) lucide.createIcons({ el: panel });
-  }});
-}
-
-function openMealAutomationModal() {
-  const settings = state.planning.execution_settings || {};
-  const listOptions = state.lists.map((list) => `<option value="${list.id}" ${Number(settings.default_shopping_list_id) === Number(list.id) ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
-  const roleToggle = (key, labelKey) => `<label class="meal-automation__toggle"><input type="checkbox" name="generate_${key}" ${settings[`generate_${key}`] !== 0 ? 'checked' : ''}><span>${esc(t(labelKey))}</span></label>`;
-  const content = `<form id="meal-automation-form" class="meal-automation-form">
-    <p class="form-hint">${esc(t('meals.automationDescription'))}</p>
-    <label class="meal-automation__master"><input type="checkbox" name="enabled" ${settings.enabled ? 'checked' : ''}><span><strong>${esc(t('meals.enableAutomation'))}</strong><small>${esc(t('meals.enableAutomationHint'))}</small></span></label>
-    <section>
-      <h3>${esc(t('meals.groceryAutomation'))}</h3>
-      <label class="form-label">${esc(t('meals.defaultShoppingList'))}<select class="form-input" name="default_shopping_list_id"><option value="">${esc(t('meals.noDefaultShoppingList'))}</option>${listOptions}</select></label>
-      <label class="meal-automation__toggle"><input type="checkbox" name="auto_create_grocery_draft" ${settings.auto_create_grocery_draft !== 0 ? 'checked' : ''}><span>${esc(t('meals.autoCreateGroceryDraft'))}</span></label>
-      <label class="meal-automation__toggle"><input type="checkbox" name="auto_finalize_grocery" ${settings.auto_finalize_grocery ? 'checked' : ''}><span>${esc(t('meals.autoFinalizeGrocery'))}<small>${esc(t('meals.autoFinalizeGroceryHint'))}</small></span></label>
-    </section>
-    <section>
-      <h3>${esc(t('meals.executionTaskRoles'))}</h3>
-      <div class="meal-automation__roles">
-        ${roleToggle('preparation', 'meals.rolePreparation')}
-        ${roleToggle('cooking', 'meals.roleCooking')}
-        ${roleToggle('supervision', 'meals.roleSupervision')}
-        ${roleToggle('serving', 'meals.roleServing')}
-        ${roleToggle('cleanup', 'meals.roleCleanup')}
-      </div>
-      <div class="meal-automation__timing">
-        <label>${esc(t('meals.preparationLead'))}<input class="form-input" type="number" min="0" max="1440" name="preparation_lead_minutes" value="${Number(settings.preparation_lead_minutes ?? 60)}"></label>
-        <label>${esc(t('meals.cookingLead'))}<input class="form-input" type="number" min="0" max="1440" name="cooking_lead_minutes" value="${Number(settings.cooking_lead_minutes ?? 30)}"></label>
-        <label>${esc(t('meals.cleanupDelay'))}<input class="form-input" type="number" min="0" max="1440" name="cleanup_delay_minutes" value="${Number(settings.cleanup_delay_minutes ?? 30)}"></label>
-      </div>
-    </section>
-    <div class="modal-panel__footer modal-panel__footer--plain">
-      <button type="button" class="btn btn--secondary" data-modal-close>${esc(t('common.cancel'))}</button>
-      <button type="submit" class="btn btn--primary">${esc(t('common.save'))}</button>
-    </div>
-  </form>`;
-  openSharedModal({ title: t('meals.automationTitle'), content, size: 'lg', onSave(panel) {
-    panel.querySelector('[data-modal-close]')?.addEventListener('click', () => closeSharedModal({ force: true }));
-    panel.querySelector('#meal-automation-form')?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = event.currentTarget;
-      const submit = panel.querySelector('[type="submit"]');
-      if (submit) submit.disabled = true;
-      const data = new FormData(form);
-      const payload = {
-        enabled: data.has('enabled'),
-        default_shopping_list_id: Number(data.get('default_shopping_list_id')) || null,
-        auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
-        auto_finalize_grocery: data.has('auto_finalize_grocery'),
-        generate_preparation: data.has('generate_preparation'),
-        generate_cooking: data.has('generate_cooking'),
-        generate_supervision: data.has('generate_supervision'),
-        generate_serving: data.has('generate_serving'),
-        generate_cleanup: data.has('generate_cleanup'),
-        preparation_lead_minutes: Number(data.get('preparation_lead_minutes')),
-        cooking_lead_minutes: Number(data.get('cooking_lead_minutes')),
-        cleanup_delay_minutes: Number(data.get('cleanup_delay_minutes')),
-      };
-      try {
-        const response = await api.put('/meals/execution-settings', payload);
-        state.planning.execution_settings = response.data;
-        closeSharedModal({ force: true });
-        await openMealPlanManager();
-        window.yuvomi?.showToast(t('meals.automationSavedToast'), 'success');
-      } catch (error) {
-        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
-        if (submit) submit.disabled = false;
-      }
-    });
   }});
 }
 
@@ -2910,62 +2889,110 @@ function openMealScheduleModal() {
   }});
 }
 
-function openMealChoicesModal() {
-  const requests = state.selectionRequests;
-  const recipeOptions = state.recipes.map((recipe) => `<option value="${recipe.id}">${esc(recipe.title)}</option>`).join('');
-  const content = requests.length ? `<div class="meal-choice-list">${requests.map((request) => `
-    <section class="meal-choice-card" data-meal-choice="${request.id}" data-choice-limit="${request.policy === 'personal_choice' && request.meal_type === 'snack' ? Number(request.snack_choice_limit || 3) : 1}">
-      <div><strong>${esc(request.meal_type)} · ${esc(request.date)}</strong><br><small>${request.reminder_due ? 'Due soon · ' : ''}Choose for ${esc(request.policy === 'personal_choice' ? 'yourself' : 'the household')}${request.responsible_name ? ` · ${esc(request.responsible_name)}` : ''}</small></div>
-      <label class="form-label">Recipe (optional)<select class="form-input" data-choice-recipe><option value="">Write a meal name</option>${recipeOptions}</select></label>
-      ${request.policy === 'personal_choice' && request.meal_type === 'snack'
-        ? `<label class="form-label">Snack choices (one per line, up to ${Number(request.snack_choice_limit || 3)})<textarea class="form-input" data-choice-title rows="3" placeholder="Apple slices\nYogurt"></textarea></label>`
-        : '<label class="form-label">Meal name<input class="form-input" data-choice-title maxlength="200" placeholder="What should we eat?"></label>'}
-      <label class="form-label">Notes<textarea class="form-input" data-choice-notes rows="2"></textarea></label>
-      <div class="modal-panel__footer modal-panel__footer--plain">
-        <button type="button" class="btn btn--ghost" data-choice-decline>Decline</button>
-        <button type="button" class="btn btn--primary" data-choice-submit>Choose meal</button>
-      </div>
-    </section>`).join('')}</div>` : emptyStateHTML({
+function renderMealChoiceRequest(request) {
+  const choiceLimit = request.policy === 'personal_choice' && request.meal_type === 'snack'
+    ? Number(request.snack_choice_limit || 3)
+    : 1;
+  const recipeListId = `meal-choice-recipes-${Number(request.id)}`;
+  const occurrenceLabel = request.slot_label || request.custom_label || mealTypeLabel(request.meal_type);
+  const recipeOptions = state.recipes
+    .filter((recipe) => recipeAllowsMealType(recipe, request.meal_type))
+    .map((recipe) => `<option value="${esc(recipe.title)}"></option>`)
+    .join('');
+  return `<section class="meal-choice-request-card" data-meal-choice-request="${Number(request.id)}" data-choice-limit="${choiceLimit}">
+    <div class="meal-choice-request-card__context">
+      <span>${mealText('meals.mealOccurrenceLabel', 'Meal occurrence')}</span>
+      <strong>${esc(occurrenceLabel)} · ${esc(request.date)}</strong>
+      <small>${request.reminder_due ? `${mealText('meals.dueSoon', 'Due soon')} · ` : ''}${mealText('meals.chooseFor', 'Choose for')} ${esc(request.policy === 'personal_choice' ? mealText('meals.yourself', 'yourself') : mealText('meals.theHousehold', 'the household'))}${request.responsible_name ? ` · ${esc(request.responsible_name)}` : ''}</small>
+    </div>
+    <datalist id="${recipeListId}">${recipeOptions}</datalist>
+    ${choiceLimit > 1
+      ? `<label class="form-label">${mealText('meals.snackChoices', 'Food choices')} <small>(${mealText('meals.onePerLineLimit', 'one per line, up to {{count}}', { count: choiceLimit })})</small><textarea class="form-input" data-choice-title rows="3" placeholder="${esc(mealText('meals.snackChoicePlaceholder', 'Apple slices\nYogurt'))}"></textarea></label>`
+      : `<label class="form-label">${mealText('meals.foodOrRecipe', 'Food or recipe')}<input class="form-input" data-choice-title list="${recipeListId}" maxlength="200" autocomplete="off" placeholder="${esc(mealText('meals.recipeOrCustomPlaceholder', 'Choose a recipe or type a new meal'))}"><small class="form-hint">${mealText('meals.selectOrCreateMealHint', 'Search saved recipes, or keep typing to use a custom meal.')}</small></label>`}
+    <label class="form-label">${t('meals.notesLabel')}<textarea class="form-input" data-choice-notes rows="2"></textarea></label>
+    <div class="modal-panel__footer modal-panel__footer--plain">
+      <button type="button" class="btn btn--ghost" data-choice-decline>${mealText('meals.declineChooserResponsibility', 'Decline')}</button>
+      <button type="button" class="btn btn--primary" data-choice-submit>${mealText('meals.chooseMeal', 'Choose meal')}</button>
+    </div>
+  </section>`;
+}
+
+function renderMealChoiceQueue(panel, { focus = false } = {}) {
+  const list = panel.querySelector('[data-meal-choice-list]');
+  if (!list) return;
+  list.replaceChildren();
+  if (state.selectionRequests.length) {
+    list.insertAdjacentHTML('beforeend', state.selectionRequests.map(renderMealChoiceRequest).join(''));
+  } else {
+    list.insertAdjacentHTML('beforeend', emptyStateHTML({
       icon: 'circle-check-big',
-      title: 'You are all caught up',
-      description: 'There are no meal choices waiting for you.',
-    });
-  openSharedModal({ title: 'Meal choices', content, size: 'lg', onSave(panel) {
-    panel.querySelectorAll('[data-meal-choice]').forEach((card) => {
-      const recipeSelect = card.querySelector('[data-choice-recipe]');
+      title: mealText('meals.choiceInboxComplete', 'You are all caught up'),
+      description: mealText('meals.choiceInboxEmpty', 'There are no meal choices waiting for you.'),
+    }));
+  }
+  if (window.lucide) window.lucide.createIcons({ el: list });
+  refreshDirtySnapshot();
+  if (focus) requestAnimationFrame(() => list.querySelector('[data-choice-title], [data-choice-submit]')?.focus());
+}
+
+function openMealChoicesModal() {
+  const content = '<div class="meal-choice-list" data-meal-choice-list aria-live="polite"></div>';
+  openSharedModal({ title: mealText('meals.mealChoices', 'Meal choices'), content, size: 'lg', onSave(panel) {
+    renderMealChoiceQueue(panel);
+    panel.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-choice-submit], [data-choice-decline]');
+      if (!button) return;
+      const card = button.closest('[data-meal-choice-request]');
+      if (!card) return;
+      const requestId = Number(card.dataset.mealChoiceRequest);
       const titleInput = card.querySelector('[data-choice-title]');
-      recipeSelect.addEventListener('change', () => {
-        const recipe = state.recipes.find((row) => Number(row.id) === Number(recipeSelect.value));
-        if (recipe && !titleInput.value.trim()) titleInput.value = recipe.title;
-      });
-      card.querySelector('[data-choice-submit]').addEventListener('click', async () => {
-        try {
-          const titles = titleInput.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
-          const notes = card.querySelector('[data-choice-notes]').value;
-          const recipeId = Number(recipeSelect.value) || null;
+      const notes = card.querySelector('[data-choice-notes]')?.value || '';
+      button.disabled = true;
+      try {
+        if (button.matches('[data-choice-decline]')) {
+          await api.post(`/meals/selection-requests/${requestId}/respond`, { action: 'decline' });
+        } else {
+          const titles = String(titleInput?.value || '').split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
+          if (!titles.length) {
+            reportFieldError(titleInput, t('common.nameRequired'));
+            button.disabled = false;
+            return;
+          }
+          const recipe = state.recipes.find((row) => row.title.localeCompare(titles[0], undefined, { sensitivity: 'base' }) === 0);
           const payload = Number(card.dataset.choiceLimit) > 1
-            ? { action: 'choose', choices: titles.map((title, index) => ({ title, notes, recipe_id: index === 0 ? recipeId : null })) }
-            : { action: 'choose', recipe_id: recipeId, title: titles[0] || '', notes };
-          await api.post(`/meals/selection-requests/${card.dataset.mealChoice}/respond`, payload);
-          await Promise.all([loadSelectionRequests(), loadWeek(state.currentWeek), loadWeekExperience()]);
+            ? { action: 'choose', choices: titles.map((title, index) => ({ title, notes, recipe_id: index === 0 ? recipe?.id || null : null })) }
+            : { action: 'choose', recipe_id: recipe?.id || null, title: titles[0], notes };
+          await api.post(`/meals/selection-requests/${requestId}/respond`, payload);
+        }
+        await Promise.all([loadSelectionRequests(), loadWeek(state.currentWeek), loadWeekExperience()]);
+        renderWeekExperienceHeader();
+        renderWeekGrid();
+        window.yuvomi?.showToast(
+          button.matches('[data-choice-decline]')
+            ? mealText('meals.choiceDeclined', 'Meal choice responsibility declined.')
+            : mealText('meals.choiceSaved', 'Meal choice saved.'),
+          'success',
+        );
+        if (!state.selectionRequests.length) {
           closeModal({ force: true });
+        } else {
+          renderMealChoiceQueue(panel, { focus: true });
+        }
+      } catch (error) {
+        // Stale/cancelled requests are reloaded and removed from the queue. A
+        // single obsolete row must not make the whole inbox unusable.
+        if ([404, 409].includes(Number(error?.status || error?.data?.code))) {
+          await loadSelectionRequests();
           renderWeekExperienceHeader();
-          renderWeekGrid();
-          window.yuvomi?.showToast('Meal choice saved.', 'success');
-        } catch (error) { window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
-      });
-      card.querySelector('[data-choice-decline]').addEventListener('click', async () => {
-        try {
-          await api.post(`/meals/selection-requests/${card.dataset.mealChoice}/respond`, { action: 'decline' });
-          await Promise.all([loadSelectionRequests(), loadWeekExperience()]);
-          closeModal({ force: true });
-          renderWeekExperienceHeader();
-          renderWeekGrid();
-          window.yuvomi?.showToast('Meal choice declined.', 'success');
-        } catch (error) { window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
-      });
+          if (!state.selectionRequests.length) closeModal({ force: true });
+          else renderMealChoiceQueue(panel, { focus: true });
+          window.yuvomi?.showToast(mealText('meals.choiceNoLongerActionable', 'That request is no longer active.'), 'info');
+        } else {
+          window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
+          button.disabled = false;
+        }
+      }
     });
-    if (window.lucide) window.lucide.createIcons({ el: panel });
   }});
 }
 
@@ -3193,6 +3220,7 @@ async function submitMealDecisionForm(form) {
       : participating && backup ? backupRecipeId : null,
     notes: data.get('notes'),
     deviceKey: stableMealDeviceKey(),
+    notifyOnMenuChange: !participating && data.get('notify_on_menu_change') === 'on',
   });
   payload.confirmed = true;
   return persistMealDecision(occurrence, payload, form.querySelector('[type="submit"]'));
@@ -3208,26 +3236,16 @@ function handleMealDecisionControlChange(event) {
     const backup = personalChoice?.value === 'backup';
     const foodSection = decisionForm.querySelector('[data-meal-food-section]');
     if (foodSection) foodSection.disabled = !participating;
+    const notifyRow = decisionForm.querySelector('[data-notify-menu-change]');
+    if (notifyRow) notifyRow.hidden = participating;
+    const backupFields = decisionForm.querySelector('[data-backup-choice-fields]');
+    if (backupFields) backupFields.hidden = !participating || !backup;
     const notes = decisionForm.querySelector('[data-meal-notes]');
     if (notes) notes.disabled = !participating;
     decisionForm.querySelectorAll('[data-personal-choice-fields] input, [data-personal-choice-fields] select')
       .forEach((field) => { field.disabled = !participating || !personal; });
     decisionForm.querySelectorAll('[data-backup-choice-fields] input, [data-backup-choice-fields] select')
       .forEach((field) => { field.disabled = !participating || !backup; });
-    return true;
-  }
-  if (event.target.matches('[data-personal-recipe]')) {
-    const form = event.target.closest('[data-meal-decision]');
-    const title = form?.querySelector('[name="selected_meal_title"]');
-    const recipe = state.recipes.find((row) => Number(row.id) === Number(event.target.value));
-    if (title && recipe && !title.value.trim()) title.value = recipe.title;
-    return true;
-  }
-  if (event.target.matches('[data-backup-recipe]')) {
-    const form = event.target.closest('[data-meal-decision]');
-    const title = form?.querySelector('[name="backup_meal_title"]');
-    const recipe = state.recipes.find((row) => Number(row.id) === Number(event.target.value));
-    if (title && recipe && !title.value.trim()) title.value = recipe.title;
     return true;
   }
   if (!event.target.matches('[data-menu-side]') || !event.target.checked) return false;
@@ -3257,23 +3275,6 @@ function wireOccurrenceDialog(panel, key) {
       if (state.expandedStatusOptions.has(optionKey)) state.expandedStatusOptions.delete(optionKey);
       else state.expandedStatusOptions.add(optionKey);
       refreshOccurrenceDialog(panel, key, '[data-action="toggle-status-option"]');
-      return;
-    }
-    if (action === 'skip-meal-decision') {
-      const occurrence = occurrenceByKey(button.dataset.occurrenceKey);
-      if (!occurrence || !canActForSelectedMember()) return;
-      const notes = button.closest('form')?.querySelector('[name="notes"]')?.value || '';
-      const payload = mealDecisionPayload({
-        occurrence,
-        memberId: state.selectedMemberId,
-        participating: false,
-        choice: 'skip',
-        menuItemIds: [],
-        notes,
-        deviceKey: stableMealDeviceKey(),
-      });
-      payload.confirmed = true;
-      if (await persistMealDecision(occurrence, payload, button)) refreshOccurrenceDialog(panel, key);
       return;
     }
     if (action === 'decline-meal-choice') {

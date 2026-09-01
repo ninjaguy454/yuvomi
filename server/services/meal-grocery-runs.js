@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { aggregateMealIngredients, parseQuantity } from './shopping-import.js';
+import { getGrocerySettings } from './meal-grocery-settings.js';
 
 const RUN_STATES = ['draft', 'finalized', 'added_to_shopping', 'purchased', 'reconciled'];
 
@@ -21,6 +22,47 @@ function defaultLogicalKey(listId, from, to) {
 function sourceKey(row) {
   if (row.source_kind === 'meal_ingredient') return `meal-ingredient:${row.meal_ingredient_id}`;
   return `meal:${row.meal_id}:recipe-ingredient:${row.recipe_ingredient_id}`;
+}
+
+function normalizedGroupingMode(value) {
+  return ['ingredient', 'category', 'meal', 'recipe'].includes(String(value))
+    ? String(value)
+    : 'ingredient';
+}
+
+function groupingDescriptor(row, mode) {
+  const category = String(row.category ?? row.category_snapshot ?? 'Sonstiges').trim() || 'Sonstiges';
+  const mealId = Number(row.meal_id) || null;
+  const mealDate = String(row.meal_date ?? row.meal_date_snapshot ?? '').trim();
+  const mealTitle = String(row.meal_title ?? row.meal_title_snapshot ?? 'Meal').trim() || 'Meal';
+  const recipeId = Number(row.recipe_id) || null;
+  const recipeTitle = String(row.recipe_title ?? row.recipe_title_snapshot ?? '').trim();
+  if (mode === 'category') {
+    return { key: `category:${category.toLocaleLowerCase()}`, label: category };
+  }
+  if (mode === 'meal') {
+    return {
+      key: `meal:${mealId || `${mealDate}:${mealTitle.toLocaleLowerCase()}`}`,
+      label: mealDate ? `${mealDate} · ${mealTitle}` : mealTitle,
+    };
+  }
+  if (mode === 'recipe') {
+    return recipeId ? {
+      key: `recipe:${recipeId}`,
+      label: recipeTitle || mealTitle,
+    } : {
+      key: `meal:${mealId || `${mealDate}:${mealTitle.toLocaleLowerCase()}`}`,
+      label: mealTitle,
+    };
+  }
+  return { key: 'ingredient', label: null };
+}
+
+function baseDemandKey(logicalKey) {
+  const parts = String(logicalKey || '').split(':');
+  return parts[0] === 'ingredient' && parts[1]
+    ? `${parts[0]}:${parts[1]}`
+    : String(logicalKey || '');
 }
 
 function loadSourceIngredients(database, from, to) {
@@ -74,7 +116,8 @@ function loadSourceIngredients(database, from, to) {
   }));
 }
 
-function aggregateWithSources(rows) {
+function aggregateWithSources(rows, groupingMode = 'ingredient') {
+  const mode = normalizedGroupingMode(groupingMode);
   const sourceGroups = new Map();
   for (const row of rows) {
     const name = String(row.name || '').trim();
@@ -82,15 +125,17 @@ function aggregateWithSources(rows) {
     const category = String(row.category || 'Sonstiges').trim() || 'Sonstiges';
     const quantity = String(row.quantity || '').trim();
     const parsed = parseQuantity(quantity);
-    const aggregationKey = parsed
+    const demandSignature = parsed
       ? `${name.toLocaleLowerCase()}\u0000${category.toLocaleLowerCase()}\u0000parsed\u0000${parsed.unit}`
       : `${name.toLocaleLowerCase()}\u0000${category.toLocaleLowerCase()}\u0000raw\u0000${quantity.toLocaleLowerCase()}`;
+    const group = groupingDescriptor(row, mode);
+    const aggregationKey = `${demandSignature}\u0000group\u0000${group.key}`;
     if (!sourceGroups.has(aggregationKey)) sourceGroups.set(aggregationKey, []);
-    sourceGroups.get(aggregationKey).push(row);
+    sourceGroups.get(aggregationKey).push({ ...row, demand_signature: demandSignature, group });
   }
 
   const result = [];
-  for (const [aggregationKey, sources] of sourceGroups) {
+  for (const sources of sourceGroups.values()) {
     const aggregate = aggregateMealIngredients(sources.map((source) => ({
       id: source.meal_ingredient_id ?? source.recipe_ingredient_id,
       meal_id: source.meal_id,
@@ -99,17 +144,29 @@ function aggregateWithSources(rows) {
       category: source.category,
     })))[0];
     const parsed = parseQuantity(aggregate.quantity);
+    const demandKey = `ingredient:${hash(sources[0].demand_signature).slice(0, 24)}`;
+    const group = sources[0].group;
+    const scopedSuffix = mode === 'ingredient'
+      ? ''
+      : `:${mode}:${hash(group.key).slice(0, 12)}`;
     result.push({
-      logical_key: `ingredient:${hash(aggregationKey).slice(0, 24)}`,
+      logical_key: `${demandKey}${scopedSuffix}`,
+      demand_key: demandKey,
       name: aggregate.name,
       category: aggregate.category,
       quantity: aggregate.quantity,
       planned_quantity: parsed?.amount ?? null,
       unit: parsed?.unit || null,
-      sources,
+      group_key: group.key,
+      group_label: group.label,
+      sources: sources.map(({ demand_signature: _demandSignature, group: _group, ...source }) => source),
     });
   }
-  return result;
+  return result.sort((left, right) => (
+    String(left.group_label || '').localeCompare(String(right.group_label || ''), undefined, { sensitivity: 'base' })
+    || String(left.category).localeCompare(String(right.category), undefined, { sensitivity: 'base' })
+    || String(left.name).localeCompare(String(right.name), undefined, { sensitivity: 'base' })
+  ));
 }
 
 function loadGroceryRun(database, runId) {
@@ -135,7 +192,22 @@ function loadGroceryRun(database, runId) {
     if (!byItem.has(source.grocery_item_id)) byItem.set(source.grocery_item_id, []);
     byItem.get(source.grocery_item_id).push(source);
   }
-  for (const item of run.items) item.sources = byItem.get(item.id) || [];
+  const inferredMode = run.items.map((item) => (
+    String(item.logical_key).match(/^ingredient:[^:]+:(category|meal|recipe):/)?.[1]
+  )).find(Boolean) || 'ingredient';
+  run.grouping_mode = inferredMode;
+  for (const item of run.items) {
+    item.sources = byItem.get(item.id) || [];
+    const group = groupingDescriptor(item.sources[0] || { category: item.category }, inferredMode);
+    item.group_key = group.key;
+    item.group_label = group.label;
+  }
+  run.items.sort((left, right) => (
+    String(left.group_label || '').localeCompare(String(right.group_label || ''), undefined, { sensitivity: 'base' })
+    || String(left.category).localeCompare(String(right.category), undefined, { sensitivity: 'base' })
+    || String(left.name).localeCompare(String(right.name), undefined, { sensitivity: 'base' })
+    || Number(left.id) - Number(right.id)
+  ));
   return run;
 }
 
@@ -145,19 +217,23 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
 
   const baseKey = String(logicalKey || defaultLogicalKey(listId, from, to)).trim();
   if (!baseKey || baseKey.length > 200) throw serviceError('logical_key must be between 1 and 200 characters.');
+  const groupingMode = normalizedGroupingMode(getGrocerySettings(database).grouping_mode);
   const sourceRows = loadSourceIngredients(database, from, to);
-  const aggregated = aggregateWithSources(sourceRows);
-  const fingerprint = hash(JSON.stringify(sourceRows.map((row) => ({
-    source_key: row.source_key,
-    meal_id: row.meal_id,
-    meal_date: row.meal_date,
-    meal_title: row.meal_title,
-    recipe_id: row.recipe_id,
-    recipe_title: row.recipe_title,
-    name: row.name,
-    quantity: row.quantity,
-    category: row.category,
-  }))));
+  const aggregated = aggregateWithSources(sourceRows, groupingMode);
+  const fingerprint = hash(JSON.stringify({
+    grouping_mode: groupingMode,
+    sources: sourceRows.map((row) => ({
+      source_key: row.source_key,
+      meal_id: row.meal_id,
+      meal_date: row.meal_date,
+      meal_title: row.meal_title,
+      recipe_id: row.recipe_id,
+      recipe_title: row.recipe_title,
+      name: row.name,
+      quantity: row.quantity,
+      category: row.category,
+    })),
+  }));
 
   const result = database.transaction(() => {
     const family = database.prepare(`
@@ -186,21 +262,34 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
     if (historical.length) {
       const placeholders = historical.map(() => '?').join(',');
       const previous = database.prepare(`
-        SELECT logical_key, SUM(planned_quantity) AS planned_quantity
+        SELECT logical_key, planned_quantity
         FROM meal_grocery_items
-        WHERE grocery_run_id IN (${placeholders}) AND planned_quantity IS NOT NULL
-        GROUP BY logical_key
+        WHERE grocery_run_id IN (${placeholders})
       `).all(...historical.map((row) => row.id));
-      const previousByKey = new Map(previous.map((row) => [row.logical_key, Number(row.planned_quantity) || 0]));
-      prepared = aggregated.flatMap((item) => {
-        if (item.planned_quantity == null) {
-          const alreadyPublished = database.prepare(`
-            SELECT 1 FROM meal_grocery_items
-            WHERE grocery_run_id IN (${placeholders}) AND logical_key = ? LIMIT 1
-          `).get(...historical.map((row) => row.id), item.logical_key);
-          return alreadyPublished ? [] : [item];
+      const previousByDemand = new Map();
+      const previousRawByDemand = new Map();
+      for (const row of previous) {
+        const demandKey = baseDemandKey(row.logical_key);
+        if (row.planned_quantity == null) {
+          previousRawByDemand.set(demandKey, (previousRawByDemand.get(demandKey) || 0) + 1);
+        } else {
+          previousByDemand.set(
+            demandKey,
+            (previousByDemand.get(demandKey) || 0) + (Number(row.planned_quantity) || 0),
+          );
         }
-        const remaining = Number(item.planned_quantity) - (previousByKey.get(item.logical_key) || 0);
+      }
+      prepared = aggregated.flatMap((item) => {
+        const demandKey = item.demand_key || baseDemandKey(item.logical_key);
+        if (item.planned_quantity == null) {
+          const previousCount = previousRawByDemand.get(demandKey) || 0;
+          if (previousCount <= 0) return [item];
+          previousRawByDemand.set(demandKey, previousCount - 1);
+          return [];
+        }
+        const previousQuantity = previousByDemand.get(demandKey) || 0;
+        const remaining = Number(item.planned_quantity) - previousQuantity;
+        previousByDemand.set(demandKey, Math.max(0, -remaining));
         if (remaining <= 0) return [];
         return [{
           ...item,

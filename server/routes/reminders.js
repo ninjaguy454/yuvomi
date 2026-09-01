@@ -16,7 +16,7 @@ import { tokenAllows } from '../scopes.js';
 const log    = createLogger('Reminders');
 const router = express.Router();
 
-const VALID_ENTITY_TYPES = ['task', 'event', 'subscription', 'inventory_item', 'inventory_tracked_date', 'pantry_item'];
+const VALID_ENTITY_TYPES = ['task', 'event', 'subscription', 'inventory_item', 'inventory_tracked_date', 'pantry_item', 'meal'];
 
 /**
  * Nach jedem Schreibvorgang an den Erinnerungen eines Termins: die Zugewiesenen
@@ -55,7 +55,7 @@ function syncEventFanout(entityType, entityId, userId) {
  * Die LESEWEGE (GET) kennen alle Typen weiter: der Erinnerungs-Toast muss eine
  * abgeleitete Meldung anzeigen und wegwischen können.
  */
-const DERIVED_ENTITY_TYPES = ['pantry_item'];
+const DERIVED_ENTITY_TYPES = ['pantry_item', 'meal'];
 
 /* DIESER ROUTER IST EINE MISCHSTELLE, UND SEIN PFAD SAGT DAS NICHT.
  *
@@ -87,6 +87,7 @@ const ORIGIN_MODULE = Object.freeze({
   inventory_item:         'inventory',
   inventory_tracked_date: 'inventory',
   pantry_item:            'pantry',
+  meal:                   'meals',
 });
 
 /**
@@ -112,6 +113,9 @@ const SETTABLE_ENTITY_TYPES = VALID_ENTITY_TYPES.filter((t) => !DERIVED_ENTITY_T
 
 /** Fehlertext, wenn ein Schreibweg eine abgeleitete Herkunft von Hand setzen will. */
 function derivedTypeError(entityType) {
+  if (entityType === 'meal') {
+    return 'Meal-change reminders are controlled by the participant decision opt-in and cannot be set here.';
+  }
   return `Reminders for ${entityType} are derived from the item itself and cannot be set here.`;
 }
 
@@ -149,6 +153,7 @@ router.get('/pending', (req, res) => {
             WHERE d.id = r.entity_id
           )
           WHEN 'pantry_item' THEN (SELECT name FROM pantry_items WHERE id = r.entity_id)
+          WHEN 'meal' THEN (SELECT title FROM meals WHERE id = r.entity_id)
         END AS entity_title
       FROM reminders r
       WHERE r.created_by  = ?

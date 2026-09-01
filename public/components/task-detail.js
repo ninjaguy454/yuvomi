@@ -127,8 +127,12 @@ export async function deleteTaskWithUndo(id, { container = null, onChanged = () 
  * die Leseansicht hängt sie sich damit selbst an, statt sich zum Nachladen
  * schließen zu müssen (#925).
  */
-export async function addSubtask(parentId, { onChanged = () => {} } = {}) {
-  const title = await promptModal(t('tasks.subtaskPrompt'));
+export async function addSubtask(parentId, {
+  onChanged = () => {}, title: suppliedTitle, throwOnError = false,
+} = {}) {
+  const title = suppliedTitle === undefined
+    ? await promptModal(t('tasks.subtaskPrompt'))
+    : suppliedTitle;
   if (!title) return null;
   try {
     const res = await api.post('/tasks', { title, parent_task_id: parentId });
@@ -137,15 +141,20 @@ export async function addSubtask(parentId, { onChanged = () => {} } = {}) {
     await onChanged();
     return res.data ?? null;
   } catch (err) {
+    if (throwOnError) throw err;
     window.yuvomi.showToast(err.message, 'danger');
     return null;
   }
 }
 
 /** Rename a first-class subtask through the canonical Task route. */
-export async function renameSubtask(subtask, { onChanged = () => {} } = {}) {
+export async function renameSubtask(subtask, {
+  onChanged = () => {}, title: suppliedTitle, throwOnError = false,
+} = {}) {
   const currentTitle = String(subtask?.title || '');
-  const title = await promptModal(t('tasks.subtaskRenamePrompt'), currentTitle);
+  const title = suppliedTitle === undefined
+    ? await promptModal(t('tasks.subtaskRenamePrompt'), currentTitle)
+    : suppliedTitle;
   if (!title || title.trim() === currentTitle) return null;
   try {
     const nextTitle = title.trim();
@@ -154,6 +163,7 @@ export async function renameSubtask(subtask, { onChanged = () => {} } = {}) {
     await onChanged();
     return nextTitle;
   } catch (err) {
+    if (throwOnError) throw err;
     window.yuvomi.showToast(err.message, 'danger');
     return null;
   }
@@ -356,12 +366,66 @@ function participantButton(person, role, ctx) {
 
 function participantListNode(task, ctx) {
   const people = taskParticipants(task);
-  if (!people.length) return null;
+  const mayAdd = canEditTaskDefinition(task, null, ctx)
+    && !isArchived(task)
+    && !task.activity_template_name;
+  if (!people.length && !mayAdd) return null;
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-participants';
   for (const person of people) {
     const button = participantButton(person, person.role, ctx);
     if (button) wrap.appendChild(button);
+  }
+  if (mayAdd) {
+    const controls = document.createElement('div');
+    controls.className = 'task-detail-participant-add';
+    const select = document.createElement('select');
+    select.className = 'input input--sm';
+    select.setAttribute('aria-label', 'Participant');
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Choose a person';
+    select.appendChild(placeholder);
+    const existingIds = new Set(people.map((person) => Number(person.id || person.user_id)));
+    for (const person of (ctx.users || [])) {
+      if (existingIds.has(Number(person.id))) continue;
+      const option = document.createElement('option');
+      option.value = String(person.id);
+      option.textContent = person.display_name;
+      select.appendChild(option);
+    }
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'btn btn--ghost btn--sm';
+    add.textContent = '+ Add participant';
+    add.disabled = select.options.length < 2;
+    add.addEventListener('click', async () => {
+      const userId = Number(select.value);
+      if (!userId) { select.focus(); return; }
+      const person = (ctx.users || []).find((candidate) => Number(candidate.id) === userId);
+      if (!person) return;
+      add.disabled = true;
+      select.disabled = true;
+      try {
+        const assignedIds = new Set((task.assigned_users || []).map((candidate) => Number(candidate.id)));
+        assignedIds.add(userId);
+        await api.put(`/tasks/${task.id}`, { assigned_to: [...assignedIds] });
+        task.assigned_users = [...(task.assigned_users || []), person];
+        const chip = participantButton(person, null, ctx);
+        if (chip) wrap.insertBefore(chip, controls);
+        select.querySelector(`option[value="${userId}"]`)?.remove();
+        select.value = '';
+        add.disabled = select.options.length < 2;
+        await ctx.onChanged();
+      } catch (err) {
+        add.disabled = false;
+        window.yuvomi.showToast(err.message, 'danger');
+      } finally {
+        select.disabled = false;
+      }
+    });
+    controls.append(select, add);
+    wrap.appendChild(controls);
   }
   return wrap;
 }
@@ -508,6 +572,43 @@ function subtaskListNode(task, ctx) {
   const wrap = document.createElement('div');
   wrap.className = 'detail-subtasks detail-task-subtasks';
 
+  const inlineTitleEditor = ({ value = '', save, cancel, saveLabel }) => {
+    const form = document.createElement('form');
+    form.className = 'detail-subtask__editor';
+    const input = document.createElement('input');
+    input.className = 'input input--sm';
+    input.value = value;
+    input.maxLength = 200;
+    input.required = true;
+    input.setAttribute('aria-label', saveLabel);
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.className = 'btn btn--primary btn--sm';
+    submit.textContent = 'Save';
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button';
+    dismiss.className = 'btn btn--ghost btn--sm';
+    dismiss.textContent = 'Cancel';
+    dismiss.addEventListener('click', cancel);
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') { event.preventDefault(); cancel(); }
+    });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const nextTitle = input.value.trim();
+      if (!nextTitle) { input.focus(); return; }
+      input.disabled = submit.disabled = dismiss.disabled = true;
+      try { await save(nextTitle); }
+      catch (err) {
+        input.disabled = submit.disabled = dismiss.disabled = false;
+        window.yuvomi.showToast(err.message, 'danger');
+      }
+    });
+    form.append(input, submit, dismiss);
+    queueMicrotask(() => { input.focus(); input.select(); });
+    return form;
+  };
+
   const appendRow = (subtask) => {
     const row = document.createElement('div');
     row.className = 'detail-subtask';
@@ -575,12 +676,30 @@ function subtaskListNode(task, ctx) {
       rename.className = 'btn btn--ghost btn--icon btn--icon-sm';
       rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
       rename.appendChild(lucideIcon('pencil'));
-      rename.addEventListener('click', async () => {
-        const changed = await renameSubtask(subtask, { onChanged: ctx.onChanged });
-        if (changed) {
-          rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
-          paint();
-        }
+      rename.addEventListener('click', () => {
+        const originalChildren = [...row.children];
+        originalChildren.forEach((child) => { child.hidden = true; });
+        const cancel = () => {
+          editor.remove();
+          originalChildren.forEach((child) => { child.hidden = false; });
+          rename.focus();
+        };
+        const editor = inlineTitleEditor({
+          value: subtask.title,
+          saveLabel: t('tasks.subtaskRename', { title: subtask.title }),
+          cancel,
+          save: async (nextTitle) => {
+            if (nextTitle !== subtask.title) {
+              await renameSubtask(subtask, {
+                onChanged: ctx.onChanged, title: nextTitle, throwOnError: true,
+              });
+              rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
+              paint();
+            }
+            cancel();
+          },
+        });
+        row.appendChild(editor);
       });
 
       const remove = document.createElement('button');
@@ -614,16 +733,29 @@ function subtaskListNode(task, ctx) {
     label.textContent = t('tasks.subtaskAdd');
     add.replaceChildren(label);
 
-    add.addEventListener('click', async () => {
-      add.disabled = true;
-      try {
-        const created = await addSubtask(task.id, ctx);
-        if (!created) return;
-        task.subtasks = [...(task.subtasks || []), created];
-        wrap.insertBefore(appendRow(created), add);
-      } finally {
-        add.disabled = false;
-      }
+    add.addEventListener('click', () => {
+      add.hidden = true;
+      const cancel = () => {
+        editor.remove();
+        add.hidden = false;
+        add.focus();
+      };
+      const editor = inlineTitleEditor({
+        saveLabel: t('tasks.subtaskAdd'),
+        cancel,
+        save: async (title) => {
+          const created = await addSubtask(task.id, {
+            ...ctx, title, throwOnError: true,
+          });
+          if (created) {
+            task.subtasks = [...(task.subtasks || []), created];
+            wrap.insertBefore(appendRow(created), editor);
+            await ctx.onChanged();
+          }
+          cancel();
+        },
+      });
+      wrap.insertBefore(editor, add);
     });
 
     wrap.appendChild(add);
@@ -1078,6 +1210,7 @@ function taskActionNode(task) {
 
 function renderTaskDetail(task, reminders = [], ctx) {
   const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task));
+  const participants = participantListNode(task, ctx);
 
   return [
     { icon: 'circle-dot', label: t('tasks.statusLabel'), value: STATUS_LABELS()[task.status] ?? task.status },
@@ -1094,8 +1227,8 @@ function renderTaskDetail(task, reminders = [], ctx) {
     { icon: 'folder', label: t('tasks.categoryLabel'), value: task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : '' },
     { icon: 'sparkles', label: t('tasks.activityTemplateLabel'), value: activityTemplateSummary(task) },
     { icon: 'route', label: t('tasks.assignmentLabel'), value: assignmentSummary(task) },
-    taskParticipants(task).length
-      ? { icon: 'users', label: t('tasks.participantsLabel'), node: participantListNode(task, ctx), multiline: true }
+    participants
+      ? { icon: 'users', label: t('tasks.participantsLabel'), node: participants, multiline: true }
       : assignedRow(task.assigned_users, t('tasks.assignedLabel')),
     { icon: 'user-check', label: t('tasks.responsibilitiesLabel'), node: responsibilityListNode(task, ctx), multiline: true },
     { icon: 'award', label: t('tasks.pointsLabel'), value: task.points ? String(task.points) : '' },

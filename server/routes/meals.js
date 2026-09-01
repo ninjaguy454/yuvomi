@@ -26,7 +26,9 @@ import {
   saveSettings as saveMealExecutionSettings,
 } from '../services/meal-execution.js';
 import {
+  getContextGrocerySettings,
   getGrocerySettings,
+  saveContextGrocerySettings,
   saveGrocerySettings,
   syncGrocerySettingsFromLegacy,
 } from '../services/meal-grocery-settings.js';
@@ -51,6 +53,7 @@ import {
   repairMealChooser,
   saveMealDecision,
   saveMealPlanDefaultSettings,
+  setMealPlanHomeEnabled,
   supersedeStaleMealChooserObligations,
   advanceMealChooserFallback,
   updateMealMenuItem,
@@ -725,6 +728,22 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
 
 function deleteMealOccurrence(meal, actorId) {
   if (!meal) return;
+  if (meal.meal_plan_rule_id) {
+    const contextId = Number(meal.planning_context_id) || null;
+    db.get().prepare(`
+      INSERT INTO meal_plan_occurrence_exceptions (
+        meal_plan_rule_id, planning_context_id, context_scope, date, action, created_by
+      ) VALUES (?, ?, ?, ?, 'skip', ?)
+      ON CONFLICT(meal_plan_rule_id, context_scope, date) DO UPDATE SET
+        action = 'skip', created_by = excluded.created_by
+    `).run(
+      meal.meal_plan_rule_id,
+      contextId,
+      contextId ? `context:${contextId}` : 'base',
+      meal.date,
+      actorId,
+    );
+  }
   if (meal.recurrence_template_id) {
     db.get().prepare(`
       INSERT OR IGNORE INTO meal_recurrence_exceptions (template_id, date, created_by)
@@ -897,6 +916,15 @@ router.put('/plans/:id', requireAdmin, (req, res) => {
   }
 });
 
+router.put('/plans/:id/home', requireAdmin, (req, res) => {
+  try {
+    const data = setMealPlanHomeEnabled(db.get(), Number(req.params.id), req.body?.enabled);
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err);
+  }
+});
+
 router.delete('/plans/:id', requireAdmin, (req, res) => {
   try {
     const data = deleteMealPlan(db.get(), Number(req.params.id), req.authUserId || req.session.userId);
@@ -1037,6 +1065,26 @@ router.put('/grocery-settings', requireAdmin, (req, res) => {
     res.json({ data });
   } catch (err) {
     mealDomainError(res, err, 'Could not save grocery settings.');
+  }
+});
+
+router.get('/grocery-settings/contexts/:contextId', (req, res) => {
+  try {
+    res.json({ data: getContextGrocerySettings(db.get(), Number(req.params.contextId)) });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not load grocery settings for this trip.');
+  }
+});
+
+router.put('/grocery-settings/contexts/:contextId', requireAdmin, (req, res) => {
+  try {
+    const data = saveContextGrocerySettings(
+      db.get(), Number(req.params.contextId), req.body || {},
+      req.authUserId || req.session.userId,
+    );
+    res.json({ data });
+  } catch (err) {
+    mealDomainError(res, err, 'Could not save grocery settings for this trip.');
   }
 });
 

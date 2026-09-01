@@ -8009,7 +8009,7 @@ test('desktop Meal cards open shared dialogs while mobile keeps the compact inli
 test('Meals preserves acting-for audit disclosure and consolidates plan actions in the manager', () => {
   const mealsPage = read('../public/pages/meals.js');
 
-  assert.match(mealsPage, /Acting for \{\{name\}\}\. Your account remains the recorded actor\./);
+  assert.match(mealsPage, /You're helping \{\{name\}\} pick their meal\./);
   assert.match(mealsPage, /renderMealActingForNotice\(model, 'meal-acting-banner--dialog'\)/);
   assert.doesNotMatch(mealsPage, /id="meal-plan-add"|id="meal-automation-settings"|id="week-randomize"|id="fab-new-meal"/);
   assert.match(mealsPage, /data-plan-create/);
@@ -8059,8 +8059,8 @@ test('Meal choice surfaces keep shared chooser, Backup Meal, and Personal Choice
   assert.match(mealsPage, /const entreeItems = chooserMode \? editableMenuItems\(occurrence\)\.filter\(\(item\) => item\.kind === 'entree'\) : \[\]/);
   assert.match(mealsPage, /if \(Array\.isArray\(draft\)\) return draft/,
     'an explicit empty incoming-chooser draft must not reuse released published menu IDs');
-  assert.match(mealsPage, /renderPublishedHouseholdMenu\(occurrence\)/,
-    'participants must see the published household menu while chooser work remains separate');
+  assert.match(mealsPage, /renderPublishedHouseholdMenu\(occurrence, \{ selectable: true, selectedIds/,
+    'participants must be able to select from the published household menu while chooser work remains separate');
   assert.match(mealsPage, /name="meal_choice" value="backup"/);
   assert.match(mealsPage, /name="backup_meal_title"/);
   assert.match(mealsPage, /name="backup_meal_title" list="\$\{recipeListId\}"/,
@@ -8068,7 +8068,7 @@ test('Meal choice surfaces keep shared chooser, Backup Meal, and Personal Choice
   assert.match(mealsPage, /const backupRecipe = state\.recipes\.find\(\(recipe\) => recipe\.title\.localeCompare/);
   assert.match(mealsPage, /const backupSelected = decision\?\.choice_kind === 'backup' && decision\?\.is_current_choice !== false/);
   assert.match(mealsPage, /const backupMealTitle = backupSelected \? \(decision\?\.selected_meal_title \|\| ''\) : ''/);
-  assert.match(mealsPage, /choice:[\s\S]*backup \? 'backup' : 'assigned'/);
+  assert.match(mealsPage, /choice:[\s\S]*backup \? 'backup' : 'household'/);
   assert.match(mealsPage, /selectedMealTitle:[\s\S]*participating && backup \? backupMealTitle : null/);
   assert.match(mealsPage, /selectedRecipeId:[\s\S]*participating && backup \? backupRecipeId : null/);
   assert.match(mealsCss, /\.meal-notify-menu-change\[hidden\]\s*\{[^}]*display:\s*none/,

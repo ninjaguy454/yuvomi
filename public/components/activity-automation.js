@@ -792,6 +792,22 @@ const TRIP_TASKS = [
   ['post_trip', 'Unpack'], ['post_trip', 'Start travel laundry'],
 ];
 
+const TRIP_PHASE_LABELS = [
+  ['before_departure', 'Before departure'], ['departure', 'Departure'],
+  ['during_trip', 'During trip'], ['before_return', 'Before return'],
+  ['post_trip', 'After the trip'],
+];
+
+function customTripTaskRow() {
+  return `<div class="automation-trip-task-row" data-custom-trip-task>
+    <select class="input" name="custom_trip_task_phase" aria-label="Task phase">
+      ${TRIP_PHASE_LABELS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}
+    </select>
+    <input class="input" name="custom_trip_task_title" maxlength="200" placeholder="Task name" aria-label="Task name">
+    <button class="btn btn--ghost btn--icon" type="button" data-remove-trip-task aria-label="Remove task"><i data-lucide="trash-2"></i></button>
+  </div>`;
+}
+
 export async function renderTripsManager(body, manager) {
   const [tripsResponse, context] = await Promise.all([api.get('/planning/trips'), api.get('/planning/admin/context')]);
   const trips = tripsResponse.data || [];
@@ -831,13 +847,30 @@ function openTripForm(trip, context, manager) {
     <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at))}">`)}</div>
     ${inputRow('Notes', `<textarea class="input" name="notes" rows="3">${h(trip?.notes || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="create_away_periods" ${trip?.create_away_periods !== 0 ? 'checked' : ''}> Create matching Away periods for travelers</label>
-    <fieldset class="automation-fieldset"><legend class="label">Create optional trip Tasks</legend><p class="form-hint">Tasks are dated relative to the trip phase and linked to the relevant saved Place.</p>${TRIP_TASKS.map(([phase,title], index) => `<label class="automation-check-row"><input type="checkbox" name="trip_task" value="${index}">${h(title)} <small class="form-hint">(${h(phase.replaceAll('_',' '))})</small></label>`).join('')}</fieldset>
+    <fieldset class="automation-fieldset"><legend class="label">Create optional trip Tasks</legend><p class="form-hint">Tasks are dated relative to the trip phase and linked to the relevant saved Place.</p>${TRIP_TASKS.map(([phase,title], index) => `<label class="automation-check-row"><input type="checkbox" name="trip_task" value="${index}">${h(title)} <small class="form-hint">(${h(phase.replaceAll('_',' '))})</small></label>`).join('')}<div data-custom-trip-tasks></div><button class="btn btn--ghost" type="button" data-add-trip-task>+ Add task</button></fieldset>
     ${footer(trip ? 'Save trip' : 'Create trip')}
   </form>`;
   openModal({ title: trip ? 'Edit trip' : 'Plan a trip', content, size: 'lg', onSave(panel) {
+    const customTasks = panel.querySelector('[data-custom-trip-tasks]');
+    panel.querySelector('[data-add-trip-task]')?.addEventListener('click', () => {
+      customTasks?.insertAdjacentHTML('beforeend', customTripTaskRow());
+      const row = customTasks?.lastElementChild;
+      row?.querySelector('[name="custom_trip_task_title"]')?.focus();
+      if (window.lucide && row) window.lucide.createIcons({ el: row });
+    });
+    customTasks?.addEventListener('click', (event) => {
+      const remove = event.target.closest('[data-remove-trip-task]');
+      if (remove) remove.closest('[data-custom-trip-task]')?.remove();
+    });
     panel.querySelector('#automation-trip-form')?.addEventListener('submit', async (event) => {
       event.preventDefault(); const data = new FormData(event.currentTarget);
-      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at'), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks: data.getAll('trip_task').map((index) => ({ phase: TRIP_TASKS[Number(index)][0], title: TRIP_TASKS[Number(index)][1] })) };
+      const tasks = data.getAll('trip_task').map((index) => ({ phase: TRIP_TASKS[Number(index)][0], title: TRIP_TASKS[Number(index)][1] }));
+      panel.querySelectorAll('[data-custom-trip-task]').forEach((row) => {
+        const title = row.querySelector('[name="custom_trip_task_title"]')?.value.trim();
+        const phase = row.querySelector('[name="custom_trip_task_phase"]')?.value;
+        if (title) tasks.push({ phase, title });
+      });
+      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at'), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks };
       try { if (trip) await api.put(`/planning/admin/trips/${trip.id}`, payload); else await api.post('/planning/admin/trips', payload); toast('Trip saved.'); await refreshAutomationManager(manager, 'trips'); }
       catch (error) { toast(error.message, 'danger'); }
     });

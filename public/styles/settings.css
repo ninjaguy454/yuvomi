@@ -1088,6 +1088,29 @@
   margin-top: var(--space-2);
 }
 
+.automation-trip-task-row {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.8fr) minmax(12rem, 1.8fr) auto;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-2);
+}
+
+.automation-trip-task-row input[type="datetime-local"],
+#automation-trip-form input[type="datetime-local"] {
+  color-scheme: dark;
+}
+
+#automation-trip-form input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  opacity: 0.75;
+  filter: invert(1) brightness(1.4);
+}
+
+#automation-trip-form input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator,
+#automation-trip-form input[type="datetime-local"]:focus::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
 .automation-question-row {
   display: grid;
   grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.5fr) auto auto;
@@ -1165,6 +1188,13 @@
 }
 
 @media (max-width: 640px) {
+  .automation-trip-task-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .automation-trip-task-row select {
+    grid-column: 1 / -1;
+  }
   .settings-card--automation {
     padding-inline: var(--space-3);
   }

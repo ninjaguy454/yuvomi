@@ -93,6 +93,38 @@ export function getGrocerySettings(database) {
   );
 }
 
+export function getContextGrocerySettings(database, contextId) {
+  const context = database.prepare(`
+    SELECT id, name, context_type, starts_at, ends_at
+      FROM planning_contexts WHERE id = ?
+  `).get(Number(contextId));
+  if (!context) throw settingsError('Planning context not found.', 404, 'PLANNING_CONTEXT_NOT_FOUND');
+  const override = database.prepare(`
+    SELECT * FROM planning_context_grocery_settings WHERE planning_context_id = ?
+  `).get(context.id);
+  return {
+    context,
+    track_groceries: override ? Boolean(override.track_groceries) : true,
+    inherits_household_defaults: true,
+    override: override || null,
+  };
+}
+
+export function saveContextGrocerySettings(database, contextId, body, actorId) {
+  const current = getContextGrocerySettings(database, contextId);
+  const enabled = bool(body?.track_groceries, current.track_groceries) ? 1 : 0;
+  database.prepare(`
+    INSERT INTO planning_context_grocery_settings (
+      planning_context_id, track_groceries, updated_by
+    ) VALUES (?, ?, ?)
+    ON CONFLICT(planning_context_id) DO UPDATE SET
+      track_groceries = excluded.track_groceries,
+      updated_by = excluded.updated_by,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+  `).run(Number(contextId), enabled, actorId || null);
+  return getContextGrocerySettings(database, contextId);
+}
+
 function resolveShoppingList(database, body, current, actorId) {
   const newName = body?.new_shopping_list_name == null
     ? ''

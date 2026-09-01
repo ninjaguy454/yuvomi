@@ -85,6 +85,11 @@ function loadSourceIngredients(database, from, to) {
     WHERE m.date BETWEEN ? AND ?
       AND m.scope != 'skipped'
       AND m.selection_status NOT IN ('declined', 'superseded')
+      AND NOT EXISTS (
+        SELECT 1 FROM planning_context_grocery_settings pcgs
+         WHERE pcgs.planning_context_id = m.planning_context_id
+           AND pcgs.track_groceries = 0
+      )
 
     UNION ALL
 
@@ -106,6 +111,11 @@ function loadSourceIngredients(database, from, to) {
     WHERE m.date BETWEEN ? AND ?
       AND m.scope != 'skipped'
       AND m.selection_status NOT IN ('declined', 'superseded')
+      AND NOT EXISTS (
+        SELECT 1 FROM planning_context_grocery_settings pcgs
+         WHERE pcgs.planning_context_id = m.planning_context_id
+           AND pcgs.track_groceries = 0
+      )
       AND NOT EXISTS (SELECT 1 FROM meal_ingredients mi WHERE mi.meal_id = m.id)
 
     ORDER BY meal_date ASC, meal_id ASC, source_kind ASC, meal_ingredient_id ASC, recipe_ingredient_id ASC

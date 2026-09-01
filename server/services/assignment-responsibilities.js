@@ -45,7 +45,32 @@ function eligibleStandaloneClaimMember(d, taskId, userId) {
       JOIN users u ON u.id = tce.user_id
      WHERE tce.task_id = ? AND tce.user_id = ?
   `).get(taskId, userId);
-  if (!eligible) throw new Error('You are not eligible for this task.');
+  if (!eligible) {
+    const trip = d.prepare(`
+      SELECT tal.source_id AS planning_context_id, pc.status AS context_status
+        FROM task_action_links tal
+        LEFT JOIN planning_contexts pc ON pc.id = tal.source_id
+       WHERE tal.task_id = ? AND tal.action_type = 'travel_meal_plan'
+         AND tal.source_type = 'planning_context'
+       LIMIT 1
+    `).get(taskId);
+    if (trip) {
+      if (!trip.context_status || ['cancelled', 'completed'].includes(trip.context_status)) {
+        d.prepare(`
+          UPDATE task_assignment_context SET state = 'cancelled', updated_at = ${nowSql()}
+           WHERE task_id = ? AND state != 'fulfilled'
+        `).run(taskId);
+        d.prepare(`
+          UPDATE planning_obligations SET status = 'cancelled', responded_at = ${nowSql()},
+            updated_at = ${nowSql()}
+           WHERE task_id = ? AND status IN ('pending', 'accepted')
+        `).run(taskId);
+        throw new Error('This trip is no longer active, so this task cannot be claimed.');
+      }
+      throw new Error("You're not eligible because you're not on this trip. Only travelers on this trip can claim this task.");
+    }
+    throw new Error('You are not eligible for this task.');
+  }
   return eligible;
 }
 

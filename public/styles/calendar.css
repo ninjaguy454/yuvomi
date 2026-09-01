@@ -1227,6 +1227,20 @@
   margin-block-end: var(--space-3);
 }
 
+.calendar-travel-fields input[type="datetime-local"] {
+  color-scheme: dark;
+}
+
+.calendar-travel-fields input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  opacity: 0.75;
+  filter: invert(1) brightness(1.4);
+}
+
+.calendar-travel-fields input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator,
+.calendar-travel-fields input[type="datetime-local"]:focus::-webkit-calendar-picker-indicator {
+  opacity: 1;
+}
+
 .calendar-travel-fields__heading p {
   margin-block: var(--space-1) 0;
 }

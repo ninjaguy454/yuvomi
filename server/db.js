@@ -8581,6 +8581,39 @@ const FORK_MIGRATIONS = [
         WHERE entity_type = 'meal' AND dismissed = 0 AND pushed_at IS NULL;
     `,
   },
+  {
+    version: 10024,
+    description: 'Context-specific Meal Plan activation, occurrence skips and grocery overrides',
+    up: `
+      ALTER TABLE meal_plans ADD COLUMN home_enabled INTEGER NOT NULL DEFAULT 1
+        CHECK(home_enabled IN (0, 1));
+
+      UPDATE meal_plans
+         SET home_enabled = 0, status = 'active'
+       WHERE status = 'archived';
+
+      CREATE TABLE meal_plan_occurrence_exceptions (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        meal_plan_rule_id   INTEGER NOT NULL REFERENCES meal_plan_rules(id) ON DELETE CASCADE,
+        planning_context_id INTEGER REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        context_scope       TEXT NOT NULL,
+        date                TEXT NOT NULL,
+        action              TEXT NOT NULL DEFAULT 'skip' CHECK(action IN ('skip')),
+        created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE(meal_plan_rule_id, context_scope, date)
+      );
+      CREATE INDEX idx_meal_plan_occurrence_exceptions_context
+        ON meal_plan_occurrence_exceptions(planning_context_id, date);
+
+      CREATE TABLE planning_context_grocery_settings (
+        planning_context_id INTEGER PRIMARY KEY REFERENCES planning_contexts(id) ON DELETE CASCADE,
+        track_groceries     INTEGER NOT NULL DEFAULT 1 CHECK(track_groceries IN (0, 1)),
+        updated_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        updated_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      );
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

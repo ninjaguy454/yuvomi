@@ -83,6 +83,8 @@ let state = {
   deepLinkFocus:    null,
   desktopOccurrenceDialogKey: null,
   mealPlans:        [],
+  mealPlanContexts: [],
+  mealPlanManagerContextId: null,
   grocerySettings: null,
   isAdmin:          false,
   modal:            null,
@@ -651,7 +653,7 @@ function mealActingForNotice(model = activeWeekModel()) {
     canAct,
     icon: canAct ? 'user-round-cog' : 'eye',
     message: canAct
-      ? mealText('meals.actingFor', 'Acting for {{name}}. Your account remains the recorded actor.', { name: member.display_name })
+      ? mealText('meals.actingFor', "You're helping {{name}} pick their meal.", { name: member.display_name })
       : mealText('meals.viewingFor', 'Viewing {{name}}. Choices are read-only.', { name: member.display_name }),
   };
 }
@@ -807,8 +809,8 @@ function participationLabel(value) {
     participating: mealText('meals.participating', 'Participating'),
     not_participating: mealText('meals.skipped', 'Skipped'),
     away: mealText('meals.away', 'Away'),
-    pending: mealText('meals.pendingResponse', 'Response pending'),
-  }[value] || mealText('meals.pendingResponse', 'Response pending');
+    pending: mealText('meals.pendingResponse', 'Waiting for your choice'),
+  }[value] || mealText('meals.pendingResponse', 'Waiting for your choice');
 }
 
 function chooserStatusLabel(value) {
@@ -921,7 +923,9 @@ function editableMenuItems(occurrence) {
   return publishedMenuItems(occurrence);
 }
 
-function renderPublishedHouseholdMenu(occurrence) {
+function renderPublishedHouseholdMenu(occurrence, {
+  selectable = false, selectedIds = new Set(), disabled = false,
+} = {}) {
   const items = publishedMenuItems(occurrence);
   const entrees = items.filter((item) => item.kind === 'entree');
   const sides = items.filter((item) => item.kind === 'side');
@@ -937,11 +941,26 @@ function renderPublishedHouseholdMenu(occurrence) {
     : mealText('meals.sharedMenuPending', 'Waiting for meal selection');
   return `<section class="meal-published-menu" aria-label="${esc(mealText('meals.publishedHouseholdMenu', 'Household Meal'))}">
     <div class="meal-published-menu__heading"><strong>${mealText('meals.publishedHouseholdMenu', 'Household Meal')}</strong><span>${esc(status)}</span></div>
-    ${items.length ? `<div class="meal-published-menu__courses">
-      ${entrees.length ? `<div><span>${mealText('meals.entree', 'Entrée')}</span>${entrees.map((item) => `<strong>${esc(item.label)}</strong>`).join('')}</div>` : ''}
-      ${sides.length ? `<div><span>${mealText('meals.sides', 'Sides')}</span><ul>${sides.map((item) => `<li>${esc(item.label)}</li>`).join('')}</ul></div>` : ''}
+    ${items.length ? `<div class="meal-published-menu__courses" ${selectable ? 'data-household-menu-fields' : ''}>
+      ${entrees.length ? `<div><span>${mealText('meals.entree', 'Entrée')}</span>${entrees.map((item) => selectable
+        ? `<label class="meal-option-choice meal-option-choice--entree"><input type="radio" name="menu_entree" value="${item.id}" ${selectedIds.has(Number(item.id)) ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span><strong>${esc(item.label)}</strong></span></label>`
+        : `<strong>${esc(item.label)}</strong>`).join('')}</div>` : ''}
+      ${sides.length ? `<div><span>${mealText('meals.sides', 'Sides')}</span>${selectable
+        ? sides.map((item) => `<label class="meal-inline-choice"><input type="checkbox" name="menu_side" value="${item.id}" data-menu-side ${selectedIds.has(Number(item.id)) ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span>${esc(item.label)}</span></label>`).join('')
+        : `<ul>${sides.map((item) => `<li>${esc(item.label)}</li>`).join('')}</ul>`}</div>` : ''}
     </div>` : `<p class="form-hint">${esc(mealText('meals.noPublishedMenuHint', "{{name}} hasn't chosen the household meal yet. You can wait for their choice, select a Backup Meal, or opt out.", { name: chooserName }))}</p>`}
   </section>`;
+}
+
+function participationQuestion(occurrence, personalPolicy = false) {
+  const meal = String(mealTypeLabel(occurrence.meal_type) || mealText('meals.mealLabel', 'meal')).toLowerCase();
+  const time = mealTimeLabel(occurrence);
+  if (personalPolicy) return time
+    ? `Will you be having ${meal} at ${time}?`
+    : `Will you be having ${meal}?`;
+  return time
+    ? `Will you be joining us for ${meal} at ${time}?`
+    : `Will you be joining us for ${meal}?`;
 }
 
 function renderChooserRepairAction(occurrence) {
@@ -992,23 +1011,24 @@ function renderChoiceForm(occurrence, decision, canAct) {
   return `<form class="meal-choice-form" data-meal-decision data-meal-id="${mealId}" data-occurrence-key="${esc(occurrence.key)}" data-choice-surface="${personalPolicy ? 'personal' : chooserMode ? 'chooser' : 'backup'}" data-max-side-choices="${courseLimits.max_side_choices}">
     <datalist id="${recipeListId}">${personalRecipeOptions}</datalist>
     ${allowParticipation ? `<fieldset class="meal-choice-form__section">
-      <legend>${mealText('meals.participationTitle', 'Participation')}</legend>
+      <legend>${esc(participationQuestion(occurrence, personalPolicy))}</legend>
       <label class="meal-inline-choice"><input type="radio" name="participation" value="participating" ${participation !== 'not_participating' ? 'checked' : ''}><span>${mealText('meals.joinMeal', 'Opt in')}</span></label>
       <label class="meal-inline-choice"><input type="radio" name="participation" value="not_participating" ${participation === 'not_participating' ? 'checked' : ''}><span>${mealText('meals.notJoiningMeal', 'Opt out')}</span></label>
       <label class="meal-inline-choice meal-notify-menu-change" data-notify-menu-change ${participation === 'not_participating' ? '' : 'hidden'}><input type="checkbox" name="notify_on_menu_change" ${decision?.notify_on_menu_change ? 'checked' : ''}><span>${mealText('meals.notifyMenuChange', 'Notify me if this meal changes')}</span></label>
       ${chooserMode ? `<small class="form-hint">${mealText('meals.notJoiningPassesChooser', 'Opting out passes chooser responsibility to the next backup.')}</small>` : ''}
     </fieldset>` : `<input type="hidden" name="participation" value="${esc(participation)}">`}
     ${chooserMode ? `<fieldset class="meal-choice-form__section" data-meal-food-section ${participation === 'not_participating' ? 'disabled' : ''}>
-      <legend>${mealText('meals.householdMeal', 'Household meal')}</legend>
-      <p class="form-hint">${mealText('meals.entree', 'Entrée')}: ${courseLimits.max_entree_choices > 0 ? 1 : 0} · ${mealText('meals.maxSides', 'Maximum sides')}: ${courseLimits.max_side_choices}</p>
+      <legend>${mealText('meals.householdMeal', 'Household Meal')}</legend>
+      <p class="form-hint">${personalPolicy ? "Choose what you're going to eat." : "Choose what we're going to eat."}</p>
+      ${canEditOccurrenceMenu(occurrence) ? `<button type="button" class="btn btn--secondary meal-menu-edit" data-action="edit-meal-menu" data-occurrence-key="${esc(occurrence.key)}"><i data-lucide="list-plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.editMenuOptions', 'Edit entrée and sides')}</button>` : ''}
       ${entreeItems.map((item) => `<label class="meal-option-choice meal-option-choice--entree"><input type="radio" name="meal_choice" value="${item.id}" ${selectedIds.has(Number(item.id)) ? 'checked' : ''}><span><strong>${esc(item.label)}</strong></span></label>`).join('') || (courseLimits.max_entree_choices > 0 ? `<p class="form-hint">${mealText('meals.noEntreeOptions', 'Use Edit entrée & sides to add the shared meal.')}</p>` : '')}
       ${sideItems.length ? `<div class="meal-side-choices"><span class="meal-side-choices__label">${mealText('meals.maxSides', 'Maximum sides')}: ${courseLimits.max_side_choices}</span>${sideItems.map((item) => `<label class="meal-inline-choice"><input type="checkbox" name="menu_side" value="${item.id}" data-menu-side ${selectedIds.has(Number(item.id)) ? 'checked' : ''}><span>${esc(item.label)}</span></label>`).join('')}</div>` : ''}
     </fieldset>` : ''}
-    ${!personalPolicy && !chooserMode ? renderPublishedHouseholdMenu(occurrence) : ''}
     ${allowBackup ? `<fieldset class="meal-choice-form__section" data-meal-food-section ${participation === 'not_participating' ? 'disabled' : ''}>
       <legend>${mealText('meals.backupChoiceTitle', 'Meal Choice')}</legend>
       <label class="meal-option-choice meal-option-choice--household"><input type="radio" name="meal_choice" value="household" ${backupSelected ? '' : 'checked'}><span><strong>${mealText('meals.householdMeal', 'Household Meal')}</strong></span></label>
       <label class="meal-option-choice meal-option-choice--backup"><input type="radio" name="meal_choice" value="backup" ${backupSelected ? 'checked' : ''}><span><strong>${mealText('meals.backupMeal', 'Backup Meal')}</strong></span></label>
+      ${renderPublishedHouseholdMenu(occurrence, { selectable: true, selectedIds, disabled: backupSelected || participation === 'not_participating' })}
       <div class="meal-backup-choice-fields" data-backup-choice-fields ${backupSelected && participation !== 'not_participating' ? '' : 'hidden'}>
         <label class="label">${mealText('meals.backupMealChoice', 'Backup meal choice')}<input class="form-input" name="backup_meal_title" list="${recipeListId}" maxlength="300" value="${esc(backupMealTitle)}" placeholder="${esc(mealText('meals.recipeOrCustomPlaceholder', 'Choose a recipe or type a new meal'))}" ${participation === 'not_participating' || !backupSelected ? 'disabled' : ''}><input type="hidden" name="backup_recipe_id" value="${Number(decision?.selected_recipe_id) || ''}"><small class="form-hint">${mealText('meals.backupMealChoiceHint', 'Saved recipes filter as you type; a new meal name is also accepted.')}</small></label>
       </div>
@@ -1099,13 +1119,12 @@ function renderChoiceOccurrenceDetails(occurrence, model, { includeActingNotice 
   return `${includeActingNotice ? renderMealActingForNotice(model, 'meal-acting-banner--dialog') : ''}
     ${occurrence.unavailable_reason ? `<div class="meal-unavailable"><i data-lucide="calendar-off" class="icon-sm" aria-hidden="true"></i><span>${esc(occurrence.unavailable_reason)}</span></div>` : ''}
     <dl class="meal-role-summary">
-      <div><dt>${mealText('meals.chooserResponsibility', 'Chooser responsibility')}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
+      <div><dt>${mealText('meals.chooserResponsibility', "Who's choosing?")}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
       <div><dt>${mealText('meals.participationTitle', 'Participation')}</dt><dd>${esc(participationLabel(decision?.participation))}</dd></div>
-      <div><dt>${mealText('meals.foodChoiceTitle', 'Selected food')}</dt><dd>${chosen.length ? chosen.map((item) => `<span class="meal-selected-food meal-selected-food--${esc(item.kind)}">${esc(item.label)}</span>`).join('') : `<span class="meal-detail-value--muted">${esc(title || mealText('meals.noMealSelected', 'No meal selected yet'))}</span>`}</dd></div>
+      ${decision?.choice_kind && decision.choice_kind !== 'household' ? `<div><dt>Your meal</dt><dd>${chosen.length ? chosen.map((item) => `<span class="meal-selected-food meal-selected-food--${esc(item.kind)}">${esc(item.label)}</span>`).join('') : `<span class="meal-detail-value--muted">${esc(title || mealText('meals.noMealSelected', 'No meal selected yet'))}</span>`}</dd></div>` : ''}
       <div><dt>${mealText('meals.cookingResponsibility', 'Cooking and supervision')}</dt><dd>${renderCookingSummary(occurrence)}</dd></div>
     </dl>
     ${renderChooserRepairAction(occurrence)}
-    ${canEditOccurrenceMenu(occurrence) ? `<button type="button" class="btn btn--secondary meal-menu-edit" data-action="edit-meal-menu" data-occurrence-key="${esc(occurrence.key)}"><i data-lucide="list-plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.editMenuOptions', 'Edit entrée and sides')}</button>` : ''}
     ${renderChoiceForm(occurrence, decision, canAct)}
     ${renderOccurrenceActions(occurrence)}`;
 }
@@ -2048,9 +2067,23 @@ async function openMealMenuEditor(occurrence) {
 }
 
 async function loadMealPlans() {
-  const response = await api.get('/meals/plans');
+  const [response, contextsResponse] = await Promise.all([
+    api.get('/meals/plans'),
+    api.get('/planning/contexts'),
+  ]);
   const data = response?.data ?? response;
   state.mealPlans = Array.isArray(data) ? data : (data?.plans || []);
+  const contexts = contextsResponse?.data ?? contextsResponse;
+  state.mealPlanContexts = (Array.isArray(contexts) ? contexts : [])
+    .filter((context) => context.context_type === 'travel'
+      && ['active', 'conflict', 'resolved'].includes(context.status));
+  if (state.mealPlanManagerContextId == null) {
+    state.mealPlanManagerContextId = selectedNumericContextId() || 'home';
+  }
+  if (state.mealPlanManagerContextId !== 'home'
+      && !state.mealPlanContexts.some((context) => Number(context.id) === Number(state.mealPlanManagerContextId))) {
+    state.mealPlanManagerContextId = 'home';
+  }
   return state.mealPlans;
 }
 
@@ -2078,28 +2111,33 @@ function renderMealPlanManagerActions() {
   return `<div class="meal-plan-manager__actions" role="group" aria-label="${esc(mealText('meals.mealPlans', 'Meal Plans'))}">
     <button type="button" class="btn btn--primary" data-plan-create><i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.createMealPlan', 'Create Meal Plan')}</button>
     <button type="button" class="btn btn--secondary" data-plan-defaults><i data-lucide="settings-2" class="icon-sm" aria-hidden="true"></i>${mealText('meals.planDefaultSettings', 'Meal Plan Default Settings')}</button>
+    <button type="button" class="btn btn--secondary" data-grocery-settings><i data-lucide="shopping-basket" class="icon-sm" aria-hidden="true"></i>Grocery List Settings</button>
     <button type="button" class="btn btn--secondary" data-plan-randomize${randomizeDisabled}${randomizeTitle}><i data-lucide="shuffle" class="icon-sm" aria-hidden="true"></i>${t('meals.randomizePlan')}</button>
   </div>`;
 }
 
 function renderMealPlanManagerContent() {
-  const model = activeWeekModel();
-  const contextId = selectedNumericContextId();
-  const context = collectMealContexts(model).find((item) => Number(item.id) === contextId);
-  const contextPlans = model.context_plan?.plans || context?.meal_plans || [];
-  const attachedIds = new Set(contextPlans.map((item) => Number(item.meal_plan_id ?? item.id)));
-  const contextIntro = context ? `<div class="meal-plan-context-callout"><i data-lucide="${(context.context_type || context.type) === 'travel' ? 'plane' : 'map-pin'}" class="icon-sm" aria-hidden="true"></i><span><strong>${esc(context.name)}</strong><small>${mealText('meals.contextPlanHint', 'Choose which Meal Plan this planning context uses. Home rotation remains separate.')}</small></span></div>` : '';
+  const managerContextId = state.mealPlanManagerContextId ?? 'home';
+  const contextId = managerContextId === 'home' ? null : Number(managerContextId);
+  const context = state.mealPlanContexts.find((item) => Number(item.id) === contextId) || null;
+  const attachedIds = new Set(state.mealPlans
+    .filter((plan) => context
+      ? (plan.context_ids || []).map(Number).includes(contextId)
+      : Boolean(plan.home_enabled))
+    .map((plan) => Number(plan.id)));
+  const contextOptions = [`<option value="home" ${context ? '' : 'selected'}>Home</option>`,
+    ...state.mealPlanContexts.map((item) => `<option value="${item.id}" ${Number(item.id) === contextId ? 'selected' : ''}>${esc(item.name)}</option>`)].join('');
+  const contextSelector = `<label class="label meal-plan-manager__context">Plan meals for<select class="form-input" data-plan-manager-context>${contextOptions}</select></label>`;
+  const contextIntro = context ? `<div class="meal-plan-context-callout"><i data-lucide="plane" class="icon-sm" aria-hidden="true"></i><span><strong>${esc(context.name)}</strong><small>Meal Plans here use this trip’s start and end dates.</small></span></div>` : '';
   if (!state.mealPlans.length) {
-    return `${contextIntro}${renderMealPlanManagerActions()}<div class="meal-plan-manager__empty"><i data-lucide="notebook-tabs" aria-hidden="true"></i><h3>${mealText('meals.noMealPlans', 'No Meal Plans yet')}</h3><p>${mealText('meals.noMealPlansHint', 'Create a reusable plan for the meal slots your household repeats.')}</p>${state.isAdmin ? '' : `<p class="form-hint">${mealText('meals.planAdminRequired', 'An administrator can create Meal Plans.')}</p>`}</div>`;
+    return `${contextSelector}${contextIntro}${renderMealPlanManagerActions()}<div class="meal-plan-manager__empty"><i data-lucide="notebook-tabs" aria-hidden="true"></i><h3>${mealText('meals.noMealPlans', 'No Meal Plans yet')}</h3><p>${mealText('meals.noMealPlansHint', 'Create a reusable plan for the meal slots your household repeats.')}</p>${state.isAdmin ? '' : `<p class="form-hint">${mealText('meals.planAdminRequired', 'An administrator can create Meal Plans.')}</p>`}</div>`;
   }
-  return `<div class="meal-plan-manager">${contextIntro}${renderMealPlanManagerActions()}<p class="form-hint">${mealText('meals.mealPlanManagerHint', 'Meal Plans define reusable meal slots. Editing a plan creates a new revision; dated meals remain reviewable.')}</p><div class="meal-plan-manager__list">${state.mealPlans.map((plan) => `
+  return `<div class="meal-plan-manager">${contextSelector}${contextIntro}${renderMealPlanManagerActions()}<p class="form-hint">${mealText('meals.mealPlanManagerHint', 'Meal Plans define reusable meal slots. Editing a plan creates a new revision; dated meals remain reviewable.')}</p><div class="meal-plan-manager__list">${state.mealPlans.map((plan) => `
     <article class="meal-plan-row" data-plan-id="${plan.id}">
       <div><strong>${esc(plan.name)}</strong><span>${esc(plan.description || mealText('meals.noDescription', 'No description'))}</span><small>${mealText('meals.ruleCount', '{{count}} slots', { count: Number(plan.rule_count ?? plan.rules?.length ?? 0) })}${plan.effective_from ? ` · ${formatDate(plan.effective_from)}` : ''}${plan.effective_until ? ` - ${formatDate(plan.effective_until)}` : ''}</small></div>
-      <span class="meal-plan-row__status meal-plan-row__status--${esc(plan.status || 'active')}">${esc(plan.status || 'active')}</span>
+      <span class="meal-plan-row__status meal-plan-row__status--${attachedIds.has(Number(plan.id)) ? 'active' : 'archived'}">${attachedIds.has(Number(plan.id)) ? 'Enabled' : 'Disabled'}</span>
       <div class="meal-plan-row__actions">
-        ${context && state.isAdmin ? attachedIds.has(Number(plan.id))
-          ? `<button type="button" class="btn btn--secondary btn--sm" data-context-plan-detach="${plan.id}">${mealText('meals.detachPlan', 'Remove from context')}</button>`
-          : plan.status === 'active' ? `<button type="button" class="btn btn--primary btn--sm" data-context-plan-attach="${plan.id}">${esc(mealText('meals.useForContext', 'Use for {{context}}', { context: context.name }))}</button>` : '' : ''}
+        ${state.isAdmin && plan.status === 'active' ? `<button type="button" class="btn ${attachedIds.has(Number(plan.id)) ? 'btn--secondary' : 'btn--primary'} btn--sm" data-plan-context-toggle="${plan.id}" data-enabled="${attachedIds.has(Number(plan.id))}">${attachedIds.has(Number(plan.id)) ? 'Disable' : 'Enable'}</button>` : ''}
         <button type="button" class="btn btn--secondary btn--sm" data-plan-view="${plan.id}">${mealText('meals.viewMealPlan', 'View')}</button>
         ${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-plan-edit="${plan.id}">${t('common.edit')}</button><button type="button" class="btn btn--ghost btn--sm" data-plan-delete="${plan.id}">${t('common.delete')}</button>` : ''}
       </div>
@@ -2121,28 +2159,39 @@ async function openMealPlanManager() {
     onSave(panel) {
       panel.querySelectorAll('[data-plan-create]').forEach((button) => button.addEventListener('click', () => openMealPlanEditor()));
       panel.querySelector('[data-plan-defaults]')?.addEventListener('click', openMealDefaultSettingsModal);
+      panel.querySelector('[data-grocery-settings]')?.addEventListener('click', openGrocerySettingsModal);
       panel.querySelector('[data-plan-randomize]')?.addEventListener('click', openRandomizeModal);
-      const saveContextPlan = async (button, attach) => {
+      panel.querySelector('[data-plan-manager-context]')?.addEventListener('change', (event) => {
+        state.mealPlanManagerContextId = event.target.value === 'home' ? 'home' : Number(event.target.value);
+        openMealPlanManager();
+      });
+      const saveContextPlan = async (button) => {
         button.disabled = true;
         try {
-          const planId = Number(attach ? button.dataset.contextPlanAttach : button.dataset.contextPlanDetach);
-          const contextId = Number(state.selectedContextId);
-          if (attach) await api.put(`/meals/plans/${planId}/contexts/${contextId}`, { is_primary: true });
-          else await api.delete(`/meals/plans/${planId}/contexts/${contextId}`);
+          const planId = Number(button.dataset.planContextToggle);
+          const enabled = button.dataset.enabled === 'true';
+          const contextId = state.mealPlanManagerContextId === 'home'
+            ? null
+            : Number(state.mealPlanManagerContextId);
+          if (contextId) {
+            if (enabled) await api.delete(`/meals/plans/${planId}/contexts/${contextId}`);
+            else await api.put(`/meals/plans/${planId}/contexts/${contextId}`, { is_primary: true });
+          } else {
+            await api.put(`/meals/plans/${planId}/home`, { enabled: !enabled });
+          }
           await Promise.all([loadWeek(state.currentWeek), loadWeekExperience()]);
-          closeSharedModal({ force: true });
           renderWeekExperienceHeader();
           renderWeekGrid();
-          window.yuvomi?.showToast(attach
-            ? mealText('meals.contextPlanAttached', 'Meal Plan attached to this context.')
-            : mealText('meals.contextPlanDetached', 'Meal Plan removed from this context.'), 'success');
+          window.yuvomi?.showToast(enabled
+            ? 'Meal Plan disabled here.'
+            : 'Meal Plan enabled here.', 'success');
+          openMealPlanManager();
         } catch (error) {
           window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
           button.disabled = false;
         }
       };
-      panel.querySelectorAll('[data-context-plan-attach]').forEach((button) => button.addEventListener('click', () => saveContextPlan(button, true)));
-      panel.querySelectorAll('[data-context-plan-detach]').forEach((button) => button.addEventListener('click', () => saveContextPlan(button, false)));
+      panel.querySelectorAll('[data-plan-context-toggle]').forEach((button) => button.addEventListener('click', () => saveContextPlan(button)));
       panel.querySelectorAll('[data-plan-view]').forEach((button) => button.addEventListener('click', async () => {
         button.disabled = true;
         try {
@@ -2434,20 +2483,27 @@ function renderMealPlanRevisionHistory(plan) {
 function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
   const rules = mealPlanRulesForEditor(plan);
   if (!rules.length) rules.push({ weekdays: [0], meal_type: 'dinner', policy: 'fixed', chooser_fallback_user_ids: [], participant_ids: [] });
+  const editorContextId = state.mealPlanManagerContextId === 'home'
+    ? null
+    : Number(state.mealPlanManagerContextId);
+  const editorContext = state.mealPlanContexts.find((item) => Number(item.id) === editorContextId) || null;
   const content = `<form id="meal-plan-form" class="meal-plan-editor">
     <p class="form-hint">${mealText('meals.mealPlanEditorHint', 'Define reusable weekly slots. Dated meals remain independently editable after the plan creates them.')}</p>
     <div class="meal-plan-editor__identity">
       <label class="label meal-plan-editor__name">${mealText('meals.planName', 'Plan name')}<input class="form-input" name="name" maxlength="120" required value="${esc(plan?.name || '')}" placeholder="${mealText('meals.planNamePlaceholder', 'e.g. School-week meals')}"></label>
-      <label class="meal-inline-choice meal-plan-editor__active"><input type="checkbox" name="active" ${plan?.status !== 'archived' ? 'checked' : ''}><span><strong>${mealText('meals.planActiveQuestion', 'Active?')}</strong><small>${mealText('meals.planActiveHint', 'When off, this plan never creates meals, even inside its effective dates.')}</small></span></label>
       <label class="label meal-plan-editor__description">${mealText('meals.planDescription', 'Description')}<textarea class="form-input" name="description" rows="2">${esc(plan?.description || '')}</textarea></label>
-      <div class="meal-plan-editor__dates"><label class="label">${mealText('meals.effectiveFrom', 'Effective from')}<input class="form-input" type="date" name="effective_from" value="${esc(plan?.effective_from || '')}"></label><label class="label">${mealText('meals.effectiveUntil', 'Effective until')}<input class="form-input" type="date" name="effective_until" value="${esc(plan?.effective_until || '')}"></label><small class="form-hint">${mealText('meals.planActivationHint', 'When Active is on, these dates control the plan window. Turning Active off always overrides the dates.')}</small></div>
+      ${editorContext ? `<div class="meal-plan-context-callout"><i data-lucide="plane" class="icon-sm" aria-hidden="true"></i><span><strong>${esc(editorContext.name)}</strong><small>This plan uses the trip’s start and end dates automatically.</small></span></div>` : `<div class="meal-plan-editor__dates"><label class="label">Starts<input class="form-input" type="date" name="effective_from" value="${esc(plan?.effective_from || '')}"></label><label class="label">Ends<input class="form-input" type="date" name="effective_until" value="${esc(plan?.effective_until || '')}"></label></div>`}
       ${plan?.id && !readOnly ? `<label class="label meal-plan-editor__description">${mealText('meals.changeSummary', 'Change summary')}<textarea class="form-input" name="change_note" rows="2" maxlength="1000" placeholder="${mealText('meals.changeSummaryPlaceholder', 'What changed in this revision?')}"></textarea></label>` : ''}
     </div>
     <div class="meal-plan-editor__heading"><h3>${mealText('meals.planSlots', 'Meal slots')}</h3>${readOnly ? '' : `<button type="button" class="btn btn--secondary btn--sm" data-plan-rule-add><i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.addSlot', 'Add slot')}</button>`}</div>
     <div class="meal-plan-editor__rules" data-plan-rules>${rules.map(renderMealPlanRule).join('')}</div>
-    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-action="close-modal">${readOnly ? t('common.close') : t('common.cancel')}</button>${readOnly ? '' : `<button type="submit" class="btn btn--primary">${plan?.id ? t('common.save') : mealText('meals.createMealPlan', 'Create Meal Plan')}</button>`}</div>
+    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-plan-back>${readOnly ? 'Back to Meal Plans' : t('common.cancel')}</button>${readOnly ? '' : `<button type="submit" class="btn btn--primary">${plan?.id ? t('common.save') : mealText('meals.createMealPlan', 'Create Meal Plan')}</button>`}</div>
   </form>`;
   openSharedModal({ title: readOnly ? mealText('meals.viewMealPlanTitle', 'Meal Plan details') : plan?.id ? mealText('meals.editMealPlan', 'Edit Meal Plan') : mealText('meals.addMealPlan', 'Meal Plan'), content, size: 'xl', onSave(panel) {
+    panel.querySelector('[data-plan-back]')?.addEventListener('click', () => {
+      closeSharedModal({ force: true });
+      setTimeout(() => openMealPlanManager(), window.innerWidth < 768 ? 420 : 0);
+    });
     if (readOnly) {
       panel.querySelectorAll('input, select, textarea, [data-plan-rule-remove], [data-plan-fallback-add], [data-plan-fallback-remove]').forEach((field) => { field.disabled = true; });
       panel.querySelectorAll('[data-plan-rule-remove], [data-plan-fallback-add], [data-plan-fallback-remove]').forEach((button) => { button.hidden = true; });
@@ -2592,9 +2648,10 @@ function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
       const payload = {
         name: String(data.get('name') || '').trim(),
         description: String(data.get('description') || '').trim() || null,
-        status: data.has('active') ? 'active' : 'archived',
-        effective_from: data.get('effective_from') || null,
-        effective_until: data.get('effective_until') || null,
+        status: plan?.status || 'active',
+        home_enabled: plan?.id ? Boolean(plan.home_enabled) : !editorContextId,
+        effective_from: editorContext ? (plan?.effective_from || null) : (data.get('effective_from') || null),
+        effective_until: editorContext ? (plan?.effective_until || null) : (data.get('effective_until') || null),
         change_note: String(data.get('change_note') || '').trim() || undefined,
         rules: [...form.querySelectorAll('[data-plan-rule]')].map(planRuleFromElement),
       };
@@ -2612,7 +2669,7 @@ function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
         let saved;
         if (plan?.id) saved = await api.put(`/meals/plans/${plan.id}`, payload);
         else saved = await api.post('/meals/plans', payload);
-        const contextId = selectedNumericContextId();
+        const contextId = editorContextId;
         const savedPlanId = Number(saved?.data?.id ?? saved?.id);
         if (!plan?.id && contextId && savedPlanId) {
           await api.put(`/meals/plans/${savedPlanId}/contexts/${contextId}`, { is_primary: true });
@@ -2622,6 +2679,7 @@ function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
         renderWeekExperienceHeader();
         renderWeekGrid();
         window.yuvomi?.showToast(mealText('meals.mealPlanSaved', 'Meal Plan saved.'), 'success');
+        setTimeout(() => openMealPlanManager(), window.innerWidth < 768 ? 420 : 0);
       } catch (error) {
         window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
         submit.disabled = false;
@@ -2665,7 +2723,7 @@ async function openMealDefaultSettingsModal() {
       <label class="label" data-terminal-fixed ${terminalStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.lastResortPerson', 'Last-resort person')}</span><select class="form-input" name="chooser_terminal_user_id">${planMemberOptions(defaults.chooser_terminal_user_id)}</select><small class="form-hint">${mealText('meals.lastResortPersonHint', 'This person is prompted only after every normal option is exhausted, even if they previously skipped.')}</small></label>
       <details class="meal-plan-rule__participants" data-terminal-rotation ${terminalStrategy === 'eligible_round_robin' ? 'open' : 'hidden'}><summary><span><strong>${mealText('meals.eligibleRotationOverride', 'Eligible rotation override')}</strong><small>${mealText('meals.eligibleRotationOverrideHint', 'Leave everyone unchecked to use all eligible household members.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><div data-plan-participant-list>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="chooser_round_robin_user_id" value="${member.id}" ${terminalRotation.has(Number(member.id)) ? 'checked' : ''}><span>${esc(member.display_name || member.name)}</span></label>`).join('')}</div></div></details>
     </section>
-    <section>
+    <section data-grocery-settings-section>
       <h3>${mealText('meals.groceryPreparation', 'Grocery preparation')}</h3>
       <p class="form-hint">${mealText('meals.weeklyGroceryTimingHint', 'Set targets for preparing the following week. Choice deadlines stay on each Meal Plan slot; these grocery targets are kept here with the household defaults.')}</p>
       <label class="meal-automation__toggle"><input type="checkbox" name="grocery_enabled" ${grocery.enabled !== false && grocery.enabled !== 0 ? 'checked' : ''}><span><strong>${mealText('meals.enableGroceryPreparation', 'Enable grocery preparation')}</strong></span></label>
@@ -2696,6 +2754,7 @@ async function openMealDefaultSettingsModal() {
     <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-modal-close>${esc(t('common.cancel'))}</button><button type="submit" class="btn btn--primary">${esc(t('common.save'))}</button></div>
   </form>`;
   openSharedModal({ title: mealText('meals.planDefaultSettings', 'Meal Plan Default Settings'), content, size: 'lg', onSave(panel) {
+    panel.querySelector('[data-grocery-settings-section]')?.remove();
     const strategy = panel.querySelector('[name="chooser_terminal_strategy"]');
     const fixed = panel.querySelector('[data-terminal-fixed]');
     const rotation = panel.querySelector('[data-terminal-rotation]');
@@ -2740,19 +2799,6 @@ async function openMealDefaultSettingsModal() {
           chooser_round_robin_user_ids: data.getAll('chooser_round_robin_user_id').map(Number),
           default_cook_strategy: data.get('default_cook_strategy'),
           default_supervisor_strategy: data.get('default_supervisor_strategy'),
-          grocery_settings: {
-            enabled: data.has('grocery_enabled'),
-            default_shopping_list_id: shoppingListId,
-            ...(creatingShoppingList ? { new_shopping_list_name: newShoppingListName } : {}),
-            auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
-            auto_finalize_grocery: data.has('auto_finalize_grocery'),
-            timing_mode: 'weekly',
-            draft_weekday: Number(data.get('draft_weekday')),
-            draft_time: data.get('draft_time'),
-            finalization_weekday: Number(data.get('finalization_weekday')),
-            finalization_time: data.get('finalization_time'),
-            grouping_mode: data.get('grouping_mode'),
-          },
         });
         const savedDefaults = defaultsResponse?.data ?? defaultsResponse ?? {};
         const savedGrocery = savedDefaults.grocery_settings || {};
@@ -2760,8 +2806,8 @@ async function openMealDefaultSettingsModal() {
         const executionResponse = await api.put('/meals/execution-settings', {
           enabled: data.has('enabled'),
           default_shopping_list_id: effectiveShoppingListId,
-          auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
-          auto_finalize_grocery: data.has('auto_finalize_grocery'),
+          auto_create_grocery_draft: grocery.auto_create_grocery_draft !== false && grocery.auto_create_grocery_draft !== 0,
+          auto_finalize_grocery: Boolean(grocery.auto_finalize_grocery),
           generate_preparation: data.has('generate_preparation'), generate_cooking: data.has('generate_cooking'), generate_supervision: data.has('generate_supervision'), generate_serving: data.has('generate_serving'), generate_cleanup: data.has('generate_cleanup'),
           preparation_lead_minutes: Number(data.get('preparation_lead_minutes')), cooking_lead_minutes: Number(data.get('cooking_lead_minutes')), cleanup_delay_minutes: Number(data.get('cleanup_delay_minutes')),
         });
@@ -2772,6 +2818,103 @@ async function openMealDefaultSettingsModal() {
         closeSharedModal({ force: true });
         setTimeout(() => openMealPlanManager(), window.innerWidth < 768 ? 420 : 0);
         window.yuvomi?.showToast(mealText('meals.planDefaultsSaved', 'Meal Plan defaults saved.'), 'success');
+      } catch (error) {
+        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
+        submit.disabled = false;
+      }
+    });
+    if (window.lucide) lucide.createIcons({ el: panel });
+  }});
+}
+
+async function openGrocerySettingsModal() {
+  const contextId = state.mealPlanManagerContextId === 'home'
+    ? null
+    : Number(state.mealPlanManagerContextId);
+  let grocery;
+  let contextSettings = null;
+  try {
+    const [settingsResponse, contextResponse] = await Promise.all([
+      api.get('/meals/grocery-settings'),
+      contextId ? api.get(`/meals/grocery-settings/contexts/${contextId}`) : Promise.resolve(null),
+    ]);
+    grocery = settingsResponse?.data ?? settingsResponse ?? {};
+    contextSettings = contextResponse?.data ?? contextResponse;
+  } catch (error) {
+    window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
+    return;
+  }
+  const context = state.mealPlanContexts.find((item) => Number(item.id) === contextId) || null;
+  const lists = grocery.shopping_lists || state.lists || [];
+  const selectedListId = Number(grocery.default_shopping_list_id) || null;
+  const listOptions = lists.map((list) => `<option value="${list.id}" ${Number(list.id) === selectedListId ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
+  const weekdays = (selected) => DAY_NAMES().map((day, index) => `<option value="${index}" ${Number(selected) === index ? 'selected' : ''}>${esc(day)}</option>`).join('');
+  const grouping = grocery.grouping_mode || 'ingredient';
+  const content = context ? `<form id="grocery-settings-form" class="meal-automation-form meal-default-settings">
+    <div class="meal-plan-context-callout"><i data-lucide="plane" class="icon-sm" aria-hidden="true"></i><span><strong>${esc(context.name)}</strong><small>Household grocery settings still apply unless groceries are turned off for this trip.</small></span></div>
+    <label class="meal-automation__master"><input type="checkbox" name="track_groceries" ${contextSettings?.track_groceries !== false ? 'checked' : ''}><span><strong>Track groceries for this trip</strong><small>Turn this off when meals on this trip should not be added to grocery drafts.</small></span></label>
+    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-grocery-back>${t('common.cancel')}</button><button type="submit" class="btn btn--primary">${t('common.save')}</button></div>
+  </form>` : `<form id="grocery-settings-form" class="meal-automation-form meal-default-settings">
+    <p class="form-hint">These are the household defaults. Trips can turn grocery tracking off without changing them.</p>
+    <label class="meal-automation__master"><input type="checkbox" name="enabled" ${grocery.enabled !== false && grocery.enabled !== 0 ? 'checked' : ''}><span><strong>${mealText('meals.enableGroceryPreparation', 'Enable grocery preparation')}</strong></span></label>
+    <label class="label">${t('meals.defaultShoppingList')}<select class="form-input" name="default_shopping_list_id">${listOptions}<option value="__create__">${mealText('meals.createNewShoppingList', '+ Create a new Shopping list…')}</option></select></label>
+    <label class="label" data-new-shopping-list hidden>${mealText('meals.newShoppingListName', 'New list name')}<input class="form-input" name="new_shopping_list_name" maxlength="200" placeholder="${mealText('meals.shoppingListNamePlaceholder', 'e.g. Weekly groceries')}"></label>
+    <label class="meal-automation__toggle"><input type="checkbox" name="auto_create_grocery_draft" ${grocery.auto_create_grocery_draft !== false && grocery.auto_create_grocery_draft !== 0 ? 'checked' : ''}><span>${t('meals.autoCreateGroceryDraft')}</span></label>
+    <label class="meal-automation__toggle"><input type="checkbox" name="auto_finalize_grocery" ${grocery.auto_finalize_grocery ? 'checked' : ''}><span>${t('meals.autoFinalizeGrocery')}<small>${t('meals.autoFinalizeGroceryHint')}</small></span></label>
+    <div class="meal-grocery-weekly-timing">
+      <label class="label">${mealText('meals.groceryDraftDay', 'Draft target day')}<select class="form-input" name="draft_weekday">${weekdays(grocery.draft_weekday ?? 5)}</select></label>
+      <label class="label">${mealText('meals.groceryDraftTime', 'Draft target time')}<input class="form-input" type="time" name="draft_time" value="${esc(grocery.draft_time || '09:00')}"></label>
+      <label class="label">${mealText('meals.groceryFinalizationDay', 'Finalized target day')}<select class="form-input" name="finalization_weekday">${weekdays(grocery.finalization_weekday ?? 6)}</select></label>
+      <label class="label">${mealText('meals.groceryFinalizationTime', 'Finalized target time')}<input class="form-input" type="time" name="finalization_time" value="${esc(grocery.finalization_time || '09:00')}"></label>
+    </div>
+    <label class="label">${mealText('meals.groceryAggregation', 'Group grocery items by')}<select class="form-input" name="grouping_mode"><option value="ingredient" ${grouping === 'ingredient' ? 'selected' : ''}>${mealText('meals.aggregateIngredient', 'Ingredient')}</option><option value="category" ${grouping === 'category' ? 'selected' : ''} ${grocery.grouping_options?.category ? '' : 'disabled'}>${mealText('meals.aggregateCategory', 'Ingredient category / department')}</option><option value="meal" ${grouping === 'meal' ? 'selected' : ''}>${mealText('meals.aggregateMeal', 'Meal')}</option><option value="recipe" ${grouping === 'recipe' ? 'selected' : ''}>${mealText('meals.aggregateRecipe', 'Recipe')}</option></select></label>
+    <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-grocery-back>${t('common.cancel')}</button><button type="submit" class="btn btn--primary">${t('common.save')}</button></div>
+  </form>`;
+  openSharedModal({ title: 'Grocery List Settings', content, size: 'lg', onSave(panel) {
+    const back = () => {
+      closeSharedModal({ force: true });
+      setTimeout(() => openMealPlanManager(), window.innerWidth < 768 ? 420 : 0);
+    };
+    panel.querySelector('[data-grocery-back]')?.addEventListener('click', back);
+    const listSelect = panel.querySelector('[name="default_shopping_list_id"]');
+    const newList = panel.querySelector('[data-new-shopping-list]');
+    listSelect?.addEventListener('change', () => { newList.hidden = listSelect.value !== '__create__'; });
+    panel.querySelector('#grocery-settings-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const data = new FormData(form);
+      const submit = form.querySelector('[type="submit"]');
+      submit.disabled = true;
+      try {
+        if (contextId) {
+          await api.put(`/meals/grocery-settings/contexts/${contextId}`, {
+            track_groceries: data.has('track_groceries'),
+          });
+        } else {
+          const creating = data.get('default_shopping_list_id') === '__create__';
+          const newName = String(data.get('new_shopping_list_name') || '').trim();
+          if (creating && !newName) {
+            reportFieldError(form.querySelector('[name="new_shopping_list_name"]'), t('common.nameRequired'));
+            submit.disabled = false;
+            return;
+          }
+          const response = await api.put('/meals/grocery-settings', {
+            enabled: data.has('enabled'),
+            default_shopping_list_id: creating ? null : Number(data.get('default_shopping_list_id')) || null,
+            ...(creating ? { new_shopping_list_name: newName } : {}),
+            auto_create_grocery_draft: data.has('auto_create_grocery_draft'),
+            auto_finalize_grocery: data.has('auto_finalize_grocery'),
+            timing_mode: 'weekly',
+            draft_weekday: Number(data.get('draft_weekday')),
+            draft_time: data.get('draft_time'),
+            finalization_weekday: Number(data.get('finalization_weekday')),
+            finalization_time: data.get('finalization_time'),
+            grouping_mode: data.get('grouping_mode'),
+          });
+          state.grocerySettings = response?.data ?? response;
+        }
+        window.yuvomi?.showToast(mealText('meals.grocerySettingsSaved', 'Grocery settings saved.'), 'success');
+        back();
       } catch (error) {
         window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
         submit.disabled = false;
@@ -3204,13 +3347,14 @@ async function submitMealDecisionForm(form) {
   }
   const menuItemIds = [
     ...(entree && !['personal', 'backup', 'household'].includes(entree) ? [Number(entree)] : []),
+    ...(data.get('menu_entree') ? [Number(data.get('menu_entree'))] : []),
     ...data.getAll('menu_side').map(Number),
   ].filter(Number.isFinite);
   const payload = mealDecisionPayload({
     occurrence,
     memberId: state.selectedMemberId,
     participating,
-    choice: !participating ? 'skip' : entree === 'personal' ? data.get('personal_choice_kind') || 'personal' : backup ? 'backup' : 'assigned',
+    choice: !participating ? 'skip' : entree === 'personal' ? data.get('personal_choice_kind') || 'personal' : backup ? 'backup' : 'household',
     menuItemIds: participating ? menuItemIds : [],
     selectedMealTitle: participating && entree === 'personal'
       ? personalMealTitle
@@ -3234,12 +3378,16 @@ function handleMealDecisionControlChange(event) {
       || decisionForm.querySelector('[name="meal_choice"][type="hidden"]');
     const personal = personalChoice?.value === 'personal';
     const backup = personalChoice?.value === 'backup';
-    const foodSection = decisionForm.querySelector('[data-meal-food-section]');
-    if (foodSection) foodSection.disabled = !participating;
+    decisionForm.querySelectorAll('[data-meal-food-section]').forEach((foodSection) => {
+      foodSection.disabled = !participating;
+    });
     const notifyRow = decisionForm.querySelector('[data-notify-menu-change]');
     if (notifyRow) notifyRow.hidden = participating;
     const backupFields = decisionForm.querySelector('[data-backup-choice-fields]');
     if (backupFields) backupFields.hidden = !participating || !backup;
+    decisionForm.querySelectorAll('[data-household-menu-fields] input').forEach((field) => {
+      field.disabled = !participating || backup;
+    });
     const notes = decisionForm.querySelector('[data-meal-notes]');
     if (notes) notes.disabled = !participating;
     decisionForm.querySelectorAll('[data-personal-choice-fields] input, [data-personal-choice-fields] select')

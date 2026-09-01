@@ -464,7 +464,15 @@ function normalizePlan(database, body, current = null) {
     if (stableKeys.has(rule.rule_key)) throw mealPlanError('Meal Plan rules must have unique stable identities.');
     stableKeys.add(rule.rule_key);
   }
-  return { name, description, status, effective_from: effectiveFrom, effective_until: effectiveUntil, rules };
+  return {
+    name,
+    description,
+    status,
+    home_enabled: bool(body?.home_enabled, current?.home_enabled !== 0) ? 1 : 0,
+    effective_from: effectiveFrom,
+    effective_until: effectiveUntil,
+    rules,
+  };
 }
 
 function groupSlotRules(rules) {
@@ -682,6 +690,7 @@ export function getMealPlan(database, planId, { includeDeleted = true } = {}) {
   const rules = loadRules(database, plan.id);
   return {
     ...plan,
+    home_enabled: Boolean(plan.home_enabled),
     rules,
     slot_groups: groupSlotRules(rules),
     revisions,
@@ -702,10 +711,19 @@ export function listMealPlans(database, { includeDeleted = false } = {}) {
      ORDER BY CASE p.status WHEN 'active' THEN 0 WHEN 'archived' THEN 1 ELSE 2 END,
               p.name COLLATE NOCASE, p.id
   `).all();
+  const associations = database.prepare(`
+    SELECT planning_context_id, meal_plan_id, effective_from, effective_until, is_primary
+      FROM planning_context_meal_plans ORDER BY planning_context_id, meal_plan_id
+  `).all();
   return rows.map((row) => ({
     ...row,
+    home_enabled: Boolean(row.home_enabled),
     weekdays: row.weekdays ? row.weekdays.split(',').map(Number).sort((a, b) => a - b) : [],
     meal_types: row.meal_types ? row.meal_types.split(',') : [],
+    contexts: associations.filter((item) => Number(item.meal_plan_id) === Number(row.id)),
+    context_ids: associations
+      .filter((item) => Number(item.meal_plan_id) === Number(row.id))
+      .map((item) => Number(item.planning_context_id)),
   }));
 }
 
@@ -714,9 +732,14 @@ export function createMealPlan(database, body, actorId) {
   let planId;
   database.transaction(() => {
     const info = database.prepare(`
-      INSERT INTO meal_plans (name, description, status, current_revision, effective_from, effective_until, created_by)
-      VALUES (?, ?, ?, 1, ?, ?, ?)
-    `).run(normalized.name, normalized.description, normalized.status, normalized.effective_from, normalized.effective_until, actorId || null);
+      INSERT INTO meal_plans (
+        name, description, status, home_enabled, current_revision,
+        effective_from, effective_until, created_by
+      ) VALUES (?, ?, ?, ?, 1, ?, ?, ?)
+    `).run(
+      normalized.name, normalized.description, normalized.status, normalized.home_enabled,
+      normalized.effective_from, normalized.effective_until, actorId || null,
+    );
     planId = Number(info.lastInsertRowid);
     writeRules(database, planId, normalized.rules);
     const plan = database.prepare('SELECT * FROM meal_plans WHERE id = ?').get(planId);
@@ -732,10 +755,13 @@ export function updateMealPlan(database, planId, body, actorId) {
   const normalized = normalizePlan(database, body, current);
   database.transaction(() => {
     database.prepare(`
-      UPDATE meal_plans SET name = ?, description = ?, status = ?, effective_from = ?, effective_until = ?,
+      UPDATE meal_plans SET name = ?, description = ?, status = ?, home_enabled = ?, effective_from = ?, effective_until = ?,
         current_revision = current_revision + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
-    `).run(normalized.name, normalized.description, normalized.status, normalized.effective_from, normalized.effective_until, current.id);
+    `).run(
+      normalized.name, normalized.description, normalized.status, normalized.home_enabled,
+      normalized.effective_from, normalized.effective_until, current.id,
+    );
     writeRules(database, current.id, normalized.rules);
     syncMealPlanHeadToLegacySlot(database, current.id);
     const updated = database.prepare('SELECT * FROM meal_plans WHERE id = ?').get(current.id);
@@ -807,7 +833,9 @@ function legacySlotRule(database, slot, current = null) {
     reminder_minutes: slot.reminder_minutes,
     choice_limit: slot.snack_choice_limit,
     cook_user_id: slot.cook_user_id,
+    cook_strategy: slot.cook_user_id ? 'fixed' : 'none',
     supervisor_user_id: slot.supervisor_user_id,
+    supervisor_strategy: slot.supervisor_user_id ? 'fixed' : 'none',
     generate_preparation: current?.generate_preparation ?? settings.generate_preparation,
     generate_cooking: current?.generate_cooking ?? settings.generate_cooking,
     generate_supervision: current?.generate_supervision ?? settings.generate_supervision,
@@ -1068,10 +1096,25 @@ export function attachMealPlanToContext(database, planId, contextId, body, actor
   if (!plan) throw mealPlanError('Active Meal Plan not found.', 404, 'MEAL_PLAN_NOT_FOUND');
   const context = database.prepare('SELECT * FROM planning_contexts WHERE id = ?').get(Number(contextId));
   if (!context) throw mealPlanError('Planning context not found.', 404, 'PLANNING_CONTEXT_NOT_FOUND');
-  const effectiveFrom = assertDate(body?.effective_from ?? body?.starts_on, 'Effective-from date', { optional: true });
-  const effectiveUntil = assertDate(body?.effective_until ?? body?.ends_on, 'Effective-until date', { optional: true });
+  const contextStarts = String(context.starts_at || '').slice(0, 10) || null;
+  const rawContextEnd = String(context.ends_at || '');
+  const contextEnds = rawContextEnd
+    ? (/T00:00(?::00(?:\.\d+)?)?(?:Z|[+-]\d\d:\d\d)?$/.test(rawContextEnd)
+      ? addDays(rawContextEnd.slice(0, 10), -1)
+      : rawContextEnd.slice(0, 10))
+    : null;
+  const effectiveFrom = assertDate(
+    body?.effective_from ?? body?.starts_on ?? contextStarts,
+    'Start date',
+    { optional: true },
+  );
+  const effectiveUntil = assertDate(
+    body?.effective_until ?? body?.ends_on ?? contextEnds,
+    'End date',
+    { optional: true },
+  );
   if (effectiveFrom && effectiveUntil && effectiveUntil < effectiveFrom) {
-    throw mealPlanError('Effective-until date must not precede effective-from date.');
+    throw mealPlanError('End date must not precede start date.');
   }
   database.prepare(`
     INSERT INTO planning_context_meal_plans (
@@ -1101,6 +1144,18 @@ export function detachMealPlanFromContext(database, planId, contextId) {
     DELETE FROM planning_context_meal_plans WHERE planning_context_id = ? AND meal_plan_id = ?
   `).run(Number(contextId), Number(planId));
   return { ...current, detached: true };
+}
+
+export function setMealPlanHomeEnabled(database, planId, enabled) {
+  const current = database.prepare(`
+    SELECT * FROM meal_plans WHERE id = ? AND status != 'deleted'
+  `).get(Number(planId));
+  if (!current) throw mealPlanError('Meal Plan not found.', 404, 'MEAL_PLAN_NOT_FOUND');
+  database.prepare(`
+    UPDATE meal_plans SET home_enabled = ?,
+      updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
+  `).run(bool(enabled, false) ? 1 : 0, current.id);
+  return getMealPlan(database, current.id);
 }
 
 function occurrenceTime(rule) {
@@ -2031,10 +2086,8 @@ function occurrenceRules(database, context, dateKey) {
        WHERE cp.planning_context_id = ?
          AND (cp.effective_from IS NULL OR cp.effective_from <= ?)
          AND (cp.effective_until IS NULL OR cp.effective_until >= ?)
-         AND (p.effective_from IS NULL OR p.effective_from <= ?)
-         AND (p.effective_until IS NULL OR p.effective_until >= ?)
        ORDER BY cp.is_primary DESC, r.weekday, r.sort_order, r.id
-    `).all(context.id, dateKey, dateKey, dateKey, dateKey);
+    `).all(context.id, dateKey, dateKey);
   }
   return database.prepare(`
     SELECT r.*, p.current_revision, p.created_by AS plan_created_by,
@@ -2043,7 +2096,7 @@ function occurrenceRules(database, context, dateKey) {
       FROM meal_plans p
       JOIN meal_plan_rules r ON r.meal_plan_id = p.id AND r.active = 1
       LEFT JOIN meal_plan_revisions pr ON pr.meal_plan_id = p.id AND pr.revision = p.current_revision
-     WHERE p.status = 'active'
+     WHERE p.status = 'active' AND p.home_enabled = 1
        AND (p.effective_from IS NULL OR p.effective_from <= ?)
        AND (p.effective_until IS NULL OR p.effective_until >= ?)
      ORDER BY r.weekday, r.sort_order, r.id
@@ -2072,6 +2125,12 @@ function activeContexts(database, from, to, contextId = null) {
 
 function insertOccurrence(database, rule, context, dateKey, actorId) {
   const contextId = context?.id || null;
+  const contextScope = contextId ? `context:${contextId}` : 'base';
+  const skipped = database.prepare(`
+    SELECT 1 FROM meal_plan_occurrence_exceptions
+     WHERE meal_plan_rule_id = ? AND context_scope = ? AND date = ? AND action = 'skip'
+  `).get(Number(rule.id), contextScope, dateKey);
+  if (skipped) return { created: 0, assignment: null };
   const stableRuleKey = rule.rule_key || `rule:${rule.id}`;
   const occurrenceKey = `meal-plan:${rule.meal_plan_id}:${stableRuleKey}:${dateKey}:context:${contextId || 'base'}`;
   const existing = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE occurrence_key = ?').get(occurrenceKey);
@@ -2245,7 +2304,7 @@ export function materializeMealPlanOccurrences(database, { from, to, contextId =
           if (Number(rule.weekday) !== mealWeekday(dateKey)) continue;
           const result = insertOccurrence(database, rule, null, dateKey, actorId);
           created += result.created;
-          assignments.push(result.assignment);
+          if (result.assignment) assignments.push(result.assignment);
         }
       }
       for (const rawContext of contexts) {
@@ -2255,7 +2314,7 @@ export function materializeMealPlanOccurrences(database, { from, to, contextId =
           if (!contextCoversRule(context, dateKey, rule)) continue;
           const result = insertOccurrence(database, rule, context, dateKey, actorId);
           created += result.created;
-          assignments.push(result.assignment);
+          if (result.assignment) assignments.push(result.assignment);
         }
       }
     }
@@ -3592,13 +3651,17 @@ function normalizeDecision(database, meal, body, current = null, {
     // them into a modern Personal Choice update.
     : (policy === 'personal_choice' ? [] : (current?.menu_item_ids ?? [])))
     .map(Number).filter(Number.isInteger))];
+  const publishedGeneration = Number(publishedMealMenuGeneration(database, meal.id)?.generation) || null;
+  const selectionGeneration = isChooser
+    ? (Number(meal.current_menu_generation) || 1)
+    : (publishedGeneration || Number(meal.current_menu_generation) || 1);
   let selectedMenu = [];
   if (menuIds.length) {
     selectedMenu = database.prepare(`
       SELECT id, item_type, menu_generation FROM meal_menu_items
        WHERE meal_id = ? AND menu_generation = ?
          AND id IN (${menuIds.map(() => '?').join(',')})
-    `).all(meal.id, Number(meal.current_menu_generation) || 1, ...menuIds);
+    `).all(meal.id, selectionGeneration, ...menuIds);
     if (selectedMenu.length !== menuIds.length) {
       throw mealPlanError(
         'One or more menu items belong to a released chooser menu and cannot be selected.',
@@ -3663,9 +3726,6 @@ function normalizeDecision(database, meal, body, current = null, {
           'BACKUP_MENU_IDS_NOT_ALLOWED',
         );
       }
-      if (sharedItems.length) {
-        throw mealPlanError('Only the assigned chooser may select the shared entrée or sides.', 403, 'SHARED_MENU_NOT_ALLOWED');
-      }
       if (choiceKind === 'backup') {
         if (participating && bool(body?.confirmed, Boolean(current?.confirmed)) && !selectedMealTitle) {
           throw mealPlanError(
@@ -3675,14 +3735,18 @@ function normalizeDecision(database, meal, body, current = null, {
           );
         }
       } else if (choiceKind === 'household') {
-        if (menuIds.length) {
-          throw mealPlanError('The shared household choice does not accept menu item IDs.', 409, 'HOUSEHOLD_MENU_IDS_NOT_ALLOWED');
-        }
         // A participant may commit to the household meal before the incoming
         // chooser publishes a menu. Keep that intent pending rather than
         // rejecting it or binding it to the chooser's private draft.
         pendingSharedHousehold = participating
-          && !publishedMealMenuGeneration(database, meal.id);
+          && !publishedGeneration;
+        if (publishedGeneration && participating && bool(body?.confirmed, Boolean(current?.confirmed))) {
+          const limits = mealMenuLimits(database, meal);
+          const selectedEntrees = sharedItems.filter((item) => item.item_type === 'entree').length;
+          if (selectedEntrees !== (limits.max_entree_choices > 0 ? 1 : 0)) {
+            throw mealPlanError('Choose exactly one entrée from the Household Meal.', 409, 'HOUSEHOLD_ENTREE_REQUIRED');
+          }
+        }
       } else if (participating) {
         throw mealPlanError('Choose the shared household meal or the Backup Meal.', 409, 'SHARED_OR_BACKUP_REQUIRED');
       }
@@ -3721,6 +3785,7 @@ function normalizeDecision(database, meal, body, current = null, {
         false,
       ) ? 1 : 0,
     menu_item_ids: menuIds,
+    menu_generation: selectionGeneration,
   };
 }
 
@@ -3759,18 +3824,6 @@ export function saveMealDecision(database, mealId, body, {
       LEFT JOIN meals selected ON selected.id = d.selected_meal_id
      WHERE d.meal_id = ? AND d.beneficiary_user_id = ?
   `).get(meal.id, beneficiaryId);
-  const current = currentRow ? {
-    ...currentRow,
-    menu_item_ids: database.prepare(`
-      SELECT pms.menu_item_id
-        FROM meal_person_menu_selections pms
-        JOIN meal_menu_items mi ON mi.id = pms.menu_item_id
-       WHERE pms.decision_id = ? AND pms.selected = 1
-         AND mi.menu_generation = ?
-       ORDER BY pms.menu_item_id
-    `).all(currentRow.id, Number(meal.current_menu_generation) || 1)
-      .map((row) => Number(row.menu_item_id)),
-  } : null;
   const policy = mealSelectionPolicy(database, meal);
   const occurrenceAssignment = database.prepare(`
     SELECT id, assigned_user_id FROM meal_occurrence_assignments WHERE meal_id = ?
@@ -3784,20 +3837,26 @@ export function saveMealDecision(database, mealId, body, {
     || !occurrenceAssignment
     || Number(occurrenceAssignment.assigned_user_id) === beneficiaryId
   );
+  const decisionGeneration = isChooser
+    ? (Number(meal.current_menu_generation) || 1)
+    : (Number(publishedMealMenuGeneration(database, meal.id)?.generation)
+      || Number(meal.current_menu_generation) || 1);
+  const current = currentRow ? {
+    ...currentRow,
+    menu_item_ids: database.prepare(`
+      SELECT pms.menu_item_id
+        FROM meal_person_menu_selections pms
+        JOIN meal_menu_items mi ON mi.id = pms.menu_item_id
+       WHERE pms.decision_id = ? AND pms.selected = 1
+         AND mi.menu_generation = ?
+       ORDER BY pms.menu_item_id
+    `).all(currentRow.id, decisionGeneration)
+      .map((row) => Number(row.menu_item_id)),
+  } : null;
   const isParticipatingMember = Boolean(database.prepare(`
     SELECT 1 FROM meal_participants
      WHERE meal_id = ? AND user_id = ? AND role = 'participant' AND status = 'participating'
   `).get(meal.id, beneficiaryId));
-  const attemptedSharedChoice = Object.hasOwn(body || {}, 'menu_item_ids')
-    || Object.hasOwn(body || {}, 'meal_menu_item_ids');
-  if (isAdmin && Number(actorId) !== beneficiaryId
-      && ['fixed', 'round_robin'].includes(policy) && attemptedSharedChoice && !isChooser) {
-    throw mealPlanError(
-      'This person is no longer the active chooser. Refresh the Meal or use Repair chooser before acting for them.',
-      409,
-      'MEAL_CHOOSER_REPAIR_REQUIRED',
-    );
-  }
   const normalized = normalizeDecision(database, meal, body, current, { policy, isChooser });
   const currentMenuGeneration = database.prepare(`
     SELECT status FROM meal_menu_generations
@@ -3932,14 +3991,15 @@ export function saveMealDecision(database, mealId, body, {
         publishedMealMenuGeneration(database, meal.id)?.generation,
       ) || null;
       const currentGeneration = Number(meal.current_menu_generation) || 1;
-      if (currentGeneration !== publishedGeneration || normalized.menu_item_ids.length) {
+      const selectedGeneration = Number(normalized.menu_generation) || currentGeneration;
+      if (selectedGeneration !== publishedGeneration || normalized.menu_item_ids.length) {
         database.prepare(`
           DELETE FROM meal_person_menu_selections
            WHERE decision_id = ? AND menu_item_id IN (
              SELECT id FROM meal_menu_items
               WHERE meal_id = ? AND menu_generation = ?
            )
-        `).run(decisionId, meal.id, currentGeneration);
+        `).run(decisionId, meal.id, selectedGeneration);
       }
       const insertSelection = database.prepare(`
         INSERT INTO meal_person_menu_selections (decision_id, menu_item_id, selected) VALUES (?, ?, 1)

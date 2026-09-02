@@ -7763,6 +7763,24 @@ test('modal lifecycle uses an explicit state machine, not the old _isClosing fla
   assert.doesNotMatch(src, /_isClosing/, 'legacy _isClosing flag must be removed');
 });
 
+test('separated Kitchen settings keep their own initialization and hoisted Save controls', () => {
+  const mealsPage = read('../public/pages/meals.js');
+  const defaultsStart = mealsPage.indexOf('async function openMealDefaultSettingsModal()');
+  const groceryStart = mealsPage.indexOf('async function openGrocerySettingsModal()');
+  const defaultsModal = mealsPage.slice(defaultsStart, groceryStart);
+  const groceryModal = mealsPage.slice(groceryStart, mealsPage.indexOf('\nasync function ', groceryStart + 1));
+
+  assert.ok(defaultsStart >= 0 && groceryStart > defaultsStart, 'both separated settings modals must exist');
+  assert.doesNotMatch(defaultsModal, /data-grocery-settings-section|const listSelect\s*=/,
+    'Meal Plan Default Settings must not initialize controls owned by Grocery List Settings');
+  assert.match(defaultsModal, /const submit = event\.submitter \|\| panel\.querySelector\('\[type="submit"\]\[form="meal-default-settings-form"\]'\)/,
+    'Meal Plan defaults must use the submit button after the shared modal hoists its footer');
+  assert.match(groceryModal, /const submit = event\.submitter \|\| panel\.querySelector\('\[type="submit"\]\[form="grocery-settings-form"\]'\)/,
+    'Grocery settings must use the submit button after the shared modal hoists its footer');
+  assert.match(defaultsModal, /Meal Plan Default Settings could not be saved\. Your changes are still open/);
+  assert.match(groceryModal, /Grocery List Settings could not be saved\. Your changes are still open/);
+});
+
 test('budget chart exposes a screen-reader summary (audit 1.7)', () => {
   const src = read('../public/pages/budget.js');
   assert.match(src, /<p class="sr-only">\$\{esc\(chartSummary\(/, 'chart must render an .sr-only summary');

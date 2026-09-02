@@ -2138,6 +2138,144 @@ test('grocery settings are independently editable while the legacy settings rema
   assert.equal(separate.finalization_time, '09:00');
 });
 
+test('separated Meal Plan and Grocery settings payloads persist without discarding each other', async () => {
+  actor = { id: admin, role: 'admin' };
+  const listId = Number(database.prepare(`
+    INSERT INTO shopping_lists (name, created_by) VALUES ('Meal Plan List', ?)
+  `).run(admin).lastInsertRowid);
+
+  const groceryPayload = {
+    enabled: true,
+    default_shopping_list_id: listId,
+    auto_create_grocery_draft: true,
+    auto_finalize_grocery: true,
+    timing_mode: 'weekly',
+    draft_weekday: 4,
+    draft_time: '09:00',
+    finalization_weekday: 6,
+    finalization_time: '08:00',
+    grouping_mode: 'category',
+  };
+  const savedGrocery = await call('PUT', '/grocery-settings', groceryPayload);
+  assert.equal(savedGrocery.status, 200, JSON.stringify(savedGrocery.body));
+  assert.equal(savedGrocery.body.data.enabled, 1);
+  assert.equal(savedGrocery.body.data.default_shopping_list_id, listId);
+  assert.equal(savedGrocery.body.data.default_shopping_list.name, 'Meal Plan List');
+  assert.equal(savedGrocery.body.data.auto_create_grocery_draft, 1);
+  assert.equal(savedGrocery.body.data.auto_finalize_grocery, 1);
+  assert.equal(savedGrocery.body.data.draft_weekday, 4);
+  assert.equal(savedGrocery.body.data.draft_time, '09:00');
+  assert.equal(savedGrocery.body.data.finalization_weekday, 6);
+  assert.equal(savedGrocery.body.data.finalization_time, '08:00');
+  assert.equal(savedGrocery.body.data.grouping_mode, 'category');
+
+  const reloadedGrocery = await call('GET', '/grocery-settings');
+  assert.equal(reloadedGrocery.status, 200, JSON.stringify(reloadedGrocery.body));
+  for (const [key, expected] of Object.entries({
+    enabled: 1,
+    default_shopping_list_id: listId,
+    auto_create_grocery_draft: 1,
+    auto_finalize_grocery: 1,
+    draft_weekday: 4,
+    draft_time: '09:00',
+    finalization_weekday: 6,
+    finalization_time: '08:00',
+    grouping_mode: 'category',
+  })) assert.equal(reloadedGrocery.body.data[key], expected, `reloaded grocery ${key}`);
+
+  const disabledGrocery = await call('PUT', '/grocery-settings', {
+    ...groceryPayload,
+    enabled: false,
+    auto_finalize_grocery: false,
+  });
+  assert.equal(disabledGrocery.status, 200, JSON.stringify(disabledGrocery.body));
+  assert.equal(disabledGrocery.body.data.enabled, 0);
+  assert.equal(disabledGrocery.body.data.auto_finalize_grocery, 0);
+  assert.equal((await call('GET', '/grocery-settings')).body.data.enabled, 0);
+  assert.equal((await call('GET', '/grocery-settings')).body.data.auto_finalize_grocery, 0);
+
+  const restoredGrocery = await call('PUT', '/grocery-settings', groceryPayload);
+  assert.equal(restoredGrocery.status, 200, JSON.stringify(restoredGrocery.body));
+  assert.equal(restoredGrocery.body.data.enabled, 1);
+  assert.equal(restoredGrocery.body.data.auto_finalize_grocery, 1);
+
+  const savedPlanDefaults = await call('PUT', '/plan-defaults', {
+    chooser_terminal_strategy: 'eligible_round_robin',
+    chooser_terminal_user_id: null,
+    chooser_round_robin_user_ids: [admin],
+    default_cook_strategy: 'none',
+    default_supervisor_strategy: 'round_robin',
+  });
+  assert.equal(savedPlanDefaults.status, 200, JSON.stringify(savedPlanDefaults.body));
+  assert.equal(savedPlanDefaults.body.data.chooser_terminal_strategy, 'eligible_round_robin');
+  assert.deepEqual(savedPlanDefaults.body.data.chooser_round_robin_user_ids, [admin]);
+  assert.equal(savedPlanDefaults.body.data.default_cook_strategy, 'none');
+  assert.equal(savedPlanDefaults.body.data.default_supervisor_strategy, 'round_robin');
+
+  const savedExecution = await call('PUT', '/execution-settings', {
+    enabled: false,
+    default_shopping_list_id: listId,
+    auto_create_grocery_draft: true,
+    auto_finalize_grocery: true,
+    generate_preparation: false,
+    generate_cooking: true,
+    generate_supervision: false,
+    generate_serving: true,
+    generate_cleanup: false,
+    preparation_lead_minutes: 75,
+    cooking_lead_minutes: 45,
+    cleanup_delay_minutes: 90,
+  });
+  assert.equal(savedExecution.status, 200, JSON.stringify(savedExecution.body));
+
+  const reloadedPlanDefaults = await call('GET', '/plan-defaults');
+  const reloadedExecution = await call('GET', '/execution-settings');
+  assert.equal(reloadedPlanDefaults.status, 200, JSON.stringify(reloadedPlanDefaults.body));
+  assert.equal(reloadedExecution.status, 200, JSON.stringify(reloadedExecution.body));
+  assert.equal(reloadedPlanDefaults.body.data.chooser_terminal_strategy, 'eligible_round_robin');
+  assert.deepEqual(reloadedPlanDefaults.body.data.chooser_round_robin_user_ids, [admin]);
+  assert.equal(reloadedPlanDefaults.body.data.default_cook_strategy, 'none');
+  assert.equal(reloadedPlanDefaults.body.data.default_supervisor_strategy, 'round_robin');
+  for (const [key, expected] of Object.entries({
+    enabled: 0,
+    generate_preparation: 0,
+    generate_cooking: 1,
+    generate_supervision: 0,
+    generate_serving: 1,
+    generate_cleanup: 0,
+    preparation_lead_minutes: 75,
+    cooking_lead_minutes: 45,
+    cleanup_delay_minutes: 90,
+  })) assert.equal(reloadedExecution.body.data[key], expected, `reloaded execution ${key}`);
+
+  const groceryAfterPlanSave = await call('GET', '/grocery-settings');
+  assert.equal(groceryAfterPlanSave.body.data.enabled, 1,
+    'Meal Plan automation does not overwrite the separate grocery preparation switch');
+  assert.equal(groceryAfterPlanSave.body.data.default_shopping_list_id, listId);
+  assert.equal(groceryAfterPlanSave.body.data.auto_create_grocery_draft, 1);
+  assert.equal(groceryAfterPlanSave.body.data.auto_finalize_grocery, 1);
+  assert.equal(groceryAfterPlanSave.body.data.grouping_mode, 'category');
+  assert.equal(groceryAfterPlanSave.body.data.draft_weekday, 4);
+  assert.equal(groceryAfterPlanSave.body.data.finalization_time, '08:00');
+
+  const tripContextId = Number(database.prepare(`
+    INSERT INTO planning_contexts (
+      context_key, name, context_type, starts_at, ends_at, created_by
+    ) VALUES ('trip:separated-settings-test', 'Separated settings trip', 'travel',
+      '2046-05-01T00:00:00Z', '2046-05-07T23:59:59Z', ?)
+  `).run(admin).lastInsertRowid);
+  const tripOverride = await call('PUT', `/grocery-settings/contexts/${tripContextId}`, {
+    track_groceries: false,
+  });
+  assert.equal(tripOverride.status, 200, JSON.stringify(tripOverride.body));
+  assert.equal(tripOverride.body.data.track_groceries, false);
+  assert.equal(tripOverride.body.data.inherits_household_defaults, true);
+  const householdAfterTripOverride = await call('GET', '/grocery-settings');
+  assert.equal(householdAfterTripOverride.body.data.enabled, 1);
+  assert.equal(householdAfterTripOverride.body.data.default_shopping_list_id, listId);
+  assert.equal(householdAfterTripOverride.body.data.grouping_mode, 'category');
+});
+
 test('new Meal rules default Cook to the presence-aware rotation and keep Supervisor opt-in', async () => {
   actor = { id: admin, role: 'admin' };
   const defaults = await call('PUT', '/plan-defaults', {

@@ -2704,16 +2704,7 @@ async function openMealDefaultSettingsModal() {
   const members = state.weekModel?.members?.length ? state.weekModel.members : (state.planning.members || []);
   const terminalStrategy = defaults.chooser_terminal_strategy || 'eligible_round_robin';
   const terminalRotation = new Set((defaults.chooser_round_robin_user_ids || []).map(Number));
-  const shoppingLists = [...(grocery.shopping_lists || state.lists || [])]
-    .sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: 'base' }));
-  state.lists = shoppingLists;
-  const selectedListId = Number(grocery.default_shopping_list_id || execution.default_shopping_list_id) || null;
-  const listOptions = shoppingLists.map((list) => `<option value="${list.id}" ${selectedListId === Number(list.id) ? 'selected' : ''}>${esc(list.name)}</option>`).join('');
   const roleToggle = (key, labelKey) => `<label class="meal-automation__toggle"><input type="checkbox" name="generate_${key}" ${execution[`generate_${key}`] !== 0 ? 'checked' : ''}><span>${esc(t(labelKey))}</span></label>`;
-  const noLists = shoppingLists.length === 0;
-  const weekdayOptions = (selected) => DAY_NAMES().map((day, index) => `<option value="${index}" ${Number(selected) === index ? 'selected' : ''}>${esc(day)}</option>`).join('');
-  const groupingMode = grocery.grouping_mode || grocery.aggregation_mode || 'ingredient';
-  const groupingOptions = grocery.grouping_options || { ingredient: true, category: false, meal: true, recipe: true };
   const content = `<form id="meal-default-settings-form" class="meal-automation-form meal-default-settings">
     <p class="form-hint">${mealText('meals.planDefaultSettingsHint', 'These household defaults are used when a Meal Plan does not provide a more specific value.')}</p>
     <section>
@@ -2722,23 +2713,6 @@ async function openMealDefaultSettingsModal() {
       <label class="label"><span>${mealText('meals.finalFailsafe', 'Final failsafe')}</span><select class="form-input" name="chooser_terminal_strategy"><option value="personal_choice" ${terminalStrategy === 'personal_choice' ? 'selected' : ''}>${mealText('meals.policyPersonalChoice', 'Personal Choice')}</option><option value="eligible_round_robin" ${terminalStrategy === 'eligible_round_robin' ? 'selected' : ''}>${mealText('meals.eligibleRoundRobin', 'Eligible round robin')}</option><option value="fixed" ${terminalStrategy === 'fixed' ? 'selected' : ''}>${mealText('meals.fixedLastResort', 'Fixed last-resort person')}</option></select></label>
       <label class="label" data-terminal-fixed ${terminalStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.lastResortPerson', 'Last-resort person')}</span><select class="form-input" name="chooser_terminal_user_id">${planMemberOptions(defaults.chooser_terminal_user_id)}</select><small class="form-hint">${mealText('meals.lastResortPersonHint', 'This person is prompted only after every normal option is exhausted, even if they previously skipped.')}</small></label>
       <details class="meal-plan-rule__participants" data-terminal-rotation ${terminalStrategy === 'eligible_round_robin' ? 'open' : 'hidden'}><summary><span><strong>${mealText('meals.eligibleRotationOverride', 'Eligible rotation override')}</strong><small>${mealText('meals.eligibleRotationOverrideHint', 'Leave everyone unchecked to use all eligible household members.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><div data-plan-participant-list>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="chooser_round_robin_user_id" value="${member.id}" ${terminalRotation.has(Number(member.id)) ? 'checked' : ''}><span>${esc(member.display_name || member.name)}</span></label>`).join('')}</div></div></details>
-    </section>
-    <section data-grocery-settings-section>
-      <h3>${mealText('meals.groceryPreparation', 'Grocery preparation')}</h3>
-      <p class="form-hint">${mealText('meals.weeklyGroceryTimingHint', 'Set targets for preparing the following week. Choice deadlines stay on each Meal Plan slot; these grocery targets are kept here with the household defaults.')}</p>
-      <label class="meal-automation__toggle"><input type="checkbox" name="grocery_enabled" ${grocery.enabled !== false && grocery.enabled !== 0 ? 'checked' : ''}><span><strong>${mealText('meals.enableGroceryPreparation', 'Enable grocery preparation')}</strong></span></label>
-      <label class="label"><span>${esc(t('meals.defaultShoppingList'))}</span><select class="form-input" name="default_shopping_list_id">${listOptions}<option value="__create__" ${noLists ? 'selected' : ''}>${mealText('meals.createNewShoppingList', '+ Create a new Shopping list…')}</option></select></label>
-      <label class="label" data-new-shopping-list ${noLists ? '' : 'hidden'}><span>${mealText('meals.newShoppingListName', 'New list name')}</span><input class="form-input" name="new_shopping_list_name" maxlength="200" placeholder="${mealText('meals.shoppingListNamePlaceholder', 'e.g. Weekly groceries')}"></label>
-      <label class="meal-automation__toggle"><input type="checkbox" name="auto_create_grocery_draft" ${grocery.auto_create_grocery_draft !== false && grocery.auto_create_grocery_draft !== 0 ? 'checked' : ''}><span>${esc(t('meals.autoCreateGroceryDraft'))}</span></label>
-      <label class="meal-automation__toggle"><input type="checkbox" name="auto_finalize_grocery" ${grocery.auto_finalize_grocery ? 'checked' : ''}><span>${esc(t('meals.autoFinalizeGrocery'))}<small>${esc(t('meals.autoFinalizeGroceryHint'))}</small></span></label>
-      <div class="meal-grocery-weekly-timing">
-        <label class="label"><span>${mealText('meals.groceryDraftDay', 'Draft target day')}</span><select class="form-input" name="draft_weekday">${weekdayOptions(grocery.draft_weekday ?? 5)}</select></label>
-        <label class="label"><span>${mealText('meals.groceryDraftTime', 'Draft target time')}</span><input class="form-input" type="time" name="draft_time" value="${esc(grocery.draft_time || '09:00')}"></label>
-        <label class="label"><span>${mealText('meals.groceryFinalizationDay', 'Finalized target day')}</span><select class="form-input" name="finalization_weekday">${weekdayOptions(grocery.finalization_weekday ?? 6)}</select></label>
-        <label class="label"><span>${mealText('meals.groceryFinalizationTime', 'Finalized target time')}</span><input class="form-input" type="time" name="finalization_time" value="${esc(grocery.finalization_time || '09:00')}"></label>
-      </div>
-      <small class="form-hint">${mealText('meals.groceryTimingManualHint', 'These are following-week planning targets. Preparing the week remains a manual action in this version; the targets do not run a clock-driven scheduler.')}</small>
-      <label class="label"><span>${mealText('meals.groceryAggregation', 'Group grocery items by')}</span><select class="form-input" name="grouping_mode"><option value="ingredient" ${groupingMode === 'ingredient' ? 'selected' : ''}>${mealText('meals.aggregateIngredient', 'Ingredient')}</option><option value="category" ${groupingMode === 'category' ? 'selected' : ''} ${groupingOptions.category ? '' : 'disabled'}>${mealText('meals.aggregateCategory', 'Ingredient category / department')}${groupingOptions.category ? '' : ` - ${mealText('meals.groupingUnavailable', 'unavailable')}`}</option><option value="meal" ${groupingMode === 'meal' ? 'selected' : ''}>${mealText('meals.aggregateMeal', 'Meal')}</option><option value="recipe" ${groupingMode === 'recipe' ? 'selected' : ''}>${mealText('meals.aggregateRecipe', 'Recipe')}</option></select><small class="form-hint">${groupingOptions.category ? mealText('meals.categoryGroupingHint', 'Category grouping uses the Shopping department assigned to each ingredient.') : mealText('meals.categoryGroupingUnavailableHint', 'Create a Shopping category before grouping ingredients by department.')}</small></label>
     </section>
     <section>
       <h3>${esc(t('meals.executionTaskRoles'))}</h3>
@@ -2754,7 +2728,6 @@ async function openMealDefaultSettingsModal() {
     <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-modal-close>${esc(t('common.cancel'))}</button><button type="submit" class="btn btn--primary">${esc(t('common.save'))}</button></div>
   </form>`;
   openSharedModal({ title: mealText('meals.planDefaultSettings', 'Meal Plan Default Settings'), content, size: 'lg', onSave(panel) {
-    panel.querySelector('[data-grocery-settings-section]')?.remove();
     const strategy = panel.querySelector('[name="chooser_terminal_strategy"]');
     const fixed = panel.querySelector('[data-terminal-fixed]');
     const rotation = panel.querySelector('[data-terminal-rotation]');
@@ -2764,33 +2737,18 @@ async function openMealDefaultSettingsModal() {
     };
     strategy.addEventListener('change', syncTerminal);
     syncTerminal();
-    const listSelect = panel.querySelector('[name="default_shopping_list_id"]');
-    const newList = panel.querySelector('[data-new-shopping-list]');
-    const syncList = () => { newList.hidden = listSelect.value !== '__create__'; };
-    listSelect.addEventListener('change', syncList);
-    syncList();
     panel.querySelector('[data-modal-close]')?.addEventListener('click', () => closeSharedModal({ force: true }));
     panel.querySelector('#meal-default-settings-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
       const data = new FormData(form);
-      const submit = form.querySelector('[type="submit"]');
-      submit.disabled = true;
+      const submit = event.submitter || panel.querySelector('[type="submit"][form="meal-default-settings-form"]');
+      if (submit) submit.disabled = true;
       try {
-        const creatingShoppingList = data.get('default_shopping_list_id') === '__create__';
-        const newShoppingListName = String(data.get('new_shopping_list_name') || '').trim();
-        if (creatingShoppingList && !newShoppingListName) {
-            reportFieldError(form.querySelector('[name="new_shopping_list_name"]'), t('common.nameRequired'));
-            submit.disabled = false;
-            return;
-        }
-        const shoppingListId = creatingShoppingList
-          ? null
-          : (Number(data.get('default_shopping_list_id')) || null);
         const terminal = data.get('chooser_terminal_strategy');
         if (terminal === 'fixed' && !Number(data.get('chooser_terminal_user_id'))) {
           reportFieldError(form.querySelector('[name="chooser_terminal_user_id"]'), mealText('meals.chooseLastResortPerson', 'Choose the fixed last-resort person.'));
-          submit.disabled = false;
+          if (submit) submit.disabled = false;
           return;
         }
         const defaultsResponse = await api.put('/meals/plan-defaults', {
@@ -2819,8 +2777,11 @@ async function openMealDefaultSettingsModal() {
         setTimeout(() => openMealPlanManager(), window.innerWidth < 768 ? 420 : 0);
         window.yuvomi?.showToast(mealText('meals.planDefaultsSaved', 'Meal Plan defaults saved.'), 'success');
       } catch (error) {
-        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
-        submit.disabled = false;
+        window.yuvomi?.showToast(
+          error.data?.error || mealText('meals.planDefaultsSaveFailed', 'Meal Plan Default Settings could not be saved. Your changes are still open; please try again.'),
+          'danger',
+        );
+        if (submit) submit.disabled = false;
       }
     });
     if (window.lucide) lucide.createIcons({ el: panel });
@@ -2883,8 +2844,8 @@ async function openGrocerySettingsModal() {
       event.preventDefault();
       const form = event.currentTarget;
       const data = new FormData(form);
-      const submit = form.querySelector('[type="submit"]');
-      submit.disabled = true;
+      const submit = event.submitter || panel.querySelector('[type="submit"][form="grocery-settings-form"]');
+      if (submit) submit.disabled = true;
       try {
         if (contextId) {
           await api.put(`/meals/grocery-settings/contexts/${contextId}`, {
@@ -2895,7 +2856,7 @@ async function openGrocerySettingsModal() {
           const newName = String(data.get('new_shopping_list_name') || '').trim();
           if (creating && !newName) {
             reportFieldError(form.querySelector('[name="new_shopping_list_name"]'), t('common.nameRequired'));
-            submit.disabled = false;
+            if (submit) submit.disabled = false;
             return;
           }
           const response = await api.put('/meals/grocery-settings', {
@@ -2916,8 +2877,11 @@ async function openGrocerySettingsModal() {
         window.yuvomi?.showToast(mealText('meals.grocerySettingsSaved', 'Grocery settings saved.'), 'success');
         back();
       } catch (error) {
-        window.yuvomi?.showToast(error.data?.error || error.message || t('common.unknownError'), 'danger');
-        submit.disabled = false;
+        window.yuvomi?.showToast(
+          error.data?.error || mealText('meals.grocerySettingsSaveFailed', 'Grocery List Settings could not be saved. Your changes are still open; please try again.'),
+          'danger',
+        );
+        if (submit) submit.disabled = false;
       }
     });
     if (window.lucide) lucide.createIcons({ el: panel });

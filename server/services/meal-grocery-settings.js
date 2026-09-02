@@ -255,12 +255,11 @@ export function syncGrocerySettingsFromLegacy(database, legacy, actorId) {
     || null;
   database.prepare(`
     UPDATE meal_grocery_settings
-       SET enabled = ?, default_shopping_list_id = ?,
+       SET default_shopping_list_id = ?,
            auto_create_grocery_draft = ?, auto_finalize_grocery = ?,
            updated_by = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
      WHERE id = 1
   `).run(
-    legacy.enabled ? 1 : 0,
     listId,
     legacy.auto_create_grocery_draft ? 1 : 0,
     legacy.auto_finalize_grocery ? 1 : 0,

@@ -18,6 +18,15 @@ export const PROFICIENCY = Object.freeze({
   NORMAL: 'normal',
 });
 
+export const BUILT_IN_SKILL_KEYS = Object.freeze({
+  MEAL_CHOOSING: 'meal_choosing',
+  MEAL_PREPARATION: 'meal_preparation',
+  COOKING: 'cooking',
+  MEAL_SUPERVISION: 'meal_supervision',
+  SERVING: 'serving',
+  CLEANUP: 'cleanup',
+});
+
 export const ASSIGNMENT_STRATEGIES = Object.freeze([
   'subject_skill',
   'eligible_round_robin',
@@ -127,7 +136,11 @@ export function effectiveSkillProficiency(d, skill, member, dateKey = todayKey(d
   }
 
   const minimumAge = skill.minimum_age == null ? 0 : Number(skill.minimum_age);
-  if (age === null && minimumAge > 0) {
+  // Built-in household skills must remain usable for clearly identified adult
+  // household roles even when an older installation has no birthday recorded.
+  // Custom skills retain their existing age-unknown behavior.
+  const eligibilityAge = age ?? (skill.system_key && definitelyAdult(member, age) ? 18 : null);
+  if (eligibilityAge === null && minimumAge > 0) {
     return {
       proficiency: PROFICIENCY.EXCLUDED,
       source: 'automatic',
@@ -135,7 +148,7 @@ export function effectiveSkillProficiency(d, skill, member, dateKey = todayKey(d
       reason: 'age_unknown',
     };
   }
-  if (age !== null && age < minimumAge) {
+  if (eligibilityAge !== null && eligibilityAge < minimumAge) {
     return {
       proficiency: PROFICIENCY.EXCLUDED,
       source: 'automatic',
@@ -152,6 +165,25 @@ export function effectiveSkillProficiency(d, skill, member, dateKey = todayKey(d
     age,
     reason: 'age_qualified',
   };
+}
+
+export function eligibleUserIdsForBuiltInSkill(
+  d,
+  systemKey,
+  userIds,
+  { dateKey = todayKey(d), includeSupervised = false } = {},
+) {
+  const skill = d.prepare('SELECT * FROM skills WHERE system_key = ? AND active = 1').get(systemKey);
+  if (!skill) return [];
+  const candidates = new Set((userIds || []).map(Number));
+  return householdMembers(d)
+    .filter((member) => candidates.has(Number(member.id)))
+    .filter((member) => {
+      const proficiency = effectiveSkillProficiency(d, skill, member, dateKey).proficiency;
+      return proficiency === PROFICIENCY.NORMAL
+        || (includeSupervised && proficiency === PROFICIENCY.SUPERVISED);
+    })
+    .map((member) => Number(member.id));
 }
 
 /** Lowest proficiency across all skills required by an activity. */

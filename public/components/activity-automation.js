@@ -989,11 +989,11 @@ async function renderSkillsManager(body, manager) {
     <div class="automation-list">
       ${skills.map((skill) => `
         <div class="list-row automation-list-row">
-          <div class="automation-list-row__copy"><strong>${h(skill.name)}</strong><br><small class="form-hint">Min age: ${skill.minimum_age ?? 0} · age → ${h(skill.age_promotion)}${skill.adult_only ? ' · adult only' : ''}</small></div>
+          <div class="automation-list-row__copy"><strong>${h(skill.name)}</strong>${skill.system_key ? ' <span class="badge">Built-in</span>' : ''}<br><small class="form-hint">Min age: ${skill.minimum_age ?? 0} · age → ${h(skill.age_promotion)}${skill.adult_only ? ' · adult only' : ''}</small></div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-skill-members="${skill.id}">Proficiency</button>
             <button type="button" class="btn btn--ghost btn--sm" data-edit-skill="${skill.id}">Edit</button>
-            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-skill="${skill.id}" aria-label="Delete ${h(skill.name)} skill">Delete</button>
+            ${skill.system_key ? '' : `<button type="button" class="btn btn--danger-ghost btn--sm" data-delete-skill="${skill.id}" aria-label="Delete ${h(skill.name)} skill">Delete</button>`}
           </div>
         </div>`).join('') || '<p class="form-hint">No skills yet.</p>'}
     </div>`);

@@ -1,6 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
+import {
+  BUILT_IN_SKILL_KEYS,
+  eligibleUserIdsForBuiltInSkill,
+} from './activity-eligibility.js';
 import { normalizeDishSelection, syncAutoPortions } from './meal-dishes.js';
 import {
   getGrocerySettings as getIndependentGrocerySettings,
@@ -1333,13 +1337,25 @@ function occurrenceCohort(database, rule, context, dateKey) {
     pool = pool.filter((id) => !away.has(id));
     responsibilityPool = responsibilityPool.filter((id) => !away.has(id));
   }
+  const eligible = pool.filter((userId) => eligibleForPresence(database, rule, context, dateKey, userId));
+  const responsibilityEligible = responsibilityPool
+    .filter((userId) => eligibleForPresence(database, rule, context, dateKey, userId));
+  const skillEligible = (systemKey, candidates) => eligibleUserIdsForBuiltInSkill(
+    database, systemKey, candidates, { dateKey },
+  );
   return {
     allMemberIds,
     pool,
-    eligible: pool.filter((userId) => eligibleForPresence(database, rule, context, dateKey, userId)),
+    eligible,
     responsibilityPool,
-    responsibilityEligible: responsibilityPool
-      .filter((userId) => eligibleForPresence(database, rule, context, dateKey, userId)),
+    responsibilityEligible,
+    chooserEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, eligible),
+    chooserResponsibilityEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, responsibilityEligible),
+    chooserResponsibilitySkillEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, responsibilityPool),
+    cookEligible: skillEligible(BUILT_IN_SKILL_KEYS.COOKING, eligible),
+    cookResponsibilityEligible: skillEligible(BUILT_IN_SKILL_KEYS.COOKING, responsibilityEligible),
+    supervisorEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION, eligible),
+    supervisorResponsibilityEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION, responsibilityEligible),
   };
 }
 
@@ -1350,6 +1366,7 @@ function chooseOccurrenceAssignee(
   eligible,
   responsibilityEligible = eligible,
   contextId = null,
+  responsibilitySkillEligible = responsibilityEligible,
 ) {
   let selected = Number(rule.fixed_user_id) || null;
   let before = null;
@@ -1366,7 +1383,9 @@ function chooseOccurrenceAssignee(
       .find((userId) => responsibilityEligible.includes(Number(userId))) || null;
   }
   if (rule.policy !== 'personal_choice' && !selected) {
-    if (defaults.chooser_terminal_strategy === 'fixed' && defaults.chooser_terminal_user_id) {
+    if (defaults.chooser_terminal_strategy === 'fixed'
+        && defaults.chooser_terminal_user_id
+        && responsibilitySkillEligible.includes(Number(defaults.chooser_terminal_user_id))) {
       selected = defaults.chooser_terminal_user_id;
     } else if (defaults.chooser_terminal_strategy === 'personal_choice') {
       policyOverride = 'personal_choice';
@@ -1391,6 +1410,10 @@ function chooseOccurrenceAssignee(
 function writeOccurrenceResponsibilities(database, {
   mealId, occurrenceKey, rule, contextId, dateKey, pool, eligible,
   responsibilityPool = pool, responsibilityEligible = eligible, selected,
+  chooserEligible = eligible, chooserResponsibilityEligible = responsibilityEligible,
+  chooserResponsibilitySkillEligible = chooserResponsibilityEligible,
+  cookResponsibilityEligible = responsibilityEligible,
+  supervisorResponsibilityEligible = responsibilityEligible,
   cookSelection = null, supervisorSelection = null, policyOverride = null,
   chooserDefaults = null,
 }) {
@@ -1398,7 +1421,8 @@ function writeOccurrenceResponsibilities(database, {
   const effectivePolicy = policyOverride || rule.policy;
   const forcedLastResort = effectivePolicy !== 'personal_choice'
     && resolvedDefaults.chooser_terminal_strategy === 'fixed'
-    && Number(selected) === Number(resolvedDefaults.chooser_terminal_user_id);
+    && Number(selected) === Number(resolvedDefaults.chooser_terminal_user_id)
+    && chooserResponsibilitySkillEligible.includes(Number(selected));
   const insertParticipant = database.prepare(`
     INSERT OR IGNORE INTO meal_participants (meal_id, user_id, role, status, source)
     VALUES (?, ?, ?, ?, 'schedule')
@@ -1406,11 +1430,11 @@ function writeOccurrenceResponsibilities(database, {
   for (const userId of pool) {
     insertParticipant.run(mealId, userId, 'participant', eligible.includes(userId) ? 'participating' : 'away');
   }
-  if (selected && (responsibilityEligible.includes(Number(selected)) || forcedLastResort)) {
+  if (selected && (chooserResponsibilityEligible.includes(Number(selected)) || forcedLastResort)) {
     insertParticipant.run(mealId, Number(selected), 'participant', 'participating');
   }
   if (effectivePolicy === 'personal_choice') {
-    for (const userId of eligible) insertParticipant.run(mealId, userId, 'chooser', 'participating');
+    for (const userId of chooserEligible) insertParticipant.run(mealId, userId, 'chooser', 'participating');
   } else if (selected) {
     insertParticipant.run(mealId, selected, 'chooser', 'participating');
   }
@@ -1420,12 +1444,12 @@ function writeOccurrenceResponsibilities(database, {
         ? rule[`${role}_user_id`]
         : null),
   ) || null;
-  for (const [userId, role] of [
-    [fallbackRoleUser('cook', cookSelection), 'cook'],
-    [fallbackRoleUser('supervisor', supervisorSelection), 'supervisor'],
+  for (const [userId, role, roleEligible] of [
+    [fallbackRoleUser('cook', cookSelection), 'cook', cookResponsibilityEligible],
+    [fallbackRoleUser('supervisor', supervisorSelection), 'supervisor', supervisorResponsibilityEligible],
   ]) {
     if (userId && responsibilityPool.includes(userId)) {
-      insertParticipant.run(mealId, userId, role, responsibilityEligible.includes(userId) ? 'participating' : 'away');
+      insertParticipant.run(mealId, userId, role, roleEligible.includes(userId) ? 'participating' : 'away');
     }
   }
 
@@ -1437,7 +1461,7 @@ function writeOccurrenceResponsibilities(database, {
   `);
   const deadline = selectionDeadline(rule, dateKey);
   const reminder = shiftMinutes(deadline.slice(0, 10), deadline.slice(11, 16), rule.reminder_minutes);
-  const obligationUsers = effectivePolicy === 'personal_choice' ? eligible : (selected ? [selected] : []);
+  const obligationUsers = effectivePolicy === 'personal_choice' ? chooserEligible : (selected ? [selected] : []);
   for (const userId of obligationUsers) {
     insertObligation.run(
       mealId, `${occurrenceKey}:chooser:${userId}`, userId, deadline, deadline, reminder,
@@ -1460,7 +1484,7 @@ function writeOccurrenceResponsibilities(database, {
           contextId,
           resolvedDefaults.chooser_round_robin_user_ids,
         ),
-        backup_eligible_user_ids: responsibilityEligible,
+        backup_eligible_user_ids: chooserResponsibilityEligible,
         choice_limit: rule.choice_limit,
         max_entree_choices: resolvedDefaults.max_entree_choices,
         max_side_choices: resolvedDefaults.max_side_choices,
@@ -1597,8 +1621,10 @@ function reconcilePendingBaseOccurrence(database, existing, rule, dateKey) {
       database,
       rowRule,
       scope.scopedRotationKey,
-      cohort.eligible,
-      cohort.responsibilityEligible,
+      cohort.chooserEligible,
+      cohort.chooserResponsibilityEligible,
+      null,
+      cohort.chooserResponsibilitySkillEligible,
     );
     database.prepare("DELETE FROM meal_participants WHERE meal_id = ? AND source = 'schedule'").run(row.meal_id);
     database.prepare("DELETE FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ?").run(row.meal_id);
@@ -1607,6 +1633,11 @@ function reconcilePendingBaseOccurrence(database, existing, rule, dateKey) {
       contextId: null, dateKey: row.date, pool: cohort.pool, eligible: cohort.eligible,
       responsibilityPool: cohort.responsibilityPool,
       responsibilityEligible: cohort.responsibilityEligible,
+      chooserEligible: cohort.chooserEligible,
+      chooserResponsibilityEligible: cohort.chooserResponsibilityEligible,
+      chooserResponsibilitySkillEligible: cohort.chooserResponsibilitySkillEligible,
+      cookResponsibilityEligible: cohort.cookResponsibilityEligible,
+      supervisorResponsibilityEligible: cohort.supervisorResponsibilityEligible,
       selected: selection.selected,
       policyOverride: selection.policyOverride,
       chooserDefaults: selection.chooserDefaults,
@@ -1642,30 +1673,34 @@ function reconciliationSelection(database, rule, assignment, cohort, context = n
      LIMIT 1
   `).get(assignment.meal_id, current);
   if (currentPending && (
-    cohort.responsibilityEligible.includes(current)
+    cohort.chooserResponsibilityEligible.includes(current)
     || (defaults.chooser_terminal_strategy === 'fixed'
-      && current === Number(defaults.chooser_terminal_user_id))
-  )) return current;
+      && current === Number(defaults.chooser_terminal_user_id)
+      && cohort.chooserResponsibilitySkillEligible.includes(current)))
+  ) return current;
   if (rule.policy === 'round_robin') {
-    if (current && cohort.eligible.includes(current)) return current;
-    if (cohort.eligible.length) {
+    if (current && cohort.chooserEligible.includes(current)) return current;
+    if (cohort.chooserEligible.length) {
       const before = Number(assignment.cursor_before_user_id) || null;
-      const previous = cohort.eligible.indexOf(before);
-      return cohort.eligible[(previous + 1 + cohort.eligible.length) % cohort.eligible.length];
+      const previous = cohort.chooserEligible.indexOf(before);
+      return cohort.chooserEligible[(previous + 1 + cohort.chooserEligible.length) % cohort.chooserEligible.length];
     }
   }
   const fixed = rule.policy === 'fixed' ? (Number(rule.fixed_user_id) || null) : null;
-  if (fixed && cohort.responsibilityEligible.includes(fixed)) return fixed;
+  if (fixed && cohort.chooserResponsibilityEligible.includes(fixed)) return fixed;
   const fallback = defaults.chooser_fallback_user_ids.find((userId) => (
-    cohort.responsibilityEligible.includes(Number(userId))
+    cohort.chooserResponsibilityEligible.includes(Number(userId))
   ));
   if (fallback) return Number(fallback);
-  if (defaults.chooser_terminal_strategy === 'fixed') return defaults.chooser_terminal_user_id;
+  if (defaults.chooser_terminal_strategy === 'fixed') {
+    return cohort.chooserResponsibilitySkillEligible.includes(Number(defaults.chooser_terminal_user_id))
+      ? defaults.chooser_terminal_user_id : null;
+  }
   if (defaults.chooser_terminal_strategy === 'eligible_round_robin') {
     const configured = defaults.chooser_round_robin_user_ids.filter((userId) => (
-      cohort.responsibilityEligible.includes(Number(userId))
+      cohort.chooserResponsibilityEligible.includes(Number(userId))
     ));
-    const candidates = configured.length ? configured : cohort.responsibilityEligible;
+    const candidates = configured.length ? configured : cohort.chooserResponsibilityEligible;
     if (!candidates.length) return null;
     return chooseRoundRobin(
       database,
@@ -1742,7 +1777,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
     addRole(userId, 'participant', status);
   }
   if (rule.policy === 'personal_choice') {
-    for (const userId of cohort.eligible) addRole(userId, 'chooser');
+    for (const userId of cohort.chooserEligible) addRole(userId, 'chooser');
   } else if (selected) {
     addRole(selected, 'participant');
     addRole(selected, 'chooser');
@@ -1753,13 +1788,13 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
      WHERE occurrence_assignment_id = ? AND committed = 1
   `).all(assignment.id);
   const delegatedByRole = new Map(delegatedRows.map((row) => [row.role, Number(row.assigned_user_id) || null]));
-  for (const [rawUserId, role] of [
-    [delegatedByRole.has('cook') ? delegatedByRole.get('cook') : rule.cook_user_id, 'cook'],
-    [delegatedByRole.has('supervisor') ? delegatedByRole.get('supervisor') : rule.supervisor_user_id, 'supervisor'],
+  for (const [rawUserId, role, roleEligible] of [
+    [delegatedByRole.has('cook') ? delegatedByRole.get('cook') : rule.cook_user_id, 'cook', cohort.cookResponsibilityEligible],
+    [delegatedByRole.has('supervisor') ? delegatedByRole.get('supervisor') : rule.supervisor_user_id, 'supervisor', cohort.supervisorResponsibilityEligible],
   ]) {
     const userId = Number(rawUserId) || null;
     if (userId && cohort.responsibilityPool.includes(userId)) {
-      addRole(userId, role, cohort.responsibilityEligible.includes(userId) ? 'participating' : 'away');
+      addRole(userId, role, roleEligible.includes(userId) ? 'participating' : 'away');
     }
   }
 
@@ -2208,25 +2243,27 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
     }
   }
 
+  const cohort = occurrenceCohort(database, rule, context, dateKey);
   const {
     allMemberIds, pool, eligible, responsibilityPool, responsibilityEligible,
-  } = occurrenceCohort(database, rule, context, dateKey);
+  } = cohort;
   const selection = chooseOccurrenceAssignee(
     database,
     rule,
     scopedRotationKey,
-    eligible,
-    responsibilityEligible,
+    cohort.chooserEligible,
+    cohort.chooserResponsibilityEligible,
     contextId,
+    cohort.chooserResponsibilitySkillEligible,
   );
   const { selected, before, after, policyOverride, chooserDefaults } = selection;
   const assignmentBaseRotationKey = selection.rotationKeyOverride || baseRotationKey;
   const assignmentScopedRotationKey = selection.rotationKeyOverride || scopedRotationKey;
   const cookSelection = chooseOccurrenceRole(
-    database, rule, context, 'cook', eligible, responsibilityEligible,
+    database, rule, context, 'cook', cohort.cookEligible, cohort.cookResponsibilityEligible,
   );
   const supervisorSelection = chooseOccurrenceRole(
-    database, rule, context, 'supervisor', eligible, responsibilityEligible,
+    database, rule, context, 'supervisor', cohort.supervisorEligible, cohort.supervisorResponsibilityEligible,
   );
 
   const slotLabel = rule.custom_label || rule.label || rule.meal_type;
@@ -2282,6 +2319,11 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
   writeOccurrenceResponsibilities(database, {
     mealId, occurrenceKey, rule, contextId, dateKey, pool, eligible, selected,
     responsibilityPool, responsibilityEligible, cookSelection, supervisorSelection,
+    chooserEligible: cohort.chooserEligible,
+    chooserResponsibilityEligible: cohort.chooserResponsibilityEligible,
+    chooserResponsibilitySkillEligible: cohort.chooserResponsibilitySkillEligible,
+    cookResponsibilityEligible: cohort.cookResponsibilityEligible,
+    supervisorResponsibilityEligible: cohort.supervisorResponsibilityEligible,
     policyOverride, chooserDefaults,
   });
   return { created: 1, assignment: { id: assignmentId, occurrence_key: occurrenceKey, meal_id: mealId, assigned_user_id: selected } };
@@ -3216,14 +3258,17 @@ function fallbackEligibleUsers(database, meal, context) {
       context.rule,
       planningContext,
       meal.date,
-    ).responsibilityEligible;
+    ).chooserResponsibilityEligible;
   }
   if (!eligible.length) {
-    eligible = database.prepare(`
+    const participating = database.prepare(`
       SELECT DISTINCT user_id FROM meal_participants
        WHERE meal_id = ? AND role = 'participant' AND status = 'participating'
        ORDER BY user_id
     `).all(Number(meal.id)).map((row) => Number(row.user_id));
+    eligible = eligibleUserIdsForBuiltInSkill(
+      database, BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, participating, { dateKey: meal.date },
+    );
   }
   const declinedParticipation = new Set(database.prepare(`
     SELECT beneficiary_user_id FROM meal_person_decisions
@@ -3382,7 +3427,10 @@ export function advanceMealChooserFallback(database, mealId, {
     let rotation = null;
 
     if (!selected && snapshot.chooser_terminal_strategy === 'fixed') {
-      selected = Number(snapshot.chooser_terminal_user_id) || null;
+      const fixedId = Number(snapshot.chooser_terminal_user_id) || null;
+      selected = eligibleUserIdsForBuiltInSkill(
+        database, BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, fixedId ? [fixedId] : [], { dateKey: meal.date },
+      )[0] || null;
       forceParticipant = Boolean(selected);
       if (!selected) {
         throw mealPlanError(
@@ -3413,7 +3461,12 @@ export function advanceMealChooserFallback(database, mealId, {
          WHERE meal_id = ? AND role = 'participant' AND status = 'participating'
          ORDER BY user_id
       `).all(Number(meal.id)).map((row) => Number(row.user_id));
-      const personalUsers = participants.length ? participants : eligible;
+      const personalUsers = eligibleUserIdsForBuiltInSkill(
+        database,
+        BUILT_IN_SKILL_KEYS.MEAL_CHOOSING,
+        participants.length ? participants : eligible,
+        { dateKey: meal.date },
+      );
       synchronizeMealMenuGeneration(database, meal.id, {
         chooserId: null,
         reason: `${reason}:personal_choice`,

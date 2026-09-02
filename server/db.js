@@ -8614,6 +8614,52 @@ const FORK_MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 10025,
+    description: 'Built-in household skills for Meal Plan role eligibility',
+    up: `
+      ALTER TABLE skills ADD COLUMN system_key TEXT;
+
+      UPDATE skills SET system_key = 'meal_choosing', active = 1
+       WHERE id = (SELECT id FROM skills WHERE name = 'Meal Choosing' COLLATE NOCASE ORDER BY id LIMIT 1);
+      INSERT INTO skills (system_key, name, description, minimum_age, age_promotion, active)
+      SELECT 'meal_choosing', 'Meal Choosing', 'Choose the shared household meal.', 8, 'normal', 1
+       WHERE NOT EXISTS (SELECT 1 FROM skills WHERE system_key = 'meal_choosing');
+
+      UPDATE skills SET system_key = 'meal_preparation', active = 1
+       WHERE id = (SELECT id FROM skills WHERE name = 'Meal Preparation' COLLATE NOCASE ORDER BY id LIMIT 1);
+      INSERT INTO skills (system_key, name, description, minimum_age, age_promotion, active)
+      SELECT 'meal_preparation', 'Meal Preparation', 'Prepare ingredients and equipment for a meal.', 8, 'normal', 1
+       WHERE NOT EXISTS (SELECT 1 FROM skills WHERE system_key = 'meal_preparation');
+
+      UPDATE skills SET system_key = 'cooking', active = 1
+       WHERE id = (SELECT id FROM skills WHERE name = 'Cooking' COLLATE NOCASE ORDER BY id LIMIT 1);
+      INSERT INTO skills (system_key, name, description, minimum_age, age_promotion, active)
+      SELECT 'cooking', 'Cooking', 'Cook a household meal independently.', 13, 'normal', 1
+       WHERE NOT EXISTS (SELECT 1 FROM skills WHERE system_key = 'cooking');
+
+      UPDATE skills SET system_key = 'meal_supervision', active = 1
+       WHERE id = (SELECT id FROM skills WHERE name = 'Meal Supervision' COLLATE NOCASE ORDER BY id LIMIT 1);
+      INSERT INTO skills (system_key, name, description, minimum_age, age_promotion, active)
+      SELECT 'meal_supervision', 'Meal Supervision', 'Supervise another household member during meal work.', 16, 'normal', 1
+       WHERE NOT EXISTS (SELECT 1 FROM skills WHERE system_key = 'meal_supervision');
+
+      UPDATE skills SET system_key = 'serving', active = 1
+       WHERE id = (SELECT id FROM skills WHERE name = 'Serving' COLLATE NOCASE ORDER BY id LIMIT 1);
+      INSERT INTO skills (system_key, name, description, minimum_age, age_promotion, active)
+      SELECT 'serving', 'Serving', 'Serve a prepared household meal.', 5, 'normal', 1
+       WHERE NOT EXISTS (SELECT 1 FROM skills WHERE system_key = 'serving');
+
+      UPDATE skills SET system_key = 'cleanup', active = 1
+       WHERE id = (SELECT id FROM skills WHERE name = 'Cleanup' COLLATE NOCASE ORDER BY id LIMIT 1);
+      INSERT INTO skills (system_key, name, description, minimum_age, age_promotion, active)
+      SELECT 'cleanup', 'Cleanup', 'Clean up after a household meal.', 6, 'normal', 1
+       WHERE NOT EXISTS (SELECT 1 FROM skills WHERE system_key = 'cleanup');
+
+      CREATE UNIQUE INDEX idx_skills_system_key
+        ON skills(system_key) WHERE system_key IS NOT NULL;
+    `,
+  },
 ];
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

@@ -73,6 +73,44 @@ async function call(method, path, body) {
   return { status: response.status, body: raw ? JSON.parse(raw) : null };
 }
 
+test('built-in household skills are editable through Skills but cannot be deleted', async () => {
+  const listed = await call('GET', '/automation/admin/skills');
+  assert.equal(listed.status, 200, JSON.stringify(listed.body));
+  const builtIns = listed.body.data.filter((skill) => skill.system_key);
+  assert.deepEqual(
+    builtIns.map((skill) => skill.system_key).sort(),
+    ['cleanup', 'cooking', 'meal_choosing', 'meal_preparation', 'meal_supervision', 'serving'],
+  );
+
+  const cooking = builtIns.find((skill) => skill.system_key === 'cooking');
+  const updated = await call('PUT', `/automation/admin/skills/${cooking.id}`, {
+    ...cooking,
+    minimum_age: 14,
+    active: false,
+  });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.equal(updated.body.data.system_key, 'cooking');
+  assert.equal(updated.body.data.minimum_age, 14);
+  assert.equal(updated.body.data.active, 1, 'built-ins always remain active');
+
+  const proficiency = await call('PUT', `/automation/admin/skills/${cooking.id}/members/${grace}`, {
+    proficiency: 'normal',
+  });
+  assert.equal(proficiency.status, 200, JSON.stringify(proficiency.body));
+  assert.equal(proficiency.body.data.proficiency, 'normal');
+
+  const guarded = await call('DELETE', `/automation/admin/skills/${cooking.id}`);
+  assert.equal(guarded.status, 409, JSON.stringify(guarded.body));
+  assert.match(guarded.body.error, /built-in household skills cannot be deleted/i);
+
+  const custom = await call('POST', '/automation/admin/skills', {
+    name: 'Custom household skill', minimum_age: 3, age_promotion: 'supervised', active: true,
+  });
+  assert.equal(custom.status, 201, JSON.stringify(custom.body));
+  assert.equal(custom.body.data.system_key, null);
+  assert.equal((await call('DELETE', `/automation/admin/skills/${custom.body.data.id}`)).status, 204);
+});
+
 test('admins can build skills, activities and a Quick Add workflow from the API', async () => {
   const makeBedSkill = await call('POST', '/automation/admin/skills', {
     name: 'Make a bed', minimum_age: 5, age_promotion: 'supervised', active: true,

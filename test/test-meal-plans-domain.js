@@ -48,6 +48,15 @@ const jamie = Number(database.prepare(`
   VALUES ('meal-plan-jamie', 'Jamie', 'x', 'member', 'child')
 `).run().lastInsertRowid);
 
+// Existing domain scenarios predate role skills and intentionally exercise
+// other Meal Plan behavior. Preserve their established cohorts explicitly.
+for (const userId of [admin, sam, jamie]) {
+  database.prepare(`
+    INSERT INTO user_skill_proficiency (user_id, skill_id, proficiency, source, updated_by)
+    SELECT ?, id, 'normal', 'manual', ? FROM skills WHERE system_key IS NOT NULL
+  `).run(userId, admin);
+}
+
 let actor = { id: admin, role: 'admin' };
 const app = express();
 app.use(express.json());
@@ -710,6 +719,91 @@ test('fixed chooser menu ownership separates publishing from participant choices
 
   actor = { id: admin, role: 'admin' };
   assert.equal((await call('DELETE', `/plans/${plan.body.data.id}`)).status, 200);
+});
+
+test('Meal Plan role pools add built-in skill eligibility without bypassing fixed or rotation behavior', async () => {
+  actor = { id: admin, role: 'admin' };
+  const child = jamie;
+  const adult = sam;
+  const setAllRoleSkills = database.prepare(`
+    INSERT INTO user_skill_proficiency (user_id, skill_id, proficiency, source, updated_by)
+    SELECT ?, id, ?, 'manual', ? FROM skills WHERE system_key IS NOT NULL
+    ON CONFLICT(user_id, skill_id) DO UPDATE SET
+      proficiency = excluded.proficiency, source = 'manual', updated_by = excluded.updated_by
+  `);
+  setAllRoleSkills.run(child, 'excluded', admin);
+  setAllRoleSkills.run(adult, 'normal', admin);
+
+  const date = '2080-01-07';
+  const weekday = (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7;
+  const plan = await call('POST', '/plans', {
+    name: 'Skill-gated household roles', effective_from: date, effective_until: date,
+    rules: [{
+      weekday, meal_type: 'dinner', policy: 'fixed', fixed_user_id: adult,
+      participant_ids: [child, adult], cook_strategy: 'round_robin',
+      supervisor_strategy: 'round_robin',
+      execution_assignment_strategies: {
+        preparation: 'eligible_round_robin', cooking: 'eligible_round_robin',
+        supervision: 'eligible_round_robin', serving: 'eligible_round_robin',
+        cleanup: 'eligible_round_robin',
+      },
+      generate_preparation: true, generate_cooking: true, generate_supervision: true,
+      generate_serving: true, generate_cleanup: true,
+    }],
+  });
+  assert.equal(plan.status, 201, JSON.stringify(plan.body));
+  assert.equal((await call('GET', `/week-model?start=${date}&end=${date}`)).status, 200);
+  const meal = database.prepare('SELECT * FROM meals WHERE meal_plan_id = ? AND date = ?')
+    .get(plan.body.data.id, date);
+  const occurrence = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE meal_id = ?').get(meal.id);
+  assert.equal(Number(occurrence.assigned_user_id), adult, 'eligible fixed chooser remains selected');
+  const delegated = database.prepare(`
+    SELECT role, assigned_user_id FROM meal_occurrence_role_assignments
+     WHERE occurrence_assignment_id = ? ORDER BY role
+  `).all(occurrence.id);
+  assert.deepEqual(delegated.map((row) => [row.role, Number(row.assigned_user_id)]), [
+    ['cook', adult], ['supervisor', adult],
+  ]);
+
+  database.prepare("UPDATE meals SET title = 'Skill-gated dinner', selection_status = 'selected' WHERE id = ?")
+    .run(meal.id);
+  const execution = await call('POST', `/${meal.id}/execution-tasks`, {});
+  assert.equal(execution.status, 200, JSON.stringify(execution.body));
+  assert.deepEqual(execution.body.data.tasks.map((row) => row.role),
+    ['preparation', 'cooking', 'supervision', 'serving', 'cleanup']);
+  for (const task of execution.body.data.tasks) {
+    assert.equal(Number(task.assigned_user_id_snapshot), adult, `${task.role} excludes the ineligible child`);
+    assert.deepEqual(JSON.parse(task.eligible_user_ids_json), [adult]);
+  }
+
+  setAllRoleSkills.run(child, 'normal', admin);
+  const eligibleDate = '2080-01-08';
+  const eligibleWeekday = (new Date(`${eligibleDate}T12:00:00Z`).getUTCDay() + 6) % 7;
+  const eligiblePlan = await call('POST', '/plans', {
+    name: 'Eligible fixed household roles', effective_from: eligibleDate, effective_until: eligibleDate,
+    rules: [{
+      weekday: eligibleWeekday, meal_type: 'dinner', policy: 'fixed', fixed_user_id: child,
+      participant_ids: [child, adult], cook_strategy: 'fixed', cook_user_id: child,
+      supervisor_strategy: 'fixed', supervisor_user_id: child,
+    }],
+  });
+  assert.equal(eligiblePlan.status, 201, JSON.stringify(eligiblePlan.body));
+  assert.equal((await call('GET', `/week-model?start=${eligibleDate}&end=${eligibleDate}`)).status, 200);
+  const eligibleMeal = database.prepare('SELECT * FROM meals WHERE meal_plan_id = ? AND date = ?')
+    .get(eligiblePlan.body.data.id, eligibleDate);
+  const eligibleOccurrence = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE meal_id = ?')
+    .get(eligibleMeal.id);
+  assert.equal(Number(eligibleOccurrence.assigned_user_id), child);
+  assert.deepEqual(database.prepare(`
+    SELECT role, assigned_user_id FROM meal_occurrence_role_assignments
+     WHERE occurrence_assignment_id = ? ORDER BY role
+  `).all(eligibleOccurrence.id).map((row) => [row.role, Number(row.assigned_user_id)]), [
+    ['cook', child], ['supervisor', child],
+  ]);
+
+  assert.equal((await call('DELETE', `/plans/${plan.body.data.id}`)).status, 200);
+  assert.equal((await call('DELETE', `/plans/${eligiblePlan.body.data.id}`)).status, 200);
+  setAllRoleSkills.run(child, 'normal', admin);
 });
 
 test('a published menu stays live through a three-person chooser handoff and replacements preserve history', async () => {

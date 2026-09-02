@@ -4,6 +4,10 @@ import {
   finalizeGroceryRun,
   publishGroceryRun,
 } from './meal-grocery-runs.js';
+import {
+  BUILT_IN_SKILL_KEYS,
+  eligibleUserIdsForBuiltInSkill,
+} from './activity-eligibility.js';
 
 const ROLE_ORDER = ['preparation', 'cooking', 'supervision', 'serving', 'cleanup'];
 const ROLE_TITLES = {
@@ -14,6 +18,13 @@ const ROLE_TITLES = {
   cleanup: (title) => `Clean up after ${title}`,
 };
 const DEFAULT_TIMES = { breakfast: '07:30', lunch: '12:30', dinner: '18:00', snack: '15:00' };
+const ROLE_SKILLS = Object.freeze({
+  preparation: BUILT_IN_SKILL_KEYS.MEAL_PREPARATION,
+  cooking: BUILT_IN_SKILL_KEYS.COOKING,
+  supervision: BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION,
+  serving: BUILT_IN_SKILL_KEYS.SERVING,
+  cleanup: BUILT_IN_SKILL_KEYS.CLEANUP,
+});
 
 function hash(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -222,7 +233,12 @@ function chooseExecutionRoundRobin(database, rotationKey, eligible) {
 }
 
 function resolveExecutionAssignment(database, meal, role, policy, output = null, task = null) {
-  const eligibleIds = participatingUsers(meal);
+  const eligibleIds = eligibleUserIdsForBuiltInSkill(
+    database,
+    ROLE_SKILLS[role],
+    participatingUsers(meal),
+    { dateKey: meal.date },
+  );
   if (output) {
     const snapshotStrategy = output.assignment_strategy_snapshot || 'legacy';
     const selected = snapshotStrategy === 'open_claimable'
@@ -241,8 +257,9 @@ function resolveExecutionAssignment(database, meal, role, policy, output = null,
   }
   const configured = policy.execution_assignment_strategies?.[role] || null;
   if (!configured) {
+    const legacy = legacyRoleAssignments(meal)[role] || null;
     return {
-      strategy: 'legacy', assignment: legacyRoleAssignments(meal)[role] || null,
+      strategy: 'legacy', assignment: legacy && eligibleIds.includes(Number(legacy.user_id)) ? legacy : null,
       eligibleIds, rotationKey: null, before: null, after: null,
     };
   }
@@ -261,6 +278,7 @@ function resolveExecutionAssignment(database, meal, role, policy, output = null,
   }
   const assignment = meal.participants.find((row) => (
     row.status === 'participating' && row.role === configured
+    && eligibleIds.includes(Number(row.user_id))
   )) || null;
   return { strategy: configured, assignment, eligibleIds, rotationKey: null, before: null, after: null };
 }

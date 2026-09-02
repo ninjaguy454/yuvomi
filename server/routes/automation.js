@@ -102,7 +102,7 @@ function normalizeSkillInput(body, existing = null) {
     minimumAge,
     agePromotion,
     adultOnly: bool(body.adult_only, !!existing?.adult_only),
-    active: bool(body.active, existing ? !!existing.active : true),
+    active: existing?.system_key ? 1 : bool(body.active, existing ? !!existing.active : true),
   };
 }
 
@@ -865,10 +865,14 @@ router.put('/admin/skills/:id', requireAdmin, (req, res) => {
 router.delete('/admin/skills/:id', requireAdmin, (req, res) => {
   try {
     const d = db.get();
+    const skill = d.prepare('SELECT * FROM skills WHERE id = ?').get(req.params.id);
+    if (!skill) return res.status(404).json({ error: 'Skill not found.', code: 404 });
+    if (skill.system_key) {
+      return res.status(409).json({ error: 'Built-in household skills cannot be deleted.', code: 409 });
+    }
     const inUse = d.prepare('SELECT COUNT(*) AS n FROM activity_template_skills WHERE skill_id = ?').get(req.params.id)?.n ?? 0;
     if (inUse) return res.status(409).json({ error: 'This skill is required by an activity template.', code: 409 });
     const result = d.prepare('DELETE FROM skills WHERE id = ?').run(req.params.id);
-    if (!result.changes) return res.status(404).json({ error: 'Skill not found.', code: 404 });
     res.status(204).end();
   } catch (err) {
     res.status(500).json({ error: 'Could not delete skill.', code: 500 });

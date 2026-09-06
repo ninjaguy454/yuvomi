@@ -41,7 +41,9 @@ jobs:
         env:
           AUDIT_LABEL: refined
           QA_OUTPUT_DIR: review-artifacts
-        run: node test/product-refinement-regressions.browser.mjs
+        run: |
+          set -o pipefail
+          node test/product-refinement-regressions.browser.mjs 2>&1 | tee review-artifacts/browser.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:

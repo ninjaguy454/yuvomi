@@ -29,6 +29,10 @@ let currentPage;
 let serverLog = '';
 const routes = ['/', '/tasks', '/meals', '/recipes', '/shopping', '/pantry', '/calendar',
   '/settings', '/settings/modules/automation', '/places', '/reader'];
+function saveReport() {
+  writeFileSync(join(output, `${label}-report.json`), JSON.stringify(report, null, 2));
+  writeFileSync(join(output, `${label}-server.log`), serverLog);
+}
 
 async function capture(page, name, requests, errors) {
   await delay(550);
@@ -60,6 +64,7 @@ async function capture(page, name, requests, errors) {
   await session.detach();
   Object.assign(observation, { name, requests: [...requests], pageErrors: [...errors] });
   report.observations.push(observation);
+  saveReport();
   await page.screenshot({ path: join(output, `${label}-${name}.png`), fullPage: true });
   assert.equal(errors.length, 0, `${name}: page exception`);
   assert.ok(!requests.some(r => r.status >= 400), `${name}: failed API response`);
@@ -154,9 +159,12 @@ try {
             const nameValue = 'QA <Place> & "address"';
             await page.type('#automation-place-form [name="name"]', nameValue);
             await page.type('#automation-place-form [name="street_address"]', 'Example address');
-            const responsePromise = page.waitForResponse(r => r.url().endsWith('/api/v1/planning/admin/places') && r.request().method() === 'POST');
-            await page.click('#automation-place-form [type="submit"]');
-            const response = await responsePromise;
+            // The shared modal intentionally mounts its footer outside the form.
+            // Use the retained native form association, not DOM ancestry.
+            const [response] = await Promise.all([
+              page.waitForResponse(r => r.url().endsWith('/api/v1/planning/admin/places') && r.request().method() === 'POST'),
+              page.click('[type="submit"][form="automation-place-form"]'),
+            ]);
             assert.ok(response.ok(), 'Place form no longer saves');
             const body = await response.json();
             const place = body.data || body;
@@ -229,21 +237,22 @@ try {
   }
 } catch (error) {
   console.error(error);
+  report.errors.push(error.stack || String(error));
+  saveReport();
   if (currentPage && !currentPage.isClosed()) {
     await currentPage.screenshot({ path: join(output, `${label}-failure.png`), fullPage: true }).catch(() => {});
     report.failurePage = await currentPage.evaluate(() => ({ path: location.pathname, text: document.body.innerText })).catch(() => null);
   }
-  report.errors.push(error.stack || String(error));
   process.exitCode = 1;
 } finally {
-  if (browser) await browser.close();
+  saveReport();
+  if (browser) await browser.close().catch(error => console.error('Browser cleanup:', error));
   if (server && server.exitCode === null) {
     server.kill('SIGTERM');
     await Promise.race([new Promise(resolve => server.once('exit', resolve)), delay(3000)]);
     if (server.exitCode === null) server.kill('SIGKILL');
   }
-  writeFileSync(join(output, `${label}-report.json`), JSON.stringify(report, null, 2));
-  writeFileSync(join(output, `${label}-server.log`), serverLog);
+  saveReport();
   if (!output.startsWith(temporary + '/')) rmSync(temporary, { recursive: true, force: true });
   console.log(`Review artifacts: ${output}`);
 }

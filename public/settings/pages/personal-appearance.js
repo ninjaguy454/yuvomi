@@ -690,8 +690,10 @@ function bindEvents(container, user) {
 }
 
 export async function render(container, { user }) {
+  let renderAppearanceRevision = appearanceRevision();
   try {
     const loaded = await getPreferences();
+    if (!container.isConnected || appearanceRevision() !== renderAppearanceRevision) return;
     const preferences = {
       ...normalizeAppearancePreferences(loaded),
       currency: loaded.currency || 'EUR',
@@ -710,6 +712,7 @@ export async function render(container, { user }) {
 
     safeStorageSet('yuvomi-date-format', preferences.date_format);
     applyAppearancePreferences(preferences);
+    renderAppearanceRevision = appearanceRevision();
     safeStorageSet('yuvomi-time-format', preferences.time_format);
     setDisplayTimeZone(preferences.timezone);
     applyNumberLocale(preferences);
@@ -721,6 +724,7 @@ export async function render(container, { user }) {
     bindEvents(container, user);
     window.lucide?.createIcons({ el: container });
   } catch {
+    if (!container.isConnected || appearanceRevision() !== renderAppearanceRevision) return;
     renderLoadError(container);
     container.querySelector('#appearance-retry')?.addEventListener('click', () => {
       render(container, { user });

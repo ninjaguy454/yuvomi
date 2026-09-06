@@ -61,6 +61,9 @@ async function change(method, path, { refreshPanel = true } = {}) {
     dataVersion++;
     const response = await api[method](path, {});
     if (epoch !== generation || !privateSurface()) return false;
+    // Also invalidate polls that began while this write was in flight: their
+    // server read may precede the commit even if their response arrives later.
+    dataVersion++;
     accept(response.data);
     status('');
     if (refreshPanel && panel?.isConnected) renderItems();

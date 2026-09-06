@@ -215,6 +215,65 @@ test('sendPushToUser keeps sub on transient (500) error', async () => {
   assert.equal(db.prepare('SELECT COUNT(*) c FROM push_subscriptions').get().c, 1);
 });
 
+test('sendPushToUser rechecks pending browser ownership and current keys after another send', async (t) => {
+  for (const change of ['unsubscribe', 'switch-account', 'refresh-keys']) {
+    await t.test(change, async () => {
+      const db = makeDb();
+      t.after(() => db.close());
+      db.prepare(`INSERT INTO push_subscriptions (id,user_id,endpoint,p256dh,auth)
+        VALUES (1,1,'https://push/first','p','a'),(2,1,'https://push/second','old-p','old-a')`).run();
+      const webpush = makeWebpushMock();
+      const calls = [];
+      webpush.sendNotification = async (subscription, payload) => {
+        calls.push({ subscription, payload: JSON.parse(payload) });
+        if (subscription.endpoint === 'https://push/first') {
+          await Promise.resolve();
+          if (change === 'unsubscribe') db.prepare('DELETE FROM push_subscriptions WHERE id = 2').run();
+          if (change === 'switch-account') db.prepare('UPDATE push_subscriptions SET user_id = 2 WHERE id = 2').run();
+          if (change === 'refresh-keys') db.prepare("UPDATE push_subscriptions SET p256dh = 'new-p', auth = 'new-a' WHERE id = 2").run();
+        }
+        return { statusCode: 201 };
+      };
+      const sent = await createPushService({ db, webpush }).sendPushToUser(1, { body: 'Private to Alice' });
+      assert.equal(sent, change === 'refresh-keys' ? 2 : 1);
+      assert.equal(calls.length, sent);
+      assert.equal(calls[0].subscription.endpoint, 'https://push/first');
+      if (change === 'refresh-keys') {
+        assert.deepEqual(calls[1].subscription.keys, { p256dh: 'new-p', auth: 'new-a' });
+        assert.equal(calls[1].payload.body, 'Private to Alice');
+      }
+    });
+  }
+});
+
+test('in-flight push results cannot update or remove a rebound browser subscription', async (t) => {
+  for (const change of ['switch-account', 'refresh-keys']) {
+    for (const result of ['success', 'gone']) {
+      await t.test(`${change}: ${result}`, async () => {
+        const db = makeDb();
+        t.after(() => db.close());
+        db.prepare(`INSERT INTO push_subscriptions (id,user_id,endpoint,p256dh,auth,last_used_at)
+          VALUES (1,1,'https://push/device','old-p','old-a','2026-01-01T00:00:00Z')`).run();
+        const webpush = makeWebpushMock();
+        webpush.sendNotification = async () => {
+          await Promise.resolve();
+          if (change === 'switch-account') db.prepare('UPDATE push_subscriptions SET user_id = 2 WHERE id = 1').run();
+          else db.prepare("UPDATE push_subscriptions SET p256dh = 'new-p', auth = 'new-a' WHERE id = 1").run();
+          if (result === 'gone') throw Object.assign(new Error('gone old target'), { statusCode: 410 });
+          return { statusCode: 201 };
+        };
+        const sent = await createPushService({ db, webpush }).sendPushToUser(1, { title: 'T' });
+        assert.equal(sent, result === 'success' ? 1 : 0, 'retain accepted-send counting semantics');
+        const current = db.prepare('SELECT * FROM push_subscriptions WHERE id = 1').get();
+        assert.ok(current, 'the old target response must not remove a replacement');
+        assert.equal(current.user_id, change === 'switch-account' ? 2 : 1);
+        assert.equal(current.p256dh, change === 'refresh-keys' ? 'new-p' : 'old-p');
+        assert.equal(current.last_used_at, '2026-01-01T00:00:00Z');
+      });
+    }
+  }
+});
+
 async function startApp(db, webpush, userId = 1) {
   const app = express();
   app.use(express.json());

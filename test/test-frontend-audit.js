@@ -408,8 +408,17 @@ test('service worker release caches track package version and include the early 
   const release = sw.match(/const APP_RELEASE\s*=\s*['"]([^'"]+)['"]/)?.[1];
 
   assert.equal(release, pkg.version, 'Service worker APP_RELEASE must match package.json');
-  assert.match(sw, /const SHELL_CACHE\s*=\s*`yuvomi-shell-\$\{APP_RELEASE\}`/);
-  assert.match(sw, /const PAGES_CACHE\s*=\s*`yuvomi-pages-\$\{APP_RELEASE\}`/);
+  assert.match(sw, /const CACHE_VERSION\s*=\s*`\$\{APP_RELEASE\}-[^`]+`/,
+    'refinement assets need a distinct cache generation from the deployed package release');
+  const caches = Object.fromEntries([...sw.matchAll(/const (SHELL_CACHE|PAGES_CACHE|LOCALES_CACHE|ASSETS_CACHE|API_CACHE)\s*=\s*`([^`]+)`/g)]
+    .map((match) => [match[1], match[2]]));
+  assert.deepEqual(caches, {
+    SHELL_CACHE: 'yuvomi-shell-${CACHE_VERSION}',
+    PAGES_CACHE: 'yuvomi-pages-${CACHE_VERSION}',
+    LOCALES_CACHE: 'yuvomi-locales-${CACHE_VERSION}',
+    ASSETS_CACHE: 'yuvomi-assets-${CACHE_VERSION}',
+    API_CACHE: 'yuvomi-api-${CACHE_VERSION}',
+  });
   assert.match(sw, /['"]\/lang-init\.js['"]/, 'early lang/dir bootstrap must be available offline');
 });
 

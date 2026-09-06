@@ -1508,6 +1508,49 @@ test('email channels preserve household and individual reminder delivery scope',
   assert.ok(deliveries.every((delivery) => delivery.url === '/meals?open=1'));
 });
 
+test('queued provider targets honor current channel access after an earlier send', async (t) => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  for (const change of ['disable', 'delete', 'reassign', 'household', 'destination']) await t.test(change, async () => {
+    const db = makeDb();
+    const store = createNotificationChannelStore({ db });
+    const create = (name) => store.createChannel({ provider: 'email', name, enabled: true, scope: 'user', userId: 1,
+      config: { toAddress: `${name.toLowerCase()}@example.org` } });
+    const first = create('First');
+    const second = create('Second');
+    db.prepare("INSERT INTO tasks (id, title, created_by) VALUES (1, 'Private task content', 1)").run();
+    db.prepare("UPDATE tasks SET visibility = 'private' WHERE id = 1").run();
+    const notification = enqueueNotification(db, { userId: 1, sourceKey: `channel-race:${change}`, category: 'tasks',
+      entityType: 'task', entityId: 1, title: 'Task assigned', body: 'Private task content' });
+    const sends = [];
+    const options = { database: db, channelStore: store, pushService: { sendPushToUser: async () => 0 }, providers: {
+      email: { send: async ({ channel }) => {
+        sends.push({ id: channel.id, to: channel.config.toAddress });
+        if (channel.id === first.id) {
+          if (change === 'delete') store.deleteChannel(second.id);
+          else store.updateChannel(second.id, {
+            ...(change === 'disable' ? { enabled: false } : {}),
+            ...(change === 'reassign' ? { userId: 2 } : {}),
+            ...(change === 'household' ? { scope: 'household' } : {}),
+            ...(change === 'destination' ? { config: { toAddress: 'current@example.org' } } : {}),
+          });
+        }
+        return { ok: true };
+      } },
+    } };
+    await processDueNotifications(options);
+    assert.deepEqual(sends, change === 'destination'
+      ? [{ id: first.id, to: 'first@example.org' }, { id: second.id, to: 'current@example.org' }]
+      : [{ id: first.id, to: 'first@example.org' }]);
+    assert.ok(db.prepare('SELECT dispatched_at FROM notification_inbox WHERE id = ?').get(notification.id).dispatched_at);
+    assert.equal(db.prepare('SELECT status FROM notification_inbox_deliveries WHERE notification_id = ? AND channel_id = ?').get(notification.id, first.id).status, 'sent');
+    const count = sends.length;
+    await processDueNotifications(options);
+    assert.equal(sends.length, count, 'the accepted earlier target must not be resent');
+    db.close();
+  });
+});
+
 test('die Kanalliste meldet einen Anbieter als nicht einsatzbereit, bevor ein Test scheitert (#944)', async () => {
   const { buildRouter } = await import('../server/routes/notifications.js');
   const db = makeDb();

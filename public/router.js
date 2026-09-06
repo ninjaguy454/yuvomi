@@ -16,7 +16,8 @@ import { TOAST_SURFACES, toastSurface } from '/utils/toast-surface.js';
 import { BULK_PILL_LAYER, clearBulkPill } from '/utils/bulk-pill.js';
 import { init as initReminders, stop as stopReminders } from '/reminders.js';
 import { openNotificationCenter, paintNotificationBadges } from '/notification-center.js';
-import { applyAppearancePreferences, resetAppearancePreferences } from '/utils/appearance-preferences.js';
+import { applyAppearancePreferences, resetAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
+import { watchSessionChanges, sessionRevision } from '/utils/session-lifecycle.js';
 import { initPush, stopPush } from '/push.js';
 import { numberLocaleFor } from '/settings/region-presets.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
@@ -966,9 +967,13 @@ async function navigate(path, userOrPushState = true, pushState = true) {
 async function syncPreferencesOnce() {
   if (_preferencesLoaded) return;
   _preferencesLoaded = true;
+  const requestedUserId = currentUser?.id;
+  const requestedAppearanceRevision = appearanceRevision();
   try {
     const res = await api.get('/preferences');
-    applyAppearancePreferences(res?.data ?? {});
+    if (!currentUser || currentUser.id !== requestedUserId) return;
+    // Logout and a newer personal choice invalidate an older appearance read.
+    if (appearanceRevision() === requestedAppearanceRevision) applyAppearancePreferences(res?.data ?? {});
     const dateFormat = res?.data?.date_format;
     if (dateFormat) {
       localStorage.setItem('yuvomi-date-format', dateFormat);
@@ -4291,6 +4296,43 @@ function forgetSessionState() {
   stopPush();
   resetAppearancePreferences();
 }
+
+let sessionReloading = false;
+function refreshAfterSessionChange() {
+  if (sessionReloading) return;
+  sessionReloading = true;
+  forgetSessionState();
+  // Remove the former account's content while the new authenticated document loads.
+  document.getElementById('app')?.replaceChildren();
+  window.location.reload();
+}
+watchSessionChanges(refreshAfterSessionChange);
+
+// Reader/SSO can change the shared session without running this JavaScript.
+// Check only on resume, share concurrent checks, and preserve offline behavior.
+let resumeIdentityRequest = null;
+async function verifyResumedSession() {
+  if (resumeIdentityRequest || !currentUser || sessionReloading
+      || navigator.onLine === false || document.visibilityState === 'hidden') return;
+  const expectedUserId = currentUser.id;
+  const expectedRevision = sessionRevision();
+  resumeIdentityRequest = (async () => {
+    try {
+      const response = await api.get('/auth/me');
+      if (sessionRevision() !== expectedRevision || currentUser?.id !== expectedUserId) return;
+      if (response?.user?.id !== expectedUserId) refreshAfterSessionChange();
+    } catch { /* expiry uses auth:expired; network failures keep the offline view */ }
+    finally { resumeIdentityRequest = null; }
+  })();
+  await resumeIdentityRequest;
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void verifyResumedSession();
+});
+window.addEventListener('focus', () => { void verifyResumedSession(); });
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) void verifyResumedSession();
+});
 
 // Session abgelaufen
 window.addEventListener('auth:expired', () => {

@@ -45,11 +45,42 @@ function worker(caches = storage()) {
     for (const listener of listeners[type] || []) listener({ ...event, waitUntil: (promise) => waits.push(promise) });
     await Promise.all(waits);
   }
-  return { caches, dispatch, shown, navigated, closed: () => closed };
+  return { caches, dispatch, shown, navigated, clients, self, closed: () => closed };
 }
 
 const push = (env, payload = { title: 'Tasks', body: 'Private task', notificationId: 42 }) =>
   env.dispatch('push', { data: { json: () => payload } });
+
+test('first upgrade with no saved device privacy state suppresses personal push until verified', async () => {
+  const env = worker();
+  await push(env);
+  await env.dispatch('notificationclick', { notification: { data: { notificationId: 42 }, close() {} } });
+  assert.equal(env.shown.length, 0);
+  assert.deepEqual(env.navigated, []);
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
+  await push(env);
+  assert.equal(env.shown.length, 1);
+});
+
+test('shared-display privacy closes visible notifications even when storage cannot persist the flag', async () => {
+  const caches = storage();
+  const open = caches.open.bind(caches);
+  const oldCache = await open('yuvomi-device-privacy');
+  await oldCache.put('/shared-display', new Response('', { headers: { 'x-shared-display': '0' } }));
+  caches.open = async (name) => {
+    const cache = await open(name);
+    if (name === 'yuvomi-device-privacy') cache.put = async () => { throw new Error('Quota exceeded'); };
+    return cache;
+  };
+  const env = worker(caches);
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: true } });
+  assert.equal(env.closed(), 1);
+  await push(env);
+  assert.equal(env.shown.length, 0);
+  const restarted = worker(caches);
+  await push(restarted);
+  assert.equal(restarted.shown.length, 0);
+});
 
 test('shared-device suppression persists across worker restart, logout and upgrade', async () => {
   const first = worker();
@@ -67,6 +98,7 @@ test('shared-device suppression persists across worker restart, logout and upgra
 
 test('personal-device push carries its canonical inbox id and authenticated handoff', async () => {
   const env = worker();
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
   await push(env);
   assert.equal(env.shown.length, 1);
   assert.equal(env.shown[0].options.data.notificationId, 42);
@@ -80,6 +112,7 @@ test('shared-device clicks do not open personal content and external click targe
   await shared.dispatch('notificationclick', { notification: { data: { notificationId: 42 }, close() {} } });
   assert.deepEqual(shared.navigated, []);
   const env = worker();
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
   for (const url of ['https://unrelated.example.test/private', 'javascript:alert(1)', '//unrelated.example.test/']) {
     await env.dispatch('notificationclick', { notification: { data: { url }, close() {} } });
   }
@@ -95,4 +128,31 @@ test('the most recent shared-device setting survives rapid toggles', async () =>
   const restarted = worker(env.caches);
   await push(restarted);
   assert.equal(restarted.shown.length, 0);
+});
+
+test('a notification that finishes showing after wall mode starts is closed again', async () => {
+  const env = worker();
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
+  let finishShowing;
+  env.self.registration.showNotification = () => new Promise((resolve) => { finishShowing = resolve; });
+  const delivery = push(env);
+  await new Promise((resolve) => setImmediate(resolve));
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: true } });
+  const closedBeforeCompletion = env.closed();
+  finishShowing();
+  await delivery;
+  assert.equal(env.closed(), closedBeforeCompletion + 1);
+});
+
+test('wall mode enabled while finding a notification destination prevents navigation', async () => {
+  const env = worker();
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
+  let finishLookup;
+  env.clients.matchAll = () => new Promise((resolve) => { finishLookup = resolve; });
+  const click = env.dispatch('notificationclick', { notification: { data: { notificationId: 42 }, close() {} } });
+  await new Promise((resolve) => setImmediate(resolve));
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: true } });
+  finishLookup([{ focus() {}, navigate(url) { env.navigated.push(url); } }]);
+  await click;
+  assert.deepEqual(env.navigated, []);
 });

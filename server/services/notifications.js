@@ -432,10 +432,23 @@ async function runDueNotifications({
     }
 
     let cancelled = false;
+    const currentTargets = [];
     for (const target of targets) {
       // A previous provider was awaited. Re-read dismissal, access and source
       // state before handing this content to another external recipient.
       if (!deliveryStillAllowed(activeDb, notification)) { cancelled = true; break; }
+      if (target.send === 'provider') {
+        // The channel can also have changed while the previous target awaited:
+        // use its current destination/secrets and honor revocation or reassignment.
+        // Recheck before writing a delivery row, since deletion removes its FK.
+        const channel = store.getChannel(target.channelId, { includeSecrets: true });
+        const scopeAllowed = channel?.scope === 'household'
+          ? notification.delivery_scope === 'household'
+          : channel?.scope === 'user' && Number(channel.userId) === Number(notification.user_id);
+        if (!channel?.enabled || !scopeAllowed || channel.provider !== target.provider) continue;
+        target.channel = channel;
+      }
+      currentTargets.push(target);
       const delivery = upsertPendingDelivery(activeDb, {
         notificationId: notification.id,
         provider: target.provider,
@@ -474,7 +487,7 @@ async function runDueNotifications({
       }
     }
 
-    if (cancelled || allKnownDeliveriesComplete(activeDb, notification.id, targets)) {
+    if (cancelled || allKnownDeliveriesComplete(activeDb, notification.id, currentTargets)) {
       complete.run(nowIso, notification.id);
       if (notification.reminder_id) markPushed.run(nowIso, notification.reminder_id);
     }

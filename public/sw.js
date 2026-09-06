@@ -16,13 +16,16 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-const SHELL_CACHE   = `yuvomi-shell-${APP_RELEASE}`;
-const PAGES_CACHE   = `yuvomi-pages-${APP_RELEASE}`;
-const LOCALES_CACHE = `yuvomi-locales-${APP_RELEASE}`;
-const ASSETS_CACHE  = `yuvomi-assets-${APP_RELEASE}`;
+// Stage this refinement separately from the deployed Kitchen .5 caches so a
+// failed install cannot replace files still used by the active worker.
+const CACHE_VERSION = `${APP_RELEASE}-refinement.1`;
+const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
+const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
+const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
+const ASSETS_CACHE  = `yuvomi-assets-${CACHE_VERSION}`;
 // API-Cache bewusst NICHT in ALL_CACHES: er wird bei jedem SW-Update neu benannt
 // (Version im Namen) und bei Logout/Session-Ende gezielt geleert.
-const API_CACHE     = `yuvomi-api-${APP_RELEASE}`;
+const API_CACHE     = `yuvomi-api-${CACHE_VERSION}`;
 const BYPASS_CACHE  = 'yuvomi-bypass-flag';
 const DEVICE_PRIVACY_CACHE = 'yuvomi-device-privacy';
 const ALL_CACHES    = [SHELL_CACHE, PAGES_CACHE, LOCALES_CACHE, ASSETS_CACHE];
@@ -43,6 +46,7 @@ const APP_SHELL = [
   '/reminders.js',
   '/notification-center.js',
   '/utils/appearance-preferences.js',
+  '/utils/session-lifecycle.js',
   '/push.js',
   '/sw-register.js',
   '/utils/html-escape.js',
@@ -630,8 +634,14 @@ self.addEventListener('message', (event) => {
     const enabled = event.data.enabled;
     sharedDisplay = enabled;
     privacyUpdate = privacyUpdate.catch(() => {}).then(async () => {
-      const cache = await caches.open(DEVICE_PRIVACY_CACHE);
-      await cache.put('/shared-display', new Response('', { headers: { 'x-shared-display': enabled ? '1' : '0' } }));
+      try {
+        const cache = await caches.open(DEVICE_PRIVACY_CACHE);
+        await cache.put('/shared-display', new Response('', { headers: { 'x-shared-display': enabled ? '1' : '0' } }));
+      } catch {
+        // A quota failure must not leave an older permissive flag in place.
+        // Missing state is private by default on the next worker start.
+        if (enabled) await caches.delete(DEVICE_PRIVACY_CACHE).catch(() => {});
+      }
       if (enabled) {
         const notifications = await self.registration.getNotifications();
         for (const notification of notifications) notification.close();
@@ -652,7 +662,9 @@ const sharedDisplayReady = (async () => {
   try {
     const cache = await caches.open(DEVICE_PRIVACY_CACHE);
     const stored = await cache.match('/shared-display');
-    if (sharedDisplay === null) sharedDisplay = stored?.headers.get('x-shared-display') === '1';
+    // An upgrading installation has no flag yet. Only a verified personal
+    // session can explicitly allow device delivery; wall state may predate us.
+    if (sharedDisplay === null) sharedDisplay = stored?.headers.get('x-shared-display') !== '0';
   } catch {
     if (sharedDisplay === null) sharedDisplay = true;
   }
@@ -694,6 +706,12 @@ self.addEventListener('push', (event) => {
     await sharedDisplayReady;
     if (sharedDisplay) return;
     await self.registration.showNotification(title, options);
+    // Showing is asynchronous. A wall/privacy change may have closed the
+    // previous notifications before this one became visible.
+    if (sharedDisplay) {
+      const notifications = await self.registration.getNotifications();
+      for (const notification of notifications) notification.close();
+    }
   })());
 });
 
@@ -704,6 +722,7 @@ self.addEventListener('notificationclick', (event) => {
     await sharedDisplayReady;
     if (sharedDisplay) return;
     const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (sharedDisplay) return;
     for (const client of all) {
       if ('focus' in client) {
         client.focus();

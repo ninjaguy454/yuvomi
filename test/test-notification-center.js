@@ -116,3 +116,21 @@ test('enabling wall mode in another tab clears the current private inbox', async
   assert.equal(subject.getSnapshot().items.length, 0);
   assert.equal(await subject.refresh(), false);
 });
+
+test('a poll started during a read mutation cannot restore unread state after the write completes', async () => {
+  const { subject, context } = harness();
+  subject.init();
+  await subject.refresh();
+  let finishWrite, finishPoll;
+  context.api.patch = () => new Promise((resolve) => { finishWrite = resolve; });
+  const read = subject.openNotificationItem({ id: 42, url: '/tasks?open=4' });
+  await new Promise((resolve) => setImmediate(resolve));
+  context.api.get = () => new Promise((resolve) => { finishPoll = resolve; });
+  const poll = subject.refresh();
+  finishWrite({ data: { items: [{ id: 42, read_at: '2026-09-06T00:00:00Z' }], unreadCount: 0 } });
+  await read;
+  finishPoll({ data: { items: [{ id: 42, read_at: null }], unreadCount: 1 } });
+  await poll;
+  assert.equal(subject.getSnapshot().unreadCount, 0);
+  assert.ok(subject.getSnapshot().items[0].read_at);
+});

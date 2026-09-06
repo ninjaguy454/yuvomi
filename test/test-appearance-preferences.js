@@ -200,3 +200,95 @@ test('leaving Settings during a failed save still rolls back the unsaved global 
   assert.equal(ui.attrs.get('data-color-theme'), 'neutral');
   assert.equal(ui.error.hidden, true);
 });
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
+}
+
+function preferenceSyncHarness(response) {
+  const env = browser();
+  Object.assign(globalThis, { document: env.document, window: env.window, localStorage: env.localStorage, CustomEvent: env.CustomEvent });
+  const noop = () => {};
+  const context = vm.createContext({
+    _preferencesLoaded: false, currentUser: { id: 1 },
+    api: { get: (path) => path === '/preferences' ? response : Promise.resolve({}) },
+    localStorage: env.localStorage, applyAppearancePreferences, appearanceRevision,
+    setDisplayTimeZone: noop, numberLocaleFor: noop, setAppName: noop, setAppVersion: noop,
+    setMaxUploadBytes: noop, updateBranding: noop, syncThirdPartyModules: noop,
+  });
+  const source = readFileSync(new URL('../public/router.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async function syncPreferencesOnce()');
+  const end = source.indexOf('\nasync function syncThirdPartyModules()', start);
+  assert.ok(start > 0 && end > start);
+  vm.runInContext(source.slice(start, end), context);
+  return { ...env, context, run: () => vm.runInContext('syncPreferencesOnce()', context) };
+}
+
+test('startup appearance reads apply for their current account', async () => {
+  const ui = preferenceSyncHarness(Promise.resolve({ data: { color_theme: 'cool', heading_font: 'serif' } }));
+  await ui.run();
+  assert.equal(ui.attrs.get('data-color-theme'), 'cool');
+  assert.equal(ui.attrs.get('data-typography'), 'serif');
+});
+
+test('late startup preferences cannot restore the previous account after logout or account switch', async () => {
+  for (const nextUser of [null, { id: 2 }]) {
+    const request = deferred();
+    const ui = preferenceSyncHarness(request.promise);
+    const pending = ui.run();
+    resetAppearancePreferences();
+    ui.context.currentUser = nextUser;
+    if (nextUser) applyAppearancePreferences({ color_theme: 'cool', heading_font: 'default' });
+    request.resolve({ data: { color_theme: 'warm', heading_font: 'serif' } });
+    await pending;
+    assert.equal(ui.attrs.get('data-color-theme'), nextUser ? 'cool' : 'neutral');
+    assert.equal(ui.attrs.get('data-typography'), 'default');
+    if (!nextUser) assert.equal(ui.storage.has('yuvomi-appearance'), false);
+  }
+});
+
+test('late startup preferences cannot overwrite a newer appearance choice in the same account', async () => {
+  const request = deferred();
+  const ui = preferenceSyncHarness(request.promise);
+  const pending = ui.run();
+  applyAppearancePreferences({ color_theme: 'cool', heading_font: 'serif' });
+  request.resolve({ data: { color_theme: 'warm', heading_font: 'default' } });
+  await pending;
+  assert.equal(ui.attrs.get('data-color-theme'), 'cool');
+  assert.equal(ui.attrs.get('data-typography'), 'serif');
+});
+
+test('late Appearance page reads and failures stop after navigation or logout', async () => {
+  for (const detach of [false, true]) {
+    for (const fail of [false, true]) {
+      const env = browser();
+      Object.assign(globalThis, { document: env.document, window: env.window, localStorage: env.localStorage, CustomEvent: env.CustomEvent });
+      const request = deferred();
+      const container = { isConnected: true, querySelector: () => null };
+      let rendered = false;
+      const noop = () => {};
+      const context = vm.createContext({
+        container, appearanceRevision, applyAppearancePreferences, normalizeAppearancePreferences,
+        getPreferences: () => request.promise, safeStorageSet: noop, setDisplayTimeZone: noop, applyNumberLocale: noop,
+        renderPage: () => { rendered = true; }, renderLoadError: () => { rendered = true; }, bindEvents: noop, window: {},
+      });
+      const source = readFileSync(new URL('../public/settings/pages/personal-appearance.js', import.meta.url), 'utf8');
+      const start = source.indexOf('export async function render(');
+      assert.ok(start > 0);
+      vm.runInContext(source.slice(start).replace('export async', 'async'), context);
+      const pending = vm.runInContext('render(container, { user: { id: 1, role: "member" } })', context);
+      if (detach) container.isConnected = false;
+      resetAppearancePreferences();
+      if (fail) request.reject(new Error('Old request failed'));
+      else request.resolve({ color_theme: 'warm', heading_font: 'serif' });
+      await pending;
+      assert.equal(env.attrs.get('data-color-theme'), 'neutral');
+      assert.equal(env.attrs.get('data-typography'), 'default');
+      assert.equal(env.storage.has('yuvomi-appearance'), false);
+      assert.equal(rendered, false);
+    }
+  }
+});

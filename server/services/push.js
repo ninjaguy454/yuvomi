@@ -148,17 +148,27 @@ export function createPushService({ db, webpush = webpushDefault } = {}) {
     const { subject } = ensureVapid();
     const subs = getDb().prepare('SELECT * FROM push_subscriptions WHERE user_id = ?').all(userId);
     let sent = 0;
-    for (const sub of subs) {
+    for (const candidate of subs) {
+      // Another send may have awaited while this browser unsubscribed, changed
+      // accounts, or refreshed its keys. Only use the current owner's target.
+      const sub = getDb().prepare('SELECT * FROM push_subscriptions WHERE id = ? AND user_id = ?')
+        .get(candidate.id, userId);
+      if (!sub) continue;
       const subscription = { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } };
       try {
         await webpush.sendNotification(subscription, JSON.stringify(payload));
-        getDb().prepare('UPDATE push_subscriptions SET last_used_at = ? WHERE id = ?')
-          .run(new Date().toISOString(), sub.id);
+        // A result for old keys must not update or remove a replacement that
+        // subscribed while the network request was in flight.
+        getDb().prepare(`UPDATE push_subscriptions SET last_used_at = ?
+          WHERE id = ? AND user_id = ? AND endpoint = ? AND p256dh = ? AND auth = ?`)
+          .run(new Date().toISOString(), sub.id, userId, sub.endpoint, sub.p256dh, sub.auth);
         sent += 1;
       } catch (err) {
         if (err && (err.statusCode === 404 || err.statusCode === 410)) {
-          getDb().prepare('DELETE FROM push_subscriptions WHERE id = ?').run(sub.id);
-          log.info(`Removed gone push subscription ${sub.id} (${pushHost(sub.endpoint)})`);
+          const removed = getDb().prepare(`DELETE FROM push_subscriptions
+            WHERE id = ? AND user_id = ? AND endpoint = ? AND p256dh = ? AND auth = ?`)
+            .run(sub.id, userId, sub.endpoint, sub.p256dh, sub.auth);
+          if (removed.changes) log.info(`Removed gone push subscription ${sub.id} (${pushHost(sub.endpoint)})`);
         } else {
           // Statuscode und Body des Push-Dienstes mitloggen - ohne sie ist ein
           // abgelehnter Push (z. B. Apple 403 BadJwtToken) nicht diagnostizierbar.

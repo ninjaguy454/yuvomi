@@ -8,6 +8,7 @@ import { clearApiCache } from '/sw-register.js';
 import { setPermissions, clearPermissions } from '/permissions.js';
 import { setHouseholdSize, clearHouseholdSize } from '/utils/household.js';
 import { forgetLayoutHint } from '/utils/dashboard-layout-hint.js';
+import { broadcastSessionChange } from '/utils/session-lifecycle.js';
 
 const API_BASE = '/api/v1';
 
@@ -206,6 +207,7 @@ const auth = {
     const res = await api.post('/auth/login', { username, password });
     setPermissions(res?.permissions);
     setHouseholdSize(res?.householdSize);
+    if (res?.user) broadcastSessionChange('login');
     return res;
   },
   // Zweiter Schritt der Anmeldung (#672). Der Code darf ein TOTP-Code oder ein
@@ -214,6 +216,7 @@ const auth = {
     const res = await api.post('/auth/2fa/verify', { code });
     setPermissions(res?.permissions);
     setHouseholdSize(res?.householdSize);
+    if (res?.user) broadcastSessionChange('login');
     return res;
   },
   // Verwaltung des eigenen zweiten Faktors.
@@ -237,6 +240,7 @@ const auth = {
       // Anordnung jeder Person gehört (#585), sagt er am geteilten Tablett
       // sonst das Raster des vorigen Nutzers voraus.
       forgetLayoutHint();
+      broadcastSessionChange('logout');
     }
   },
   me: async () => {

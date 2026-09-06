@@ -122,9 +122,11 @@ function loadSw({ fetchImpl } = {}) {
     parseInt, console,
   };
   sandbox.globalThis = sandbox;
-  runInContext(SRC, createContext(sandbox));
+  const context = createContext(sandbox);
+  runInContext(SRC, context);
   return {
     listeners, caches: cacheStorage,
+    cacheNames: runInContext('({ SHELL_CACHE, API_CACHE })', context),
     setFetch: (f) => { ctl.fetchImpl = f; },
   };
 }
@@ -264,8 +266,7 @@ test('Reader navigations never cache or reuse authenticated HTML, including old 
 test('logout and worker activation remove legacy Reader pages while preserving the app shell', async () => {
   for (const trigger of ['logout', 'activate']) {
     const env = loadSw();
-    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-    const cache = await env.caches.open(`yuvomi-shell-${pkg.version}`);
+    const cache = await env.caches.open(env.cacheNames.SHELL_CACHE);
     const reader = new MockRequest(`${ORIGIN}/reader?view=meals`);
     const shell = new MockRequest(`${ORIGIN}/index.html`);
     await cache.put(reader, new MockResponse('Old Reader household'));
@@ -335,18 +336,17 @@ test('activate entfernt alte Vorversions- und Legacy-oikos-Caches, behält aktue
   const env = loadSw();
   // Vorzustand: alter API-Cache, ein Legacy-`oikos-*`-Cache aus der Zeit vor dem
   // Yuvomi-Rename + aktueller Shell- und API-Cache der laufenden Version.
-  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   await env.caches.open('yuvomi-api-0.0.1');                 // Vorversion → löschen
   await env.caches.open('oikos-shell-0.0.1');               // Legacy-Rename → löschen
-  await env.caches.open(`yuvomi-shell-${pkg.version}`);     // aktuell → behalten
-  await env.caches.open(`yuvomi-api-${pkg.version}`);       // aktuell → behalten
+  await env.caches.open(env.cacheNames.SHELL_CACHE);        // aktuell → behalten
+  await env.caches.open(env.cacheNames.API_CACHE);          // aktuell → behalten
 
   await dispatchActivate(env);
 
   assert.equal(await env.caches.has('yuvomi-api-0.0.1'), false, 'alter API-Cache muss weg sein');
   assert.equal(await env.caches.has('oikos-shell-0.0.1'), false, 'Legacy-oikos-Cache muss weg sein');
-  assert.equal(await env.caches.has(`yuvomi-shell-${pkg.version}`), true, 'aktueller Shell-Cache bleibt');
-  assert.equal(await env.caches.has(`yuvomi-api-${pkg.version}`), true, 'aktueller API-Cache bleibt');
+  assert.equal(await env.caches.has(env.cacheNames.SHELL_CACHE), true, 'aktueller Shell-Cache bleibt');
+  assert.equal(await env.caches.has(env.cacheNames.API_CACHE), true, 'aktueller API-Cache bleibt');
 });
 
 test('im Bypass-Fenster (nach SW-Update) wird die API nicht gecacht', async () => {

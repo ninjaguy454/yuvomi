@@ -163,6 +163,22 @@ const FOCUSABLE = [
 // Dateneingabe gehört.
 const FIRST_FIELD = 'input:not([type="hidden"]):not([disabled]), textarea:not([disabled]), select:not([disabled])';
 
+// Detail/Edit panes and advanced sections keep their controls in the DOM.
+// Only controls the browser can currently focus belong in the Tab boundary.
+function visibleFocusable(container, selector = FOCUSABLE) {
+  return Array.from(container.querySelectorAll(selector)).filter((el) => {
+    if (el.type === 'hidden' || el.tabIndex < 0 || el.matches(':disabled')) return false;
+    if (el.closest('[hidden], [inert]') || !el.getClientRects().length) return false;
+    const visibility = getComputedStyle(el).visibility;
+    return visibility !== 'hidden' && visibility !== 'collapse';
+  });
+}
+
+function focusPanel(panel) {
+  panel.setAttribute('tabindex', '-1');
+  panel.focus();
+}
+
 // --------------------------------------------------------
 // Focus-Trap (Spec §5.2)
 // --------------------------------------------------------
@@ -171,15 +187,19 @@ function trapFocus(container, initialFocus = 'first-field') {
   focusTrapHandler = (e) => {
     // Tab-Trap: Fokus innerhalb des Modals halten
     if (e.key === 'Tab') {
-      const focusable = container.querySelectorAll(FOCUSABLE);
-      if (!focusable.length) return;
+      const focusable = visibleFocusable(container);
+      if (!focusable.length) {
+        e.preventDefault();
+        focusPanel(container);
+        return;
+      }
       const first = focusable[0];
       const last  = focusable[focusable.length - 1];
 
-      if (e.shiftKey && document.activeElement === first) {
+      if (e.shiftKey && (document.activeElement === first || !focusable.includes(document.activeElement))) {
         e.preventDefault();
         last.focus();
-      } else if (!e.shiftKey && document.activeElement === last) {
+      } else if (!e.shiftKey && (document.activeElement === last || !focusable.includes(document.activeElement))) {
         e.preventDefault();
         first.focus();
       }
@@ -240,7 +260,7 @@ function applyInitialFocus(container, initialFocus) {
     return;
   }
 
-  const first = container.querySelector(FIRST_FIELD) ?? container.querySelector(FOCUSABLE);
+  const first = visibleFocusable(container, FIRST_FIELD)[0] ?? visibleFocusable(container)[0];
   if (first) {
     setTimeout(() => first.focus(), 50);
   }
@@ -272,7 +292,7 @@ export function focusFirstField(panel) {
     }
   }
 
-  const target = panel.querySelector(FIRST_FIELD) ?? panel.querySelector(FOCUSABLE);
+  const target = visibleFocusable(panel, FIRST_FIELD)[0] ?? visibleFocusable(panel)[0];
   target?.focus();
   return target ?? null;
 }
@@ -283,7 +303,14 @@ export function focusFirstField(panel) {
 
 function serializeForm(container) {
   const inputs = container.querySelectorAll('input:not([type="file"]), select, textarea');
-  return Array.from(inputs).map((el) => `${el.name || el.id}=${el.value}`).join('&');
+  return JSON.stringify(Array.from(inputs, (el) => {
+    const value = el.type === 'checkbox' || el.type === 'radio'
+      ? [el.value, el.checked]
+      : el.multiple && el.tagName === 'SELECT'
+        ? Array.from(el.selectedOptions, (option) => option.value)
+        : el.value;
+    return [el.name || el.id, value];
+  }));
 }
 
 function isFormDirty(container) {

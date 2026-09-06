@@ -27,11 +27,28 @@ function footer(primaryLabel = 'Save') {
   </div>`;
 }
 
+let inputRowSequence = 0;
+
 function inputRow(label, control, hint = '') {
+  const field = control.match(/<(?:input|select|textarea)\b[^>]*>/i);
+  const rowId = `automation-field-${++inputRowSequence}`;
+  const fieldId = field?.[0].match(/\sid=(["'])(.*?)\1/i)?.[2] || rowId;
+  const hintId = `${rowId}-hint`;
+  if (field) {
+    let tag = field[0];
+    if (!/\sid=/i.test(tag)) tag = tag.replace(/\s*\/?>(?=$)/, ` id="${fieldId}">`);
+    if (hint) {
+      const describedBy = tag.match(/\saria-describedby=(["'])(.*?)\1/i);
+      tag = describedBy
+        ? tag.replace(describedBy[0], ` aria-describedby="${describedBy[2]} ${hintId}"`)
+        : tag.replace(/\s*\/?>(?=$)/, ` aria-describedby="${hintId}">`);
+    }
+    control = control.replace(field[0], tag);
+  }
   return `<div class="form-group">
-    <label class="label">${h(label)}</label>
+    ${field ? `<label class="label" for="${fieldId}">${h(label)}</label>` : `<span class="label">${h(label)}</span>`}
     ${control}
-    ${hint ? `<small class="form-hint">${h(hint)}</small>` : ''}
+    ${hint ? `<small class="form-hint" id="${hintId}">${h(hint)}</small>` : ''}
   </div>`;
 }
 
@@ -316,7 +333,7 @@ function workflowVariableId(question) {
 
 function renderRuntimeQuestion(question, members, places) {
   const key = h(workflowVariableId(question));
-  const label = h(question.label || workflowVariableId(question));
+  const label = question.label || workflowVariableId(question);
   if (question.type === 'boolean') {
     return inputRow(label, `<select class="input" name="input_${key}" data-runtime-input="${key}" data-type="boolean">
       <option value="false">No</option><option value="true">Yes</option>
@@ -808,7 +825,7 @@ function customTripTaskRow() {
   </div>`;
 }
 
-export async function renderTripsManager(body, manager) {
+export async function renderTripsManager(body, manager, { openTripId = null } = {}) {
   const [tripsResponse, context] = await Promise.all([api.get('/planning/trips'), api.get('/planning/admin/context')]);
   const trips = tripsResponse.data || [];
   replaceHtml(body, `${managerHeader('Trips and itineraries', 'automation-add-trip', 'Plan trip')}
@@ -822,18 +839,44 @@ export async function renderTripsManager(body, manager) {
     try { await api.delete(`/planning/admin/trips/${trip.id}`); toast('Trip deleted.'); await refreshAutomationManager(manager, 'trips'); }
     catch (error) { toast(error.message, 'danger'); }
   }));
-  body.querySelectorAll('[data-view-trip]').forEach((button) => button.addEventListener('click', async () => {
+  const showItinerary = async (button) => {
     const target = body.querySelector(`[data-trip-itinerary="${button.dataset.viewTrip}"]`);
-    if (target.dataset.loaded === '1') { target.hidden = !target.hidden; return; }
+    if (target.dataset.loaded === '1') {
+      target.hidden = !target.hidden;
+      button.setAttribute('aria-expanded', String(!target.hidden));
+      return;
+    }
     button.disabled = true;
+    target.textContent = 'Loading itinerary…';
+    target.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
     try {
       const response = await api.get(`/planning/trips/${button.dataset.viewTrip}/itinerary`);
       const days = response.data?.days || {};
+      target.replaceChildren();
       target.insertAdjacentHTML('beforeend', `<div class="automation-workflow-condition" style="margin-top:var(--space-3)">${Object.entries(days).map(([date, day]) => `<div><strong>${h(date)}</strong><ul>${day.stages.map((item) => `<li>${h(item.title)}</li>`).join('')}${day.events.map((item) => `<li>Calendar: ${h(item.title)}</li>`).join('')}${day.meals.map((item) => `<li>Meal: ${h(item.title)}</li>`).join('')}${day.tasks.map((item) => `<li>Task: ${h(item.title)}</li>`).join('')}</ul></div>`).join('') || '<p class="form-hint">No itinerary items in the travel window.</p>'}</div>`);
       target.dataset.loaded = '1';
     } catch (error) { target.textContent = error.message; }
     finally { button.disabled = false; }
-  }));
+  };
+  const buttons = [...body.querySelectorAll('[data-view-trip]')];
+  for (const button of buttons) {
+    const target = body.querySelector(`[data-trip-itinerary="${button.dataset.viewTrip}"]`);
+    target.id = `trip-itinerary-${button.dataset.viewTrip}`;
+    target.hidden = true;
+    button.setAttribute('aria-controls', target.id);
+    button.setAttribute('aria-expanded', 'false');
+    button.addEventListener('click', () => showItinerary(button));
+  }
+  const requestedId = Number(openTripId);
+  const requestedButton = Number.isInteger(requestedId) && requestedId > 0
+    ? buttons.find((button) => Number(button.dataset.viewTrip) === requestedId)
+    : null;
+  if (requestedButton) {
+    await showItinerary(requestedButton);
+    requestedButton.closest('[data-trip-row]')?.scrollIntoView({ block: 'nearest' });
+    requestedButton.focus({ preventScroll: true });
+  }
 }
 
 function openTripForm(trip, context, manager) {

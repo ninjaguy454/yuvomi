@@ -627,8 +627,10 @@ router.get('/calendar-context', (req, res) => {
     `).all(from, to).filter((meal) => meal.scheduled_time || meal.preferred_time).map((meal) => {
       const time = meal.scheduled_time || meal.preferred_time;
       const start = `${meal.date}T${time}:00`;
-      const endDate = new Date(start);
-      endDate.setMinutes(endDate.getMinutes() + (Number(meal.expected_duration_minutes) || 60));
+      // Both Calendar fields are household wall times. UTC arithmetic preserves
+      // those values and midnight rollover independently of the server's zone.
+      const endDate = new Date(`${start}Z`);
+      endDate.setUTCMinutes(endDate.getUTCMinutes() + (Number(meal.expected_duration_minutes) || 60));
       const assigned = database.prepare(`SELECT u.id, u.display_name, u.avatar_color AS color FROM meal_participants mp JOIN users u ON u.id = mp.user_id WHERE mp.meal_id = ? AND mp.role = 'participant' AND mp.status IN ('participating','needs_confirmation') ORDER BY u.display_name`).all(meal.id);
       return {
         id: -Number(meal.id), title: `${meal.meal_type}: ${meal.title}`, description: meal.notes,

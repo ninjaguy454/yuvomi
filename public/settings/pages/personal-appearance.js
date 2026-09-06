@@ -10,6 +10,7 @@ import { getPreferences, savePreferences } from '/settings/preferences-cache.js'
 import { toggleRowHtml } from '/settings/components.js';
 import { isWallModeEnabled, setWallModeEnabled } from '/utils/wall-mode.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
+import { applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
 import {
   CUSTOM_REGION,
   REGION_CODES,
@@ -213,6 +214,7 @@ function renderLoadError(container) {
  */
 function renderPage(container, preferences, isAdmin) {
   const theme = currentTheme();
+  const appearance = normalizeAppearancePreferences(preferences);
   const activeRegion = resolveRegion(preferences);
   const customHidden = isAdmin && activeRegion !== CUSTOM_REGION;
   container.replaceChildren();
@@ -220,7 +222,8 @@ function renderPage(container, preferences, isAdmin) {
     <section class="settings-section">
       <h2 class="settings-section__title">${t('settings.sectionDesign')}</h2>
       <div class="settings-card">
-        <div class="theme-toggle" id="theme-toggle">
+        <p class="form-label" id="appearance-mode-label">${t('appearanceOptions.appearance')}</p>
+        <div class="theme-toggle" id="theme-toggle" role="group" aria-labelledby="appearance-mode-label">
           <button class="theme-toggle__btn ${theme === 'system' ? 'theme-toggle__btn--active' : ''}" type="button" data-theme-value="system" aria-label="${t('settings.themeSysLabel')}" aria-pressed="${theme === 'system'}">
             <i data-lucide="monitor" class="icon-md" aria-hidden="true"></i>
             ${t('settings.themeSystem')}
@@ -234,6 +237,23 @@ function renderPage(container, preferences, isAdmin) {
             ${t('settings.themeDark')}
           </button>
         </div>
+      </div>
+      <div class="settings-card">
+        <div class="form-group">
+          <label class="form-label" for="color-theme-select">${t('appearanceOptions.theme')}</label>
+          <select class="form-input" id="color-theme-select" aria-describedby="color-theme-hint appearance-choice-error">
+            ${['warm', 'neutral', 'cool'].map((value) => `<option value="${value}"${appearance.color_theme === value ? ' selected' : ''}>${t(`appearanceOptions.${value}`)}</option>`).join('')}
+          </select>
+          <p class="form-hint" id="color-theme-hint">${t('appearanceOptions.themeHint')}</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="heading-font-select">${t('appearanceOptions.typography')}</label>
+          <select class="form-input" id="heading-font-select" aria-describedby="heading-font-hint appearance-choice-error">
+            ${['default', 'serif'].map((value) => `<option value="${value}"${appearance.heading_font === value ? ' selected' : ''}>${t(`appearanceOptions.${value}`)}</option>`).join('')}
+          </select>
+          <p class="form-hint" id="heading-font-hint">${t('appearanceOptions.typographyHint')}</p>
+        </div>
+        <p class="form-error" id="appearance-choice-error" role="alert" hidden></p>
       </div>
       <!-- DER WAND-MODUS WOHNT HIER UND NICHT IM ANPASSEN-PANEL.
            Er ist wie Theme und Sprache GERÄTELOKAL (localStorage) - das
@@ -413,6 +433,39 @@ async function refreshDataLanguageOptions(container) {
 }
 
 function bindEvents(container, user) {
+  const colorSelect = container.querySelector('#color-theme-select');
+  const fontSelect = container.querySelector('#heading-font-select');
+  let savedAppearance = normalizeAppearancePreferences({ color_theme: colorSelect?.value, heading_font: fontSelect?.value });
+  const saveAppearance = async () => {
+    const errorElement = container.querySelector('#appearance-choice-error');
+    clearError(errorElement);
+    const requested = { color_theme: colorSelect.value, heading_font: fontSelect.value };
+    applyAppearancePreferences(requested);
+    const previewRevision = appearanceRevision();
+    colorSelect.disabled = true;
+    fontSelect.disabled = true;
+    try {
+      await savePreferences(requested);
+      savedAppearance = requested;
+      if (container.isConnected) window.yuvomi?.showToast(t('appearanceOptions.saved'), 'success');
+    } catch (error) {
+      // A failed save must not appear persisted. Do not restore stale personal
+      // colors after logout or after the settings page has been replaced.
+      if (appearanceRevision() === previewRevision) applyAppearancePreferences(savedAppearance);
+      if (container.isConnected) {
+        colorSelect.value = savedAppearance.color_theme;
+        fontSelect.value = savedAppearance.heading_font;
+        showError(errorElement, error.message);
+      }
+    } finally {
+      if (container.isConnected) {
+        colorSelect.disabled = false;
+        fontSelect.disabled = false;
+      }
+    }
+  };
+  colorSelect?.addEventListener('change', saveAppearance);
+  fontSelect?.addEventListener('change', saveAppearance);
   const themeToggle = container.querySelector('#theme-toggle');
   themeToggle?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-theme-value]');
@@ -640,6 +693,7 @@ export async function render(container, { user }) {
   try {
     const loaded = await getPreferences();
     const preferences = {
+      ...normalizeAppearancePreferences(loaded),
       currency: loaded.currency || 'EUR',
       date_format: loaded.date_format || 'dmy',
       time_format: loaded.time_format || '24h',
@@ -655,6 +709,7 @@ export async function render(container, { user }) {
     };
 
     safeStorageSet('yuvomi-date-format', preferences.date_format);
+    applyAppearancePreferences(preferences);
     safeStorageSet('yuvomi-time-format', preferences.time_format);
     setDisplayTimeZone(preferences.timezone);
     applyNumberLocale(preferences);

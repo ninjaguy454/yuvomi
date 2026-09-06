@@ -541,6 +541,7 @@ let state = {
   // Fehlerobjekt des letzten Bereichs-Ladeversuchs, oder null. Nicht `true`:
   // `mountLoadError` liest daraus den Statuscode.
   loadError:     null,
+  failedLayers:  [],
   today:         '',
   cursor:        null,     // aktuell angezeigte Referenz-Datum (YYYY-MM-DD)
   events:        [],
@@ -1162,20 +1163,35 @@ function fetchWindow(from, to) {
   return { from: addLocalDays(from, -1), to: addLocalDays(to, 1) };
 }
 
+async function loadOptionalLayer(path, fallback = []) {
+  try {
+    return { data: (await api.get(path)).data ?? fallback, failed: false };
+  } catch (err) {
+    // Restricted modules are intentionally absent; a temporary failure is not
+    // an empty calendar and needs a visible retry path.
+    return { data: fallback, failed: ![401, 403].includes(err.status) };
+  }
+}
+
 async function loadRange(from, to) {
   const win     = fetchWindow(from, to);
   const calPath = `/calendar?from=${win.from}&to=${win.to}`;
   try {
     const [evRes, taskRes, holRes, scheduleRes, planningRes] = await Promise.all([
       api.get(calPath),
-      api.get("/tasks?include_future=1").catch((err) => { console.warn("[Calendar] Tasks fetch failed:", err); return { data: [] }; }),
-      api.get(`/calendar/holidays?from=${from}&to=${to}`).catch(() => ({ data: [] })),
+      window.yuvomi?.isModuleDisabled?.('tasks')
+        ? Promise.resolve({ data: [] })
+        : loadOptionalLayer('/tasks?include_future=1'),
+      loadOptionalLayer(`/calendar/holidays?from=${from}&to=${to}`),
       scheduleEnabled()
-        ? api.get(`/schedule/entries?from=${from}&to=${to}`).catch(() => ({ data: { entries: [] } }))
+        ? loadOptionalLayer(`/schedule/entries?from=${from}&to=${to}`, { entries: [] })
         : Promise.resolve({ data: { entries: [] } }),
-      api.get(`/planning/calendar-context?from=${from}&to=${to}`).catch(() => ({ data: [] })),
+      loadOptionalLayer(`/planning/calendar-context?from=${from}&to=${to}`),
     ]);
     state.loadError = null;
+    state.failedLayers = [
+      ['tasks', taskRes], ['holidays', holRes], ['schedule', scheduleRes], ['planning', planningRes],
+    ].filter(([, response]) => response.failed).map(([layer]) => layer);
     state.events = [...(evRes.data ?? []).map(localizeBirthdayEvent), ...(planningRes.data ?? [])];
     state.tasks = filterTasksForCalendar(taskRes.data ?? []);
     state.holidays = holRes.data ?? [];
@@ -1190,6 +1206,7 @@ async function loadRange(from, to) {
     // die Einkauf und Essensplan 2026-07-30 hatten (Critique P0). `renderView`
     // prueft das Feld jetzt vor allen vier Ansichten.
     state.loadError = err;
+    state.failedLayers = [];
     state.events   = [];
     state.tasks    = [];
     state.holidays = [];
@@ -1246,9 +1263,11 @@ async function reloadCalendarEventsOnly() {
     const win = fetchWindow(state.rangeFrom, state.rangeTo);
     const [res, planning] = await Promise.all([
       api.get(`/calendar?from=${win.from}&to=${win.to}`),
-      api.get(`/planning/calendar-context?from=${state.rangeFrom}&to=${state.rangeTo}`).catch(() => ({ data: [] })),
+      loadOptionalLayer(`/planning/calendar-context?from=${state.rangeFrom}&to=${state.rangeTo}`),
     ]);
     state.events = [...(res.data ?? []).map(localizeBirthdayEvent), ...(planning.data ?? [])];
+    state.failedLayers = state.failedLayers.filter((layer) => layer !== 'planning');
+    if (planning.failed) state.failedLayers.push('planning');
   } catch (err) {
     console.error('[Calendar] reloadCalendarEventsOnly Fehler:', err);
   }
@@ -1316,7 +1335,7 @@ function wireCalendarPlanningTabs(container) {
   }));
 }
 
-async function renderCalendarPlanningSection(container, section, user) {
+async function renderCalendarPlanningSection(container, section, user, openTripId = null) {
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `<div class="calendar-planning-page page-measure--narrow">
     <div class="page-toolbar page-toolbar--wrap page-toolbar--narrow"><h1 class="page-toolbar__title">Calendar</h1></div>
@@ -1332,7 +1351,7 @@ async function renderCalendarPlanningSection(container, section, user) {
   }
   const manager = { navigate: async () => {
     if (section === 'availability') await renderAvailabilityManager(host, manager);
-    else await renderTripsManager(host, manager);
+    else await renderTripsManager(host, manager, { openTripId });
   } };
   await manager.navigate();
   if (window.lucide) window.lucide.createIcons({ el: container });
@@ -1341,7 +1360,7 @@ async function renderCalendarPlanningSection(container, section, user) {
 export async function render(container, { user }) {
   const requestedSection = new URLSearchParams(window.location.search).get('section');
   if (['availability', 'trips'].includes(requestedSection)) {
-    await renderCalendarPlanningSection(container, requestedSection, user);
+    await renderCalendarPlanningSection(container, requestedSection, user, new URLSearchParams(window.location.search).get('open'));
     return;
   }
   _container = container;
@@ -1755,6 +1774,37 @@ function updateOfflineNotice() {
   if (window.lucide) lucide.createIcons({ el: page.querySelector('#cal-offline-notice') });
 }
 
+function updatePartialLoadNotice() {
+  const page = _container?.querySelector('#calendar-page');
+  if (!page) return;
+  page.querySelector('#cal-partial-notice')?.remove();
+  if (state.loadError || !state.failedLayers.length) return;
+  const body = page.querySelector('#cal-body');
+  body?.insertAdjacentHTML('beforebegin', `
+    <div class="cal-offline-notice cal-partial-notice" id="cal-partial-notice" role="status">
+      <span>${esc(t('calendar.partialLoad'))}</span>
+      <button type="button" class="btn btn--secondary btn--sm" data-calendar-retry>${esc(t('common.retry'))}</button>
+    </div>`);
+  page.querySelector('[data-calendar-retry]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
+    const hadFocus = document.activeElement === button;
+    button.disabled = true;
+    try {
+      await loadRange(state.rangeFrom, state.rangeTo);
+      if (!page.isConnected) return;
+      const restoreFocus = hadFocus && (document.activeElement === button || document.activeElement === document.body);
+      renderView();
+      if (restoreFocus) {
+        const target = page.querySelector('[data-calendar-retry]') ?? page.querySelector('#cal-body');
+        if (target?.id === 'cal-body') target.setAttribute('tabindex', '-1');
+        target?.focus();
+      }
+    } finally {
+      if (button.isConnected) button.disabled = false;
+    }
+  });
+}
+
 // --------------------------------------------------------
 // Monatszellen-Kapazität (Audit P2)
 // --------------------------------------------------------
@@ -1830,6 +1880,7 @@ function scheduleMonthFit(grid) {
 function renderView() {
   const body = _container.querySelector('#cal-body');
   if (!body) return;
+  updatePartialLoadNotice();
   /* Das Lesemass der Seite folgt der ANSICHT, denn hier wechselt der Koerper
    * seine Natur: die Agenda ist eine Zeilenliste und will die Lesebahn, das
    * Monatsgitter ist eine Flaeche und will die ganze Content-Spalte. Ein
@@ -3066,6 +3117,12 @@ async function openFoundEvent(ev) {
 }
 
 export const __test = {
+  loadRange,
+  loadOptionalLayer,
+  calendarLoadSnapshot: () => ({
+    events: state.events, tasks: state.tasks, failedLayers: state.failedLayers,
+    loadError: state.loadError, holidays: state.holidays, scheduleEntries: state.scheduleEntries,
+  }),
   fetchWindow,
   resolveEventColor,
   isVisibleLayer,

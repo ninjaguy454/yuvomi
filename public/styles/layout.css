@@ -4925,7 +4925,7 @@ p.field-hint--warn[hidden] {
   box-sizing: border-box;
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-sm);
-  border: 1.5px solid var(--color-border);
+  border: 1.5px solid var(--color-border-control);
   background-color: var(--color-surface);
   color: var(--color-text-primary);
   font-size: var(--text-base);
@@ -5004,6 +5004,16 @@ textarea::placeholder {
   font-weight: var(--font-weight-bold);
   line-height: 1;
 }
+
+/* Shared form hints also appear in Kitchen and other modules that do not load
+   settings.css. Keep their typography and status colors available everywhere. */
+.form-hint {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+}
+
+.form-hint--success { color: var(--color-success); }
+.form-hint--danger { color: var(--color-danger); }
 
 .form-group {
   display: flex;

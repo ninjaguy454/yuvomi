@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 import { SETTINGS_DOMAINS, SETTINGS_LEAVES } from '../public/settings/registry.js';
 import { eachRule } from './css-rules.js';
 import { withoutHtmlComments, withoutBlockComments } from './source-text.js';
@@ -2147,12 +2148,13 @@ test('settings rows programmatically label form controls and preserve descriptio
   assert.match(source, /formControl\.setAttribute\('aria-describedby'/);
 });
 
-test('push client re-registers an orphaned subscription', () => {
+test('push client verifies device ownership and leaves subscription repair explicit', () => {
   const source = read('../public/push.js');
 
-  // App-Start: bestehendes Abo nachregistrieren, sonst bleibt ein serverseitig
-  // entferntes Abo (410, DB-Restore) dauerhaft stumm.
-  assert.match(source, /if \(st\.subscribed\) await resyncSubscription\(\)/);
+  // A browser may outlive its signed-in user. Runtime privacy and async races
+  // are exercised against this module in test-push-client-privacy.js.
+  assert.match(source, /await pushStatus\(\)/);
+  assert.match(source, /api\.post\('\/push\/status'/);
   assert.match(source, /async function resyncSubscription\(\)/);
   assert.match(source, /api\.post\('\/push\/subscribe', sub\.toJSON\(\)\)/);
   // Reparatur erkennt ein Abo auf einem veralteten VAPID-Key und legt es neu an.
@@ -5499,28 +5501,18 @@ test('die Touch-Zielgröße folgt DESIGN.md statt einer dritten Zahl', () => {
 });
 
 /**
- * Nicht-Text-Kontrast: gemessen, dokumentiert, bewusst offen.
- *
- * Die Kanten der Bedienelemente erreichen die 3:1 aus WCAG 1.4.11 nicht. Der
- * Betreiber hat am 2026-07-30 entschieden, das vorerst nur zu dokumentieren
- * statt --color-border anzuheben - die Änderung ginge durch jedes Modul.
- *
- * Der Guard hält die MESSUNG fest, nicht den Fix: verschwindet der Kommentar,
- * verschwindet auch das Wissen, warum die Zahl so steht. Messwerte und Zielwert
- * sind mit dem HIG-Rollout (2026-08) neu erhoben worden - die alte Zahlenreihe
- * galt gegen die warme Prä-Redesign-Palette und wäre gegen die kühle
- * iOS-27-Rampe schlicht falsch.
+ * Bedienelemente und dekorative Kartenkanten haben getrennte Rollen.
+ * test-appearance-preferences.js misst den Kontrollrand in allen sechs Paletten
+ * gegen die Eingabefläche (mindestens 3:1); dieser Guard schützt die Verwendung.
  */
-test('der offene Nicht-Text-Kontrast bleibt an den Tokens dokumentiert', () => {
+test('Bedienelemente verwenden den kontrastreichen Rand ohne Kartenkanten zu verändern', () => {
   const tokens = read('../public/styles/tokens.css');
-  const block = tokens.slice(0, tokens.indexOf('--color-border:'));
-  assert.match(block, /WCAG 1\.4\.11/, 'der Befund muss an --color-border dokumentiert bleiben');
-  assert.match(block, /1\.13:1/, 'der gemessene Ist-Wert auf dem Grouped-Grund gehört dazu');
-  assert.match(block, /1\.26:1/, 'der Wert auf --color-surface gehört dazu (Eingabefeld auf Weiß)');
-  assert.match(block, /1\.60:1/, 'der Dark-Wert gehört dazu');
-  assert.match(block, /#949494/, 'der Zielwert für 3:1 gegen die kühle Rampe gehört dazu, sonst muss ihn jeder neu ausrechnen');
-  assert.match(block, /nicht für dekorative Gruppierung/,
-    'die Abgrenzung Bedienelement gegen Kartenkante gehört dazu - der Critique warf beides zusammen');
+  const layout = read('../public/styles/layout.css');
+  assert.match(tokens, /--color-border-control:\s*var\(--_color-border-control\)/);
+  assert.match(tokens, /--color-border:\s*var\(--neutral-200\)/);
+  assert.match(layout, /\.input,\s*\.form-input\s*\{[^}]*border:\s*1\.5px solid var\(--color-border-control\)/);
+  const glass = read('../public/styles/glass.css');
+  assert.match(glass, /\.input,\s*\.form-input,\s*select\.form-input,\s*textarea\.form-input\s*\{\s*border-color:\s*var\(--color-border-control\)/);
 });
 
 /**
@@ -8186,8 +8178,8 @@ test('the redesigned meal week keeps compact cards on a horizontally scrollable 
   );
   assert.match(
     meals,
-    /@media \(max-width:\s*1023px\)[\s\S]*?\.meals-page > \.page-toolbar--wrap > \.page-toolbar__actions\s*\{[^}]*flex-wrap:\s*nowrap[^}]*overflow-x:\s*auto/,
-    'narrow Meal actions need a swipeable row instead of clipped controls',
+    /@media \(max-width:\s*1023px\)[\s\S]*?\.meals-page > \.page-toolbar--wrap > \.page-toolbar__actions\s*\{[^}]*flex-wrap:\s*wrap[^}]*overflow:\s*visible/,
+    'narrow Meal actions form visible rows without a separate horizontal scroller',
   );
   assert.match(
     meals,
@@ -9820,7 +9812,7 @@ test('settings.css haelt Zeilenlaenge, Token-Disziplin und keine toten Regeln', 
   // Design-Werte gehoeren nicht ins JS.
   const backup = read('../public/settings/pages/admin-backup.js');
   assert.ok(!/\.style\.(opacity|color)\s*=/.test(backup), 'Tone/Opazitaet ueber Klassen, nicht inline');
-  assert.match(css, /\.form-hint--success \{ color: var\(--color-success\); \}/);
+  assert.match(read('../public/styles/layout.css'), /\.form-hint--success \{ color: var\(--color-success\); \}/);
   assert.match(css, /\.settings-page \.form-input:disabled \{/);
 });
 
@@ -12835,10 +12827,22 @@ test('the status bar colour is the page background, in both themes', () => {
     }
   }
 
-  const call = read('../public/router.js').match(/setThemeColor\(\s*'(#[0-9A-Fa-f]{6})'\s*,\s*'(#[0-9A-Fa-f]{6})'\s*\)/);
-  assert.ok(call, 'expected router.js to set the route-independent status bar colour from two literals');
-  if (call[1].toUpperCase() !== expected.light) offenders.push(`router.js (light): ${call[1]} statt ${expected.light}`);
-  if (call[2].toUpperCase() !== expected.dark) offenders.push(`router.js (dark): ${call[2]} statt ${expected.dark}`);
+  // Color temperature is now independent of Light/Dark. Exercise the route
+  // function with resolved CSS values instead of requiring two frozen colors.
+  const functionSource = read('../public/router.js').match(/function updateThemeColorForRoute\(route\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(functionSource, 'route status-bar updater must remain testable');
+  for (const background of [expected.light, expected.dark, 'rgb(248, 244, 236)']) {
+    const calls = [];
+    const update = runInNewContext(`(${functionSource})`, {
+      document: { documentElement: {} },
+      getComputedStyle: () => ({ getPropertyValue: (name) => name === '--color-bg' ? ` ${background} ` : '' }),
+      setThemeColor: (...colors) => calls.push(colors),
+    });
+    update({});
+    assert.deepEqual(calls, [[background, background]], 'the current resolved page background controls browser chrome');
+    update({ thirdPartyModule: { accent: '#123456' } });
+    assert.deepEqual(calls[1], ['#123456', '#123456'], 'third-party module accent contract remains intact');
+  }
 
   assert.deepEqual(
     offenders,
@@ -13301,15 +13305,21 @@ test('die Herkuenfte des Erinnerungs-Toasts sind die entity_type des Servers', (
   assert.deepEqual(titleTypes, serverTypes,
     'Der Push-Titel kennt andere Herkuenfte als der Server schreibt - die unbekannten heissen wieder „Yuvomi".');
 
-  // UND JEDE HERKUNFT TRAEGT AUCH IHR ZIEL (Critique 2026-08-10). Titel und
-  // Ziel stehen bewusst in EINEM Eintrag, damit die zweite Antwort nicht von
-  // der ersten wegdriften kann: vorher nannte der Titel das Modul und die URL
-  // stand fest auf `/reminders`, einer Route, die es nie gab.
-  const withoutTarget = [...titleMap[1].matchAll(/^\s{2}([a-z_]+):\s*\{([^}]*)\}/gm)]
-    .filter(([, , body]) => !/\burl:\s*'/.test(body))
-    .map(([, type]) => type);
-  assert.deepEqual(withoutTarget, [],
-    'Herkunft ohne Ziel - der Titel nennt das Modul und der Tipp landet woanders.');
+  // The durable inbox now owns destinations for both the bell and delivery.
+  // Verify every reminder origin reaches that canonical builder; a second URL
+  // table in the title map would reintroduce module-root-only Push links.
+  const inbox = read('../server/services/notification-inbox.js');
+  const targetSource = inbox.match(/export function notificationUrl\([^\n]+\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(targetSource, 'the inbox must expose its canonical destination builder');
+  const notificationUrl = runInNewContext(`(${targetSource.replace(/^export /, '')})`);
+  const database = { prepare: () => ({ get: () => ({}) }) };
+  for (const type of serverTypes) {
+    const target = notificationUrl(database, type, 5);
+    assert.match(target, /^\/(?!\/)/, `${type} must have a local destination`);
+    assert.notEqual(target, '/', `${type} silently lost its destination`);
+    assert.doesNotMatch(target, /^\/reminders(?:\?|$)/);
+  }
+  assert.match(notifications, /url:\s*notification\.url/, 'delivery must reuse the canonical inbox destination');
 });
 
 // --------------------------------------------------------------------------

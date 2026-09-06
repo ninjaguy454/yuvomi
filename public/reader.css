@@ -1,4 +1,9 @@
 html { font-family: Georgia, serif; font-size: 18px; color: #111; background: #fff; }
+/* Preserve a plain, no-JavaScript light view for e-paper. Token declarations
+ * are progressive enhancement; old readers retain the monochrome fallbacks. */
+html { font-family: var(--font-sans, Georgia, serif); color: var(--color-text-primary, #111); background: var(--color-bg, #fff); }
+html[data-typography="serif"] { --font-heading: var(--font-serif); }
+h1, h2, h3, .brand, .calendar-nav strong { font-family: var(--font-heading, Georgia, serif); }
 body { margin: 0; }
 .page { max-width: 44em; margin: 0 auto; padding: 1em; }
 header { border-bottom: 3px solid #111; padding-bottom: .7em; }
@@ -29,4 +34,9 @@ button { font: inherit; font-weight: bold; border: 2px solid #111; padding: .55e
 .prewrap { white-space: pre-wrap; line-height: 1.45; }
 .notice { border: 2px solid #111; padding: .6em; }
 footer { border-top: 1px solid #777; margin-top: 2em; padding-top: .7em; font-size: .85em; }
+header, .notice, .calendar-grid td.selected { border-color: var(--color-text-primary, #111); }
+nav, .items li, .calendar-grid th, .calendar-grid td, footer { border-color: var(--color-text-secondary, #777); }
+.brand, nav a, .action { color: var(--color-text-primary, #111); }
+input, textarea, select, button, .action { background: var(--color-surface, #fff); color: var(--color-text-primary, #111); border-color: var(--color-text-secondary, #111); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid var(--color-accent, #111); outline-offset: 3px; }
 @media (max-width: 480px) { html { font-size: 16px; } .page { padding: .65em; } nav a { display: inline-block; margin-right: .6em; } .calendar-grid th { font-size: .7em; } .calendar-grid td { height: 2.4em; padding: .15em; } .calendar-grid td small { display: none; } }

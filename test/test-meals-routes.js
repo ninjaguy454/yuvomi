@@ -871,6 +871,11 @@ test('Meal editor updates preserve explicit non-final participant statuses', asy
 });
 
 test('Phase 2 recurring schedule materializes one stable occurrence and preserves a deletion exception', async () => {
+  // The legacy fixture has no age or adult family role. Explicit proficiency
+  // keeps this recurrence test independent of the built-in skill safety gate.
+  db.prepare(`INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by)
+    SELECT ?,id,'normal','manual',? FROM skills WHERE system_key='meal_choosing'
+    ON CONFLICT(user_id,skill_id) DO UPDATE SET proficiency='normal'`).run(U, U);
   actor = { id: U, role: 'admin' };
   const saved = await call('PUT', '/planning', {
     timing_defaults: [{

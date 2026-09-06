@@ -158,15 +158,18 @@ function recipeMealTypeOptions() {
   ];
 }
 
-function buildRandomMealAssignments({ weekStart, visibleMealTypes, meals, recipes, replaceExisting = false, pick = Math.random }) {
+function buildRandomMealAssignments({ weekStart, visibleMealTypes, meals, recipes, replaceExisting = false, pick = Math.random, dateFrom = null, dateTo = null }) {
   const assignments = [];
   const deleteMealIds = [];
   const previousDayByMealType = new Map();
   let hasOpenSlot = false;
   let hasCompatibleSlot = false;
+  let hasContextDate = false;
 
   for (let dayOffset = 0; dayOffset < 7; dayOffset++) {
     const date = addDays(weekStart, dayOffset);
+    if ((dateFrom && date < dateFrom) || (dateTo && date > dateTo)) continue;
+    hasContextDate = true;
     let previousRecipeIdSameDay = null;
     for (const mealType of visibleMealTypes) {
       const slotMeals = meals.filter((meal) => meal.date === date && meal.meal_type === mealType);
@@ -194,7 +197,9 @@ function buildRandomMealAssignments({ weekStart, visibleMealTypes, meals, recipe
 
   const reason = assignments.length
     ? null
-    : !hasOpenSlot
+    : !hasContextDate
+      ? 'outside_context'
+      : !hasOpenSlot
       ? 'week_full'
       : !hasCompatibleSlot
         ? 'no_compatible_recipes'
@@ -372,7 +377,10 @@ async function loadWeekExperience() {
     const open = state.deepLinkOpenKey;
     const match = open && state.weekModel.occurrences.find((occurrence) =>
       occurrence.key === open || String(occurrence.id) === String(open));
-    if (match) state.expandedOccurrences.add(match.key);
+    if (match) {
+      state.deepLinkOpenKey = match.key;
+      state.expandedOccurrences.add(match.key);
+    }
   } else {
     state.weekModel = null;
     state.weekModelError = choicesResult.reason;
@@ -480,9 +488,9 @@ export async function render(container, { user }) {
           </label>
           <label class="meal-context-filter" for="meal-context-select">
             <span>${mealText('meals.contextLabel', 'Planning context')}</span>
-            <select class="form-input" id="meal-context-select"></select>
-            <small>${mealText('meals.contextSelectorHint', 'Home uses the normal household schedule. Trips use their own dated plan; All is an overview.')}</small>
+            <select class="form-input" id="meal-context-select" aria-describedby="meal-context-hint"></select>
           </label>
+          <small id="meal-context-hint" class="meal-view-filters__hint">${mealText('meals.contextSelectorHint', 'Home uses the normal household schedule. Trips use their own dated plan; All is an overview.')}</small>
         </div>
       </div>
       <div class="meal-acting-banner" id="meal-acting-banner" role="status" hidden></div>
@@ -2103,14 +2111,14 @@ function planPlaceOptions(selected) {
 
 function renderMealPlanManagerActions() {
   if (!state.isAdmin) return '';
-  const mutationContext = mealMutationContext();
+  const mutationContext = mealManagerMutationContext();
   const randomizeDisabled = mutationContext.allowed ? '' : ' disabled';
   const randomizeTitle = mutationContext.allowed
     ? ''
     : ` title="${esc(mealText('meals.chooseContextBeforeEditing', 'Choose Home or a trip before changing this week.'))}"`;
   return `<div class="meal-plan-manager__actions" role="group" aria-label="${esc(mealText('meals.mealPlans', 'Meal Plans'))}">
     <button type="button" class="btn btn--primary" data-plan-create><i data-lucide="plus" class="icon-sm" aria-hidden="true"></i>${mealText('meals.createMealPlan', 'Create Meal Plan')}</button>
-    <button type="button" class="btn btn--secondary" data-plan-defaults><i data-lucide="settings-2" class="icon-sm" aria-hidden="true"></i>${mealText('meals.planDefaultSettings', 'Meal Plan Default Settings')}</button>
+    ${mutationContext.id ? '' : `<button type="button" class="btn btn--secondary" data-plan-defaults><i data-lucide="settings-2" class="icon-sm" aria-hidden="true"></i>${mealText('meals.householdPlanDefaults', 'Household defaults')}</button>`}
     <button type="button" class="btn btn--secondary" data-grocery-settings><i data-lucide="shopping-basket" class="icon-sm" aria-hidden="true"></i>Grocery List Settings</button>
     <button type="button" class="btn btn--secondary" data-plan-randomize${randomizeDisabled}${randomizeTitle}><i data-lucide="shuffle" class="icon-sm" aria-hidden="true"></i>${t('meals.randomizePlan')}</button>
   </div>`;
@@ -2128,7 +2136,7 @@ function renderMealPlanManagerContent() {
   const contextOptions = [`<option value="home" ${context ? '' : 'selected'}>Home</option>`,
     ...state.mealPlanContexts.map((item) => `<option value="${item.id}" ${Number(item.id) === contextId ? 'selected' : ''}>${esc(item.name)}</option>`)].join('');
   const contextSelector = `<label class="label meal-plan-manager__context">Plan meals for<select class="form-input" data-plan-manager-context>${contextOptions}</select></label>`;
-  const contextIntro = context ? `<div class="meal-plan-context-callout"><i data-lucide="plane" class="icon-sm" aria-hidden="true"></i><span><strong>${esc(context.name)}</strong><small>Meal Plans here use this trip’s start and end dates.</small></span></div>` : '';
+  const contextIntro = context ? `<div class="meal-plan-context-callout"><i data-lucide="plane" class="icon-sm" aria-hidden="true"></i><span><strong>${esc(context.name)}</strong><small>Enable, Disable, Randomize, and Grocery List Settings apply to this trip and its dates. Household defaults are available under Home.</small></span></div>` : '<p class="form-hint">Planning actions apply to Home. Household defaults also apply to trips unless their settings override them.</p>';
   if (!state.mealPlans.length) {
     return `${contextSelector}${contextIntro}${renderMealPlanManagerActions()}<div class="meal-plan-manager__empty"><i data-lucide="notebook-tabs" aria-hidden="true"></i><h3>${mealText('meals.noMealPlans', 'No Meal Plans yet')}</h3><p>${mealText('meals.noMealPlansHint', 'Create a reusable plan for the meal slots your household repeats.')}</p>${state.isAdmin ? '' : `<p class="form-hint">${mealText('meals.planAdminRequired', 'An administrator can create Meal Plans.')}</p>`}</div>`;
   }
@@ -2160,7 +2168,7 @@ async function openMealPlanManager() {
       panel.querySelectorAll('[data-plan-create]').forEach((button) => button.addEventListener('click', () => openMealPlanEditor()));
       panel.querySelector('[data-plan-defaults]')?.addEventListener('click', openMealDefaultSettingsModal);
       panel.querySelector('[data-grocery-settings]')?.addEventListener('click', openGrocerySettingsModal);
-      panel.querySelector('[data-plan-randomize]')?.addEventListener('click', openRandomizeModal);
+      panel.querySelector('[data-plan-randomize]')?.addEventListener('click', () => openRandomizeModal(mealManagerMutationContext()));
       panel.querySelector('[data-plan-manager-context]')?.addEventListener('change', (event) => {
         state.mealPlanManagerContextId = event.target.value === 'home' ? 'home' : Number(event.target.value);
         openMealPlanManager();
@@ -3710,8 +3718,43 @@ async function addRecipeToSlot(recipe, date, mealType, { replaceMeals = [], plan
   }
 }
 
-function openRandomizeModal() {
-  const mutationContext = mealMutationContext();
+function mealContextDateBoundary(value, exclusiveEnd = false) {
+  if (!value) return null;
+  // Match apply-plan's julianday day-overlap check: unzoned stored values
+  // retain their wall fields, explicit offsets are respected, and an end at
+  // midnight excludes that date. Do not use the browser's timezone here.
+  const raw = String(value);
+  const instant = new Date(raw.length === 10 ? `${raw}T00:00:00Z`
+    : /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`);
+  if (!Number.isFinite(instant.getTime())) return null;
+  const iso = instant.toISOString();
+  const dateKey = iso.slice(0, 10);
+  return exclusiveEnd && iso.slice(11) === '00:00:00.000Z' ? addLocalDays(dateKey, -1) : dateKey;
+}
+
+function mealManagerMutationContext({ managerContextId = state.mealPlanManagerContextId, contexts = state.mealPlanContexts, weekStart = state.currentWeek } = {}) {
+  const id = managerContextId === 'home' ? null : Number(managerContextId) || null;
+  const context = id ? contexts.find((item) => Number(item.id) === id) : null;
+  return {
+    allowed: !id || !!context, id,
+    name: context?.name || 'Home',
+    dateFrom: mealContextDateBoundary(context?.starts_at) || context?.start_date || null,
+    dateTo: mealContextDateBoundary(context?.ends_at, true) || context?.end_date || null,
+    weekStart,
+  };
+}
+
+function randomizeContextMeals(context, meals = state.meals) {
+  return meals.filter((meal) => Number(meal.planning_context_id || 0) === Number(context.id || 0)
+    && !meal.parent_meal_id && !meal.meal_plan_id);
+}
+
+function randomizeEmptyMessage(reason) {
+  if (reason === 'outside_context') return mealText('meals.randomizeOutsideTrip', 'The displayed week is outside this trip. Choose a week within the trip dates to randomize meals.');
+  return reason === 'week_full' ? t('meals.randomizeWeekFull') : t('meals.randomizeNoRecipes');
+}
+
+function openRandomizeModal(mutationContext = mealMutationContext()) {
   if (!mutationContext.allowed) {
     window.yuvomi?.showToast(mealText('meals.chooseContextBeforeEditing', 'Choose Home or a trip before changing this week.'), 'warning');
     return;
@@ -3721,6 +3764,7 @@ function openRandomizeModal() {
     size: 'sm',
     content: `
       <div class="meal-randomize-modal">
+        <p class="form-hint"><strong>${esc(mutationContext.name || 'Home')}</strong> · ${esc(formatWeekLabel(mutationContext.weekStart || state.currentWeek))}</p>
         <label class="toggle meal-randomize-modal__toggle">
           <input type="checkbox" id="meal-randomize-replace">
           <span class="toggle__track"></span>
@@ -3744,9 +3788,10 @@ function openRandomizeModal() {
       // geladenen Wochen- und Rezeptbestand, kostet also keinen Roundtrip.
       const updatePreview = () => {
         const plan = buildRandomMealAssignments({
-          weekStart: state.currentWeek,
+          weekStart: mutationContext.weekStart || state.currentWeek,
+          dateFrom: mutationContext.dateFrom, dateTo: mutationContext.dateTo,
           visibleMealTypes: state.visibleMealTypes,
-          meals: state.meals.filter((meal) => mealMatchesSelectedContext(meal) && !meal.parent_meal_id && !meal.meal_plan_id),
+          meals: randomizeContextMeals(mutationContext),
           recipes: state.recipes,
           replaceExisting: Boolean(replaceBox?.checked),
         });
@@ -3754,9 +3799,7 @@ function openRandomizeModal() {
         const overwrite = plan.deleteMealIds?.length ?? 0;
 
         if (!fill) {
-          preview.textContent = plan.reason === 'week_full'
-            ? t('meals.randomizeWeekFull')
-            : t('meals.randomizeNoRecipes');
+          preview.textContent = randomizeEmptyMessage(plan.reason);
           runBtn.disabled = true;
           return;
         }
@@ -3770,27 +3813,27 @@ function openRandomizeModal() {
       updatePreview();
 
       panel.querySelector('#meal-randomize-cancel')?.addEventListener('click', closeModal);
-      runBtn?.addEventListener('click', () => runRandomize(panel));
+      runBtn?.addEventListener('click', () => runRandomize(panel, mutationContext));
     },
   });
 }
 
-async function runRandomize(panel) {
-  const mutationContext = mealMutationContext();
+async function runRandomize(panel, mutationContext = mealMutationContext()) {
   if (!mutationContext.allowed) return;
   const replaceExisting = Boolean(panel.querySelector('#meal-randomize-replace')?.checked);
   const runBtn = panel.querySelector('#meal-randomize-run');
   const plan = buildRandomMealAssignments({
-    weekStart: state.currentWeek,
+    weekStart: mutationContext.weekStart || state.currentWeek,
+    dateFrom: mutationContext.dateFrom, dateTo: mutationContext.dateTo,
     visibleMealTypes: state.visibleMealTypes,
-    meals: state.meals.filter((meal) => mealMatchesSelectedContext(meal) && !meal.parent_meal_id && !meal.meal_plan_id),
+    meals: randomizeContextMeals(mutationContext),
     recipes: state.recipes,
     replaceExisting,
   });
 
   if (!plan.assignments.length) {
     window.yuvomi?.showToast(
-      plan.reason === 'week_full' ? t('meals.randomizeWeekFull') : t('meals.randomizeNoRecipes'),
+      randomizeEmptyMessage(plan.reason),
       'info'
     );
     return;
@@ -4651,6 +4694,8 @@ async function transferMeal(mealId, btn) {
 
 export const __test = {
   buildRandomMealAssignments,
+  mealManagerMutationContext,
+  randomizeContextMeals,
   mealPayloadFromRecipe,
   normalizeDayHeaderDateLabel,
 };

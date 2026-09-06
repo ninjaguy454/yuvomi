@@ -10,10 +10,14 @@ import { createNotificationChannelStore } from './notification-channels.js';
 import { gotifyProvider } from './notification-providers/gotify.js';
 import { ntfyProvider } from './notification-providers/ntfy.js';
 import { webhookProvider } from './notification-providers/webhook.js';
+import { emailProvider } from './notification-providers/email.js';
+import { guardedFetch } from './notification-providers/guarded-fetch.js';
 import { syncAllBirthdayReminders } from './birthdays.js';
 import { resolveHouseholdLocale, translate } from '../utils/i18n.js';
 import { warrantyEndDate } from './inventory-deadlines.js';
 import { syncAllPantryExpiryReminders } from './pantry-reminders.js';
+import { enqueueNotification, canReceiveNotification, getNotificationPreferences } from './notification-inbox.js';
+import { isNotificationDeliveryCurrent } from './notification-events.js';
 
 const log = createLogger('Notifications');
 const APP_NAME = 'Yuvomi';
@@ -22,12 +26,16 @@ const APP_NAME = 'Yuvomi';
 const FALLBACK_BODY = 'Reminder';
 const RETRY_DELAY_MS = 5 * 60 * 1000;
 const MAX_ATTEMPTS = 3;
-const PROVIDER_TIMEOUT_MS = 8_000;
+// Exportiert, damit die Zeitschranken des Mail-Transports (services/email.js)
+// dagegen gepruefte werden koennen statt gegen eine abgeschriebene Zahl: die
+// Staffelung ist die Zusicherung, nicht der einzelne Wert.
+export const PROVIDER_TIMEOUT_MS = 8_000;
 
 export const defaultProviders = {
   gotify: gotifyProvider,
   ntfy: ntfyProvider,
   webhook: webhookProvider,
+  email: emailProvider,
 };
 
 function iso(value) {
@@ -71,33 +79,16 @@ function subscriptionBody(reminder) {
  * Quelle - public/locales/*.json ueber utils/i18n.js. Die Keys sind bestehende
  * Modulnamen; eine Meldung braucht dafuer kein eigenes Vokabular.
  */
-/*
- * UND DIESELBE HERKUNFT SETZT DAS ZIEL (Critique 2026-08-10).
- *
- * Der Titel nannte das Modul, und der Tipp darauf landete trotzdem im
- * Dashboard: `url` stand fest auf `/reminders`, und diese Route gibt es in
- * `ROUTES` nicht - der Router fiel still auf `/` zurueck, Dokumenttitel
- * „Yuvomi · Yuvomi". Der Befund war schon vorher einer und ist seit der
- * Titel-Herkunft doppelt so teuer: die Meldung sagt jetzt, wo sie herkommt,
- * und schickt den Nutzer trotzdem woandershin.
- *
- * Die Zuordnung stand die ganze Zeit hier - sie wurde nur nicht gefragt. Ein
- * Eintrag traegt beides, Titel und Ziel, damit die zweite Antwort nicht von
- * der ersten wegdriften kann. Push ist der zeitkritischste Pfad der App: wer
- * eine Erinnerung antippt, will an das Ding, nicht an eine Uebersicht.
- *
- * Abonnements zeigen auf `/budget` und nicht auf ihren Tab darin - einen
- * Deep-Link auf `budget.activeTab` gibt es nicht (geprueft). Das Modul ist die
- * genaueste Antwort, die das Ziel heute geben kann, und immer noch eine.
- */
+// Deep links are resolved once by notification-inbox.js for reminders and
+// domain events alike; the saved inbox URL is then used by every transport.
 const REMINDER_ORIGINS = {
-  task:                   { titleKey: 'nav.tasks',              url: '/tasks' },
-  event:                  { titleKey: 'nav.calendar',           url: '/calendar' },
-  subscription:           { titleKey: 'subscriptions.tabLabel', url: '/budget' },
-  inventory_item:         { titleKey: 'nav.inventory',          url: '/inventory' },
-  inventory_tracked_date: { titleKey: 'nav.inventory',          url: '/inventory' },
-  pantry_item:            { titleKey: 'nav.pantry',             url: '/pantry' },
-  meal:                   { titleKey: 'nav.meals',              url: '/meals' },
+  task:                   { titleKey: 'nav.tasks' },
+  event:                  { titleKey: 'nav.calendar' },
+  subscription:           { titleKey: 'subscriptions.tabLabel' },
+  inventory_item:         { titleKey: 'nav.inventory' },
+  inventory_tracked_date: { titleKey: 'nav.inventory' },
+  pantry_item:            { titleKey: 'nav.pantry' },
+  meal:                   { titleKey: 'nav.meals' },
 };
 
 /**
@@ -151,28 +142,23 @@ function reminderPayload(reminder, locale) {
   }
   return {
     // Ohne bekannte Herkunft bleibt der App-Name: er ist nichtssagend, aber nie
-    // falsch - und ein roher `entity_type` im Titel waere beides. Das Ziel
-    // faellt aus demselben Grund auf die Uebersicht: sie ist die einzige Seite,
-    // die es mit Sicherheit gibt.
+    // falsch - und ein roher `entity_type` im Titel waere beides.
     title: origin ? translate(locale, origin.titleKey) : APP_NAME,
     body,
-    url: origin ? origin.url : '/',
-    tag: `reminder-${reminder.id}`,
-    priority: 'default',
   };
 }
 
-function upsertPendingDelivery(database, { reminderId, provider, channelId = null, targetKey, nowIso }) {
+function upsertPendingDelivery(database, { notificationId, provider, channelId = null, targetKey, nowIso }) {
   database.prepare(`
-    INSERT INTO notification_deliveries
-      (reminder_id, provider, channel_id, target_key, status, created_at, updated_at)
+    INSERT INTO notification_inbox_deliveries
+      (notification_id, provider, channel_id, target_key, status, created_at, updated_at)
     VALUES (?, ?, ?, ?, 'pending', ?, ?)
-    ON CONFLICT(reminder_id, provider, target_key) DO NOTHING
-  `).run(reminderId, provider, channelId, targetKey, nowIso, nowIso);
+    ON CONFLICT(notification_id, provider, target_key) DO NOTHING
+  `).run(notificationId, provider, channelId, targetKey, nowIso, nowIso);
   return database.prepare(`
-    SELECT * FROM notification_deliveries
-    WHERE reminder_id = ? AND provider = ? AND target_key = ?
-  `).get(reminderId, provider, targetKey);
+    SELECT * FROM notification_inbox_deliveries
+    WHERE notification_id = ? AND provider = ? AND target_key = ?
+  `).get(notificationId, provider, targetKey);
 }
 
 function shouldAttempt(delivery, nowIso) {
@@ -184,7 +170,7 @@ function shouldAttempt(delivery, nowIso) {
 
 function markSent(database, deliveryId, nowIso) {
   database.prepare(`
-    UPDATE notification_deliveries
+    UPDATE notification_inbox_deliveries
     SET status = 'sent',
         attempt_count = attempt_count + 1,
         last_attempt_at = ?,
@@ -198,7 +184,7 @@ function markSent(database, deliveryId, nowIso) {
 
 function markSkipped(database, deliveryId, nowIso, reason) {
   database.prepare(`
-    UPDATE notification_deliveries
+    UPDATE notification_inbox_deliveries
     SET status = 'skipped',
         next_attempt_at = NULL,
         error = ?,
@@ -209,11 +195,11 @@ function markSkipped(database, deliveryId, nowIso, reason) {
 
 function markFailed(database, deliveryId, now, error) {
   const nowIso = iso(now);
-  const row = database.prepare('SELECT attempt_count FROM notification_deliveries WHERE id = ?').get(deliveryId);
+  const row = database.prepare('SELECT attempt_count FROM notification_inbox_deliveries WHERE id = ?').get(deliveryId);
   const nextAttempt = (row?.attempt_count ?? 0) + 1;
   const exhausted = nextAttempt >= MAX_ATTEMPTS;
   database.prepare(`
-    UPDATE notification_deliveries
+    UPDATE notification_inbox_deliveries
     SET status = ?,
         attempt_count = ?,
         last_attempt_at = ?,
@@ -233,13 +219,13 @@ function markFailed(database, deliveryId, now, error) {
   return exhausted ? 'skipped' : 'failed';
 }
 
-function allKnownDeliveriesComplete(database, reminderId, expectedTargets) {
+function allKnownDeliveriesComplete(database, notificationId, expectedTargets) {
   if (expectedTargets.length === 0) return true;
   const rows = database.prepare(`
     SELECT provider, target_key, status
-    FROM notification_deliveries
-    WHERE reminder_id = ?
-  `).all(reminderId);
+    FROM notification_inbox_deliveries
+    WHERE notification_id = ?
+  `).all(notificationId);
   const byKey = new Map(rows.map((row) => [`${row.provider}:${row.target_key}`, row.status]));
   return expectedTargets.every((target) => {
     const status = byKey.get(`${target.provider}:${target.targetKey}`);
@@ -258,7 +244,7 @@ async function withTimeout(fn, timeoutMs = PROVIDER_TIMEOUT_MS) {
 }
 
 export function createNotificationService({ providers = defaultProviders, channelStore } = {}) {
-  async function testChannel({ channel, payload, fetchImpl = fetch } = {}) {
+  async function testChannel({ channel, payload, fetchImpl = guardedFetch } = {}) {
     const provider = providers[channel?.provider];
     if (!provider) throw new Error('Unknown notification provider.');
     return withTimeout((signal) => provider.send({ channel, payload, fetchImpl, signal }));
@@ -267,13 +253,63 @@ export function createNotificationService({ providers = defaultProviders, channe
   return { providers, channelStore, testChannel };
 }
 
-export async function processDueNotifications({
+// Every entry point shares the same run for one database. A slow provider must
+// not let the next scheduler tick send the same pending target concurrently.
+const activeRuns = new WeakMap();
+
+export function processDueNotifications(options = {}) {
+  const database = options.database || dbModule.get();
+  if (activeRuns.has(database)) return activeRuns.get(database);
+  const run = Promise.resolve().then(() => runDueNotifications({ ...options, database }))
+    .finally(() => { if (activeRuns.get(database) === run) activeRuns.delete(database); });
+  activeRuns.set(database, run);
+  return run;
+}
+
+function importReminderDeliveries(database, notificationId, reminderId) {
+  // Keep successful receipts and the remaining retry budget from before the
+  // inbox upgrade. No broad data rewrite and no repeat of accepted deliveries.
+  database.prepare(`
+    INSERT INTO notification_inbox_deliveries
+      (notification_id, provider, channel_id, target_key, status, attempt_count,
+       next_attempt_at, last_attempt_at, sent_at, error, created_at, updated_at)
+    SELECT ?, provider, channel_id, target_key, status, attempt_count,
+           next_attempt_at, last_attempt_at, sent_at, error, created_at, updated_at
+    FROM notification_deliveries WHERE reminder_id = ?
+    ON CONFLICT(notification_id, provider, target_key) DO NOTHING
+  `).run(notificationId, reminderId);
+}
+
+function inboxPayload(notification) {
+  return {
+    title: notification.title,
+    body: notification.body,
+    url: notification.url,
+    notificationId: notification.id,
+    tag: `notification-${notification.id}`,
+    priority: 'default',
+  };
+}
+
+function deliveryStillAllowed(database, notification) {
+  const current = database.prepare('SELECT dismissed_at FROM notification_inbox WHERE id = ?').get(notification.id);
+  if (!current || current.dismissed_at) return false;
+  const isReminder = notification.source_key.startsWith('reminder:');
+  if (isReminder && (notification.reminder_id == null || !database.prepare(
+    'SELECT 1 FROM reminders WHERE id = ? AND dismissed = 0'
+  ).get(notification.reminder_id))) return false;
+  return canReceiveNotification(database, notification)
+    && isNotificationDeliveryCurrent(database, notification)
+    && getNotificationPreferences(database, notification.user_id)[notification.category] !== false;
+}
+
+async function runDueNotifications({
   database,
   pushService = defaultPushService,
   channelStore,
   providers = defaultProviders,
   now = new Date(),
-  fetchImpl = fetch,
+  fetchImpl = guardedFetch,
 } = {}) {
   const getDb = () => (database || dbModule.get());
   const activeDb = getDb();
@@ -302,7 +338,7 @@ export async function processDueNotifications({
   }
 
   const due = activeDb.prepare(`
-    SELECT r.id, r.created_by, r.entity_type,
+    SELECT r.id, r.created_by, r.entity_type, r.entity_id, r.remind_at, r.pushed_at,
       CASE r.entity_type
         WHEN 'task'  THEN (SELECT title FROM tasks           WHERE id = r.entity_id)
         WHEN 'event' THEN (SELECT title FROM calendar_events WHERE id = r.entity_id)
@@ -336,18 +372,54 @@ export async function processDueNotifications({
     ORDER BY r.remind_at ASC
   `).all(nowIso);
 
-  const counters = { due: due.length, attempted: 0, sent: 0, failed: 0, skipped: 0 };
   const markPushed = activeDb.prepare('UPDATE reminders SET pushed_at = ? WHERE id = ?');
   // Einmal je Lauf, nicht je Meldung: die Datensprache gehoert dem Haushalt.
   const locale = resolveHouseholdLocale(activeDb);
 
   for (const reminder of due) {
     const payload = reminderPayload(reminder, locale);
-    const channels = store.listEnabledChannelsForUser(reminder.created_by);
-    const pushCount = activeDb.prepare('SELECT COUNT(*) AS c FROM push_subscriptions WHERE user_id = ?').get(reminder.created_by).c;
+    const notification = enqueueNotification(activeDb, {
+      userId: reminder.created_by,
+      sourceKey: `reminder:${reminder.id}`,
+      category: { task: 'tasks', event: 'calendar', meal: 'meals' }[reminder.entity_type] || 'other',
+      entityType: reminder.entity_type,
+      entityId: reminder.entity_id,
+      title: payload.title,
+      body: payload.body,
+      reminderId: reminder.id,
+      // Preserve existing reminder channel scope; new personal events default
+      // to user channels in the inbox service.
+      deliveryScope: 'household',
+    });
+    if (notification) {
+      importReminderDeliveries(activeDb, notification.id, reminder.id);
+      // Heal a stop between the inbox completion write and legacy completion
+      // marker, without replaying the successfully delivered receipt.
+      if ((notification.dismissed_at || notification.dispatched_at) && !reminder.pushed_at) markPushed.run(nowIso, reminder.id);
+    }
+    else if (!reminder.pushed_at) markPushed.run(nowIso, reminder.id);
+  }
+
+  const pending = activeDb.prepare(`
+    SELECT * FROM notification_inbox
+    WHERE dispatched_at IS NULL AND dismissed_at IS NULL ORDER BY id
+  `).all();
+  const counters = { due: pending.length, attempted: 0, sent: 0, failed: 0, skipped: 0 };
+  const complete = activeDb.prepare('UPDATE notification_inbox SET dispatched_at = ? WHERE id = ?');
+
+  for (const notification of pending) {
+    if (!deliveryStillAllowed(activeDb, notification)) {
+      complete.run(nowIso, notification.id);
+      if (notification.reminder_id) markPushed.run(nowIso, notification.reminder_id);
+      continue;
+    }
+    const payload = inboxPayload(notification);
+    const channels = store.listEnabledChannelsForUser(notification.user_id)
+      .filter((channel) => notification.delivery_scope === 'household' || channel.scope === 'user');
+    const pushCount = activeDb.prepare('SELECT COUNT(*) AS c FROM push_subscriptions WHERE user_id = ?').get(notification.user_id).c;
     const targets = [];
     if (pushCount > 0) {
-      targets.push({ provider: 'webpush', channelId: null, targetKey: `user:${reminder.created_by}`, send: 'webpush' });
+      targets.push({ provider: 'webpush', channelId: null, targetKey: `user:${notification.user_id}`, send: 'webpush' });
     }
     for (const channel of channels) {
       targets.push({
@@ -359,9 +431,13 @@ export async function processDueNotifications({
       });
     }
 
+    let cancelled = false;
     for (const target of targets) {
+      // A previous provider was awaited. Re-read dismissal, access and source
+      // state before handing this content to another external recipient.
+      if (!deliveryStillAllowed(activeDb, notification)) { cancelled = true; break; }
       const delivery = upsertPendingDelivery(activeDb, {
-        reminderId: reminder.id,
+        notificationId: notification.id,
         provider: target.provider,
         channelId: target.channelId,
         targetKey: target.targetKey,
@@ -372,7 +448,10 @@ export async function processDueNotifications({
       counters.attempted += 1;
       try {
         if (target.send === 'webpush') {
-          const sent = await pushService.sendPushToUser(reminder.created_by, payload);
+          const sent = await pushService.sendPushToUser(notification.user_id, {
+            ...payload,
+            url: `/?notification=${notification.id}`,
+          });
           if (sent > 0) {
             markSent(activeDb, delivery.id, nowIso);
             counters.sent += 1;
@@ -391,12 +470,13 @@ export async function processDueNotifications({
         const status = markFailed(activeDb, delivery.id, now, err);
         if (status === 'skipped') counters.skipped += 1;
         else counters.failed += 1;
-        log.error(`Notification delivery failed for reminder ${reminder.id}:`, safeError(err));
+        log.error(`Notification delivery failed for inbox item ${notification.id}:`, safeError(err));
       }
     }
 
-    if (allKnownDeliveriesComplete(activeDb, reminder.id, targets)) {
-      markPushed.run(nowIso, reminder.id);
+    if (cancelled || allKnownDeliveriesComplete(activeDb, notification.id, targets)) {
+      complete.run(nowIso, notification.id);
+      if (notification.reminder_id) markPushed.run(nowIso, notification.reminder_id);
     }
   }
 

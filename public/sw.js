@@ -24,6 +24,7 @@ const ASSETS_CACHE  = `yuvomi-assets-${APP_RELEASE}`;
 // (Version im Namen) und bei Logout/Session-Ende gezielt geleert.
 const API_CACHE     = `yuvomi-api-${APP_RELEASE}`;
 const BYPASS_CACHE  = 'yuvomi-bypass-flag';
+const DEVICE_PRIVACY_CACHE = 'yuvomi-device-privacy';
 const ALL_CACHES    = [SHELL_CACHE, PAGES_CACHE, LOCALES_CACHE, ASSETS_CACHE];
 
 // GET-API-Pfade (nach /api/v1), die für Read-only-Offline gecacht werden dürfen.
@@ -40,8 +41,12 @@ const APP_SHELL = [
   '/i18n.js',
   '/rrule-ui.js',
   '/reminders.js',
+  '/notification-center.js',
+  '/utils/appearance-preferences.js',
   '/push.js',
   '/sw-register.js',
+  '/utils/html-escape.js',
+  '/components/datepicker.js',
   '/lucide.min.js',
   // Alles, was `index.html` als `<link rel="stylesheet">` eager lädt, gehört
   // hierher - sonst rendert der allererste Offline-Start ungestylt. Die Regel
@@ -250,6 +255,7 @@ const PAGE_MODULES = [
   '/vendor/libphonenumber/metadata.min.json',
   '/settings/registry.js',
   '/settings/shell.js',
+  '/settings/dirty-guard.js',
   '/settings/components.js',
   '/settings/module-order.js',
   '/settings/cron-label.js',
@@ -348,12 +354,13 @@ self.addEventListener('activate', (event) => {
           // Versions-Caches der laufenden Release behalten; alles andere entfernen —
           // inklusive alter Vorversions-Caches UND der Legacy-`oikos-*`-Caches aus der
           // Zeit vor dem Yuvomi-Rename (Cache-Invalidierung, kein User-Eingriff nötig).
-          .filter((key) => !ALL_CACHES.includes(key) && key !== API_CACHE)
+          .filter((key) => !ALL_CACHES.includes(key) && key !== API_CACHE && key !== DEVICE_PRIVACY_CACHE)
           .map((key) => caches.delete(key))
       )
     )
     // Assets-Cache leeren: lazily gecachte Bilder/Icons werden sonst nie erneuert.
     .then(() => caches.delete(ASSETS_CACHE))
+    .then(() => clearReaderCache())
     .then(async () => {
       // Bypass-Fenster setzen: nach SW-Update lädt die nächste Seite alles frisch.
       // KEIN künstliches waitUntil-Delay hier — Chrome würde clients.claim()
@@ -389,6 +396,21 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   if (!url.protocol.startsWith('http')) return;
+
+  // Reader HTML contains session-specific household data. Older workers cached
+  // navigations despite its no-store header; never serve that HTML offline.
+  if (url.origin === self.location.origin && isReaderPath(url.pathname)) {
+    event.waitUntil(clearReaderCache());
+    if (request.method === 'GET') {
+      event.respondWith(fetch(new Request(request, { cache: 'no-store' })).catch(() =>
+        new Response('Reader mode needs a connection. Reconnect and try again.', {
+          status: 503,
+          headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' },
+        })
+      ));
+    }
+    return;
+  }
 
   // API-Requests: nur GET-Whitelist read-only offline-cachen. Alles andere
   // (Mutationen, /auth/*, Nicht-Whitelist) unangetastet ans Netz durchreichen.
@@ -484,7 +506,7 @@ async function networkFirst(request, cacheName) {
 
   try {
     const response = await fetch(request);
-    if (response.ok && response.type === 'basic') {
+    if (response.ok && response.type === 'basic' && !/\bno-store\b/i.test(response.headers.get('Cache-Control') || '')) {
       cache.put(request, response.clone());
     }
     return response;
@@ -515,22 +537,26 @@ async function networkFirstApi(request) {
     const response = await fetch(request);
     // Nur erfolgreiche, gleichoriginäre (basic) Antworten cachen.
     if (response.ok && response.type === 'basic') {
-      const cache   = await caches.open(API_CACHE);
-      const cloned  = response.clone();
-      const headers = new Headers(cloned.headers);
-      headers.set('x-cached-at', String(Date.now()));
-      const body = await cloned.blob();
-      await cache.put(request, new Response(body, {
-        status: cloned.status,
-        statusText: cloned.statusText,
-        headers,
-      }));
+      try {
+        const cache   = await caches.open(API_CACHE);
+        const cloned  = response.clone();
+        const headers = new Headers(cloned.headers);
+        headers.set('x-cached-at', String(Date.now()));
+        const body = await cloned.blob();
+        await cache.put(request, new Response(body, {
+          status: cloned.status,
+          statusText: cloned.statusText,
+          headers,
+        }));
+      } catch { /* Optional offline storage must not replace a successful network response. */ }
     }
     return response;
   } catch {
-    const cache  = await caches.open(API_CACHE);
-    const cached = await cache.match(request);
-    if (cached) return cached;
+    try {
+      const cache  = await caches.open(API_CACHE);
+      const cached = await cache.match(request);
+      if (cached) return cached;
+    } catch { /* Storage may be unavailable along with the network. */ }
     return new Response(JSON.stringify({ error: 'offline' }), {
       status: 503,
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
@@ -569,6 +595,22 @@ function isMutableAppResource(pathname) {
     || /\.(css|js|json|html)$/i.test(pathname);
 }
 
+function isReaderPath(pathname) {
+  return pathname === '/reader' || pathname.startsWith('/reader/');
+}
+
+async function clearReaderCache() {
+  try {
+    const names = (await caches.keys()).filter((name) => /^(?:yuvomi|oikos)-/.test(name));
+    await Promise.all(names.map(async (name) => {
+      const cache = await caches.open(name);
+      const requests = await cache.keys();
+      await Promise.all(requests.filter((request) => isReaderPath(new URL(request.url).pathname))
+        .map((request) => cache.delete(request)));
+    }));
+  } catch { /* Reader requests still use the network exclusively when storage is unavailable. */ }
+}
+
 // Prüft, ob ein API-Pfad (inkl. /api/v1-Prefix) zur Read-only-Offline-Whitelist
 // gehört. Query-Strings sind nicht Teil von pathname → reiner Pfad-Prefix-Match.
 function isCacheableApiGet(pathname) {
@@ -582,13 +624,52 @@ function isCacheableApiGet(pathname) {
 // --------------------------------------------------------
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'CLEAR_API_CACHE') {
-    event.waitUntil(caches.delete(API_CACHE));
+    event.waitUntil(Promise.all([caches.delete(API_CACHE), clearReaderCache()]));
+  }
+  if (event.data?.type === 'SET_SHARED_DISPLAY' && typeof event.data.enabled === 'boolean') {
+    const enabled = event.data.enabled;
+    sharedDisplay = enabled;
+    privacyUpdate = privacyUpdate.catch(() => {}).then(async () => {
+      const cache = await caches.open(DEVICE_PRIVACY_CACHE);
+      await cache.put('/shared-display', new Response('', { headers: { 'x-shared-display': enabled ? '1' : '0' } }));
+      if (enabled) {
+        const notifications = await self.registration.getNotifications();
+        for (const notification of notifications) notification.close();
+      }
+    });
+    event.waitUntil(privacyUpdate);
   }
 });
 
 // --------------------------------------------------------
 // Web Push
 // --------------------------------------------------------
+// Device privacy outlives open tabs, login sessions and release caches. The
+// browser also unsubscribes when wall mode starts; this covers queued pushes.
+let sharedDisplay = null;
+let privacyUpdate = Promise.resolve();
+const sharedDisplayReady = (async () => {
+  try {
+    const cache = await caches.open(DEVICE_PRIVACY_CACHE);
+    const stored = await cache.match('/shared-display');
+    if (sharedDisplay === null) sharedDisplay = stored?.headers.get('x-shared-display') === '1';
+  } catch {
+    if (sharedDisplay === null) sharedDisplay = true;
+  }
+})();
+
+function safeNotificationTarget(data) {
+  const id = Number(data?.notificationId);
+  if (Number.isSafeInteger(id) && id > 0) return `/?notification=${id}`;
+  try {
+    const url = new URL(data?.url || '/', self.location.origin);
+    if (url.origin === self.location.origin && ['http:', 'https:'].includes(url.protocol)) {
+      return `${url.pathname}${url.search}${url.hash}`;
+    }
+  } catch { /* malformed or external link falls back to the authenticated shell */ }
+  return '/';
+}
+
 self.addEventListener('push', (event) => {
   let payload = {};
   try {
@@ -607,15 +688,21 @@ self.addEventListener('push', (event) => {
     // Uebersicht zurueck - ein Fallback, der wie ein Ziel aussah. Die Uebersicht
     // ist jetzt der ausgesprochene Fallback; das echte Ziel kommt aus
     // `payload.url`, das der Server je Herkunft setzt (services/notifications.js).
-    data: { url: payload.url || '/' },
+    data: { url: payload.url || '/', notificationId: payload.notificationId || null },
   };
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil((async () => {
+    await sharedDisplayReady;
+    if (sharedDisplay) return;
+    await self.registration.showNotification(title, options);
+  })());
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = (event.notification.data && event.notification.data.url) || '/';
+  const targetUrl = safeNotificationTarget(event.notification.data);
   event.waitUntil((async () => {
+    await sharedDisplayReady;
+    if (sharedDisplay) return;
     const all = await clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of all) {
       if ('focus' in client) {

@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { notifyMealRequests } from './notification-events.js';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
 import {
@@ -1492,6 +1493,7 @@ function writeOccurrenceResponsibilities(database, {
       }),
     );
   }
+  notifyMealRequests(database, mealId);
 }
 
 function pendingOccurrenceCanBeReconciled(database, row) {
@@ -1971,7 +1973,10 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
     `).run(selected, assignment.id);
     changed = true;
   }
-  if (changed) syncAutoPortions(database, assignment.meal_id);
+  if (changed) {
+    syncAutoPortions(database, assignment.meal_id);
+    notifyMealRequests(database, assignment.meal_id);
+  }
   return {
     changed,
     assignment: database.prepare('SELECT * FROM meal_occurrence_assignments WHERE id = ?').get(assignment.id),
@@ -3297,6 +3302,10 @@ function addChooserObligationEvent(database, obligationId, event, actorId, detai
     actorId || null,
     details == null ? null : JSON.stringify(details),
   );
+  if (['fallback_assigned', 'fallback_personal_choice_assigned'].includes(event)) {
+    const obligation = database.prepare('SELECT entity_id FROM planning_obligations WHERE id = ?').get(obligationId);
+    if (obligation) notifyMealRequests(database, obligation.entity_id);
+  }
 }
 
 function setMealChooserRoles(database, mealId, chooserIds, {

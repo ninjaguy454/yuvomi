@@ -8662,6 +8662,57 @@ const FORK_MIGRATIONS = [
   },
 ];
 
+FORK_MIGRATIONS.push({
+  version: 10026,
+  description: 'Per-user notification inbox, preferences and delivery receipts',
+  up: `
+    CREATE TABLE notification_inbox (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      source_key TEXT NOT NULL,
+      category TEXT NOT NULL CHECK(category IN ('tasks','meals','calendar','shopping','automation','other')),
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      url TEXT NOT NULL DEFAULT '/',
+      reminder_id INTEGER REFERENCES reminders(id) ON DELETE SET NULL,
+      delivery_scope TEXT NOT NULL DEFAULT 'user' CHECK(delivery_scope IN ('user','household')),
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      read_at TEXT,
+      dismissed_at TEXT,
+      dispatched_at TEXT,
+      UNIQUE(user_id, source_key)
+    );
+    CREATE INDEX idx_notification_inbox_user ON notification_inbox(user_id, dismissed_at, id DESC);
+    CREATE INDEX idx_notification_inbox_pending ON notification_inbox(dispatched_at, id);
+    CREATE TABLE notification_preferences (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      category TEXT NOT NULL CHECK(category IN ('tasks','meals','calendar','shopping','automation')),
+      enabled INTEGER NOT NULL CHECK(enabled IN (0,1)),
+      PRIMARY KEY(user_id, category)
+    );
+    CREATE TABLE notification_inbox_deliveries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      notification_id INTEGER NOT NULL REFERENCES notification_inbox(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      channel_id INTEGER REFERENCES notification_channels(id) ON DELETE SET NULL,
+      target_key TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','skipped')),
+      attempt_count INTEGER NOT NULL DEFAULT 0,
+      next_attempt_at TEXT,
+      last_attempt_at TEXT,
+      sent_at TEXT,
+      error TEXT,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
+      UNIQUE(notification_id, provider, target_key)
+    );
+    CREATE INDEX idx_notification_inbox_deliveries_notification ON notification_inbox_deliveries(notification_id);
+    CREATE INDEX idx_notification_inbox_deliveries_retry ON notification_inbox_deliveries(status, next_attempt_at);
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

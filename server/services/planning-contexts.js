@@ -1,4 +1,5 @@
 import { reconcilePlanningContextMealOccurrences } from './meal-plans.js';
+import { notifyPlanningContext, notifyPlanningConflict, notifyTaskObligations } from './notification-events.js';
 
 const CONTEXT_TYPES = new Set(['home', 'travel', 'custom']);
 const CONTEXT_STATUSES = new Set(['active', 'conflict', 'resolved', 'completed', 'cancelled']);
@@ -214,6 +215,7 @@ export function replacePlanningContextMembers(database, contextId, memberIds, ac
     if (changed) database.prepare(`UPDATE planning_contexts SET revision = revision + 1, updated_at = ${nowSql()} WHERE id = ?`).run(id);
     reconcilePlanningContextConflicts(database, actorId);
     reconcilePlanningContextMealOccurrences(database, { contextIds: [id], actorId });
+    if (changed) notifyPlanningContext(database, id);
     return getPlanningContext(database, id);
   });
 }
@@ -424,6 +426,7 @@ export function reconcilePlanningContextConflicts(database, actorId = null) {
       markMember.run(conflict.second_context_id, conflict.user_id);
       markContext.run(conflict.first_context_id);
       markContext.run(conflict.second_context_id);
+      notifyPlanningConflict(database, conflict);
     }
     reconcilePlanningContextMealOccurrences(database, {
       contextIds: [...affectedContextIds],
@@ -534,6 +537,8 @@ export function savePlanningContext(database, body, actorId, id = null) {
     if (body.source) attachPlanningContextSource(database, savedId, body.source, { allowMove: body.allow_source_move === true });
     reconcilePlanningContextConflicts(database, actorId);
     reconcilePlanningContextMealOccurrences(database, { contextIds: [savedId], actorId });
+    const finalRevision = database.prepare('SELECT revision FROM planning_contexts WHERE id = ?').get(savedId)?.revision;
+    if (!existing || finalRevision !== existing.revision) notifyPlanningContext(database, savedId);
     return getPlanningContext(database, savedId);
   });
 }
@@ -775,6 +780,7 @@ export function ensureTravelMealPlanTask(database, contextId, actorId = null) {
        ORDER BY user_id
     `).all(id);
     for (const member of eligible) insertEligible.run(existing.id, member.user_id);
+    notifyTaskObligations(database, existing.id, { eligibleIds: eligible.map((member) => member.user_id) });
     return getTravelMealPlanTask(database, id);
   });
 }
@@ -893,6 +899,7 @@ export function reconcileTravelPlanningContext(database, contextId, actorId = nu
       reconcilePlanningContextAwayPeriods(database, affectedId, actorId);
       ensureTravelMealPlanTask(database, affectedId, actorId || current.created_by);
     }
+    if (coreChanged || memberChanged) notifyPlanningContext(database, id);
     return getPlanningContext(database, id);
   });
 }

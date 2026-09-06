@@ -9,6 +9,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
 import express from 'express';
 import { MIGRATIONS } from '../server/db.js';
+import { addNotificationInboxFixture } from './helpers/notification-inbox-fixture.js';
+import { enqueueNotification } from '../server/services/notification-inbox.js';
 
 function notificationMigration() {
   return MIGRATIONS.find((m) => m.version === 60);
@@ -101,6 +103,7 @@ function makeDb({ withNotificationTables = true } = {}) {
   `);
   if (withNotificationTables) {
     db.exec(notificationMigration().up);
+    addNotificationInboxFixture(db);
   }
   db.prepare("INSERT INTO users (id, username, role) VALUES (1, 'alice', 'admin'), (2, 'bob', 'member')").run();
   return db;
@@ -121,6 +124,182 @@ function pastIso() {
 function futureIso() {
   return new Date(Date.now() + 3_600_000).toISOString();
 }
+
+function seedDueTask(database) {
+  database.exec("INSERT INTO tasks (id, title, created_by) VALUES (1, 'Original task', 1)");
+  database.prepare("INSERT INTO reminders (id, entity_type, entity_id, remind_at, created_by) VALUES (1, 'task', 1, ?, 1)")
+    .run('2026-09-06T08:59:00.000Z');
+}
+
+test('a due reminder is durable without delivery subscriptions and survives reminder removal', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const database = makeDb();
+  seedDueTask(database);
+  await processDueNotifications({ database, now: new Date('2026-09-06T09:00:00Z') });
+  const item = database.prepare('SELECT * FROM notification_inbox').get();
+  assert.equal(item.source_key, 'reminder:1');
+  assert.equal(item.body, 'Original task');
+  assert.equal(item.url, '/tasks?open=1');
+  assert.ok(item.dispatched_at);
+  database.exec('DELETE FROM reminders WHERE id = 1');
+  assert.equal(database.prepare('SELECT reminder_id FROM notification_inbox').get().reminder_id, null);
+});
+
+test('inbox delivery retries use the saved content and one stable notification id', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const database = makeDb();
+  seedDueTask(database);
+  const store = createNotificationChannelStore({ db: database });
+  store.createChannel({ provider: 'email', name: 'Personal', enabled: true, scope: 'user', userId: 1, config: { toAddress: 'alice@example.com' } });
+  const received = [];
+  const providers = { email: { send: async ({ payload }) => {
+    received.push(payload);
+    if (received.length === 1) throw new Error('temporary transport failure');
+  } } };
+  await processDueNotifications({ database, providers, now: new Date('2026-09-06T09:00:00Z') });
+  database.exec("UPDATE tasks SET title = 'Changed task' WHERE id = 1");
+  await processDueNotifications({ database, providers, now: new Date('2026-09-06T09:06:00Z') });
+  assert.equal(received.length, 2);
+  assert.equal(received[1].body, 'Original task');
+  assert.equal(received[0].notificationId, received[1].notificationId);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM notification_inbox').get().count, 1);
+});
+
+test('legacy successful receipts and retry backoff migrate without duplicate sends', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const database = makeDb();
+  seedDueTask(database);
+  const store = createNotificationChannelStore({ db: database });
+  const gotify = store.createChannel({ provider: 'gotify', name: 'Done', enabled: true, config: { baseUrl: 'https://gotify.example.test' }, secrets: { appToken: 'test' } });
+  const ntfy = store.createChannel({ provider: 'ntfy', name: 'Retry', enabled: true, config: { baseUrl: 'https://ntfy.example.test', topic: 'test' } });
+  const seed = database.prepare(`INSERT INTO notification_deliveries
+    (reminder_id,provider,channel_id,target_key,status,attempt_count,next_attempt_at)
+    VALUES (1,?,?,?,?,?,?)`);
+  seed.run('gotify', gotify.id, `channel:${gotify.id}`, 'sent', 1, null);
+  seed.run('ntfy', ntfy.id, `channel:${ntfy.id}`, 'failed', 2, '2026-09-06T09:05:00.000Z');
+  const calls = [];
+  const providers = Object.fromEntries(['gotify', 'ntfy'].map((id) => [id, { send: async () => calls.push(id) }]));
+  await processDueNotifications({ database, providers, now: new Date('2026-09-06T09:00:00Z') });
+  assert.deepEqual(calls, []);
+  await processDueNotifications({ database, providers, now: new Date('2026-09-06T09:06:00Z') });
+  assert.deepEqual(calls, ['ntfy']);
+  const receipt = database.prepare("SELECT * FROM notification_inbox_deliveries WHERE provider = 'ntfy'").get();
+  assert.equal(receipt.status, 'sent');
+  assert.equal(receipt.attempt_count, 3);
+});
+
+test('deleting a reminder cancels its pending retry while keeping its inbox receipt', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const database = makeDb();
+  seedDueTask(database);
+  createNotificationChannelStore({ db: database }).createChannel({ provider: 'email', name: 'Test', enabled: true, config: { toAddress: 'alice@example.com' } });
+  let calls = 0;
+  const providers = { email: { send: async () => { calls++; throw new Error('temporary failure'); } } };
+  await processDueNotifications({ database, providers, now: new Date('2026-09-06T09:00:00Z') });
+  database.exec('DELETE FROM reminders WHERE id = 1');
+  await processDueNotifications({ database, providers, now: new Date('2026-09-06T09:06:00Z') });
+  assert.equal(calls, 1);
+  const item = database.prepare('SELECT * FROM notification_inbox').get();
+  assert.equal(item.body, 'Original task');
+  assert.ok(item.dispatched_at);
+});
+
+test('already delivered reminders are not replayed into new inbox history', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const database = makeDb();
+  seedDueTask(database);
+  database.exec("UPDATE reminders SET pushed_at = '2026-09-06T09:00:00Z'");
+  database.exec("INSERT INTO push_subscriptions (user_id,endpoint,p256dh,auth) VALUES (1,'https://push.example.test/device','key','auth')");
+  let calls = 0;
+  const options = { database, now: new Date('2026-09-06T09:01:00Z'), pushService: { sendPushToUser: async () => { calls++; return 1; } } };
+  await processDueNotifications(options);
+  await processDueNotifications(options);
+  assert.equal(calls, 0);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM notification_inbox').get().count, 0);
+});
+
+test('a completed inbox receipt heals an interrupted legacy completion marker without replay', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const database = makeDb();
+  seedDueTask(database);
+  enqueueNotification(database, { userId: 1, sourceKey: 'reminder:1', category: 'tasks', entityType: 'task', entityId: 1, reminderId: 1, title: 'Tasks', body: 'Already sent', suppressDelivery: true });
+  const result = await processDueNotifications({ database, now: new Date('2026-09-06T09:00:00Z') });
+  assert.equal(result.attempted, 0);
+  assert.ok(database.prepare('SELECT pushed_at FROM reminders WHERE id = 1').get().pushed_at);
+  assert.equal(database.prepare('SELECT COUNT(*) AS count FROM notification_inbox').get().count, 1);
+});
+
+test('personal inbox events use matching personal channels and canonical push handoff', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const database = makeDb();
+  database.exec("INSERT INTO tasks (id,title,created_by,visibility) VALUES (2,'Private assignment',2,'private')");
+  database.exec("INSERT INTO push_subscriptions (user_id,endpoint,p256dh,auth) VALUES (2,'https://push.example.test/bob','key','auth')");
+  const store = createNotificationChannelStore({ db: database });
+  for (const [name, scope, userId] of [['Household', 'household', null], ['Alice', 'user', 1], ['Bob', 'user', 2]]) {
+    store.createChannel({ provider: 'email', name, enabled: true, scope, userId, config: { toAddress: `${name.toLowerCase()}@example.com` } });
+  }
+  const item = enqueueNotification(database, { userId: 2, sourceKey: 'assignment:2:1', category: 'tasks', entityType: 'task', entityId: 2, title: 'Tasks', body: 'Private assignment' });
+  const sent = [], pushed = [];
+  await processDueNotifications({ database, providers: { email: { send: async ({ channel, payload }) => sent.push({ name: channel.name, payload }) } },
+    pushService: { sendPushToUser: async (userId, payload) => { pushed.push({ userId, payload }); return 1; } } });
+  assert.deepEqual(sent.map((entry) => entry.name), ['Bob']);
+  assert.equal(sent[0].payload.notificationId, item.id);
+  assert.equal(pushed[0].userId, 2);
+  assert.equal(pushed[0].payload.notificationId, item.id);
+  assert.equal(pushed[0].payload.url, `/?notification=${item.id}`);
+});
+
+test('category changes suppress already queued delivery', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const database = makeDb();
+  seedDueTask(database);
+  const item = enqueueNotification(database, { userId: 1, sourceKey: 'assignment:1:1', category: 'tasks', entityType: 'task', entityId: 1, title: 'Tasks' });
+  database.exec("INSERT INTO notification_preferences (user_id,category,enabled) VALUES (1,'tasks',0)");
+  const result = await processDueNotifications({ database, now: new Date('2026-09-06T09:00:00Z') });
+  assert.equal(result.attempted, 0);
+  assert.ok(database.prepare('SELECT dispatched_at FROM notification_inbox WHERE id = ?').get(item.id).dispatched_at);
+});
+
+test('category changes during one provider prevent subsequent target delivery', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const database = makeDb();
+  seedDueTask(database);
+  const store = createNotificationChannelStore({ db: database });
+  store.createChannel({ provider: 'gotify', name: 'First', enabled: true, config: { baseUrl: 'https://gotify.example.test' }, secrets: { appToken: 'test' } });
+  store.createChannel({ provider: 'ntfy', name: 'Second', enabled: true, config: { baseUrl: 'https://ntfy.example.test', topic: 'test' } });
+  const sent = [];
+  await processDueNotifications({ database, now: new Date('2026-09-06T09:00:00Z'), providers: {
+    gotify: { send: async () => { sent.push('gotify'); database.exec("INSERT INTO notification_preferences (user_id,category,enabled) VALUES (1,'tasks',0)"); } },
+    ntfy: { send: async () => sent.push('ntfy') },
+  } });
+  assert.deepEqual(sent, ['gotify']);
+  assert.ok(database.prepare('SELECT dispatched_at FROM notification_inbox').get().dispatched_at);
+});
+
+test('overlapping scheduler calls share one run and do not double-send', async () => {
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const database = makeDb();
+  seedDueTask(database);
+  createNotificationChannelStore({ db: database }).createChannel({ provider: 'email', name: 'Test', enabled: true, config: { toAddress: 'alice@example.com' } });
+  let release, started;
+  const sending = new Promise((resolve) => { started = resolve; });
+  const paused = new Promise((resolve) => { release = resolve; });
+  let calls = 0;
+  const options = { database, now: new Date('2026-09-06T09:00:00Z'), providers: { email: { send: async () => { calls++; started(); await paused; } } } };
+  const first = processDueNotifications(options);
+  await sending;
+  const second = processDueNotifications(options);
+  assert.equal(first, second);
+  release();
+  await Promise.all([first, second]);
+  assert.equal(calls, 1);
+});
 
 async function call(app, method, path, body) {
   const { createServer } = await import('node:http');
@@ -415,6 +594,149 @@ test('die OpenAPI-Provider-Liste kennt jeden angebotenen Kanal (#692)', async ()
   }
 });
 
+// --------------------------------------------------------------------------
+// SSRF-Schutz der Kanaele (GHSA-f4w5-ggcc-7m5c)
+// --------------------------------------------------------------------------
+// Webhook, Gotify und ntfy riefen das nackte fetch() auf die eingetragene URL.
+// Jetzt laeuft der Aufruf ueber guardedFetch mit dem Anti-Rebinding-Lookup aus
+// utils/ssrf.js, und der Store lehnt schon beim Speichern ab, was sich ohne DNS
+// entscheiden laesst. NOTIFICATION_ALLOW_PRIVATE_NETWORK=true hebt beides auf.
+
+import http from 'node:http';
+
+function startLocalServer(handler) {
+  const server = http.createServer(handler);
+  return new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve({
+      server,
+      base: `http://127.0.0.1:${server.address().port}`,
+      close: () => new Promise((r) => server.close(r)),
+    }));
+  });
+}
+
+async function withPrivateNetworkAllowed(fn) {
+  const before = process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK;
+  process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK = 'true';
+  try {
+    return await fn();
+  } finally {
+    if (before === undefined) delete process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK;
+    else process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK = before;
+  }
+}
+
+test('der Store lehnt eine private oder lokale Ziel-URL beim Speichern ab (GHSA-f4w5)', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const store = createNotificationChannelStore({ db: makeDb() });
+  delete process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK;
+  const blocked = [
+    'http://169.254.169.254/latest/meta-data/',
+    'http://192.168.1.5:8080/hooks',
+    'http://10.0.0.7/',
+    'http://127.0.0.1:8080/',
+    'http://[::1]:8080/',
+    'http://localhost:8080/',
+    'http://gotify.local/',
+    'http://ha.internal:8123/api/webhook/x',
+  ];
+  for (const baseUrl of blocked) {
+    assert.throws(
+      () => store.createChannel({ provider: 'webhook', name: 'Bad', config: { baseUrl } }),
+      /private or local network/i,
+      `${baseUrl} muss abgelehnt werden`,
+    );
+  }
+  // Dieselbe Regel fuer Gotify und ntfy, und die Fehlermeldung nennt den Schalter.
+  assert.throws(
+    () => store.createChannel({ provider: 'gotify', name: 'Bad', config: { baseUrl: 'http://192.168.1.5' }, secrets: { appToken: 'x' } }),
+    /NOTIFICATION_ALLOW_PRIVATE_NETWORK/,
+  );
+  assert.throws(
+    () => store.createChannel({ provider: 'ntfy', name: 'Bad', config: { baseUrl: 'http://192.168.1.5', topic: 'family' } }),
+    /private or local network/i,
+  );
+  // Ein oeffentlicher Name bleibt speicherbar - die Aufloesung prueft erst der Versand.
+  const ok = store.createChannel({ provider: 'webhook', name: 'Ok', config: { baseUrl: 'https://hooks.example.test/x' } });
+  assert.ok(ok.id);
+  // Und der Schalter oeffnet das LAN bewusst.
+  await withPrivateNetworkAllowed(() => {
+    const lan = store.createChannel({ provider: 'gotify', name: 'LAN', config: { baseUrl: 'http://192.168.1.5' }, secrets: { appToken: 'x' } });
+    assert.equal(lan.config.baseUrl, 'http://192.168.1.5');
+  });
+});
+
+test('guardedFetch verbindet nur ueber den SSRF-Lookup - ein privates Ziel bleibt unerreicht', async () => {
+  const { guardedFetch } = await import('../server/services/notification-providers/guarded-fetch.js');
+  const hits = [];
+  const { base, close } = await startLocalServer((req, res) => {
+    let body = '';
+    req.on('data', (c) => { body += c; });
+    req.on('end', () => {
+      hits.push({ url: req.url, type: req.headers['content-type'], body });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ id: 42 }));
+    });
+  });
+  try {
+    delete process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK;
+    await assert.rejects(() => guardedFetch(`${base}/message`, { method: 'POST', body: 'x' }), /private IP/i);
+    assert.equal(hits.length, 0, 'der lokale Server darf nichts empfangen haben');
+
+    await withPrivateNetworkAllowed(async () => {
+      const params = new URLSearchParams();
+      params.set('title', 'Yuvomi');
+      const res = await guardedFetch(`${base}/message`, { method: 'POST', body: params });
+      assert.equal(res.ok, true);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { id: 42 });
+      assert.equal(hits.length, 1);
+      assert.match(hits[0].type, /application\/x-www-form-urlencoded/);
+      assert.equal(hits[0].body, 'title=Yuvomi');
+    });
+  } finally {
+    await close();
+  }
+});
+
+test('ohne fetchImpl senden alle drei Provider ueber guardedFetch (die Voreinstellung ist der Schutz)', async () => {
+  const { gotifyProvider } = await import('../server/services/notification-providers/gotify.js');
+  const { ntfyProvider } = await import('../server/services/notification-providers/ntfy.js');
+  const { webhookProvider } = await import('../server/services/notification-providers/webhook.js');
+  const { createNotificationService } = await import('../server/services/notifications.js');
+  const hits = [];
+  const { base, close } = await startLocalServer((req, res) => {
+    hits.push(req.url);
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"id":1}');
+  });
+  const payload = { title: 'Yuvomi', body: 'Test', url: '/reminders', tag: 't', priority: 'default' };
+  try {
+    delete process.env.NOTIFICATION_ALLOW_PRIVATE_NETWORK;
+    await assert.rejects(() => gotifyProvider.send({ channel: { config: { baseUrl: base }, secrets: { appToken: 'x' } }, payload }), /private IP/i);
+    await assert.rejects(() => ntfyProvider.send({ channel: { config: { baseUrl: base, topic: 'family' }, secrets: {} }, payload }), /private IP/i);
+    await assert.rejects(() => webhookProvider.send({ channel: { config: { baseUrl: `${base}/hook` }, secrets: {} }, payload }), /private IP/i);
+    // Auch der Testversand aus den Admin-Routen nimmt die Voreinstellung.
+    const service = createNotificationService();
+    await assert.rejects(
+      () => service.testChannel({ channel: { provider: 'webhook', config: { baseUrl: `${base}/hook` }, secrets: {} }, payload }),
+      /private IP/i,
+    );
+    assert.equal(hits.length, 0, 'kein Provider hat den lokalen Server erreicht');
+
+    await withPrivateNetworkAllowed(async () => {
+      const result = await gotifyProvider.send({ channel: { config: { baseUrl: base }, secrets: { appToken: 'x' } }, payload });
+      assert.equal(result.ok, true);
+      assert.equal(result.providerMessageId, '1');
+      await ntfyProvider.send({ channel: { config: { baseUrl: base, topic: 'family' }, secrets: {} }, payload });
+      await webhookProvider.send({ channel: { config: { baseUrl: `${base}/hook` }, secrets: {} }, payload });
+      assert.deepEqual(hits, ['/message?token=x', '/family', '/hook']);
+    });
+  } finally {
+    await close();
+  }
+});
+
 test('providers throw sanitized HTTP errors', async () => {
   const { gotifyProvider } = await import('../server/services/notification-providers/gotify.js');
   await assert.rejects(() => gotifyProvider.send({
@@ -452,7 +774,7 @@ test('notification processor fans out and deduplicates reminder deliveries', asy
   const first = await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
   assert.deepEqual(first, { due: 1, attempted: 3, sent: 3, failed: 0, skipped: 0 });
   assert.deepEqual(calls, { webpush: 1, gotify: 1, ntfy: 1 });
-  assert.equal(db.prepare("SELECT COUNT(*) c FROM notification_deliveries WHERE status = 'sent'").get().c, 3);
+  assert.equal(db.prepare("SELECT COUNT(*) c FROM notification_inbox_deliveries WHERE status = 'sent'").get().c, 3);
   assert.notEqual(db.prepare('SELECT pushed_at FROM reminders WHERE id = 1').get().pushed_at, null);
 
   const second = await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
@@ -552,7 +874,7 @@ test('Meal-change reminders reuse the existing delivery pipeline and link back t
   assert.equal(payloads.length, 1);
   assert.equal(payloads[0].title, 'Meals');
   assert.equal(payloads[0].body, 'Vegetable tacos and cilantro rice');
-  assert.equal(payloads[0].url, '/meals');
+  assert.equal(payloads[0].url, '/meals?open=1');
 });
 
 test('subscription reminders degrade to the bare name when amount or date are missing (#581)', async () => {
@@ -734,7 +1056,7 @@ test('eine Vorrats-Erinnerung ohne Artikel wird abgeraeumt statt inhaltslos zuge
   assert.equal(db.prepare("SELECT COUNT(*) AS c FROM reminders WHERE entity_type = 'pantry_item'").get().c, 0);
 });
 
-test('inventory tracked-date reminders degrade to the bare title without a date', async () => {
+test('inventory tracked-date reminders for deleted sources do not dispatch', async () => {
   const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
   const { processDueNotifications } = await import('../server/services/notifications.js');
   const db = makeDb();
@@ -753,8 +1075,8 @@ test('inventory tracked-date reminders degrade to the bare title without a date'
   const pushService = { sendPushToUser: async () => 0 };
 
   await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
-  assert.equal(payloads.length, 1);
-  assert.equal(payloads[0].body, 'Reminder');
+  assert.equal(payloads.length, 0);
+  assert.notEqual(db.prepare('SELECT pushed_at FROM reminders WHERE id = 1').get().pushed_at, null);
 });
 
 test('task reminders keep their bare title as body (#581)', async () => {
@@ -777,7 +1099,7 @@ test('task reminders keep their bare title as body (#581)', async () => {
   assert.equal(payloads[0].body, 'Müll rausbringen');
 });
 
-test('reminders for deleted entities never send the app name as body (#581)', async () => {
+test('reminders for deleted entities do not create inaccessible inbox content', async () => {
   const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
   const { processDueNotifications } = await import('../server/services/notifications.js');
   const db = makeDb();
@@ -792,9 +1114,8 @@ test('reminders for deleted entities never send the app name as body (#581)', as
   const pushService = { sendPushToUser: async () => 0 };
 
   await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
-  assert.equal(payloads.length, 1);
-  assert.notEqual(payloads[0].body, payloads[0].title);
-  assert.equal(payloads[0].body, 'Reminder');
+  assert.equal(payloads.length, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM notification_inbox').get().count, 0);
 });
 
 test('notification processor retries failed external channels after backoff', async () => {
@@ -828,7 +1149,7 @@ test('notification processor retries failed external channels after backoff', as
   const first = await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: firstNow });
   assert.equal(first.failed, 1);
   assert.equal(db.prepare('SELECT pushed_at FROM reminders WHERE id = 1').get().pushed_at, null);
-  let ntfyRow = db.prepare("SELECT * FROM notification_deliveries WHERE provider = 'ntfy'").get();
+  let ntfyRow = db.prepare("SELECT * FROM notification_inbox_deliveries WHERE provider = 'ntfy'").get();
   assert.equal(ntfyRow.status, 'failed');
   assert.equal(ntfyRow.attempt_count, 1);
   assert.equal(ntfyRow.next_attempt_at > firstNow.toISOString(), true);
@@ -837,7 +1158,7 @@ test('notification processor retries failed external channels after backoff', as
   assert.equal(ntfyAttempts, 1);
 
   await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date('2026-06-19T10:06:00.000Z') });
-  ntfyRow = db.prepare("SELECT * FROM notification_deliveries WHERE provider = 'ntfy'").get();
+  ntfyRow = db.prepare("SELECT * FROM notification_inbox_deliveries WHERE provider = 'ntfy'").get();
   assert.equal(ntfyRow.status, 'sent');
   assert.notEqual(db.prepare('SELECT pushed_at FROM reminders WHERE id = 1').get().pushed_at, null);
 });
@@ -904,4 +1225,362 @@ test('admin notification routes manage channels and test sends', async () => {
   const deleted = await call(makeApp(), 'DELETE', `/notifications/channels/${created.json.data.id}`);
   assert.equal(deleted.status, 200);
   assert.equal(db.prepare('SELECT COUNT(*) c FROM notification_channels').get().c, 0);
+});
+
+/* ------------------------------------------------------------------ *
+ * E-Mail als vierter Kanal (#944)
+ *
+ * Der Kanal traegt NUR sein Ziel. Der SMTP-Zugang steht app-weit in
+ * services/email.js und traegt schon Passwort-Reset und Einladungen; ein
+ * zweiter Satz Zugangsdaten je Kanal waere eine zweite Schreibweise fuer
+ * dieselbe Sache.
+ * ------------------------------------------------------------------ */
+
+function fakeMailer({ configured = true } = {}) {
+  const sent = [];
+  return {
+    sent,
+    isConfigured: () => configured,
+    sendMail: async (message) => { sent.push(message); return { messageId: 'x' }; },
+  };
+}
+
+test('ein Mail-Kanal traegt nur sein Ziel - keine Basis-URL, keine Geheimnisse (#944)', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+  const created = store.createChannel({
+    provider: 'email',
+    name: 'Oma',
+    enabled: true,
+    config: { toAddress: '  oma@example.org  ' },
+  });
+  assert.deepEqual(created.config, { toAddress: 'oma@example.org' }, 'nur die Adresse, getrimmt');
+  assert.equal(created.secretSet, false, 'ein Mail-Kanal haelt kein eigenes Geheimnis');
+  assert.deepEqual(
+    JSON.parse(db.prepare('SELECT secret_json FROM notification_channels WHERE id = ?').get(created.id).secret_json),
+    {},
+    'und legt auch keines an - sonst waere das SMTP-Passwort an zwei Orten'
+  );
+});
+
+test('eine unbrauchbare Empfaengeradresse wird beim Speichern abgelehnt, nicht beim Senden (#944)', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const store = createNotificationChannelStore({ db: makeDb() });
+  const reject = (toAddress, why) => assert.throws(
+    () => store.createChannel({ provider: 'email', name: 'Bad', config: { toAddress } }),
+    /recipient email address/i,
+    why
+  );
+  reject('', 'leer');
+  reject('kein-at', 'ohne @');
+  reject('a@b', 'ohne Punkt in der Domain');
+  reject('a b@c.de', 'mit Leerzeichen');
+  // Der teuerste Fall: ein Zeilenumbruch im Empfaenger-Header macht aus einer
+  // Adresse zwei Header. Er darf gar nicht erst in die Datenbank.
+  reject('a@c.de\nBcc: fremd@example.org', 'mit Zeilenumbruch (Header-Injection)');
+  reject('a@c.de\r\nBcc: fremd@example.org', 'mit CRLF (Header-Injection)');
+  reject('a@.de', 'Punkt direkt hinter dem @');
+  reject('a@de.', 'Punkt am Ende der Domain');
+  reject('@example.org', 'nichts vor dem @');
+  reject('a@b@c.de', 'zwei @');
+  reject(`${'a'.repeat(250)}@example.org`, 'laenger als RFC 5321 erlaubt');
+  // Und die Gegenprobe, damit die Pruefung nicht einfach alles ablehnt:
+  assert.equal(
+    store.createChannel({ provider: 'email', name: 'Ok', config: { toAddress: 'vor.name+tag@sub.example.co.uk' } }).config.toAddress,
+    'vor.name+tag@sub.example.co.uk',
+    'eine gewoehnliche Adresse mit Punkt, Plus und Subdomain geht durch'
+  );
+});
+
+test('eine Adressliste wird abgelehnt - ein Kanal, ein Ziel (#944)', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const store = createNotificationChannelStore({ db: makeDb() });
+  // nodemailer liest `to` als LISTE. "a@example.com,postmaster" waeren zwei
+  // Empfaenger im Umschlag - die Zusage "eine Adresse je Kanal" waere gebrochen
+  // und der Zustellstatus des Kanals truege zwei Wahrheiten. Die Zaehlung der
+  // @ allein faengt das nicht: der zweite Eintrag braucht gar keines.
+  for (const listy of ['a@example.com,postmaster', 'a@example.com,b@example.com', 'a@example.com;b@example.com']) {
+    assert.throws(
+      () => store.createChannel({ provider: 'email', name: 'Liste', config: { toAddress: listy } }),
+      /email address/i,
+      `${listy} muss abgelehnt werden`
+    );
+  }
+});
+
+test('email channels reject address-parser syntax and normalize international domains', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const store = createNotificationChannelStore({ db: makeDb() });
+  for (const toAddress of [
+    'alice@example.com<postmaster>',
+    'alice@example.com:postmaster',
+    'Alice<alice@example.com>',
+    'alice(comment)@example.com',
+    '"alice"@example.com',
+    'alice\\@example.com',
+    'alice\u0000@example.com',
+    'alice\u0007@example.com',
+    'alice\u007f@example.com',
+    'alice@example..com',
+    'alice@-example.com',
+  ]) {
+    assert.throws(
+      () => store.createChannel({ provider: 'email', name: 'Invalid recipient', config: { toAddress } }),
+      /valid recipient email address/i,
+      `${toAddress} must not be interpreted as another recipient`
+    );
+  }
+  const valid = store.createChannel({
+    provider: 'email', name: 'International recipient', config: { toAddress: ' Alice+tag@b\u00fccher.example ' },
+  });
+  assert.equal(valid.config.toAddress, 'Alice+tag@xn--bcher-kva.example');
+});
+
+test('der Betreff einer Erinnerungsmail bleibt aus dem Log (#944)', async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  // `emailService.sendMail` schreibt Empfaenger und Betreff auf info. Solange
+  // dort nur Passwort-Reset und Einladung liefen, war der Betreff fest. Eine
+  // Erinnerung traegt darin den Aufgaben- oder Terminnamen - bei einer
+  // Medikamenten-Erinnerung einen Gesundheitsdatensatz, der sonst dauerhaft
+  // auf stdout des Containers liegt.
+  const mailer = fakeMailer();
+  await emailProvider.send({
+    channel: { config: { toAddress: 'oma@example.org' } },
+    payload: { title: 'Gesundheit', body: 'Metformin 500mg' },
+    emailService: mailer,
+    env: {},
+  });
+  const mail = mailer.sent[0];
+  assert.match(mail.subject, /Metformin/, 'in der Mail steht er - dafuer ist sie da');
+  assert.ok(mail.logLabel, 'aber fuers Log gibt der Aufrufer eine Gattung an');
+  assert.doesNotMatch(mail.logLabel, /Metformin/);
+  assert.doesNotMatch(mail.logLabel, /Gesundheit/);
+});
+
+test('der Mail-Transport gibt vor dem Aufrufer auf (#944)', async () => {
+  // Reihenfolge der Zeitschranken, und sie ist der ganze Punkt: gibt der
+  // Transport zuerst auf, ist die Verbindung zu und ein erneuter Versuch
+  // redlich. Gaebe der Aufrufer zuerst auf, liefe der Versand darunter weiter -
+  // die Zustellung gaelte als gescheitert, wuerde wiederholt, und die Mail kaeme
+  // womoeglich zweimal an.
+  const { createEmailService } = await import('../server/services/email.js');
+  const db = makeDb();
+  db.prepare("INSERT INTO sync_config (key, value) VALUES ('email_smtp_host', 'smtp.example.test')").run();
+  db.prepare("INSERT INTO sync_config (key, value) VALUES ('email_from_address', 'yuvomi@example.test')").run();
+  let opts = null;
+  const service = createEmailService({
+    db,
+    env: {},
+    nodemailer: { createTransport: (o) => { opts = o; return { sendMail: async () => ({ messageId: 'x' }) }; } },
+  });
+  await service.sendMail({ to: 'a@b.de', subject: 's', text: 't', html: '<p>t</p>' });
+
+  const { PROVIDER_TIMEOUT_MS } = await import('../server/services/notifications.js');
+  for (const key of ['connectionTimeout', 'greetingTimeout', 'socketTimeout']) {
+    assert.ok(Number.isFinite(opts[key]), `${key} muss gesetzt sein - sonst wartet nodemailer unbegrenzt`);
+    assert.ok(opts[key] < PROVIDER_TIMEOUT_MS,
+      `${key} (${opts[key]}) muss unter dem Abbruch des Aufrufers (${PROVIDER_TIMEOUT_MS}) liegen`);
+  }
+});
+
+test('eine pathologische Adresse prallt ab, statt den Server anzuhalten (#944)', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const store = createNotificationChannelStore({ db: makeDb() });
+  // DIE ERSTE FASSUNG PRUEFTE MIT `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`. Deren beide
+  // Teile hinter dem @ ueberlappen sich - `[^\s@]` deckt auch den Punkt -, also
+  // probiert die Engine bei einer langen Eingabe OHNE Treffer jede Aufteilung
+  // von "Domain.TLD" durch. Sauber quadratisch: 1 kB kostete 1 ms, 8 kB schon
+  // 53 ms, die 80 kB hier gut fuenf Sekunden. Node arbeitet einaedrig - der
+  // ganze Server steht so lange.
+  //
+  // DAS SCHLUSS-@ IST DIE POINTE, nicht Beiwerk. Der erste Anlauf haengte ein
+  // Leerzeichen an; `trim()` nahm es weg, und was blieb, war eine GUELTIGE
+  // Adresse. Der Test wurde damals rot, weil kein Fehler kam - nicht wegen der
+  // Zeit. Er haette einen Rueckfall nicht bemerkt. Ein `@` ist von `[^\s@]`
+  // ausgeschlossen und ueberlebt das Trimmen, also scheitert der Match wirklich
+  // und die Engine backtrackt sich durch die ganze Laenge.
+  const evil = `a@${'!.'.repeat(40_000)}@`;
+  const started = process.hrtime.bigint();
+  assert.throws(() => store.createChannel({ provider: 'email', name: 'Evil', config: { toAddress: evil } }), /email address/i);
+  const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+  // Grosszuegig: die lineare Fassung liegt unter einer Millisekunde, die
+  // backtrackende bei dieser Laenge um das Tausendfache darueber. Zwischen
+  // beiden ist so viel Platz, dass die Schranke auf keiner Maschine wackelt.
+  assert.ok(elapsedMs < 250, `Die Pruefung brauchte ${elapsedMs.toFixed(0)} ms - das riecht nach Backtracking`);
+});
+
+test('eine Erinnerungsmail escapet die Nutzerdaten, die sie traegt (#944)', async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  const mailer = fakeMailer();
+  await emailProvider.send({
+    channel: { config: { toAddress: 'oma@example.org' } },
+    // Ein Terminname ist Nutzereingabe. In einer HTML-Mail ist er genauso
+    // gefaehrlich wie im DOM - manche Clients rendern grosszuegig.
+    payload: { title: 'Kalender', body: 'Zahnarzt <img src=x onerror=alert(1)> & Co', url: '/calendar' },
+    emailService: mailer,
+    env: { BASE_URL: 'https://haus.example' },
+  });
+  const mail = mailer.sent[0];
+  assert.doesNotMatch(mail.html, /<img/, 'kein durchgereichtes Markup');
+  assert.match(mail.html, /&lt;img src=x onerror=alert\(1\)&gt;/, 'sondern escaped');
+  assert.match(mail.html, /&amp; Co/, 'auch das kaufmaennische Und');
+  assert.match(mail.text, /Zahnarzt <img src=x onerror=alert\(1\)> & Co/, 'die Textfassung bleibt roh');
+});
+
+test('der Betreff nennt Herkunft UND Sache - im Posteingang ist nur er sichtbar (#944)', async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  const mailer = fakeMailer();
+  const send = (payload) => emailProvider.send({
+    channel: { config: { toAddress: 'oma@example.org' } }, payload, emailService: mailer, env: {},
+  });
+  await send({ title: 'Kalender', body: 'Zahnarzt' });
+  assert.equal(mailer.sent.at(-1).subject, 'Kalender: Zahnarzt');
+  // Gleicher Titel und Body: nicht doppeln.
+  await send({ title: 'Yuvomi', body: 'Yuvomi' });
+  assert.equal(mailer.sent.at(-1).subject, 'Yuvomi');
+  // Ein Zeilenumbruch im Titel darf keinen weiteren Header oeffnen.
+  await send({ title: 'Aufgaben', body: 'Milch\nBcc: fremd@example.org' });
+  assert.doesNotMatch(mailer.sent.at(-1).subject, /[\r\n]/, 'der Betreff bleibt einzeilig');
+});
+
+test('ohne BASE_URL traegt die Mail keinen Link statt eines kaputten (#944)', async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  const mailer = fakeMailer();
+  const base = { channel: { config: { toAddress: 'oma@example.org' } }, emailService: mailer };
+  const payload = { title: 'Kalender', body: 'Zahnarzt', url: '/calendar' };
+
+  await emailProvider.send({ ...base, payload, env: { BASE_URL: 'https://haus.example/' } });
+  assert.match(mailer.sent.at(-1).html, /href="https:\/\/haus\.example\/calendar"/, 'der Schraegstrich am Ende verdoppelt sich nicht');
+  assert.match(mailer.sent.at(-1).text, /https:\/\/haus\.example\/calendar/);
+
+  // `/calendar` allein ist in einer Mail kein Ziel. Der Request-Host wird hier
+  // bewusst nicht herangezogen - beim Versand kommt gar keiner vorbei.
+  await emailProvider.send({ ...base, payload, env: {} });
+  assert.doesNotMatch(mailer.sent.at(-1).html, /href=/, 'lieber kein Link als ein toter');
+  assert.doesNotMatch(mailer.sent.at(-1).text, /calendar/);
+});
+
+test('ohne SMTP nennt der Mail-Kanal den Grund, statt still zu scheitern (#944)', async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  const mailer = fakeMailer({ configured: false });
+  await assert.rejects(
+    () => emailProvider.send({ channel: { config: { toAddress: 'a@b.de' } }, payload: { title: 'x', body: 'y' }, emailService: mailer }),
+    /SMTP/i,
+    'die Meldung muss sagen, was zu tun ist'
+  );
+  assert.equal(mailer.sent.length, 0);
+  assert.equal(emailProvider.isAvailable({ emailService: mailer }), false);
+  assert.equal(emailProvider.isAvailable({ emailService: fakeMailer() }), true);
+});
+
+test('an already aborted email delivery never starts an SMTP send', async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  const mailer = fakeMailer();
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(() => emailProvider.send({
+    channel: { config: { toAddress: 'recipient@example.org' } },
+    payload: { title: 'Tasks', body: 'Cancelled reminder' },
+    emailService: mailer, signal: controller.signal,
+  }), /timed out/i);
+  assert.equal(mailer.sent.length, 0);
+});
+
+test('email channels preserve household and individual reminder delivery scope', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+  for (const [name, scope, userId] of [['Household', 'household', null], ['Alice', 'user', 1], ['Bob', 'user', 2]]) {
+    store.createChannel({ provider: 'email', name, enabled: true, scope, userId, config: { toAddress: `${name.toLowerCase()}@example.org` } });
+  }
+  db.prepare("INSERT INTO meals (id, title) VALUES (1, 'Family meal')").run();
+  db.prepare("INSERT INTO reminders (entity_type, entity_id, remind_at, created_by) VALUES ('meal', 1, ?, 1)").run(pastIso());
+  const deliveries = [];
+  const options = {
+    database: db, channelStore: store, pushService: { sendPushToUser: async () => 0 },
+    providers: { email: { id: 'email', send: async ({ channel, payload }) => { deliveries.push({ to: channel.config.toAddress, url: payload.url }); return { ok: true }; } } },
+  };
+  await processDueNotifications(options);
+  await processDueNotifications(options);
+  assert.deepEqual(deliveries.map((delivery) => delivery.to).sort(), ['alice@example.org', 'household@example.org']);
+  assert.ok(deliveries.every((delivery) => delivery.url === '/meals?open=1'));
+});
+
+test('die Kanalliste meldet einen Anbieter als nicht einsatzbereit, bevor ein Test scheitert (#944)', async () => {
+  const { buildRouter } = await import('../server/routes/notifications.js');
+  const db = makeDb();
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  // Die Test-Route beantwortet einen Fehlschlag mit generischem "Internal
+  // error" - der eine Satz, der weiterhilft, geht dabei verloren. Deshalb muss
+  // die Liste den Zustand schon vorher tragen.
+  const router = buildRouter({
+    database: db,
+    channelStore: createNotificationChannelStore({ db }),
+    notificationService: {
+      providers: {
+        gotify: { id: 'gotify', send: async () => ({ ok: true }) },
+        email: { id: 'email', isAvailable: () => false, send: async () => ({ ok: true }) },
+      },
+      testChannel: async () => ({ ok: true }),
+    },
+  });
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => { req.authUserId = 1; req.authRole = 'admin'; next(); });
+  app.use('/notifications', router);
+
+  const res = await call(app, 'GET', '/notifications/providers');
+  assert.equal(res.status, 200);
+  const byId = Object.fromEntries(res.json.data.map((p) => [p.id, p]));
+  assert.equal(byId.email.ready, false, 'Mail ohne SMTP ist nicht einsatzbereit');
+  assert.equal('ready' in byId.gotify, false, 'wer keine Voraussetzung hat, bleibt unveraendert');
+});
+
+test('der Erinnerungslauf stellt ueber einen Mail-Kanal zu (#944)', async () => {
+  const { createNotificationChannelStore } = await import('../server/services/notification-channels.js');
+  const { processDueNotifications } = await import('../server/services/notifications.js');
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  const db = makeDb();
+  const store = createNotificationChannelStore({ db });
+  store.createChannel({ provider: 'email', name: 'Oma', enabled: true, config: { toAddress: 'oma@example.org' } });
+  db.prepare("INSERT INTO tasks (id, title, created_by) VALUES (1, 'Müll rausbringen', 1)").run();
+  db.prepare("INSERT INTO reminders (id, entity_type, entity_id, remind_at, created_by) VALUES (1, 'task', 1, ?, 1)")
+    .run('2026-06-19T09:59:00.000Z');
+  const mailer = fakeMailer();
+  const providers = {
+    email: { id: 'email', send: (args) => emailProvider.send({ ...args, emailService: mailer, env: {} }) },
+  };
+  const pushService = { sendPushToUser: async () => 0 };
+
+  const first = await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
+  assert.deepEqual(first, { due: 1, attempted: 1, sent: 1, failed: 0, skipped: 0 });
+  assert.equal(mailer.sent.length, 1);
+  assert.equal(mailer.sent[0].to, 'oma@example.org');
+  assert.match(mailer.sent[0].subject, /Müll rausbringen/);
+
+  // Zweiter Lauf: dieselbe Erinnerung darf nicht erneut zugestellt werden.
+  const second = await processDueNotifications({ database: db, channelStore: store, pushService, providers, now: new Date() });
+  assert.equal(second.due, 0);
+  assert.equal(mailer.sent.length, 1, 'keine zweite Mail fuer dieselbe Erinnerung');
+});
+
+// Eigenes Zeitlimit: faellt das Rennen im Provider weg, HAENGT dieser Test
+// sonst, statt rot zu werden - und ein haengender Lauf blockiert die CI, statt
+// sie zu warnen (dieselbe Falle wie in der caldav-sync-Suite, #903).
+test('ein haengender SMTP-Server blockiert den Erinnerungslauf nicht (#944)', { timeout: 5000 }, async () => {
+  const { emailProvider } = await import('../server/services/notification-providers/email.js');
+  // nodemailer kennt kein AbortSignal. Ohne das Rennen im Provider wartet der
+  // Lauf hier ewig - und er arbeitet ALLE faelligen Erinnerungen nacheinander ab.
+  const controller = new AbortController();
+  const hanging = { isConfigured: () => true, sendMail: () => new Promise(() => {}) };
+  const pending = emailProvider.send({
+    channel: { config: { toAddress: 'a@b.de' } },
+    payload: { title: 'x', body: 'y' },
+    emailService: hanging,
+    signal: controller.signal,
+  });
+  controller.abort();
+  await assert.rejects(() => pending, /timed out/i);
 });

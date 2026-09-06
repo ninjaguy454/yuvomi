@@ -93,17 +93,10 @@
   --color-surface-2:      var(--neutral-50);
   --_color-surface-3:     var(--_neutral-150);
   --color-surface-3:      var(--_color-surface-3);
-  /* OFFEN, BEWUSST NICHT GEÄNDERT (Entscheidung des Betreibers, 2026-07-30,
-   * gilt im HIG-Redesign fort): die Kanten der BEDIENELEMENTE erreichen den von
-   * WCAG 1.4.11 geforderten 3:1-Kontrast nicht — auch Apples eigene Grouped-List-
-   * Separatoren tun das nicht. Gemessen gegen die iOS-27-Welt: 1.26:1 hell auf
-   * --color-surface (Eingabefeld auf Weiß), 1.13:1 auf dem Grouped-Grund,
-   * 1.60:1 dunkel auf --color-surface. Der 3:1-Zielwert auf Weiß wäre #949494
-   * (der alte Zielwert #8A8A86 galt gegen die warme Prä-Redesign-Palette).
-   * Der saubere Weg wäre ein eigenes --color-border-control mit 3:1, das NUR
-   * interaktive Kanten benutzen, nicht für dekorative Gruppierung;
-   * --color-border global anzuheben würde jede Kartenkante der App mithärten.
-   * Der TEXT-Kontrast ist ohne Verstoß. */
+  /* Inputs need a recognizable boundary (3:1 against their surface). Keep
+   * that role separate from the quiet borders of decorative cards/groups. */
+  --_color-border-control: #8C857A;
+  --color-border-control: var(--_color-border-control);
   --color-border:         var(--neutral-200);
   --color-border-subtle:  var(--neutral-150);
   --color-border-strong:  var(--neutral-300);  /* kräftigere Trennlinie (Hover, betonte Rahmen) */
@@ -332,7 +325,7 @@
   --color-success-hover:  var(--_color-success-hover);
   --_color-success-light: #DFF6E4;
   --color-success-light:  var(--_color-success-light);
-  --_color-warning:       #A85D00;
+  --_color-warning:       #A65B00;
   --color-warning:        var(--_color-warning);   /* Amber-Braun: klar von Danger-Rot getrennt (Farbfehlsicht), 4.9:1 auf weiß */
   --_color-warning-hover: #8F4F00;
   --color-warning-hover:  var(--_color-warning-hover);
@@ -1000,6 +993,8 @@
    *     Plattform-Grotesk überall sonst. Apple-Typo-Skala.
    * -------------------------------------------------------- */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Roboto, Arial, sans-serif;
+  --font-serif: Iowan Old Style, Palatino Linotype, Book Antiqua, Georgia, serif;
+  --font-heading: var(--font-sans);
   --font-mono: ui-monospace, 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
 
   /* Größen-Skala (Kompatibilitäts- und Layout-Tokens) */
@@ -1743,6 +1738,7 @@
     --color-border-subtle: #3E3933;  /* Trenner, ruhige Kartenkante */
     --color-border:        #47423B;  /* Standardkante, Formfelder */
     --color-border-strong: #6F6A61;  /* Hover, betonte Rahmen (~2.7:1) */
+    --_color-border-control: #8F887E;
 
     --_sidebar-bg:           #221F1D;
     --_sidebar-shadow-light: rgba(255, 255, 255, 0.04);
@@ -1775,7 +1771,7 @@
     /* Semantik — Apple Dark-Varianten */
     --_color-success:       #30D158;
     --_color-warning:       #FF9F0A;
-    --_color-danger:        #FF6961;   /* heller als FF453A: ~5.6:1 auf #1C1C1E */
+    --_color-danger:        #FF6D65;   /* AA also on raised surfaces in each color theme. */
     --_color-info:          #409CFF;
     /* WARM STATT KUEHL (Dark-Kur 2026-08-17). #98989F stand bei Hue 291
      * (Lab), ein kuehl-violetter Rest der abgeloesten Apple-Rampe, waehrend
@@ -1866,8 +1862,8 @@
     --_family-kitchen:  #FB923C;
     --_family-money:    #2DD4BF;
     --_family-people:   #FB7185;
-    --_family-health:   #DB60CB;
-    --_family-records:  #7E9BCC;
+    --_family-health:   #E573D6;
+    --_family-records:  #819ED0;
     --_family-neutral:  #94A3B8;
     --cycle-period:    #F871A0;
     --cycle-fertile:   #34D3B0;
@@ -2004,6 +2000,7 @@
     --color-border-subtle: #3E3933;
     --color-border:        #47423B;
     --color-border-strong: #6F6A61;
+    --_color-border-control: #8F887E;
 
     /* Sidebar */
     --_sidebar-bg:           #221F1D;
@@ -2022,7 +2019,7 @@
     /* Semantische Farben */
     --_color-success:       #30D158;
     --_color-warning:       #FF9F0A;
-    --_color-danger:        #FF6961;
+    --_color-danger:        #FF6D65;
     --_color-info:          #409CFF;
     /* Warm statt kuehl - Begruendung im Media-Block oben (Dark-Kur 2026-08-17). */
     --_color-text-tertiary: #A9A39A;
@@ -2090,8 +2087,8 @@
     --_family-kitchen:  #FB923C;
     --_family-money:    #2DD4BF;
     --_family-people:   #FB7185;
-    --_family-health:   #DB60CB;
-    --_family-records:  #7E9BCC;
+    --_family-health:   #E573D6;
+    --_family-records:  #819ED0;
     --_family-neutral:  #94A3B8;
     --cycle-period:    #F871A0;
     --cycle-fertile:   #34D3B0;
@@ -2169,6 +2166,213 @@
     --_app-backdrop-accent-strength: 1.5%;
     --_app-backdrop-secondary-strength: 0.75%;
     --lg-blob-opacity:        0.20;
+  }
+}
+
+/* Personal color temperature. Neutral keeps the existing palette unchanged.
+ * Warm and Cool change neutral roles only; semantic and module colors retain
+ * their meanings. Values are applied before accessibility media overrides. */
+:root[data-color-theme="warm"] {
+  --palette-control-border: #94816A;
+  --palette-dark-control-border: #A18B70;
+  --palette-light-50: #FDFBF7;
+  --palette-light-100: #F8F4EC;
+  --palette-light-150: #EFE8DB;
+  --palette-light-200: #E3D9C8;
+  --palette-light-250: #D7C9B3;
+  --palette-light-300: #C8BBA5;
+  --palette-light-400: #A99A85;
+  --palette-light-500: #887B69;
+  --palette-light-600: #665A4B;
+  --palette-light-700: #4B4135;
+  --palette-light-800: #30291F;
+  --palette-light-900: #241E16;
+  --palette-light-950: #16110B;
+  --palette-dark-50: #15100C;
+  --palette-dark-100: #1C1712;
+  --palette-dark-150: #2D251D;
+  --palette-dark-200: #382F25;
+  --palette-dark-250: #493C2E;
+  --palette-dark-300: #594A38;
+  --palette-dark-400: #75634D;
+  --palette-dark-500: #9A866D;
+  --palette-dark-600: #C0AE96;
+  --palette-dark-700: #D6C6AF;
+  --palette-dark-800: #EBDDC8;
+  --palette-dark-900: #F8EEDC;
+  --palette-dark-950: #FFFAEF;
+  --palette-surface: #FFFDF9;
+  --palette-tertiary: #6B5E4C;
+  --palette-dark-tertiary: #B3A087;
+  --palette-dark-sidebar: #251E17;
+  --palette-dark-border: #493E30;
+  --palette-dark-border-subtle: #403529;
+  --palette-dark-border-strong: #81705B;
+  --palette-shadow: 59, 39, 19;
+  --palette-highlight: 255, 246, 230;
+  --palette-light-glass: 255, 251, 243;
+  --palette-dark-glass: 45, 37, 29;
+}
+
+:root[data-color-theme="cool"] {
+  --palette-control-border: #7C8BA0;
+  --palette-dark-control-border: #8B9DB5;
+  --palette-light-50: #F8FAFD;
+  --palette-light-100: #F2F5FA;
+  --palette-light-150: #E4EBF3;
+  --palette-light-200: #D5DFEC;
+  --palette-light-250: #C6D3E3;
+  --palette-light-300: #B5C5D9;
+  --palette-light-400: #95A8BF;
+  --palette-light-500: #72879F;
+  --palette-light-600: #51647A;
+  --palette-light-700: #3B4E64;
+  --palette-light-800: #28394C;
+  --palette-light-900: #1B2A3C;
+  --palette-light-950: #101B29;
+  --palette-dark-50: #0C121B;
+  --palette-dark-100: #131D2A;
+  --palette-dark-150: #202A37;
+  --palette-dark-200: #2B3541;
+  --palette-dark-250: #374352;
+  --palette-dark-300: #46546A;
+  --palette-dark-400: #60718A;
+  --palette-dark-500: #8A9CB6;
+  --palette-dark-600: #B1C2D8;
+  --palette-dark-700: #C8D7E7;
+  --palette-dark-800: #DFE8F3;
+  --palette-dark-900: #F0F5FB;
+  --palette-dark-950: #FAFCFF;
+  --palette-surface: #FDFEFF;
+  --palette-tertiary: #53667C;
+  --palette-dark-tertiary: #A4B6CC;
+  --palette-dark-sidebar: #192432;
+  --palette-dark-border: #3D4756;
+  --palette-dark-border-subtle: #333D4B;
+  --palette-dark-border-strong: #71839B;
+  --palette-shadow: 16, 35, 59;
+  --palette-highlight: 234, 243, 255;
+  --palette-light-glass: 245, 249, 255;
+  --palette-dark-glass: 32, 42, 55;
+}
+
+:root:is([data-color-theme="warm"], [data-color-theme="cool"]) {
+  --_color-border-control: var(--palette-control-border);
+  --_neutral-50: var(--palette-light-50);
+  --_neutral-100: var(--palette-light-100);
+  --_neutral-150: var(--palette-light-150);
+  --_neutral-200: var(--palette-light-200);
+  --_neutral-250: var(--palette-light-250);
+  --_neutral-300: var(--palette-light-300);
+  --_neutral-400: var(--palette-light-400);
+  --_neutral-500: var(--palette-light-500);
+  --_neutral-600: var(--palette-light-600);
+  --_neutral-700: var(--palette-light-700);
+  --_neutral-800: var(--palette-light-800);
+  --_neutral-900: var(--palette-light-900);
+  --_neutral-950: var(--palette-light-950);
+  --_color-surface: var(--palette-surface);
+  --_color-surface-work: var(--palette-surface);
+  --_color-surface-raised: var(--palette-light-50);
+  --_color-text-tertiary: var(--palette-tertiary);
+  --_sidebar-bg: var(--palette-light-100);
+  --color-border: var(--palette-light-200);
+  --color-border-subtle: var(--palette-light-150);
+  --color-border-strong: var(--palette-light-300);
+  --_color-surface-glass: rgba(var(--palette-light-glass), 0.66);
+  --_glass-bg-elevated: rgba(var(--palette-light-glass), 0.88);
+  --_glass-bg-card-hover: rgba(var(--palette-light-glass), 0.80);
+  --_shadow-xs: 0 1px 2px rgba(var(--palette-shadow), 0.08);
+  --_shadow-sm: 0 1px 3px rgba(var(--palette-shadow), .08);
+  --_shadow-md: 0 4px 14px rgba(var(--palette-shadow), .10);
+  --_shadow-lg: 0 8px 28px rgba(var(--palette-shadow), .14);
+  --_shadow-xl: 0 18px 56px rgba(var(--palette-shadow), .20);
+  --_glass-shadow-sm: 0 2px 10px rgba(var(--palette-shadow), .06), 0 0 0 1px rgba(var(--palette-highlight), .55);
+  --_glass-shadow-md: 0 6px 24px rgba(var(--palette-shadow), .10), 0 0 0 1px rgba(var(--palette-highlight), .55);
+  --_glass-shadow-lg: 0 10px 44px rgba(var(--palette-shadow), .14), 0 0 0 1px rgba(var(--palette-highlight), .55);
+}
+
+@media screen and (prefers-color-scheme: dark) {
+  :root:is([data-color-theme="warm"], [data-color-theme="cool"]):not([data-theme="light"]) {
+    --_color-border-control: var(--palette-dark-control-border);
+    --_neutral-50: var(--palette-dark-50);
+    --_neutral-100: var(--palette-dark-100);
+    --_neutral-150: var(--palette-dark-150);
+    --_neutral-200: var(--palette-dark-200);
+    --_neutral-250: var(--palette-dark-250);
+    --_neutral-300: var(--palette-dark-300);
+    --_neutral-400: var(--palette-dark-400);
+    --_neutral-500: var(--palette-dark-500);
+    --_neutral-600: var(--palette-dark-600);
+    --_neutral-700: var(--palette-dark-700);
+    --_neutral-800: var(--palette-dark-800);
+    --_neutral-900: var(--palette-dark-900);
+    --_neutral-950: var(--palette-dark-950);
+    --_color-surface: var(--palette-dark-150);
+    --_color-surface-work: var(--palette-dark-150);
+    --_color-surface-raised: var(--palette-dark-200);
+    --_color-surface-3: var(--palette-dark-200);
+    --_color-surface-elevated: var(--palette-dark-200);
+    --_color-surface-hover: var(--palette-dark-200);
+    --_color-surface-elevated-hover: var(--palette-dark-250);
+    --_color-text-tertiary: var(--palette-dark-tertiary);
+    --_sidebar-bg: var(--palette-dark-sidebar);
+    --color-border: var(--palette-dark-border);
+    --color-border-subtle: var(--palette-dark-border-subtle);
+    --color-border-strong: var(--palette-dark-border-strong);
+    --_color-surface-glass: rgba(var(--palette-dark-glass), 0.66);
+    --_glass-bg-elevated: rgba(var(--palette-dark-glass), 0.88);
+    --_glass-bg-card-hover: rgba(var(--palette-dark-glass), 0.80);
+    --_shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --_shadow-sm: 0 1px 3px rgba(0, 0, 0, .30), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_shadow-md: 0 4px 14px rgba(0, 0, 0, .40), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_shadow-lg: 0 8px 28px rgba(0, 0, 0, .50), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_shadow-xl: 0 18px 56px rgba(0, 0, 0, .65), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_glass-shadow-sm: 0 2px 10px rgba(0, 0, 0, .35), 0 0 0 1px rgba(var(--palette-highlight), .06);
+    --_glass-shadow-md: 0 6px 24px rgba(0, 0, 0, .45), 0 0 0 1px rgba(var(--palette-highlight), .06);
+    --_glass-shadow-lg: 0 10px 44px rgba(0, 0, 0, .60), 0 0 0 1px rgba(var(--palette-highlight), .06);
+  }
+}
+
+@media screen {
+  :root:is([data-color-theme="warm"], [data-color-theme="cool"])[data-theme="dark"] {
+    --_color-border-control: var(--palette-dark-control-border);
+    --_neutral-50: var(--palette-dark-50);
+    --_neutral-100: var(--palette-dark-100);
+    --_neutral-150: var(--palette-dark-150);
+    --_neutral-200: var(--palette-dark-200);
+    --_neutral-250: var(--palette-dark-250);
+    --_neutral-300: var(--palette-dark-300);
+    --_neutral-400: var(--palette-dark-400);
+    --_neutral-500: var(--palette-dark-500);
+    --_neutral-600: var(--palette-dark-600);
+    --_neutral-700: var(--palette-dark-700);
+    --_neutral-800: var(--palette-dark-800);
+    --_neutral-900: var(--palette-dark-900);
+    --_neutral-950: var(--palette-dark-950);
+    --_color-surface: var(--palette-dark-150);
+    --_color-surface-work: var(--palette-dark-150);
+    --_color-surface-raised: var(--palette-dark-200);
+    --_color-surface-3: var(--palette-dark-200);
+    --_color-surface-elevated: var(--palette-dark-200);
+    --_color-surface-hover: var(--palette-dark-200);
+    --_color-surface-elevated-hover: var(--palette-dark-250);
+    --_color-text-tertiary: var(--palette-dark-tertiary);
+    --_sidebar-bg: var(--palette-dark-sidebar);
+    --color-border: var(--palette-dark-border);
+    --color-border-subtle: var(--palette-dark-border-subtle);
+    --color-border-strong: var(--palette-dark-border-strong);
+    --_color-surface-glass: rgba(var(--palette-dark-glass), 0.66);
+    --_glass-bg-elevated: rgba(var(--palette-dark-glass), 0.88);
+    --_glass-bg-card-hover: rgba(var(--palette-dark-glass), 0.80);
+    --_shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --_shadow-sm: 0 1px 3px rgba(0, 0, 0, .30), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_shadow-md: 0 4px 14px rgba(0, 0, 0, .40), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_shadow-lg: 0 8px 28px rgba(0, 0, 0, .50), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_shadow-xl: 0 18px 56px rgba(0, 0, 0, .65), 0 0 0 1px rgba(var(--palette-highlight), 0.06);
+    --_glass-shadow-sm: 0 2px 10px rgba(0, 0, 0, .35), 0 0 0 1px rgba(var(--palette-highlight), .06);
+    --_glass-shadow-md: 0 6px 24px rgba(0, 0, 0, .45), 0 0 0 1px rgba(var(--palette-highlight), .06);
+    --_glass-shadow-lg: 0 10px 44px rgba(0, 0, 0, .60), 0 0 0 1px rgba(var(--palette-highlight), .06);
   }
 }
 

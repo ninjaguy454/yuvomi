@@ -1,9 +1,13 @@
 /**
  * Modul: Notification-Channel-Store
  * Zweck: CRUD, Validierung und write-only Secret-Handhabung fuer externe Notification-Provider.
- * Abhaengigkeiten: server/db.js
+ * Abhaengigkeiten: server/db.js, utils/ssrf.js, notification-providers/guarded-fetch.js
  */
+import { isIP } from 'node:net';
 import * as dbModule from '../db.js';
+import { singleEmailAddress } from './member-email.js';
+import { isBlockedAddress, isBlockedHostname, normalizeHostname } from '../utils/ssrf.js';
+import { ENV_ALLOW_PRIVATE_NETWORK, isPrivateNetworkAllowed } from './notification-providers/guarded-fetch.js';
 import {
   WEBHOOK_TEMPLATE_PLACEHOLDERS,
   renderPayloadTemplate,
@@ -14,6 +18,7 @@ export const NOTIFICATION_PROVIDERS = [
   { id: 'gotify', name: 'Gotify' },
   { id: 'ntfy', name: 'ntfy' },
   { id: 'webhook', name: 'Webhook' },
+  { id: 'email', name: 'Email' },
 ];
 
 const PROVIDER_IDS = new Set(NOTIFICATION_PROVIDERS.map((p) => p.id));
@@ -50,6 +55,15 @@ function normalizeBaseUrl(value, { keepPath = false } = {}) {
   }
   if (!['http:', 'https:'].includes(url.protocol)) {
     throw new Error('Notification channel URL scheme must be http or https.');
+  }
+  // Was sich ohne DNS entscheiden laesst, faellt schon beim Speichern: localhost,
+  // reservierte Suffixe und ein Literal aus einem privaten Netz. Die Antwort auf
+  // ein Formular ist der Ort, an dem ein Admin den Schalter erfaehrt - bei der
+  // Zustellung Stunden spaeter liest sie niemand. Die Namensaufloesung prueft
+  // guardedFetch beim Senden, je Verbindung (GHSA-f4w5-ggcc-7m5c).
+  const host = normalizeHostname(url.hostname);
+  if (!isPrivateNetworkAllowed() && (isBlockedHostname(host) || (isIP(host) && isBlockedAddress(host)))) {
+    throw new Error(`Notification channel URL must not point to a private or local network address (set ${ENV_ALLOW_PRIVATE_NETWORK}=true to allow it).`);
   }
   if (keepPath) return url.toString();
   url.pathname = url.pathname.replace(/\/+$/, '');
@@ -159,6 +173,32 @@ function normalizeWebhookSecrets(input = {}) {
   return { token: String(input.token ?? '').trim() };
 }
 
+/**
+ * EINE ADRESSE JE KANAL, keine Liste. Wer zwei Empfaenger will, legt zwei
+ * Kanaele an - dann laesst sich jeder einzeln abschalten und einzeln testen.
+ * Eine Adressliste in einem Feld nimmt genau das weg: ein Testknopf fuer drei
+ * Adressen sagt nicht, welche davon gescheitert ist, und beim Teilversand
+ * muesste der Kanal-Status zwei Wahrheiten gleichzeitig tragen.
+ *
+ * Dieselbe begrenzte Adresspruefung wie fuer Kontakt-Mails verhindert Listen,
+ * Anzeigenamen und Gruppensyntax, die nodemailer als anderes Ziel auslegen
+ * koennte. Die Haushaltsmitgliedschaft ist eine separate Frage und gilt hier
+ * nicht: ein Kanal darf eine ausdruecklich konfigurierte externe Adresse haben.
+ */
+function normalizeEmailAddress(value) {
+  const raw = String(value ?? '').trim();
+  if (!raw) throw new Error('A recipient email address is required.');
+  const address = singleEmailAddress(raw);
+  if (!address) throw new Error('A valid recipient email address is required.');
+  return address;
+}
+
+function normalizeEmailConfig(input = {}) {
+  // Kein baseUrl: der Kanal bringt keinen Endpunkt mit, der SMTP-Zugang steht
+  // app-weit in services/email.js. Siehe notification-providers/email.js.
+  return { toAddress: normalizeEmailAddress(input.toAddress) };
+}
+
 export function normalizeChannelInput(input = {}, existing = null) {
   const provider = existing?.provider || normalizeProvider(input.provider);
   normalizeProvider(provider);
@@ -179,6 +219,9 @@ export function normalizeChannelInput(input = {}, existing = null) {
     config = normalizeNtfyConfig(mergedConfig);
     secrets = normalizeNtfySecrets(mergedSecrets);
     validateNtfy({ config, secrets, requireSecrets: !existing || input.secrets !== undefined });
+  } else if (provider === 'email') {
+    config = normalizeEmailConfig(mergedConfig);
+    secrets = {};
   } else {
     config = normalizeWebhookConfig(mergedConfig);
     secrets = normalizeWebhookSecrets(mergedSecrets);

@@ -196,6 +196,7 @@ function renderTabs(container) {
         items: [
           { action: 'rename-list', label: t('shopping.renameListLabel'), icon: 'pencil', id: state.activeList.id },
           { action: 'import-meals', label: t('shopping.importMeals'), icon: 'utensils' },
+          { action: 'send-list', label: t('shopping.sendList'), icon: 'mail' },
           { action: 'manage-categories', label: t('shopping.manageCategories'), icon: 'tags' },
           { action: 'delete-list', label: t('shopping.deleteListLabel'), icon: 'trash', id: state.activeList.id, danger: true },
         ],
@@ -211,6 +212,111 @@ function renderTabs(container) {
     ${actionsHtml}
   `);
   if (window.lucide) window.lucide.createIcons({ el: bar });
+}
+
+/**
+ * Die offene Liste an ein Haushaltsmitglied mailen (#944).
+ *
+ * ABSCHRIFT, KEIN ZUGANG. Der Dialog sagt beides: wie viele Artikel mitgehen
+ * und dass es eine Momentaufnahme ist. Wer im Laden steht, haekelt nicht mit -
+ * die Mail kann von spaeteren Aenderungen nichts wissen, und der Absender soll
+ * das vorher lesen, nicht hinterher merken.
+ *
+ * Die Auswahl kennt nur Mitglieder MIT hinterlegter Adresse. Ein Name, den man
+ * anklicken kann und der dann scheitert, ist eine Zusage, die nicht haelt; die
+ * Route lehnt denselben Fall ohnehin ab, aber sie ist die zweite Verteidigung,
+ * nicht die erste.
+ */
+async function openSendListDialog(container) {
+  const listId = state.activeListId;
+  const openCount = state.items.filter((item) => !item.is_checked).length;
+  if (!openCount) {
+    window.yuvomi.showToast(t('shopping.sendListEmpty'), 'warning');
+    return;
+  }
+
+  let members = [];
+  try {
+    // Nicht `/family/members`: der zeigt alle Konten ausser Hauspersonal, also
+    // auch Geteilte-Ausgaben-Gaeste, die Externe sind. Dieser Endpunkt fragt
+    // dieselbe Funktion wie die Versandroute, damit die Auswahl niemanden
+    // anbietet, den der Server ablehnt - und umgekehrt.
+    //
+    // Sich selbst einzuschliessen ist Absicht: "schick mir die Liste aufs
+    // Handy" ist derselbe Wunsch wie "schick sie meiner Mutter", und wer sie
+    // sich selbst schickt, bekommt den Absendersatz nicht vorgesetzt (die
+    // Route laesst ihn dann weg).
+    const res = await api.get('/shopping/send-recipients');
+    members = res.data || [];
+  } catch {
+    window.yuvomi.showToast(t('common.errorGeneric'), 'danger');
+    return;
+  }
+
+  // WAEHREND DES LADENS KANN DIE LISTE GEWECHSELT HABEN. Der Dialog haelt
+  // `listId` und die Artikelzahl von vorhin fest, sagt aber nirgends, welche
+  // Liste er meint - er wuerde also die alte verschicken, waehrend auf dem
+  // Bildschirm die neue steht. Bei etwas, das sich nicht zuruecknehmen laesst,
+  // ist das der teuerste Fehler dieser Funktion.
+  if (state.activeListId !== listId) return;
+
+  if (!members.length) {
+    window.yuvomi.showToast(t('shopping.sendListNoRecipients'), 'warning');
+    return;
+  }
+
+  openModal({
+    title: t('shopping.sendListTitle'),
+    content: `
+      <p class="form-hint">${esc(t('shopping.sendListDescription', { count: openCount }))}</p>
+      <div class="form-group">
+        <label class="form-label" for="send-list-recipient">${esc(t('shopping.sendListRecipient'))}</label>
+        <select id="send-list-recipient" class="form-input">
+          ${members.map((m) => `<option value="${m.id}">${esc(m.display_name)}</option>`).join('')}
+        </select>
+      </div>
+      <p class="form-hint">${esc(t('shopping.sendListSnapshotHint'))}</p>
+      <div class="modal-panel__footer modal-panel__footer--plain">
+        <button type="button" class="btn btn--secondary" data-action="close-modal">${esc(t('common.cancel'))}</button>
+        <button type="button" class="btn btn--primary" id="send-list-confirm">${esc(t('shopping.sendListSubmit'))}</button>
+      </div>`,
+    onSave(panel) {
+      panel.querySelector('#send-list-confirm').addEventListener('click', async (event) => {
+        const btn = event.currentTarget;
+        const select = panel.querySelector('#send-list-recipient');
+        const userId = Number(select.value);
+        const name = members.find((m) => m.id === userId)?.display_name ?? '';
+        btn.disabled = true;
+        try {
+          await api.post(`/shopping/${listId}/send`, { userId });
+          closeModal({ force: true });
+          // BEWUSST KEIN success-Toast. Die Erfolgsmeldungen der App sind nach
+          // 50 Bestaetigungen dauerhaft stummgeschaltet (`TOAST_SUCCESS_MAX` in
+          // router.js) - richtig fuer Handlungen, deren Ergebnis auf dem
+          // Bildschirm steht und die man taeglich wiederholt. Ein Mailversand
+          // ist das Gegenteil: er passiert selten, laesst sich nicht
+          // zuruecknehmen, und sein Ergebnis liegt in einem fremden Postfach.
+          // Wer hier nichts sieht, weiss nicht, ob die Liste unterwegs ist.
+          window.yuvomi.showToast(t('shopping.sendListSent', { name }), 'info');
+        } catch (err) {
+          // Der Server nennt seinen Grund maschinenlesbar mit, damit die drei
+          // Absagen hier in der Sprache der Oberflaeche stehen koennen. Sein
+          // Meldungstext bleibt der Rueckfall fuer alles Unerwartete - er ist
+          // englisch wie jede Server-Meldung, aber besser als "ging nicht".
+          const byReason = {
+            recipient_no_email: 'shopping.sendListRecipientNoEmail',
+            smtp_unconfigured: 'shopping.sendListSmtpMissing',
+            nothing_open: 'shopping.sendListEmpty',
+          }[err.data?.reason];
+          window.yuvomi.showToast(
+            byReason ? t(byReason) : (err.data?.error ?? t('shopping.sendListError')),
+            'danger',
+          );
+          btn.disabled = false;
+        }
+      });
+    },
+  });
 }
 
 function renderListContent(container) {
@@ -1817,6 +1923,10 @@ function wireListContentEvents(container) {
 
     if (action === 'import-meals') {
       openMealPlanImport(container);
+    }
+
+    if (action === 'send-list') {
+      await openSendListDialog(container);
     }
 
     // ---- Liste umbenennen ----

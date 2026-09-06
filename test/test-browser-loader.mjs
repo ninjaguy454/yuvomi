@@ -24,6 +24,14 @@ const STUBS = {
       logout: async () => ({ ok: true }),
       updateProfile: async () => ({ user: null }),
     };
+    export const notifications = {
+      providers: async () => ({ data: [] }),
+      listChannels: async () => ({ data: [] }),
+      createChannel: async () => ({ data: null }),
+      updateChannel: async () => ({ data: null }),
+      deleteChannel: async () => ({ data: null }),
+      testChannel: async () => ({ data: null }),
+    };
     export const recipeProviders = {
       listAccounts: async () => ({ data: [] }),
       createAccount: async () => ({ data: null }),

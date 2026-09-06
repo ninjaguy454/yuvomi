@@ -198,13 +198,13 @@ function makeDb() {
   // genau seine WIRKUNG.
   db.prepare('INSERT INTO users (id, username, password_hash, oidc_sub, role) VALUES (2,?,?,?,?)')
     .run('sso', OIDC_PASSWORD_SENTINEL, 'sub-linked-847', 'admin');
-  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (1, 'alice@test')").run();
-  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (2, 'sso@test')").run();
+  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (1, 'alice@example.test')").run();
+  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (2, 'sso@example.test')").run();
   // Ein Gast aus den geteilten Ausgaben: externes Konto mit echtem Passwort,
   // das der Schalter nicht mitnehmen darf.
   db.prepare("INSERT INTO users (id, username, password_hash) VALUES (3,'gast','$2b$12$fakehash')").run();
   db.prepare('INSERT INTO split_expense_guest_users (user_id) VALUES (3)').run();
-  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (3, 'gast@test')").run();
+  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (3, 'gast@example.test')").run();
   return db;
 }
 
@@ -261,7 +261,7 @@ test('das Konto mit Passwort bekommt seinen Reset-Link weiterhin', async () => {
   const { app, sent } = await makeAuthApp(db);
   await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'alice' });
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].to, 'alice@test');
+  assert.equal(sent[0].to, 'alice@example.test');
 });
 
 test('auch ueber die E-Mail-Adresse fuehrt kein Weg zum Reset eines SSO-Kontos', async () => {
@@ -269,7 +269,7 @@ test('auch ueber die E-Mail-Adresse fuehrt kein Weg zum Reset eines SSO-Kontos',
   // haengt, ist kein Riegel.
   const db = makeDb();
   const { app, sent } = await makeAuthApp(db);
-  await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'sso@test' });
+  await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'sso@example.test' });
   assert.equal(sent.length, 0);
 });
 
@@ -330,7 +330,7 @@ test('ein Gast aus den geteilten Ausgaben behaelt seinen Reset', async () => {
     await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'gast' });
   });
   assert.equal(sent.length, 1, 'der Gast muss seinen Link bekommen');
-  assert.equal(sent[0].to, 'gast@test');
+  assert.equal(sent[0].to, 'gast@example.test');
 });
 
 test('das Haushaltsmitglied bekommt im selben Zustand keinen', async () => {

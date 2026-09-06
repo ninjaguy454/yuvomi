@@ -10,6 +10,10 @@ import {
   hasExplicitZone, householdTimeZone, shiftDateKey, todayKey, utcToWall,
 } from '../utils/timezone.js';
 import { visibilityWhere } from '../services/visibility.js';
+import {
+  buildSessionModuleAccess, moduleAccessVerdict, MODULE_ACCESS_ALLOW,
+  MODULE_ACCESS_READ_ONLY, resolvePermissions,
+} from '../permissions.js';
 
 const router = express.Router();
 const limiter = rateLimit({ windowMs: 10 * 60_000, max: 10, standardHeaders: true, legacyHeaders: false });
@@ -19,15 +23,53 @@ const DUMMY_HASH = '$2b$12$invalidhashfortimingprotection000000000000000000000';
 // authenticated-user slot as the rest of Yuvomi.
 router.use((req, _res, next) => {
   req.authUserId = Number(req.session?.['userId']) || null;
+  if (req.authUserId) {
+    const database = db.get();
+    const user = database.prepare('SELECT id, role, family_role FROM users WHERE id = ?').get(req.authUserId);
+    if (!user) req.authUserId = null;
+    else {
+      req.sessionModuleAccess = buildSessionModuleAccess(resolvePermissions(database, user));
+      req.readerRestrictedGuest = !!database.prepare('SELECT 1 FROM split_expense_guest_users WHERE user_id = ?').get(user.id);
+      if (req.readerRestrictedGuest) req.sessionModuleAccess = { tasks: 'none', calendar: 'none', meals: 'none' };
+    }
+  }
   next();
 });
+
+function canAccess(moduleAccess, module, access = 'read') {
+  return moduleAccessVerdict(moduleAccess, module, access) === MODULE_ACCESS_ALLOW;
+}
+
+function pageOptions(req) {
+  const preference = (key) => db.get().prepare('SELECT value FROM sync_config WHERE key = ?')
+    .get(`${key}:user:${Number(req.authUserId)}`)?.value;
+  const color = preference('color_theme');
+  return {
+    signedIn: true, csrf: csrf(req), moduleAccess: req.sessionModuleAccess,
+    colorTheme: ['warm', 'cool'].includes(color) ? color : 'neutral',
+    headingFont: preference('heading_font') === 'serif' ? 'serif' : 'default',
+  };
+}
+
+function deniedPage(req, res, verdict) {
+  const message = req.readerRestrictedGuest ? 'This account can only access Shared expenses.'
+    : verdict === MODULE_ACCESS_READ_ONLY ? 'You have read-only access to this module.'
+      : 'You do not have access to this module.';
+  res.setHeader('Cache-Control', 'private, no-store');
+  return res.status(403).type('html').send(page('Access unavailable', `<h1>Access unavailable</h1><p>${message}</p><p><a href="/">Open the full app</a></p>`, pageOptions(req)));
+}
 
 function h(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
 }
 
-function page(title, body, { signedIn = false, csrf = '' } = {}) {
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${h(title)} - Yuvomi Reader</title><link rel="stylesheet" href="/reader.css"></head><body><div class="page"><header><a class="brand" href="/reader">Yuvomi Reader</a>${signedIn ? `<form class="logout" method="post" action="/reader/logout"><input type="hidden" name="csrf" value="${h(csrf)}"><button type="submit">Sign out</button></form>` : ''}</header>${signedIn ? '<nav><a href="/reader?view=today">Today</a> <a href="/reader?view=tasks">Tasks</a> <a href="/reader?view=add-task">Add Task</a> <a href="/reader?view=calendar">Calendar</a> <a href="/reader?view=meals">Meals</a> <a href="/reader?view=recipes">Recipes</a> <a href="/">Full app</a></nav>' : ''}<main>${body}</main><footer>Lightweight mode for e-readers and older browsers.</footer></div></body></html>`;
+function page(title, body, { signedIn = false, csrf = '', moduleAccess = null, colorTheme = 'neutral', headingFont = 'default' } = {}) {
+  const navigation = [
+    ['today', 'Today'], ['tasks', 'Tasks', 'tasks'], ['add-task', 'Add Task', 'tasks', 'write'],
+    ['calendar', 'Calendar', 'calendar'], ['meals', 'Meals', 'meals'], ['recipes', 'Recipes', 'meals'],
+  ].filter(([, , module, access]) => !module || canAccess(moduleAccess, module, access))
+    .map(([view, label]) => `<a href="/reader?view=${view}">${label}</a>`).join(' ');
+  return `<!doctype html><html lang="en" data-theme="light" data-color-theme="${h(colorTheme)}" data-typography="${h(headingFont)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${h(title)} - Yuvomi Reader</title><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/reader.css"></head><body><div class="page"><header><a class="brand" href="/reader">Yuvomi Reader</a>${signedIn ? `<form class="logout" method="post" action="/reader/logout"><input type="hidden" name="csrf" value="${h(csrf)}"><button type="submit">Sign out</button></form>` : ''}</header>${signedIn ? `<nav>${navigation} <a href="/">Full app</a></nav>` : ''}<main>${body}</main><footer>Lightweight mode for e-readers and older browsers.</footer></div></body></html>`;
 }
 
 function loginPage(message = '') {
@@ -138,9 +180,9 @@ function mapsUrl(row) {
   return `https://www.google.com/maps/search/?${params.toString()}`;
 }
 
-function taskList(rows) {
+function taskList(rows, canCreate = true) {
   if (!rows.length) return '<p>No open Tasks.</p>';
-  return `<p><a class="action" href="/reader?view=add-task">Add a Task</a></p><ul class="items">${rows.map((task) => { const map = mapsUrl(task); return `<li><strong>${h(task.title)}</strong>${task.due_date ? `<br><span>Due ${h(task.due_date)}${task.due_time ? ` ${h(task.due_time)}` : ''}</span>` : ''}${task.description ? `<p>${h(task.description)}</p>` : ''}${task.place_name || task.location_label || task.manual_address ? `<p>Location: ${h(task.place_name || task.location_label || task.manual_address)}${map ? ` - <a href="${h(map)}">Map</a>` : ''}</p>` : ''}</li>`; }).join('')}</ul>`;
+  return `${canCreate ? '<p><a class="action" href="/reader?view=add-task">Add a Task</a></p>' : ''}<ul class="items">${rows.map((task) => { const map = mapsUrl(task); return `<li><strong>${h(task.title)}</strong>${task.due_date ? `<br><span>Due ${h(task.due_date)}${task.due_time ? ` ${h(task.due_time)}` : ''}</span>` : ''}${task.description ? `<p>${h(task.description)}</p>` : ''}${task.place_name || task.location_label || task.manual_address ? `<p>Location: ${h(task.place_name || task.location_label || task.manual_address)}${map ? ` - <a href="${h(map)}">Map</a>` : ''}</p>` : ''}</li>`; }).join('')}</ul>`;
 }
 
 function eventList(rows, date, timeZone) {
@@ -200,19 +242,26 @@ function recipeDetail(database, id) {
   return `<p><a href="/reader?view=recipes">&larr; Back to Recipes</a></p><h1>${h(recipe.title)}</h1>${recipe.recipe_url ? `<p><a href="${h(recipe.recipe_url)}">Open original recipe</a></p>` : ''}<h2>Ingredients</h2>${ingredients.length ? `<ul>${ingredients.map((item) => `<li>${item.quantity ? `${h(item.quantity)} ` : ''}${h(item.name)}</li>`).join('')}</ul>` : '<p>No ingredients listed.</p>'}${recipe.notes ? `<h2>Instructions / notes</h2><div class="prewrap">${h(recipe.notes)}</div>` : ''}`;
 }
 
-function taskForm(token, message = '', values = {}) {
-  return `<h1>Add a Task</h1>${message ? `<p class="notice">${h(message)}</p>` : ''}<form method="post" action="/reader/tasks"><input type="hidden" name="csrf" value="${h(token)}"><label>Task title<input name="title" maxlength="200" required value="${h(values.title || '')}"></label><label>Description<textarea name="description" rows="4" maxlength="10000">${h(values.description || '')}</textarea></label><label>Due date<input name="due_date" placeholder="YYYY-MM-DD" value="${h(values.due_date || '')}"></label><label>Due time<input name="due_time" placeholder="HH:MM" value="${h(values.due_time || '')}"></label><label>Priority<select name="priority"><option value="none">None</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label class="check"><input type="checkbox" name="assign_to_me" checked> Assign to me</label><button type="submit">Create Task</button></form>`;
+function taskForm(token, message = '', submitted = null) {
+  const values = submitted || {};
+  const priorities = ['none', 'low', 'medium', 'high'].map((value) => `<option value="${value}"${value === (values.priority || 'none') ? ' selected' : ''}>${value[0].toUpperCase()}${value.slice(1)}</option>`).join('');
+  const assigned = submitted === null || !!values.assign_to_me;
+  return `<h1>Add a Task</h1>${message ? `<p class="notice">${h(message)}</p>` : ''}<form method="post" action="/reader/tasks"><input type="hidden" name="csrf" value="${h(token)}"><label>Task title<input name="title" maxlength="200" required value="${h(values.title || '')}"></label><label>Description<textarea name="description" rows="4" maxlength="10000">${h(values.description || '')}</textarea></label><label>Due date<input name="due_date" placeholder="YYYY-MM-DD" value="${h(values.due_date || '')}"></label><label>Due time<input name="due_time" placeholder="HH:MM" value="${h(values.due_time || '')}"></label><label>Priority<select name="priority">${priorities}</select></label><label class="check"><input type="checkbox" name="assign_to_me"${assigned ? ' checked' : ''}> Assign to me</label><button type="submit">Create Task</button></form>`;
 }
 
 router.get('/', (req, res) => {
   if (!req.authUserId) return res.type('html').send(loginPage(req.query.error || ''));
+  if (req.readerRestrictedGuest) return deniedPage(req, res);
   const database = db.get(); const today = todayKey(database); const date = isoDate(req.query.date, today); const view = String(req.query.view || 'today');
+  const viewModule = { tasks: 'tasks', 'add-task': 'tasks', calendar: 'calendar', event: 'calendar', meals: 'meals', recipes: 'meals', recipe: 'meals' }[view];
+  const verdict = moduleAccessVerdict(req.sessionModuleAccess, viewModule, view === 'add-task' ? 'write' : 'read');
+  if (verdict !== MODULE_ACCESS_ALLOW) return deniedPage(req, res, verdict);
   const timeZone = householdTimeZone(database);
   const sections = [];
-  if (view === 'today' || view === 'tasks') sections.push(`<section><h1>Open Tasks</h1>${taskList(tasksFor(database, req.authUserId))}</section>`);
-  if (view === 'today') sections.push(`<section><h1>Calendar - ${h(date)}</h1>${eventList(calendarFor(database, req.authUserId, date), date, timeZone)}<p><a href="/reader?view=calendar&amp;date=${h(date)}">Open Calendar</a></p></section>`);
+  if ((view === 'today' || view === 'tasks') && canAccess(req.sessionModuleAccess, 'tasks')) sections.push(`<section><h1>Open Tasks</h1>${taskList(tasksFor(database, req.authUserId), canAccess(req.sessionModuleAccess, 'tasks', 'write'))}</section>`);
+  if (view === 'today' && canAccess(req.sessionModuleAccess, 'calendar')) sections.push(`<section><h1>Calendar - ${h(date)}</h1>${eventList(calendarFor(database, req.authUserId, date), date, timeZone)}<p><a href="/reader?view=calendar&amp;date=${h(date)}">Open Calendar</a></p></section>`);
   if (view === 'calendar') sections.push(`<section><h1>Calendar</h1>${monthCalendar(database, req.authUserId, date)}</section>`);
-  if (view === 'today' || view === 'meals') sections.push(`<section><h1>Meals - ${h(date)}</h1>${mealList(mealsFor(database, date))}</section>`);
+  if ((view === 'today' || view === 'meals') && canAccess(req.sessionModuleAccess, 'meals')) sections.push(`<section><h1>Meals - ${h(date)}</h1>${mealList(mealsFor(database, date))}</section>`);
   if (view === 'event') {
     const event = calendarFor(database, req.authUserId, date).find((row) => Number(row.id) === Number(req.query.id));
     sections.push(event ? `<p><a href="/reader?view=calendar&amp;date=${h(date)}">&larr; Back to Calendar</a></p><h1>${h(event.title)}</h1><p>${event.all_day ? 'All day' : `${h(dateTime(event.start_datetime, timeZone))}${event.end_datetime ? ` to ${h(dateTime(event.end_datetime, timeZone))}` : ''}`}</p>${event.location ? `<p><strong>Location:</strong> ${h(event.location)}</p>` : ''}${event.description ? `<h2>Details</h2><div class="prewrap">${h(event.description)}</div>` : ''}` : '<p>Event not found for this date.</p>');
@@ -221,16 +270,19 @@ router.get('/', (req, res) => {
   if (view === 'recipes') sections.push(`<section><h1>Recipes</h1>${recipeList(database)}</section>`);
   if (view === 'recipe') sections.push(recipeDetail(database, Number(req.query.id)));
   res.setHeader('Cache-Control', 'private, no-store');
-  res.type('html').send(page(view === 'today' ? 'Today' : view, sections.join(''), { signedIn: true, csrf: csrf(req) }));
+  if (!sections.length) sections.push('<p>No Reader content is available. Open the full app to view your available modules.</p>');
+  res.type('html').send(page(view === 'today' ? 'Today' : view, sections.join(''), pageOptions(req)));
 });
 
 router.post('/tasks', (req, res) => {
   if (!req.authUserId || !csrfValid(req)) return res.status(403).type('text').send('Invalid request.');
+  const verdict = moduleAccessVerdict(req.sessionModuleAccess, 'tasks', 'write');
+  if (req.readerRestrictedGuest || verdict !== MODULE_ACCESS_ALLOW) return deniedPage(req, res, verdict);
   const title = String(req.body.title || '').trim(); const description = String(req.body.description || '').trim() || null;
   const dueDate = String(req.body.due_date || '').trim() || null; const dueTime = String(req.body.due_time || '').trim() || null;
   const priorities = new Set(['none', 'low', 'medium', 'high']); const priority = priorities.has(req.body.priority) ? req.body.priority : 'none';
   if (!title || title.length > 200 || description?.length > 10000 || (dueDate && !isDateKey(dueDate)) || (dueTime && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(dueTime))) {
-    return res.status(400).type('html').send(page('Add Task', taskForm(csrf(req), 'Check the title, date, and time.', req.body), { signedIn: true, csrf: csrf(req) }));
+    return res.status(400).type('html').send(page('Add Task', taskForm(csrf(req), 'Check the title, date, and time.', req.body), pageOptions(req)));
   }
   const assignee = req.body.assign_to_me ? req.authUserId : null;
   db.get().transaction(() => {

@@ -121,7 +121,7 @@ async function callJson(app, method, path, body) {
 function seedContactsAndEmail(db) {
   db.exec(`CREATE TABLE contacts (id INTEGER PRIMARY KEY AUTOINCREMENT,
     family_user_id INTEGER, email TEXT);`);
-  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (1, 'alice@test')").run();
+  db.prepare("INSERT INTO contacts (family_user_id, email) VALUES (1, 'alice@example.test')").run();
 }
 
 test('forgot-password returns generic ok for unknown user (no email sent)', async () => {
@@ -142,7 +142,7 @@ test('forgot-password sends a reset link for a known username', async () => {
   assert.equal(status, 200);
   assert.equal(json.data.ok, true);
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].to, 'alice@test');
+  assert.equal(sent[0].to, 'alice@example.test');
   assert.match(sent[0].html, /https:\/\/oikos\.test\/reset-password\?token=[a-f0-9]+/);
 });
 
@@ -182,8 +182,28 @@ test('forgot-password also resolves a user by email', async () => {
   const db = makeDb();
   seedContactsAndEmail(db);
   const { app, sent } = await makeAuthApp(db);
-  await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'alice@test' });
+  await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'alice@example.test' });
   assert.equal(sent.length, 1);
+});
+
+test('forgot-password never sends a reset token to malformed or multiple contact addresses', async () => {
+  for (const email of [
+    'alice@example.test,bob@example.test',
+    'alice@example.test;bob@example.test',
+    'Alice <alice@example.test>',
+    'alice@example.test\r\nBcc: bob@example.test',
+    'alice@',
+  ]) {
+    const db = makeDb();
+    seedContactsAndEmail(db);
+    db.prepare('UPDATE contacts SET email = ?').run(email);
+    const { app, sent } = await makeAuthApp(db);
+    const { status, json } = await callJson(app, 'POST', '/auth/forgot-password', { identifier: 'alice' });
+    assert.equal(status, 200);
+    assert.equal(json.data.ok, true);
+    assert.equal(sent.length, 0, email);
+    assert.equal(db.prepare('SELECT COUNT(*) AS n FROM password_resets').get().n, 0);
+  }
 });
 
 test('reset-password rejects an invalid token', async () => {

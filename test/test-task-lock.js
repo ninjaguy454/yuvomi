@@ -258,6 +258,37 @@ test('PATCH /:id/archive: ablegen nimmt sie allen aus der Ansicht - also gesperr
   assert.equal((await call('PATCH', `/${task.id}/archive`, { as: asAdmin, body: { archived: true } })).status, 200);
 });
 
+test('PATCH /:id/status: the legacy archive alias enforces task and parent locks', async () => {
+  const task = await lockedTask('Archive compatibility guard');
+  const sub = await call('POST', '/', {
+    as: asParent, body: { title: 'Inherited archive guard', parent_task_id: task.id },
+  });
+  assert.equal(sub.status, 201);
+
+  for (const id of [task.id, sub.body.data.id]) {
+    const denied = await call('PATCH', `/${id}/status`, {
+      as: asChild, body: { status: 'archived' },
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(db.prepare('SELECT archived_at FROM tasks WHERE id = ?').get(id).archived_at, null);
+  }
+
+  const completed = await call('PATCH', `/${task.id}/status`, {
+    as: asChild, body: { status: 'done' },
+  });
+  assert.equal(completed.status, 200, 'locking the definition still allows completion');
+  const creatorArchived = await call('PATCH', `/${task.id}/status`, {
+    as: asParent, body: { status: 'archived' },
+  });
+  assert.equal(creatorArchived.status, 200);
+  assert.equal(creatorArchived.body.data.status, 'done');
+  assert.ok(creatorArchived.body.data.archived_at);
+  const adminArchived = await call('PATCH', `/${sub.body.data.id}/status`, {
+    as: asAdmin, body: { status: 'archived' },
+  });
+  assert.equal(adminArchived.status, 200);
+});
+
 test('PATCH /:id/archive: prüft seit #830 auch die Sichtbarkeit (Muster #769)', async () => {
   const priv = await call('POST', '/', { as: asParent, body: { title: 'Privat', visibility: 'private' } });
   const r = await call('PATCH', `/${priv.body.data.id}/archive`, { as: asChild, body: { archived: true } });

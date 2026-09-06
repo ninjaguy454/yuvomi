@@ -6,6 +6,8 @@
 
 import { createLogger } from '../logger.js';
 import express from 'express';
+import { notifyMealRequests } from '../services/notification-events.js';
+import { assertLegacyMealImportAllowed } from '../services/meal-grocery-runs.js';
 import * as db from '../db.js';
 import { str, oneOf, date, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT, DATE_RE } from '../middleware/validate.js';
 import { addDays, mealWeekday, datesForTemplateInRange } from '../services/meal-recurrence.js';
@@ -480,6 +482,7 @@ function materializeMealSchedule(from, to, actorId = null) {
             JSON.stringify({ policy: slot.policy, schedule_slot_id: slot.id, base_chooser_user_id: chooserId, zero_eligible: !chooserId }),
           );
         }
+        notifyMealRequests(d, mealId);
         created += 1;
       }
     }
@@ -2346,6 +2349,7 @@ router.post('/:id/to-shopping-list', (req, res) => {
         'SELECT name, quantity, category FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id ASC',
       ).all(meal.recipe_id);
       if (recipeIngredients.length > 0) {
+        assertLegacyMealImportAllowed(db.get(), [mealId]);
         const copyIng = db.get().prepare(
           'INSERT INTO meal_ingredients (meal_id, name, quantity, category) VALUES (?, ?, ?, ?)',
         );
@@ -2364,6 +2368,8 @@ router.post('/:id/to-shopping-list', (req, res) => {
 
     if (ingredients.length === 0)
       return res.json({ data: { transferred: 0, added_ids: [] } });
+
+    assertLegacyMealImportAllowed(db.get(), [mealId]);
 
     const addedIds = db.transaction(() => {
       const insertItem = db.get().prepare(`
@@ -2386,6 +2392,7 @@ router.post('/:id/to-shopping-list', (req, res) => {
     res.json({ data: { transferred: addedIds.length, added_ids: addedIds } });
   } catch (err) {
     log.error('POST /:id/to-shopping-list', err);
+    if (err.code === 'GROCERY_RECONCILIATION_REQUIRED') return res.status(409).json({ error: err.message, code: err.code });
     res.status(500).json({ error: 'Interner Fehler', code: 500 });
   }
 });
@@ -2425,6 +2432,8 @@ router.post('/week-to-shopping-list', (req, res) => {
     if (ingredients.length === 0)
       return res.json({ data: { transferred: 0, added_ids: [] } });
 
+    assertLegacyMealImportAllowed(db.get(), ingredients.map((item) => item.meal_id));
+
     const addedIds = db.transaction(() => {
       const insertItem = db.get().prepare(`
         INSERT INTO shopping_items (list_id, name, quantity, category, added_from_meal)
@@ -2446,6 +2455,7 @@ router.post('/week-to-shopping-list', (req, res) => {
     res.json({ data: { transferred: addedIds.length, added_ids: addedIds } });
   } catch (err) {
     log.error('POST /week-to-shopping-list', err);
+    if (err.code === 'GROCERY_RECONCILIATION_REQUIRED') return res.status(409).json({ error: err.message, code: err.code });
     res.status(500).json({ error: 'Interner Fehler', code: 500 });
   }
 });

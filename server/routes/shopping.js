@@ -13,6 +13,7 @@ import * as db from '../db.js';
 import { str, oneOf, url, date, collectErrors, MAX_TITLE, MAX_SHORT, MAX_TEXT } from '../middleware/validate.js';
 import { aggregateMealIngredients } from '../services/shopping-import.js';
 import {
+  assertLegacyMealImportAllowed,
   createOrRefreshGroceryRun,
   finalizeGroceryRun,
   listGroceryRuns,
@@ -25,10 +26,31 @@ import { loadItemTagsFor } from '../utils/task-tags.js';
 import {
   flushOutbound, markTodoOutbound, queueTodoDeletions,
 } from '../services/caldav-todo-outbound.js';
+import rateLimit from 'express-rate-limit';
+import { emailService as defaultEmailService } from '../services/email.js';
+import { memberEmail, isHouseholdMember, listEmailableMembers } from '../services/member-email.js';
+import { buildShoppingListMail } from '../services/shopping-mail.js';
+import { householdTimeZone, utcToWall } from '../utils/timezone.js';
 
 const log = createLogger('Shopping');
 
 const router  = express.Router();
+
+/**
+ * Eigene Schranke fuer den Listenversand (#944). Der API-Limiter darueber
+ * erlaubt 300 Anfragen je Minute - das ist fuer Lesen und Abhaken richtig
+ * bemessen und fuer etwas, das eine Mail ausloest, zu grosszuegig: 300 Mails je
+ * Minute an ein Haushaltsmitglied waeren keine Hilfe mehr, sondern eine Last
+ * fuer dessen Postfach und fuer den SMTP-Server, in dessen Ruf sie sich
+ * niederschlaegt.
+ */
+const sendListLimiter = rateLimit({
+  windowMs: 60_000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many send requests. Please wait a moment.', code: 429 },
+});
 
 // --------------------------------------------------------
 // Hilfsfunktionen
@@ -260,6 +282,33 @@ router.patch('/categories/reorder', (req, res) => {
     res.json({ data: loadCategories() });
   } catch (err) {
     log.error('PATCH /categories/reorder error:', err);
+    res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+// --------------------------------------------------------
+// GET /api/v1/shopping/send-recipients
+// Wer die Einkaufsliste per Mail bekommen kann (#944).
+// Response: { data: [{ id, display_name }] }
+//
+// EIGENER ENDPUNKT STATT `/family/members`. Der zeigt alle Konten ausser
+// Hauspersonal - also auch Geteilte-Ausgaben-Gaeste, die Externe sind. Wer die
+// Auswahl von dort speist, bietet einen Empfaenger an, den die Versandroute
+// zurueckweist; und stuende dort einmal jemand, den sie NICHT zurueckweist,
+// waere die Grenze nur in der Oberflaeche gezogen. Auswahl und Route fragen
+// deshalb dieselbe Funktion.
+//
+// Die Adressen bleiben hier: fuer die Auswahl reicht der Name, und wer sie
+// nicht herausgibt, kann sie auch nicht versehentlich anzeigen.
+// --------------------------------------------------------
+router.get('/send-recipients', (req, res) => {
+  try {
+    void req;
+    const members = listEmailableMembers({ db: db.get() })
+      .map(({ id, display_name }) => ({ id, display_name }));
+    res.json({ data: members });
+  } catch (err) {
+    log.error('GET /send-recipients error:', err.message);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });
@@ -777,6 +826,112 @@ router.post('/:listId/items', (req, res) => {
 });
 
 // --------------------------------------------------------
+// POST /api/v1/shopping/:listId/send
+// Die offenen Artikel der Liste an ein Haushaltsmitglied mailen (#944).
+// Body: { userId: number }   Response: { data: { sent: true, items: number } }
+//
+// DER EMPFAENGER IST EINE ID, NIE EINE ADRESSE. Naeme diese Route eine Adresse
+// aus dem Rumpf entgegen, waere Yuvomi fuer jeden angemeldeten Nutzer ein
+// offener Mailversender: beliebiger Text an beliebige Empfaenger, abgeschickt
+// vom SMTP-Server des Haushalts und in dessen Ruf. Die Adresse loest deshalb
+// der Server auf, aus derselben Quelle wie beim Passwort-Reset, und ein
+// Mitglied ohne hinterlegte Adresse ist schlicht nicht erreichbar.
+//
+// Gesendet wird eine Abschrift, kein Zugang: kein Link, kein Token, nichts das
+// weiterlebt. Wer die Liste laufend braucht, ist Mitglied und hat die App.
+// --------------------------------------------------------
+router.post('/:listId/send', sendListLimiter, async (req, res) => {
+  // Diese Datei exportiert einen fertigen Router, keine Fabrik - eine
+  // Abhaengigkeit laesst sich daher nicht ueber Parameter hineinreichen.
+  // `app.locals` ist der Express-eigene Platz dafuer und hier der kleinere
+  // Eingriff, als die Datei samt aller Aufrufer umzubauen. Im Betrieb ist der
+  // Wert nie gesetzt und es bleibt beim Standarddienst.
+  const emailService = req.app?.locals?.emailService || defaultEmailService;
+  try {
+    const list = db.get().prepare('SELECT * FROM shopping_lists WHERE id = ?').get(req.params.listId);
+    if (!list) return res.status(404).json({ error: 'List not found.', code: 404 });
+
+    const userId = Number(req.body?.userId);
+    if (!Number.isInteger(userId) || userId <= 0) {
+      return res.status(400).json({ error: 'A recipient userId is required.', code: 400 });
+    }
+
+    // Reihenfolge der Pruefungen ist Absicht: erst der Empfaenger, dann die
+    // Einrichtung, dann der Inhalt. Jede Meldung nennt genau eine Ursache und
+    // die naechste Handlung - "es ging nicht" waere hier dreimal dasselbe Wort
+    // fuer drei verschiedene Aufgaben.
+    // NICHT einfach "gibt es diese users-Zeile": Hauspersonal und
+    // Geteilte-Ausgaben-Gaeste haben ebenfalls ein Konto und einen Kontakt mit
+    // Adresse, sind aber keine Haushaltsmitglieder - ein Gast ist ausdruecklich
+    // ein Externer, den index.js aus jeder anderen /api/v1-Route aussperrt. Die
+    // Auswahl im Dialog zeigt beide nicht; sie hier trotzdem anzunehmen hiesse,
+    // die Grenze nur zu verstecken statt sie zu ziehen. Dieselbe Antwort wie
+    // fuer ein unbekanntes Konto, damit sich aus ihr nicht ablesen laesst,
+    // welche Konten es gibt.
+    if (!isHouseholdMember(userId, { db: db.get() })) {
+      return res.status(404).json({ error: 'Recipient not found.', code: 404 });
+    }
+    const recipient = db.get().prepare('SELECT id, display_name FROM users WHERE id = ?').get(userId);
+
+    // `reason` neben der Meldung: die drei Absagen sind alle 422, und der Text
+    // ist englisch wie jede Server-Meldung hier. Ohne eine maschinenlesbare
+    // Unterscheidung koennte die Oberflaeche sie nicht in ihrer eigenen Sprache
+    // ausdruecken - der Nutzen der drei getrennten Gruende endet sonst an der
+    // Sprachgrenze. Additiv, also fuer bestehende Aufrufer unveraendert.
+    const to = memberEmail(userId, { db: db.get() });
+    if (!to) {
+      return res.status(422).json({
+        error: 'This member has no email address on their contact.', code: 422, reason: 'recipient_no_email',
+      });
+    }
+    if (!emailService.isConfigured()) {
+      return res.status(422).json({
+        error: 'Email is not configured. Set up SMTP in Settings first.', code: 422, reason: 'smtp_unconfigured',
+      });
+    }
+
+    const categories = loadCategories();
+    const items = loadListItems(req.params.listId, categories);
+    // Wer sich die Liste selbst schickt, braucht kein "X hat dir diese Liste
+    // geschickt" ueber der eigenen Einkaufsliste.
+    const sender = userId === req.authUserId
+      ? null
+      : db.get().prepare('SELECT display_name FROM users WHERE id = ?').get(req.authUserId);
+    const wall = utcToWall(new Date().toISOString(), householdTimeZone(db.get()));
+    const sentAt = wall ? `${wall.date} ${wall.time}` : new Date().toISOString().slice(0, 16).replace('T', ' ');
+
+    let mail;
+    try {
+      mail = buildShoppingListMail({
+        list,
+        items,
+        categories,
+        senderName: sender?.display_name || null,
+        sentAt,
+      });
+    } catch (err) {
+      // Eine leere Liste ist kein Serverfehler, sondern eine Eingabe, die
+      // nichts bewirken kann.
+      return res.status(422).json({ error: err.message || 'Nothing to send.', code: 422, reason: 'nothing_open' });
+    }
+
+    await emailService.sendMail({
+      to,
+      subject: mail.subject,
+      text: mail.text,
+      html: mail.html,
+      // Betreff und Rumpf tragen Listennamen und Artikel, also Nutzertexte.
+      // Sie gehoeren in die Mail, nicht in das Log des Servers.
+      logLabel: 'shopping list',
+    });
+    res.json({ data: { sent: true, items: mail.openCount } });
+  } catch (err) {
+    log.error('POST /:listId/send error:', err.message);
+    res.status(502).json({ error: 'The email could not be sent.', code: 502 });
+  }
+});
+
+// --------------------------------------------------------
 // POST /api/v1/shopping/:listId/import-meal-plan
 // Importiert Zutaten aus dem Essensplan eines Datumsbereichs in eine Liste.
 // Body: { from: YYYY-MM-DD, to: YYYY-MM-DD, preview?: boolean }
@@ -813,6 +968,7 @@ router.post('/:listId/import-meal-plan', (req, res) => {
     }
 
     const mealCount = new Set(ingredients.map((i) => i.meal_id)).size;
+    assertLegacyMealImportAllowed(db.get(), ingredients.map((item) => item.meal_id));
     const aggregated = aggregateMealIngredients(ingredients);
 
     // Vorschau (Audit A1-22): identische Auswahl und Aggregation, aber ohne
@@ -841,6 +997,7 @@ router.post('/:listId/import-meal-plan', (req, res) => {
     res.json({ data: { transferred: ingredients.length, added, meals: mealCount } });
   } catch (err) {
     log.error('POST /:listId/import-meal-plan error:', err);
+    if (err.code === 'GROCERY_RECONCILIATION_REQUIRED') return res.status(409).json({ error: err.message, code: err.code });
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });
@@ -936,5 +1093,10 @@ router.delete('/:listId/items/checked', (req, res) => {
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });
+
+// Der Versand-Limiter, damit ihn eine Testsuite zwischen den Faellen zuruecksetzen
+// kann. Die Grenze bleibt so bei der Zahl, die fuer den Betrieb richtig ist,
+// statt auf die Zahl anzuwachsen, die eine Testdatei gerade braucht.
+export const __test = { sendListLimiter };
 
 export default router;

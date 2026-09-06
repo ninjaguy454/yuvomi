@@ -15,6 +15,8 @@ import { wireScrollFade, wireCollapsingHeader, wireSwipeToDismiss } from '/utils
 import { TOAST_SURFACES, toastSurface } from '/utils/toast-surface.js';
 import { BULK_PILL_LAYER, clearBulkPill } from '/utils/bulk-pill.js';
 import { init as initReminders, stop as stopReminders } from '/reminders.js';
+import { openNotificationCenter, paintNotificationBadges } from '/notification-center.js';
+import { applyAppearancePreferences, resetAppearancePreferences } from '/utils/appearance-preferences.js';
 import { initPush, stopPush } from '/push.js';
 import { numberLocaleFor } from '/settings/region-presets.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
@@ -219,7 +221,8 @@ function updateThemeColorForRoute(route) {
     setThemeColor(route.thirdPartyModule.accent, route.thirdPartyModule.accent);
     return;
   }
-  setThemeColor('#F5F3ED', '#191816');
+  const background = getComputedStyle(document.documentElement).getPropertyValue('--color-bg').trim();
+  setThemeColor(background, background);
 }
 
 // --------------------------------------------------------
@@ -941,6 +944,13 @@ async function navigate(path, userOrPushState = true, pushState = true) {
     updateThemeColorForRoute(route);
     updateBranding(basePath);
     focusMainContentAfterNavigation(basePath);
+    paintNotificationBadges();
+    const notificationId = new URLSearchParams(location.search).get('notification');
+    if (notificationId && currentUser && /^\d+$/.test(notificationId)) {
+      // Resolve the receipt for the authenticated user, then reuse normal object navigation.
+      // Let this navigation finish before a notification can request its destination.
+      setTimeout(() => openNotificationCenter({ notificationId }), 0);
+    }
   } finally {
     isNavigating = false;
     // auth:expired kann waehrend einer Navigation gefeuert haben (z.B. wenn ein
@@ -958,6 +968,7 @@ async function syncPreferencesOnce() {
   _preferencesLoaded = true;
   try {
     const res = await api.get('/preferences');
+    applyAppearancePreferences(res?.data ?? {});
     const dateFormat = res?.data?.date_format;
     if (dateFormat) {
       localStorage.setItem('yuvomi-date-format', dateFormat);
@@ -1143,6 +1154,22 @@ function sidebarActionEl({ labelKey, icon, className, onClick }) {
   labelEl.className = 'nav-item__label';
   labelEl.textContent = label;
   button.append(wrap, labelEl);
+  return button;
+}
+
+function notificationNavButton({ compact = false } = {}) {
+  const button = sidebarActionEl({
+    labelKey: 'notificationCenter.title', icon: 'bell',
+    className: `nav-item--reminder${compact ? ' nav-item--notification-compact' : ''}`,
+    onClick: () => openNotificationCenter(),
+  });
+  button.dataset.notificationCenter = '';
+  button.setAttribute('aria-haspopup', 'dialog');
+  const badge = document.createElement('span');
+  badge.className = 'reminder-bell-badge';
+  badge.setAttribute('aria-hidden', 'true');
+  badge.hidden = true;
+  button.querySelector('.nav-item__icon-wrap').append(badge);
   return button;
 }
 
@@ -1923,6 +1950,7 @@ function renderAppShell(container) {
   sidebarSearch.setAttribute('aria-keyshortcuts', '/');
   sidebarSearch.setAttribute('title', `${t('nav.search')} (/)`);
   sidebar.appendChild(sidebarSearch);
+  if (!isGuest) sidebar.appendChild(notificationNavButton());
 
   sidebar.appendChild(sidebarItems);
 
@@ -3690,6 +3718,7 @@ function buildBottomNavItems(moreBtn = moreNavButtonEl()) {
   return [
     ...(dashboard ? [navItemEl({ ...dashboard, navId: 'dashboard' })] : []),
     ...mobileFavoriteItems().map(mobileDestinationEl),
+    notificationNavButton({ compact: true }),
     moreBtn,
   ];
 }
@@ -4260,6 +4289,7 @@ function forgetSessionState() {
   stopThirdPartyModulePolling();
   stopReminders();
   stopPush();
+  resetAppearancePreferences();
 }
 
 // Session abgelaufen
@@ -4556,6 +4586,10 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
     // Aufruf idempotent (dieselbe Farbe wird erneut aufgelöst). Die Statusbar
     // hängt an derselben Momentaufnahme, siehe refreshThemeColorForTheme.
     darkSchemeQuery?.addEventListener?.('change', () => {
+      applyModuleAccentForRoute(currentRoute());
+      refreshThemeColorForTheme();
+    });
+    window.addEventListener('appearance-preferences-changed', () => {
       applyModuleAccentForRoute(currentRoute());
       refreshThemeColorForTheme();
     });

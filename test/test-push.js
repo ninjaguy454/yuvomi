@@ -10,6 +10,7 @@ import express from 'express';
 import { buildRouter } from '../server/routes/push.js';
 import { processDuePushes } from '../server/services/push-scheduler.js';
 import { MIGRATIONS } from '../server/db.js';
+import { addNotificationInboxFixture } from './helpers/notification-inbox-fixture.js';
 
 // --- Minimal-Schema -------------------------------------------------------
 function makeDb() {
@@ -55,6 +56,7 @@ function makeDb() {
     );
   `);
   db.exec(MIGRATIONS.find((m) => m.version === 60).up);
+  addNotificationInboxFixture(db);
   db.prepare("INSERT INTO users (id, username) VALUES (1,'alice'),(2,'bob')").run();
   return db;
 }
@@ -254,6 +256,21 @@ test('POST /subscribe rejects missing keys', async () => {
   const res = await fetch(`${app.baseUrl}/subscribe`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint: 'https://push/x' }) });
   assert.equal(res.status, 400);
   await app.close();
+});
+
+test('POST /status reports only current-user ownership and never transfers an endpoint', async () => {
+  const db = makeDb();
+  db.exec("INSERT INTO push_subscriptions (user_id,endpoint,p256dh,auth) VALUES (2,'https://push/bob','p','a'), (1,'https://push/alice','p','a')");
+  const app = await startApp(db, makeWebpushMock(), 1);
+  try {
+    for (const [endpoint, expected] of [['https://push/bob', false], ['https://push/alice', true], ['https://push/unknown', false]]) {
+      const res = await fetch(`${app.baseUrl}/status`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpoint }) });
+      assert.equal(res.status, 200);
+      assert.match(res.headers.get('cache-control'), /no-store/);
+      assert.equal((await res.json()).data.subscribed, expected);
+    }
+    assert.equal(db.prepare("SELECT user_id FROM push_subscriptions WHERE endpoint = 'https://push/bob'").get().user_id, 2);
+  } finally { await app.close(); }
 });
 
 test('POST /unsubscribe removes the subscription', async () => {

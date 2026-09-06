@@ -2034,6 +2034,9 @@ test('context conflicts reconcile pending materialized meals in both creation or
   `).get(firstMeal.id, sam);
   assert.ok(freshFirstObligation);
   assert.equal(freshFirstObligation.parent_obligation_id, firstObligation.id);
+  assert.equal(database.prepare(`SELECT COUNT(*) AS n FROM notification_inbox
+    WHERE user_id = ? AND source_key = ?`).get(sam, `obligation:${freshFirstObligation.id}:assigned`).n, 1,
+  'a fresh chooser request after context conflict resolution has one durable notification');
   assert.ok(database.prepare(`
     SELECT 1 FROM planning_obligation_events
      WHERE obligation_id = ? AND event = 'planning_context_reassigned'

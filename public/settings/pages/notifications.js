@@ -13,7 +13,19 @@ const DEFAULT_PROVIDERS = [
   { id: 'gotify', name: 'Gotify' },
   { id: 'ntfy', name: 'ntfy' },
   { id: 'webhook', name: 'Webhook' },
+  { id: 'email', name: 'Email' },
 ];
+
+/**
+ * Traegt dieser Provider einen eigenen Endpunkt? Beantwortet aus den Defaults
+ * statt aus einer zweiten Liste - sonst driften die beiden auseinander, und
+ * der naechste Provider ohne Endpunkt bekommt still ein Pflichtfeld, das er
+ * nicht fuellen kann. Mail ist der erste solche Fall: sein Zugang steht
+ * app-weit in den E-Mail-Einstellungen, nicht am Kanal.
+ */
+function usesBaseUrl(provider) {
+  return Object.hasOwn(channelDefaults(provider).config, 'baseUrl');
+}
 
 function selected(value, expected) {
   return value === expected ? ' selected' : '';
@@ -41,6 +53,17 @@ function channelDefaults(provider = 'gotify') {
       secretSet: false,
     };
   }
+  if (provider === 'email') {
+    return {
+      provider: 'email',
+      name: '',
+      enabled: false,
+      // Kein baseUrl und keine Geheimnisse: der SMTP-Zugang gilt app-weit
+      // (Einstellungen > E-Mail), der Kanal traegt nur sein Ziel (#944).
+      config: { toAddress: '' },
+      secretSet: false,
+    };
+  }
   return {
     provider: 'gotify',
     name: '',
@@ -53,6 +76,12 @@ function channelDefaults(provider = 'gotify') {
 function renderPage(container, user) {
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
+    <section class="settings-section" id="notification-categories-section">
+      <h2 class="settings-section__title">${t('notificationCenter.categoriesTitle')}</h2>
+      <p class="form-hint">${t('notificationCenter.categoriesHint')}</p>
+      <div class="settings-card" id="notification-categories"></div>
+      <p class="form-hint" id="notification-categories-status" role="status"></p>
+    </section>
     <section class="settings-section">
       <h2 class="settings-section__title">${t('settings.pushToggleTitle')}</h2>
       <div class="settings-card">
@@ -81,6 +110,45 @@ function renderPage(container, user) {
   renderChannelShell(container, user);
 }
 
+async function setupCategories(container) {
+  const list = container.querySelector('#notification-categories');
+  const status = container.querySelector('#notification-categories-status');
+  try {
+    const response = await api.get('/notifications/preferences');
+    if (!container.isConnected) return;
+    const preferences = response?.data || {};
+    for (const category of ['tasks', 'meals', 'calendar', 'shopping', 'automation']) {
+      list.insertAdjacentHTML('beforeend', toggleRowHtml({
+        label: t(`notificationCenter.category${category[0].toUpperCase()}${category.slice(1)}`),
+        checked: preferences[category] !== false,
+        attrs: { 'data-notification-category': category },
+      }));
+    }
+    list.addEventListener('change', async (event) => {
+      const toggle = event.target.closest('[data-notification-category]');
+      if (!toggle) return;
+      const enabled = toggle.checked;
+      toggle.disabled = true;
+      status.textContent = '';
+      try {
+        await api.patch('/notifications/preferences', { [toggle.dataset.notificationCategory]: enabled });
+        status.textContent = t(enabled ? 'notificationCenter.categoryResumed' : 'notificationCenter.categoryMuted');
+      } catch {
+        toggle.checked = !enabled;
+        status.textContent = t('notificationCenter.actionFailed');
+      } finally { toggle.disabled = false; }
+    });
+  } catch {
+    status.textContent = t('notificationCenter.loadFailed');
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'btn btn--secondary btn--sm';
+    retry.textContent = t('common.retry');
+    retry.addEventListener('click', () => { list.replaceChildren(); status.textContent = ''; setupCategories(container); });
+    list.append(retry);
+  }
+}
+
 function renderChannelShell(container, user) {
   const section = container.querySelector('#notification-channels-section');
   if (!section) return;
@@ -107,6 +175,10 @@ function renderChannelShell(container, user) {
   `);
 }
 
+function providerNotReady(providers, providerId) {
+  return providers.some((p) => p.id === providerId && p.ready === false);
+}
+
 function providerOptions(providers, current) {
   return providers.map((provider) => `
     <option value="${esc(provider.id)}"${selected(current, provider.id)}>${esc(provider.name)}</option>
@@ -126,6 +198,17 @@ function renderChannelList(container, channels, providers = DEFAULT_PROVIDERS) {
     const suffix = channel.id ? `existing-${channel.id}` : `new-${index}`;
     const isNtfy = channel.provider === 'ntfy';
     const isWebhook = channel.provider === 'webhook';
+    const isEmail = channel.provider === 'email';
+    const hasBaseUrl = usesBaseUrl(channel.provider);
+    // `ready === false` kommt nur von einem Provider, der eine Voraussetzung
+    // ausserhalb seines Kanals hat. Der Hinweis steht am Formular, nicht hinter
+    // einem fehlgeschlagenen Testversand - dessen Meldung sagt nur "Fehler".
+    // Nur der Anfangszustand: ein neuer Kanal startet als Gotify, und der
+    // Wechsel auf E-Mail rendert NICHT neu. Wuerde der Absatz hier weggelassen
+    // statt versteckt, koennte updateProviderVisibility() ihn spaeter nicht
+    // einblenden - und der Hinweis erschiene erst nach dem Speichern, also
+    // genau dann nicht, wenn er gebraucht wird.
+    const notReady = providerNotReady(providers, channel.provider);
     list.insertAdjacentHTML('beforeend', `
       <form class="settings-card settings-form notification-channel-form" data-channel-index="${index}" data-channel-id="${esc(channel.id ?? '')}">
         <h3 class="settings-card__title">${esc(channel.name || t('settings.notificationChannelAdd'))}</h3>
@@ -144,9 +227,9 @@ function renderChannelList(container, channels, providers = DEFAULT_PROVIDERS) {
           checked: !!channel.enabled,
           attrs: { name: 'enabled' },
         })}
-        <div class="form-field">
+        <div class="form-field notification-base-url-field${hasBaseUrl ? '' : ' settings-card--hidden'}">
           <label class="form-label" for="notification-base-url-${suffix}">${t('settings.notificationChannelBaseUrl')}</label>
-          <input class="form-input" id="notification-base-url-${suffix}" name="baseUrl" value="${esc(channel.config.baseUrl)}" required>
+          <input class="form-input" id="notification-base-url-${suffix}" name="baseUrl" value="${esc(channel.config.baseUrl ?? '')}"${hasBaseUrl ? ' required' : ''}>
         </div>
         <div class="notification-provider-fields notification-provider-fields--gotify${channel.provider === 'gotify' ? '' : ' settings-card--hidden'}">
           <div class="form-field">
@@ -201,6 +284,14 @@ function renderChannelList(container, channels, providers = DEFAULT_PROVIDERS) {
             <input class="form-input" id="notification-ntfy-password-${suffix}" name="ntfyPassword" type="password" autocomplete="new-password" placeholder="${channel.secretSet ? esc(t('settings.notificationChannelSecretKeep')) : ''}">
           </div>
         </div>
+        <div class="notification-provider-fields notification-provider-fields--email${isEmail ? '' : ' settings-card--hidden'}">
+          <div class="form-field">
+            <label class="form-label" for="notification-email-to-${suffix}">${t('settings.notificationChannelEmailTo')}</label>
+            <input class="form-input" id="notification-email-to-${suffix}" name="emailTo" type="email" autocomplete="email" value="${esc(channel.config.toAddress ?? '')}">
+            <p class="form-hint">${t('settings.notificationChannelEmailToHint')}</p>
+          </div>
+          <p class="form-hint notification-email-not-ready${notReady ? '' : ' settings-card--hidden'}">${t('settings.notificationChannelEmailNotConfigured')}</p>
+        </div>
         <div class="settings-form-actions">
           <button type="submit" class="btn btn--primary">${t('settings.notificationChannelSave')}</button>
           ${channel.id ? `<button type="button" class="btn btn--secondary" data-action="test">${t('settings.notificationChannelTest')}</button>` : ''}
@@ -209,6 +300,12 @@ function renderChannelList(container, channels, providers = DEFAULT_PROVIDERS) {
       </form>
     `);
   });
+  // Den Anfangszustand einmal durchziehen: frisch gerenderte Bloecke tragen
+  // zwar ihre Versteckt-Klasse, ihre Felder sind aber noch aktiv - und ein
+  // unsichtbares `type="email"` mit Altwert blockiert das Absenden genauso, ob
+  // es nun durch einen Wechsel oder durch das erste Rendern dorthin kam.
+  list.querySelectorAll('.notification-channel-form')
+    .forEach((form) => updateProviderVisibility(form, providers));
   window.lucide?.createIcons({ el: list });
 }
 
@@ -218,12 +315,15 @@ function readChannelForm(form) {
     provider,
     name: form.elements.name.value.trim(),
     enabled: form.elements.enabled.checked,
-    config: {
-      baseUrl: form.elements.baseUrl.value.trim(),
-    },
+    config: {},
     secrets: {},
   };
-  if (provider === 'ntfy') {
+  // Nur senden, was der Provider kennt: ein leeres baseUrl an einen
+  // Mail-Kanal wuerde serverseitig als "Basis-URL fehlt" abgelehnt.
+  if (usesBaseUrl(provider)) body.config.baseUrl = form.elements.baseUrl.value.trim();
+  if (provider === 'email') {
+    body.config.toAddress = form.elements.emailTo.value.trim();
+  } else if (provider === 'ntfy') {
     body.config.topic = form.elements.ntfyTopic.value.trim();
     body.config.priority = form.elements.ntfyPriority.value;
     body.config.authType = form.elements.ntfyAuth.value;
@@ -245,15 +345,51 @@ function readChannelForm(form) {
   return body;
 }
 
-function updateProviderVisibility(form) {
+/**
+ * EIN VERSTECKTES FELD DARF DAS ABSENDEN NICHT BLOCKIEREN, und `display:none`
+ * allein sorgt nicht dafuer: der Browser prueft die Bedingungen eines
+ * unsichtbaren Feldes weiter, kann den Fokus zur Meldung aber nicht dorthin
+ * setzen - der Speichern-Knopf tut dann scheinbar nichts.
+ *
+ * Betroffen ist mehr als `required`. `type="email"` bringt seine eigene
+ * Pruefung mit (`typeMismatch`), die auch ohne `required` greift: wer beim
+ * Anlegen `oma@` tippt und dann auf Gotify zurueckwechselt, hinterlaesst ein
+ * unsichtbares ungueltiges Feld. Genau der Fehler, gegen den die baseUrl-Zeile
+ * hier schon geschuetzt war - nur eben nicht fuer das neue Feld.
+ *
+ * Deshalb als Regel ueber den ganzen Block statt als Aufzaehlung einzelner
+ * Felder: `disabled` nimmt ein Element aus der Pruefung UND aus dem Versand,
+ * und der naechste Provider mit einem eigenen Feld ist damit von selbst
+ * gedeckt. `readChannelForm()` liest ueber `form.elements`, das disabled
+ * Elemente weiterhin herausgibt - die Werte bleiben also erreichbar.
+ */
+function setBlockActive(block, active) {
+  if (!block) return;
+  block.classList.toggle('settings-card--hidden', !active);
+  block.querySelectorAll('input, select, textarea').forEach((field) => { field.disabled = !active; });
+}
+
+function updateProviderVisibility(form, providers = DEFAULT_PROVIDERS) {
   const provider = form.elements.provider.value;
-  form.querySelector('.notification-provider-fields--gotify')?.classList.toggle('settings-card--hidden', provider !== 'gotify');
-  form.querySelector('.notification-provider-fields--ntfy')?.classList.toggle('settings-card--hidden', provider !== 'ntfy');
-  form.querySelector('.notification-provider-fields--webhook')?.classList.toggle('settings-card--hidden', provider !== 'webhook');
+  for (const id of ['gotify', 'ntfy', 'webhook', 'email']) {
+    setBlockActive(form.querySelector(`.notification-provider-fields--${id}`), provider === id);
+  }
+  const showBaseUrl = usesBaseUrl(provider);
+  setBlockActive(form.querySelector('.notification-base-url-field'), showBaseUrl);
+  if (form.elements.baseUrl) form.elements.baseUrl.required = showBaseUrl;
+  // Der Hinweis wird immer gerendert und hier nur ein-/ausgeblendet: der
+  // Wechsel des Anbieters rendert die Karte nicht neu, ein erst dann erzeugter
+  // Absatz erschiene nie.
+  form.querySelector('.notification-email-not-ready')
+    ?.classList.toggle('settings-card--hidden', !(provider === 'email' && providerNotReady(providers, 'email')));
+  // Die beiden Auth-Bloecke liegen INNERHALB des ntfy-Blocks, der sie oben
+  // schon aktiviert hat - hier wird nachgeschaerft. Reihenfolge ist deshalb
+  // Absicht: erst der Anbieter, dann die Auth-Art darin.
+  const isNtfy = provider === 'ntfy';
   const auth = form.elements.ntfyAuth?.value || 'none';
-  form.querySelector('.notification-ntfy-token-field')?.classList.toggle('settings-card--hidden', auth !== 'token');
+  setBlockActive(form.querySelector('.notification-ntfy-token-field'), isNtfy && auth === 'token');
   form.querySelectorAll('.notification-ntfy-basic-field').forEach((field) => {
-    field.classList.toggle('settings-card--hidden', auth !== 'basic');
+    setBlockActive(field, isNtfy && auth === 'basic');
   });
 }
 
@@ -285,7 +421,7 @@ async function setupChannelControls(container, user) {
       const index = Number(form.dataset.channelIndex);
       if (!form.dataset.channelId) channels[index] = channelDefaults(event.target.value);
     }
-    updateProviderVisibility(form);
+    updateProviderVisibility(form, providers);
   });
 
   container.addEventListener('submit', async (event) => {
@@ -349,6 +485,7 @@ export async function render(container, { user } = {}) {
   try {
     renderPage(container, user);
     window.lucide?.createIcons({ el: container });
+    await setupCategories(container);
     await setupChannelControls(container, user);
 
     const toggle  = container.querySelector('#push-toggle');
@@ -370,9 +507,10 @@ export async function render(container, { user } = {}) {
 
     const applyState = (st) => {
       toggle.checked = st.subscribed;
-      toggle.disabled = st.permission === 'denied';
+      toggle.disabled = st.shared === true || st.permission === 'denied';
       testBtn.disabled = !st.subscribed;
-      if (st.permission === 'denied') status.textContent = t('settings.pushDenied');
+      if (st.shared) status.textContent = t('notificationCenter.sharedDevice');
+      else if (st.permission === 'denied') status.textContent = t('settings.pushDenied');
       else status.textContent = st.subscribed ? t('settings.pushEnabled') : t('settings.pushDisabled');
     };
 
@@ -429,3 +567,9 @@ export async function render(container, { user } = {}) {
     throw error;
   }
 }
+
+// Die Sichtbarkeitslogik ist reine Zustandsarbeit auf einem schmalen
+// DOM-Ausschnitt und damit ohne Browser pruefbar. Sie hat zwei Fehler getragen,
+// die ein Textguard nicht gesehen haette: ein verstecktes `type="email"`, das
+// das Absenden blockiert, und einen Hinweis, der beim Anlegen nie erscheint.
+export const __test = { updateProviderVisibility, setBlockActive, providerNotReady, channelDefaults, usesBaseUrl, readChannelForm };

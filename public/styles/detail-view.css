@@ -116,6 +116,13 @@
   gap: var(--space-1);
 }
 
+/* The metadata column aligns badges to their content width. Subtask controls
+ * use its full available row so the add action is not squeezed to two words. */
+.detail-task-subtasks {
+  width: 100%;
+  min-width: 0;
+}
+
 .detail-task-subtasks .detail-subtask {
   display: flex;
   align-items: center;

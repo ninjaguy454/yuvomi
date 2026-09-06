@@ -47,6 +47,12 @@ const SHARED_ISOMORPHIC = new Set([
   // was Event-Modal und Einstellungen bauen - zwei Definitionen desselben
   // Formats würden sich unbemerkt auseinanderentwickeln.
   'public/utils/sync-target.js',
+  // #944: HTML-Escaping. Eine Erinnerungsmail traegt Nutzertexte (Aufgaben-,
+  // Terminnamen) in ihren HTML-Teil; dort gilt dieselbe Regel wie im DOM. Das
+  // Modul ist absichtlich schmal - die Nachbardatei utils/html.js re-exportiert
+  // esc(), traegt aber auch den Notiz-Renderer mit seinen CSS-Klassen und ist
+  // damit Frontend-Code, kein geteiltes Util.
+  'public/utils/html-escape.js',
   // #891: Wie ein Termin zu seiner Farbe kommt - eigene Farbe, sonst die der
   // PRIMAEREN zugewiesenen Person, sonst die des Kalenders. Der Browser malt
   // damit Kalender und Uebersicht, der Server beantwortet damit die

@@ -390,6 +390,19 @@ router.post('/import-shopping', (req, res) => {
       .all(vList.value);
     const checkedById = new Map(checked.map((i) => [i.id, i]));
 
+    // Grocery provenance is authoritative on the server. A failed or limited
+    // client history lookup must not import these items outside their ledger.
+    const groceryItems = new Set(db.get().prepare(`
+      SELECT shopping_item_id FROM meal_grocery_items
+       WHERE shopping_item_id IN (SELECT id FROM shopping_items WHERE list_id = ? AND is_checked = 1)
+    `).all(vList.value).map((item) => Number(item.shopping_item_id)));
+    if (entries.some((entry) => groceryItems.has(Number(entry?.shopping_item_id)))) {
+      return res.status(409).json({
+        error: 'Some items belong to a Meal grocery run. Refresh Shopping and transfer them through the grocery run so Pantry quantities are recorded once.',
+        code: 'GROCERY_RECONCILIATION_REQUIRED',
+      });
+    }
+
     const userId = req.authUserId || req.session.userId;
     const categoryNames = validCategoryNames();
     const fallbackCategory = categoryNames[categoryNames.length - 1] ?? 'Sonstiges';

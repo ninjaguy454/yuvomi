@@ -63,6 +63,19 @@ export function buildRouter({ pushService = defaultPushService, database } = {})
     }
   });
 
+  router.post('/status', (req, res) => {
+    try {
+      const userId = req.authUserId || req.session.userId;
+      const endpoint = req.body?.endpoint;
+      if (typeof endpoint !== 'string' || !endpoint) return res.status(400).json({ error: 'An endpoint is required.', code: 400 });
+      const owned = getDb().prepare('SELECT 1 FROM push_subscriptions WHERE endpoint = ? AND user_id = ?').get(endpoint, userId);
+      res.set('Cache-Control', 'no-store').json({ data: { subscribed: !!owned } });
+    } catch (err) {
+      log.error('Error checking push subscription ownership:', err.message);
+      res.status(500).json({ error: 'Internal error.', code: 500 });
+    }
+  });
+
   router.post('/test', async (req, res) => {
     try {
       const userId = req.authUserId || req.session.userId;
@@ -74,7 +87,7 @@ export function buildRouter({ pushService = defaultPushService, database } = {})
       const devices = getDb()
         .prepare('SELECT COUNT(*) AS n FROM push_subscriptions WHERE user_id = ?')
         .get(userId)?.n ?? 0;
-      const sent = await pushService.sendPushToUser(userId, { title, body, url: '/reminders', tag: 'push-test' });
+      const sent = await pushService.sendPushToUser(userId, { title, body, url: '/settings/personal/notifications', tag: 'push-test' });
       res.json({ data: { sent, devices } });
     } catch (err) {
       log.error('Error sending test push:', err.message);

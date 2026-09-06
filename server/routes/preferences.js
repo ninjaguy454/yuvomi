@@ -23,6 +23,18 @@ const log = createLogger('Preferences');
 
 const router = express.Router();
 
+const COLOR_THEMES = ['neutral', 'warm', 'cool'];
+const HEADING_FONTS = ['default', 'serif'];
+
+function appearancePreferences(userId) {
+  const color = cfgUserGet('color_theme', userId);
+  const font = cfgUserGet('heading_font', userId);
+  return {
+    color_theme: COLOR_THEMES.includes(color) ? color : 'neutral',
+    heading_font: HEADING_FONTS.includes(font) ? font : 'default',
+  };
+}
+
 const VALID_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
 const DEFAULT_MEAL_TYPES = VALID_MEAL_TYPES.join(',');
 
@@ -495,6 +507,7 @@ router.get('/', (req, res) => {
         hidden_modules: hiddenModules,
         module_order: moduleOrder,
         mobile_nav_order: mobileNavOrder,
+        ...appearancePreferences(req.authUserId),
         housekeeping_payment_tasks: cfgGet('housekeeping_payment_tasks') === '1',
         budget_mode: VALID_BUDGET_MODES.includes(cfgGet('budget_mode')) ? cfgGet('budget_mode') : DEFAULT_BUDGET_MODE,
         calendar_default_duration: Number(cfgGet('calendar_default_duration')) || DEFAULT_CALENDAR_DURATION,
@@ -544,6 +557,15 @@ router.get('/', (req, res) => {
 
 router.put('/', (req, res) => {
   try {
+    // Validate both personal choices before writing either one. These do not
+    // alter household appearance or require household administration rights.
+    const { color_theme, heading_font } = req.body;
+    if (color_theme !== undefined && !COLOR_THEMES.includes(color_theme)) {
+      return res.status(400).json({ error: 'Theme must be neutral, warm, or cool.', code: 400 });
+    }
+    if (heading_font !== undefined && !HEADING_FONTS.includes(heading_font)) {
+      return res.status(400).json({ error: 'Typography must be default or serif.', code: 400 });
+    }
     const { visible_meal_types, currency, date_format, time_format, week_start, region, timezone, language, app_name, dashboard_widgets, dashboard_today_glance, dashboard_widgets_default, dashboard_today_glance_default, disabled_modules, hidden_modules, module_order, mobile_nav_order, housekeeping_payment_tasks, budget_mode, calendar_default_duration, calendar_default_reminders, calendar_default_assign_me, calendar_default_target, health_cycle_enabled, health_cycle_enabled_user, rewards_require_approval, tasks_subtasks_expanded, tasks_default_points, tasks_default_target, weather_provider, weather_lat, weather_lon, weather_city, weather_units, weather_auto_locate, weather_user, holiday_country, holiday_subdivision, holiday_group, holiday_show_public, holiday_show_school, holiday_public_color, holiday_school_color } = req.body;
 
     if (visible_meal_types !== undefined) {
@@ -1110,6 +1132,8 @@ router.put('/', (req, res) => {
     const savedHiddenModules = parseHiddenModules(cfgUserGet('hidden_modules', req.authUserId));
     const savedModuleOrder = parseModuleOrder(cfgUserGet('module_order', req.authUserId) ?? cfgGet('module_order'));
     const savedMobileNavOrder = parseMobileNavOrder(cfgUserGet('mobile_nav_order', req.authUserId));
+    if (color_theme !== undefined) cfgUserSet('color_theme', req.authUserId, color_theme);
+    if (heading_font !== undefined) cfgUserSet('heading_font', req.authUserId, heading_font);
     const savedHousekeepingPaymentTasks = cfgGet('housekeeping_payment_tasks') === '1';
 
     res.json({
@@ -1131,6 +1155,7 @@ router.put('/', (req, res) => {
         hidden_modules: savedHiddenModules,
         module_order: savedModuleOrder,
         mobile_nav_order: savedMobileNavOrder,
+        ...appearancePreferences(req.authUserId),
         housekeeping_payment_tasks: savedHousekeepingPaymentTasks,
         budget_mode: VALID_BUDGET_MODES.includes(cfgGet('budget_mode')) ? cfgGet('budget_mode') : DEFAULT_BUDGET_MODE,
         calendar_default_duration: Number(cfgGet('calendar_default_duration')) || DEFAULT_CALENDAR_DURATION,

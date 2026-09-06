@@ -1626,17 +1626,6 @@
   border-radius: var(--radius-sm);
 }
 
-.form-hint {
-  font-size: var(--text-sm);
-  color: var(--color-text-secondary);
-}
-
-/* Tonlagen für Hinweistexte. Vorher setzte `admin-backup.js` die Farbe des
-   Verbindungstests inline (`style.color = 'var(--color-success)'`), was den
-   Wert am Token vorbei ins Markup schrieb. */
-.form-hint--success { color: var(--color-success); }
-.form-hint--danger { color: var(--color-danger); }
-
 /* Gesperrte Eingabefelder sahen aus wie bediente: es gab keine
    :disabled-Regel, und `admin-backup.js` half sich mit einem hartkodierten
    `style.opacity = '0.6'` für die env-gesteuerten Felder. Die Regel gilt jetzt
@@ -1657,7 +1646,7 @@
    verbreitete 65ch-Faustregel ergäbe hier 104 Zeichen; 50ch sind 512px und
    damit rund 76.
 
-   Auf die Settings-Fläche begrenzt: `.form-hint` gehört zwar dieser Datei,
+   Auf die Settings-Fläche begrenzt: `.form-hint` ist ein geteilter Baustein,
    wird aber von acht weiteren Modulen benutzt, deren Spalten hier niemand
    gemessen hat. */
 .settings-page .form-hint,

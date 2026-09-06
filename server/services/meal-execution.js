@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { notifyTaskAssignments, notifyClaimableTask } from './notification-events.js';
 import {
   createOrRefreshGroceryRun,
   finalizeGroceryRun,
@@ -331,6 +332,7 @@ function taskDescription(meal, role) {
 }
 
 function setTaskAssignment(database, taskId, resolution, role) {
+  const previousIds = database.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(taskId).map((row) => row.user_id);
   const assignment = resolution?.assignment || null;
   database.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
   database.prepare("DELETE FROM task_responsibilities WHERE task_id = ? AND source = 'meal_execution'").run(taskId);
@@ -352,6 +354,7 @@ function setTaskAssignment(database, taskId, resolution, role) {
       VALUES (?, ?, 'meal_execution')
     `);
     for (const userId of resolution.eligibleIds || []) insertEligible.run(taskId, userId);
+    notifyClaimableTask(database, taskId, resolution.eligibleIds || []);
     return;
   }
   if (!assignment?.user_id) return;
@@ -360,6 +363,7 @@ function setTaskAssignment(database, taskId, resolution, role) {
     INSERT OR REPLACE INTO task_responsibilities (task_id, user_id, role, status, source, updated_at)
     VALUES (?, ?, ?, 'active', 'meal_execution', strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   `).run(taskId, assignment.user_id, role);
+  notifyTaskAssignments(database, taskId, previousIds, { managed: true, role });
 }
 
 function loadExecution(database, mealId) {

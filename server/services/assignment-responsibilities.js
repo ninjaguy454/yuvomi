@@ -1,4 +1,5 @@
 import { todayKey } from '../utils/timezone.js';
+import { notifyTaskObligations, notifyTaskClaim } from './notification-events.js';
 import {
   assertEligibleActivityMember,
   eligibleMembersForActivity,
@@ -128,10 +129,11 @@ function createTaskObligation(d, taskId, userId, {
 }
 
 function event(d, obligationId, name, actorUserId = null, details = null) {
-  d.prepare(`
+  const result = d.prepare(`
     INSERT INTO planning_obligation_events (obligation_id, event, actor_user_id, details_json)
     VALUES (?, ?, ?, ?)
   `).run(obligationId, name, actorUserId, details ? JSON.stringify(details) : null);
+  return Number(result.lastInsertRowid);
 }
 
 export function recordTaskAssignment(d, taskId, activity, resolution, {
@@ -209,6 +211,7 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
         role: 'supervisor', dueAt, metadata: { strategy: policy, activity_template_id: activity.id },
       });
     }
+    notifyTaskObligations(d, taskId, { eligibleIds: (resolution.eligible || []).map((member) => member.id) });
     return primaryId;
   }
   return null;
@@ -264,7 +267,10 @@ export function claimTask(d, taskId, userId) {
     if (open) {
       d.prepare(`UPDATE planning_obligations SET responsible_user_id = ?, responsible_group = NULL, status = 'accepted', responded_at = ${nowSql()}, updated_at = ${nowSql()} WHERE id = ?`)
         .run(member.id, open.id);
-      event(d, open.id, 'claimed', userId);
+      const eventId = event(d, open.id, 'claimed', userId);
+      notifyTaskClaim(d, taskId, eventId, userId);
+    } else {
+      notifyTaskClaim(d, taskId, null, userId);
     }
     return { task_id: Number(taskId), assigned_to: member, state: 'assigned' };
   })();
@@ -297,6 +303,7 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
       fallbackSource: 'manual_override', metadata: { actor_user_id: actorUserId },
     });
     event(d, id, 'override_assigned', actorUserId, { target_user_id: member.id });
+    notifyTaskObligations(d, taskId);
     return { task_id: Number(taskId), assigned_to: member, state: 'assigned' };
   })();
 }
@@ -345,6 +352,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
         fallbackSource: `${closedStatus}:${obligation.responsible_user_id}`,
       });
       event(d, replacementId, 'fallback_assigned', actorUserId, { previous_obligation_id: obligation.id });
+      notifyTaskObligations(d, obligation.task_id);
       return { ...d.prepare('SELECT * FROM planning_obligations WHERE id = ?').get(obligation.id), fallback: replacement, replacement_obligation_id: replacementId };
     }
     const previous = d.prepare("SELECT responsible_user_id FROM planning_obligations WHERE task_id = ? AND role = 'primary' AND responsible_user_id IS NOT NULL")
@@ -370,6 +378,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       metadata: { base_strategy: d.prepare('SELECT strategy FROM task_assignment_context WHERE task_id = ?').get(obligation.task_id)?.strategy },
     });
     event(d, replacementId, 'fallback_assigned', actorUserId, { previous_obligation_id: obligation.id });
+    notifyTaskObligations(d, obligation.task_id);
     return { ...d.prepare('SELECT * FROM planning_obligations WHERE id = ?').get(obligation.id), fallback: fallback, replacement_obligation_id: replacementId };
   })();
 }

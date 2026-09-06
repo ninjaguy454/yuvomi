@@ -92,6 +92,31 @@ export function shoppingPaths() {
         requestBody: jsonBody(null),
       }),
     },
+    '/api/v1/shopping/send-recipients': {
+      get: op({
+        summary: 'Household members who can receive a shopping list by email',
+        description: 'Names only, no addresses - the picker needs a name, and what is not handed out cannot be shown by accident. '
+          + 'Deliberately not `/family/members`: that lists every account except housekeeping staff, so it includes '
+          + 'shared-expense guests, who are external. This endpoint and the send route ask the same function, so the '
+          + 'picker cannot offer a recipient the server rejects, nor hide one it accepts.',
+        tag: 'Shopping',
+      }),
+    },
+    '/api/v1/shopping/{listId}/send': {
+      post: op({
+        summary: 'Email the open items of a list to a household member',
+        description: 'Sends the list as it stands to one household member. The recipient is a `userId`; '
+          + 'the server resolves the address from that member\'s contact, the same source the password reset uses. '
+          + 'An address in the request body is ignored - accepting one would make the instance an open mail relay '
+          + 'for any signed-in user. Only unchecked items are included, grouped by category in shop order. '
+          + 'Requires SMTP to be configured. Rate limited to 10 requests per minute per IP, separately from the '
+          + 'general API limit. Fails with 422 when the member has no address, SMTP is unset, or nothing is open.',
+        tag: 'Shopping',
+        params: [idParam('listId', 'List ID')],
+        stateChanging: true,
+        requestBody: jsonBody(null),
+      }),
+    },
     '/api/v1/shopping/{listId}/items/checked': {
       delete: op({ summary: 'Delete checked shopping items', tag: 'Shopping', params: [idParam('listId', 'List ID')], stateChanging: true }),
     },

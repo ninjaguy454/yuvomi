@@ -16,6 +16,13 @@ export function mealsPaths() {
       put: op({ summary: 'Update a Meal Plan and append an immutable revision', tag: 'Meals', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
       delete: op({ summary: 'Soft-delete a Meal Plan while retaining historical Meals', tag: 'Meals', admin: true, params: [idParam()], stateChanging: true, description: 'Stops future materialization and retains dated outputs and provenance.' }),
     },
+    '/api/v1/meals/plans/{id}/home': {
+      put: op({ summary: 'Enable or disable a Meal Plan for Home', tag: 'Meals', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: { enabled: boolean }. Updates Home activation without changing the plan associations for other planning contexts.' }),
+    },
+    '/api/v1/meals/grocery-settings/contexts/{contextId}': {
+      get: op({ summary: 'Get grocery settings for a planning context', tag: 'Meals', params: [idParam('contextId', 'Planning context ID')] }),
+      put: op({ summary: 'Update grocery settings for a planning context', tag: 'Meals', admin: true, params: [idParam('contextId', 'Planning context ID')], stateChanging: true, requestBody: jsonBody(null), description: 'Updates context-specific grocery scheduling overrides using the existing grocery settings service.' }),
+    },
     '/api/v1/meals/plans/{id}/contexts/{contextId}': {
       put: op({
         summary: 'Attach a reusable Meal Plan to a planning context',

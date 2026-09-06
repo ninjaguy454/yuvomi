@@ -1472,7 +1472,18 @@
   align-items: center;
 }
 
+.task-detail-participants { width: 100%; min-width: 0; }
 .task-detail-participant-add .input { min-width: 10rem; }
+
+@media (max-width: 640px) {
+  .task-detail-participant-add {
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .task-detail-participant-add .input { min-width: 0; }
+  .task-detail-participant-add .btn { align-self: flex-start; }
+}
 
 .task-detail-participant {
   display: inline-flex;

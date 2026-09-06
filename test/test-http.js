@@ -13,7 +13,18 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import zlib from 'node:zlib';
 
-import { safeRequest } from '../server/utils/http.js';
+import { safeRequest, resolveRedirect, headersForRedirect } from '../server/utils/http.js';
+
+test('invalid initial request protocols reject before opening a connection', async () => {
+  await assert.rejects(() => safeRequest('file:///notification-test'), /unsupported request protocol/i);
+});
+
+test('synchronous request setup errors reject after the lookup check', async () => {
+  await assert.rejects(
+    () => safeRequest('http://127.0.0.1:1/', { headers: { 'invalid header name': 'value' } }),
+    /header name|HTTP token/i,
+  );
+});
 
 function startServer(handler) {
   const server = http.createServer(handler);
@@ -246,6 +257,122 @@ test('Redirect-Cap: zu viele Redirects → Fehler', async () => {
   }
 });
 
+// --------------------------------------------------------
+// Redirect-Haertung (#937)
+// --------------------------------------------------------
+// Der DNS-Hook sieht nur IPs. Schema-Wechsel und Empfaengerwechsel der Header
+// muessen deshalb hier geprueft werden - beides kann ein Ziel-Server ausloesen.
+
+test('Redirect auf ein fremdes Protokoll wird abgelehnt', async () => {
+  const { base, close } = await startServer((req, res) => {
+    res.writeHead(302, { Location: 'file:///etc/passwd' });
+    res.end();
+  });
+  try {
+    await assert.rejects(
+      () => safeRequest(`${base}/start`),
+      /unsupported protocol/i,
+    );
+  } finally {
+    await close();
+  }
+});
+
+test('resolveRedirect: https → http wird abgelehnt (kein stilles TLS-Downgrade)', () => {
+  const from = new URL('https://cal.example/dav/');
+  assert.throws(() => resolveRedirect(from, 'http://cal.example/dav/'), /downgrade/i);
+  assert.throws(() => resolveRedirect(from, 'http://anderswo.example/'), /downgrade/i);
+});
+
+test('resolveRedirect: erlaubte Wechsel bleiben erlaubt', () => {
+  // http → https ist ein Upgrade, http → http der Normalfall, und ein relatives
+  // Location erbt sein Schema von der Quelle.
+  assert.equal(
+    resolveRedirect(new URL('http://cal.example/a'), 'https://cal.example/b').href,
+    'https://cal.example/b',
+  );
+  assert.equal(
+    resolveRedirect(new URL('http://cal.example/a'), 'http://cal.example/b').href,
+    'http://cal.example/b',
+  );
+  assert.equal(
+    resolveRedirect(new URL('https://cal.example/a'), '/b').href,
+    'https://cal.example/b',
+  );
+});
+
+test('resolveRedirect: fremde Protokolle und unlesbare Ziele werfen', () => {
+  const from = new URL('https://cal.example/a');
+  assert.throws(() => resolveRedirect(from, 'file:///etc/passwd'), /unsupported protocol/i);
+  assert.throws(() => resolveRedirect(from, 'ftp://cal.example/x'), /unsupported protocol/i);
+  assert.throws(() => resolveRedirect(from, 'http://['), /invalid redirect/i);
+});
+
+test('headersForRedirect: Origin entscheidet ueber die Zugangsdaten', () => {
+  const headers = { Authorization: 'Basic x', Cookie: 'sid=1', 'User-Agent': 'Yuvomi' };
+  const from = new URL('https://cal.example/a');
+
+  // Gleicher Origin: unveraendert (dieselbe Referenz, kein Kopieraufwand).
+  assert.equal(headersForRedirect(headers, from, new URL('https://cal.example/b')), headers);
+
+  // Anderer Port und anderes Schema sind eigene Origins, nicht nur ein anderer Host.
+  for (const target of ['https://boese.example/', 'https://cal.example:8443/', 'http://cal.example/']) {
+    const out = headersForRedirect(headers, from, new URL(target));
+    assert.deepEqual(out, { 'User-Agent': 'Yuvomi' }, `Zugangsdaten an ${target} durchgereicht`);
+  }
+});
+
+test('Redirect auf fremden Origin entfernt Authorization und Cookie', async () => {
+  let seen = null;
+  const target = await startServer((req, res) => {
+    seen = req.headers;
+    res.writeHead(200);
+    res.end('ziel');
+  });
+  // Zweiter Server = zweiter Port = fremder Origin.
+  const source = await startServer((req, res) => {
+    res.writeHead(302, { Location: `${target.base}/final` });
+    res.end();
+  });
+  try {
+    const resp = await safeRequest(`${source.base}/start`, {
+      headers: { Authorization: 'Basic Z2VoZWlt', Cookie: 'sid=abc', 'X-Harmlos': 'ja' },
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(seen.authorization, undefined, 'Authorization darf den Origin nicht verlassen');
+    assert.equal(seen.cookie, undefined, 'Cookie darf den Origin nicht verlassen');
+    assert.equal(seen['x-harmlos'], 'ja', 'sonstige Header bleiben erhalten');
+  } finally {
+    await source.close();
+    await target.close();
+  }
+});
+
+test('Redirect innerhalb desselben Origins behaelt Authorization', async () => {
+  let seen = null;
+  const { base, close } = await startServer((req, res) => {
+    if (req.url === '/start') {
+      res.writeHead(302, { Location: '/final' });
+      res.end();
+      return;
+    }
+    seen = req.headers;
+    res.writeHead(200);
+    res.end('ziel');
+  });
+  try {
+    // Der Normalfall jedes WebDAV-Servers, der /cal auf /cal/ umleitet: ohne die
+    // Zugangsdaten braeche der Sync mit 401 ab.
+    const resp = await safeRequest(`${base}/start`, {
+      headers: { Authorization: 'Basic Z2VoZWlt' },
+    });
+    assert.equal(resp.status, 200);
+    assert.equal(seen.authorization, 'Basic Z2VoZWlt');
+  } finally {
+    await close();
+  }
+});
+
 test('lookup wird pro Request an die Verbindung durchgereicht (SSRF-Hook)', async () => {
   let called = false;
   const { server, base, close } = await startServer((req, res) => { res.end('ok'); });
@@ -291,6 +418,105 @@ test('signal/abort: bricht laufende Anfrage ab', async () => {
     await assert.rejects(
       () => safeRequest(`${base}/hang`, { signal: AbortSignal.timeout(150) }),
     );
+  } finally {
+    await close();
+  }
+});
+
+// --------------------------------------------------------
+// IP-Literal im Redirect (GHSA-9jh6-phj9-m6qr)
+// --------------------------------------------------------
+// node:http ruft `lookup` nur fuer NAMEN auf. Ein 302 auf http://169.254.169.254/
+// lief deshalb am SSRF-Hook vorbei, obwohl er mitgereicht wurde. safeRequest
+// fragt den Hook fuer ein Literal jetzt selbst - und der Test prueft die WIRKUNG:
+// der interne Pfad darf den Server nie erreichen.
+
+function literalAwareLookup(log) {
+  // Namen loesen auf 127.0.0.1 auf (der Testserver), Literale werden abgelehnt -
+  // genau die Entscheidung, die createGuardedLookup fuer eine private IP trifft.
+  return (hostname, options, callback) => {
+    log.push(hostname);
+    if (/^[\d.]+$|:/.test(hostname)) {
+      return callback(new Error(`URL resolves to a private IP address: ${hostname}`));
+    }
+    const all = options && typeof options === 'object' && options.all;
+    if (all) return callback(null, [{ address: '127.0.0.1', family: 4 }]);
+    return callback(null, '127.0.0.1', 4);
+  };
+}
+
+test('Redirect auf ein IP-Literal fragt den lookup-Hook und bricht ab', async () => {
+  const hits = [];
+  const { server, close } = await startServer((req, res) => {
+    hits.push(req.url);
+    if (req.url === '/start') {
+      res.writeHead(302, { Location: `http://127.0.0.1:${server.address().port}/internal` });
+      res.end();
+      return;
+    }
+    res.writeHead(200);
+    res.end('secret');
+  });
+  const port = server.address().port;
+  const asked = [];
+  try {
+    await assert.rejects(
+      () => safeRequest(`http://first.example:${port}/start`, { lookup: literalAwareLookup(asked) }),
+      /private IP/i,
+    );
+    assert.deepEqual(hits, ['/start'], 'der interne Pfad darf nie erreicht werden');
+    assert.deepEqual(asked, ['first.example', '127.0.0.1'], 'der Hook sieht beide Hops, das Literal eingeschlossen');
+  } finally {
+    await close();
+  }
+});
+
+test('Ein IP-Literal als erster Hop fragt den lookup-Hook ebenfalls', async () => {
+  const { server, close } = await startServer((req, res) => { res.end('ok'); });
+  const port = server.address().port;
+  const asked = [];
+  try {
+    await assert.rejects(
+      () => safeRequest(`http://127.0.0.1:${port}/`, { lookup: literalAwareLookup(asked) }),
+      /private IP/i,
+    );
+    assert.deepEqual(asked, ['127.0.0.1']);
+    // IPv6-Literal: die Klammern der URL-Schreibweise erreichen den Hook nicht.
+    const asked6 = [];
+    await assert.rejects(
+      () => safeRequest(`http://[::1]:${port}/`, { lookup: literalAwareLookup(asked6) }),
+      /private IP/i,
+    );
+    assert.deepEqual(asked6, ['::1']);
+  } finally {
+    await close();
+  }
+});
+
+test('Ein IP-Literal, das der Hook annimmt, wird normal verbunden', async () => {
+  const { server, base, close } = await startServer((req, res) => { res.end('ok'); });
+  void server;
+  const asked = [];
+  const lookup = (hostname, options, callback) => {
+    asked.push(hostname);
+    const all = options && typeof options === 'object' && options.all;
+    if (all) return callback(null, [{ address: hostname, family: 4 }]);
+    return callback(null, hostname, 4);
+  };
+  try {
+    const resp = await safeRequest(`${base}/`, { lookup });
+    assert.equal(resp.status, 200);
+    assert.deepEqual(asked, ['127.0.0.1']);
+  } finally {
+    await close();
+  }
+});
+
+test('Ohne lookup bleibt ein IP-Literal unveraendert erreichbar', async () => {
+  const { base, close } = await startServer((req, res) => { res.end('ok'); });
+  try {
+    const resp = await safeRequest(`${base}/`);
+    assert.equal(resp.status, 200);
   } finally {
     await close();
   }

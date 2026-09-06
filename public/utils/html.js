@@ -5,28 +5,13 @@
  */
 
 import { matchChecklistLine } from './markdown-checklist.js';
+import { esc } from './html-escape.js';
 
-const ESCAPE_MAP = {
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;',
-};
-
-const ESCAPE_RE = /[&<>"']/g;
-
-/**
- * Escapet einen String fuer die sichere Einbettung in HTML.
- * Gibt fuer null/undefined einen Leerstring zurueck.
- *
- * @param {*} str - Beliebiger Wert (wird zu String konvertiert)
- * @returns {string} HTML-sicherer String
- */
-export function esc(str) {
-  if (str == null) return '';
-  return String(str).replace(ESCAPE_RE, (ch) => ESCAPE_MAP[ch]);
-}
+// esc() wohnt seit #944 nebenan und wird hier weiter angeboten: die rund
+// siebzig Aufrufer im Frontend importieren es unveraendert von hier, waehrend
+// der Mail-Versand im Backend nur das schmale Modul zieht statt dieser Datei
+// samt Notiz-Renderer. Eine Funktion, zwei Adressen - keine zweite Fassung.
+export { esc };
 
 /**
  * Normalisiert einen iCalendar LOCATION-String fuer die Anzeige.

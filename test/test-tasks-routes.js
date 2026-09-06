@@ -240,6 +240,36 @@ test('PATCH /:id/status: gültiger Wechsel persistiert', async () => {
   assert.equal(row.status, 'done');
 });
 
+test('PATCH /:id/status: hidden tasks cannot be completed, reopened, or archived', async () => {
+  for (const visibility of ['private', 'assignees']) {
+    const created = await call('POST', '/', {
+      as: { id: ALICE, role: 'admin' },
+      body: { title: `Hidden status ${visibility}`, visibility, assigned_to: [ALICE] },
+    });
+    assert.equal(created.status, 201);
+    const id = created.body.data.id;
+    assert.equal((await call('GET', `/${id}`, { as: { id: BOB, role: 'member' } })).status, 404);
+
+    for (const status of ['in_progress', 'done', 'archived']) {
+      const denied = await call('PATCH', `/${id}/status`, { body: { status } });
+      assert.equal(denied.status, 404, `${visibility}: ${status} must not expose or mutate the task`);
+      assert.deepEqual(db.prepare('SELECT status, archived_at FROM tasks WHERE id = ?').get(id), {
+        status: 'open', archived_at: null,
+      });
+    }
+
+    const completed = await call('PATCH', `/${id}/status`, {
+      as: { id: ALICE, role: 'admin' }, body: { status: 'done' },
+    });
+    assert.equal(completed.status, 200, 'the creator can still complete a hidden task');
+    const reopened = await call('PATCH', `/${id}/status`, {
+      as: { id: BOB, role: 'member' }, body: { status: 'open' },
+    });
+    assert.equal(reopened.status, 404);
+    assert.equal(db.prepare('SELECT status FROM tasks WHERE id = ?').get(id).status, 'done');
+  }
+});
+
 test('DELETE /:id: Erfolg (204/ok) und unbekannte ID → 404', async () => {
   const created = await call('POST', '/', { as: { id: ALICE, role: 'admin' }, body: { title: 'Löschbar' } });
   const del = await call('DELETE', `/${created.body.data.id}`, { as: { id: ALICE, role: 'admin' } });

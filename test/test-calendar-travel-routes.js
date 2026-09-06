@@ -101,6 +101,38 @@ function assertMealPlanPath(details, contextId, week = '2040-09-10') {
   assert.equal(target.searchParams.get('planning_context_id'), String(contextId));
 }
 
+test('Calendar meal durations and midnight rollover are independent of the server timezone', async () => {
+  const previousTimezone = process.env.TZ;
+  const examples = [
+    { date: '2040-09-10', time: '18:00', duration: 60, end: '2040-09-10T19:00:00' },
+    { date: '2040-12-31', time: '23:30', duration: 90, end: '2041-01-01T01:00:00' },
+  ];
+  const insert = database.prepare(`
+    INSERT INTO meals (date, meal_type, title, created_by, scheduled_time, expected_duration_minutes)
+    VALUES (?, 'dinner', 'Calendar duration test', ?, ?, ?)
+  `);
+  const meals = examples.map((example) => ({
+    ...example, id: Number(insert.run(example.date, ADMIN.id, example.time, example.duration).lastInsertRowid),
+  }));
+  try {
+    for (const timezone of ['UTC', 'America/New_York', 'Asia/Tokyo']) {
+      process.env.TZ = timezone;
+      for (const example of meals) {
+        const response = await call('GET', `/planning/calendar-context?from=${example.date}&to=${example.date}`);
+        assert.equal(response.status, 200, response.body?.error);
+        const event = response.body.data.find((row) => row.plan_kind === 'meal' && row.plan_id === example.id);
+        assert.ok(event);
+        assert.equal(event.start_datetime, `${example.date}T${example.time}:00`, timezone);
+        assert.equal(event.end_datetime, example.end, timezone);
+      }
+    }
+  } finally {
+    if (previousTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTimezone;
+    for (const meal of meals) database.prepare('DELETE FROM meals WHERE id = ?').run(meal.id);
+  }
+});
+
 test('Calendar Travel HTTP lifecycle preserves one shared context and reconciles generalization/deletion', async () => {
   const created = await call('POST', '/', { body: travelBody() });
   assert.equal(created.status, 201, created.body?.error);

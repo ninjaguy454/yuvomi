@@ -48,6 +48,7 @@ class MockCache {
   async put(input, response) { this.entries.set(keyOf(input), response); }
   async match(input) { return this.entries.get(keyOf(input)); }
   async delete(input) { return this.entries.delete(keyOf(input)); }
+  async keys() { return [...this.entries.keys()].map((path) => new MockRequest(path)); }
   async addAll(requests) {
     for (const request of requests) {
       await this.put(request, new MockResponse(`fresh:${keyOf(request)}`));

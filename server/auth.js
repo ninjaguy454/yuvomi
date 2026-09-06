@@ -12,6 +12,7 @@ import * as db from './db.js';
 import { generateToken, csrfMiddleware } from './middleware/csrf.js';
 import { collectErrors, date as validateDate, str, MAX_SHORT, MAX_TITLE } from './middleware/validate.js';
 import { createLogger } from './logger.js';
+import { memberEmail } from './services/member-email.js';
 import { deleteBirthdayArtifacts, syncBirthdayArtifacts } from './services/birthdays.js';
 import * as oidcClient from 'openid-client';
 import {
@@ -330,6 +331,30 @@ function publicApiToken(row) {
     created_at: row.created_at,
   };
 }
+
+// The auth router precedes the global API scope gate so login/setup/SSO remain
+// public. Auth is not a scopeable module: a scoped integration token must not
+// reach account management and mint an unrestricted token or administrator.
+// Look up scopes without authenticating or changing last_used_at; requireAuth
+// continues to own the fork's subject-user, role, and session behavior.
+function requestTokenScopes(req) {
+  const token = extractApiToken(req);
+  if (!token) return undefined;
+  const row = db.get().prepare(`
+    SELECT scopes FROM api_tokens
+    WHERE token_hash = ?
+      AND revoked_at IS NULL
+      AND (expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+  `).get(hashApiToken(token));
+  return row ? parseScopes(row.scopes) : undefined;
+}
+
+router.use((req, res, next) => {
+  if (requestTokenScopes(req) != null) {
+    return res.status(403).json({ error: 'Token scope does not permit this operation.', code: 403 });
+  }
+  next();
+});
 
 function publicUser(row) {
   return {
@@ -1098,12 +1123,7 @@ export function buildResetRoutes(targetRouter, {
     return !!row && !isSsoOnlyAccount(row.password_hash);
   }
 
-  function emailFor(userId) {
-    const row = getDb().prepare(
-      'SELECT email FROM contacts WHERE family_user_id = ? AND email IS NOT NULL AND email != \'\' LIMIT 1'
-    ).get(userId);
-    return row?.email ?? null;
-  }
+  const emailFor = (userId) => memberEmail(userId, { db: getDb() });
 
   targetRouter.post('/forgot-password', limiter, async (req, res) => {
     try {

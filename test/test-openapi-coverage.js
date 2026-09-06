@@ -127,6 +127,14 @@ function routerSources(entry, prefix = '', seen = new Map()) {
   for (const m of src.matchAll(/import\s+(\w+)\s+from\s+'(\.[^']+\.js)'/g)) {
     imports.set(m[1], resolve(dirname(entry), m[2]));
   }
+  // Route factories can be named imports, as with the personal inbox mounted
+  // before notification channel administration. Follow those route files too.
+  for (const m of src.matchAll(/import\s+\{([^}]+)\}\s+from\s+'(\.[^']+\.js)'/g)) {
+    for (const part of m[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop().trim();
+      if (/[Rr]outer$/.test(name)) imports.set(name, resolve(dirname(entry), m[2]));
+    }
+  }
 
   const mounted = new Set();
   for (const m of src.matchAll(/router\.use\(\s*'([^']*)'\s*,\s*(?:[\w.]+\s*,\s*)*(\w+)\s*\)/g)) {

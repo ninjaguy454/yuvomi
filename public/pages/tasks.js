@@ -1870,16 +1870,17 @@ function wireTaskForm(panel, {
   wireCountdownGate(panel);
   wireTaskLocationForm(panel);
   panel.querySelector('[data-activity-reassign-submit]')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget;
     const userId = Number(panel.querySelector('[data-activity-reassign]')?.value);
-    event.currentTarget.disabled = true;
+    button.disabled = true;
     try {
-      await api.put(`/automation/tasks/${event.currentTarget.dataset.taskId}/assignment`, { user_id: userId });
+      await api.put(`/automation/tasks/${button.dataset.taskId}/assignment`, { user_id: userId });
       window.yuvomi.showToast('Assignment updated.', 'success');
-      closeSharedModal({ force: true });
+      await closeModal({ force: true });
       await onChanged();
     } catch (err) {
       window.yuvomi.showToast(err.data?.error || err.message, 'danger');
-      event.currentTarget.disabled = false;
+      button.disabled = false;
     }
   });
 
@@ -2256,6 +2257,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     } else {
       const res = await api.post('/tasks', body);
       savedTaskId = res.data?.id;
+      // Ancillary saves can fail after creation. Retrying this same form must
+      // update the saved task instead of creating another copy.
+      if (savedTaskId) form.querySelector('#task-id').value = savedTaskId;
       window.yuvomi.showToast(t('tasks.createdToast'), 'success');
     }
 
@@ -4691,7 +4695,7 @@ function wireAssignmentRequestsBtn(container) {
         try {
           await api.post(`/automation/obligations/${row.dataset.assignmentRequest}/respond`, { action: button.dataset.requestAction });
           state.assignmentRequests = (await api.get('/automation/obligations')).data || [];
-          closeSharedModal({ force: true });
+          await closeModal({ force: true });
           await loadTasks(container);
           window.yuvomi.showToast(button.dataset.requestAction === 'accept' ? 'Assignment accepted.' : 'Assignment declined.', 'success');
         } catch (err) {
@@ -5485,6 +5489,15 @@ export async function render(container, { user }) {
         loadReminderForTask(openId),
       ]);
       openTaskView(task, reminder, container);
+      if (new URLSearchParams(window.location.search).get('section') === 'subtasks') {
+        requestAnimationFrame(() => {
+          const section = document.querySelector('.detail-task-subtasks');
+          if (!section) return;
+          section.tabIndex = -1;
+          section.scrollIntoView({ block: 'center' });
+          section.focus({ preventScroll: true });
+        });
+      }
     } catch { /* Task existiert nicht oder kein Zugriff */ }
   }
 }

@@ -98,11 +98,27 @@ export function createEmailService({ db, nodemailer = nodemailerDefault, env = p
     };
   }
 
+  /**
+   * ZEITSCHRANKEN AM TRANSPORT, und sie sind absichtlich knapper als die des
+   * Aufrufers. Ohne sie wartet nodemailer unbegrenzt auf einen SMTP-Server, der
+   * die Verbindung offen laesst. Fuer den Erinnerungslauf (#944) ist das mehr
+   * als eine Verzoegerung: er arbeitet alle faelligen Erinnerungen nacheinander
+   * ab, und sein Abbruch nach 8 s liesse den Versand darunter WEITERLAUFEN -
+   * die Zustellung gaelte als gescheitert, wuerde erneut versucht, und die Mail
+   * kaeme womoeglich zweimal an. Deshalb muss der Transport zuerst aufgeben,
+   * nicht der Aufrufer: dann ist die Verbindung wirklich zu und ein erneuter
+   * Versuch ist redlich.
+   */
+  const TRANSPORT_TIMEOUT_MS = 5_000;
+
   function buildTransport(c) {
     const opts = {
       host: c.host,
       port: c.port || (c.secure === 'ssl' ? 465 : 587),
       secure: c.secure === 'ssl',
+      connectionTimeout: TRANSPORT_TIMEOUT_MS,
+      greetingTimeout: TRANSPORT_TIMEOUT_MS,
+      socketTimeout: TRANSPORT_TIMEOUT_MS,
     };
     if (c.secure === 'starttls') opts.requireTLS = true;
     if (c.user) opts.auth = { user: c.user, pass: c.pass || '' };
@@ -113,12 +129,22 @@ export function createEmailService({ db, nodemailer = nodemailerDefault, env = p
     return c.fromName ? `"${c.fromName}" <${c.fromAddress}>` : c.fromAddress;
   }
 
-  async function sendMail({ to, subject, html, text }) {
+  /**
+   * `logLabel` haelt den Betreff aus dem Log. Solange hier nur Passwort-Reset
+   * und Einladungen liefen, war der Betreff fest formuliert und im Log
+   * nuetzlich. Eine Erinnerungsmail (#944) traegt dagegen den Aufgaben- oder
+   * Terminnamen im Betreff - bei Medikamenten-Erinnerungen einen
+   * Gesundheitsdatensatz. Der landete damit auf stdout des Containers, wo er
+   * dauerhaft liegen bleibt und von jeder Log-Sammlung mitgenommen wird.
+   * Wer eine Mail mit variablem Betreff verschickt, nennt hier stattdessen
+   * ihre Gattung.
+   */
+  async function sendMail({ to, subject, html, text, logLabel = null }) {
     if (!isConfigured()) throw new Error('Email is not configured.');
     const c = getRawConfig();
     const transport = buildTransport(c);
     const info = await transport.sendMail({ from: fromHeader(c), to, subject, html, text });
-    log.info(`Mail sent to ${to} (${subject})`);
+    log.info(`Mail sent to ${to} (${logLabel || subject})`);
     return info;
   }
 

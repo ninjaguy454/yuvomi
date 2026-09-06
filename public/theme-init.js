@@ -30,7 +30,8 @@
 })();
 
 (function() {
-  var stored = localStorage.getItem('yuvomi-theme');
+  var stored;
+  try { stored = localStorage.getItem('yuvomi-theme'); } catch (e) { /* system appearance */ }
   if (stored === 'dark') {
     document.documentElement.setAttribute('data-theme', 'dark');
   } else if (stored === 'light') {
@@ -66,6 +67,20 @@
       metas[1].setAttribute('content', active);
     }
   } catch (e) { /* ohne Metas bleibt es beim Systemverhalten */ }
+})();
+
+// Match utils/appearance-preferences.js before the first paint, including the
+// offline shell. Authentication refreshes this cache; session end removes it.
+(function () {
+  var values = {};
+  try {
+    if (/^\/(login|setup|join)(\/|$)/.test(location.pathname)) localStorage.removeItem('yuvomi-appearance');
+    else values = JSON.parse(localStorage.getItem('yuvomi-appearance') || '{}') || {};
+  } catch (e) { /* defaults */ }
+  document.documentElement.setAttribute('data-color-theme',
+    ['neutral', 'warm', 'cool'].indexOf(values.color_theme) >= 0 ? values.color_theme : 'neutral');
+  document.documentElement.setAttribute('data-typography',
+    values.heading_font === 'serif' ? 'serif' : 'default');
 })();
 
 // DER WAND-MODUS GEHOERT ZUM ERSTZUSTAND, ALSO HIERHER.

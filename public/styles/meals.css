@@ -1686,8 +1686,9 @@
 }
 
 .meal-view-filters {
-  display: flex;
-  align-items: end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
   gap: var(--space-2);
   min-width: 0;
 }
@@ -1722,7 +1723,8 @@
   padding-block: var(--space-1);
 }
 
-.meal-context-filter small {
+.meal-view-filters__hint {
+  grid-column: 1 / -1;
   max-width: 28rem;
   color: var(--color-text-tertiary);
   line-height: var(--line-height-snug);
@@ -2986,28 +2988,24 @@
     order: 0;
   }
 
-  /* On narrower screens a single compact, swipeable action rail consumes much
-   * less vertical space than three or four wrapped rows, without hiding any
-   * action or requiring abbreviated labels. */
+  /* Actions form deliberate rows; no separate horizontal toolbar scrollport. */
   .meals-page > .page-toolbar--wrap > .page-toolbar__actions {
     flex: 1 1 100%;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     justify-content: flex-start;
     width: 100%;
     max-width: 100%;
     margin-inline-start: 0;
     padding-block-end: var(--space-1);
-    overflow-x: auto;
-    overflow-y: hidden;
-    overscroll-behavior-x: contain;
-    scroll-snap-type: x proximity;
-    scrollbar-width: thin;
-    -webkit-overflow-scrolling: touch;
+    overflow: visible;
   }
 
   .meals-page > .page-toolbar--wrap > .page-toolbar__actions > .btn {
-    flex: 0 0 auto;
-    scroll-snap-align: start;
+    flex: 0 1 auto;
+    min-height: var(--target-md);
+    padding: var(--space-2) var(--space-3);
+    font-size: var(--text-sm);
+    white-space: normal;
   }
 }
 
@@ -3092,6 +3090,7 @@
   .meal-member-filter .form-input,
   .meal-context-filter .form-input {
     width: 100%;
+    min-width: 0;
   }
 
   .meal-acting-banner {

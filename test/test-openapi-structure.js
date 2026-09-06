@@ -65,6 +65,26 @@ test('buildOpenApiSpec spiegelt buildPaths() vollstaendig', () => {
   assert.ok(Object.keys(spec.components.schemas).length > 0, 'schemas fehlen in der Spec');
 });
 
+test('personal inbox operations document session-only access and valid response references', () => {
+  const spec = buildOpenApiSpec({}, 'test');
+  const paths = Object.entries(spec.paths).filter(([path]) => path.startsWith('/api/v1/notifications/inbox') || path === '/api/v1/notifications/preferences');
+  assert.equal(paths.length, 5);
+  function checkReferences(value) {
+    if (!value || typeof value !== 'object') return;
+    if (value.$ref?.startsWith('#/')) {
+      const target = value.$ref.slice(2).split('/').reduce((node, key) => node?.[key], spec);
+      assert.notEqual(target, undefined, `Unresolved notification reference ${value.$ref}`);
+    }
+    for (const nested of Object.values(value)) checkReferences(nested);
+  }
+  for (const [, operations] of paths) {
+    for (const operation of Object.values(operations)) {
+      assert.deepEqual(operation.security, [{ cookieAuth: [] }]);
+      checkReferences(operation);
+    }
+  }
+});
+
 test('kein Pfad-Parameter mit Namens-Bedeutung ist als Zahl deklariert', () => {
   // idParam() setzt hart `type: integer`; fuer Namen und Schluessel gibt es
   // stringPathParam(). Wird der falsche Helfer genommen, ist die Spec still

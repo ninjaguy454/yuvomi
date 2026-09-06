@@ -506,6 +506,65 @@ test('Randomize-Helfer vermeidet gleiche Rezepte in benachbarten Mahlzeiten dess
   assert(breakfast.recipe.id !== lunch.recipe.id, 'benachbarte Mahlzeiten desselben Tages sollen unterschiedliche Rezepte nutzen');
 });
 
+test('Meal Plan actions keep the visible manager context and its trip dates', () => {
+  const context = mealsUi.mealManagerMutationContext({
+    managerContextId: 7, weekStart: '2026-09-07',
+    contexts: [{ id: 7, name: 'Vacation', starts_at: '2026-09-08T10:00:00', ends_at: '2026-09-10T18:00:00' }],
+  });
+  assert(context.allowed && context.id === 7 && context.name === 'Vacation', 'selected manager context is authoritative');
+  assert(context.dateFrom === '2026-09-08' && context.dateTo === '2026-09-10', 'trip bounds retained');
+  const meals = mealsUi.randomizeContextMeals(context, [
+    { id: 1, planning_context_id: null }, { id: 2, planning_context_id: 7 },
+    { id: 3, planning_context_id: 8 }, { id: 4, planning_context_id: 7, meal_plan_id: 10 },
+    { id: 5, planning_context_id: 7, parent_meal_id: 2 },
+  ]);
+  assert(meals.length === 1 && meals[0].id === 2, 'other contexts and managed/child meals are excluded');
+  const plan = mealsUi.buildRandomMealAssignments({
+    ...context, visibleMealTypes: ['dinner'], meals: [],
+    recipes: [{ id: 1, title: 'Pasta', meal_types: ['dinner'], ingredients: [] }], pick: () => 0,
+  });
+  assert(plan.assignments.length === 3, 'only the three trip dates are randomized');
+  assert(plan.assignments.every((item) => item.date >= context.dateFrom && item.date <= context.dateTo), 'no writes outside trip dates');
+});
+
+test('Home manager excludes trip meals and a missing trip cannot mutate Home', () => {
+  const home = mealsUi.mealManagerMutationContext({ managerContextId: 'home', contexts: [], weekStart: '2026-09-07' });
+  assert(home.allowed && home.id === null, 'Home is explicit');
+  assert(mealsUi.randomizeContextMeals(home, [{ id: 1 }, { id: 2, planning_context_id: 7 }]).length === 1, 'Home does not consume trip slots');
+  const missing = mealsUi.mealManagerMutationContext({ managerContextId: 99, contexts: [], weekStart: '2026-09-07' });
+  assert(!missing.allowed && missing.id === 99, 'invalid trip does not silently target Home');
+});
+
+test('Randomize respects midnight-exclusive trip ends and the server day-overlap check', () => {
+  for (const [startsAt, endsAt, weekStart] of [
+    ['2026-09-08T10:00:00', '2026-09-10T00:00:00', '2026-09-07'],
+    ['2026-09-08', '2026-09-10', '2026-09-07'],
+    ['2026-10-30T10:00:00Z', '2026-11-01T00:00:00.000Z', '2026-10-26'],
+    ['2026-09-08T00:30:00+02:00', '2026-09-10T01:00:00+02:00', '2026-09-07'],
+  ]) {
+    const context = mealsUi.mealManagerMutationContext({ managerContextId: 7, weekStart,
+      contexts: [{ id: 7, name: 'Boundary trip', starts_at: startsAt, ends_at: endsAt }] });
+    const plan = mealsUi.buildRandomMealAssignments({ ...context, visibleMealTypes: ['dinner'], meals: [],
+      recipes: [{ id: 1, title: 'Pasta', meal_types: ['dinner'], ingredients: [] }], pick: () => 0 });
+    const expected = db.prepare(`WITH RECURSIVE days(day) AS (
+      SELECT ? UNION ALL SELECT date(day, '+1 day') FROM days WHERE day < date(?, '+6 days')
+    ) SELECT day FROM days WHERE julianday(?) < julianday(day, '+1 day') AND julianday(?) > julianday(day) ORDER BY day`)
+      .all(weekStart, weekStart, startsAt, endsAt).map((row) => row.day);
+    assert(JSON.stringify(plan.assignments.map((item) => item.date)) === JSON.stringify(expected),
+      `preview dates must match server validation for ${startsAt} to ${endsAt}`);
+    assert(plan.assignments.length > 0, 'eligible trip dates remain usable');
+  }
+});
+
+test('Randomize distinguishes a week outside the trip from an occupied week', () => {
+  for (const weekStart of ['2026-08-31', '2026-09-14']) {
+    const plan = mealsUi.buildRandomMealAssignments({ weekStart, dateFrom: '2026-09-08', dateTo: '2026-09-10',
+      visibleMealTypes: ['dinner'], meals: [], recipes: [], replaceExisting: true });
+    assert(plan.assignments.length === 0 && plan.deleteMealIds.length === 0, 'no mutation is offered outside the trip');
+    assert(plan.reason === 'outside_context', 'the recovery reason points to choosing a trip week');
+  }
+});
+
 test('Meals-Route bietet einen atomaren apply-plan Endpunkt für Replace-Flows', () => {
   const source = readFileSync(new URL('../server/routes/meals.js', import.meta.url), 'utf8');
   assert(/router\.post\('\/apply-plan'/.test(source), 'apply-plan Route muss existieren');

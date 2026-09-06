@@ -34,8 +34,8 @@ import { toLocalDateKey } from '../../public/utils/date.js';
 import { parseSyncTargetValue } from '../../public/utils/sync-target.js';
 import { mentionedUserIds } from '../../public/utils/mentions.js';
 import { toggleChecklistLine } from '../../public/utils/markdown-checklist.js';
-import { resolvePermissions } from '../permissions.js';
-import { pushService } from '../services/push.js';
+import { notifyTaskAssignments } from '../services/notification-events.js';
+import { enqueueNotification } from '../services/notification-inbox.js';
 import { todayKey } from '../utils/timezone.js';
 import { requireAdmin } from '../middleware/require-admin.js';
 import {
@@ -1356,6 +1356,7 @@ router.post('/', (req, res) => {
       if (taskLocation !== undefined) {
         setTaskLocation(db.get(), Number(result.lastInsertRowid), taskLocation, req.authUserId || req.session.userId);
       }
+      notifyTaskAssignments(db.get(), Number(result.lastInsertRowid));
       return result.lastInsertRowid;
     })();
 
@@ -1693,6 +1694,7 @@ router.put('/:id', (req, res) => {
       // also muss es die Serie genauso weiterschreiben. Grundlage ist die frisch
       // gelesene Zeile, damit im selben Zug geänderte Regel/Fälligkeit schon zählen.
       if (status === 'done' && task.status !== 'done') spawnRecurrenceFollowup(updated);
+      notifyTaskAssignments(db.get(), task.id, assignedBefore);
     })();
 
     addAssignedUsers(updated);
@@ -1988,6 +1990,7 @@ function spawnRecurrenceFollowupSingle(task) {
       );
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);
+      notifyTaskAssignments(db.get(), Number(newSub.lastInsertRowid));
     }
 
     if (taskActivityBinding) {
@@ -1997,6 +2000,7 @@ function spawnRecurrenceFollowupSingle(task) {
       });
     }
     copyTaskLocation(db.get(), task.id, Number(newTask.lastInsertRowid), task.created_by);
+    notifyTaskAssignments(db.get(), Number(newTask.lastInsertRowid));
   })();
 }
 
@@ -2049,11 +2053,16 @@ router.patch('/:id/status', (req, res) => {
     const prev = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     if (!prev)
       return res.status(404).json({ error: 'Task not found.', code: 404 });
+    if (!mayAccessTask(prev, req.authUserId || req.session.userId)) {
+      return res.status(404).json({ error: 'Task not found.', code: 404 });
+    }
 
     // Ablegen ist kein Statuswechsel: kein Punkte-Storno, keine Serien-Bewegung,
     // kein CalDAV-Push. Genau daran hing #688 - die Ablage überschrieb das 'done'
     // und syncTaskRewards nahm die Gutschrift dafür wieder zurück.
     if (status === ARCHIVE_STATUS) {
+      // The compatibility alias must enforce the same lock as /:id/archive.
+      if (!mayEditTaskDefinition(prev, req)) return res.status(403).json(LOCKED_ERROR);
       const archivedAt = setArchived(req.params.id, true);
       return res.json({ data: { id: Number(req.params.id), status: prev.status, archived_at: archivedAt } });
     }
@@ -2411,7 +2420,8 @@ function loadTaskComments(taskId) {
  * kein Weg, jemandem den Titel einer privaten Aufgabe zuzustellen. Sich selbst
  * zu erwähnen löst nichts aus.
  */
-function notifyMentions(task, comment, authorId, previousComment = '') {
+function notifyMentions(task, commentRow, authorId, previousComment = '') {
+  const comment = commentRow.comment;
   // DIESELBE Personenliste, die `meta/options` an den Browser gibt: dort sind
   // Haushaltshilfen ausgenommen, und der Client hebt deshalb nur diese Namen
   // hervor. Ohne den Ausschluss haette der Server jemanden benachrichtigt, den
@@ -2431,21 +2441,10 @@ function notifyMentions(task, comment, authorId, previousComment = '') {
 
   const author = users.find((u) => u.id === authorId)?.display_name || '';
   for (const id of ids) {
-    if (!findVisibleTask(task.id, id)) continue;
-    // Die Sichtbarkeit der Zeile ist nicht die einzige Huerde: wem das
-    // Aufgaben-Modul entzogen ist, der kommt an die Aufgabe gar nicht heran -
-    // und bekaeme mit dem Push trotzdem ihren Titel und den Kommentaranfang
-    // zugestellt. Dieselbe Frage, die die /api/v1-Middleware beim Lesen stellt.
-    const target = db.get().prepare('SELECT id, role, family_role FROM users WHERE id = ?').get(id);
-    if (!target) continue;
-    const perms = resolvePermissions(db.get(), target);
-    if (!perms.admin && perms.modules?.tasks === 'none') continue;
-    pushService.sendPushToUser(id, {
-      title: task.title,
-      body: `${author}: ${comment}`.slice(0, 300),
-      url: `/tasks?open=${task.id}`,
-      tag: `task-comment-${task.id}`,
-    }).catch((err) => log.warn('Erwähnungs-Push fehlgeschlagen:', err?.message || err));
+    enqueueNotification(db.get(), {
+      userId: id, sourceKey: `task-comment:${commentRow.id}:mention`, category: 'tasks', entityType: 'task', entityId: task.id,
+      title: task.title, body: `${author}: ${comment}`.slice(0, 300),
+    });
   }
 }
 
@@ -2505,7 +2504,7 @@ router.post('/:id/comments', (req, res) => {
     `).get(result.lastInsertRowid);
 
     res.status(201).json({ data: row });
-    notifyMentions(task, row.comment, me);
+    notifyMentions(task, row, me);
   } catch (err) {
     log.error('POST /:id/comments error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -2540,7 +2539,7 @@ router.patch('/:id/comments/:commentId', (req, res) => {
     // Wer beim Korrigieren jemanden dazuholt, meint ihn genauso wie beim
     // Schreiben - ohne diesen Aufruf staende der Name farbig da und niemand
     // erfuehre davon.
-    notifyMentions(found.task, row.comment, found.me, found.row.comment);
+    notifyMentions(found.task, row, found.me, found.row.comment);
   } catch (err) {
     log.error('PATCH /:id/comments/:commentId error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });

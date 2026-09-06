@@ -37,6 +37,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
+import { posix } from 'node:path';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public/', import.meta.url));
 const SRC = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
@@ -85,11 +86,39 @@ function loadSwLists() {
 
 const { APP_SHELL, PAGE_MODULES, APP_LOCALES, PAGE_MODULE_SET } = loadSwLists();
 
-/** Statische `from '/pfad'`-Importe einer Datei. Dynamische Importe stehen bewusst außen vor: sie sind zur Laufzeit auflösbar und blockieren keinen Modulgraph. */
+/**
+ * Statische Importe einer Datei, als absolute Pfade.
+ *
+ * JEDE SCHREIBWEISE ZAEHLT, NICHT NUR DIE HAEUFIGSTE. Der Ausdruck sah lange
+ * `from '/pfad'` und sonst nichts. Unsichtbar blieben damit zwei Formen, die
+ * der Browser genauso laedt:
+ *
+ *   - relative Specifier - `from './nachbar.js'`
+ *   - Seiteneffekt-Importe ohne Bindung - `import '/components/datepicker.js'`
+ *
+ * Beide Luecken haben je einen echten Fehler getragen, der jahrelang gruen war:
+ * `settings/dirty-guard.js` (relativ, aus der Settings-Shell) und
+ * `components/datepicker.js` (Seiteneffekt, aus dem Router). Online faellt so
+ * etwas nie auf, weil das Netz die Luecke fuellt; offline scheitert der Import
+ * und nimmt alles mit, was von der Datei abhaengt.
+ *
+ * Dynamische Importe stehen weiter bewusst aussen vor: sie sind zur Laufzeit
+ * aufloesbar und blockieren keinen Modulgraph.
+ */
 function staticImports(pathname) {
   const file = PUBLIC_DIR + pathname.replace(/^\//, '');
   if (!existsSync(file)) return [];
-  return [...readFileSync(file, 'utf8').matchAll(/from\s+'(\/[^']+)'/g)].map((m) => m[1]);
+  const code = readFileSync(file, 'utf8');
+  const dir = posix.dirname(pathname);
+  const specs = [
+    ...[...code.matchAll(/from\s+'([^']+)'/g)].map((m) => m[1]),
+    // `import 'x';` am Zeilenanfang - ohne `from`, ohne Klammer (das waere ein
+    // dynamischer Import und bleibt draussen).
+    ...[...code.matchAll(/^\s*import\s+'([^']+)'/gm)].map((m) => m[1]),
+  ];
+  return specs
+    .filter((spec) => spec.startsWith('/') || spec.startsWith('.'))
+    .map((spec) => (spec.startsWith('/') ? spec : posix.resolve(dir, spec)));
 }
 
 const precached = new Set([...APP_SHELL, ...PAGE_MODULES, ...APP_LOCALES]);

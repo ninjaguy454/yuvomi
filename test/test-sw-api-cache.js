@@ -68,6 +68,8 @@ class MockRequest {
       this.url = String(input);
       this.method = init.method || 'GET';
     }
+    this.mode = init.mode || input?.mode || 'same-origin';
+    this.cache = init.cache || input?.cache || 'default';
   }
 }
 
@@ -77,6 +79,8 @@ class MockCache {
   constructor() { this.store = new Map(); }
   async put(req, res) { this.store.set(keyOf(req), res); }
   async match(req) { return this.store.get(keyOf(req)) || undefined; }
+  async keys() { return [...this.store.keys()].map((url) => new MockRequest(new URL(url, ORIGIN).href)); }
+  async delete(req) { return this.store.delete(keyOf(req)); }
   async addAll() { /* no-op für Tests */ }
 }
 
@@ -131,8 +135,9 @@ function apiUrl(path) { return `${ORIGIN}/api/v1${path}`; }
 function dispatchFetch(env, request) {
   let responded = false;
   let result;
-  env.listeners.fetch[0]({ request, respondWith(p) { responded = true; result = p; } });
-  return { responded, result: responded ? Promise.resolve(result) : null };
+  let waited = Promise.resolve();
+  env.listeners.fetch[0]({ request, respondWith(p) { responded = true; result = p; }, waitUntil(p) { waited = Promise.resolve(p); } });
+  return { responded, result: responded ? Promise.resolve(result) : null, waited };
 }
 
 async function dispatchActivate(env) {
@@ -202,6 +207,83 @@ test('offline ohne Cache → 503 mit {error:"offline"}', async () => {
   const res = await result;
   assert.equal(res.status, 503);
   assert.deepEqual(await res.json(), { error: 'offline' });
+});
+
+test('cache quota failures do not replace fresh network data with stale data', async () => {
+  const env = loadSw({ fetchImpl: async () => new MockResponse(JSON.stringify({ data: 'old' })) });
+  const request = new MockRequest(apiUrl('/tasks'));
+  await dispatchFetch(env, request).result;
+  const cache = await env.caches.open(await apiCacheName(env));
+  cache.put = async () => { throw new Error('QuotaExceededError'); };
+  env.setFetch(async () => new MockResponse(JSON.stringify({ data: 'fresh' })));
+
+  const response = await dispatchFetch(env, request).result;
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { data: 'fresh' });
+  assert.equal(response.headers.get('x-cached-at'), null);
+});
+
+test('unavailable cache storage preserves network data and a useful offline error', async () => {
+  const env = loadSw({ fetchImpl: async () => new MockResponse(JSON.stringify({ data: 'fresh' })) });
+  env.caches.open = async () => { throw new Error('Storage unavailable'); };
+  const request = new MockRequest(apiUrl('/shopping'));
+
+  const online = await dispatchFetch(env, request).result;
+  assert.equal(online.status, 200);
+  assert.deepEqual(await online.json(), { data: 'fresh' });
+
+  env.setFetch(async () => { throw new TypeError('Failed to fetch'); });
+  const offline = await dispatchFetch(env, request).result;
+  assert.equal(offline.status, 503);
+  assert.deepEqual(await offline.json(), { error: 'offline' });
+});
+
+test('Reader navigations never cache or reuse authenticated HTML, including old query-specific entries', async () => {
+  const env = loadSw({ fetchImpl: async (request) => {
+    assert.equal(request.cache, 'no-store');
+    return new MockResponse('Current Reader household', { headers: { 'Cache-Control': 'private, no-store' } });
+  } });
+  const request = new MockRequest(`${ORIGIN}/reader?view=tasks`, { mode: 'navigate' });
+  const cache = await env.caches.open('yuvomi-shell-test');
+  await cache.put(request, new MockResponse('Previous Reader household'));
+  const online = dispatchFetch(env, request);
+  assert.equal((await online.result)._body, 'Current Reader household');
+  await online.waited;
+  assert.equal(await cache.match(request), undefined);
+
+  await cache.put(request, new MockResponse('Previous Reader household'));
+  env.setFetch(async () => { throw new TypeError('Failed to fetch'); });
+  const offline = dispatchFetch(env, request);
+  const response = await offline.result;
+  assert.equal(response.status, 503);
+  assert.doesNotMatch(response._body, /Previous Reader household/);
+  await offline.waited;
+  assert.equal(await cache.match(request), undefined);
+});
+
+test('logout and worker activation remove legacy Reader pages while preserving the app shell', async () => {
+  for (const trigger of ['logout', 'activate']) {
+    const env = loadSw();
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const cache = await env.caches.open(`yuvomi-shell-${pkg.version}`);
+    const reader = new MockRequest(`${ORIGIN}/reader?view=meals`);
+    const shell = new MockRequest(`${ORIGIN}/index.html`);
+    await cache.put(reader, new MockResponse('Old Reader household'));
+    await cache.put(shell, new MockResponse('App shell'));
+    if (trigger === 'logout') await dispatchMessage(env, { type: 'CLEAR_API_CACHE' });
+    else await dispatchActivate(env);
+    assert.equal(await cache.match(reader), undefined, trigger);
+    assert.ok(await cache.match(shell), trigger);
+  }
+});
+
+test('navigation caching honors a no-store response', async () => {
+  const env = loadSw({ fetchImpl: async () => new MockResponse('Uncacheable', {
+    headers: { 'Cache-Control': 'private, no-store' },
+  }) });
+  const request = new MockRequest(`${ORIGIN}/private-page`, { mode: 'navigate' });
+  assert.equal((await dispatchFetch(env, request).result)._body, 'Uncacheable');
+  assert.equal(await env.caches.match(request), undefined);
 });
 
 test('Mutationen werden nie gecacht und nicht angefasst', async () => {

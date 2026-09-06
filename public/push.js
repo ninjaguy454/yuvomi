@@ -4,8 +4,44 @@
  * Abhängigkeiten: /api.js
  */
 import { api } from '/api.js';
+import { isWallModeEnabled } from '/utils/wall-mode.js';
 
 let _subscribedCache = false;
+let _privacyListening = false;
+let _generation = 0;
+let _deliveryVerified = false;
+
+function currentOperation(generation) {
+  return generation === _generation && !isWallModeEnabled();
+}
+
+async function syncWorkerPrivacy(registration) {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = registration || await navigator.serviceWorker.ready;
+  const enabled = isWallModeEnabled() || !_deliveryVerified;
+  (reg.active || navigator.serviceWorker.controller)?.postMessage({ type: 'SET_SHARED_DISPLAY', enabled });
+}
+
+function invalidateDelivery() {
+  _generation++;
+  _subscribedCache = false;
+  _deliveryVerified = false;
+  void syncWorkerPrivacy().catch(() => {});
+  return _generation;
+}
+
+async function syncSharedDisplay() {
+  if (!('serviceWorker' in navigator)) return;
+  const reg = await navigator.serviceWorker.ready;
+  await syncWorkerPrivacy(reg);
+  if (isWallModeEnabled() && 'PushManager' in window) await disablePush();
+}
+
+function onWallModeChange() {
+  invalidateDelivery();
+  void syncSharedDisplay().catch(() => {});
+}
+function onWallStorage(event) { if (event.key === 'yuvomi-wall-mode') onWallModeChange(); }
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -26,6 +62,11 @@ function isPushSubscribed() {
 }
 
 async function pushStatus() {
+  const generation = _generation;
+  if (isWallModeEnabled()) {
+    invalidateDelivery();
+    return { supported: pushSupported(), permission: 'Notification' in window ? Notification.permission : 'unsupported', subscribed: false, shared: true };
+  }
   if (!pushSupported()) {
     _subscribedCache = false;
     return { supported: false, permission: 'unsupported', subscribed: false };
@@ -33,39 +74,65 @@ async function pushStatus() {
   let subscribed = false;
   try {
     const reg = await navigator.serviceWorker.ready;
-    subscribed = Boolean(await reg.pushManager.getSubscription());
+    const sub = await reg.pushManager.getSubscription();
+    if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isWallModeEnabled() };
+    if (sub) {
+      const response = await api.post('/push/status', { endpoint: sub.endpoint });
+      if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isWallModeEnabled() };
+      subscribed = response?.data?.subscribed === true;
+      // A browser subscription can outlive a signed-in user. Never display another
+      // person's notifications or silently transfer their device on session switch.
+      if (!subscribed) await sub.unsubscribe();
+    }
   } catch {
     subscribed = false;
   }
+  if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isWallModeEnabled() };
   _subscribedCache = subscribed;
-  return { supported: true, permission: Notification.permission, subscribed };
+  _deliveryVerified = subscribed;
+  await syncWorkerPrivacy();
+  return { supported: true, permission: Notification.permission, subscribed: currentOperation(generation) && subscribed };
 }
 
 async function enablePush() {
+  if (isWallModeEnabled()) return { subscribed: false, shared: true };
   if (!pushSupported()) throw new Error('unsupported');
+  const generation = invalidateDelivery();
   const permission = await Notification.requestPermission();
+  if (!currentOperation(generation)) return { subscribed: false, shared: isWallModeEnabled() };
   if (permission !== 'granted') {
     _subscribedCache = false;
     return { subscribed: false, permission };
   }
   const reg = await navigator.serviceWorker.ready;
+  if (!currentOperation(generation)) return { subscribed: false, shared: isWallModeEnabled() };
   const { data } = await api.get('/push/vapid-public-key');
+  if (!currentOperation(generation)) return { subscribed: false, shared: isWallModeEnabled() };
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(data.key),
   });
-  await api.post('/push/subscribe', sub.toJSON());
+  if (!currentOperation(generation)) { await sub.unsubscribe(); return { subscribed: false, shared: isWallModeEnabled() }; }
+  try { await api.post('/push/subscribe', sub.toJSON()); }
+  catch (error) { await sub.unsubscribe(); throw error; }
+  if (!currentOperation(generation)) { await sub.unsubscribe(); return { subscribed: false, shared: isWallModeEnabled() }; }
   _subscribedCache = true;
-  return { subscribed: true, permission };
+  _deliveryVerified = true;
+  await syncWorkerPrivacy(reg);
+  return { subscribed: currentOperation(generation) && _subscribedCache, permission };
 }
 
 async function disablePush() {
+  const generation = invalidateDelivery();
   if (!pushSupported()) return { subscribed: false };
   const reg = await navigator.serviceWorker.ready;
   const sub = await reg.pushManager.getSubscription();
+  if (generation !== _generation) return { subscribed: false };
   if (sub) {
-    await api.post('/push/unsubscribe', { endpoint: sub.endpoint });
+    // Revoke locally first: even an expired session/offline server must not keep
+    // personal contents arriving on a device that has become a shared display.
     await sub.unsubscribe();
+    try { await api.post('/push/unsubscribe', { endpoint: sub.endpoint }); } catch { /* expired endpoint is removed on next delivery */ }
   }
   _subscribedCache = false;
   return { subscribed: false };
@@ -81,22 +148,13 @@ function matchesServerKey(sub, serverKey) {
 }
 
 /**
- * Lokales Abo erneut beim Server registrieren. `/push/subscribe` ist ein Upsert,
- * der Aufruf also idempotent. Heilt den Fall, dass der Server das Abo verloren hat
- * (410 vom Push-Dienst, DB-Restore, Gerätewechsel), der Browser es aber weiterhin
- * kennt - ohne Resync bleibt das Gerät still, obwohl der Schalter "aktiv" zeigt.
+ * Verify the local subscription's owner. Restoring server registration is an
+ * explicit repair action, since a browser can be shared between signed-in users.
  */
 async function resyncSubscription() {
+  if (isWallModeEnabled()) return false;
   if (!pushSupported() || Notification.permission !== 'granted') return false;
-  const reg = await navigator.serviceWorker.ready;
-  const sub = await reg.pushManager.getSubscription();
-  if (!sub) {
-    _subscribedCache = false;
-    return false;
-  }
-  await api.post('/push/subscribe', sub.toJSON());
-  _subscribedCache = true;
-  return true;
+  return (await pushStatus()).subscribed;
 }
 
 /**
@@ -106,36 +164,56 @@ async function resyncSubscription() {
  * setzt eine bereits erteilte also voraus.
  */
 async function repairPush() {
+  if (isWallModeEnabled()) return false;
   if (!pushSupported() || Notification.permission !== 'granted') return false;
+  const generation = invalidateDelivery();
   const reg = await navigator.serviceWorker.ready;
+  if (!currentOperation(generation)) return false;
   const { data } = await api.get('/push/vapid-public-key');
+  if (!currentOperation(generation)) return false;
   const serverKey = urlBase64ToUint8Array(data.key);
 
   let sub = await reg.pushManager.getSubscription();
+  if (!currentOperation(generation)) return false;
   if (sub && !matchesServerKey(sub, serverKey)) {
     // Abo auf altem Key: serverseitig abmelden, damit keine Karteileiche bleibt.
     try { await api.post('/push/unsubscribe', { endpoint: sub.endpoint }); } catch { /* egal */ }
     try { await sub.unsubscribe(); } catch { /* egal */ }
     sub = null;
   }
+  if (!currentOperation(generation)) return false;
   if (!sub) {
     sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: serverKey });
   }
-  await api.post('/push/subscribe', sub.toJSON());
+  if (!currentOperation(generation)) { await sub.unsubscribe(); return false; }
+  try { await api.post('/push/subscribe', sub.toJSON()); }
+  catch (error) { await sub.unsubscribe(); throw error; }
+  if (!currentOperation(generation)) { await sub.unsubscribe(); return false; }
   _subscribedCache = true;
-  return true;
+  _deliveryVerified = true;
+  await syncWorkerPrivacy(reg);
+  return currentOperation(generation) && _subscribedCache;
 }
 
-/** Beim App-Start einmal den Cache füllen und ein bestehendes Abo nachregistrieren. */
+/** Verify device privacy and ownership at startup; never silently register it. */
 async function initPush() {
+  const generation = _generation;
+  if (!_privacyListening) {
+    window.addEventListener('yuvomi:wall-mode-change', onWallModeChange);
+    window.addEventListener('storage', onWallStorage);
+    _privacyListening = true;
+  }
   try {
-    const st = await pushStatus();
-    if (st.subscribed) await resyncSubscription();
+    await syncSharedDisplay();
+    if (!currentOperation(generation)) return;
+    await pushStatus();
   } catch { /* ignore */ }
 }
 
 function stopPush() {
-  _subscribedCache = false;
+  invalidateDelivery();
+  // Logout closes the local delivery endpoint; a subsequent user must opt in.
+  void disablePush().catch(() => {});
 }
 
 export {

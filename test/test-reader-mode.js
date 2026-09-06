@@ -39,6 +39,123 @@ test('Reader mode renders useful HTML without JavaScript', async () => {
   assert.match(html, /reader\.css/);
 });
 
+test('Reader uses account colors and heading typography without scripts or dark e-paper inversion', async () => {
+  const put = database.prepare('INSERT OR REPLACE INTO sync_config (key, value) VALUES (?, ?)');
+  put.run(`color_theme:user:${userId}`, 'warm');
+  put.run(`heading_font:user:${userId}`, 'serif');
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=tasks`);
+    const html = await response.text();
+    assert.match(html, /data-color-theme="warm"/);
+    assert.match(html, /data-typography="serif"/);
+    assert.match(html, /data-theme="light"/);
+    assert.match(html, /\/styles\/tokens\.css/);
+    assert.doesNotMatch(html, /<script/i);
+    assert.match(response.headers.get('cache-control'), /no-store/);
+  } finally {
+    database.prepare("DELETE FROM sync_config WHERE key LIKE 'color_theme:user:%' OR key LIKE 'heading_font:user:%'").run();
+  }
+});
+
+test('Reader applies module permissions to navigation, Today, and direct views', async () => {
+  const setAccess = database.prepare(`
+    INSERT INTO access_permissions (subject_type, subject_id, resource_type, resource_key, access)
+    VALUES ('user', ?, 'module', ?, 'none')
+  `);
+  for (const module of ['tasks', 'calendar', 'meals']) setAccess.run(String(userId), module);
+  try {
+    const today = await fetch(`http://127.0.0.1:${server.address().port}/reader?date=2032-01-02`);
+    const html = await today.text();
+    assert.equal(today.status, 200);
+    assert.doesNotMatch(html, /Reader task|Reader event|Reader meal|view=tasks|view=add-task|view=calendar|view=meals|view=recipes/);
+    for (const view of ['tasks', 'add-task', 'calendar', 'event', 'meals', 'recipes', 'recipe']) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=${view}&id=${recipeId}&date=2032-01-02`);
+      assert.equal(response.status, 403, view);
+      assert.doesNotMatch(await response.text(), /Reader task|Reader event|Reader meal|Reader recipe/);
+    }
+  } finally {
+    database.prepare("DELETE FROM access_permissions WHERE subject_type = 'user' AND subject_id = ?").run(String(userId));
+  }
+});
+
+test('Reader read-only Tasks remain readable but cannot be created', async () => {
+  database.prepare(`
+    INSERT INTO access_permissions (subject_type, subject_id, resource_type, resource_key, access)
+    VALUES ('user', ?, 'module', 'tasks', 'read')
+  `).run(String(userId));
+  try {
+    const tasks = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=tasks`);
+    const html = await tasks.text();
+    assert.equal(tasks.status, 200);
+    assert.match(html, /Reader task/);
+    assert.doesNotMatch(html, /view=add-task/);
+    const form = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=add-task`);
+    assert.equal(form.status, 403);
+    const created = await fetch(`http://127.0.0.1:${server.address().port}/reader/tasks`, {
+      method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ csrf: sharedSession.csrfToken, title: 'Disallowed Reader task' }),
+    });
+    assert.equal(created.status, 403);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM tasks WHERE title = 'Disallowed Reader task'").get().count, 0);
+  } finally {
+    database.prepare("DELETE FROM access_permissions WHERE subject_type = 'user' AND subject_id = ?").run(String(userId));
+  }
+});
+
+test('Reader preserves the existing administrator permission bypass', async () => {
+  database.prepare("UPDATE users SET role = 'admin' WHERE id = ?").run(userId);
+  database.prepare(`
+    INSERT INTO access_permissions (subject_type, subject_id, resource_type, resource_key, access)
+    VALUES ('user', ?, 'module', 'tasks', 'none')
+  `).run(String(userId));
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=tasks`);
+    assert.equal(response.status, 200);
+    const html = await response.text();
+    assert.match(html, /Reader task/);
+    assert.match(html, /view=add-task/);
+  } finally {
+    database.prepare("UPDATE users SET role = 'member' WHERE id = ?").run(userId);
+    database.prepare("DELETE FROM access_permissions WHERE subject_type = 'user' AND subject_id = ?").run(String(userId));
+  }
+});
+
+test('Reader preserves the Shared-expense guest boundary for reads and creation', async () => {
+  database.prepare('INSERT INTO split_expense_guest_users (user_id) VALUES (?)').run(userId);
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/reader?date=2032-01-02`);
+    assert.equal(response.status, 403);
+    const html = await response.text();
+    assert.match(html, /only access Shared expenses/);
+    assert.doesNotMatch(html, /Reader task|Reader event|Reader meal|view=add-task/);
+    const created = await fetch(`http://127.0.0.1:${server.address().port}/reader/tasks`, {
+      method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ csrf: sharedSession.csrfToken, title: 'Guest Reader task' }),
+    });
+    assert.equal(created.status, 403);
+    assert.equal(database.prepare("SELECT COUNT(*) AS count FROM tasks WHERE title = 'Guest Reader task'").get().count, 0);
+  } finally {
+    database.prepare('DELETE FROM split_expense_guest_users WHERE user_id = ?').run(userId);
+  }
+});
+
+test('Reader validation preserves the chosen priority and self-assignment state', async () => {
+  for (const assignToMe of [false, true]) {
+    const body = new URLSearchParams({ csrf: sharedSession.csrfToken, title: 'Keep my choices', due_date: '2032-02-30', priority: 'high' });
+    if (assignToMe) body.set('assign_to_me', 'on');
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/reader/tasks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body,
+    });
+    const html = await response.text();
+    assert.equal(response.status, 400);
+    assert.match(html, /<option value="high" selected>/);
+    const checkbox = html.match(/<input[^>]*name="assign_to_me"[^>]*>/)?.[0];
+    assert.ok(checkbox);
+    assert.equal(/\bchecked\b/.test(checkbox), assignToMe);
+    assert.match(html, /value="Keep my choices"/);
+  }
+});
+
 test('Reader Calendar is navigable and events open into a detail view', async () => {
   const calendar = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=calendar&date=2032-01-02`);
   const calendarHtml = await calendar.text();

@@ -249,6 +249,11 @@ test('purchase synchronization records purchased and remaining quantities and ad
 });
 
 test('meal execution creates role Tasks once, refreshes open work, and freezes started history', async () => {
+  // This lifecycle fixture needs qualified assignees. Skill eligibility itself
+  // is covered separately; an age-unknown child is intentionally not qualified.
+  database.prepare(`INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by)
+    SELECT ?,id,'normal','manual',? FROM skills WHERE system_key IN ('serving','cleanup')
+    ON CONFLICT(user_id,skill_id) DO UPDATE SET proficiency='normal'`).run(member, admin);
   const recipeId = Number(database.prepare(`INSERT INTO recipes (title, created_by) VALUES ('Tacos', ?)`).run(admin).lastInsertRowid);
   database.prepare(`INSERT INTO recipe_ingredients (recipe_id, name, quantity, category) VALUES (?, 'Tortillas', '8 pcs', 'Sonstiges')`).run(recipeId);
   const mealId = Number(database.prepare(`
@@ -372,4 +377,93 @@ test('purchased groceries reconcile into Pantry once and Pantry movements are id
   });
   assert.equal(leftoverRetry.body.data.reused, true);
   assert.equal(database.prepare("SELECT COUNT(*) AS n FROM pantry_movements WHERE logical_key LIKE '%phase6-consume-once' OR logical_key LIKE '%phase6-leftovers-once'").get().n, 2);
+});
+
+test('legacy Pantry import rejects grocery outputs atomically and preserves canonical reconciliation', async () => {
+  seedRecipeMeal({ date: '2040-09-10', title: 'Provenance guard', quantity: '1 l', ingredient: 'Provenance milk' });
+  const draft = await call('POST', `/${listId}/grocery-runs`, {
+    from: '2040-09-10', to: '2040-09-10', logical_key: 'provenance-guard',
+  });
+  assert.equal(draft.status, 201);
+  const runId = draft.body.data.id;
+  await call('POST', `/grocery-runs/${runId}/finalize`);
+  const published = await call('POST', `/grocery-runs/${runId}/add-to-shopping`);
+  const grocery = published.body.data.items[0];
+  const ordinaryId = Number(database.prepare(`
+    INSERT INTO shopping_items (list_id, name, quantity, is_checked)
+    VALUES (?, 'Ordinary guard item', '1', 1)
+  `).run(listId).lastInsertRowid);
+  database.prepare('UPDATE shopping_items SET is_checked = 1 WHERE id = ?').run(grocery.shopping_item_id);
+  await call('POST', `/grocery-runs/${runId}/sync-purchases`);
+
+  const ordinaryEntry = { shopping_item_id: ordinaryId, quantity: 1, unit: 'pcs' };
+  const groceryEntry = { shopping_item_id: grocery.shopping_item_id, quantity: 1, unit: 'l' };
+  const rejected = await callApi('POST', '/pantry/import-shopping', {
+    list_id: listId, items: [ordinaryEntry, groceryEntry],
+  });
+  assert.equal(rejected.status, 409);
+  assert.equal(rejected.body.code, 'GROCERY_RECONCILIATION_REQUIRED');
+  assert.match(rejected.body.error, /Refresh Shopping/);
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM pantry_items WHERE name IN ('Ordinary guard item', 'Provenance milk')").get().n, 0);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM pantry_movements WHERE grocery_item_id = ?').get(grocery.id).n, 0);
+
+  const ordinary = await callApi('POST', '/pantry/import-shopping', { list_id: listId, items: [ordinaryEntry] });
+  assert.equal(ordinary.status, 200);
+  assert.equal(ordinary.body.data.added, 1);
+  const canonical = await callApi('POST', '/pantry/reconcile-grocery-run', {
+    grocery_run_id: runId, items: [{ grocery_item_id: grocery.id, quantity: 1, unit: 'l' }],
+  });
+  assert.equal(canonical.status, 200);
+  assert.equal(database.prepare("SELECT quantity FROM pantry_items WHERE name = 'Provenance milk'").get().quantity, 1);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM pantry_movements WHERE grocery_item_id = ?').get(grocery.id).n, 1);
+
+  const retry = await callApi('POST', '/pantry/import-shopping', { list_id: listId, items: [groceryEntry] });
+  assert.equal(retry.status, 409);
+  assert.equal(database.prepare("SELECT quantity FROM pantry_items WHERE name = 'Provenance milk'").get().quantity, 1);
+});
+
+test('legacy Meal and week imports cannot recreate unlinked copies of published grocery demand', async () => {
+  const { mealId } = seedRecipeMeal({ date: '2042-04-07', title: 'Alternate import meal', quantity: '1 pcs', ingredient: 'Alternate guard beans' });
+  const draft = await call('POST', `/${listId}/grocery-runs`, {
+    from: '2042-04-07', to: '2042-04-07', logical_key: 'alternate-import-guard',
+  });
+  const runId = draft.body.data.id;
+  await call('POST', `/grocery-runs/${runId}/finalize`);
+  const published = await call('POST', `/grocery-runs/${runId}/add-to-shopping`);
+  const grocery = published.body.data.items[0];
+  const countBefore = database.prepare('SELECT COUNT(*) AS n FROM shopping_items').get().n;
+  const firstNoticeCount = database.prepare('SELECT COUNT(*) AS n FROM notification_inbox WHERE source_key = ?').get(`grocery-run:${runId}:published`).n;
+  assert.ok(firstNoticeCount > 0);
+  await call('POST', `/grocery-runs/${runId}/add-to-shopping`);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM notification_inbox WHERE source_key = ?').get(`grocery-run:${runId}:published`).n, firstNoticeCount);
+  const single = await callApi('POST', `/meals/${mealId}/to-shopping-list`, { listId });
+  assert.equal(single.status, 409);
+  assert.equal(single.body.code, 'GROCERY_RECONCILIATION_REQUIRED');
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM meal_ingredients WHERE meal_id = ?').get(mealId).n, 0, 'preflight runs before recipe materialization');
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM shopping_items').get().n, countBefore);
+
+  // A Meal with published demand must use a grocery revision for later open
+  // ingredients. A mixed legacy batch must not partially import ordinary work.
+  database.prepare("INSERT INTO meal_ingredients(meal_id,name,quantity) VALUES (?,'Updated grocery ingredient','1 pcs')").run(mealId);
+  const ordinaryMeal = Number(database.prepare(`INSERT INTO meals(date,meal_type,title,created_by)
+    VALUES ('2042-04-08','lunch','Ordinary legacy meal',?)`).run(admin).lastInsertRowid);
+  database.prepare("INSERT INTO meal_ingredients(meal_id,name,quantity) VALUES (?,'Ordinary legacy ingredient','1 pcs')").run(ordinaryMeal);
+  for (const path of ['/meals/week-to-shopping-list', `/shopping/${listId}/import-meal-plan`]) {
+    const rejected = await callApi('POST', path, { listId, week: '2042-04-07', from: '2042-04-07', to: '2042-04-13' });
+    assert.equal(rejected.status, 409, JSON.stringify(rejected));
+    assert.equal(database.prepare('SELECT COUNT(*) AS n FROM shopping_items').get().n, countBefore);
+    assert.equal(database.prepare('SELECT on_shopping_list FROM meal_ingredients WHERE meal_id = ?').get(ordinaryMeal).on_shopping_list, 0);
+  }
+  const ordinary = await callApi('POST', `/meals/${ordinaryMeal}/to-shopping-list`, { listId });
+  assert.equal(ordinary.status, 200);
+  assert.equal(ordinary.body.data.transferred, 1);
+
+  await call('PATCH', `/items/${grocery.shopping_item_id}`, { is_checked: true });
+  await call('POST', `/grocery-runs/${runId}/sync-purchases`);
+  const canonical = await callApi('POST', '/pantry/reconcile-grocery-run', {
+    grocery_run_id: runId, items: [{ grocery_item_id: grocery.id, quantity: 1, unit: 'pcs' }],
+  });
+  assert.equal(canonical.status, 200);
+  assert.equal(database.prepare("SELECT quantity FROM pantry_items WHERE name = 'Alternate guard beans'").get().quantity, 1);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM pantry_movements WHERE grocery_item_id = ?').get(grocery.id).n, 1);
 });

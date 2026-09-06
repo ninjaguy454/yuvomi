@@ -18,6 +18,25 @@
  * Siehe Typo-Konsistenz-Plan Phase 2.
  * ========================================================================== */
 
+:root[data-typography="serif"] { --font-heading: var(--font-serif); }
+:root[data-typography="serif"] :is(button, input, select, textarea, nav, table) {
+  font-family: var(--font-sans);
+}
+
+/* Heading-only preference: controls, navigation, tables, metadata and body
+ * copy keep their existing sans-serif family and sizing. */
+h1, h2, h3,
+.u-hero, .u-page-title, .u-toolbar-title, .u-section-title,
+.page__title, .page-toolbar__title, .page-toolbar__dock-title,
+.settings-leaf-header__title, .settings-shell-header__title,
+.modal-panel__title, .dashboard-hero__title, .dashboard-overview__title,
+.meal-card__title, .recipe-card__title, .recipe-detail__title,
+.meal-choice-card__headline strong, .recipe-row .list-row__name,
+.recipe-sidebar__card-title,
+.day-view__date-label, .clock-widget__time, .clock-widget__date {
+  font-family: var(--font-heading);
+}
+
 /* --------------------------------------------------------------------------
  * Hero / Begrüßung — eine Instanz pro Screen, feste Produkt-Skala
  * ------------------------------------------------------------------------ */

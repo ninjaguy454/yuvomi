@@ -1,8 +1,24 @@
 import { createHash } from 'node:crypto';
 import { aggregateMealIngredients, parseQuantity } from './shopping-import.js';
 import { getGrocerySettings } from './meal-grocery-settings.js';
+import { notifyGroceryPublished } from './notification-events.js';
 
 const RUN_STATES = ['draft', 'finalized', 'added_to_shopping', 'purchased', 'reconciled'];
+
+// Once a Meal has published demand, changes belong to its grocery revision.
+// Legacy importers cannot safely manufacture new, unlinked copies of that
+// demand (including Recipe ingredients not materialized as meal_ingredients).
+export function assertLegacyMealImportAllowed(database, mealIds) {
+  const ids = [...new Set(mealIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
+  if (!ids.length) return;
+  const conflict = database.prepare(`SELECT 1 FROM meal_grocery_item_sources s
+    JOIN meal_grocery_items i ON i.id = s.grocery_item_id
+    WHERE s.meal_id IN (${ids.map(() => '?').join(',')}) AND i.published_at IS NOT NULL LIMIT 1`).get(...ids);
+  if (conflict) throw serviceError(
+    'Some Meals already have a published grocery run. Refresh Shopping and update that grocery run to keep purchases and Pantry quantities together.',
+    409, 'GROCERY_RECONCILIATION_REQUIRED',
+  );
+}
 
 function serviceError(message, status = 400, code = 'INVALID_GROCERY_RUN') {
   const error = new Error(message);
@@ -421,6 +437,7 @@ function publishGroceryRun(database, runId) {
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(runId);
+    notifyGroceryPublished(database, runId);
     return ids;
   })();
   return { run: loadGroceryRun(database, runId), added_ids: addedIds };

@@ -26,6 +26,8 @@
   font-size: var(--text-xs);
 }
 .cal-offline-notice i { flex: 0 0 auto; }
+.cal-partial-notice { flex-wrap: wrap; flex-shrink: 0; }
+.cal-partial-notice > span { flex: 1 1 16rem; }
 
 /* --------------------------------------------------------
  * Seiten-Layout

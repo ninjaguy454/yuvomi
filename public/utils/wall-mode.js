@@ -92,6 +92,7 @@ export function isWallModeEnabled() {
 export function setWallModeEnabled(enabled) {
   if (enabled) safeSet(WALL_KEY, '1');
   else safeRemove(WALL_KEY);
+  window.dispatchEvent(new CustomEvent('yuvomi:wall-mode-change', { detail: { enabled: !!enabled } }));
 }
 
 /**

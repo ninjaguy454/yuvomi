@@ -170,7 +170,9 @@ try {
             const place = body.data || body;
             assert.equal(place.name, nameValue);
             await page.waitForSelector('#shared-modal-overlay', { hidden: true });
+            await page.waitForSelector(`[data-edit-place="${place.id}"]`, { visible: true });
             await page.click(`[data-edit-place="${place.id}"]`);
+            await page.waitForSelector('#automation-place-form [name="name"]', { visible: true });
             assert.equal(await page.$eval('#automation-place-form [name="name"]', el => el.value), nameValue);
             await capture(page, `${name}-edit`, [], errors);
             report.regressions.push('Place create/edit round trip preserves names, values and escaping');

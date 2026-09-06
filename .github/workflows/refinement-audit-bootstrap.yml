@@ -28,7 +28,17 @@ jobs:
         env:
           AUDIT_LABEL: baseline
           QA_OUTPUT_DIR: review-artifacts
-        run: node test/product-refinement.browser.mjs
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('test/product-refinement.browser.mjs')
+          s = p.read_text()
+          needle = "await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });"
+          assert s.count(needle) == 1
+          s = s.replace(needle, "await delay(1500); await capture(page, `${width}-${theme}-login`, requests, errors); " + needle)
+          p.write_text(s)
+          PY
+          node test/product-refinement.browser.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -119,7 +119,7 @@ try {
       assert.deepEqual(await page.evaluate(() => [window.__reviewInitialPage, document.querySelector('#username')?.value]),
         ['initial-document', 'draft-before-worker'], 'first service-worker activation erased the login draft');
       report.regressions.push(`${width}-${theme}: first service-worker activation preserves login draft`);
-      await page.click('#username', { clickCount: 3 });
+      await page.$eval('#username', el => { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); });
       await page.type('#username', 'alex');
       await page.type('#password', 'demo1234');
       await page.click('#auth-btn');

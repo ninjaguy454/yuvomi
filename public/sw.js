@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Stage this refinement separately from the deployed Kitchen .5 caches so a
 // failed install cannot replace files still used by the active worker.
-const CACHE_VERSION = `${APP_RELEASE}-refinement.1`;
+const CACHE_VERSION = `${APP_RELEASE}-refinement.2`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

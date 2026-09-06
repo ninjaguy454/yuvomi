@@ -5,7 +5,8 @@ import { notifyGroceryPublished } from './notification-events.js';
 
 const RUN_STATES = ['draft', 'finalized', 'added_to_shopping', 'purchased', 'reconciled'];
 
-// Once a Meal has published demand, changes belong to its grocery revision.
+// Once a Meal has source demand in a grocery run, even an unpublished draft,
+// changes belong to that run. Refreshing a draft removes obsolete source rows.
 // Legacy importers cannot safely manufacture new, unlinked copies of that
 // demand (including Recipe ingredients not materialized as meal_ingredients).
 export function assertLegacyMealImportAllowed(database, mealIds) {
@@ -13,9 +14,9 @@ export function assertLegacyMealImportAllowed(database, mealIds) {
   if (!ids.length) return;
   const conflict = database.prepare(`SELECT 1 FROM meal_grocery_item_sources s
     JOIN meal_grocery_items i ON i.id = s.grocery_item_id
-    WHERE s.meal_id IN (${ids.map(() => '?').join(',')}) AND i.published_at IS NOT NULL LIMIT 1`).get(...ids);
+    WHERE s.meal_id IN (${ids.map(() => '?').join(',')}) LIMIT 1`).get(...ids);
   if (conflict) throw serviceError(
-    'Some Meals already have a published grocery run. Refresh Shopping and update that grocery run to keep purchases and Pantry quantities together.',
+    'Some Meals already belong to a grocery run. Refresh Shopping and continue that run, including finalizing any draft, to keep purchases and Pantry quantities together.',
     409, 'GROCERY_RECONCILIATION_REQUIRED',
   );
 }

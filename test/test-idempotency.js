@@ -14,6 +14,7 @@
  */
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import http from 'node:http';
 import test from 'node:test';
 import Database from 'better-sqlite3-multiple-ciphers';
@@ -64,12 +65,29 @@ const ALICE = seedUser('alice', 'admin');
 const BOB   = seedUser('bob', 'admin');
 
 let actor = { id: ALICE, role: 'admin' };
+let dropNextTaskCreateResponse = false;
+let droppedTaskId = null;
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
   req.authUserId = actor.id;
   req.authRole = actor.role;
   req.session = { userId: actor.id, role: actor.role };
+  next();
+});
+// Install the transport fault before the real idempotency middleware: it
+// records the successful route response, then this boundary loses it on wire.
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res);
+  res.json = (body) => {
+    if (dropNextTaskCreateResponse && req.method === 'POST' && /^\/api\/v1\/tasks\/?$/.test(req.originalUrl) && res.statusCode === 201) {
+      dropNextTaskCreateResponse = false;
+      droppedTaskId = body.data.id;
+      req.socket.destroy();
+      return res;
+    }
+    return originalJson(body);
+  };
   next();
 });
 // Genau die Reihenfolge aus server/index.js: die Middleware sieht den Pfad
@@ -102,6 +120,52 @@ async function call(method, path, { as, body, key, headers = {} } = {}) {
 
 const countTasks = (title) =>
   db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE title = ?').get(title).n;
+
+for (const editAfterLoss of [false, true]) {
+  test(`Task form recovers a committed create whose HTTP response is dropped${editAfterLoss ? ', then applies edited fields' : ''}`, async () => {
+    const source = readFileSync(new URL('../public/pages/tasks.js', import.meta.url), 'utf8').replace(/\r/g, '');
+    const declaration = source.match(/^async function saveTaskRecord\([\s\S]*?^}/m)?.[0];
+    assert.ok(declaration, 'run the production form persistence path');
+    const requests = [];
+    const request = async (method, path, body, options) => {
+      requests.push({ method, path, body: structuredClone(body), key: options?.headers?.['Idempotency-Key'] });
+      const result = await call(method, path, { as: { id: ALICE, role: 'admin' }, body, headers: options?.headers });
+      if (result.status >= 400) throw Object.assign(new Error(result.body.error), { status: result.status });
+      return result.body;
+    };
+    const save = new Function('api', 't', `const taskCreateAttempts = new WeakMap(); return (${declaration});`)(
+      { post: (path, body, options) => request('POST', path, body, options), put: (path, body) => request('PUT', path, body) },
+      (key) => key,
+    );
+    const idField = { value: '' };
+    const form = { querySelector: () => idField };
+    const body = { title: `Lost response ${randomUUID()}`, priority: 'high', assigned_to: [BOB] };
+    dropNextTaskCreateResponse = true;
+    await assert.rejects(save(form, body), /fetch failed|socket/i);
+    assert.ok(droppedTaskId, 'real route committed a Task before the socket was closed');
+    assert.equal(idField.value, '', 'the browser has not received the new ID');
+    assert.equal(countTasks(body.title), 1);
+    const receipt = db.prepare('SELECT status, response_body FROM idempotency_keys WHERE user_id = ? AND key = ?').get(ALICE, requests[0].key);
+    assert.equal(receipt.status, 201);
+    assert.equal(JSON.parse(receipt.response_body).data.id, droppedTaskId);
+
+    const currentBody = editAfterLoss ? { ...body, title: `${body.title} revised` } : body;
+    const savedId = await save(form, currentBody);
+    assert.equal(savedId, droppedTaskId);
+    assert.equal(Number(idField.value), droppedTaskId);
+    assert.equal(requests[1].key, requests[0].key);
+    assert.deepEqual(requests[1].body, requests[0].body, 'recovery repeats the accepted payload');
+    assert.equal(requests.length, editAfterLoss ? 3 : 2);
+    if (editAfterLoss) {
+      assert.equal(requests[2].method, 'PUT');
+      assert.equal(requests[2].key, undefined);
+    }
+    const tasks = db.prepare('SELECT id, title FROM tasks WHERE title IN (?, ?)').all(body.title, currentBody.title);
+    assert.deepEqual(tasks, [{ id: droppedTaskId, title: currentBody.title }]);
+    assert.equal(db.prepare("SELECT COUNT(*) AS n FROM notification_inbox WHERE entity_type = 'task' AND entity_id = ? AND user_id = ?").get(savedId, BOB).n, 1,
+      'replay does not repeat assignment notifications');
+  });
+}
 
 // --------------------------------------------------------
 // Der Fall aus dem Issue

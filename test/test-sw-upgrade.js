@@ -125,9 +125,10 @@ async function dispatchLifecycle(listener) {
   await completion;
 }
 
-test('2.54.0 through Kitchen .4 caches upgrade to the Kitchen .5 refinement with shared Meal and Task modules', async () => {
+test('older releases and the previous refinement candidate upgrade to fresh Meal and Task modules', async () => {
   const env = loadWorker();
-  const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4'];
+  const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4',
+    '2.54.0-kitchen.5-refinement.1'];
   const oldCaches = oldReleases.flatMap((release) => [
     `yuvomi-shell-${release}`,
     `yuvomi-pages-${release}`,

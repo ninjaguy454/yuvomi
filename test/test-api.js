@@ -118,6 +118,27 @@ function schemaProperties(spec, name) {
   return spec.components.schemas[name]?.properties ?? {};
 }
 
+test('Task create identity and payload survive the API client CSRF retry', async () => {
+  setup();
+  const calls = [];
+  _mockFetch = (url, options) => {
+    calls.push({ url, options });
+    return calls.length === 1
+      ? mockResponse(403, { error: 'Invalid CSRF token' }, { 'X-CSRF-Token': 'fresh-token' })
+      : mockResponse(201, { data: { id: 42 } });
+  };
+  const body = { title: 'Same task' };
+  const result = await api.post('/tasks', body, { headers: { 'Idempotency-Key': 'one-form-create' } });
+  assert.equal(result.data.id, 42);
+  assert.equal(calls.length, 2);
+  for (const { url, options } of calls) {
+    assert.equal(url, '/api/v1/tasks');
+    assert.equal(options.headers['Idempotency-Key'], 'one-form-create');
+    assert.equal(options.body, JSON.stringify(body));
+  }
+  assert.equal(calls[1].options.headers['X-CSRF-Token'], 'fresh-token');
+});
+
 function responseSchema(operation, status = 200) {
   const schema = operation.responses[status].content['application/json'].schema;
   if (!schema.$ref) return schema;

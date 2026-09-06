@@ -1,5 +1,7 @@
 # Yuvomi final release-readiness review — 6 September 2026
 
+**Historical gate:** the subsequent [known correctness correction report](known-correctness-20260906.md) resolves the draft-first grocery duplication, Reader header and same-form lost Task-create-response findings below, and supplies the current release verdict and validation. This report preserves the earlier candidate's evidence and limitations as they stood at that gate.
+
 **Verdict: READY WITH KNOWN LIMITATIONS for manual candidate testing.** No confirmed introduced release blocker remains after the fixes below. This is not a deployment or a guarantee of every existing workflow. The grocery sequence described below remains an existing data-quality risk and must not be represented as fully protected.
 
 Branch: `refine/product-coherence-20260906`. Review started from clean commit `086f1d312798a729b89a585ef42d72de20c7a5c0` and inspected the complete refinement against original baseline `de4be2702dee7f1cd9828f01f9ab6c7b4bd0ad04`, plus the release corrections. The final handoff supplies the commit containing this report. Nothing was pushed, merged, deployed or changed in production.

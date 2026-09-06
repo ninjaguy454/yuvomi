@@ -112,7 +112,7 @@ test('failed itinerary loads can be retried without leaving the previous error b
   assert.match(fixture.itinerary.html, /Depart/);
 });
 
-function taskSaveFixture(failurePath) {
+function taskSaveFixture(failurePath, { initialError = new Error('Ancillary save failed'), invalidResponse = false, failUpdate = false, laterErrors = [] } = {}) {
   const calls = [];
   const fields = {
     '#task-id': { value: '' }, '#task-form-error': {}, '#task-submit-btn': {},
@@ -124,14 +124,30 @@ function taskSaveFixture(failurePath) {
     form[key] = { value };
   }
   let failed = false;
-  const request = async (method, path) => {
-    calls.push([method, path]);
-    if (path === failurePath && !failed) { failed = true; throw new Error('Ancillary save failed'); }
+  let updateFailed = false;
+  const request = async (method, path, body, options) => {
+    calls.push([method, path, structuredClone(body), structuredClone(options)]);
+    if (path === failurePath && !failed) {
+      failed = true;
+      if (invalidResponse) return null;
+      throw initialError;
+    }
+    if (path === failurePath && laterErrors.length) throw laterErrors.shift();
+    if (failUpdate && method === 'PUT' && path === '/tasks/42' && !updateFailed) {
+      updateFailed = true;
+      throw new Error('Update failed');
+    }
     return method === 'POST' && path === '/tasks' ? { data: { id: 42 } } : {};
   };
+  const api = {
+    post: (path, body, options) => request('POST', path, body, options),
+    put: (path, body) => request('PUT', path, body),
+    delete: (path) => request('DELETE', path),
+  };
+  const saveTaskRecord = loadFunction(taskSource, 'saveTaskRecord', { api, t: (key) => key }, 'const taskCreateAttempts = new WeakMap();');
   const save = loadFunction(taskSource, 'handleFormSubmit', {
     document: { getElementById: (id) => fields[`#${id}`] },
-    api: { post: (path) => request('POST', path), put: (path) => request('PUT', path), delete: (path) => request('DELETE', path) },
+    api, saveTaskRecord,
     validateAll: () => true, t: (key) => key,
     parseDateInput: (value) => value, isDateInputValid: () => true,
     getRRuleValues: () => ({ valid_until: true }), normalizeTagList: () => [], modalTags: [],
@@ -141,7 +157,7 @@ function taskSaveFixture(failurePath) {
     window: { yuvomi: { showToast() {} } }, refreshReminders() {}, refreshTags: async () => {},
     btnError() {}, btnSuccess() {}, closeModal() {}, setTimeout() {}, console: { error() {} },
   });
-  return { fields, calls, save: () => save({ target: form, preventDefault() {} }, { onChanged: async () => {} }) };
+  return { form, fields, calls, save: () => save({ target: form, preventDefault() {} }, { onChanged: async () => {} }) };
 }
 
 for (const failurePath of ['/reminders', '/tasks/42/documents']) {
@@ -157,6 +173,79 @@ for (const failurePath of ['/reminders', '/tasks/42/documents']) {
     assert.equal(fixture.calls.filter(([, path]) => path === failurePath).length, 2);
   });
 }
+
+for (const [label, options] of [
+  ['lost response', {}],
+  ['invalid success response', { invalidResponse: true }],
+  ['server failure', { initialError: Object.assign(new Error('Unavailable'), { status: 500 }) }],
+  ['in-progress conflict', { initialError: Object.assign(new Error('In progress'), { status: 409 }) }],
+]) {
+  test(`Task create retries retain their request identity after ${label}`, async () => {
+    const fixture = taskSaveFixture('/tasks', options);
+    await fixture.save();
+    assert.equal(fixture.fields['#task-id'].value, '');
+    assert.equal(fixture.fields['#task-submit-btn'].disabled, false);
+    await fixture.save();
+    const creates = fixture.calls.filter(([method, path]) => method === 'POST' && path === '/tasks');
+    assert.equal(creates.length, 2);
+    assert.deepEqual(creates[1], creates[0], 'retry sends the original payload and same key');
+    assert.ok(creates[0][3].headers['Idempotency-Key']);
+    assert.equal(Number(fixture.fields['#task-id'].value), 42);
+    assert.equal(fixture.calls.some(([method, path]) => method === 'PUT' && path === '/tasks/42'), false);
+    assert.equal(fixture.calls.some(([, path, , options]) => path !== '/tasks' && options?.headers?.['Idempotency-Key']), false);
+  });
+}
+
+test('Task edits after a lost create response recover the original ID before updating, including update failure', async () => {
+  const fixture = taskSaveFixture('/tasks', { failUpdate: true });
+  await fixture.save();
+  fixture.form.title.value = 'Revised task';
+  await fixture.save();
+  const creates = fixture.calls.filter(([method, path]) => method === 'POST' && path === '/tasks');
+  assert.deepEqual(creates[1], creates[0]);
+  assert.equal(creates[0][2].title, 'Test task');
+  assert.equal(Number(fixture.fields['#task-id'].value), 42, 'ID survives failed follow-up edit');
+  assert.equal(fixture.fields['#task-submit-btn'].disabled, false);
+  await fixture.save();
+  assert.equal(fixture.calls.filter(([method, path]) => method === 'POST' && path === '/tasks').length, 2);
+  const updates = fixture.calls.filter(([method, path]) => method === 'PUT' && path === '/tasks/42');
+  assert.equal(updates.length, 2);
+  assert.ok(updates.every(([, , body]) => body.title === 'Revised task'));
+});
+
+for (const status of [400, 403, 429]) {
+  test(`an initial HTTP ${status} rejection allows corrected Task input with a new create request`, async () => {
+    const fixture = taskSaveFixture('/tasks', { initialError: Object.assign(new Error('Request rejected'), { status }) });
+    await fixture.save();
+    fixture.form.title.value = 'Corrected task';
+    await fixture.save();
+    const creates = fixture.calls.filter(([method, path]) => method === 'POST' && path === '/tasks');
+    assert.notEqual(creates[0][3].headers['Idempotency-Key'], creates[1][3].headers['Idempotency-Key']);
+    assert.equal(creates[1][2].title, 'Corrected task');
+  });
+}
+
+for (const status of [400, 401, 403, 429]) {
+  test(`a later HTTP ${status} cannot discard a Task create identity after response loss`, async () => {
+    const fixture = taskSaveFixture('/tasks', { laterErrors: [Object.assign(new Error('Retry rejected'), { status })] });
+    await fixture.save();
+    await fixture.save();
+    await fixture.save();
+    const creates = fixture.calls.filter(([method, path]) => method === 'POST' && path === '/tasks');
+    assert.equal(creates.length, 3);
+    assert.deepEqual(creates[1], creates[0]);
+    assert.deepEqual(creates[2], creates[0]);
+    assert.equal(Number(fixture.fields['#task-id'].value), 42);
+  });
+}
+
+test('separate Task forms use separate create identities', async () => {
+  const first = taskSaveFixture();
+  const second = taskSaveFixture();
+  await first.save();
+  await second.save();
+  assert.notEqual(first.calls[0][3].headers['Idempotency-Key'], second.calls[0][3].headers['Idempotency-Key']);
+});
 
 test('activity reassignment closes and refreshes after success, and recovers after async failure', async () => {
   const start = taskSource.indexOf("  panel.querySelector('[data-activity-reassign-submit]')");

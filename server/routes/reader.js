@@ -21,7 +21,10 @@ const DUMMY_HASH = '$2b$12$invalidhashfortimingprotection000000000000000000000';
 
 // Reader login remains session-only, but handlers consume the same canonical
 // authenticated-user slot as the rest of Yuvomi.
-router.use((req, _res, next) => {
+router.use((req, res, next) => {
+  // Login, redirects and validation errors can also contain session-specific
+  // state or private drafts. Protect every Reader response before any handler.
+  res.setHeader('Cache-Control', 'private, no-store');
   req.authUserId = Number(req.session?.['userId']) || null;
   if (req.authUserId) {
     const database = db.get();
@@ -55,7 +58,6 @@ function deniedPage(req, res, verdict) {
   const message = req.readerRestrictedGuest ? 'This account can only access Shared expenses.'
     : verdict === MODULE_ACCESS_READ_ONLY ? 'You have read-only access to this module.'
       : 'You do not have access to this module.';
-  res.setHeader('Cache-Control', 'private, no-store');
   return res.status(403).type('html').send(page('Access unavailable', `<h1>Access unavailable</h1><p>${message}</p><p><a href="/">Open the full app</a></p>`, pageOptions(req)));
 }
 
@@ -269,7 +271,6 @@ router.get('/', (req, res) => {
   if (view === 'add-task') sections.push(taskForm(csrf(req), req.query.created ? 'Task created.' : ''));
   if (view === 'recipes') sections.push(`<section><h1>Recipes</h1>${recipeList(database)}</section>`);
   if (view === 'recipe') sections.push(recipeDetail(database, Number(req.query.id)));
-  res.setHeader('Cache-Control', 'private, no-store');
   if (!sections.length) sections.push('<p>No Reader content is available. Open the full app to view your available modules.</p>');
   res.type('html').send(page(view === 'today' ? 'Today' : view, sections.join(''), pageOptions(req)));
 });

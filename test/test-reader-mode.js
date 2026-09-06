@@ -37,6 +37,48 @@ test('Reader mode renders useful HTML without JavaScript', async () => {
   assert.match(html, /Reader task/);
   assert.doesNotMatch(html, /<script/i);
   assert.match(html, /reader\.css/);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+});
+
+test('Reader login, validation, verification and redirects never permit caching', async () => {
+  const base = `http://127.0.0.1:${server.address().port}/reader`;
+  delete sharedSession.userId;
+  try {
+    const login = await fetch(base);
+    assert.equal(login.status, 200);
+    assert.match(await login.text(), /<h1>Sign in<\/h1>/);
+    assert.equal(login.headers.get('cache-control'), 'private, no-store');
+
+    const invalid = await fetch(`${base}/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: 'reader' }),
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.headers.get('cache-control'), 'private, no-store');
+
+    sharedSession.readerPendingUserId = userId;
+    sharedSession.readerPendingUntil = Date.now() + 60_000;
+    const verification = await fetch(`${base}/two-factor`);
+    assert.equal(verification.status, 200);
+    assert.match(await verification.text(), /Verification code/);
+    assert.equal(verification.headers.get('cache-control'), 'private, no-store');
+
+    delete sharedSession.readerPendingUserId;
+    const expired = await fetch(`${base}/two-factor`, { redirect: 'manual' });
+    assert.equal(expired.status, 303);
+    assert.equal(expired.headers.get('cache-control'), 'private, no-store');
+
+    const denied = await fetch(`${base}/tasks`, {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ title: 'Not authenticated' }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(denied.headers.get('cache-control'), 'private, no-store');
+  } finally {
+    sharedSession.userId = userId;
+    delete sharedSession.readerPendingUserId;
+    delete sharedSession.readerPendingUntil;
+  }
 });
 
 test('Reader uses account colors and heading typography without scripts or dark e-paper inversion', async () => {
@@ -148,6 +190,7 @@ test('Reader validation preserves the chosen priority and self-assignment state'
     });
     const html = await response.text();
     assert.equal(response.status, 400);
+    assert.equal(response.headers.get('cache-control'), 'private, no-store');
     assert.match(html, /<option value="high" selected>/);
     const checkbox = html.match(/<input[^>]*name="assign_to_me"[^>]*>/)?.[0];
     assert.ok(checkbox);
@@ -182,6 +225,7 @@ test('Reader mode can create a simple assigned Task with a server-rendered form'
     body: new URLSearchParams({ csrf: sharedSession.csrfToken, title: 'Added on Kindle', due_date: '2032-01-03', due_time: '08:30', priority: 'medium', assign_to_me: 'on' }),
   });
   assert.equal(response.status, 303);
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
   const task = database.prepare("SELECT * FROM tasks WHERE title = 'Added on Kindle'").get();
   assert.equal(task.assigned_to, userId);
   assert.equal(task.due_time, '08:30');

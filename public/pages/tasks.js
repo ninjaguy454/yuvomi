@@ -2110,6 +2110,54 @@ function openTaskCategoryManager(container) {
 // Formular-Handler
 // --------------------------------------------------------
 
+// A lost create response leaves the server outcome unknown. Keep the original
+// request identity on this form until its task ID is recovered; reopening the
+// form starts a separate create. The server retains replay receipts for 24h.
+const taskCreateAttempts = new WeakMap();
+
+async function saveTaskRecord(form, body) {
+  const idField = form.querySelector('#task-id');
+  if (idField.value) {
+    await api.put(`/tasks/${idField.value}`, body);
+    return idField.value;
+  }
+
+  const serialized = JSON.stringify(body);
+  let attempt = taskCreateAttempts.get(form);
+  if (!attempt) {
+    attempt = {
+      key: globalThis.crypto?.randomUUID?.() || `task-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      body: JSON.parse(serialized), serialized,
+    };
+    taskCreateAttempts.set(form, attempt);
+  }
+
+  let response;
+  try {
+    response = await api.post('/tasks', attempt.body, { headers: { 'Idempotency-Key': attempt.key } });
+  } catch (error) {
+    // An initial validation/auth rejection proves this create was not saved.
+    // Once an outcome is unknown, a later auth/CSRF/validation gate rejection
+    // cannot rule out the earlier commit, so it must not discard the identity.
+    if (error.status >= 400 && error.status < 500 && ![408, 409].includes(error.status) && !attempt.ambiguous) {
+      taskCreateAttempts.delete(form);
+    } else attempt.ambiguous = true;
+    throw error;
+  }
+  const savedTaskId = Number(response?.data?.id);
+  if (!Number.isSafeInteger(savedTaskId) || savedTaskId <= 0) {
+    attempt.ambiguous = true;
+    throw new Error(t('common.errorGeneric'));
+  }
+
+  // Retain the recovered ID before any further save can fail. If the user
+  // edited the form after a lost response, apply those edits to this same task.
+  idField.value = savedTaskId;
+  taskCreateAttempts.delete(form);
+  if (serialized !== attempt.serialized) await api.put(`/tasks/${savedTaskId}`, body);
+  return savedTaskId;
+}
+
 async function handleFormSubmit(e, { container = null, onChanged = () => loadTasks(container) } = {}) {
   e.preventDefault();
   const form      = e.target;
@@ -2250,18 +2298,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
 
   try {
-    let savedTaskId = taskId;
-    if (taskId) {
-      await api.put(`/tasks/${taskId}`, body);
-      window.yuvomi.showToast(t('tasks.savedToast'), 'success');
-    } else {
-      const res = await api.post('/tasks', body);
-      savedTaskId = res.data?.id;
-      // Ancillary saves can fail after creation. Retrying this same form must
-      // update the saved task instead of creating another copy.
-      if (savedTaskId) form.querySelector('#task-id').value = savedTaskId;
-      window.yuvomi.showToast(t('tasks.createdToast'), 'success');
-    }
+    const savedTaskId = await saveTaskRecord(form, body);
+    window.yuvomi.showToast(t(taskId ? 'tasks.savedToast' : 'tasks.createdToast'), 'success');
 
     // Erinnerung speichern oder löschen (Vorbedingungen bereits oben geprüft)
     if (savedTaskId) {

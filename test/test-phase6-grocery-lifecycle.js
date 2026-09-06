@@ -467,3 +467,140 @@ test('legacy Meal and week imports cannot recreate unlinked copies of published 
   assert.equal(database.prepare("SELECT quantity FROM pantry_items WHERE name = 'Alternate guard beans'").get().quantity, 1);
   assert.equal(database.prepare('SELECT COUNT(*) AS n FROM pantry_movements WHERE grocery_item_id = ?').get(grocery.id).n, 1);
 });
+
+test('draft ownership prevents legacy import before publication and accounts for the purchase exactly once', async () => {
+  const { mealId } = seedRecipeMeal({ date: '2043-04-09', title: 'Draft-owned meal', quantity: '1 l', ingredient: 'Draft-owned milk' });
+  const draft = await call('POST', `/${listId}/grocery-runs`, {
+    from: '2043-04-09', to: '2043-04-09', logical_key: 'draft-legacy-publish-once',
+  });
+  assert.equal(draft.status, 201);
+  const runId = draft.body.data.id;
+  assert.equal(draft.body.data.items[0].published_at, null);
+  for (const state of ['draft', 'finalized']) {
+    if (state === 'finalized') assert.equal((await call('POST', `/grocery-runs/${runId}/finalize`)).status, 200);
+    const legacy = await callApi('POST', `/meals/${mealId}/to-shopping-list`, { listId });
+    assert.equal(legacy.status, 409, `${state}: ${JSON.stringify(legacy.body)}`);
+    assert.equal(legacy.body.code, 'GROCERY_RECONCILIATION_REQUIRED');
+    assert.match(legacy.body.error, /grocery run/i);
+    assert.equal(database.prepare('SELECT COUNT(*) AS n FROM meal_ingredients WHERE meal_id = ?').get(mealId).n, 0,
+      'reject before recipe ingredients are materialized');
+    assert.equal(database.prepare('SELECT COUNT(*) AS n FROM shopping_items WHERE added_from_meal = ?').get(mealId).n, 0);
+  }
+
+  const published = await call('POST', `/grocery-runs/${runId}/add-to-shopping`);
+  assert.equal(published.status, 200);
+  const grocery = published.body.data.items[0];
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM shopping_items WHERE added_from_meal = ?').get(mealId).n, 1);
+  await call('PATCH', `/items/${grocery.shopping_item_id}`, { is_checked: true });
+  await call('POST', `/grocery-runs/${runId}/sync-purchases`);
+  const generic = await callApi('POST', '/pantry/import-shopping', {
+    list_id: listId, items: [{ shopping_item_id: grocery.shopping_item_id, quantity: 1, unit: 'l' }],
+  });
+  assert.equal(generic.status, 409);
+  assert.equal(database.prepare("SELECT COUNT(*) AS n FROM pantry_items WHERE name = 'Draft-owned milk'").get().n, 0);
+  const payload = { grocery_run_id: runId, items: [{ grocery_item_id: grocery.id, quantity: 1, unit: 'l' }] };
+  assert.equal((await callApi('POST', '/pantry/reconcile-grocery-run', payload)).body.data.reconciled, 1);
+  assert.equal((await callApi('POST', '/pantry/reconcile-grocery-run', payload)).body.data.reconciled, 0);
+  assert.equal(database.prepare("SELECT quantity FROM pantry_items WHERE name = 'Draft-owned milk'").get().quantity, 1);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM pantry_movements WHERE grocery_item_id = ?').get(grocery.id).n, 1);
+});
+
+test('unpublished materialized demand blocks every mixed legacy batch before any list or ingredient mutation', async () => {
+  const mealId = Number(database.prepare(`INSERT INTO meals(date,meal_type,title,created_by)
+    VALUES ('2044-03-09','dinner','Owned materialized meal',?)`).run(admin).lastInsertRowid);
+  database.prepare("INSERT INTO meal_ingredients(meal_id,name,quantity) VALUES (?,'Owned draft flour','1.5 kg')").run(mealId);
+  const draft = await call('POST', `/${listId}/grocery-runs`, {
+    from: '2044-03-09', to: '2044-03-09', logical_key: 'mixed-draft-ownership',
+  });
+  assert.equal(draft.status, 201);
+  const ordinaryMeal = Number(database.prepare(`INSERT INTO meals(date,meal_type,title,created_by)
+    VALUES ('2044-03-09','lunch','Unowned materialized meal',?)`).run(admin).lastInsertRowid);
+  database.prepare("INSERT INTO meal_ingredients(meal_id,name,quantity) VALUES (?,'Unowned draft flour','2.5 kg')").run(ordinaryMeal);
+  const otherList = Number(database.prepare("INSERT INTO shopping_lists(name,created_by) VALUES ('Alternate draft destination',?)").run(admin).lastInsertRowid);
+  const before = database.prepare('SELECT COUNT(*) AS n FROM shopping_items').get().n;
+  for (const target of [listId, otherList]) {
+    const paths = [`/meals/${mealId}/to-shopping-list`, '/meals/week-to-shopping-list', `/shopping/${target}/import-meal-plan`];
+    for (const path of paths) {
+      const rejected = await callApi('POST', path, {
+        listId: target, week: '2044-03-09', from: '2044-03-09', to: '2044-03-09',
+      });
+      assert.equal(rejected.status, 409, `${path}: ${JSON.stringify(rejected.body)}`);
+      assert.equal(rejected.body.code, 'GROCERY_RECONCILIATION_REQUIRED');
+      assert.equal(database.prepare('SELECT COUNT(*) AS n FROM shopping_items').get().n, before);
+      assert.equal(database.prepare('SELECT SUM(on_shopping_list) AS n FROM meal_ingredients WHERE meal_id IN (?,?)').get(mealId, ordinaryMeal).n, 0);
+    }
+  }
+  const ordinary = await callApi('POST', `/meals/${ordinaryMeal}/to-shopping-list`, { listId: otherList });
+  assert.equal(ordinary.status, 200);
+  assert.equal(ordinary.body.data.transferred, 1);
+  assert.equal(database.prepare('SELECT quantity FROM shopping_items WHERE added_from_meal = ?').get(ordinaryMeal).quantity, '2.5 kg');
+});
+
+test('draft source ownership respects excluded trip demand and preserves real quantities and category groups', async () => {
+  const context = Number(database.prepare(`INSERT INTO planning_contexts
+    (context_key,name,context_type,starts_at,ends_at,created_by)
+    VALUES ('grocery-excluded-trip','Excluded grocery trip','travel','2045-03-09T00:00:00','2045-03-10T00:00:00',?)`).run(admin).lastInsertRowid);
+  database.prepare('INSERT INTO planning_context_grocery_settings(planning_context_id,track_groceries) VALUES (?,0)').run(context);
+  const trackedContext = Number(database.prepare(`INSERT INTO planning_contexts
+    (context_key,name,context_type,starts_at,ends_at,created_by)
+    VALUES ('grocery-tracked-trip','Tracked grocery trip','travel','2045-03-09T00:00:00','2045-03-10T00:00:00',?)`).run(admin).lastInsertRowid);
+  const home = seedRecipeMeal({ date: '2045-03-09', title: 'Tracked Home demand', quantity: '1.25 l', ingredient: 'Context guard milk' });
+  const additional = seedRecipeMeal({ date: '2045-03-09', title: 'Tracked Trip demand', quantity: '2.75 l', ingredient: 'Context guard milk' });
+  database.prepare('UPDATE meals SET planning_context_id = ? WHERE id = ?').run(trackedContext, additional.mealId);
+  const trip = seedRecipeMeal({ date: '2045-03-09', title: 'Excluded Trip demand', quantity: '5 l', ingredient: 'Context guard milk' });
+  database.prepare('UPDATE meals SET planning_context_id = ? WHERE id = ?').run(context, trip.mealId);
+  seedRecipeMeal({ date: '2045-03-09', title: 'Separate category demand', quantity: '3 l', ingredient: 'Context guard milk', category: 'Sonstiges' });
+  const draft = await call('POST', `/${listId}/grocery-runs`, {
+    from: '2045-03-09', to: '2045-03-09', logical_key: 'context-draft-ownership',
+  });
+  assert.equal(draft.status, 201);
+  const dairy = draft.body.data.items.find((item) => item.category === 'Milchprodukte');
+  const other = draft.body.data.items.find((item) => item.category === 'Sonstiges');
+  assert.equal(draft.body.data.items.length, 2, 'same ingredient in different categories remains separate');
+  assert.equal(dairy.quantity, '4 l');
+  assert.equal(dairy.planned_quantity, 4);
+  assert.equal(other.quantity, '3 l');
+  assert.deepEqual(dairy.sources.map((source) => source.meal_id).sort(), [home.mealId, additional.mealId].sort());
+  assert.ok(draft.body.data.items.every((item) => item.sources.every((source) => source.meal_id !== trip.mealId)));
+  assert.equal((await callApi('POST', `/meals/${home.mealId}/to-shopping-list`, { listId })).status, 409);
+  assert.equal((await callApi('POST', `/meals/${additional.mealId}/to-shopping-list`, { listId })).status, 409);
+  const legacy = await callApi('POST', `/meals/${trip.mealId}/to-shopping-list`, { listId });
+  assert.equal(legacy.status, 200, 'the same ingredient name in an excluded context has no ledger ownership');
+  const legacyId = legacy.body.data.added_ids[0];
+  assert.equal(database.prepare('SELECT quantity FROM shopping_items WHERE id = ?').get(legacyId).quantity, '5 l');
+  await call('PATCH', `/items/${legacyId}`, { is_checked: true });
+  assert.equal((await callApi('POST', '/pantry/import-shopping', {
+    list_id: listId, items: [{ shopping_item_id: legacyId, quantity: 5, unit: 'l' }],
+  })).status, 200);
+  await call('POST', `/grocery-runs/${draft.body.data.id}/finalize`);
+  const published = await call('POST', `/grocery-runs/${draft.body.data.id}/add-to-shopping`);
+  const publishedDairy = published.body.data.items.find((item) => item.id === dairy.id);
+  assert.equal(publishedDairy.quantity, '4 l');
+  await call('PATCH', `/items/${publishedDairy.shopping_item_id}`, { is_checked: true });
+  await call('POST', `/grocery-runs/${draft.body.data.id}/sync-purchases`);
+  assert.equal((await callApi('POST', '/pantry/reconcile-grocery-run', {
+    grocery_run_id: draft.body.data.id, items: [{ grocery_item_id: dairy.id, quantity: 4, unit: 'l' }],
+  })).body.data.reconciled, 1);
+  assert.equal(database.prepare("SELECT quantity FROM pantry_items WHERE name = 'Context guard milk'").get().quantity, 9,
+    'the distinct 5 l excluded Trip purchase and 4 l tracked Home/Trip purchase are both legitimate');
+});
+
+test('refreshing a draft releases a Meal only after its source demand is removed', async () => {
+  const { mealId } = seedRecipeMeal({ date: '2046-03-09', title: 'Moved draft meal', quantity: '2 pcs', ingredient: 'Moved draft apples' });
+  const body = { from: '2046-03-09', to: '2046-03-09', logical_key: 'refresh-releases-legacy' };
+  const draft = await call('POST', `/${listId}/grocery-runs`, body);
+  assert.equal(draft.status, 201);
+  assert.equal((await callApi('POST', `/meals/${mealId}/to-shopping-list`, { listId })).status, 409);
+  database.prepare("UPDATE meals SET date = '2046-03-10' WHERE id = ?").run(mealId);
+  assert.equal((await callApi('POST', `/meals/${mealId}/to-shopping-list`, { listId })).status, 409,
+    'changing dates alone does not abandon already reserved demand');
+  const refreshed = await call('POST', `/${listId}/grocery-runs`, body);
+  assert.equal(refreshed.status, 200);
+  assert.equal(refreshed.body.data.id, draft.body.data.id);
+  assert.equal(refreshed.body.data.items.length, 0);
+  assert.equal(database.prepare('SELECT COUNT(*) AS n FROM meal_grocery_item_sources WHERE meal_id = ?').get(mealId).n, 0);
+  const legacy = await callApi('POST', `/meals/${mealId}/to-shopping-list`, { listId });
+  assert.equal(legacy.status, 200);
+  assert.equal(legacy.body.data.transferred, 1);
+  assert.equal(database.prepare('SELECT quantity FROM shopping_items WHERE added_from_meal = ?').get(mealId).quantity, '2 pcs');
+});

@@ -1,4 +1,4 @@
-name: Refinement Audit Bootstrap
+name: Refinement Browser Review
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  prepare:
+  browser-review:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,16 +22,15 @@ jobs:
           cache: npm
       - name: Install locked dependencies
         run: npm ci
-      - name: Package isolated review workspace
-        run: |
-          git archive --format=tar HEAD > "$RUNNER_TEMP/yuvomi-review-source.tar"
-          tar -cf "$RUNNER_TEMP/yuvomi-review-dependencies.tar" node_modules
-          gzip "$RUNNER_TEMP/yuvomi-review-source.tar" "$RUNNER_TEMP/yuvomi-review-dependencies.tar"
+      - name: Inspect disposable demo household
+        env:
+          AUDIT_LABEL: baseline
+          QA_OUTPUT_DIR: review-artifacts
+        run: node test/product-refinement.browser.mjs
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: yuvomi-review-workspace
-          path: |
-            ${{ runner.temp }}/yuvomi-review-source.tar.gz
-            ${{ runner.temp }}/yuvomi-review-dependencies.tar.gz
+          name: yuvomi-browser-review
+          path: review-artifacts/
           retention-days: 1
           if-no-files-found: error

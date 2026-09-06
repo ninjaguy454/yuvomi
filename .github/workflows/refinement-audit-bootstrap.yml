@@ -1,0 +1,37 @@
+name: Refinement Audit Bootstrap
+
+on:
+  push:
+    branches: [audit/product-refinement-2026-09-06]
+    paths: [.github/workflows/refinement-audit-bootstrap.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.x
+          cache: npm
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Package isolated review workspace
+        run: |
+          git archive --format=tar HEAD > "$RUNNER_TEMP/yuvomi-review-source.tar"
+          tar -cf "$RUNNER_TEMP/yuvomi-review-dependencies.tar" node_modules
+          gzip "$RUNNER_TEMP/yuvomi-review-source.tar" "$RUNNER_TEMP/yuvomi-review-dependencies.tar"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: yuvomi-review-workspace
+          path: |
+            ${{ runner.temp }}/yuvomi-review-source.tar.gz
+            ${{ runner.temp }}/yuvomi-review-dependencies.tar.gz
+          retention-days: 1
+          if-no-files-found: error

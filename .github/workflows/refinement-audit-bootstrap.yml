@@ -33,9 +33,20 @@ jobs:
           from pathlib import Path
           p = Path('test/product-refinement.browser.mjs')
           s = p.read_text()
+          s = s.replace("localStorage.setItem('yuvomi-onboarded', '1');", "localStorage.setItem('yuvomi-onboarded:1', '1');")
+          s = s.replace("await page.type('#username', 'alex');", "await page.waitForFunction(() => !!navigator.serviceWorker.controller, { timeout: 15000 }); await delay(800); await page.waitForSelector('#username'); await page.type('#username', 'alex');")
           needle = "await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });"
           assert s.count(needle) == 1
           s = s.replace(needle, "await delay(1500); await capture(page, `${width}-${theme}-login`, requests, errors); " + needle)
+          needle = "if (route === '/tasks') {"
+          extra = """const extra = { '/places': '#automation-add-place', '/settings/modules/automation': '#automation-add-skill', '/meals': '#meal-plan-manage' }[route];
+                  if (extra && await page.$(extra)) {
+                    await page.click(extra); await capture(page, `${name}-form`, [], errors);
+                    await page.keyboard.press('Escape'); await delay(300);
+                  }
+                  """
+          s = s.replace(needle, extra + needle)
+          s = s.replace("report.errors.push(error.stack || String(error));", "console.error(error); report.errors.push(error.stack || String(error));")
           p.write_text(s)
           PY
           node test/product-refinement.browser.mjs

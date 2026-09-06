@@ -5,10 +5,13 @@ on:
     branches: [audit/product-refinement-2026-09-06]
     paths:
       - .github/workflows/refinement-audit-bootstrap.yml
-      - test/product-refinement.browser.mjs
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: yuvomi-product-refinement-audit
+  cancel-in-progress: false
 
 jobs:
   browser-review:
@@ -16,44 +19,52 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 22.x
           cache: npm
       - name: Install locked dependencies
         run: npm ci
+      - name: Apply narrowly scoped reviewed edits
+        run: |
+          test "$GITHUB_REF" = 'refs/heads/audit/product-refinement-2026-09-06'
+          python3 .audit/apply_refinements.py
+          git diff --check
+          python3 - <<'PY'
+          import subprocess
+          expected = {'package.json', 'public/api.js', 'public/components/activity-automation.js', 'public/pages/tasks.js', 'public/sw-register.js', 'public/utils/kitchen-tabs.js', 'test/test-api.js', 'test/test-kitchen-tabs.js', 'test/test-push.js', 'test/test-region-presets.js', 'test/test-sw-upgrade.js'}
+          actual = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          assert actual == expected, (actual, expected)
+          PY
+      - name: Run focused regression checks
+        run: |
+          mkdir -p review-artifacts
+          set -o pipefail
+          for suite in api sw-upgrade kitchen-tabs meal-change-notifications-migration suite-chain push region-presets frontend-audit; do
+            npm run "test:$suite" 2>&1 | tee -a review-artifacts/focused-tests.log
+          done
+      - name: Commit only the reviewed product and test files
+        run: |
+          test "$GITHUB_REF" = 'refs/heads/audit/product-refinement-2026-09-06'
+          git fetch origin refs/heads/audit/product-refinement-2026-09-06
+          test "$(git rev-parse FETCH_HEAD)" = "$GITHUB_SHA"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add package.json public/api.js public/components/activity-automation.js public/pages/tasks.js public/sw-register.js public/utils/kitchen-tabs.js test/test-api.js test/test-kitchen-tabs.js test/test-push.js test/test-region-presets.js test/test-sw-upgrade.js
+          git commit -m 'fix(product): preserve drafts, label shared forms and avoid forbidden-write replays'
+          git push origin HEAD:refs/heads/audit/product-refinement-2026-09-06
+          git rev-parse HEAD > review-artifacts/product-commit.txt
+          git diff de4be2702dee7f1cd9828f01f9ab6c7b4bd0ad04 -- package.json public/api.js public/components/activity-automation.js public/pages/tasks.js public/sw-register.js public/utils/kitchen-tabs.js test/test-api.js test/test-kitchen-tabs.js test/test-push.js test/test-region-presets.js test/test-sw-upgrade.js > review-artifacts/product-refinement.patch || git show --format= --binary HEAD > review-artifacts/product-refinement.patch
+          tar -czf review-artifacts/refined-source.tar.gz package.json public/api.js public/components/activity-automation.js public/pages/tasks.js public/sw-register.js public/utils/kitchen-tabs.js test/test-api.js test/test-kitchen-tabs.js test/test-push.js test/test-region-presets.js test/test-sw-upgrade.js test/product-refinement-regressions.browser.mjs
       - name: Inspect disposable demo household
         env:
-          AUDIT_LABEL: baseline
+          AUDIT_LABEL: refined
           QA_OUTPUT_DIR: review-artifacts
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('test/product-refinement.browser.mjs')
-          s = p.read_text()
-          s = s.replace("localStorage.setItem('yuvomi-onboarded', '1');", "localStorage.setItem('yuvomi-onboarded:1', '1');")
-          s = s.replace("await page.type('#username', 'alex');", "await page.waitForFunction(() => !!navigator.serviceWorker.controller, { timeout: 15000 }); await delay(800); await page.waitForSelector('#username'); await page.type('#username', 'alex');")
-          needle = "await page.waitForFunction(() => location.pathname === '/', { timeout: 15000 });"
-          assert s.count(needle) == 1
-          s = s.replace(needle, "await delay(1500); await capture(page, `${width}-${theme}-login`, requests, errors); " + needle)
-          needle = "if (route === '/tasks') {"
-          extra = """const extra = { '/places': '#automation-add-place', '/settings/modules/automation': '#automation-add-skill', '/meals': '#meal-plan-manage' }[route];
-                  if (extra && await page.$(extra)) {
-                    await page.click(extra); await capture(page, `${name}-form`, [], errors);
-                    await page.keyboard.press('Escape'); await delay(300);
-                  }
-                  """
-          s = s.replace(needle, extra + needle)
-          s = s.replace("report.errors.push(error.stack || String(error));", "console.error(error); report.errors.push(error.stack || String(error));")
-          p.write_text(s)
-          PY
-          node test/product-refinement.browser.mjs
+        run: node test/product-refinement-regressions.browser.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: yuvomi-browser-review
+          name: yuvomi-refined-review
           path: review-artifacts/
           retention-days: 1
           if-no-files-found: error

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { KITCHEN_ROUTES, KITCHEN_STORAGE_KEY, getLastKitchenRoute, isKitchenRoute } = await (async () => {
+const { KITCHEN_ROUTES, KITCHEN_STORAGE_KEY, getLastKitchenRoute, isKitchenRoute, isKitchenModule } = await (async () => {
   global.window = { yuvomi: null };
   global.document = {
     createElement: () => ({
@@ -66,4 +66,14 @@ test('isKitchenRoute: lehnt Nicht-Kitchen-Routen ab', () => {
   assert.equal(isKitchenRoute('/'), false);
   assert.equal(isKitchenRoute('/calendar'), false);
   assert.equal(isKitchenRoute(''), false);
+});
+
+
+test('isKitchenModule uses the canonical imported module list', () => {
+  for (const module of ['meals', 'recipes', 'shopping', 'pantry']) {
+    assert.equal(isKitchenModule(module), true);
+  }
+  for (const module of ['tasks', '/meals', '', null, undefined]) {
+    assert.equal(isKitchenModule(module), false);
+  }
 });

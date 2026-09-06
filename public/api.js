@@ -71,9 +71,13 @@ async function apiFetch(path, options = {}, _retried = false) {
     // Für beide: fall-through zum generischen !response.ok-Handler unten.
   }
 
-  // CSRF-Token-Desync (haeufig nach iOS-PWA-Resume): einmal GET /auth/me
-  // ausfuehren um den CSRF-Token zu erneuern, dann den Request wiederholen.
-  if (response.status === 403 && stateChanging && !_retried) {
+  const data = await response.json().catch(() => null);
+
+  // A permission denial is not a token failure. Only replay a write that the
+  // CSRF middleware explicitly rejected, never an ordinary forbidden action.
+  // Keep the single retry for token desynchronization after PWA resume.
+  if (response.status === 403 && stateChanging && !_retried
+      && data?.error === 'Invalid CSRF token.') {
     // Token aus der 403-Antwort selbst extrahieren (Server liefert den
     // korrekten Token im Header mit, auch bei Fehlschlag)
     const errorCsrf = response.headers.get('X-CSRF-Token');
@@ -95,8 +99,6 @@ async function apiFetch(path, options = {}, _retried = false) {
   // CSRF-Token aus Response-Header extrahieren (wird bei jeder API-Antwort mitgeliefert)
   const csrfHeader = response.headers.get('X-CSRF-Token');
   if (csrfHeader) _csrfToken = csrfHeader;
-
-  const data = await response.json().catch(() => null);
 
   // Fallback: CSRF-Token aus Response-Body (fuer /auth/me und /auth/login)
   if (data?.csrfToken) _csrfToken = data.csrfToken;

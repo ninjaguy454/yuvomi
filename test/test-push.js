@@ -27,6 +27,8 @@ function makeDb() {
     CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL,
       created_by INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE);
     CREATE TABLE calendar_events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
+    -- The shared notification query also resolves meal reminder titles.
+    CREATE TABLE meals (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL);
     CREATE TABLE budget_subscriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
       amount REAL, currency TEXT, next_payment_date TEXT);
     CREATE TABLE inventory_items (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,

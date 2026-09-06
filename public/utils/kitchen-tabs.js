@@ -40,7 +40,7 @@ export function isKitchenRoute(path) {
 }
 
 export function isKitchenModule(mod) {
-  return !!mod && KITCHEN_MODULES.includes(mod);
+  return !!mod && KITCHEN_MODULES_SOURCE.includes(mod);
 }
 
 // --------------------------------------------------------

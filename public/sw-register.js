@@ -18,8 +18,15 @@ if ('serviceWorker' in navigator) {
   // zu Timing-Problemen (leere Seite, verlorene Cookies). Stattdessen nur
   // nachladen wenn die Seite gerade nicht mitten im Initialisieren ist.
   let refreshing = false;
+  let hadController = Boolean(navigator.serviceWorker.controller);
   navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (refreshing) return;
+    // The first takeover controls the already network-loaded page. Reloading
+    // it can erase a login or form draft. Later worker upgrades still reload.
+    if (!hadController && navigator.serviceWorker.controller) {
+      hadController = true;
+      return;
+    }
+    if (!navigator.serviceWorker.controller || refreshing) return;
     refreshing = true;
     // Kurz warten damit der neue SW vollstaendig aktiviert ist und
     // clients.claim() abgeschlossen hat, bevor die Seite neu laedt.

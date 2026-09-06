@@ -262,3 +262,76 @@ test('OpenAPI erlaubt DMS-Push für local, webdav und google_drive, aber nicht d
   assert.deepEqual(linked.properties.storage_backend.enum, ['dms']);
   assert.ok(linked.required.includes('storage_backend'));
 });
+
+
+// Permission failures retain the response without replaying a denied write.
+for (const headers of [{}, { 'X-CSRF-Token': 'fresh-but-forbidden' }]) {
+  test(`ordinary 403 is not retried (${Object.keys(headers).length ? 'with' : 'without'} CSRF header)`, async () => {
+    setup();
+    const calls = [];
+    const body = { error: 'Insufficient permissions.', code: 403 };
+    _mockFetch = (url) => { calls.push(url); return mockResponse(403, body, headers); };
+    await assert.rejects(() => api.post('/tasks', { title: 'Denied' }), (error) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.status, 403);
+      assert.equal(error.message, body.error);
+      assert.equal(error.data, body);
+      return true;
+    });
+    assert.deepEqual(calls, ['/api/v1/tasks']);
+    assert.equal(dispatchedEvents.length, 0);
+  });
+}
+
+test('confirmed CSRF rejection retries once with the response token', async () => {
+  setup();
+  const calls = [];
+  _mockFetch = (url, options) => {
+    calls.push({ url, options });
+    return calls.length === 1
+      ? mockResponse(403, { error: 'Invalid CSRF token.', code: 403 }, { 'X-CSRF-Token': 'recovered-token' })
+      : mockResponse(200, { id: 7 });
+  };
+  assert.deepEqual(await api.post('/tasks', { title: 'Retried' }), { id: 7 });
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].options.headers['X-CSRF-Token'], 'recovered-token');
+  assert.equal(calls[1].options.body, calls[0].options.body);
+});
+
+test('confirmed CSRF rejection without a header refreshes the session once', async () => {
+  setup();
+  const calls = [];
+  _mockFetch = (url, options) => {
+    calls.push({ url, options });
+    if (calls.length === 1) return mockResponse(403, { error: 'Invalid CSRF token.', code: 403 });
+    if (url === '/api/v1/auth/me') return mockResponse(200, { csrfToken: 'session-recovered' });
+    return mockResponse(200, { id: 8 });
+  };
+  assert.deepEqual(await api.patch('/tasks/8', { title: 'Retried' }), { id: 8 });
+  assert.deepEqual(calls.map(call => call.url), ['/api/v1/tasks/8', '/api/v1/auth/me', '/api/v1/tasks/8']);
+  assert.equal(calls[2].options.headers['X-CSRF-Token'], 'session-recovered');
+});
+
+test('repeated CSRF rejection stops after the single allowed retry', async () => {
+  setup();
+  let calls = 0;
+  _mockFetch = () => {
+    calls += 1;
+    return mockResponse(403, { error: 'Invalid CSRF token.', code: 403 }, { 'X-CSRF-Token': 'still-invalid' });
+  };
+  await assert.rejects(() => api.delete('/tasks/7'), error => error instanceof ApiError && error.status === 403);
+  assert.equal(calls, 2);
+});
+
+test('non-JSON forbidden response is not replayed', async () => {
+  setup();
+  let calls = 0;
+  _mockFetch = async () => {
+    calls += 1;
+    const response = await mockResponse(403);
+    response.json = async () => { throw new SyntaxError('Not JSON'); };
+    return response;
+  };
+  await assert.rejects(() => api.put('/tasks/7', {}), error => error.status === 403 && error.message === 'HTTP 403');
+  assert.equal(calls, 1);
+});

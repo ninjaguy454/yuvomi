@@ -27,12 +27,29 @@ function footer(primaryLabel = 'Save') {
   </div>`;
 }
 
+let inputRowSequence = 0;
+
 function inputRow(label, control, hint = '') {
-  return `<div class="form-group">
-    <label class="label">${h(label)}</label>
+  // Parse the existing trusted control markup, preserving its names, values,
+  // IDs and event hooks. Every editor using this row gets the same label and
+  // help-text association, including fields revealed after a choice changes.
+  const row = document.createElement('div');
+  row.className = 'form-group';
+  row.insertAdjacentHTML('afterbegin', `<label class="label">${h(label)}</label>
     ${control}
-    ${hint ? `<small class="form-hint">${h(hint)}</small>` : ''}
-  </div>`;
+    ${hint ? `<small class="form-hint">${h(hint)}</small>` : ''}`);
+  const field = row.querySelector('input, select, textarea');
+  if (field) {
+    if (!field.id) field.id = `automation-field-${++inputRowSequence}`;
+    row.querySelector('label').htmlFor = field.id;
+    const description = row.querySelector('.form-hint');
+    if (description) {
+      description.id = `automation-hint-${++inputRowSequence}`;
+      const ids = [field.getAttribute('aria-describedby'), description.id].filter(Boolean);
+      field.setAttribute('aria-describedby', ids.join(' '));
+    }
+  }
+  return row.outerHTML;
 }
 
 function workflowMentionOptions(panel) {

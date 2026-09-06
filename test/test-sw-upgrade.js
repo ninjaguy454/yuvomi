@@ -217,3 +217,30 @@ test('activation remains alive until claim and update notification finish', asyn
   assert.equal(settled, true);
   assert.equal(JSON.stringify(env.signals.messages), JSON.stringify([{ type: 'SW_UPDATED' }]));
 });
+
+
+test('first worker takeover preserves the current page; a later upgrade reloads once', () => {
+  const listeners = {};
+  const signals = { reloads: 0, timers: 0 };
+  const serviceWorker = {
+    controller: null,
+    addEventListener(type, callback) { listeners[type] = callback; },
+  };
+  const sandbox = {
+    navigator: { serviceWorker },
+    window: { addEventListener() {}, location: { reload() { signals.reloads += 1; } } },
+    document: { addEventListener() {} },
+    setTimeout(callback) { signals.timers += 1; callback(); },
+    console,
+  };
+  runInContext(REGISTER_SOURCE, createContext(sandbox));
+  listeners.controllerchange();
+  assert.equal(signals.reloads, 0, 'loss or absence of a controller is not an upgrade');
+  serviceWorker.controller = { postMessage() {} };
+  listeners.controllerchange();
+  assert.equal(signals.timers, 0, 'first activation must not schedule a draft-erasing reload');
+  serviceWorker.controller = { postMessage() {} };
+  listeners.controllerchange();
+  listeners.controllerchange();
+  assert.equal(signals.reloads, 1, 'subsequent upgrades keep the existing once-only refresh');
+});

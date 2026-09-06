@@ -4567,27 +4567,27 @@ function renderTaskLocationFields(task = null) {
   const setupMessage = 'Google place search is off. An administrator must configure GOOGLE_MAPS_API_KEY, enable the integration, and accept the Google Maps terms. You can still save ordinary addresses.';
   return `<fieldset class="form-group task-location" id="task-location-fieldset">
     <legend class="label">Location</legend>
-    <select class="input" id="task-location-kind" name="location_kind">
+    <select class="input" id="task-location-kind" aria-label="Location type" name="location_kind">
       <option value="none" ${kind === 'none' ? 'selected' : ''}>No location</option>
       <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Yuvomi Place</option>
       <option value="manual" ${kind === 'manual' ? 'selected' : ''}>One-use manual location</option>
       <option value="google_place" ${kind === 'google_place' ? 'selected' : ''}>Find a business or place</option>
     </select>
     <div data-location-pane="saved_place" style="margin-top:var(--space-3)">
-      <select class="input" id="task-location-place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
+      <select class="input" id="task-location-place" aria-label="Saved Place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
       <p class="task-field-hint">Reusable locations are maintained in Address Book → Places.</p>
     </div>
     <div data-location-pane="manual" style="margin-top:var(--space-3)">
-      <input class="input" id="task-location-label" maxlength="120" placeholder="Location name" value="${esc(kind === 'manual' ? location?.label || '' : '')}">
-      <textarea class="input" id="task-location-address" rows="2" placeholder="Address or directions" style="margin-top:var(--space-2)">${esc(kind === 'manual' ? location?.address || '' : '')}</textarea>
-      <details style="margin-top:var(--space-2)"><summary class="task-field-hint">Advanced coordinates (optional)</summary><div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div></details>
+      <input class="input" id="task-location-label" aria-label="Location name" maxlength="120" placeholder="Location name" value="${esc(kind === 'manual' ? location?.label || '' : '')}">
+      <textarea class="input" id="task-location-address" aria-label="Address or directions" rows="2" placeholder="Address or directions" style="margin-top:var(--space-2)">${esc(kind === 'manual' ? location?.address || '' : '')}</textarea>
+      <details style="margin-top:var(--space-2)"><summary class="task-field-hint">Advanced coordinates (optional)</summary><div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" aria-label="Latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" aria-label="Longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div></details>
     </div>
     <div data-location-pane="google_place" style="margin-top:var(--space-3)">
       <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Yuvomi server. Search runs only when you press Search.</p>
-      <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
-      <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>
-      <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
-      <div data-origin-pane="text" style="margin-top:var(--space-2)" hidden><input class="input" id="task-origin-text" maxlength="160" placeholder="Address, city, or ZIP (for example, 27513)"></div>
+      <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" aria-label="Search for a business or place" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category" aria-label="Place category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
+      <select class="input" id="task-place-origin-mode" aria-label="Search area" style="margin-top:var(--space-2)"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>
+      <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin" aria-label="Saved search origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
+      <div data-origin-pane="text" style="margin-top:var(--space-2)" hidden><input class="input" id="task-origin-text" aria-label="Address, city, or ZIP" maxlength="160" placeholder="Address, city, or ZIP (for example, 27513)"></div>
       <div data-origin-pane="anywhere" hidden></div>
       <button class="btn btn--secondary btn--sm" type="button" id="task-place-search" style="margin-top:var(--space-2)" ${searchConfigured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Search Google Places</button>
       <p class="task-field-hint" id="task-place-search-status">${searchConfigured ? `${state.placeSearchStatus.usage?.household_today ?? 0} of ${state.placeSearchStatus.limits?.household_per_day ?? 100} household searches used today.` : setupMessage}</p>

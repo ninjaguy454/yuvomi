@@ -97,13 +97,14 @@ test('numberLocaleFor yields a region tag that drives Intl number grouping (#521
   // Kernfall des Issues: Schweizer Region → Tausender-Apostroph + Punkt-Dezimal.
   const chLocale = numberLocaleFor({ region: 'de-CH', ...REGION_PRESETS['de-CH'] });
   assert.equal(chLocale, 'de-CH');
-  assert.equal(new Intl.NumberFormat(chLocale).format(123456.78), "123'456.78");
+  // ICU versions use either ASCII apostrophe or U+2019 for Swiss grouping.
+  // Keep the grouping and decimal contract strict without pinning ICU glyphs.
+  assert.match(new Intl.NumberFormat(chLocale).format(123456.78), /^123['’]456\.78$/);
   // Währung: nur die Gruppierung prüfen; das Leerzeichen vor dem Betrag ist je
   // nach ICU-Version ein schmales geschütztes Leerzeichen (U+202F/U+00A0).
-  assert.ok(
-    new Intl.NumberFormat(chLocale, { style: 'currency', currency: 'CHF' })
-      .format(123456.78)
-      .includes("123'456.78"),
+  assert.match(
+    new Intl.NumberFormat(chLocale, { style: 'currency', currency: 'CHF' }).format(123456.78),
+    /123['’]456\.78/,
   );
   // Deutsche Region bleibt beim gewohnten Format (kein Regressionswechsel).
   assert.equal(

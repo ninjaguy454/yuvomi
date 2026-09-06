@@ -76,7 +76,7 @@ try {
   let ready = false;
   for (let i = 0; i < 100; i++) {
     if (server.exitCode !== null) throw new Error('Disposable server exited');
-    try { ready = (await fetch(`${base}/api/v1/health`)).ok; } catch {}
+    try { ready = (await fetch(`${base}/health`)).ok; } catch {}
     if (ready) break;
     await delay(200);
   }

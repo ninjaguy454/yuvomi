@@ -3,7 +3,9 @@ name: Refinement Browser Review
 on:
   push:
     branches: [audit/product-refinement-2026-09-06]
-    paths: [.github/workflows/refinement-audit-bootstrap.yml]
+    paths:
+      - .github/workflows/refinement-audit-bootstrap.yml
+      - test/product-refinement.browser.mjs
 
 permissions:
   contents: read

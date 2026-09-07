@@ -62,7 +62,8 @@ import {
   updateMealPlan,
 } from '../services/meal-plans.js';
 import {
-  finalizedDinerCount,
+  mealDishPortionSummary,
+  mealPortionSummary,
   normalizeDishSelection,
   normalizePortions,
   presentDishSelection,
@@ -198,6 +199,8 @@ function loadMealWithIngredients(id) {
     ...meal,
     portions: meal.portions_mode === 'fixed' ? Number(meal.portions) : null,
     effective_portions: Number(meal.portions) || 1,
+    planned_portions: Number(meal.planned_portions) || 0,
+    cook_portions: Number(meal.portions) || 1,
     ingredients_manual_override: Boolean(meal.ingredients_manual_override),
     dish: presentDishSelection(meal),
     menu_items: menuItems,
@@ -226,13 +229,17 @@ function preferredMealMenu(body, currentMeal = null) {
 
 function applyMealPortions(mealId, body, currentMeal = null) {
   const database = db.get();
-  const autoCount = finalizedDinerCount(database, mealId);
+  const portionSummary = mealDishPortionSummary(database, mealId);
   const hasPortionWrite = Object.hasOwn(body || {}, 'portions_mode') || Object.hasOwn(body || {}, 'portions');
   let rawPortions;
   if (hasPortionWrite) {
     const mode = body.portions_mode || (body.portions == null ? 'auto' : 'fixed');
     rawPortions = mode === 'auto' ? { mode: 'auto' } : { mode: 'fixed', count: body.portions };
   }
+  const primaryDish = portionSummary.dishes.find((dish) => dish.meal_id === Number(mealId) && dish.primary);
+  const autoCount = rawPortions?.mode === 'auto'
+    ? Math.max(Math.ceil(Number(primaryDish?.planned_portions) || 0), 1)
+    : portionSummary.cook;
   const normalized = normalizePortions(rawPortions, {
     currentMode: currentMeal?.portions_mode || 'auto',
     currentCount: currentMeal?.portions,
@@ -248,8 +255,9 @@ function applyMealPortions(mealId, body, currentMeal = null) {
   const shouldMaterialize = !manualOverride && (hasPortionWrite || dishChanged || !currentMeal);
 
   database.prepare(`
-    UPDATE meals SET portions_mode = ?, portions = ?, ingredients_manual_override = ? WHERE id = ?
-  `).run(normalized.mode, normalized.count, manualOverride ? 1 : 0, Number(mealId));
+    UPDATE meals SET portions_mode = ?, portions = ?, planned_portions = ?,
+      ingredients_manual_override = ? WHERE id = ?
+  `).run(normalized.mode, normalized.count, portionSummary.planned, manualOverride ? 1 : 0, Number(mealId));
 
   if (ingredientWrite || shouldMaterialize) {
     database.prepare('DELETE FROM meal_ingredients WHERE meal_id = ?').run(Number(mealId));
@@ -259,6 +267,23 @@ function applyMealPortions(mealId, body, currentMeal = null) {
       : recipeIngredientsForPortions(database, meal?.recipe_id, normalized.count);
     insertMealIngredients(mealId, ingredients);
   }
+}
+
+function updatePlannedPortions(mealId) {
+  const database = db.get();
+  const summary = mealPortionSummary(database, mealId);
+  database.prepare('UPDATE meals SET planned_portions = ? WHERE id = ?').run(summary.planned, Number(mealId));
+}
+
+function initializeMealIngredientsAndPortions(mealId, body, { canonicalMenu = false } = {}) {
+  if (canonicalMenu || Object.hasOwn(body, 'portions_mode') || Object.hasOwn(body, 'portions')) {
+    applyMealPortions(mealId, body);
+    return;
+  }
+  // Legacy callers supplied an already chosen ingredient snapshot. Initialize
+  // the exact participant total without changing that snapshot or cook target.
+  insertMealIngredients(mealId, sanitizedIngredients(body.ingredients || []));
+  updatePlannedPortions(mealId);
 }
 
 function householdPlanningMembers() {
@@ -457,6 +482,7 @@ function materializeMealSchedule(from, to, actorId = null) {
         } else if (chooserId) insertParticipant.run(mealId, chooserId, 'chooser', 'participating');
         if (slot.cook_user_id) insertParticipant.run(mealId, slot.cook_user_id, 'cook', availability.get(Number(slot.cook_user_id))?.eligible ? 'participating' : 'away');
         if (slot.supervisor_user_id) insertParticipant.run(mealId, slot.supervisor_user_id, 'supervisor', availability.get(Number(slot.supervisor_user_id))?.eligible ? 'participating' : 'away');
+        updatePlannedPortions(mealId);
         const deadline = minutesBefore(dateKey, preferred || '23:59', slot.selection_deadline_minutes);
         const reminderAt = minutesBefore(deadline.slice(0, 10), deadline.slice(11, 16), slot.reminder_minutes);
         if (slot.policy === 'personal_choice') {
@@ -626,6 +652,7 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
           `).run(mealId, obligation.responsible_user_id);
           d.prepare(`INSERT INTO meal_selection_response_items (obligation_id, position, meal_id, recipe_id, title, notes) VALUES (?, ?, ?, ?, ?, ?)`)
             .run(obligation.id, index, mealId, choice.recipeId, choice.title, choice.notes);
+          updatePlannedPortions(mealId);
         });
       } else {
         // Keep the legacy inbox response on the same generation-aware path as
@@ -765,11 +792,9 @@ function deleteMealOccurrence(meal, actorId) {
   db.get().prepare('DELETE FROM meals WHERE id = ?').run(meal.id);
 }
 
-function createMealRecord({
-  date, meal_type, custom_label = null, title, notes, recipe_url, recipe_id, ingredients = [],
-  planning_context_id = null,
-}, actorId) {
-  const cleanIngredients = sanitizedIngredients(ingredients);
+function createMealRecord(assignment, actorId) {
+  const { date, meal_type, custom_label = null, title, notes, recipe_url, recipe_id,
+    planning_context_id = null } = assignment;
   const result = db.get().prepare(`
     INSERT INTO meals (
       date, meal_type, custom_label, title, notes, recipe_url, recipe_id, created_by,
@@ -781,7 +806,7 @@ function createMealRecord({
     planning_context_id,
     JSON.stringify({ source: 'manual', created_from: 'recipe_assignment', planning_context_id }),
   );
-  insertMealIngredients(result.lastInsertRowid, cleanIngredients);
+  initializeMealIngredientsAndPortions(result.lastInsertRowid, assignment);
   return loadMealWithIngredients(result.lastInsertRowid);
 }
 
@@ -1662,6 +1687,8 @@ router.get('/', (req, res) => {
       ...m,
       portions: m.portions_mode === 'fixed' ? Number(m.portions) : null,
       effective_portions: Number(m.portions) || 1,
+      planned_portions: Number(m.planned_portions) || 0,
+      cook_portions: Number(m.portions) || 1,
       ingredients_manual_override: Boolean(m.ingredients_manual_override),
       dish: presentDishSelection(m),
       menu_items: listMealMenuItems(db.get(), m.id),
@@ -1818,15 +1845,11 @@ router.post('/', (req, res) => {
           deviceKey: req.body?.device_key || req.get('x-device-key') || null,
         });
       }
-      if (preferredMenu || Object.hasOwn(req.body, 'portions_mode') || Object.hasOwn(req.body, 'portions')) {
-        applyMealPortions(mealId, {
-          ...req.body,
-          recipe_id: vRecipeId.value,
-          ingredients: Array.isArray(req.body.ingredients) ? cleanIngredients : undefined,
-        });
-      } else {
-        insertMealIngredients(mealId, cleanIngredients);
-      }
+      initializeMealIngredientsAndPortions(mealId, {
+        ...req.body,
+        recipe_id: vRecipeId.value,
+        ingredients: Array.isArray(req.body.ingredients) ? cleanIngredients : undefined,
+      }, { canonicalMenu: Boolean(preferredMenu) });
 
       return loadMealWithIngredients(mealId);
     });
@@ -1881,8 +1904,12 @@ router.post('/apply-plan', (req, res) => {
         notes: vNotes.value,
         recipe_url: vRecipeUrl.value,
         recipe_id: vRecipeId.value,
-        ingredients: assignment.ingredients || [],
+        ingredients: Array.isArray(assignment.ingredients) ? assignment.ingredients : undefined,
         planning_context_id: planningContextId,
+        ...(Object.hasOwn(assignment, 'portions_mode') ? { portions_mode: assignment.portions_mode } : {}),
+        ...(Object.hasOwn(assignment, 'portions') ? { portions: assignment.portions } : {}),
+        ...(Object.hasOwn(assignment, 'ingredients_manual_override')
+          ? { ingredients_manual_override: assignment.ingredients_manual_override } : {}),
       });
     }
 
@@ -1925,6 +1952,7 @@ router.post('/apply-plan', (req, res) => {
     res.status(201).json({ data: created });
   } catch (err) {
     log.error('POST /apply-plan', err);
+    if (err.status || err.statusCode) return mealDomainError(res, err);
     res.status(500).json({ error: 'Interner Fehler', code: 500 });
   }
 });
@@ -2325,7 +2353,8 @@ router.delete('/ingredients/:ingId', (req, res) => {
 router.post('/:id/to-shopping-list', (req, res) => {
   try {
     const mealId = parseInt(req.params.id, 10);
-    const meal   = db.get().prepare('SELECT id, recipe_id FROM meals WHERE id = ?').get(mealId);
+    const meal = db.get().prepare(`SELECT m.id, m.recipe_id, m.portions, r.yield_portions
+      FROM meals m LEFT JOIN recipes r ON r.id = m.recipe_id WHERE m.id = ?`).get(mealId);
     if (!meal) return res.status(404).json({ error: 'Mahlzeit nicht gefunden', code: 404 });
 
     const { listId } = req.body;
@@ -2345,9 +2374,11 @@ router.post('/:id/to-shopping-list', (req, res) => {
     const existingCount = db.get()
       .prepare('SELECT COUNT(*) AS c FROM meal_ingredients WHERE meal_id = ?').get(mealId).c;
     if (existingCount === 0 && meal.recipe_id) {
-      const recipeIngredients = db.get().prepare(
-        'SELECT name, quantity, category FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id ASC',
-      ).all(meal.recipe_id);
+      const recipeIngredients = meal.yield_portions != null
+        ? recipeIngredientsForPortions(db.get(), meal.recipe_id, Number(meal.portions) || 1)
+        : db.get().prepare(
+          'SELECT name, quantity, category FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id ASC',
+        ).all(meal.recipe_id);
       if (recipeIngredients.length > 0) {
         assertLegacyMealImportAllowed(db.get(), [mealId]);
         const copyIng = db.get().prepare(

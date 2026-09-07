@@ -6,6 +6,8 @@
  * one vocabulary while the compatibility routes continue to exist.
  */
 
+import { parseQuantity } from './ingredient-quantity.js';
+
 function numberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   const number = Number(value);
@@ -25,7 +27,7 @@ const FINALIZED_PARTICIPATION_STATUS = 'participating';
  */
 export function finalizedMealParticipantIds(participants = []) {
   return [...new Set(asArray(participants)
-    .filter((row) => row?.role === 'participant'
+    .filter((row) => (row?.role === 'participant' || row?.roles?.includes?.('participant'))
       && String(row?.status || '') === FINALIZED_PARTICIPATION_STATUS)
     .map((row) => numberOrNull(row?.user_id ?? row?.id))
     .filter((value) => value !== null))];
@@ -83,17 +85,24 @@ export function mealEditorRolePayload({
 }
 
 /** Scale the numeric prefix of an ingredient quantity while preserving units. */
-export function scaleMealIngredientQuantity(quantity, factor) {
+export function scaleMealIngredientQuantity(quantity, factor, { precision = 2, roundUp = false } = {}) {
   if (!quantity || factor === 1) return quantity;
   const multiplier = Number(factor);
   if (!Number.isFinite(multiplier) || multiplier <= 0) return quantity;
 
   const formatNumber = (num, useComma = false) => {
-    const rounded = Math.round(num * 100) / 100;
+    const scale = 10 ** precision;
+    const scaled = num * scale;
+    const rounded = (roundUp ? Math.ceil(scaled - Number.EPSILON * Math.max(1, Math.abs(scaled))) : Math.round(scaled)) / scale;
     if (Number.isInteger(rounded)) return String(rounded);
     const text = String(rounded);
     return useComma ? text.replace('.', ',') : text;
   };
+
+  if (roundUp) {
+    const parsed = parseQuantity(quantity);
+    if (parsed) return `${formatNumber(parsed.amount * multiplier, /\d,\d/.test(String(quantity)))}${parsed.unit ? ` ${parsed.unit}` : ''}`;
+  }
 
   const mixed = String(quantity).match(/^(\d+)\s+(\d+)\/(\d+)(.*)$/);
   if (mixed) {
@@ -229,6 +238,8 @@ function normalizeDecision(raw = {}) {
     selected_menu_item_ids: selectedIds,
     notes: String(first(raw.notes, '')),
     confirmed: Boolean(first(raw.confirmed, raw.is_confirmed, false)),
+    portion_amount: Number(first(raw.portion_amount, raw.portionAmount, 1)) || 1,
+    revision: Number(first(raw.revision, 0)) || 0,
   };
 }
 
@@ -400,6 +411,8 @@ export function mealDecisionPayload({
   notes,
   deviceKey = null,
   notifyOnMenuChange = false,
+  portionAmount = null,
+  expectedRevision = null,
 }) {
   const payload = {
     beneficiary_user_id: numberOrNull(memberId),
@@ -416,5 +429,7 @@ export function mealDecisionPayload({
     payload.selected_recipe_id = numberOrNull(selectedRecipeId);
   }
   if (deviceKey) payload.device_key = String(deviceKey);
+  if (portionAmount != null) payload.portion_amount = Number(portionAmount);
+  if (expectedRevision != null) payload.expected_revision = Number(expectedRevision);
   return payload;
 }

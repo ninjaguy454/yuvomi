@@ -9,6 +9,7 @@ import express from 'express';
 import * as db from '../db.js';
 import { str, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT } from '../middleware/validate.js';
 import { normalizeRecipeMealTypes } from '../../public/utils/recipe-meal-types.js';
+import { SERVING_BASIS_UNITS, roundPortions } from '../../public/utils/meal-portions.js';
 import { validatePipeline } from '../../public/utils/recipe-pipeline.js';
 import { canWriteRecipePipeline, validateRecipePipelineBindings, withRecipePipeline } from '../services/recipe-pipeline.js';
 import { getAdapter } from '../services/recipe-providers/index.js';
@@ -31,6 +32,72 @@ export function _setRecipeUrlImporter(importer) {
 // Content-Type, den ein Drittsystem liefert, direkt im Response-Header.
 const THUMBNAIL_MIME = new Set(['image/webp', 'image/jpeg', 'image/png']);
 function normalizeMime(value) { return String(value || '').split(';')[0].trim().toLowerCase(); }
+
+function positiveDecimal(value, field, { max = 10000 } = {}) {
+  if (!['number', 'string'].includes(typeof value)) throw new Error(`${field} must be a positive number.`);
+  const text = String(value ?? '').trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) throw new Error(`${field} must be a positive number with no more than two decimal places.`);
+  const number = Number(text);
+  if (!Number.isFinite(number) || number <= 0 || number > max) throw new Error(`${field} must be between 0.01 and ${max}.`);
+  return roundPortions(number);
+}
+
+function normalizeServingFields(body = {}, current = null) {
+  const yieldPortions = Object.hasOwn(body, 'yield_portions')
+    ? (body.yield_portions == null || body.yield_portions === '' ? null : positiveDecimal(body.yield_portions, 'Recipe yield'))
+    : (current?.yield_portions ?? null);
+  const touched = Object.hasOwn(body, 'serving_basis')
+    || Object.hasOwn(body, 'serving_basis_amount')
+    || Object.hasOwn(body, 'serving_basis_unit')
+    || Object.hasOwn(body, 'serving_basis_label');
+  if (!touched) return {
+    yield_portions: yieldPortions,
+    serving_basis_amount: current?.serving_basis_amount ?? null,
+    serving_basis_unit: current?.serving_basis_unit ?? null,
+    serving_basis_label: current?.serving_basis_label ?? null,
+  };
+  const cleared = {
+    yield_portions: yieldPortions,
+    serving_basis_amount: null,
+    serving_basis_unit: null,
+    serving_basis_label: null,
+  };
+  const nestedPresent = Object.hasOwn(body, 'serving_basis');
+  if (nestedPresent && body.serving_basis === null) return cleared;
+  if (nestedPresent && (typeof body.serving_basis !== 'object' || Array.isArray(body.serving_basis))) {
+    throw new Error('Serving size must contain an amount and unit, or be null to remove it.');
+  }
+  const patch = {};
+  for (const field of ['amount', 'unit', 'label']) {
+    if (Object.hasOwn(body, `serving_basis_${field}`)) patch[field] = body[`serving_basis_${field}`];
+  }
+  if (nestedPresent) {
+    for (const [field, value] of Object.entries(body.serving_basis)) {
+      if (!['amount', 'unit', 'label'].includes(field)) throw new Error('Serving size accepts only amount, unit, and label.');
+      patch[field] = value;
+    }
+  }
+  // Omitted fields retain their saved value. Only an explicit null clears the
+  // basis; a misspelled or incomplete update must not silently discard it.
+  if (Object.hasOwn(patch, 'amount') && patch.amount === null) return cleared;
+  const rawAmount = Object.hasOwn(patch, 'amount') ? patch.amount : current?.serving_basis_amount;
+  if (!Object.keys(patch).length && rawAmount == null) return cleared;
+  const amount = positiveDecimal(rawAmount, 'Serving amount', { max: 1000000 });
+  const rawUnit = Object.hasOwn(patch, 'unit') ? patch.unit : current?.serving_basis_unit;
+  if (typeof rawUnit !== 'string') throw new Error('Choose a valid serving unit.');
+  const unit = rawUnit.trim();
+  if (!SERVING_BASIS_UNITS.includes(unit)) throw new Error('Choose a valid serving unit.');
+  const rawLabel = Object.hasOwn(patch, 'label') ? patch.label : current?.serving_basis_label;
+  if (rawLabel != null && typeof rawLabel !== 'string') throw new Error('Use a name for the countable item.');
+  const label = String(rawLabel ?? '').trim().slice(0, 80);
+  if (unit === 'count' && !label) throw new Error('Name the countable item, such as cob, slice, or fish stick.');
+  return {
+    yield_portions: yieldPortions,
+    serving_basis_amount: amount,
+    serving_basis_unit: unit,
+    serving_basis_label: unit === 'count' ? label : null,
+  };
+}
 
 // Mirror-Rezepte tragen provider_account_id; native Rezepte haben diese Spalte
 // NULL. `source` liest den tatsaechlichen Provider-Namen (mealie/tandoor/...)
@@ -153,15 +220,21 @@ router.post('/', (req, res) => {
     const vNotes = str(req.body.notes, 'Notizen', { max: MAX_TEXT, required: false });
     const vRecipeUrl = str(req.body.recipe_url, 'Rezept-URL', { max: MAX_TEXT, required: false });
     const mealTypes = normalizeRecipeMealTypes(req.body.meal_types);
+    let serving;
+    try { serving = normalizeServingFields(req.body); }
+    catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
 
     const errors = collectErrors([vTitle, vNotes, vRecipeUrl]);
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
     const recipeId = db.transaction(() => {
       const result = db.get().prepare(`
-        INSERT INTO recipes (title, notes, recipe_url, meal_types, created_by)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(vTitle.value, vNotes.value, vRecipeUrl.value, mealTypes.join(','), req.authUserId || req.session.userId);
+        INSERT INTO recipes (
+          title, notes, recipe_url, meal_types, created_by, yield_portions,
+          serving_basis_amount, serving_basis_unit, serving_basis_label
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(vTitle.value, vNotes.value, vRecipeUrl.value, mealTypes.join(','), req.authUserId || req.session.userId,
+        serving.yield_portions, serving.serving_basis_amount, serving.serving_basis_unit, serving.serving_basis_label);
 
       const rid = Number(result.lastInsertRowid);
       const insertIng = db.get().prepare(`
@@ -263,11 +336,16 @@ router.post('/:id/duplicate', (req, res) => {
       const errors = collectErrors([vTitle]);
       if (errors.length) return { status: 400, error: errors.join(' ') };
       const info = db.get().prepare(`
-        INSERT INTO recipes (title, notes, recipe_url, meal_types, created_by, execution_json, execution_revision, execution_source_hash)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO recipes (
+          title, notes, recipe_url, meal_types, created_by, execution_json,
+          execution_revision, execution_source_hash, yield_portions,
+          serving_basis_amount, serving_basis_unit, serving_basis_label
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(vTitle.value, source.notes, source.recipe_url, source.meal_types.join(','), req.authUserId || req.session?.userId,
         source.pipeline ? JSON.stringify(source.pipeline) : null, source.pipeline ? 1 : 0,
-        source.pipeline ? source.pipeline_source_hash : null);
+        source.pipeline ? source.pipeline_source_hash : null, source.yield_portions ?? null,
+        source.serving_basis_amount ?? null, source.serving_basis_unit ?? null,
+        source.serving_basis_label ?? null);
       const copiedId = Number(info.lastInsertRowid);
       const insertIngredient = db.get().prepare('INSERT INTO recipe_ingredients (recipe_id, name, quantity, category) VALUES (?, ?, ?, ?)');
       for (const ingredient of source.ingredients) {
@@ -288,7 +366,11 @@ router.put('/:id', (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Ungueltige Rezept-ID', code: 400 });
 
-    const existing = db.get().prepare('SELECT id, created_by, provider_account_id, meal_types FROM recipes WHERE id = ?').get(id);
+    const existing = db.get().prepare(`
+      SELECT id, created_by, provider_account_id, meal_types, yield_portions,
+             serving_basis_amount, serving_basis_unit, serving_basis_label
+        FROM recipes WHERE id = ?
+    `).get(id);
     if (!existing) return res.status(404).json({ error: 'Recipe not found', code: 404 });
     // Mirror-Rezepte sind read-only: der Quell-Provider bleibt Quelle der
     // Wahrheit für ihren Inhalt. Der Check steht vor der created_by-Prüfung,
@@ -309,15 +391,21 @@ router.put('/:id', (req, res) => {
     const mealTypes = normalizeRecipeMealTypes(
       req.body.meal_types === undefined ? existing.meal_types : req.body.meal_types
     );
+    let serving;
+    try { serving = normalizeServingFields(req.body, existing); }
+    catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
     const errors = collectErrors([vTitle, vNotes, vRecipeUrl]);
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
     db.transaction(() => {
       db.get().prepare(`
         UPDATE recipes
-        SET title = ?, notes = ?, recipe_url = ?, meal_types = ?
+        SET title = ?, notes = ?, recipe_url = ?, meal_types = ?, yield_portions = ?,
+            serving_basis_amount = ?, serving_basis_unit = ?, serving_basis_label = ?
         WHERE id = ?
-      `).run(vTitle.value, vNotes.value, vRecipeUrl.value, mealTypes.join(','), id);
+      `).run(vTitle.value, vNotes.value, vRecipeUrl.value, mealTypes.join(','),
+        serving.yield_portions, serving.serving_basis_amount, serving.serving_basis_unit,
+        serving.serving_basis_label, id);
 
       db.get().prepare('DELETE FROM recipe_ingredients WHERE recipe_id = ?').run(id);
 

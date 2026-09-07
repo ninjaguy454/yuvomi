@@ -8165,7 +8165,7 @@ test('Meal cards, ingredient scale, participant roles, and automation use the re
   assert.match(mealsPage, /let currentAppliedRecipe = state\.recipes\.find/);
   assert.match(mealsPage, /const rescaleVisibleIngredients = \(nextScale\) =>/);
   assert.match(mealsPage, /const factor = normalizedScale \/ Math\.max\(lastAppliedScale, 0\.1\)/);
-  assert.match(mealsPage, /quantityInput\.value = scaleMealIngredientQuantity\(quantityInput\.value, factor\)/);
+  assert.match(mealsPage, /quantityInput\.value = scaleMealIngredientQuantity\(quantityInput\.value, factor[,)]/);
   assert.match(mealsPage, /data-meal-role-present="\$\{roleState\.present\}"/);
   assert.match(mealsPage, /data-meal-role-status="\$\{esc\(roleState\.status\)\}"/);
   assert.match(mealsPage, /input\.dataset\.mealRoleTouched = 'true'/);

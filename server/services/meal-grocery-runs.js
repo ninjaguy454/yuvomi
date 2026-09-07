@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { aggregateMealIngredients, parseQuantity } from './shopping-import.js';
+import { scaleIngredientQuantity, mealDishPortionSummary } from './meal-dishes.js';
 import { getGrocerySettings } from './meal-grocery-settings.js';
 import { notifyGroceryPublished } from './notification-events.js';
 
@@ -12,11 +13,15 @@ const RUN_STATES = ['draft', 'finalized', 'added_to_shopping', 'purchased', 'rec
 export function assertLegacyMealImportAllowed(database, mealIds) {
   const ids = [...new Set(mealIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
   if (!ids.length) return;
+  const multipleDishes = ids.some((id) => {
+    const summary = mealDishPortionSummary(database, id);
+    return summary.dishes.length !== 1 || summary.dishes.some((dish) => !dish.primary || dish.meal_id !== id);
+  });
   const conflict = database.prepare(`SELECT 1 FROM meal_grocery_item_sources s
     JOIN meal_grocery_items i ON i.id = s.grocery_item_id
     WHERE s.meal_id IN (${ids.map(() => '?').join(',')}) LIMIT 1`).get(...ids);
-  if (conflict) throw serviceError(
-    'Some Meals already belong to a grocery run. Refresh Shopping and continue that run, including finalizing any draft, to keep purchases and Pantry quantities together.',
+  if (conflict || multipleDishes) throw serviceError(
+    'These Meal choices need a grocery run. Open Shopping and create or refresh its Meal grocery draft, then finalize it to keep purchases and Pantry quantities together.',
     409, 'GROCERY_RECONCILIATION_REQUIRED',
   );
 }
@@ -38,6 +43,7 @@ function defaultLogicalKey(listId, from, to) {
 
 function sourceKey(row) {
   if (row.source_kind === 'meal_ingredient') return `meal-ingredient:${row.meal_ingredient_id}`;
+  if (row.menu_item_id) return `meal:${row.meal_id}:menu:${row.menu_item_id}:recipe-ingredient:${row.recipe_ingredient_id}`;
   return `meal:${row.meal_id}:recipe-ingredient:${row.recipe_ingredient_id}`;
 }
 
@@ -83,7 +89,7 @@ function baseDemandKey(logicalKey) {
 }
 
 function loadSourceIngredients(database, from, to) {
-  return database.prepare(`
+  const baseRows = database.prepare(`
     SELECT
       'meal_ingredient' AS source_kind,
       m.id AS meal_id,
@@ -93,6 +99,9 @@ function loadSourceIngredients(database, from, to) {
       m.date AS meal_date,
       m.title AS meal_title,
       r.title AS recipe_title,
+      m.planned_portions AS planned_portions,
+      m.portions AS cook_portions,
+      r.yield_portions AS recipe_yield_portions,
       mi.name,
       mi.quantity,
       mi.category
@@ -119,6 +128,9 @@ function loadSourceIngredients(database, from, to) {
       m.date AS meal_date,
       m.title AS meal_title,
       r.title AS recipe_title,
+      m.planned_portions AS planned_portions,
+      m.portions AS cook_portions,
+      r.yield_portions AS recipe_yield_portions,
       ri.name,
       ri.quantity,
       ri.category
@@ -136,11 +148,60 @@ function loadSourceIngredients(database, from, to) {
       AND NOT EXISTS (SELECT 1 FROM meal_ingredients mi WHERE mi.meal_id = m.id)
 
     ORDER BY meal_date ASC, meal_id ASC, source_kind ASC, meal_ingredient_id ASC, recipe_ingredient_id ASC
-  `).all(from, to, from, to).map((row) => ({
-    ...row,
-    category: String(row.category || 'Sonstiges').trim() || 'Sonstiges',
-    source_key: sourceKey(row),
-  }));
+  `).all(from, to, from, to);
+  const meals = database.prepare(`SELECT m.* FROM meals m WHERE m.date BETWEEN ? AND ?
+    AND m.scope != 'skipped' AND m.selection_status NOT IN ('declined','superseded')
+    AND NOT EXISTS (SELECT 1 FROM planning_context_grocery_settings pcgs
+      WHERE pcgs.planning_context_id = m.planning_context_id AND pcgs.track_groceries = 0)
+    ORDER BY m.date, m.id`).all(from, to);
+  const rows = [];
+  for (const meal of meals) {
+    const dishes = mealDishPortionSummary(database, meal.id).dishes.filter((dish) => dish.meal_id === meal.id);
+    for (const dish of dishes) {
+      const ingredients = dish.primary ? baseRows.filter((row) => row.meal_id === meal.id)
+        : database.prepare(`SELECT 'recipe_ingredient' AS source_kind, ri.id AS recipe_ingredient_id,
+            NULL AS meal_ingredient_id, r.id AS recipe_id, r.title AS recipe_title,
+            r.yield_portions AS recipe_yield_portions, ri.name, ri.quantity, ri.category
+          FROM recipes r JOIN recipe_ingredients ri ON ri.recipe_id = r.id
+          WHERE r.id = ? ORDER BY ri.id`).all(dish.recipe_id);
+      for (const ingredient of ingredients) {
+        const row = { ...ingredient, meal_id: meal.id, meal_date: meal.date, meal_title: meal.title,
+          menu_item_id: dish.primary ? null : dish.menu_item_id,
+          planned_portions: dish.planned_portions, cook_portions: dish.cook_portions };
+        // Existing materialized quantities are already a Meal snapshot. An unset
+        // yield keeps the legacy fallback batch; an explicit yield scales it.
+        if (row.source_kind === 'recipe_ingredient' && row.recipe_yield_portions != null) {
+          row.quantity = scaleIngredientQuantity(row.quantity, dish.cook_portions / Number(row.recipe_yield_portions),
+            { precision: 6, roundUp: true });
+        }
+        rows.push({ ...row, category: String(row.category || 'Sonstiges').trim() || 'Sonstiges', source_key: sourceKey(row) });
+      }
+    }
+  }
+  return rows.sort((left, right) => left.meal_date.localeCompare(right.meal_date)
+    || left.meal_id - right.meal_id || left.source_key.localeCompare(right.source_key));
+}
+
+function sourceFingerprint(sourceRows, groupingMode) {
+  return hash(JSON.stringify({ grouping_mode: groupingMode,
+    sources: sourceRows.map((row) => ({ source_key: row.source_key, meal_id: row.meal_id,
+      meal_date: row.meal_date, meal_title: row.meal_title, recipe_id: row.recipe_id,
+      recipe_title: row.recipe_title, name: row.name, quantity: row.quantity, category: row.category,
+      planned_portions: row.planned_portions, cook_portions: row.cook_portions,
+      recipe_yield_portions: row.recipe_yield_portions })) }));
+}
+
+function assertUnpublishedRunCurrent(database, run) {
+  if (!['draft', 'finalized'].includes(run.status)) return;
+  const current = sourceFingerprint(loadSourceIngredients(database, run.start_date, run.end_date),
+    normalizedGroupingMode(getGrocerySettings(database).grouping_mode));
+  const baseKey = String(run.logical_key).replace(/:revision:\d+$/, '');
+  const newer = database.prepare(`SELECT 1 FROM meal_grocery_runs WHERE id > ?
+    AND (logical_key = ? OR instr(logical_key, ? || ':revision:') = 1) LIMIT 1`)
+    .get(run.id, baseKey, baseKey);
+  if (current !== run.source_fingerprint || newer) throw serviceError(
+    'Meal choices or portions changed. Refresh the grocery draft and review the updated quantities before adding them to Shopping.',
+    409, 'GROCERY_DRAFT_CHANGED');
 }
 
 function aggregateWithSources(rows, groupingMode = 'ingredient') {
@@ -163,13 +224,14 @@ function aggregateWithSources(rows, groupingMode = 'ingredient') {
 
   const result = [];
   for (const sources of sourceGroups.values()) {
+    const preciseQuantity = sources.some((source) => source.recipe_yield_portions != null);
     const aggregate = aggregateMealIngredients(sources.map((source) => ({
       id: source.meal_ingredient_id ?? source.recipe_ingredient_id,
       meal_id: source.meal_id,
       name: source.name,
       quantity: source.quantity,
       category: source.category,
-    })))[0];
+    })), preciseQuantity ? { precision: 6, roundUp: true } : {})[0];
     const parsed = parseQuantity(aggregate.quantity);
     const demandKey = `ingredient:${hash(sources[0].demand_signature).slice(0, 24)}`;
     const group = sources[0].group;
@@ -183,6 +245,7 @@ function aggregateWithSources(rows, groupingMode = 'ingredient') {
       category: aggregate.category,
       quantity: aggregate.quantity,
       planned_quantity: parsed?.amount ?? null,
+      precise_quantity: preciseQuantity,
       unit: parsed?.unit || null,
       group_key: group.key,
       group_label: group.label,
@@ -247,20 +310,7 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
   const groupingMode = normalizedGroupingMode(getGrocerySettings(database).grouping_mode);
   const sourceRows = loadSourceIngredients(database, from, to);
   const aggregated = aggregateWithSources(sourceRows, groupingMode);
-  const fingerprint = hash(JSON.stringify({
-    grouping_mode: groupingMode,
-    sources: sourceRows.map((row) => ({
-      source_key: row.source_key,
-      meal_id: row.meal_id,
-      meal_date: row.meal_date,
-      meal_title: row.meal_title,
-      recipe_id: row.recipe_id,
-      recipe_title: row.recipe_title,
-      name: row.name,
-      quantity: row.quantity,
-      category: row.category,
-    })),
-  }));
+  const fingerprint = sourceFingerprint(sourceRows, groupingMode);
 
   const result = database.transaction(() => {
     const family = database.prepare(`
@@ -284,7 +334,9 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
         : baseKey;
     if (run?.status !== 'draft') run = null;
     const existed = Boolean(run);
-    const historical = family.filter((row) => row.id !== run?.id && row.status !== 'draft');
+    const historical = family.filter((row) => row.id !== run?.id && database.prepare(`
+      SELECT 1 FROM meal_grocery_items WHERE grocery_run_id = ? AND published_at IS NOT NULL LIMIT 1
+    `).get(row.id));
     let prepared = aggregated;
     if (historical.length) {
       const placeholders = historical.map(() => '?').join(',');
@@ -315,13 +367,19 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
           return [];
         }
         const previousQuantity = previousByDemand.get(demandKey) || 0;
-        const remaining = Number(item.planned_quantity) - previousQuantity;
+        let remaining = Number(item.planned_quantity) - previousQuantity;
         previousByDemand.set(demandKey, Math.max(0, -remaining));
         if (remaining <= 0) return [];
+        if (item.precise_quantity) {
+          if (remaining <= Number.EPSILON * Math.max(1, Math.abs(Number(item.planned_quantity)), Math.abs(previousQuantity)) * 4) return [];
+          const scaled = remaining * 1e6;
+          remaining = Math.ceil(scaled - Number.EPSILON * Math.max(1, Math.abs(scaled)) * 4) / 1e6;
+          if (remaining <= 0) return [];
+        }
         return [{
           ...item,
           planned_quantity: remaining,
-          quantity: `${Number(remaining.toFixed(3))}${item.unit ? ` ${item.unit}` : ''}`,
+          quantity: `${item.precise_quantity ? remaining : Number(remaining.toFixed(3))}${item.unit ? ` ${item.unit}` : ''}`,
         }];
       });
     }
@@ -354,8 +412,9 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
       INSERT INTO meal_grocery_item_sources (
         grocery_item_id, source_key, source_kind, meal_id, meal_ingredient_id,
         recipe_id, recipe_ingredient_id, meal_date_snapshot, meal_title_snapshot,
-        recipe_title_snapshot, ingredient_name_snapshot, quantity_snapshot, category_snapshot
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        recipe_title_snapshot, ingredient_name_snapshot, quantity_snapshot, category_snapshot,
+        planned_portions_snapshot, cook_portions_snapshot
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const item of prepared) {
       const itemInfo = insertItem.run(
@@ -367,7 +426,7 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
           itemInfo.lastInsertRowid, source.source_key, source.source_kind, source.meal_id,
           source.meal_ingredient_id, source.recipe_id, source.recipe_ingredient_id,
           source.meal_date, source.meal_title, source.recipe_title, source.name,
-          source.quantity, source.category,
+          source.quantity, source.category, source.planned_portions, source.cook_portions,
         );
       }
     }
@@ -381,6 +440,7 @@ function finalizeGroceryRun(database, runId) {
   const run = loadGroceryRun(database, runId);
   if (!run) throw serviceError('Grocery run not found.', 404, 'GROCERY_RUN_NOT_FOUND');
   if (run.status !== 'draft') return run;
+  assertUnpublishedRunCurrent(database, run);
   database.prepare(`
     UPDATE meal_grocery_runs
     SET status = 'finalized', finalized_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
@@ -399,6 +459,7 @@ function publishGroceryRun(database, runId) {
   if (!initial.shopping_list_id) {
     throw serviceError('The grocery run no longer has a shopping list.', 409, 'SHOPPING_LIST_NOT_FOUND');
   }
+  assertUnpublishedRunCurrent(database, initial);
 
   const addedIds = database.transaction(() => {
     const categories = database.prepare('SELECT name FROM shopping_categories').all().map((row) => row.name);

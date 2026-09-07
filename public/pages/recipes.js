@@ -22,6 +22,12 @@ import { renderSkeletonList } from '/utils/skeleton.js';
 import { mountEmptyState, mountLoadError } from '/utils/empty-state.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { openRecipePipeline } from '/components/recipe-pipeline-editor.js';
+import { SERVING_BASIS_UNITS, formatServingAmount, recipeServingBasis } from '/utils/meal-portions.js';
+
+const SERVING_UNIT_OPTIONS = [
+  ['count', 'Items'], ['oz', 'oz'], ['lb', 'lb'], ['g', 'g'], ['kg', 'kg'],
+  ['fl_oz', 'fl oz'], ['cup', 'cup'], ['tbsp', 'tbsp'], ['tsp', 'tsp'], ['ml', 'mL'], ['l', 'L'],
+];
 
 let _container = null;
 /** Handle des geteilten Suchfelds (setValue/clear), gesetzt in render(). */
@@ -533,7 +539,7 @@ function renderRecipeList() {
     const isMirrored = recipe.source !== 'native';
     const ingredients = recipe.ingredients ?? [];
     const detailId = `recipe-detail-${recipe.id}`;
-    const hasDetail = Boolean(ingredients.length || recipe.notes || recipe.recipe_url || recipe.pipeline);
+    const hasDetail = Boolean(ingredients.length || recipe.notes || recipe.recipe_url || recipe.pipeline || recipe.yield_portions || recipeServingBasis(recipe));
 
     const li = document.createElement('li');
     li.className = 'recipe-row-item';
@@ -746,6 +752,16 @@ function renderRecipeList() {
         detail.appendChild(ul);
       }
 
+      const servingBasis = recipeServingBasis(recipe);
+      if (servingBasis || recipe.yield_portions != null) {
+        const serving = document.createElement('p');
+        serving.className = 'recipe-detail__serving';
+        const yieldText = recipe.yield_portions != null ? `Ingredients make ${Number(recipe.yield_portions)} portion${Number(recipe.yield_portions) === 1 ? '' : 's'}.` : '';
+        const basisText = servingBasis ? ` One portion is ${formatServingAmount(servingBasis)}.` : '';
+        serving.textContent = `${yieldText}${basisText}`;
+        detail.appendChild(serving);
+      }
+
       if (recipe.notes) {
         const notes = document.createElement('p');
         notes.className = 'recipe-detail__notes';
@@ -851,6 +867,19 @@ function openRecipeModal(mode, recipe = null) {
           `).join('')}
         </div>
       </div>
+      <fieldset class="recipe-serving-fields">
+        <legend>Portions and serving size</legend>
+        <label class="form-label" for="recipe-yield-portions">These ingredients make</label>
+        <div class="recipe-serving-row"><input id="recipe-yield-portions" class="form-input" type="number" min="0.01" max="10000" step="any" inputmode="decimal" placeholder="Not specified"><span>portions (optional)</span></div>
+        <p class="form-hint">Set this to scale ingredients for the amount being cooked. Leave it blank to keep existing quantity behavior.</p>
+        <label class="form-label" for="recipe-serving-amount">One portion is <span class="form-hint">(optional)</span></label>
+        <div class="recipe-serving-basis-row">
+          <input id="recipe-serving-amount" class="form-input" type="number" min="0.01" max="1000000" step="any" inputmode="decimal" placeholder="4">
+          <select id="recipe-serving-unit" class="form-input" aria-label="Serving unit">${SERVING_UNIT_OPTIONS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select>
+          <input id="recipe-serving-label" class="form-input" type="text" maxlength="80" placeholder="fish sticks" aria-label="Countable item name">
+        </div>
+        <p class="form-hint">For countable food, use a natural name such as cob, slice, taco, or fish stick.</p>
+      </fieldset>
       <div class="form-group">
         <label class="form-label">${t('recipes.ingredientsLabel')}</label>
         <div class="recipe-ingredient-list" id="recipe-ingredient-list"></div>
@@ -875,6 +904,17 @@ function openRecipeModal(mode, recipe = null) {
       panel.querySelector('#recipe-title').value = (isEdit || isImport) ? recipe.title : '';
       panel.querySelector('#recipe-notes').value = (isEdit || isImport) && recipe.notes ? recipe.notes : '';
       panel.querySelector('#recipe-url').value = (isEdit || isImport) && recipe.recipe_url ? recipe.recipe_url : '';
+      panel.querySelector('#recipe-yield-portions').value = (isEdit || isImport) ? (recipe.yield_portions ?? '') : '';
+      panel.querySelector('#recipe-serving-amount').value = (isEdit || isImport) && recipe.serving_basis_amount != null ? recipe.serving_basis_amount : '';
+      panel.querySelector('#recipe-serving-unit').value = (isEdit || isImport) && SERVING_BASIS_UNITS.includes(recipe.serving_basis_unit) ? recipe.serving_basis_unit : 'count';
+      panel.querySelector('#recipe-serving-label').value = (isEdit || isImport) ? (recipe.serving_basis_label || '') : '';
+      const syncServingLabel = () => {
+        const countable = panel.querySelector('#recipe-serving-unit').value === 'count';
+        panel.querySelector('#recipe-serving-label').hidden = !countable;
+        panel.querySelector('#recipe-serving-label').disabled = !countable;
+      };
+      panel.querySelector('#recipe-serving-unit').addEventListener('change', syncServingLabel);
+      syncServingLabel();
       const selectedMealTypes = normalizeRecipeMealTypes((isEdit || isImport) ? recipe.meal_types : RECIPE_MEAL_TYPE_KEYS);
       panel.querySelectorAll('#recipe-meal-types input[type="checkbox"]').forEach((input) => {
         input.checked = selectedMealTypes.includes(input.value);
@@ -981,12 +1021,31 @@ async function saveRecipe(panel, mode, recipe) {
   const notes = panel.querySelector('#recipe-notes')?.value.trim() || null;
   const recipe_url = panel.querySelector('#recipe-url')?.value.trim() || null;
   const meal_types = [...panel.querySelectorAll('#recipe-meal-types input[type="checkbox"]:checked')].map((input) => input.value);
+  const yield_portions = panel.querySelector('#recipe-yield-portions')?.value.trim() || '';
+  const servingAmount = panel.querySelector('#recipe-serving-amount')?.value.trim() || '';
+  const servingUnit = panel.querySelector('#recipe-serving-unit')?.value || 'count';
+  const servingLabel = panel.querySelector('#recipe-serving-label')?.value.trim() || '';
 
   if (!title) {
     // Fehler am Feld statt als ortloser Toast (geteiltes Muster, Critique P1).
     reportFieldError(panel.querySelector('#recipe-title'), t('common.nameRequired'));
     return;
   }
+  if (yield_portions && (!/^\d+(?:\.\d{1,2})?$/.test(yield_portions) || Number(yield_portions) <= 0 || Number(yield_portions) > 10000)) {
+    reportFieldError(panel.querySelector('#recipe-yield-portions'), 'Enter how many portions the listed ingredients make.');
+    return;
+  }
+  if (servingAmount && (!/^\d+(?:\.\d{1,2})?$/.test(servingAmount) || Number(servingAmount) <= 0 || Number(servingAmount) > 1000000)) {
+    reportFieldError(panel.querySelector('#recipe-serving-amount'), 'Enter a positive amount with no more than two decimal places.');
+    return;
+  }
+  if (servingAmount && servingUnit === 'count' && !servingLabel) {
+    reportFieldError(panel.querySelector('#recipe-serving-label'), 'Name the countable item, such as cob, slice, or fish stick.');
+    return;
+  }
+  const serving_basis = servingAmount ? {
+    amount: Number(servingAmount), unit: servingUnit, label: servingLabel || null,
+  } : null;
 
   const ingredients = [];
   panel.querySelectorAll('.ingredient-row').forEach((row) => {
@@ -1000,10 +1059,10 @@ async function saveRecipe(panel, mode, recipe) {
 
   try {
     if (mode !== 'edit') {
-      const res = await api.post('/recipes', { title, notes, recipe_url, meal_types, ingredients });
+      const res = await api.post('/recipes', { title, notes, recipe_url, meal_types, ingredients, yield_portions: yield_portions ? Number(yield_portions) : null, serving_basis });
       state.recipes.push(res.data);
     } else {
-      const res = await api.put(`/recipes/${recipe.id}`, { title, notes, recipe_url, meal_types, ingredients });
+      const res = await api.put(`/recipes/${recipe.id}`, { title, notes, recipe_url, meal_types, ingredients, yield_portions: yield_portions ? Number(yield_portions) : null, serving_basis });
       const idx = state.recipes.findIndex((r) => r.id === recipe.id);
       if (idx >= 0) state.recipes[idx] = res.data;
     }

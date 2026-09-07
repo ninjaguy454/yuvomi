@@ -8723,6 +8723,46 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10028,
+  description: 'Per-person Meal portions and reusable Recipe serving basis',
+  up: `
+    ALTER TABLE meal_person_decisions ADD COLUMN portion_amount REAL NOT NULL DEFAULT 1
+      CHECK(portion_amount > 0 AND portion_amount <= 1000);
+    ALTER TABLE meal_person_decisions ADD COLUMN revision INTEGER NOT NULL DEFAULT 1
+      CHECK(revision > 0);
+    ALTER TABLE meals ADD COLUMN planned_portions REAL NOT NULL DEFAULT 0
+      CHECK(planned_portions >= 0);
+    CREATE TEMP TABLE migration_10028_meal_updated_at AS
+      SELECT id, updated_at FROM meals;
+    UPDATE meals SET planned_portions = (
+      SELECT COUNT(*) FROM meal_participants mp
+       WHERE mp.meal_id = meals.id AND mp.role = 'participant' AND mp.status = 'participating'
+    );
+    DROP TRIGGER trg_meals_updated_at;
+    UPDATE meals
+       SET updated_at = (SELECT prior.updated_at
+                           FROM migration_10028_meal_updated_at prior
+                          WHERE prior.id = meals.id);
+    CREATE TRIGGER trg_meals_updated_at
+      AFTER UPDATE ON meals FOR EACH ROW
+      BEGIN UPDATE meals SET updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = OLD.id; END;
+    DROP TABLE migration_10028_meal_updated_at;
+
+    ALTER TABLE recipes ADD COLUMN yield_portions REAL
+      CHECK(yield_portions IS NULL OR (yield_portions > 0 AND yield_portions <= 10000));
+    ALTER TABLE recipes ADD COLUMN serving_basis_amount REAL
+      CHECK(serving_basis_amount IS NULL OR (serving_basis_amount > 0 AND serving_basis_amount <= 1000000));
+    ALTER TABLE recipes ADD COLUMN serving_basis_unit TEXT
+      CHECK(serving_basis_unit IS NULL OR serving_basis_unit IN
+        ('count','oz','lb','g','kg','fl_oz','cup','tbsp','tsp','ml','l'));
+    ALTER TABLE recipes ADD COLUMN serving_basis_label TEXT;
+
+    ALTER TABLE meal_grocery_item_sources ADD COLUMN planned_portions_snapshot REAL;
+    ALTER TABLE meal_grocery_item_sources ADD COLUMN cook_portions_snapshot INTEGER;
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

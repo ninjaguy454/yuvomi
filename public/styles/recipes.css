@@ -356,6 +356,47 @@
   white-space: pre-wrap;
 }
 
+.recipe-detail__serving {
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.recipe-serving-fields {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-2);
+}
+
+.recipe-serving-fields legend {
+  padding: 0 var(--space-2);
+  font-weight: 650;
+}
+
+.recipe-serving-row,
+.recipe-serving-basis-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 9rem) auto;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.recipe-serving-basis-row {
+  grid-template-columns: minmax(5rem, 7rem) minmax(7rem, 9rem) minmax(9rem, 1fr);
+}
+
+@media (max-width: 32rem) {
+  .recipe-serving-basis-row {
+    grid-template-columns: minmax(4.5rem, 0.7fr) minmax(7rem, 1fr);
+  }
+
+  .recipe-serving-basis-row #recipe-serving-label {
+    grid-column: 1 / -1;
+  }
+}
+
 /* Die beiden Kreislauf-Ausgänge, beschriftet. Umbruchfähig, weil bei 320px drei
  * beschriftete Buttons nicht in eine Zeile passen - und ein Label, das umbricht,
  * ist besser als ein Glyph, den man erraten muss. */

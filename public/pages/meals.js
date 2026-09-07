@@ -21,6 +21,16 @@ import { mealPayloadFromRecipe } from '/utils/recipe-to-meal.js';
 import { zonedWeekday } from '/utils/timezone.js';
 import { isWallModeEnabled } from '/utils/wall-mode.js';
 import {
+  cookPortionTarget,
+  formatPortions,
+  formatServingAmount,
+  projectRequestedPortions,
+  recipeServingBasis,
+  servingAmountForPortions,
+  stepPortionAmount,
+  validPortionAmount,
+} from '/utils/meal-portions.js';
+import {
   decisionForMember,
   finalizedMealParticipantIds,
   mealCourseLimits,
@@ -1014,6 +1024,7 @@ function renderChoiceForm(occurrence, decision, canAct) {
       && ['pending', 'accepted'].includes(obligation.status)
   ));
   const participation = decision?.participation || 'participating';
+  const portionAmount = Number(decision?.portion_amount) || 1;
   const memberIsCook = [...occurrence.cooks, ...occurrence.supervisors]
     .some((person) => Number(person.user_id ?? person.id) === Number(state.selectedMemberId));
   return `<form class="meal-choice-form" data-meal-decision data-meal-id="${mealId}" data-occurrence-key="${esc(occurrence.key)}" data-choice-surface="${personalPolicy ? 'personal' : chooserMode ? 'chooser' : 'backup'}" data-max-side-choices="${courseLimits.max_side_choices}">
@@ -1025,6 +1036,7 @@ function renderChoiceForm(occurrence, decision, canAct) {
       <label class="meal-inline-choice meal-notify-menu-change" data-notify-menu-change ${participation === 'not_participating' ? '' : 'hidden'}><input type="checkbox" name="notify_on_menu_change" ${decision?.notify_on_menu_change ? 'checked' : ''}><span>${mealText('meals.notifyMenuChange', 'Notify me if this meal changes')}</span></label>
       ${chooserMode ? `<small class="form-hint">${mealText('meals.notJoiningPassesChooser', 'Opting out passes chooser responsibility to the next backup.')}</small>` : ''}
     </fieldset>` : `<input type="hidden" name="participation" value="${esc(participation)}">`}
+    ${renderMealPortionControl(occurrence, decision, participation, portionAmount)}
     ${chooserMode ? `<fieldset class="meal-choice-form__section" data-meal-food-section ${participation === 'not_participating' ? 'disabled' : ''}>
       <legend>${mealText('meals.householdMeal', 'Household Meal')}</legend>
       <p class="form-hint">${personalPolicy ? "Choose what you're going to eat." : "Choose what we're going to eat."}</p>
@@ -1129,6 +1141,7 @@ function renderChoiceOccurrenceDetails(occurrence, model, { includeActingNotice 
     <dl class="meal-role-summary">
       <div><dt>${mealText('meals.chooserResponsibility', "Who's choosing?")}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
       <div><dt>${mealText('meals.participationTitle', 'Participation')}</dt><dd>${esc(participationLabel(decision?.participation))}</dd></div>
+      <div><dt>Portions</dt><dd>${esc(formatPortions(Number(occurrence.planned_portions) || 0))} requested${(occurrence.dish_portions || []).map((dish) => `<small>${esc(dish.title)} · cook ${esc(formatPortions(dish.cook_portions))}</small>`).join('')}</dd></div>
       ${decision?.choice_kind && decision.choice_kind !== 'household' ? `<div><dt>Your meal</dt><dd>${chosen.length ? chosen.map((item) => `<span class="meal-selected-food meal-selected-food--${esc(item.kind)}">${esc(item.label)}</span>`).join('') : `<span class="meal-detail-value--muted">${esc(title || mealText('meals.noMealSelected', 'No meal selected yet'))}</span>`}</dd></div>` : ''}
       <div><dt>${mealText('meals.cookingResponsibility', 'Cooking and supervision')}</dt><dd>${renderCookingSummary(occurrence)}</dd></div>
     </dl>
@@ -3304,6 +3317,13 @@ async function submitMealDecisionForm(form) {
   if (!occurrence || !canActForSelectedMember()) return false;
   const data = new FormData(form);
   const participating = data.get('participation') !== 'not_participating';
+  const portionInput = form.querySelector('[name="portion_amount"]');
+  const portionAmount = portionInput ? portionInput.value : (decisionForMember(occurrence, state.selectedMemberId)?.portion_amount ?? 1);
+  if (participating && !validPortionAmount(portionAmount)) {
+    reportFieldError(portionInput, 'Enter a positive amount with no more than two decimal places.');
+    return false;
+  }
+  const currentDecision = decisionForMember(occurrence, state.selectedMemberId);
   const entree = data.get('meal_choice');
   const backup = entree === 'backup';
   const backupMealTitle = String(data.get('backup_meal_title') || '').trim();
@@ -3337,6 +3357,8 @@ async function submitMealDecisionForm(form) {
     notes: data.get('notes'),
     deviceKey: stableMealDeviceKey(),
     notifyOnMenuChange: !participating && data.get('notify_on_menu_change') === 'on',
+    portionAmount: participating ? Number(portionAmount) : null,
+    expectedRevision: currentDecision?.revision ?? 0,
   });
   payload.confirmed = true;
   return persistMealDecision(occurrence, payload, form.querySelector('[type="submit"]'));
@@ -3355,6 +3377,8 @@ function handleMealDecisionControlChange(event) {
     });
     const notifyRow = decisionForm.querySelector('[data-notify-menu-change]');
     if (notifyRow) notifyRow.hidden = participating;
+    const portionSection = decisionForm.querySelector('[data-portion-section]');
+    if (portionSection) portionSection.disabled = !participating;
     const backupFields = decisionForm.querySelector('[data-backup-choice-fields]');
     if (backupFields) backupFields.hidden = !participating || !backup;
     decisionForm.querySelectorAll('[data-household-menu-fields] input').forEach((field) => {
@@ -3366,14 +3390,22 @@ function handleMealDecisionControlChange(event) {
       .forEach((field) => { field.disabled = !participating || !personal; });
     decisionForm.querySelectorAll('[data-backup-choice-fields] input, [data-backup-choice-fields] select')
       .forEach((field) => { field.disabled = !participating || !backup; });
+    updateMealPortionPreview(decisionForm);
     return true;
   }
-  if (!event.target.matches('[data-menu-side]') || !event.target.checked) return false;
+  if (!event.target.matches('[data-menu-side]') || !event.target.checked) {
+    if (decisionForm) updateMealPortionPreview(decisionForm);
+    return false;
+  }
   const form = event.target.closest('[data-meal-decision]');
   const checked = [...form.querySelectorAll('[data-menu-side]:checked')];
   const sideLimit = Math.min(9, Math.max(0, Number(form.dataset.maxSideChoices ?? 3)));
-  if (checked.length <= sideLimit) return true;
+  if (checked.length <= sideLimit) {
+    updateMealPortionPreview(form);
+    return true;
+  }
   event.target.checked = false;
+  updateMealPortionPreview(form);
   window.yuvomi?.showToast(`${mealText('meals.maxSides', 'Maximum sides')}: ${sideLimit}`, 'warning');
   return true;
 }
@@ -3386,9 +3418,14 @@ function wireOccurrenceDialog(panel, key) {
     if (await submitMealDecisionForm(form)) refreshOccurrenceDialog(panel, key, '[type="submit"]');
   });
   panel.addEventListener('change', handleMealDecisionControlChange);
+  panel.addEventListener('keydown', handlePortionKey);
+  panel.addEventListener('input', (event) => {
+    if (event.target.matches('[name="portion_amount"], [name="selected_meal_title"], [name="backup_meal_title"]')) updateMealPortionPreview(event.target.closest('form'));
+  });
   panel.addEventListener('click', async (event) => {
     const button = event.target.closest('[data-action]');
     if (!button) return;
+    if (handlePortionStep(button)) return;
     const action = button.dataset.action;
     if (action === 'toggle-status-option') {
       const optionKey = button.dataset.optionKey;
@@ -3481,6 +3518,7 @@ function wireGrid(grid) {
   grid.addEventListener('click', async (e) => {
     const btn = e.target.closest('[data-action]');
     if (!btn) return;
+    if (handlePortionStep(btn)) return;
 
     const action = btn.dataset.action;
 
@@ -3518,6 +3556,7 @@ function wireGrid(grid) {
       const occurrence = occurrenceByKey(btn.dataset.occurrenceKey);
       if (!occurrence || !canActForSelectedMember()) return;
       const notes = btn.closest('form')?.querySelector('[name="notes"]')?.value || '';
+      const currentDecision = decisionForMember(occurrence, state.selectedMemberId);
       const payload = mealDecisionPayload({
         occurrence,
         memberId: state.selectedMemberId,
@@ -3526,6 +3565,7 @@ function wireGrid(grid) {
         menuItemIds: [],
         notes,
         deviceKey: stableMealDeviceKey(),
+        expectedRevision: currentDecision?.revision ?? 0,
       });
       payload.confirmed = true;
       await persistMealDecision(occurrence, payload, btn);
@@ -3614,6 +3654,10 @@ function wireGrid(grid) {
   });
 
   grid.addEventListener('change', handleMealDecisionControlChange);
+  grid.addEventListener('keydown', handlePortionKey);
+  grid.addEventListener('input', (event) => {
+    if (event.target.matches('[name="portion_amount"], [name="selected_meal_title"], [name="backup_meal_title"]')) updateMealPortionPreview(event.target.closest('form'));
+  });
 
   grid.addEventListener('dragover', (e) => {
     if (!_dragRecipeId) return;
@@ -3730,6 +3774,121 @@ function mealContextDateBoundary(value, exclusiveEnd = false) {
   const iso = instant.toISOString();
   const dateKey = iso.slice(0, 10);
   return exclusiveEnd && iso.slice(11) === '00:00:00.000Z' ? addLocalDays(dateKey, -1) : dateKey;
+}
+
+function servingRecipesForDecision(occurrence, decision, form = null) {
+  const recipeIds = [];
+  if (form) {
+    const choice = form.querySelector('[name="meal_choice"]:checked')?.value
+      || form.querySelector('[name="meal_choice"][type="hidden"]')?.value;
+    if (['backup', 'personal'].includes(choice)) {
+      const kind = choice === 'personal' ? form.querySelector('[name="personal_choice_kind"]')?.value : 'backup';
+      if (['restaurant', 'takeout'].includes(kind)) return [];
+      const title = form.querySelector(`[name="${choice === 'backup' ? 'backup' : 'selected'}_meal_title"]`)?.value.trim();
+      const recipe = state.recipes.find((entry) => entry.title.localeCompare(title || '', undefined, { sensitivity: 'base' }) === 0);
+      return recipe ? [recipe] : [];
+    }
+    if (!form.querySelector('[name="menu_entree"], [name="menu_side"], [name="meal_choice"]:not([value="household"]):not([value="backup"]):not([value="personal"])')) {
+      const saved = decisionForMember(occurrence, state.selectedMemberId);
+      return servingRecipesForDecision(occurrence, choice === 'household'
+        ? { ...saved, choice_kind: 'household', selected_recipe_id: null }
+        : saved);
+    }
+    const selectedIds = new Set([...form.querySelectorAll('[name="menu_entree"]:checked, [name="menu_side"]:checked, [name="meal_choice"]:checked')]
+      .map((input) => Number(input.value)).filter(Number.isFinite));
+    const items = [...publishedMenuItems(occurrence), ...editableMenuItems(occurrence)];
+    for (const item of items) if (selectedIds.has(Number(item.id)) && item.recipe_id) recipeIds.push(Number(item.recipe_id));
+    return [...new Set(recipeIds)].map((id) => state.recipes.find((recipe) => Number(recipe.id) === id)).filter(Boolean);
+  }
+  if (['backup', 'personal'].includes(decision?.choice_kind) && decision?.selected_recipe_id) {
+    recipeIds.push(Number(decision.selected_recipe_id));
+  } else {
+    const chosen = selectedMenuItems(occurrence, decision);
+    for (const item of (chosen.length ? chosen : publishedMenuItems(occurrence))) {
+      if (item.recipe_id) recipeIds.push(Number(item.recipe_id));
+    }
+    const mealRecipeId = Number(occurrence.meal?.recipe_id || occurrence.recipe_id);
+    if (!recipeIds.length && mealRecipeId) recipeIds.push(mealRecipeId);
+  }
+  return [...new Set(recipeIds)].map((id) => state.recipes.find((recipe) => Number(recipe.id) === id)).filter(Boolean);
+}
+
+function renderServingBasisRows(recipes, portionAmount) {
+  const bases = recipes
+    .map((recipe) => ({ recipe, basis: recipeServingBasis(recipe) }))
+    .filter((entry) => entry.basis);
+  return bases.map(({ recipe, basis }) => {
+    const derived = servingAmountForPortions(recipe, portionAmount);
+    return `<div class="meal-portion-basis" data-serving-amount="${basis.amount}" data-serving-unit="${esc(basis.unit)}" data-serving-label="${esc(basis.label)}">
+      <span>${bases.length > 1 ? `${esc(recipe.title)} · ` : ''}1 portion = ${esc(formatServingAmount(basis))}</span>
+      <strong data-portion-derived>${derived ? esc(formatServingAmount(derived)) : 'Enter a valid amount'}</strong>
+    </div>`;
+  }).join('') || '<p class="form-hint">Choose your portion amount for this Meal.</p>';
+}
+
+function renderMealPortionControl(occurrence, decision, participation, portionAmount) {
+  const planned = Number(occurrence.planned_portions) || 0;
+  const wasParticipating = finalizedMealParticipantIds(occurrence.participants || [])
+    .some((id) => Number(id) === Number(state.selectedMemberId));
+  const projected = projectRequestedPortions({ planned, previous: portionAmount, wasParticipating,
+    participating: participation === 'participating', amount: portionAmount });
+  return `<fieldset class="meal-choice-form__section meal-portion-section" data-portion-section ${participation === 'not_participating' ? 'disabled' : ''}>
+    <legend>How much would you like?</legend>
+    <div data-portion-bases>${renderServingBasisRows(servingRecipesForDecision(occurrence, decision), portionAmount)}</div>
+    <div class="meal-portion-input-row">
+      <label class="sr-only" for="portion-${Number(occurrence.meal?.id || occurrence.id)}-${Number(state.selectedMemberId)}">Portion amount</label>
+      <input class="form-input" id="portion-${Number(occurrence.meal?.id || occurrence.id)}-${Number(state.selectedMemberId)}" name="portion_amount" type="text" role="spinbutton" inputmode="decimal" autocomplete="off" aria-valuemin="0.01" aria-valuemax="1000" aria-valuenow="${portionAmount}" value="${portionAmount.toFixed(2)}" aria-describedby="portion-summary-${Number(occurrence.meal?.id || occurrence.id)}-${Number(state.selectedMemberId)}">
+      <div class="meal-portion-stepper" aria-label="Adjust portions">
+        <button class="btn btn--secondary" type="button" data-action="step-portion" data-direction="up" aria-label="Increase portions"><i data-lucide="chevron-up" class="icon-sm" aria-hidden="true"></i></button>
+        <button class="btn btn--secondary" type="button" data-action="step-portion" data-direction="down" aria-label="Decrease portions"><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></button>
+      </div>
+    </div>
+    <p class="meal-portion-summary" aria-live="polite" id="portion-summary-${Number(occurrence.meal?.id || occurrence.id)}-${Number(state.selectedMemberId)}" data-portion-summary data-planned="${planned}" data-previous="${portionAmount}" data-was-participating="${wasParticipating}">${esc(formatPortions(projected))} requested in total</p>
+  </fieldset>`;
+}
+
+function updateMealPortionPreview(form) {
+  const input = form?.querySelector('[name="portion_amount"]');
+  const summary = form?.querySelector('[data-portion-summary]');
+  if (!input || !summary) return;
+  const valid = validPortionAmount(input.value);
+  input.setAttribute('aria-invalid', valid ? 'false' : 'true');
+  if (valid) input.setAttribute('aria-valuenow', String(Number(input.value)));
+  else input.removeAttribute('aria-valuenow');
+  const occurrence = occurrenceByKey(form.dataset.occurrenceKey);
+  const basisContainer = form.querySelector('[data-portion-bases]');
+  if (occurrence && basisContainer) {
+    basisContainer.replaceChildren();
+    basisContainer.insertAdjacentHTML('beforeend', renderServingBasisRows(servingRecipesForDecision(occurrence, null, form), input.value));
+  }
+  if (!valid) {
+    summary.textContent = 'Enter a positive amount with no more than two decimal places.';
+    return;
+  }
+  const participating = form.querySelector('[name="participation"]:checked')?.value !== 'not_participating';
+  const projected = projectRequestedPortions({ planned: Number(summary.dataset.planned) || 0,
+    previous: Number(summary.dataset.previous) || 1, wasParticipating: summary.dataset.wasParticipating === 'true',
+    participating, amount: Number(input.value) });
+  summary.textContent = `${formatPortions(projected)} requested in total`;
+}
+
+function handlePortionKey(event) {
+  if (!event.target.matches('[name="portion_amount"]') || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+  event.preventDefault();
+  const input = event.target;
+  input.value = stepPortionAmount(input.value, event.key === 'ArrowDown' ? -1 : 1).toFixed(2);
+  updateMealPortionPreview(input.closest('form'));
+}
+
+function handlePortionStep(button) {
+  if (button?.dataset.action !== 'step-portion') return false;
+  const form = button.closest('[data-meal-decision]');
+  const input = form?.querySelector('[name="portion_amount"]');
+  if (!input || input.matches(':disabled')) return true;
+  input.value = stepPortionAmount(input.value, button.dataset.direction === 'down' ? -1 : 1).toFixed(2);
+  updateMealPortionPreview(form);
+  input.focus();
+  return true;
 }
 
 function mealManagerMutationContext({ managerContextId = state.mealPlanManagerContextId, contexts = state.mealPlanContexts, weekStart = state.currentWeek } = {}) {
@@ -4086,17 +4245,18 @@ function openMealModal(opts) {
 
       const renderAppliedRecipeIngredients = () => {
         if (!currentAppliedRecipe) return;
-        const factor = Math.max(Number(recipeScaleInput?.value || 1), 0.1);
+        const portions = Math.max(Number(recipeScaleInput?.value || 1), 0.1);
+        const factor = portions / (Number(currentAppliedRecipe.yield_portions) || 1);
         ingList.replaceChildren();
         ingList.insertAdjacentHTML('beforeend', (currentAppliedRecipe.ingredients || [])
           .map((ing) => ingredientRowHTML({
             name: ing.name,
-            quantity: scaleMealIngredientQuantity(ing.quantity ?? '', factor),
+            quantity: scaleMealIngredientQuantity(ing.quantity ?? '', factor, currentAppliedRecipe.yield_portions != null ? { precision: 6, roundUp: true } : {}),
             category: ing.category ?? DEFAULT_CATEGORY_NAME,
             categories: mealCategories(),
           }))
           .join(''));
-        lastAppliedScale = factor;
+        lastAppliedScale = portions;
         if (window.lucide) lucide.createIcons({ el: ingList });
       };
 
@@ -4116,7 +4276,7 @@ function openMealModal(opts) {
         for (const row of rows) {
           const quantityInput = row.querySelector('.ingredient-row__qty');
           if (quantityInput) {
-            quantityInput.value = scaleMealIngredientQuantity(quantityInput.value, factor) ?? '';
+            quantityInput.value = scaleMealIngredientQuantity(quantityInput.value, factor, currentAppliedRecipe.yield_portions != null ? { precision: 6, roundUp: true } : {}) ?? '';
           }
         }
         lastAppliedScale = normalizedScale;
@@ -4141,11 +4301,18 @@ function openMealModal(opts) {
         renderAppliedRecipeIngredients();
       };
 
-      const finalizedParticipantCount = () => new Set(
-        [...panel.querySelectorAll('[data-meal-role-user] [data-meal-role="participant"]:checked')]
-          .map((input) => Number(input.closest('[data-meal-role-user]')?.dataset.mealRoleUser))
-          .filter(Number.isFinite),
-      ).size;
+      const finalizedParticipantCookTarget = () => {
+        const occurrence = meal?.id ? occurrenceByKey(`meal:${meal.id}`) : null;
+        const participantIds = new Set([...panel.querySelectorAll('[data-meal-role-user] [data-meal-role="participant"]:checked')]
+          .map((input) => Number(input.closest('[data-meal-role-user]')?.dataset.mealRoleUser)).filter(Number.isFinite));
+        const requested = [...participantIds].reduce((total, id) => {
+          const decision = decisionForMember(occurrence, id);
+          // A separate personal/Backup Meal has its own cooking amount.
+          if (decision?.participation === 'participating' && decision?.selected_meal_id) return total;
+          return total + (Number(decision?.portion_amount) || 1);
+        }, 0);
+        return cookPortionTarget(requested);
+      };
 
       recipeScaleInput?.addEventListener('input', () => {
         if (!recipeScaleInput.value) return;
@@ -4159,7 +4326,7 @@ function openMealModal(opts) {
         const auto = portionsModeSelect.value === 'auto';
         recipeScaleInput.disabled = auto;
         if (auto) {
-          recipeScaleInput.value = String(Math.max(finalizedParticipantCount(), 1));
+          recipeScaleInput.value = String(finalizedParticipantCookTarget());
           portionsModeSelect.options[0].textContent = `${mealText('meals.portionsAuto', 'Auto')} (${recipeScaleInput.value})`;
           rescaleVisibleIngredients(recipeScaleInput.value);
         }

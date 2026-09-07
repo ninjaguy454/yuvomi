@@ -144,6 +144,16 @@ test('jede Einheit hat eine Schrittweite; Gewicht und Volumen schreiten in Haush
   assert.equal(pantryUnitStep('unbekannt'), 1);
 });
 
+test('canonical grocery precision is optional and precise stored stock keeps its remainder', () => {
+  assert.equal(normalizePantryQuantity(0.0025), 0, 'ordinary manual entry keeps two-decimal normalization');
+  assert.equal(normalizePantryQuantity(0.0025, { precision: 6 }), 0.0025);
+  assert.equal(normalizePantryQuantity(0.0025 + 0.5, { precision: 6 }), 0.5025);
+  assert.equal(normalizePantryQuantity(0.0025 + 0.0025, { precision: 6 }), 0.005);
+  assert.equal(normalizePantryQuantity(0.01 - 0.0025, { precision: 6 }), 0.0075);
+  assert.equal(normalizePantryQuantity(0.02 - 0.0175, { precision: 6 }), 0.0025);
+  assert.equal(new Intl.NumberFormat('en', { maximumFractionDigits: 6 }).format(0.0025), '0.0025');
+});
+
 test('PANTRY_UNITS ist eingefroren (kanonische Einheiten-Liste)', () => {
   assert.equal(Object.isFrozen(PANTRY_UNITS), true);
 });

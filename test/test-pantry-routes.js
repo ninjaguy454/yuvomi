@@ -55,6 +55,79 @@ async function call(method, path, body) {
 
 const itemRow = (id) => db.prepare('SELECT * FROM pantry_items WHERE id = ?').get(id);
 
+test('merged precise purchases retain six-decimal operations when their balance happens to have two decimals', async () => {
+  for (const [receipts, consumeAmount, expectedRemainder] of [[4, 0.0025, 0.0075], [8, 0.0175, 0.0025]]) {
+    const name = `Merged precise stock ${receipts}`;
+    let pantryId;
+    for (let index = 0; index < receipts; index += 1) {
+      const key = `precise-receipt-${receipts}-${index}`;
+      const runId = Number(db.prepare(`INSERT INTO meal_grocery_runs
+        (logical_key,start_date,end_date,status,source_fingerprint,created_by)
+        VALUES (?,'2049-01-01','2049-01-01','purchased',?,?)`).run(key, key, USER).lastInsertRowid);
+      const groceryId = Number(db.prepare(`INSERT INTO meal_grocery_items
+        (grocery_run_id,logical_key,name,quantity,planned_quantity,unit,purchased_quantity,remaining_quantity,purchase_status)
+        VALUES (?,?,?,'0.0025 kg',0.0025,'kg',0.0025,0,'purchased')`).run(runId, key, name).lastInsertRowid);
+      const reconciled = await call('POST', '/pantry/reconcile-grocery-run', {
+        grocery_run_id: runId, items: [{ grocery_item_id: groceryId, unit: 'kg' }],
+      });
+      assert.equal(reconciled.status, 200, JSON.stringify(reconciled.body));
+      assert.equal(reconciled.body.data.reconciled, 1);
+      pantryId = db.prepare('SELECT id FROM pantry_items WHERE name=?').get(name).id;
+      assert.equal(itemRow(pantryId).quantity, Number(((index + 1) * 0.0025).toFixed(6)));
+    }
+    assert.equal(itemRow(pantryId).quantity, receipts === 4 ? 0.01 : 0.02);
+    const consumed = await call('POST', `/pantry/${pantryId}/consume`, {
+      quantity: consumeAmount, logical_key: `merged-precise-consume-${receipts}`,
+    });
+    assert.equal(consumed.status, 200, JSON.stringify(consumed.body));
+    assert.equal(itemRow(pantryId).quantity, expectedRemainder);
+    const movement = db.prepare(`SELECT quantity,quantity_before,quantity_after FROM pantry_movements
+      WHERE pantry_item_id=? AND movement_type='consume' ORDER BY id DESC LIMIT 1`).get(pantryId);
+    assert.deepEqual(movement, { quantity: consumeAmount, quantity_before: receipts === 4 ? 0.01 : 0.02, quantity_after: expectedRemainder });
+    assert.equal((await call('PATCH', `/pantry/${pantryId}`, { quantity: 0.01 })).status, 200);
+    const fineEdit = await call('PUT', `/pantry/${pantryId}`, { name, quantity: 0.0125, unit: 'kg' });
+    assert.equal(fineEdit.status, 200);
+    assert.equal(itemRow(pantryId).quantity, 0.0125, 'a fine edit works even when the previous balance was 0.01');
+  }
+});
+
+test('precise canonical stock survives ordinary edits, stepper saves, consumption and legacy stock additions', async () => {
+  // Arrival through the real grocery reconciliation endpoint is covered by the
+  // dish-portion lifecycle test. Continue here with its stored stock shape.
+  const id = Number(db.prepare(`INSERT INTO pantry_items(name,quantity,unit,created_by)
+    VALUES ('Precise flour',0.0025,'kg',?)`).run(USER).lastInsertRowid);
+  const edited = await call('PUT', `/pantry/${id}`, { name: 'Precise flour', quantity: 0.0025, unit: 'kg', notes: 'Keep this batch' });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.body.data.quantity, 0.0025);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM pantry_movements WHERE pantry_item_id=?').get(id).n, 0);
+  const stepper = await call('PATCH', `/pantry/${id}`, { quantity: 0.5025 });
+  assert.equal(stepper.status, 200);
+  assert.equal(stepper.body.data.quantity, 0.5025);
+  const consumed = await call('POST', `/pantry/${id}/consume`, { quantity: 0.5, logical_key: 'precise-consumption' });
+  assert.equal(consumed.status, 200, JSON.stringify(consumed.body));
+  assert.equal(consumed.body.data.item.quantity, 0.0025);
+
+  const listId = Number(db.prepare('INSERT INTO shopping_lists(name,created_by) VALUES (?,?)').run('Precise stock refill', USER).lastInsertRowid);
+  const shoppingId = Number(db.prepare(`INSERT INTO shopping_items(list_id,name,quantity,is_checked)
+    VALUES (?,'Precise flour','1 kg',1)`).run(listId).lastInsertRowid);
+  const added = await call('POST', '/pantry/import-shopping', {
+    list_id: listId, items: [{ shopping_item_id: shoppingId, quantity: 1, unit: 'kg' }],
+  });
+  assert.equal(added.status, 200);
+  assert.equal(added.body.data.merged, 1);
+  assert.equal(itemRow(id).quantity, 1.0025);
+  const leftover = await call('POST', '/pantry/leftovers', { name: 'Precise flour', quantity: 1, unit: 'kg', logical_key: 'precise-leftover' });
+  assert.equal(leftover.status, 201);
+  assert.equal(itemRow(id).quantity, 2.0025);
+  const fraction = await call('POST', `/pantry/${id}/consume`, { quantity: 0.0025, logical_key: 'precise-fraction' });
+  assert.equal(fraction.status, 200);
+  assert.equal(itemRow(id).quantity, 2);
+
+  const ordinary = await call('POST', '/pantry', { name: 'Ordinary entry', quantity: 1.2345, unit: 'kg' });
+  assert.equal(ordinary.status, 201);
+  assert.equal(ordinary.body.data.quantity, 1.23, 'ordinary manual entry retains its two-decimal behavior');
+});
+
 // --------------------------------------------------------------------------
 // Lagerorte
 // --------------------------------------------------------------------------

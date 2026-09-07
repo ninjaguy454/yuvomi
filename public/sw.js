@@ -16,9 +16,9 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Stage this refinement separately from the deployed Kitchen .5 caches so a
+// Stage Cooking Map separately from the deployed refinement caches so a
 // failed install cannot replace files still used by the active worker.
-const CACHE_VERSION = `${APP_RELEASE}-refinement.2`;
+const CACHE_VERSION = `${APP_RELEASE}-recipe-pipeline.1`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -88,6 +88,8 @@ const APP_SHELL = [
   '/styles/documents.css',
   '/styles/settings.css',
   '/styles/recipes.css',
+  '/styles/recipe-pipeline.css',
+  '/styles/recipe-pipeline-editor.css',
   '/styles/pantry.css',
   '/styles/inventory.css',
   '/styles/detail-view.css',
@@ -161,6 +163,10 @@ const APP_SHELL = [
   '/utils/recipe-meal-types.js',
   '/utils/recipe-markdown.js',
   '/utils/recipe-to-meal.js',
+  '/utils/recipe-pipeline.js',
+  '/utils/recipe-pipeline-edit.js',
+  '/components/recipe-pipeline-view.js',
+  '/components/recipe-pipeline-editor.js',
   '/utils/recurrence-scope.js',
   '/utils/reminder-offset.js',
   '/utils/scroll-restore.js',

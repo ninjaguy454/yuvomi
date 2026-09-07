@@ -187,6 +187,31 @@ const escapeForRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // Gelegenheit gewesen, dieselbe Falle wieder einzubauen. Seine Geschichte
 // (drei bezahlte Blindstellen) steht dort im Kopfkommentar.
 
+test('CSS scanner skips statement at-rules without losing following selectors or nested contexts', () => {
+  const css = `
+    @charset "UTF-8";
+    @import url('/styles/recipe;pipeline.css');
+    @import url(data:text/css;base64,LmEge30=);
+    @layer base, overrides;
+    .recipes-page { height: 100%; overflow: hidden; }
+    @media (min-width: 768px) {
+      @supports (display: grid) {
+        .nested { display: grid; }
+        .sibling { color: red; }
+      }
+      .after-nested { display: block; }
+    }
+    .tail { color: blue; }
+  `;
+  assert.deepEqual([...eachRule(css)].map(({ selector, body, at }) => ({ selector, body: body.trim(), at })), [
+    { selector: '.recipes-page', body: 'height: 100%; overflow: hidden;', at: [] },
+    { selector: '.nested', body: 'display: grid;', at: ['@media (min-width: 768px)', '@supports (display: grid)'] },
+    { selector: '.sibling', body: 'color: red;', at: ['@media (min-width: 768px)', '@supports (display: grid)'] },
+    { selector: '.after-nested', body: 'display: block;', at: ['@media (min-width: 768px)'] },
+    { selector: '.tail', body: 'color: blue;', at: [] },
+  ]);
+});
+
 function cssRuleBody(css, selector) {
   const match = css.match(new RegExp(`${escapeForRegExp(selector)}\\s*\\{([^}]*)\\}`, 'm'));
   return match?.[1] ?? '';

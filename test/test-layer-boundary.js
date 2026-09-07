@@ -41,6 +41,8 @@ const SHARED_ISOMORPHIC = new Set([
   // genau dem Wert, den jemand sucht, der sie auseinanderlaufen sehen will.
   'public/utils/quick-link-url.js',
   'public/utils/recipe-meal-types.js',
+  // Pure resource graph validation is shared by the editor and recipe API.
+  'public/utils/recipe-pipeline.js',
   'public/utils/contact-name.js',
   'public/utils/pantry-units.js',
   // #620: Das Format der Sync-Ziel-Kennung. Der Server validiert genau das,

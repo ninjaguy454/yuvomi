@@ -1,3 +1,6 @@
+@import url('/styles/recipe-pipeline.css');
+@import url('/styles/recipe-pipeline-editor.css');
+
 /**
  * Modul: Rezepte (Recipes)
  * Zweck: Styles fuer gespeicherte Rezepte und Aktionskarten

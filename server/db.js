@@ -8713,6 +8713,16 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10027,
+  description: 'Recipes: resource execution pipelines with source and revision tracking',
+  up: `
+    ALTER TABLE recipes ADD COLUMN execution_json TEXT;
+    ALTER TABLE recipes ADD COLUMN execution_revision INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE recipes ADD COLUMN execution_source_hash TEXT;
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

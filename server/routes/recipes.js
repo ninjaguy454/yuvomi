@@ -9,6 +9,8 @@ import express from 'express';
 import * as db from '../db.js';
 import { str, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT } from '../middleware/validate.js';
 import { normalizeRecipeMealTypes } from '../../public/utils/recipe-meal-types.js';
+import { validatePipeline } from '../../public/utils/recipe-pipeline.js';
+import { canWriteRecipePipeline, validateRecipePipelineBindings, withRecipePipeline } from '../services/recipe-pipeline.js';
 import { getAdapter } from '../services/recipe-providers/index.js';
 import {
   importRecipeFromMarkdown,
@@ -35,11 +37,11 @@ function normalizeMime(value) { return String(value || '').split(';')[0].trim().
 // vom verknuepften Account statt ihn hart zu verdrahten - das ist der einzige
 // Unterschied, den Frontend und Zugriffsschutz brauchen, um ein Rezept korrekt
 // zu behandeln, und er erweitert sich automatisch um jeden neuen Provider.
-function withSource(recipe) {
-  return { ...recipe, source: recipe.provider_account_id ? recipe.provider_type : 'native' };
+function withSource(recipe, req) {
+  return withRecipePipeline({ ...recipe, source: recipe.provider_account_id ? recipe.provider_type : 'native' }, req);
 }
 
-function loadRecipeWithIngredients(id) {
+function loadRecipeWithIngredients(id, req) {
   const recipe = db.get().prepare(`
     SELECT r.*, u.display_name AS creator_name, u.avatar_color AS creator_color,
            p.name AS provider_account_name, p.provider AS provider_type
@@ -57,10 +59,10 @@ function loadRecipeWithIngredients(id) {
     ORDER BY id ASC
   `).all(id);
 
-  return withSource({ ...recipe, meal_types: normalizeRecipeMealTypes(recipe.meal_types), ingredients });
+  return withSource({ ...recipe, meal_types: normalizeRecipeMealTypes(recipe.meal_types), ingredients }, req);
 }
 
-router.get('/', (_req, res) => {
+router.get('/', (req, res) => {
   try {
     const recipes = db.get().prepare(`
       SELECT r.*, u.display_name AS creator_name, u.avatar_color AS creator_color,
@@ -92,7 +94,7 @@ router.get('/', (_req, res) => {
       ...r,
       meal_types: normalizeRecipeMealTypes(r.meal_types),
       ingredients: ingredientMap[r.id] || [],
-    })) });
+    }, req)) });
   } catch (err) {
     log.error('GET / error:', err);
     res.status(500).json({ error: 'Internal error', code: 500 });
@@ -177,11 +179,107 @@ router.post('/', (req, res) => {
       return rid;
     });
 
-    const created = loadRecipeWithIngredients(recipeId);
+    const created = loadRecipeWithIngredients(recipeId, req);
     res.status(201).json({ data: created });
   } catch (err) {
     log.error('POST / error:', err);
     res.status(500).json({ error: 'Internal error', code: 500 });
+  }
+});
+
+router.get('/:id', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid recipe ID.', code: 400 });
+    const recipe = loadRecipeWithIngredients(id, req);
+    if (!recipe) return res.status(404).json({ error: 'Recipe not found.', code: 404 });
+    return res.json({ data: recipe });
+  } catch (err) {
+    log.error('GET /:id error:', err);
+    return res.status(500).json({ error: 'Recipe could not be loaded.', code: 500 });
+  }
+});
+
+// Execution data belongs only to native recipes. Imported written content
+// remains read-only; duplicate it into a native recipe before authoring a flow.
+router.put('/:id/pipeline', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid recipe ID.', code: 400 });
+    const result = db.transaction(() => {
+      const recipe = loadRecipeWithIngredients(id, req);
+      if (!recipe) return { status: 404, error: 'Recipe not found.' };
+      if (recipe.provider_account_id) return { status: 403, error: 'Duplicate this imported recipe before adding a pipeline.' };
+      if (!recipe.pipeline_can_edit) return { status: 403, error: 'You do not have permission to edit this recipe pipeline.' };
+      const { expected_revision: expectedRevision, source_hash: sourceHash } = req.body || {};
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
+        return { status: 400, error: 'A valid pipeline revision is required. Reopen the recipe and try again.' };
+      }
+      if (typeof sourceHash !== 'string' || !/^[a-f0-9]{64}$/.test(sourceHash)) {
+        return { status: 400, error: 'The recipe source is required. Reopen the recipe and try again.' };
+      }
+      if (recipe.pipeline_revision !== expectedRevision) {
+        return { status: 409, error: 'This pipeline was changed elsewhere. Reopen it before saving your changes.' };
+      }
+      if (recipe.pipeline_current_source_hash !== sourceHash) {
+        return { status: 409, error: 'The recipe ingredients or instructions changed. Review the current recipe before saving its pipeline.' };
+      }
+      let pipeline;
+      try {
+        pipeline = validatePipeline(req.body.pipeline);
+        validateRecipePipelineBindings(pipeline, recipe);
+      }
+      catch (err) { return { status: 400, error: err.message }; }
+      const saved = db.get().prepare(`
+        UPDATE recipes SET execution_json = ?, execution_revision = execution_revision + 1,
+                           execution_source_hash = ?
+        WHERE id = ? AND execution_revision = ?
+      `).run(JSON.stringify(pipeline), sourceHash, id, expectedRevision);
+      if (saved.changes !== 1) return { status: 409, error: 'This pipeline was changed elsewhere. Reopen it before saving your changes.' };
+      return { recipe: loadRecipeWithIngredients(id, req) };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error, code: result.status });
+    return res.json({ data: result.recipe });
+  } catch (err) {
+    log.error('PUT /:id/pipeline error:', err);
+    return res.status(500).json({ error: 'The pipeline could not be saved.', code: 500 });
+  }
+});
+
+// Copy written fields, ingredients and execution data in one transaction. A
+// mirror becomes an ordinary native recipe owned by the caller; a source's
+// existing need for review must survive copying instead of being marked fresh.
+router.post('/:id/duplicate', (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ error: 'Invalid recipe ID.', code: 400 });
+    if (!canWriteRecipePipeline(req)) return res.status(403).json({ error: 'You do not have permission to create recipes.', code: 403 });
+    const result = db.transaction(() => {
+      const source = loadRecipeWithIngredients(id, req);
+      if (!source) return { status: 404, error: 'Recipe not found.' };
+      if (source.pipeline_invalid) return { status: 409, error: 'This recipe has an invalid saved pipeline and cannot be copied until it is repaired.' };
+      const title = req.body?.title === undefined ? `${source.title.slice(0, MAX_TITLE - 7)} (copy)` : req.body.title;
+      const vTitle = str(title, 'Title', { max: MAX_TITLE });
+      const errors = collectErrors([vTitle]);
+      if (errors.length) return { status: 400, error: errors.join(' ') };
+      const info = db.get().prepare(`
+        INSERT INTO recipes (title, notes, recipe_url, meal_types, created_by, execution_json, execution_revision, execution_source_hash)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(vTitle.value, source.notes, source.recipe_url, source.meal_types.join(','), req.authUserId || req.session?.userId,
+        source.pipeline ? JSON.stringify(source.pipeline) : null, source.pipeline ? 1 : 0,
+        source.pipeline ? source.pipeline_source_hash : null);
+      const copiedId = Number(info.lastInsertRowid);
+      const insertIngredient = db.get().prepare('INSERT INTO recipe_ingredients (recipe_id, name, quantity, category) VALUES (?, ?, ?, ?)');
+      for (const ingredient of source.ingredients) {
+        insertIngredient.run(copiedId, ingredient.name, ingredient.quantity, ingredient.category);
+      }
+      return { recipe: loadRecipeWithIngredients(copiedId, req) };
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error, code: result.status });
+    return res.status(201).json({ data: result.recipe });
+  } catch (err) {
+    log.error('POST /:id/duplicate error:', err);
+    return res.status(500).json({ error: 'The recipe could not be copied.', code: 500 });
   }
 });
 
@@ -236,7 +334,7 @@ router.put('/:id', (req, res) => {
       }
     });
 
-    const updated = loadRecipeWithIngredients(id);
+    const updated = loadRecipeWithIngredients(id, req);
     res.json({ data: updated });
   } catch (err) {
     log.error('PUT /:id error:', err);

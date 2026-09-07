@@ -21,6 +21,7 @@ import '/components/datepicker.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { mountEmptyState, mountLoadError } from '/utils/empty-state.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
+import { openRecipePipeline } from '/components/recipe-pipeline-editor.js';
 
 let _container = null;
 /** Handle des geteilten Suchfelds (setValue/clear), gesetzt in render(). */
@@ -345,6 +346,11 @@ export async function render(container) {
     const recipe = state.recipes.find((r) => r.id === recipeId);
     if (!recipe) return;
 
+    if (actionBtn.dataset.action === 'pipeline') {
+      openRecipePipeline(recipe, { onDuplicate: duplicateRecipe });
+      return;
+    }
+
     if (actionBtn.dataset.action === 'edit') {
       openRecipeModal('edit', recipe);
       return;
@@ -527,7 +533,7 @@ function renderRecipeList() {
     const isMirrored = recipe.source !== 'native';
     const ingredients = recipe.ingredients ?? [];
     const detailId = `recipe-detail-${recipe.id}`;
-    const hasDetail = Boolean(ingredients.length || recipe.notes || recipe.recipe_url);
+    const hasDetail = Boolean(ingredients.length || recipe.notes || recipe.recipe_url || recipe.pipeline);
 
     const li = document.createElement('li');
     li.className = 'recipe-row-item';
@@ -638,6 +644,7 @@ function renderRecipeList() {
     // sowohl die Inline-Buttons als auch das Überlaufmenü weiter unten, damit
     // beide Fassungen nie auseinanderlaufen.
     const ROW_ACTIONS = [
+      { action: 'pipeline', icon: 'git-branch', label: 'Visualize recipe' },
       !isMirrored && { action: 'edit',      icon: 'pencil',  label: t('common.edit') },
       { action: 'export-markdown', icon: 'clipboard-copy', label: t('recipes.exportMarkdown') },
       { action: 'duplicate', icon: 'copy',    label: t('recipes.duplicate') },
@@ -755,6 +762,14 @@ function renderRecipeList() {
       // scanbar und auf 393px ohne fünf konkurrierende Bedienelemente.
       const detailActions = document.createElement('div');
       detailActions.className = 'recipe-detail__actions';
+
+      const visualize = document.createElement('button');
+      visualize.type = 'button';
+      visualize.className = 'btn btn--secondary';
+      visualize.dataset.action = 'pipeline';
+      visualize.dataset.id = String(recipe.id);
+      visualize.textContent = 'Visualize recipe';
+      detailActions.appendChild(visualize);
 
       const addToMeals = document.createElement('button');
       addToMeals.className = 'btn btn--primary';
@@ -1160,19 +1175,12 @@ async function removeRecipe(recipe) {
 async function duplicateRecipe(recipe) {
   const copySuffix = t('recipes.copySuffix');
   const title = `${recipe.title} (${copySuffix})`;
-  const notes = recipe.notes || null;
-  const recipe_url = recipe.recipe_url || null;
-  const ingredients = (recipe.ingredients || []).map((ing) => ({
-    name: ing.name,
-    quantity: ing.quantity || null,
-    category: ing.category || DEFAULT_CATEGORY_NAME,
-  }));
-
   try {
-    const res = await api.post('/recipes', { title, notes, recipe_url, ingredients });
+    const res = await api.post(`/recipes/${recipe.id}/duplicate`, { title });
     state.recipes.push(res.data);
     renderRecipeList();
     window.yuvomi?.showToast(t('recipes.duplicated'), 'success');
+    return res.data;
   } catch (err) {
     window.yuvomi?.showToast(err.data?.error ?? t('common.errorGeneric'), 'danger');
   }

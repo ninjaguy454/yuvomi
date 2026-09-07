@@ -43,9 +43,34 @@ export function* eachRule(css) {
   const at = [];
   let index = 0;
   let start = 0;
+  let parentheses = 0;
 
   while (index < src.length) {
     const char = src[index];
+
+    // Statement at-rules (@import, @charset, @layer ...) end at a semicolon,
+    // not at the next rule's opening brace. URL/string semicolons are content.
+    if (char === '"' || char === "'") {
+      const quote = char;
+      index += 1;
+      while (index < src.length && src[index] !== quote) {
+        if (src[index] === '\\') index += 1;
+        index += 1;
+      }
+      index += 1;
+      continue;
+    }
+    if (char === '(') parentheses += 1;
+    if (char === ')') parentheses = Math.max(0, parentheses - 1);
+    if (parentheses > 0) {
+      index += 1;
+      continue;
+    }
+    if (char === ';' && src.slice(start, index).trimStart().startsWith('@')) {
+      index += 1;
+      start = index;
+      continue;
+    }
 
     if (char === '}') {
       at.pop();

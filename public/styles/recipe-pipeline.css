@@ -169,11 +169,11 @@
 .recipe-pipeline-unassigned { margin-top: var(--space-6); padding: var(--space-4); background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-sm); }
 .recipe-pipeline-unassigned h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); }
 
-@media (max-width: 480px) {
+@media (max-width: 640px) {
   .recipe-pipeline-step { padding: var(--space-3); }
   .recipe-pipeline-stage-cards { grid-template-columns: minmax(0, 1fr); }
   .recipe-pipeline-stage + .recipe-pipeline-stage { margin-top: var(--space-8); }
-  .recipe-pipeline-edit { min-height: 44px; min-width: 44px; }
+  .recipe-pipeline-edit { min-height: var(--target-base); min-width: var(--target-base); }
 }
 
 @media (forced-colors: active) {

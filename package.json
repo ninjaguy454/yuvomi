@@ -310,7 +310,7 @@
     "test:openapi-coverage": "node --test test/test-openapi-coverage.js",
     "test:onboarding-version": "node --experimental-sqlite --test test/test-onboarding-version.js",
     "test:recipe-pipeline": "node --experimental-sqlite --test test/test-recipe-pipeline.js",
-    "test:recipe-pipeline-editor": "node --loader ./test/test-browser-loader.mjs --test test/test-recipe-pipeline-editor.js",
+    "test:recipe-pipeline-editor": "node --loader ./test/test-browser-loader.mjs --test test/test-recipe-pipeline-editor.js test/test-recipe-pipeline-workspace.js",
     "test:recipe-pipeline-view": "node --experimental-sqlite --test test/test-recipe-pipeline-view.js",
     "test:recipe-pipeline-routes": "node --experimental-sqlite --test test/test-recipe-pipeline-routes.js",
     "test:recipe-pipeline-migration": "node --experimental-sqlite --test test/test-recipe-pipeline-migration.js"

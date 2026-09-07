@@ -132,7 +132,15 @@ function mountHarness() {
   const frames = new Map();
   const windowListeners = new Map();
   const containerListeners = new Map();
-  const pathGroup = { innerHTML: '' };
+  const markupSurface = () => ({
+    innerHTML: '',
+    replaceChildren() { this.innerHTML = ''; },
+    insertAdjacentHTML(position, html) {
+      assert.equal(position, 'afterbegin');
+      this.innerHTML = html + this.innerHTML;
+    },
+  });
+  const pathGroup = markupSurface();
   const svg = { attributes: {}, setAttribute(name, value) { this.attributes[name] = value; }, querySelector: () => pathGroup };
   const cards = [
     { getBoundingClientRect: () => ({ left: 30, right: 250, top: 60, bottom: 160 }) },
@@ -155,7 +163,7 @@ function mountHarness() {
     },
   };
   const container = {
-    innerHTML: '', ownerDocument: { defaultView: view }, querySelector: () => board,
+    ...markupSurface(), ownerDocument: { defaultView: view }, querySelector: () => board,
     addEventListener: (type, handler) => containerListeners.set(type, handler),
     removeEventListener: type => containerListeners.delete(type),
     contains: node => node?.inside === true,
@@ -190,6 +198,9 @@ test('hidden maps redraw when revealed, with distinct material and readiness pat
   const paths = [...harness.pathGroup.innerHTML.matchAll(/ d="([^"]+)"/g)].map(match => match[1]);
   assert.notEqual(paths[0], paths[1]);
   assert.equal(harness.observed.length, 3);
+  harness.setWidth(300);
+  harness.flush();
+  assert.equal((harness.pathGroup.innerHTML.match(/<path /g) || []).length, 2);
   cleanup();
 });
 

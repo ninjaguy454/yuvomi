@@ -347,10 +347,7 @@ export async function render(container) {
     if (!recipe) return;
 
     if (actionBtn.dataset.action === 'pipeline') {
-      openRecipePipeline(recipe, { onDuplicate: async () => {
-        const duplicated = await duplicateRecipe(recipe);
-        if (duplicated) openRecipePipeline(duplicated);
-      } });
+      openRecipePipeline(recipe, { onDuplicate: duplicateRecipe });
       return;
     }
 

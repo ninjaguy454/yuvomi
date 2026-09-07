@@ -112,12 +112,14 @@ export function routePipelineDependency(source, target, rectangles, width, laneI
 /** Mount cards and arrows; callers must dispose before replacing their surface. */
 export function mountPipelineGraph(container, document, { onEdit } = {}) {
   if (!document?.operations?.length) {
-    container.innerHTML = renderPipelineGraph(document);
+    container.replaceChildren();
+    container.insertAdjacentHTML('afterbegin', renderPipelineGraph(document));
     return () => {};
   }
   const derived = derivePipeline(document);
   const idPrefix = `recipe-pipeline-${++graphSequence}`;
-  container.innerHTML = graphMarkup(derived, { idPrefix, editable: typeof onEdit === 'function' });
+  container.replaceChildren();
+  container.insertAdjacentHTML('afterbegin', graphMarkup(derived, { idPrefix, editable: typeof onEdit === 'function' }));
   const board = container.querySelector('.recipe-pipeline-board');
   const svg = board.querySelector('svg');
   const pathGroup = svg.querySelector('[data-pipeline-paths]');
@@ -143,12 +145,13 @@ export function mountPipelineGraph(container, document, { onEdit } = {}) {
         top: rectangle.top - bounds.top, bottom: rectangle.bottom - bounds.top };
     });
     svg.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`);
-    pathGroup.innerHTML = [...connections.values()].map((edge, index) => {
+    pathGroup.replaceChildren();
+    pathGroup.insertAdjacentHTML('afterbegin', [...connections.values()].map((edge, index) => {
       const otherType = connections.has(`${edge.from}/${edge.to}/${edge.kind === 'requires' ? 'consumes' : 'requires'}`);
       const offset = otherType ? (edge.kind === 'requires' ? 4 : -4) : 0;
       const points = routePipelineDependency(rectangles[indexes.get(edge.from)], rectangles[indexes.get(edge.to)], rectangles, bounds.width, index, offset);
       return `<path class="recipe-pipeline-edge${edge.kind === 'requires' ? ' recipe-pipeline-edge--readiness' : ''}" d="${points.map((point, part) => `${part ? 'L' : 'M'} ${point.x} ${point.y}`).join(' ')}" marker-end="url(#${idPrefix}-arrow)"></path>`;
-    }).join('');
+    }).join(''));
   }
   function scheduleDraw() {
     if (!disposed && pendingFrame == null) pendingFrame = requestFrame(draw);

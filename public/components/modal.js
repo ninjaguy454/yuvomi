@@ -335,10 +335,12 @@ function _snapshotNow() {
  * Der zweite, verzögerte Snapshot spiegelt `openModal`: Felder, die per API
  * nachgeladen werden (Selects, Datepicker), sind erst danach befüllt.
  */
-export function refreshDirtySnapshot() {
+export function refreshDirtySnapshot({ defer = true } = {}) {
   _snapshotNow();
   if (_initialFormTimeout) clearTimeout(_initialFormTimeout);
-  _initialFormTimeout = setTimeout(_snapshotNow, 150);
+  // Synchronously rendered editors must not absorb a user's first edit into
+  // a later baseline. Existing asynchronous forms keep their delayed snapshot.
+  _initialFormTimeout = defer ? setTimeout(_snapshotNow, 150) : null;
 }
 
 // --------------------------------------------------------
@@ -1056,12 +1058,15 @@ export function confirmModal(message, { confirmLabel, cancelLabel, danger = fals
  * Bestätigt der Nutzer, schließt das geparkte Modal mit `force: true`: die
  * Entscheidung nimmt die Eingaben ohnehin mit, eine zweite Rückfrage wäre
  * falsch (#625).
+ * With `closeOnConfirm: false`, confirmation also restores the underlying
+ * modal. Use this for edits inside a continuing workspace, such as removing
+ * one operation or discarding a draft while keeping the recipe view open.
  *
  * Ohne offenes Modal identisch mit `confirmModal` - eine Löschfunktion, die aus
  * Liste und Modal gleichermaßen aufgerufen wird, braucht keine Fallunterscheidung.
  *
  * @param {string} message - die Frage (wird zum Titel), wie bei confirmModal
- * @param {Object} [opts]  - identisch zu confirmModal ({ confirmLabel, danger, detail })
+ * @param {Object} [opts]  - confirmModal options plus closeOnConfirm (default true)
  * @returns {Promise<boolean>}
  */
 export async function confirmOverModal(message, opts = {}) {
@@ -1076,7 +1081,7 @@ export async function confirmOverModal(message, opts = {}) {
   // Schließ-Logik laufen, nicht an ihrem 'closing'-Wächter vorbei. Der Fokus
   // kehrt dabei auf den auslösenden Knopf zurück (siehe _resumeSuspendedModal).
   _resumeSuspendedModal(suspended);
-  if (confirmed) await closeModal({ force: true });
+  if (confirmed && opts.closeOnConfirm !== false) await closeModal({ force: true });
   return confirmed;
 }
 

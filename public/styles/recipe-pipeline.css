@@ -1,0 +1,183 @@
+/* Cooking Map: resource flows inherit the active theme and appearance. */
+.recipe-pipeline-graph { min-width: 0; color: var(--color-text-primary); }
+
+.recipe-pipeline-guide,
+.recipe-pipeline-empty {
+  margin: 0 0 var(--space-4);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.recipe-pipeline-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-bottom: var(--space-5);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+}
+
+.recipe-pipeline-legend > span { display: inline-flex; align-items: center; gap: var(--space-2); }
+.recipe-pipeline-legend-line { width: var(--space-6); border-top: 2px solid currentColor; }
+.recipe-pipeline-legend-line--readiness { border-top-style: dashed; }
+
+.recipe-pipeline-board {
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  padding-inline: var(--space-5);
+}
+
+.recipe-pipeline-connections {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: -1;
+  color: var(--color-text-secondary);
+}
+
+.recipe-pipeline-edge { stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; fill: none; }
+.recipe-pipeline-edge--readiness { stroke-dasharray: 5 4; }
+.recipe-pipeline-connections marker path { fill: currentColor; }
+.recipe-pipeline-stage + .recipe-pipeline-stage { margin-top: var(--space-10); }
+
+.recipe-pipeline-stage-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.recipe-pipeline-stage-heading > span { padding-inline: var(--space-1); background: var(--color-surface); }
+.recipe-pipeline-parallel-label { color: var(--color-text-secondary); font-weight: 400; }
+
+.recipe-pipeline-stage-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+  column-gap: var(--space-4);
+  /* Dedicated gutters keep arrows out of cards after responsive wrapping. */
+  row-gap: var(--space-8);
+  align-items: stretch;
+  min-width: 0;
+}
+
+.recipe-pipeline-step {
+  min-width: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  overflow-wrap: anywhere;
+}
+
+.recipe-pipeline-step--merge { border-color: var(--color-border-strong); }
+.recipe-pipeline-step-heading { display: flex; align-items: baseline; gap: var(--space-2); }
+
+.recipe-pipeline-step-heading h4 {
+  min-width: 0;
+  flex: 1;
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--text-base);
+  line-height: 1.4;
+  font-weight: 650;
+}
+
+.recipe-pipeline-step-number,
+.recipe-pipeline-reference {
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.recipe-pipeline-step-number { flex: 0 0 auto; }
+.recipe-pipeline-reference { margin-inline-end: var(--space-1); }
+
+.recipe-pipeline-edit {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  margin-block: calc(-1 * var(--space-1));
+  border: 1px solid var(--color-border-control);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.recipe-pipeline-edit:hover { background: var(--color-surface-hover); }
+.recipe-pipeline-edit:focus-visible { outline: 2px solid var(--focus-ring-color); outline-offset: 3px; }
+
+.recipe-pipeline-merge-label {
+  margin: var(--space-2) 0 0;
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.recipe-pipeline-metadata { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: var(--space-3) 0 0; font-size: var(--text-sm); }
+.recipe-pipeline-metadata span { padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); background: var(--color-surface-3); }
+.recipe-pipeline-equipment { margin: var(--space-2) 0 0; font-size: var(--text-sm); line-height: 1.5; color: var(--color-text-secondary); }
+
+.recipe-pipeline-inputs,
+.recipe-pipeline-requires,
+.recipe-pipeline-outputs {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.recipe-pipeline-inputs { padding: var(--space-3); background: var(--color-surface-2); border-radius: var(--radius-sm); }
+.recipe-pipeline-requires { padding-inline-start: var(--space-3); border-inline-start: 2px dashed var(--color-border-control); }
+.recipe-pipeline-outputs { padding-top: var(--space-3); border-top: 1px solid var(--color-border); }
+.recipe-pipeline-resource-heading { margin: 0 0 var(--space-1); font-size: var(--text-xs); font-weight: 600; color: var(--color-text-secondary); }
+.recipe-pipeline-resource-source { display: block; color: var(--color-text-secondary); font-size: var(--text-xs); }
+
+.recipe-pipeline-inputs ul,
+.recipe-pipeline-requires ul,
+.recipe-pipeline-outputs ul,
+.recipe-pipeline-prerequisites ul,
+.recipe-pipeline-unassigned ul { margin: 0; padding-inline-start: var(--space-4); }
+
+.recipe-pipeline-inputs li + li,
+.recipe-pipeline-requires li + li,
+.recipe-pipeline-outputs li + li { margin-top: var(--space-1); }
+
+.recipe-pipeline-prerequisites {
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-border-subtle);
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+.recipe-pipeline-prerequisites p { margin: 0; }
+.recipe-pipeline-prerequisites li + li { margin-top: var(--space-1); }
+.recipe-pipeline-unassigned { margin-top: var(--space-6); padding: var(--space-4); background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); font-size: var(--text-sm); }
+.recipe-pipeline-unassigned h3 { margin: 0 0 var(--space-2); font-size: var(--text-sm); }
+
+@media (max-width: 480px) {
+  .recipe-pipeline-step { padding: var(--space-3); }
+  .recipe-pipeline-stage-cards { grid-template-columns: minmax(0, 1fr); }
+  .recipe-pipeline-stage + .recipe-pipeline-stage { margin-top: var(--space-8); }
+  .recipe-pipeline-edit { min-height: 44px; min-width: 44px; }
+}
+
+@media (forced-colors: active) {
+  .recipe-pipeline-connections { color: CanvasText; }
+  .recipe-pipeline-step,
+  .recipe-pipeline-metadata span { border: 1px solid CanvasText; }
+}

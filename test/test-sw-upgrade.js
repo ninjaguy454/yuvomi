@@ -257,6 +257,87 @@ test('a partially failed refinement install leaves the active Kitchen .5 cache g
   assert.deepEqual(env.signals.messages, []);
 });
 
+test('deployed refinement.2 upgrades to fresh Cooking Map modules and styles in a separate cache generation', async () => {
+  const env = loadWorker();
+  const deployed = '2.54.0-kitchen.5-refinement.2';
+  const oldNames = ['shell', 'pages', 'locales', 'assets', 'api'].map(kind => `yuvomi-${kind}-${deployed}`);
+  for (const name of oldNames) await env.caches.open(name);
+  const oldShell = await env.caches.open(`yuvomi-shell-${deployed}`);
+  const oldPages = await env.caches.open(`yuvomi-pages-${deployed}`);
+  await oldShell.put('/styles/recipes.css', new MockResponse('deployed recipe styles'));
+  await oldPages.put('/pages/recipes.js', new MockResponse('deployed recipe module'));
+  const pipelineAssets = [
+    '/utils/recipe-pipeline.js', '/utils/recipe-pipeline-edit.js',
+    '/components/recipe-pipeline-view.js', '/components/recipe-pipeline-editor.js',
+    '/styles/recipe-pipeline.css', '/styles/recipe-pipeline-editor.css',
+  ];
+  for (const path of pipelineAssets) assert.equal(await env.caches.match(path), undefined);
+
+  await dispatchLifecycle(env.listeners.install[0]);
+  const freshShell = await env.caches.open(env.cacheNames.SHELL_CACHE);
+  const freshPages = await env.caches.open(env.cacheNames.PAGES_CACHE);
+  assert.notEqual(freshShell, oldShell, 'Cooking Map must not install into the deployed shell cache');
+  assert.notEqual(freshPages, oldPages, 'Cooking Map must not install into the deployed page cache');
+  assert.equal((await oldShell.match('/styles/recipes.css'))?.body, 'deployed recipe styles');
+  assert.equal((await oldPages.match('/pages/recipes.js'))?.body, 'deployed recipe module');
+  for (const path of ['/styles/recipes.css', ...pipelineAssets]) {
+    assert.equal((await freshShell.match(path))?.body, `fresh:${path}`, `${path} must be available before activation`);
+    assert.equal(freshShell.addedRequests.find(request => keyOf(request) === path)?.cache, 'reload',
+      `${path} must bypass stale HTTP cache entries`);
+  }
+  assert.equal((await freshPages.match('/pages/recipes.js'))?.body, 'fresh:/pages/recipes.js');
+  assert.equal(freshPages.addedRequests.find(request => keyOf(request) === '/pages/recipes.js')?.cache, 'reload');
+  assert.equal(env.signals.skipped, 1);
+
+  await dispatchLifecycle(env.listeners.activate[0]);
+  for (const name of oldNames) assert.equal((await env.caches.keys()).includes(name), false, `${name} must retire only after activation`);
+  for (const path of ['/styles/recipes.css', '/pages/recipes.js', ...pipelineAssets]) {
+    assert.equal((await env.caches.match(path))?.body, `fresh:${path}`, `${path} must resolve to the activated generation`);
+  }
+  assert.equal(env.signals.claimed, 1);
+  assert.equal(JSON.stringify(env.signals.messages), JSON.stringify([{ type: 'SW_UPDATED' }]));
+});
+
+test('failed Cooking Map install cannot overwrite deployed refinement.2 after its new recipe page has already cached', async () => {
+  const env = loadWorker();
+  const deployed = '2.54.0-kitchen.5-refinement.2';
+  const oldShell = await env.caches.open(`yuvomi-shell-${deployed}`);
+  const oldPages = await env.caches.open(`yuvomi-pages-${deployed}`);
+  const oldLocales = await env.caches.open(`yuvomi-locales-${deployed}`);
+  await oldShell.put('/styles/recipes.css', new MockResponse('deployed recipe styles'));
+  await oldShell.put('/components/modal.js', new MockResponse('deployed modal'));
+  await oldPages.put('/pages/recipes.js', new MockResponse('deployed recipe module'));
+  await oldLocales.put('/locales/en.json', new MockResponse('deployed locale'));
+
+  // Let the independent page bucket finish first, then fail shell precaching.
+  // This models addAll's per-bucket atomicity without assuming that the whole
+  // installation's Promise.all can roll back a different completed bucket.
+  let pagesFinished;
+  const pagesGate = new Promise(resolve => { pagesFinished = resolve; });
+  const freshPages = await env.caches.open(env.cacheNames.PAGES_CACHE);
+  const addPages = freshPages.addAll.bind(freshPages);
+  freshPages.addAll = async requests => { await addPages(requests); pagesFinished(); };
+  const freshShell = await env.caches.open(env.cacheNames.SHELL_CACHE);
+  freshShell.addAll = async () => { await pagesGate; throw new Error('Cooking Map stylesheet could not be fetched'); };
+
+  await assert.rejects(dispatchLifecycle(env.listeners.install[0]), /Cooking Map stylesheet/);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal((await freshPages.match('/pages/recipes.js'))?.body, 'fresh:/pages/recipes.js',
+    'exercise completed new page precaching before the shell failure');
+  assert.equal((await oldPages.match('/pages/recipes.js'))?.body, 'deployed recipe module',
+    'the active worker must retain the recipe module without new pipeline imports');
+  assert.equal((await oldShell.match('/styles/recipes.css'))?.body, 'deployed recipe styles');
+  assert.equal((await oldShell.match('/components/modal.js'))?.body, 'deployed modal');
+  assert.equal((await oldLocales.match('/locales/en.json'))?.body, 'deployed locale');
+  assert.equal(await oldShell.match('/components/recipe-pipeline-editor.js'), undefined);
+  for (const kind of ['shell', 'pages', 'locales']) {
+    assert.equal((await env.caches.keys()).includes(`yuvomi-${kind}-${deployed}`), true);
+  }
+  assert.equal(env.signals.skipped, 0, 'a partial generation must never request activation');
+  assert.equal(env.signals.claimed, 0);
+  assert.deepEqual(env.signals.messages, []);
+});
+
 test('controller change reloads once without requiring a hard reload', async () => {
   const windowListeners = {};
   const workerListeners = {};

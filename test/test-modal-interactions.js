@@ -59,6 +59,137 @@ function modalHarness() {
   return { modal: context.modal, document, control, container };
 }
 
+// Run the real confirmation orchestration and suspend/restore helpers. Only the
+// nested dialog's user choice and final removal are doubled; no browser DOM is
+// needed to verify that the underlying form survives with its dirty baseline.
+function confirmationHarness() {
+  const listeners = new Map();
+  const document = {
+    activeElement: null, body: { style: { overflow: 'hidden' } },
+    addEventListener: (name, handler) => listeners.set(name, handler),
+    removeEventListener: name => listeners.delete(name),
+    getElementById: () => null,
+  };
+  const field = { id: 'pipeline-draft', type: 'hidden', value: 'saved pipeline' };
+  const panel = { querySelectorAll: () => [field] };
+  const title = { id: 'shared-modal-title', removeAttribute(name) { this[name] = ''; } };
+  const trigger = { isConnected: true, focus() { document.activeElement = this; } };
+  const overlay = {
+    id: 'shared-modal-overlay', isConnected: true, inert: false,
+    querySelector: selector => selector === '.modal-panel' ? panel : selector === '#shared-modal-title' ? title : null,
+    removeAttribute(name) { this[name] = ''; },
+    contains: element => element === trigger,
+    remove() { this.isConnected = false; },
+  };
+  const context = vm.createContext({ document, window: {}, clearTimeout: () => {}, setTimeout: () => 1 });
+  vm.runInContext(`${source}
+    this.closeCalls = [];
+    _syncOverlayRegistration = () => {};
+    confirmModal = () => new Promise(resolve => {
+      const dialog = { id: 'shared-modal-overlay', isConnected: true };
+      activeOverlay = dialog;
+      modalState = 'open';
+      document.getElementById = () => dialog;
+      document.activeElement = { kind: 'confirmation-button' };
+      this.choose = confirmed => {
+        dialog.isConnected = false;
+        activeOverlay = null;
+        modalState = 'idle';
+        resolve(confirmed);
+      };
+    });
+    closeModal = async options => {
+      this.closeCalls.push({ force: options.force, target: activeOverlay });
+      activeOverlay.remove();
+      activeOverlay = null;
+      modalState = 'idle';
+      return true;
+    };
+    this.begin = (overlay, trigger) => {
+      activeOverlay = overlay;
+      modalState = 'open';
+      previouslyFocused = { outside: true };
+      document.activeElement = trigger;
+      _snapshotNow();
+    };
+    this.confirm = confirmOverModal;
+    this.dirty = isFormDirty;
+    this.active = () => activeOverlay;
+  `, context);
+  context.begin(overlay, trigger);
+  field.value = 'unsaved authored pipeline';
+  return { context, document, overlay, panel, title, trigger, field, listeners };
+}
+
+test('confirmation can preserve a live editor so its caller can remove an operation in place', async () => {
+  const { context, document, overlay, panel, title, trigger, field, listeners } = confirmationHarness();
+  const pending = context.confirm('Remove this operation?', { closeOnConfirm: false });
+  assert.equal(overlay.inert, true, 'the editor is unavailable while confirmation is open');
+  assert.equal(title.id, '', 'the nested dialog has the only active title ID');
+  context.choose(true);
+  assert.equal(await pending, true);
+  assert.equal(context.closeCalls.length, 0);
+  assert.equal(context.active(), overlay);
+  assert.equal(overlay.isConnected, true);
+  assert.equal(overlay.inert, false);
+  assert.equal(overlay.id, 'shared-modal-overlay');
+  assert.equal(title.id, 'shared-modal-title');
+  assert.equal(document.activeElement, trigger);
+  assert.equal(listeners.has('keydown'), true);
+  assert.equal(context.dirty(panel), true, 'confirmation must not reset the earlier dirty baseline');
+  field.value = 'unsaved pipeline with operation removed';
+  assert.equal(context.dirty(panel), true, 'the restored editor remains usable by its caller');
+});
+
+for (const opts of [{}, { closeOnConfirm: false }]) {
+  test(`canceling confirmation retains edits with closeOnConfirm=${opts.closeOnConfirm ?? true}`, async () => {
+    const { context, document, overlay, panel, trigger, field } = confirmationHarness();
+    const pending = context.confirm('Discard these changes?', opts);
+    context.choose(false);
+    assert.equal(await pending, false);
+    assert.equal(context.closeCalls.length, 0);
+    assert.equal(overlay.isConnected, true);
+    assert.equal(overlay.inert, false);
+    assert.equal(context.active(), overlay);
+    assert.equal(document.activeElement, trigger);
+    assert.equal(field.value, 'unsaved authored pipeline');
+    assert.equal(context.dirty(panel), true);
+  });
+}
+
+test('confirmation still closes the underlying modal by default', async () => {
+  const { context, overlay } = confirmationHarness();
+  const pending = context.confirm('Delete this recipe?');
+  context.choose(true);
+  assert.equal(await pending, true);
+  assert.equal(context.closeCalls.length, 1);
+  assert.equal(context.closeCalls[0].force, true);
+  assert.equal(context.closeCalls[0].target, overlay);
+  assert.equal(overlay.isConnected, false);
+  assert.equal(context.active(), null);
+});
+
+test('synchronous dirty baseline cancels pending capture and retains immediate edits', () => {
+  const timers = new Map(); let sequence = 0;
+  const field = { id: 'pipeline-draft', type: 'hidden', value: '' };
+  const panel = { querySelectorAll: () => [field] };
+  const context = vm.createContext({
+    document: { activeElement: null },
+    setTimeout: callback => { timers.set(++sequence, callback); return sequence; },
+    clearTimeout: id => timers.delete(id),
+  });
+  vm.runInContext(`${source}\nthis.begin = (panel) => {
+    activeOverlay = { querySelector: () => panel };
+    _initialFormTimeout = setTimeout(_snapshotNow, 150);
+    refreshDirtySnapshot({ defer: false });
+  }; this.dirty = isFormDirty;`, context);
+  context.begin(panel);
+  field.value = '{"resources":["first immediate edit"]}';
+  for (const callback of timers.values()) callback();
+  assert.equal(timers.size, 0);
+  assert.equal(context.dirty(panel), true);
+});
+
 test('checkbox-only edits require confirmation and reverting the toggle restores a clean form', () => {
   const { modal, control, container } = modalHarness();
   const countdown = control({ id: 'countdown', type: 'checkbox', value: 'on' });

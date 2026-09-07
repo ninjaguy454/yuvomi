@@ -108,8 +108,8 @@ function movementKey(prefix, supplied) {
   return value ? `${prefix}:${value.slice(0, 160)}` : `${prefix}:${randomUUID()}`;
 }
 
-function positiveQuantity(value, label = 'Quantity') {
-  const quantity = normalizePantryQuantity(value, { fallback: NaN });
+function positiveQuantity(value, label = 'Quantity', { precision = 2 } = {}) {
+  const quantity = normalizePantryQuantity(value, { fallback: NaN, precision });
   if (!Number.isFinite(quantity) || quantity <= 0) {
     const error = new Error(`${label} must be greater than zero.`);
     error.status = 400;
@@ -142,9 +142,12 @@ function validateItemFields(body, { partial = false, current = null } = {}) {
     // null/leer explizit abfangen: normalizePantryQuantity(null) wäre 0, und
     // "Artikel ohne Mengenangabe" heißt 1 Stück, nicht "leer".
     const fallbackQty = partial ? Number(current?.quantity ?? 1) : 1;
+    // Existing stock may contain precise grocery receipts even when several
+    // receipts happen to add up to a two-decimal balance.
+    const precision = current ? 6 : 2;
     values.quantity = vQty.value === null
-      ? normalizePantryQuantity(fallbackQty, { fallback: 1 })
-      : normalizePantryQuantity(vQty.value, { fallback: 1 });
+      ? normalizePantryQuantity(fallbackQty, { fallback: 1, precision })
+      : normalizePantryQuantity(vQty.value, { fallback: 1, precision });
   }
 
   // Einheit normalisiert statt validiert - siehe pantry-units.js.
@@ -463,7 +466,8 @@ router.post('/import-shopping', (req, res) => {
         // Charge und bekommt bewusst eine eigene Zeile.
         const match = findMatch.get(source.name, unit, locationId, expiresOn);
         if (match) {
-          bump.run(normalizePantryQuantity(Number(match.quantity) + quantity, { fallback: quantity }), match.id);
+          bump.run(normalizePantryQuantity(Number(match.quantity) + quantity,
+            { fallback: quantity, precision: 6 }), match.id);
           // Eine aufgefüllte Charge kann von Menge 0 zurückkommen - dann ist die
           // Erinnerung wieder fällig, die das Ausbuchen abgeräumt hat.
           syncReminder(getItem(match.id), access, today);
@@ -563,7 +567,8 @@ router.post('/reconcile-grocery-run', (req, res) => {
           skipped += 1;
           continue;
         }
-        const quantity = positiveQuantity(entry.quantity ?? grocery.purchased_quantity ?? grocery.planned_quantity ?? 1);
+        const quantity = positiveQuantity(entry.quantity ?? grocery.purchased_quantity ?? grocery.planned_quantity ?? 1,
+          'Quantity', { precision: 6 });
         const unit = normalizePantryUnit(entry.unit || grocery.unit);
         const locationId = Number(entry.location_id) || null;
         if (locationId && !db.get().prepare('SELECT 1 FROM pantry_locations WHERE id = ?').get(locationId)) {
@@ -573,7 +578,7 @@ router.post('/reconcile-grocery-run', (req, res) => {
         const category = categoryNames.includes(grocery.category) ? grocery.category : fallbackCategory;
         let pantryItem = findMatch.get(grocery.name, unit, locationId, expiresOn);
         const before = Number(pantryItem?.quantity || 0);
-        const after = normalizePantryQuantity(before + quantity, { fallback: quantity });
+        const after = normalizePantryQuantity(before + quantity, { fallback: quantity, precision: 6 });
         if (pantryItem) {
           updatePantry.run(after, pantryItem.id);
           merged += 1;
@@ -645,7 +650,8 @@ router.post('/leftovers', (req, res) => {
           AND location_id IS ? AND expires_on IS ? LIMIT 1
       `).get(name.value, unit, locationId, expiresOn);
       const before = Number(pantry?.quantity || 0);
-      const after = normalizePantryQuantity(before + quantity, { fallback: quantity });
+      const after = normalizePantryQuantity(before + quantity,
+        { fallback: quantity, precision: 6 });
       if (pantry) db.get().prepare('UPDATE pantry_items SET quantity = ? WHERE id = ?').run(after, pantry.id);
       else {
         const info = db.get().prepare(`
@@ -678,7 +684,7 @@ router.post('/:itemId/consume', (req, res) => {
   try {
     const item = getItem(Number(req.params.itemId));
     if (!item) return res.status(404).json({ error: 'Item not found.', code: 404 });
-    const quantity = positiveQuantity(req.body?.quantity);
+    const quantity = positiveQuantity(req.body?.quantity, 'Quantity', { precision: 6 });
     if (quantity > Number(item.quantity)) {
       return res.status(409).json({ error: 'Cannot consume more than the Pantry contains.', code: 'PANTRY_QUANTITY_EXCEEDED' });
     }
@@ -689,7 +695,8 @@ router.post('/:itemId/consume', (req, res) => {
     const existing = db.get().prepare('SELECT id FROM pantry_movements WHERE logical_key = ?').get(logicalKey);
     if (existing) return res.json({ data: { item, reused: true } });
     const updated = db.get().transaction(() => {
-      const after = normalizePantryQuantity(Number(item.quantity) - quantity, { fallback: 0 });
+      const after = normalizePantryQuantity(Number(item.quantity) - quantity,
+        { fallback: 0, precision: 6 });
       db.get().prepare('UPDATE pantry_items SET quantity = ? WHERE id = ?').run(after, item.id);
       db.get().prepare(`
         INSERT INTO pantry_movements (
@@ -834,7 +841,7 @@ router.put('/:itemId', (req, res) => {
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).run(
           `pantry:${item.id}:quantity:${randomUUID()}`, item.id,
-          difference < 0 ? 'consume' : 'adjust', Math.abs(difference), item.unit,
+          difference < 0 ? 'consume' : 'adjust', normalizePantryQuantity(Math.abs(difference), { precision: 6 }), item.unit,
           item.name, item.quantity, fresh.quantity, item.expires_on,
           difference < 0 ? 'Pantry quantity stepper' : 'Pantry quantity adjustment',
           req.authUserId || req.session.userId,

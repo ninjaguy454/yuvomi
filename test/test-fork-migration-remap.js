@@ -285,7 +285,7 @@ test('migration 10018 preserves released menu IDs, selection/event FKs, and is r
   }
 });
 
-test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10027 exactly once', () => {
+test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10028 exactly once', () => {
   // Keep the disposable proof beside the worktree. On managed Windows hosts
   // the OS temp directory can permit creation but reject recursive cleanup
   // from a child test process, leaving an otherwise successful proof red.
@@ -629,15 +629,16 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
     assert.match(firstLog, /Migration 10025 applied:/);
     assert.match(firstLog, /Migration 10026 applied:/);
     assert.equal((firstLog.match(/Migration 10027 applied:/g) || []).length, 1);
+    assert.equal((firstLog.match(/Migration 10028 applied:/g) || []).length, 1);
     assert.doesNotMatch(firstLog, /Migration 100(?:0\d|1[0-4]) applied:/, 'released fork migrations must not replay');
 
     const afterFirst = new Database(databasePath, { readonly: true, fileMustExist: true });
     const firstHistory = afterFirst.prepare(`
       SELECT version, description, applied_at FROM schema_migrations ORDER BY version
     `).all();
-    assert.equal(firstHistory.length, 197, 'only migrations 168, 169 and 10015-10027 are added');
+    assert.equal(firstHistory.length, 198, 'only migrations 168, 169 and 10015-10028 are added');
     assert.deepEqual(
-      firstHistory.filter((row) => ![168, 169, 10015, 10016, 10017, 10018, 10019, 10020, 10021, 10022, 10023, 10024, 10025, 10026, 10027].includes(row.version)),
+      firstHistory.filter((row) => ![168, 169, 10015, 10016, 10017, 10018, 10019, 10020, 10021, 10022, 10023, 10024, 10025, 10026, 10027, 10028].includes(row.version)),
       originalHistory,
       'all released core/fork migration records and timestamps remain byte-for-byte logical matches',
     );
@@ -671,10 +672,22 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
       'Per-user notification inbox, preferences and delivery receipts');
     assert.equal(firstHistory.find((row) => row.version === 10027)?.description,
       'Recipes: resource execution pipelines with source and revision tracking');
+    assert.equal(firstHistory.find((row) => row.version === 10028)?.description,
+      'Per-person Meal portions and reusable Recipe serving basis');
     for (const column of ['execution_json', 'execution_revision', 'execution_source_hash']) {
       assert.ok(afterFirst.pragma('table_info(recipes)').some((candidate) => candidate.name === column),
         `migration 10027 adds recipes.${column}`);
     }
+    for (const column of ['yield_portions', 'serving_basis_amount', 'serving_basis_unit', 'serving_basis_label']) {
+      assert.ok(afterFirst.pragma('table_info(recipes)').some((candidate) => candidate.name === column),
+        `migration 10028 adds recipes.${column}`);
+    }
+    for (const column of ['portion_amount', 'revision']) {
+      assert.ok(afterFirst.pragma('table_info(meal_person_decisions)').some((candidate) => candidate.name === column),
+        `migration 10028 adds meal_person_decisions.${column}`);
+    }
+    assert.ok(afterFirst.pragma('table_info(meals)').some((candidate) => candidate.name === 'planned_portions'),
+      'migration 10028 adds meals.planned_portions');
     assert.equal(afterFirst.prepare('SELECT onboarding_version FROM users WHERE id = ?').get(userId).onboarding_version, 1);
     assert.equal(afterFirst.prepare('SELECT assigned_from FROM reminders WHERE entity_type = ? AND entity_id = ?')
       .get('event', eventId).assigned_from, null);
@@ -682,7 +695,7 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
     assert.equal(afterFirst.prepare('SELECT COUNT(*) AS n FROM users').get().n, 2);
     assert.equal(afterFirst.prepare('SELECT COUNT(*) AS n FROM calendar_events').get().n, 1);
     assert.equal(afterFirst.prepare('SELECT COUNT(*) AS n FROM reminders').get().n, 1);
-    assert.equal(afterFirst.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 10027,
+    assert.equal(afterFirst.prepare('SELECT MAX(version) AS v FROM schema_migrations').get().v, 10028,
       'fork namespace remains the numeric maximum; direct 168/169 row checks are authoritative');
     assert.ok(afterFirst.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meal_plans'").get());
     assert.ok(afterFirst.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'planning_contexts'").get());
@@ -784,7 +797,7 @@ test('a live-like v10014 database applies upstream 168/169 and new fork 10015-10
     assert.deepEqual(
       afterLegacyState,
       originalFixtureState,
-      '10015-10027 preserve every pre-existing Kitchen, travel, planning, grocery and execution value',
+      '10015-10028 preserve every pre-existing Kitchen, travel, planning, grocery and execution value',
     );
     assert.equal(afterFirst.prepare(`
       SELECT COUNT(*) AS n FROM places WHERE type = 'home' AND active = 1

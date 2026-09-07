@@ -41,6 +41,8 @@ const SHARED_ISOMORPHIC = new Set([
   // genau dem Wert, den jemand sucht, der sie auseinanderlaufen sehen will.
   'public/utils/quick-link-url.js',
   'public/utils/recipe-meal-types.js',
+  'public/utils/meal-portions.js',
+  'public/utils/ingredient-quantity.js',
   // Pure resource graph validation is shared by the editor and recipe API.
   'public/utils/recipe-pipeline.js',
   'public/utils/contact-name.js',

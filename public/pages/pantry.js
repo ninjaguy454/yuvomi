@@ -72,7 +72,7 @@ let _quantitySeq = 0;
  * UI-Sprache entkoppelt (#521).
  */
 function formatQuantity(value) {
-  return new Intl.NumberFormat(getFormatLocale(), { maximumFractionDigits: 2 }).format(Number(value) || 0);
+  return new Intl.NumberFormat(getFormatLocale(), { maximumFractionDigits: 6 }).format(Number(value) || 0);
 }
 
 /**
@@ -828,7 +828,8 @@ function onListClick(e) {
 function adjustQuantity(item, direction, row) {
   const step = Number(row.querySelector('.pantry-stepper')?.dataset.step) || 1;
   const previous = Number(item.quantity);
-  const next = normalizePantryQuantity(previous + direction * step, { fallback: previous });
+  const next = normalizePantryQuantity(previous + direction * step,
+    { fallback: previous, precision: 6 });
   if (next === previous) return;
 
   item.quantity = next;
@@ -953,7 +954,8 @@ function refreshRowQuantity(row, item) {
  */
 function shortfallText(item) {
   if (item.min_quantity == null) return null;
-  const missing = normalizePantryQuantity(Number(item.min_quantity) - Number(item.quantity), { fallback: 0 });
+  const missing = normalizePantryQuantity(Number(item.min_quantity) - Number(item.quantity),
+    { fallback: 0, precision: 6 });
   if (missing <= 0) return null;
   return `${formatQuantity(missing)} ${unitLabel(item.unit)}`;
 }
@@ -1222,7 +1224,8 @@ async function saveItem(panel, mode, item) {
   const minRaw = panel.querySelector('#pantry-min').value.trim();
   const payload = {
     name,
-    quantity: normalizePantryQuantity(panel.querySelector('#pantry-quantity').value, { fallback: 1 }),
+    quantity: normalizePantryQuantity(panel.querySelector('#pantry-quantity').value,
+      { fallback: 1, precision: mode === 'create' ? 2 : 6 }),
     unit: panel.querySelector('#pantry-unit').value,
     location_id: panel.querySelector('#pantry-location').value || null,
     category: panel.querySelector('#pantry-category').value,

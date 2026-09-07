@@ -6,7 +6,8 @@ import {
   BUILT_IN_SKILL_KEYS,
   eligibleUserIdsForBuiltInSkill,
 } from './activity-eligibility.js';
-import { normalizeDishSelection, syncAutoPortions } from './meal-dishes.js';
+import { normalizeDishSelection, syncAutoPortions, syncRecipeMealIngredients, mealDishPortionSummary } from './meal-dishes.js';
+import { cookPortionTarget, validPortionAmount, roundPortions } from '../../public/utils/meal-portions.js';
 import {
   getGrocerySettings as getIndependentGrocerySettings,
   saveGrocerySettings as saveIndependentGrocerySettings,
@@ -2965,8 +2966,12 @@ function loadOccurrenceData(database, from, to, contextId = null) {
       historical_recipe_id: meal.recipe_id,
       historical_selection_status: meal.selection_status,
     } : meal;
+    const dishSummary = mealDishPortionSummary(database, meal.id);
     return {
       ...projectedMeal,
+      planned_portions: Number(projectedMeal.planned_portions) || 0,
+      cook_portions: dishSummary.cook_total,
+      dish_portions: dishSummary.dishes,
       max_entree_choices: courseLimits.max_entree_choices,
       max_side_choices: courseLimits.max_side_choices,
       menu_limits: { ...courseLimits },
@@ -3682,6 +3687,15 @@ function normalizeDecision(database, meal, body, current = null, {
   choiceKind = String(choiceKind);
   if (!PARTICIPATION.has(participation)) throw mealPlanError('Choose a valid participation state.');
   if (!CHOICE_KINDS.has(choiceKind)) throw mealPlanError('Choose a valid meal choice.');
+  const portionTouched = Object.hasOwn(body || {}, 'portion_amount')
+    || Object.hasOwn(body || {}, 'portionAmount');
+  const rawPortion = portionTouched
+    ? (body?.portion_amount ?? body?.portionAmount)
+    : (current?.portion_amount ?? 1);
+  if (!validPortionAmount(rawPortion)) {
+    throw mealPlanError('Enter a portion amount between 0.01 and 1000 with no more than two decimal places.');
+  }
+  const portionAmount = roundPortions(rawPortion);
   const selectedMealTouched = Object.hasOwn(body || {}, 'selected_meal_id')
     || Object.hasOwn(body || {}, 'selectedMealId');
   const selectedMealId = selectedMealTouched
@@ -3831,6 +3845,7 @@ function normalizeDecision(database, meal, body, current = null, {
   }
   return {
     participation,
+    portion_amount: portionAmount,
     choice_kind: choiceKind,
     selected_meal_id: selectedMealId,
     selected_meal_title: selectedMealTitle,
@@ -3886,6 +3901,19 @@ export function saveMealDecision(database, mealId, body, {
       LEFT JOIN meals selected ON selected.id = d.selected_meal_id
      WHERE d.meal_id = ? AND d.beneficiary_user_id = ?
   `).get(meal.id, beneficiaryId);
+  if (Object.hasOwn(body || {}, 'expected_revision')) {
+    const expectedRevision = Number(body.expected_revision);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      throw mealPlanError('A valid Meal response revision is required.');
+    }
+    if (expectedRevision !== Number(currentRow?.revision || 0)) {
+      throw mealPlanError(
+        'This Meal response changed elsewhere. Reopen it before saving your portions.',
+        409,
+        'MEAL_DECISION_CHANGED',
+      );
+    }
+  }
   const policy = mealSelectionPolicy(database, meal);
   const occurrenceAssignment = database.prepare(`
     SELECT id, assigned_user_id FROM meal_occurrence_assignments WHERE meal_id = ?
@@ -4023,20 +4051,22 @@ export function saveMealDecision(database, mealId, body, {
     }
     database.prepare(`
       INSERT INTO meal_person_decisions (
-        meal_id, beneficiary_user_id, participation, choice_kind, selected_meal_id,
+        meal_id, beneficiary_user_id, participation, portion_amount, choice_kind, selected_meal_id,
         notes, confirmed, notify_on_menu_change, entered_by_user_id,
         entered_by_device_key, entered_via, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
       ON CONFLICT(meal_id, beneficiary_user_id) DO UPDATE SET
-        participation = excluded.participation, choice_kind = excluded.choice_kind,
+        participation = excluded.participation, portion_amount = excluded.portion_amount,
+        choice_kind = excluded.choice_kind,
         selected_meal_id = excluded.selected_meal_id, notes = excluded.notes,
         confirmed = excluded.confirmed,
         notify_on_menu_change = excluded.notify_on_menu_change,
         entered_by_user_id = excluded.entered_by_user_id,
         entered_by_device_key = excluded.entered_by_device_key, entered_via = excluded.entered_via,
+        revision = meal_person_decisions.revision + 1,
         updated_at = excluded.updated_at
     `).run(
-      meal.id, beneficiaryId, normalized.participation, normalized.choice_kind,
+      meal.id, beneficiaryId, normalized.participation, normalized.portion_amount, normalized.choice_kind,
       normalized.selected_meal_id, normalized.notes, normalized.confirmed,
       normalized.notify_on_menu_change, actorId || null,
       text(deviceKey, { max: 500, field: 'Device key' }), enteredVia,
@@ -4081,6 +4111,46 @@ export function saveMealDecision(database, mealId, body, {
       ON CONFLICT(meal_id, user_id, role) DO UPDATE SET status = excluded.status,
         updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
     `).run(meal.id, beneficiaryId, participantStatus);
+
+    if (normalized.selected_meal_id) {
+      const currentIndividual = database.prepare('SELECT portions_mode, portions FROM meals WHERE id = ?')
+        .get(normalized.selected_meal_id);
+      const individualCook = currentIndividual?.portions_mode === 'fixed'
+        ? Number(currentIndividual.portions) : cookPortionTarget(normalized.portion_amount);
+      database.prepare(`
+        UPDATE meals SET planned_portions = ?, portions = ?,
+          selection_status = 'selected', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ? AND parent_meal_id = ?
+      `).run(
+        normalized.portion_amount,
+        individualCook,
+        normalized.selected_meal_id,
+        meal.id,
+      );
+      const individual = database.prepare(`SELECT m.recipe_id, r.yield_portions,
+          EXISTS(SELECT 1 FROM meal_ingredients mi WHERE mi.meal_id = m.id) AS materialized
+        FROM meals m LEFT JOIN recipes r ON r.id = m.recipe_id WHERE m.id = ?`)
+        .get(normalized.selected_meal_id);
+      if (individual?.yield_portions != null || individual?.materialized) {
+        syncRecipeMealIngredients(database, normalized.selected_meal_id, individualCook);
+      }
+    } else if (currentRow?.selected_meal_id) {
+      database.prepare(`
+        UPDATE meals SET selection_status = 'declined',
+          updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE id = ? AND parent_meal_id = ?
+      `).run(currentRow.selected_meal_id, meal.id);
+    }
+
+    if (normalized.selected_meal_id && normalized.participation === 'participating') {
+      const additionalChoices = database.prepare(`SELECT DISTINCT m.id FROM meals m
+        JOIN meal_selection_response_items ri ON ri.meal_id = m.id
+        JOIN planning_obligations o ON o.id = ri.obligation_id
+        WHERE m.parent_meal_id = ? AND m.id != ? AND o.responsible_user_id = ?
+          AND m.selection_status NOT IN ('declined','superseded')`)
+        .all(meal.id, normalized.selected_meal_id, beneficiaryId);
+      for (const child of additionalChoices) syncAutoPortions(database, child.id);
+    }
 
     if (chooserSkipping) {
       const obligations = database.prepare(`
@@ -4183,6 +4253,10 @@ export function saveMealDecision(database, mealId, body, {
     }
 
     syncAutoPortions(database, meal.id);
+    if (sharedEntree && Number(meal.recipe_id || 0) !== Number(sharedEntree.recipe_id || 0)) {
+      const updated = database.prepare('SELECT portions FROM meals WHERE id = ?').get(meal.id);
+      syncRecipeMealIngredients(database, meal.id, updated.portions);
+    }
 
     const after = database.prepare('SELECT * FROM meal_person_decisions WHERE id = ?').get(decisionId);
     const info = database.prepare(`

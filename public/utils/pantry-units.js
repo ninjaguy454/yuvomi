@@ -52,12 +52,15 @@ export function normalizePantryUnit(value) {
  * Menge auf zwei Nachkommastellen runden, auf [0, MAX_PANTRY_QUANTITY] klemmen.
  * Ohne das Runden schreibt der ±-Stepper Fließkomma-Artefakte in die DB
  * (0.1 + 0.2 = 0.30000000000000004) und die Zeile zeigt sie an.
+ * Canonical grocery reconciliation may request six decimals so an explicit
+ * recipe yield does not erase a small positive quantity before it reaches stock.
  * @param {any} value
- * @param {{ fallback?: number }} [opts]
+ * @param {{ fallback?: number, precision?: 2|6 }} [opts]
  * @returns {number}
  */
-export function normalizePantryQuantity(value, { fallback = 1 } = {}) {
+export function normalizePantryQuantity(value, { fallback = 1, precision = 2 } = {}) {
   const n = Number(value);
   if (!Number.isFinite(n)) return fallback;
-  return Math.min(MAX_PANTRY_QUANTITY, Math.max(0, Math.round(n * 100) / 100));
+  const factor = precision === 6 ? 1_000_000 : 100;
+  return Math.min(MAX_PANTRY_QUANTITY, Math.max(0, Math.round(n * factor) / factor));
 }

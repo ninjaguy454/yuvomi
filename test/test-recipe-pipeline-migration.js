@@ -46,7 +46,7 @@ test('10027 follows the released fork history and adds only three recipe columns
   assert.doesNotMatch(migration.up, /(?:DELETE|DROP|UPDATE|CREATE TABLE)/i);
 });
 
-test('real upgrade from 10026 preserves existing data/history and restart cannot replay 10027 or erase authored JSON', () => {
+test('real upgrade from 10026 preserves existing data/history through 10028 and restart cannot replay or erase authored JSON', () => {
   const directory = mkdtempSync(join(tmpdir(), 'yuvomi-pipeline-migration-'));
   const databasePath = join(directory, 'fixture.db');
   let connection;
@@ -67,11 +67,12 @@ test('real upgrade from 10026 preserves existing data/history and restart cannot
 
     const firstLog = realStartup(databasePath);
     assert.equal((firstLog.match(/Migration 10027 applied:/g) || []).length, 1);
-    assert.deepEqual([...firstLog.matchAll(/Migration (\d+) applied:/g)].map(match => Number(match[1])), [10027]);
+    assert.equal((firstLog.match(/Migration 10028 applied:/g) || []).length, 1);
+    assert.deepEqual([...firstLog.matchAll(/Migration (\d+) applied:/g)].map(match => Number(match[1])), [10027, 10028]);
     connection = new Database(databasePath);
     const afterHistory = connection.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
     assert.deepEqual(afterHistory.filter(item => item.version <= 10026), beforeHistory);
-    assert.equal(afterHistory.at(-1).version, 10027);
+    assert.equal(afterHistory.at(-1).version, 10028);
     const afterRecipe = connection.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId);
     for (const [key, value] of Object.entries(beforeRecipe)) assert.equal(afterRecipe[key], value);
     assert.equal(afterRecipe.execution_json, null);

@@ -2225,6 +2225,70 @@
   gap: var(--space-2);
 }
 
+.meal-portion-section {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.meal-portion-section:disabled {
+  opacity: 0.58;
+}
+
+.meal-portion-basis {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.meal-portion-basis strong {
+  color: var(--color-text-primary);
+  text-align: right;
+}
+
+.meal-portion-input-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 9rem) auto;
+  gap: var(--space-2);
+  align-items: stretch;
+  justify-content: end;
+}
+
+.meal-portion-stepper {
+  display: grid;
+  grid-template-columns: repeat(2, var(--target-base));
+  gap: var(--space-1);
+}
+
+.meal-portion-input-row input {
+  text-align: right;
+}
+
+.meal-portion-stepper .btn {
+  min-width: var(--target-base);
+  min-height: var(--target-base);
+  padding: 0;
+}
+
+.meal-portion-summary {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 30rem) {
+  .meal-portion-basis {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-1);
+  }
+
+  .meal-portion-basis strong {
+    text-align: left;
+  }
+}
+
 .meal-menu-edit {
   justify-self: start;
 }

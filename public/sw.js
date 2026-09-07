@@ -16,9 +16,9 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Stage Cooking Map separately from the deployed refinement caches so a
-// failed install cannot replace files still used by the active worker.
-const CACHE_VERSION = `${APP_RELEASE}-recipe-pipeline.1`;
+// Stage Meal portion and serving-basis assets separately from the deployed
+// Cooking Map cache so an older worker cannot retain mismatched JS and CSS.
+const CACHE_VERSION = `${APP_RELEASE}-meal-portions.1`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -161,6 +161,8 @@ const APP_SHELL = [
   '/utils/quick-link-url.js',
   '/utils/pwa-install.js',
   '/utils/recipe-meal-types.js',
+  '/utils/meal-portions.js',
+  '/utils/ingredient-quantity.js',
   '/utils/recipe-markdown.js',
   '/utils/recipe-to-meal.js',
   '/utils/recipe-pipeline.js',

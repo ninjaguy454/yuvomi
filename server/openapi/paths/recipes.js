@@ -4,7 +4,7 @@ export function recipesPaths() {
   return {
     '/api/v1/recipes': {
       get: op({ summary: 'List recipes', tag: 'Recipes' }),
-      post: op({ summary: 'Create recipe', tag: 'Recipes', stateChanging: true, requestBody: jsonBody(null) }),
+      post: op({ summary: 'Create recipe', tag: 'Recipes', stateChanging: true, requestBody: jsonBody(null, 'Body may include yield_portions and optional serving_basis { amount, unit, label? }. Yield is null until explicitly set. Unit identifiers are count, oz, lb, g, kg, fl_oz, cup, tbsp, tsp, ml and l. Count requires a natural label. Partial serving fields preserve omitted values; serving_basis:null clears the basis.') }),
     },
     '/api/v1/recipes/url-preview': {
       post: op({
@@ -26,7 +26,7 @@ export function recipesPaths() {
     },
     '/api/v1/recipes/{id}': {
       get: op({ summary: 'Get recipe and its execution pipeline', tag: 'Recipes', params: [idParam()], description: 'Includes pipeline, pipeline_revision, pipeline_source_hash, pipeline_current_source_hash, pipeline_review_needed, pipeline_invalid and pipeline_can_edit. Execution JSON is a local resource/operation document; normal written content is preserved.' }),
-      put: op({ summary: 'Update recipe', tag: 'Recipes', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+      put: op({ summary: 'Update recipe', tag: 'Recipes', params: [idParam()], stateChanging: true, requestBody: jsonBody(null, 'Native recipes may update yield_portions and optional serving_basis alongside written content and ingredients.') }),
       delete: op({ summary: 'Delete recipe', tag: 'Recipes', params: [idParam()], stateChanging: true }),
     },
     '/api/v1/recipes/{id}/pipeline': {

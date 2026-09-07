@@ -101,6 +101,14 @@ test('meal editor preserves non-final participation until the user deliberately 
   }), null);
 });
 
+test('finalized diners recognize occurrence role arrays as well as flat Meal rows', () => {
+  assert.deepEqual(finalizedMealParticipantIds([
+    { user_id: 1, role: 'participant', status: 'participating' },
+    { user_id: 2, roles: ['participant', 'cook'], status: 'participating' },
+    { user_id: 3, roles: ['participant'], status: 'declined' },
+  ]), [1, 2]);
+});
+
 test('ingredient scaling preserves units and custom text while scaling numeric quantities', () => {
   assert.equal(scaleMealIngredientQuantity('2 cups', 1.5), '3 cups');
   assert.equal(scaleMealIngredientQuantity('1 1/2 tbsp', 2), '3 tbsp');
@@ -108,6 +116,11 @@ test('ingredient scaling preserves units and custom text while scaling numeric q
   assert.equal(scaleMealIngredientQuantity('1,5 kg', 2), '3 kg');
   assert.equal(scaleMealIngredientQuantity('to taste', 4), 'to taste');
   assert.equal(scaleMealIngredientQuantity('2 cups', 0), '2 cups');
+  assert.equal(scaleMealIngredientQuantity('0.01 kg', 0.25, { precision: 6, roundUp: true }), '0.0025 kg');
+  assert.equal(scaleMealIngredientQuantity('1 cup', 1 / 3, { precision: 6, roundUp: true }), '0.333334 cup');
+  assert.equal(scaleMealIngredientQuantity('1 cup', 1 / 3), '0.33 cup');
+  assert.equal(scaleMealIngredientQuantity('½ cup', 2, { precision: 6, roundUp: true }), '1 cup');
+  assert.equal(scaleMealIngredientQuantity('.5 cup', 0.25, { precision: 6, roundUp: true }), '0.125 cup');
 });
 
 test('direct backend occurrence shape normalizes policy, context, responsibilities and menu choices', () => {

@@ -1,5 +1,5 @@
 {
-  "title": "Pag-set up ng Ordoma",
+  "title": "Pag-set up ng Vidamia",
   "common": {
     "continue": "Magpatuloy",
     "back": "Bumalik",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Batayang Pagsasaayos",
-    "subtitle": "Paano mo aabutin ang Ordoma?",
+    "subtitle": "Paano mo aabutin ang Vidamia?",
     "existing": "May natukoy na umiiral na pagsasaayos - bibinbinan ang iyong kasalukuyang .env file bago mag-save.",
     "hostLabel": "Domain o IP address",
-    "hostHint": "Ang address na gagamitin mo para buksan ang Ordoma sa iyong browser.",
+    "hostHint": "Ang address na gagamitin mo para buksan ang Vidamia sa iyong browser.",
     "portLabel": "Port",
     "tzLabel": "Time zone",
     "errHost": "Hindi wastong hostname. Gumamit lamang ng mga titik, numero, gitling at tuldok.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Pag-sync ng Kalendaryo",
-    "subtitle": "Ikonekta ang Ordoma sa Google Calendar, Apple iCloud o Outlook. Lahat opsyonal - palawakin para i-configure.",
+    "subtitle": "Ikonekta ang Vidamia sa Google Calendar, Apple iCloud o Outlook. Lahat opsyonal - palawakin para i-configure.",
     "google": "Google Calendar",
     "googleHint": "Gumawa ng mga kredensyal na OAuth sa {{link}}. Redirect URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,16 +78,16 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Client ID",
     "outlookSecretLabel": "Client Secret",
-    "outlookNote": "One-way push: nananatiling pinagmumulan ang Ordoma - ang mga pagbabagong ginawa sa Outlook ay napapatungan. Ikokonekta ang mga account ng pamilya sa app settings sa ibang pagkakataon."
+    "outlookNote": "One-way push: nananatiling pinagmumulan ang Vidamia - ang mga pagbabagong ginawa sa Outlook ay napapatungan. Ikokonekta ang mga account ng pamilya sa app settings sa ibang pagkakataon."
   },
   "advanced": {
     "tag": "Advanced · opsyonal",
     "title": "Mga Advanced na Setting",
     "subtitle": "Single sign-on, access sa home network mo, at ilang pinong setting. Opsyonal lahat.",
-    "proxyLabel": "Paano naaabot ang Ordoma?",
+    "proxyLabel": "Paano naaabot ang Vidamia?",
     "proxyBehindHttps": "Sa likod ng reverse proxy na may HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Direktang access sa localhost / HTTP",
-    "proxyHint": "Piliin ang \"Direktang access\" kung binubuksan mo ang Ordoma sa http:// - kung hindi, hindi ka makakapag-sign in. Kung nasa likod ng reverse proxy na may HTTPS, piliin ang unang opsyon.",
+    "proxyHint": "Piliin ang \"Direktang access\" kung binubuksan mo ang Vidamia sa http:// - kung hindi, hindi ka makakapag-sign in. Kung nasa likod ng reverse proxy na may HTTPS, piliin ang unang opsyon.",
     "oidc": "Single Sign-On (OIDC)",
     "oidcHint": "Punan ang lahat ng apat na field para i-enable ang SSO, o iwanan silang blangko.",
     "oidcIssuerLabel": "URL ng Issuer",
@@ -151,12 +151,12 @@
     "oidcAllowSignup": "Payagan ang mga pag-sign in gamit ang SSO na gumawa ng bagong account",
     "oidcAllowSignupHint": "I-off ito kung ang provider mo ay naglilingkod sa mas maraming tao kaysa sa sambahayang ito. Patuloy pa ring makakapag-sign in at maiuugnay ang mga umiiral na account.",
     "baseUrlLabel": "Pampublikong address",
-    "baseUrlHint": "Ang address na binubuksan ng pamilya mo para sa Ordoma - hindi ang host at port ng container. Ginagamit para sa mga link ng pag-reset ng password at imbitasyon.",
+    "baseUrlHint": "Ang address na binubuksan ng pamilya mo para sa Vidamia - hindi ang host at port ng container. Ginagamit para sa mga link ng pag-reset ng password at imbitasyon.",
     "syncIntervalLabel": "Agwat ng pag-sync ng kalendaryo (minuto)",
-    "syncIntervalHint": "Gaano kadalas nagsi-sync ang Ordoma ng mga kalendaryo at contact. Taasan kung nililimitahan ka ng provider mo.",
+    "syncIntervalHint": "Gaano kadalas nagsi-sync ang Vidamia ng mga kalendaryo at contact. Taasan kung nililimitahan ka ng provider mo.",
     "errSyncInterval": "Maglagay ng positibong buong bilang ng minuto.",
     "sectionPrivateNetwork": "Access sa home network mo",
-    "privateNetworkHint": "Bilang default ay tinatanggihan ng Ordoma ang koneksyon sa mga address sa sarili mong network, na nagpoprotekta laban sa panlilinlang sa server para maabot ang mga internal na serbisyo. I-enable ang talagang pinapatakbo mo sa bahay.",
+    "privateNetworkHint": "Bilang default ay tinatanggihan ng Vidamia ang koneksyon sa mga address sa sarili mong network, na nagpoprotekta laban sa panlilinlang sa server para maabot ang mga internal na serbisyo. I-enable ang talagang pinapatakbo mo sa bahay.",
     "authPasswordLogin": "Panatilihin ang pag-login gamit ang username at password",
     "authPasswordLoginHint": "Kapag ito ay naka-off, ang SSO na lang ang paraan para makapasok: mawawala ang login form at ang pag-reset ng password. Kung hindi maabot ang provider, ang daan pabalik ay ang pag-edit ng .env file at pag-restart."
   },
@@ -201,7 +201,7 @@
     "outlook": "Outlook Calendar"
   },
   "docker": {
-    "title": "Sinisimulan ang Ordoma",
+    "title": "Sinisimulan ang Vidamia",
     "subtitle": "Kinukuha ang image at sinisimulan ang Docker container.",
     "elapsed": "{{n}}s ang lumipas",
     "running": "Malusog at tumatakbo ang container",
@@ -220,7 +220,7 @@
   },
   "admin": {
     "title": "Gumawa ng Admin Account",
-    "subtitle": "I-set up ang iyong unang pag-log in. May buong access sa Ordoma ang account na ito.",
+    "subtitle": "I-set up ang iyong unang pag-log in. May buong access sa Vidamia ang account na ito.",
     "userLabel": "Username",
     "userHint": "3-64 na karakter: mga titik, numero, . - _",
     "nameLabel": "Pangalang Ipapakita",
@@ -236,9 +236,9 @@
     "errCreate": "Nabigo ang paggawa ng admin account."
   },
   "done": {
-    "title": "Handa na ang Ordoma!",
+    "title": "Handa na ang Vidamia!",
     "subtitle": "Tumatakbo na ang iyong family planner at naka-set up na ang iyong admin account.",
-    "open": "Buksan ang Ordoma →",
+    "open": "Buksan ang Vidamia →",
     "backupReminder": "Tandaang i-backup ngayon ang iyong .env file - naroon ang iyong mga susi.",
     "download": "I-download ang .env file",
     "savedTo": "Na-save sa {{path}}",
@@ -250,21 +250,21 @@
     "nextModules": "Piliin ang mga module",
     "nextModulesDesc": "I-on ang talagang ginagamit ng sambahayan mo at itago ang iba.",
     "nextInstall": "I-install sa mga telepono",
-    "nextInstallDesc": "Buksan ang Ordoma sa telepono at idagdag sa home screen - gumagana kahit offline.",
-    "subtitleExisting": "Tumatakbo ang Ordoma. May administrator account na ang installation na ito - mag-sign in gamit ang kasalukuyan mong mga kredensyal."
+    "nextInstallDesc": "Buksan ang Vidamia sa telepono at idagdag sa home screen - gumagana kahit offline.",
+    "subtitleExisting": "Tumatakbo ang Vidamia. May administrator account na ang installation na ito - mag-sign in gamit ang kasalukuyan mong mga kredensyal."
   },
   "welcome": {
-    "title": "Maligayang pagdating sa Ordoma",
+    "title": "Maligayang pagdating sa Vidamia",
     "subtitle": "Patakbuhin natin ang iyong pribadong family planner. Piliin kung paano mo ito gustong i-set up.",
     "simpleTitle": "Simpleng setup",
     "simpleBadge": "Inirerekomenda",
-    "simpleDesc": "Kami ang bahala sa mga teknikal na detalye. Angkop na angkop para patakbuhin ang Ordoma sa bahay.",
+    "simpleDesc": "Kami ang bahala sa mga teknikal na detalye. Angkop na angkop para patakbuhin ang Vidamia sa bahay.",
     "simpleTime": "Mga 2 minuto",
     "advancedTitle": "Advanced na setup",
     "advancedDesc": "Buong kontrol: reverse proxy, pag-sync ng kalendaryo, email, single sign-on at mga backup.",
     "advancedTime": "Bawat opsyon, hakbang-hakbang",
     "existingLocked": "May natukoy na kasalukuyang installation. Gamitin ang advanced na setup para manatili ang kasalukuyan mong mga setting.",
-    "containerRunning": "Kasalukuyang tumatakbo ang Ordoma. Ire-restart ng pag-save ang container, kaya sandaling hindi ito magagamit."
+    "containerRunning": "Kasalukuyang tumatakbo ang Vidamia. Ire-restart ng pag-save ang container, kaya sandaling hindi ito magagamit."
   },
   "simple": {
     "title": "Handa nang umandar",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "May lokal na backup na itinatago gabi-gabi.",
     "backupReminder": "Pagkatapos ng setup, i-backup ang nagawang .env file - naroon ang iyong tanging susi sa pag-encrypt.",
     "switchAdvanced": "Kailangan ng higit pang opsyon? Lumipat sa advanced na setup",
-    "start": "I-set up at simulan ang Ordoma"
+    "start": "I-set up at simulan ang Vidamia"
   },
   "email": {
     "title": "Email at Pag-reset ng Password",

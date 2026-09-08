@@ -123,7 +123,7 @@ export function documentsPaths() {
         tag: 'Documents',
         admin: true,
         stateChanging: true,
-        description: 'Deletes only Ordoma\'s local Drive token state. It does not revoke shared Google credentials. Disconnection is blocked while Drive is selected or Drive-backed documents exist.',
+        description: 'Deletes only Vidamia\'s local Drive token state. It does not revoke shared Google credentials. Disconnection is blocked while Drive is selected or Drive-backed documents exist.',
         responses: {
           200: {
             description: 'Google Drive disconnected',

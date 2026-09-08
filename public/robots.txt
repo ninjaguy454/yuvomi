@@ -1,4 +1,4 @@
-# Ordoma Familienplaner - self-hosted, private
+# Vidamia Familienplaner - self-hosted, private
 # Keine öffentlichen Inhalte zum Indexieren
 
 User-agent: *

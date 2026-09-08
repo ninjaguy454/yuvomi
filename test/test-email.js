@@ -72,6 +72,20 @@ test('env override beats DB value', () => {
   assert.equal(svc.getPublicConfig().host, 'env-host');
 });
 
+test('a branding update preserves explicitly configured sender names', async () => {
+  for (const source of ['database', 'environment']) {
+    const db = makeDb();
+    setCfg(db, { email_smtp_host: 'smtp.test', email_from_address: 'a@test', ...(source === 'database' ? { email_from_name: 'Ordoma' } : {}) });
+    const nm = makeNodemailerMock();
+    const svc = createEmailService({ db, nodemailer: nm, env: source === 'environment' ? { EMAIL_FROM_NAME: 'Ordoma' } : {} });
+    await svc.sendTest('admin@test');
+    assert.equal(nm.sent[0].from, '"Ordoma" <a@test>');
+    assert.equal(nm.sent[0].subject, 'Vidamia SMTP test');
+    assert.equal(svc.getPublicConfig().fromName, 'Ordoma');
+    db.close();
+  }
+});
+
 test('sendMail builds transport with ssl→secure:true and from header', async () => {
   const db = makeDb();
   setCfg(db, {
@@ -112,10 +126,10 @@ test('sendTest verifies then sends to the given address', async () => {
   const res = await svc.sendTest('admin@test');
   assert.equal(res.ok, true);
   assert.equal(nm.sent[0].to, 'admin@test');
-  assert.equal(nm.sent[0].from, '"Ordoma" <a@test>');
-  assert.equal(nm.sent[0].subject, 'Ordoma SMTP test');
-  assert.match(nm.sent[0].text, /Ordoma SMTP configuration/);
-  assert.match(nm.sent[0].html, /Ordoma SMTP configuration/);
+  assert.equal(nm.sent[0].from, '"Vidamia" <a@test>');
+  assert.equal(nm.sent[0].subject, 'Vidamia SMTP test');
+  assert.match(nm.sent[0].text, /Vidamia SMTP configuration/);
+  assert.match(nm.sent[0].html, /Vidamia SMTP configuration/);
 });
 
 test('sendTest reports failure reason without throwing', async () => {

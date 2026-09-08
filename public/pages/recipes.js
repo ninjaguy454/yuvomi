@@ -956,7 +956,7 @@ function openRecipeImportModal() {
     title: 'Import recipe',
     size: 'sm',
     content: `
-      <p class="form-hint recipe-import-intro">Paste a public recipe page. Ordoma tries structured recipe data first, then Markdown-style Ingredients and Instructions sections. You can also paste Markdown directly. Nothing is saved until you review it.</p>
+      <p class="form-hint recipe-import-intro">Paste a public recipe page. Vidamia tries structured recipe data first, then Markdown-style Ingredients and Instructions sections. You can also paste Markdown directly. Nothing is saved until you review it.</p>
       <div class="form-group">
         <label class="form-label" for="recipe-import-url">Recipe page or source URL</label>
         <input id="recipe-import-url" class="form-input" type="url" autocomplete="url" placeholder="https://example.com/recipe">

@@ -1,6 +1,6 @@
 # Notification webhooks
 
-Ordoma can deliver every due reminder to a generic HTTP webhook in addition to
+Vidamia can deliver every due reminder to a generic HTTP webhook in addition to
 Web Push, Gotify, and ntfy. Webhook channels use the same per-channel delivery
 tracking, retry, and deduplication flow as the other notification providers.
 
@@ -12,7 +12,7 @@ Only administrators can manage household notification channels.
 2. Under **Household channels**, select **Add channel**.
 3. Choose **Webhook** as the provider and enter a name.
 4. Enter the complete HTTP or HTTPS endpoint URL.
-5. Optionally enter a Bearer token. Ordoma stores it as a write-only secret and
+5. Optionally enter a Bearer token. Vidamia stores it as a write-only secret and
    sends it as `Authorization: Bearer <token>`.
 6. Optionally enter a **payload template** if the receiver expects a body of its
    own shape. Leaving it empty sends the default body described below.
@@ -25,13 +25,13 @@ or written into delivery error messages.
 
 ## Request format
 
-Ordoma sends an HTTP `POST` with `Content-Type: application/json`:
+Vidamia sends an HTTP `POST` with `Content-Type: application/json`:
 
 ```json
 {
   "event": "notification",
   "notification": {
-    "title": "Ordoma",
+    "title": "Vidamia",
     "body": "Take out the bins",
     "url": "/reminders",
     "tag": "reminder-42",
@@ -43,7 +43,7 @@ Ordoma sends an HTTP `POST` with `Content-Type: application/json`:
 
 `sentAt` is generated for each delivery attempt. The notification `tag`
 identifies the reminder and can be used by receivers for their own
-deduplication. The `url` is relative to the Ordoma application.
+deduplication. The `url` is relative to the Vidamia application.
 
 ## Payload template
 

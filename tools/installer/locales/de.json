@@ -1,5 +1,5 @@
 {
-  "title": "Ordoma einrichten",
+  "title": "Vidamia einrichten",
   "common": {
     "continue": "Weiter",
     "back": "Zurück",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Grundkonfiguration",
-    "subtitle": "Wie möchtest du auf Ordoma zugreifen?",
+    "subtitle": "Wie möchtest du auf Vidamia zugreifen?",
     "existing": "Bestehende Konfiguration erkannt - deine aktuelle .env-Datei wird vor dem Speichern gesichert.",
     "hostLabel": "Domain oder IP-Adresse",
-    "hostHint": "Die Adresse, über die du Ordoma im Browser öffnest.",
+    "hostHint": "Die Adresse, über die du Vidamia im Browser öffnest.",
     "portLabel": "Port",
     "tzLabel": "Zeitzone",
     "errHost": "Ungültiger Hostname. Verwende nur Buchstaben, Ziffern, Bindestriche und Punkte.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Kalender-Synchronisation",
-    "subtitle": "Verbinde Ordoma mit Google Kalender, Apple iCloud oder Outlook. Alles optional - zum Konfigurieren ausklappen.",
+    "subtitle": "Verbinde Vidamia mit Google Kalender, Apple iCloud oder Outlook. Alles optional - zum Konfigurieren ausklappen.",
     "google": "Google Kalender",
     "googleHint": "Erstelle OAuth-Anmeldedaten unter {{link}}. Redirect-URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,16 +78,16 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Client-ID",
     "outlookSecretLabel": "Client-Secret",
-    "outlookNote": "Einseitiger Push: Ordoma bleibt führend - Änderungen in Outlook werden überschrieben. Familienkonten werden später in den App-Einstellungen verbunden."
+    "outlookNote": "Einseitiger Push: Vidamia bleibt führend - Änderungen in Outlook werden überschrieben. Familienkonten werden später in den App-Einstellungen verbunden."
   },
   "advanced": {
     "tag": "Erweitert · optional",
     "title": "Erweiterte Einstellungen",
     "subtitle": "Single Sign-On, Zugriff ins Heimnetz und ein paar Feineinstellungen. Alles optional.",
-    "proxyLabel": "Wie wird Ordoma bereitgestellt?",
+    "proxyLabel": "Wie wird Vidamia bereitgestellt?",
     "proxyBehindHttps": "Hinter einem Reverse-Proxy mit HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Direkter Zugriff über localhost / HTTP",
-    "proxyHint": "Wähle „Direkter Zugriff\", wenn du Ordoma über http:// aufrufst - sonst kannst du dich nicht anmelden. Hinter einem Reverse-Proxy mit HTTPS die erste Option.",
+    "proxyHint": "Wähle „Direkter Zugriff\", wenn du Vidamia über http:// aufrufst - sonst kannst du dich nicht anmelden. Hinter einem Reverse-Proxy mit HTTPS die erste Option.",
     "oidc": "Single Sign-On (OIDC)",
     "oidcHint": "Fülle alle vier Felder aus, um SSO zu aktivieren, oder lass sie leer.",
     "oidcIssuerLabel": "Issuer-URL",
@@ -151,12 +151,12 @@
     "oidcAllowSignup": "SSO-Anmeldungen dürfen neue Konten anlegen",
     "oidcAllowSignupHint": "Ausschalten, wenn der Anbieter mehr Menschen bedient als diesen Haushalt. Bestehende Konten melden sich weiter an und werden weiter verknüpft.",
     "baseUrlLabel": "Öffentliche Adresse",
-    "baseUrlHint": "Die Adresse, unter der deine Familie Ordoma aufruft - nicht Host und Port des Containers. Wird für Passwort-Reset- und Einladungslinks verwendet.",
+    "baseUrlHint": "Die Adresse, unter der deine Familie Vidamia aufruft - nicht Host und Port des Containers. Wird für Passwort-Reset- und Einladungslinks verwendet.",
     "syncIntervalLabel": "Kalender-Sync-Intervall (Minuten)",
-    "syncIntervalHint": "Wie oft Ordoma Kalender und Kontakte abgleicht. Höher stellen, wenn dein Anbieter die Rate begrenzt.",
+    "syncIntervalHint": "Wie oft Vidamia Kalender und Kontakte abgleicht. Höher stellen, wenn dein Anbieter die Rate begrenzt.",
     "errSyncInterval": "Bitte eine positive ganze Zahl in Minuten angeben.",
     "sectionPrivateNetwork": "Zugriff auf dein Heimnetz",
-    "privateNetworkHint": "Ordoma lehnt Verbindungen zu Adressen im eigenen Netz standardmäßig ab - das schützt davor, dass der Server dazu gebracht wird, interne Dienste zu erreichen. Gib frei, was du zu Hause wirklich betreibst.",
+    "privateNetworkHint": "Vidamia lehnt Verbindungen zu Adressen im eigenen Netz standardmäßig ab - das schützt davor, dass der Server dazu gebracht wird, interne Dienste zu erreichen. Gib frei, was du zu Hause wirklich betreibst.",
     "authPasswordLogin": "Anmeldung mit Benutzername und Passwort beibehalten",
     "authPasswordLoginHint": "Ausschalten macht SSO zum einzigen Weg hinein: Anmeldeformular und Passwort-Reset verschwinden. Wirksam wird es, sobald mindestens ein Konto mit dem Anbieter verknüpft ist - eine frische Installation kann ihren ersten Administrator also noch anlegen. Ist der Anbieter nicht erreichbar, führt der Weg zurück über die .env-Datei und einen Neustart."
   },
@@ -201,7 +201,7 @@
     "outlook": "Outlook-Kalender"
   },
   "docker": {
-    "title": "Ordoma wird gestartet",
+    "title": "Vidamia wird gestartet",
     "subtitle": "Das Image wird geladen und der Docker-Container gestartet.",
     "elapsed": "{{n}} s vergangen",
     "running": "Container ist gesund und läuft",
@@ -220,7 +220,7 @@
   },
   "admin": {
     "title": "Admin-Konto erstellen",
-    "subtitle": "Richte deinen ersten Login ein. Dieses Konto hat vollen Zugriff auf Ordoma.",
+    "subtitle": "Richte deinen ersten Login ein. Dieses Konto hat vollen Zugriff auf Vidamia.",
     "userLabel": "Benutzername",
     "userHint": "3-64 Zeichen: Buchstaben, Zahlen, . - _",
     "nameLabel": "Anzeigename",
@@ -236,9 +236,9 @@
     "errCreate": "Admin-Konto konnte nicht erstellt werden."
   },
   "done": {
-    "title": "Ordoma ist bereit!",
+    "title": "Vidamia ist bereit!",
     "subtitle": "Dein Familienplaner läuft und dein Admin-Konto ist eingerichtet.",
-    "open": "Ordoma öffnen →",
+    "open": "Vidamia öffnen →",
     "backupReminder": "Denk daran, deine .env-Datei jetzt zu sichern - sie enthält deine Schlüssel.",
     "download": ".env-Datei herunterladen",
     "savedTo": "Gespeichert unter {{path}}",
@@ -250,21 +250,21 @@
     "nextModules": "Module wählen",
     "nextModulesDesc": "Schalte frei, was ihr wirklich nutzt, und blende den Rest aus.",
     "nextInstall": "Auf den Handys installieren",
-    "nextInstallDesc": "Öffne Ordoma auf dem Handy und lege es auf den Startbildschirm - es läuft auch offline.",
-    "subtitleExisting": "Ordoma läuft. Diese Installation hat bereits ein Administratorkonto - melde dich mit deinen bestehenden Zugangsdaten an."
+    "nextInstallDesc": "Öffne Vidamia auf dem Handy und lege es auf den Startbildschirm - es läuft auch offline.",
+    "subtitleExisting": "Vidamia läuft. Diese Installation hat bereits ein Administratorkonto - melde dich mit deinen bestehenden Zugangsdaten an."
   },
   "welcome": {
-    "title": "Willkommen bei Ordoma",
+    "title": "Willkommen bei Vidamia",
     "subtitle": "Bring deinen privaten Familienplaner zum Laufen. Wähle, wie du ihn einrichten möchtest.",
     "simpleTitle": "Einfache Einrichtung",
     "simpleBadge": "Empfohlen",
-    "simpleDesc": "Wir übernehmen die technischen Details für dich. Ideal, um Ordoma zu Hause zu betreiben.",
+    "simpleDesc": "Wir übernehmen die technischen Details für dich. Ideal, um Vidamia zu Hause zu betreiben.",
     "simpleTime": "Etwa 2 Minuten",
     "advancedTitle": "Erweiterte Einrichtung",
     "advancedDesc": "Volle Kontrolle: Reverse-Proxy, Kalender-Sync, E-Mail, Single Sign-On und Backups.",
     "advancedTime": "Jede Option, Schritt für Schritt",
     "existingLocked": "Bestehende Installation erkannt. Nutze die erweiterte Einrichtung, damit deine bisherigen Einstellungen erhalten bleiben.",
-    "containerRunning": "Ordoma läuft gerade. Beim Speichern wird der Container neu gestartet und ist kurz nicht erreichbar."
+    "containerRunning": "Vidamia läuft gerade. Beim Speichern wird der Container neu gestartet und ist kurz nicht erreichbar."
   },
   "simple": {
     "title": "Bereit",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Jede Nacht wird ein lokales Backup aufbewahrt.",
     "backupReminder": "Sichere nach der Einrichtung die erzeugte .env-Datei - sie enthält deine einzigen Verschlüsselungsschlüssel.",
     "switchAdvanced": "Mehr Optionen nötig? Zur erweiterten Einrichtung wechseln",
-    "start": "Ordoma einrichten & starten"
+    "start": "Vidamia einrichten & starten"
   },
   "email": {
     "title": "E-Mail & Passwort-Reset",

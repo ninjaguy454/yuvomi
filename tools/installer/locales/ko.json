@@ -1,5 +1,5 @@
 {
-  "title": "Ordoma 설정",
+  "title": "Vidamia 설정",
   "common": {
     "continue": "계속",
     "back": "뒤로",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "기본 구성",
-    "subtitle": "Ordoma에 어떻게 접속하시겠습니까?",
+    "subtitle": "Vidamia에 어떻게 접속하시겠습니까?",
     "existing": "기존 구성이 감지되었습니다 — 저장 전에 현재 .env 파일이 백업됩니다.",
     "hostLabel": "도메인 또는 IP 주소",
-    "hostHint": "브라우저에서 Ordoma를 여는 주소입니다.",
+    "hostHint": "브라우저에서 Vidamia를 여는 주소입니다.",
     "portLabel": "포트",
     "tzLabel": "시간대",
     "errHost": "잘못된 호스트 이름입니다. 문자, 숫자, 하이픈, 마침표만 사용하세요.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "캘린더 동기화",
-    "subtitle": "Ordoma를 Google 캘린더, Apple iCloud 또는 Outlook에 연결하세요. 모두 선택 사항 - 구성하려면 펼치세요.",
+    "subtitle": "Vidamia를 Google 캘린더, Apple iCloud 또는 Outlook에 연결하세요. 모두 선택 사항 - 구성하려면 펼치세요.",
     "google": "Google 캘린더",
     "googleHint": "{{link}}에서 OAuth 자격 증명을 만드세요. 리디렉션 URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,16 +78,16 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "클라이언트 ID",
     "outlookSecretLabel": "클라이언트 시크릿",
-    "outlookNote": "단방향 푸시: Ordoma가 기준이며 Outlook에서의 변경 사항은 덮어쓰기됩니다. 가족 계정은 나중에 앱 설정에서 연결합니다."
+    "outlookNote": "단방향 푸시: Vidamia가 기준이며 Outlook에서의 변경 사항은 덮어쓰기됩니다. 가족 계정은 나중에 앱 설정에서 연결합니다."
   },
   "advanced": {
     "tag": "고급 · 선택 사항",
     "title": "고급 설정",
     "subtitle": "통합 인증, 홈 네트워크 접근, 그리고 몇 가지 세부 조정. 모두 선택 사항입니다.",
-    "proxyLabel": "Ordoma가 어떻게 제공됩니까?",
+    "proxyLabel": "Vidamia가 어떻게 제공됩니까?",
     "proxyBehindHttps": "HTTPS를 사용하는 리버스 프록시 뒤 (Caddy, nginx, Traefik)",
     "proxyDirect": "localhost / HTTP를 통한 직접 접속",
-    "proxyHint": "http://로 Ordoma를 연다면 \"직접 접근\"을 선택하세요. 그렇지 않으면 로그인할 수 없습니다. HTTPS 리버스 프록시 뒤에서는 첫 번째 옵션을 선택하세요.",
+    "proxyHint": "http://로 Vidamia를 연다면 \"직접 접근\"을 선택하세요. 그렇지 않으면 로그인할 수 없습니다. HTTPS 리버스 프록시 뒤에서는 첫 번째 옵션을 선택하세요.",
     "oidc": "싱글 사인온 (OIDC)",
     "oidcHint": "SSO를 활성화하려면 네 필드를 모두 채우거나 비워 두세요.",
     "oidcIssuerLabel": "발급자 URL",
@@ -151,12 +151,12 @@
     "oidcAllowSignup": "SSO 로그인으로 새 계정 생성 허용",
     "oidcAllowSignupHint": "제공자가 이 가정보다 많은 사람을 담당한다면 끄세요. 기존 계정은 계속 로그인되고 계속 연결됩니다.",
     "baseUrlLabel": "공개 주소",
-    "baseUrlHint": "가족이 Ordoma를 여는 주소입니다. 컨테이너의 호스트와 포트가 아닙니다. 비밀번호 재설정 및 초대 링크에 사용됩니다.",
+    "baseUrlHint": "가족이 Vidamia를 여는 주소입니다. 컨테이너의 호스트와 포트가 아닙니다. 비밀번호 재설정 및 초대 링크에 사용됩니다.",
     "syncIntervalLabel": "캘린더 동기화 간격(분)",
-    "syncIntervalHint": "Ordoma가 캘린더와 연락처를 동기화하는 주기입니다. 공급자가 요청을 제한하면 값을 늘리세요.",
+    "syncIntervalHint": "Vidamia가 캘린더와 연락처를 동기화하는 주기입니다. 공급자가 요청을 제한하면 값을 늘리세요.",
     "errSyncInterval": "분 단위 양의 정수를 입력하세요.",
     "sectionPrivateNetwork": "홈 네트워크 접근",
-    "privateNetworkHint": "Ordoma는 기본적으로 자체 네트워크의 주소로의 연결을 거부합니다. 이는 서버가 내부 서비스에 접근하도록 유도되는 것을 막습니다. 집에서 실제로 운영하는 것만 허용하세요.",
+    "privateNetworkHint": "Vidamia는 기본적으로 자체 네트워크의 주소로의 연결을 거부합니다. 이는 서버가 내부 서비스에 접근하도록 유도되는 것을 막습니다. 집에서 실제로 운영하는 것만 허용하세요.",
     "authPasswordLogin": "사용자 이름과 비밀번호 로그인 유지",
     "authPasswordLoginHint": "끄면 SSO가 유일한 접속 방법이 됩니다. 로그인 양식과 비밀번호 재설정이 사라집니다. 공급자에 연결할 수 없게 되면 되돌아가는 길은 .env 파일 편집과 재시작입니다."
   },
@@ -201,7 +201,7 @@
     "outlook": "Outlook 캘린더"
   },
   "docker": {
-    "title": "Ordoma 시작 중",
+    "title": "Vidamia 시작 중",
     "subtitle": "이미지를 불러오고 Docker 컨테이너를 시작합니다.",
     "elapsed": "{{n}}초 경과",
     "running": "컨테이너가 정상이며 실행 중입니다",
@@ -220,7 +220,7 @@
   },
   "admin": {
     "title": "관리자 계정 만들기",
-    "subtitle": "첫 로그인을 설정하세요. 이 계정은 Ordoma에 대한 전체 접근 권한을 가집니다.",
+    "subtitle": "첫 로그인을 설정하세요. 이 계정은 Vidamia에 대한 전체 접근 권한을 가집니다.",
     "userLabel": "사용자 이름",
     "userHint": "3~64자: 문자, 숫자, . - _",
     "nameLabel": "표시 이름",
@@ -236,9 +236,9 @@
     "errCreate": "관리자 계정을 만들지 못했습니다."
   },
   "done": {
-    "title": "Ordoma 준비 완료!",
+    "title": "Vidamia 준비 완료!",
     "subtitle": "가족 플래너가 실행 중이며 관리자 계정이 설정되었습니다.",
-    "open": "Ordoma 열기 →",
+    "open": "Vidamia 열기 →",
     "backupReminder": "지금 .env 파일을 백업하는 것을 잊지 마세요 — 키가 들어 있습니다.",
     "download": ".env 파일 다운로드",
     "savedTo": "{{path}}에 저장됨",
@@ -250,21 +250,21 @@
     "nextModules": "모듈 고르기",
     "nextModulesDesc": "실제로 쓰는 것만 켜고 나머지는 숨기세요.",
     "nextInstall": "휴대폰에 설치하기",
-    "nextInstallDesc": "휴대폰에서 Ordoma를 열고 홈 화면에 추가하세요. 오프라인에서도 작동합니다.",
-    "subtitleExisting": "Ordoma가 실행 중입니다. 이 설치에는 이미 관리자 계정이 있습니다. 기존 자격 증명으로 로그인하세요."
+    "nextInstallDesc": "휴대폰에서 Vidamia를 열고 홈 화면에 추가하세요. 오프라인에서도 작동합니다.",
+    "subtitleExisting": "Vidamia가 실행 중입니다. 이 설치에는 이미 관리자 계정이 있습니다. 기존 자격 증명으로 로그인하세요."
   },
   "welcome": {
-    "title": "Ordoma에 오신 것을 환영합니다",
+    "title": "Vidamia에 오신 것을 환영합니다",
     "subtitle": "개인 가족 플래너를 실행해 봅시다. 설정 방법을 선택하세요.",
     "simpleTitle": "간편 설정",
     "simpleBadge": "권장",
-    "simpleDesc": "기술적인 세부 사항은 저희가 처리합니다. 집에서 Ordoma를 운영하기에 적합합니다.",
+    "simpleDesc": "기술적인 세부 사항은 저희가 처리합니다. 집에서 Vidamia를 운영하기에 적합합니다.",
     "simpleTime": "약 2분",
     "advancedTitle": "고급 설정",
     "advancedDesc": "완전한 제어: 리버스 프록시, 캘린더 동기화, 이메일, 싱글 사인온, 백업.",
     "advancedTime": "모든 옵션을 단계별로",
     "existingLocked": "기존 설치가 감지되었습니다. 현재 설정을 유지하려면 고급 설정을 사용하세요.",
-    "containerRunning": "Ordoma가 실행 중입니다. 저장하면 컨테이너가 다시 시작되어 잠시 사용할 수 없습니다."
+    "containerRunning": "Vidamia가 실행 중입니다. 저장하면 컨테이너가 다시 시작되어 잠시 사용할 수 없습니다."
   },
   "simple": {
     "title": "준비 완료",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "매일 밤 로컬 백업을 보관합니다.",
     "backupReminder": "설정 후 생성된 .env 파일을 백업하세요 — 유일한 암호화 키가 들어 있습니다.",
     "switchAdvanced": "옵션이 더 필요하세요? 고급 설정으로 전환",
-    "start": "Ordoma 설정 및 시작"
+    "start": "Vidamia 설정 및 시작"
   },
   "email": {
     "title": "이메일 및 비밀번호 재설정",

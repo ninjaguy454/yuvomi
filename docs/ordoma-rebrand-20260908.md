@@ -1,5 +1,7 @@
 # Ordoma product identity and upgrade compatibility
 
+> **Historical branding report.** This document describes the former product name and radial-O mark in the deployed `50866278dbd9e71b53bb98f439b0e41a55965423` release. The approved identity is now **Vidamia**. See the [current Vidamia report](vidamia-rebrand-20260908.md) for the replacement identity, assets, compatibility and validation. The evidence below is retained as history; it does not prescribe the current product name or mark.
+
 Ordoma is an independent household-management platform derived from the open-source Yuvomi project. The upstream MIT copyright and license notices remain intact. This is a product identity change in the current Tasks refinement pass, without a repository rename, infrastructure rename, deployment, or branding migration.
 
 ## Mark

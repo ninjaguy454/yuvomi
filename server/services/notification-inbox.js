@@ -105,7 +105,7 @@ export function enqueueNotification(database, {
   const candidate = { user_id: Number(userId), category, entity_type: entityType, entity_id: entityId };
   if (!canReceiveNotification(database, candidate) || getNotificationPreferences(database, userId)[category] === false) return null;
   const target = url || notificationUrl(database, entityType, entityId, Number(userId));
-  if (!target.startsWith('/') || target.startsWith('//') || /[\r\n\\]/.test(target)) throw new Error('Notification links must stay in Ordoma.');
+  if (!target.startsWith('/') || target.startsWith('//') || /[\r\n\\]/.test(target)) throw new Error('Notification links must stay in Vidamia.');
   database.prepare(`INSERT INTO notification_inbox
     (user_id, source_key, category, entity_type, entity_id, title, body, url, reminder_id, delivery_scope, dispatched_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

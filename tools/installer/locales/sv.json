@@ -1,5 +1,5 @@
 {
-  "title": "Ordoma-installation",
+  "title": "Vidamia-installation",
   "common": {
     "continue": "Fortsätt",
     "back": "Tillbaka",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Grundkonfiguration",
-    "subtitle": "Hur kommer du att nå Ordoma?",
+    "subtitle": "Hur kommer du att nå Vidamia?",
     "existing": "Befintlig konfiguration upptäckt — en säkerhetskopia av din nuvarande .env-fil skapas innan den sparas.",
     "hostLabel": "Domän eller IP-adress",
-    "hostHint": "Adressen du använder för att öppna Ordoma i webbläsaren.",
+    "hostHint": "Adressen du använder för att öppna Vidamia i webbläsaren.",
     "portLabel": "Port",
     "tzLabel": "Tidszon",
     "errHost": "Ogiltigt värdnamn. Använd endast bokstäver, siffror, bindestreck och punkter.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Kalendersynkronisering",
-    "subtitle": "Anslut Ordoma till Google Kalender, Apple iCloud eller Outlook. Alla valfria - expandera för att konfigurera.",
+    "subtitle": "Anslut Vidamia till Google Kalender, Apple iCloud eller Outlook. Alla valfria - expandera för att konfigurera.",
     "google": "Google Kalender",
     "googleHint": "Skapa OAuth-uppgifter på {{link}}. Omdirigerings-URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Klient-ID",
     "outlookSecretLabel": "Klienthemlighet",
-    "outlookNote": "Enkelriktad push: Ordoma förblir källan - ändringar gjorda i Outlook skrivs över. Familjens konton kopplas senare i appens inställningar."
+    "outlookNote": "Enkelriktad push: Vidamia förblir källan - ändringar gjorda i Outlook skrivs över. Familjens konton kopplas senare i appens inställningar."
   },
   "review": {
     "title": "Granskning",
@@ -121,7 +121,7 @@
     "outlook": "Outlook-kalender"
   },
   "docker": {
-    "title": "Startar Ordoma",
+    "title": "Startar Vidamia",
     "subtitle": "Hämtar avbildningen och startar Docker-containern.",
     "elapsed": "{{n}} s förflutna",
     "running": "Containern är frisk och körs",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "Skapa administratörskonto",
-    "subtitle": "Konfigurera din första inloggning. Detta konto har full åtkomst till Ordoma.",
+    "subtitle": "Konfigurera din första inloggning. Detta konto har full åtkomst till Vidamia.",
     "userLabel": "Användarnamn",
     "userHint": "3-64 tecken: bokstäver, siffror, . - _",
     "nameLabel": "Visningsnamn",
@@ -156,9 +156,9 @@
     "errCreate": "Det gick inte att skapa administratörskontot."
   },
   "done": {
-    "title": "Ordoma är klart!",
+    "title": "Vidamia är klart!",
     "subtitle": "Din familjeplanerare körs och ditt administratörskonto är konfigurerat.",
-    "open": "Öppna Ordoma →",
+    "open": "Öppna Vidamia →",
     "backupReminder": "Kom ihåg att säkerhetskopiera din .env-fil nu — den innehåller dina nycklar.",
     "download": "Ladda ner .env-filen",
     "savedTo": "Sparad i {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "Välj dina moduler",
     "nextModulesDesc": "Slå på det hushållet faktiskt använder och göm resten.",
     "nextInstall": "Installera på telefonerna",
-    "nextInstallDesc": "Öppna Ordoma i telefonen och lägg till den på hemskärmen - den fungerar offline.",
-    "subtitleExisting": "Ordoma körs. Den här installationen har redan ett administratörskonto - logga in med dina befintliga uppgifter."
+    "nextInstallDesc": "Öppna Vidamia i telefonen och lägg till den på hemskärmen - den fungerar offline.",
+    "subtitleExisting": "Vidamia körs. Den här installationen har redan ett administratörskonto - logga in med dina befintliga uppgifter."
   },
   "advanced": {
     "tag": "Avancerat · valfritt",
     "title": "Avancerade inställningar",
     "subtitle": "Enkel inloggning, åtkomst till ditt hemnätverk och några finjusteringar. Allt är valfritt.",
-    "proxyLabel": "Hur exponeras Ordoma?",
+    "proxyLabel": "Hur exponeras Vidamia?",
     "proxyBehindHttps": "Bakom en omvänd proxy med HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Direkt åtkomst via localhost / HTTP",
-    "proxyHint": "Välj \"Direktåtkomst\" om du öppnar Ordoma via http:// - annars kan du inte logga in. Bakom en omvänd proxy med HTTPS väljer du det första alternativet.",
+    "proxyHint": "Välj \"Direktåtkomst\" om du öppnar Vidamia via http:// - annars kan du inte logga in. Bakom en omvänd proxy med HTTPS väljer du det första alternativet.",
     "oidc": "Enkel inloggning (OIDC)",
     "oidcHint": "Fyll i alla fyra fält för att aktivera SSO, eller lämna dem tomma.",
     "oidcIssuerLabel": "Issuer-URL",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "Låt SSO-inloggningar skapa nya konton",
     "oidcAllowSignupHint": "Stäng av det om din leverantör betjänar fler personer än det här hushållet. Befintliga konton loggar fortfarande in och länkas fortfarande.",
     "baseUrlLabel": "Publik adress",
-    "baseUrlHint": "Adressen där din familj öppnar Ordoma - inte containerns värd och port. Används för länkar till lösenordsåterställning och inbjudningar.",
+    "baseUrlHint": "Adressen där din familj öppnar Vidamia - inte containerns värd och port. Används för länkar till lösenordsåterställning och inbjudningar.",
     "syncIntervalLabel": "Synkroniseringsintervall för kalender (minuter)",
-    "syncIntervalHint": "Hur ofta Ordoma synkroniserar kalendrar och kontakter. Höj det om din leverantör begränsar antalet anrop.",
+    "syncIntervalHint": "Hur ofta Vidamia synkroniserar kalendrar och kontakter. Höj det om din leverantör begränsar antalet anrop.",
     "errSyncInterval": "Ange ett positivt heltal antal minuter.",
     "sectionPrivateNetwork": "Åtkomst till ditt hemnätverk",
-    "privateNetworkHint": "Ordoma vägrar som standard anslutningar till adresser i ditt eget nätverk, vilket skyddar mot att servern luras att nå interna tjänster. Aktivera det du faktiskt kör hemma.",
+    "privateNetworkHint": "Vidamia vägrar som standard anslutningar till adresser i ditt eget nätverk, vilket skyddar mot att servern luras att nå interna tjänster. Aktivera det du faktiskt kör hemma.",
     "authPasswordLogin": "Behåll inloggning med användarnamn och lösenord",
     "authPasswordLoginHint": "Om du stänger av detta blir SSO enda vägen in: inloggningsformuläret och lösenordsåterställningen försvinner. Om leverantören blir onåbar går vägen tillbaka via .env-filen och en omstart."
   },
   "welcome": {
-    "title": "Välkommen till Ordoma",
+    "title": "Välkommen till Vidamia",
     "subtitle": "Nu sätter vi igång din privata familjeplanerare. Välj hur du vill konfigurera den.",
     "simpleTitle": "Enkel installation",
     "simpleBadge": "Rekommenderas",
-    "simpleDesc": "Vi sköter de tekniska detaljerna åt dig. Perfekt för att köra Ordoma hemma.",
+    "simpleDesc": "Vi sköter de tekniska detaljerna åt dig. Perfekt för att köra Vidamia hemma.",
     "simpleTime": "Ungefär 2 minuter",
     "advancedTitle": "Avancerad installation",
     "advancedDesc": "Full kontroll: omvänd proxy, kalendersynk, e-post, enkel inloggning och säkerhetskopior.",
     "advancedTime": "Varje alternativ, steg för steg",
     "existingLocked": "En befintlig installation hittades. Använd den avancerade installationen så att dina nuvarande inställningar behålls.",
-    "containerRunning": "Ordoma körs just nu. Att spara startar om containern, så den blir kortvarigt otillgänglig."
+    "containerRunning": "Vidamia körs just nu. Att spara startar om containern, så den blir kortvarigt otillgänglig."
   },
   "simple": {
     "title": "Klart att köra",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "En lokal säkerhetskopia sparas varje natt.",
     "backupReminder": "Säkerhetskopiera den genererade .env-filen efter installationen — den innehåller dina enda krypteringsnycklar.",
     "switchAdvanced": "Behöver du fler alternativ? Byt till avancerad installation",
-    "start": "Konfigurera & starta Ordoma"
+    "start": "Konfigurera & starta Vidamia"
   },
   "email": {
     "title": "E-post & lösenordsåterställning",

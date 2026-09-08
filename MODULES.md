@@ -1,6 +1,6 @@
-# Ordoma Modules
+# Vidamia Modules
 
-Ordoma loads third-party modules from the repository-level `modules/` directory. Each module lives in its own folder and must include a `module.json` manifest. Modules are separate code: do not edit Ordoma core files to install one.
+Vidamia loads third-party modules from the repository-level `modules/` directory. Each module lives in its own folder and must include a `module.json` manifest. Modules are separate code: do not edit Vidamia core files to install one.
 
 ## Folder Layout
 
@@ -21,7 +21,7 @@ The folder name must match the manifest `id`.
   "id": "example-module",
   "name": "Example Module",
   "version": "1.0.0",
-  "description": "Adds a small page to Ordoma.",
+  "description": "Adds a small page to Vidamia.",
   "entry": "index.js",
   "style": "style.css",
   "icon": "box",
@@ -78,11 +78,11 @@ export async function render(container, context) {
 }
 ```
 
-Modules may import public Ordoma browser libraries such as `/api.js`, `/i18n.js`, and utilities under `/utils/`. For calls to Ordoma's built-in REST API, prefer `import { api } from '/api.js'`: it prefixes requests with `/api/v1`, sends the current session credentials, handles CSRF tokens, and uses non-cached fetches for user data.
+Modules may import public Vidamia browser libraries such as `/api.js`, `/i18n.js`, and utilities under `/utils/`. For calls to Vidamia's built-in REST API, prefer `import { api } from '/api.js'`: it prefixes requests with `/api/v1`, sends the current session credentials, handles CSRF tokens, and uses non-cached fetches for user data.
 
-If a module calls a separate backend service through a reverse proxy, expose that service on a same-origin `/api/...` path whenever the response is dynamic. Ordoma's service worker deliberately bypasses `/api/` requests, while other same-origin GET requests may be handled by the app-shell caching strategy. A dynamic proxy path such as `/ext/myservice/...` can therefore return stale cached responses unless you also change the service-worker strategy.
+If a module calls a separate backend service through a reverse proxy, expose that service on a same-origin `/api/...` path whenever the response is dynamic. Vidamia's service worker deliberately bypasses `/api/` requests, while other same-origin GET requests may be handled by the app-shell caching strategy. A dynamic proxy path such as `/ext/myservice/...` can therefore return stale cached responses unless you also change the service-worker strategy.
 
-Modules must follow the same frontend security rules as core Ordoma:
+Modules must follow the same frontend security rules as core Vidamia:
 
 - Use `replaceChildren()` and `insertAdjacentHTML()`.
 - Escape untrusted values before inserting HTML.
@@ -92,19 +92,19 @@ Modules must follow the same frontend security rules as core Ordoma:
 
 ## Modules With A Backend Service
 
-A module page is browser code with no server of its own. When a module needs stored state, scheduled work, or a third-party credential, run that as a separate service beside Ordoma rather than as a patch to core, and leave Ordoma on its official image. What follows is what such a module needs in order to survive a Ordoma upgrade.
+A module page is browser code with no server of its own. When a module needs stored state, scheduled work, or a third-party credential, run that as a separate service beside Vidamia rather than as a patch to core, and leave Vidamia on its official image. What follows is what such a module needs in order to survive a Vidamia upgrade.
 
-Serve the service from the same origin under an `/api/` path; `/api/extensions/<module-id>/` is a reasonable convention. Browser requests then carry the Ordoma session cookie, and the service worker leaves them alone. The stale-cache trap described above applies to any dynamic path outside `/api/`.
+Serve the service from the same origin under an `/api/` path; `/api/extensions/<module-id>/` is a reasonable convention. Browser requests then carry the Vidamia session cookie, and the service worker leaves them alone. The stale-cache trap described above applies to any dynamic path outside `/api/`.
 
-Do not open `yuvomi.db`. It is core's private storage: the schema changes between releases without notice, and a second writer breaks Ordoma's own migrations. Read and write through `/api/v1` instead. If the data a module needs is not reachable through the API, that is a missing endpoint worth an issue, not a reason to reach for the file.
+Do not open `yuvomi.db`. It is core's private storage: the schema changes between releases without notice, and a second writer breaks Vidamia's own migrations. Read and write through `/api/v1` instead. If the data a module needs is not reachable through the API, that is a missing endpoint worth an issue, not a reason to reach for the file.
 
-Re-check identity on the server for every request. Forward the incoming Ordoma session cookie to `GET /api/v1/auth/me` over the internal Ordoma URL, and trust only that response for the user id, role, and permissions. The browser half of a module is not a trusted caller: never accept a user id or role from a request body.
+Re-check identity on the server for every request. Forward the incoming Vidamia session cookie to `GET /api/v1/auth/me` over the internal Vidamia URL, and trust only that response for the user id, role, and permissions. The browser half of a module is not a trusted caller: never accept a user id or role from a request body.
 
-Cache that answer briefly rather than resolving it on every call. Ordoma rate-limits `/api/` to 300 requests per minute per IP, and a service that does not forward the caller's address spends that budget from its own container IP for all of its users at once - the first symptom is a `429` for everyone. A few seconds of cache keyed on the session cookie is enough, and short enough that a logout still takes effect.
+Cache that answer briefly rather than resolving it on every call. Vidamia rate-limits `/api/` to 300 requests per minute per IP, and a service that does not forward the caller's address spends that budget from its own container IP for all of its users at once - the first symptom is a `429` for everyone. A few seconds of cache keyed on the session cookie is enough, and short enough that a logout still takes effect.
 
-Ordoma's CSRF token protects Ordoma's endpoints, not a module's. State-changing routes on the service should independently require:
+Vidamia's CSRF token protects Vidamia's endpoints, not a module's. State-changing routes on the service should independently require:
 
-- a valid Ordoma session, verified as above;
+- a valid Vidamia session, verified as above;
 - an `Origin` matching the public host;
 - the service's own double-submit CSRF cookie and header pair;
 - an endpoint-specific role or ownership check.
@@ -113,26 +113,26 @@ Scheduled jobs have no session. Issue an API token under Settings -> Admin -> AP
 
 ## Loading And Failure Behavior
 
-Ordoma scans `modules/` and validates each `module.json`. Invalid modules are shown as errored in Settings and are not loaded. Disabled modules are not served to the browser and do not appear in navigation. If a module page fails while rendering, Ordoma shows an error for that page without changing core application code.
+Vidamia scans `modules/` and validates each `module.json`. Invalid modules are shown as errored in Settings and are not loaded. Disabled modules are not served to the browser and do not appear in navigation. If a module page fails while rendering, Vidamia shows an error for that page without changing core application code.
 
 Admins enable and disable modules in Settings -> Modules -> Active modules. Ordering is a separate, personal matter and lives in Settings -> Personal -> Navigation, where every member also decides which modules they want in their own navigation - hiding one there removes it from that member's sidebar and mobile favourites without taking it from the household. Copying a new folder into `modules/` makes it appear in both places automatically.
 
-## Compatibility Across Ordoma Releases
+## Compatibility Across Vidamia Releases
 
-`module.json` records the module's own version, not the Ordoma version it was written against, and Ordoma does not gate loading on a compatibility range. A module that calls an endpoint a later release renamed or moved therefore keeps loading and fails at the point of use, in front of the user.
+`module.json` records the module's own version, not the Vidamia version it was written against, and Vidamia does not gate loading on a compatibility range. A module that calls an endpoint a later release renamed or moved therefore keeps loading and fails at the point of use, in front of the user.
 
 Two endpoints help, though they answer at different times:
 
-- `GET /api/v1/version` returns the running Ordoma version to any caller holding a session or an API token. Without a credential the response still describes the instance, but omits the version.
+- `GET /api/v1/version` returns the running Vidamia version to any caller holding a session or an API token. Without a credential the response still describes the instance, but omits the version.
 - `GET /api/v1/openapi.json` describes the operations that version actually serves. It is admin-only, so treat it as a check you run while developing and against a new release before shipping, not as something every module instance can call at startup.
 
-Compare the operations the module requires - method, path, and the response fields it reads - against that document while building, and again when a Ordoma release moves. At runtime, where the document is usually out of reach, watch the version instead and read the failure: a `404` or `405` on an endpoint that worked before means the operation moved, and that is the point to degrade rather than retry. Three outcomes cover the realistic cases: run normally; keep stored data, review and export readable while blocking writes; or show a dependency error with a retry control. Refusing a write is better than issuing it against an endpoint whose meaning has changed.
+Compare the operations the module requires - method, path, and the response fields it reads - against that document while building, and again when a Vidamia release moves. At runtime, where the document is usually out of reach, watch the version instead and read the failure: a `404` or `405` on an endpoint that worked before means the operation moved, and that is the point to degrade rather than retry. Three outcomes cover the realistic cases: run normally; keep stored data, review and export readable while blocking writes; or show a dependency error with a retry control. Refusing a write is better than issuing it against an endpoint whose meaning has changed.
 
 Third-party modules should build on `/api/v1` and the public browser libraries described above; breaking changes to those are called out in the CHANGELOG. Direct database access, private helpers under `server/`, and undocumented response fields sit outside that line and may change in any release without notice.
 
 ## Docker / Podman
 
-The default `docker-compose.yml` mounts `${MODULES_DIR:-./modules}` to `/app/modules`. To keep modules outside the Ordoma checkout, set `MODULES_DIR=/absolute/path/to/yuvomi-modules` in `.env` and restart the compose service. New or changed module folders are scanned at runtime; rebuilding the image is not required.
+The default `docker-compose.yml` mounts `${MODULES_DIR:-./modules}` to `/app/modules`. To keep modules outside the Vidamia checkout, set `MODULES_DIR=/absolute/path/to/yuvomi-modules` in `.env` and restart the compose service. New or changed module folders are scanned at runtime; rebuilding the image is not required.
 
 On Podman (RHEL/Fedora/CentOS Stream) use `podman-compose.yml` instead — it mounts the same `/app/modules` path with the SELinux `:Z` relabel so the rootless container can read your modules.
 

@@ -612,7 +612,7 @@ const CORE_TOOLS = [
 const OPENAPI_TOOLS = [
   {
     name: 'list_api_operations',
-    description: 'List Ordoma REST API operations reachable through call_api_operation.',
+    description: 'List Vidamia REST API operations reachable through call_api_operation.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -644,7 +644,7 @@ const OPENAPI_TOOLS = [
   },
   {
     name: 'get_api_operation',
-    description: 'Return OpenAPI metadata for one Ordoma API operation key.',
+    description: 'Return OpenAPI metadata for one Vidamia API operation key.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -656,7 +656,7 @@ const OPENAPI_TOOLS = [
   },
   {
     name: 'call_api_operation',
-    description: 'Call any Ordoma REST API operation from the live OpenAPI spec. Runs with the permissions of the authenticated MCP token — admin-only routes require an admin token.',
+    description: 'Call any Vidamia REST API operation from the live OpenAPI spec. Runs with the permissions of the authenticated MCP token — admin-only routes require an admin token.',
     inputSchema: {
       type: 'object',
       properties: {

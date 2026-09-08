@@ -1,27 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
-    <rect width="160" height="160" rx="34" fill="#34433e"/>
-    <g fill="#f7f3e9"><rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(0 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(15 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(30 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(45 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(60 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(75 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(90 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(105 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(120 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(135 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(150 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(165 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(180 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(195 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(210 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(225 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(240 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(255 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(270 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(285 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(300 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(315 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(330 80 80)"/>
-  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(345 80 80)"/></g>
+    <rect width="160" height="160" rx="34" fill="#504238"/>
+    <g color="#f7f3e9" fill="#f7f3e9"><g fill="none" stroke="currentColor" stroke-width="12">
+    <ellipse cx="61" cy="78" rx="29" ry="55" transform="rotate(-28 61 78)"/>
+    <ellipse cx="99" cy="78" rx="29" ry="55" transform="rotate(28 99 78)"/>
+  </g></g>
   </svg>

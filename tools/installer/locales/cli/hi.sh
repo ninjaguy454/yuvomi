@@ -1,4 +1,4 @@
-# Ordoma CLI-Installer — हिन्दी (hi)
+# Vidamia CLI-Installer — हिन्दी (hi)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="पासवर्ड (कम से कम 8 अक्ष�
 MSG_admin_confirm="पासवर्ड की पुष्टि करें:"
 MSG_admin_mismatch="पासवर्ड मेल नहीं खाते, फिर से प्रयास करें।"
 MSG_admin_created="व्यवस्थापक खाता बन गया!"
-MSG_admin_ready="  Ordoma तैयार है!"
+MSG_admin_ready="  Vidamia तैयार है!"
 MSG_admin_open="  खोलें: %s"
 MSG_admin_exists="एक व्यवस्थापक खाता पहले से मौजूद है।"
 MSG_admin_failed="व्यवस्थापक बनाने में विफल (HTTP %s): %s"

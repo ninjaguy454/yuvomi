@@ -2088,7 +2088,7 @@ export async function render(container, { user }) {
         <div class="skeleton skeleton-line skeleton-line--medium" style="height:36px;width:120px;border-radius:var(--radius-full)"></div>
         <div class="skeleton skeleton-line skeleton-line--short"  style="height:36px;width:80px; border-radius:var(--radius-full)"></div>
       </div>
-      <div id="list-content" style="flex:1;display:flex;flex-direction:column">
+      <div id="list-content" class="shopping-content--loading">
         <div style="padding:var(--space-6)">
           ${[1,2,3].map(() => `
             <div class="skeleton skeleton-line skeleton-line--full" style="height:48px;margin-bottom:var(--space-2);border-radius:var(--radius-sm)"></div>
@@ -2136,7 +2136,7 @@ export async function render(container, { user }) {
            Template-Literals, ein Backtick-Paar schliesst es und macht aus dem
            Rest ein Tagged Template ("TypeError: toolbar is not a function"). -->
       <div class="list-tabs-bar" id="list-tabs-bar"></div>
-      <div id="list-content" style="flex:1;display:flex;flex-direction:column;overflow:hidden"></div>
+      <div id="list-content"></div>
       <button class="page-fab" id="fab-new-item" aria-label="${t('shopping.addItemLabel')}" data-dock-label="${t('newLabel.shopping')}">
         <i data-lucide="plus" class="icon-xl" aria-hidden="true"></i>
       </button>

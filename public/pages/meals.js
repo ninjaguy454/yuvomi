@@ -522,9 +522,9 @@ export async function render(container, { user }) {
           <button class="btn btn--icon" id="week-next" aria-label="${t('meals.nextWeek')}">
             <i data-lucide="chevron-right" aria-hidden="true"></i>
           </button>
-          <button class="btn btn--secondary week-nav__today" id="week-today">${t('meals.today')}</button>
         </div>
         <div class="page-toolbar__actions">
+          <button class="btn btn--secondary week-nav__today" id="week-today">${t('meals.today')}</button>
           <button class="btn btn--secondary" id="meal-view-toggle" aria-pressed="${state.viewMode === 'timeline'}"><i data-lucide="${state.viewMode === 'timeline' ? 'layout-grid' : 'list'}" class="icon-sm" aria-hidden="true"></i><span>${state.viewMode === 'timeline' ? mealText('meals.weeklyGrid', 'Weekly grid') : mealText('meals.timeline', 'Timeline')}</span></button>
           <button class="btn btn--secondary" id="meal-choice-requests" hidden><i data-lucide="inbox" class="icon-sm" aria-hidden="true"></i><span>${mealText('meals.pendingRequests', 'Pending requests')}</span><span class="meal-request-count" aria-hidden="true"></span></button>
           <button class="btn btn--secondary" id="meal-plan-manage"><i data-lucide="notebook-tabs" class="icon-sm" aria-hidden="true"></i><span>${mealText('meals.mealPlans', 'Meal Plans')}</span></button>

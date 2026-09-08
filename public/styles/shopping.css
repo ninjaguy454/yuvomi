@@ -506,7 +506,15 @@
 /* Inhaltsfläche unter der Listen-Auswahl: trägt die gemeinsame Content-Spalte,
  * damit die 720er-Lesespalte darin an derselben Stelle sitzt wie zuvor. */
 #list-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   padding-inline: var(--page-inline-pad);
+}
+
+#list-content.shopping-content--loading {
+  overflow: visible;
 }
 
 #list-content[aria-busy="true"] {

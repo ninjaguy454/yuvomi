@@ -35,9 +35,9 @@ function buildOpenApiSpec(req, appVersion) {
   return {
     openapi: '3.1.0',
     info: {
-      title: 'Ordoma API',
+      title: 'Vidamia API',
       version: appVersion,
-      description: 'OpenAPI documentation for the Ordoma family organizer backend.',
+      description: 'OpenAPI documentation for the Vidamia family organizer backend.',
     },
     servers: [{ url: '/', description: 'Current origin' }],
     tags: apiTags,

@@ -1,4 +1,4 @@
-# Ordoma CLI 설치 프로그램 — 한국어 (ko)
+# Vidamia CLI 설치 프로그램 — 한국어 (ko)
 # 자동 생성됨 (키는 모든 로케일과 동일). en = 대체, de = 참조.
 # install.sh에서 소싱됨; 각 키에 대해 영어 기본값을 재정의함.
 # 점 키 → 밑줄 변수 (MSG_<영역>_<이름>).
@@ -84,7 +84,7 @@ MSG_admin_password="비밀번호 (최소 8자):"
 MSG_admin_confirm="비밀번호 확인:"
 MSG_admin_mismatch="비밀번호가 일치하지 않습니다. 다시 시도하세요."
 MSG_admin_created="관리자 계정이 생성되었습니다!"
-MSG_admin_ready="  Ordoma 준비 완료!"
+MSG_admin_ready="  Vidamia 준비 완료!"
 MSG_admin_open="  열기: %s"
 MSG_admin_exists="관리자 계정이 이미 존재합니다."
 MSG_admin_failed="관리자를 만들지 못했습니다 (HTTP %s): %s"

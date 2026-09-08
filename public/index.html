@@ -19,9 +19,9 @@
   <!-- iOS-spezifisch -->
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="Ordoma" />
-  <meta name="description" content="Ordoma - Familienplaner" />
-  <title>Ordoma</title>
+  <meta name="apple-mobile-web-app-title" content="Vidamia" />
+  <meta name="description" content="Vidamia — Your life, together." />
+  <title>Vidamia</title>
 
   <!-- PWA -->
   <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
@@ -94,8 +94,11 @@
   <!-- App-Shell - wird durch JavaScript gefüllt -->
   <div id="app" class="app-shell">
     <!-- Skeleton-Loading während Initialisierung -->
-    <div id="app-loading" class="app-loading" aria-live="polite" aria-label="Lade Ordoma…">
-      <div class="app-loading__logo"><span class="ordoma-mark" aria-hidden="true"></span><span>Ordoma</span></div>
+    <div id="app-loading" class="app-loading" aria-live="polite" aria-label="Lade Vidamia…">
+      <div class="app-loading__logo">
+        <!-- VIDAMIA_STARTUP_MARK_START --><svg class="app-loading__mark" viewBox="0 0 160 160" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-width="12"><g class="app-loading__spin"><g class="app-loading__oval app-loading__oval--first"><ellipse cx="61" cy="78" rx="29" ry="55" transform="rotate(-28 61 78)"/></g><g class="app-loading__oval app-loading__oval--second"><ellipse cx="99" cy="78" rx="29" ry="55" transform="rotate(28 99 78)"/></g></g></g></svg><!-- VIDAMIA_STARTUP_MARK_END -->
+        <span class="app-loading__wordmark">Vidamia</span>
+      </div>
     </div>
   </div>
 

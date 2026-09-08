@@ -80,7 +80,7 @@ test('GET / liefert die dokumentierten Defaults', async () => {
   assert.equal(body.data.date_format, 'dmy');
   assert.equal(body.data.time_format, '24h');
   assert.equal(body.data.week_start, 'monday');
-  assert.equal(body.data.app_name, 'Ordoma');
+  assert.equal(body.data.app_name, 'Vidamia');
   assert.equal(body.data.budget_mode, 'shared');
   assert.equal(body.data.calendar_default_duration, 60);
   assert.deepEqual(body.data.visible_meal_types, ['breakfast', 'lunch', 'dinner', 'snack']);
@@ -91,12 +91,12 @@ test('GET / liefert die dokumentierten Defaults', async () => {
   assert.equal(body.data.tasks_template_switch_warning, true);
 });
 
-test('historical app names no longer override Ordoma and remain stored without rewriting', async () => {
+test('historical app names no longer override Vidamia and remain stored without rewriting', async () => {
   try {
-    for (const name of ['Yuvomi', 'Oikos', 'Our household', 'Yuvomi Family']) {
+    for (const name of ['Yuvomi', 'Oikos', 'Ordoma', 'Our household', 'Yuvomi Family']) {
       cfgSet('app_name', name);
-      assert.equal((await get()).body.data.app_name, 'Ordoma');
-      assert.equal((await put({})).body.data.app_name, 'Ordoma');
+      assert.equal((await get()).body.data.app_name, 'Vidamia');
+      assert.equal((await put({})).body.data.app_name, 'Vidamia');
       assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name').value, name);
     }
   } finally { cfgDelete('app_name'); }
@@ -220,7 +220,7 @@ test('PUT ignores obsolete name payloads while saving supported personal fields'
     for (const name of ['Replacement', '', null, 'x'.repeat(5000), { old: 'client' }]) {
       const result = await put({ app_name: name, color_theme: 'cool' }, person);
       assert.equal(result.status, 200);
-      assert.equal(result.body.data.app_name, 'Ordoma');
+      assert.equal(result.body.data.app_name, 'Vidamia');
       assert.equal(result.body.data.color_theme, 'cool');
       assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name').value, 'Retained historical name');
     }
@@ -228,7 +228,7 @@ test('PUT ignores obsolete name payloads while saving supported personal fields'
 });
 test('PUT obsolete app_name never creates a new configuration row', async () => {
   cfgDelete('app_name');
-  assert.equal((await put({ app_name: 'Familie Muster' })).body.data.app_name, 'Ordoma');
+  assert.equal((await put({ app_name: 'Familie Muster' })).body.data.app_name, 'Vidamia');
   assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name'), undefined);
 });
 

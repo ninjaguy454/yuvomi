@@ -3,7 +3,7 @@
  * and docs/twitter-image.png (1200×675) from one shared design, so the three
  * assets can never drift apart again.
  *
- * The current Ordoma identity uses the canonical geometric mark.
+ * The current Vidamia identity uses the canonical geometric mark.
  * No historical upstream screenshot is presented as the current application.
  *
  * The typeface does NOT follow. Plus Jakarta Sans stays embedded as base64
@@ -31,7 +31,7 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-const brandSvg = readFileSync(resolve(ROOT, 'public/icons/ordoma-mark.svg'), 'utf8');
+const brandSvg = readFileSync(resolve(ROOT, 'public/icons/vidamia-mark.svg'), 'utf8');
 const FONT_SRC       = resolve(ROOT, 'docs/fonts/plus-jakarta-sans-variable.woff2');
 const OUT_SOCIAL     = resolve(ROOT, 'docs/social-preview.png');
 const OUT_OG         = resolve(ROOT, 'docs/og-image.png');
@@ -74,11 +74,11 @@ html, body {
 }
 body {
   position: relative;
-  background-color: #0A0A0C;
+  background-color: #f7f3e9;
   background-image:
-    radial-gradient(ellipse 78% 95% at 74% 52%, rgba(79,77,201,.45) 0%, transparent 58%),
-    radial-gradient(ellipse 50% 50% at 6% 8%,   rgba(138,135,255,.14) 0%, transparent 55%),
-    radial-gradient(ellipse 40% 40% at 96% 96%, rgba(45,212,191,.06) 0%, transparent 50%);
+    radial-gradient(ellipse 78% 95% at 74% 52%, rgba(174,141,101,.45) 0%, transparent 58%),
+    radial-gradient(ellipse 50% 50% at 6% 8%,   rgba(174,141,101,.14) 0%, transparent 55%),
+    radial-gradient(ellipse 40% 40% at 96% 96%, rgba(147,154,123,.06) 0%, transparent 50%);
 }
 /* fine tech grid overlay, faded toward edges */
 body::before {
@@ -96,7 +96,7 @@ body::before {
 body::after {
   content: '';
   position: absolute; top: 0; left: 0; right: 0; height: 3px;
-  background: linear-gradient(90deg, transparent 0%, #8A87FF 30%, #4F4DC9 55%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, #815f3d 30%, #ad815a 55%, transparent 100%);
   opacity: .85;
 }
 
@@ -117,37 +117,37 @@ body::after {
   margin-bottom: 30px;
 }
 .brand .name {
-  display: flex; align-items: center; gap: 0;
-  font-size: 30px; font-weight: 800; color: #fff; letter-spacing: -.035em; line-height: 1;
+  display: flex; align-items: center; gap: 10px;
+  font-size: 30px; font-weight: 800; color: #302a24; letter-spacing: -.035em; line-height: 1;
 }
-.brand .name svg { display: block; width: 33px; height: 33px; margin-right: -3px; }
+.brand .name svg { display: block; width: 33px; height: 33px; margin-right: 0; }
 
 .kicker {
   display: inline-flex; align-items: center; align-self: flex-start; gap: 8px;
   padding: 7px 14px; margin-bottom: 22px;
-  border: 1px solid rgba(138,135,255,.35);
+  border: 1px solid rgba(174,141,101,.35);
   border-radius: 999px;
-  background: rgba(138,135,255,.10);
+  background: rgba(174,141,101,.10);
   font-size: 11.5px; font-weight: 700; letter-spacing: .14em;
-  text-transform: uppercase; color: #8A87FF; line-height: 1;
+  text-transform: uppercase; color: #815f3d; line-height: 1;
 }
 .kicker .dot {
-  width: 6px; height: 6px; border-radius: 50%; background: #30D158;
-  box-shadow: 0 0 8px rgba(48,209,88,.9);
+  width: 6px; height: 6px; border-radius: 50%; background: #67745d;
+  box-shadow: 0 0 8px rgba(103,116,93,.9);
 }
 
 .headline {
   font-size: 50px; font-weight: 800; line-height: 1.04; letter-spacing: -.032em;
-  color: #fff; margin-bottom: 20px;
+  color: #302a24; margin-bottom: 20px;
 }
 .headline .grad {
-  background: linear-gradient(100deg, #A9A7FD 0%, #8A87FF 55%, #9B98FF 100%);
+  background: linear-gradient(100deg, #504238 0%, #815f3d 55%, #6b5a47 100%);
   -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
 }
 
 .sub {
   font-size: 16.5px; font-weight: 400; line-height: 1.55; letter-spacing: -.005em;
-  color: #AEAEB2; max-width: 430px; margin-bottom: 30px;
+  color: #655d53; max-width: 430px; margin-bottom: 30px;
 }
 
 .chips { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 30px; }
@@ -157,13 +157,13 @@ body::after {
   border: 1px solid rgba(255,255,255,.09);
   border-radius: 11px;
   background: rgba(255,255,255,.035);
-  color: #E5E5EA; font-size: 13.5px; font-weight: 600; letter-spacing: -.01em;
+  color: #51483e; font-size: 13.5px; font-weight: 600; letter-spacing: -.01em;
 }
-.chip svg { width: 16px; height: 16px; color: #8A87FF; flex-shrink: 0; }
+.chip svg { width: 16px; height: 16px; color: #815f3d; flex-shrink: 0; }
 
 .meta {
   display: flex; align-items: center; gap: 11px;
-  font-size: 12.5px; font-weight: 500; color: #8E8E93; letter-spacing: .01em;
+  font-size: 12.5px; font-weight: 500; color: #655d53; letter-spacing: .01em;
 }
 .meta .sep { width: 3px; height: 3px; border-radius: 50%; background: #48484A; }
 
@@ -171,7 +171,7 @@ body::after {
 .brand-display {
   position: absolute; right: 82px; top: 154px;
   width: 330px; height: 330px; border-radius: 68px;
-  background: #34433e; color: #f7f3e9;
+  background: #504238; color: #f7f3e9;
   box-shadow: 0 32px 100px rgba(0,0,0,.25);
 }
 .brand-display svg { width: 100%; height: 100%; }
@@ -181,12 +181,12 @@ body::after {
 
 <div class="left">
   <div class="brand">
-    <div class="name" aria-label="Ordoma"><span aria-hidden="true">${brandSvg}</span><span aria-hidden="true">rdoma</span></div>
+    <div class="name" aria-label="Vidamia"><span aria-hidden="true">${brandSvg}</span><span aria-hidden="true">Vidamia</span></div>
   </div>
 
   <div class="kicker"><span class="dot"></span>Self-hosted · Open Source</div>
 
-  <h1 class="headline">Your household,<br><span class="grad">in order.</span></h1>
+  <h1 class="headline">Life,<br><span class="grad">together.</span></h1>
 
   <p class="sub">Tasks, calendar, meals, shopping and budget — private by design, beautifully organized on your own server.</p>
 
@@ -227,7 +227,7 @@ async function render(outPath, finalW, finalH) {
 
   // Preserve the complete mark, headline and margins at every social ratio.
   await sharp(raw)
-    .resize(finalW, finalH, { fit: 'contain', background: '#0A0A0C' })
+    .resize(finalW, finalH, { fit: 'contain', background: '#f7f3e9' })
     .png({ compressionLevel: 9 })
     .toFile(outPath);
 

@@ -1,5 +1,5 @@
 {
-  "title": "Nastavení Ordoma",
+  "title": "Nastavení Vidamia",
   "common": {
     "continue": "Pokračovat",
     "back": "Zpět",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Základní konfigurace",
-    "subtitle": "Jak chceš přistupovat k Ordoma?",
+    "subtitle": "Jak chceš přistupovat k Vidamia?",
     "existing": "Nalezena stávající konfigurace – před uložením bude záloha tvého souboru .env.",
     "hostLabel": "Doména nebo IP adresa",
-    "hostHint": "Adresa, na které otevřeš Ordoma v prohlížeči.",
+    "hostHint": "Adresa, na které otevřeš Vidamia v prohlížeči.",
     "portLabel": "Port",
     "tzLabel": "Časové pásmo",
     "errHost": "Neplatný název hostitele. Používej jen písmena, číslice, pomlčky a tečky.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Synchronizace kalendáře",
-    "subtitle": "Propoj Ordoma s Kalendářem Google, Apple iCloud nebo Outlookem. Vše volitelné - rozbal pro konfiguraci.",
+    "subtitle": "Propoj Vidamia s Kalendářem Google, Apple iCloud nebo Outlookem. Vše volitelné - rozbal pro konfiguraci.",
     "google": "Kalendář Google",
     "googleHint": "Vytvoř OAuth přihlašovací údaje na {{link}}. Přesměrovací URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,16 +78,16 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "ID klienta",
     "outlookSecretLabel": "Tajný klíč klienta",
-    "outlookNote": "Jednosměrný push: Ordoma zůstává zdrojem pravdy - změny v Outlooku se přepíší. Rodinné účty se připojí později v nastavení aplikace."
+    "outlookNote": "Jednosměrný push: Vidamia zůstává zdrojem pravdy - změny v Outlooku se přepíší. Rodinné účty se připojí později v nastavení aplikace."
   },
   "advanced": {
     "tag": "Pokročilé · volitelné",
     "title": "Pokročilá nastavení",
     "subtitle": "Jednotné přihlášení, přístup do domácí sítě a pár jemných nastavení. Vše volitelné.",
-    "proxyLabel": "Jak je Ordoma zpřístupněn?",
+    "proxyLabel": "Jak je Vidamia zpřístupněn?",
     "proxyBehindHttps": "Za reverzní proxy s HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Přímý přístup přes localhost / HTTP",
-    "proxyHint": "Zvol „Přímý přístup\", pokud Ordoma otevíráš přes http:// - jinak se nepřihlásíš. Za reverzní proxy s HTTPS zvol první možnost.",
+    "proxyHint": "Zvol „Přímý přístup\", pokud Vidamia otevíráš přes http:// - jinak se nepřihlásíš. Za reverzní proxy s HTTPS zvol první možnost.",
     "oidc": "Jednotné přihlášení (OIDC)",
     "oidcHint": "Vyplň všechna čtyři pole pro povolení SSO, nebo je nechej prázdná.",
     "oidcIssuerLabel": "URL vydavatele",
@@ -151,12 +151,12 @@
     "oidcAllowSignup": "Povolit přihlášením přes SSO zakládat nové účty",
     "oidcAllowSignupHint": "Vypněte, pokud váš poskytovatel slouží více lidem než této domácnosti. Stávající účty se dál přihlašují a dál se propojují.",
     "baseUrlLabel": "Veřejná adresa",
-    "baseUrlHint": "Adresa, na které tvoje rodina otevírá Ordoma - ne hostitel a port kontejneru. Používá se pro odkazy na obnovu hesla a pozvánky.",
+    "baseUrlHint": "Adresa, na které tvoje rodina otevírá Vidamia - ne hostitel a port kontejneru. Používá se pro odkazy na obnovu hesla a pozvánky.",
     "syncIntervalLabel": "Interval synchronizace kalendáře (minuty)",
-    "syncIntervalHint": "Jak často Ordoma synchronizuje kalendáře a kontakty. Zvyš, pokud tě poskytovatel omezuje.",
+    "syncIntervalHint": "Jak často Vidamia synchronizuje kalendáře a kontakty. Zvyš, pokud tě poskytovatel omezuje.",
     "errSyncInterval": "Zadej celé kladné číslo minut.",
     "sectionPrivateNetwork": "Přístup do domácí sítě",
-    "privateNetworkHint": "Ordoma ve výchozím nastavení odmítá spojení na adresy ve tvé síti, což chrání před tím, aby byl server přiměn k oslovení interních služeb. Povol to, co doma opravdu provozuješ.",
+    "privateNetworkHint": "Vidamia ve výchozím nastavení odmítá spojení na adresy ve tvé síti, což chrání před tím, aby byl server přiměn k oslovení interních služeb. Povol to, co doma opravdu provozuješ.",
     "authPasswordLogin": "Zachovat přihlášení uživatelským jménem a heslem",
     "authPasswordLoginHint": "Vypnutím se SSO stane jedinou cestou dovnitř: přihlašovací formulář i obnova hesla zmizí. Pokud je poskytovatel nedostupný, cesta zpět vede přes úpravu souboru .env a restart."
   },
@@ -201,7 +201,7 @@
     "outlook": "Kalendář Outlook"
   },
   "docker": {
-    "title": "Spouštění Ordoma",
+    "title": "Spouštění Vidamia",
     "subtitle": "Obraz se načítá a kontejner Docker se spouští.",
     "elapsed": "{{n}} s uplynulo",
     "running": "Kontejner je v pořádku a spuštěn",
@@ -220,7 +220,7 @@
   },
   "admin": {
     "title": "Vytvoření účtu správce",
-    "subtitle": "Nastav své první přihlášení. Tento účet má úplný přístup k Ordoma.",
+    "subtitle": "Nastav své první přihlášení. Tento účet má úplný přístup k Vidamia.",
     "userLabel": "Uživatelské jméno",
     "userHint": "3-64 znaků: písmena, číslice, . - _",
     "nameLabel": "Zobrazované jméno",
@@ -236,9 +236,9 @@
     "errCreate": "Nepodařilo se vytvořit účet správce."
   },
   "done": {
-    "title": "Ordoma je připraven!",
+    "title": "Vidamia je připraven!",
     "subtitle": "Tvůj rodinný plánovač běží a účet správce je nastaven.",
-    "open": "Otevřít Ordoma →",
+    "open": "Otevřít Vidamia →",
     "backupReminder": "Nezapomeňte nyní zálohovat soubor .env — obsahuje vaše klíče.",
     "download": "Stáhnout soubor .env",
     "savedTo": "Uloženo do {{path}}",
@@ -250,21 +250,21 @@
     "nextModules": "Vyber moduly",
     "nextModulesDesc": "Zapni to, co vaše domácnost opravdu používá, zbytek skryj.",
     "nextInstall": "Nainstaluj do telefonů",
-    "nextInstallDesc": "Otevři Ordoma v telefonu a přidej ho na plochu - funguje i offline.",
-    "subtitleExisting": "Ordoma běží. Tato instalace už má účet správce - přihlas se svými stávajícími údaji."
+    "nextInstallDesc": "Otevři Vidamia v telefonu a přidej ho na plochu - funguje i offline.",
+    "subtitleExisting": "Vidamia běží. Tato instalace už má účet správce - přihlas se svými stávajícími údaji."
   },
   "welcome": {
-    "title": "Vítejte v Ordoma",
+    "title": "Vítejte v Vidamia",
     "subtitle": "Pojďme spustit váš soukromý rodinný plánovač. Vyberte, jak jej chcete nastavit.",
     "simpleTitle": "Jednoduché nastavení",
     "simpleBadge": "Doporučeno",
-    "simpleDesc": "Technické detaily vyřešíme za vás. Ideální pro provoz Ordoma doma.",
+    "simpleDesc": "Technické detaily vyřešíme za vás. Ideální pro provoz Vidamia doma.",
     "simpleTime": "Přibližně 2 minuty",
     "advancedTitle": "Pokročilé nastavení",
     "advancedDesc": "Plná kontrola: reverzní proxy, synchronizace kalendáře, e-mail, jednotné přihlášení a zálohy.",
     "advancedTime": "Každá volba, krok za krokem",
     "existingLocked": "Byla nalezena existující instalace. Použij pokročilé nastavení, aby se zachovalo tvé současné nastavení.",
-    "containerRunning": "Ordoma právě běží. Uložení restartuje kontejner, takže bude na chvíli nedostupný."
+    "containerRunning": "Vidamia právě běží. Uložení restartuje kontejner, takže bude na chvíli nedostupný."
   },
   "simple": {
     "title": "Připraveno",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Každou noc se uchová místní záloha.",
     "backupReminder": "Po nastavení zálohujte vygenerovaný soubor .env — obsahuje vaše jediné šifrovací klíče.",
     "switchAdvanced": "Potřebujete více možností? Přepněte na pokročilé nastavení",
-    "start": "Nastavit a spustit Ordoma"
+    "start": "Nastavit a spustit Vidamia"
   },
   "email": {
     "title": "E-mail a obnovení hesla",

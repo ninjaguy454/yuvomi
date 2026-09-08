@@ -1803,7 +1803,7 @@ function renderAppShell(container) {
 
   // One canonical mark; its mask follows the current theme's text color.
   const logomark = document.createElement('div');
-  logomark.className = 'nav-sidebar__logomark ordoma-mark';
+  logomark.className = 'nav-sidebar__logomark vidamia-mark';
   logomark.setAttribute('aria-hidden', 'true');
   sidebarLogo.appendChild(logomark);
 
@@ -4196,14 +4196,14 @@ window.addEventListener('error', (e) => {
   // Ressource-Ladefehler (z.B. fehlgeschlagenes Bild): ignorieren
   if (e.target && e.target !== window) return;
   if (RESIZE_OBSERVER_NOTICE.test(e.message || '')) return;
-  console.error('[Ordoma] Unbehandelter Fehler:', e.error ?? e.message);
+  console.error('[Vidamia] Unbehandelter Fehler:', e.error ?? e.message);
   showToast(t('common.unexpectedError'), 'danger');
 });
 
 window.addEventListener('unhandledrejection', (e) => {
   // Auth-Fehler werden bereits von auth:expired behandelt
   if (e.reason?.status === 401) return;
-  console.error('[Ordoma] Unbehandeltes Promise-Rejection:', e.reason);
+  console.error('[Vidamia] Unbehandeltes Promise-Rejection:', e.reason);
   showToast(friendlyError(e.reason), 'danger');
   e.preventDefault(); // Konsolenfehler unterdrücken (bereits geloggt)
 });

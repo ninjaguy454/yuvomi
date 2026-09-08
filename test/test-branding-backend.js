@@ -4,13 +4,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { APP_NAME, displayAppName, isBrandAsset } from '../server/utils/brand.js';
 
-test('product identity remains Ordoma regardless of historical or custom display names', () => {
-  assert.equal(APP_NAME, 'Ordoma');
+test('product identity remains Vidamia regardless of historical or custom display names', () => {
+  assert.equal(APP_NAME, 'Vidamia');
   for (const value of [undefined, null, '', '  ', 'Yuvomi', 'Oikos', ' Yuvomi ']) {
-    assert.equal(displayAppName(value), 'Ordoma');
+    assert.equal(displayAppName(value), 'Vidamia');
   }
-  for (const name of ['Our household', 'Yuvomi Family', 'oikos', 'Ordoma']) {
-    assert.equal(displayAppName(name), 'Ordoma');
+  for (const name of ['Our household', 'Yuvomi Family', 'oikos', 'Ordoma', ' ORDoma ', 'Vidamia']) {
+    assert.equal(displayAppName(name), 'Vidamia');
   }
 });
 
@@ -18,26 +18,31 @@ test('product identity remains Ordoma regardless of historical or custom display
 // opening the deployment database or invoking background schedulers.
 const serverSource = readFileSync(new URL('../server/index.js', import.meta.url), 'utf8');
 
-test('version and dynamic manifest expose fixed Ordoma identity without reading historical name configuration', () => {
+test('version and dynamic manifest expose fixed Vidamia identity without reading historical name configuration', () => {
   const queries = [];
   const db = { get: () => ({ prepare: sql => {
     queries.push(sql);
-    return { get: () => sql.includes('COUNT(*)') ? {count:1} : {value:'Old custom name'} };
+    return { get: () => sql.includes('COUNT(*)') ? {count:1} : {value:'Ordoma'} };
   } }) };
   const versionSource = serverSource.slice(serverSource.indexOf('function buildVersionPayload('), serverSource.indexOf('// Public bootstrap metadata'));
   const version = new Function('APP_NAME', 'db', 'OIDC_PASSWORD_SENTINEL', 'isPasswordLoginEnabled', 'APP_VERSION', 'MAX_UPLOAD_BYTES', `${versionSource}; return buildVersionPayload;`)(APP_NAME,db,'OIDC',()=>false,'test-version',123);
-  assert.equal(version(false).app_name,'Ordoma');
-  assert.equal(version(true).app_name,'Ordoma');
+  assert.equal(version(false).app_name,'Vidamia');
+  assert.equal(version(true).app_name,'Vidamia');
   assert.equal(version(true).version,'test-version');
   assert.ok(queries.every(sql=>!sql.includes('app_name')));
 
   const routeStart = serverSource.indexOf("app.get('/manifest.webmanifest'");
   const route = serverSource.slice(routeStart,serverSource.indexOf('\n});',routeStart));
   const body = route.slice(route.indexOf('=> {')+4);
-  const response = { type(){},setHeader(){},json(value){this.value=value;} };
+  const response = { headers:{},type(){},setHeader(key,value){this.headers[key]=value;},json(value){this.value=value;} };
   new Function('APP_NAME','res',body)(APP_NAME,response);
-  assert.equal(response.value.short_name,'Ordoma');
-  assert.match(response.value.name,/^Ordoma\b/);
+  assert.equal(response.value.short_name,'Vidamia');
+  assert.equal(response.value.name,'Vidamia — Your life, together.');
+  assert.equal(response.value.description,'Your life, together.');
+  assert.equal(response.value.lang,'en');
+  assert.equal(response.headers['Cache-Control'],'no-cache, must-revalidate');
+  const staticManifest = JSON.parse(readFileSync(new URL('../public/manifest.json', import.meta.url), 'utf8'));
+  assert.deepEqual(response.value, staticManifest, 'Installed and fallback manifests share display metadata and stable identity');
 });
 
 const match = serverSource.match(/setHeaders\(res, filePath\) \{([\s\S]*?)\n  \},/);
@@ -50,13 +55,14 @@ function headers(filePath) {
 }
 
 const assets = [
-  'favicon.ico', 'icons/ordoma-mark.svg', 'icons/favicon-16.png', 'icons/favicon-32.png',
+  'favicon.ico', 'icons/vidamia-mark.svg', 'icons/favicon-16.png', 'icons/favicon-32.png',
+  'icons/ordoma-mark.svg',
   'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png',
   'icons/icon-maskable-192.png', 'icons/icon-maskable-512.png', 'icons/notification-badge.png',
 ];
 test('every brand asset revalidates on both Windows and POSIX deployment paths', () => {
   for (const asset of assets) {
-    for (const filePath of [`/app/public/${asset}`, `C:\\Ordoma\\public\\${asset.replaceAll('/', '\\')}`]) {
+    for (const filePath of [`/app/public/${asset}`, `C:\\Vidamia\\public\\${asset.replaceAll('/', '\\')}`]) {
       assert.equal(isBrandAsset(filePath), true, filePath);
       assert.equal(headers(filePath)['Cache-Control'], 'no-cache, must-revalidate', filePath);
     }

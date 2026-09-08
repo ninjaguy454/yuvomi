@@ -2,7 +2,7 @@
 
 _Abgeleitet aus einer Wissensgraph-Analyse der Codebase (2026-07-08); die Import-/Aufruf-Zahlen sind per grep-Gegencheck ermittelt und zuletzt am 2026-08-05 aufgefrischt. Die Betweenness-Werte stammen aus der Analyse vom Juli und sind als Größenordnung zu lesen._
 
-Die zentralsten Frontend-/Server-Utilities von Ordoma ("God-Nodes" im Wissensgraph)
+Die zentralsten Frontend-/Server-Utilities von Vidamia ("God-Nodes" im Wissensgraph)
 zerfallen in **zwei Klassen**, die der Graph an der Provenienz ihrer Kanten trennt
 (`INFERRED calls` vs. `EXTRACTED imports`):
 

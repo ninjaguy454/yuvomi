@@ -1115,7 +1115,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       ${isEdit && task?.activity_template_id ? `<section class="form-group">
         <label class="label">Activity responsibility</label>
         <p class="task-field-hint">${(task.activity_responsibilities || []).map((row) => `${esc(row.role)}: ${esc(row.display_name)}`).join(' · ') || (task.activity_assignment_state === 'open' ? 'Open for an eligible household member to claim.' : 'No active responsibility recorded.')}</p>
-        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(user.display_name)}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Ordoma will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
+        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(user.display_name)}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Vidamia will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
       </section>` : ''}
       <div class="form-group" id="task-manual-assignment-mode" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-assignment-mode">Assignment mode</label>
@@ -4105,7 +4105,7 @@ function renderTaskLocationFields(task = null) {
     <legend class="label">Location</legend>
     <select class="input" id="task-location-kind" name="location_kind" aria-label="Location type">
       <option value="none" ${kind === 'none' ? 'selected' : ''}>No location</option>
-      <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Ordoma Place</option>
+      <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Vidamia Place</option>
       <option value="manual" ${kind === 'manual' ? 'selected' : ''}>One-use manual location</option>
       <option value="google_place" ${kind === 'google_place' ? 'selected' : ''}>Find a business or place</option>
     </select>
@@ -4119,7 +4119,7 @@ function renderTaskLocationFields(task = null) {
       <details style="margin-top:var(--space-2)"><summary class="task-field-hint">Advanced coordinates (optional)</summary><div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div></details>
     </div>
     <div data-location-pane="google_place" style="margin-top:var(--space-3)">
-      <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Ordoma server. Search runs only when you press Search.</p>
+      <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Vidamia server. Search runs only when you press Search.</p>
       <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
       <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>
       <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
@@ -4178,7 +4178,7 @@ function wireTaskLocationForm(panel) {
         const row = document.createElement('div');
         row.className = 'list-row automation-list-row';
         const distance = result.distance_meters == null ? '' : ` • ${(result.distance_meters / 1609.344).toFixed(1)} mi`;
-        row.insertAdjacentHTML('beforeend', `<div class="automation-list-row__copy"><strong>${esc(result.display_name)}</strong><br><small class="form-hint">${esc(result.formatted_address || '')}${esc(distance)}${result.primary_type ? ` • ${esc(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-save-name="${index}" maxlength="120" value="${esc(result.display_name)}" aria-label="Ordoma Place name"></div><div class="automation-list-row__actions"><button type="button" class="btn btn--primary btn--sm" data-use-place="${index}">Use for Task</button>${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-save-place="${index}">Save to Places</button>` : ''}</div>`);
+        row.insertAdjacentHTML('beforeend', `<div class="automation-list-row__copy"><strong>${esc(result.display_name)}</strong><br><small class="form-hint">${esc(result.formatted_address || '')}${esc(distance)}${result.primary_type ? ` • ${esc(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-save-name="${index}" maxlength="120" value="${esc(result.display_name)}" aria-label="Vidamia Place name"></div><div class="automation-list-row__actions"><button type="button" class="btn btn--primary btn--sm" data-use-place="${index}">Use for Task</button>${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-save-place="${index}">Save to Places</button>` : ''}</div>`);
         list.appendChild(row);
       });
       list.querySelectorAll('[data-use-place]').forEach((button) => button.addEventListener('click', () => {
@@ -4194,14 +4194,14 @@ function wireTaskLocationForm(panel) {
       list.querySelectorAll('[data-save-place]').forEach((button) => button.addEventListener('click', async () => {
         const index = Number(button.dataset.savePlace); const result = results[index];
         const name = list.querySelector(`[data-place-save-name="${index}"]`)?.value.trim();
-        if (!name) { status.textContent = 'Give the saved Ordoma Place a name.'; return; }
+        if (!name) { status.textContent = 'Give the saved Vidamia Place a name.'; return; }
         button.disabled = true;
         try {
           const saved = await api.post('/planning/admin/places/from-google', { external_place_id: result.external_place_id, name, type: 'custom', latitude: result.latitude, longitude: result.longitude });
           state.places.push(saved.data); kind.value = 'saved_place'; refresh();
           const select = panel.querySelector('#task-location-place');
           select.insertAdjacentHTML('beforeend', `<option value="${saved.data.id}">${esc(saved.data.path_label || saved.data.name)}</option>`); select.value = String(saved.data.id);
-          status.textContent = 'Saved to Ordoma Places and selected for this Task.';
+          status.textContent = 'Saved to Vidamia Places and selected for this Task.';
         } catch (error) { status.textContent = error.message; button.disabled = false; }
       }));
     } catch (error) { status.textContent = error.message; }

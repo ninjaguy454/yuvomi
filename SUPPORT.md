@@ -1,6 +1,6 @@
 # Support
 
-Ordoma is an independent household-management platform derived from open-source Yuvomi. Report issues in the Ordoma fork to its maintainer. The inherited channels below belong to upstream Yuvomi and should be used for issues reproduced there:
+Vidamia is an independent household-management platform derived from open-source Yuvomi. Report issues in the Vidamia fork to its maintainer. The inherited channels below belong to upstream Yuvomi and should be used for issues reproduced there:
 
 - **Questions & ideas** — [GitHub Discussions](https://github.com/ulsklyc/yuvomi/discussions).
   Feature ideas go to the [Ideas category](https://github.com/ulsklyc/yuvomi/discussions/new?category=ideas);

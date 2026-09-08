@@ -86,13 +86,13 @@ export function tasksPaths() {
     },
     '/api/v1/tasks/{id}/location/promote': {
       post: op({
-        summary: 'Promote a one-use Google Task location into Ordoma Places',
+        summary: 'Promote a one-use Google Task location into Vidamia Places',
         tag: 'Tasks',
         admin: true,
         params: [idParam()],
         stateChanging: true,
         requestBody: jsonBody(null),
-        description: 'Creates or reuses a Ordoma Place keyed by Google external_place_id, then changes only the Task location reference to the immutable Ordoma Place ID. The Task itself is not recreated.',
+        description: 'Creates or reuses a Vidamia Place keyed by Google external_place_id, then changes only the Task location reference to the immutable Vidamia Place ID. The Task itself is not recreated.',
       }),
     },
     '/api/v1/tasks/{id}/status': {

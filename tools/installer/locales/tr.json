@@ -1,5 +1,5 @@
 {
-  "title": "Ordoma Kurulumu",
+  "title": "Vidamia Kurulumu",
   "common": {
     "continue": "Devam",
     "back": "Geri",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Temel Yapılandırma",
-    "subtitle": "Ordoma'a nasıl erişeceksiniz?",
+    "subtitle": "Vidamia'a nasıl erişeceksiniz?",
     "existing": "Mevcut yapılandırma algılandı — kaydetmeden önce geçerli .env dosyanızın yedeği alınacak.",
     "hostLabel": "Alan adı veya IP adresi",
-    "hostHint": "Ordoma'u tarayıcınızda açmak için kullanacağınız adres.",
+    "hostHint": "Vidamia'u tarayıcınızda açmak için kullanacağınız adres.",
     "portLabel": "Bağlantı noktası",
     "tzLabel": "Saat dilimi",
     "errHost": "Geçersiz ana bilgisayar adı. Yalnızca harf, rakam, tire ve nokta kullanın.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Takvim Senkronizasyonu",
-    "subtitle": "Ordoma’u Google Takvim, Apple iCloud veya Outlook’a bağlayın. Hepsi isteğe bağlı - yapılandırmak için genişletin.",
+    "subtitle": "Vidamia’u Google Takvim, Apple iCloud veya Outlook’a bağlayın. Hepsi isteğe bağlı - yapılandırmak için genişletin.",
     "google": "Google Takvim",
     "googleHint": "{{link}} adresinde OAuth kimlik bilgileri oluşturun. Yönlendirme URI'si: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "İstemci kimliği",
     "outlookSecretLabel": "İstemci gizli anahtarı",
-    "outlookNote": "Tek yönlü gönderim: Ordoma kaynak olmaya devam eder - Outlook’ta yapılan değişikliklerin üzerine yazılır. Aile hesapları daha sonra uygulama ayarlarından bağlanır."
+    "outlookNote": "Tek yönlü gönderim: Vidamia kaynak olmaya devam eder - Outlook’ta yapılan değişikliklerin üzerine yazılır. Aile hesapları daha sonra uygulama ayarlarından bağlanır."
   },
   "review": {
     "title": "İnceleme",
@@ -121,7 +121,7 @@
     "outlook": "Outlook Takvimi"
   },
   "docker": {
-    "title": "Ordoma başlatılıyor",
+    "title": "Vidamia başlatılıyor",
     "subtitle": "İmaj indiriliyor ve Docker kapsayıcısı başlatılıyor.",
     "elapsed": "{{n}} sn geçti",
     "running": "Kapsayıcı sağlıklı ve çalışıyor",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "Yönetici Hesabı Oluştur",
-    "subtitle": "İlk girişinizi ayarlayın. Bu hesap Ordoma'a tam erişime sahiptir.",
+    "subtitle": "İlk girişinizi ayarlayın. Bu hesap Vidamia'a tam erişime sahiptir.",
     "userLabel": "Kullanıcı adı",
     "userHint": "3-64 karakter: harfler, rakamlar, . - _",
     "nameLabel": "Görünen ad",
@@ -156,9 +156,9 @@
     "errCreate": "Yönetici hesabı oluşturulamadı."
   },
   "done": {
-    "title": "Ordoma hazır!",
+    "title": "Vidamia hazır!",
     "subtitle": "Aile planlayıcınız çalışıyor ve yönetici hesabınız ayarlandı.",
-    "open": "Ordoma'u aç →",
+    "open": "Vidamia'u aç →",
     "backupReminder": "Şimdi .env dosyanızı yedeklemeyi unutmayın — anahtarlarınızı içerir.",
     "download": ".env dosyasını indir",
     "savedTo": "Şuraya kaydedildi: {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "Modüllerini seç",
     "nextModulesDesc": "Evinizin gerçekten kullandığını aç, gerisini gizle.",
     "nextInstall": "Telefonlara kur",
-    "nextInstallDesc": "Ordoma'yi telefonda aç ve ana ekrana ekle - çevrimdışı da çalışır.",
-    "subtitleExisting": "Ordoma çalışıyor. Bu kurulumda zaten bir yönetici hesabı var - mevcut bilgilerinle oturum aç."
+    "nextInstallDesc": "Vidamia'yi telefonda aç ve ana ekrana ekle - çevrimdışı da çalışır.",
+    "subtitleExisting": "Vidamia çalışıyor. Bu kurulumda zaten bir yönetici hesabı var - mevcut bilgilerinle oturum aç."
   },
   "advanced": {
     "tag": "Gelişmiş · isteğe bağlı",
     "title": "Gelişmiş Ayarlar",
     "subtitle": "Çoklu oturum açma, ev ağına erişim ve birkaç ince ayar. Hepsi isteğe bağlı.",
-    "proxyLabel": "Ordoma nasıl yayınlanıyor?",
+    "proxyLabel": "Vidamia nasıl yayınlanıyor?",
     "proxyBehindHttps": "HTTPS'li bir ters proxy arkasında (Caddy, nginx, Traefik)",
     "proxyDirect": "localhost / HTTP üzerinden doğrudan erişim",
-    "proxyHint": "Ordoma'yi http:// üzerinden açıyorsan \"Doğrudan erişim\" seç - aksi halde oturum açamazsın. HTTPS'li ters vekil sunucunun arkasındaysan ilk seçeneği seç.",
+    "proxyHint": "Vidamia'yi http:// üzerinden açıyorsan \"Doğrudan erişim\" seç - aksi halde oturum açamazsın. HTTPS'li ters vekil sunucunun arkasındaysan ilk seçeneği seç.",
     "oidc": "Çoklu Oturum Açma (OIDC)",
     "oidcHint": "SSO'yu etkinleştirmek için dört alanı da doldurun ya da boş bırakın.",
     "oidcIssuerLabel": "Issuer URL'si",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "SSO girişlerinin yeni hesap oluşturmasına izin ver",
     "oidcAllowSignupHint": "Sağlayıcınız bu haneden daha fazla kişiye hizmet veriyorsa bunu kapatın. Mevcut hesaplar giriş yapmaya ve eşleşmeye devam eder.",
     "baseUrlLabel": "Herkese açık adres",
-    "baseUrlHint": "Ailenin Ordoma'yi açtığı adres - kapsayıcının konağı ve bağlantı noktası değil. Parola sıfırlama ve davet bağlantıları için kullanılır.",
+    "baseUrlHint": "Ailenin Vidamia'yi açtığı adres - kapsayıcının konağı ve bağlantı noktası değil. Parola sıfırlama ve davet bağlantıları için kullanılır.",
     "syncIntervalLabel": "Takvim eşitleme aralığı (dakika)",
-    "syncIntervalHint": "Ordoma'nin takvimleri ve kişileri ne sıklıkla eşitleyeceği. Sağlayıcın hız sınırı uyguluyorsa artır.",
+    "syncIntervalHint": "Vidamia'nin takvimleri ve kişileri ne sıklıkla eşitleyeceği. Sağlayıcın hız sınırı uyguluyorsa artır.",
     "errSyncInterval": "Dakika olarak pozitif bir tam sayı gir.",
     "sectionPrivateNetwork": "Ev ağına erişim",
-    "privateNetworkHint": "Ordoma varsayılan olarak kendi ağındaki adreslere bağlantıları reddeder; bu, sunucunun iç servislere ulaşmaya kandırılmasına karşı korur. Evde gerçekten çalıştırdıklarını etkinleştir.",
+    "privateNetworkHint": "Vidamia varsayılan olarak kendi ağındaki adreslere bağlantıları reddeder; bu, sunucunun iç servislere ulaşmaya kandırılmasına karşı korur. Evde gerçekten çalıştırdıklarını etkinleştir.",
     "authPasswordLogin": "Kullanıcı adı ve şifreyle girişi koru",
     "authPasswordLoginHint": "Kapatmak SSO'yu tek giriş yolu yapar: giriş formu ve şifre sıfırlama kaybolur. Sağlayıcıya erişilemez hale gelirse dönüş yolu .env dosyasını düzenlemek ve yeniden başlatmaktır."
   },
   "welcome": {
-    "title": "Ordoma’ye hoş geldiniz",
+    "title": "Vidamia’ye hoş geldiniz",
     "subtitle": "Özel aile planlayıcınızı çalıştıralım. Nasıl kuracağınızı seçin.",
     "simpleTitle": "Basit kurulum",
     "simpleBadge": "Önerilen",
-    "simpleDesc": "Teknik ayrıntıları sizin için biz hallederiz. Ordoma’yi evde çalıştırmak için idealdir.",
+    "simpleDesc": "Teknik ayrıntıları sizin için biz hallederiz. Vidamia’yi evde çalıştırmak için idealdir.",
     "simpleTime": "Yaklaşık 2 dakika",
     "advancedTitle": "Gelişmiş kurulum",
     "advancedDesc": "Tam kontrol: ters proxy, takvim senkronizasyonu, e-posta, tek oturum açma ve yedeklemeler.",
     "advancedTime": "Her seçenek, adım adım",
     "existingLocked": "Mevcut bir kurulum bulundu. Şu anki ayarlarının korunması için gelişmiş kurulumu kullan.",
-    "containerRunning": "Ordoma şu anda çalışıyor. Kaydetmek kapsayıcıyı yeniden başlatır, bu yüzden kısa süre erişilemez olur."
+    "containerRunning": "Vidamia şu anda çalışıyor. Kaydetmek kapsayıcıyı yeniden başlatır, bu yüzden kısa süre erişilemez olur."
   },
   "simple": {
     "title": "Hazır",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Her gece yerel bir yedek saklanır.",
     "backupReminder": "Kurulumdan sonra oluşturulan .env dosyasını yedekleyin — tek şifreleme anahtarlarınızı içerir.",
     "switchAdvanced": "Daha fazla seçenek mi lazım? Gelişmiş kuruluma geçin",
-    "start": "Ordoma’yi kur ve başlat"
+    "start": "Vidamia’yi kur ve başlat"
   },
   "email": {
     "title": "E-posta ve parola sıfırlama",

@@ -7,39 +7,48 @@ import { displayAppName } from '../public/utils/branding.js';
 const read = path => readFileSync(new URL(`../${path}`, import.meta.url));
 const text = path => read(path).toString('utf8');
 
-test('Ordoma is the fixed product identity regardless of historical App Name values', () => {
-  for (const name of [null, '', 'Yuvomi', 'Oikos', 'Ordoma', 'Our home', 'Yuvomi family archive']) assert.equal(displayAppName(name), 'Ordoma');
+test('Vidamia is the fixed product identity regardless of historical App Name values', () => {
+  for (const name of [null, '', 'Yuvomi', 'Oikos', 'Ordoma', 'Vidamia', 'Our home', 'Yuvomi family archive']) assert.equal(displayAppName(name), 'Vidamia');
   assert.doesNotMatch(text('public/utils/branding.js'), /(?:localStorage|sessionStorage|\.setItem|fetch\()/);
 });
 
 test('branding preserves installed application identity and uses revalidated manifest metadata', () => {
   const manifest = JSON.parse(text('public/manifest.json'));
-  assert.equal(manifest.short_name, 'Ordoma');
+  assert.equal(manifest.short_name, 'Vidamia');
+  assert.equal(manifest.name, 'Vidamia — Your life, together.');
+  assert.equal(manifest.description, 'Your life, together.');
+  assert.equal(manifest.lang, 'en');
   assert.deepEqual([manifest.id, manifest.start_url, manifest.scope], ['/', '/', '/']);
   assert.deepEqual(manifest.icons.map(icon => [icon.src, icon.purpose]), [
     ['/icons/icon-192.png', 'any'], ['/icons/icon-512.png', 'any'],
     ['/icons/icon-maskable-192.png', 'maskable'], ['/icons/icon-maskable-512.png', 'maskable'],
   ]);
   assert.match(text('public/index.html'), /href="\/manifest\.webmanifest" crossorigin="use-credentials"/);
+  assert.match(text('public/index.html'), /name="description" content="Vidamia — Your life, together\."/);
 });
 
 test('the release update includes the new mark and alpha badge while preserving privacy identities', () => {
   const sw = text('public/sw.js');
-  for (const asset of ['/icons/ordoma-mark.svg', '/icons/notification-badge.png', '/utils/branding.js']) assert.ok(sw.includes(`'${asset}'`));
+  for (const asset of ['/icons/vidamia-mark.svg', '/icons/notification-badge.png', '/utils/branding.js']) assert.ok(sw.includes(`'${asset}'`));
   assert.match(sw, /DEVICE_PRIVACY_CACHE\s*=\s*'yuvomi-device-privacy'/);
   assert.match(sw, /BYPASS_CACHE\s*=\s*'yuvomi-bypass-flag'/);
   assert.match(sw, /tag:\s*payload\.tag\s*\|\|\s*'yuvomi-push'/);
-  assert.match(sw, /const title = payload\.title \|\| 'Ordoma'/);
+  assert.match(sw, /const title = payload\.title \|\| 'Vidamia'/);
   assert.match(sw, /badge:\s*'\/icons\/notification-badge\.png'/);
 });
 
 test('installer marks use canonical geometry and the favicon contains three valid icon entries', () => {
-  const mark = text('public/icons/ordoma-mark.svg').match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/)[1].trim();
+  const mark = text('public/icons/vidamia-mark.svg').match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/)[1].trim();
+  assert.equal(text('public/icons/ordoma-mark.svg'), text('public/icons/vidamia-mark.svg'), 'The installed legacy asset URL serves the current mark');
   const installer = text('tools/installer/install.html');
-  const blocks = [...installer.matchAll(/<!-- ordoma-mark:start -->([\s\S]*?)<!-- ordoma-mark:end -->/g)];
+  const blocks = [...installer.matchAll(/<!-- vidamia-mark:start -->([\s\S]*?)<!-- vidamia-mark:end -->/g)];
   assert.equal(blocks.length, 2);
   for (const [, block] of blocks) assert.ok(block.includes(mark));
   assert.doesNotMatch(mark, /<text|<image|https?:|<script/);
+  const ellipses = [...mark.matchAll(/<ellipse\b[^>]*\/>/g)].map(match => match[0]);
+  assert.equal(ellipses.length, 2, 'Canonical geometry is exactly two ovals');
+  const startup = text('public/index.html').match(/<!-- VIDAMIA_STARTUP_MARK_START -->([\s\S]*?)<!-- VIDAMIA_STARTUP_MARK_END -->/)[1];
+  for (const ellipse of ellipses) assert.ok(startup.includes(ellipse), 'Startup uses the same oval geometry');
   const ico = read('public/favicon.ico');
   assert.equal(ico.readUInt16LE(0), 0); assert.equal(ico.readUInt16LE(2), 1); assert.equal(ico.readUInt16LE(4), 3);
   for (const [index, size] of [16, 32, 48].entries()) {
@@ -67,11 +76,11 @@ test('browser decodes every icon size; maskable marks stay in the safe circle an
           top = Math.min(top, y); bottom = Math.max(bottom, y);
         }
       }
-      return { width: right - left + 1, height: bottom - top + 1, centerAlpha: pixels[(80 * 160 + 80) * 4 + 3] };
-    }, `data:image/svg+xml;base64,${read('public/icons/ordoma-mark.svg').toString('base64')}`);
-    assert.ok(markBounds.width > 100, 'Radial O remains substantial inside the icon');
-    assert.ok(Math.abs(markBounds.width - markBounds.height) <= 1, 'Radial O must be circular, not stretched into an oval');
-    assert.equal(markBounds.centerAlpha, 0, 'Radial O retains an open center');
+      return { width: right - left + 1, height: bottom - top + 1, centerAlpha: pixels[(95 * 160 + 80) * 4 + 3] };
+    }, `data:image/svg+xml;base64,${read('public/icons/vidamia-mark.svg').toString('base64')}`);
+    assert.ok(markBounds.width > 110 && markBounds.height > 100, 'The intersecting ovals remain substantial and vertically centered');
+    assert.ok(markBounds.width / markBounds.height < 1.2, 'The intersecting mark retains balanced proportions');
+    assert.equal(markBounds.centerAlpha, 0, 'The intersecting ovals retain open negative space');
     const icons = [
       ['icon-192.png', 192], ['icon-512.png', 512], ['icon-maskable-192.png', 192],
       ['icon-maskable-512.png', 512], ['apple-touch-icon.png', 180], ['favicon-16.png', 16],

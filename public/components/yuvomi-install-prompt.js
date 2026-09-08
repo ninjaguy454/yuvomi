@@ -338,7 +338,7 @@ class YuvomiInstallPrompt extends HTMLElement {
     const icon = document.createElement('img');
     icon.className = 'icon';
     icon.src = '/icons/icon-192.png';
-    icon.alt = 'Ordoma';
+    icon.alt = 'Vidamia';
     icon.width = 40;
     icon.height = 40;
     banner.appendChild(icon);

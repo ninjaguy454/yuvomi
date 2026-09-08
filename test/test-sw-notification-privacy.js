@@ -51,6 +51,21 @@ function worker(caches = storage()) {
 const push = (env, payload = { title: 'Tasks', body: 'Private task', notificationId: 42 }) =>
   env.dispatch('push', { data: { json: () => payload } });
 
+test('device notifications use Vidamia branding while preserving existing notification identity', async () => {
+  const env = worker();
+  await env.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
+  await push(env, { body: 'Ready to cook', notificationId: 42 });
+  await env.dispatch('push', { data: { json() { throw new Error('Plain text payload'); }, text: () => 'A household reminder' } });
+  assert.deepEqual(env.shown.map(notification => notification.title), ['Vidamia', 'Vidamia']);
+  for (const { options } of env.shown) {
+    assert.equal(options.icon, '/icons/icon-192.png');
+    assert.equal(options.badge, '/icons/notification-badge.png');
+    assert.equal(options.tag, 'yuvomi-push');
+  }
+  assert.equal(env.shown[0].options.data.notificationId, 42);
+  assert.equal(env.shown[1].options.body, 'A household reminder');
+});
+
 test('first upgrade with no saved device privacy state suppresses personal push until verified', async () => {
   const env = worker();
   await push(env);

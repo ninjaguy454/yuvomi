@@ -1,5 +1,5 @@
 {
-  "title": "Configuração do Ordoma",
+  "title": "Configuração do Vidamia",
   "common": {
     "continue": "Continuar",
     "back": "Voltar",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Configuração básica",
-    "subtitle": "Como você vai acessar o Ordoma?",
+    "subtitle": "Como você vai acessar o Vidamia?",
     "existing": "Configuração existente detectada — será feito um backup do seu arquivo .env atual antes de salvar.",
     "hostLabel": "Domínio ou endereço IP",
-    "hostHint": "O endereço que você usará para abrir o Ordoma no navegador.",
+    "hostHint": "O endereço que você usará para abrir o Vidamia no navegador.",
     "portLabel": "Porta",
     "tzLabel": "Fuso horário",
     "errHost": "Nome de host inválido. Use apenas letras, dígitos, hifens e pontos.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Sincronização de calendário",
-    "subtitle": "Conecte o Ordoma ao Google Agenda, ao Apple iCloud ou ao Outlook. Todos opcionais - expanda para configurar.",
+    "subtitle": "Conecte o Vidamia ao Google Agenda, ao Apple iCloud ou ao Outlook. Todos opcionais - expanda para configurar.",
     "google": "Google Agenda",
     "googleHint": "Crie credenciais OAuth em {{link}}. URI de redirecionamento: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "ID do cliente",
     "outlookSecretLabel": "Segredo do cliente",
-    "outlookNote": "Envio em sentido único: o Ordoma continua sendo a referência - alterações feitas no Outlook são sobrescritas. As contas da família são conectadas depois nas configurações do app."
+    "outlookNote": "Envio em sentido único: o Vidamia continua sendo a referência - alterações feitas no Outlook são sobrescritas. As contas da família são conectadas depois nas configurações do app."
   },
   "review": {
     "title": "Revisão",
@@ -121,7 +121,7 @@
     "outlook": "Calendário Outlook"
   },
   "docker": {
-    "title": "Iniciando o Ordoma",
+    "title": "Iniciando o Vidamia",
     "subtitle": "Baixando a imagem e iniciando o contêiner Docker.",
     "elapsed": "{{n}} s decorridos",
     "running": "O contêiner está saudável e em execução",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "Criar conta de administrador",
-    "subtitle": "Configure seu primeiro login. Esta conta tem acesso total ao Ordoma.",
+    "subtitle": "Configure seu primeiro login. Esta conta tem acesso total ao Vidamia.",
     "userLabel": "Nome de usuário",
     "userHint": "3-64 caracteres: letras, números, . - _",
     "nameLabel": "Nome de exibição",
@@ -156,9 +156,9 @@
     "errCreate": "Falha ao criar a conta de administrador."
   },
   "done": {
-    "title": "O Ordoma está pronto!",
+    "title": "O Vidamia está pronto!",
     "subtitle": "Seu organizador familiar está em execução e sua conta de administrador está configurada.",
-    "open": "Abrir o Ordoma →",
+    "open": "Abrir o Vidamia →",
     "backupReminder": "Lembra-te de fazer uma cópia do teu ficheiro .env agora — contém as tuas chaves.",
     "download": "Baixar arquivo .env",
     "savedTo": "Salvo em {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "Escolha seus módulos",
     "nextModulesDesc": "Ative o que sua casa realmente usa e esconda o resto.",
     "nextInstall": "Instale nos celulares",
-    "nextInstallDesc": "Abra o Ordoma no celular e adicione à tela inicial - funciona offline.",
-    "subtitleExisting": "O Ordoma está em execução. Esta instalação já tem uma conta de administrador - entre com suas credenciais existentes."
+    "nextInstallDesc": "Abra o Vidamia no celular e adicione à tela inicial - funciona offline.",
+    "subtitleExisting": "O Vidamia está em execução. Esta instalação já tem uma conta de administrador - entre com suas credenciais existentes."
   },
   "advanced": {
     "tag": "Avançado · opcional",
     "title": "Configurações avançadas",
     "subtitle": "Login único, acesso à sua rede doméstica e alguns ajustes finos. Tudo opcional.",
-    "proxyLabel": "Como o Ordoma é exposto?",
+    "proxyLabel": "Como o Vidamia é exposto?",
     "proxyBehindHttps": "Atrás de um proxy reverso com HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Acesso direto por localhost / HTTP",
-    "proxyHint": "Escolha \"Acesso direto\" se você abre o Ordoma por http:// - caso contrário não conseguirá entrar. Atrás de um proxy reverso com HTTPS, escolha a primeira opção.",
+    "proxyHint": "Escolha \"Acesso direto\" se você abre o Vidamia por http:// - caso contrário não conseguirá entrar. Atrás de um proxy reverso com HTTPS, escolha a primeira opção.",
     "oidc": "Início de sessão único (OIDC)",
     "oidcHint": "Preencha os quatro campos para ativar o SSO ou deixe-os vazios.",
     "oidcIssuerLabel": "URL do emissor",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "Permitir que os logins SSO criem novas contas",
     "oidcAllowSignupHint": "Desative isto se o seu fornecedor servir mais pessoas do que este agregado familiar. As contas existentes continuam a entrar e a ser associadas.",
     "baseUrlLabel": "Endereço público",
-    "baseUrlHint": "O endereço em que sua família abre o Ordoma - não o host e a porta do contêiner. Usado para links de redefinição de senha e convites.",
+    "baseUrlHint": "O endereço em que sua família abre o Vidamia - não o host e a porta do contêiner. Usado para links de redefinição de senha e convites.",
     "syncIntervalLabel": "Intervalo de sincronização do calendário (minutos)",
-    "syncIntervalHint": "Com que frequência o Ordoma sincroniza calendários e contatos. Aumente se o seu provedor limitar a taxa.",
+    "syncIntervalHint": "Com que frequência o Vidamia sincroniza calendários e contatos. Aumente se o seu provedor limitar a taxa.",
     "errSyncInterval": "Informe um número inteiro positivo de minutos.",
     "sectionPrivateNetwork": "Acesso à sua rede doméstica",
-    "privateNetworkHint": "Por padrão, o Ordoma recusa conexões para endereços na sua própria rede, o que protege contra um servidor ser induzido a alcançar serviços internos. Ative o que você realmente executa em casa.",
+    "privateNetworkHint": "Por padrão, o Vidamia recusa conexões para endereços na sua própria rede, o que protege contra um servidor ser induzido a alcançar serviços internos. Ative o que você realmente executa em casa.",
     "authPasswordLogin": "Manter o início de sessão com nome de utilizador e senha",
     "authPasswordLoginHint": "Desativá-lo torna o SSO a única forma de entrar: o formulário de início de sessão e a reposição da senha desaparecem. Se o fornecedor ficar inacessível, o caminho de volta é editar o ficheiro .env e reiniciar."
   },
   "welcome": {
-    "title": "Boas-vindas ao Ordoma",
+    "title": "Boas-vindas ao Vidamia",
     "subtitle": "Vamos pôr o teu organizador familiar privado a funcionar. Escolhe como o queres configurar.",
     "simpleTitle": "Configuração simples",
     "simpleBadge": "Recomendada",
-    "simpleDesc": "Tratamos dos detalhes técnicos por ti. Ideal para usar o Ordoma em casa.",
+    "simpleDesc": "Tratamos dos detalhes técnicos por ti. Ideal para usar o Vidamia em casa.",
     "simpleTime": "Cerca de 2 minutos",
     "advancedTitle": "Configuração avançada",
     "advancedDesc": "Controlo total: proxy inverso, sincronização de calendário, e-mail, início de sessão único e backups.",
     "advancedTime": "Todas as opções, passo a passo",
     "existingLocked": "Foi detectada uma instalação existente. Use a configuração avançada para manter suas configurações atuais.",
-    "containerRunning": "O Ordoma está em execução. Salvar reiniciará o contêiner, que ficará brevemente indisponível."
+    "containerRunning": "O Vidamia está em execução. Salvar reiniciará o contêiner, que ficará brevemente indisponível."
   },
   "simple": {
     "title": "Tudo pronto",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Todas as noites é guardado um backup local.",
     "backupReminder": "Após a configuração, faz uma cópia do ficheiro .env gerado — contém as tuas únicas chaves de cifragem.",
     "switchAdvanced": "Precisas de mais opções? Muda para a configuração avançada",
-    "start": "Configurar e iniciar o Ordoma"
+    "start": "Configurar e iniciar o Vidamia"
   },
   "email": {
     "title": "E-mail e reposição de palavra-passe",

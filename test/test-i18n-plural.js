@@ -45,8 +45,8 @@ test('Deutsch: Singular und Plural je nach count', async () => {
 
 test('Englisch: Singular und Plural je nach count', async () => {
   await setLocale('en');
-  assert.equal(t('settings.enabledReminderListCount', { count: 1 }), '1 reminder list enabled');
-  assert.equal(t('settings.enabledReminderListCount', { count: 3 }), '3 reminder lists enabled');
+  assert.equal(t('settings.enabledReminderListCount', { count: 1 }), '1 external list enabled');
+  assert.equal(t('settings.enabledReminderListCount', { count: 3 }), '3 external lists enabled');
   assert.equal(t('settings.calendarImport.success', { count: 1 }), '1 event imported.');
   assert.equal(t('settings.calendarImport.success', { count: 4 }), '4 events imported.');
 });

@@ -1,10 +1,10 @@
 # Immich photo screensaver
 
-Ordoma can replace the dashboard with photos from an [Immich](https://immich.app/) server after
+Vidamia can replace the dashboard with photos from an [Immich](https://immich.app/) server after
 five minutes without keyboard, pointer, touch, or scroll activity. It requests a random set of
-photos, changes the photo every 20 seconds, and returns to Ordoma on the next interaction. Photo
+photos, changes the photo every 20 seconds, and returns to Vidamia on the next interaction. Photo
 metadata moves between corners so that the screensaver does not introduce another fixed bright
-area. If Immich is unavailable, Ordoma leaves the current screen visible and tries again after a
+area. If Immich is unavailable, Vidamia leaves the current screen visible and tries again after a
 later idle period.
 
 ## Before you start
@@ -14,12 +14,12 @@ Create an Immich API key with these permissions:
 - `asset.read`, to select random image assets;
 - `asset.view`, to retrieve preview-sized thumbnails.
 
-The Immich server must be reachable from the Ordoma server or container. A URL that works only in
+The Immich server must be reachable from the Vidamia server or container. A URL that works only in
 your browser is not sufficient. For two containers on the same Docker network, this may be an
 internal service URL such as `http://immich-server:2283`; otherwise use the HTTPS address at which
-Ordoma's server can reach Immich.
+Vidamia's server can reach Immich.
 
-## Configure in Ordoma
+## Configure in Vidamia
 
 1. Sign in as an administrator.
 2. Open **Settings → Administration → Immich**.
@@ -44,13 +44,13 @@ IMMICH_SCREENSAVER_ALBUM_ID=optional-album-uuid
 ```
 
 The album ID is optional. Non-empty environment variables take precedence over database values,
-and their matching controls become read-only in Settings. Restart Ordoma after changing them.
+and their matching controls become read-only in Settings. Restart Vidamia after changing them.
 
 ## Security and troubleshooting
 
 - Enable `DB_ENCRYPTION_KEY` to encrypt a key saved through Settings at rest. Without database
-  encryption, Ordoma logs a warning when it stores an Immich API key.
-- Ordoma proxies thumbnails so the API key is never placed in image URLs or sent to the tablet.
+  encryption, Vidamia logs a warning when it stores an Immich API key.
+- Vidamia proxies thumbnails so the API key is never placed in image URLs or sent to the tablet.
 - Use **Test** first if **Preview** cannot load a photo. Verify the permissions, server
   reachability, album UUID, and that the library or album contains images.
 - A successful test with an empty album is valid, but Preview needs at least one accessible image.

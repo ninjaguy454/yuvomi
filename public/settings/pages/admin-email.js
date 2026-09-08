@@ -10,7 +10,7 @@ import { createInlineError } from '/settings/components.js';
 
 const DEFAULTS = {
   host: '', port: 587, secure: 'starttls', user: '',
-  fromAddress: '', fromName: 'Ordoma', passwordSet: false, envControlled: {},
+  fromAddress: '', fromName: 'Vidamia', passwordSet: false, envControlled: {},
 };
 
 // Formularfeld je Konfigurationsfeld. Dieselben Namen wie CONFIG_KEYS in

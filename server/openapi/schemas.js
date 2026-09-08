@@ -354,13 +354,13 @@ export const schemas = {
         },
         CalendarEvent: {
           type: 'object',
-          description: 'Calendar event. New attachments use document URLs; attachment_data remains available for legacy stored blobs. `place_id` is the immutable Ordoma Place reference while `location` remains the human-readable Event location.',
+          description: 'Calendar event. New attachments use document URLs; attachment_data remains available for legacy stored blobs. `place_id` is the immutable Vidamia Place reference while `location` remains the human-readable Event location.',
           properties: {
             id: { type: 'integer' },
             title: { type: 'string' },
             place_id: {
               type: ['integer', 'null'],
-              description: 'Optional immutable Ordoma Place ID. A Place rename does not break the Event reference.',
+              description: 'Optional immutable Vidamia Place ID. A Place rename does not break the Event reference.',
             },
             color: {
               type: ['string', 'null'],

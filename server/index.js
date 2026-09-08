@@ -304,9 +304,9 @@ app.get('/manifest.webmanifest', apiLimiter, (req, res) => {
   res.type('application/manifest+json');
   res.setHeader('Cache-Control', 'no-cache, must-revalidate');
   res.json({
-    name: `${appName} Familienplaner`,
+    name: `${appName} — Your life, together.`,
     short_name: appName,
-    description: 'Selbstgehosteter Familienplaner',
+    description: 'Your life, together.',
     id: '/',
     start_url: '/',
     scope: '/',
@@ -323,7 +323,7 @@ app.get('/manifest.webmanifest', apiLimiter, (req, res) => {
     // (#F5F3ED = --neutral-100, warmes Papier).
     theme_color: '#F5F3ED',
     background_color: '#F5F3ED',
-    lang: 'de-DE',
+    lang: 'en',
     categories: ['productivity', 'lifestyle'],
     icons: [
       { src: '/icons/icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
@@ -363,7 +363,7 @@ app.get('/feed/calendar/:token.ics', feedLimiter, (req, res) => {
     if (!userId) return res.status(404).type('text/plain').send('Not found');
     const ics = icsExport.buildFeed(db.get(), userId);
     res.set('Cache-Control', 'private, no-store');
-    res.set('Content-Disposition', 'inline; filename="ordoma.ics"');
+    res.set('Content-Disposition', 'inline; filename="vidamia.ics"');
     res.type('text/calendar; charset=utf-8').send(ics);
   } catch (err) {
     log.error('', err);
@@ -382,7 +382,7 @@ app.get('/feed/inventory-deadlines/:token.ics', feedLimiter, (req, res) => {
     if (!userId) return res.status(404).type('text/plain').send('Not found');
     const ics = inventoryDeadlinesIcs.buildInventoryDeadlinesFeed(db.get());
     res.set('Cache-Control', 'private, no-store');
-    res.set('Content-Disposition', 'inline; filename="ordoma-inventory-deadlines.ics"');
+    res.set('Content-Disposition', 'inline; filename="vidamia-inventory-deadlines.ics"');
     res.type('text/calendar; charset=utf-8').send(ics);
   } catch (err) {
     log.error('', err);

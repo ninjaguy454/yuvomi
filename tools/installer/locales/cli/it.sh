@@ -1,4 +1,4 @@
-# Ordoma CLI-Installer — Italiano (it)
+# Vidamia CLI-Installer — Italiano (it)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="Password (min. 8 caratteri):"
 MSG_admin_confirm="Conferma la password:"
 MSG_admin_mismatch="Le password non coincidono, riprova."
 MSG_admin_created="Account amministratore creato!"
-MSG_admin_ready="  Ordoma è pronto!"
+MSG_admin_ready="  Vidamia è pronto!"
 MSG_admin_open="  Apri: %s"
 MSG_admin_exists="Esiste già un account amministratore."
 MSG_admin_failed="Impossibile creare l’amministratore (HTTP %s): %s"

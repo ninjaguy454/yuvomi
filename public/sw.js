@@ -18,7 +18,7 @@
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Keep the Task, Cooking Map and shared interface refinements together so an
 // older worker cannot retain mismatched component JavaScript and styles.
-const CACHE_VERSION = `${APP_RELEASE}-ordoma.3`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.2`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -204,7 +204,7 @@ const APP_SHELL = [
   '/icons/favicon-32.png',
   '/icons/apple-touch-icon.png',
   '/icons/icon-192.png',
-  '/icons/ordoma-mark.svg',
+  '/icons/vidamia-mark.svg',
   '/icons/notification-badge.png',
   '/icons/icon-512.png',
   '/icons/icon-maskable-192.png',
@@ -703,9 +703,9 @@ self.addEventListener('push', (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch {
-    payload = { title: 'Ordoma', body: event.data ? event.data.text() : '' };
+    payload = { title: 'Vidamia', body: event.data ? event.data.text() : '' };
   }
-  const title = payload.title || 'Ordoma';
+  const title = payload.title || 'Vidamia';
   const options = {
     body: payload.body || '',
     icon: '/icons/icon-192.png',

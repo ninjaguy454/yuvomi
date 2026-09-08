@@ -69,6 +69,10 @@
   background-color: var(--color-bg);
 }
 
+.app-loading[hidden] {
+  display: none;
+}
+
 .app-loading__logo {
   display: flex;
   align-items: center;
@@ -79,19 +83,80 @@
 }
 
 /* One monochrome mark, shared by shell, authentication and startup. */
-.ordoma-mark {
+.vidamia-mark {
   display: inline-block;
   width: 100%;
   height: 100%;
   flex: 0 0 auto;
   background-color: currentColor;
-  mask: url('/icons/ordoma-mark.svg') center / contain no-repeat;
-  -webkit-mask: url('/icons/ordoma-mark.svg') center / contain no-repeat;
+  mask: url('/icons/vidamia-mark.svg') center / contain no-repeat;
+  -webkit-mask: url('/icons/vidamia-mark.svg') center / contain no-repeat;
 }
 
-.app-loading__logo .ordoma-mark {
+.app-loading__mark {
   width: var(--space-10);
   height: var(--space-10);
+  flex: 0 0 auto;
+  overflow: visible;
+}
+
+/* A single launch gesture; readiness removes this screen without waiting for it.
+ * Base styles are the final lockup, including when motion is disabled. */
+.app-loading__spin {
+  transform-box: view-box;
+  transform-origin: 80px 78px;
+  animation: vidamia-launch-turn 820ms var(--ease-out) 1 both;
+}
+
+.app-loading__oval {
+  transform-box: view-box;
+  animation-duration: 1200ms;
+  animation-timing-function: var(--ease-out);
+  animation-iteration-count: 1;
+  animation-fill-mode: both;
+}
+
+.app-loading__oval--first {
+  transform-origin: 61px 78px;
+  animation-name: vidamia-launch-first;
+}
+
+.app-loading__oval--second {
+  transform-origin: 99px 78px;
+  animation-name: vidamia-launch-second;
+}
+
+.app-loading__wordmark {
+  animation: vidamia-launch-name 160ms ease-out 1200ms 1 both;
+}
+
+@keyframes vidamia-launch-turn {
+  from { transform: rotate(-480deg); }
+  to { transform: none; }
+}
+
+@keyframes vidamia-launch-first {
+  0%, 60% { transform: translateX(19px) rotate(28deg); }
+  100% { transform: none; }
+}
+
+@keyframes vidamia-launch-second {
+  0%, 60% { opacity: 0; transform: translateX(-19px) rotate(-28deg); }
+  68% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes vidamia-launch-name {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-loading__spin,
+  .app-loading__oval,
+  .app-loading__wordmark {
+    animation: none;
+  }
 }
 
 /* --------------------------------------------------------

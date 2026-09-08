@@ -125,10 +125,45 @@ async function dispatchLifecycle(listener) {
   await completion;
 }
 
+test('Vidamia updates the deployed branding assets without losing shared-device privacy', async () => {
+  const env = loadWorker();
+  const deployed = '2.54.0-kitchen.5-ordoma.3';
+  const oldNames = ['shell', 'pages', 'locales', 'assets', 'api'].map(kind => `yuvomi-${kind}-${deployed}`);
+  for (const name of oldNames) await env.caches.open(name);
+  const oldShell = await env.caches.open(`yuvomi-shell-${deployed}`);
+  const oldAssets = await env.caches.open(`yuvomi-assets-${deployed}`);
+  await oldShell.put('/index.html', new MockResponse('previous product identity'));
+  await oldShell.put('/reader/tasks', new MockResponse('private household data'));
+  await oldAssets.put('/icons/ordoma-mark.svg', new MockResponse('previous product mark'));
+  const privacy = await env.caches.open('yuvomi-device-privacy');
+  await privacy.put('/shared-display', new MockResponse('', { headers: { 'X-Shared-Display': '1' } }));
+
+  await dispatchLifecycle(env.listeners.install[0]);
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.2');
+  const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
+  assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
+  for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
+    '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png', '/favicon.ico']) {
+    assert.equal((await shell.match(path))?.body, `fresh:${path}`, `${path} must use the new branding`);
+    assert.equal(shell.addedRequests.find(request => keyOf(request) === path)?.cache, 'reload',
+      `${path} must bypass the previous HTTP cache`);
+  }
+  assert.equal((await oldShell.match('/index.html'))?.body, 'previous product identity');
+
+  await dispatchLifecycle(env.listeners.activate[0]);
+  for (const name of oldNames) assert.equal((await env.caches.keys()).includes(name), false);
+  assert.equal(await env.caches.match('/icons/ordoma-mark.svg'), undefined);
+  assert.equal(await env.caches.match('/reader/tasks'), undefined);
+  assert.equal((await privacy.match('/shared-display'))?.headers.get('X-Shared-Display'), '1');
+  assert.ok((await env.caches.keys()).includes('yuvomi-device-privacy'));
+  assert.equal(env.signals.claimed, 1);
+  assert.equal(JSON.stringify(env.signals.messages), JSON.stringify([{ type: 'SW_UPDATED' }]));
+});
+
 test('older releases and the previous refinement candidate upgrade to fresh Meal and Task modules', async () => {
   const env = loadWorker();
   const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4',
-    '2.54.0-kitchen.5-refinement.1'];
+    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1'];
   const oldCaches = oldReleases.flatMap((release) => [
     `yuvomi-shell-${release}`,
     `yuvomi-pages-${release}`,

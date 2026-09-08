@@ -635,7 +635,7 @@ function openVariableForm(variable = null, manager = null) {
 function openVariableKeyForm(variable, manager = null) {
   if (!variable) return;
   const content = `<form id="automation-variable-key-form">
-    <p class="form-hint">Renaming this ID updates linked definitions while preserving the variable's permanent identity. Existing plain text copied outside Ordoma cannot be updated.</p>
+    <p class="form-hint">Renaming this ID updates linked definitions while preserving the variable's permanent identity. Existing plain text copied outside Vidamia cannot be updated.</p>
     ${inputRow('New variable ID', `<input class="input" name="variable_key" required value="${h(variable.variable_key)}">`)}
     ${footer('Rename ID')}
   </form>`;
@@ -643,7 +643,7 @@ function openVariableKeyForm(variable, manager = null) {
     panel.querySelector('#automation-variable-key-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const confirmed = await confirmOverModal('Rename this reusable variable ID?', {
-        confirmLabel: 'Rename ID', detail: 'Ordoma will keep database links intact. Use this only when the new ID is clearer.',
+        confirmLabel: 'Rename ID', detail: 'Vidamia will keep database links intact. Use this only when the new ID is clearer.',
       });
       if (!confirmed) return;
       try {
@@ -780,7 +780,7 @@ function openPlaceSearchForm(places, manager) {
       submit.disabled = true; status.textContent = 'Searching Google Places…';
       try {
         const response = await api.post('/planning/place-search', payload); const results = response.data || [];
-        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row automation-google-place-result"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<div class="automation-google-place-result__fields"><label class="form-hint">Ordoma name<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}"></label><label class="form-hint">Type<select class="input" data-place-type="${index}">${placeTypeOptions(placeTypeFromGoogle(result.primary_type))}</select></label><label class="form-hint">Address you want to keep<input class="input" data-place-address="${index}" maxlength="250" value="${h(result.formatted_address || '')}"></label><label class="form-hint">Your notes / description<textarea class="input" data-place-description="${index}" maxlength="1000" rows="2"></textarea></label></div><small class="form-hint">Review these Ordoma-owned fields before saving. The Google Place ID remains the external identity; the editable name, address, type, and notes belong to your address book.</small></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
+        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row automation-google-place-result"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<div class="automation-google-place-result__fields"><label class="form-hint">Vidamia name<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}"></label><label class="form-hint">Type<select class="input" data-place-type="${index}">${placeTypeOptions(placeTypeFromGoogle(result.primary_type))}</select></label><label class="form-hint">Address you want to keep<input class="input" data-place-address="${index}" maxlength="250" value="${h(result.formatted_address || '')}"></label><label class="form-hint">Your notes / description<textarea class="input" data-place-description="${index}" maxlength="1000" rows="2"></textarea></label></div><small class="form-hint">Review these Vidamia-owned fields before saving. The Google Place ID remains the external identity; the editable name, address, type, and notes belong to your address book.</small></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
         status.textContent = results.length ? `${results.length} live result${results.length === 1 ? '' : 's'} from Google.` : '';
         list.querySelectorAll('[data-save-google-place]').forEach((button) => button.addEventListener('click', async () => {
           const index = Number(button.dataset.saveGooglePlace); const result = results[index];
@@ -1167,7 +1167,7 @@ async function renderActivitiesManager(body, manager) {
   const response = await api.get('/automation/admin/activity-templates');
   const activities = response.data ?? [];
   replaceHtml(body, `${managerHeader('Activity templates', 'automation-add-activity', 'Add activity')}
-    <p class="form-hint automation-manager__hint">Activities define work, required skills and how Ordoma chooses an assignee.</p>
+    <p class="form-hint automation-manager__hint">Activities define work, required skills and how Vidamia chooses an assignee.</p>
     <div class="automation-list">
       ${activities.map((activity) => `
         <div class="list-row automation-list-row">

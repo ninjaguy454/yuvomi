@@ -1,5 +1,7 @@
 # Ordoma: Tasks, Cooking Map and product refinement
 
+> **Historical release evidence.** This report records the Tasks/Cooking Map refinement completed at `50866278dbd9e71b53bb98f439b0e41a55965423` and subsequently deployed with schema 10029. Its screenshots, names and test results describe that release. The later approved product name is **Vidamia**; the [current branding correction and validation report](vidamia-rebrand-20260908.md) supersedes this report's product identity. The completed Tasks, Cooking Map and Meal portion behavior remains the baseline.
+
 Branch: `feature/tasks-refinement-20260907`. Baseline: `2cf912812897cb9e478831aa0f8205a99872fabd` (the already deployed Meal portions release). This pass preserves that implementation and migration 10028. No push, merge, or production deployment is included.
 
 ## Task and subtask skill model

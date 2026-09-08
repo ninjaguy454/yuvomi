@@ -1,4 +1,4 @@
-# Ordoma CLI-Installer — 日本語 (ja)
+# Vidamia CLI-Installer — 日本語 (ja)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="パスワード（8 文字以上）:"
 MSG_admin_confirm="パスワードを確認:"
 MSG_admin_mismatch="パスワードが一致しません。もう一度お試しください。"
 MSG_admin_created="管理者アカウントを作成しました！"
-MSG_admin_ready="  Ordoma の準備が整いました！"
+MSG_admin_ready="  Vidamia の準備が整いました！"
 MSG_admin_open="  開く: %s"
 MSG_admin_exists="管理者アカウントはすでに存在します。"
 MSG_admin_failed="管理者の作成に失敗しました（HTTP %s）: %s"

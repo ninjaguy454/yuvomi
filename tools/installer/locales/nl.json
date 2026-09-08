@@ -1,5 +1,5 @@
 {
-  "title": "Ordoma instellen",
+  "title": "Vidamia instellen",
   "common": {
     "continue": "Doorgaan",
     "back": "Terug",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Basisconfiguratie",
-    "subtitle": "Hoe wil je Ordoma bereiken?",
+    "subtitle": "Hoe wil je Vidamia bereiken?",
     "existing": "Bestaande configuratie gevonden — je huidige .env-bestand wordt voor het opslaan geback-upt.",
     "hostLabel": "Domein of IP-adres",
-    "hostHint": "Het adres waarmee je Ordoma in de browser opent.",
+    "hostHint": "Het adres waarmee je Vidamia in de browser opent.",
     "portLabel": "Poort",
     "tzLabel": "Tijdzone",
     "errHost": "Ongeldige hostnaam. Gebruik alleen letters, cijfers, koppeltekens en punten.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Kalendersynchronisatie",
-    "subtitle": "Verbind Ordoma met Google Agenda, Apple iCloud of Outlook. Alles optioneel - uitklappen om te configureren.",
+    "subtitle": "Verbind Vidamia met Google Agenda, Apple iCloud of Outlook. Alles optioneel - uitklappen om te configureren.",
     "google": "Google Agenda",
     "googleHint": "Maak OAuth-inloggegevens aan op {{link}}. Redirect-URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,16 +78,16 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Client-ID",
     "outlookSecretLabel": "Client-secret",
-    "outlookNote": "Eenrichtingspush: Ordoma blijft leidend - wijzigingen in Outlook worden overschreven. Gezinsaccounts worden later in de app-instellingen gekoppeld."
+    "outlookNote": "Eenrichtingspush: Vidamia blijft leidend - wijzigingen in Outlook worden overschreven. Gezinsaccounts worden later in de app-instellingen gekoppeld."
   },
   "advanced": {
     "tag": "Geavanceerd · optioneel",
     "title": "Geavanceerde instellingen",
     "subtitle": "Eenmalige aanmelding, toegang tot je thuisnetwerk en een paar fijnafstellingen. Alles optioneel.",
-    "proxyLabel": "Hoe wordt Ordoma aangeboden?",
+    "proxyLabel": "Hoe wordt Vidamia aangeboden?",
     "proxyBehindHttps": "Achter een reverse proxy met HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Directe toegang via localhost / HTTP",
-    "proxyHint": "Kies \"Directe toegang\" als je Ordoma via http:// opent - anders kun je niet inloggen. Achter een reverse proxy met HTTPS kies je de eerste optie.",
+    "proxyHint": "Kies \"Directe toegang\" als je Vidamia via http:// opent - anders kun je niet inloggen. Achter een reverse proxy met HTTPS kies je de eerste optie.",
     "oidc": "Single sign-on (OIDC)",
     "oidcHint": "Vul alle vier velden in om SSO in te schakelen, of laat ze leeg.",
     "oidcIssuerLabel": "Issuer-URL",
@@ -151,12 +151,12 @@
     "oidcAllowSignup": "SSO-aanmeldingen mogen nieuwe accounts aanmaken",
     "oidcAllowSignupHint": "Zet dit uit als je provider meer mensen bedient dan dit huishouden. Bestaande accounts melden zich nog steeds aan en worden nog steeds gekoppeld.",
     "baseUrlLabel": "Openbaar adres",
-    "baseUrlHint": "Het adres waarop je gezin Ordoma opent - niet de host en poort van de container. Wordt gebruikt voor links om wachtwoorden te herstellen en voor uitnodigingen.",
+    "baseUrlHint": "Het adres waarop je gezin Vidamia opent - niet de host en poort van de container. Wordt gebruikt voor links om wachtwoorden te herstellen en voor uitnodigingen.",
     "syncIntervalLabel": "Synchronisatie-interval agenda (minuten)",
-    "syncIntervalHint": "Hoe vaak Ordoma agenda's en contacten synchroniseert. Verhoog dit als je provider je afremt.",
+    "syncIntervalHint": "Hoe vaak Vidamia agenda's en contacten synchroniseert. Verhoog dit als je provider je afremt.",
     "errSyncInterval": "Voer een positief geheel aantal minuten in.",
     "sectionPrivateNetwork": "Toegang tot je thuisnetwerk",
-    "privateNetworkHint": "Ordoma weigert standaard verbindingen naar adressen in je eigen netwerk, wat beschermt tegen een server die verleid wordt interne diensten te benaderen. Sta toe wat je thuis echt draait.",
+    "privateNetworkHint": "Vidamia weigert standaard verbindingen naar adressen in je eigen netwerk, wat beschermt tegen een server die verleid wordt interne diensten te benaderen. Sta toe wat je thuis echt draait.",
     "authPasswordLogin": "Aanmelden met gebruikersnaam en wachtwoord behouden",
     "authPasswordLoginHint": "Uitschakelen maakt SSO de enige manier om binnen te komen: het aanmeldformulier en het herstellen van het wachtwoord verdwijnen. Is de provider onbereikbaar, dan loopt de weg terug via het .env-bestand en een herstart."
   },
@@ -201,7 +201,7 @@
     "outlook": "Outlook-agenda"
   },
   "docker": {
-    "title": "Ordoma wordt gestart",
+    "title": "Vidamia wordt gestart",
     "subtitle": "Het image wordt geladen en de Docker-container wordt gestart.",
     "elapsed": "{{n}} s verstreken",
     "running": "Container is gezond en actief",
@@ -220,7 +220,7 @@
   },
   "admin": {
     "title": "Beheerdersaccount aanmaken",
-    "subtitle": "Stel je eerste login in. Dit account heeft volledige toegang tot Ordoma.",
+    "subtitle": "Stel je eerste login in. Dit account heeft volledige toegang tot Vidamia.",
     "userLabel": "Gebruikersnaam",
     "userHint": "3-64 tekens: letters, cijfers, . - _",
     "nameLabel": "Weergavenaam",
@@ -236,9 +236,9 @@
     "errCreate": "Beheerdersaccount kon niet worden aangemaakt."
   },
   "done": {
-    "title": "Ordoma is klaar!",
+    "title": "Vidamia is klaar!",
     "subtitle": "Je gezinsplanner werkt en je beheerdersaccount is ingesteld.",
-    "open": "Ordoma openen →",
+    "open": "Vidamia openen →",
     "backupReminder": "Vergeet niet je .env-bestand nu te back-uppen — het bevat je sleutels.",
     "download": ".env-bestand downloaden",
     "savedTo": "Opgeslagen in {{path}}",
@@ -250,21 +250,21 @@
     "nextModules": "Kies je modules",
     "nextModulesDesc": "Zet aan wat je huishouden echt gebruikt en verberg de rest.",
     "nextInstall": "Installeer het op de telefoons",
-    "nextInstallDesc": "Open Ordoma op een telefoon en zet het op het startscherm - het werkt offline.",
-    "subtitleExisting": "Ordoma draait. Deze installatie heeft al een beheerdersaccount - log in met je bestaande gegevens."
+    "nextInstallDesc": "Open Vidamia op een telefoon en zet het op het startscherm - het werkt offline.",
+    "subtitleExisting": "Vidamia draait. Deze installatie heeft al een beheerdersaccount - log in met je bestaande gegevens."
   },
   "welcome": {
-    "title": "Welkom bij Ordoma",
+    "title": "Welkom bij Vidamia",
     "subtitle": "Laten we je privé-gezinsplanner starten. Kies hoe je hem wilt instellen.",
     "simpleTitle": "Eenvoudige installatie",
     "simpleBadge": "Aanbevolen",
-    "simpleDesc": "Wij regelen de technische details voor je. Ideaal om Ordoma thuis te draaien.",
+    "simpleDesc": "Wij regelen de technische details voor je. Ideaal om Vidamia thuis te draaien.",
     "simpleTime": "Ongeveer 2 minuten",
     "advancedTitle": "Geavanceerde installatie",
     "advancedDesc": "Volledige controle: reverse proxy, agenda-synchronisatie, e-mail, single sign-on en back-ups.",
     "advancedTime": "Elke optie, stap voor stap",
     "existingLocked": "Er is een bestaande installatie gevonden. Gebruik de geavanceerde installatie zodat je huidige instellingen behouden blijven.",
-    "containerRunning": "Ordoma draait op dit moment. Bij opslaan wordt de container herstart en is hij even niet bereikbaar."
+    "containerRunning": "Vidamia draait op dit moment. Bij opslaan wordt de container herstart en is hij even niet bereikbaar."
   },
   "simple": {
     "title": "Klaar voor gebruik",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Elke nacht wordt een lokale back-up bewaard.",
     "backupReminder": "Maak na de installatie een back-up van het gegenereerde .env-bestand — het bevat je enige versleutelingssleutels.",
     "switchAdvanced": "Meer opties nodig? Ga naar de geavanceerde installatie",
-    "start": "Ordoma instellen & starten"
+    "start": "Vidamia instellen & starten"
   },
   "email": {
     "title": "E-mail & wachtwoordherstel",

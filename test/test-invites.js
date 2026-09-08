@@ -325,6 +325,7 @@ test('POST /invites verschickt die Mail mit BASE_URL-Link und meldet email_sent'
   assert.equal(email_sent, true);
   assert.equal(sentMails.length, 1);
   assert.equal(sentMails[0].to, 'dora@test');
+  assert.equal(sentMails[0].subject, 'You have been invited to Ordoma');
   assert.match(sentMails[0].html, /https:\/\/yuvomi\.test\/join\?token=[a-f0-9]+/);
   assert.ok(sentMails[0].html.includes(token), 'der Link trägt den erzeugten Token');
 });

@@ -5,10 +5,10 @@ export function planningPaths() {
   return {
     '/api/v1/planning/places': {
       get: op({
-        summary: 'List reusable Yuvomi Places',
+        summary: 'List reusable Ordoma Places',
         tag: 'Planning',
         params: [{ name: 'active', in: 'query', required: false, schema: { type: 'string', enum: ['true', 'false'] }, description: 'Defaults to active Places only. Set false to include inactive Places.' }],
-        description: 'Returns immutable Yuvomi Place IDs, inherited address information and any permitted external-provider identity. Every household has an active, address-optional Home Place; the endpoint idempotently restores that default if the last active Home was removed. Renaming a Place does not change references to it.',
+        description: 'Returns immutable Ordoma Place IDs, inherited address information and any permitted external-provider identity. Every household has an active, address-optional Home Place; the endpoint idempotently restores that default if the last active Home was removed. Renaming a Place does not change references to it.',
       }),
     },
     '/api/v1/planning/place-search/status': {
@@ -31,31 +31,31 @@ export function planningPaths() {
         tag: 'Planning',
         stateChanging: true,
         requestBody: jsonBody(null),
-        description: 'Body: { query, origin_place_id?, origin_text?, included_type? }. Search is request-controlled and returns transient Google results keyed by external_place_id; it does not create Yuvomi Places.',
+        description: 'Body: { query, origin_place_id?, origin_text?, included_type? }. Search is request-controlled and returns transient Google results keyed by external_place_id; it does not create Ordoma Places.',
       }),
     },
     '/api/v1/planning/admin/context': {
       get: op({ summary: 'Get the household Place and availability authoring context', tag: 'Planning', admin: true, description: 'Returns Places, household members, recurring Availability Rules and dated Availability Periods for the administration UI.' }),
     },
     '/api/v1/planning/admin/places': {
-      post: op({ summary: 'Create a user-maintained Yuvomi Place', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Creates a reusable Place with immutable Yuvomi identity, optional parent Place, address and coordinates. Home Places do not require an address.' }),
+      post: op({ summary: 'Create a user-maintained Ordoma Place', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Creates a reusable Place with immutable Ordoma identity, optional parent Place, address and coordinates. Home Places do not require an address.' }),
     },
     '/api/v1/planning/admin/places/from-google': {
       post: op({
-        summary: 'Save a Google result as a reusable Yuvomi Place',
+        summary: 'Save a Google result as a reusable Ordoma Place',
         tag: 'Planning',
         admin: true,
         stateChanging: true,
         requestBody: jsonBody(null),
-        description: 'Stores Google external_place_id separately from the immutable Yuvomi Place ID. Name and address remain user-maintained fields; a duplicate provider identity returns 409.',
+        description: 'Stores Google external_place_id separately from the immutable Ordoma Place ID. Name and address remain user-maintained fields; a duplicate provider identity returns 409.',
       }),
     },
     '/api/v1/planning/admin/places/{id}': {
-      put: op({ summary: 'Update a Yuvomi Place without changing its identity', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
-      delete: op({ summary: 'Delete an unused Yuvomi Place', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, description: 'Returns 409 while schedules, templates, Tasks or child Places still reference the Place. Calendar Event and Meal links use their schema deletion policy and do not justify deleting other guarded references.' }),
+      put: op({ summary: 'Update a Ordoma Place without changing its identity', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
+      delete: op({ summary: 'Delete an unused Ordoma Place', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, description: 'Returns 409 while schedules, templates, Tasks or child Places still reference the Place. Calendar Event and Meal links use their schema deletion policy and do not justify deleting other guarded references.' }),
     },
     '/api/v1/planning/admin/places/{id}/refresh-external-id': {
-      post: op({ summary: 'Refresh a saved Google Place identity', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, description: 'Refreshes a stale Google place ID without changing the immutable Yuvomi Place ID; a provider-ID collision returns 409.' }),
+      post: op({ summary: 'Refresh a saved Google Place identity', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, description: 'Refreshes a stale Google place ID without changing the immutable Ordoma Place ID; a provider-ID collision returns 409.' }),
     },
     '/api/v1/planning/admin/rules': {
       post: op({ summary: 'Create a recurring Availability Rule', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'Defines a member, weekdays, time window, availability state, optional Place/category and active state.' }),
@@ -111,7 +111,7 @@ export function planningPaths() {
       }),
     },
     '/api/v1/planning/admin/context-conflicts/{id}/resolve': {
-      post: op({ summary: 'Explicitly resolve an overlapping planning-context claim', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body resolution is `keep_first` or `keep_second`. The selected context keeps the member and the other releases them; distinct overlapping contexts can never both claim the same person, and Yuvomi never chooses silently.' }),
+      post: op({ summary: 'Explicitly resolve an overlapping planning-context claim', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body resolution is `keep_first` or `keep_second`. The selected context keeps the member and the other releases them; distinct overlapping contexts can never both claim the same person, and Ordoma never chooses silently.' }),
     },
     '/api/v1/planning/admin/trips': {
       post: op({ summary: 'Create a Trip with stages and participants', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null) }),

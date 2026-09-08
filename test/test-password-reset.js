@@ -143,6 +143,7 @@ test('forgot-password sends a reset link for a known username', async () => {
   assert.equal(json.data.ok, true);
   assert.equal(sent.length, 1);
   assert.equal(sent[0].to, 'alice@example.test');
+  assert.equal(sent[0].subject, 'Reset your Ordoma password');
   assert.match(sent[0].html, /https:\/\/oikos\.test\/reset-password\?token=[a-f0-9]+/);
 });
 

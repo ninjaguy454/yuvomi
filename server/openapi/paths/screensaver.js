@@ -42,7 +42,7 @@ export function screensaverPaths() {
         summary: 'Fetch one screensaver photo',
         tag: 'Screensaver',
         params: [idParam('id', 'Immich asset ID')],
-        description: 'Proxies the image bytes from Immich. It is fetched through Yuvomi rather than '
+        description: 'Proxies the image bytes from Immich. It is fetched through Ordoma rather than '
           + 'linked directly so the browser never needs the Immich token.',
       }),
     },

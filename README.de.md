@@ -1,7 +1,9 @@
 <div align="center">
   <img src="docs/logo.svg" alt="" width="92" />
 
-  <h1>Yuvomi</h1>
+  <h1>Ordoma</h1>
+
+  <p>Ordoma ist eine eigenständige Plattform für die Haushaltsorganisation, die aus dem Open-Source-Projekt <a href="https://github.com/ulsklyc/yuvomi">Yuvomi</a> hervorgegangen ist. MIT-Lizenz und Urheberrechtshinweise des Ursprungsprojekts bleiben erhalten.</p>
 
   <p><strong>Ein privates Zuhause für alles, was einen Haushalt am Laufen hält.</strong></p>
 
@@ -31,14 +33,16 @@
 
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/de/dashboard-dark-web.webp">
-    <img src="docs/screenshots/de/dashboard-light-web.webp" alt="Das Yuvomi-Dashboard: Aufgaben, Termine, Mahlzeiten und Einkaufsliste des Tages auf einem Bildschirm" width="820">
+    <img src="docs/screenshots/de/dashboard-light-web.webp" alt="Historische Yuvomi-Referenz: Aufgaben, Termine, Mahlzeiten und Einkaufsliste des Tages auf einem Bildschirm" width="820">
   </picture>
+
+  <p><small>Die Screenshots zeigen die frühere Yuvomi-Oberfläche als Referenz. Ordoma ergänzt eigene Haushaltsabläufe und visuelle Verbesserungen.</small></p>
 
   <sub><b>19</b> Module &nbsp;·&nbsp; <b>24</b> Sprachen &nbsp;·&nbsp; <b>0</b> Tracker &nbsp;·&nbsp; optionale <b>AES-256</b>-Datenbankverschlüsselung &nbsp;·&nbsp; <b>MIT</b></sub>
 </div>
 
 Die meisten Haushalte kleben ihren Alltag aus einem Dutzend Bezahl-Apps zusammen, jede mit eigenem
-Konto, eigenem Abo und einer eigenen Kopie deiner Daten auf fremden Servern. Yuvomi bringt das alles
+Konto, eigenem Abo und einer eigenen Kopie deiner Daten auf fremden Servern. Ordoma bringt das alles
 an einen Ort, der dir gehört, als Container auf jedem Home-Server oder NAS. Jedes Modul ist
 eigenständig - nutze, was passt, und schalte ab, was nicht passt.
 
@@ -46,7 +50,7 @@ eigenständig - nutze, was passt, und schalte ab, was nicht passt.
 
 ## Eine App statt einem Dutzend Abos
 
-| Statt zu jonglieren mit… | gibt dir Yuvomi |
+| Statt zu jonglieren mit… | gibt dir Ordoma |
 |---|---|
 | einer To-do- &amp; Aufgaben-App | **Aufgaben** - Kanban, Fristen, Wiederholungen, Mehrfachzuweisung |
 | einem Abo für den geteilten Kalender | **Kalender** - Sync, Abos, Sichtbarkeit je Termin |
@@ -102,18 +106,20 @@ Fotos laufen, wenn der Bildschirm still steht. Jedes Modul im Detail steht in de
 
 ### E-Reader und ältere Browser
 
-Hänge `/reader` an deine normale Yuvomi-Adresse an. Dort gibt es eine schlanke,
+Hänge `/reader` an deine normale Ordoma-Adresse an. Dort gibt es eine schlanke,
 serverseitig erzeugte Ansicht für Heute, Aufgaben, Kalender und Mahlzeiten. Sie benötigt kein
 JavaScript und funktioniert deshalb auch in Browsern wie dem des Kindle Paperwhite 3, die die
 vollständige App nicht ausführen können. Der Lesemodus ist bewusst schreibgeschützt und nutzt die
 lokale Anmeldung mit Passwort, einschließlich Zwei-Faktor-Anmeldung, falls sie aktiviert ist.
 Moderne Single-Sign-on-Abläufe werden nicht unterstützt. Nutze auf einem anderen Gerät den
-LAN-Namen oder die LAN-Adresse des Yuvomi-Servers statt `127.0.0.1`, denn diese Adresse bezeichnet
+LAN-Namen oder die LAN-Adresse des Ordoma-Servers statt `127.0.0.1`, denn diese Adresse bezeichnet
 immer das Gerät, auf dem die Seite gerade geöffnet wird.
 
 ---
 
 ## Installieren
+
+> **Ordoma-Veröffentlichung.** Die folgenden Befehle, Registry-Links und App-Store-Verweise verwenden weiterhin die Paketkennungen des Ursprungsprojekts Yuvomi. Sie installieren für sich genommen keine Ordoma-Version. Ordoma wird mit dem geprüften Image dieses Forks und der bestehenden Konfiguration sowie den vorhandenen Datenvolumes betrieben.
 
 - **Image** - `ghcr.io/ulsklyc/`<wbr>`yuvomi:latest`, rund 500 MB.
 - **Braucht** - 256 MB RAM und einen Port, standardmäßig 3000.
@@ -161,7 +167,7 @@ node tools/installer/install-server.js
 
 ### Aus dem App-Store deines NAS
 
-**TrueNAS SCALE**, **Umbrel** und **Unraid** führen Yuvomi alle: im Katalog suchen und installieren,
+**TrueNAS SCALE**, **Umbrel** und **Unraid** führen das Ursprungsprojekt Yuvomi: im Katalog suchen und installieren,
 ganz ohne Terminal. Neu bei Containern? Die
 **[Installationsanleitung](docs/installation.md)** führt Schritt für Schritt durch Engine, HTTPS,
 Backups und Fehlersuche.
@@ -173,11 +179,11 @@ Backups und Fehlersuche.
 
 > **Gesundheit ist kein Medizinprodukt.** Es werden keine diagnostischen Aussagen getroffen. Gesundheitsdaten sind sensibel - aktiviere die Datenbankverschlüsselung (`DB_ENCRYPTION_KEY`, SQLCipher).
 
-> **Externer Dokumentenspeicher braucht eine eigene Sicherung.** Datenbank-Backups enthalten Metadaten und Verknüpfungen, nicht die Dateien selbst, wenn sie in einem lokalen Ordner, auf WebDAV oder in Google Drive liegen; sichere das gewählte Ziel separat. Yuvomis Sichtbarkeitseinstellungen regeln nur den Zugriff über Yuvomi. Wer Zugriff auf den verbundenen Google-Drive-Ordner `Yuvomi/Documents` hat, sieht alle dort abgelegten Dateien.
+> **Externer Dokumentenspeicher braucht eine eigene Sicherung.** Datenbank-Backups enthalten Metadaten und Verknüpfungen, nicht die Dateien selbst, wenn sie in einem lokalen Ordner, auf WebDAV oder in Google Drive liegen; sichere das gewählte Ziel separat. Ordomas Sichtbarkeitseinstellungen regeln nur den Zugriff über Ordoma. Wer Zugriff auf den verbundenen Google-Drive-Ordner `Yuvomi/Documents` hat, sieht alle dort abgelegten Dateien.
 
 > **Interne Ziele (LAN / private IP) sind standardmäßig blockiert.** Der serverseitige Anfrageschutz weist private, Loopback-, Link-Local- und intern auflösende URLs für Kalender-Abos, WebDAV-Dokumentenspeicher und Rezept-Spiegel ab. Für eine intern auflösende URL setzt du das passende Opt-in in deiner Deployment-Umgebung. Siehe [Installationsanleitung](docs/installation.md#environment-variables).
 
-> **Manche Katalog-Slugs tragen weiter den alten Namen `oikos`** (z. B. Unraid `oikos-…`). Die App heißt und installiert sich überall als Yuvomi; wo der technische Slug `oikos` bleibt, bleibt er, damit bestehende Installationen nahtlos aktualisieren. Suche nach **Yuvomi**; taucht in einem Store noch ein Eintrag als *oikos* auf, ist das dieselbe App.
+> **Die Paketnamen des Ursprungsprojekts bleiben erhalten.** Katalogeinträge und Images namens `yuvomi` oder `oikos` gehören zu Yuvomi und sind keine eigene Ordoma-Veröffentlichung. Ordoma wird aus dem geprüften Image dieses Forks betrieben; bestehende technische Kennungen bleiben kompatibel.
 
 </details>
 
@@ -185,7 +191,7 @@ Backups und Fehlersuche.
 
 ## Bevor du dich festlegst
 
-**Was, wenn dieses Projekt aufhört?** Auf deiner Maschine ändert sich nichts. Yuvomi ist
+**Was, wenn dieses Projekt aufhört?** Auf deiner Maschine ändert sich nichts. Ordoma ist
 MIT-lizenziert und selbstgehostet, auf dem Weg steht kein Server von uns, und das Einzige, was deine
 Maschine verlässt, ist eine Versionsprüfung gegen die GitHub-Releases-API. Der Container, den du
 schon geholt hast, läuft weiter wie heute, mit uns oder ohne uns.
@@ -196,7 +202,7 @@ deiner eigenen Platte. Geplante Backups schreiben
 zusätzlich ein wiederherstellbares Archiv, und die dokumentierte API holt alles in der Form heraus,
 die du brauchst.
 
-**Was kostet es?** Nichts. Yuvomi ist kostenlos und MIT-lizenziert. Du stellst den Server; es gibt
+**Was kostet es?** Nichts. Ordoma ist kostenlos und MIT-lizenziert. Du stellst den Server; es gibt
 kein Abo, keinen Upsell und keine Bezahlstufe.
 
 ---
@@ -207,7 +213,7 @@ kein Abo, keinen Upsell und keine Bezahlstufe.
 - **Apple HIG in der Liquid-Glass-Sprache** - Systemschrift und Apples Typoskala, Kapsel-Bedienelemente, eingerückte Listengruppen und federnde Bewegung, in Hell und Dunkel gegen WCAG AA geprüft.
 - **Privatsphäre zuerst** - vollständig selbstgehostet, optionale SQLCipher-AES-256-Datenbankverschlüsselung, keine Telemetrie.
 - **Anmeldung für einen ganzen Haushalt** - optionale Zwei-Faktor-Anmeldung (TOTP mit Wiederherstellungscodes, auf Wunsch für alle verpflichtend), optionales Single Sign-on über jeden OIDC-Anbieter (mit einem Schalter dafür, ob eine unbekannte Identität ein Konto bekommt - ein Anbieter, der mehr als diesen Haushalt bedient, reicht damit nicht jedem einen Zugang - und einem zweiten dafür, SSO zum einzigen Weg hinein zu machen), Einladungslinks statt weitergereichter Passwörter und optionaler Self-Service-Passwort-Reset per E-Mail.
-- **24 Sprachen** mit automatischer Erkennung. Eine eigene Haushaltseinstellung bestimmt die Sprache der Einträge, die Yuvomi selbst anlegt - so spricht ein exportierter Kalender die Sprache deines Haushalts statt Englisch.
+- **24 Sprachen** mit automatischer Erkennung. Eine eigene Haushaltseinstellung bestimmt die Sprache der Einträge, die Ordoma selbst anlegt - so spricht ein exportierter Kalender die Sprache deines Haushalts statt Englisch.
 
 <p align="center">
   <img src="https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white" alt="Express">
@@ -226,19 +232,19 @@ kein Abo, keinen Upsell und keine Bezahlstufe.
 
 [Installation](docs/installation.md) &nbsp;·&nbsp; [Spezifikation &amp; Datenmodell](docs/SPEC.md) &nbsp;·&nbsp; [Fremdmodule](MODULES.md) &nbsp;·&nbsp; [Benachrichtigungs-Webhooks](docs/notification-webhooks.md) &nbsp;·&nbsp; [Immich-Bildschirmschoner](docs/immich-screensaver.md) &nbsp;·&nbsp; [Mitwirken](CONTRIBUTING.md) &nbsp;·&nbsp; [Sicherheit](SECURITY.md) &nbsp;·&nbsp; [Changelog](CHANGELOG.md) &nbsp;·&nbsp; [Backlog](BACKLOG.md)
 
-Wenn du Yuvomi im DSGVO-Kontext betreibst (EU/EWR, Verarbeitung fremder Daten), lies vorher
+Wenn du Ordoma im DSGVO-Kontext betreibst (EU/EWR, Verarbeitung fremder Daten), lies vorher
 [Datenschutz für Selfhoster](docs/PRIVACY-FOR-SELFHOSTERS.md). Dort stehen Drittlandsbewertungen für
 jeden externen Dienst, Hinweise zur Auftragsverarbeitung, Empfehlungen zur Log-Aufbewahrung und eine
 Vorlage für das Verarbeitungsverzeichnis.
 
 <details>
-<summary>Kommst du von <b>Oikos</b>? Das Projekt wurde umbenannt, an der App ändert sich nichts.</summary>
+<summary>Geschichte des Ursprungsprojekts: Aus <b>Oikos</b> wurde <b>Yuvomi</b></summary>
 
 <br>
 
-Yuvomi wurde von **Oikos** umbenannt, um einen Markenkonflikt mit einem unabhängigen Produkt zu vermeiden. Gleicher Code, gleiche Daten, gleicher Maintainer.
+Das Ursprungsprojekt Yuvomi wurde von **Oikos** umbenannt, um einen Markenkonflikt mit einem unabhängigen Produkt zu vermeiden. Ordoma ist ein unabhängig weiterentwickelter Fork; diese frühere Umbenennung ist davon getrennt.
 
-- Alte Links (`github.com/ulsklyc/oikos`) leiten automatisch hierher weiter.
+- Alte Links (`github.com/ulsklyc/oikos`) leiten zum Repository des Ursprungsprojekts weiter.
 - Das Docker-Image liegt jetzt unter `ghcr.io/ulsklyc/yuvomi`; das alte `ghcr.io/ulsklyc/oikos` funktioniert weiter, du kannst also in Ruhe umstellen.
 - Bestehende Daten und Einstellungen bleiben beim Update vollständig erhalten.
 

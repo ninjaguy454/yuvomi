@@ -60,20 +60,9 @@
 }
 
 /* Der Button trägt die ganze Textspalte: Name, Zutatenzahl, Chevron. */
-/* NAME UND META STEHEN HIER NEBENEINANDER, NICHT ÜBEREINANDER - und das ist
- * die eine benannte Ausnahme vom Stapel der geteilten Zeile (Critique
- * 2026-08-13, dort zunächst als vergessener Umbau gelesen).
- *
- * Der Grund ist die Meta selbst: sie ist hier EINE Zahl („6 Zutaten"), kein
- * mehrteiliger Satz aus Datum, Konto und Kategorie. Eine einzelne Zahl gehört
- * rechtsbündig ans Zeilenende, wo das Chevron steht - das ist die Detailspalte
- * der HIG-Tabellenzeile, und die Regeln darunter halten sie über Ziffernzahl
- * und Singular/Plural hinweg bündig. Untereinander gesetzt kostete dieselbe
- * Zahl eine zweite Textzeile pro Rezept und stünde linksbündig unter einem
- * Titel, mit dem sie nichts zu tun hat.
- *
- * Wer diese Ausnahme kopiert, prüfe zuerst, ob seine Metazeile auch nur EINE
- * Angabe trägt. Ab zwei gilt der Stapel. */
+/* Wide rows can keep the ingredient count beside the title. At the ordinary
+ * reading-column width, title, metadata and actions use separate rows below:
+ * five action buttons must never reduce a recipe name to a few characters. */
 .recipe-row__toggle {
   flex: 1 1 auto;
   min-width: 0;
@@ -179,7 +168,7 @@
 }
 
 /* --------------------------------------------------------
- * Schmale Zeile: Aktionen ins Menü, Zutatenzahl auf eine eigene Zeile
+ * Responsive rows: metadata and actions below the title; More on small screens
  *
  * GEMESSEN bei 320px (Critique 2026-07-30, P0): drei Zeilenaktionen belegten
  * 3 × 48 + 2 × 8 = 152px der 262px Zeilenbreite. Für die Textspalte blieben 98px,
@@ -189,13 +178,9 @@
  * breitesten Einzelzeichens: **8px**. „Chicken Tikka Masala" stand ein Zeichen pro
  * Zeile, die Zeile war 448px hoch, auf den Bildschirm passte EIN Rezept.
  *
- * Zwei Züge, beide mit derselben Container-Query wie der Vorrats-Stepper - die
- * maßgebliche Breite ist die der Zeile, nicht die des Fensters:
- *   1. Die drei Sekundäraktionen wandern in das geteilte Überlaufmenü
- *      (utils/popover-menu.js), MIT Labels. 152px → 48px.
- *   2. Die Zutatenzahl rückt unter den Namen, damit er die Zeile allein hat.
- *
- * Danach: Textspalte 202px statt 98px, Namensbreite 186px statt 8px.
+ * The original 30rem More menu remains. With five actions now available,
+ * stacking starts at 48rem so intermediate widths cannot squeeze the title
+ * before that menu breakpoint. Both decisions use the actual card container.
  * -------------------------------------------------------- */
 
 /* Basiszustand ZUERST: `@container` erhöht die Spezifität nicht, es entscheidet die
@@ -212,6 +197,71 @@
   display: none;
 }
 
+@container list-rows (max-width: 48rem) {
+  .recipe-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
+  }
+
+  .recipe-row__toggle {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    row-gap: var(--space-0h);
+  }
+
+  .recipe-row__toggle .list-row__name {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .recipe-row__toggle .recipe-row__chevron {
+    grid-column: -2;
+    grid-row: 1;
+  }
+
+  .recipe-row__toggle:has(.recipe-row__thumb) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .recipe-row__thumb {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .recipe-row__toggle:has(.recipe-row__thumb) .list-row__name {
+    grid-column: 2;
+  }
+
+  .recipe-row__badge-slot,
+  .recipe-row__toggle .list-row__meta,
+  .recipe-row__planned {
+    grid-column: 1 / -1;
+  }
+
+  .recipe-row__badge-slot {
+    display: flex;
+  }
+
+  .recipe-row__toggle .list-row__meta {
+    min-width: 0;
+    text-align: start;
+  }
+
+  .recipe-row__planned {
+    order: 3;
+  }
+
+  .recipe-row__toggle .list-row__meta + .recipe-row__planned::before {
+    content: none;
+  }
+
+  .recipe-row .list-row__actions,
+  .recipe-row__inline-actions {
+    flex-wrap: wrap;
+  }
+}
+
 @container list-rows (max-width: 30rem) {
   .recipe-row__inline-actions {
     display: none;
@@ -222,47 +272,6 @@
     align-items: center;
   }
 
-  /* `order`, damit die Vorlesereihenfolge Name → Zutatenzahl → Chevron bleibt. */
-  .recipe-row__toggle {
-    flex-wrap: wrap;
-    /* DER SPALTENABSTAND DARF NICHT DER ZEILENABSTAND SEIN. Sobald die Query
-     * greift, stapelt dieser Flex-Container Name über Meta - dieselbe
-     * Beziehung, die .list-row__main (list-row.css) als Grid mit
-     * `gap: var(--space-0h)` führt. Hier erbte der Stapel den HORIZONTALEN
-     * Abstand zum Vorschaubild (--space-2) als Zeilenabstand und war damit
-     * 6px höher als jede andere Zeile der App: gemessen bei 390x844
-     * 23,5 (Name) + 8 + 20,6 (Meta) = 52,1 statt 46,1, Zeile 68,1 statt 64.
-     * Der Spaltenabstand bleibt, er hat einen eigenen Anlass (Bild ↔ Text). */
-    row-gap: var(--space-0h);
-  }
-
-  /* Eigene Zeile fürs Mealie-Badge, direkt unter dem Namen und über der
-   * Zutatenzahl - konsistent auf jeder Zeile, unabhängig von Titellänge oder
-   * Zutatenzahl-Wortbreite (siehe .recipe-row__badge-slot in recipes.js: der
-   * SLOT trägt die volle Breite, nicht die Pille selbst). */
-  .recipe-row__badge-slot {
-    display: flex;
-    flex: 1 0 100%;
-    order: 1;
-  }
-
-  .recipe-row__toggle .list-row__meta {
-    flex: 1 0 100%;
-    order: 2;
-    /* UND DAMIT ENTFÄLLT DER GRUND FÜR `text-align: end`.
-     *
-     * Oben steht er, damit die Zutatenzahl bündig zum Chevron bleibt, während
-     * sie in derselben Zeile rechts vom Namen sitzt. Hier bekommt sie ihre
-     * eigene volle Zeile - der Name beginnt links, sein Untertitel endete
-     * rechts, und die Zeile verlor ihre Anatomie: gemessen bei 375px stand
-     * „Chicken Tikka Masala" bei x=29 und „6 Zutaten" 257px weiter rechts
-     * darunter. Jede andere Liste der App hält Name und Meta auf einer Kante.
-     *
-     * Die Mindestbreite geht mit: sie hielt die Spalte für die Breitfassung
-     * frei und presst hier nur noch eine volle Zeile auf 15ch. */
-    min-width: 0;
-    text-align: start;
-  }
 }
 
 

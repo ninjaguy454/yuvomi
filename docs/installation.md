@@ -1,6 +1,12 @@
+# Ordoma installation
+
+Ordoma is an independent household-management platform derived from open-source Yuvomi. Existing technical names, paths and environment variables remain compatible.
+
+> **Upstream packaging reference.** The clone URLs, published images and app-store instructions in this inherited guide refer to upstream Yuvomi. They do not identify a published Ordoma image. Use the validated image built from this fork for Ordoma, with the existing data volumes and configuration. Do not switch a running Ordoma instance to an upstream image as part of a branding change.
+
 ## Quick Install
 
-Three ways to get Yuvomi running from scratch:
+Three ways to get Ordoma running from scratch:
 
 ### Option A — Web Installer (recommended, all platforms)
 
@@ -67,7 +73,7 @@ the browser. Headless deployments can instead create it from the container conso
 
 # Installation Guide
 
-Complete setup instructions for Yuvomi - from Docker installation to your first login.
+Complete setup instructions for Ordoma - from Docker installation to your first login.
 
 ## Table of Contents
 
@@ -86,7 +92,7 @@ Complete setup instructions for Yuvomi - from Docker installation to your first 
 
 ## Architecture Overview
 
-Yuvomi is a self-hosted family planner that runs as a single Docker container. The Express.js backend serves both the API and the static frontend files. Application data is stored in a SQLCipher-encrypted SQLite database inside a host-mounted data folder, and automated database backups are written to a separate host-mounted backup folder. Optionally, newly uploaded document files can be stored on a mounted host folder or on a WebDAV server instead of inside SQLite.
+Ordoma is a self-hosted family planner that runs as a single Docker container. The Express.js backend serves both the API and the static frontend files. Application data is stored in a SQLCipher-encrypted SQLite database inside a host-mounted data folder, and automated database backups are written to a separate host-mounted backup folder. Optionally, newly uploaded document files can be stored on a mounted host folder or on a WebDAV server instead of inside SQLite.
 
 ```
 Browser ──HTTP──▶ Docker Container (Express.js :3000) ──▶ SQLite/SQLCipher (/data/yuvomi.db)
@@ -95,7 +101,7 @@ With HTTPS (recommended for network access):
 Browser ──HTTPS──▶ Nginx (Reverse Proxy) ──HTTP──▶ Docker Container (Express.js :3000) ──▶ SQLite/SQLCipher
 ```
 
-For local-only access, the Docker container is all you need. If you want to access Yuvomi from other devices on your network or the internet, add Nginx as a reverse proxy with SSL.
+For local-only access, the Docker container is all you need. If you want to access Ordoma from other devices on your network or the internet, add Nginx as a reverse proxy with SSL.
 
 ---
 
@@ -121,7 +127,7 @@ docker compose version     # Docker Compose version v2.x.x
 ### Podman (alternative to Docker, RHEL / Fedora / CentOS Stream)
 
 RHEL-based distributions ship **Podman** (often rootless) and **SELinux** instead of
-Docker. Yuvomi supports Podman out of the box: both installers auto-detect it, and a
+Docker. Ordoma supports Podman out of the box: both installers auto-detect it, and a
 dedicated `podman-compose.yml` adds the SELinux `:Z` volume relabel. Install Podman and
 either the `podman compose` subcommand (Podman 4.1+) or the `podman-compose` package:
 
@@ -154,7 +160,7 @@ git --version              # git version 2.x.x
 
 ## Step-by-Step Installation
 
-There are seven ways to get Yuvomi running. **Option A** (web installer) is recommended for most users — it walks you through every step in your browser. **Option B** (pre-built image) is a quick manual alternative. **Option C** (build from source) is for contributors or custom builds. **Options D–F** install directly from a NAS/home-server app store with no terminal required: **Option D** (TrueNAS SCALE), **Option E** (Umbrel), and **Option F** (Unraid). **Option G** covers Portainer, whether you paste the stack or let it follow this repository via Git.
+There are seven ways to get Ordoma running. **Option A** (web installer) is recommended for most users — it walks you through every step in your browser. **Option B** (pre-built image) is a quick manual alternative. **Option C** (build from source) is for contributors or custom builds. **Options D–F** install directly from a NAS/home-server app store with no terminal required: **Option D** (TrueNAS SCALE), **Option E** (Umbrel), and **Option F** (Unraid). **Option G** covers Portainer, whether you paste the stack or let it follow this repository via Git.
 
 ---
 
@@ -179,12 +185,12 @@ node tools/installer/install-server.js
 
 Open your browser and navigate to **http://localhost:8090**. The wizard detects your browser language (24 languages supported), verifies that a container engine is available (Docker with Compose v2, or Podman with `podman compose` / `podman-compose`), and reports an existing `.env` file as well as a running container before you start. When it finds one, the **simple setup is disabled** and you continue with the advanced setup: the simple path writes fixed values for host, port, `SESSION_SECURE` and `TRUST_PROXY`, which would silently downgrade an installation that already runs behind a reverse proxy. The wizard then guides you through:
 
-- Basics — domain/IP, HTTP host port (`OIKOS_HTTP_PORT`), timezone (`TZ`, which pre-sets the household zone; that one is changeable later under Settings → Personal → Appearance → Region), how Yuvomi is exposed (`SESSION_SECURE`, `TRUST_PROXY`) and the public address (`BASE_URL`). The exposure choice follows the host you enter, and the wizard rejects an `http://` address combined with enforced secure cookies — nobody could sign in to that combination. A typed public address only counts once it names a full `http://` or `https://` origin; until then the wizard keeps the address it derives from host and port
+- Basics — domain/IP, HTTP host port (`OIKOS_HTTP_PORT`), timezone (`TZ`, which pre-sets the household zone; that one is changeable later under Settings → Personal → Appearance → Region), how Ordoma is exposed (`SESSION_SECURE`, `TRUST_PROXY`) and the public address (`BASE_URL`). The exposure choice follows the host you enter, and the wizard rejects an `http://` address combined with enforced secure cookies — nobody could sign in to that combination. A typed public address only counts once it names a full `http://` or `https://` origin; until then the wizard keeps the address it derives from host and port
 - Security key generation (`SESSION_SECRET`, `DB_ENCRYPTION_KEY`) — on a re-run, keys already present in your `.env` are kept rather than regenerated, so running the wizard again on a live installation cannot lock you out of your encrypted database
 - Optional integrations (weather, Google Calendar, Apple CalDAV)
 - Email/SMTP for the "forgot password" flow (`EMAIL_SMTP_*`, `EMAIL_FROM_*`)
 - Storage & backups — the host data folder (`DATA_DIR`), automatic backups, off-site WebDAV backups and the three document storage options. Everything that decides where data lives
-- Advanced settings — Single Sign-On (OIDC), the three home-network permissions (they lift the SSRF protection and are asked as one group), the calendar sync interval, live currency rates and the Web-Push contact. Everything that decides what Yuvomi connects to
+- Advanced settings — Single Sign-On (OIDC), the three home-network permissions (they lift the SSRF protection and are asked as one group), the calendar sync interval, live currency rates and the Web-Push contact. Everything that decides what Ordoma connects to
 - Writing your `.env` file (an existing `.env` is backed up to `.env.bak-<timestamp>` first)
 - Starting the container (via Docker or Podman, whichever was detected)
 - Creating your admin account
@@ -193,7 +199,7 @@ The final screen lets you **download a copy of your `.env`** — keep it safe, a
 
 Download the file before you close the tab: the installer server shuts down **5 minutes after your admin account is created**, and after 30 minutes of inactivity otherwise.
 
-The final screen also links to the next three steps on your new instance: inviting your family, choosing which modules to enable, and installing Yuvomi on your phones. Running the wizard again on an installation that already has an admin account is a supported case — it writes your `.env`, restarts the container and takes you to that same screen instead of failing.
+The final screen also links to the next three steps on your new instance: inviting your family, choosing which modules to enable, and installing Ordoma on your phones. Running the wizard again on an installation that already has an admin account is a supported case — it writes your `.env`, restarts the container and takes you to that same screen instead of failing.
 
 ---
 
@@ -296,13 +302,13 @@ Press `Ctrl+C` to stop following the logs (the container keeps running).
 
 ### 5. Create the First Admin Account
 
-On the first visit, Yuvomi detects that no account exists yet and guides you through
+On the first visit, Ordoma detects that no account exists yet and guides you through
 creating your admin account directly in the browser (see step 6). The form asks for:
 - **Username** (3–64 characters; letters, numbers, dots, hyphens, underscores)
 - **Display name** (e.g. "Jane Doe")
 - **Password** (minimum 8 characters, with a confirmation field)
 
-After you submit, Yuvomi creates the admin, signs you in automatically, and the setup
+After you submit, Ordoma creates the admin, signs you in automatically, and the setup
 form is no longer reachable.
 
 **Headless alternative (CLI):** if you prefer not to use the browser — or are scripting
@@ -312,7 +318,7 @@ a provisioning step — create the admin from the container console instead:
 docker compose exec yuvomi node setup.js
 ```
 
-### 6. Open Yuvomi
+### 6. Open Ordoma
 
 Open your browser and navigate to:
 
@@ -326,7 +332,7 @@ Log in with the admin credentials you just created. You can add family members f
 
 ### Option D — TrueNAS SCALE (Community Apps Catalog)
 
-No terminal required. Yuvomi is available directly in the TrueNAS SCALE Community Apps Catalog.
+No terminal required. Upstream Yuvomi is available directly in the TrueNAS SCALE Community Apps Catalog. This is an upstream packaging reference, not an Ordoma release channel.
 
 #### 1. Open the Apps Catalog
 
@@ -350,7 +356,7 @@ Once the app status shows **Running**, click **WebUI** in the Apps overview. The
 
 ### Option E — Umbrel (App Store)
 
-No terminal required. Yuvomi is available in the Umbrel App Store — everything runs on, and stays on, your Umbrel.
+No terminal required. Upstream Yuvomi is available in the Umbrel App Store — everything runs on, and stays on, your Umbrel. This is an upstream packaging reference, not an Ordoma release channel.
 
 #### 1. Open the App Store
 
@@ -360,7 +366,7 @@ In your Umbrel dashboard, open the **App Store** and search for **Yuvomi**.
 
 Click **Install**. Umbrel pulls the image and starts the container for you — there are no configuration files to edit.
 
-#### 3. Open Yuvomi
+#### 3. Open upstream Yuvomi
 
 Launch Yuvomi from your Umbrel home screen. The first visit guides you through creating your admin account in the browser.
 
@@ -370,7 +376,7 @@ Launch Yuvomi from your Umbrel home screen. The first visit guides you through c
 
 ### Option F — Unraid (Community Apps)
 
-No terminal required. Yuvomi ships as an Unraid Community Applications template.
+No terminal required. Upstream Yuvomi ships as an Unraid Community Applications template. This is an upstream packaging reference, not an Ordoma release channel.
 
 #### 1. Open Community Applications
 
@@ -428,7 +434,7 @@ All configuration happens in the `.env` file. The container reads these values o
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `PORT` | Port the Express server listens on **inside the container** (rarely changed) | `3000` | No |
-| `OIKOS_HTTP_PORT` | Host port that the compose file maps to the container's port 3000. Change this to expose Yuvomi on a different host port; the app inside the container always listens on 3000. | `3000` | No |
+| `OIKOS_HTTP_PORT` | Host port that the compose file maps to the container's port 3000. Change this to expose Ordoma on a different host port; the app inside the container always listens on 3000. | `3000` | No |
 | `OIKOS_HTTP_BIND` | Host bind address for the published port (`podman-compose.yml` only). Set to `127.0.0.1` for rootless Podman behind a reverse proxy on the same host. | `0.0.0.0` | No |
 | `TZ` | Container timezone (e.g. `Europe/Berlin`). Affects log timestamps and the automated-backup schedule, and is the **default** for the household zone. Since v2.34.0 the household zone is a setting of its own (Settings → Personal → Appearance → Region), and where both exist the setting wins: `TZ` lives in the compose file, which is out of reach on Umbrel, TrueNAS and Unraid, and it also drives things that have nothing to do with the family calendar. Whichever applies is the zone used wherever a time carries none of its own: the calendar day server-side jobs call "today" (upcoming events, countdowns, recurring split expenses, birthdays), events pushed to Google Calendar when the target calendar reports no zone, events pushed to Outlook, the due times of CalDAV reminders synced into Tasks, and the times in the exported calendar feed (`/feed/calendar/<token>.ics`), which subscribers read in this zone - a wrong zone shifts every appointment for everyone subscribed. **Since v2.36.0 the app's own display follows it too**, so a device travelling in another zone shows the household's clock rather than its own; that half applies only when the setting is set, since `TZ` alone leaves the display on the browser as before. | `UTC` | No |
 | `NODE_ENV` | Runtime environment | `production` | No |
@@ -460,7 +466,7 @@ see [HTTPS / Reverse Proxy](#https--reverse-proxy-nginx)). Each device opts in u
 Settings → Personal → Notifications.
 
 Admins can also add household Gotify, ntfy or generic HTTP webhook channels on the same settings
-page. These channels are configured in the UI and do not require environment variables. The Yuvomi
+page. These channels are configured in the UI and do not require environment variables. The Ordoma
 backend container or host must be able to reach the configured base URL. HTTPS is recommended; HTTP
 is accepted for trusted internal networks such as a private LAN or container network.
 
@@ -487,20 +493,20 @@ Apple applies extra restrictions that do not exist on Android or desktop browser
 
 - **iOS/iPadOS 16.4 or newer** is required.
 - **The app must be installed to the Home Screen.** iOS delivers Web Push only to installed
-  home-screen web apps, never to a Safari tab. Open Yuvomi in Safari, then Share ->
+  home-screen web apps, never to a Safari tab. Open Ordoma in Safari, then Share ->
   "Add to Home Screen".
 - **Enable the toggle from inside the home-screen app.** The push subscription belongs to that
   installation, so a toggle enabled in a Safari tab does not carry over.
 - **The certificate must be one iOS trusts.** A self-signed certificate or a private CA without an
   installed profile stops the service worker from registering, which silently disables push. A
   plain `http://` LAN address does not work either.
-- **Check iOS Settings -> Notifications -> Yuvomi**: "Allow Notifications" must be on, and a Focus
+- **Check iOS Settings -> Notifications -> Ordoma**: "Allow Notifications" must be on, and a Focus
   mode must not be filtering the app.
 - **The server needs outbound access to `web.push.apple.com`.** In LAN-only or egress-filtered
   deployments the send fails server-side.
 - **The VAPID subject must be routable.** Apple validates the contact URI in the signed token and
   answers `403 BadJwtToken` when it cannot be reached, so push fails on iOS while Android continues
-  to work. Yuvomi derives a usable value from the SMTP sender address or `BASE_URL`; set
+  to work. Ordoma derives a usable value from the SMTP sender address or `BASE_URL`; set
   [`VAPID_SUBJECT`](#web-push-optional) explicitly if neither is configured.
 
 If a test notification does not arrive, the server log is the authoritative source. Successful
@@ -529,10 +535,10 @@ makes exactly that field read-only in the settings UI; empty values fall back to
 | `EMAIL_SMTP_USER` | SMTP auth username. | - | No |
 | `EMAIL_SMTP_PASS` | SMTP auth password. | - | No |
 | `EMAIL_FROM_ADDRESS` | Sender email address. | - | No |
-| `EMAIL_FROM_NAME` | Sender display name. | `Yuvomi` | No |
+| `EMAIL_FROM_NAME` | Sender display name. | `Ordoma` | No |
 | `BASE_URL` | Absolute origin used to build password-reset links, invitation links in emails, and calendar export-feed URLs, e.g. `https://yuvomi.example.com`. **Required for password-reset and invitation emails to be sent** — the request `Host` header is never trusted as a fallback, to prevent reset-link poisoning. The invite link shown in the admin UI works without it (it is built from the browser's origin); the export feed falls back to the request's protocol/host when unset. | - | No* |
 
-\* Not required to start Yuvomi. Without it (or without SMTP configured) the self-service reset
+\* Not required to start Ordoma. Without it (or without SMTP configured) the self-service reset
 cannot deliver a mail, so the login page hides the "Forgot password" link entirely rather than
 offering a dead end — an admin can still reset a member's password directly under
 Settings → Administration → Family.
@@ -547,7 +553,7 @@ optional `DB_ENCRYPTION_KEY`.
 
 Connect a self-hosted Immich server under **Settings → Administration → Immich** to show random
 photos after five minutes without activity. The administration page can test the connection and
-open an immediate preview. An optional album UUID limits the selection; otherwise Yuvomi uses the
+open an immediate preview. An optional album UUID limits the selection; otherwise Ordoma uses the
 whole accessible library. The Immich API key needs `asset.read` and `asset.view` permissions.
 
 | Variable | Description | Default | Required |
@@ -657,7 +663,7 @@ environment:
 
 Admins can configure **Settings → Sync → Document storage** as the global destination for all
 new document files, including calendar attachments. Existing local documents are not migrated.
-Uploads fail closed: if WebDAV cannot accept the file, Yuvomi rejects the upload instead of silently
+Uploads fail closed: if WebDAV cannot accept the file, Ordoma rejects the upload instead of silently
 storing it in SQLite. Disabling WebDAV changes only future uploads; existing WebDAV documents remain
 readable and deletable.
 
@@ -695,7 +701,7 @@ PUT/GET/DELETE roundtrip in the target folder.
 Google Drive is a separate Documents OAuth connection, even when it reuses the same Cloud Console
 client ID and secret as Google Calendar. Enable the **Google Drive API**, add the exact redirect URI
 `https://<YOUR-DOMAIN>/api/v1/documents/storage/google-drive/callback`, and configure the variables
-below. Yuvomi requests only `https://www.googleapis.com/auth/drive.file`; it cannot browse arbitrary
+below. Ordoma requests only `https://www.googleapis.com/auth/drive.file`; it cannot browse arbitrary
 Drive files and never creates public permissions.
 
 | Variable | Description | Default | Required |
@@ -716,7 +722,7 @@ the candidate account and an existing Drive-backed file before replacing working
 Disconnect is blocked while Drive is selected or Drive-backed rows exist, and it removes only local
 Drive token state without revoking shared Google credentials.
 
-> **Access and backup boundary:** Yuvomi visibility settings only control access through Yuvomi.
+> **Access and backup boundary:** Ordoma visibility settings only control access through Ordoma.
 > Anyone with access to the connected Google Drive folder can view all files stored there. SQLite backups contain
 > metadata and Drive file IDs, not binaries. Back up or export the Drive folder separately and restore
 > it with the matching database.
@@ -758,7 +764,7 @@ it in controlled environments.
 
 > **Note the inverted default.** `DMS_ALLOW_PRIVATE_NETWORK` is the only switch in this family that
 > defaults to `true`. A document management system is self-hosted by definition and normally sits on
-> the same LAN or Docker network as Yuvomi, so blocking private targets by default would break
+> the same LAN or Docker network as Ordoma, so blocking private targets by default would break
 > virtually every existing connection. Set it to `false` to enforce the same protection the other
 > integrations have; only an explicit `false` or `0` switches it on, so a typo leaves a working
 > setup working.
@@ -772,11 +778,11 @@ it in controlled environments.
 | `GOOGLE_REDIRECT_URI` | OAuth callback URL | `https://<YOUR-DOMAIN>/api/v1/calendar/google/callback` | No |
 
 After connecting, enable the calendars to sync under **Settings → Sync**. The sync runs both ways:
-events created, edited, deleted, or moved to another calendar in Yuvomi are applied in Google as
+events created, edited, deleted, or moved to another calendar in Ordoma are applied in Google as
 well, and changes made in Google flow back. Outbound changes are attempted immediately and retried
 by the next sync run (`SYNC_INTERVAL_MINUTES`) if Google is unreachable. A calendar is only written
 to when the connected account has write access to it, and the **read-only mode** checkbox stops
-Yuvomi from changing anything in Google while still importing normally.
+Ordoma from changing anything in Google while still importing normally.
 
 Recurring appointments are imported as one series with its repeat rule, and cancelled or moved
 occurrences are carried over individually. Upgrading to v1.56.0 makes the first sync run read every
@@ -788,8 +794,8 @@ colour is kept as a separate entry instead.
 ### Google Places for Task Locations (Optional)
 
 Enable **Places API (New)** in a billing-enabled Google Maps Platform project and create an API key
-restricted to that API and to the server that runs Yuvomi. This integration is independent of
-Google Calendar OAuth. When it is not configured, saved and manual Yuvomi Places continue to work
+restricted to that API and to the server that runs Ordoma. This integration is independent of
+Google Calendar OAuth. When it is not configured, saved and manual Ordoma Places continue to work
 and the external search control reports that discovery is unavailable.
 
 | Variable | Description | Default | Required |
@@ -799,20 +805,20 @@ and the external search control reports that discovery is unavailable.
 | `GOOGLE_MAPS_TERMS_ACCEPTED` | Record the administrator's acceptance of Google's attribution and data-handling requirements | `false` | Yes for external discovery |
 | `GOOGLE_PLACES_PER_USER_PER_MINUTE` | Per-user deliberate-search safeguard | `10` | No |
 | `GOOGLE_PLACES_PER_HOUSEHOLD_PER_DAY` | Instance-wide daily search safeguard | `100` | No |
-| `GOOGLE_PLACES_SEARCH_RADIUS_METERS` | Search bias radius around the selected Yuvomi Place, up to 50 km | `50000` | No |
+| `GOOGLE_PLACES_SEARCH_RADIUS_METERS` | Search bias radius around the selected Ordoma Place, up to 50 km | `50000` | No |
 | `GOOGLE_PLACES_TIMEOUT_MS` | Provider request timeout, 1–30 seconds | `8000` | No |
 
-Yuvomi uses Text Search only after the user presses Search, requests at most ten results with a
+Ordoma uses Text Search only after the user presses Search, requests at most ten results with a
 fixed minimal field mask, never polls in the background, and keeps Google Place IDs separate from
-Yuvomi's own immutable Place IDs. Enable a billing account and **Places API (New)** only; Maps
+Ordoma's own immutable Place IDs. Enable a billing account and **Places API (New)** only; Maps
 JavaScript, Routes, Geocoding, and Navigation APIs are not needed. Restrict the key to Places API
 (New) and, when practical, the deployment server's source IP. Configure Google Cloud quotas and
-budget alerts in addition to Yuvomi's local safeguards. Google Maps navigation links do not
+budget alerts in addition to Ordoma's local safeguards. Google Maps navigation links do not
 require the API key.
 
 ### Outlook Calendar Push - Microsoft Graph (Optional)
 
-One-way push **Yuvomi → Outlook.com** for personal Microsoft accounts (outlook.com, hotmail.com, M365 Family). Outlook.com does not support CalDAV, so this provider uses the Microsoft Graph API. Yuvomi stays the source of truth: pushed events are created/updated/deleted in Outlook, and every sync run also checks the pushed events for remote drift (one cheap `changeKey` listing per calendar) — events edited in Outlook are reset to the Yuvomi state, events deleted in Outlook are re-created. Multiple family accounts can be connected.
+One-way push **Ordoma → Outlook.com** for personal Microsoft accounts (outlook.com, hotmail.com, M365 Family). Outlook.com does not support CalDAV, so this provider uses the Microsoft Graph API. Ordoma stays the source of truth: pushed events are created/updated/deleted in Outlook, and every sync run also checks the pushed events for remote drift (one cheap `changeKey` listing per calendar) — events edited in Outlook are reset to the Ordoma state, events deleted in Outlook are re-created. Multiple family accounts can be connected.
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
@@ -825,15 +831,15 @@ One-way push **Yuvomi → Outlook.com** for personal Microsoft accounts (outlook
 > Microsoft has deprecated creating app registrations *outside a directory* — signing in to Entra with a bare personal account shows a blocking notice. You need an Entra tenant to hold the app: sign up for a **free Azure account** (creates a "Default Directory"; identity verification asks for a credit card, but the app registration and Graph calls stay free). The M365 Developer Program alternative is restricted to Visual Studio Professional/Enterprise subscribers and Microsoft partners. Your family's personal accounts do **not** need to join the tenant — it only hosts the app registration.
 
 1. Sign in at [entra.microsoft.com](https://entra.microsoft.com) with the account that owns the tenant → **Identity → Applications → App registrations → New registration**.
-2. Name: e.g. `Yuvomi Calendar Push`. Supported account types: **"Personal Microsoft accounts only"**.
+2. Name: e.g. `Ordoma Calendar Push`. Supported account types: **"Personal Microsoft accounts only"**.
 3. Platform: **Web**, redirect URI: `https://<YOUR-DOMAIN>/api/v1/calendar/outlook/callback` (must be HTTPS, or `http://localhost:3000/...` for local testing). This must match `MS_REDIRECT_URI` exactly.
 4. After creation, copy the **Application (client) ID** → `MS_CLIENT_ID`.
 5. **Certificates & secrets → New client secret** → copy the secret **Value** (shown only once) → `MS_CLIENT_SECRET`. Note the expiry (max. 24 months) — you must create a new secret before it expires.
 6. API permissions are requested dynamically via OAuth scopes (`Calendars.ReadWrite`, `User.Read`, `offline_access` — delegated); no admin consent is needed for personal accounts.
-7. Set the three `MS_*` variables in `.env`, restart Yuvomi, then connect each family member's account under **Settings → Synchronization → More providers → Outlook** (admin only).
-8. After connecting, no calendars are enabled yet. Recommended setup: create a **dedicated calendar in Outlook** (e.g. "Yuvomi"), refresh the calendar list, pick it as the **auto-sync target calendar**, and choose which family member the account belongs to — from then on all Yuvomi events visible to that person are pushed there automatically, with assigned members appended to the title (`Dinner (Anna, Ben)`). Alternatively (or additionally), individual events can pick an explicit Outlook target in the event dialog; an explicit target overrides the auto-sync calendar for that event.
+7. Set the three `MS_*` variables in `.env`, restart Ordoma, then connect each family member's account under **Settings → Synchronization → More providers → Outlook** (admin only).
+8. After connecting, no calendars are enabled yet. Recommended setup: create a **dedicated calendar in Outlook** (e.g. "Ordoma"), refresh the calendar list, pick it as the **auto-sync target calendar**, and choose which family member the account belongs to — from then on all Ordoma events visible to that person are pushed there automatically, with assigned members appended to the title (`Dinner (Anna, Ben)`). Alternatively (or additionally), individual events can pick an explicit Outlook target in the event dialog; an explicit target overrides the auto-sync calendar for that event.
 
-**Limitations (one-way push):** recurring events support Yuvomi's RRULE subset only; excluded single occurrences (EXDATE) are not propagated; no attendees, reminders, attachments, or colors. **Times follow the household zone since v2.34.0 (#829)** - until then `Europe/Berlin` was hard-coded here, justified as parity with the Google outbound sync although that one already read the target calendar's own zone and only fell back to `TZ`; a household in Toronto pushed every appointment six hours out. Refresh tokens for personal accounts expire after ~90 days of inactivity — the account then shows a "reconnect" button.
+**Limitations (one-way push):** recurring events support Ordoma's RRULE subset only; excluded single occurrences (EXDATE) are not propagated; no attendees, reminders, attachments, or colors. **Times follow the household zone since v2.34.0 (#829)** - until then `Europe/Berlin` was hard-coded here, justified as parity with the Google outbound sync although that one already read the target calendar's own zone and only fell back to `TZ`; a household in Toronto pushed every appointment six hours out. Refresh tokens for personal accounts expire after ~90 days of inactivity — the account then shows a "reconnect" button.
 
 ### Apple Calendar Sync — Legacy Single-Account (Optional)
 
@@ -852,15 +858,15 @@ One-way push **Yuvomi → Outlook.com** for personal Microsoft accounts (outlook
 | `SYNC_INTERVAL_MINUTES` | Sync interval in minutes for calendars and contacts | `15` | No |
 
 CalDAV and iCloud sync both ways: events created, edited, deleted, or moved to another calendar in
-Yuvomi are applied on the server as well, and changes made there flow back. An outbound change is
+Ordoma are applied on the server as well, and changes made there flow back. An outbound change is
 attempted right when you save and retried by the next sync run if the server cannot be reached.
-Editing preserves everything the server holds that Yuvomi does not — attendees, alarms, categories
+Editing preserves everything the server holds that Ordoma does not — attendees, alarms, categories
 and exceptions of a recurring series stay untouched. Events that were already synced before the
 upgrade to v1.52.0 need one sync run before edits and deletions can reach them.
 
 ### Two-Factor Authentication (Optional)
 
-Nothing to configure — there is no environment variable, and Yuvomi never reaches the network for
+Nothing to configure — there is no environment variable, and Ordoma never reaches the network for
 this. Each member turns it on for themselves under **Settings → Personal → Account**: scan the QR
 code with any authenticator app (or type the secret by hand), enter the six-digit code once, and
 store the ten recovery codes that appear. They are shown exactly once; afterwards the server only
@@ -878,18 +884,18 @@ on every account page without a second factor — it deliberately does not rejec
 already exist, because in a household where nobody has set it up yet that would lock everyone out,
 including the admin.
 
-**Single sign-on does not skip it.** If you have a second factor set up, Yuvomi asks for the code
+**Single sign-on does not skip it.** If you have a second factor set up, Ordoma asks for the code
 after the OIDC provider sends you back — otherwise the household-wide requirement would only bind
 those who sign in with a password.
 
-Time matters: TOTP codes are derived from the clock, and Yuvomi accepts a deviation of ±30 seconds.
+Time matters: TOTP codes are derived from the clock, and Ordoma accepts a deviation of ±30 seconds.
 If codes are rejected on a device whose clock drifts, sync the clock rather than the app.
 
 ### SSO / OpenID Connect (Optional)
 
 Enable single sign-on via any OpenID Connect provider (Authentik, Keycloak, Google, Microsoft Entra, etc.).
 
-Pocket ID documents Yuvomi as one of its [client examples](https://pocket-id.org/docs/client-examples/yuvomi), which is a working set of values for the four variables below if you run that provider.
+Pocket ID documents Ordoma as one of its [client examples](https://pocket-id.org/docs/client-examples/yuvomi), which is a working set of values for the four variables below if you run that provider.
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
@@ -905,7 +911,7 @@ When all four OIDC variables are set, a **"Sign in with SSO"** button appears on
 
 **Who gets an account.** By default every identity your provider accepts gets one on first sign-in - convenient for a provider you run for this household alone, but a directory is a list of people, not a list of household members. Set `OIDC_ALLOW_SIGNUP=false` and provisioning stops: an unknown identity is turned away with "There is no account here yet for this SSO sign-in" instead of the generic SSO error, while known accounts sign in as before. Linking still happens too, which is what makes the switch usable: create the account under **Settings → Administration → Family** with the member's email address, and their first SSO sign-in binds the two together (the provider must report `email_verified: true`, or the account owner links it themselves under **Settings → Account → Single sign-on**).
 
-**Making SSO the only way in.** Even with SSO configured, Yuvomi keeps a second door open: the login form stays, password reset stays, and every account carries a password hash. Set `AUTH_ALLOW_PASSWORD_LOGIN=false` and that door closes - the login page shows nothing but the SSO button, `POST /auth/login` is refused outright (the rule sits on the route, not just on the page), and password reset disappears with it rather than staying as a route that can still send mail.
+**Making SSO the only way in.** Even with SSO configured, Ordoma keeps a second door open: the login form stays, password reset stays, and every account carries a password hash. Set `AUTH_ALLOW_PASSWORD_LOGIN=false` and that door closes - the login page shows nothing but the SSO button, `POST /auth/login` is refused outright (the rule sits on the route, not just on the page), and password reset disappears with it rather than staying as a route that can still send mail.
 
 Three things are deliberate:
 
@@ -916,7 +922,7 @@ Three things are deliberate:
 
 **Creating an account without a password.** Preparing an account for an SSO user used to mean inventing a password - and the invented password stayed a working credential. With OIDC configured, the "SSO sign-in only" toggle under **Settings → Administration → Family** creates the account without one. Such an account needs an email address, and one that belongs to no other member: an account with no password and no linkable identity could never be signed into, because a matching *username* deliberately never links. This works whether or not `AUTH_ALLOW_PASSWORD_LOGIN` is set, so a household can run mixed: some members with a password, some SSO-only.
 
-**Username of a newly provisioned account.** The name is taken from the first claim that yields something usable: `preferred_username`, then the non-standard `username` claim (Synology DSM SSO sends the plain account name there, where `sub` still carries the directory part), then `sub`. The email address is deliberately not a candidate: a household often shares one address across several members, so it identifies nobody, and its domain part only makes the name unwieldy. Whichever claim wins is reduced to the format every username in Yuvomi follows (`a-z A-Z 0-9 . _ -`, 3 to 64 characters), with accents transliterated and anything else turned into a hyphen. Admins can rename the account afterwards under **Settings → Administration → Family**; sign-in keeps working either way, because the identity hangs on `sub`, not on the name.
+**Username of a newly provisioned account.** The name is taken from the first claim that yields something usable: `preferred_username`, then the non-standard `username` claim (Synology DSM SSO sends the plain account name there, where `sub` still carries the directory part), then `sub`. The email address is deliberately not a candidate: a household often shares one address across several members, so it identifies nobody, and its domain part only makes the name unwieldy. Whichever claim wins is reduced to the format every username in Ordoma follows (`a-z A-Z 0-9 . _ -`, 3 to 64 characters), with accents transliterated and anything else turned into a hyphen. Admins can rename the account afterwards under **Settings → Administration → Family**; sign-in keeps working either way, because the identity hangs on `sub`, not on the name.
 
 **Linking an existing account yourself.** A matching *username* deliberately never links: anyone who names themselves `admin` at the identity provider would otherwise take over the local admin account. If neither the `sub` nor a verified email matches, the first SSO sign-in therefore creates a separate account - same name with a numeric suffix (`test1-1`), and the original account's data stays where it is. The way to merge the two is to sign in locally and open **Settings → Account → Single sign-on**, where "Link SSO account" runs the same provider flow and binds the resulting `sub` to the account you are signed in as. Being signed in is the point: the session names the local account and the provider names the remote one, which together prove ownership of both. Linking is refused when that `sub` already belongs to another account. The same card removes a link again - except on an account that was created through SSO, because it holds no password and the link is its only way in; set a password first.
 
@@ -945,7 +951,7 @@ Built-in cron-based database backup (default: 2 AM daily, keep last 7 copies). S
 | `BACKUP_KEEP` | Number of most-recent backup files to retain | `7` | No |
 | `BACKUP_UPLOAD_LIMIT` | Maximum size of a backup file uploaded for restore through the admin UI (Express body-limit syntax). Raise it when restoring a database larger than the default. | `100mb` | No |
 
-**WebDAV backup target (optional):** After each local backup, Yuvomi can automatically upload the file to any WebDAV-compatible server (Nextcloud, ownCloud, Hetzner Storage Box, Infomaniak kDrive, etc.). Configure in **Settings → Administration → Backup and restore → WebDAV Backup Target**, or via environment variables (env vars take precedence over the UI):
+**WebDAV backup target (optional):** After each local backup, Ordoma can automatically upload the file to any WebDAV-compatible server (Nextcloud, ownCloud, Hetzner Storage Box, Infomaniak kDrive, etc.). Configure in **Settings → Administration → Backup and restore → WebDAV Backup Target**, or via environment variables (env vars take precedence over the UI):
 
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
@@ -960,9 +966,9 @@ Built-in cron-based database backup (default: 2 AM daily, keep last 7 copies). S
 
 ## HTTPS / Reverse Proxy (Nginx)
 
-> **Optional for local access, required for network/internet access.** If you only access Yuvomi on the same machine (localhost), you can skip this section.
+> **Optional for local access, required for network/internet access.** If you only access Ordoma on the same machine (localhost), you can skip this section.
 
-When exposing Yuvomi to your local network or the internet, you need HTTPS for security. Nginx acts as a reverse proxy that handles SSL termination and forwards requests to the Docker container.
+When exposing Ordoma to your local network or the internet, you need HTTPS for security. Nginx acts as a reverse proxy that handles SSL termination and forwards requests to the Docker container.
 
 ### Install Nginx
 
@@ -974,7 +980,7 @@ sudo apt install nginx
 
 ### Configure Nginx
 
-Yuvomi ships with an example configuration. Copy it and replace `deine-domain.de` with
+Ordoma ships with an example configuration. Copy it and replace `deine-domain.de` with
 your actual domain — but do **not** enable the site yet: its HTTPS block references a
 certificate that does not exist until the next step, and Nginx refuses to load an
 `ssl` listener without one.
@@ -1022,7 +1028,7 @@ Verify auto-renewal is active:
 sudo certbot renew --dry-run
 ```
 
-### Update Yuvomi for HTTPS
+### Update Ordoma for HTTPS
 
 `docker-compose.yml` reads `SESSION_SECURE` from your `.env` (`${SESSION_SECURE:-false}`), so you no longer need to edit the Compose file. When running behind an HTTPS reverse proxy, set these in `.env`:
 
@@ -1056,8 +1062,8 @@ Set `SESSION_SECURE=true` and `TRUST_PROXY=1` in `.env` as above, then reload Ca
 
 ## Podman & systemd Autostart (rootless)
 
-On RHEL-based systems you can run Yuvomi as a rootless systemd service via Podman
-[Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html). Yuvomi
+On RHEL-based systems you can run Ordoma as a rootless systemd service via Podman
+[Quadlet](https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html). Ordoma
 ships a ready-made unit at `tools/quadlet/oikos.container`.
 
 ```bash
@@ -1189,7 +1195,7 @@ For a local CLI restore outside Docker, set the same environment variables used 
 DB_PATH=/path/to/yuvomi.db node --import dotenv/config scripts/restore-backup.js ./yuvomi-backup-20260401.db
 ```
 
-The restore helper validates that the file is an Yuvomi database before replacing the active database. It also keeps a pre-restore copy next to the database file for emergency rollback.
+The restore helper validates that the file is an Ordoma database before replacing the active database. It also keeps a pre-restore copy next to the database file for emergency rollback.
 
 ### Automated Backups
 
@@ -1424,7 +1430,7 @@ After switching a list on, either press "Sync reminders" or wait for the next sc
 (`SYNC_INTERVAL_MINUTES`).
 
 Once a list is enabled for **Tasks**, it also becomes a destination: the task dialog gains a "sync
-target" field, and a task created in Yuvomi with a target set is uploaded on the next run (or right
+target" field, and a task created in Ordoma with a target set is uploaded on the next run (or right
 away, on save). Each member sets their own default under **Settings → Personal → Task defaults** -
 which lists the household mirrors is an admin decision, which of them your new tasks go to is
 yours. A task without a target stays local, as every task did before. Lists mapped to **Shopping**
@@ -1433,7 +1439,7 @@ Subtasks are never uploaded on their own, and a task that has already been uploa
 to a different list.
 
 One boundary worth knowing if you use both mirroring and the task lock: a **locked** task is closed
-to everyone but its creator and admins inside Yuvomi, but an **inbound sync still rewrites its
+to everyone but its creator and admins inside Ordoma, but an **inbound sync still rewrites its
 mirrored fields**. The sync runs with the household's CalDAV credentials rather than as a member,
 and whoever holds those has full access to the list anyway; the alternative would be to let the
 mirror diverge silently, which is worse. Keep tasks you want locked on a list nobody else can write
@@ -1454,7 +1460,7 @@ can read. Over CalDAV, iCloud still serves the task collections that existed *be
 usually none, sometimes a single orphaned list that the Reminders app itself no longer shows. So an
 iCloud account whose calendars sync perfectly can still offer no usable reminder list, and no
 setting on either side changes that. The reminders page states this on every iCloud
-account. If you want your Apple tasks in Yuvomi, keep them in a CalDAV-backed list (Nextcloud,
+account. If you want your Apple tasks in Ordoma, keep them in a CalDAV-backed list (Nextcloud,
 Radicale, Baikal) and subscribe to it from the Reminders app's "Other" account rather than iCloud.
 
 </details>
@@ -1489,12 +1495,12 @@ stops working at once and a new secret has to be created in Entra and written to
 
 A push is not immediate: it happens on the shared sync run (`SYNC_INTERVAL_MINUTES`, 15 minutes by
 default), right after connecting, and whenever an admin triggers it manually. The same applies in
-reverse — deleting an event in Yuvomi removes it from Outlook on the *next* run, not instantly.
+reverse — deleting an event in Ordoma removes it from Outlook on the *next* run, not instantly.
 
-Editing a pushed event in Outlook is pointless: Yuvomi is the source of truth and resets it to its
+Editing a pushed event in Outlook is pointless: Ordoma is the source of truth and resets it to its
 own state on the next run, and re-creates it if you delete it there. To get rid of an event for
-good, delete it in Yuvomi. Note also that disconnecting an account leaves everything already
-pushed behind in Outlook — clear those events in Yuvomi *before* disconnecting, or delete them by
+good, delete it in Ordoma. Note also that disconnecting an account leaves everything already
+pushed behind in Outlook — clear those events in Ordoma *before* disconnecting, or delete them by
 hand in Outlook afterwards.
 
 </details>
@@ -1504,7 +1510,7 @@ hand in Outlook afterwards.
 
 Fixed in v2.47.0 (#883). Update and run a sync; the missing events arrive on the next pass.
 
-Before that, Yuvomi discarded any calendar object whose URL did not contain `.ics`. That extension
+Before that, Ordoma discarded any calendar object whose URL did not contain `.ics`. That extension
 is pure convention - RFC 4791 prescribes no name for the object resource, and a server is free to
 assign its own. Stalwart, for instance, does so for everything created over JMAP (`NZtPkIOMoK`),
 while objects written by a CalDAV `PUT` keep the client-chosen `<uid>.ics`. In the same calendar,

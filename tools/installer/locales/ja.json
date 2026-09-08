@@ -1,5 +1,5 @@
 {
-  "title": "Yuvomi セットアップ",
+  "title": "Ordoma セットアップ",
   "common": {
     "continue": "続ける",
     "back": "戻る",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "基本設定",
-    "subtitle": "Yuvomi にどのようにアクセスしますか？",
+    "subtitle": "Ordoma にどのようにアクセスしますか？",
     "existing": "既存の設定が検出されました — 保存前に現在の .env ファイルがバックアップされます。",
     "hostLabel": "ドメインまたは IP アドレス",
-    "hostHint": "ブラウザで Yuvomi を開くために使用するアドレスです。",
+    "hostHint": "ブラウザで Ordoma を開くために使用するアドレスです。",
     "portLabel": "ポート",
     "tzLabel": "タイムゾーン",
     "errHost": "ホスト名が無効です。英字、数字、ハイフン、ピリオドのみを使用してください。",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "カレンダー同期",
-    "subtitle": "Yuvomi を Google カレンダー、Apple iCloud、または Outlook に接続します。いずれも任意です。設定するには展開してください。",
+    "subtitle": "Ordoma を Google カレンダー、Apple iCloud、または Outlook に接続します。いずれも任意です。設定するには展開してください。",
     "google": "Google カレンダー",
     "googleHint": "{{link}} で OAuth 認証情報を作成します。リダイレクト URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "クライアント ID",
     "outlookSecretLabel": "クライアントシークレット",
-    "outlookNote": "一方向のプッシュです。Yuvomi が基準となり、Outlook 側での変更は上書きされます。家族のアカウントは後でアプリの設定から接続します。"
+    "outlookNote": "一方向のプッシュです。Ordoma が基準となり、Outlook 側での変更は上書きされます。家族のアカウントは後でアプリの設定から接続します。"
   },
   "review": {
     "title": "確認",
@@ -121,7 +121,7 @@
     "outlook": "Outlook カレンダー"
   },
   "docker": {
-    "title": "Yuvomi を起動しています",
+    "title": "Ordoma を起動しています",
     "subtitle": "イメージを取得し、Docker コンテナを起動しています。",
     "elapsed": "{{n}} 秒経過",
     "running": "コンテナは正常に稼働しています",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "管理者アカウントを作成",
-    "subtitle": "最初のログインを設定します。このアカウントは Yuvomi への完全なアクセス権を持ちます。",
+    "subtitle": "最初のログインを設定します。このアカウントは Ordoma への完全なアクセス権を持ちます。",
     "userLabel": "ユーザー名",
     "userHint": "3〜64 文字：英字、数字、. - _",
     "nameLabel": "表示名",
@@ -156,9 +156,9 @@
     "errCreate": "管理者アカウントの作成に失敗しました。"
   },
   "done": {
-    "title": "Yuvomi の準備が整いました！",
+    "title": "Ordoma の準備が整いました！",
     "subtitle": "ファミリープランナーが稼働し、管理者アカウントの設定が完了しました。",
-    "open": "Yuvomi を開く →",
+    "open": "Ordoma を開く →",
     "backupReminder": "今すぐ .env ファイルをバックアップするのを忘れずに — キーが含まれています。",
     "download": ".env ファイルをダウンロード",
     "savedTo": "{{path}} に保存しました",
@@ -170,17 +170,17 @@
     "nextModules": "モジュールを選ぶ",
     "nextModulesDesc": "家庭で実際に使うものだけを有効にし、残りは隠せます。",
     "nextInstall": "スマートフォンに追加する",
-    "nextInstallDesc": "スマートフォンで Yuvomi を開き、ホーム画面に追加してください。オフラインでも動きます。",
-    "subtitleExisting": "Yuvomi は稼働中です。このインストールにはすでに管理者アカウントがあります。既存の認証情報でログインしてください。"
+    "nextInstallDesc": "スマートフォンで Ordoma を開き、ホーム画面に追加してください。オフラインでも動きます。",
+    "subtitleExisting": "Ordoma は稼働中です。このインストールにはすでに管理者アカウントがあります。既存の認証情報でログインしてください。"
   },
   "advanced": {
     "tag": "詳細設定 · 任意",
     "title": "詳細設定",
     "subtitle": "シングルサインオン、自宅ネットワークへのアクセス、細かな調整。すべて任意です。",
-    "proxyLabel": "Yuvomi はどのように公開されますか？",
+    "proxyLabel": "Ordoma はどのように公開されますか？",
     "proxyBehindHttps": "HTTPS 付きのリバースプロキシの背後（Caddy、nginx、Traefik）",
     "proxyDirect": "localhost / HTTP による直接アクセス",
-    "proxyHint": "http:// で Yuvomi を開く場合は「直接アクセス」を選んでください。そうしないとログインできません。HTTPS のリバースプロキシの背後では最初の選択肢を選びます。",
+    "proxyHint": "http:// で Ordoma を開く場合は「直接アクセス」を選んでください。そうしないとログインできません。HTTPS のリバースプロキシの背後では最初の選択肢を選びます。",
     "oidc": "シングルサインオン (OIDC)",
     "oidcHint": "SSO を有効にするには 4 つすべての項目を入力するか、すべて空のままにしてください。",
     "oidcIssuerLabel": "発行者 URL",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "SSOサインインによる新規アカウント作成を許可する",
     "oidcAllowSignupHint": "プロバイダーがこの世帯より多くの人を扱う場合はオフにします。既存のアカウントは引き続きサインインでき、引き続き連携されます。",
     "baseUrlLabel": "公開アドレス",
-    "baseUrlHint": "家族が Yuvomi を開くアドレスです。コンテナのホストとポートではありません。パスワード再設定と招待のリンクに使われます。",
+    "baseUrlHint": "家族が Ordoma を開くアドレスです。コンテナのホストとポートではありません。パスワード再設定と招待のリンクに使われます。",
     "syncIntervalLabel": "カレンダー同期の間隔（分）",
-    "syncIntervalHint": "Yuvomi がカレンダーと連絡先を同期する頻度です。プロバイダーに制限されている場合は大きくしてください。",
+    "syncIntervalHint": "Ordoma がカレンダーと連絡先を同期する頻度です。プロバイダーに制限されている場合は大きくしてください。",
     "errSyncInterval": "分を正の整数で入力してください。",
     "sectionPrivateNetwork": "home ネットワークへのアクセス",
-    "privateNetworkHint": "Yuvomi は既定で自宅ネットワーク上のアドレスへの接続を拒否します。これはサーバーが内部サービスへ誘導されるのを防ぎます。実際に自宅で動かしているものだけを許可してください。",
+    "privateNetworkHint": "Ordoma は既定で自宅ネットワーク上のアドレスへの接続を拒否します。これはサーバーが内部サービスへ誘導されるのを防ぎます。実際に自宅で動かしているものだけを許可してください。",
     "authPasswordLogin": "ユーザー名とパスワードでのログインを残す",
     "authPasswordLoginHint": "オフにすると SSO が唯一の入口になります。ログインフォームとパスワードの再設定は表示されなくなります。プロバイダーに接続できなくなった場合の戻り道は、.env ファイルの編集と再起動です。"
   },
   "welcome": {
-    "title": "Yuvomi へようこそ",
+    "title": "Ordoma へようこそ",
     "subtitle": "プライベートな家族プランナーを立ち上げましょう。セットアップ方法を選んでください。",
     "simpleTitle": "簡単セットアップ",
     "simpleBadge": "おすすめ",
-    "simpleDesc": "技術的な詳細はこちらで対応します。自宅で Yuvomi を使うのに最適です。",
+    "simpleDesc": "技術的な詳細はこちらで対応します。自宅で Ordoma を使うのに最適です。",
     "simpleTime": "約2分",
     "advancedTitle": "詳細セットアップ",
     "advancedDesc": "完全な制御：リバースプロキシ、カレンダー同期、メール、シングルサインオン、バックアップ。",
     "advancedTime": "すべての項目を順番に",
     "existingLocked": "既存のインストールが見つかりました。現在の設定を保持するため、詳細セットアップに進んでください。",
-    "containerRunning": "Yuvomi は現在稼働中です。保存するとコンテナーが再起動し、しばらく利用できなくなります。"
+    "containerRunning": "Ordoma は現在稼働中です。保存するとコンテナーが再起動し、しばらく利用できなくなります。"
   },
   "simple": {
     "title": "準備完了",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "毎晩ローカルバックアップを保持します。",
     "backupReminder": "セットアップ後、生成された .env ファイルをバックアップしてください。唯一の暗号化キーが含まれています。",
     "switchAdvanced": "もっとオプションが必要ですか？詳細セットアップに切り替える",
-    "start": "Yuvomi をセットアップして起動"
+    "start": "Ordoma をセットアップして起動"
   },
   "email": {
     "title": "メールとパスワードリセット",

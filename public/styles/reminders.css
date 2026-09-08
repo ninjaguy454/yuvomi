@@ -4,8 +4,68 @@
    -------------------------------------------------------- */
 
 /* Bell-Badge: Rote Zahl über dem Bell-Icon */
-.nav-item--reminder {
+.notification-header-host:not(.page-toolbar):not(.kitchen-tabs-bar) { position: relative; }
+.notification-header-host:not(.page-toolbar) {
+  --notification-header-inset: 0px;
+  padding-inline-end: calc(var(--notification-header-inset) + var(--target-base) + var(--space-2));
+}
+.page-toolbar.notification-header-host,
+.kitchen-tabs-bar.notification-header-host { --notification-header-inset: var(--page-inline-pad); }
+.notification-header-button {
+  position: absolute;
+  inset-inline-end: var(--notification-header-inset);
+  top: 0;
+  width: var(--target-base);
+  min-width: var(--target-base);
+  height: var(--target-base);
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+.page-toolbar > .notification-header-button {
+  top: var(--space-3);
+}
+.page-toolbar.notification-header-host > .page-toolbar__actions {
+  margin-inline-end: calc(var(--target-base) + var(--space-2));
+}
+.kitchen-tabs-bar > .notification-header-button { top: var(--space-2); }
+.notification-header-fallback {
   position: relative;
+  min-height: calc(var(--target-base) + var(--space-6));
+  --notification-header-inset: var(--page-inline-pad);
+}
+.notification-header-fallback > .notification-header-button { top: var(--space-3); }
+.notification-header-fallback:has(> .notification-header-button[hidden]) { display: none; }
+
+/* Grouped heads can put their context controls on a full first row. Reserve
+ * the bell there, while allowing actions on the following row their full width. */
+.page-toolbar--in-group.page-toolbar--stacked.notification-header-host > .page-toolbar__center {
+  margin-inline-end: calc(var(--target-base) + var(--space-2));
+  flex-wrap: wrap;
+}
+.page-toolbar--in-group.page-toolbar--stacked.notification-header-host > .page-toolbar__actions {
+  margin-inline-end: 0;
+}
+
+/* Large-title headers keep the control beside the title; their lower action row
+ * still gets the full available width. Compact and desktop heads share one row. */
+@media (max-width: 1023px) and (min-height: 500px) {
+  .page-toolbar.notification-header-host:not(.page-toolbar--in-group):has(> .page-toolbar__title) {
+    --notification-header-inset: var(--page-inline-pad);
+  }
+  .page-toolbar.notification-header-host:not(.page-toolbar--in-group):has(> .page-toolbar__title) > .notification-header-button {
+    top: var(--space-3);
+  }
+  .page-toolbar.notification-header-host:not(.page-toolbar--in-group):not(.is-collapsed):has(> .page-toolbar__title) > .page-toolbar__actions {
+    margin-inline-end: 0;
+  }
+  .page-toolbar.notification-header-host:not(.page-toolbar--in-group) > .page-toolbar__title {
+    flex-basis: calc(100% - var(--seal-head-lead) - var(--target-base) - var(--space-2));
+    margin-inline-end: calc(var(--target-base) + var(--space-2));
+  }
+  .page-toolbar.notification-header-host.is-collapsed > .page-toolbar__title {
+    flex-basis: auto;
+    margin-inline-end: 0;
+  }
 }
 
 .reminder-bell-badge {
@@ -111,9 +171,6 @@
 }
 
 [data-notification-center][hidden], .reminder-bell-badge[hidden] { display: none !important; }
-.nav-item--reminder .nav-item__icon-wrap { position: relative; }
-.nav-bottom .nav-item--notification-compact { flex: 0 0 44px; min-width: 44px; }
-.nav-bottom .nav-item--notification-compact .nav-item__label { display: none; }
 .notification-center { min-width: 0; }
 .notification-center__toolbar, .notification-center__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .notification-center__toolbar { justify-content: space-between; }

@@ -3,6 +3,7 @@
  * Zweck: REST-API für VAPID-Public-Key, Subscribe/Unsubscribe und Test-Push.
  * Abhängigkeiten: express, server/db.js, server/services/push.js
  */
+import { APP_NAME } from '../utils/brand.js';
 import express from 'express';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
@@ -79,7 +80,7 @@ export function buildRouter({ pushService = defaultPushService, database } = {})
   router.post('/test', async (req, res) => {
     try {
       const userId = req.authUserId || req.session.userId;
-      const title = typeof req.body?.title === 'string' ? req.body.title : 'Yuvomi';
+      const title = typeof req.body?.title === 'string' ? req.body.title : APP_NAME;
       const body  = typeof req.body?.body === 'string' ? req.body.body : '';
       // Vor dem Senden zählen: Wird das Abo beim Senden als "gone" entfernt,
       // bleibt devices > 0 bei sent === 0 und der Client kann "abgelaufen"

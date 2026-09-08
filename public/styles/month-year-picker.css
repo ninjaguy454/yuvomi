@@ -1,0 +1,63 @@
+.month-year-picker {
+  position: absolute;
+  z-index: var(--z-dropdown);
+  inset-block-start: calc(100% + var(--space-2));
+  inset-inline-start: 50%;
+  width: min(19rem, calc(100vw - var(--space-6)));
+  padding: var(--space-3);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised, var(--color-surface));
+  color: var(--color-text-primary);
+  box-shadow: var(--shadow-xl);
+  transform: translateX(-50%);
+}
+
+.month-year-picker[hidden] {
+  display: none;
+}
+
+.month-year-picker__year {
+  display: grid;
+  grid-template-columns: var(--target-base) minmax(0, 1fr) var(--target-base);
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+  text-align: center;
+}
+
+.month-year-picker__months {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-1);
+}
+
+.month-year-picker__month {
+  min-height: var(--target-base);
+  padding: var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.month-year-picker__month:hover,
+.month-year-picker__month:focus-visible {
+  background: var(--color-surface-hover);
+}
+
+.month-year-picker__month--active {
+  color: color-mix(in srgb, var(--module-accent) var(--tint-ink), var(--color-text-primary));
+  background: color-mix(in srgb, var(--module-accent) var(--tint-state), transparent);
+  font-weight: var(--font-weight-semibold);
+}
+
+
+.month-year-picker[popover] {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  transform: none;
+}

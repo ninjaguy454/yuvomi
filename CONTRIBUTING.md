@@ -1,6 +1,9 @@
-# Contributing to Yuvomi
+# Contributing to Ordoma
 
-Thanks for your interest in contributing! Yuvomi is a small, opinionated project with deliberate architectural constraints. This guide covers what you need to know before submitting code.
+Ordoma is an independent household-management platform derived from open-source Yuvomi. The upstream MIT license and copyright notices remain intact. URLs to `ulsklyc/yuvomi` below identify upstream resources; direct fork-specific contributions and security reports to the Ordoma fork maintainer.
+
+
+Thanks for your interest in contributing! Ordoma is a small, opinionated project with deliberate architectural constraints. This guide covers what you need to know before submitting code.
 
 Have a question before diving in? Start a thread in [Discussions](https://github.com/ulsklyc/yuvomi/discussions).
 
@@ -8,7 +11,7 @@ Have a question before diving in? Start a thread in [Discussions](https://github
 
 ## Hard Constraints
 
-**Yuvomi enforces a strict "no frameworks, no build tools" policy.** This is a permanent architectural decision, not a temporary limitation.
+**Ordoma enforces a strict "no frameworks, no build tools" policy.** This is a permanent architectural decision, not a temporary limitation.
 
 Specifically - the following will **not** be merged:
 
@@ -305,7 +308,7 @@ Otherwise: user-oriented language, and `-` rather than `—` or `–`. An entry 
 
 ## AI Assistance
 
-Asked for in [#687](https://github.com/ulsklyc/yuvomi/discussions/687). Yuvomi holds a household's calendar, health notes, documents and finances, so it is fair to ask who - or what - wrote the code that handles them.
+Asked for in [#687](https://github.com/ulsklyc/yuvomi/discussions/687). Ordoma holds a household's calendar, health notes, documents and finances, so it is fair to ask who - or what - wrote the code that handles them.
 
 ### How this project is built
 

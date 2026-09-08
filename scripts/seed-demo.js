@@ -188,7 +188,7 @@ cfgSet.run('currency', 'EUR');
 cfgSet.run('disabled_modules', '[]');
 cfgSet.run('date_format', 'dmy_dot');
 cfgSet.run('time_format', '24h');
-cfgSet.run('app_name', 'Yuvomi');
+cfgSet.run('app_name', 'Ordoma');
 cfgSet.run('visible_meal_types', 'breakfast,lunch,dinner,snack');
 // Weather widget — Dortmund via Open-Meteo (no API key required)
 cfgSet.run('weather_provider', 'open-meteo');
@@ -843,7 +843,7 @@ for (const [slug, name] of [
 }
 // Build a base64 payload of a given byte size so file sizes look realistic.
 function payload(bytes) {
-  const text = 'OIKOS DEMO DOCUMENT — placeholder content. '.repeat(Math.ceil(bytes / 44)).slice(0, bytes);
+  const text = 'ORDOMA DEMO DOCUMENT — placeholder content. '.repeat(Math.ceil(bytes / 44)).slice(0, bytes);
   const buf = Buffer.from(text, 'utf8');
   return { base64: buf.toString('base64'), size: buf.length };
 }

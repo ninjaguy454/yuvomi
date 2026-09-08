@@ -1,3 +1,4 @@
+import { APP_NAME } from '../utils/brand.js';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import * as db from '../db.js';
@@ -71,7 +72,7 @@ function page(title, body, { signedIn = false, csrf = '', moduleAccess = null, c
     ['calendar', 'Calendar', 'calendar'], ['meals', 'Meals', 'meals'], ['recipes', 'Recipes', 'meals'],
   ].filter(([, , module, access]) => !module || canAccess(moduleAccess, module, access))
     .map(([view, label]) => `<a href="/reader?view=${view}">${label}</a>`).join(' ');
-  return `<!doctype html><html lang="en" data-theme="light" data-color-theme="${h(colorTheme)}" data-typography="${h(headingFont)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${h(title)} - Yuvomi Reader</title><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/reader.css"></head><body><div class="page"><header><a class="brand" href="/reader">Yuvomi Reader</a>${signedIn ? `<form class="logout" method="post" action="/reader/logout"><input type="hidden" name="csrf" value="${h(csrf)}"><button type="submit">Sign out</button></form>` : ''}</header>${signedIn ? `<nav>${navigation} <a href="/">Full app</a></nav>` : ''}<main>${body}</main><footer>Lightweight mode for e-readers and older browsers.</footer></div></body></html>`;
+  return `<!doctype html><html lang="en" data-theme="light" data-color-theme="${h(colorTheme)}" data-typography="${h(headingFont)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${h(title)} - ${h(APP_NAME)} Reader</title><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/reader.css"></head><body><div class="page"><header><a class="brand" href="/reader">${h(APP_NAME)} Reader</a>${signedIn ? `<form class="logout" method="post" action="/reader/logout"><input type="hidden" name="csrf" value="${h(csrf)}"><button type="submit">Sign out</button></form>` : ''}</header>${signedIn ? `<nav>${navigation} <a href="/">Full app</a></nav>` : ''}<main>${body}</main><footer>Lightweight mode for e-readers and older browsers.</footer></div></body></html>`;
 }
 
 function loginPage(message = '') {

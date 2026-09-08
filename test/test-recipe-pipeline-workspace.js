@@ -77,15 +77,16 @@ function makePanel() {
     controls() { return [parts.dirty, ...Object.values(parts).flatMap(part => part.controls)]; },
     querySelector(selector) {
       if (selector === '.modal-panel__title') return element();
+      if (selector === '[data-pipeline-operations]' && parts.content.html.includes('data-pipeline-operations')) return element('data-pipeline-operations');
       return [...Object.values(parts), ...this.controls()].find(item => matches(item, selector)) || null;
     },
-    querySelectorAll(selector) { return selector.startsWith('input:') ? this.controls() : []; },
+    querySelectorAll(selector) { return selector.startsWith('input:') ? this.controls() : this.controls().filter(item => matches(item, selector)); },
     addEventListener(name, listener) { this.listeners[name] = listener; },
   };
 }
 function harness({ get, put, post, confirm } = {}) {
   let current, baseline;
-  const panels = [], writes = [], copies = [], confirmations = [];
+  const panels = [], writes = [], copies = [], confirmations = [], sortables = [];
   const serialize = panel => JSON.stringify(panel.controls().map(field => [field.name || field.id,
     field.type === 'checkbox' ? [field.value, field.checked] : field.value]));
   const api = {
@@ -102,6 +103,10 @@ function harness({ get, put, post, confirm } = {}) {
     validatePipeline: value => model.validatePipeline(clone(value)),
     document: { activeElement: null }, window: {}, t: key => key, state: { recipes: [] }, renderRecipeList() {},
     mountPipelineGraph() { return () => {}; },
+    async makeSortable(list, options) {
+      const instance = { list, options, destroyed: false, destroy() { this.destroyed = true; } };
+      sortables.push(instance); return instance;
+    },
     refreshDirtySnapshot() { baseline = serialize(current); },
     async confirmOverModal(message, options) { confirmations.push({ message, options }); return confirm ? confirm() : true; },
     openModal(options) {
@@ -111,13 +116,15 @@ function harness({ get, put, post, confirm } = {}) {
   });
   vm.runInContext(`${editorSource}\n${duplicateSource}\nthis.open = openRecipePipeline; this.openFromList = recipe => { ${listEntry} };`, context);
   return {
-    api, panels, writes, copies, confirmations,
+    api, panels, writes, copies, confirmations, sortables,
     get panel() { return current; },
     async open(value = recipe(), options) { context.open(value, options); await tick(); },
     async openFromList(value) { context.openFromList(value); await tick(); },
     dirty() { return serialize(current) !== baseline; },
     async click(command, resourceId) { current.listeners.click({ target: element(`data-command="${command}"${resourceId ? ` data-resource-id="${resourceId}"` : ''}`) }); await tick(); },
     async select(operation) { current.listeners.click({ target: element(`data-operation="${operation}"`) }); await tick(); },
+    async move(operation, direction) { current.listeners.click({ target: element(`data-command="${direction}" data-move-operation="${operation}"`) }); await tick(); },
+    async drop(operation, index) { sortables.at(-1).options.onEnd({ item: { dataset: { operationRow: operation } }, newIndex: index }); await tick(); },
     async view(view) { current.listeners.click({ target: element(`data-view="${view}"`) }); await tick(); },
     input(selector, value) {
       const target = current.querySelector(selector); assert.ok(target, selector);
@@ -301,4 +308,43 @@ test('late save response does not update a closed workspace or reset a newer dra
   pending.resolve({ data: { ...recipe(), pipeline: h.writes[0].pipeline, pipeline_revision: 2 } }); await tick();
   assert.equal(h.panel, newer); assert.equal(oldRecipe.pipeline_revision, 1);
   assert.equal(h.panel.querySelector('[data-operation-field="label"]').value, 'Keep newer draft'); assert.equal(h.dirty(), true);
+});
+
+test('drag reorder flushes field drafts, retains selection and preserves the cooking graph', async () => {
+  const h = harness(); await h.open(); await h.click('edit');
+  h.panel.querySelector('[data-operation-field="label"]').value = 'Patiently mix dough';
+  h.panel.querySelector('[data-operation-field="equipment"]').value = 'Bowl\nWooden spoon';
+  h.panel.querySelector('[data-resource-name="dough"]').value = 'Soft dough';
+  h.panel.querySelector('[data-resource-quantity="dough"]').value = 'One batch';
+  h.panel.querySelector('[data-time="min"]').value = '4';
+  h.panel.querySelector('[data-temperature="value"]').value = '22';
+  h.panel.querySelector('[data-temperature="unit"]').value = 'C';
+  const initialSortable = h.sortables.at(-1);
+  await h.drop('mix', 1);
+  assert.equal(initialSortable.destroyed, true, 'rerender disposes the old drag instance');
+  assert.equal(h.panel.querySelector('[data-operation-field="label"]').value, 'Patiently mix dough');
+  assert.match(h.panel.parts.content.html, /data-operation="mix" aria-pressed="true"/);
+  await h.click('save');
+  assert.equal(h.writes.length, 1, h.panel.parts.error.textContent);
+  const saved = h.writes[0].pipeline;
+  assert.deepEqual(saved.operations.map(operation => operation.id), ['bake', 'mix']);
+  const mix = saved.operations[1];
+  assert.deepEqual(mix.consumes, ['flour']); assert.deepEqual(mix.produces, ['dough']);
+  assert.deepEqual(mix.equipment, ['Bowl', 'Wooden spoon']);
+  assert.deepEqual(mix.duration, { min_seconds: 240, max_seconds: 240 });
+  assert.deepEqual(mix.temperature, { value: 22, unit: 'C' });
+  assert.equal(saved.resources.find(resource => resource.id === 'dough').name, 'Soft dough');
+  assert.equal(saved.resources.find(resource => resource.id === 'dough').quantity, 'One batch');
+  assert.deepEqual(model.derivePipeline(saved).order.map(operation => operation.id), ['mix', 'bake']);
+});
+
+test('inline chevrons reorder their own operation while keeping the current operation selected', async () => {
+  const h = harness(); await h.open(); await h.click('edit'); await h.select('bake');
+  h.panel.querySelector('[data-operation-field="label"]').value = 'Bake until golden';
+  await h.move('mix', 'down');
+  assert.equal(h.panel.querySelector('[data-operation-field="label"]').value, 'Bake until golden');
+  assert.match(h.panel.parts.content.html, /data-operation="bake" aria-pressed="true"/);
+  await h.click('save');
+  assert.deepEqual(h.writes[0].pipeline.operations.map(operation => operation.id), ['bake', 'mix']);
+  assert.equal(h.writes[0].pipeline.operations[0].label, 'Bake until golden');
 });

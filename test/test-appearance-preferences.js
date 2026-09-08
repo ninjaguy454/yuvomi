@@ -37,6 +37,10 @@ function contrast(a, b) {
   const [high, low] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (high + .05) / (low + .05);
 }
+function mix(a, b, weight) {
+  return '#' + [1, 3, 5].map((offset) => Math.round(parseInt(a.slice(offset, offset + 2), 16) * weight
+    + parseInt(b.slice(offset, offset + 2), 16) * (1 - weight)).toString(16).padStart(2, '0')).join('');
+}
 for (const theme of ['neutral', 'warm', 'cool']) {
   for (const mode of ['light', 'dark']) {
     test(`${theme}/${mode}: readable text, recognizable semantic color, visible focus`, () => {
@@ -67,6 +71,22 @@ for (const theme of ['neutral', 'warm', 'cool']) {
         }
       }
       assert.notEqual(colors.resolve('--color-text-disabled'), colors.resolve('--color-text-secondary'));
+    });
+    test(`${theme}/${mode}: themed action, selection and hover ink retain contrast`, () => {
+      const colors = palette(theme, mode);
+      for (const fill of ['--color-accent-light', '--color-accent-subtle']) {
+        assert.ok(contrast(colors.resolve('--color-accent'), colors.resolve(fill)) >= 4.5, `${fill}: selected text`);
+      }
+      for (const weight of [.88, .76]) {
+        const fill = mix(colors.resolve('--color-accent'), colors.resolve('--neutral-950'), weight);
+        assert.ok(contrast(colors.resolve('--color-ink-on-vivid'), fill) >= 4.5, `${weight}: primary button label`);
+      }
+      for (const fill of ['--color-btn-primary', '--color-btn-primary-hover']) {
+        assert.ok(contrast(colors.resolve('--color-text-on-accent'), colors.resolve(fill)) >= 4.5, `${fill}: legacy label`);
+      }
+      for (const fill of ['--color-bg', '--color-surface', '--color-surface-raised']) {
+        assert.ok(contrast(colors.resolve('--color-accent-hover'), colors.resolve(fill)) >= 4.5, `${fill}: hover text`);
+      }
     });
   }
 }

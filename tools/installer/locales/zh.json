@@ -1,5 +1,5 @@
 {
-  "title": "Yuvomi 设置",
+  "title": "Ordoma 设置",
   "common": {
     "continue": "继续",
     "back": "返回",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "基本配置",
-    "subtitle": "您将如何访问 Yuvomi？",
+    "subtitle": "您将如何访问 Ordoma？",
     "existing": "检测到现有配置——保存前将备份您当前的 .env 文件。",
     "hostLabel": "域名或 IP 地址",
-    "hostHint": "您将用于在浏览器中打开 Yuvomi 的地址。",
+    "hostHint": "您将用于在浏览器中打开 Ordoma 的地址。",
     "portLabel": "端口",
     "tzLabel": "时区",
     "errHost": "主机名无效。只能使用字母、数字、连字符和点。",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "日历同步",
-    "subtitle": "将 Yuvomi 连接到 Google 日历、Apple iCloud 或 Outlook。均为可选——展开以进行配置。",
+    "subtitle": "将 Ordoma 连接到 Google 日历、Apple iCloud 或 Outlook。均为可选——展开以进行配置。",
     "google": "Google 日历",
     "googleHint": "在 {{link}} 创建 OAuth 凭据。重定向 URI：{{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "客户端 ID",
     "outlookSecretLabel": "客户端密钥",
-    "outlookNote": "单向推送：Yuvomi 保持为数据源，在 Outlook 中所做的更改会被覆盖。家庭帐户稍后在应用设置中连接。"
+    "outlookNote": "单向推送：Ordoma 保持为数据源，在 Outlook 中所做的更改会被覆盖。家庭帐户稍后在应用设置中连接。"
   },
   "review": {
     "title": "检查",
@@ -121,7 +121,7 @@
     "outlook": "Outlook 日历"
   },
   "docker": {
-    "title": "正在启动 Yuvomi",
+    "title": "正在启动 Ordoma",
     "subtitle": "正在拉取镜像并启动 Docker 容器。",
     "elapsed": "已用时 {{n}} 秒",
     "running": "容器运行正常",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "创建管理员账户",
-    "subtitle": "设置您的首次登录。此账户拥有对 Yuvomi 的完全访问权限。",
+    "subtitle": "设置您的首次登录。此账户拥有对 Ordoma 的完全访问权限。",
     "userLabel": "用户名",
     "userHint": "3-64 个字符：字母、数字、. - _",
     "nameLabel": "显示名称",
@@ -156,9 +156,9 @@
     "errCreate": "无法创建管理员账户。"
   },
   "done": {
-    "title": "Yuvomi 已就绪！",
+    "title": "Ordoma 已就绪！",
     "subtitle": "您的家庭规划器正在运行，管理员账户已设置完成。",
-    "open": "打开 Yuvomi →",
+    "open": "打开 Ordoma →",
     "backupReminder": "记得现在备份你的 .env 文件——它保存着你的密钥。",
     "download": "下载 .env 文件",
     "savedTo": "已保存到 {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "选择模块",
     "nextModulesDesc": "打开家里真正会用的模块，隐藏其余部分。",
     "nextInstall": "安装到手机上",
-    "nextInstallDesc": "在手机上打开 Yuvomi 并添加到主屏幕，离线也能使用。",
-    "subtitleExisting": "Yuvomi 正在运行。此安装已有管理员账户，请使用你现有的凭据登录。"
+    "nextInstallDesc": "在手机上打开 Ordoma 并添加到主屏幕，离线也能使用。",
+    "subtitleExisting": "Ordoma 正在运行。此安装已有管理员账户，请使用你现有的凭据登录。"
   },
   "advanced": {
     "tag": "高级 · 可选",
     "title": "高级设置",
     "subtitle": "单点登录、访问家庭网络，以及几项细节设置。全部可选。",
-    "proxyLabel": "Yuvomi 如何对外提供服务？",
+    "proxyLabel": "Ordoma 如何对外提供服务？",
     "proxyBehindHttps": "位于带 HTTPS 的反向代理之后（Caddy、nginx、Traefik）",
     "proxyDirect": "通过 localhost / HTTP 直接访问",
-    "proxyHint": "如果你通过 http:// 打开 Yuvomi，请选择「直接访问」，否则将无法登录。若在带 HTTPS 的反向代理之后，请选择第一项。",
+    "proxyHint": "如果你通过 http:// 打开 Ordoma，请选择「直接访问」，否则将无法登录。若在带 HTTPS 的反向代理之后，请选择第一项。",
     "oidc": "单点登录 (OIDC)",
     "oidcHint": "填写全部四个字段以启用 SSO，或全部留空。",
     "oidcIssuerLabel": "Issuer 网址",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "允许 SSO 登录创建新账户",
     "oidcAllowSignupHint": "如果您的提供方服务的人多于这个家庭，请关闭此项。已有账户仍可登录，仍会被关联。",
     "baseUrlLabel": "公开地址",
-    "baseUrlHint": "家人打开 Yuvomi 时使用的地址，而不是容器的主机和端口。用于密码重置和邀请链接。",
+    "baseUrlHint": "家人打开 Ordoma 时使用的地址，而不是容器的主机和端口。用于密码重置和邀请链接。",
     "syncIntervalLabel": "日历同步间隔（分钟）",
-    "syncIntervalHint": "Yuvomi 同步日历和联系人的频率。如果服务商限制请求频率，请调高该值。",
+    "syncIntervalHint": "Ordoma 同步日历和联系人的频率。如果服务商限制请求频率，请调高该值。",
     "errSyncInterval": "请输入以分钟为单位的正整数。",
     "sectionPrivateNetwork": "访问你的家庭网络",
-    "privateNetworkHint": "Yuvomi 默认拒绝连接到你自己网络上的地址，这可以防止服务器被诱导访问内部服务。请只启用你在家中确实运行的服务。",
+    "privateNetworkHint": "Ordoma 默认拒绝连接到你自己网络上的地址，这可以防止服务器被诱导访问内部服务。请只启用你在家中确实运行的服务。",
     "authPasswordLogin": "保留用户名和密码登录",
     "authPasswordLoginHint": "关闭后 SSO 将成为唯一的入口：登录表单和密码重置都会消失。若提供方无法访问，返回的办法是修改 .env 文件并重启。"
   },
   "welcome": {
-    "title": "欢迎使用 Yuvomi",
+    "title": "欢迎使用 Ordoma",
     "subtitle": "让我们启动你的私人家庭计划工具。选择你想要的设置方式。",
     "simpleTitle": "简易设置",
     "simpleBadge": "推荐",
-    "simpleDesc": "技术细节由我们为你处理。非常适合在家中运行 Yuvomi。",
+    "simpleDesc": "技术细节由我们为你处理。非常适合在家中运行 Ordoma。",
     "simpleTime": "约 2 分钟",
     "advancedTitle": "高级设置",
     "advancedDesc": "完全掌控：反向代理、日历同步、电子邮件、单点登录和备份。",
     "advancedTime": "每个选项，逐步进行",
     "existingLocked": "检测到已有安装。请使用高级设置，以保留你当前的配置。",
-    "containerRunning": "Yuvomi 正在运行。保存会重启容器，因此它会短暂无法访问。"
+    "containerRunning": "Ordoma 正在运行。保存会重启容器，因此它会短暂无法访问。"
   },
   "simple": {
     "title": "一切就绪",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "每晚都会保留一份本地备份。",
     "backupReminder": "设置完成后，请备份生成的 .env 文件——它保存着你唯一的加密密钥。",
     "switchAdvanced": "需要更多选项？切换到高级设置",
-    "start": "设置并启动 Yuvomi"
+    "start": "设置并启动 Ordoma"
   },
   "email": {
     "title": "电子邮件与密码重置",

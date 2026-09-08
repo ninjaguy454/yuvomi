@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validatePipeline, derivePipeline } from '../public/utils/recipe-pipeline.js';
-import { newOperation, divideResource, moveOperation, removeOperation, addOutput, removeOutput, bindIngredient } from '../public/utils/recipe-pipeline-edit.js';
-import { operationFields } from '../public/components/recipe-pipeline-editor.js';
+import { newOperation, divideResource, moveOperation, reorderOperation, readyStateChoices, removeOperation, addOutput, removeOutput, bindIngredient } from '../public/utils/recipe-pipeline-edit.js';
+import { operationFields, operationPicker } from '../public/components/recipe-pipeline-editor.js';
 
 const base = () => ({ schema_version: 1, resources: [
   { id: 'flour', kind: 'ingredient', name: 'Flour', quantity: '200 g', source_index: 0 },
@@ -104,4 +104,71 @@ test('Editor escapes recipe text and does not expose dependency ID controls', ()
   assert.doesNotMatch(html, /<script>|<img src/);
   assert.match(html, /&lt;img/);
   assert.doesNotMatch(html, /depends_on|data-dependency/);
+});
+
+test('Reordering does not repair or discard invalid references or cyclic connections', () => {
+  const cyclic = base();
+  cyclic.operations[0].consumes.push('loaf');
+  const movedCycle = reorderOperation(cyclic, 'bake', 0);
+  assert.deepEqual(movedCycle.operations.find(operation => operation.id === 'mix').consumes, ['flour', 'loaf']);
+  assert.throws(() => validatePipeline(movedCycle), /loop/i);
+  const invalid = base();
+  invalid.operations[1].requires.push('missing-ready-state');
+  const movedInvalid = reorderOperation(invalid, 'bake', 0);
+  assert.deepEqual(movedInvalid.operations[0].requires, ['missing-ready-state']);
+  assert.throws(() => validatePipeline(movedInvalid), /unknown|missing|not exist/i);
+});
+
+const readyFixture = () => ({ ...base(), resources: [...base().resources,
+  { id: 'pan-ready', kind: 'readiness', name: 'Pan prepared', quantity: '', source_index: null },
+  { id: 'oven-ready', kind: 'readiness', name: 'Oven preheated', quantity: '', source_index: null },
+], operations: [
+  { ...newOperation(), id: 'preheat', label: 'Preheat oven', produces: ['oven-ready'] },
+  ...base().operations,
+  { ...newOperation(), id: 'pan', label: 'Prepare pan', produces: ['pan-ready'] },
+] });
+
+test('ready choices follow current producer order and reveal newly earlier states after arbitrary moves', () => {
+  const original = readyFixture();
+  assert.deepEqual(readyStateChoices(original, 'bake').map(choice => choice.resource.id), ['oven-ready']);
+  const reordered = reorderOperation(original, 'pan', 0);
+  assert.deepEqual(reordered.operations.map(operation => operation.id), ['pan', 'preheat', 'mix', 'bake']);
+  assert.deepEqual(readyStateChoices(reordered, 'bake').map(choice => choice.resource.id), ['pan-ready', 'oven-ready']);
+  assert.deepEqual(readyStateChoices(reordered, 'preheat').map(choice => choice.resource.id), ['pan-ready']);
+  assert.deepEqual(original.operations.map(operation => operation.id), ['preheat', 'mix', 'bake', 'pan']);
+});
+
+test('a selected prerequisite remains checked with a later note when its producer is moved later', () => {
+  const original = readyFixture(); original.operations.find(operation => operation.id === 'bake').requires = ['oven-ready'];
+  const reordered = reorderOperation(original, 'preheat', 3);
+  const choices = readyStateChoices(reordered, 'bake');
+  assert.equal(choices.length, 1); assert.equal(choices[0].later, true); assert.equal(choices[0].selected, true);
+  assert.match(operationFields(reordered, 'bake'), /data-input-kind="requires" value="oven-ready" checked/);
+  assert.match(operationFields(reordered, 'bake'), /Shown later in the list: Preheat oven/);
+  assert.deepEqual(validatePipeline(reordered).operations.find(operation => operation.id === 'bake').requires, ['oven-ready']);
+  assert.ok(derivePipeline(reordered).edges.some(edge => edge.from === 'preheat' && edge.to === 'bake'));
+});
+
+test('adding, renaming and removing readiness output refreshes choices without changing reference IDs', () => {
+  const added = addOutput(base(), 'mix', 'readiness');
+  assert.equal(readyStateChoices(added.document, 'bake')[0].resource.id, added.resourceId);
+  added.document.resources.find(resource => resource.id === added.resourceId).name = 'Bench cleaned';
+  added.document.operations[0].label = 'Clean and mix';
+  assert.match(operationFields(added.document, 'bake'), /Bench cleaned/);
+  assert.match(operationFields(added.document, 'bake'), /Prepared by: Clean and mix/);
+  assert.equal(readyStateChoices(added.document, 'mix').length, 0, 'an operation cannot require its own ready output');
+  const removed = removeOutput(added.document, added.resourceId);
+  assert.equal(readyStateChoices(removed, 'bake').length, 0);
+  added.document.operations[1].requires = [added.resourceId];
+  assert.throws(() => removeOutput(added.document, added.resourceId), /still used/);
+});
+
+test('operation picker offers compact named keyboard controls and a separate drag handle', () => {
+  const html = operationPicker(base(), 'mix');
+  assert.match(html, /data-operation-row="mix"/);
+  assert.match(html, /class="pipeline-operation-handle" role="img"/);
+  assert.match(html, /data-command="up" data-move-operation="mix" aria-label="Move operation 1 up" disabled/);
+  assert.match(html, /data-command="down" data-move-operation="mix" aria-label="Move operation 1 down"/);
+  assert.match(html, /data-lucide="chevron-up"/); assert.match(html, /data-lucide="chevron-down"/);
+  assert.doesNotMatch(html, />Move up<|>Move down</);
 });

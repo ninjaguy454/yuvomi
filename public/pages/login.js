@@ -5,19 +5,20 @@
  */
 
 import { auth } from '/api.js';
+import { displayAppName } from '/utils/branding.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
 
 const VERSION_URL = '/api/v1/version';
-const DEFAULT_APP_NAME = 'Yuvomi';
-const APP_NAME_STORAGE_KEY = 'yuvomi-app-name';
+
+
 
 function getStoredAppName() {
-  return localStorage.getItem(APP_NAME_STORAGE_KEY) || DEFAULT_APP_NAME;
+  return displayAppName();
 }
 
-function setAppBranding(appName) {
-  const name = String(appName || '').trim() || DEFAULT_APP_NAME;
+function setAppBranding() {
+  const name = displayAppName();
   document.title = name;
   const titleEl = document.querySelector('.auth-hero__title');
   if (titleEl) titleEl.textContent = name;
@@ -47,13 +48,7 @@ export async function render(container) {
     <main class="auth-page" id="main-content">
       <div class="auth-hero">
         <span class="auth-hero__mark" aria-hidden="true">
-          <svg viewBox="0 0 160 160" fill="currentColor">
-            <g fill-opacity="0.82">
-              <circle cx="64" cy="72" r="27" />
-              <circle cx="100" cy="78" r="25" />
-              <circle cx="80" cy="106" r="24" />
-            </g>
-          </svg>
+          <span class="ordoma-mark"></span>
         </span>
         <h1 class="auth-hero__title">${esc(storedAppName)}</h1>
         <p class="auth-hero__tagline">${esc(t('login.tagline'))}</p>
@@ -198,7 +193,7 @@ export async function render(container) {
   passwordInput.addEventListener('keyup', updateCapsLock);
   passwordInput.addEventListener('blur', () => { capslockEl.hidden = true; });
 
-  setAppBranding(storedAppName);
+  setAppBranding();
 
   // Autofocus nur auf Zeigegeräten (Desktop): spart Rückkehrern den Klick, ohne
   // auf Touch sofort die virtuelle Tastatur hochzureißen und Hero/Branding zu
@@ -207,7 +202,7 @@ export async function render(container) {
     container.querySelector('#username').focus();
   }
 
-  hydrateFromVersion(container, storedAppName);
+  hydrateFromVersion(container);
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -443,12 +438,6 @@ function hydrateFromVersion(container, storedAppName) {
   fetch(VERSION_URL, { cache: 'no-store' })
     .then((r) => r.json())
     .then((d) => {
-      if (d?.app_name) {
-        try { localStorage.setItem(APP_NAME_STORAGE_KEY, d.app_name); } catch (_) {}
-        // Nur neu anwenden, wenn sich der Name tatsächlich geändert hat –
-        // verhindert ein sichtbares Titel-Flackern bei jedem Aufruf.
-        if (d.app_name !== storedAppName) setAppBranding(d.app_name);
-      }
       // „Passwort vergessen?" wie SSO gaten: nur anbieten, wenn der Server eine
       // Reset-Mail tatsächlich zustellen kann (SMTP + BASE_URL). Sonst Sackgasse.
       if (d?.password_reset_enabled) {

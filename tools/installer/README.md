@@ -1,6 +1,6 @@
-# Yuvomi Web Installer
+# Ordoma Web Installer
 
-A browser-based setup wizard for Yuvomi. Run it once to configure your `.env`,
+A browser-based setup wizard for Ordoma. Run it once to configure your `.env`,
 start your container engine, and create your admin account — no hand-editing of
 config files. Works with both Docker and Podman (auto-detected).
 
@@ -46,7 +46,7 @@ dedicated `podman-compose.yml` (SELinux `:Z` labels).
      still pre-generated (regenerate any time), and each screen is optional:
      - **Basics** — domain/IP, HTTP host port (`OIKOS_HTTP_PORT`), timezone (`TZ`,
        which also pre-sets the household zone - changeable later in the app),
-       how Yuvomi is exposed (`SESSION_SECURE`, `TRUST_PROXY`) and the public
+       how Ordoma is exposed (`SESSION_SECURE`, `TRUST_PROXY`) and the public
        address (`BASE_URL`). The exposure choice follows the host you enter, and the
        combination of an `http://` address with enforced secure cookies is rejected -
        nobody could sign in to that
@@ -64,7 +64,7 @@ dedicated `podman-compose.yml` (SELinux `:Z` labels).
        (calendar subscriptions, recipe mirrors, WebDAV target - they lift the SSRF
        protection and are asked as one group), the calendar sync interval, live
        currency rates (`FIXER_API_KEY`) and the Web-Push contact (`VAPID_SUBJECT`).
-       Everything that decides *what Yuvomi connects to*
+       Everything that decides *what Ordoma connects to*
    - The advanced path asks for `BASE_URL` (pre-filled from host, port and the
      exposure choice); the simple path derives it. A typed value only wins over
      the pre-fill when it names a full `http://` or `https://` origin.
@@ -159,8 +159,9 @@ wins over the derivation.
 
 The wizard reuses the app's design language: the shared design tokens
 (`public/styles/tokens.css`) are served read-only from the repo, so the
-installer matches the app's violet accent, radii, shadows, and automatic dark
-mode. No font is served any more - the app took the system font stack with the
+installer matches the app's Neutral graphite controls, radii, shadows, and
+automatic dark mode. In the app, Warm uses bronze and Cool uses slate blue
+through the same control tokens. No font is served any more - the app took the system font stack with the
 v2.0.0 redesign, and the `/fonts/` route went with the typeface it carried.
 An inline fallback token block (with a dark-mode variant) precedes the
 `tokens.css` link, so the wizard stays legible even if that stylesheet cannot be

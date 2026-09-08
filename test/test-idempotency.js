@@ -133,7 +133,7 @@ for (const editAfterLoss of [false, true]) {
       if (result.status >= 400) throw Object.assign(new Error(result.body.error), { status: result.status });
       return result.body;
     };
-    const save = new Function('api', 't', `const taskCreateAttempts = new WeakMap(); return (${declaration});`)(
+    const save = new Function('api', 't', `const taskCreateAttempts = new WeakMap(); const taskFormControls = new WeakMap(); return (${declaration});`)(
       { post: (path, body, options) => request('POST', path, body, options), put: (path, body) => request('PUT', path, body) },
       (key) => key,
     );
@@ -141,7 +141,13 @@ for (const editAfterLoss of [false, true]) {
     const form = { querySelector: () => idField };
     const body = { title: `Lost response ${randomUUID()}`, priority: 'high', assigned_to: [BOB] };
     dropNextTaskCreateResponse = true;
-    await assert.rejects(save(form, body), /fetch failed|socket/i);
+    try {
+      await assert.rejects(save(form, body), /fetch failed|socket/i);
+    } finally {
+      // A failed harness assertion must not leave the transport fault armed
+      // for a later, independent API test.
+      dropNextTaskCreateResponse = false;
+    }
     assert.ok(droppedTaskId, 'real route committed a Task before the socket was closed');
     assert.equal(idField.value, '', 'the browser has not received the new ID');
     assert.equal(countTasks(body.title), 1);

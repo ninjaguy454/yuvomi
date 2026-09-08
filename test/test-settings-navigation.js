@@ -252,7 +252,7 @@ test('das Blatt der aktiven Module liegt adminOnly in der Modul-Domaene', () => 
   assert.equal(findSettingsLeaf('/settings/modules/active', member), null);
 });
 
-test('household automation is an admin Settings leaf and Quick Add stays execution-only', async () => {
+test('household automation is an admin Settings leaf and Task Workflows reuses its editor', async () => {
   const leaf = SETTINGS_LEAVES.find((entry) => entry.id === 'modules-automation');
   assert.ok(leaf, 'modules-automation leaf is missing from the registry');
   assert.equal(leaf.domainId, 'modules');
@@ -290,8 +290,11 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'the Settings leaf should contain automation authoring rather than unrelated planning destinations');
   assert.match(component, /export async function renderAutomationManager/);
   assert.doesNotMatch(component, /automation-manage-from-quick/);
-  assert.match(component, /data-quick-activity/,
-    'Quick Add should offer individual Activity Templates as well as workflows');
+  assert.doesNotMatch(component, /data-quick-activity/,
+    'individual Activity Templates belong in the canonical +Task form');
+  assert.match(component, /export async function openTaskWorkflows/);
+  assert.match(component, /data-create-task-workflow/,
+    'administrators can open the existing workflow editor from the launcher');
   assert.match(component, /data-variable-mentions="workflow-step-title"/,
     'workflow fields should expose the @ variable picker');
   assert.match(component, /data-variable-mentions="activity-description"/,
@@ -337,8 +340,10 @@ test('household automation is an admin Settings leaf and Quick Add stays executi
     'the Google configuration form should use the protected server-side settings API');
   assert.match(styles, /\.settings-module-kitchen__child\s*>\s*\.module-glyph\s*\{[\s\S]*?width:\s*var\(--icon-md\);[\s\S]*?height:\s*var\(--icon-md\);/,
     'nested Kitchen icons should use the standard icon scale instead of intrinsic SVG dimensions');
-  assert.match(tasks, /onActivitySelected/,
-    'selecting an Activity Template from Quick Add should open the Task flow');
+  assert.match(tasks, /openTaskWorkflows\(\{/,
+    'the lightning launcher should open Task Workflows');
+  assert.match(tasks, /wireActivityTemplatePrefill\(/,
+    'Activity Template selection remains in the canonical Task form');
   assert.ok(tasks.indexOf('task-template-picker') < tasks.indexOf('id="task-title"'),
     'the Activity Template picker should appear before the ordinary Task fields');
   assert.match(component, /panel\.querySelector\('button\[type="submit"\]'\)/,

@@ -6,20 +6,21 @@
  */
 
 import { auth, ApiError } from '/api.js';
+import { displayAppName } from '/utils/branding.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
 
 const VERSION_URL = '/api/v1/version';
-const DEFAULT_APP_NAME = 'Yuvomi';
-const APP_NAME_STORAGE_KEY = 'yuvomi-app-name';
+
+
 const USERNAME_RE = /^[a-zA-Z0-9._-]{3,64}$/;
 
 function getStoredAppName() {
-  return localStorage.getItem(APP_NAME_STORAGE_KEY) || DEFAULT_APP_NAME;
+  return displayAppName();
 }
 
-function setAppBranding(appName) {
-  const name = String(appName || '').trim() || DEFAULT_APP_NAME;
+function setAppBranding() {
+  const name = displayAppName();
   document.title = name;
   const titleEl = document.querySelector('.auth-hero__title');
   if (titleEl) titleEl.textContent = name;
@@ -35,6 +36,7 @@ export async function render(container) {
   container.insertAdjacentHTML('beforeend', `
     <main class="auth-page" id="main-content">
       <div class="auth-hero">
+        <span class="auth-hero__mark" aria-hidden="true"><span class="ordoma-mark"></span></span>
         <h1 class="auth-hero__title">${esc(storedAppName)}</h1>
         <p class="auth-hero__tagline">${esc(t('setup.tagline'))}</p>
       </div>
@@ -103,15 +105,11 @@ export async function render(container) {
     if (window.lucide) lucide.createIcons({ el: toggleBtn });
   });
 
-  setAppBranding(storedAppName);
+  setAppBranding();
 
   fetch(VERSION_URL, { cache: 'no-store' })
     .then((r) => r.json())
     .then((d) => {
-      if (d?.app_name) {
-        try { localStorage.setItem(APP_NAME_STORAGE_KEY, d.app_name); } catch (_) {}
-        setAppBranding(d.app_name);
-      }
       versionEl.textContent = d?.version ? t('login.version', { version: d.version }) : '';
     })
     .catch(() => {});

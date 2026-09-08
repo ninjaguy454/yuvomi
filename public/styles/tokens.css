@@ -267,26 +267,14 @@
    * Leiste` (test-typography.js). */
 
   /* --------------------------------------------------------
-   * 2. Farben - Akzent: DIE STIMME DER APP
-   *
-   *    Das Violett der Bildmarke (#6C3AED). 6.10:1 auf weiß, 5.49:1 auf
-   *    --color-bg — WCAG AA auf beiden Gruenden.
-   *
-   * WARUM ZURUECK ZUM VIOLETT (2026-08-10). Hier stand Apple Indigo #4F4DC9.
-   * Es war korrekt gemessen und trotzdem die falsche Farbe: die Bildmarke ist
-   * violett und laut PRODUCT.md als Marke gesetzt, die App war es nicht mehr.
-   * Logo und Oberflaeche sprachen zwei Farben - und weil zusaetzlich jedes
-   * Modul das Chrome umfaerbte (siehe Die-Eine-Stimme-Regel, Abschnitt 4),
-   * kam das Indigo ohnehin nur auf dem Dashboard vor. Es gab damit KEINE
-   * Farbe, die app-weit "Yuvomi" hiess.
-   *
-   * Der Ton ist der Marken-Ton, nicht der alte Token: geprueft gegen die neue
-   * warme Buehne, nicht gegen die alte kuehle. Auf dem Grouped-Grund #F5F3ED
-   * liegt er bei 5.49:1.
+   * 2. Accent: one control family per selected color temperature.
+   * Neutral starts with graphite. Warm/Cool override the same private roles
+   * below, so navigation, selected controls, primary actions and focus remain
+   * coherent. Module and semantic colors describe content independently.
    * -------------------------------------------------------- */
-  --_color-accent:            #6C3AED;
+  --_color-accent:            #4B5357;
   --color-accent:             var(--_color-accent);
-  --_color-accent-hover:      #5B2FD4;
+  --_color-accent-hover:      #343C40;
   --color-accent-hover:       var(--_color-accent-hover);
   /* --color-accent-deep ist mit dem Wetter-Widget entfallen (Runde 3): es hatte
    * genau einen Nutzer, den Verlauf dieses Widgets, und Verläufe auf Inhalt
@@ -298,15 +286,15 @@
    * Tageszeit spricht seither allein über den Grusstext. Nach dem Umbau stand
    * die Reihe in drei Blöcken (Light, Dark, forced-dark) ohne einen einzigen
    * Nutzer im CSS oder JS. */
-  --_color-accent-secondary:  #8B5CF6;
-  --color-accent-secondary:   var(--_color-accent-secondary);  /* Violett-hell — Sekundärer Akzent für Logo-Gradient */
-  --_color-accent-light:      #F3EFFE;
-  --color-accent-light:       var(--_color-accent-light);   /* Violett-Tint 50 — Fokus-Glow, Heute-Chip */
-  --_color-accent-subtle:     #E7DDFD;
-  --color-accent-subtle:      var(--_color-accent-subtle);  /* Violett-Tint 100 */
-  --_color-btn-primary:       #6C3AED;
-  --color-btn-primary:        var(--_color-btn-primary);    /* Weißes Label 6.1:1 — WCAG AA */
-  --_color-btn-primary-hover: #5B2FD4;
+  --_color-accent-secondary:  #616B70;
+  --color-accent-secondary:   var(--_color-accent-secondary);
+  --_color-accent-light:      #EEF0F0;
+  --color-accent-light:       var(--_color-accent-light);
+  --_color-accent-subtle:     #DFE3E4;
+  --color-accent-subtle:      var(--_color-accent-subtle);
+  --_color-btn-primary:       #4B5357;
+  --color-btn-primary:        var(--_color-btn-primary);    /* Legacy white-label fill role. */
+  --_color-btn-primary-hover: #343C40;
   --color-btn-primary-hover:  var(--_color-btn-primary-hover);
 
   /* --------------------------------------------------------
@@ -483,7 +471,7 @@
    *    die private Wert-Ebene wechselt von 18 Toenen auf 9 Familien.
    *    Die Dark-Bloecke ueberschreiben ausschliesslich --_family-*.
    * -------------------------------------------------------- */
-  --_family-overview: #6C3AED;  /* Violett - Uebersicht (= --color-accent, bewusster Share) */
+  --_family-overview: #6C3AED;  /* Overview content color; independent of the selected control palette. */
   --_family-time:     #00668F;  /* Azur - Kalender, Erinnerungen; 6.37:1 auf weiss,
                                  * 5.74:1 auf --color-bg.
                                  * ZOG UM, ALS DER AKZENT VIOLETT WURDE (2026-08-10).
@@ -593,7 +581,7 @@
   --_meal-lunch-light:     #DFF6E4;
   --meal-lunch-light:      var(--_meal-lunch-light);
   --_meal-dinner:          #6C3AED;
-  --meal-dinner:           var(--_meal-dinner);          /* Violett — Abend (= --color-accent) */
+  --meal-dinner:           var(--_meal-dinner);          /* Violet identifies dinner, independently of controls. */
   --_meal-dinner-light:    #F3EFFE;
   --meal-dinner-light:     var(--_meal-dinner-light);
   --_meal-snack:           #C2410C;
@@ -1744,7 +1732,7 @@
     --_sidebar-shadow-light: rgba(255, 255, 255, 0.04);
     --_sidebar-shadow-dark:  rgba(0, 0, 0, 0.5);
 
-    /* Akzent — Violett Dark
+    /* Accent — light graphite ink for dark surfaces.
      *
      * DIE ZUSAGE GILT FUER DIE HELLSTE FLAECHE, AUF DER DER AKZENT ALS TEXT
      * STEHT, nicht fuer eine ausgesuchte. Die App setzt Akzent-Text auch auf
@@ -1755,18 +1743,18 @@
      *
      * Der Lift ist der Weg und NICHT der Ink-Mix aus Abschnitt 4: der gilt
      * ausdruecklich fuer akzent-getoenten Grund, hier ist der Grund neutral.
-     * Die FLAECHEN-Rolle bleibt unberuehrt - sie haengt an --_color-btn-primary,
-     * das weisses Label traegt und darum nicht mitwandern darf. */
-    --_color-accent:            #A78BFA;   /* Text: 4.61 auf #37332E, 5.39 auf #2B2825, 6.52 auf #191816 */
+     * The legacy --_color-btn-primary role stays dark for white labels;
+     * canonical buttons mix the accent with neutral-950 and use vivid ink. */
+    --_color-accent:            #B7C1C7;
     /* Zieht mit, und im Dark geht die Leiter NACH OBEN: eine abgedunkelte
      * Hellfarbe auf warmer Kohle liest niemand als Hover. Abstand 1.19 wie
      * zuvor - die Leiter wandert, ihre Sprosse nicht. */
-    --_color-accent-hover:      #BCA6FC;
-    --_color-accent-light:      #241A45;  /* >=4.5:1 unter --color-accent (5.87) */
-    --_color-accent-subtle:     #1D1438;
-    --_color-btn-primary:       #7C3AED;   /* Weißes Label 5.70:1 */
-    --_color-btn-primary-hover: #6D28D9;
-    --_color-accent-secondary:  #C4B5FD;
+    --_color-accent-hover:      #D0D8DC;
+    --_color-accent-light:      #282F33;
+    --_color-accent-subtle:     #22282B;
+    --_color-btn-primary:       #4B5357;
+    --_color-btn-primary-hover: #343C40;
+    --_color-accent-secondary:  #D0D8DC;
 
     /* Semantik — Apple Dark-Varianten */
     --_color-success:       #30D158;
@@ -1848,14 +1836,7 @@
 
     /* Modul-Akzente — Dark-Varianten der Familientoene (Bestandswerte der
      * Spender-Module, verifiziert; Feld unter --color-ink-on-vivid 6,17-11,35) */
-    --_family-overview: #A78BFA;   /* Violett Dark = Akzent: zieht mit --_color-accent MIT.
-                                    * Der Share ist die Zusage, nicht der Wert - stuende hier
-                                    * ein eigener Ton, loeste der Router auf /dashboard einen
-                                    * anderen Wert in --active-module-accent auf als den, den
-                                    * der Akzent als geprueft abgelegt hat. Traegt beide Rollen:
-                                    * als Text 4,96 auf --color-surface-raised, als Flaeche
-                                    * unter --color-ink-on-vivid 6,50 - im Feld der uebrigen
-                                    * Dark-Tints (6,17 bis 11,35). */
+    --_family-overview: #A78BFA;   /* Overview content color; not the global control accent. */
     --_family-time:     #4CB8F0;   /* Azur hell - zog mit dem Light-Wert um (siehe dort);
                                     * 6,00:1 als Text auf -raised, 7,86 unter der dunklen Tinte */
     --_family-work:     #4ADE80;
@@ -2007,14 +1988,14 @@
     --_sidebar-shadow-light: rgba(255, 255, 255, 0.04);
     --_sidebar-shadow-dark:  rgba(0, 0, 0, 0.5);
 
-    /* Akzent — Violett Dark (Werte und Begruendung: Dark-Block oben) */
-    --_color-accent:            #A78BFA;
-    --_color-accent-hover:      #BCA6FC;
-    --_color-accent-light:      #241A45;  /* >=4.5:1 unter --color-accent (5.87) */
-    --_color-accent-subtle:     #1D1438;
-    --_color-btn-primary:       #7C3AED;
-    --_color-btn-primary-hover: #6D28D9;
-    --_color-accent-secondary:  #C4B5FD;
+    /* Accent — graphite Dark (same values as the system Dark block). */
+    --_color-accent:            #B7C1C7;
+    --_color-accent-hover:      #D0D8DC;
+    --_color-accent-light:      #282F33;
+    --_color-accent-subtle:     #22282B;
+    --_color-btn-primary:       #4B5357;
+    --_color-btn-primary-hover: #343C40;
+    --_color-accent-secondary:  #D0D8DC;
 
     /* Semantische Farben */
     --_color-success:       #30D158;
@@ -2081,7 +2062,7 @@
     --_chart-series-7: #4ADE80;
 
     /* Modul-Akzente (Familientoene) */
-    --_family-overview: #A78BFA;   /* zieht mit --_color-accent MIT, siehe Dark-Block oben */
+    --_family-overview: #A78BFA;   /* Same Overview content color as system Dark. */
     --_family-time:     #4CB8F0;
     --_family-work:     #4ADE80;
     --_family-kitchen:  #FB923C;
@@ -2169,10 +2150,19 @@
   }
 }
 
-/* Personal color temperature. Neutral keeps the existing palette unchanged.
- * Warm and Cool change neutral roles only; semantic and module colors retain
- * their meanings. Values are applied before accessibility media overrides. */
+/* Personal color temperature includes selection, action and focus roles.
+ * Neutral uses graphite, Warm bronze, Cool slate blue. Semantic and module
+ * colors retain their meanings. Accessibility media overrides follow below. */
 :root[data-color-theme="warm"] {
+  --palette-accent: #805632;
+  --palette-accent-hover: #644025;
+  --palette-accent-secondary: #8F623D;
+  --palette-accent-light: #F5EBDD;
+  --palette-accent-subtle: #EAD8C0;
+  --palette-dark-accent: #D2AB80;
+  --palette-dark-accent-hover: #E8C9A5;
+  --palette-dark-accent-light: #36291D;
+  --palette-dark-accent-subtle: #2E2218;
   --palette-control-border: #94816A;
   --palette-dark-control-border: #A18B70;
   --palette-light-50: #FDFBF7;
@@ -2215,6 +2205,15 @@
 }
 
 :root[data-color-theme="cool"] {
+  --palette-accent: #3D617E;
+  --palette-accent-hover: #2A475F;
+  --palette-accent-secondary: #4D718D;
+  --palette-accent-light: #E9F0F5;
+  --palette-accent-subtle: #D5E2EC;
+  --palette-dark-accent: #9BBAD1;
+  --palette-dark-accent-hover: #BED4E5;
+  --palette-dark-accent-light: #213342;
+  --palette-dark-accent-subtle: #1B2A37;
   --palette-control-border: #7C8BA0;
   --palette-dark-control-border: #8B9DB5;
   --palette-light-50: #F8FAFD;
@@ -2257,6 +2256,13 @@
 }
 
 :root:is([data-color-theme="warm"], [data-color-theme="cool"]) {
+  --_color-accent: var(--palette-accent);
+  --_color-accent-hover: var(--palette-accent-hover);
+  --_color-accent-secondary: var(--palette-accent-secondary);
+  --_color-accent-light: var(--palette-accent-light);
+  --_color-accent-subtle: var(--palette-accent-subtle);
+  --_color-btn-primary: var(--palette-accent);
+  --_color-btn-primary-hover: var(--palette-accent-hover);
   --_color-border-control: var(--palette-control-border);
   --_neutral-50: var(--palette-light-50);
   --_neutral-100: var(--palette-light-100);
@@ -2294,6 +2300,11 @@
 
 @media screen and (prefers-color-scheme: dark) {
   :root:is([data-color-theme="warm"], [data-color-theme="cool"]):not([data-theme="light"]) {
+    --_color-accent: var(--palette-dark-accent);
+    --_color-accent-hover: var(--palette-dark-accent-hover);
+    --_color-accent-secondary: var(--palette-dark-accent-hover);
+    --_color-accent-light: var(--palette-dark-accent-light);
+    --_color-accent-subtle: var(--palette-dark-accent-subtle);
     --_color-border-control: var(--palette-dark-control-border);
     --_neutral-50: var(--palette-dark-50);
     --_neutral-100: var(--palette-dark-100);
@@ -2336,6 +2347,11 @@
 
 @media screen {
   :root:is([data-color-theme="warm"], [data-color-theme="cool"])[data-theme="dark"] {
+    --_color-accent: var(--palette-dark-accent);
+    --_color-accent-hover: var(--palette-dark-accent-hover);
+    --_color-accent-secondary: var(--palette-dark-accent-hover);
+    --_color-accent-light: var(--palette-dark-accent-light);
+    --_color-accent-subtle: var(--palette-dark-accent-subtle);
     --_color-border-control: var(--palette-dark-control-border);
     --_neutral-50: var(--palette-dark-50);
     --_neutral-100: var(--palette-dark-100);

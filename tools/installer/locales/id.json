@@ -1,5 +1,5 @@
 {
-  "title": "Siapkan Yuvomi",
+  "title": "Siapkan Ordoma",
   "common": {
     "continue": "Lanjut",
     "back": "Kembali",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Konfigurasi dasar",
-    "subtitle": "Bagaimana Anda ingin mengakses Yuvomi?",
+    "subtitle": "Bagaimana Anda ingin mengakses Ordoma?",
     "existing": "Konfigurasi yang ada terdeteksi — file .env Anda saat ini dicadangkan sebelum menyimpan.",
     "hostLabel": "Domain atau alamat IP",
-    "hostHint": "Alamat yang Anda gunakan untuk membuka Yuvomi di browser.",
+    "hostHint": "Alamat yang Anda gunakan untuk membuka Ordoma di browser.",
     "portLabel": "Port",
     "tzLabel": "Zona waktu",
     "errHost": "Nama host tidak valid. Gunakan hanya huruf, angka, tanda hubung, dan titik.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Sinkronisasi kalender",
-    "subtitle": "Sambungkan Yuvomi dengan Google Calendar, Apple iCloud, atau Outlook. Semuanya opsional - bentangkan untuk mengonfigurasi.",
+    "subtitle": "Sambungkan Ordoma dengan Google Calendar, Apple iCloud, atau Outlook. Semuanya opsional - bentangkan untuk mengonfigurasi.",
     "google": "Google Calendar",
     "googleHint": "Buat kredensial OAuth di {{link}}. Redirect URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,16 +78,16 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Client ID",
     "outlookSecretLabel": "Client Secret",
-    "outlookNote": "Push satu arah: Yuvomi tetap menjadi sumber utama - perubahan di Outlook akan ditimpa. Akun keluarga dihubungkan nanti di pengaturan aplikasi."
+    "outlookNote": "Push satu arah: Ordoma tetap menjadi sumber utama - perubahan di Outlook akan ditimpa. Akun keluarga dihubungkan nanti di pengaturan aplikasi."
   },
   "advanced": {
     "tag": "Lanjutan · opsional",
     "title": "Pengaturan lanjutan",
     "subtitle": "Single sign-on, akses ke jaringan rumahmu, dan beberapa penyetelan halus. Semua opsional.",
-    "proxyLabel": "Bagaimana Yuvomi disediakan?",
+    "proxyLabel": "Bagaimana Ordoma disediakan?",
     "proxyBehindHttps": "Di belakang reverse proxy dengan HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Akses langsung melalui localhost / HTTP",
-    "proxyHint": "Pilih \"Akses langsung\" jika kamu membuka Yuvomi lewat http:// - kalau tidak, kamu tidak bisa masuk. Di belakang reverse proxy dengan HTTPS, pilih opsi pertama.",
+    "proxyHint": "Pilih \"Akses langsung\" jika kamu membuka Ordoma lewat http:// - kalau tidak, kamu tidak bisa masuk. Di belakang reverse proxy dengan HTTPS, pilih opsi pertama.",
     "oidc": "Single sign-on (OIDC)",
     "oidcHint": "Isi keempat bidang untuk mengaktifkan SSO, atau biarkan kosong.",
     "oidcIssuerLabel": "URL Issuer",
@@ -151,12 +151,12 @@
     "oidcAllowSignup": "Izinkan masuk SSO membuat akun baru",
     "oidcAllowSignupHint": "Matikan jika penyedia Anda melayani lebih banyak orang daripada rumah tangga ini. Akun yang sudah ada tetap bisa masuk dan tetap ditautkan.",
     "baseUrlLabel": "Alamat publik",
-    "baseUrlHint": "Alamat yang dipakai keluargamu untuk membuka Yuvomi - bukan host dan port kontainer. Dipakai untuk tautan atur ulang kata sandi dan undangan.",
+    "baseUrlHint": "Alamat yang dipakai keluargamu untuk membuka Ordoma - bukan host dan port kontainer. Dipakai untuk tautan atur ulang kata sandi dan undangan.",
     "syncIntervalLabel": "Interval sinkronisasi kalender (menit)",
-    "syncIntervalHint": "Seberapa sering Yuvomi menyinkronkan kalender dan kontak. Naikkan jika penyedia membatasi laju.",
+    "syncIntervalHint": "Seberapa sering Ordoma menyinkronkan kalender dan kontak. Naikkan jika penyedia membatasi laju.",
     "errSyncInterval": "Masukkan bilangan bulat positif dalam menit.",
     "sectionPrivateNetwork": "Akses ke jaringan rumahmu",
-    "privateNetworkHint": "Secara bawaan Yuvomi menolak koneksi ke alamat di jaringanmu sendiri, yang melindungi dari server yang diperdaya untuk menjangkau layanan internal. Aktifkan yang benar-benar kamu jalankan di rumah.",
+    "privateNetworkHint": "Secara bawaan Ordoma menolak koneksi ke alamat di jaringanmu sendiri, yang melindungi dari server yang diperdaya untuk menjangkau layanan internal. Aktifkan yang benar-benar kamu jalankan di rumah.",
     "authPasswordLogin": "Pertahankan masuk dengan nama pengguna dan kata sandi",
     "authPasswordLoginHint": "Mematikannya menjadikan SSO satu-satunya jalan masuk: formulir masuk dan pengaturan ulang kata sandi menghilang. Jika penyedia tidak dapat dijangkau, jalan kembalinya adalah menyunting berkas .env dan memulai ulang."
   },
@@ -201,7 +201,7 @@
     "outlook": "Kalender Outlook"
   },
   "docker": {
-    "title": "Yuvomi sedang dimulai",
+    "title": "Ordoma sedang dimulai",
     "subtitle": "Image dimuat dan kontainer Docker dimulai.",
     "elapsed": "{{n}} d berlalu",
     "running": "Kontainer sehat dan berjalan",
@@ -220,7 +220,7 @@
   },
   "admin": {
     "title": "Buat akun admin",
-    "subtitle": "Siapkan login pertama Anda. Akun ini memiliki akses penuh ke Yuvomi.",
+    "subtitle": "Siapkan login pertama Anda. Akun ini memiliki akses penuh ke Ordoma.",
     "userLabel": "Nama pengguna",
     "userHint": "3-64 karakter: huruf, angka, . - _",
     "nameLabel": "Nama tampilan",
@@ -236,9 +236,9 @@
     "errCreate": "Akun admin tidak dapat dibuat."
   },
   "done": {
-    "title": "Yuvomi siap!",
+    "title": "Ordoma siap!",
     "subtitle": "Perencana keluarga Anda berjalan dan akun admin Anda telah disiapkan.",
-    "open": "Buka Yuvomi →",
+    "open": "Buka Ordoma →",
     "backupReminder": "Ingat untuk mencadangkan berkas .env Anda sekarang — berkas itu berisi kunci Anda.",
     "download": "Unduh berkas .env",
     "savedTo": "Disimpan di {{path}}",
@@ -250,21 +250,21 @@
     "nextModules": "Pilih modulmu",
     "nextModulesDesc": "Aktifkan yang benar-benar dipakai rumah tanggamu dan sembunyikan sisanya.",
     "nextInstall": "Pasang di ponsel",
-    "nextInstallDesc": "Buka Yuvomi di ponsel dan tambahkan ke layar utama - bisa dipakai offline.",
-    "subtitleExisting": "Yuvomi sedang berjalan. Instalasi ini sudah punya akun administrator - masuk dengan kredensialmu yang ada."
+    "nextInstallDesc": "Buka Ordoma di ponsel dan tambahkan ke layar utama - bisa dipakai offline.",
+    "subtitleExisting": "Ordoma sedang berjalan. Instalasi ini sudah punya akun administrator - masuk dengan kredensialmu yang ada."
   },
   "welcome": {
-    "title": "Selamat datang di Yuvomi",
+    "title": "Selamat datang di Ordoma",
     "subtitle": "Mari jalankan perencana keluarga pribadi Anda. Pilih cara menyiapkannya.",
     "simpleTitle": "Penyiapan sederhana",
     "simpleBadge": "Disarankan",
-    "simpleDesc": "Kami mengurus detail teknis untuk Anda. Ideal untuk menjalankan Yuvomi di rumah.",
+    "simpleDesc": "Kami mengurus detail teknis untuk Anda. Ideal untuk menjalankan Ordoma di rumah.",
     "simpleTime": "Sekitar 2 menit",
     "advancedTitle": "Penyiapan lanjutan",
     "advancedDesc": "Kontrol penuh: reverse proxy, sinkronisasi kalender, email, single sign-on, dan pencadangan.",
     "advancedTime": "Setiap opsi, langkah demi langkah",
     "existingLocked": "Instalasi yang sudah ada terdeteksi. Gunakan pengaturan lanjutan agar pengaturanmu saat ini tetap tersimpan.",
-    "containerRunning": "Yuvomi sedang berjalan. Menyimpan akan memulai ulang kontainer, jadi akan sebentar tidak tersedia."
+    "containerRunning": "Ordoma sedang berjalan. Menyimpan akan memulai ulang kontainer, jadi akan sebentar tidak tersedia."
   },
   "simple": {
     "title": "Siap digunakan",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Cadangan lokal disimpan setiap malam.",
     "backupReminder": "Setelah penyiapan, cadangkan berkas .env yang dibuat — berkas itu menyimpan satu-satunya kunci enkripsi Anda.",
     "switchAdvanced": "Butuh lebih banyak opsi? Beralih ke penyiapan lanjutan",
-    "start": "Siapkan & jalankan Yuvomi"
+    "start": "Siapkan & jalankan Ordoma"
   },
   "email": {
     "title": "Email & atur ulang kata sandi",

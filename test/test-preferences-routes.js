@@ -80,7 +80,7 @@ test('GET / liefert die dokumentierten Defaults', async () => {
   assert.equal(body.data.date_format, 'dmy');
   assert.equal(body.data.time_format, '24h');
   assert.equal(body.data.week_start, 'monday');
-  assert.equal(body.data.app_name, 'Yuvomi');
+  assert.equal(body.data.app_name, 'Ordoma');
   assert.equal(body.data.budget_mode, 'shared');
   assert.equal(body.data.calendar_default_duration, 60);
   assert.deepEqual(body.data.visible_meal_types, ['breakfast', 'lunch', 'dinner', 'snack']);
@@ -88,6 +88,59 @@ test('GET / liefert die dokumentierten Defaults', async () => {
   assert.equal(body.data.health_cycle_enabled, true);
   assert.equal(body.data.rewards_require_approval, true);
   assert.equal(body.data.tasks_subtasks_expanded, false);
+  assert.equal(body.data.tasks_template_switch_warning, true);
+});
+
+test('historical app names no longer override Ordoma and remain stored without rewriting', async () => {
+  try {
+    for (const name of ['Yuvomi', 'Oikos', 'Our household', 'Yuvomi Family']) {
+      cfgSet('app_name', name);
+      assert.equal((await get()).body.data.app_name, 'Ordoma');
+      assert.equal((await put({})).body.data.app_name, 'Ordoma');
+      assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name').value, name);
+    }
+  } finally { cfgDelete('app_name'); }
+});
+
+test('Task template warning is an independently reversible per-user preference for ordinary members', async () => {
+  const key = 'tasks_template_switch_warning';
+  const first = { userId: 111, role: 'member' };
+  const second = { userId: 112, role: 'member' };
+  try {
+    // An accidental old household key must never disable somebody's warning.
+    cfgSet(key, '0');
+    assert.equal((await get(first)).body.data[key], true);
+    assert.equal((await get(second)).body.data[key], true);
+    const disabled = await put({ [key]: false }, first);
+    assert.equal(disabled.status, 200);
+    assert.equal(disabled.body.data[key], false);
+    assert.equal((await get(first)).body.data[key], false);
+    assert.equal((await get(second)).body.data[key], true);
+    assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get(`${key}:user:111`).value, '0');
+    assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get(`${key}:user:112`), undefined);
+    assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get(key).value, '0');
+    const enabled = await put({ [key]: true }, first);
+    assert.equal(enabled.status, 200);
+    assert.equal(enabled.body.data[key], true);
+    assert.equal((await get(first)).body.data[key], true);
+  } finally {
+    [key, `${key}:user:111`, `${key}:user:112`].forEach(cfgDelete);
+  }
+});
+
+test('Task template warning rejects non-booleans without replacing the saved preference', async () => {
+  const key = 'tasks_template_switch_warning';
+  const member = { userId: 113, role: 'member' };
+  try {
+    assert.equal((await put({ [key]: false }, member)).status, 200);
+    for (const invalid of [null, 0, 1, 'false', 'true', [], {}]) {
+      assert.equal((await put({ [key]: invalid }, member)).status, 400, JSON.stringify(invalid));
+      assert.equal((await get(member)).body.data[key], false);
+    }
+    assert.equal((await put({}, member)).body.data[key], false, 'omitting the field preserves it');
+  } finally {
+    cfgDelete(`${key}:user:113`);
+  }
 });
 
 // --------------------------------------------------------
@@ -158,16 +211,25 @@ test('GET timezone: gewählter Wert und geltender Wert sind zwei Felder', async 
 });
 
 // --------------------------------------------------------
-// app_name (str-Validator, empty->delete)
+// Deprecated app_name is ignored without changing other preference behavior.
 // --------------------------------------------------------
-test('PUT app_name: zu lang -> 400', async () => {
-  assert.equal((await put({ app_name: 'x'.repeat(101) })).status, 400);
+test('PUT ignores obsolete name payloads while saving supported personal fields', async () => {
+  const person = { userId: 190, role: 'member' };
+  try {
+    cfgSet('app_name', 'Retained historical name');
+    for (const name of ['Replacement', '', null, 'x'.repeat(5000), { old: 'client' }]) {
+      const result = await put({ app_name: name, color_theme: 'cool' }, person);
+      assert.equal(result.status, 200);
+      assert.equal(result.body.data.app_name, 'Ordoma');
+      assert.equal(result.body.data.color_theme, 'cool');
+      assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name').value, 'Retained historical name');
+    }
+  } finally { cfgDelete('app_name'); cfgDelete('color_theme:user:190'); }
 });
-test('PUT app_name: gültig -> persist, leer -> Rückfall auf Default', async () => {
-  assert.equal((await put({ app_name: 'Familie Muster' })).body.data.app_name, 'Familie Muster');
-  // Leerer Wert löscht -> GET fällt auf den Default 'Yuvomi' zurück.
-  assert.equal((await put({ app_name: '   ' })).body.data.app_name, 'Yuvomi');
-  assert.equal((await get()).body.data.app_name, 'Yuvomi');
+test('PUT obsolete app_name never creates a new configuration row', async () => {
+  cfgDelete('app_name');
+  assert.equal((await put({ app_name: 'Familie Muster' })).body.data.app_name, 'Ordoma');
+  assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name'), undefined);
 });
 
 // --------------------------------------------------------

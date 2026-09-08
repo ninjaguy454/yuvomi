@@ -75,6 +75,7 @@ const STUBS = {
   `,
   '/components/modal.js': `
     export const openModal = () => {};
+    export const openChildModal = () => ({ panel: null, closed: Promise.resolve(), close: async () => true });
     export const closeModal = () => {};
     export const confirmModal = async () => true;
     export const confirmOverModal = async () => true;

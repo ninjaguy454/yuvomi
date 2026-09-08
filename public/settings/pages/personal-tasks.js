@@ -3,6 +3,7 @@ import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { caldavTargetValue, SYNC_TARGET_LOCAL } from '/utils/sync-target.js';
 import { getPreferences, savePreferences } from '/settings/preferences-cache.js';
+import { toggleRowHtml } from '/settings/components.js';
 
 /**
  * Standardwerte, die nur für die eigenen neuen Aufgaben gelten (#695).
@@ -86,6 +87,8 @@ function renderPage(container, preferences, lists = null) {
            (Guard in test-typography.js). -->
       <h2 class="settings-section__title">${t('settings.tasksDefaultsTitle')}</h2>
       <div class="settings-card">
+        ${toggleRowHtml({ label: 'Warn before replacing an edited Task draft', checked: preferences.tasks_template_switch_warning !== false, attrs: { id: 'tasks-template-switch-warning' } })}
+        <p class="form-hint">Applies when switching Activity Templates in New Task. Untouched drafts switch immediately.</p>
         <p class="settings-card-description">${t('settings.tasksDefaultsDescription')}</p>
 ${options.length > 1 ? targetFieldHtml(options, current) : `        <p class="form-hint">${t('settings.tasksDefaultTargetEmpty')}</p>`}
       </div>
@@ -96,6 +99,14 @@ ${options.length > 1 ? targetFieldHtml(options, current) : `        <p class="fo
 // Instant-Save mit Rollback auf den letzten gespeicherten Wert, damit ein
 // abgelehnter Wert nicht sichtbar stehenbleibt.
 function bindEvents(container) {
+  const warning = container.querySelector('#tasks-template-switch-warning');
+  warning?.addEventListener('change', async () => {
+    const value = warning.checked;
+    warning.disabled = true;
+    try { await savePreferences({ tasks_template_switch_warning: value }); }
+    catch (error) { warning.checked = !value; window.yuvomi?.showToast(error.message || t('common.errorGeneric'), 'danger'); }
+    finally { warning.disabled = false; }
+  });
   const select = container.querySelector('#tasks-default-target');
   if (!select) return;
 

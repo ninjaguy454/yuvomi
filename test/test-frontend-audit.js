@@ -2005,7 +2005,7 @@ test('admin-weather leaf owns the household default location', () => {
   assert.doesNotMatch(source, /\/version/);
 });
 
-test('admin-system leaf owns the app name next to the read-only version rows', () => {
+test('admin-system retains read-only system information without a product-name control', () => {
   const source = read('../public/settings/pages/admin-system.js');
 
   assert.match(source, /api\.get\('\/version'\)/);
@@ -2013,15 +2013,7 @@ test('admin-system leaf owns the app name next to the read-only version rows', (
   assert.match(source, /MIT/);
   assert.match(source, /setup_required/);
 
-  // Der Anwendungsname lag in "Übersicht", während die Description dieses Blatts
-  // ihn versprach und nur read-only zeigte (Critique 2026-07-27).
-  assert.match(source, /id="app-name-input"/);
-  assert.match(source, /savePreferences\(\{ app_name: value \}\)/);
-  assert.match(source, /new CustomEvent\('app-name-changed'/);
-  assert.match(source, /localStorage\.setItem\(key, value\)/);
-  assert.match(source, /localStorage\.removeItem\(key\)/);
-  // Die read-only Zeile daneben wäre der gleiche Wert zweimal auf einer Seite.
-  assert.doesNotMatch(source, /systemAppNameLabel/);
+  assert.doesNotMatch(source, /app-name-input|app-name-form|savePreferences|app-name-changed|localStorage|systemAppNameLabel/);
 
   // System leaf owns no other backend domain and no secrets.
   assert.doesNotMatch(source, /\/documents\//);
@@ -4944,37 +4936,18 @@ test('die Rückfrage der Pille bricht um, statt zu kappen', () => {
  */
 test('ein Etikett verschwindet, wenn es heisst wie die eigene Prioritaet', () => {
   const src = read('../public/pages/tasks.js');
-
-  const fn = src.match(/function renderTagBadges\([^)]*\)\s*\{[\s\S]*?\n\}/);
-  assert.ok(fn, 'renderTagBadges nicht gefunden');
-  assert.match(fn[0], /priority\s*=\s*null/,
-    'die Etiketten-Funktion muss die Prioritaet kennen, sonst kann sie sie nicht vergleichen');
-  // DER RUMPF, NICHT DIE SIGNATUR. Eine erste Fassung prueft nur, dass die
-  // Bestandteile irgendwo im Rumpf vorkommen - und blieb gruen, als die
-  // Filterzeile entfernt wurde: `PRIORITY_LABELS()[priority]` und die
-  // Kleinschreibung standen weiter da, sie taten nur nichts mehr. Also wird der
-  // Name der Label-Variablen gelesen und verlangt, dass GENAU DER in einem
-  // Filter ueber die Etiketten vorkommt.
-  const labelVar = fn[0].match(/const\s+(\w+)\s*=[^;]*PRIORITY_LABELS\(\)\[priority\]/);
-  assert.ok(labelVar,
-    'verglichen wird gegen das ANGEZEIGTE Label, nicht gegen den Schluessel - das Etikett kommt '
-    + 'aus einer fremden Liste und ist in der Sprache geschrieben, in der es dort steht');
-  const filterMitLabel = new RegExp(`tags\\s*=\\s*tags\\.filter\\([\\s\\S]{0,160}?\\b${labelVar[1]}\\b`);
-  assert.match(fn[0], filterMitLabel,
-    `das Label (\`${labelVar[1]}\`) muss die Etiketten wirklich filtern - eine Variable, die nur `
-    + 'berechnet und nie benutzt wird, ist ein Guard ohne Gegenstand');
-  assert.match(fn[0], /toLocaleLowerCase|toLowerCase/,
-    'gross/klein darf den Vergleich nicht entscheiden - „Dringend" und „dringend" sind dasselbe Wort');
-
-  // BEIDE Aufrufstellen, sonst greift der Fix nur in einer Ansicht.
-  const aufrufe = [...src.matchAll(/renderTagBadges\(([^)]*)\)/g)]
-    .map((m) => m[1]).filter((args) => !args.includes('limit ='));
-  assert.ok(aufrufe.length >= 2, `erwartet mindestens zwei Aufrufstellen, gefunden ${aufrufe.length}`);
-  for (const args of aufrufe) {
-    assert.match(args, /task\.priority/,
-      `eine Aufrufstelle gibt die Prioritaet nicht mit (\`${args}\`) - dort steht das Etikett `
-      + 'weiter neben seinem Zwilling');
-  }
+  const fn = src.match(/function renderResponsiveTagBadges\([^)]*\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(fn, 'the live responsive tag renderer must be present');
+  const render = runInNewContext(`(${fn[0]})`, { PRIORITY_LABELS: () => ({ urgent: 'Dringend' }),
+    esc: (value) => String(value), t: (_key, values) => values?.tag || '' });
+  assert.equal(render({ priority: 'urgent', tags: [' dringend '] }), '');
+  const html = render({ priority: 'urgent', tags: ['Dringend', 'urgent', 'Kitchen'] });
+  assert.doesNotMatch(html, /data-tag-filter="Dringend"/);
+  assert.match(html, /data-tag-filter="urgent"/,'the display label, not the internal key, controls deduplication');
+  assert.match(html, /data-tag-filter="Kitchen"/);
+  assert.match(src, /function renderTaskCard[\s\S]*?renderResponsiveTagBadges\(task\)/);
+  assert.match(src, /renderSwipeRow\(t, renderTaskCard\(t/,'List uses the shared card');
+  assert.match(src, /sorted\.map\(\(task\) => renderTaskCard\(task, \{\s*board: true/,'Kanban uses the same card');
 });
 
 /**
@@ -5634,8 +5607,12 @@ test('der Zeilenname bricht in Wörtern, nicht in Zeichen', () => {
   const compact = recipes.slice(query);
   assert.match(compact, /\.recipe-row__inline-actions\s*\{\s*display:\s*none/,
     'die drei Inline-Aktionen müssen in der schmalen Zeile weichen');
-  assert.match(compact, /\.recipe-row__toggle \.list-row__meta\s*\{[\s\S]*?flex:\s*1 0 100%/,
-    'die Zutatenzahl muss unter den Namen rücken - sie ist flex-shrink: 0 und nähme ihm sonst 70px');
+  assert.match(compact, /@container list-rows \(max-width: 48rem\)/,
+    'title stacking must start before the five-action row becomes cramped');
+  assert.match(compact, /\.recipe-row__toggle\s*\{[\s\S]*?display:\s*grid/,
+    'title and ingredient metadata have independent grid rows');
+  assert.match(compact, /\.recipe-row__toggle \.list-row__meta,[\s\S]*?grid-column:\s*1 \/ -1/,
+    'ingredient summary spans the title area instead of reducing its width');
 });
 
 test('phase 3 high-frequency controls use tokenized touch targets', () => {
@@ -8301,7 +8278,10 @@ test('remaining audited mobile controls use 48px touch targets', () => {
   // Regel diesen Knopf nicht und der Guard bliebe grün, während das Ziel
   // schrumpft.
   assertRuleUsesToken(read('../public/styles/filter-chip.css'), '.filter-chip', 'min-height', '--target-lg', '../public/styles/filter-chip.css');
-  assert.match(read('../public/pages/tasks.js'), /toggleBtn\.className\s*=\s*`filter-chip filter-toggle-btn/);
+  const filterButton = read('../public/pages/tasks.js').match(/<button[^>]*id="filter-toggle-btn"[^>]*>/)?.[0];
+  assert.ok(filterButton, 'the visible Tasks filter button must exist');
+  assert.match(filterButton, /tasks-toolbar-control/);
+  assertRuleUsesToken(tasks, '.tasks-toolbar-control', 'min-height', '--target-base', '../public/styles/tasks.css');
   assert.doesNotMatch(tasks, /\.filter-toggle-btn\s*\{[^}]*min-height/);
   // „Heute" (Kalender) holt seine 48px aus .btn - siehe die Begruendung beim
   // Budget-Zwilling im Guard darueber.
@@ -8701,14 +8681,19 @@ test('page-inline-pad contract holds across every stylesheet (#577)', () => {
   //     Kontext (.page-toolbar__bar .sub-tab) polstert einen Button IN der
   //     Rail - das ist Innenabstand, keine Rail-Einrückung, und war vorher ein
   //     dokumentierter Ausnahme-Eintrag je Fundstelle.
+  const targetsRail = (selector) => {
+    // A simple :not(.page-toolbar) explicitly excludes the rail; its token
+    // must not turn a non-header container into a positive rail match.
+    const positive = selector.replace(/:not\([^()]*\)/g, '');
+    const subject = positive.trim().split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
+    return [...rails].some((rail) => new RegExp(`${rail.replace('.', '\\.')}(?![\\w-])`).test(subject));
+  };
+  assert.equal(targetsRail('.notification-header-host:not(.page-toolbar)'), false);
+  assert.equal(targetsRail('.page-toolbar:not(.page-toolbar--in-group)'), true);
+  assert.equal(targetsRail('.page-toolbar > .notification-header-button'), false);
   for (const file of styleFiles) {
     for (const rule of cssRules(read(`../public/styles/${file}`))) {
-      const hitsRail = rule.selectors.some((sel) => {
-        const subject = sel.trim().split(/[\s>+~]+/).filter(Boolean).pop() ?? '';
-        return [...rails].some(
-          (rail) => new RegExp(`${rail.replace('.', '\\.')}(?![\\w-])`).test(subject),
-        );
-      });
+      const hitsRail = rule.selectors.some(targetsRail);
       if (!hitsRail) continue;
       for (const value of horizontalPaddings(rule.body)) {
         if (isException(file, rule.selectors.join(', '))) continue;
@@ -9089,11 +9074,10 @@ test('ein Kategoriebalken bleibt proportional - kein Prozentboden im Anteil', ()
   }
 });
 
-test('dashboard and task progress bars animate with transforms instead of widths', () => {
+test('dashboard progress uses transforms and Task progress uses the accessible native meter', () => {
   const dashboardPage = read('../public/pages/dashboard.js');
   const dashboardCss = read('../public/styles/dashboard.css');
-  const tasksPage = read('../public/pages/tasks.js');
-  const tasksCss = read('../public/styles/tasks.css');
+  const taskDetail = read('../public/components/task-detail.js');
 
   assert.match(
     dashboardCss,
@@ -9103,13 +9087,13 @@ test('dashboard and task progress bars animate with transforms instead of widths
   assert.match(dashboardPage, /style="--progress-scale:\$\{progress\s*\/\s*100\}"/);
   assert.doesNotMatch(dashboardPage, /shopping-widget-list__bar" style="width:/);
 
-  assert.match(
-    tasksCss,
-    /\.subtask-progress__bar-fill\s*\{[\s\S]*transform-origin:\s*left[\s\S]*transform:\s*scaleX\(var\(--progress-scale,\s*0\)\)[\s\S]*transition:\s*transform/,
-  );
-  assert.doesNotMatch(cssRuleBody(tasksCss, '.subtask-progress__bar-fill'), /transition:\s*width/);
-  assert.match(tasksPage, /style="--progress-scale:\$\{progress\s*\/\s*100\}"/);
-  assert.doesNotMatch(tasksPage, /subtask-progress__bar-fill" style="width:/);
+  const progress = taskDetail.match(/function progressNode\([\s\S]*?\n\}/)?.[0];
+  assert.ok(progress);
+  assert.match(progress, /createElement\('progress'\)/);
+  assert.match(progress, /meter\.max = progress\.total/);
+  assert.match(progress, /meter\.value = progress\.done/);
+  assert.match(progress, /meter\.setAttribute\('aria-label'/);
+  assert.doesNotMatch(progress, /style\.width|transition:\s*width/);
 });
 
 test('toolbar "new" buttons are hidden via a shared class, not an ID list (audit 1.9)', () => {
@@ -10223,8 +10207,7 @@ test('die schwersten Settings-Dialoge bleiben als gefaehrlich markiert', () => {
 
 test('Tag-Chips auf Karten sind Filter-Buttons, keine Beschriftungen', () => {
   const source = read('../public/pages/tasks.js');
-  const fn = source.slice(source.indexOf('function renderTagBadges'),
-                          source.indexOf('function wireTagBadgeFilter'));
+  const fn = source.match(/^function renderResponsiveTagBadges\([\s\S]*?^}/m)?.[0] || '';
 
   assert.match(fn, /<button type="button" class="task-tag task-tag--filter"/,
     'Ein Tag anzuklicken und danach zu filtern ist die erwartete Geste - als <span> gibt es sie nicht');
@@ -10232,7 +10215,7 @@ test('Tag-Chips auf Karten sind Filter-Buttons, keine Beschriftungen', () => {
   assert.match(fn, /aria-label="\$\{esc\(t\('tasks\.tagFilterBy'/,
     'Der Button braucht eine Beschriftung, die seine Wirkung nennt');
 
-  // Die Zusammenfassung ab dem vierten Tag darf kein Button sein: sie benennt
+  // Die responsive Zusammenfassung darf kein Button sein: sie benennt
   // keinen einzelnen Tag, auf den ein Klick filtern koennte.
   const more = fn.slice(fn.indexOf('task-tag--more') - 120, fn.indexOf('task-tag--more') + 200);
   assert.match(more, /<span/, '+N ist eine Anzeige, kein Ziel');
@@ -14166,54 +14149,31 @@ test('die Lesemass-Liste kappt kein selbstpolsterndes Element (#758)', () => {
 });
 
 test('ein Teilschritt lässt sich korrigieren und entfernen, nicht nur abhaken (#748)', () => {
-  // Ein Teilschritt IST eine Aufgabe mit parent_task_id, PUT und DELETE gab es
-  // also längst - die Zeile bot nur das Häkchen an. Einen Tippfehler zu
-  // korrigieren hieß: abhaken und neu tippen (#748).
   const tasksPage = read('../public/pages/tasks.js');
   const taskDetail = read('../public/components/task-detail.js');
-
-  const row = /class="subtask-item [\s\S]*?<\/div>`\)\.join\(''\)/.exec(tasksPage);
-  assert.ok(row, 'die Teilschritt-Zeile ist nicht mehr auffindbar');
-  for (const action of ['toggle-subtask', 'rename-subtask', 'delete-subtask']) {
-    assert.match(row[0], new RegExp(`data-action="${action}"`),
-      `die Teilschritt-Zeile bietet "${action}" nicht an`);
-  }
-
-  // Beide Aktionen sind auch verdrahtet - ein Knopf ohne Handler ist schlimmer
-  // als keiner.
-  assert.match(tasksPage, /action === 'rename-subtask'[\s\S]{0,160}renameSubtask/);
-  assert.match(tasksPage, /action === 'delete-subtask'[\s\S]{0,160}deleteSubtask/);
+  const row = /function renderActivitySubtasks\([\s\S]*?\n\}/.exec(tasksPage);
+  assert.ok(row, 'the live subtask row must exist');
+  assert.match(row[0], /data-action="toggle-subtask"/);
+  assert.match(row[0], /subtask-item__title" data-action="open-task"/,'the compact row opens the canonical detail surface');
+  const detailRows = taskDetail.match(/function subtaskListNode\([\s\S]*?\n\}/)?.[0];
+  assert.ok(detailRows);
+  assert.match(detailRows, /rename\.addEventListener\('click',[\s\S]*?inlineTitleEditor\([\s\S]*?renameSubtask\(/);
+  assert.match(detailRows, /remove\.addEventListener\('click',[\s\S]*?deleteSubtask\(/);
+  assert.match(detailRows, /actions\.append\(rename, remove\)/);
   assert.match(taskDetail, /export async function renameSubtask\(/);
   assert.match(taskDetail, /export async function deleteSubtask\(/);
-
-  // Löschen ist der einzige Weg ohne Rückweg und fragt deshalb zurück.
   assert.match(taskDetail, /export async function deleteSubtask[\s\S]{0,500}confirmModal/);
-
-  // Und die Zielgröße stimmt mit der Aufgabenzeile darüber überein, statt eine
-  // zweite Größe für dieselbe Rolle einzuführen.
-  const css = read('../public/styles/tasks.css');
-  const block = /\.subtask-item__action \{([\s\S]*?)\}/.exec(css);
-  assert.ok(block, '.subtask-item__action fehlt');
-  assert.match(block[1], /min-height:\s*var\(--target-base\)/);
+  assert.match(detailRows, /rename\.className = 'btn btn--ghost btn--icon btn--icon-sm'/);
+  assert.match(detailRows, /remove\.className = 'btn btn--ghost btn--icon btn--icon-sm'/);
 });
 
-test('Quick Add keeps activity names visible and moves descriptions into a short tooltip', () => {
+test('Task Workflows launcher reserves activity templates for the canonical Task form', () => {
   const automation = read('../public/components/activity-automation.js');
-
-  assert.match(automation, /function activityDescriptionTooltip[\s\S]*?\.slice\(0, 160\)\.join\(''\)/,
-    'the activity tooltip must be capped at 160 characters');
-  assert.ok(
-    automation.includes('title="${h(activityDescriptionTooltip(activity.description))}"'),
-    'activity descriptions must be exposed as hover tooltips',
-  );
-  assert.ok(
-    automation.includes('<span><strong>${h(activity.name)}</strong></span>'),
-    'the visible Quick Add activity label must be the Activity Template name',
-  );
-  assert.ok(
-    !automation.includes('<br><small>${h(activity.description)}</small>'),
-    'activity descriptions must not replace or visually compete with the activity name',
-  );
+  const launcher = automation.slice(automation.indexOf('export async function openTaskWorkflows'), automation.indexOf('function workflowVariableId'));
+  assert.match(launcher, /title: 'Task Workflows'/);
+  assert.match(launcher, /data-quick-template/);
+  assert.match(launcher, /Create new Task Workflow/);
+  assert.doesNotMatch(launcher, /onActivitySelected|data-quick-activity/);
 });
 
 test('Tasks calendar mouse clicks survive grid pointer capture', () => {
@@ -14761,37 +14721,10 @@ test('der schmale Zustand der Kueche steht hinter seinem Bauteil', () => {
  *
  * Guard-Ebene: Struktur (aus Quelltext und Stylesheet gelesen).
  * ──────────────────────────────────────────────────────────────────────────── */
-test('jede auf Touch ausgeblendete Karten-Aktion hat einen Weg in der Leseansicht (#925)', () => {
+test('the shared Task detail preserves editing, archive and first-subtask actions on touch (#925)', () => {
   const page   = read('../public/pages/tasks.js');
   const detail = read('../public/components/task-detail.js');
-  const css    = read('../public/styles/tasks.css');
-
-  // 1. Blendet das Stylesheet die Inline-Aktionen ueberhaupt aus? Nur dann
-  //    entsteht die Luecke - faellt die Regel weg, ist der Guard gegenstandslos
-  //    und sagt das, statt eine Zusicherung ueber nichts zu geben.
-  const hidesOnNarrow = [...eachRule(css)].some(({ selector, body, at }) =>
-    /\.task-card__inline-action(?![\w-])/.test(selector)
-    && /display\s*:\s*none/.test(body)
-    && at.some((pre) => /max-width\s*:\s*640px/.test(pre)));
-  assert.ok(hidesOnNarrow,
-    'tasks.css blendet .task-card__inline-action nicht mehr unter 640px aus - '
-    + 'entweder ist die Regel umgezogen (dann muss dieser Guard mit) oder die '
-    + 'Karte zeigt ihre Aktionen jetzt auch auf dem Telefon');
-
-  // 2. Welche Aktionen bietet die Karte inline an? Aus dem Markup gelesen.
-  //    Der Ablage-Knopf traegt seine beiden Namen in einem Template-Ausdruck
-  //    (`${archived ? 'unarchive-task' : 'archive-task'}`), deshalb wird der
-  //    Attributwert nach Literalen abgesucht statt als eines genommen - ein
-  //    Muster, das nur nackte Werte kennt, uebersaehe genau die zwei.
-  const actions = new Set(
-    [...page.matchAll(/task-card__inline-action[^>]*?data-action="([^"]+)"/g)]
-      .flatMap((m) => (m[1].includes('${')
-        ? [...m[1].matchAll(/'([a-z][a-z-]*)'/g)].map((lit) => lit[1])
-        : [m[1]])),
-  );
-  assert.ok(actions.size >= 3,
-    `nur ${actions.size} Inline-Aktionen gefunden - das Muster im Guard passt nicht mehr `
-    + 'auf das Karten-Markup und wuerde jede Luecke uebersehen');
+  assert.match(page, /activity-card__open" data-action="open-task"/);
 
   // 3. Und wo faengt die Leseansicht sie auf? Der Wert ist der Aufruf, der die
   //    Handlung im Detail-Pfad ausloest.
@@ -14819,12 +14752,7 @@ test('jede auf Touch ausgeblendete Karten-Aktion hat einen Weg in der Leseansich
     'der Mount-Block des Bearbeiten-Formulars ist nicht mehr auffindbar');
   const detailPath = detail.slice(detailStart, detailEnd) + page.slice(mountStart, mountEnd);
 
-  for (const action of actions) {
-    const call = TOUCH_PATH[action];
-    assert.ok(call,
-      `die Karte bietet "${action}" inline an, und dieser Guard kennt den Ersatzweg nicht. `
-      + 'Unter 640px ist der Knopf weg: entweder traegt die Leseansicht die Handlung mit '
-      + '(dann gehoert sie in TOUCH_PATH) oder es gibt sie auf dem Telefon nicht');
+  for (const [action, call] of Object.entries(TOUCH_PATH)) {
     assert.ok(detailPath.includes(call),
       `"${action}" verschwindet unter 640px, und der Detail-Pfad ruft ${call} nicht - `
       + 'auf dem Telefon gibt es dann keinen Weg zu dieser Handlung (genau #925)');

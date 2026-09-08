@@ -112,6 +112,10 @@ test('sendTest verifies then sends to the given address', async () => {
   const res = await svc.sendTest('admin@test');
   assert.equal(res.ok, true);
   assert.equal(nm.sent[0].to, 'admin@test');
+  assert.equal(nm.sent[0].from, '"Ordoma" <a@test>');
+  assert.equal(nm.sent[0].subject, 'Ordoma SMTP test');
+  assert.match(nm.sent[0].text, /Ordoma SMTP configuration/);
+  assert.match(nm.sent[0].html, /Ordoma SMTP configuration/);
 });
 
 test('sendTest reports failure reason without throwing', async () => {

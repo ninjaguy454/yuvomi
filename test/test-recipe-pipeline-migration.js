@@ -68,11 +68,11 @@ test('real upgrade from 10026 preserves existing data/history through 10028 and 
     const firstLog = realStartup(databasePath);
     assert.equal((firstLog.match(/Migration 10027 applied:/g) || []).length, 1);
     assert.equal((firstLog.match(/Migration 10028 applied:/g) || []).length, 1);
-    assert.deepEqual([...firstLog.matchAll(/Migration (\d+) applied:/g)].map(match => Number(match[1])), [10027, 10028]);
+    assert.deepEqual([...firstLog.matchAll(/Migration (\d+) applied:/g)].map(match => Number(match[1])), ALL_MIGRATIONS.filter(item => item.version > 10026).map(item => item.version));
     connection = new Database(databasePath);
     const afterHistory = connection.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
     assert.deepEqual(afterHistory.filter(item => item.version <= 10026), beforeHistory);
-    assert.equal(afterHistory.at(-1).version, 10028);
+    assert.equal(afterHistory.at(-1).version, FORK_MIGRATIONS.at(-1).version);
     const afterRecipe = connection.prepare('SELECT * FROM recipes WHERE id = ?').get(recipeId);
     for (const [key, value] of Object.entries(beforeRecipe)) assert.equal(afterRecipe[key], value);
     assert.equal(afterRecipe.execution_json, null);

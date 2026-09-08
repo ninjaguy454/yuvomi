@@ -7,12 +7,12 @@ body:
     attributes:
       value: |
         Thanks for taking the time to report a bug! The version and deployment
-        fields below decide where we look first - Yuvomi ships to seven
+        fields below decide where we look first - the upstream project ships to seven
         deployment targets and they fail in different ways.
   - type: input
     id: version
     attributes:
-      label: Yuvomi version
+      label: Ordoma version
       description: >-
         Open **Changes** in the sidebar - the dialog shows the installed
         version at the top. (For source installs, `git rev-parse --short HEAD`

@@ -3,6 +3,7 @@
  * Zweck: Yuvomi Reminder-Payloads als Mail zustellen (#944).
  * Abhaengigkeiten: server/services/email.js, public/utils/html.js
  */
+import { APP_NAME } from '../../utils/brand.js';
 import { emailService as defaultEmailService } from '../email.js';
 import { esc } from '../../../public/utils/html-escape.js';
 
@@ -35,7 +36,7 @@ function subjectFor(payload) {
   const title = headerSafe(payload?.title);
   const body = headerSafe(payload?.body);
   if (title && body && title !== body) return `${title}: ${body}`;
-  return title || body || 'Yuvomi';
+  return title || body || APP_NAME;
 }
 
 /**

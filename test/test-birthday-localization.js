@@ -334,7 +334,7 @@ test('ein abgelehntes Feld hinterlässt keine Sprache ohne passende Titel', asyn
   // schreibt im Durchlauf und verlässt sich über ein early return.
   const rejected = await asAdmin(() => call('PUT', '/preferences', {
     language: 'de',
-    app_name: 'x'.repeat(5000),
+    dashboard_today_glance_default: 'invalid-boolean',
   }));
   assert.equal(rejected.status, 400);
 

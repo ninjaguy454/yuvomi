@@ -180,7 +180,7 @@ export function googlePlacesStatus(database = null, userId = null, now = new Dat
       household_per_day: config.householdPerDay,
     },
     usage: { household_today: householdUsed, user_today: userUsed },
-    privacy_notice: 'Search terms and the selected origin are sent to Google Places through this Yuvomi server.',
+    privacy_notice: 'Search terms and the selected origin are sent to Google Places through this Ordoma server.',
   };
 }
 
@@ -276,7 +276,7 @@ export async function searchGooglePlaces(database, {
 } = {}) {
   const config = googlePlacesConfig(database);
   if (!config.configured) {
-    throw new PlaceProviderError('Google Places is not configured for this Yuvomi instance.', {
+    throw new PlaceProviderError('Google Places is not configured for this Ordoma instance.', {
       status: 503,
       code: 'place_provider_not_configured',
     });

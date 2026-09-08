@@ -58,6 +58,19 @@
   margin-bottom: var(--space-3);
 }
 
+/* The same search is available at the overview entry point on every device. */
+.settings-shell__content > .settings-shell__navigation-search {
+  max-width: var(--content-max-width-narrow);
+  margin-bottom: var(--space-5);
+}
+
+.settings-shell__content > .settings-shell__navigation-results {
+  background: var(--color-surface-work);
+  padding: var(--space-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
 .settings-shell__navigation-status {
   margin: 0 var(--space-2) var(--space-2);
   font-size: var(--text-sm);
@@ -460,8 +473,8 @@
 .settings-leaf-header {
   display: grid;
   gap: var(--space-2);
-  margin-top: var(--space-5);
-  margin-bottom: var(--space-6);
+  margin-top: var(--space-3);
+  margin-bottom: var(--space-5);
 }
 
 .settings-setting-row {
@@ -692,7 +705,7 @@
    * fassbar wäre. */
   .settings-desktop-overview__domain {
     display: grid;
-    gap: var(--space-3);
+    gap: var(--space-2);
   }
 
   .settings-desktop-overview__domain-title {
@@ -710,8 +723,15 @@
     color: var(--module-settings);
   }
 
+  .settings-desktop-overview__domain-description {
+    margin: 0 0 var(--space-1);
+    color: var(--color-text-secondary);
+    font-size: var(--text-sm);
+  }
+
   .settings-desktop-overview__leaf-list {
     display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     background: var(--color-surface-work);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm);
@@ -723,6 +743,7 @@
     grid-template-columns: var(--target-md) minmax(0, 1fr) auto;
     gap: var(--space-3);
     align-items: center;
+    min-width: 0;
     min-height: var(--target-lg);
     padding: var(--space-2) var(--space-4);
     transition:
@@ -730,8 +751,16 @@
       color var(--transition-fast);
   }
 
-  .settings-desktop-overview__leaf + .settings-desktop-overview__leaf {
+  .settings-desktop-overview__leaf:nth-child(n + 3) {
     border-top: var(--space-px) solid var(--color-border-subtle);
+  }
+
+  .settings-desktop-overview__leaf:nth-child(even) {
+    border-left: var(--space-px) solid var(--color-border-subtle);
+  }
+
+  .settings-desktop-overview__leaf:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 
   .settings-desktop-overview__leaf:hover {
@@ -1316,12 +1345,12 @@
    -------------------------------------------------------- */
 
 .settings-section {
-  margin-bottom: var(--space-8);
+  margin-bottom: var(--space-6);
 }
 
 .settings-section__title {
   color: var(--color-text-primary);
-  margin: 0 0 var(--space-3) var(--space-1);
+  margin: 0 0 var(--space-3);
 }
 
 /* --------------------------------------------------------
@@ -1352,6 +1381,26 @@
 .settings-card__title {
   margin: 0 0 var(--space-3);
   color: var(--color-text-primary);
+}
+
+/* Shared spacing removes the extra trailing field margin from short cards. */
+.settings-card > :last-child,
+.settings-section > .settings-card:last-child,
+.settings-form > .form-group,
+.settings-field-grid > .form-group {
+  margin-bottom: 0;
+}
+
+.settings-field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.settings-field-grid > * { min-width: 0; }
+
+@media (max-width: 767px) {
+  .settings-field-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 .settings-pwa-card {
@@ -1598,6 +1647,11 @@
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
+}
+
+.settings-form > .settings-form-actions {
+  padding-top: var(--space-3);
+  border-top: var(--space-px) solid var(--color-border-subtle);
 }
 
 /* Feldgruppe innerhalb eines Formulars (z. B. Kontaktdaten im Konto-Blatt).

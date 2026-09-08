@@ -3,6 +3,7 @@
  * Zweck: Reminder an Web Push und externe Notification-Channels fan-outen und Delivery-State pflegen.
  * Abhaengigkeiten: server/db.js, push.js, notification-channels.js, Provider-Adapter
  */
+import { APP_NAME } from '../utils/brand.js';
 import { createLogger } from '../logger.js';
 import * as dbModule from '../db.js';
 import { pushService as defaultPushService } from './push.js';
@@ -20,7 +21,7 @@ import { enqueueNotification, canReceiveNotification, getNotificationPreferences
 import { isNotificationDeliveryCurrent } from './notification-events.js';
 
 const log = createLogger('Notifications');
-const APP_NAME = 'Yuvomi';
+
 // Greift nur, wenn die verknuepfte Entitaet inzwischen geloescht wurde: nie den
 // App-Namen als Body wiederholen, sonst besteht die Notification nur aus "Yuvomi" (#581).
 const FALLBACK_BODY = 'Reminder';

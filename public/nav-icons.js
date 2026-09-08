@@ -128,6 +128,14 @@ const ICON_SHAPES = {
     ['path', { d: 'M5 17.5c-.5 1-.5 1.8 0 2.5 1 .6 1.9.5 2.5 0' }],
   ],
 
+  // A trigger cleaner, with a broad bottle and a separate squeeze lever.
+  'spray-bottle': [
+    ['path', { d: 'M5 3h9l4 3h-6v3H8V6H5z' }],
+    ['path', { d: 'M15 6c0 2-1 3-2 4' }],
+    ['path', { d: 'M8 9h4v2c0 1 1.8 2 3.5 3 1 .6 1.5 1.6 1.5 2.8V19a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-2.2c0-1.2.5-2.2 1.5-3C7.5 13 8 12 8 11z' }],
+    ['path', { d: 'M8 16h6' }],
+  ],
+
   'utensils': [
     ['path', { d: 'M7.5 3.5v8a2 2 0 0 1-2 2h-.5v7' }],
     ['path', { d: 'M5.5 3.5v6M7.5 3.5v6M9.5 3.5v6' }],
@@ -311,8 +319,8 @@ export const MODULE_ICON = {
   recipes:          'book-text',
   shopping:         'shopping-cart',
   pantry:           'archive',
-  kitchen:          'utensils',
-  housekeeping:     'paintbrush',
+  kitchen:          'cooking-pot',
+  housekeeping:     'spray-bottle',
   documents:        'folder-lock',
   inventory:        'package',
   rewards:          'award',

@@ -70,15 +70,28 @@
 }
 
 .app-loading__logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   font-size: var(--text-2xl);
   font-weight: var(--font-weight-bold);
-  color: var(--color-accent);
-  animation: pulse 1.5s ease-in-out infinite;
+  color: var(--color-text-primary);
 }
 
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+/* One monochrome mark, shared by shell, authentication and startup. */
+.ordoma-mark {
+  display: inline-block;
+  width: 100%;
+  height: 100%;
+  flex: 0 0 auto;
+  background-color: currentColor;
+  mask: url('/icons/ordoma-mark.svg') center / contain no-repeat;
+  -webkit-mask: url('/icons/ordoma-mark.svg') center / contain no-repeat;
+}
+
+.app-loading__logo .ordoma-mark {
+  width: var(--space-10);
+  height: var(--space-10);
 }
 
 /* --------------------------------------------------------
@@ -3428,18 +3441,13 @@ p.field-hint--warn[hidden] {
     gap: var(--space-3);
   }
 
-  /* SVG-Logomark (via DOM API in router.js injiziert, Gradient im SVG selbst) */
+  /* Canonical mark with the current theme text color. */
   .nav-sidebar__logomark {
     width: 28px;
     height: 28px;
     flex-shrink: 0;
   }
 
-  .nav-sidebar__logomark svg {
-    width: 100%;
-    height: 100%;
-    display: block;
-  }
 
   .nav-sidebar__brand-text {
     display: flex;

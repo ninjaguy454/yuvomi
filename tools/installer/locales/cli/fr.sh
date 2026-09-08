@@ -1,4 +1,4 @@
-# Yuvomi CLI-Installer — Français (fr)
+# Ordoma CLI-Installer — Français (fr)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="Mot de passe (8 caractères min.) :"
 MSG_admin_confirm="Confirmez le mot de passe :"
 MSG_admin_mismatch="Les mots de passe ne correspondent pas, réessayez."
 MSG_admin_created="Compte administrateur créé !"
-MSG_admin_ready="  Yuvomi est prêt !"
+MSG_admin_ready="  Ordoma est prêt !"
 MSG_admin_open="  Ouvrir : %s"
 MSG_admin_exists="Un compte administrateur existe déjà."
 MSG_admin_failed="Échec de la création de l’administrateur (HTTP %s) : %s"

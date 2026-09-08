@@ -52,13 +52,35 @@ export function removeOperation(document, operationId) {
 }
 
 export function moveOperation(document, operationId, direction) {
+  const index = document.operations.findIndex(item => item.id === operationId);
+  return reorderOperation(document, operationId, index + direction);
+}
+
+export function reorderOperation(document, operationId, destination) {
   const next = clone(document);
   const index = next.operations.findIndex(item => item.id === operationId);
-  const other = index + direction;
-  if (index >= 0 && other >= 0 && other < next.operations.length) {
-    [next.operations[index], next.operations[other]] = [next.operations[other], next.operations[index]];
+  if (index >= 0 && Number.isInteger(destination) && destination >= 0 && destination < next.operations.length) {
+    const [operation] = next.operations.splice(index, 1);
+    next.operations.splice(destination, 0, operation);
   }
   return next;
+}
+
+/** Readiness choices are a projection of the current draft, never a snapshot. */
+export function readyStateChoices(document, operationId) {
+  const index = document.operations.findIndex(operation => operation.id === operationId);
+  const operation = document.operations[index];
+  if (!operation) return [];
+  const producers = new Map();
+  document.operations.forEach((producer, order) => producer.produces.forEach(id => producers.set(id, { producer, order })));
+  return document.resources.filter(resource => resource.kind === 'readiness' && !operation.produces.includes(resource.id))
+    .map(resource => {
+      const source = producers.get(resource.id);
+      return { resource, producer: source?.producer || null, order: source?.order ?? -1,
+        selected: operation.requires.includes(resource.id), later: (source?.order ?? -1) > index };
+    })
+    .filter(choice => !choice.later || choice.selected)
+    .sort((a, b) => a.order - b.order);
 }
 
 export function divideResource(document, resourceId, portions) {

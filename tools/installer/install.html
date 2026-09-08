@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title data-i18n="title">Yuvomi Setup</title>
+  <title data-i18n="title">Ordoma Setup</title>
   <!-- Fallback-Tokens VOR dem tokens.css-Link: lädt tokens.css (inkl. Dark-Mode-
        Media-Query), gewinnen dessen spätere :root-Regeln per Cascade. Fehlt
        tokens.css (falscher OIKOS_INSTALLER_ROOT, Packaging-/Volume-Fehler), bleibt
@@ -30,8 +30,8 @@
       /* tokens.css leitet dieses Token aus --color-text-tertiary ab; hier steht
          dessen Wert direkt, weil der Fallback keine zweite Ebene braucht. */
       --color-text-placeholder: #6B675F;
-      --color-accent: #6C3AED;
-      --color-accent-hover: #5B2FD4;
+      --color-accent: #4B5357;
+      --color-accent-hover: #343C40;
       /* Traegt die Primaerbutton-Mischung der App. Die Rampe INVERTIERT im Dark
          Mode (#FBFAF7 statt #0E0D0B) - dadurch wird der Knopf dort heller statt
          dunkler, und die dunkle Tinte darauf gewinnt Kontrast statt zu verlieren. */
@@ -42,7 +42,7 @@
          dagegen statisch weiß und taugt hier deshalb nicht. */
       --color-ink-on-vivid: #FFFFFF;
       --color-success: #1E7B35;
-      --color-warning: #A85D00;
+      --color-warning: #A65B00;
       --color-danger: #D70015;
       --radius-xs: 4px;
       --radius-sm: 10px;
@@ -74,9 +74,9 @@
         --color-bg: #191816; --color-surface: #2B2825; --color-surface-2: #0F0E0D;
         --color-border: #47423B; --color-text-primary: #F5F3ED; --color-text-secondary: #B4AEA5;
         --color-text-placeholder: #A9A39A;
-        --color-accent: #A78BFA; --color-accent-hover: #BCA6FC; --color-ink-on-vivid: #0A0A0C;
+        --color-accent: #B7C1C7; --color-accent-hover: #D0D8DC; --color-ink-on-vivid: #0A0A0C;
         --neutral-950: #FBFAF7;
-        --color-success: #30D158; --color-warning: #FF9F0A; --color-danger: #FF6961;
+        --color-success: #30D158; --color-warning: #FF9F0A; --color-danger: #FF6D65;
         --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.30);
         --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.40);
         --shadow-lg: 0 8px 28px rgba(0, 0, 0, 0.50);
@@ -113,7 +113,7 @@
     }
 
     /* Marken-Anker über der Karte: Zeichen plus Wortmarke, dasselbe Motiv wie
-       .login-hero__mark in der App. Der Wizard trug bisher kein Yuvomi-Zeichen. */
+       .login-hero__mark in der App. Der Wizard trug bisher kein Ordoma-Zeichen. */
     .brand { text-align: center; margin-bottom: 22px; }
     .brand__mark {
       display: inline-flex; align-items: center; justify-content: center;
@@ -125,13 +125,13 @@
       color: var(--color-ink-on-vivid);
       box-shadow: var(--shadow-md), inset 0 1px 0 color-mix(in srgb, var(--color-ink-on-vivid) 22%, transparent);
     }
-    .brand__mark svg { width: 55%; height: 55%; }
+    .brand__mark svg { width: 100%; height: 100%; }
     .brand__word {
       font-size: var(--text-xl); font-weight: 700;
       /* Label-Farbe, nicht Akzent. auth.css:77-81 haelt fest, dass DESIGN.md
          einen Titel in Akzentfarbe ausdruecklich verbietet, und hat die
          Anmeldeseite genau deshalb zurueckgesetzt. Der Installer ist die ERSTE
-         Begegnung mit dem Produkt und trug als einziges Yuvomi-Artefakt noch
+         Begegnung mit dem Produkt und trug als einziges Ordoma-Artefakt noch
          die abgeloeste Fassung. Die Marke traegt das Tile darueber. */
       letter-spacing: -.02em; color: var(--color-text-primary);
     }
@@ -376,7 +376,7 @@
     .done-wrap   { text-align: center; padding: 20px 0 8px; }
     /* Der Abschluss trug ein 🎉-Systemsemoji: der einzige Bildinhalt der ganzen
        Reise, auf jedem Betriebssystem anders gerendert und gegen PRODUCT.md:22
-       („kein Konfetti"). Jetzt trägt ihn das Yuvomi-Zeichen in einem Erfolgsring. */
+       („kein Konfetti"). Jetzt trägt ihn das Ordoma-Zeichen in einem Erfolgsring. */
     .done-mark {
       display: inline-grid; place-items: center; width: 72px; height: 72px;
       margin-bottom: 16px; border-radius: var(--radius-full);
@@ -528,24 +528,41 @@
        Sprache gleich, braucht also keinen Locale-Key. -->
   <div class="brand">
     <span class="brand__mark" aria-hidden="true">
-      <svg viewBox="0 0 160 160" fill="currentColor">
-        <g fill-opacity="0.82">
-          <circle cx="64" cy="72" r="27"/>
-          <circle cx="100" cy="78" r="25"/>
-          <circle cx="80" cy="106" r="24"/>
-        </g>
-      </svg>
+      <!-- ordoma-mark:start --><svg viewBox="0 0 160 160" fill="currentColor"><rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(0 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(15 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(30 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(45 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(60 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(75 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(90 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(105 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(120 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(135 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(150 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(165 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(180 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(195 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(210 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(225 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(240 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(255 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(270 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(285 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(300 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(315 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(330 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(345 80 80)"/></svg><!-- ordoma-mark:end -->
     </span>
-    <div class="brand__word">Yuvomi</div>
+    <div class="brand__word">Ordoma</div>
   </div>
 
   <main class="card">
-    <h1 class="vh" data-i18n="title">Yuvomi Setup</h1>
+    <h1 class="vh" data-i18n="title">Ordoma Setup</h1>
 
     <!-- Step: Welcome / mode selection -->
     <div class="step" id="step-welcome">
       <div class="card-head">
-        <h2 tabindex="-1" data-i18n="welcome.title">Welcome to Yuvomi</h2>
+        <h2 tabindex="-1" data-i18n="welcome.title">Welcome to Ordoma</h2>
         <p data-i18n="welcome.subtitle">Let's get your private family planner running. Choose how you'd like to set it up.</p>
       </div>
       <div class="card-body">
@@ -571,7 +588,7 @@
              Test als Boolean zugesichert und in der README angekuendigt, aber von
              keiner Zeile gelesen. -->
         <div class="info-banner" id="welcome-running" style="display:none" role="note" data-i18n="welcome.containerRunning">
-          Yuvomi is currently running. Saving will restart the container, so it will be briefly unavailable.
+          Ordoma is currently running. Saving will restart the container, so it will be briefly unavailable.
         </div>
         <div class="mode-grid">
           <button type="button" class="mode-card is-primary" id="mode-simple">
@@ -584,7 +601,7 @@
                 <div class="mode-card__badge" data-i18n="welcome.simpleBadge">Recommended</div>
               </div>
             </div>
-            <div class="mode-card__desc" data-i18n="welcome.simpleDesc">We handle the technical details for you. Perfect for running Yuvomi at home.</div>
+            <div class="mode-card__desc" data-i18n="welcome.simpleDesc">We handle the technical details for you. Perfect for running Ordoma at home.</div>
             <div class="mode-card__meta">
               <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
               <span data-i18n="welcome.simpleTime">About 2 minutes</span>
@@ -649,7 +666,7 @@
       </div>
       <div class="card-foot">
         <button class="btn btn-ghost" data-back data-i18n="common.back">Back</button>
-        <button class="btn btn-primary" id="simple-next" data-i18n="simple.start">Set up &amp; start Yuvomi</button>
+        <button class="btn btn-primary" id="simple-next" data-i18n="simple.start">Set up &amp; start Ordoma</button>
       </div>
     </div>
 
@@ -658,7 +675,7 @@
       <div class="card-head">
         <div class="step-tag"></div>
         <h2 tabindex="-1" data-i18n="config.title">Basic Configuration</h2>
-        <p data-i18n="config.subtitle">How will you access Yuvomi?</p>
+        <p data-i18n="config.subtitle">How will you access Ordoma?</p>
       </div>
       <div class="card-body">
         <div class="info-banner" id="cfg-existing" style="display:none" data-i18n="config.existing">
@@ -669,7 +686,7 @@
         <div class="field">
           <label for="cfg-host" data-i18n="config.hostLabel">Domain or IP address</label>
           <input type="text" id="cfg-host" value="localhost" placeholder="localhost or 192.168.1.x">
-          <div class="hint" data-i18n="config.hostHint">The address you'll use to open Yuvomi in your browser.</div>
+          <div class="hint" data-i18n="config.hostHint">The address you'll use to open Ordoma in your browser.</div>
         </div>
         <div class="field">
           <label for="cfg-port" data-i18n="config.portLabel">Port</label>
@@ -691,12 +708,12 @@
              Adresse jetzt schon im Kalenderschritt, der frueher davor lag.
              Die Locale-Schluessel behalten ihr advanced.*-Praefix. -->
         <div class="field field-emphasis">
-          <label for="adv-proxy" data-i18n="advanced.proxyLabel">How is Yuvomi exposed?</label>
+          <label for="adv-proxy" data-i18n="advanced.proxyLabel">How is Ordoma exposed?</label>
           <select id="adv-proxy">
             <option value="proxy" data-i18n="advanced.proxyBehindHttps">Behind a reverse proxy with HTTPS (Caddy, nginx, Traefik)</option>
             <option value="direct" data-i18n="advanced.proxyDirect">Direct access over localhost / HTTP</option>
           </select>
-          <div class="hint" data-i18n="advanced.proxyHint">Pick "Direct access" if you open Yuvomi over http:// - otherwise you cannot sign in. Behind a reverse proxy with HTTPS, pick the first option.</div>
+          <div class="hint" data-i18n="advanced.proxyHint">Pick "Direct access" if you open Ordoma over http:// - otherwise you cannot sign in. Behind a reverse proxy with HTTPS, pick the first option.</div>
         </div>
         <!-- BASE_URL wurde bisher aus Schema, Host und Port abgeleitet. Hinter
              einem Reverse-Proxy stimmt das nie: die öffentliche Adresse ist
@@ -710,7 +727,7 @@
         <div class="field">
           <label for="adv-base-url" data-i18n="advanced.baseUrlLabel">Public address</label>
           <input type="text" id="adv-base-url" placeholder="https://yuvomi.example.com">
-          <div class="hint" data-i18n="advanced.baseUrlHint">The address your family opens Yuvomi at - not the container's host and port. Used for password reset and invitation links.</div>
+          <div class="hint" data-i18n="advanced.baseUrlHint">The address your family opens Ordoma at - not the container's host and port. Used for password reset and invitation links.</div>
         </div>
 
         <div class="error-banner" id="cfg-err" role="alert"></div>
@@ -822,7 +839,7 @@
       <div class="card-head">
         <div class="step-tag"></div>
         <h2 tabindex="-1" data-i18n="calendar.title">Calendar Sync</h2>
-        <p data-i18n="calendar.subtitle">Connect Yuvomi to Google Calendar, Apple iCloud or Outlook. All optional - expand to configure.</p>
+        <p data-i18n="calendar.subtitle">Connect Ordoma to Google Calendar, Apple iCloud or Outlook. All optional - expand to configure.</p>
       </div>
       <div class="card-body">
         <div class="toggle-card">
@@ -910,7 +927,7 @@
               <label for="outlook-secret" data-i18n="calendar.outlookSecretLabel">Client Secret</label>
               <input type="password" id="outlook-secret">
             </div>
-            <p class="hint" data-i18n="calendar.outlookNote">One-way push: Yuvomi stays the source of truth and overwrites changes made in Outlook. Family accounts are connected later in the app under Settings.</p>
+            <p class="hint" data-i18n="calendar.outlookNote">One-way push: Ordoma stays the source of truth and overwrites changes made in Outlook. Family accounts are connected later in the app under Settings.</p>
           </div>
         </div>
       </div>
@@ -970,7 +987,7 @@
           </div>
           <div class="field">
             <label for="email-from-name"><span data-i18n="email.fromNameLabel">Sender name</span> <span class="opt" data-i18n="calendar.appleUrlOpt">(optional)</span></label>
-            <input type="text" id="email-from-name" placeholder="Yuvomi">
+            <input type="text" id="email-from-name" placeholder="Ordoma">
           </div>
         </div>
         <div class="error-banner" id="email-err" role="alert"></div>
@@ -1225,7 +1242,7 @@
              sie laengst zu einer Zeile zusammen und begruendet das dort auch; was sie
              als eine Auskunft zeigt, wird hier als eine Frage gestellt. -->
         <div class="group-label" data-i18n="advanced.sectionPrivateNetwork">Access to your home network</div>
-        <p class="hint" style="margin-bottom:12px" data-i18n="advanced.privateNetworkHint">Yuvomi refuses connections to addresses on your own network by default, which protects against a server being tricked into reaching internal services. Enable what you actually run at home.</p>
+        <p class="hint" style="margin-bottom:12px" data-i18n="advanced.privateNetworkHint">Ordoma refuses connections to addresses on your own network by default, which protects against a server being tricked into reaching internal services. Enable what you actually run at home.</p>
         <div class="field">
           <label><input type="checkbox" id="adv-ics-private"> <span data-i18n="advanced.icsPrivateNetwork">Allow calendar subscriptions from your home network</span></label>
         </div>
@@ -1243,7 +1260,7 @@
         <div class="field">
           <label for="adv-sync-interval" data-i18n="advanced.syncIntervalLabel">Calendar sync interval (minutes)</label>
           <input type="number" id="adv-sync-interval" min="5" max="1440" step="5" placeholder="15">
-          <div class="hint" data-i18n="advanced.syncIntervalHint">How often Yuvomi syncs calendars and contacts. Raise it if your provider rate-limits you.</div>
+          <div class="hint" data-i18n="advanced.syncIntervalHint">How often Ordoma syncs calendars and contacts. Raise it if your provider rate-limits you.</div>
         </div>
         <div class="field">
           <label for="adv-fixer" data-i18n="advanced.fixerLabel">Fixer API key (live currency rates)</label>
@@ -1325,7 +1342,7 @@
     <div class="step" id="step-docker">
       <div class="card-head">
         <div class="step-tag"></div>
-        <h2 tabindex="-1" data-i18n="docker.title">Starting Yuvomi</h2>
+        <h2 tabindex="-1" data-i18n="docker.title">Starting Ordoma</h2>
         <p data-i18n="docker.subtitle">Pulling the image and starting the Docker container.</p>
       </div>
       <div class="card-body">
@@ -1371,7 +1388,7 @@
       <div class="card-head">
         <div class="step-tag"></div>
         <h2 tabindex="-1" data-i18n="admin.title">Create Admin Account</h2>
-        <p data-i18n="admin.subtitle">Set up your first login. This account has full access to Yuvomi.</p>
+        <p data-i18n="admin.subtitle">Set up your first login. This account has full access to Ordoma.</p>
       </div>
       <div class="card-body">
         <div class="field">
@@ -1410,15 +1427,32 @@
       <div class="card-body">
         <div class="done-wrap">
           <div class="done-mark" aria-hidden="true">
-            <svg viewBox="0 0 160 160" fill="currentColor">
-              <g fill-opacity="0.82">
-                <circle cx="64" cy="72" r="27"/>
-                <circle cx="100" cy="78" r="25"/>
-                <circle cx="80" cy="106" r="24"/>
-              </g>
-            </svg>
+            <!-- ordoma-mark:start --><svg viewBox="0 0 160 160" fill="currentColor"><rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(0 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(15 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(30 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(45 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(60 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(75 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(90 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(105 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(120 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(135 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(150 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(165 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(180 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(195 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(210 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(225 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(240 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(255 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(270 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(285 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(300 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(315 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(330 80 80)"/>
+  <rect x="76.75" y="18" width="6.5" height="26" rx="1.8" transform="rotate(345 80 80)"/></svg><!-- ordoma-mark:end -->
           </div>
-          <h2 tabindex="-1" data-i18n="done.title">Yuvomi is ready!</h2>
+          <h2 tabindex="-1" data-i18n="done.title">Ordoma is ready!</h2>
           <!-- Kein data-i18n: der Text haengt seit dem 404-Zweig vom Zustand ab
                (frisch angelegt gegen schon vorhanden). applyTranslations wuerde
                beim Sprachwechsel den Grundtext zurueckschreiben und die
@@ -1442,7 +1476,7 @@
               The file could not be loaded - the installer has most likely shut down already. Your keys are in the .env file on your server.
             </div>
             <div class="hint" id="done-path" style="display:none; margin:0; font-family:var(--font-mono); word-break:break-all"></div>
-            <a id="done-link" class="open-link" href="#" target="_blank" rel="noopener" data-i18n="done.open">Open Yuvomi &#x2192;</a>
+            <a id="done-link" class="open-link" href="#" target="_blank" rel="noopener" data-i18n="done.open">Open Ordoma &#x2192;</a>
             <!-- Der Installer beendet sich nach der Kontoerstellung von selbst.
                  Wer den Tab liegen lässt, findet den Download-Endpunkt tot vor -
                  das gehört auf den Bildschirm, nicht nur in den Quelltext. -->
@@ -1469,7 +1503,7 @@
             </a>
             <div class="next-step next-step--static">
               <svg class="icon-svg" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg>
-              <span><b data-i18n="done.nextInstall">Install it on your phones</b><br><span data-i18n="done.nextInstallDesc">Open Yuvomi on a phone and add it to the home screen - it works offline.</span></span>
+              <span><b data-i18n="done.nextInstall">Install it on your phones</b><br><span data-i18n="done.nextInstallDesc">Open Ordoma on a phone and add it to the home screen - it works offline.</span></span>
             </div>
           </div>
         </div>
@@ -2246,7 +2280,7 @@ $('cfg-next').addEventListener('click', () => {
 
   // Reverse proxy vs. direct access drives the secure-cookie / trust-proxy pair.
   // Steht seit dem Umzug hier statt in adv-next: die Entscheidung gehoert zu
-  // "Wie greifst du auf Yuvomi zu?", und alles Weitere (Schema, BASE_URL, die
+  // "Wie greifst du auf Ordoma zu?", und alles Weitere (Schema, BASE_URL, die
   // Redirect-URIs im Kalenderschritt) haengt daran.
   if ($('adv-proxy').value === 'direct') {
     S.SESSION_SECURE = 'false';     // allow login cookies over plain HTTP
@@ -2516,7 +2550,7 @@ $('storage-next').addEventListener('click', () => {
 
 $('adv-next').addEventListener('click', () => {
   clearInvalid();
-  // Alles, was entscheidet, WOMIT sich Yuvomi verbindet. Speicher und
+  // Alles, was entscheidet, WOMIT sich Ordoma verbindet. Speicher und
   // Sicherungen stehen einen Schritt davor.
   const origin = S.BASE_URL;
   if (S.GOOGLE_CLIENT_ID) S.GOOGLE_REDIRECT_URI = `${origin}/api/v1/calendar/google/callback`;
@@ -2619,7 +2653,7 @@ $('adv-next').addEventListener('click', () => {
   $('rv-base-url').textContent = S.BASE_URL || '-';
   $('rv-data-dir').textContent = S.DATA_DIR || './data';
   // Die drei Schalter zusammen in einer Zeile: sie beantworten dieselbe Frage
-  // („darf Yuvomi Ziele im eigenen Netz erreichen?") und stehen im Wizard nur
+  // („darf Ordoma Ziele im eigenen Netz erreichen?") und stehen im Wizard nur
   // deshalb getrennt, weil sie an verschiedenen Feldern hängen.
   const privateNet = [
     S.ICS_SUBSCRIPTION_ALLOW_PRIVATE_NETWORK === 'true' && t('review.privateNetworkIcs'),

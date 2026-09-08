@@ -96,6 +96,9 @@ test('buildFeed enthält eigenes lokales Event', () => {
   d2.prepare(`INSERT INTO calendar_events (title,start_datetime,end_datetime,all_day,external_source,created_by) VALUES ('Zahnarzt','2026-06-25T09:00:00Z','2026-06-25T10:00:00Z',0,'local',?)`).run(u1);
   const ics = buildFeed(d2, u1, NOW, FEED_TZ);
   assert(ics.includes('BEGIN:VCALENDAR'), 'kein VCALENDAR');
+  assert(ics.includes('X-WR-CALNAME:Ordoma'), 'calendar display name uses the current brand');
+  assert(ics.includes('PRODID:-//Yuvomi//Calendar Feed//DE'), 'subscription producer identity is stable');
+  assert(ics.includes('UID:event-1@yuvomi'), 'existing event identity remains stable');
   assert(ics.includes('SUMMARY:Zahnarzt'), 'Titel fehlt');
   assert(ics.includes('DTSTART:20260625T090000Z'), 'DTSTART falsch: ' + ics);
   assert(ics.includes('DTEND:20260625T100000Z'), 'DTEND falsch: ' + ics);

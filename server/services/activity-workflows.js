@@ -17,6 +17,7 @@ import {
 } from './activity-eligibility.js';
 import { recordTaskAssignment } from './assignment-responsibilities.js';
 import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
+import { setTags } from '../utils/task-tags.js';
 
 function parseJson(raw, fallback) {
   if (raw == null || raw === '') return fallback;
@@ -49,6 +50,7 @@ export function getActivityTemplate(d, id) {
   if (!row) return null;
   row.skills = loadSkillRequirements(d, row.id);
   row.checklist = loadActivityChecklist(d, row.id);
+  row.tags = parseJson(row.tags_json, []);
   return row;
 }
 
@@ -62,6 +64,7 @@ export function listActivityTemplates(d, { activeOnly = false } = {}) {
     ...row,
     skills: loadSkillRequirements(d, row.id),
     checklist: loadActivityChecklist(d, row.id),
+    tags: parseJson(row.tags_json, []),
   }));
 }
 
@@ -410,24 +413,30 @@ function insertTask(d, {
   parentTaskId = null,
   dueDate = null,
   dueTime = null,
+  priority = 'none',
+  points = 0,
+  tags = [],
 }) {
   const result = d.prepare(`
     INSERT INTO tasks (
       title, description, category, priority, status, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
       assignment_mode, rotation_index, points, visibility, countdown, locked
-    ) VALUES (?, ?, ?, 'none', 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, 0, 'all', 0, 0)
+    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0)
   `).run(
     title,
     description,
     category || 'misc',
+    priority,
     dueDate,
     dueTime,
     assignedTo,
     createdBy,
     parentTaskId,
+    points,
   );
   const taskId = Number(result.lastInsertRowid);
+  setTags(d, taskId, tags);
   if (assignedTo) {
     d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)')
       .run(taskId, assignedTo);
@@ -503,6 +512,9 @@ export function instantiateWorkflow(d, workflowId, {
         title: stepTitle(activity, activitySubject, step.title_override, variableLabels),
         description: stepDescription(activity, activitySubject, step.description_override, variableLabels),
         category: activity.category,
+        priority: activity.priority,
+        points: activity.points,
+        tags: activity.tags,
         assignedTo: resolution.primary?.id ?? null,
         createdBy,
         parentTaskId,

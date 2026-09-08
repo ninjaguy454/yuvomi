@@ -1,91 +1,76 @@
 /**
- * Icon Generator for Yuvomi PWA
- * Generates icons from docs/logo.svg
- * Sizes: 192px and 512px, both "any" and "maskable" variants
- * Maskable icons: full-bleed background, logo content stays within 80% safe zone
- *
- * Usage: node scripts/generate-icons.js
- * Dependencies: sharp (devDependency)
+ * Generate Ordoma assets from the canonical public/icons/ordoma-mark.svg.
+ * Run: node scripts/generate-icons.js (uses the existing sharp dev dependency).
+ * Browser identity and existing asset URLs are deliberately unchanged.
  */
-
 import sharp from 'sharp';
-import { mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const ICONS_DIR = join(__dirname, '..', 'public', 'icons');
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const iconsDir = join(root, 'public', 'icons');
+mkdirSync(iconsDir, { recursive: true });
+const canonical = readFileSync(join(iconsDir, 'ordoma-mark.svg'), 'utf8');
+const mark = canonical.match(/<svg\b[^>]*>([\s\S]*?)<\/svg>/)?.[1].trim();
+if (!mark || !canonical.includes('viewBox="0 0 160 160"')) throw Error('Invalid canonical brand mark');
 
-mkdirSync(ICONS_DIR, { recursive: true });
-
-/**
- * Drei transluzente, ineinander übergehende Kreise (Familie).
- * Überlappungen verdichten sich zu helleren Linsen -> weicher Blend.
- * Liegen innerhalb der maskable-Safe-Zone (Ø 80 %).
- */
-const CIRCLES = `<g fill="#fff" fill-opacity="0.82">
-    <circle cx="64" cy="72" r="27"/>
-    <circle cx="100" cy="78" r="25"/>
-    <circle cx="80" cy="106" r="24"/>
-  </g>`;
-
-/** Gemeinsame Gradient-Defs: Marken-Violett + dezenter Top-Sheen (Glas-Charakter) */
-const DEFS = `<defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="160" y2="160" gradientUnits="userSpaceOnUse">
-      <stop offset="0%" stop-color="#8b5cf6"/>
-      <stop offset="100%" stop-color="#6c3aed"/>
-    </linearGradient>
-    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="160" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.14"/>
-      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
-    </linearGradient>
-  </defs>`;
-
-/** Logo SVG (any): rounded corners, gradient background + sheen */
-function createLogoSvg(size) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 160 160" fill="none">
-  ${DEFS}
-  <rect width="160" height="160" rx="36" fill="url(#bg)"/>
-  <rect width="160" height="160" rx="36" fill="url(#sheen)"/>
-  ${CIRCLES}
-</svg>`;
+// A stable two-color installed tile; the live shell uses a token-colored mask.
+const ink = '#34433e';
+const paper = '#f7f3e9';
+function tile({ maskable = false } = {}) {
+  // The 0.76 maskable transform puts every foreground pixel inside radius64
+  // (the standard central80% safe circle), including square/circular crops.
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160">
+    <rect width="160" height="160" rx="${maskable ? 0 : 34}" fill="${ink}"/>
+    <g fill="${paper}"${maskable ? ' transform="translate(19.2 19.2) scale(0.76)"' : ''}>${mark}</g>
+  </svg>`;
 }
-
-/** Maskable logo SVG: full-bleed background (no rx), logo within safe zone */
-function createMaskableLogoSvg(size) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 160 160" fill="none">
-  ${DEFS}
-  <rect width="160" height="160" fill="url(#bg)"/>
-  <rect width="160" height="160" fill="url(#sheen)"/>
-  ${CIRCLES}
-</svg>`;
-}
-
-/** Apple Touch Icon (180x180): same as any-icon */
-function createAppleTouchSvg() {
-  return createLogoSvg(180);
-}
-
-/** Favicon (32x32): simplified - just gradient background with house */
-function createFaviconSvg() {
-  return createLogoSvg(32);
-}
-
-const icons = [
-  { name: 'icon-192.png',          size: 192, svg: createLogoSvg(192)         },
-  { name: 'icon-512.png',          size: 512, svg: createLogoSvg(512)         },
-  { name: 'icon-maskable-192.png', size: 192, svg: createMaskableLogoSvg(192) },
-  { name: 'icon-maskable-512.png', size: 512, svg: createMaskableLogoSvg(512) },
-  { name: 'apple-touch-icon.png',  size: 180, svg: createAppleTouchSvg()      },
-  { name: 'favicon-32.png',        size: 32,  svg: createFaviconSvg()         },
+const assets = [
+  ['icon-192.png',192,tile()], ['icon-512.png',512,tile()],
+  ['icon-maskable-192.png',192,tile({maskable:true})],
+  ['icon-maskable-512.png',512,tile({maskable:true})],
+  ['apple-touch-icon.png',180,tile({maskable:true})],
+  ['favicon-16.png',16,tile()], ['favicon-32.png',32,tile()],
+  // Android masks badges by alpha, so no tile/background belongs here.
+  ['notification-badge.png',96,canonical.replace('currentColor','#ffffff')],
 ];
-
-for (const icon of icons) {
-  const outputPath = join(ICONS_DIR, icon.name);
-  await sharp(Buffer.from(icon.svg))
-    .png()
-    .toFile(outputPath);
-  console.log(`  ✓ ${icon.name} (${icon.size}x${icon.size})`);
+for (const [name,size,svg] of assets) {
+  await sharp(Buffer.from(svg)).resize(size,size).png().toFile(join(iconsDir,name));
+  console.log(`${name}: ${size}x${size}`);
 }
 
-console.log('\nIcons generated in public/icons/');
+// ICO embeds lossless PNGs; no platform-specific icon dependency is needed.
+const faviconSizes = [16,32,48];
+const images = await Promise.all(faviconSizes.map(size => sharp(Buffer.from(tile())).resize(size,size).png().toBuffer()));
+const header = Buffer.alloc(6 + images.length * 16);
+header.writeUInt16LE(1,2); header.writeUInt16LE(images.length,4);
+let offset = header.length;
+images.forEach((data,index) => {
+  const entry = 6 + index * 16;
+  header[entry] = faviconSizes[index]; header[entry+1] = faviconSizes[index];
+  header.writeUInt16LE(1,entry+4); header.writeUInt16LE(32,entry+6);
+  header.writeUInt32LE(data.length,entry+8); header.writeUInt32LE(offset,entry+12);
+  offset += data.length;
+});
+writeFileSync(join(root,'public','favicon.ico'), Buffer.concat([header,...images]));
+writeFileSync(join(root,'icon.svg'), tile());
+writeFileSync(join(root,'docs','logo.svg'), tile());
+
+// The standalone installer cannot depend on the installed app's static server.
+// These generated blocks share the exact canonical geometry and currentColor.
+const installerPath = join(root,'tools','installer','install.html');
+const installer = readFileSync(installerPath,'utf8');
+const inline = `<!-- ordoma-mark:start --><svg viewBox="0 0 160 160" fill="currentColor">${mark}</svg><!-- ordoma-mark:end -->`;
+const regenerated = installer.replace(/<!-- ordoma-mark:start -->[\s\S]*?<!-- ordoma-mark:end -->/g,inline);
+if ((regenerated.match(/<!-- ordoma-mark:start -->/g) || []).length !== 2) throw Error('Expected two generated installer marks');
+if (regenerated !== installer) writeFileSync(installerPath,regenerated);
+// Current documentation headers use generated inline tiles at their existing URLs.
+for (const page of ['index.html','install.html','privacy.html','datenschutz.html','impressum.html']) {
+  const path = join(root,'docs',page);
+  const html = readFileSync(path,'utf8');
+  const next = html.replace(/<!-- ordoma-tile:start -->[\s\S]*?<!-- ordoma-tile:end -->/g,
+    `<!-- ordoma-tile:start -->${tile().replace('<svg ', '<svg aria-hidden="true" ')}<!-- ordoma-tile:end -->`);
+  if (next !== html) writeFileSync(path,next);
+}
+console.log('favicon.ico and installer marks generated');

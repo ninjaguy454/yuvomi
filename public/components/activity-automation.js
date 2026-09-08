@@ -1,6 +1,8 @@
 import { api } from '/api.js';
 import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
-import { openModal, closeModal, confirmOverModal } from '/components/modal.js';
+import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
+import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
+import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
 
@@ -11,13 +13,24 @@ function replaceHtml(element, html) {
   element.insertAdjacentHTML('afterbegin', html);
 }
 
-function activityDescriptionTooltip(value) {
-  const description = String(value ?? '').replace(/\s+/g, ' ').trim();
-  return [...description].slice(0, 160).join('');
-}
-
 function toast(message, type = 'success') {
   window.yuvomi?.showToast?.(message, type);
+}
+
+function singlePendingAction(button, action) {
+  let pending = false;
+  return async (event) => {
+    event?.preventDefault?.();
+    if (pending) return;
+    pending = true;
+    const wasDisabled = button?.disabled;
+    if (button) button.disabled = true;
+    try { return await action(event); }
+    finally {
+      pending = false;
+      if (button) button.disabled = wasDisabled;
+    }
+  };
 }
 
 function footer(primaryLabel = 'Save') {
@@ -242,7 +255,7 @@ function placeOptions(places, selected = null, emptyLabel = 'Choose a Place…')
 
 function categoryOptions(categories, selected = 'misc') {
   return categories.map((category) => {
-    const label = category.name || category.key;
+    const label = catLabel(category.key, categories);
     return `<option value="${h(category.key)}" ${category.key === selected ? 'selected' : ''}>${h(label)}</option>`;
   }).join('');
 }
@@ -262,68 +275,58 @@ function parseEquals(value, type = null) {
 // Quick Add
 // ---------------------------------------------------------------------------
 
-export async function openQuickAdd({ onCreated = null, onActivitySelected = null } = {}) {
+export async function openTaskWorkflows({ onCreated = null, canCreate = false } = {}) {
   try {
     const response = await api.get('/automation/quick-add');
-    const templates = response.data ?? [];
-    const activities = response.activities ?? [];
-    const members = response.members ?? [];
-    const places = response.places ?? [];
-    const content = `
-      <div class="automation-quick-section">
-        <div class="automation-quick-section__heading">
-          <strong>Activity templates</strong>
-          <small class="form-hint">Create one task using its saved instructions and assignment rules.</small>
-        </div>
-        <div class="automation-quick-list">
-          ${activities.length ? activities.map((activity) => `
-            <button type="button" class="btn btn--secondary automation-quick-template" data-quick-activity="${activity.id}"
-                    ${activity.description ? `title="${h(activityDescriptionTooltip(activity.description))}"` : ''}>
-              <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
-              <span><strong>${h(activity.name)}</strong></span>
-            </button>
-          `).join('') : '<p class="form-hint">No activity templates are available yet.</p>'}
-        </div>
-      </div>
-      <div class="automation-quick-section">
-        <div class="automation-quick-section__heading">
-          <strong>Automated events</strong>
-          <small class="form-hint">Run a multi-step Quick Add workflow.</small>
-        </div>
+    let launcher = response;
+    const render = (panel) => {
+      const target = panel.querySelector('[data-workflow-launcher]');
+      if (!target?.isConnected) return;
+      const scroll = panel.querySelector('.modal-panel__body');
+      const scrollTop = scroll?.scrollTop || 0;
+      const templates = launcher.data ?? [];
+      replaceHtml(target, `<p class="form-hint">Start a saved workflow to create its connected Tasks.</p>
         <div class="automation-quick-list">
         ${templates.length ? templates.map((template) => `
           <button type="button" class="btn btn--secondary automation-quick-template" data-quick-template="${template.id}">
             <i data-lucide="zap" class="icon-md" aria-hidden="true"></i>
             <span><strong>${h(template.name)}</strong>${template.description ? `<br><small>${h(template.description)}</small>` : ''}</span>
           </button>
-        `).join('') : `<p class="form-hint">No Quick Add templates have been enabled yet.</p>`}
+        `).join('') : `<p class="form-hint">No Task Workflows are available yet.</p>`}
         </div>
-      </div>`;
-
+        ${canCreate ? '<button type="button" class="btn btn--ghost" data-create-task-workflow><i data-lucide="plus" class="icon-md" aria-hidden="true"></i>Create new Task Workflow</button>' : ''}`);
+      target.querySelectorAll('[data-quick-template]').forEach((button) => {
+        button.addEventListener('click', () => {
+          const template = templates.find((row) => Number(row.id) === Number(button.dataset.quickTemplate));
+          if (template) openQuickAddTemplate(template, launcher.members ?? [], launcher.places ?? [], onCreated);
+        });
+      });
+      target.querySelector('[data-create-task-workflow]')?.addEventListener('click', async (event) => {
+        const button = event.currentTarget;
+        button.disabled = true;
+        try {
+          const context = await loadWorkflowEditorContext();
+          if (!target.isConnected || target.closest('[inert]')) return;
+          openWorkflowForm(null, context, null, { asChild: true, onSaved: async (workflow) => {
+            launcher = await api.get('/automation/quick-add');
+            render(panel);
+            panel.querySelector(`[data-quick-template="${Number(workflow?.id)}"]`)?.focus();
+          } });
+        } catch (error) { toast(error.message || 'Could not open the Task Workflow editor.', 'danger'); }
+        finally { button.disabled = false; }
+      });
+      if (scroll) scroll.scrollTop = scrollTop;
+      if (window.lucide) window.lucide.createIcons({ el: target });
+    };
     openModal({
-      title: 'Quick Add',
-      content,
+      title: 'Task Workflows',
+      content: '<div data-workflow-launcher></div>',
       size: 'md',
       initialFocus: 'none',
-      onSave(panel) {
-        panel.querySelectorAll('[data-quick-activity]').forEach((button) => {
-          button.addEventListener('click', async () => {
-            const activity = activities.find((row) => Number(row.id) === Number(button.dataset.quickActivity));
-            if (!activity || typeof onActivitySelected !== 'function') return;
-            await closeModal({ force: true });
-            await onActivitySelected(activity);
-          });
-        });
-        panel.querySelectorAll('[data-quick-template]').forEach((button) => {
-          button.addEventListener('click', () => {
-            const template = templates.find((row) => Number(row.id) === Number(button.dataset.quickTemplate));
-            if (template) openQuickAddTemplate(template, members, places, onCreated);
-          });
-        });
-      },
+      onSave: render,
     });
   } catch (error) {
-    toast(error.message || 'Could not load Quick Add templates.', 'danger');
+    toast(error.message || 'Could not load Task Workflows.', 'danger');
   }
 }
 
@@ -384,12 +387,22 @@ function openQuickAddTemplate(template, members, places, onCreated) {
     ${footer('Preview')}
   </form>`;
 
-  openModal({
+  let child;
+  child = openChildModal({
     title: template.name,
     content,
     size: 'lg',
     onSave(panel) {
       const form = panel.querySelector('#quick-add-form');
+      let previewVersion = 0;
+      const invalidatePreview = () => {
+        previewVersion += 1;
+        panel.querySelector('#quick-add-preview')?.replaceChildren();
+        const submit = panel.querySelector('[type="submit"]');
+        if (submit) submit.textContent = 'Preview';
+      };
+      form.addEventListener('input', invalidatePreview);
+      form.addEventListener('change', invalidatePreview);
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
         const subjectUserId = template.subject_required
@@ -400,12 +413,17 @@ function openQuickAddTemplate(template, members, places, onCreated) {
           return;
         }
         const inputs = collectRuntimeInputs(form);
+        const version = ++previewVersion;
         try {
           const response = await api.post(`/automation/quick-add/${template.id}/preview`, {
             subject_user_id: subjectUserId,
             inputs,
           });
-          renderQuickPreview(panel, template, response.data, subjectUserId, inputs, onCreated);
+          if (!panel.isConnected || version !== previewVersion) return;
+          renderQuickPreview(panel, template, response.data, subjectUserId, inputs, async (created) => {
+            await child.close({ force: true });
+            await onCreated?.(created);
+          });
         } catch (error) {
           toast(error.message || 'Could not preview this workflow.', 'danger');
         }
@@ -433,25 +451,25 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
         </div>`).join('')}
     </div>
     <button type="button" class="btn btn--primary automation-preview-create" id="quick-add-create">
-      Create activities
+      Create Tasks
     </button>`);
   const submitButton = panel.querySelector('button[type="submit"]');
   if (submitButton) submitButton.textContent = 'Refresh preview';
   if (window.lucide) window.lucide.createIcons({ el: target });
 
-  target.querySelector('#quick-add-create')?.addEventListener('click', async () => {
+  const createButton = target.querySelector('#quick-add-create');
+  createButton?.addEventListener('click', singlePendingAction(createButton, async () => {
     try {
       const response = await api.post(`/automation/quick-add/${template.id}/create`, {
         subject_user_id: subjectUserId,
         inputs,
       });
-      await closeModal({ force: true });
       toast(`${template.name} created.`);
       await onCreated?.(response.data);
     } catch (error) {
       toast(error.message || 'Could not create this workflow.', 'danger');
     }
-  });
+  }));
 }
 
 // ---------------------------------------------------------------------------
@@ -461,7 +479,7 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
 const AUTOMATION_TABS = [
   ['skills', 'Skills'],
   ['activities', 'Activities'],
-  ['workflows', 'Quick Add templates'],
+  ['workflows', 'Task Workflows'],
   ['variables', 'Variables'],
 ];
 
@@ -617,7 +635,7 @@ function openVariableForm(variable = null, manager = null) {
 function openVariableKeyForm(variable, manager = null) {
   if (!variable) return;
   const content = `<form id="automation-variable-key-form">
-    <p class="form-hint">Renaming this ID updates linked definitions while preserving the variable's permanent identity. Existing plain text copied outside Yuvomi cannot be updated.</p>
+    <p class="form-hint">Renaming this ID updates linked definitions while preserving the variable's permanent identity. Existing plain text copied outside Ordoma cannot be updated.</p>
     ${inputRow('New variable ID', `<input class="input" name="variable_key" required value="${h(variable.variable_key)}">`)}
     ${footer('Rename ID')}
   </form>`;
@@ -625,7 +643,7 @@ function openVariableKeyForm(variable, manager = null) {
     panel.querySelector('#automation-variable-key-form')?.addEventListener('submit', async (event) => {
       event.preventDefault();
       const confirmed = await confirmOverModal('Rename this reusable variable ID?', {
-        confirmLabel: 'Rename ID', detail: 'Yuvomi will keep database links intact. Use this only when the new ID is clearer.',
+        confirmLabel: 'Rename ID', detail: 'Ordoma will keep database links intact. Use this only when the new ID is clearer.',
       });
       if (!confirmed) return;
       try {
@@ -762,7 +780,7 @@ function openPlaceSearchForm(places, manager) {
       submit.disabled = true; status.textContent = 'Searching Google Places…';
       try {
         const response = await api.post('/planning/place-search', payload); const results = response.data || [];
-        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row automation-google-place-result"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<div class="automation-google-place-result__fields"><label class="form-hint">Yuvomi name<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}"></label><label class="form-hint">Type<select class="input" data-place-type="${index}">${placeTypeOptions(placeTypeFromGoogle(result.primary_type))}</select></label><label class="form-hint">Address you want to keep<input class="input" data-place-address="${index}" maxlength="250" value="${h(result.formatted_address || '')}"></label><label class="form-hint">Your notes / description<textarea class="input" data-place-description="${index}" maxlength="1000" rows="2"></textarea></label></div><small class="form-hint">Review these Yuvomi-owned fields before saving. The Google Place ID remains the external identity; the editable name, address, type, and notes belong to your address book.</small></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
+        const list = form.querySelector('[data-place-search-results]'); replaceHtml(list, results.map((result, index) => `<div class="list-row automation-list-row automation-google-place-result"><div class="automation-list-row__copy"><strong>${h(result.display_name)}</strong><br><small class="form-hint">${h(result.formatted_address || '')}${result.primary_type ? ` · ${h(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<div class="automation-google-place-result__fields"><label class="form-hint">Ordoma name<input class="input" data-place-name="${index}" maxlength="120" value="${h(result.display_name)}"></label><label class="form-hint">Type<select class="input" data-place-type="${index}">${placeTypeOptions(placeTypeFromGoogle(result.primary_type))}</select></label><label class="form-hint">Address you want to keep<input class="input" data-place-address="${index}" maxlength="250" value="${h(result.formatted_address || '')}"></label><label class="form-hint">Your notes / description<textarea class="input" data-place-description="${index}" maxlength="1000" rows="2"></textarea></label></div><small class="form-hint">Review these Ordoma-owned fields before saving. The Google Place ID remains the external identity; the editable name, address, type, and notes belong to your address book.</small></div><div class="automation-list-row__actions"><button class="btn btn--primary btn--sm" type="button" data-save-google-place="${index}">Save to address book</button></div></div>`).join('') || '<p class="form-hint">No matching places found.</p>');
         status.textContent = results.length ? `${results.length} live result${results.length === 1 ? '' : 's'} from Google.` : '';
         list.querySelectorAll('[data-save-google-place]').forEach((button) => button.addEventListener('click', async () => {
           const index = Number(button.dataset.saveGooglePlace); const result = results[index];
@@ -1062,7 +1080,12 @@ async function renderSkillsManager(body, manager) {
   });
 }
 
-function openSkillForm(skill = null, manager = null) {
+/** Create a skill with the existing administrator editor, retaining its caller. */
+export function openSkillEditor() {
+  return openSkillForm(null, null, { asChild: true }).result;
+}
+
+function openSkillForm(skill = null, manager = null, { asChild = false } = {}) {
   const content = `<form id="automation-skill-form">
     ${inputRow('Skill name', `<input class="input" name="name" required maxlength="120" value="${h(skill?.name || '')}">`)}
     ${inputRow('Description', `<textarea class="input" name="description" rows="3">${h(skill?.description || '')}</textarea>`)}
@@ -1071,11 +1094,13 @@ function openSkillForm(skill = null, manager = null) {
     <label class="automation-check-row"><input type="checkbox" name="adult_only" ${skill?.adult_only ? 'checked' : ''}> Adult only</label>
     ${footer(skill ? 'Save skill' : 'Create skill')}
   </form>`;
-  openModal({
+  let child;
+  let savedSkill = null;
+  child = (asChild ? openChildModal : openModal)({
     title: skill ? 'Edit skill' : 'New skill',
     content,
     onSave(panel) {
-      panel.querySelector('#automation-skill-form')?.addEventListener('submit', async (event) => {
+      panel.querySelector('#automation-skill-form')?.addEventListener('submit', singlePendingAction(panel.querySelector('[type="submit"]'), async (event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         const payload = {
@@ -1087,14 +1112,18 @@ function openSkillForm(skill = null, manager = null) {
           active: true,
         };
         try {
-          if (skill) await api.put(`/automation/admin/skills/${skill.id}`, payload);
-          else await api.post('/automation/admin/skills', payload);
+          const response = skill
+            ? await api.put(`/automation/admin/skills/${skill.id}`, payload)
+            : await api.post('/automation/admin/skills', payload);
+          savedSkill = response.data;
           toast('Skill saved.');
-          await refreshAutomationManager(manager, 'skills');
+          if (asChild) await child.close({ force: true });
+          else await refreshAutomationManager(manager, 'skills');
         } catch (error) { toast(error.message, 'danger'); }
-      });
+      }));
     },
   });
+  return asChild ? { ...child, result: child.closed.then(() => savedSkill) } : null;
 }
 
 function openSkillProficiency(skill, manager = null) {
@@ -1138,7 +1167,7 @@ async function renderActivitiesManager(body, manager) {
   const response = await api.get('/automation/admin/activity-templates');
   const activities = response.data ?? [];
   replaceHtml(body, `${managerHeader('Activity templates', 'automation-add-activity', 'Add activity')}
-    <p class="form-hint automation-manager__hint">Activities define work, required skills and how Yuvomi chooses an assignee.</p>
+    <p class="form-hint automation-manager__hint">Activities define work, required skills and how Ordoma chooses an assignee.</p>
     <div class="automation-list">
       ${activities.map((activity) => `
         <div class="list-row automation-list-row">
@@ -1149,7 +1178,7 @@ async function renderActivitiesManager(body, manager) {
           </div>
         </div>`).join('') || '<p class="form-hint">No activity templates yet.</p>'}
     </div>`);
-  const context = { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [] };
+  const context = activityEditorContext(response);
   body.querySelector('#automation-add-activity')?.addEventListener('click', () => openActivityForm(null, context, manager));
   body.querySelectorAll('[data-edit-activity]').forEach((button) => {
     button.addEventListener('click', () => openActivityForm(
@@ -1173,34 +1202,41 @@ async function renderActivitiesManager(body, manager) {
   });
 }
 
-function activityChecklistRow(item = {}, index = 0) {
-  return `<div class="automation-checklist-row" data-activity-checklist-row>
-    <span class="automation-checklist-row__handle" aria-hidden="true"><i data-lucide="grip-vertical" class="icon-sm"></i></span>
-    <input class="input" data-activity-checklist-title data-variable-mentions="activity-title"
-           aria-label="Checklist item ${index + 1}" maxlength="200"
-           placeholder="Checklist item, for example: Put pillows in place"
-           value="${h(item?.title_template || '')}">
-    <button type="button" class="btn btn--ghost btn--icon btn--icon-sm" data-checklist-up aria-label="Move checklist item up"><i data-lucide="arrow-up" class="icon-sm"></i></button>
-    <button type="button" class="btn btn--ghost btn--icon btn--icon-sm" data-checklist-down aria-label="Move checklist item down"><i data-lucide="arrow-down" class="icon-sm"></i></button>
-    <button type="button" class="btn btn--danger-ghost btn--icon btn--icon-sm" data-checklist-remove aria-label="Remove checklist item"><i data-lucide="trash-2" class="icon-sm"></i></button>
-  </div>`;
+function activityEditorContext(response) {
+  return { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [] };
 }
 
-function openActivityForm(activity, context, manager = null) {
-  const selectedSkills = new Set((activity?.skills ?? []).map((skill) => Number(skill.id)));
+/** Review a Task-derived template draft in the same editor used by Automation. */
+export async function openActivityTemplateEditor({ draft = null, onSaved = null, onSkillCreated = null, asChild = true } = {}) {
+  const parent = document.getElementById('shared-modal-overlay');
+  const response = await api.get('/automation/admin/activity-templates');
+  if (asChild && parent && (!parent.isConnected || parent.inert)) return null;
+  const activity = draft ? { ...draft, id: null,
+    skills: draft.skills ?? (draft.skill_ids || []).map((id) => ({ id })) } : null;
+  return openActivityForm(activity, activityEditorContext(response), null, { asChild, onSaved, onSkillCreated });
+}
+
+function openActivityForm(activity, context, manager = null, { asChild = false, onSaved = null, onSkillCreated = null } = {}) {
+  const editing = Boolean(activity?.id);
+  const selectedSkills = activity?.skill_ids ?? activity?.skills ?? [];
   const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
   const locationMode = activity?.location_mode || 'none';
   const content = `<form id="automation-activity-form">
+    ${asChild && activity && !editing ? '<p class="form-hint automation-form-intro">Review the reusable details below. Dates, reminders, recurrence and attached documents stay with this Task.</p>' : ''}
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
     ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}"><small class="form-hint" data-activity-title-preview></small>`, 'This is the Task title, separate from the reusable Template name above. A person is included only when you explicitly insert the person variable with @.')}
     ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3" data-variable-mentions="activity-description" aria-autocomplete="list" aria-expanded="false">${h(activity?.description || '')}</textarea>`, 'Type @ to insert the person or Activity Template name.')}
-    <fieldset class="automation-fieldset automation-checklist-editor">
-      <legend class="sr-only">Checklist copied into each Task</legend>
-      <div class="automation-workflow-step__header"><strong>Checklist copied into each Task</strong><button type="button" class="btn btn--ghost btn--sm" data-add-activity-checklist><i data-lucide="list-plus" class="icon-sm"></i>Add item</button></div>
+    <fieldset class="automation-fieldset">
+      <legend class="label">Subtasks copied into each Task</legend>
       <p class="form-hint automation-manager__hint">Each generated Task gets its own editable subtask copies. Later changes to this template do not rewrite existing Tasks. Type @ to insert the person or Activity Template name; workflow variables are also resolved when a workflow runs.</p>
-      <div data-activity-checklist>${(activity?.checklist || []).map(activityChecklistRow).join('')}</div>
+      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: true })}
     </fieldset>
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
+    <div class="grid grid--2">
+      ${inputRow('Priority', `<select class="input" name="priority">${PRIORITIES().map(({ value, label }) => `<option value="${value}" ${(activity?.priority || 'none') === value ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`)}
+      ${inputRow('Points', `<input class="input" type="number" name="points" min="0" step="1" inputmode="numeric" value="${Math.max(0, Math.trunc(Number(activity?.points) || 0))}">`)}
+    </div>
+    ${inputRow('Tags', `<input class="input" name="tags" value="${h(normalizeTagList(activity?.tags).join(', '))}">`, 'Separate tags with commas.')}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
       <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper, based on proficiency</option>
       <option value="eligible_round_robin" ${strategy === 'eligible_round_robin' ? 'selected' : ''}>Eligible round robin</option>
@@ -1209,44 +1245,39 @@ function openActivityForm(activity, context, manager = null) {
       <option value="rotating_multi" ${strategy === 'rotating_multi' ? 'selected' : ''}>Rotating group</option>
       <option value="fixed" ${strategy === 'fixed' ? 'selected' : ''}>Fixed household member</option>
     </select>`)}
-    <label class="automation-check-row"><input type="checkbox" name="subject_required" ${activity?.subject_required !== 0 ? 'checked' : ''}> Requires a person this activity is for</label>
+    <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(activity?.subject_required ?? true) ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed assignee', `<select class="input" name="fixed_user_id">${memberOptions(context.members, activity?.fixed_user_id)}</select>`)}</div>
     <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
     <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Rotation group', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Optional. Activities with the same group share one rotation cursor.')}</div>
-    <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${activity?.allow_assignment_override !== 0 ? 'checked' : ''}> Allow an admin to reassign this activity</label>
-    <fieldset class="automation-fieldset"><legend class="label">Required skills</legend>
-      <div class="automation-skill-grid">${context.skills.map((skill) => `<label class="automation-check-row"><input type="checkbox" name="skill" value="${skill.id}" ${selectedSkills.has(Number(skill.id)) ? 'checked' : ''}> ${h(skill.name)}</label>`).join('') || '<small class="form-hint">Create skills first if this activity requires proficiency checks.</small>'}</div>
-    </fieldset>
+    <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${(activity?.allow_assignment_override ?? true) ? 'checked' : ''}> Allow an admin to reassign this activity</label>
+    <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: true })}</div>
     ${inputRow('Location', `<select class="input" name="location_mode" id="automation-location-mode"><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No required location</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Place chosen by a workflow variable</option></select>`)}
     <div id="automation-fixed-place" ${locationMode === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed Place', `<select class="input" name="place_id">${placeOptions(context.places, activity?.place_id)}</select>`)}</div>
     <div id="automation-location-variable" ${locationMode === 'workflow' ? '' : 'hidden'}>${inputRow('Location variable', `<select class="input" name="location_variable_id"><option value="">Choose a reusable Location variable…</option>${context.variables.filter((variable) => variable.type === 'location').map((variable) => `<option value="${h(variable.variable_key)}" ${variable.variable_key === activity?.location_variable_id ? 'selected' : ''}>${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select>`, 'The workflow using this activity must include the same Location variable.')}</div>
     ${inputRow('Presence policy', `<select class="input" name="presence_policy"><option value="ignore" ${activity?.presence_policy === 'ignore' || !activity?.presence_policy ? 'selected' : ''}>Ignore location</option><option value="must_be_home" ${activity?.presence_policy === 'must_be_home' ? 'selected' : ''}>Must be home</option><option value="must_be_at_location" ${activity?.presence_policy === 'must_be_at_location' ? 'selected' : ''}>Must be at the activity location</option><option value="must_be_away" ${activity?.presence_policy === 'must_be_away' ? 'selected' : ''}>Must be away</option><option value="available_before_due" ${activity?.presence_policy === 'available_before_due' ? 'selected' : ''}>Expected available before due time</option></select>`, 'Existing activities default to Ignore location.')}
     ${inputRow('Presence evaluation time', `<select class="input" name="presence_window"><option value="start" ${activity?.presence_window === 'start' ? 'selected' : ''}>At task start</option><option value="due" ${activity?.presence_window === 'due' || !activity?.presence_window ? 'selected' : ''}>At task due time</option><option value="completion" ${activity?.presence_window === 'completion' ? 'selected' : ''}>Across the useful completion window</option></select>`)}
     ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" data-variable-mentions="activity-supervision" aria-autocomplete="list" aria-expanded="false" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Type @ to insert the person or Activity Template name. Used only when the person requires supervision.')}
-    ${footer(activity ? 'Save activity' : 'Create activity')}
+    ${footer(editing ? 'Save template' : 'Create template')}
   </form>`;
-  openModal({
-    title: activity ? 'Edit activity template' : 'New activity template',
+  let child;
+  child = (asChild ? openChildModal : openModal)({
+    title: editing ? 'Edit Activity Template' : 'New Activity Template',
     content,
     size: 'lg',
     onSave(panel) {
       wireVariableMentions(panel);
-      const checklist = panel.querySelector('[data-activity-checklist]');
-      const refreshChecklistLabels = () => checklist?.querySelectorAll('[data-activity-checklist-title]').forEach((input, index) => input.setAttribute('aria-label', `Checklist item ${index + 1}`));
-      panel.querySelector('[data-add-activity-checklist]')?.addEventListener('click', () => {
-        checklist.insertAdjacentHTML('beforeend', activityChecklistRow({}, checklist.children.length));
-        refreshChecklistLabels();
-        if (window.lucide) window.lucide.createIcons({ el: checklist.lastElementChild });
-        checklist.lastElementChild?.querySelector('input')?.focus();
-      });
-      checklist?.addEventListener('click', (event) => {
-        const row = event.target.closest('[data-activity-checklist-row]');
-        if (!row) return;
-        if (event.target.closest('[data-checklist-remove]')) row.remove();
-        else if (event.target.closest('[data-checklist-up]') && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
-        else if (event.target.closest('[data-checklist-down]') && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
-        refreshChecklistLabels();
-      });
+      const createSkill = async () => {
+        const skill = await openSkillEditor();
+        if (skill) {
+          context.skills = [...context.skills.filter((item) => Number(item.id) !== Number(skill.id)), skill];
+          subtasks.addSkill(skill);
+          requiredSkills.addSkill(skill);
+          onSkillCreated?.(skill);
+        }
+        return skill;
+      };
+      const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: createSkill });
+      const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: createSkill });
       const templateName = panel.querySelector('[name="name"]');
       const generatedTitle = panel.querySelector('[name="title_template"]');
       const titlePreview = panel.querySelector('[data-activity-title-preview]');
@@ -1280,63 +1311,63 @@ function openActivityForm(activity, context, manager = null) {
       const locationVariable = panel.querySelector('#automation-location-variable');
       const refreshLocation = () => { fixedPlace.hidden = locationSelect.value !== 'fixed'; locationVariable.hidden = locationSelect.value !== 'workflow'; };
       locationSelect?.addEventListener('change', refreshLocation);
-      panel.querySelector('#automation-activity-form')?.addEventListener('submit', async (event) => {
+      panel.querySelector('#automation-activity-form')?.addEventListener('submit', singlePendingAction(panel.querySelector('[type="submit"]'), async (event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         const payload = {
           name: data.get('name'), title_template: data.get('title_template'),
           description: data.get('description'), category: data.get('category'),
+          priority: data.get('priority'), points: Math.max(0, Math.trunc(Number(data.get('points')) || 0)),
+          tags: normalizeTagList(String(data.get('tags') || '').split(',')),
           assignment_strategy: data.get('assignment_strategy'),
           subject_required: data.has('subject_required'),
           fixed_user_id: data.get('fixed_user_id') || null,
           allow_assignment_override: data.has('allow_assignment_override'),
           participant_count: Number(data.get('participant_count')) || 1,
           rotation_group: data.get('rotation_group') || null,
-          skill_ids: data.getAll('skill').map(Number),
+          skill_ids: requiredSkills.getValue(),
           supervision_title_template: data.get('supervision_title_template'),
           location_mode: data.get('location_mode'),
           place_id: Number(data.get('place_id')) || null,
           location_variable_id: data.get('location_variable_id') || null,
           presence_policy: data.get('presence_policy'),
           presence_window: data.get('presence_window'),
-          checklist: [...panel.querySelectorAll('[data-activity-checklist-title]')]
-            .map((input) => ({ title_template: input.value.trim() }))
+          checklist: subtasks.getValue()
+            .map((item) => ({ title_template: item.title.trim(), skill_ids: item.skill_ids }))
             .filter((item) => item.title_template),
           active: true,
         };
         try {
-          if (activity) await api.put(`/automation/admin/activity-templates/${activity.id}`, payload);
-          else await api.post('/automation/admin/activity-templates', payload);
+          const response = editing
+            ? await api.put(`/automation/admin/activity-templates/${activity.id}`, payload)
+            : await api.post('/automation/admin/activity-templates', payload);
           toast('Activity template saved.');
-          await refreshAutomationManager(manager, 'activities');
+          if (asChild) await child.close({ force: true });
+          else await refreshAutomationManager(manager, 'activities');
+          await onSaved?.(response.data);
         } catch (error) { toast(error.message, 'danger'); }
-      });
+      }));
     },
   });
+  return child;
 }
 
 async function renderWorkflowsManager(body, manager) {
   const response = await api.get('/automation/admin/workflow-templates');
   const workflows = response.data ?? [];
-  replaceHtml(body, `${managerHeader('Workflow templates', 'automation-add-workflow', 'Add workflow')}
-    <p class="form-hint automation-manager__hint">Workflows arrange reusable activities into an on-demand event. Enabled workflows appear in Quick Add.</p>
+  replaceHtml(body, `${managerHeader('Task Workflows', 'automation-add-workflow', 'Create Task Workflow')}
+    <p class="form-hint automation-manager__hint">Task Workflows arrange reusable activities into connected Tasks. Enabled workflows appear in the Task Workflows launcher.</p>
     <div class="automation-list">
       ${workflows.map((workflow) => `
         <div class="list-row automation-list-row">
-          <div class="automation-list-row__copy"><strong>${h(workflow.name)}</strong><br><small class="form-hint">${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Quick Add enabled' : 'hidden from Quick Add'}</small></div>
+          <div class="automation-list-row__copy"><strong>${h(workflow.name)}</strong><br><small class="form-hint">${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Available in Task Workflows' : 'Hidden from the launcher'}</small></div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-edit-workflow="${workflow.id}">Edit</button>
-            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-workflow="${workflow.id}" aria-label="Delete ${h(workflow.name)} Quick Add template">Delete</button>
+            <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-workflow="${workflow.id}" aria-label="Delete ${h(workflow.name)} Task Workflow">Delete</button>
           </div>
-        </div>`).join('') || '<p class="form-hint">No workflow templates yet.</p>'}
+        </div>`).join('') || '<p class="form-hint">No Task Workflows yet.</p>'}
     </div>`);
-  const context = {
-    activities: response.activities ?? [],
-    members: response.members ?? [],
-    categories: response.categories ?? [],
-    variables: response.variables ?? [],
-    places: response.places ?? [],
-  };
+  const context = workflowEditorContext(response);
   body.querySelector('#automation-add-workflow')?.addEventListener('click', () => openWorkflowForm(null, context, manager));
   body.querySelectorAll('[data-edit-workflow]').forEach((button) => {
     button.addEventListener('click', () => openWorkflowForm(
@@ -1351,7 +1382,7 @@ async function renderWorkflowsManager(body, manager) {
       if (!workflow) return;
       deleteAutomationDefinition({
         name: workflow.name,
-        noun: 'Quick Add template',
+        noun: 'Task Workflow',
         path: `/automation/admin/workflow-templates/${workflow.id}`,
         tab: 'workflows',
         manager,
@@ -1513,13 +1544,22 @@ function questionHtml(question = {}, workflowId = null) {
   </div>`;
 }
 
-function openWorkflowForm(workflow, context, manager = null) {
+function workflowEditorContext(response) {
+  return { activities: response.activities ?? [], members: response.members ?? [],
+    categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [] };
+}
+
+async function loadWorkflowEditorContext() {
+  return workflowEditorContext(await api.get('/automation/admin/workflow-templates'));
+}
+
+function openWorkflowForm(workflow, context, manager = null, { asChild = false, onSaved = null } = {}) {
   const content = `<form id="automation-workflow-form">
     ${inputRow('Workflow name', `<input class="input" name="name" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false" required value="${h(workflow?.name || '')}">`, 'Type @ to insert an answer from a workflow variable.')}
     ${inputRow('Description', `<textarea class="input" name="description" rows="2" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false">${h(workflow?.description || '')}</textarea>`, 'Type @ to insert an answer from a workflow variable.')}
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, workflow?.category || 'misc')}</select>`)}
-    <label class="automation-check-row"><input type="checkbox" name="subject_required" ${workflow?.subject_required !== 0 ? 'checked' : ''}> Ask which household member this is for</label>
-    <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${workflow?.quick_add_enabled !== 0 ? 'checked' : ''}> Show in Quick Add</label>
+    <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(workflow?.subject_required ?? true) ? 'checked' : ''}> Ask which household member this is for</label>
+    <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${(workflow?.quick_add_enabled ?? true) ? 'checked' : ''}> Show in Task Workflows</label>
 
     <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>
     <p class="form-hint automation-manager__hint">New IDs are generated from the variable name (for example, Day of Week becomes day_of_week). Duplicate names receive _2, _3, and so on. Once saved, IDs remain stable when display wording changes.</p>
@@ -1527,11 +1567,12 @@ function openWorkflowForm(workflow, context, manager = null) {
 
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>Activities</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-step">Add activity</button></div>
     <div id="workflow-steps">${(workflow?.steps?.length ? workflow.steps : [{}]).map((step, index) => workflowStepHtml(step, index, context.activities, workflow?.input_schema || [], context.members, context.places)).join('')}</div>
-    ${footer(workflow ? 'Save workflow' : 'Create workflow')}
+    ${footer(workflow ? 'Save Task Workflow' : 'Create Task Workflow')}
   </form>`;
 
-  openModal({
-    title: workflow ? 'Edit workflow template' : 'New workflow template',
+  let child;
+  child = (asChild ? openChildModal : openModal)({
+    title: workflow ? 'Edit Task Workflow' : 'New Task Workflow',
     content,
     size: 'xl',
     onSave(panel) {
@@ -1647,6 +1688,7 @@ function openWorkflowForm(workflow, context, manager = null) {
           (async () => {
             const confirmed = await confirmOverModal('Make this a reusable household variable?', {
               confirmLabel: 'Make reusable',
+              closeOnConfirm: false,
               detail: 'The variable will appear in the Variable Manager and remain linked to this workflow. This promotion cannot be undone from the workflow editor.',
             });
             if (!confirmed) return;
@@ -1700,7 +1742,7 @@ function openWorkflowForm(workflow, context, manager = null) {
         ));
       });
 
-      panel.querySelector('#automation-workflow-form')?.addEventListener('submit', async (event) => {
+      panel.querySelector('#automation-workflow-form')?.addEventListener('submit', singlePendingAction(panel.querySelector('[type="submit"]'), async (event) => {
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         const inputSchema = readQuestionDrafts().filter((question) => question.id && question.label);
@@ -1743,12 +1785,15 @@ function openWorkflowForm(workflow, context, manager = null) {
           active: true, input_schema: inputSchema, steps: stepPayload,
         };
         try {
-          if (workflow) await api.put(`/automation/admin/workflow-templates/${workflow.id}`, payload);
-          else await api.post('/automation/admin/workflow-templates', payload);
-          toast('Workflow template saved.');
-          await refreshAutomationManager(manager, 'workflows');
+          const response = workflow
+            ? await api.put(`/automation/admin/workflow-templates/${workflow.id}`, payload)
+            : await api.post('/automation/admin/workflow-templates', payload);
+          toast('Task Workflow saved.');
+          if (asChild) await child.close({ force: true });
+          else await refreshAutomationManager(manager, 'workflows');
+          await onSaved?.(response.data);
         } catch (error) { toast(error.message, 'danger'); }
-      });
+      }));
     },
   });
 }

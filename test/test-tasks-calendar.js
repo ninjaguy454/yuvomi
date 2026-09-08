@@ -13,6 +13,37 @@ globalThis.customElements = globalThis.customElements ?? { define() {}, get() {}
 
 const { __test: tasks } = await import('../public/pages/tasks.js');
 
+test('changing the picker year stays open after replacing the clicked button and retains keyboard focus', () => {
+  const originalYear = tasks.state.calendarPickerYear;
+  const originalCursor = tasks.state.calendarCursor;
+  const originalWindow = globalThis.window;
+  let stopped = false, focused = false, html = '';
+  const panel = {
+    hidden: false,
+    replaceChildren() { assert.equal(stopped, true, 'stop bubbling before detaching the clicked year button'); },
+    insertAdjacentHTML(_position, markup) { html = markup; },
+    querySelector(selector) {
+      assert.equal(selector, '[data-task-calendar-picker-year="1"]');
+      return { focus() { focused = true; } };
+    },
+  };
+  try {
+    globalThis.window = {};
+    tasks.state.calendarPickerYear = 2026;
+    tasks.state.calendarCursor = '2026-09-08';
+    tasks.shiftTaskCalendarPickerYear({ stopPropagation() { stopped = true; } },
+      { dataset: { taskCalendarPickerYear: '1' } }, { querySelector: () => panel });
+    assert.equal(tasks.state.calendarPickerYear, 2027);
+    assert.match(html, /data-task-calendar-month="2" data-task-calendar-year="2027"/);
+    assert.equal(panel.hidden, false);
+    assert.equal(focused, true);
+  } finally {
+    tasks.state.calendarPickerYear = originalYear;
+    tasks.state.calendarCursor = originalCursor;
+    globalThis.window = originalWindow;
+  }
+});
+
 test('Monatsraster enthält immer 42 Tage und respektiert Montag als Wochenstart', () => {
   const days = tasks.buildTaskMonthDays('2026-08-01', 1);
 

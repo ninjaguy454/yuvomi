@@ -52,6 +52,8 @@ import {
   removeTagEverywhere, renameTag, setTags, tagKey, tagsKey, taskIdsWithTag,
 } from '../utils/task-tags.js';
 import * as v from '../middleware/validate.js';
+import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
+  attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 
 const log = createLogger('Tasks');
 
@@ -255,7 +257,49 @@ function attachTags(tasks) {
   if (!tasks.length) return tasks;
   const map = loadTagsFor(db.get(), tasks.map((t) => t.id));
   for (const task of tasks) task.tags = map.get(task.id) ?? [];
-  return tasks;
+  return attachTaskSkills(db.get(), tasks);
+}
+
+function taskSkillInput(body, existingTaskId = null, activityTemplateId = null) {
+  const d = db.get();
+  const saved = existingTaskId ? loadTaskSkillIds(d, existingTaskId) : [];
+  const ids = normalizeSkillIds(d, body.skill_ids, saved);
+  if (activityTemplateId) {
+    const templateIds = d.prepare('SELECT skill_id FROM activity_template_skills WHERE activity_template_id = ? ORDER BY sort_order')
+      .all(activityTemplateId).map((row) => row.skill_id);
+    if (body.skill_ids !== undefined && (ids.length !== templateIds.length || ids.some((id) => !templateIds.includes(id)))) {
+      throw new TaskSkillError('This Task uses the skills on its Activity Template. Edit the template to change them.');
+    }
+    return [];
+  }
+  return ids;
+}
+
+function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, primaryUserId) {
+  const derived = new Set(db.get().prepare(`SELECT user_id FROM task_responsibilities
+    WHERE task_id = ? AND role = 'participant' AND source = 'subtasks'
+      AND status IN ('active', 'fulfilled')`).all(taskId).map((row) => Number(row.user_id)));
+  const previous = new Set(previousUserIds.map(Number));
+  // Child assignees also appear in the parent's assignment list for visibility
+  // and responsibility. They do not inherit its required skills. There is no
+  // separate marker for an old secondary assignee who also helps on a child:
+  // preserve that existing derived responsibility, but always validate the
+  // primary and every newly selected independent worker.
+  return userIds.filter((id) => Number(id) === Number(primaryUserId)
+    || !previous.has(Number(id)) || !derived.has(Number(id)));
+}
+
+function initialSubtasksInput(body) {
+  if (body.subtasks === undefined) return undefined;
+  if (body.parent_task_id || !Array.isArray(body.subtasks) || body.subtasks.length > 50) {
+    throw new TaskSkillError('A new Task can contain at most 50 subtasks.');
+  }
+  return body.subtasks.map((item) => {
+    if (!item || typeof item !== 'object' || typeof item.title !== 'string' || !item.title.trim() || item.title.trim().length > 200) {
+      throw new TaskSkillError('Give each subtask a name of at most 200 characters.');
+    }
+    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids) };
+  });
 }
 
 /**
@@ -1216,11 +1260,15 @@ router.post('/', (req, res) => {
     const errors = validateTaskInput(req.body, true);
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
+    const templateDefaults = req.body.activity_template_id
+      ? db.get().prepare('SELECT description,category,priority,points,tags_json FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
+      : null;
+
     const {
       title,
-      description     = null,
-      category        = FALLBACK_CATEGORY,
-      priority        = 'none',
+      description     = templateDefaults?.description ?? null,
+      category        = templateDefaults?.category ?? FALLBACK_CATEGORY,
+      priority        = templateDefaults?.priority ?? 'none',
       start_date      = null,
       due_date        = null,
       due_time        = null,
@@ -1234,13 +1282,15 @@ router.post('/', (req, res) => {
     // Hauptaufgaben: Subtasks sind Checklisten-Punkte der Elternaufgabe und
     // würden den Punktewert sonst vervielfachen. Eine ausdrückliche 0 bleibt 0.
     const points = req.body.points === undefined && !parent_task_id
-      ? defaultTaskPoints()
+      ? (templateDefaults?.points ?? defaultTaskPoints())
       : clampPoints(req.body.points);
     const visibility = normalizeVisibility(req.body.visibility);
 
     const bindingRequest = parseTaskActivityBinding(req.body);
     if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
     const activityBinding = bindingRequest.binding;
+    const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
+    const initialSubtasks = initialSubtasksInput(req.body);
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
@@ -1286,6 +1336,8 @@ router.post('/', (req, res) => {
       ? [rotationUserIds[activeRotationPosition]]
       : requestedUserIds;
     const firstUid = userIds[0] ?? null;
+    if (!activityBinding) assertTaskSkillAssignments(db.get(), skillIds,
+      assignmentMode === 'round_robin' ? rotationUserIds : userIds, due_date || todayInHouseholdZone());
 
     // Sync-Ziel (#695). Unteraufgaben bekommen keines: sie gehören zu ihrer
     // Elternaufgabe, und als eigenständiges VTODO stünden sie gleichrangig
@@ -1338,15 +1390,28 @@ router.post('/', (req, res) => {
         points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
+      setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
       setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), result.lastInsertRowid, req.body.tags);
+      else if (templateDefaults) setTags(db.get(), result.lastInsertRowid, JSON.parse(templateDefaults.tags_json));
       if (activityBinding) {
         applyTaskActivityBinding(db.get(), Number(result.lastInsertRowid), {
           activityTemplateId: activityBinding.activityTemplateId,
           subjectUserId: activityBinding.subjectUserId,
           commitRotation: true,
           dateKey: due_date || todayInHouseholdZone(),
+          materializeChecklist: initialSubtasks === undefined,
         });
+      }
+      if (initialSubtasks !== undefined) {
+        const insertChild = db.get().prepare(`INSERT INTO tasks
+          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility)
+          VALUES (?,?,?,?,?,?,?,?)`);
+        for (const child of initialSubtasks) {
+          const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
+            result.lastInsertRowid, start_date, due_date, due_time, visibility).lastInsertRowid);
+          setTaskSkills(db.get(), childId, child.skillIds);
+        }
       }
       if (syncTarget) {
         db.get().prepare(
@@ -1371,10 +1436,11 @@ router.post('/', (req, res) => {
     attachTaskActivityBindings(db.get(), [task]);
     attachTaskLocations(db.get(), [task]);
     attachTags([task]);
+    task.subtasks = loadSubtasks(task.id, req.authUserId || req.session.userId);
     res.status(201).json({ data: task });
     if (syncTarget) pushToCalDAV('Neue Aufgabe');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError) {
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('POST / error:', err);
@@ -1449,6 +1515,18 @@ router.put('/:id', (req, res) => {
     const bindingRequest = parseTaskActivityBinding(req.body, existingActivityBinding);
     if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
     const desiredActivityBinding = bindingRequest.binding;
+    const skillsBefore = loadTaskSkillIds(db.get(), task.id);
+    const skillIds = taskSkillInput(req.body, task.id, desiredActivityBinding?.activityTemplateId);
+    if (req.body.subtasks !== undefined) {
+      // A recovered create can PUT other edited fields with the frozen initial
+      // checklist. Accept that unchanged payload, never silently discard edits.
+      const requested = initialSubtasksInput({ subtasks: req.body.subtasks });
+      const current = ordinaryActivitySubtasks(db.get(), task.id);
+      if (requested.length !== current.length || requested.some((item, index) => item.title !== current[index].title
+          || !sameIdOrder(item.skillIds, loadTaskSkillIds(db.get(), current[index].id)))) {
+        return res.status(409).json({ error: 'This Task is already saved. Edit its subtasks individually.', code: 409 });
+      }
+    }
     const bindingChanged = !sameTaskActivityBinding(desiredActivityBinding, existingActivityBinding);
     if (bindingChanged && desiredActivityBinding && task.rotation_group) {
       return res.status(409).json({
@@ -1524,7 +1602,16 @@ router.put('/:id', (req, res) => {
     } else {
       userIds = requestedUserIds;
     }
-    const firstUid = userIds[0] ?? null;
+    const firstUid = req.body.assigned_to === undefined && assignmentMode === 'fixed'
+      ? task.assigned_to : (userIds[0] ?? null);
+    if (!desiredActivityBinding && (!sameIdOrder(skillIds, skillsBefore) || !sameIdOrder(userIds, assignedBefore)
+        || firstUid !== task.assigned_to || !sameIdOrder(rotationUserIds, rotationBefore)
+        || bindingChanged || due_date !== task.due_date)) {
+      assertTaskSkillAssignments(db.get(), skillIds,
+        assignmentMode === 'round_robin' ? rotationUserIds
+          : independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid),
+        due_date || todayInHouseholdZone());
+    }
 
     // Sperre der Aufgabe (#830). Nicht mitgeschickt heisst "nicht angefasst".
     const lockedRequested = req.body.locked !== undefined ? (req.body.locked ? 1 : 0) : null;
@@ -1569,6 +1656,7 @@ router.put('/:id', (req, res) => {
       if (req.body.tags !== undefined
           && tagsKey(normalizeTags(req.body.tags)) !== tagsKey(tagsBefore)) touchesDefinition = true;
       if (!sameIdOrder(rotationUserIds, rotationBefore)) touchesDefinition = true;
+      if (!sameIdOrder(skillIds, skillsBefore)) touchesDefinition = true;
       if (bindingChanged) touchesDefinition = true;
       if (taskLocation !== undefined
           && JSON.stringify(taskLocation) !== JSON.stringify(storedTaskLocation(db.get(), task.id))) {
@@ -1621,6 +1709,7 @@ router.put('/:id', (req, res) => {
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, req.params.id);
       setAssignments(db.get(), task.id, userIds);
+      setTaskSkills(db.get(), task.id, skillIds);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), task.id, req.body.tags);
       if (bindingChanged) {
@@ -1706,7 +1795,7 @@ router.put('/:id', (req, res) => {
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError) {
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('PUT /:id error:', err);
@@ -1742,6 +1831,7 @@ function recurrenceFollowupOf(taskId) {
  */
 function isFollowupSubtasksTouched(followup) {
   const originTaskId = followup.recurrence_origin_id;
+  if (originTaskId && !sameIdOrder(loadTaskSkillIds(db.get(), followup.id), loadTaskSkillIds(db.get(), originTaskId))) return true;
   const originSubtasks = originTaskId ? ordinaryActivitySubtasks(db.get(), originTaskId) : [];
   const currentSubtasks = ordinaryActivitySubtasks(db.get(), followup.id);
 
@@ -1765,6 +1855,7 @@ function isFollowupSubtasksTouched(followup) {
     if (!support.recurrence_origin_id) return true;
     const origin = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(support.recurrence_origin_id);
     if (!origin) return true;
+
     // Normal -> supervised has no prior support Task. copyTaskActivityBinding
     // points this first support row at the prior root occurrence, while the
     // binding/responsibility data supplies its deterministic baseline.
@@ -1794,6 +1885,7 @@ function isFollowupSubtasksTouched(followup) {
     if (sub.status !== 'open' || !sub.recurrence_origin_id) return true;
     const origin = originSubtasks.find((o) => o.id === sub.recurrence_origin_id);
     if (!origin) return true;
+    if (!sameIdOrder(loadTaskSkillIds(db.get(), sub.id), loadTaskSkillIds(db.get(), origin.id))) return true;
 
     if (
       sub.title !== origin.title ||
@@ -1923,10 +2015,13 @@ function spawnRecurrenceFollowupSingle(task) {
   const nextRotationIndex = roundRobin
     ? (Number(task.rotation_index || 0) + 1) % rotationUserIds.length
     : Number(task.rotation_index || 0);
-  const nextAssignedTo = roundRobin
+  const scheduledAssignedTo = roundRobin
     ? rotationUserIds[(nextRotationIndex + Number(task.rotation_group ? task.rotation_slot || 0 : 0)) % rotationUserIds.length]
     : (task.assigned_to ?? existingAssignments[0] ?? null);
-  const followupAssignments = roundRobin ? [nextAssignedTo] : existingAssignments;
+  const followupAssignments = qualifiedTaskAssignees(db.get(), task.id,
+    roundRobin ? [scheduledAssignedTo] : existingAssignments, nextDate);
+  const nextAssignedTo = !loadTaskSkillIds(db.get(), task.id).length || followupAssignments.includes(scheduledAssignedTo)
+    ? scheduledAssignedTo : (followupAssignments[0] ?? null);
   // Die Tags gehören zur Aufgabe, nicht zum einzelnen Durchlauf (#586).
   // Ohne das Mitnehmen verlöre eine wöchentliche Aufgabe ihre Etiketten
   // beim ersten Abhaken - und zwar lautlos, weil die Folgeinstanz sonst
@@ -1967,14 +2062,18 @@ function spawnRecurrenceFollowupSingle(task) {
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
     setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);
+    copyTaskSkills(db.get(), task.id, newTask.lastInsertRowid);
 
     for (const sub of existingSubtasks) {
-      const subAssignments = db.get()
+      const subAnchorDate = task.due_date || sub.due_date;
+      const subDueDate = sub.due_date ? (shiftedStartDate(sub.due_date, subAnchorDate, nextDate) ?? nextDate) : null;
+      const priorSubAssignments = db.get()
         .prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
         .all(sub.id).map((r) => r.user_id);
+      const subAssignments = qualifiedTaskAssignees(db.get(), sub.id, priorSubAssignments, subDueDate || todayInHouseholdZone());
+      const subAssignedTo = !loadTaskSkillIds(db.get(), sub.id).length || subAssignments.includes(sub.assigned_to)
+        ? sub.assigned_to : (subAssignments[0] ?? null);
       const subTags = loadTags(db.get(), sub.id);
-
-      const subAnchorDate = task.due_date || sub.due_date;
 
       const newSub = db.get().prepare(`
         INSERT INTO tasks (title, description, category, priority, status,
@@ -1984,12 +2083,13 @@ function spawnRecurrenceFollowupSingle(task) {
       `).run(
         sub.title, sub.description, sub.category, sub.priority,
         shiftedStartDate(sub.start_date, subAnchorDate, nextDate) ?? sub.start_date,
-        sub.due_date ? (shiftedStartDate(sub.due_date, subAnchorDate, nextDate) ?? nextDate) : null,
-        sub.due_time, sub.assigned_to, sub.created_by, newTask.lastInsertRowid,
+        subDueDate,
+        sub.due_time, subAssignedTo, sub.created_by, newTask.lastInsertRowid,
         sub.points, sub.visibility, sub.id
       );
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);
+      copyTaskSkills(db.get(), sub.id, newSub.lastInsertRowid);
       notifyTaskAssignments(db.get(), Number(newSub.lastInsertRowid));
     }
 

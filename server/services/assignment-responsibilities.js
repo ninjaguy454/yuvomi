@@ -1,4 +1,5 @@
 import { todayKey } from '../utils/timezone.js';
+import { assertTaskMemberSkills } from './task-skills.js';
 import { notifyTaskObligations, notifyTaskClaim } from './notification-events.js';
 import {
   assertEligibleActivityMember,
@@ -253,6 +254,7 @@ export function claimTask(d, taskId, userId) {
       // Activity Template. Their explicit eligibility rows are the complete,
       // occurrence-local pool; absence from that pool is a hard denial.
       member = eligibleStandaloneClaimMember(d, taskId, userId);
+      assertTaskMemberSkills(d, taskId, userId);
     }
     const changed = d.prepare(`
       UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()}
@@ -291,6 +293,7 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
     const member = activity
       ? assertEligibleActivityMember(d, activity, targetUserId, taskWindow(d, taskId))
       : eligibleStandaloneClaimMember(d, taskId, targetUserId);
+    if (!activity) assertTaskMemberSkills(d, taskId, targetUserId);
     supersedeActiveTaskObligations(d, taskId);
     d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`).run(taskId);
     d.prepare(`UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()} WHERE task_id = ?`).run(taskId);

@@ -21,7 +21,7 @@ export function recipesPaths() {
         tag: 'Recipes',
         stateChanging: true,
         requestBody: jsonBody(null),
-        description: 'Body: { markdown, source_url? }. Parses the shareable Yuvomi Markdown format without saving a Recipe. Markdown export itself is client-side and therefore has no separate API route.',
+        description: 'Body: { markdown, source_url? }. Parses the shareable Ordoma Markdown format without saving a Recipe. Markdown export itself is client-side and therefore has no separate API route.',
       }),
     },
     '/api/v1/recipes/{id}': {

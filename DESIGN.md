@@ -1,11 +1,11 @@
 ---
-name: Yuvomi
-description: Familienplaner in Apples Handwerk und Yuvomis Handschrift - warme Buehne, eine violette Stimme, WCAG AA als Invariante
+name: Ordoma
+description: Familienplaner in Apples Handwerk und Ordomas Handschrift - zusammenhaengende Themes, eine Bedienfarbe pro Theme, WCAG AA als Invariante
 colors:
-  accent-violet: "#6C3AED"
-  accent-violet-hover: "#5B2FD4"
-  accent-violet-dark: "#A78BFA"
-  accent-light: "#F3EFFE"
+  # Control colors resolve through the selected Theme and Light/Dark appearance.
+  accent: "var(--color-accent)"
+  accent-hover: "var(--color-accent-hover)"
+  accent-light: "var(--color-accent-light)"
   grouped-bg: "#F5F3ED"
   surface: "#FFFFFF"
   surface-dark: "#2B2825"
@@ -197,13 +197,13 @@ components:
     rounded: "{rounded.full}"
     size: "44px (mobil, in der Nav-Kapsel) / 48px (Desktop)"
   brand-tile:
-    backgroundColor: "{colors.accent-violet}"
+    backgroundColor: "{colors.accent}"
     textColor: "{colors.ink-on-vivid}"
     rounded: "{rounded.lg}"
     size: "64px"
 ---
 
-# Design System: Yuvomi
+# Design System: Ordoma
 
 <!-- Neu aufgezeichnet 2026-08-06 aus dem GEBAUTEN Stand des HIG-Redesigns nach
      Fundament + Rest-Rollout Runde 1-3 und zwei Finish-Review-Durchlaeufen
@@ -313,30 +313,30 @@ Stand bis 2026-08-08 als HTML-Kommentar am Body-Anfang von `public/index.html`
 und wurde damit an jeden Browser ausgeliefert. Er gehoert hierher, wo die
 uebrigen Designentscheidungen stehen.
 
-**THESIS:** Apples HANDWERK, Yuvomis HANDSCHRIFT. Die Struktur ist
+**THESIS:** Apples HANDWERK, Ordomas HANDSCHRIFT. Die Struktur ist
 Plattform-Kanon (Gruppenlisten, Kapsel-Controls, Typo-Skala, Motion,
-AA-Disziplin); die Haut gehoert Yuvomi. Verweigert wird der Kategorie-Standard
+AA-Disziplin); die Haut gehoert Ordoma. Verweigert wird der Kategorie-Standard
 (freundlicher Pastell-Organizer) - und seit 2026-08-10 ausdruecklich auch die
 woertliche Uebernahme von Apples PALETTE und seinem Pro-App-Tint-Modell.
 
-**KORREKTUR VOM 2026-08-10, und der Anlass steht in einem Satz des Betreibers:**
+**Historische Korrektur vom 2026-08-10 (damalige Upstream-Palette):**
 "Im Vergleich zum alten Yuvomi fuehlt sich die App nicht mehr wie aus einem Guss
 an." Hier stand vorher "Plattform-Kanon in voller Treue" mit kuehlen
 System-Neutralen (#F2F2F7 / Near-Black #0A0A0C) und Apple Indigo als globalem
 Tint. Drei Uebernahmen waren zu woertlich, und alle drei sind zurueckgenommen:
-die KUEHLE BUEHNE (Apples Grau war Apples Buehne, nicht Yuvomis - jetzt warmes
+die KUEHLE BUEHNE (Apples Grau war Apples Buehne, nicht Ordomas - jetzt warmes
 Papier #F5F3ED / warme Kohle #191816), der INDIGO-TINT (die Bildmarke ist
 violett und gesetzt; Logo und App sprachen zwei Farben - jetzt #6C3AED) und das
-PRO-APP-TINT-MODELL (Apple faerbt pro App, Yuvomi hat siebzehn Zimmer in EINEM
+PRO-APP-TINT-MODELL (Apple faerbt pro App, Ordoma hat siebzehn Zimmer in EINEM
 Haus - siehe die Eine-Stimme-Regel). Was BLEIBT, ist alles, was die Runden 1-9
 an Struktur und Messbarkeit gebaut haben. Der Kanon war nicht der Fehler, seine
 woertliche Anwendung auf die Haut war es.
 
 **OWN-WORLD:** Liquid-Glass-Designphilosophie (Lesbarkeit vor Transparenz:
 diffuses, sattes Glas, Inhalte opak). SF-Pro-System-Stack, Apple-Typo-Skala
-(Body 17, Large Title 34, Footnote 13). WARME Neutrale (#F5F3ED grouped /
-#191816 dunkel mit #2B2825-Flaechen). Eine Stimme: das Violett der Bildmarke
-#6C3AED. Neun Familientoene als Orientierungsvokabular, im INHALT. Glas nur als
+(Body 17, Large Title 34, Footnote 13). Theme-getoente Neutrale in Warm, Neutral
+oder Cool, jeweils in Light und Dark. Eine Bedienfarbe pro Theme: Bronze in Warm,
+Graphit in Neutral, Schieferblau in Cool. Neun Familientoene als Orientierungsvokabular, im INHALT. Glas nur als
 Chrome (Tab-Bar, Sidebar, Sheets), Inhalte opak. Kapsel-Controls,
 Inset-Grouped-Listen, Feder-Motion.
 
@@ -354,14 +354,14 @@ Messlatte Apple-Systemapps + Fantastical) als STRUKTUR, nicht als Palette.
 
 ## Overview
 
-**Creative North Star: "Apples Handwerk, Yuvomis Handschrift"**
+**Creative North Star: "Apples Handwerk, Ordomas Handschrift"**
 
-Yuvomi ist so gebaut, wie eine mitgelieferte App gebaut waere - und sieht aus wie Yuvomi.
+Ordoma ist so gebaut, wie eine mitgelieferte App gebaut waere - und sieht aus wie Ordoma.
 Der Kanon ist die Apple Human Interface Guidelines in der Liquid-Glass-Designphilosophie;
 die Messlatte sind Apple-Systemapps und Fantastical. Er gilt fuer die STRUKTUR: Gruppen-
 listen, Kapsel-Controls, Typo-Skala, Feder-Motion, die Messdisziplin. Er gilt NICHT fuer
-die Haut - warme Buehne, das Violett der Bildmarke als einzige Stimme, neun Familientoene
-im Inhalt. Verweigert wird der Kategorie-Standard (freundlicher Pastell-Organizer) ebenso
+die Haut - eine zusammenhaengende Farbtemperatur pro Theme, dessen Bedienfarbe
+im Chrome und neun Familientoene im Inhalt. Verweigert wird der Kategorie-Standard (freundlicher Pastell-Organizer) ebenso
 wie eine App, die aussieht wie irgendeine Systemapp. Diese Linie heisst Lesbarkeit vor
 Transparenz: Glas ist diffus und satt statt roh-transparent, und es bleibt striktes
 Chrome-Material (Tab-Bar, Sidebar, Sheets, FAB); alle Inhalte sind opak.
@@ -420,8 +420,8 @@ endgueltig loeschte.
 **Key Characteristics:**
 - Plattform-Kanon statt Eigenwelt: Apple HIG, Liquid Glass, System-Font-Stack
 - Glas nur als Chrome; Inhalte immer opak (Lesbarkeit vor Transparenz)
-- Eine Stimme (Bildmarken-Violett) im Chrome, neun AA-verifizierte Familientoene im Inhalt,
-  beides auf warmen Neutralen
+- Eine Bedienfarbe pro Theme im Chrome (Warm: Bronze, Neutral: Graphit, Cool: Schieferblau),
+  neun AA-verifizierte Familientoene im Inhalt und dazu passende neutrale Flaechen
 - Apple-Typo-Skala (Large Title 34 / Body 17 / Footnote 13), Kapsel-Controls, Inset-Grouped-Listen
 - Eine Kernform fuer Zeilenfolgen: genau ein Traeger, Zeilen als Haarlinien
 - Der FAB sitzt in der Nav-Kapsel und kostet keine Contentflaeche
@@ -431,8 +431,11 @@ endgueltig loeschte.
 
 ## Colors
 
-Warme Neutrale als Buehne, das Violett der Bildmarke als Stimme, 17 Modul-Tints als
-Orientierungsvokabular; alle Textfarben AA-vertieft. Es gibt keinen chromatischen
+Die gewaehlte Farbtemperatur traegt Hintergruende, Flaechen, Rahmen und Schatten.
+Warm nutzt Bronze fuer gemeinsame Aktionen und Auswahl, Neutral Graphit, Cool
+Schieferblau. Light/Dark bleibt eine separate Einstellung; die 17 Modul-Tints
+bleiben Orientierungsvokabular im Inhalt. Alle Textfarben werden gegen ihre
+tatsaechlichen Flaechen auf AA-Kontrast geprueft. Es gibt keinen chromatischen
 Verlauf auf Inhalt. Die Farbdramatik der App ist auf EINE Gattung beschraenkt: weiche,
 kreisrunde Lichtfelder HINTER dem Inhalt, die nie eine Flaeche fuellen und nie unter Text
 liegen, wo sie ihn traegt. Zwei Stellen gehoeren ihr an, und beide teilen dieselben
@@ -452,19 +455,24 @@ Inhalt, kein Verlauf ueber eine Karte, kein Text auf einer Flaeche, die nicht ge
 (der Sekundaertext ueber dem staerksten Punkt des Lichthauchs haelt 4.82-4.97:1).
 
 ### Primary
-- **Das Violett der Bildmarke** (`accent-violet` #6C3AED): die Stimme der App. 6.10:1 auf
-  Weiss, 5.49:1 auf dem Grouped-Grund; Dark-Variante `#A78BFA` (4.96:1 auf der hellsten
-  Flaeche, auf der sie als Text steht). Der getoente Zwilling `accent-light` traegt
-  Fokus-Glows und Heute-Chips. Das Dashboard teilt den Wert bewusst als Modul-Tint - es
-  ist der Raum der Marke.
+- **Eine Bedienfarbe pro Theme** (`--color-accent`): Warm nutzt Bronze, Neutral
+  Graphit und Cool Schieferblau. Die Light/Dark-Varianten stehen ausschliesslich in
+  `public/styles/tokens.css`; Hover, Auswahlflaechen, Fokus und Kontrasttinte folgen
+  denselben Rollen. `--color-accent-light` traegt getoente Fokus- und Auswahlflaechen.
+  Module, Datenreihen und semantische Statusfarben behalten ihre eigene Bedeutung.
+  Die Bildmarke legt keine universelle Buttonfarbe fest.
 
-  **Hier stand bis 2026-08-10 Apple Indigo** (#5856D6, AA-vertieft auf #4F4DC9), mit der
+  **Ordoma-Entscheidung vom 2026-09-08:** Kein festes Violett fuer gemeinsame
+  Bedienelemente. Die Eine-Stimme-Regel bedeutet Konsistenz innerhalb eines Themes,
+  nicht eine erzwungene Farbe ueber alle Themes.
+
+  **Historische Begruendung der damaligen Upstream-Palette:** Bis 2026-08-10 stand hier Apple Indigo (#5856D6, AA-vertieft auf #4F4DC9), mit der
   Begruendung "Brand-Naehe zur violetten Bildmarke, ohne das alte Violett zu wiederholen".
   Die Farbe war richtig gemessen und trotzdem falsch gewaehlt: die Bildmarke ist violett
   und laut PRODUCT.md als Marke gesetzt, die App war es nicht mehr - Logo und Oberflaeche
   sprachen zwei Farben. Und weil zusaetzlich jedes Modul das Chrome umfaerbte (siehe die
   Eine-Stimme-Regel), kam das Indigo ohnehin nur auf dem Dashboard vor: es gab keine Farbe,
-  die app-weit "Yuvomi" hiess.
+  die app-weit "Ordoma" hiess.
 
 ### Secondary
 - **Neun Familientoene, aus denen die Modul-Tints beziehen** (Frontmatter `family-*`,
@@ -505,7 +513,7 @@ Inhalt, kein Verlauf ueber eine Karte, kein Text auf einer Flaeche, die nicht ge
   sehen. Gemessen gegen die Glaskapsel (der echte Grund ist die Mischung aus Kapsel und
   Seite, #F9F9FA / #2B2825): Light 4,79-6,81:1, Dark 4,57-8,41:1 - beides ueber der
   Textschwelle, der Ton ist hier also nicht die Grenze. Aktiv gewinnt in BEIDEN Leisten die
-  Stimme zurueck: eine Zeile, die als Ganzes violett ist, deren Zeichen aber allein seine
+  Bedienfarbe zurueck: eine Zeile, die als Ganzes den Theme-Akzent traegt, deren Zeichen aber allein seine
   Familienfarbe behielte, liest sich als „nicht mitgemeint".
   **Pruefebene: Regel** (`die Sidebar zeigt die Modultoene als Legende` +
   `die Tab-Bar zeigt dieselbe Legende wie die Sidebar`, `test:frontend-audit`) - zwei Guards,
@@ -683,8 +691,10 @@ Inhalt, kein Verlauf ueber eine Karte, kein Text auf einer Flaeche, die nicht ge
   eigene Grouped-List-Separatoren. Der TEXT-Kontrast ist ueberall ohne Verstoss.
 
 ### Named Rules
-**Die Eine-Stimme-Regel (2026-08-10).** Die App hat GENAU EINE Akzentfarbe, und das ist
-das Violett der Bildmarke. Sie traegt alles, was in jedem Modul dasselbe tut: die
+**Die Eine-Stimme-Regel (2026-08-10, Theme-Erweiterung 2026-09-08).** Innerhalb
+des gewaehlten Themes traegt eine gemeinsame Bedienfarbe alles, was in jedem
+Modul dasselbe tut: Bronze in Warm, Graphit in Neutral, Schieferblau in Cool.
+Dazu gehoeren die
 Tab-Leiste und die Sidebar samt Aktiv-Pille, den FAB, den Primaer- und Sekundaerknopf,
 Umschalter und Checkboxen, den Fokusring, den Datepicker, die Suche und jedes
 Shell-Overlay. Der MODULTON traegt, was sagt, wo man ist: das Siegel im Kopf, die Leisten
@@ -989,7 +999,7 @@ Fundstellen). Ein 9px-Text sagt weniger als ein sauberer Punkt.
   keine Glyphen-Fonts.
 - **Ein Modul fuehrt EIN Zeichen, in EINER Hand** (2026-08-17). Wo ein Modul sich zu erkennen
   gibt - Leiste, Sidebar, „Mehr"-Blatt, Widget-Kopf, Kennzahl-Kachel, „Heute wichtig", Suche,
-  Wand -, zeichnet Yuvomis eigener monoliniger Satz (`public/nav-icons.js`); was er nicht
+  Wand -, zeichnet Ordomas eigener monoliniger Satz (`public/nav-icons.js`); was er nicht
   kennt, faellt auf Lucide zurueck. Aktions- und Zustandszeichen (Chevron, Plus, Uhrzeit-Slot
   einer Mahlzeit) bleiben Lucide - sie beantworten nicht „welches Modul".
   **Der Fehler war nicht ein falscher Glyph, sondern die dritte Tabelle:** die Zuordnung
@@ -1050,7 +1060,7 @@ Backdrop und seinen Aktionen. Inhalte - Karten, Listen, Widgets, Text - sind opa
 Blur-Stufen kanonisch 2/6/10/20/32px (`--blur-2xs..lg`).
 
 **Der Modulkopf traegt KEIN Glas, und das ist eine begruendete Abweichung vom Kanon, keine
-Auslassung.** Die belegte Liquid-Glass-Linie fuehrt Navigationsleisten transparent; Yuvomi
+Auslassung.** Die belegte Liquid-Glass-Linie fuehrt Navigationsleisten transparent; Ordoma
 stellt den Kopf nahtlos und opak auf den Seitengrund (`--color-bg`). Zwei Gruende, beide
 gemessen: die kollabierende Large-Title-Leiste lebt davon - Glas zeigte am Scroll-Anfang
 eine Flaeche, wo gerade keine sein soll, und haette die gewonnene Ruhe wieder aufgehoben -
@@ -1902,8 +1912,8 @@ Der Einkauf verdrahtete seine Gesten nur im Nachlade-Pfad und antwortete beim er
 Oeffnen der Seite auf gar nichts; im Quelltext stand alles richtig da.
 
 ### Das Markensiegel (Signature Component)
-Yuvomis eigene Ausweisform und die Antwort auf "Health hat die Ringe, was hat Yuvomi?" - die
-eine Stelle, an der die Marke etwas kann, was keine Systemapp braucht: **Yuvomi ist der
+Ordomas eigene Ausweisform und die Antwort auf "Health hat die Ringe, was hat Ordoma?" - die
+eine Stelle, an der die Marke etwas kann, was keine Systemapp braucht: **Ordoma ist der
 einzige Ort, an dem siebzehn Apps in einem Raum leben, und das Siegel weist jedes Ding als
 "aus Raum X" aus.**
 
@@ -1976,7 +1986,7 @@ Solo-Nutzer ist ein Anti-Ziel des Briefs.
 **Eine Systembenachrichtigung kann kein Siegel tragen**, und der Titel uebernimmt seine
 Aufgabe: sie hat kein DOM, ihr `icon` erreicht nur einen Teil der Plattformen, und Android
 maskiert ihr `badge` monochrom, womit der Familienton ohnehin verloren ginge. Der Titel
-erreicht jede Plattform und stand app-weit auf "Yuvomi" - auf dem, was das System darueber
+erreicht jede Plattform und stand app-weit auf "Ordoma" - auf dem, was das System darueber
 ohnehin anzeigt. Er nennt jetzt das Herkunftsmodul (Kalender, Aufgaben, Abonnements,
 Medikamente), serverseitig uebersetzt ueber die Datensprache des Haushalts, clientseitig ueber
 die Sprache des Nutzers. Die beiden Karten liegen beidseits der Schichtgrenze und sind an die
@@ -2112,11 +2122,11 @@ dunklen Flur der hellste Punkt im Raum.
 ### Anmeldeseite
 Die erste Seite der App ist Teil derselben Welt, keine Ausnahme. Die Buehne ist der reine
 Seitengrund ohne Verlauf (bis Runde 3 stand hier der letzte chromatische Verlauf der App).
-Die Marke traegt allein das Tile: 64px, `--radius-lg`, gefuellt in Akzent, Zeichen in
-`--color-ink-on-vivid` (6.06:1 light / 6.40:1 dark - nicht `--color-text-on-accent`, das
-statisches Weiss ist und im Dark auf 2.72:1 faellt), shadow-md plus feine Lichtkante. Der
-Titel ist ein Large Title in Label-Farbe wie jeder Seitentitel. Die Bildmarke selbst - drei
-transluzente violette Kreise mit Sheen - ist als Marke gesetzt und unantastbar.
+Die kanonische Ordoma-Marke ist das kreisrunde radiale O aus den gemeinsamen
+Marken-Assets. Die Anmeldeseite bezieht Zeichen, Groessen und Kontrasttinte aus
+denselben Komponenten und Tokens wie die restliche App; sie zeichnet keine
+eigene Logo-Variante. Der Titel ist ein Large Title in Label-Farbe wie jeder
+Seitentitel. Die fruehere Upstream-Marke mit drei violetten Kreisen ist historisch.
 
 ### FAB (Signature Component)
 Getoente Glas-Kapsel: der App-Akzent mit 78 % Deckung
@@ -2135,8 +2145,9 @@ Eine-Stimme-Regel: `layout.css` (Basisregel und opaker Fallback) und `glass.css`
 lesen seit 2026-08-10 beide `--color-accent`, und die Frontmatter fuehrte ihn ebenfalls schon
 richtig - allein dieser Abschnitt beschrieb noch den alten Zustand. Der FAB ist nach dem
 Kriterium der Regel eindeutig: er tut in jedem Modul dasselbe. Die 3:1-Messung oben stammt
-noch aus der Modulton-Zeit und bleibt die Begruendung der Untergrenze; sie haelt fuer den
-einen Akzent erst recht, weil das Violett dunkler ist als das gemessene Tasks-Gruen.
+noch aus der Modulton-Zeit und dokumentiert den Anlass der Untergrenze. Jede
+aktuelle Theme-Variante muss gegen den wirklich komponierten Grund neu bestehen;
+ein alter Messwert fuer Violett ist kein Nachweis fuer Bronze, Graphit oder Schieferblau.
 
 ### Event-Bloecke im Kalender (Signature Component)
 **Im Monatsraster** flache Tint-Bars statt satter Farbfelder: Flaeche auf `--tint-surface`
@@ -2384,8 +2395,8 @@ Angabe braeuchte einen zweiten Timer, nur damit sie sich selbst aktuell haelt.
   in seiner groessten Form, keine Flaeche - Identitaetsfarben-Regel).
 - **Don't** Initialen unter die kleinste Textrolle der App schrumpfen; ab 20px Scheibe
   11px, darunter traegt die Farbe allein (Initialen-Schwelle-Regel).
-- **Don't** die Bildmarke anfassen (drei transluzente Kreise, Violett plus Sheen); sie ist
-  als Marke gesetzt.
+- **Don't** die Bildmarke je Oberflaeche neu zeichnen; das kreisrunde radiale
+  Ordoma-O kommt aus den kanonischen gemeinsamen Assets.
 - **Don't** Ueberschriften ueber 34px; die Display-Stufen 48/72px sind exklusiv fuer
   Anzeigewerte (Wandtablet-Uhr).
 - **Don't** neue Viewport-Breakpoints erfinden; die vier Grenzen sind verbindlich,

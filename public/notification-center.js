@@ -33,6 +33,7 @@ export function paintNotificationBadges() {
     button.hidden = !privateSurface();
     const count = snapshot.unreadCount;
     button.setAttribute('aria-label', count ? text('unreadCount', { count }) : text('title'));
+    button.setAttribute('title', text('title'));
     const badge = button.querySelector('.reminder-bell-badge');
     if (badge) {
       badge.hidden = !count;
@@ -93,7 +94,9 @@ function action(label, handler, className = 'btn btn--ghost btn--sm') {
   button.addEventListener('click', async () => {
     button.disabled = true;
     try { await handler(); } catch { status(text('actionFailed'), true); }
-    finally { if (button.isConnected) button.disabled = false; }
+    finally {
+      if (button.isConnected) button.disabled = button.hasAttribute('data-inbox-read-all') && !snapshot.unreadCount;
+    }
   });
   return button;
 }
@@ -196,7 +199,14 @@ export async function openNotificationCenter({ notificationId } = {}) {
   toolbar.className = 'notification-center__toolbar';
   const all = action(text('markAllRead'), () => change('post', '/notifications/inbox/read-all'), 'btn btn--secondary btn--sm');
   all.dataset.inboxReadAll = '';
-  const reload = action(text('refresh'), refresh);
+  const reload = action('', refresh, 'btn btn--ghost btn--icon');
+  reload.setAttribute('aria-label', text('refresh'));
+  reload.setAttribute('title', text('refresh'));
+  const refreshIcon = document.createElement('i');
+  refreshIcon.dataset.lucide = 'refresh-cw';
+  refreshIcon.className = 'icon-sm';
+  refreshIcon.setAttribute('aria-hidden', 'true');
+  reload.append(refreshIcon);
   reload.dataset.inboxRefresh = '';
   toolbar.append(all, reload);
   const message = document.createElement('p');
@@ -215,6 +225,7 @@ export async function openNotificationCenter({ notificationId } = {}) {
       modal.querySelector('.modal-panel__body').append(content);
       panel = content;
       renderItems();
+      window.lucide?.createIcons({ el: content });
     },
     onClose: () => { if (version === panelVersion) panel = null; },
   });

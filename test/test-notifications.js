@@ -1220,7 +1220,7 @@ test('admin notification routes manage channels and test sends', async () => {
   const testSend = await call(makeApp(), 'POST', `/notifications/channels/${created.json.data.id}/test`, {});
   assert.equal(testSend.status, 200);
   assert.equal(sent.length, 1);
-  assert.match(sent[0].body, /Yuvomi/);
+  assert.match(sent[0].body, /Ordoma/);
 
   const deleted = await call(makeApp(), 'DELETE', `/notifications/channels/${created.json.data.id}`);
   assert.equal(deleted.status, 200);
@@ -1439,6 +1439,8 @@ test('der Betreff nennt Herkunft UND Sache - im Posteingang ist nur er sichtbar 
   // Gleicher Titel und Body: nicht doppeln.
   await send({ title: 'Yuvomi', body: 'Yuvomi' });
   assert.equal(mailer.sent.at(-1).subject, 'Yuvomi');
+  await send({});
+  assert.equal(mailer.sent.at(-1).subject, 'Ordoma');
   // Ein Zeilenumbruch im Titel darf keinen weiteren Header oeffnen.
   await send({ title: 'Aufgaben', body: 'Milch\nBcc: fremd@example.org' });
   assert.doesNotMatch(mailer.sent.at(-1).subject, /[\r\n]/, 'der Betreff bleibt einzeilig');

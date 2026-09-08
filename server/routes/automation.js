@@ -24,6 +24,8 @@ import {
   instantiateWorkflow,
 } from '../services/activity-workflows.js';
 import { createLogger } from '../logger.js';
+import { normalizeSkillIds } from '../services/task-skills.js';
+import { normalizeTags } from '../utils/task-tags.js';
 import {
   claimTask,
   obligationInbox,
@@ -138,14 +140,13 @@ function normalizeActivityInput(d, body, existing = null) {
   if (assignmentStrategy === 'fixed' && !validHouseholdUser(d, fixedUserId)) {
     throw new Error('Choose a valid fixed household member.');
   }
-  const skillIds = Array.isArray(body.skill_ids)
-    ? [...new Set(body.skill_ids.map(Number).filter(Number.isInteger))]
-    : (existing?.skills ?? []).map((skill) => Number(skill.id));
-  if (skillIds.length) {
-    const placeholders = skillIds.map(() => '?').join(',');
-    const found = d.prepare(`SELECT COUNT(*) AS n FROM skills WHERE id IN (${placeholders})`).get(...skillIds)?.n ?? 0;
-    if (found !== skillIds.length) throw new Error('One or more required skills do not exist.');
-  }
+  const skillIds = normalizeSkillIds(d, body.skill_ids, (existing?.skills ?? []).map((skill) => Number(skill.id)));
+  const priority = body.priority ?? existing?.priority ?? 'none';
+  if (!['none', 'low', 'medium', 'high', 'urgent'].includes(priority)) throw new Error('Choose a valid priority.');
+  const points = body.points ?? existing?.points ?? 0;
+  if (!Number.isSafeInteger(Number(points)) || Number(points) < 0 || Number(points) > 100000) throw new Error('Points must be a whole number from 0 to 100000.');
+  const tags = body.tags === undefined ? (existing?.tags || []) : body.tags;
+  if (!Array.isArray(tags) && typeof tags !== 'string') throw new Error('Tags must be a list.');
 
   const locationMode = body.location_mode ?? existing?.location_mode ?? 'none';
   if (!VALID_LOCATION_MODES.has(locationMode)) throw new Error('Unknown activity location mode.');
@@ -167,19 +168,29 @@ function normalizeActivityInput(d, body, existing = null) {
   if (!Array.isArray(rawChecklist) || rawChecklist.length > 50) {
     throw new Error('An Activity Template checklist must contain at most 50 items.');
   }
-  const checklist = rawChecklist.map((item, index) => ({
-    titleTemplate: text(
-      typeof item === 'string' ? item : item?.title_template,
-      { required: true, max: 200 },
-    ),
-    sortOrder: index,
-  }));
+  const checklist = rawChecklist.map((item, index) => {
+    const titleTemplate = text(typeof item === 'string' ? item : item?.title_template, { required: true, max: 200 });
+    const prior = existing?.checklist?.find((row) => item?.id != null
+      ? Number(row.id) === Number(item.id) : row.title_template === titleTemplate);
+    if (item?.skill_ids === undefined && !prior && existing?.checklist?.some((row) => row.skill_ids?.length)) {
+      throw new Error('Reload the Activity Template editor to preserve its subtask skills.');
+    }
+    return {
+      titleTemplate,
+      sortOrder: index,
+      skillIds: normalizeSkillIds(d, item?.skill_ids,
+        prior?.skill_ids || (item?.skills || []).map((skill) => skill.id)),
+    };
+  });
 
   return {
     name,
     titleTemplate,
     description,
     category,
+    priority,
+    points: Number(points),
+    tags: normalizeTags(tags),
     assignmentStrategy,
     legacyAssignmentStrategy: ['subject_skill', 'eligible_round_robin', 'fixed'].includes(assignmentStrategy)
       ? assignmentStrategy : 'eligible_round_robin',
@@ -319,7 +330,11 @@ function saveActivityChecklist(d, activityId, checklist) {
     INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order)
     VALUES (?, ?, ?)
   `);
-  checklist.forEach((item) => insert.run(activityId, item.titleTemplate, item.sortOrder));
+  const insertSkill = d.prepare('INSERT INTO activity_template_checklist_skills(checklist_item_id,skill_id,sort_order) VALUES (?,?,?)');
+  checklist.forEach((item) => {
+    const itemId = insert.run(activityId, item.titleTemplate, item.sortOrder).lastInsertRowid;
+    item.skillIds.forEach((skillId, order) => insertSkill.run(itemId, skillId, order));
+  });
 }
 
 function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
@@ -740,11 +755,27 @@ router.get('/activity-options', (_req, res) => {
       title_template: activity.title_template,
       description: activity.description,
       category: activity.category,
+      priority: activity.priority,
+      points: activity.points,
+      tags: activity.tags,
+      skills: activity.skills,
+      skill_ids: activity.skills.map((skill) => skill.id),
+      checklist: activity.checklist,
+      location_mode: activity.location_mode,
+      place_id: activity.place_id,
+      fixed_user_id: activity.fixed_user_id,
+      supervision_title_template: activity.supervision_title_template,
+      allow_assignment_override: activity.allow_assignment_override,
+      participant_count: activity.participant_count,
+      rotation_group: activity.rotation_group,
+      location_variable_id: activity.location_variable_id,
+      presence_policy: activity.presence_policy,
+      presence_window: activity.presence_window,
       assignment_strategy: activity.assignment_strategy,
       assignment_policy: activity.assignment_policy || activity.assignment_strategy,
       subject_required: activity.subject_required,
     }));
-    res.json({ data: { activities } });
+    res.json({ data: { activities, skills: db.get().prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all() } });
   } catch (err) {
     log.error('GET /activity-options:', err);
     res.status(500).json({ error: 'Could not load activity templates.', code: 500 });
@@ -870,8 +901,11 @@ router.delete('/admin/skills/:id', requireAdmin, (req, res) => {
     if (skill.system_key) {
       return res.status(409).json({ error: 'Built-in household skills cannot be deleted.', code: 409 });
     }
-    const inUse = d.prepare('SELECT COUNT(*) AS n FROM activity_template_skills WHERE skill_id = ?').get(req.params.id)?.n ?? 0;
-    if (inUse) return res.status(409).json({ error: 'This skill is required by an activity template.', code: 409 });
+    const inUse = d.prepare(`SELECT 'an activity template' AS owner FROM activity_template_skills WHERE skill_id = ?
+      UNION ALL SELECT 'a Task' FROM task_skill_requirements WHERE skill_id = ?
+      UNION ALL SELECT 'an Activity Template subtask' FROM activity_template_checklist_skills WHERE skill_id = ? LIMIT 1`)
+      .get(req.params.id, req.params.id, req.params.id);
+    if (inUse) return res.status(409).json({ error: `This skill is required by ${inUse.owner}.`, code: 409 });
     const result = d.prepare('DELETE FROM skills WHERE id = ?').run(req.params.id);
     res.status(204).end();
   } catch (err) {
@@ -1091,8 +1125,9 @@ router.post('/admin/activity-templates', requireAdmin, (req, res) => {
           name, title_template, description, category, assignment_strategy,
           subject_required, fixed_user_id, supervision_title_template, active, created_by,
           location_mode, place_id, location_variable_id, presence_policy, presence_window,
-          assignment_policy, allow_assignment_override, participant_count, rotation_group
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          assignment_policy, allow_assignment_override, participant_count, rotation_group,
+          priority, points, tags_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
         input.legacyAssignmentStrategy, input.subjectRequired, input.fixedUserId,
@@ -1100,6 +1135,7 @@ router.post('/admin/activity-templates', requireAdmin, (req, res) => {
         input.locationMode, input.placeId, input.locationVariableId,
         input.presencePolicy, input.presenceWindow, input.assignmentStrategy,
         input.allowAssignmentOverride, input.participantCount, input.rotationGroup,
+        input.priority, input.points, JSON.stringify(input.tags),
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
@@ -1125,6 +1161,7 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
                supervision_title_template = ?, active = ?, location_mode = ?,
                place_id = ?, location_variable_id = ?, presence_policy = ?, presence_window = ?,
                assignment_policy = ?, allow_assignment_override = ?, participant_count = ?, rotation_group = ?,
+               priority = ?, points = ?, tags_json = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(
@@ -1133,7 +1170,7 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
         input.supervisionTitleTemplate, input.active, input.locationMode,
         input.placeId, input.locationVariableId, input.presencePolicy,
         input.presenceWindow, input.assignmentStrategy, input.allowAssignmentOverride,
-        input.participantCount, input.rotationGroup, existing.id,
+        input.participantCount, input.rotationGroup, input.priority, input.points, JSON.stringify(input.tags), existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
       saveActivityChecklist(d, existing.id, input.checklist);

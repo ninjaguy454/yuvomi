@@ -220,7 +220,7 @@ function renderPage(container, preferences, isAdmin) {
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
     <section class="settings-section">
-      <h2 class="settings-section__title">${t('settings.sectionDesign')}</h2>
+      <h2 class="settings-section__title">${t('appearanceOptions.theme')} &amp; ${t('appearanceOptions.typography')}</h2>
       <div class="settings-card">
         <p class="form-label" id="appearance-mode-label">${t('appearanceOptions.appearance')}</p>
         <div class="theme-toggle" id="theme-toggle" role="group" aria-labelledby="appearance-mode-label">
@@ -239,6 +239,7 @@ function renderPage(container, preferences, isAdmin) {
         </div>
       </div>
       <div class="settings-card">
+        <div class="settings-field-grid">
         <div class="form-group">
           <label class="form-label" for="color-theme-select">${t('appearanceOptions.theme')}</label>
           <select class="form-input" id="color-theme-select" aria-describedby="color-theme-hint appearance-choice-error">
@@ -252,6 +253,7 @@ function renderPage(container, preferences, isAdmin) {
             ${['default', 'serif'].map((value) => `<option value="${value}"${appearance.heading_font === value ? ' selected' : ''}>${t(`appearanceOptions.${value}`)}</option>`).join('')}
           </select>
           <p class="form-hint" id="heading-font-hint">${t('appearanceOptions.typographyHint')}</p>
+        </div>
         </div>
         <p class="form-error" id="appearance-choice-error" role="alert" hidden></p>
       </div>

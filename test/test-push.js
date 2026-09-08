@@ -353,6 +353,9 @@ test('POST /test forwards client-provided localized text', async () => {
   assert.equal(json.data.sent, 1);
   assert.equal(json.data.devices, 1);
   assert.match(webpush.calls[0].payload, /Titel/);
+  const fallback = await fetch(`${app.baseUrl}/test`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+  assert.equal(fallback.status, 200);
+  assert.equal(JSON.parse(webpush.calls.at(-1).payload).title, 'Ordoma');
   await app.close();
 });
 

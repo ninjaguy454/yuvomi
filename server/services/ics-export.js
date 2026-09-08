@@ -5,6 +5,7 @@
  * Abhängigkeiten: keine externen.
  */
 
+import { APP_NAME } from '../utils/brand.js';
 import { randomBytes } from 'node:crypto';
 import { householdTimeZone, isValidTimeZone, utcToWall } from '../utils/timezone.js';
 import { rruleLine } from './recurrence.js';
@@ -365,7 +366,7 @@ function buildFeed(conn, userId, now = new Date(), tz = householdTimeZone(conn))
     'PRODID:-//Yuvomi//Calendar Feed//DE',
     'CALSCALE:GREGORIAN',
     'METHOD:PUBLISH',
-    'X-WR-CALNAME:Yuvomi',
+    `X-WR-CALNAME:${APP_NAME}`,
   ];
   // Kalenderzone für die Clients, die den Header auswerten (Google, Thunderbird).
   // Sie ersetzt die TZID-Parameter nicht, sondern deckt den Rest: Termine ohne

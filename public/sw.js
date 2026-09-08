@@ -16,9 +16,9 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Stage Meal portion and serving-basis assets separately from the deployed
-// Cooking Map cache so an older worker cannot retain mismatched JS and CSS.
-const CACHE_VERSION = `${APP_RELEASE}-meal-portions.1`;
+// Keep the Task, Cooking Map and shared interface refinements together so an
+// older worker cannot retain mismatched component JavaScript and styles.
+const CACHE_VERSION = `${APP_RELEASE}-ordoma.3`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -76,6 +76,7 @@ const APP_SHELL = [
   '/styles/reminders.css',
   '/styles/dashboard.css',
   '/styles/tasks.css',
+  '/styles/task-requirements.css',
   '/styles/shopping.css',
   '/styles/meals.css',
   '/styles/calendar.css',
@@ -109,6 +110,11 @@ const APP_SHELL = [
   '/components/photo-screensaver.js',
   '/components/quick-links-manager.js',
   '/components/task-detail.js',
+  '/components/task-requirements.js',
+  '/utils/task-draft.js',
+  '/utils/branding.js',
+  '/components/month-year-picker.js',
+  '/styles/month-year-picker.css',
   '/components/user-multi-select.js',
   '/components/user-rotation-order.js',
   '/utils/birthday-event.js',
@@ -198,6 +204,8 @@ const APP_SHELL = [
   '/icons/favicon-32.png',
   '/icons/apple-touch-icon.png',
   '/icons/icon-192.png',
+  '/icons/ordoma-mark.svg',
+  '/icons/notification-badge.png',
   '/icons/icon-512.png',
   '/icons/icon-maskable-192.png',
   '/icons/icon-maskable-512.png',
@@ -695,13 +703,13 @@ self.addEventListener('push', (event) => {
   try {
     payload = event.data ? event.data.json() : {};
   } catch {
-    payload = { title: 'Yuvomi', body: event.data ? event.data.text() : '' };
+    payload = { title: 'Ordoma', body: event.data ? event.data.text() : '' };
   }
-  const title = payload.title || 'Yuvomi';
+  const title = payload.title || 'Ordoma';
   const options = {
     body: payload.body || '',
     icon: '/icons/icon-192.png',
-    badge: '/icons/icon-192.png',
+    badge: '/icons/notification-badge.png',
     tag: payload.tag || 'yuvomi-push',
     // `/` UND NICHT `/reminders`: diese Route hat es nie gegeben (Critique
     // 2026-08-10). Der Router kannte sie nicht und fiel still auf die

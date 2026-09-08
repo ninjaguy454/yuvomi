@@ -456,6 +456,7 @@ function _suspendActiveModal() {
     // null-Snapshot schaltet isFormDirty() für die restliche Lebensdauer des
     // Formulars ab - der Dirty-Guard wäre danach still tot.
     snapshot: _initialFormSnapshot ?? (panel ? serializeForm(panel) : null),
+    focusTrap: focusTrapHandler,
     restoreFocus: previouslyFocused,
     // Zwei verschiedene Fokusziele: `restoreFocus` zeigt nach draußen (die Zeile,
     // aus der das Modal kam) und gilt für dessen späteres Schließen; `trigger`
@@ -477,7 +478,7 @@ function _suspendActiveModal() {
 }
 
 // Dialog beendet, Modal darunter lebt weiter → exakt wiederherstellen.
-function _resumeSuspendedModal({ overlay, id, title, titleId, snapshot, restoreFocus, trigger }) {
+function _resumeSuspendedModal({ overlay, id, title, titleId, snapshot, focusTrap, restoreFocus, trigger }) {
   /* ES GIBT NICHTS ZURUECKZUHOLEN, WENN DER KNOTEN WEG IST (#871).
    *
    * Sitzungsende und echte Navigation raeumen alle Kaesten aus dem Dokument,
@@ -497,6 +498,7 @@ function _resumeSuspendedModal({ overlay, id, title, titleId, snapshot, restoreF
   overlay.inert = false;
   activeOverlay = overlay;
   _initialFormSnapshot = snapshot;
+  focusTrapHandler = focusTrap;
   previouslyFocused = restoreFocus;
   document.body.style.overflow = 'hidden';
   modalState = 'open';
@@ -1013,7 +1015,7 @@ export function selectModal(label, options) {
  * einen Knopf verschwiege, dass die Termine dann bleiben (#732). Ohne die
  * Angabe steht dort weiterhin „Abbrechen".
  */
-export function confirmModal(message, { confirmLabel, cancelLabel, danger = false, detail = null } = {}) {
+export function confirmModal(message, { confirmLabel, cancelLabel, danger = false, detail = null, checkbox = null } = {}) {
   return new Promise((resolve) => {
     let resolved = false;
 
@@ -1029,6 +1031,7 @@ export function confirmModal(message, { confirmLabel, cancelLabel, danger = fals
       size: 'sm',
       content: `
         ${detail ? `<p class="modal-confirm__detail">${esc(detail)}</p>` : ''}
+        ${checkbox ? `<label class="form-check"><input type="checkbox" id="confirm-modal-checkbox" ${checkbox.checked ? 'checked' : ''}> <span>${esc(checkbox.label)}</span></label>` : ''}
         <div class="modal-actions">
           <button type="button" class="btn btn--secondary" id="confirm-modal-cancel">${cancelLabel ?? t('common.cancel')}</button>
           <button type="button" class="btn ${danger ? 'btn--danger' : 'btn--primary'}" id="confirm-modal-ok">
@@ -1037,6 +1040,11 @@ export function confirmModal(message, { confirmLabel, cancelLabel, danger = fals
         </div>`,
       onClose: () => finish(false),
       onSave(panel) {
+        const preference = panel.querySelector('#confirm-modal-checkbox');
+        preference?.addEventListener('change', () => {
+          checkbox?.onChange?.(Boolean(preference.checked));
+          refreshDirtySnapshot({ defer: false });
+        });
         panel.querySelector('#confirm-modal-ok')?.addEventListener('click', () => finish(true));
         panel.querySelector('#confirm-modal-cancel')?.addEventListener('click', () => finish(false));
       },
@@ -1321,4 +1329,46 @@ export function advancedSection(innerHtml, { label, open = false } = {}) {
         ${innerHtml}
       </div>
     </details>`;
+}
+/** Open a child editor without discarding the live parent form or its history.
+ * The existing suspension mechanism also supports confirmations above the child.
+ * `closed` resolves after the child animation and the parent's restoration. */
+export function openChildModal(options = {}) {
+  const suspended = activeOverlay && modalState === 'open' ? _suspendActiveModal() : null;
+  let child = null;
+  let resolveClosed;
+  const closed = new Promise((resolve) => { resolveClosed = resolve; });
+  const finish = async () => {
+    await _awaitOverlayRemoval(child);
+    if (suspended) {
+      // An unrelated navigation/replacement owns the slot now. Never resurrect
+      // a parked editor over it; session-end already removes every overlay.
+      if (activeOverlay && activeOverlay !== child) suspended.overlay.remove();
+      else _resumeSuspendedModal(suspended);
+    }
+    try { options.onClose?.(); } finally { resolveClosed(); }
+  };
+  try {
+    openModal({ ...options, onClose: () => { void finish(); } });
+    child = activeOverlay;
+  } catch (error) {
+    // Mounting can fail after the overlay was inserted. Remove that partial
+    // child immediately, so it cannot cover the parent we are restoring.
+    if (activeOverlay && activeOverlay !== suspended?.overlay) _doClose(activeOverlay);
+    if (_initialFormTimeout) clearTimeout(_initialFormTimeout);
+    _initialFormTimeout = null;
+    if (suspended) _resumeSuspendedModal(suspended);
+    resolveClosed();
+    throw error;
+  }
+  return {
+    panel: child?.querySelector('.modal-panel') || null,
+    closed,
+    async close({ force = false } = {}) {
+      if (activeOverlay !== child) return false;
+      const didClose = await closeModal({ force });
+      if (didClose) await closed;
+      return didClose;
+    },
+  };
 }

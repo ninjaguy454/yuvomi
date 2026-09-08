@@ -6,6 +6,7 @@
  *        notifications.js, ohne Delivery-Logik zu duplizieren.
  * Abhängigkeiten: server/db.js, push.js, notification-channels.js, notifications.js.
  */
+import { APP_NAME } from '../utils/brand.js';
 import { createLogger } from '../logger.js';
 import * as dbModule from '../db.js';
 import { pushService as defaultPushService } from './push.js';
@@ -14,7 +15,7 @@ import { defaultProviders } from './notifications.js';
 import { resolveHouseholdLocale, translate } from '../utils/i18n.js';
 
 const log = createLogger('MedicationScheduler');
-const APP_NAME = 'Yuvomi';
+
 // Fallback-Body, falls der Medikamentenname fehlt: nie den App-Namen wiederholen (#581).
 const FALLBACK_BODY = 'Medication reminder';
 const PROVIDER_TIMEOUT_MS = 8_000;

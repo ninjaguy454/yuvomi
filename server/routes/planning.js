@@ -89,7 +89,7 @@ async function refreshSavedGoogleIdentity(database, place, userId) {
   const refreshed = await refreshGooglePlaceId(place.external_place_id, { database, userId });
   const duplicate = database.prepare("SELECT id FROM places WHERE external_provider = 'google' AND external_place_id = ? AND id != ?").get(refreshed, place.id);
   if (duplicate) {
-    throw new PlaceProviderError('This Google identity now belongs to another saved Yuvomi Place. An administrator needs to reconcile the two saved Places.', { status: 409, code: 'place_identity_conflict' });
+    throw new PlaceProviderError('This Google identity now belongs to another saved Ordoma Place. An administrator needs to reconcile the two saved Places.', { status: 409, code: 'place_identity_conflict' });
   }
   database.prepare(`
     UPDATE places SET external_place_id = ?,
@@ -358,7 +358,7 @@ router.post('/admin/places/from-google', requireAdmin, (req, res) => {
     `).get(externalPlaceId);
     if (existing) {
       return res.status(409).json({
-        error: 'That Google place is already saved in Yuvomi Places.',
+        error: 'That Google place is already saved in Ordoma Places.',
         code: 409,
         data: placeWithInheritedAddress(database, existing),
       });

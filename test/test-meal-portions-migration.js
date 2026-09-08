@@ -30,7 +30,7 @@ test('real 10027 upgrade preserves data and 10028 cannot replay on restart', () 
   const migration = FORK_MIGRATIONS.find((item) => item.version === 10028);
   assert.ok(migration);
   assert.equal(FORK_MIGRATIONS.filter((item) => item.version === 10028).length, 1);
-  assert.equal(FORK_MIGRATIONS.at(-1).version, 10028);
+  assert.ok(FORK_MIGRATIONS.at(-1).version >= 10028);
 
   const directory = mkdtempSync(join(tmpdir(), 'yuvomi-portions-migration-'));
   const databasePath = join(directory, 'fixture.db');
@@ -78,10 +78,10 @@ test('real 10027 upgrade preserves data and 10028 cannot replay on restart', () 
 
     database.close(); database = null;
     const firstLog = realStartup(databasePath);
-    assert.deepEqual([...firstLog.matchAll(/Migration (\d+) applied:/g)].map((match) => Number(match[1])), [10028]);
+    assert.deepEqual([...firstLog.matchAll(/Migration (\d+) applied:/g)].map((match) => Number(match[1])), ALL_MIGRATIONS.filter((item) => item.version > 10027).map((item) => item.version));
     database = new Database(databasePath);
     const historyAfter = database.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
-    assert.equal(historyAfter.at(-1).version, 10028);
+    assert.equal(historyAfter.at(-1).version, FORK_MIGRATIONS.at(-1).version);
     const upgradedRecipe = database.prepare('SELECT * FROM recipes WHERE id=?').get(recipeId);
     for (const [column, value] of Object.entries(priorRecipe)) assert.equal(upgradedRecipe[column], value, `recipe.${column}`);
     assert.deepEqual(database.prepare('SELECT * FROM recipe_ingredients WHERE recipe_id=?').all(recipeId), priorIngredients);

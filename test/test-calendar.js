@@ -584,6 +584,11 @@ test('clickedTime: eine Spalte ohne messbare Höhe legt nichts Falsches an', () 
  * Regex: das alte Muster war dreimal blind und jedes Mal war der Guard grün. */
 const calendarCss = readFileSync(new URL('../public/styles/calendar.css', import.meta.url), 'utf8');
 
+test('Calendar planning sections align with the shared toolbar content gutter', () => {
+  const rule = [...eachRule(calendarCss)].find((r) => r.selector.trim() === '.calendar-page > .calendar-planning-tabs');
+  assert(rule && /margin-inline:\s*var\(--page-inline-pad\)/.test(rule.body), 'Planning sections use the same responsive gutter as the view selector');
+});
+
 test('Wochenraster: Kopf, Ganztagszeile und Stunden verwenden dieselbe Zeitspaltenbreite', () => {
   const src = readFileSync(new URL('../public/pages/calendar.js', import.meta.url), 'utf8');
   const renderWeekView = src.slice(

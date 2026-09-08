@@ -5,6 +5,7 @@
  *        Admin-Test-Route genutzt.
  * Abhängigkeiten: nodemailer, server/db.js
  */
+import { APP_NAME } from '../utils/brand.js';
 import nodemailerDefault from 'nodemailer';
 import * as dbModule from '../db.js';
 import { createLogger } from '../logger.js';
@@ -73,7 +74,7 @@ export function createEmailService({ db, nodemailer = nodemailerDefault, env = p
       user: resolve('user'),
       pass: resolve('pass'),
       fromAddress: resolve('fromAddress'),
-      fromName: resolve('fromName') || 'Yuvomi',
+      fromName: resolve('fromName') || APP_NAME,
     };
   }
 
@@ -158,9 +159,9 @@ export function createEmailService({ db, nodemailer = nodemailerDefault, env = p
       await transport.sendMail({
         from: fromHeader(c),
         to,
-        subject: 'Yuvomi SMTP test',
-        text: 'This is a test message confirming your Yuvomi SMTP configuration works.',
-        html: '<p>This is a test message confirming your Yuvomi SMTP configuration works.</p>',
+        subject: `${APP_NAME} SMTP test`,
+        text: `This is a test message confirming your ${APP_NAME} SMTP configuration works.`,
+        html: `<p>This is a test message confirming your ${APP_NAME} SMTP configuration works.</p>`,
       });
       return { ok: true };
     } catch (err) {

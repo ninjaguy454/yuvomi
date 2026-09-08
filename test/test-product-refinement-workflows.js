@@ -144,10 +144,12 @@ function taskSaveFixture(failurePath, { initialError = new Error('Ancillary save
     put: (path, body) => request('PUT', path, body),
     delete: (path) => request('DELETE', path),
   };
-  const saveTaskRecord = loadFunction(taskSource, 'saveTaskRecord', { api, t: (key) => key }, 'const taskCreateAttempts = new WeakMap();');
+  const taskFormControls = new WeakMap();
+  const taskCreateAttempts = new WeakMap();
+  const saveTaskRecord = loadFunction(taskSource, 'saveTaskRecord', { api, t: (key) => key, taskFormControls, taskCreateAttempts });
   const save = loadFunction(taskSource, 'handleFormSubmit', {
     document: { getElementById: (id) => fields[`#${id}`] },
-    api, saveTaskRecord,
+    api, saveTaskRecord, taskFormControls, taskCreateAttempts,
     validateAll: () => true, t: (key) => key,
     parseDateInput: (value) => value, isDateInputValid: () => true,
     getRRuleValues: () => ({ valid_until: true }), normalizeTagList: () => [], modalTags: [],

@@ -343,13 +343,12 @@ test('jeder Weg zu einer bestehenden Aufgabe führt in die Detailansicht', async
   const detailCalls = [...src.matchAll(/^\s+openTaskView\(task, reminder, container\);$/gm)];
   assert.equal(detailCalls.length, 5, 'Listenzeile/Stift, Kanban, Wischen, Deep-Link und Verlauf');
 
-  // Three creation paths remain: the FAB, Activity Template Quick Add, and the
-  // Schedule selection that pre-fills dates. All three create a new Task. The definition
+  // The two manual creation paths are the FAB and Schedule date selection.
+  // Activity Templates are selected inside this canonical form. The definition
   // above carries defaults and is not counted.
   const modalCalls = [...src.matchAll(/^\s+openTaskModal\(\{.*\}, container\);$/gm)];
-  assert.equal(modalCalls.length, 3, 'only new Tasks open the authoring form directly');
+  assert.equal(modalCalls.length, 2, 'only new Tasks open the authoring form directly');
   assert.match(src, /openTaskModal\(\{ users: state\.users \}, container\)/, 'der FAB öffnet ohne task');
-  assert.match(src, /openTaskModal\(\{ users: state\.users, presetActivityTemplate: activity \}, container\)/, 'der Template-Einstieg öffnet ohne task');
   assert.match(src, /openTaskModal\(\{ users: state\.users, presetDates: state\.calendarSelection \}, container\)/,
     'the Schedule selection creates a Task with its selected dates');
 });
@@ -362,7 +361,7 @@ test('die Wisch-Geste heißt Ansehen, nicht Bearbeiten', async () => {
 
 test('die Aufgaben-Verdrahtung ist zweigeteilt und behält die Tag-Reihenfolge', async () => {
   const src = await tasksJs();
-  assert.match(src, /function wireTaskForm\(panel, \{\s*task = null,\s*container = null,\s*presetActivityTemplate = null,\s*onChanged = \(\) => loadTasks\(container\),\s*\}\)/);
+  assert.match(src, /function wireTaskForm\(panel, \{\s*task = null,\s*container = null,\s*presetActivityTemplate = null,\s*presetDates = null,\s*onChanged = \(\) => loadTasks\(container\),\s*\}\)/);
 
   // modalTags ist ein Working-Set, das renderTagChips direkt nach dem Rendern
   // liest - es muss VOR renderModalContent gesetzt werden. Der Mount-Block

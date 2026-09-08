@@ -1,4 +1,4 @@
-# Penginstal CLI Yuvomi — Bahasa Indonesia (id)
+# Penginstal CLI Ordoma — Bahasa Indonesia (id)
 # Dibuat otomatis (kunci identik di semua locale). en = fallback, de = referensi.
 # Di-source oleh install.sh; menimpa basis Inggris per kunci.
 # Kunci titik → variabel dengan garis bawah (MSG_<area>_<nama>).
@@ -84,7 +84,7 @@ MSG_admin_password="Kata sandi (min. 8 karakter):"
 MSG_admin_confirm="Konfirmasi kata sandi:"
 MSG_admin_mismatch="Kata sandi tidak cocok, silakan coba lagi."
 MSG_admin_created="Akun administrator dibuat!"
-MSG_admin_ready="  Yuvomi siap!"
+MSG_admin_ready="  Ordoma siap!"
 MSG_admin_open="  Buka: %s"
 MSG_admin_exists="Akun administrator sudah ada."
 MSG_admin_failed="Administrator tidak dapat dibuat (HTTP %s): %s"

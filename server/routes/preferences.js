@@ -4,11 +4,11 @@
  * Abhängigkeiten: express, server/db.js
  */
 
+import { APP_NAME } from '../utils/brand.js';
 import { createLogger } from '../logger.js';
 import express from 'express';
 import * as db from '../db.js';
 import * as holidays from '../services/holidays.js';
-import { str, MAX_SHORT } from '../middleware/validate.js';
 import { getSupportedLocales, isSupportedLocale, resolveHouseholdLocale } from '../utils/i18n.js';
 import { householdTimeZone, isValidTimeZone } from '../utils/timezone.js';
 import { retitleBirthdayEvents } from '../services/birthdays.js';
@@ -39,7 +39,6 @@ const VALID_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack'];
 const DEFAULT_MEAL_TYPES = VALID_MEAL_TYPES.join(',');
 
 const DEFAULT_CURRENCY = 'EUR';
-const DEFAULT_APP_NAME = 'Yuvomi';
 
 const VALID_DATE_FORMATS = ['mdy', 'dmy', 'ymd', 'mdy_dot', 'dmy_dot', 'dmy_slash', 'ymd_dot', 'ymd_slash'];
 // Default an die übrigen europäischen Defaults (EUR, 24h) und den Client-i18n-
@@ -474,7 +473,6 @@ router.get('/', (req, res) => {
     const dateFormat = VALID_DATE_FORMATS.includes(cfgGet('date_format')) ? cfgGet('date_format') : DEFAULT_DATE_FORMAT;
     const timeFormat = VALID_TIME_FORMATS.includes(cfgGet('time_format')) ? cfgGet('time_format') : DEFAULT_TIME_FORMAT;
     const weekStart = VALID_WEEK_STARTS.includes(cfgGet('week_start')) ? cfgGet('week_start') : DEFAULT_WEEK_START;
-    const appName = cfgGet('app_name') ?? DEFAULT_APP_NAME;
     const disabledModules = parseDisabledModules(cfgGet('disabled_modules'));
     const hiddenModules = parseHiddenModules(cfgUserGet('hidden_modules', req.authUserId));
     const moduleOrder = parseModuleOrder(cfgUserGet('module_order', req.authUserId) ?? cfgGet('module_order'));
@@ -500,7 +498,7 @@ router.get('/', (req, res) => {
         language: isSupportedLocale(cfgGet('language')) ? cfgGet('language') : null,
         language_effective: resolveHouseholdLocale(db.get()),
         language_auto: resolveHouseholdLocale(db.get(), { ignoreExplicit: true }),
-        app_name: appName,
+        app_name: APP_NAME,
         // Anordnung und Kopfband der Übersicht - persönlich, mit Haushalts-Fallback (#585).
         ...dashboardPersonalViews(req.authUserId),
         disabled_modules: disabledModules,
@@ -525,6 +523,7 @@ router.get('/', (req, res) => {
         // dieselbe Form wie calendar_default_target, damit beide Dialoge ihr
         // Ziel gleich benennen.
         tasks_default_target: cfgUserGet('tasks_default_target', req.authUserId) || '',
+        tasks_template_switch_warning: cfgUserGet('tasks_template_switch_warning', req.authUserId) !== '0',
         weather_provider: cfgGet('weather_provider') ?? null,
         weather_lat:      cfgGet('weather_lat')      ?? null,
         weather_lon:      cfgGet('weather_lon')      ?? null,
@@ -559,14 +558,17 @@ router.put('/', (req, res) => {
   try {
     // Validate both personal choices before writing either one. These do not
     // alter household appearance or require household administration rights.
-    const { color_theme, heading_font } = req.body;
+    const { color_theme, heading_font, tasks_template_switch_warning } = req.body;
     if (color_theme !== undefined && !COLOR_THEMES.includes(color_theme)) {
       return res.status(400).json({ error: 'Theme must be neutral, warm, or cool.', code: 400 });
     }
     if (heading_font !== undefined && !HEADING_FONTS.includes(heading_font)) {
       return res.status(400).json({ error: 'Typography must be default or serif.', code: 400 });
     }
-    const { visible_meal_types, currency, date_format, time_format, week_start, region, timezone, language, app_name, dashboard_widgets, dashboard_today_glance, dashboard_widgets_default, dashboard_today_glance_default, disabled_modules, hidden_modules, module_order, mobile_nav_order, housekeeping_payment_tasks, budget_mode, calendar_default_duration, calendar_default_reminders, calendar_default_assign_me, calendar_default_target, health_cycle_enabled, health_cycle_enabled_user, rewards_require_approval, tasks_subtasks_expanded, tasks_default_points, tasks_default_target, weather_provider, weather_lat, weather_lon, weather_city, weather_units, weather_auto_locate, weather_user, holiday_country, holiday_subdivision, holiday_group, holiday_show_public, holiday_show_school, holiday_public_color, holiday_school_color } = req.body;
+    if (tasks_template_switch_warning !== undefined && typeof tasks_template_switch_warning !== 'boolean') {
+      return res.status(400).json({ error: 'tasks_template_switch_warning must be a boolean.', code: 400 });
+    }
+    const { visible_meal_types, currency, date_format, time_format, week_start, region, timezone, language, dashboard_widgets, dashboard_today_glance, dashboard_widgets_default, dashboard_today_glance_default, disabled_modules, hidden_modules, module_order, mobile_nav_order, housekeeping_payment_tasks, budget_mode, calendar_default_duration, calendar_default_reminders, calendar_default_assign_me, calendar_default_target, health_cycle_enabled, health_cycle_enabled_user, rewards_require_approval, tasks_subtasks_expanded, tasks_default_points, tasks_default_target, weather_provider, weather_lat, weather_lon, weather_city, weather_units, weather_auto_locate, weather_user, holiday_country, holiday_subdivision, holiday_group, holiday_show_public, holiday_show_school, holiday_public_color, holiday_school_color } = req.body;
 
     if (visible_meal_types !== undefined) {
       if (!Array.isArray(visible_meal_types)) {
@@ -672,12 +674,8 @@ router.put('/', (req, res) => {
       else cfgSet('language', language);
     }
 
-    if (app_name !== undefined) {
-      const vAppName = str(app_name, 'Application name', { max: MAX_SHORT, required: false });
-      if (vAppName.error) return res.status(400).json({ error: vAppName.error, code: 400 });
-      if (vAppName.value) cfgSet('app_name', vAppName.value);
-      else cfgDelete('app_name');
-    }
+    // Deprecated app_name writes from older clients are ignored. Keep the saved
+    // configuration intact while the product name remains fixed.
 
     // DIE ÜBERSICHT GEHÖRT DER PERSON, NICHT DEM HAUSHALT (#585).
     //
@@ -885,6 +883,11 @@ router.put('/', (req, res) => {
         return res.status(400).json({ error: 'tasks_default_target: erwartet "caldav:<kontoId>|<url>"', code: 400 });
       }
       cfgUserSet('tasks_default_target', req.authUserId, target);
+    }
+
+    // This warning belongs to the person editing a draft, never the household.
+    if (tasks_template_switch_warning !== undefined) {
+      cfgUserSet('tasks_template_switch_warning', req.authUserId, tasks_template_switch_warning ? '1' : '0');
     }
 
     // Haushaltweite Modul-Feature-Schalter — nur Admins.
@@ -1127,7 +1130,6 @@ router.put('/', (req, res) => {
     const savedDateFormat = VALID_DATE_FORMATS.includes(cfgGet('date_format')) ? cfgGet('date_format') : DEFAULT_DATE_FORMAT;
     const savedTimeFormat = VALID_TIME_FORMATS.includes(cfgGet('time_format')) ? cfgGet('time_format') : DEFAULT_TIME_FORMAT;
     const savedWeekStart = VALID_WEEK_STARTS.includes(cfgGet('week_start')) ? cfgGet('week_start') : DEFAULT_WEEK_START;
-    const savedAppName = cfgGet('app_name') ?? DEFAULT_APP_NAME;
     const savedDisabledModules = parseDisabledModules(cfgGet('disabled_modules'));
     const savedHiddenModules = parseHiddenModules(cfgUserGet('hidden_modules', req.authUserId));
     const savedModuleOrder = parseModuleOrder(cfgUserGet('module_order', req.authUserId) ?? cfgGet('module_order'));
@@ -1149,7 +1151,7 @@ router.put('/', (req, res) => {
         language: isSupportedLocale(cfgGet('language')) ? cfgGet('language') : null,
         language_effective: resolveHouseholdLocale(db.get()),
         language_auto: resolveHouseholdLocale(db.get(), { ignoreExplicit: true }),
-        app_name: savedAppName,
+        app_name: APP_NAME,
         ...dashboardPersonalViews(req.authUserId),
         disabled_modules: savedDisabledModules,
         hidden_modules: savedHiddenModules,
@@ -1170,6 +1172,7 @@ router.put('/', (req, res) => {
         // dieselbe Form wie calendar_default_target, damit beide Dialoge ihr
         // Ziel gleich benennen.
         tasks_default_target: cfgUserGet('tasks_default_target', req.authUserId) || '',
+        tasks_template_switch_warning: cfgUserGet('tasks_template_switch_warning', req.authUserId) !== '0',
         weather_provider: cfgGet('weather_provider') ?? null,
         weather_lat:      cfgGet('weather_lat')      ?? null,
         weather_lon:      cfgGet('weather_lon')      ?? null,

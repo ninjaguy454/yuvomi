@@ -1,4 +1,4 @@
-# نصب‌کننده CLI Yuvomi — فارسی (fa)
+# نصب‌کننده CLI Ordoma — فارسی (fa)
 # تولید خودکار (کلیدها با همه لوکیل‌ها یکسان). en = جایگزین، de = مرجع.
 # توسط install.sh سورس می‌شود؛ پایه انگلیسی را برای هر کلید بازنویسی می‌کند.
 # کلیدهای نقطه‌ای → متغیرها با زیرخط (MSG_<حوزه>_<نام>).
@@ -84,7 +84,7 @@ MSG_admin_password="رمز عبور (حداقل ۸ نویسه):"
 MSG_admin_confirm="تأیید رمز عبور:"
 MSG_admin_mismatch="رمزهای عبور مطابقت ندارند، لطفاً دوباره تلاش کنید."
 MSG_admin_created="حساب مدیر ایجاد شد!"
-MSG_admin_ready="  Yuvomi آماده است!"
+MSG_admin_ready="  Ordoma آماده است!"
 MSG_admin_open="  باز کردن: %s"
 MSG_admin_exists="یک حساب مدیر از پیش وجود دارد."
 MSG_admin_failed="مدیر ایجاد نشد (HTTP %s): %s"

@@ -2,7 +2,7 @@
 
 This fork adds an optional **Round robin** assignment mode to recurring top-level tasks.
 
-- **Fixed** preserves Yuvomi's existing assignment behavior.
+- **Fixed** preserves Ordoma's existing assignment behavior.
 - **Round robin** stores an ordered list of household members.
 - The first member owns the current/new occurrence.
 - Completing the task creates the next recurring occurrence for the next member.
@@ -29,4 +29,4 @@ Recurring round-robin tasks can optionally share a **Rotation group**. Give each
 
 For a shower order with Grace, Eleanor, and Frank, create three daily tasks in the same group with positions 1, 2, and 3. The assignments advance as a cohort: `Grace / Eleanor / Frank`, then `Eleanor / Frank / Grace`, then `Frank / Grace / Eleanor`.
 
-Reopening a task from the completed source cycle removes the entire generated next cycle only when all of those generated tasks are still safe to discard. If any generated task contains work under Yuvomi's existing recurrence safety checks, none of the group is deleted.
+Reopening a task from the completed source cycle removes the entire generated next cycle only when all of those generated tasks are still safe to discard. If any generated task contains work under Ordoma's existing recurrence safety checks, none of the group is deleted.

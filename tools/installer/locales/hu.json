@@ -1,5 +1,5 @@
 {
-  "title": "Yuvomi Beállítási varázsló",
+  "title": "Ordoma Beállítási varázsló",
   "common": {
     "continue": "Folytatás",
     "back": "Vissza",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Alapbeállítások",
-    "subtitle": "Hogyan fogja elérni a Yuvomi-t?",
+    "subtitle": "Hogyan fogja elérni a Ordoma-t?",
     "existing": "Már létezik konfiguráció — a jelenlegi .env fájl biztonsági mentésre kerül a mentés előtt.",
     "hostLabel": "Domain vagy IP cím",
-    "hostHint": "Az a cím, amellyel megnyitja a Yuvomi-t a böngészőjében.",
+    "hostHint": "Az a cím, amellyel megnyitja a Ordoma-t a böngészőjében.",
     "portLabel": "Port",
     "tzLabel": "Időzóna",
     "errHost": "Érvénytelen hosztnév. Csak betűk, számok, kötőjelek és pontok használhatók.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Naptár szinkronizálás",
-    "subtitle": "Csatlakoztassa a Yuvomi-t a Google Naptárhoz, az Apple iCloudhoz vagy az Outlookhoz. Mindegyik opcionális - bővítse a konfigurációhoz.",
+    "subtitle": "Csatlakoztassa a Ordoma-t a Google Naptárhoz, az Apple iCloudhoz vagy az Outlookhoz. Mindegyik opcionális - bővítse a konfigurációhoz.",
     "google": "Google Naptár",
     "googleHint": "Hozzon létre OAuth hitelesítő adatokat itt: {{link}}. Átirányítási URI: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Ügyfél azonosító",
     "outlookSecretLabel": "Ügyfél titkos kulcs",
-    "outlookNote": "Egyirányú push: a Yuvomi marad a mérvadó - az Outlookban tett módosítások felülíródnak. A családi fiókok később, az alkalmazás beállításaiban csatlakoztathatók."
+    "outlookNote": "Egyirányú push: a Ordoma marad a mérvadó - az Outlookban tett módosítások felülíródnak. A családi fiókok később, az alkalmazás beállításaiban csatlakoztathatók."
   },
   "review": {
     "title": "Áttekintés",
@@ -121,7 +121,7 @@
     "outlook": "Outlook naptár"
   },
   "docker": {
-    "title": "Yuvomi indítása",
+    "title": "Ordoma indítása",
     "subtitle": "A kép letöltése és a Docker konténer indítása.",
     "elapsed": "{{n}}s eltelt",
     "running": "A konténer egészséges és fut",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "Adminisztrátor fiók létrehozása",
-    "subtitle": "Állítsa be az első bejelentkezést. Ez a fiók teljes hozzáféréssel rendelkezik a Yuvomihoz.",
+    "subtitle": "Állítsa be az első bejelentkezést. Ez a fiók teljes hozzáféréssel rendelkezik a Ordomahoz.",
     "userLabel": "Felhasználónév",
     "userHint": "3-64 karakter: betűk, számok, . - _",
     "nameLabel": "Megjelenítendő név",
@@ -156,9 +156,9 @@
     "errCreate": "Nem sikerült létrehozni az adminisztrátor fiókot."
   },
   "done": {
-    "title": "Yuvomi készen áll!",
+    "title": "Ordoma készen áll!",
     "subtitle": "A családi tervező fut, és az adminisztrátor fiók be van állítva.",
-    "open": "Yuvomi megnyitása →",
+    "open": "Ordoma megnyitása →",
     "backupReminder": "Ne feledd most menteni a .env fájlt — ez tartalmazza a kulcsaidat.",
     "download": ".env fájl letöltése",
     "savedTo": "Elmentve ide: {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "Válaszd ki a modulokat",
     "nextModulesDesc": "Kapcsold be, amit a háztartásod tényleg használ, a többit rejtsd el.",
     "nextInstall": "Telepítsd a telefonokra",
-    "nextInstallDesc": "Nyisd meg a Yuvomit telefonon, és tedd a kezdőképernyőre - offline is működik.",
-    "subtitleExisting": "A Yuvomi fut. Ennek a telepítésnek már van rendszergazdai fiókja - jelentkezz be a meglévő adataiddal."
+    "nextInstallDesc": "Nyisd meg a Ordomat telefonon, és tedd a kezdőképernyőre - offline is működik.",
+    "subtitleExisting": "A Ordoma fut. Ennek a telepítésnek már van rendszergazdai fiókja - jelentkezz be a meglévő adataiddal."
   },
   "advanced": {
     "tag": "Speciális · opcionális",
     "title": "Speciális beállítások",
     "subtitle": "Egyszeri bejelentkezés, hozzáférés az otthoni hálózathoz és néhány finombeállítás. Minden opcionális.",
-    "proxyLabel": "Hogyan van kitéve a Yuvomi?",
+    "proxyLabel": "Hogyan van kitéve a Ordoma?",
     "proxyBehindHttps": "Reverse proxy mögött HTTPS-sel (Caddy, nginx, Traefik)",
     "proxyDirect": "Közvetlen hozzáférés localhost / HTTP-n keresztül",
-    "proxyHint": "Válaszd a „Közvetlen hozzáférés\" lehetőséget, ha http://-en nyitod meg a Yuvomit - különben nem tudsz bejelentkezni. HTTPS-es fordított proxy mögött az első lehetőséget válaszd.",
+    "proxyHint": "Válaszd a „Közvetlen hozzáférés\" lehetőséget, ha http://-en nyitod meg a Ordomat - különben nem tudsz bejelentkezni. HTTPS-es fordított proxy mögött az első lehetőséget válaszd.",
     "oidc": "Egyszeri bejelentkezés (OIDC)",
     "oidcHint": "Töltse ki mind a négy mezőt az SSO engedélyezéséhez, vagy hagyja üresen.",
     "oidcIssuerLabel": "Kibocsátó URL",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "Az SSO bejelentkezések létrehozhatnak új fiókokat",
     "oidcAllowSignupHint": "Kapcsolja ki, ha a szolgáltató több embert szolgál ki, mint ez a háztartás. A meglévő fiókok továbbra is bejelentkeznek és összekapcsolódnak.",
     "baseUrlLabel": "Nyilvános cím",
-    "baseUrlHint": "Az a cím, amelyen a családod megnyitja a Yuvomit - nem a konténer gazdagépe és portja. Jelszó-visszaállítási és meghívó linkekhez használatos.",
+    "baseUrlHint": "Az a cím, amelyen a családod megnyitja a Ordomat - nem a konténer gazdagépe és portja. Jelszó-visszaállítási és meghívó linkekhez használatos.",
     "syncIntervalLabel": "Naptár-szinkronizálás gyakorisága (perc)",
-    "syncIntervalHint": "Milyen gyakran szinkronizálja a Yuvomi a naptárakat és névjegyeket. Növeld, ha a szolgáltatód korlátozza.",
+    "syncIntervalHint": "Milyen gyakran szinkronizálja a Ordoma a naptárakat és névjegyeket. Növeld, ha a szolgáltatód korlátozza.",
     "errSyncInterval": "Adj meg egy pozitív egész számot percben.",
     "sectionPrivateNetwork": "Hozzáférés az otthoni hálózatodhoz",
-    "privateNetworkHint": "A Yuvomi alapértelmezés szerint elutasítja a saját hálózatod címeire irányuló kapcsolatokat, ami megvédi attól, hogy a kiszolgálót belső szolgáltatások elérésére vegyék rá. Engedélyezd, amit valóban futtatsz otthon.",
+    "privateNetworkHint": "A Ordoma alapértelmezés szerint elutasítja a saját hálózatod címeire irányuló kapcsolatokat, ami megvédi attól, hogy a kiszolgálót belső szolgáltatások elérésére vegyék rá. Engedélyezd, amit valóban futtatsz otthon.",
     "authPasswordLogin": "A felhasználónévvel és jelszóval való belépés megtartása",
     "authPasswordLoginHint": "Kikapcsolásával az SSO lesz az egyetlen út befelé: a bejelentkezési űrlap és a jelszó-visszaállítás eltűnik. Ha a szolgáltató elérhetetlenné válik, a visszaút a .env fájl szerkesztése és egy újraindítás."
   },
   "welcome": {
-    "title": "Üdvözöl a Yuvomi",
+    "title": "Üdvözöl a Ordoma",
     "subtitle": "Indítsuk el a privát családi tervezőt. Válaszd ki, hogyan szeretnéd beállítani.",
     "simpleTitle": "Egyszerű telepítés",
     "simpleBadge": "Ajánlott",
-    "simpleDesc": "A technikai részleteket elintézzük helyetted. Ideális a Yuvomi otthoni használatához.",
+    "simpleDesc": "A technikai részleteket elintézzük helyetted. Ideális a Ordoma otthoni használatához.",
     "simpleTime": "Körülbelül 2 perc",
     "advancedTitle": "Speciális telepítés",
     "advancedDesc": "Teljes irányítás: reverse proxy, naptárszinkron, e-mail, egyszeri bejelentkezés és biztonsági mentések.",
     "advancedTime": "Minden lehetőség, lépésről lépésre",
     "existingLocked": "Meglévő telepítést találtunk. Használd a haladó beállítást, hogy a jelenlegi beállításaid megmaradjanak.",
-    "containerRunning": "A Yuvomi éppen fut. A mentés újraindítja a konténert, így az rövid ideig nem lesz elérhető."
+    "containerRunning": "A Ordoma éppen fut. A mentés újraindítja a konténert, így az rövid ideig nem lesz elérhető."
   },
   "simple": {
     "title": "Minden kész",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Minden éjjel megőrzünk egy helyi biztonsági mentést.",
     "backupReminder": "A telepítés után mentsd el a létrehozott .env fájlt — ez tartalmazza az egyetlen titkosítási kulcsaidat.",
     "switchAdvanced": "Több beállítás kell? Válts speciális telepítésre",
-    "start": "Yuvomi beállítása és indítása"
+    "start": "Ordoma beállítása és indítása"
   },
   "email": {
     "title": "E-mail és jelszó-visszaállítás",

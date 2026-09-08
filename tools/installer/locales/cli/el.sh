@@ -1,4 +1,4 @@
-# Yuvomi CLI-Installer — Ελληνικά (el)
+# Ordoma CLI-Installer — Ελληνικά (el)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="Κωδικός (τουλάχιστον 8 χαρακτήρε�
 MSG_admin_confirm="Επιβεβαίωση κωδικού:"
 MSG_admin_mismatch="Οι κωδικοί δεν ταιριάζουν, δοκιμάστε ξανά."
 MSG_admin_created="Ο λογαριασμός διαχειριστή δημιουργήθηκε!"
-MSG_admin_ready="  Το Yuvomi είναι έτοιμο!"
+MSG_admin_ready="  Το Ordoma είναι έτοιμο!"
 MSG_admin_open="  Άνοιγμα: %s"
 MSG_admin_exists="Υπάρχει ήδη λογαριασμός διαχειριστή."
 MSG_admin_failed="Αποτυχία δημιουργίας διαχειριστή (HTTP %s): %s"

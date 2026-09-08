@@ -33,6 +33,8 @@ const SERVER_DIR = path.join(ROOT, 'server');
  * aus `public/` importieren darf. Reine Funktionen, front- und backend-identisch.
  */
 const SHARED_ISOMORPHIC = new Set([
+  // Fixed product identity is a pure constant shared by display and server metadata.
+  'public/utils/branding.js',
   // #469: Was aus einem Adressfeld eine Adresse macht - oder eine Absage. Das
   // Ergebnis landet als `href` einer Kachel auf der Startseite; die Route
   // prueft es, weil eine Client-Pruefung keine Grenze ist, und das Formular

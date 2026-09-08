@@ -1,5 +1,5 @@
 {
-  "title": "Configurazione di Yuvomi",
+  "title": "Configurazione di Ordoma",
   "common": {
     "continue": "Continua",
     "back": "Indietro",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Configurazione di base",
-    "subtitle": "Come accederai a Yuvomi?",
+    "subtitle": "Come accederai a Ordoma?",
     "existing": "Configurazione esistente rilevata: verrà eseguito un backup del tuo file .env attuale prima del salvataggio.",
     "hostLabel": "Dominio o indirizzo IP",
-    "hostHint": "L'indirizzo che userai per aprire Yuvomi nel browser.",
+    "hostHint": "L'indirizzo che userai per aprire Ordoma nel browser.",
     "portLabel": "Porta",
     "tzLabel": "Fuso orario",
     "errHost": "Nome host non valido. Usa solo lettere, cifre, trattini e punti.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Sincronizzazione calendario",
-    "subtitle": "Collega Yuvomi a Google Calendar, Apple iCloud o Outlook. Tutti facoltativi: espandi per configurare.",
+    "subtitle": "Collega Ordoma a Google Calendar, Apple iCloud o Outlook. Tutti facoltativi: espandi per configurare.",
     "google": "Google Calendar",
     "googleHint": "Crea le credenziali OAuth su {{link}}. URI di reindirizzamento: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "ID client",
     "outlookSecretLabel": "Client secret",
-    "outlookNote": "Invio in una sola direzione: Yuvomi resta la fonte principale - le modifiche fatte in Outlook vengono sovrascritte. Gli account della famiglia si collegano più tardi nelle impostazioni dell’app."
+    "outlookNote": "Invio in una sola direzione: Ordoma resta la fonte principale - le modifiche fatte in Outlook vengono sovrascritte. Gli account della famiglia si collegano più tardi nelle impostazioni dell’app."
   },
   "review": {
     "title": "Revisione",
@@ -121,7 +121,7 @@
     "outlook": "Calendario Outlook"
   },
   "docker": {
-    "title": "Avvio di Yuvomi",
+    "title": "Avvio di Ordoma",
     "subtitle": "Download dell'immagine e avvio del container Docker.",
     "elapsed": "{{n}} s trascorsi",
     "running": "Il container è integro e in esecuzione",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "Crea account amministratore",
-    "subtitle": "Configura il tuo primo accesso. Questo account ha accesso completo a Yuvomi.",
+    "subtitle": "Configura il tuo primo accesso. Questo account ha accesso completo a Ordoma.",
     "userLabel": "Nome utente",
     "userHint": "3-64 caratteri: lettere, numeri, . - _",
     "nameLabel": "Nome visualizzato",
@@ -156,9 +156,9 @@
     "errCreate": "Impossibile creare l'account amministratore."
   },
   "done": {
-    "title": "Yuvomi è pronto!",
+    "title": "Ordoma è pronto!",
     "subtitle": "Il tuo organizer familiare è in funzione e il tuo account amministratore è configurato.",
-    "open": "Apri Yuvomi →",
+    "open": "Apri Ordoma →",
     "backupReminder": "Ricorda di salvare ora il file .env: contiene le tue chiavi.",
     "download": "Scarica il file .env",
     "savedTo": "Salvato in {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "Scegli i moduli",
     "nextModulesDesc": "Attiva ciò che la tua famiglia usa davvero e nascondi il resto.",
     "nextInstall": "Installalo sui telefoni",
-    "nextInstallDesc": "Apri Yuvomi sul telefono e aggiungilo alla schermata Home: funziona anche offline.",
-    "subtitleExisting": "Yuvomi è in funzione. Questa installazione ha già un account amministratore: accedi con le tue credenziali esistenti."
+    "nextInstallDesc": "Apri Ordoma sul telefono e aggiungilo alla schermata Home: funziona anche offline.",
+    "subtitleExisting": "Ordoma è in funzione. Questa installazione ha già un account amministratore: accedi con le tue credenziali esistenti."
   },
   "advanced": {
     "tag": "Avanzate · opzionale",
     "title": "Impostazioni avanzate",
     "subtitle": "Single sign-on, accesso alla tua rete domestica e qualche regolazione fine. Tutto facoltativo.",
-    "proxyLabel": "Come viene esposto Yuvomi?",
+    "proxyLabel": "Come viene esposto Ordoma?",
     "proxyBehindHttps": "Dietro un reverse proxy con HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Accesso diretto tramite localhost / HTTP",
-    "proxyHint": "Scegli «Accesso diretto» se apri Yuvomi via http://: altrimenti non potrai accedere. Dietro un reverse proxy con HTTPS scegli la prima opzione.",
+    "proxyHint": "Scegli «Accesso diretto» se apri Ordoma via http://: altrimenti non potrai accedere. Dietro un reverse proxy con HTTPS scegli la prima opzione.",
     "oidc": "Single Sign-On (OIDC)",
     "oidcHint": "Compila tutti e quattro i campi per abilitare l'SSO oppure lasciali vuoti.",
     "oidcIssuerLabel": "URL dell'issuer",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "Consenti agli accessi SSO di creare nuovi account",
     "oidcAllowSignupHint": "Disattivalo se il tuo provider serve più persone di questa famiglia. Gli account esistenti continuano ad accedere e a essere collegati.",
     "baseUrlLabel": "Indirizzo pubblico",
-    "baseUrlHint": "L'indirizzo con cui la tua famiglia apre Yuvomi, non host e porta del container. Usato per i link di reimpostazione password e invito.",
+    "baseUrlHint": "L'indirizzo con cui la tua famiglia apre Ordoma, non host e porta del container. Usato per i link di reimpostazione password e invito.",
     "syncIntervalLabel": "Intervallo di sincronizzazione calendario (minuti)",
-    "syncIntervalHint": "Ogni quanto Yuvomi sincronizza calendari e contatti. Aumentalo se il tuo provider limita la frequenza.",
+    "syncIntervalHint": "Ogni quanto Ordoma sincronizza calendari e contatti. Aumentalo se il tuo provider limita la frequenza.",
     "errSyncInterval": "Inserisci un numero intero positivo di minuti.",
     "sectionPrivateNetwork": "Accesso alla tua rete domestica",
-    "privateNetworkHint": "Per impostazione predefinita Yuvomi rifiuta le connessioni verso indirizzi della tua rete, il che protegge da un server indotto a raggiungere servizi interni. Abilita ciò che davvero hai in casa.",
+    "privateNetworkHint": "Per impostazione predefinita Ordoma rifiuta le connessioni verso indirizzi della tua rete, il che protegge da un server indotto a raggiungere servizi interni. Abilita ciò che davvero hai in casa.",
     "authPasswordLogin": "Mantieni l'accesso con nome utente e password",
     "authPasswordLoginHint": "Disattivarlo rende l'SSO l'unico modo per entrare: il modulo di accesso e il ripristino della password scompaiono. Se il provider diventa irraggiungibile, la via di ritorno è modificare il file .env e riavviare."
   },
   "welcome": {
-    "title": "Ti diamo il benvenuto in Yuvomi",
+    "title": "Ti diamo il benvenuto in Ordoma",
     "subtitle": "Mettiamo in funzione il tuo organizer familiare privato. Scegli come configurarlo.",
     "simpleTitle": "Configurazione semplice",
     "simpleBadge": "Consigliata",
-    "simpleDesc": "Pensiamo noi ai dettagli tecnici. Ideale per usare Yuvomi a casa.",
+    "simpleDesc": "Pensiamo noi ai dettagli tecnici. Ideale per usare Ordoma a casa.",
     "simpleTime": "Circa 2 minuti",
     "advancedTitle": "Configurazione avanzata",
     "advancedDesc": "Controllo totale: reverse proxy, sincronizzazione calendario, e-mail, single sign-on e backup.",
     "advancedTime": "Ogni opzione, passo dopo passo",
     "existingLocked": "È stata rilevata un'installazione esistente. Usa la configurazione avanzata per mantenere le tue impostazioni attuali.",
-    "containerRunning": "Yuvomi è in esecuzione. Il salvataggio riavvierà il container, che sarà brevemente non disponibile."
+    "containerRunning": "Ordoma è in esecuzione. Il salvataggio riavvierà il container, che sarà brevemente non disponibile."
   },
   "simple": {
     "title": "Tutto pronto",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Ogni notte viene conservato un backup locale.",
     "backupReminder": "Dopo la configurazione, salva il file .env generato: contiene le tue uniche chiavi di cifratura.",
     "switchAdvanced": "Servono più opzioni? Passa alla configurazione avanzata",
-    "start": "Configura e avvia Yuvomi"
+    "start": "Configura e avvia Ordoma"
   },
   "email": {
     "title": "E-mail e reimpostazione password",

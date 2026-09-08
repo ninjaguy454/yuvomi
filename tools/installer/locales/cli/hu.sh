@@ -1,4 +1,4 @@
-# Yuvomi CLI-Installer — Hungarian (hu)
+# Ordoma CLI-Installer — Hungarian (hu)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="Jelszó (min 8 karakter):"
 MSG_admin_confirm="Jelszó megerősítése:"
 MSG_admin_mismatch="A jelszavak nem egyeznek, próbálja újra."
 MSG_admin_created="Adminisztrátor fiók létrehozva!"
-MSG_admin_ready="  A Yuvomi készen áll!"
+MSG_admin_ready="  A Ordoma készen áll!"
 MSG_admin_open="  Megnyitás: %s"
 MSG_admin_exists="Már létezik adminisztrátor fiók."
 MSG_admin_failed="Adminisztrátor létrehozása sikertelen (HTTP %s): %s"

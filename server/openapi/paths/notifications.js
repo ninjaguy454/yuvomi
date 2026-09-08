@@ -8,7 +8,7 @@ const itemSchema = {
   type: 'object',
   properties: {
     id: { type: 'integer' }, title: { type: 'string' }, body: { type: 'string' },
-    url: { type: 'string', description: 'Authorized, relative Yuvomi destination.' },
+    url: { type: 'string', description: 'Authorized, relative Ordoma destination.' },
     category: { type: 'string' }, created_at: { type: 'string' }, read_at: { type: 'string', nullable: true },
   },
 };

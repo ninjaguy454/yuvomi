@@ -2340,20 +2340,32 @@ svg.weather-forecast__icon {
   gap: var(--space-3);
 }
 
-/* Bearbeiten-Modus: die Customize-Toolbar braucht volle Breite, daher mobil unter
- * die Begrüßung umbrechen; ab Container-Breite wieder einzeilig. Der schlanke
- * Normalzustand bleibt einzeilig (Icon rechts, vertikal zur Begrüßung zentriert). */
+/* Editing needs separate heading and controls rows at every width. A long
+ * greeting and the administrator actions must never compete for one line. */
 .dashboard-overview__header--editing {
   flex-direction: column;
   align-items: stretch;
 }
 
-@container dashboard-overview (min-width: 640px) {
-  .dashboard-overview__header--editing {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
+.dashboard-overview__header--editing .dashboard-overview__tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.dashboard-overview__header--editing .dashboard-customize-scope {
+  grid-column: 1 / -1;
+  margin: 0;
+  text-align: start;
+}
+
+.dashboard-overview__header--editing .dashboard-customize-toolbar {
+  min-width: 0;
+  justify-content: flex-start;
+}
+
+.dashboard-overview__header--editing .dashboard-icon-btn {
+  align-self: start;
 }
 
 .dashboard-overview__heading {

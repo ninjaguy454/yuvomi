@@ -6,7 +6,7 @@ export function pantryPaths() {
       get: op({
         summary: 'List pantry items with storage locations, categories and Store Places',
         tag: 'Pantry',
-        description: 'Each item includes optional `sku` and `preferred_store_place_id`; the response also includes `store_places` for the preferred-store selector. A preferred store is a reusable Yuvomi Place whose type is `store`.',
+        description: 'Each item includes optional `sku` and `preferred_store_place_id`; the response also includes `store_places` for the preferred-store selector. A preferred store is a reusable Ordoma Place whose type is `store`.',
       }),
       post: op({
         summary: 'Create pantry item',

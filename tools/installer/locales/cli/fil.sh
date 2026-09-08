@@ -1,4 +1,4 @@
-# Yuvomi CLI-Installer - Filipino (fil)
+# Ordoma CLI-Installer - Filipino (fil)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="Password (min 8 karakter):"
 MSG_admin_confirm="Kumpirmahin ang password:"
 MSG_admin_mismatch="Hindi magkatugma ang mga password, subukang muli."
 MSG_admin_created="Nagawa ang admin account!"
-MSG_admin_ready="  Handa na ang Yuvomi!"
+MSG_admin_ready="  Handa na ang Ordoma!"
 MSG_admin_open="  Buksan: %s"
 MSG_admin_exists="May umiiral nang admin account."
 MSG_admin_failed="Nabigo ang paggawa ng admin (HTTP %s): %s"

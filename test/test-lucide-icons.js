@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { MODULE_ICON, NAV_ICONS } from '../public/nav-icons.js';
 
 const ROOT       = fileURLToPath(new URL('../', import.meta.url));
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -78,6 +79,11 @@ function usedIcons() {
     if (!used.has(name)) used.set(name, new Set());
     used.get(name).add(path.relative(ROOT, file));
   };
+  // Module mappings use the same bundled fallback as normal controls when the
+  // shared custom set has no shape (for example Kitchen and Housekeeping).
+  for (const name of Object.values(MODULE_ICON)) {
+    if (!NAV_ICONS[name]) add(name, path.join(PUBLIC_DIR, 'nav-icons.js'));
+  }
   for (const file of sourceFiles(PUBLIC_DIR)) {
     const src = readFileSync(file, 'utf8');
     for (const m of src.matchAll(/data-lucide="([a-z0-9-]+)"/g)) add(m[1], file);

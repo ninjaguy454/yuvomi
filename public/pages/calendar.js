@@ -5,6 +5,8 @@
  */
 
 import { api } from '/api.js';
+import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
+import { installPopoverMenus } from '/utils/popover-menu.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, recurrenceRow } from '/rrule-ui.js';
 import { openModal as openSharedModal, closeModal, confirmModal, advancedSection, wireBlurValidation, reportFieldError } from '/components/modal.js';
 import { attachOverlay } from '/utils/overlay-history.js';
@@ -1513,7 +1515,12 @@ function renderToolbar() {
       <button class="btn btn--icon" id="cal-prev" aria-label="${t('calendar.back')}">
         <i data-lucide="chevron-left" aria-hidden="true"></i>
       </button>
-      <span class="cal-toolbar__label" id="cal-label"></span>
+      <div class="cal-toolbar__label">
+        <button type="button" class="btn btn--ghost cal-toolbar__period-button" popovertarget="cal-month-picker" aria-expanded="false" title="${esc(t('calendar.chooseMonthYear'))}">
+          <span id="cal-label"></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i>
+        </button>
+        <div class="popover-menu month-year-picker" id="cal-month-picker" popover role="group" aria-label="${esc(t('calendar.chooseMonthYear'))}"></div>
+      </div>
       <button class="btn btn--icon" id="cal-next" aria-label="${t('calendar.forward')}">
         <i data-lucide="chevron-right" aria-hidden="true"></i>
       </button>
@@ -1557,6 +1564,7 @@ function renderToolbar() {
   if (window.lucide) lucide.createIcons({ el: bar });
 
   updateLabel();
+  wireCalendarMonthPicker(bar);
 
   bar.querySelector('#cal-prev').addEventListener('click', () => navigate(-1));
   bar.querySelector('#cal-next').addEventListener('click', () => navigate(1));
@@ -1772,6 +1780,50 @@ function updateOfflineNotice() {
   if (toolbar) toolbar.insertAdjacentHTML('beforebegin', html);
   else page.insertAdjacentHTML('afterbegin', html);
   if (window.lucide) lucide.createIcons({ el: page.querySelector('#cal-offline-notice') });
+}
+
+function selectedCalendarMonthDate(cursor, year, month, view) {
+  return dateInSelectedMonth(cursor, year, month, { firstDay: view === 'month' });
+}
+
+function wireCalendarMonthPicker(bar) {
+  const panel = bar.querySelector('#cal-month-picker');
+  const toggle = bar.querySelector('[popovertarget="cal-month-picker"]');
+  if (!panel || !toggle) return;
+  let pickerYear = Number(state.cursor.slice(0, 4));
+  const renderPicker = () => {
+    panel.replaceChildren();
+    panel.insertAdjacentHTML('beforeend', renderMonthYearPicker(pickerYear, state.cursor, 'cal'));
+    window.lucide?.createIcons({ el: panel });
+  };
+  installPopoverMenus(bar);
+  panel.addEventListener('beforetoggle', (event) => {
+    if (event.newState === 'open') {
+      pickerYear = Number(state.cursor.slice(0, 4));
+      renderPicker();
+    }
+    toggle.setAttribute('aria-expanded', String(event.newState === 'open'));
+  });
+  panel.addEventListener('click', async (event) => {
+    const shift = event.target.closest('[data-cal-picker-year]');
+    if (shift) {
+      pickerYear = Math.max(1, Math.min(9999, pickerYear + Number(shift.dataset.calPickerYear)));
+      renderPicker();
+      panel.querySelector(`[data-cal-picker-year="${shift.dataset.calPickerYear}"]`)?.focus();
+      return;
+    }
+    const selected = event.target.closest('[data-cal-month]');
+    if (!selected) return;
+    const cursor = selectedCalendarMonthDate(state.cursor, Number(selected.dataset.calYear), Number(selected.dataset.calMonth), state.view);
+    if (!cursor) return;
+    panel.hidePopover();
+    toggle.focus();
+    if (searchActive) closeCalendarSearch({ restoreView: false });
+    state.cursor = cursor;
+    await reloadForView();
+    updateLabel();
+    renderView();
+  });
 }
 
 function updatePartialLoadNotice() {
@@ -3117,6 +3169,7 @@ async function openFoundEvent(ev) {
 }
 
 export const __test = {
+  selectedCalendarMonthDate,
   loadRange,
   loadOptionalLayer,
   calendarLoadSnapshot: () => ({

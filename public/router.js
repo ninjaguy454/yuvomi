@@ -5,6 +5,7 @@
  */
 
 import { api, auth } from '/api.js';
+import { displayAppName } from '/utils/branding.js';
 import { canAccessNavModule, navModuleAccess } from '/permissions.js';
 import { clearApiCache } from '/sw-register.js';
 import { forgetLayoutHint } from '/utils/dashboard-layout-hint.js';
@@ -520,8 +521,8 @@ const NAV_SECTION_LABEL_KEYS = Object.freeze({
   [NAV_SECTION.customModules]: 'nav.sectionCustomModules',
 });
 
-const DEFAULT_APP_NAME = 'Yuvomi';
-const APP_NAME_STORAGE_KEY = 'yuvomi-app-name';
+
+
 const APP_VERSION_STORAGE_KEY = 'yuvomi-app-version';
 
 // Reduziert einen (Sub-)Pfad auf seine Top-Level-Sektion. /settings/* Blätter
@@ -545,21 +546,13 @@ function getDirection(fromPath, toPath) {
 }
 
 function getAppName() {
-  return localStorage.getItem(APP_NAME_STORAGE_KEY) || DEFAULT_APP_NAME;
+  return displayAppName();
 }
 
 function getAppVersion() {
   return localStorage.getItem(APP_VERSION_STORAGE_KEY) || '';
 }
 
-function setAppName(name) {
-  const next = String(name || '').trim();
-  if (next) {
-    localStorage.setItem(APP_NAME_STORAGE_KEY, next);
-  } else {
-    localStorage.removeItem(APP_NAME_STORAGE_KEY);
-  }
-}
 
 function setAppVersion(version) {
   const next = String(version || '').trim();
@@ -1001,10 +994,6 @@ async function syncPreferencesOnce() {
     } else {
       localStorage.removeItem('yuvomi-number-locale');
     }
-    if (res?.data?.app_name) {
-      setAppName(res.data.app_name);
-      updateBranding();
-    }
     if (Array.isArray(res?.data?.disabled_modules)) {
       _disabledModules = new Set(res.data.disabled_modules);
     }
@@ -1023,7 +1012,6 @@ async function syncPreferencesOnce() {
   try {
     const res = await api.get('/version');
     if (res?.version) setAppVersion(res.version);
-    if (res?.app_name) setAppName(res.app_name);
     // Die Upload-Grenze kommt vom Server, damit Hinweis und Pruefung im Browser
     // dieselbe Zahl nennen wie er (#806).
     setMaxUploadBytes(res?.max_upload_bytes);
@@ -1162,20 +1150,59 @@ function sidebarActionEl({ labelKey, icon, className, onClick }) {
   return button;
 }
 
-function notificationNavButton({ compact = false } = {}) {
-  const button = sidebarActionEl({
-    labelKey: 'notificationCenter.title', icon: 'bell',
-    className: `nav-item--reminder${compact ? ' nav-item--notification-compact' : ''}`,
-    onClick: () => openNotificationCenter(),
-  });
+function notificationHeaderButton() {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'btn btn--ghost btn--icon notification-header-button';
+  button.hidden = true;
+  button.setAttribute('aria-label', t('notificationCenter.title'));
+  button.setAttribute('title', t('notificationCenter.title'));
+  button.addEventListener('click', () => openNotificationCenter());
   button.dataset.notificationCenter = '';
   button.setAttribute('aria-haspopup', 'dialog');
+  const icon = document.createElement('i');
+  icon.dataset.lucide = 'bell';
+  icon.className = 'icon-md';
+  icon.setAttribute('aria-hidden', 'true');
   const badge = document.createElement('span');
   badge.className = 'reminder-bell-badge';
   badge.setAttribute('aria-hidden', 'true');
   badge.hidden = true;
-  button.querySelector('.nav-item__icon-wrap').append(badge);
+  button.append(icon, badge);
   return button;
+}
+
+let _notificationHeaderButton = null;
+
+/** Move the one inbox control with the current module's header, including soft renders. */
+function adoptNotificationHeader() {
+  const main = document.getElementById('main-content');
+  if (!main || !currentUser || currentUser.access_scope === 'split_guest') {
+    _notificationHeaderButton?.remove();
+    return;
+  }
+  const visible = (selector) => [...main.querySelectorAll(selector)]
+    .find((el) => !el.closest('[hidden]') && el.getClientRects().length);
+  let host = visible('.page-toolbar')
+    || visible('.dashboard-overview__header')
+    || visible('.settings-leaf-header')
+    || visible('.settings-shell-header')
+    || visible('.kitchen-tabs-bar')
+    || visible('.page__header');
+  const fallback = main.querySelector('.notification-header-fallback');
+  if (!host) {
+    host = fallback || document.createElement('div');
+    host.className = 'notification-header-fallback';
+    if (!host.isConnected) (main.querySelector('.page-transition') || main).prepend(host);
+  } else fallback?.remove();
+  if (!_notificationHeaderButton) _notificationHeaderButton = notificationHeaderButton();
+  if (_notificationHeaderButton.parentElement !== host) {
+    _notificationHeaderButton.parentElement?.classList.remove('notification-header-host');
+    host.classList.add('notification-header-host');
+    host.append(_notificationHeaderButton);
+    window.lucide?.createIcons({ el: _notificationHeaderButton });
+    paintNotificationBadges();
+  }
 }
 
 // System-/Utility-Zeilen unter dem App-Launcher-Grid: Einstellungen (Route),
@@ -1774,45 +1801,10 @@ function renderAppShell(container) {
   const sidebarLogo = document.createElement('div');
   sidebarLogo.className = 'nav-sidebar__logo';
 
-  // SVG-Logomark aus docs/logo.svg — Gradient via CSS-Tokens
+  // One canonical mark; its mask follows the current theme's text color.
   const logomark = document.createElement('div');
-  logomark.className = 'nav-sidebar__logomark';
+  logomark.className = 'nav-sidebar__logomark ordoma-mark';
   logomark.setAttribute('aria-hidden', 'true');
-  const SVG_NS = 'http://www.w3.org/2000/svg';
-  const logoSvg = document.createElementNS(SVG_NS, 'svg');
-  logoSvg.setAttribute('viewBox', '0 0 160 160');
-  logoSvg.setAttribute('fill', 'none');
-  const defs = document.createElementNS(SVG_NS, 'defs');
-  const grad = document.createElementNS(SVG_NS, 'linearGradient');
-  const gradId = `yuvomi-logo-bg-${Math.random().toString(36).slice(2, 7)}`;
-  grad.setAttribute('id', gradId);
-  grad.setAttribute('x1', '0'); grad.setAttribute('y1', '0');
-  grad.setAttribute('x2', '160'); grad.setAttribute('y2', '160');
-  grad.setAttribute('gradientUnits', 'userSpaceOnUse');
-  const stop0 = document.createElementNS(SVG_NS, 'stop');
-  stop0.setAttribute('offset', '0%');
-  stop0.style.stopColor = 'var(--color-accent)';
-  const stop1 = document.createElementNS(SVG_NS, 'stop');
-  stop1.setAttribute('offset', '100%');
-  stop1.style.stopColor = 'var(--color-accent-secondary)';
-  grad.appendChild(stop0); grad.appendChild(stop1);
-  defs.appendChild(grad);
-  logoSvg.appendChild(defs);
-  const bgRect = document.createElementNS(SVG_NS, 'rect');
-  bgRect.setAttribute('width', '160'); bgRect.setAttribute('height', '160');
-  bgRect.setAttribute('rx', '36'); bgRect.setAttribute('fill', `url(#${gradId})`);
-  logoSvg.appendChild(bgRect);
-  // Drei transluzente, ineinander übergehende Kreise (Familie); kein Sheen in der Sidebar
-  const marks = document.createElementNS(SVG_NS, 'g');
-  marks.setAttribute('fill', 'white');
-  marks.setAttribute('fill-opacity', '0.82');
-  for (const [cx, cy, r] of [[64, 72, 27], [100, 78, 25], [80, 106, 24]]) {
-    const c = document.createElementNS(SVG_NS, 'circle');
-    c.setAttribute('cx', String(cx)); c.setAttribute('cy', String(cy)); c.setAttribute('r', String(r));
-    marks.appendChild(c);
-  }
-  logoSvg.appendChild(marks);
-  logomark.appendChild(logoSvg);
   sidebarLogo.appendChild(logomark);
 
   const sidebarBrandText = document.createElement('div');
@@ -1955,7 +1947,6 @@ function renderAppShell(container) {
   sidebarSearch.setAttribute('aria-keyshortcuts', '/');
   sidebarSearch.setAttribute('title', `${t('nav.search')} (/)`);
   sidebar.appendChild(sidebarSearch);
-  if (!isGuest) sidebar.appendChild(notificationNavButton());
 
   sidebar.appendChild(sidebarItems);
 
@@ -2473,6 +2464,7 @@ function wirePageToolbars() {
   const main = document.getElementById('main-content');
   if (!main) return;
   main.querySelectorAll('.page-toolbar').forEach(wireToolbar);
+  adoptNotificationHeader();
   if (_toolbarObserverRoot === main) return;
   _toolbarObserverRoot = main;
   new MutationObserver((mutations) => {
@@ -2490,6 +2482,7 @@ function wirePageToolbars() {
         else node.querySelectorAll('.page-toolbar').forEach(unwireToolbar);
       }
     }
+    adoptNotificationHeader();
   }).observe(main, { childList: true, subtree: true });
 }
 
@@ -3723,7 +3716,6 @@ function buildBottomNavItems(moreBtn = moreNavButtonEl()) {
   return [
     ...(dashboard ? [navItemEl({ ...dashboard, navId: 'dashboard' })] : []),
     ...mobileFavoriteItems().map(mobileDestinationEl),
-    notificationNavButton({ compact: true }),
     moreBtn,
   ];
 }
@@ -4204,14 +4196,14 @@ window.addEventListener('error', (e) => {
   // Ressource-Ladefehler (z.B. fehlgeschlagenes Bild): ignorieren
   if (e.target && e.target !== window) return;
   if (RESIZE_OBSERVER_NOTICE.test(e.message || '')) return;
-  console.error('[Yuvomi] Unbehandelter Fehler:', e.error ?? e.message);
+  console.error('[Ordoma] Unbehandelter Fehler:', e.error ?? e.message);
   showToast(t('common.unexpectedError'), 'danger');
 });
 
 window.addEventListener('unhandledrejection', (e) => {
   // Auth-Fehler werden bereits von auth:expired behandelt
   if (e.reason?.status === 401) return;
-  console.error('[Yuvomi] Unbehandeltes Promise-Rejection:', e.reason);
+  console.error('[Ordoma] Unbehandeltes Promise-Rejection:', e.reason);
   showToast(friendlyError(e.reason), 'danger');
   e.preventDefault(); // Konsolenfehler unterdrücken (bereits geloggt)
 });
@@ -4641,7 +4633,6 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
       const v = await api.get('/version');
       _setupRequired = v?.setup_required === true;
       if (v?.version) setAppVersion(v.version);
-      if (v?.app_name) setAppName(v.app_name);
     } catch {
       _setupRequired = false; // Fail-safe: kein Setup erzwingen
     }

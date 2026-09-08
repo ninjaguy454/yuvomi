@@ -124,10 +124,16 @@
 }
 
 .detail-task-subtasks .detail-subtask {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--space-1);
   cursor: default;
+}
+
+/* Inline editing hides the read row; its flex styles must not override hidden. */
+.detail-task-subtasks .detail-subtask > [hidden] {
+  display: none;
 }
 
 .detail-subtask__toggle {
@@ -167,20 +173,51 @@
 .detail-subtask__actions {
   display: flex;
   flex: 0 0 auto;
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .detail-subtask__editor {
   display: grid;
   grid-template-columns: minmax(10rem, 1fr) auto auto;
+  grid-column: 1 / -1;
   gap: var(--space-2);
   width: 100%;
+  min-width: 0;
+}
+
+@media (max-width: 639px) {
+  .detail-subtask__editor {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-subtask__editor > input {
+    grid-column: 1 / -1;
+    min-width: 0;
+  }
 }
 
 .detail-subtask__meta {
-  flex: 0 1 auto;
+  grid-column: 1 / -1;
+  grid-row: 2;
+  min-width: 0;
+  padding-inline: var(--space-2);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
-  text-align: end;
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+
+.detail-subtask__requirements summary {
+  cursor: pointer;
+  min-height: var(--target-md);
+  align-content: center;
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}
+
+.detail-subtask__requirements[open] > div {
+  padding-bottom: var(--space-2);
 }
 
 .detail-task-subtasks .detail-subtask:hover {

@@ -1,5 +1,5 @@
 {
-  "title": "Cài đặt Yuvomi",
+  "title": "Cài đặt Ordoma",
   "common": {
     "continue": "Tiếp tục",
     "back": "Quay lại",
@@ -15,10 +15,10 @@
   },
   "config": {
     "title": "Cấu hình cơ bản",
-    "subtitle": "Bạn sẽ truy cập Yuvomi như thế nào?",
+    "subtitle": "Bạn sẽ truy cập Ordoma như thế nào?",
     "existing": "Đã phát hiện cấu hình hiện có — tệp .env hiện tại của bạn sẽ được sao lưu trước khi lưu.",
     "hostLabel": "Tên miền hoặc địa chỉ IP",
-    "hostHint": "Địa chỉ bạn sẽ dùng để mở Yuvomi trong trình duyệt.",
+    "hostHint": "Địa chỉ bạn sẽ dùng để mở Ordoma trong trình duyệt.",
     "portLabel": "Cổng",
     "tzLabel": "Múi giờ",
     "errHost": "Tên máy chủ không hợp lệ. Chỉ dùng chữ cái, số, dấu gạch ngang và dấu chấm.",
@@ -58,7 +58,7 @@
   },
   "calendar": {
     "title": "Đồng bộ lịch",
-    "subtitle": "Kết nối Yuvomi với Google Calendar, Apple iCloud hoặc Outlook. Tất cả đều tùy chọn - mở rộng để cấu hình.",
+    "subtitle": "Kết nối Ordoma với Google Calendar, Apple iCloud hoặc Outlook. Tất cả đều tùy chọn - mở rộng để cấu hình.",
     "google": "Google Calendar",
     "googleHint": "Tạo thông tin xác thực OAuth tại {{link}}. URI chuyển hướng: {{redirect}}",
     "googleLink": "console.cloud.google.com",
@@ -78,7 +78,7 @@
     "outlookLink": "entra.microsoft.com",
     "outlookIdLabel": "Client ID",
     "outlookSecretLabel": "Client Secret",
-    "outlookNote": "Đẩy một chiều: Yuvomi vẫn là nguồn chính - các thay đổi trong Outlook sẽ bị ghi đè. Tài khoản của gia đình được kết nối sau trong phần cài đặt ứng dụng."
+    "outlookNote": "Đẩy một chiều: Ordoma vẫn là nguồn chính - các thay đổi trong Outlook sẽ bị ghi đè. Tài khoản của gia đình được kết nối sau trong phần cài đặt ứng dụng."
   },
   "review": {
     "title": "Xem lại",
@@ -121,7 +121,7 @@
     "outlook": "Lịch Outlook"
   },
   "docker": {
-    "title": "Đang khởi động Yuvomi",
+    "title": "Đang khởi động Ordoma",
     "subtitle": "Đang tải image và khởi động container Docker.",
     "elapsed": "Đã qua {{n}}s",
     "running": "Container hoạt động bình thường",
@@ -140,7 +140,7 @@
   },
   "admin": {
     "title": "Tạo tài khoản Admin",
-    "subtitle": "Thiết lập lần đăng nhập đầu tiên. Tài khoản này có toàn quyền truy cập vào Yuvomi.",
+    "subtitle": "Thiết lập lần đăng nhập đầu tiên. Tài khoản này có toàn quyền truy cập vào Ordoma.",
     "userLabel": "Tên người dùng",
     "userHint": "3-64 ký tự: chữ cái, số, . - _",
     "nameLabel": "Tên hiển thị",
@@ -156,9 +156,9 @@
     "errCreate": "Không thể tạo tài khoản admin."
   },
   "done": {
-    "title": "Yuvomi đã sẵn sàng!",
+    "title": "Ordoma đã sẵn sàng!",
     "subtitle": "Trình lên kế hoạch gia đình của bạn đang chạy và tài khoản admin đã được thiết lập.",
-    "open": "Mở Yuvomi →",
+    "open": "Mở Ordoma →",
     "backupReminder": "Nhớ sao lưu tệp .env của bạn ngay bây giờ — nó chứa các khóa của bạn.",
     "download": "Tải xuống tệp .env",
     "savedTo": "Đã lưu vào {{path}}",
@@ -170,17 +170,17 @@
     "nextModules": "Chọn mô-đun",
     "nextModulesDesc": "Bật những gì gia đình bạn thực sự dùng và ẩn phần còn lại.",
     "nextInstall": "Cài lên điện thoại",
-    "nextInstallDesc": "Mở Yuvomi trên điện thoại và thêm vào màn hình chính - vẫn dùng được khi ngoại tuyến.",
-    "subtitleExisting": "Yuvomi đang chạy. Bản cài đặt này đã có tài khoản quản trị - hãy đăng nhập bằng thông tin hiện có của bạn."
+    "nextInstallDesc": "Mở Ordoma trên điện thoại và thêm vào màn hình chính - vẫn dùng được khi ngoại tuyến.",
+    "subtitleExisting": "Ordoma đang chạy. Bản cài đặt này đã có tài khoản quản trị - hãy đăng nhập bằng thông tin hiện có của bạn."
   },
   "advanced": {
     "tag": "Nâng cao · tùy chọn",
     "title": "Cài đặt nâng cao",
     "subtitle": "Đăng nhập một lần, truy cập mạng gia đình, và vài tinh chỉnh. Tất cả đều tùy chọn.",
-    "proxyLabel": "Yuvomi được hiển thị như thế nào?",
+    "proxyLabel": "Ordoma được hiển thị như thế nào?",
     "proxyBehindHttps": "Sau reverse proxy với HTTPS (Caddy, nginx, Traefik)",
     "proxyDirect": "Truy cập trực tiếp qua localhost / HTTP",
-    "proxyHint": "Chọn \"Truy cập trực tiếp\" nếu bạn mở Yuvomi qua http:// - nếu không bạn sẽ không đăng nhập được. Phía sau reverse proxy có HTTPS, hãy chọn tùy chọn đầu tiên.",
+    "proxyHint": "Chọn \"Truy cập trực tiếp\" nếu bạn mở Ordoma qua http:// - nếu không bạn sẽ không đăng nhập được. Phía sau reverse proxy có HTTPS, hãy chọn tùy chọn đầu tiên.",
     "oidc": "Đăng nhập một lần (OIDC)",
     "oidcHint": "Điền cả bốn trường để bật SSO, hoặc để trống.",
     "oidcIssuerLabel": "URL Issuer",
@@ -244,27 +244,27 @@
     "oidcAllowSignup": "Cho phép đăng nhập SSO tạo tài khoản mới",
     "oidcAllowSignupHint": "Tắt tùy chọn này nếu nhà cung cấp của bạn phục vụ nhiều người hơn hộ gia đình này. Các tài khoản hiện có vẫn đăng nhập và vẫn được liên kết.",
     "baseUrlLabel": "Địa chỉ công khai",
-    "baseUrlHint": "Địa chỉ mà gia đình bạn mở Yuvomi - không phải host và cổng của container. Dùng cho liên kết đặt lại mật khẩu và lời mời.",
+    "baseUrlHint": "Địa chỉ mà gia đình bạn mở Ordoma - không phải host và cổng của container. Dùng cho liên kết đặt lại mật khẩu và lời mời.",
     "syncIntervalLabel": "Khoảng thời gian đồng bộ lịch (phút)",
-    "syncIntervalHint": "Yuvomi đồng bộ lịch và danh bạ bao lâu một lần. Tăng lên nếu nhà cung cấp giới hạn tần suất.",
+    "syncIntervalHint": "Ordoma đồng bộ lịch và danh bạ bao lâu một lần. Tăng lên nếu nhà cung cấp giới hạn tần suất.",
     "errSyncInterval": "Hãy nhập một số nguyên dương tính bằng phút.",
     "sectionPrivateNetwork": "Truy cập mạng gia đình",
-    "privateNetworkHint": "Theo mặc định, Yuvomi từ chối kết nối tới các địa chỉ trong mạng của bạn, giúp tránh việc máy chủ bị lừa truy cập dịch vụ nội bộ. Hãy bật những gì bạn thực sự chạy tại nhà.",
+    "privateNetworkHint": "Theo mặc định, Ordoma từ chối kết nối tới các địa chỉ trong mạng của bạn, giúp tránh việc máy chủ bị lừa truy cập dịch vụ nội bộ. Hãy bật những gì bạn thực sự chạy tại nhà.",
     "authPasswordLogin": "Giữ đăng nhập bằng tên người dùng và mật khẩu",
     "authPasswordLoginHint": "Tắt tùy chọn này khiến SSO là lối vào duy nhất: biểu mẫu đăng nhập và đặt lại mật khẩu sẽ biến mất. Nếu nhà cung cấp không truy cập được, đường quay lại là sửa tệp .env và khởi động lại."
   },
   "welcome": {
-    "title": "Chào mừng đến với Yuvomi",
+    "title": "Chào mừng đến với Ordoma",
     "subtitle": "Hãy khởi chạy trình lập kế hoạch gia đình riêng tư của bạn. Chọn cách thiết lập.",
     "simpleTitle": "Thiết lập đơn giản",
     "simpleBadge": "Khuyến nghị",
-    "simpleDesc": "Chúng tôi lo các chi tiết kỹ thuật cho bạn. Lý tưởng để chạy Yuvomi tại nhà.",
+    "simpleDesc": "Chúng tôi lo các chi tiết kỹ thuật cho bạn. Lý tưởng để chạy Ordoma tại nhà.",
     "simpleTime": "Khoảng 2 phút",
     "advancedTitle": "Thiết lập nâng cao",
     "advancedDesc": "Toàn quyền kiểm soát: reverse proxy, đồng bộ lịch, email, đăng nhập một lần và sao lưu.",
     "advancedTime": "Mọi tùy chọn, từng bước",
     "existingLocked": "Đã phát hiện một bản cài đặt hiện có. Hãy dùng thiết lập nâng cao để giữ nguyên các cài đặt hiện tại của bạn.",
-    "containerRunning": "Yuvomi đang chạy. Việc lưu sẽ khởi động lại container, nên nó sẽ tạm thời không khả dụng."
+    "containerRunning": "Ordoma đang chạy. Việc lưu sẽ khởi động lại container, nên nó sẽ tạm thời không khả dụng."
   },
   "simple": {
     "title": "Sẵn sàng",
@@ -277,7 +277,7 @@
     "itemBackupsDesc": "Mỗi đêm giữ lại một bản sao lưu cục bộ.",
     "backupReminder": "Sau khi thiết lập, hãy sao lưu tệp .env đã tạo — nó chứa các khóa mã hóa duy nhất của bạn.",
     "switchAdvanced": "Cần thêm tùy chọn? Chuyển sang thiết lập nâng cao",
-    "start": "Thiết lập & khởi động Yuvomi"
+    "start": "Thiết lập & khởi động Ordoma"
   },
   "email": {
     "title": "Email & đặt lại mật khẩu",

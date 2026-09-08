@@ -1,0 +1,89 @@
+.task-skill-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.task-skill-picker summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: var(--target-base);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.task-skill-picker summary::after {
+  content: '+';
+  flex: 0 0 auto;
+  color: var(--color-text-secondary);
+}
+
+.task-skill-picker details[open] > summary::after { content: '−'; }
+
+.task-skill-picker__summary {
+  flex: 1 1 auto;
+  color: var(--color-text-secondary);
+  text-align: right;
+}
+
+.task-skill-picker__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-1) 0 var(--space-2);
+}
+
+.task-skill-picker__option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: var(--target-base);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.task-skill-picker__option input { flex: 0 0 auto; }
+.task-skill-picker__option span { overflow-wrap: anywhere; }
+.task-skill-picker:disabled .task-skill-picker__option { cursor: default; }
+
+.task-subtask-editor,
+.task-subtask-editor__rows {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+}
+
+.task-subtask-editor > button { justify-self: start; }
+
+.task-subtask-editor__row {
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.task-subtask-editor__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.task-subtask-editor__main > input { flex: 1 1 10rem; width: 0; min-width: min(100%, 10rem); }
+
+.task-subtask-editor__actions {
+  display: flex;
+  flex: 0 0 auto;
+  margin-inline-start: auto;
+  gap: var(--space-1);
+}
+
+.task-subtask-editor__actions button {
+  width: var(--target-base);
+  min-width: var(--target-base);
+  height: var(--target-base);
+  padding: 0;
+}

@@ -1,4 +1,5 @@
 @import url('/styles/settings.css');
+@import url('/styles/month-year-picker.css');
 
 /**
  * Modul: Aufgaben (Tasks)
@@ -13,6 +14,33 @@
 
 .modal-panel__body--tasks-fit {
   flex: 0 1 auto;
+}
+
+/* Concept sections share the modal grid; no nested cards or fixed field widths. */
+.task-editor__section {
+  border-top: 1px solid var(--color-border);
+  padding-block: var(--space-4);
+  min-width: 0;
+}
+.task-editor__section > h3 {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-lg);
+}
+.task-editor .form-group { min-width: 0; margin-bottom: var(--space-3); }
+.task-editor .task-location { border: 0; padding: 0; margin-inline: 0; }
+.detail-subtask__editor .task-skill-picker { grid-column: 1 / -1; }
+.task-editor .modal-grid { align-items: start; }
+.task-editor .task-field-hint { margin-top: var(--space-1); }
+.task-editor__basics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.task-editor__basics .task-tags-field { grid-column: 1 / -1; }
+.task-editor__dates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.task-sync-integration > summary { cursor: pointer; font-weight: var(--font-weight-medium); margin-bottom: var(--space-2); }
+@media (max-width: 639px) {
+  .task-editor__basics, .task-editor__dates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-editor__dates > :last-child { grid-column: 1 / -1; }
+  .modal-panel:has(.task-editor) > .modal-panel__footer { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); }
+  .modal-panel:has(.task-editor) > .modal-panel__footer #task-submit-btn { grid-column: 1 / -1; }
+  .modal-panel:has(.task-editor) > .modal-panel__footer .btn { min-width: 0; margin: 0; }
 }
 
 .task-template-picker {
@@ -2754,61 +2782,6 @@
   font-size: var(--text-sm);
   line-height: 1.35;
   text-align: end;
-}
-
-.task-calendar-month-picker {
-  position: absolute;
-  z-index: var(--z-dropdown);
-  inset-block-start: calc(100% + var(--space-2));
-  inset-inline-start: 50%;
-  width: min(19rem, calc(100vw - var(--space-6)));
-  padding: var(--space-3);
-  border: var(--space-px) solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-raised, var(--color-surface));
-  box-shadow: var(--shadow-xl);
-  transform: translateX(-50%);
-}
-
-.task-calendar-month-picker[hidden] {
-  display: none;
-}
-
-.task-calendar-month-picker__year {
-  display: grid;
-  grid-template-columns: var(--target-base) minmax(0, 1fr) var(--target-base);
-  align-items: center;
-  gap: var(--space-2);
-  margin-bottom: var(--space-2);
-  text-align: center;
-}
-
-.task-calendar-month-picker__months {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-1);
-}
-
-.task-calendar-month-option {
-  min-height: var(--target-base);
-  padding: var(--space-2);
-  border: 0;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-primary);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-
-.task-calendar-month-option:hover,
-.task-calendar-month-option:focus-visible {
-  background: var(--color-surface-hover);
-}
-
-.task-calendar-month-option--active {
-  color: color-mix(in srgb, var(--module-accent) var(--tint-ink), var(--color-text-primary));
-  background: color-mix(in srgb, var(--module-accent) var(--tint-state), transparent);
-  font-weight: var(--font-weight-semibold);
 }
 
 .task-calendar__weekdays,

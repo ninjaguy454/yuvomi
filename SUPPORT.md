@@ -1,6 +1,6 @@
 # Support
 
-Yuvomi is a solo-maintained open-source project. Pick the channel that fits:
+Ordoma is an independent household-management platform derived from open-source Yuvomi. Report issues in the Ordoma fork to its maintainer. The inherited channels below belong to upstream Yuvomi and should be used for issues reproduced there:
 
 - **Questions & ideas** — [GitHub Discussions](https://github.com/ulsklyc/yuvomi/discussions).
   Feature ideas go to the [Ideas category](https://github.com/ulsklyc/yuvomi/discussions/new?category=ideas);
@@ -14,4 +14,4 @@ Yuvomi is a solo-maintained open-source project. Pick the channel that fits:
   HTTPS, backups and troubleshooting; the README answers the
   [three questions worth asking first](README.md#before-you-commit).
 
-Expect answers within a few days — this is one person's evenings, not a support desk.
+Upstream support is provided by its own maintainers; this fork does not promise response times on their behalf.

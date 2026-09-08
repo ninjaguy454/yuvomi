@@ -3,10 +3,8 @@
  * and docs/twitter-image.png (1200×675) from one shared design, so the three
  * assets can never drift apart again.
  *
- * PALETTE: the app's, since v2.0.0 — Apple Indigo on the near-black neutral
- * ground, not the retired violet. The BILDMARKE keeps its violet gradient; it is
- * the mark, bound in PRODUCT.md, and the one thing on this canvas that must not
- * follow the interface.
+ * The current Ordoma identity uses the canonical geometric mark.
+ * No historical upstream screenshot is presented as the current application.
  *
  * The typeface does NOT follow. Plus Jakarta Sans stays embedded as base64
  * because this file produces a COMMITTED artifact: an embedded font renders the
@@ -15,10 +13,7 @@
  * tofu glyphs once (see the twitter-image fix). A poster may wear a display face
  * the product does not; a poster that renders differently per machine may not.
  *
- * Design "Editorial Indigo" — a modern, professional split layout:
- *   left  → brand lockup, kicker, headline, feature chips (real Lucide icons), meta
- *   right → dashboard screenshot inside a macOS-style window frame with an
- *           ambient violet glow and premium shadow, bleeding off the right edge.
+ * Shared layout: brand, household message and features alongside the mark.
  *
  * Rendered via headless Chromium (puppeteer, devDependency) for pixel-perfect
  * text/gradients/shadows, with the brand font (Plus Jakarta Sans) embedded as
@@ -36,14 +31,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, '..');
 
-const SCREENSHOT_SRC = resolve(ROOT, 'docs/screenshots/dashboard-dark-web.png');
+const brandSvg = readFileSync(resolve(ROOT, 'public/icons/ordoma-mark.svg'), 'utf8');
 const FONT_SRC       = resolve(ROOT, 'docs/fonts/plus-jakarta-sans-variable.woff2');
 const OUT_SOCIAL     = resolve(ROOT, 'docs/social-preview.png');
 const OUT_OG         = resolve(ROOT, 'docs/og-image.png');
 const OUT_TWITTER    = resolve(ROOT, 'docs/twitter-image.png');
 
-const screenshotB64 = 'data:image/png;base64,'
-  + readFileSync(SCREENSHOT_SRC).toString('base64');
 const fontB64 = readFileSync(FONT_SRC).toString('base64');
 
 // ── Inline Lucide stroke icons (24×24, currentColor) ───────────────────────
@@ -62,7 +55,7 @@ const chip = (icon, label) => `
   </div>`;
 
 // ── HTML template (rendered at 2× for crisp output) ────────────────────────
-const html = (imgSrc) => `<!DOCTYPE html>
+const html = () => `<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -123,17 +116,11 @@ body::after {
   display: flex; align-items: center; gap: 13px;
   margin-bottom: 30px;
 }
-.brand .mark {
-  width: 46px; height: 46px; border-radius: 13px;
-  background: linear-gradient(135deg, #8b5cf6 0%, #6c3aed 100%);
-  display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 8px 24px rgba(108,58,237,.45), inset 0 1px 0 rgba(255,255,255,.25);
-  flex-shrink: 0;
-}
-.brand .mark svg { width: 28px; height: 28px; display: block; }
 .brand .name {
+  display: flex; align-items: center; gap: 0;
   font-size: 30px; font-weight: 800; color: #fff; letter-spacing: -.035em; line-height: 1;
 }
+.brand .name svg { display: block; width: 33px; height: 33px; margin-right: -3px; }
 
 .kicker {
   display: inline-flex; align-items: center; align-self: flex-start; gap: 8px;
@@ -181,73 +168,25 @@ body::after {
 .meta .sep { width: 3px; height: 3px; border-radius: 50%; background: #48484A; }
 
 /* ── Right product window ── */
-.stage {
-  position: absolute;
-  top: 50%; left: 624px;
-  transform: translateY(-50%);
-  width: 770px;
-  z-index: 1;
+.brand-display {
+  position: absolute; right: 82px; top: 154px;
+  width: 330px; height: 330px; border-radius: 68px;
+  background: #34433e; color: #f7f3e9;
+  box-shadow: 0 32px 100px rgba(0,0,0,.25);
 }
-.glow {
-  position: absolute; inset: -60px -40px -60px -40px;
-  background: radial-gradient(ellipse at center, rgba(79,77,201,.55) 0%, transparent 65%);
-  filter: blur(20px);
-  z-index: 0;
-}
-.window {
-  position: relative; z-index: 1;
-  border-radius: 14px;
-  overflow: hidden;
-  background: #1C1C1E;
-  border: 1px solid rgba(138,135,255,.20);
-  box-shadow:
-    0 40px 90px rgba(0,0,0,.65),
-    0 8px 30px rgba(67,64,184,.30),
-    inset 0 1px 0 rgba(255,255,255,.06);
-}
-.titlebar {
-  height: 40px;
-  display: flex; align-items: center; gap: 9px;
-  padding: 0 16px;
-  background: linear-gradient(180deg, #2C2C2E 0%, #1C1C1E 100%);
-  border-bottom: 1px solid rgba(255,255,255,.05);
-}
-.tl { width: 12px; height: 12px; border-radius: 50%; }
-.tl.r { background: #ff5f57; } .tl.y { background: #febc2e; } .tl.g { background: #28c840; }
-.titlebar .addr {
-  margin-left: 14px;
-  height: 22px; flex: 1; max-width: 330px;
-  display: flex; align-items: center;
-  padding: 0 12px;
-  border-radius: 7px;
-  background: rgba(0,0,0,.28);
-  color: #8E8E93; font-size: 11.5px; font-weight: 500; letter-spacing: .01em;
-}
-.titlebar .addr svg { width: 11px; height: 11px; margin-right: 7px; color: #30D158; }
-.window img { width: 100%; display: block; vertical-align: top; }
-/* top shimmer edge */
-.window::after {
-  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(169,167,253,.6) 40%, rgba(169,167,253,.6) 60%, transparent);
-}
+.brand-display svg { width: 100%; height: 100%; }
 </style>
 </head>
 <body>
 
 <div class="left">
   <div class="brand">
-    <div class="mark">
-      <svg viewBox="0 0 160 160" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <g fill="white" fill-opacity="0.82"><circle cx="64" cy="72" r="27"/><circle cx="100" cy="78" r="25"/><circle cx="80" cy="106" r="24"/></g>
-        
-      </svg>
-    </div>
-    <div class="name">Yuvomi</div>
+    <div class="name" aria-label="Ordoma"><span aria-hidden="true">${brandSvg}</span><span aria-hidden="true">rdoma</span></div>
   </div>
 
   <div class="kicker"><span class="dot"></span>Self-hosted · Open Source</div>
 
-  <h1 class="headline">The family planner<br>that's <span class="grad">truly yours.</span></h1>
+  <h1 class="headline">Your household,<br><span class="grad">in order.</span></h1>
 
   <p class="sub">Tasks, calendar, meals, shopping and budget — private by design, beautifully organized on your own server.</p>
 
@@ -266,19 +205,8 @@ body::after {
   </div>
 </div>
 
-<div class="stage">
-  <div class="glow"></div>
-  <div class="window">
-    <div class="titlebar">
-      <span class="tl r"></span><span class="tl y"></span><span class="tl g"></span>
-      <span class="addr">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"
-             stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="11" x="3" y="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
-        yuvomi.local
-      </span>
-    </div>
-    <img src="${imgSrc}" alt="Yuvomi Dashboard">
-  </div>
+<div class="brand-display" aria-hidden="true">
+  ${brandSvg}
 </div>
 
 </body>
@@ -290,20 +218,16 @@ async function render(outPath, finalW, finalH) {
   const browser = await puppeteer.launch();
   const page = await browser.newPage();
   await page.setViewport({ width: 1280, height: 640, deviceScaleFactor: 2 });
-  await page.setContent(html(screenshotB64), { waitUntil: 'load', timeout: 120_000 });
+  await page.setContent(html(), { waitUntil: 'load', timeout: 120_000 });
   await page.evaluate(async () => {
     await document.fonts.ready;
-    const img = document.querySelector('.window img');
-    if (img && !img.complete) await new Promise((r) => { img.onload = r; img.onerror = r; });
-    await img?.decode?.().catch(() => {});
   });
   const raw = await page.screenshot({ type: 'png' });
   await browser.close();
 
-  // 'cover' statt 'fill': das Twitter-Format (16:9) weicht vom 2:1-Canvas ab -
-  // ein leichter Seitenbeschnitt ist unsichtbar, eine Stauchung nicht.
+  // Preserve the complete mark, headline and margins at every social ratio.
   await sharp(raw)
-    .resize(finalW, finalH, { fit: 'cover', position: 'centre' })
+    .resize(finalW, finalH, { fit: 'contain', background: '#0A0A0C' })
     .png({ compressionLevel: 9 })
     .toFile(outPath);
 

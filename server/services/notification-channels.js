@@ -3,6 +3,7 @@
  * Zweck: CRUD, Validierung und write-only Secret-Handhabung fuer externe Notification-Provider.
  * Abhaengigkeiten: server/db.js, utils/ssrf.js, notification-providers/guarded-fetch.js
  */
+import { APP_NAME } from '../utils/brand.js';
 import { isIP } from 'node:net';
 import * as dbModule from '../db.js';
 import { singleEmailAddress } from './member-email.js';
@@ -138,7 +139,7 @@ const MAX_WEBHOOK_TEMPLATE_LENGTH = 4096;
 // Anfuehrungszeichen, Backslash, Zeilenumbruch. Waeren sie harmlos, ginge die
 // Gegenprobe unten durch und der Fehler kaeme erst bei der ersten Zustellung.
 const WEBHOOK_TEMPLATE_SAMPLE = Object.freeze({
-  title: 'Yuvomi "Test"',
+  title: `${APP_NAME} "Test"`,
   body: 'Zeile 1\nZeile 2 \\ Ende',
   url: '/tasks',
   tag: 'reminder-1',

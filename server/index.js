@@ -4,6 +4,7 @@
  * Abhängigkeiten: express, helmet, server/db.js, server/auth.js, server/routes/*
  */
 
+import { APP_NAME, isBrandAsset } from './utils/brand.js';
 import express from 'express';
 import helmet from 'helmet';
 import compression from 'compression';
@@ -87,7 +88,6 @@ const logYuvomi = createLogger('Yuvomi');
 const { version: APP_VERSION } = JSON.parse(
   readFileSync(new URL('../package.json', import.meta.url), 'utf-8')
 );
-const DEFAULT_APP_NAME = 'Yuvomi';
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -209,7 +209,7 @@ app.use(express.static(path.join(import.meta.dirname, '..', 'public'), {
   redirect: false,
   setHeaders(res, filePath) {
     const ext = path.extname(filePath).toLowerCase();
-    const isPwaIcon = /\/icons\/(icon-|apple-touch-icon|favicon)/.test(filePath);
+    const isPwaIcon = isBrandAsset(filePath);
     if (isPwaIcon) {
       // PWA-Icons müssen bei Deployments sofort aktualisiert werden
       res.setHeader('Cache-Control', 'no-cache, must-revalidate');
@@ -241,14 +241,8 @@ app.use('/api/v1/auth', authRouter);
 app.use('/reader', readerRouter);
 
 function buildVersionPayload(includeVersion = false) {
-  let appName = DEFAULT_APP_NAME;
+  const appName = APP_NAME;
   let setupRequired = false;
-  try {
-    const row = db.get().prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name');
-    if (row?.value) appName = row.value;
-  } catch {
-    // fall back to default
-  }
   try {
     const { count } = db.get().prepare('SELECT COUNT(*) AS count FROM users').get();
     setupRequired = count === 0;
@@ -305,13 +299,7 @@ app.get('/api/v1/version', (req, res) => {
 });
 
 app.get('/manifest.webmanifest', apiLimiter, (req, res) => {
-  let appName = DEFAULT_APP_NAME;
-  try {
-    const row = db.get().prepare('SELECT value FROM sync_config WHERE key = ?').get('app_name');
-    if (row?.value) appName = row.value;
-  } catch {
-    // fall back to default
-  }
+  const appName = APP_NAME;
 
   res.type('application/manifest+json');
   res.setHeader('Cache-Control', 'no-cache, must-revalidate');
@@ -375,7 +363,7 @@ app.get('/feed/calendar/:token.ics', feedLimiter, (req, res) => {
     if (!userId) return res.status(404).type('text/plain').send('Not found');
     const ics = icsExport.buildFeed(db.get(), userId);
     res.set('Cache-Control', 'private, no-store');
-    res.set('Content-Disposition', 'inline; filename="yuvomi.ics"');
+    res.set('Content-Disposition', 'inline; filename="ordoma.ics"');
     res.type('text/calendar; charset=utf-8').send(ics);
   } catch (err) {
     log.error('', err);
@@ -394,7 +382,7 @@ app.get('/feed/inventory-deadlines/:token.ics', feedLimiter, (req, res) => {
     if (!userId) return res.status(404).type('text/plain').send('Not found');
     const ics = inventoryDeadlinesIcs.buildInventoryDeadlinesFeed(db.get());
     res.set('Cache-Control', 'private, no-store');
-    res.set('Content-Disposition', 'inline; filename="yuvomi-inventory-deadlines.ics"');
+    res.set('Content-Disposition', 'inline; filename="ordoma-inventory-deadlines.ics"');
     res.type('text/calendar; charset=utf-8').send(ics);
   } catch (err) {
     log.error('', err);

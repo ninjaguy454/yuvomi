@@ -33,7 +33,7 @@ test('Reader mode renders useful HTML without JavaScript', async () => {
   const response = await fetch(`http://127.0.0.1:${server.address().port}/reader?view=tasks`);
   const html = await response.text();
   assert.equal(response.status, 200);
-  assert.match(html, /Yuvomi Reader/);
+  assert.match(html, /Ordoma Reader/);
   assert.match(html, /Reader task/);
   assert.doesNotMatch(html, /<script/i);
   assert.match(html, /reader\.css/);

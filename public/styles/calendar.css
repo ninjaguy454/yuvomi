@@ -1,4 +1,5 @@
 @import url('/styles/settings.css');
+@import url('/styles/month-year-picker.css');
 
 /**
  * Modul: Kalender (Calendar)
@@ -42,6 +43,12 @@
    * oberen Rand ab, obwohl er top:0 klebt, und machte den Kalender mit 1200px
    * als einziges Modul schmaler als die kanonischen 1280px. */
   overflow: hidden;
+}
+
+/* The planning sections share the view selector's content column. The page
+ * itself is full width; its toolbar already uses this shared inline gutter. */
+.calendar-page > .calendar-planning-tabs {
+  margin-inline: var(--page-inline-pad);
 }
 
 /* Scroll-/Rasterfläche unter der Monats-Nav.
@@ -109,9 +116,25 @@
   min-width: 7ch;
   text-align: center;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
+
+.cal-toolbar__period-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  min-height: var(--target-base);
+  padding: var(--space-1) var(--space-2);
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.cal-toolbar__period-button:hover { background: var(--color-surface-hover); }
+.cal-toolbar__period-button > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cal-toolbar__period-button > svg { flex-shrink: 0; }
 
 /* „Heute" ist eine Aktion, keine Selektion - und stand als getönte Fläche neben
  * den getönten View-Segmenten, las sich also wie eine dritte aktive Ansicht.

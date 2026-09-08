@@ -3,6 +3,7 @@
  * Zweck: Notification-Channels verwalten und Testbenachrichtigungen senden.
  * Abhaengigkeiten: express, notification-channels.js, notifications.js
  */
+import { APP_NAME } from '../utils/brand.js';
 import express from 'express';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
@@ -114,8 +115,8 @@ export function buildRouter({
       const channel = store.getChannel(id, { includeSecrets: true });
       if (!channel) return res.status(404).json({ error: 'Notification channel not found.', code: 404 });
       const payload = {
-        title: 'Yuvomi',
-        body: 'Yuvomi notification test',
+        title: APP_NAME,
+        body: `${APP_NAME} notification test`,
         url: '/settings/personal/notifications',
         tag: `notification-channel-test-${id}`,
         priority: 'default',

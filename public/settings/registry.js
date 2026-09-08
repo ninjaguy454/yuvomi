@@ -1,13 +1,15 @@
+import { MODULE_ICON } from '../nav-icons.js';
+
 export const SETTINGS_STORAGE_KEY = 'yuvomi:settings:path';
 export const LEGACY_SETTINGS_STORAGE_KEY = 'yuvomi:settings:tab';
 
 const freezeEntries = (entries) => Object.freeze(entries.map((entry) => Object.freeze(entry)));
 
 export const SETTINGS_DOMAINS = freezeEntries([
-  { id: 'personal', labelKey: 'settings.domainPersonal', icon: 'user', adminOnly: false },
-  { id: 'modules', labelKey: 'settings.domainModules', icon: 'layout-grid', adminOnly: true },
-  { id: 'sync', labelKey: 'settings.domainSync', icon: 'refresh-cw', adminOnly: true },
-  { id: 'admin', labelKey: 'settings.domainAdministration', icon: 'shield', adminOnly: true },
+  { id: 'personal', labelKey: 'settings.domainPersonal', descriptionKey: 'settings.domainPersonalDescription', icon: 'user', adminOnly: false },
+  { id: 'modules', labelKey: 'settings.domainModules', descriptionKey: 'settings.domainModulesDescription', icon: 'layout-grid', adminOnly: true },
+  { id: 'sync', labelKey: 'settings.domainSync', descriptionKey: 'settings.domainSyncDescription', icon: 'refresh-cw', adminOnly: true },
+  { id: 'admin', labelKey: 'settings.domainAdministration', descriptionKey: 'settings.domainAdministrationDescription', icon: 'shield', adminOnly: true },
 ]);
 
 export const SETTINGS_LEAVES = freezeEntries([
@@ -177,7 +179,7 @@ export const SETTINGS_LEAVES = freezeEntries([
     path: '/settings/modules/kitchen',
     labelKey: 'settings.pageKitchen',
     descriptionKey: 'settings.pageKitchenDescription',
-    icon: 'utensils',
+    icon: MODULE_ICON.kitchen,
     module: 'kitchen',
     adminOnly: true,
     loader: () => import('/settings/pages/modules-kitchen.js'),

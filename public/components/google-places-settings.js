@@ -60,7 +60,7 @@ export async function renderGooglePlacesSettings(container, {
     : '<div class="settings-form-actions"><button type="submit" class="btn btn--primary">Save Google settings</button></div>';
 
   replaceHtml(container, `<form data-google-places-config>
-    <p class="settings-card-description">Google search is optional. The API key stays on the Yuvomi server and is never returned to the browser after it is saved.</p>
+    <p class="settings-card-description">Google search is optional. The API key stays on the Ordoma server and is never returned to the browser after it is saved.</p>
     ${inputRow('Google Maps Platform API key', `<input class="input" type="password" name="api_key" maxlength="500" autocomplete="off" placeholder="${config.api_key_configured ? 'Saved - leave blank to keep' : 'Paste API key'}"${lock('api_key')}>`, sourceLabel)}
     ${managed.api_key ? `<p class="form-hint" id="google-api_key-managed">${lockedHint}</p>` : ''}
     <label class="automation-check-row"><input type="checkbox" name="integration_enabled" ${config.integration_enabled ? 'checked' : ''}${lock('integration_enabled')}> Enable Google Places search</label>

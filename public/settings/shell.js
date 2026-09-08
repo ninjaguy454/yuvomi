@@ -157,7 +157,7 @@ function createNavigationLink(entry, activeLeaf) {
  * nicht kennt (Critique 2026-07-27). Gefiltert wird über Label UND Beschreibung,
  * damit "Zeitzone" auch ein Blatt findet, das anders heisst.
  */
-function createNavigationSearch(navigation, domains, user, activeLeaf) {
+function createNavigationSearch(navigation, domains, user, activeLeaf, groupSelector = '.settings-shell__navigation-group') {
   const leaves = domains.flatMap((domain) => allowedLeavesForDomain(domain.id, user)
     .map((entry) => ({
       entry,
@@ -183,7 +183,7 @@ function createNavigationSearch(navigation, domains, user, activeLeaf) {
   status.setAttribute('role', 'status');
   status.hidden = true;
 
-  const groups = () => navigation.querySelectorAll('.settings-shell__navigation-group');
+  const groups = () => navigation.querySelectorAll(groupSelector);
 
   const applyFilter = () => {
     const query = searchNormalize(input.value.trim());
@@ -429,6 +429,7 @@ function renderDomainsOverview(content, domains, user) {
       href: settingsOverviewUrl(domain.id),
       icon: domain.icon,
       title: t(domain.labelKey),
+      description: t(domain.descriptionKey),
     }));
   }
 
@@ -450,6 +451,9 @@ function renderDomainsOverview(content, domains, user) {
       createIcon(domain.icon, 'settings-desktop-overview__domain-icon'),
       document.createTextNode(t(domain.labelKey)),
     );
+    const description = document.createElement('p');
+    description.className = 'settings-desktop-overview__domain-description';
+    description.textContent = t(domain.descriptionKey);
 
     const leafList = document.createElement('div');
     leafList.className = 'settings-desktop-overview__leaf-list';
@@ -457,11 +461,12 @@ function renderDomainsOverview(content, domains, user) {
       leafList.appendChild(createDesktopLeafLink(entry));
     }
 
-    domainSection.append(heading, leafList);
+    domainSection.append(heading, description, leafList);
     desktopOverview.appendChild(domainSection);
   }
 
   content.replaceChildren(overview, desktopOverview);
+  createNavigationSearch(content, domains, user, null, '.settings-mobile-overview--domains, .settings-desktop-overview');
 }
 
 function renderDomainOverview(content, domain, user) {
@@ -469,6 +474,7 @@ function renderDomainOverview(content, domain, user) {
   overview.className = 'settings-mobile-overview settings-domain-overview';
   overview.appendChild(createOverviewHeader(
     t('settings.mobileDomainTitle', { domain: t(domain.labelKey) }),
+    t(domain.descriptionKey),
   ));
 
   const backLink = createLink(settingsOverviewUrl(), 'settings-overview-back-link');

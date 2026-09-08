@@ -43,6 +43,7 @@ import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { isNavModuleReadOnly } from '/permissions.js';
+import { renderSkillPicker, bindSkillPicker } from '/components/task-requirements.js';
 import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -128,14 +129,15 @@ export async function deleteTaskWithUndo(id, { container = null, onChanged = () 
  * schließen zu müssen (#925).
  */
 export async function addSubtask(parentId, {
-  onChanged = () => {}, title: suppliedTitle, throwOnError = false,
+  onChanged = () => {}, title: suppliedTitle, skillIds, throwOnError = false,
 } = {}) {
   const title = suppliedTitle === undefined
     ? await promptModal(t('tasks.subtaskPrompt'))
     : suppliedTitle;
   if (!title) return null;
   try {
-    const res = await api.post('/tasks', { title, parent_task_id: parentId });
+    const res = await api.post('/tasks', { title, parent_task_id: parentId,
+      ...(skillIds === undefined ? {} : { skill_ids: skillIds }) });
     // Wie beim Abhaken daneben: die Umgebung trägt den Fortschrittsbalken der
     // Elternkarte, aber sie muss nichts davon zeigen.
     await onChanged();
@@ -149,17 +151,26 @@ export async function addSubtask(parentId, {
 
 /** Rename a first-class subtask through the canonical Task route. */
 export async function renameSubtask(subtask, {
-  onChanged = () => {}, title: suppliedTitle, throwOnError = false,
+  onChanged = () => {}, title: suppliedTitle, skillIds, throwOnError = false,
 } = {}) {
   const currentTitle = String(subtask?.title || '');
   const title = suppliedTitle === undefined
     ? await promptModal(t('tasks.subtaskRenamePrompt'), currentTitle)
     : suppliedTitle;
-  if (!title || title.trim() === currentTitle) return null;
+  const skillsChanged = skillIds !== undefined
+    && JSON.stringify([...skillIds].sort((a, b) => a - b)) !== JSON.stringify([...(subtask.skill_ids || [])].sort((a, b) => a - b));
+  if (!title || (title.trim() === currentTitle && !skillsChanged)) return null;
   try {
     const nextTitle = title.trim();
-    await api.put(`/tasks/${subtask.id}`, { title: nextTitle });
+    const response = await api.put(`/tasks/${subtask.id}`, { title: nextTitle,
+      ...(skillIds === undefined ? {} : { skill_ids: skillIds }) });
     subtask.title = nextTitle;
+    if (skillIds !== undefined) {
+      subtask.skill_ids = response.data?.skill_ids || [...skillIds];
+      subtask.skills = response.data?.skills || (subtask.skills || []).filter((skill) => skillIds.includes(Number(skill.id)));
+      subtask.skill_assignment_needed = response.data?.skill_assignment_needed
+        ?? (subtask.skill_ids.length > 0 && subtask.assigned_to == null);
+    }
     await onChanged();
     return nextTitle;
   } catch (err) {
@@ -228,6 +239,15 @@ function chipListNode(items, toLabel) {
 /** Tags als Chips. In der Leseansicht benennen sie, sie filtern nicht. */
 function tagChipsNode(tags) {
   return chipListNode(normalizeTagList(tags), (tag) => tag);
+}
+
+function taskSkillSummary(task, ctx) {
+  const names = new Map([...(ctx.skills || []), ...(task.skills || [])]
+    .map((skill) => [Number(skill.id), skill.name]));
+  const ids = task.skill_ids || (task.skills || []).map((skill) => skill.id);
+  if (!ids.length) return '';
+  const summary = ids.map((id) => names.get(Number(id)) || 'Unavailable skill').join(', ');
+  return task.skill_assignment_needed ? `${summary} · Needs someone with these skills` : summary;
 }
 
 function lucideIcon(name) {
@@ -572,7 +592,22 @@ function subtaskListNode(task, ctx) {
   const wrap = document.createElement('div');
   wrap.className = 'detail-subtasks detail-task-subtasks';
 
-  const inlineTitleEditor = ({ value = '', save, cancel, saveLabel }) => {
+  let skillsRequest;
+  const editingSkills = async (subtask = null) => {
+    if (!skillsRequest) skillsRequest = Array.isArray(ctx.skills)
+      ? Promise.resolve(ctx.skills)
+      : api.get('/automation/activity-options').then((response) => response.data?.skills || []);
+    try {
+      const available = await skillsRequest;
+      return [...new Map([...(subtask?.skills || []), ...available].map((skill) => [Number(skill.id), skill])).values()];
+    } catch (error) {
+      skillsRequest = null;
+      window.yuvomi.showToast(error.message || 'Could not load skills.', 'danger');
+      return null;
+    }
+  };
+
+  const inlineTitleEditor = ({ value = '', selectedSkills = [], skills = [], save, cancel, saveLabel }) => {
     const form = document.createElement('form');
     form.className = 'detail-subtask__editor';
     const input = document.createElement('input');
@@ -598,13 +633,25 @@ function subtaskListNode(task, ctx) {
       const nextTitle = input.value.trim();
       if (!nextTitle) { input.focus(); return; }
       input.disabled = submit.disabled = dismiss.disabled = true;
-      try { await save(nextTitle); }
+      picker.setReadOnly(true);
+      try { await save(nextTitle, picker.getValue()); }
       catch (err) {
         input.disabled = submit.disabled = dismiss.disabled = false;
+        picker.setReadOnly(false);
         window.yuvomi.showToast(err.message, 'danger');
       }
     });
     form.append(input, submit, dismiss);
+    form.insertAdjacentHTML('beforeend', renderSkillPicker({ skills, selectedIds: selectedSkills, canCreateSkill: ctx.isAdmin }));
+    const picker = bindSkillPicker(form, { onCreateSkill: ctx.isAdmin ? async () => {
+      const { openSkillEditor } = await import('/components/activity-automation.js');
+      const skill = await openSkillEditor();
+      if (skill) {
+        ctx.skills = [...new Map([...skills, ...(ctx.skills || []), skill].map((entry) => [Number(entry.id), entry])).values()];
+        skillsRequest = Promise.resolve(ctx.skills);
+      }
+      return skill;
+    } : null });
     queueMicrotask(() => { input.focus(); input.select(); });
     return form;
   };
@@ -623,6 +670,14 @@ function subtaskListNode(task, ctx) {
     icon.setAttribute('aria-hidden', 'true');
     const label = document.createElement('span');
     label.className = 'detail-subtask__title';
+    const meta = document.createElement('div');
+    meta.className = 'detail-subtask__meta';
+    const requirements = document.createElement('details');
+    requirements.className = 'detail-subtask__requirements';
+    const requirementsLabel = document.createElement('summary');
+    requirementsLabel.textContent = 'Required skills';
+    const requirementsContent = document.createElement('div');
+    requirements.append(requirementsLabel, requirementsContent);
 
     const paint = () => {
       const done = subtask.status === 'done';
@@ -632,6 +687,18 @@ function subtaskListNode(task, ctx) {
       toggle.setAttribute('aria-label', t('tasks.subtaskMarkDone', { title: subtask.title }));
       icon.dataset.lucide = done ? 'check-circle-2' : 'circle';
       label.textContent = subtask.title;
+      const parts = [];
+      const assignees = subtaskParticipants(subtask, ctx.users);
+      const pointCount = Number(subtask.points || 0);
+      if (assignees.length) parts.push(assignees.map((person) => person.display_name).filter(Boolean).join(', '));
+      if (pointCount > 0) parts.push(t('tasks.pointsSummary', { count: pointCount }));
+      const skills = taskSkillSummary(subtask, ctx);
+      requirementsContent.textContent = skills;
+      requirementsLabel.setAttribute('aria-label', `Required skills for ${subtask.title}`);
+      meta.replaceChildren();
+      if (parts.length) meta.append(document.createTextNode(parts.join(' · ')));
+      if (skills) meta.append(requirements);
+      meta.hidden = !parts.length && !skills;
       if (window.lucide) window.lucide.createIcons({ el: toggle });
     };
     toggle.append(icon, label);
@@ -653,19 +720,7 @@ function subtaskListNode(task, ctx) {
         toggle.disabled = false;
       }
     });
-    row.appendChild(toggle);
-
-    const assignees = subtaskParticipants(subtask, ctx.users);
-    const pointCount = Number(subtask.points || 0);
-    if (assignees.length || pointCount > 0) {
-      const meta = document.createElement('span');
-      meta.className = 'detail-subtask__meta';
-      const parts = [];
-      if (assignees.length) parts.push(assignees.map((person) => person.display_name).filter(Boolean).join(', '));
-      if (pointCount > 0) parts.push(t('tasks.pointsSummary', { count: pointCount }));
-      meta.textContent = parts.join(' � ');
-      row.appendChild(meta);
-    }
+    row.append(toggle, meta);
 
     if (canEditTaskDefinition(subtask, task, ctx) && !isArchived(task)) {
       const actions = document.createElement('div');
@@ -676,26 +731,31 @@ function subtaskListNode(task, ctx) {
       rename.className = 'btn btn--ghost btn--icon btn--icon-sm';
       rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
       rename.appendChild(lucideIcon('pencil'));
-      rename.addEventListener('click', () => {
+      rename.addEventListener('click', async () => {
+        rename.disabled = true;
+        const skills = await editingSkills(subtask);
+        rename.disabled = false;
+        if (!skills || !row.isConnected) return;
         const originalChildren = [...row.children];
         originalChildren.forEach((child) => { child.hidden = true; });
         const cancel = () => {
           editor.remove();
           originalChildren.forEach((child) => { child.hidden = false; });
+          paint();
           rename.focus();
         };
         const editor = inlineTitleEditor({
           value: subtask.title,
+          selectedSkills: subtask.skill_ids || [],
+          skills,
           saveLabel: t('tasks.subtaskRename', { title: subtask.title }),
           cancel,
-          save: async (nextTitle) => {
-            if (nextTitle !== subtask.title) {
-              await renameSubtask(subtask, {
-                onChanged: ctx.onChanged, title: nextTitle, throwOnError: true,
-              });
-              rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
-              paint();
-            }
+          save: async (nextTitle, skillIds) => {
+            await renameSubtask(subtask, {
+              onChanged: ctx.onChanged, title: nextTitle, skillIds, throwOnError: true,
+            });
+            rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
+            paint();
             cancel();
           },
         });
@@ -733,7 +793,11 @@ function subtaskListNode(task, ctx) {
     label.textContent = t('tasks.subtaskAdd');
     add.replaceChildren(label);
 
-    add.addEventListener('click', () => {
+    add.addEventListener('click', async () => {
+      add.disabled = true;
+      const skills = await editingSkills();
+      add.disabled = false;
+      if (!skills || !add.isConnected) return;
       add.hidden = true;
       const cancel = () => {
         editor.remove();
@@ -741,11 +805,12 @@ function subtaskListNode(task, ctx) {
         add.focus();
       };
       const editor = inlineTitleEditor({
+        skills,
         saveLabel: t('tasks.subtaskAdd'),
         cancel,
-        save: async (title) => {
+        save: async (title, skillIds) => {
           const created = await addSubtask(task.id, {
-            ...ctx, title, throwOnError: true,
+            ...ctx, title, skillIds, throwOnError: true,
           });
           if (created) {
             task.subtasks = [...(task.subtasks || []), created];
@@ -1231,6 +1296,7 @@ function renderTaskDetail(task, reminders = [], ctx) {
       ? { icon: 'users', label: t('tasks.participantsLabel'), node: participants, multiline: true }
       : assignedRow(task.assigned_users, t('tasks.assignedLabel')),
     { icon: 'user-check', label: t('tasks.responsibilitiesLabel'), node: responsibilityListNode(task, ctx), multiline: true },
+    { icon: 'badge-check', label: 'Required skills', value: taskSkillSummary(task, ctx) },
     { icon: 'award', label: t('tasks.pointsLabel'), value: task.points ? String(task.points) : '' },
     { icon: 'chart-no-axes-column-increasing', label: t('tasks.subtasksLabel'), node: progressNode(task) },
     { icon: 'tag', label: t('tasks.tagsLabel'), node: tagChipsNode(task.tags) },
@@ -1384,6 +1450,7 @@ export function openTaskDetail({
   task,
   reminder = null,
   users = [],
+  skills = null,
   currentUserId = null,
   isAdmin = false,
   categories = [],
@@ -1391,7 +1458,7 @@ export function openTaskDetail({
   onChanged = () => {},
   edit = null,
 }) {
-  const ctx = { users, currentUserId, isAdmin, categories, container, onChanged };
+  const ctx = { users, skills, currentUserId, isAdmin, categories, container, onChanged };
   const archived = isArchived(task);
   const next = archived ? null : NEXT_STATUS[task.status];
   // Gesperrte Aufgabe (#830): der Weiterschalt-Knopf bleibt, Loeschen, Ablegen

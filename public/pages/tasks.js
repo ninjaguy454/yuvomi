@@ -5,8 +5,9 @@
  */
 
 import { api } from '/api.js';
+import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
-import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, advancedSection } from '/components/modal.js';
+import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
 import { stagger, vibrate, scheduleUndoableDelete, animationSettled } from '/utils/ux.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
@@ -15,7 +16,9 @@ import { renderMarkdownToolbar, wireMarkdownToolbar } from '/utils/markdown-tool
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
-import { openQuickAdd } from '/components/activity-automation.js';
+import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor } from '/components/activity-automation.js';
+import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
+import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
 import { resolveReminderPreset } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { renderDocumentAttachField, bindDocumentAttachField } from '/components/document-attach.js';
@@ -28,7 +31,7 @@ import {
   todayKey, parseLocalDateKey, addLocalDays, toLocalDateKey,
   startOfLocalWeekKey, weekStartIndex, weekdayOrder, isWeekendKey,
 } from '/utils/date.js';
-import { nowFields, zonedDateKey, zonedUTCProxy } from '/utils/timezone.js';
+import { zonedDateKey } from '/utils/timezone.js';
 import { isWallModeEnabled } from '/utils/wall-mode.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -119,9 +122,6 @@ let taskDocuments = null;
 // Hilfsfunktionen
 // --------------------------------------------------------
 
-function initials(name = '') {
-  return name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-}
 
 /** Progress for the first-class subtasks assigned to one household member. */
 function participantCompletion(task, userId) {
@@ -373,13 +373,6 @@ function renderPriorityBadge(priority) {
   </span>`;
 }
 
-function renderDueDate(dateStr, timeStr, isDone = false) {
-  const d = formatDueDate(dateStr, timeStr, isDone);
-  if (!d) return '';
-  return `<span class="due-date ${d.cls}">
-    <i data-lucide="clock" class="icon-sm" aria-hidden="true"></i> ${d.label}
-  </span>`;
-}
 
 function renderStartDateBadge(startDateStr) {
   if (!startDateStr) return '';
@@ -439,13 +432,13 @@ function syncTargetFieldHtml(task) {
   }
 
   return `
-      <div class="form-group">
+      <details class="form-group task-sync-integration" data-task-sync-integration hidden><summary>External calendar sync</summary>
         <label class="label" for="task-sync-target">${t('tasks.syncTargetLabel')}</label>
         <select class="input" id="task-sync-target" name="sync_target">
           <option value="">${t('tasks.syncTargetLocal')}</option>
         </select>
         <small class="form-hint">${t('tasks.syncTargetHint')}</small>
-      </div>
+      </details>
 `;
 }
 
@@ -502,6 +495,8 @@ async function wireSyncTarget(panel, task) {
     select.appendChild(option);
   }
 
+  const integration = panel.querySelector('[data-task-sync-integration]');
+  if (integration) integration.hidden = !lists.length && !current;
   const wanted = current || (task ? '' : state.defaultSyncTarget);
   if (wanted && Array.from(select.options).some((o) => o.value === wanted)) {
     select.value = wanted;
@@ -528,122 +523,6 @@ async function wireSyncTarget(panel, task) {
  * Anhänge werden zur reinen Glyphe: die Zahl daneben war die einzige Stelle der
  * Zeile, an der eine Anzahl OHNE ihren Gegenstand stand.
  */
-function renderLegacyTaskCard(task, opts = {}) {
-  const { expandedSubtasks = false, showCheckbox = false, isChecked = false, showCategory = true } = opts;
-  const isDone = task.status === 'done';
-  const archived = isArchived(task);
-  // Gesperrte Aufgabe (#830): abhaken bleibt, umschreiben nicht. Die Knoepfe,
-  // die in einem 403 endeten, stehen deshalb gar nicht erst da.
-  const canEdit = canEditTaskDefinition(task);
-  const progress = task.subtask_total > 0
-    ? Math.round((task.subtask_done / task.subtask_total) * 100)
-    : null;
-
-  const subtasksHtml = task.subtasks?.length
-    ? task.subtasks.map((s) => `
-        <div class="subtask-item ${s.status === 'done' ? 'subtask-item--done' : ''}"
-             data-subtask-id="${s.id}">
-          <button class="subtask-item__checkbox ${s.status === 'done' ? 'subtask-item__checkbox--done' : ''}"
-                  data-action="toggle-subtask" data-id="${s.id}"
-                  data-status="${s.status}" aria-label="${t('tasks.subtaskMarkDone', { title: esc(s.title) })}">
-            ${s.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
-          </button>
-          <button type="button" class="subtask-item__title" data-action="open-task" data-id="${s.id}">${esc(s.title)}</button>
-          ${s.assigned_name ? `<span class="subtask-item__assignee">${esc(s.assigned_name)}</span>` : ''}
-          ${canEditTaskDefinition(s, task) ? `
-          <div class="subtask-item__actions">
-            <button class="btn btn--ghost btn--icon btn--icon-sm subtask-item__action"
-                    data-action="rename-subtask" data-id="${s.id}" data-title="${esc(s.title)}"
-                    aria-label="${t('tasks.subtaskRename', { title: esc(s.title) })}">
-              <i data-lucide="pencil" aria-hidden="true"></i>
-            </button>
-            <button class="btn btn--ghost btn--icon btn--icon-sm subtask-item__action"
-                    data-action="delete-subtask" data-id="${s.id}" data-title="${esc(s.title)}"
-                    aria-label="${t('tasks.subtaskDelete', { title: esc(s.title) })}">
-              <i data-lucide="trash-2" aria-hidden="true"></i>
-            </button>
-          </div>` : ''}
-        </div>`).join('')
-    : '';
-
-  return `
-    <div class="task-card ${isDone ? 'task-card--done' : ''} ${archived ? 'task-card--archived' : ''}" data-task-id="${task.id}">
-      <div class="list-row list-row--roomy task-card__main">
-        ${showCheckbox ? `
-        <input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}"
-               ${isChecked ? 'checked' : ''} aria-label="${t('tasks.selectTask')}">
-        ` : ''}
-        <button class="task-status-btn task-status-btn--${task.status}"
-                data-action="toggle-status" data-id="${task.id}" data-status="${task.status}"
-                aria-label="${isDone ? t('tasks.markOpen', { title: esc(task.title) }) : t('tasks.markDone', { title: esc(task.title) })}">
-          <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
-        </button>
-
-        <div class="task-card__body" data-action="open-task" data-id="${task.id}"
-             role="button" tabindex="0" aria-label="${esc(task.title)}">
-          <span class="task-card__title u-card-title u-compact">${esc(task.title)}</span>
-          <div class="task-card__meta">
-            ${archived ? `<span class="due-date task-card__archived"><i data-lucide="archive" class="icon-sm" aria-hidden="true"></i>${t('tasks.statusArchived')}</span>` : ''}
-            ${renderPriorityBadge(task.priority)}
-            ${task.due_date ? '' : renderStartDateBadge(task.start_date)}
-            ${renderDueDate(task.due_date, task.due_time, isDone || archived)}
-            ${/* `role="img"`, sonst wertet keine Hilfstechnik das `aria-label` aus:
-                an einem generischen <span> ohne Rolle ist es wirkungslos. Solange
-                die Ziffer noch danebenstand, las der Screenreader wenigstens sie -
-                seit der Dichte-Runde traegt das Label die Anzahl allein. Dieselbe
-                Marke im Budget (budget.js, `.budget-recur-mark`) macht es richtig;
-                hier standen zwei Kopien ohne Rolle (PR-Review #754). */ ''}
-            ${task.is_recurring ? `<span class="due-date" role="img" aria-label="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i></span>` : ''}
-            ${task.document_count > 0 ? `<span class="due-date task-card__docs" role="img" aria-label="${esc(t('tasks.documentsCount', { count: task.document_count }))}"><i data-lucide="paperclip" class="icon-sm" aria-hidden="true"></i></span>` : ''}
-            ${task.locked ? `<span class="due-date" role="img" aria-label="${esc(t('tasks.lockedBadge'))}" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
-            ${renderVisibilityBadge(task.visibility)}
-            ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date task-card__category">${esc(catLabel(task.category))}</span>` : ''}
-            ${task.activity_assignment_state === 'open' ? '<span class="due-date task-card__category">Open · claimable</span>' : ''}
-            ${task.activity_assignment_state === 'unavailable' ? '<span class="due-date task-card__category">Needs an eligible person</span>' : ''}
-            ${(task.activity_responsibilities || []).filter((row) => ['beneficiary', 'supervisor'].includes(row.role)).map((row) => `<span class="due-date">${esc(row.role)}: ${esc(row.display_name)}</span>`).join('')}
-            ${task.location ? `<span class="due-date task-card__location" title="${esc(task.location.address || task.location.label || '')}"><i data-lucide="map-pin" class="icon-sm" aria-hidden="true"></i>${esc(task.location.label || task.location.address || 'Location')}</span>` : ''}
-            ${renderTagBadges(task.tags, ROW_TAG_BADGES_VISIBLE, task.priority)}
-          </div>
-        </div>
-
-        ${renderAvatarStack(task.assigned_users ?? [], { size: 28 })}
-
-        ${task.activity_assignment_state === 'open' ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">Claim</button>` : ''}
-
-        ${canEdit && !(task.subtask_total > 0) && !archived && !task.parent_task_id ? `
-        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action task-card__add-subtask" data-action="add-subtask" data-parent="${task.id}"
-                aria-label="${t('tasks.subtaskAdd')}" title="${t('tasks.subtaskAdd')}">
-          <i data-lucide="list-plus" class="icon-md" aria-hidden="true"></i>
-        </button>` : ''}
-        ${canEdit ? `
-        <button class="btn btn--ghost btn--icon btn--icon-sm task-card__inline-action"
-                data-action="${archived ? 'unarchive-task' : 'archive-task'}" data-id="${task.id}"
-                aria-label="${archived ? t('tasks.unarchiveButton') : t('tasks.archiveButton')}"
-                title="${archived ? t('tasks.unarchiveButton') : t('tasks.archiveButton')}">
-          <i data-lucide="${archived ? 'archive-restore' : 'archive'}" class="icon-md" aria-hidden="true"></i>
-        </button>` : ''}
-      </div>
-
-      ${progress !== null ? `
-        <button type="button" class="subtask-progress" data-action="toggle-subtasks" data-id="${task.id}"
-                aria-expanded="${expandedSubtasks ? 'true' : 'false'}" aria-controls="subtasks-${task.id}"
-                aria-label="${t('tasks.subtaskToggle')}">
-          <div class="subtask-progress__bar-wrap">
-            <div class="subtask-progress__bar-fill" style="--progress-scale:${progress / 100}"></div>
-          </div>
-          <span class="subtask-progress__text">${task.subtask_done}/${task.subtask_total}</span>
-        </button>` : ''}
-
-      ${task.subtasks?.length ? `
-        <div class="subtask-list ${expandedSubtasks ? 'subtask-list--visible' : ''}"
-             id="subtasks-${task.id}">
-          ${subtasksHtml}
-          <button class="subtask-item__add" data-action="add-subtask" data-parent="${task.id}">
-            ${t('tasks.subtaskAdd')}
-          </button>
-        </div>` : ''}
-    </div>`;
-}
 
 // Effektive Fälligkeit: mit due_time wenn vorhanden, sonst 23:59:59 des Tages
 function renderResponsiveTagBadges(task) {
@@ -1018,27 +897,6 @@ const ROW_TAG_BADGES_VISIBLE = 1;
  * Etikett kommt aus einer fremden Liste und ist in der Sprache geschrieben, in
  * der der Nutzer es dort angelegt hat.
  */
-function renderTagBadges(tags, limit = TAG_BADGES_VISIBLE, priority = null) {
-  if (!tags?.length) return '';
-  const eigenes = priority && priority !== 'none' ? PRIORITY_LABELS()[priority] : null;
-  if (eigenes) {
-    const norm = (s) => String(s).trim().toLocaleLowerCase();
-    tags = tags.filter((tag) => norm(tag) !== norm(eigenes));
-    if (!tags.length) return '';
-  }
-  const shown = tags.slice(0, limit);
-  const rest  = tags.length - shown.length;
-  const chips = shown.map((tag) => `
-    <button type="button" class="task-tag task-tag--filter" data-tag-filter="${esc(tag)}"
-            aria-label="${esc(t('tasks.tagFilterBy', { tag }))}">${esc(tag)}</button>`);
-  // Der Rest bleibt lesbar statt anklickbar: er benennt keinen einzelnen Tag,
-  // also gäbe es auch nichts, worauf ein Klick filtern könnte.
-  if (rest > 0) {
-    chips.push(`<span class="task-tag task-tag--more"
-                      title="${esc(tags.slice(limit).join(', '))}">+${rest}</span>`);
-  }
-  return chips.join('');
-}
 
 /**
  * Klick auf ein Tag-Chip filtert die Liste danach (#586).
@@ -1069,8 +927,10 @@ function wireTagBadgeFilter(container) {
 
 function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null } = {}) {
   const isEdit = !!task;
-  const presetStartDate = isEdit ? task?.start_date : (presetDates?.start_date || null);
-  const presetDueDate = isEdit ? task?.due_date : (presetDates?.due_date || null);
+  const existingTask = task;
+  task = task || createManualTaskDraft({ template: presetActivityTemplate, places: state.places, defaultPoints: state.defaultPoints, presetDates });
+  const presetStartDate = task.start_date;
+  const presetDueDate = task.due_date;
 
   const selectedIds = task?.assigned_users?.map((u) => u.id) ?? (task?.assigned_to ? [task.assigned_to] : []);
   const rotationIds = task?.rotation_user_ids ?? [];
@@ -1109,53 +969,10 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
   // Punkte neuer Aufgaben mit dem Haushalt-Standard vorbelegen (#578).
   const prefillPoints = !isEdit && state.defaultPoints > 0 ? state.defaultPoints : 0;
-  const pointsValue = isEdit
-    ? (Number(task?.points) > 0 ? Number(task.points) : '')
-    : (prefillPoints || '');
+  const pointsValue = Number(task.points) || '';
 
-  /* WAS IN DER SEKTION STEHT, NENNT IHRE ZUSAMMENFASSUNG - dann muss sie nicht
-   * auf (Critique 2026-08-10, P1 „Enterprise-SaaS-Antireferenz").
-   *
-   * Das Formular mass 29 Labels und `scrollHeight 1410` in `clientHeight 528`,
-   * also 2,7 Bildschirme, um eine Aufgabe zu aendern - die haeufigste Handlung
-   * der App auf ihrem ueberladensten Screen. Die progressive Offenlegung war
-   * dabei nicht etwa nicht gebaut: sie war gebaut und abgeschaltet, und der
-   * Schalter war diese eine Zeile.
-   *
-   * `advancedFieldsOpen` verlangte „einen Wert abseits der Defaults", zaehlte
-   * dazu aber `category !== FALLBACK_CATEGORY`. Eine Kategorie hat fast jede
-   * Aufgabe - die Bedingung war also praktisch immer wahr, und die Sektion kam
-   * praktisch immer offen. Eine Regel, die jeden Fall zur Ausnahme erklaert,
-   * hat keine Ausnahme mehr.
-   *
-   * Der Grund hinter der Bedingung war richtig: ein gesetzter Wert darf nicht
-   * unsichtbar sein. Nur ist Aufklappen dafuer die teuerste Antwort. Das Muster
-   * fuer die billige stand schon zwei Zeilen weiter unten - bei den
-   * vorbelegten Punkten, wo der Aufklapper ZU blieb und die Zusammenfassung den
-   * Wert nannte. Es gilt jetzt fuer alle Sekundaerfelder.
-   *
-   * Die Beschreibung traegt die Zusammenfassung nicht: sie ist Freitext, und
-   * eine gekuerzte Notiz im Summary waere eine schlechtere Notiz. Sie steht
-   * deshalb OBEN beim Titel - Titel und Notiz sichtbar, alles andere hinter
-   * einem Einstieg, genau wie Apple Erinnerungen es haelt. */
-  const advancedSummary = [];
-  if (isEdit && task.priority && task.priority !== 'none') {
-    advancedSummary.push(PRIORITY_LABELS()[task.priority] ?? task.priority);
-  }
-  if (isEdit && task.category && task.category !== FALLBACK_CATEGORY) {
-    advancedSummary.push(catLabel(task.category));
-  }
-  if (presetStartDate) advancedSummary.push(formatDate(presetStartDate));
-  const summaryPoints = isEdit ? Number(task.points) : prefillPoints;
-  if (summaryPoints > 0) advancedSummary.push(t('tasks.pointsSummary', { count: summaryPoints }));
-  if (isEdit && task.tags?.length) advancedSummary.push(task.tags.join(', '));
-
-  const advancedLabel = advancedSummary.length
-    ? `${t('modal.moreSettings')} · ${advancedSummary.join(' · ')}`
-    : undefined;
-
-  const advancedFieldsHtml = `
-      <div class="modal-grid modal-grid--2">
+  const taskFieldsHtml = `
+      <div class="task-editor__basics">
         <div class="form-group">
           <label class="label" for="task-priority">${t('tasks.priorityLabel')}</label>
           <select class="input" id="task-priority" name="priority">
@@ -1168,14 +985,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
             ${categoryOptions}
           </select>
         </div>
-      </div>
 
-      <div class="modal-grid modal-grid--2" style="margin-top:var(--space-4)">
-        <div class="form-group">
-          <label class="label" for="task-start-date">${t('tasks.startDateLabel')}</label>
-          <yuvomi-datepicker type="date" id="task-start-date" name="start_date"
-                 value="${esc(formatDateInput(presetStartDate))}"></yuvomi-datepicker>
-        </div>
         <div class="form-group">
           <label class="label" for="task-points">${t('tasks.pointsLabel')}</label>
           <input class="input" type="number" id="task-points" name="points" inputmode="numeric"
@@ -1185,9 +995,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
             ? t('tasks.pointsDefaultHint', { count: prefillPoints })
             : t('tasks.pointsHint')}</p>
         </div>
-      </div>
 
-      <div class="form-group task-tags-field" style="margin-top:var(--space-4)">
+      <div class="form-group task-tags-field">
         <label class="label" for="task-tag-input">${t('tasks.tagsLabel')}</label>
         <div class="task-tags-editor" id="task-tags-editor">
           <div class="task-tags-editor__chips" id="task-tags-chips"></div>
@@ -1199,10 +1008,10 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
           </datalist>
         </div>
         <p class="task-field-hint">${t('tasks.tagsHint')}</p>
-      </div>`;
+      </div></div>`;
 
   return `
-    <form id="task-form" novalidate>
+    <form id="task-form" class="task-editor" novalidate>
       <input type="hidden" id="task-id" value="${task?.id ?? ''}">
 
       <div class="form-group task-template-picker">
@@ -1214,21 +1023,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         <p class="task-field-hint">Templates fill the task instructions and use saved skills and proficiency to choose an assignee.</p>
       </div>
 
-      <div class="form-group" id="task-activity-subject" hidden>
-        <label class="label" for="task-activity-subject-user">Who is this activity for?</label>
-        <select class="input" id="task-activity-subject-user" name="activity_subject_user_id">
-          <option value="">Choose a household member</option>
-          ${activitySubjectOptions}
-        </select>
-        <p class="task-field-hint">The template can use this person in its title and proficiency rules.</p>
-      </div>
-
-      ${isEdit && task?.activity_template_id ? `<section class="form-group">
-        <label class="label">Activity responsibility</label>
-        <p class="task-field-hint">${(task.activity_responsibilities || []).map((row) => `${esc(row.role)}: ${esc(row.display_name)}`).join(' · ') || (task.activity_assignment_state === 'open' ? 'Open for an eligible household member to claim.' : 'No active responsibility recorded.')}</p>
-        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(user.display_name)}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Yuvomi will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
-      </section>` : ''}
-
+      <section class="task-editor__section" aria-labelledby="task-main-heading">
+      <h3 id="task-main-heading">Task</h3>
       <div class="form-group">
         <div class="form-field">
           <label class="label" for="task-title">${t('tasks.titleLabel')}<span class="required-marker" aria-hidden="true"> *</span></label>
@@ -1245,22 +1041,25 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         </div>
       </div>
 
-      <!-- Notiz steht beim Titel, nicht hinter dem Aufklapper: sie ist sein
-           Gegenstueck, und eine Zusammenfassung kann Freitext nicht tragen.
-           Genau deshalb sind zwei Zeilen zu wenig gewesen (#731): das Feld war
-           auf die Groesse einer Zusammenfassung gebaut, obwohl der Kommentar
-           darueber das Gegenteil begruendet. -->
       <div class="form-group">
         <label class="label" for="task-description">${t('tasks.descriptionLabel')}</label>
         ${renderMarkdownToolbar()}
         <textarea class="input" id="task-description" name="description"
-                  rows="6" placeholder="${t('tasks.descriptionPlaceholder')}"
+                  rows="3" placeholder="${t('tasks.descriptionPlaceholder')}"
                  >${esc(task?.description ?? presetActivityTemplate?.description ?? '')}</textarea>
         <small class="form-hint">${t('tasks.descriptionMarkdownHint')}</small>
       </div>
-      ${renderTaskLocationFields(task)}
-${syncTargetFieldHtml(task)}
-      <div class="modal-grid modal-grid--2">
+      ${taskFieldsHtml}
+      </section>
+      <section class="task-editor__section" aria-labelledby="task-when-heading">
+      <h3 id="task-when-heading">When</h3>
+      <div class="task-editor__dates"><div class="form-group">
+          <label class="label" for="task-start-date">${t('tasks.startDateLabel')}</label>
+          <yuvomi-datepicker type="date" id="task-start-date" name="start_date"
+                 value="${esc(formatDateInput(presetStartDate))}"></yuvomi-datepicker>
+        </div>
+
+
         <div class="form-group">
           <label class="label" for="task-due-date">${t('tasks.dueDateLabel')}</label>
           <yuvomi-datepicker type="date" id="task-due-date" name="due_date"
@@ -1272,11 +1071,52 @@ ${syncTargetFieldHtml(task)}
                  value="${esc(formatTimeInput(task?.due_time ?? ''))}"></yuvomi-datepicker>
         </div>
       </div>
+      <div class="form-group" style="margin-top:var(--space-4)">
+        <label class="toggle" style="margin:0">
+          <input type="checkbox" id="task-countdown" name="countdown" aria-describedby="task-countdown-hint"
+                 ${task?.countdown ? 'checked' : ''}>
+          <span class="toggle__track"></span>
+          <span>${t('tasks.countdownToggle')}</span>
+        </label>
+        <p class="task-field-hint" id="task-countdown-hint">${t('tasks.countdownHint')}</p>
+        <p class="task-field-hint field-hint--warn" id="task-countdown-warning" role="status" hidden><i data-lucide="alert-triangle" aria-hidden="true"></i><span>${t('tasks.countdownNeedsDue')}</span></p>
+      </div>
 
-      <!-- „Zugewiesen an" bot einer Solo-Nutzerin eine Chip-Reihe mit ihr selbst
-           und „- Niemand -" (Critique 2026-08-10). Das Feld bleibt im DOM und
-           behaelt seinen Wert, es wird nur verborgen - der Absende-Pfad liest
-           es unveraendert (utils/household.js). -->
+
+
+      ${isEdit ? `
+        <div class="form-group">
+          <label class="label" for="task-status">${t('tasks.statusLabel')}</label>
+          <select class="input" id="task-status" name="status">
+            ${STATUSES().map((s) =>
+              `<option value="${s.value}" ${task.status === s.value ? 'selected' : ''}>${s.label}</option>`
+            ).join('')}
+          </select>
+        </div>` : ''}
+
+      ${renderRRuleFields('task', task?.recurrence_rule, {
+        allowFromCompletion: true,
+        fromCompletion: !!task?.recurrence_from_completion,
+      })}
+
+      ${renderReminderSection(task, reminder)}
+      </section>
+      <section class="task-editor__section" aria-labelledby="task-people-heading">
+      <h3 id="task-people-heading">People</h3>
+      <div class="form-group" id="task-activity-subject" hidden>
+        <label class="label" for="task-activity-subject-user">Who is this activity for?</label>
+        <select class="input" id="task-activity-subject-user" name="activity_subject_user_id">
+          <option value="">Choose a household member</option>
+          ${activitySubjectOptions}
+        </select>
+        <p class="task-field-hint">The template can use this person in its title and proficiency rules.</p>
+      </div>
+
+      ${isEdit && task?.activity_template_id ? `<section class="form-group">
+        <label class="label">Activity responsibility</label>
+        <p class="task-field-hint">${(task.activity_responsibilities || []).map((row) => `${esc(row.role)}: ${esc(row.display_name)}`).join(' · ') || (task.activity_assignment_state === 'open' ? 'Open for an eligible household member to claim.' : 'No active responsibility recorded.')}</p>
+        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(user.display_name)}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Ordoma will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
+      </section>` : ''}
       <div class="form-group" id="task-manual-assignment-mode" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-assignment-mode">Assignment mode</label>
         <select class="input" id="task-assignment-mode" name="assignment_mode">
@@ -1305,23 +1145,6 @@ ${syncTargetFieldHtml(task)}
           <p class="task-field-hint">Position 1 uses the first person, position 2 the second, and so on. Each new cycle shifts all positions by one.</p>
         </div>
       </div>
-
-      <!-- EINE QUELLE, NICHT ZWEI: die Bedingung war "users.length > 1" und
-           beantwortete dieselbe Frage wie der Solo-Schalter, nur aus einer
-           anderen Zahl - der geladenen Nutzerliste dieses Moduls statt der
-           gezaehlten Haushaltsgroesse. Zwei Quellen fuer eine Frage laufen
-           auseinander, sobald eine von beiden einen Sonderfall bekommt
-           (Split-Gaeste zaehlen in der Nutzerliste mit, im Haushalt nicht).
-
-           UND VERBORGEN, NICHT ENTFERNT - das ist hier kein Stilfrage, sondern
-           die Regel selbst. Der Absende-Pfad liest
-           "#task-visibility?.value || 'all'" (unten): ohne den Knoten schreibt
-           JEDES Speichern im Solo-Haushalt "all" ueber den gespeicherten Wert,
-           und eine als "private" angelegte Aufgabe verliert ihre Sichtbarkeit
-           stillschweigend. Der Fehler steckte schon in der alten
-           users.length-Bedingung; die Solo-Regel sagt ausdruecklich, dass sie
-           keine Daten aendert (utils/household.js), also muss der Knoten
-           stehenbleiben. Dokumente machen es an ihrer Stelle genauso. --> 
       <div class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-visibility">${t('common.visibility.label')}</label>
         <select class="input" id="task-visibility" name="visibility">
@@ -1332,11 +1155,6 @@ ${syncTargetFieldHtml(task)}
         <p class="task-field-hint">${t('common.visibility.hint')}</p>
         <p class="task-field-hint field-hint--warn" id="task-visibility-warning" role="status" hidden><i data-lucide="alert-triangle" aria-hidden="true"></i><span>${t('common.visibility.assigneesNobodyHint')}</span></p>
       </div>
-
-      <!-- #830: Die Sperre steht neben der Sichtbarkeit, weil beide dieselbe
-           Frage beantworten - wer darf hier was. Sichtbarkeit regelt das Sehen,
-           die Sperre das Aendern. In einem Ein-Personen-Haushalt sagen beide
-           nichts, also verschwinden sie zusammen (isSoloHousehold). -->
       <div class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="toggle" style="margin:0">
           <input type="checkbox" id="task-locked" name="locked" aria-describedby="task-locked-hint"
@@ -1347,47 +1165,18 @@ ${syncTargetFieldHtml(task)}
         <p class="task-field-hint" id="task-locked-hint">${t('tasks.lockedHint')}</p>
       </div>
 
-      <!-- #647: die Haelfte, die @jamespurnama1 beschrieben hat. Fuehrerschein
-           und Luftfilter sind keine Termine, und ihre Ruecksetzung haengt an
-           einer DAUER, nicht an einem Datum - das ist genau eine wiederkehrende
-           Aufgabe „ab Erledigung" (#658), die es hier schon gibt. Der Schalter
-           haengt deshalb an der Aufgabe und nicht an einem dritten Objekt.
-           Im Hauptbereich aus demselben Grund wie im Kalender: hinter dem
-           Aufklapper faende ihn niemand, der nicht danach sucht. -->
-      <div class="form-group" style="margin-top:var(--space-4)">
-        <label class="toggle" style="margin:0">
-          <input type="checkbox" id="task-countdown" name="countdown" aria-describedby="task-countdown-hint"
-                 ${task?.countdown ? 'checked' : ''}>
-          <span class="toggle__track"></span>
-          <span>${t('tasks.countdownToggle')}</span>
-        </label>
-        <p class="task-field-hint" id="task-countdown-hint">${t('tasks.countdownHint')}</p>
-        <!-- DER SCHALTER SPERRT SICH SELBST, statt sich auf die Zeile darueber
-             zu verlassen. Ein Hinweis ist keine Fehlervermeidung: ohne
-             Faelligkeit war der Schalter voll bedienbar, speicherte, meldete
-             „Aufgabe erstellt." - und der Countdown erschien nie. Wer sich
-             darauf verlaesst, erfaehrt es, wenn die Frist vorbei ist. -->
-        <p class="task-field-hint field-hint--warn" id="task-countdown-warning" role="status" hidden><i data-lucide="alert-triangle" aria-hidden="true"></i><span>${t('tasks.countdownNeedsDue')}</span></p>
-      </div>
 
-      ${advancedSection(advancedFieldsHtml, { label: advancedLabel, open: !!(!isEdit && presetStartDate) })}
+      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId, canCreateSkill: state.isAdmin && !activityTemplateId })}</div>
+      <p class="task-field-hint">${activityTemplateId ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
+      ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(person.display_name)).join(', ')}</p>` : ''}
+      </section>
+      ${!isEdit ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: task.subtasks || [], skills: state.skills, canCreateSkill: state.isAdmin })}</section>` : ''}
+      <section class="task-editor__section" aria-labelledby="task-where-heading">
+      <h3 id="task-where-heading">Where</h3>
+      ${renderTaskLocationFields(task)}
+      ${syncTargetFieldHtml(existingTask)}
+      </section>
 
-      ${isEdit ? `
-        <div class="form-group">
-          <label class="label" for="task-status">${t('tasks.statusLabel')}</label>
-          <select class="input" id="task-status" name="status">
-            ${STATUSES().map((s) =>
-              `<option value="${s.value}" ${task.status === s.value ? 'selected' : ''}>${s.label}</option>`
-            ).join('')}
-          </select>
-        </div>` : ''}
-
-      ${renderRRuleFields('task', task?.recurrence_rule, {
-        allowFromCompletion: true,
-        fromCompletion: !!task?.recurrence_from_completion,
-      })}
-
-      ${renderReminderSection(task, reminder)}
 
       ${renderDocumentAttachField({
         attachments: (task?.documents ?? []).map((doc) => ({ document_id: doc.id, name: doc.name, mime_type: doc.mime_type })),
@@ -1401,8 +1190,9 @@ ${syncTargetFieldHtml(task)}
           <button type="button" class="btn btn--danger-outline" data-action="delete-task"
                   data-id="${task.id}" style="margin-right:auto">${t('common.delete')}</button>` : ''}
         <button type="button" class="btn btn--ghost" data-action="close-modal">${t('common.cancel')}</button>
+        ${!isEdit ? `<button type="button" class="btn btn--secondary" data-save-as-template ${!state.isAdmin ? 'disabled title="Activity Templates are managed by household administrators"' : ''}>Save as Template</button>` : ''}
         <button type="submit" class="btn btn--primary" id="task-submit-btn">
-          ${isEdit ? t('common.save') : t('common.create')}
+          ${isEdit ? t('common.save') : 'Create Task'}
         </button>
       </div>
     </form>`;
@@ -1426,6 +1216,8 @@ let state = {
   allTags:         [],       // [{ tag, count }] für Filterleiste und Vorschläge (#586)
   defaultPoints:   0,        // Haushalt-Standard für neue Aufgaben (#578), 0 = aus
   activityTemplates: [],
+  skills: [],
+  templateSwitchWarning: true,
   assignmentRequests: [],
   places: [],
   placeSearchStatus: null,
@@ -1607,10 +1399,6 @@ async function refreshTags() {
   } catch { /* alte Liste behalten */ }
 }
 
-async function toggleTaskStatus(id, currentStatus) {
-  const next = currentStatus === 'done' ? 'open' : 'done';
-  await api.patch(`/tasks/${id}/status`, { status: next });
-}
 
 async function loadTaskForEdit(id) {
   const data = await api.get(`/tasks/${id}`);
@@ -1726,6 +1514,7 @@ function wireAssignmentMode(panel) {
   activity?.addEventListener('change', update);
   mode.addEventListener('change', update);
   update();
+  return update;
 }
 
 function renderActivityTemplateText(value, subjectName = '') {
@@ -1737,42 +1526,125 @@ function renderActivityTemplateText(value, subjectName = '') {
  * not even fill the title or instructions that make it a template. Keep the
  * ordinary Task editor, but let the template provide a useful starting point.
  */
-function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplate = null } = {}) {
-  const select = panel.querySelector('#task-activity-template');
-  const subject = panel.querySelector('#task-activity-subject-user');
-  const title = panel.querySelector('#task-title');
-  const description = panel.querySelector('#task-description');
-  const category = panel.querySelector('#task-category');
-  if (!select || !title) return;
+const taskFormControls = new WeakMap();
 
-  const selectedTemplate = () => state.activityTemplates.find(
-    (entry) => Number(entry.id) === Number(select.value),
-  ) ?? (Number(presetActivityTemplate?.id) === Number(select.value) ? presetActivityTemplate : null);
-  const subjectName = () => subject?.selectedOptions?.[0]?.value
-    ? subject.selectedOptions[0].textContent.trim()
-    : '';
-
-  const applyTemplate = () => {
-    const template = selectedTemplate();
-    if (!template) return;
-    title.value = renderActivityTemplateText(template.title_template || template.name, subjectName());
-    title.dataset.activityTemplateAutofill = String(template.id);
-    if (description) description.value = renderActivityTemplateText(template.description, subjectName());
-    if (category && [...category.options].some((option) => option.value === template.category)) {
-      category.value = template.category;
-    }
+function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplate = null, presetDates = null, container = null, onChanged, syncReady } = {}) {
+  const form = panel.querySelector('#task-form');
+  const select = form.querySelector('#task-activity-template');
+  const subject = form.querySelector('#task-activity-subject-user');
+  const title = form.querySelector('#task-title');
+  const description = form.querySelector('#task-description');
+  const controls = taskFormControls.get(form);
+  if (!select) return;
+  if (task) {
+    select.addEventListener('change', () => {
+      const activity = state.activityTemplates.find((entry) => Number(entry.id) === Number(select.value));
+      controls.skills.setValue(activity?.skill_ids || []);
+      controls.skills.setReadOnly(!!activity);
+      if (activity) {
+        title.value = renderActivityTemplateText(activity.title_template || activity.name);
+        description.value = renderActivityTemplateText(activity.description);
+        form.querySelector('#task-category').value = activity.category || FALLBACK_CATEGORY;
+      }
+    });
+    return;
+  }
+  let selectedId = select.value;
+  const template = () => state.activityTemplates.find((entry) => Number(entry.id) === Number(selectedId)) || presetActivityTemplate;
+  const subjectName = () => subject?.selectedOptions?.[0]?.value ? subject.selectedOptions[0].textContent.trim() : '';
+  let generatedTitle = title.value;
+  let generatedDescription = description.value;
+  let generatedSubtasks = controls.subtasks.getValue();
+  const applySubject = () => {
+    const activity = template();
+    if (!activity || !selectedId) return;
+    if (title.value === generatedTitle) title.value = generatedTitle = renderActivityTemplateText(activity.title_template || activity.name, subjectName());
+    if (description.value === generatedDescription) description.value = generatedDescription = renderActivityTemplateText(activity.description, subjectName());
+    if (taskCreateAttempts.has(form) || form.querySelector('#task-id').value) return;
+    const rows = controls.subtasks.getValue();
+    rows.forEach((row, index) => {
+      if (row.title === generatedSubtasks[index]?.title && activity.checklist?.[index]) row.title = renderActivityTemplateText(activity.checklist[index].title_template, subjectName());
+    });
+    controls.subtasks.setValue(rows);
+    generatedSubtasks = rows;
   };
-
-  select.addEventListener('change', applyTemplate);
-  subject?.addEventListener('change', () => {
-    const template = selectedTemplate();
-    if (template && title.dataset.activityTemplateAutofill === String(template.id)) {
-      title.value = renderActivityTemplateText(template.title_template || template.name, subjectName());
-    }
+  applySubject();
+  subject?.addEventListener('change', applySubject);
+  const documents = taskDocuments;
+  const snapshot = () => taskDraftSnapshot(form, { tags: modalTags, documents: documents?.documentIds() || [], pendingFiles: documents?.isDirty() || false });
+  let baseline = snapshot();
+  // Loading sync options must not absorb a user's edits into the baseline.
+  syncReady?.then(() => {
+    const saved = JSON.parse(baseline);
+    const target = saved.fields.find(([key]) => key === 'sync_target');
+    if (target) target[1] = form.querySelector('#task-sync-target')?.value || '';
+    baseline = JSON.stringify(saved);
   });
-  title.addEventListener('input', () => delete title.dataset.activityTemplateAutofill);
+  let switching = false;
+  select.addEventListener('change', async () => {
+    if (switching) return;
+    const nextId = select.value;
+    if (nextId === selectedId) return;
+    select.value = selectedId;
+    // Once creation may have reached the server, preserve the existing recovery
+    // identity instead of turning a retry into a different new Task.
+    if (taskCreateAttempts.has(form) || form.querySelector('#task-id').value) {
+      controls.refreshAssignment?.();
+      window.yuvomi.showToast('Finish saving this Task before starting another template.', 'warning');
+      return;
+    }
+    switching = true;
+    let skipWarning = false;
+    if (snapshot() !== baseline && state.templateSwitchWarning) {
+      const confirmed = await confirmOverModal('Switching templates will replace the changes you’ve made to this task.', {
+        title: 'Switch template?', confirmLabel: 'Switch template', cancelLabel: 'Cancel', closeOnConfirm: false,
+        checkbox: { label: 'Don’t show this warning again', checked: false, onChange: (value) => { skipWarning = value; } },
+      });
+      if (!confirmed) { switching = false; controls.refreshAssignment?.(); return; }
+      if (skipWarning) {
+        try { await api.put('/preferences', { tasks_template_switch_warning: false }); state.templateSwitchWarning = false; }
+        catch { window.yuvomi.showToast('Your warning preference could not be saved. The warning will stay on.', 'warning'); }
+      }
+    }
+    if (!form.isConnected) return;
+    const nextTemplate = state.activityTemplates.find((entry) => Number(entry.id) === Number(nextId)) || null;
+    modalTags = normalizeTagList(nextTemplate?.tags);
+    const body = panel.querySelector('.modal-panel__body');
+    body.replaceChildren();
+    body.insertAdjacentHTML('beforeend', renderModalContent({ users: state.users, presetActivityTemplate: nextTemplate, presetDates }));
+    mountFooter(panel);
+    wireTaskForm(panel, { container, presetActivityTemplate: nextTemplate, presetDates, onChanged });
+    refreshDirtySnapshot({ defer: false });
+    window.lucide?.createIcons();
+    panel.querySelector('#task-activity-template')?.focus();
+  });
+}
 
-  if (!task && presetActivityTemplate) applyTemplate();
+async function saveTaskAsTemplate(form) {
+  const controls = taskFormControls.get(form);
+  const title = form.querySelector('#task-title').value.trim();
+  if (!title) { form.querySelector('#task-title').focus(); window.yuvomi.showToast('Give this Task a title first.', 'warning'); return; }
+  const selectedId = Number(form.querySelector('#task-activity-template').value);
+  const source = state.activityTemplates.find((entry) => Number(entry.id) === selectedId) || null;
+  const draft = taskDraftToActivity({
+    title, description: form.querySelector('#task-description').value.trim(),
+    priority: form.querySelector('#task-priority').value, category: form.querySelector('#task-category').value,
+    points: form.querySelector('#task-points').value,
+    tags: normalizeTagList([...modalTags, ...form.querySelector('#task-tag-input').value.split(',')]),
+    location: readTaskLocation(form), assigned_users: getSelectedUserIds(form, 'task_assigned'),
+    skill_ids: controls.skills.getValue(), subtasks: controls.subtasks.getValue().filter((step) => step.title.trim()),
+  }, source);
+  const button = document.querySelector('[data-save-as-template]');
+  button.disabled = true;
+  try {
+    await openActivityTemplateEditor({ draft, asChild: true, onSkillCreated: controls.addSkill, onSaved: async () => {
+      const result = await api.get('/automation/activity-options');
+      state.activityTemplates = result.data?.activities || state.activityTemplates;
+      state.skills = result.data?.skills || state.skills;
+      window.yuvomi.showToast('Activity Template saved. Your Task draft is still here.', 'success');
+    } });
+  } catch (error) { window.yuvomi.showToast(error.data?.error || error.message, 'danger'); }
+  finally { button.disabled = false; }
 }
 
 /**
@@ -1812,14 +1684,14 @@ function wireCountdownGate(panel) {
 function openTaskModal({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null } = {}, container) {
   const isEdit = !!task;
   // Working-Set VOR dem Rendern setzen: renderTagChips liest ihn direkt danach.
-  modalTags = normalizeTagList(task?.tags);
+  modalTags = normalizeTagList(task?.tags ?? presetActivityTemplate?.tags);
   openSharedModal({
     title: isEdit ? t('tasks.editTask') : t('tasks.newTask'),
     content: renderModalContent({ task, users, reminder, presetActivityTemplate, presetDates }),
     size: 'lg',
     // Eine neue Aufgabe startet weiterhin mit dem Fokus im Titelfeld - hier ist
     // Tippen die Absicht.
-    onSave(panel) { wireTaskForm(panel, { task, container, presetActivityTemplate }); },
+    onSave(panel) { wireTaskForm(panel, { task, container, presetActivityTemplate, presetDates }); },
   });
 }
 
@@ -1858,14 +1730,15 @@ function wireTaskForm(panel, {
   task = null,
   container = null,
   presetActivityTemplate = null,
+  presetDates = null,
   onChanged = () => loadTasks(container),
 }) {
   panel.querySelector('.modal-panel__body')?.classList.add('modal-panel__body--tasks-fit');
   // RRULE-Events binden
-  bindRRuleEvents(document, 'task');
+  bindRRuleEvents(panel, 'task');
   bindUserMultiSelect(panel, 'task_assigned');
-  wireAssignmentMode(panel);
-  wireActivityTemplatePrefill(panel, { task, presetActivityTemplate });
+  const refreshAssignment = wireAssignmentMode(panel);
+
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
   wireCountdownGate(panel);
   wireTaskLocationForm(panel);
@@ -1946,7 +1819,7 @@ function wireTaskForm(panel, {
 
   // Sync-Ziel nachladen (#695). Ohne await: die Liste kommt aus dem Netz, und
   // bis sie da ist, steht "nur lokal" - das ist der richtige Zwischenzustand.
-  wireSyncTarget(panel, task);
+  const syncReady = wireSyncTarget(panel, task);
 
   // Blur-Validierung für required-Felder aktivieren
   wireBlurValidation(panel);
@@ -1966,6 +1839,23 @@ function wireTaskForm(panel, {
   // Form-Events
   panel.querySelector('#task-form')
     ?.addEventListener('submit', (e) => handleFormSubmit(e, { container, onChanged }));
+
+  const form = panel.querySelector('#task-form');
+  const addSkill = (skill) => {
+    state.skills = [...new Map([...state.skills, skill].map((entry) => [Number(entry.id), entry])).values()];
+    skills.addSkill(skill);
+    subtasks?.addSkill(skill);
+  };
+  const createSkill = async () => {
+    const skill = await openSkillEditor();
+    if (skill) addSkill(skill);
+    return skill;
+  };
+  const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: state.isAdmin ? createSkill : null });
+  const subtasks = !task ? bindSubtaskEditor(form, { skills: state.skills, onCreateSkill: state.isAdmin ? createSkill : null }) : null;
+  taskFormControls.set(form, { skills, subtasks, refreshAssignment, addSkill });
+  wireActivityTemplatePrefill(panel, { task, presetActivityTemplate, presetDates, container, onChanged, syncReady });
+  panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
   panel.querySelector('[data-action="delete-task"]')
     ?.addEventListener('click', (e) => deleteTaskWithUndo(e.currentTarget.dataset.id, {
@@ -2117,6 +2007,7 @@ const taskCreateAttempts = new WeakMap();
 
 async function saveTaskRecord(form, body) {
   const idField = form.querySelector('#task-id');
+  taskFormControls.get(form)?.subtasks?.setReadOnly(true);
   if (idField.value) {
     await api.put(`/tasks/${idField.value}`, body);
     return idField.value;
@@ -2141,6 +2032,7 @@ async function saveTaskRecord(form, body) {
     // cannot rule out the earlier commit, so it must not discard the identity.
     if (error.status >= 400 && error.status < 500 && ![408, 409].includes(error.status) && !attempt.ambiguous) {
       taskCreateAttempts.delete(form);
+      taskFormControls.get(form)?.subtasks?.setReadOnly(false);
     } else attempt.ambiguous = true;
     throw error;
   }
@@ -2178,7 +2070,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const startDate = parseDateInput(startDateRaw);
   const dueDateRaw = form.due_date?.value || '';
   const dueDate = parseDateInput(dueDateRaw);
-  const rrule = getRRuleValues(document, 'task');
+  const rrule = getRRuleValues(form, 'task');
   const reminderToggle = form.querySelector('#reminder-toggle');
   if ((startDateRaw && !isDateInputValid(startDateRaw)) || !isDateInputValid(dueDateRaw) || !rrule.valid_until) {
     errorEl.textContent = t('calendar.invalidDate');
@@ -2228,6 +2120,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     points:          Math.max(0, Math.trunc(Number(form.points?.value)) || 0),
     location:        readTaskLocation(form),
   };
+  const controls = taskFormControls.get(form);
+  if (!managedActivity && controls) body.skill_ids = controls.skills.getValue();
+  if (controls?.subtasks && !taskId) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
   // Das Feld fehlt bei Unteraufgaben und bei bereits gespiegelten Aufgaben - in
   // beiden Fällen soll gar kein Ziel mitgeschickt werden, sonst nähme der Server
   // das Fehlen als "auf lokal zurücksetzen" (#695).
@@ -2236,7 +2131,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const dueTimeRaw = form.due_time?.value || '';
   const dueTime = parseTimeInput(dueTimeRaw);
   const resetSubmit = (msg) => {
-    errorEl.textContent = msg;
+    const recoveringChildren = controls?.subtasks && (taskCreateAttempts.has(form) || form.querySelector('#task-id').value);
+    errorEl.textContent = recoveringChildren ? `${msg} Finish saving this Task to confirm its subtasks; you can edit them afterward.` : msg;
     errorEl.hidden = false;
     submitBtn.disabled = false;
     submitBtn.textContent = originalLabel;
@@ -2370,11 +2266,6 @@ function kanbanColumnOf(task) {
   return isArchived(task) ? 'archived' : task.status;
 }
 
-function kanbanNextStatus(status) {
-  if (status === 'open')        return 'in_progress';
-  if (status === 'in_progress') return 'done';
-  return 'open';
-}
 
 /**
  * Eine Aufgabe in eine Spalte bewegen - der einzige Weg, auf dem das Board
@@ -2419,118 +2310,7 @@ async function runColumnMove(task, column, container) {
   await loadTasks(container);
 }
 
-function renderKanbanCard(task) {
-  const archived = isArchived(task);
-  const due  = formatDueDate(task.due_date, task.due_time, task.status === 'done' || archived);
-  // Aus der Ablage führt nur ein Schritt: zurück. Wohin, sagt der Status, den
-  // die Aufgabe die ganze Zeit behalten hat.
-  const next = archived ? task.status : kanbanNextStatus(task.status);
-  const icon = archived ? 'archive-restore'
-    : next === 'done' ? 'check' : next === 'in_progress' ? 'circle-play' : 'rotate-ccw';
-  const nextLabel = archived
-    ? t('tasks.unarchiveButton')
-    : next === 'done'
-      ? t('tasks.kanbanMoveToDone')
-      : next === 'in_progress'
-        ? t('tasks.kanbanMoveToInProgress')
-        : t('tasks.kanbanMoveToOpen');
-  return `
-    <div class="kanban-card ${task.status === 'done' ? 'kanban-card--done' : ''}"
-         data-task-id="${task.id}" draggable="true">
-      <!-- Button statt div: einziger Tastaturweg in die Kartendetails; der
-           Board-Klick-Handler fängt ihn über den umschließenden [draggable]. -->
-      <button type="button" class="kanban-card__title u-card-title u-compact">${esc(task.title)}</button>
-      <div class="kanban-card__meta">
-        ${renderPriorityBadge(task.priority)}
-        ${due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i> ${due.label}</span>` : ''}
-        ${renderTagBadges(task.tags, TAG_BADGES_VISIBLE, task.priority)}
-      </div>
-      <div class="kanban-card__footer">
-        ${renderAvatarStack(task.assigned_users ?? [], { size: 22 }) || '<span></span>'}
-        <button class="kanban-card__status-btn" type="button"
-                data-next-status="${next}" title="${nextLabel}" aria-label="${nextLabel}">
-          <i data-lucide="${icon}" aria-hidden="true"></i>
-        </button>
-      </div>
-    </div>`;
-}
 
-function renderLegacyKanban(container) {
-  const listEl = container.querySelector('#task-list');
-  if (!listEl) return;
-
-  const cols = KANBAN_COLS();
-  const grouped = {};
-  for (const col of cols) grouped[col.status] = [];
-  for (const t of filteredTasks()) {
-    const column = kanbanColumnOf(t);
-    if (grouped[column]) grouped[column].push(t);
-    else grouped['open'].push(t);
-  }
-
-  const now = new Date();
-  for (const col of cols) {
-    grouped[col.status].sort((a, b) => sortTasks(a, b, now));
-  }
-
-  // Bei aktiver Suche ohne Treffer wäre ein Board aus lauter „Keine Aufgaben"-
-  // Spalten irreführend (wirkt wie ein leeres Modul statt wie ein leeres Such-
-  // ergebnis). Stattdessen ein board-weiter Treffer-Empty analog zur Liste,
-  // inkl. expliziter Zurücksetzen-Affordanz (Critique P3).
-  const isFiltered   = state.searchQuery.trim().length > 0;
-  const totalVisible = cols.reduce((n, c) => n + grouped[c.status].length, 0);
-  if (isFiltered && totalVisible === 0) {
-    listEl.replaceChildren();
-    listEl.insertAdjacentHTML('beforeend', emptyStateHTML({
-      variant: 'no-results',
-      title: t('tasks.noResultsTitle'),
-      description: t('tasks.noResultsDescription', { query: state.searchQuery }),
-      action: {
-        label: t('common.searchClear'),
-        icon: 'x',
-        attrs: { id: 'kanban-reset-search' },
-      },
-    }));
-    if (window.lucide) window.lucide.createIcons({ el: listEl });
-    listEl.querySelector('#kanban-reset-search')?.addEventListener('click', () => {
-      state.searchQuery = '';
-      const input = container.querySelector('#tasks-search');
-      if (input) input.value = '';
-      container.querySelector('[data-page-search-clear]')?.setAttribute('hidden', '');
-      renderTaskList(container);
-    });
-    return;
-  }
-
-  const kanbanHtml = `
-    <div class="kanban-board">
-      ${cols.map((col) => `
-        <div class="kanban-col" data-status="${col.status}">
-          <div class="kanban-col__header">
-            <span class="kanban-col__title" style="color:${col.colorVar.startsWith('--') ? `var(${col.colorVar})` : col.colorVar}">
-              ${col.label}
-            </span>
-            <span class="kanban-col__count">${grouped[col.status].length}</span>
-          </div>
-          <div class="kanban-col__body" data-drop-zone="${col.status}">
-            ${grouped[col.status].length
-              ? grouped[col.status].map((task) => renderKanbanCard(task)).join('')
-              : `<div class="kanban-col__empty">
-                   <span class="kanban-col__empty-idle">${t('tasks.kanbanColEmpty')}</span>
-                   <span class="kanban-col__empty-drop">${t('tasks.kanbanDropHint')}</span>
-                 </div>`}
-            <div class="kanban-drop-placeholder" hidden></div>
-          </div>
-        </div>
-      `).join('')}
-    </div>`;
-  listEl.replaceChildren();
-  listEl.insertAdjacentHTML('beforeend', kanbanHtml);
-
-  if (window.lucide) window.lucide.createIcons({ el: listEl });
-  wireKanbanDrag(container);
-  wireKanbanTouch(container);
-}
 
 function isBoardSectionCollapsed(key, status) {
   if (state.expandedBoardSections.has(key)) return false;
@@ -3151,24 +2931,19 @@ function renderTaskCalendarDay(day) {
 }
 
 function renderTaskCalendarMonthPicker(year) {
-  const currentMonth = state.calendarCursor.slice(0, 7);
-  const months = Array.from({ length: 12 }, (_, month) => {
-    const date = new Date(year, month, 1);
-    const key = `${year}-${String(month + 1).padStart(2, '0')}`;
-    const label = new Intl.DateTimeFormat(getLocale(), { month: 'short' }).format(date);
-    return `<button type="button" class="task-calendar-month-option${key === currentMonth ? ' task-calendar-month-option--active' : ''}"
-      data-task-calendar-month="${month + 1}" data-task-calendar-year="${year}" aria-pressed="${key === currentMonth}">${esc(label)}</button>`;
-  }).join('');
-  return `<div class="task-calendar-month-picker__year">
-      <button type="button" class="btn btn--icon btn--ghost btn--icon-sm" data-task-calendar-picker-year="-1" aria-label="${esc(t('tasks.calendarPreviousYear'))}">
-        <i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i>
-      </button>
-      <strong>${year}</strong>
-      <button type="button" class="btn btn--icon btn--ghost btn--icon-sm" data-task-calendar-picker-year="1" aria-label="${esc(t('tasks.calendarNextYear'))}">
-        <i data-lucide="chevron-up" class="icon-sm" aria-hidden="true"></i>
-      </button>
-    </div>
-    <div class="task-calendar-month-picker__months">${months}</div>`;
+  return renderMonthYearPicker(year, state.calendarCursor, 'task-calendar');
+}
+
+function shiftTaskCalendarPickerYear(event, yearShift, calendar) {
+  // Replacing the children detaches the clicked button. Keep the document's
+  // outside-click handler from mistaking that detached target for a dismissal.
+  event.stopPropagation();
+  state.calendarPickerYear = Math.max(1, Math.min(9999, state.calendarPickerYear + Number(yearShift.dataset.taskCalendarPickerYear)));
+  const panel = calendar.querySelector('#task-calendar-month-picker');
+  panel.replaceChildren();
+  panel.insertAdjacentHTML('beforeend', renderTaskCalendarMonthPicker(state.calendarPickerYear));
+  window.lucide?.createIcons({ el: panel });
+  panel.querySelector(`[data-task-calendar-picker-year="${yearShift.dataset.taskCalendarPickerYear}"]`)?.focus();
 }
 
 function taskCalendarRule(task) {
@@ -3264,7 +3039,7 @@ function renderTaskCalendar(container) {
               <span>${esc(taskCalendarMonthLabel(state.calendarCursor))}</span>
               <i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i>
             </button>
-            <div class="task-calendar-month-picker" id="task-calendar-month-picker" hidden>
+            <div class="month-year-picker" id="task-calendar-month-picker" hidden>
               ${renderTaskCalendarMonthPicker(state.calendarPickerYear)}
             </div>
           </div>
@@ -3381,17 +3156,14 @@ function wireTaskCalendar(container) {
     }
     const yearShift = event.target.closest('[data-task-calendar-picker-year]');
     if (yearShift) {
-      state.calendarPickerYear += Number(yearShift.dataset.taskCalendarPickerYear);
-      const panel = calendar.querySelector('#task-calendar-month-picker');
-      panel.replaceChildren();
-      panel.insertAdjacentHTML('beforeend', renderTaskCalendarMonthPicker(state.calendarPickerYear));
-      window.lucide?.createIcons({ el: panel });
+      shiftTaskCalendarPickerYear(event, yearShift, calendar);
       return;
     }
     const month = event.target.closest('[data-task-calendar-month]');
     if (month) {
-      const monthNumber = String(month.dataset.taskCalendarMonth).padStart(2, '0');
-      state.calendarCursor = `${month.dataset.taskCalendarYear}-${monthNumber}-01`;
+      const cursor = dateInSelectedMonth(state.calendarCursor, Number(month.dataset.taskCalendarYear), Number(month.dataset.taskCalendarMonth), { firstDay: true });
+      if (!cursor) return;
+      state.calendarCursor = cursor;
       state.calendarFocusDate = state.calendarCursor;
       state.calendarSelection = null;
       renderTaskCalendar(container);
@@ -3551,232 +3323,6 @@ function makeChip({ label, active = false, extraClass = '', pressed = undefined,
   return chip;
 }
 
-function renderLegacyFilters(container) {
-  const bar   = container.querySelector('#filter-bar');
-  const panel = container.querySelector('#filter-panel');
-  if (!bar || !panel) return;
-  const panelOpen = isTaskPopoverOpen(panel);
-
-  const statusLabels   = STATUS_LABELS();
-  const priorityLabels = PRIORITY_LABELS();
-  // Im Kanban ist der Statusfilter unwirksam (die Spalten SIND der Status) und
-  // wird nicht als Chip gezeigt - daher auch nicht mitzählen, sonst behauptet
-  // "Filter N" einen unsichtbaren Filter (Audit P3).
-  const activeCount    = (state.viewMode === 'kanban' ? 0 : state.filters.status.length)
-    + state.filters.priority.length
-    + state.filters.assigned_to.length
-    + state.filters.tags.length;
-
-  // ---- Chip-Leiste: nur aktive Filter + Toggle-Button ----
-  bar.replaceChildren();
-
-  // Ein Chip je gewähltem Wert, in jeder Achse. Jeder trägt seinen eigenen
-  // Wert, damit das Entfernen genau diesen einen löst und nicht die ganze
-  // Auswahl (#671) - vorher gab es je Achse nur einen Wert und damit einen Chip.
-  if (state.viewMode !== 'kanban') {
-    state.filters.status.forEach((value) => {
-      const chip = makeChip({ label: statusLabels[value] ?? value, active: true, withRemove: true });
-      chip.dataset.filter = 'status';
-      chip.dataset.value = value;
-      bar.appendChild(chip);
-    });
-  }
-  state.filters.priority.forEach((value) => {
-    const chip = makeChip({ label: priorityLabels[value] ?? value, active: true, withRemove: true });
-    chip.dataset.filter = 'priority';
-    chip.dataset.value = value;
-    bar.appendChild(chip);
-  });
-  // Aktive Personen-Filter — außer der eigenen ID, die deckt der dedizierte
-  // „Mir zugewiesen"-Chip ab (keine Doppel-Anzeige).
-  state.filters.assigned_to.forEach((value) => {
-    if (state.currentUserId != null && Number(value) === Number(state.currentUserId)) return;
-    const u = state.users.find((user) => user.id === Number(value));
-    const chip = makeChip({
-      label: u?.display_name ?? t('tasks.filterGroupPerson'),
-      active: true,
-      withRemove: true,
-    });
-    chip.dataset.filter = 'assigned_to';
-    chip.dataset.value = value;
-    bar.appendChild(chip);
-  });
-  // Ein Chip je gewähltem Tag. Jeder trägt seinen eigenen Wert, damit das
-  // Entfernen genau diesen einen löst und nicht die ganze Auswahl.
-  state.filters.tags.forEach((tag) => {
-    const chip = makeChip({ label: tag, active: true, withRemove: true });
-    chip.dataset.filter = 'tag';
-    chip.dataset.value = tag;
-    bar.appendChild(chip);
-  });
-
-  // "Mir zugewiesen" Schnellzugriff — nur sinnvoll bei mehreren Familienmitgliedern.
-  // Icon+Label bewusst identisch zum Kalender-Toggle (gleiche Fähigkeit, eine Gestalt).
-  if (state.users.length > 1 && state.currentUserId != null) {
-    const meActive = isAssignedToMe();
-    const meChip = makeChip({ label: null, active: meActive, extraClass: 'filter-chip--toggle' });
-    meChip.id = 'filter-assigned-me';
-    const meIcon = document.createElement('i');
-    meIcon.setAttribute('data-lucide', 'user');
-    meIcon.className = 'icon-sm';
-    meIcon.setAttribute('aria-hidden', 'true');
-    const meLabel = document.createElement('span');
-    meLabel.textContent = t('tasks.assignedToMe');
-    meChip.append(meIcon, meLabel);
-    if (meActive) meChip.appendChild(makeRemoveSpan());
-    bar.appendChild(meChip);
-  }
-
-  // "Geplante anzeigen" Toggle-Chip — Icon+Label wie „Mir zugewiesen" (beide Toggles).
-  const futureChip = makeChip({ label: null, active: state.showFuture, extraClass: 'filter-chip--toggle' });
-  futureChip.id = 'filter-show-future';
-  const futureIcon = document.createElement('i');
-  futureIcon.setAttribute('data-lucide', 'calendar-clock');
-  futureIcon.className = 'icon-sm';
-  futureIcon.setAttribute('aria-hidden', 'true');
-  const futureLabel = document.createElement('span');
-  futureLabel.textContent = t('tasks.showFuture');
-  futureChip.append(futureIcon, futureLabel);
-  if (state.showFuture) {
-    futureChip.appendChild(makeRemoveSpan());
-  }
-  bar.appendChild(futureChip);
-
-  const toggleBtn = document.createElement('button');
-  toggleBtn.id = 'filter-toggle-btn';
-  // `filter-chip` trägt die Form, `filter-toggle-btn` nur noch die Abweichung:
-  // der Knopf stand mit einer eigenen, zeichengleichen Kopie derselben vierzehn
-  // Deklarationen daneben (siehe tasks.css) und war damit der vierte Chip, den
-  // die geteilte Datei eigentlich abgelöst hat.
-  toggleBtn.className = `filter-chip filter-toggle-btn${panelOpen ? ' filter-toggle-btn--open' : ''}${activeCount > 0 ? ' filter-toggle-btn--active' : ''}`;
-  toggleBtn.setAttribute('aria-expanded', String(panelOpen));
-  toggleBtn.setAttribute('aria-controls', 'filter-panel');
-
-  const iconWrap = document.createElement('i');
-  iconWrap.setAttribute('data-lucide', 'sliders-horizontal');
-  iconWrap.className = 'icon-sm';
-  iconWrap.setAttribute('aria-hidden', 'true');
-  toggleBtn.appendChild(iconWrap);
-
-  const label = document.createElement('span');
-  label.textContent = t('tasks.filterBtn');
-  toggleBtn.appendChild(label);
-
-  if (activeCount > 0) {
-    const badge = document.createElement('span');
-    badge.className = 'filter-toggle-btn__count';
-    badge.textContent = String(activeCount);
-    toggleBtn.appendChild(badge);
-  }
-
-  bar.appendChild(toggleBtn);
-
-  // ---- Zuletzt verwendete Filter als Quick-Chips ----
-  const statusLabelsMap   = STATUS_LABELS();
-  const priorityLabelsMap = PRIORITY_LABELS();
-  const recent = getRecentFilters();
-  recent.forEach((f) => {
-    const parts = [];
-    // Jeder Wert jeder Achse wird benannt: seit #671 kann ein gemerktes Set
-    // "Hoch" UND "Mittel" enthalten, und ein Chip, der nur den ersten nennt,
-    // schaltete beim Klick mehr, als er behauptet.
-    f.status.forEach((v) => parts.push(statusLabelsMap[v] ?? v));
-    f.priority.forEach((v) => parts.push(priorityLabelsMap[v] ?? v));
-    f.assigned_to.forEach((v) => {
-      const u = state.users.find((user) => user.id === Number(v));
-      if (u) parts.push(u.display_name);
-    });
-    // Die Tags gehören in die Beschriftung, weil der Chip sie beim Klick
-    // mitsetzt: ohne sie hieße ein Chip „Offen" und schaltete zusätzlich
-    // Tag-Filter, die niemand am Chip ablesen kann (#586).
-    parts.push(...f.tags);
-    if (!parts.length) return;
-    // Aktions-Chip (wendet ein Filter-Set an), kein Ein/Aus-Zustand → pressed:null.
-    const chip = makeChip({ label: parts.join(' · '), extraClass: 'filter-chip--recent', pressed: null });
-    chip.dataset.recentFilter = JSON.stringify(f);
-    bar.appendChild(chip);
-  });
-
-  if (window.lucide) window.lucide.createIcons({ el: bar });
-
-  // ---- Filter-Panel: Gruppen mit allen Optionen ----
-  panel.hidden = false;
-  panel.replaceChildren();
-
-  {
-    // Im Kanban entfällt die Status-Gruppe: die Spalten übernehmen diese
-    // Achse bereits (Audit A1-07).
-    const groups = [
-      ...(state.viewMode !== 'kanban' ? [{
-        key: 'status',
-        label: t('tasks.filterGroupStatus'),
-        items: FILTER_STATUSES().map((s) => ({ value: s.value, label: s.label })),
-      }] : []),
-      {
-        key: 'priority',
-        label: t('tasks.filterGroupPriority'),
-        items: PRIORITIES().map((p) => ({ value: p.value, label: p.label })),
-      },
-    ];
-    if (state.users.length > 1) {
-      groups.push({
-        key: 'assigned_to',
-        label: t('tasks.filterGroupPerson'),
-        items: state.users.map((u) => ({ value: String(u.id), label: u.display_name })),
-      });
-    }
-    // Tags nur anbieten, wenn welche vergeben sind — ohne CalDAV-Spiegel und ohne
-    // eigene Vergabe bleibt die Gruppe sonst als leere Zeile stehen (#586).
-    if (state.allTags.length) {
-      groups.push({
-        key: 'tag',
-        label: t('tasks.filterGroupTag'),
-        items: state.allTags.map((entry) => ({ value: entry.tag, label: entry.tag })),
-      });
-    }
-
-    groups.forEach((group) => {
-      const section = document.createElement('div');
-      section.className = 'filter-panel__group';
-      section.setAttribute('role', 'group');
-      section.setAttribute('aria-label', group.label);
-
-      const heading = document.createElement('div');
-      heading.className = 'filter-panel__label';
-      heading.textContent = group.label;
-      section.appendChild(heading);
-
-      const row = document.createElement('div');
-      row.className = 'filter-panel__chips';
-
-      group.items.forEach((item) => {
-        // Jede Gruppe erlaubt Mehrfachauswahl (#671); die Tags unterscheiden
-        // sich nur darin, dass ihre Zugehörigkeit die Schreibweise ignoriert.
-        const isActive = group.key === 'tag'
-          ? hasTagFilter(item.value)
-          : hasFilter(group.key, item.value);
-        const chip = makeChip({ label: item.label, active: isActive, withRemove: isActive });
-        chip.dataset.filter = group.key;
-        chip.dataset.value = item.value;
-        row.appendChild(chip);
-      });
-
-      section.appendChild(row);
-      panel.appendChild(section);
-    });
-
-    if (activeCount > 0) {
-      const clearBtn = document.createElement('button');
-      clearBtn.className = 'filter-panel__clear';
-      clearBtn.id = 'filter-clear-all';
-      clearBtn.textContent = t('tasks.filterClearAll');
-      panel.appendChild(clearBtn);
-    }
-    if (window.lucide) window.lucide.createIcons({ el: panel });
-  }
-
-  wireFilterChips(container);
-}
 
 function renderFilters(container) {
   const toggleBtn = container.querySelector('#filter-toggle-btn');
@@ -4028,7 +3574,7 @@ function wireSwipeGestures(container) {
         const capturedStatus = row.dataset.swipeStatus;
         const nextStatus = capturedStatus === 'done' ? 'open' : 'done';
         try {
-          await toggleTaskStatus(taskId, capturedStatus);
+          await toggleSubtaskStatus(taskId, capturedStatus);
           await loadTasks(container);
           window.yuvomi.showToast(
             t(nextStatus === 'done' ? 'tasks.swipedDoneToast' : 'tasks.swipedOpenToast'),
@@ -4036,7 +3582,7 @@ function wireSwipeGestures(container) {
             5000,
             async () => {
               try {
-                await toggleTaskStatus(taskId, nextStatus);
+                await toggleSubtaskStatus(taskId, nextStatus);
                 await loadTasks(container);
               } catch (err) {
                 window.yuvomi.showToast(err.message, 'danger');
@@ -4267,53 +3813,6 @@ function isWideTaskView() {
   return state.viewMode === 'kanban' || state.viewMode === 'calendar';
 }
 
-function wireLegacyViewToggle(container) {
-  const toggle = container.querySelector('#view-toggle');
-  if (!toggle) return;
-  syncViewChrome(container);
-  toggle.querySelectorAll('[data-view]').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      // A control panel belongs to the layout that opened it. Keeping it open
-      // while moving between List, Kanban, and History leaves an orphaned
-      // menu over controls whose meaning (especially Group) has just changed.
-      container.querySelectorAll('.task-control-popover').forEach((panel) => {
-        closeTaskPopover(container, panel);
-      });
-      state.viewMode = btn.dataset.view;
-      localStorage.setItem('yuvomi-tasks-view', state.viewMode);
-      syncActiveGroupMode();
-      persistTaskLayoutState();
-      renderFilters(container);
-      renderTaskControlPanels(container);
-      syncViewChrome(container);
-
-      // Skeleton-Flash: einen Frame Render-Feedback geben, dann Ansicht aufbauen
-      const listEl = container.querySelector('#task-list');
-      if (listEl) listEl.style.opacity = '0.4';
-      const restore = () => {
-        const el = container.querySelector('#task-list');
-        if (el) { el.style.transition = 'opacity 0.15s'; el.style.opacity = ''; }
-      };
-      requestAnimationFrame(() => {
-        // Der Verlauf holt Vorgaenge, die beiden anderen Ansichten Aufgaben -
-        // zwei Abfragen, und der Umschalter darf nicht die falsche fahren. Ein
-        // gemeinsames loadTasks() haette den Verlauf mit einer Aufgabenliste
-        // befuellt, die er gar nicht anzeigt.
-        if (state.viewMode === 'history') {
-          loadHistory(container).finally(restore);
-          return;
-        }
-        // Task-Menge neu laden: der Kanban lädt alle Stati (kein status-Param),
-        // die Liste wendet den Statusfilter wieder an (Audit A1-07/P3). Fällt bei
-        // Netzfehler auf ein reines Re-Render der vorhandenen Aufgaben zurück.
-        loadTasks(container).catch(() => renderTaskList(container)).finally(() => {
-          updateBulkActionsBar(container);
-          restore();
-        });
-      });
-    });
-  });
-}
 
 function taskViewValue() {
   return state.viewMode;
@@ -4573,12 +4072,7 @@ function wireNewTaskBtn(container) {
 function wireQuickAddBtn(container) {
   container.querySelector('#btn-quick-add')?.addEventListener('click', () => {
     container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
-    openQuickAdd({
-      onCreated: async () => loadTasks(container),
-      onActivitySelected: async (activity) => {
-        openTaskModal({ users: state.users, presetActivityTemplate: activity }, container);
-      },
-    });
+    openTaskWorkflows({ onCreated: async () => loadTasks(container), canCreate: state.isAdmin });
   });
 }
 
@@ -4609,14 +4103,14 @@ function renderTaskLocationFields(task = null) {
   const setupMessage = 'Google place search is off. An administrator must configure GOOGLE_MAPS_API_KEY, enable the integration, and accept the Google Maps terms. You can still save ordinary addresses.';
   return `<fieldset class="form-group task-location" id="task-location-fieldset">
     <legend class="label">Location</legend>
-    <select class="input" id="task-location-kind" name="location_kind">
+    <select class="input" id="task-location-kind" name="location_kind" aria-label="Location type">
       <option value="none" ${kind === 'none' ? 'selected' : ''}>No location</option>
-      <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Yuvomi Place</option>
+      <option value="saved_place" ${kind === 'saved_place' ? 'selected' : ''}>Saved Ordoma Place</option>
       <option value="manual" ${kind === 'manual' ? 'selected' : ''}>One-use manual location</option>
       <option value="google_place" ${kind === 'google_place' ? 'selected' : ''}>Find a business or place</option>
     </select>
     <div data-location-pane="saved_place" style="margin-top:var(--space-3)">
-      <select class="input" id="task-location-place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
+      <select class="input" id="task-location-place" aria-label="Saved Place"><option value="">Choose a saved Place</option>${placeSelectOptions(location?.place_id)}</select>
       <p class="task-field-hint">Reusable locations are maintained in Address Book → Places.</p>
     </div>
     <div data-location-pane="manual" style="margin-top:var(--space-3)">
@@ -4625,7 +4119,7 @@ function renderTaskLocationFields(task = null) {
       <details style="margin-top:var(--space-2)"><summary class="task-field-hint">Advanced coordinates (optional)</summary><div class="modal-grid modal-grid--2" style="margin-top:var(--space-2)"><input class="input" id="task-location-latitude" type="number" step="any" min="-90" max="90" placeholder="Latitude" value="${kind === 'manual' && location?.latitude != null ? location.latitude : ''}"><input class="input" id="task-location-longitude" type="number" step="any" min="-180" max="180" placeholder="Longitude" value="${kind === 'manual' && location?.longitude != null ? location.longitude : ''}"></div></details>
     </div>
     <div data-location-pane="google_place" style="margin-top:var(--space-3)">
-      <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Yuvomi server. Search runs only when you press Search.</p>
+      <p class="task-field-hint"><strong>Privacy:</strong> your search text and selected origin are sent to Google through this Ordoma server. Search runs only when you press Search.</p>
       <div class="modal-grid modal-grid--2"><input class="input" id="task-place-query" minlength="3" maxlength="120" placeholder="UPS Store, pharmacy, dentist…"><select class="input" id="task-place-category"><option value="">Any type</option><option value="pharmacy">Pharmacy</option><option value="restaurant">Restaurant</option><option value="dentist">Dentist</option><option value="lodging">Hotel / lodging</option><option value="store">Store</option></select></div>
       <select class="input" id="task-place-origin-mode" style="margin-top:var(--space-2)"><option value="saved">Near a saved Place</option><option value="text">Near an address, city, or ZIP</option><option value="anywhere">No specific origin</option></select>
       <div data-origin-pane="saved" style="margin-top:var(--space-2)"><select class="input" id="task-place-origin"><option value="">Choose search origin</option>${placeSelectOptions(origin?.id)}</select></div>
@@ -4684,7 +4178,7 @@ function wireTaskLocationForm(panel) {
         const row = document.createElement('div');
         row.className = 'list-row automation-list-row';
         const distance = result.distance_meters == null ? '' : ` • ${(result.distance_meters / 1609.344).toFixed(1)} mi`;
-        row.insertAdjacentHTML('beforeend', `<div class="automation-list-row__copy"><strong>${esc(result.display_name)}</strong><br><small class="form-hint">${esc(result.formatted_address || '')}${esc(distance)}${result.primary_type ? ` • ${esc(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-save-name="${index}" maxlength="120" value="${esc(result.display_name)}" aria-label="Yuvomi Place name"></div><div class="automation-list-row__actions"><button type="button" class="btn btn--primary btn--sm" data-use-place="${index}">Use for Task</button>${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-save-place="${index}">Save to Places</button>` : ''}</div>`);
+        row.insertAdjacentHTML('beforeend', `<div class="automation-list-row__copy"><strong>${esc(result.display_name)}</strong><br><small class="form-hint">${esc(result.formatted_address || '')}${esc(distance)}${result.primary_type ? ` • ${esc(result.primary_type)}` : ''}</small><br>${googleAttributionHtml(result)}<input class="input" data-place-save-name="${index}" maxlength="120" value="${esc(result.display_name)}" aria-label="Ordoma Place name"></div><div class="automation-list-row__actions"><button type="button" class="btn btn--primary btn--sm" data-use-place="${index}">Use for Task</button>${state.isAdmin ? `<button type="button" class="btn btn--secondary btn--sm" data-save-place="${index}">Save to Places</button>` : ''}</div>`);
         list.appendChild(row);
       });
       list.querySelectorAll('[data-use-place]').forEach((button) => button.addEventListener('click', () => {
@@ -4700,14 +4194,14 @@ function wireTaskLocationForm(panel) {
       list.querySelectorAll('[data-save-place]').forEach((button) => button.addEventListener('click', async () => {
         const index = Number(button.dataset.savePlace); const result = results[index];
         const name = list.querySelector(`[data-place-save-name="${index}"]`)?.value.trim();
-        if (!name) { status.textContent = 'Give the saved Yuvomi Place a name.'; return; }
+        if (!name) { status.textContent = 'Give the saved Ordoma Place a name.'; return; }
         button.disabled = true;
         try {
           const saved = await api.post('/planning/admin/places/from-google', { external_place_id: result.external_place_id, name, type: 'custom', latitude: result.latitude, longitude: result.longitude });
           state.places.push(saved.data); kind.value = 'saved_place'; refresh();
           const select = panel.querySelector('#task-location-place');
           select.insertAdjacentHTML('beforeend', `<option value="${saved.data.id}">${esc(saved.data.path_label || saved.data.name)}</option>`); select.value = String(saved.data.id);
-          status.textContent = 'Saved to Yuvomi Places and selected for this Task.';
+          status.textContent = 'Saved to Ordoma Places and selected for this Task.';
         } catch (error) { status.textContent = error.message; button.disabled = false; }
       }));
     } catch (error) { status.textContent = error.message; }
@@ -4966,7 +4460,7 @@ function wireTaskList(container) {
       // (tasks.css:703) in 0 von 6 Messungen zu sehen. Siehe animationSettled().
       const settled = animationSettled(target);
       try {
-        await toggleTaskStatus(id, status);
+        await toggleSubtaskStatus(id, status);
         await settled;
         await loadTasks(container);
         // Derselbe Rückweg wie beim Wischen. Die Geste hatte hier zwei
@@ -4984,7 +4478,7 @@ function wireTaskList(container) {
           5000,
           async () => {
             try {
-              await toggleTaskStatus(id, nextStatus);
+              await toggleSubtaskStatus(id, nextStatus);
               await loadTasks(container);
             } catch (err) {
               window.yuvomi.showToast(err.message, 'danger');
@@ -5092,6 +4586,7 @@ function wireTaskList(container) {
  */
 function openTaskView(task, reminder, container, onChanged = () => loadTasks(container)) {
   openTaskDetail({
+    skills: state.skills,
     task,
     reminder,
     users: state.users,
@@ -5222,9 +4717,11 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
     api.get('/preferences').catch(() => ({ data: {} })),
   ]);
   state.activityTemplates = activityData.data?.activities ?? state.activityTemplates;
+  state.skills = activityData.data?.skills ?? state.skills;
   state.places = placesData.data ?? state.places;
   state.placeSearchStatus = placeStatusData.data ?? state.placeSearchStatus ?? { configured: false };
-  state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
+  state.templateSwitchWarning = preferencesData.data?.tasks_template_switch_warning !== false;
+    state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
   state.defaultSyncTarget = preferencesData.data?.tasks_default_target || state.defaultSyncTarget;
   state.calendarWeekStart = weekStartIndex(preferencesData.data?.week_start);
 
@@ -5243,6 +4740,7 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
   const canOfferEdit = state.categories.length > 0;
 
   openTaskDetail({
+    skills: state.skills,
     task,
     reminder,
     users: state.users,
@@ -5377,7 +4875,7 @@ export async function render(container, { user }) {
             <i data-lucide="plus" class="icon-lg" aria-hidden="true"></i> <span class="toolbar-new-btn__label">${t('newLabel.tasks')}</span>
           </button>
           <button class="btn btn--icon btn--ghost" id="btn-quick-add"
-                  aria-label="Quick Add from a template" title="Quick Add from a template">
+                  aria-label="Task Workflows" title="Task Workflows">
             <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
           </button>
         </div>
@@ -5462,9 +4960,11 @@ export async function render(container, { user }) {
     state.allTags = metaData.tags ?? [];
     state.defaultPoints = Number(metaData.default_points) || 0;
     state.activityTemplates = activityData.data?.activities ?? [];
+    state.skills = activityData.data?.skills ?? [];
     state.assignmentRequests = assignmentData.data ?? [];
     state.places = placesData.data ?? [];
     state.placeSearchStatus = placeStatusData.data ?? { configured: false };
+    state.templateSwitchWarning = preferencesData.data?.tasks_template_switch_warning !== false;
     state.subtasksExpandedByDefault = preferencesData.data?.tasks_subtasks_expanded === true;
     state.defaultSyncTarget = preferencesData.data?.tasks_default_target || '';
     state.calendarWeekStart = weekStartIndex(preferencesData.data?.week_start);
@@ -5542,6 +5042,7 @@ export async function render(container, { user }) {
 
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.
 export const __test = {
+  shiftTaskCalendarPickerYear,
   groupBy,
   groupKey,
   formatDueDate,

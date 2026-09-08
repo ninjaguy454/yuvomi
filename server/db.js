@@ -8763,6 +8763,33 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10029,
+  description: 'Task and Activity checklist skills with reusable Task defaults',
+  up: `
+    CREATE TABLE task_skill_requirements (
+      task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE RESTRICT,
+      sort_order INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0),
+      PRIMARY KEY(task_id, skill_id),
+      UNIQUE(task_id, sort_order)
+    );
+    CREATE INDEX idx_task_skill_requirements_skill ON task_skill_requirements(skill_id);
+    CREATE TABLE activity_template_checklist_skills (
+      checklist_item_id INTEGER NOT NULL REFERENCES activity_template_checklist_items(id) ON DELETE CASCADE,
+      skill_id INTEGER NOT NULL REFERENCES skills(id) ON DELETE RESTRICT,
+      sort_order INTEGER NOT NULL DEFAULT 0 CHECK(sort_order >= 0),
+      PRIMARY KEY(checklist_item_id, skill_id),
+      UNIQUE(checklist_item_id, sort_order)
+    );
+    CREATE INDEX idx_activity_checklist_skills_skill ON activity_template_checklist_skills(skill_id);
+    ALTER TABLE activity_templates ADD COLUMN priority TEXT NOT NULL DEFAULT 'none'
+      CHECK(priority IN ('none','low','medium','high','urgent'));
+    ALTER TABLE activity_templates ADD COLUMN points INTEGER NOT NULL DEFAULT 0 CHECK(points >= 0);
+    ALTER TABLE activity_templates ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]';
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [
@@ -8963,7 +8990,7 @@ function validateBackupFile(sourcePath) {
       WHERE type = 'table' AND name = 'schema_migrations'
     `).get();
     if (!row) {
-      throw new Error('Backup file is not a valid Yuvomi database.');
+      throw new Error('Backup file is not a valid Ordoma database.');
     }
     return candidate.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()?.version ?? 0;
   } finally {

@@ -5,6 +5,7 @@
  */
 
 import { api, auth } from '/api.js';
+import { displayAppName } from '/utils/branding.js';
 import { canSeeWidget } from '/permissions.js';
 import { t, formatDate, formatTime, timeSuffix, getLocale, getNumberFormat } from '/i18n.js';
 import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
@@ -51,7 +52,7 @@ function onboardingStorageKey(userId) {
 // Der Dialog benennt sich ueber seinen Schritt-Titel; die id steht hier, weil
 // beide Seiten der Verknuepfung sie brauchen (Overlay und `renderStep()`).
 const ONBOARDING_TITLE_ID = 'onboarding-step-title';
-const APP_NAME_STORAGE_KEY = 'yuvomi-app-name';
+
 const CUSTOMIZE_HINT_KEY = 'yuvomi-dash-customize-hint';
 
 function eventOccurrenceDateKey(event) {
@@ -83,7 +84,7 @@ function calendarEventRoute(event) {
 }
 
 function getAppName() {
-  return localStorage.getItem(APP_NAME_STORAGE_KEY) || 'Yuvomi';
+  return displayAppName();
 }
 
 function getOnboardingSteps() {

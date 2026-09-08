@@ -1,4 +1,4 @@
-# Yuvomi CLI-Installer — Svenska (sv)
+# Ordoma CLI-Installer — Svenska (sv)
 # Auto-generiert (Schlüssel identisch zu allen Locales). en = Fallback, de = Referenz.
 # Wird von install.sh gesourct; setzt die englische Basis pro Schlüssel außer Kraft.
 # Punkt-Schlüssel → Variablen mit Unterstrich (MSG_<bereich>_<name>).
@@ -84,7 +84,7 @@ MSG_admin_password="Lösenord (minst 8 tecken):"
 MSG_admin_confirm="Bekräfta lösenord:"
 MSG_admin_mismatch="Lösenorden matchar inte, försök igen."
 MSG_admin_created="Administratörskonto skapat!"
-MSG_admin_ready="  Yuvomi är redo!"
+MSG_admin_ready="  Ordoma är redo!"
 MSG_admin_open="  Öppna: %s"
 MSG_admin_exists="Ett administratörskonto finns redan."
 MSG_admin_failed="Kunde inte skapa administratör (HTTP %s): %s"

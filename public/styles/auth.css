@@ -45,8 +45,7 @@
   margin-bottom: var(--space-8);
 }
 
-/* Marken-Anker: App-Tile mit dem Yuvomi-Zeichen (drei transluzente Kreise).
- * Selbstbewusst (gefülltes Tile, weicher Schatten) und warm – „Würde ohne Kälte". */
+/* The canonical Ordoma O, with theme-aware contrast. */
 .auth-hero__mark {
   display: inline-flex;
   align-items: center;
@@ -69,10 +68,6 @@
     inset 0 1px 0 var(--glass-highlight-subtle);
 }
 
-.auth-hero__mark svg {
-  width: 55%;
-  height: 55%;
-}
 
 /* Large Title wie jeder Seitentitel, in Label-Farbe. Der Titel stand bis Runde 3
  * auf einer eigenen 48px-Stufe und in --color-accent - beides verbietet

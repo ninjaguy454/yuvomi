@@ -14,6 +14,7 @@
     "test:vidamia-branding": "node --test test/test-vidamia-branding.js",
     "test:startup-branding": "node --test test/test-startup-branding.js",
     "test:recipe-row-layout": "node --test test/test-recipe-row-layout.js",
+    "test:meals-mobile-layout": "node --test test/test-meals-mobile-layout.js",
     "test:theme-controls": "node --test test/test-theme-controls.js",
     "test:appearance-preferences": "node --test test/test-appearance-preferences.js",
     "test:preferences-appearance": "node --experimental-sqlite --test test/test-preferences-appearance.js",

@@ -8036,7 +8036,8 @@ test('Meals preserves acting-for audit disclosure and consolidates plan actions 
   assert.match(mealsPage, /data-plan-create/);
   assert.match(mealsPage, /data-plan-defaults/);
   assert.match(mealsPage, /data-plan-randomize/);
-  assert.match(mealsPage, /id="week-next"[\s\S]*id="week-today"[\s\S]*<\/div>\s*<div class="page-toolbar__actions">/);
+  assert.equal((mealsPage.match(/id="week-today"/g) || []).length, 1, 'one Today action remains available beside the week controls');
+  assert.match(mealsPage, /querySelector\('#week-today'\)\?\.addEventListener\('click'/);
   assert.match(mealsPage, /class="day-add meal-experience-day__add"/, 'each day retains the one-off Add meal path');
 });
 

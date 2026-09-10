@@ -48,6 +48,11 @@ export function automationPaths() {
     '/api/v1/automation/activity-options': {
       get: op({ summary: 'List active Activity Templates for Task authoring', tag: 'Automation' }),
     },
+    '/api/v1/automation/activity-templates/{id}/resolve': {
+      post: op({ summary: 'Resolve an editable Activity Template draft without creating Tasks', tag: 'Automation',
+        params: [idParam()], requestBody: jsonBody(null), stateChanging: true,
+        description: 'Body: { inputs?, subject_user_id? }. Returns resolved title, description, checklist, inputs and input_schema. Variables use the same deterministic typed evaluator as Workflow execution. Missing sample/context inputs return 422; invalid expressions or values return 400. Task creation accepts activity_inputs and revalidates before writing, while preserving explicit edits.' }),
+    },
     '/api/v1/automation/quick-add': {
       get: op({ summary: 'List Quick Add Activity and Workflow Templates', tag: 'Automation' }),
     },
@@ -96,6 +101,11 @@ export function automationPaths() {
     '/api/v1/automation/admin/variables': {
       get: op({ summary: 'List reusable household variables and system context variables', tag: 'Automation', admin: true }),
       post: op({ summary: 'Create a reusable household variable', tag: 'Automation', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/automation/admin/variables/preview': {
+      post: op({ summary: 'Preview a reusable or Workflow-local calculated value without writes', tag: 'Automation', admin: true,
+        requestBody: jsonBody(null), stateChanging: true,
+        description: 'Body: { variable, definitions?, inputs?, subject_user_id? }. A definition may contain expression: { version: 1, source }. References are typed and allowlisted; no executable code or arbitrary property traversal is accepted. Returns data.value, display_value, resolved_values and the required ordinary input_schema. At most 100 local definitions. Missing sample/context inputs return 422; structural/type errors return 400.' }),
     },
     '/api/v1/automation/admin/variables/{id}': {
       put: op({ summary: 'Update a reusable household variable', tag: 'Automation', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Updates the label, description, type, options and active state while retaining immutable database identity.' }),

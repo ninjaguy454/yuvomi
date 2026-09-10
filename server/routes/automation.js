@@ -22,7 +22,17 @@ import {
   listWorkflowTemplates,
   previewWorkflow,
   instantiateWorkflow,
+  activityVariableSchema,
+  resolveActivityTemplate,
 } from '../services/activity-workflows.js';
+import {
+  SYSTEM_CONTEXT_VARIABLES, householdVariableRows, normalizeExpression,
+  validateExpression, validateVariableDefinitions, expressionDependencies,
+  expressionScope, expandVariableDefinitions, hydrateWorkflowDefinitions,
+  resolveVariables, variableInputSchema, validateVariableTemplate,
+  normalizeVariableValue,
+  renameExpressionReference, renameVariableTemplate, templateReferences,
+} from '../services/variable-resolution.js';
 import { createLogger } from '../logger.js';
 import { normalizeSkillIds } from '../services/task-skills.js';
 import { normalizeTags } from '../utils/task-tags.js';
@@ -46,12 +56,6 @@ const VALID_LOCATION_MODES = new Set(['none', 'fixed', 'workflow']);
 const VALID_STEP_LOCATION_MODES = new Set(['inherit', 'none', 'fixed', 'workflow']);
 const VALID_PRESENCE_POLICIES = new Set(['ignore', 'must_be_home', 'must_be_at_location', 'must_be_away', 'available_before_due']);
 const VALID_PRESENCE_WINDOWS = new Set(['start', 'due', 'completion']);
-const SYSTEM_CONTEXT_VARIABLES = Object.freeze([
-  { key: 'context.current_date', label: 'Current date', type: 'date', description: 'The date when the template runs.' },
-  { key: 'context.day_of_week', label: 'Day of week', type: 'text', description: 'The local weekday when the template runs.' },
-  { key: 'context.current_time', label: 'Current time', type: 'time', description: 'The local time when the template runs.' },
-  { key: 'context.household_member', label: 'Selected household member', type: 'household_member', description: 'The person selected for the current activity or workflow.' },
-]);
 
 function text(value, { required = false, max = 200 } = {}) {
   const out = value == null ? '' : String(value).trim();
@@ -225,6 +229,7 @@ function saveActivitySkills(d, activityId, skillIds) {
 
 function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
   if (!Array.isArray(raw)) throw new Error('input_schema must be an array.');
+  if (raw.length > 100) throw new Error('A workflow supports up to 100 variables.');
   const existingByDefinitionId = new Map(
     existingQuestions
       .filter((question) => Number.isInteger(Number(question?.definition_id)))
@@ -269,11 +274,19 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
       question.reusable_definition_id ?? existingDefinition?.reusable_definition_id,
       { min: 1 },
     );
+    const reusable = reusableDefinitionId ? householdVariableRows(db.get()).find(row => Number(row.id) === reusableDefinitionId && row.active) : null;
     if (reusableDefinitionId) {
-      const reusable = db.get().prepare('SELECT variable_key, type FROM household_variable_definitions WHERE id = ? AND active = 1').get(reusableDefinitionId);
       if (!reusable || reusable.variable_key !== variableId || reusable.type !== type) {
         throw new Error(`Reusable variable ${variableId} no longer matches its household definition.`);
       }
+    }
+    const kind = reusable?.kind ?? question.kind ?? existingDefinition?.kind ?? 'field';
+    if (!['field', 'value'].includes(kind)) throw new Error(`Workflow variable ${variableId} has an unsupported value mode.`);
+    const expression = reusable ? reusable.expression : normalizeExpression(question.expression !== undefined ? question.expression : existingDefinition?.expression);
+    let defaultValue = reusable ? reusable.default_value : question.default_value !== undefined ? question.default_value : existingDefinition?.default_value ?? null;
+    if (!reusable && !expression && defaultValue != null && (!existingDefinition || question.default_value !== undefined || type !== existingDefinition.type)) {
+      const normalized = normalizeVariableValue(db.get(), { id: variableId, type, options }, defaultValue);
+      defaultValue = normalized && typeof normalized === 'object' ? normalized.id : normalized;
     }
     return {
       id: variableId,
@@ -283,6 +296,9 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
       type,
       options,
       scope: 'workflow',
+      kind,
+      default_value: defaultValue,
+      expression,
     };
   });
   if (new Set(questions.map((question) => question.id)).size !== questions.length) {
@@ -364,19 +380,6 @@ function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
   };
 }
 
-function validateVariableTemplate(value, questionsById, field) {
-  if (!value) return;
-  for (const match of String(value).matchAll(/\{\{([A-Za-z][A-Za-z0-9_-]*)(?:\.([A-Za-z][A-Za-z0-9_-]*))?\}\}/g)) {
-    const question = questionsById.get(match[1]);
-    if (!question) {
-      throw new Error(`${field} references unknown variable "${match[1]}".`);
-    }
-    if (match[2] && (question.type !== 'location' || !['name', 'id', 'parent', 'address'].includes(match[2]))) {
-      throw new Error(`${field} references unsupported property "${match[1]}.${match[2]}".`);
-    }
-  }
-}
-
 function normalizeWorkflowInput(d, body, existing = null) {
   const name = text(body.name ?? existing?.name, { required: true, max: 120 });
   const description = text(body.description ?? existing?.description, { max: 2000 });
@@ -384,10 +387,12 @@ function normalizeWorkflowInput(d, body, existing = null) {
   const rawInputSchema = body.input_schema !== undefined
     ? body.input_schema
     : (existing?.input_schema ?? []);
-  const inputSchema = normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? []);
+  const inputSchema = expandVariableDefinitions(normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? []), householdVariableRows(d));
+  const variableScope = expressionScope(inputSchema);
+  validateVariableDefinitions(variableScope);
   const questionsByKey = new Map(inputSchema.map((question) => [question.id, question]));
-  validateVariableTemplate(name, questionsByKey, 'Workflow name');
-  validateVariableTemplate(description, questionsByKey, 'Workflow description');
+  validateVariableTemplate(name, variableScope, 'Workflow name');
+  validateVariableTemplate(description, variableScope, 'Workflow description');
   const steps = Array.isArray(body.steps)
     ? body.steps
     : (existing?.steps ?? []);
@@ -445,8 +450,8 @@ function normalizeWorkflowInput(d, body, existing = null) {
     }
     const titleOverride = text(step.title_override, { max: 200 });
     const descriptionOverride = text(step.description_override, { max: 2000 });
-    validateVariableTemplate(titleOverride, questionsByKey, `Workflow step ${stepKey} title`);
-    validateVariableTemplate(descriptionOverride, questionsByKey, `Workflow step ${stepKey} description`);
+    validateVariableTemplate(titleOverride, variableScope, `Workflow step ${stepKey} title`);
+    validateVariableTemplate(descriptionOverride, variableScope, `Workflow step ${stepKey} description`);
     return {
       stepKey,
       activityTemplateId,
@@ -478,11 +483,11 @@ function normalizeWorkflowInput(d, body, existing = null) {
        WHERE id = ?
     `).get(step.activityTemplateId);
     if (!activity) throw new Error('A workflow step references an unknown activity template.');
-    validateVariableTemplate(activity.title_template, questionsByKey, `Activity ${activity.name} title`);
-    validateVariableTemplate(activity.description, questionsByKey, `Activity ${activity.name} description`);
+    validateVariableTemplate(activity.title_template, variableScope, `Activity ${activity.name} title`);
+    validateVariableTemplate(activity.description, variableScope, `Activity ${activity.name} description`);
     validateVariableTemplate(
       activity.supervision_title_template,
-      questionsByKey,
+      variableScope,
       `Activity ${activity.name} supervision title`,
     );
     const effectiveLocationMode = step.locationMode === 'inherit' ? activity.location_mode : step.locationMode;
@@ -558,10 +563,15 @@ function normalizeHouseholdVariable(body, existing = null) {
       .map((option) => String(option).trim()).filter(Boolean))]
     : [];
   if (type === 'choice' && !options.length) throw new Error('Choice variables need at least one option.');
-  const defaultValue = body.default_value !== undefined
+  let defaultValue = body.default_value !== undefined
     ? body.default_value
     : parseJsonSafe(existing?.default_value_json, null);
-  return { key, label, description, type, kind, options, defaultValue, active: bool(body.active, existing ? !!existing.active : true) };
+  const expression = normalizeExpression(body.expression !== undefined ? body.expression : parseJsonSafe(existing?.expression_json, null));
+  if (!expression && defaultValue != null && (!existing || body.default_value !== undefined || type !== existing.type)) {
+    const normalized = normalizeVariableValue(db.get(), { id: key, type, options }, defaultValue);
+    defaultValue = normalized && typeof normalized === 'object' ? normalized.id : normalized;
+  }
+  return { key, label, description, type, kind, options, defaultValue, expression, active: bool(body.active, existing ? !!existing.active : true) };
 }
 
 function parseJsonSafe(raw, fallback) {
@@ -569,19 +579,58 @@ function parseJsonSafe(raw, fallback) {
   try { return typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return fallback; }
 }
 
-function householdVariableRows(d) {
-  return d.prepare(`
-    SELECT hv.*,
-           (SELECT COUNT(*) FROM workflow_variable_definitions wv WHERE wv.reusable_definition_id = hv.id) AS usage_count
-      FROM household_variable_definitions hv
-     ORDER BY hv.active DESC, hv.label COLLATE NOCASE, hv.id
-  `).all().map((row) => ({
-    ...row,
-    options: parseJsonSafe(row.options_json, []),
-    default_value: parseJsonSafe(row.default_value_json, null),
-    options_json: undefined,
-    default_value_json: undefined,
-  }));
+function validateVariableCatalog(d, catalog) {
+  const definitions = expressionScope([], catalog);
+  validateVariableDefinitions(definitions);
+  const byKey = new Map(catalog.map(row => [row.variable_key, row]));
+  for (const row of catalog.filter(row => row.active && row.expression)) {
+    for (const key of expressionDependencies(row.expression.source, definitions)) {
+      if (byKey.get(key)?.active === 0) throw new Error(`Calculation ${row.label} depends on inactive variable ${key}.`);
+    }
+  }
+  for (const workflow of d.prepare('SELECT id,input_schema_json FROM workflow_templates').all()) {
+    const local = hydrateWorkflowDefinitions(d, workflow.id, parseJsonSafe(workflow.input_schema_json, []), catalog);
+    const scope = expressionScope(local);
+    validateVariableDefinitions(scope);
+    const types = new Map(local.map(row => [row.id, row.type]));
+    for (const step of d.prepare('SELECT * FROM workflow_template_steps WHERE workflow_template_id = ?').all(workflow.id)) {
+      const activity = getActivityTemplate(d, step.activity_template_id);
+      for (const template of [step.title_override,step.description_override,activity?.title_template,activity?.description,activity?.supervision_title_template,
+        ...(activity?.checklist ?? []).map(item => item.title_template)]) validateVariableTemplate(template, scope);
+      for (const key of [step.subject_variable_id, step.assignment_variable_id].filter(Boolean)) {
+        if (types.get(key) !== 'household_member') throw new Error(`Workflow ${workflow.id} requires ${key} to remain a Household Member variable.`);
+      }
+      if (step.location_variable_id && types.get(step.location_variable_id) !== 'location') throw new Error(`Workflow ${workflow.id} requires a Location variable.`);
+    }
+  }
+}
+
+function variableCandidate(input, id) {
+  return { id, variable_key: input.key, label: input.label, type: input.type, kind: input.kind,
+    options: input.options, default_value: input.defaultValue, expression: input.expression, active: input.active };
+}
+
+function expressionErrorResponse(res, error, extra = {}) {
+  const missing = error.code === 'missing_input';
+  return res.status(missing ? 422 : 400).json({ error: error.message, code: missing ? 422 : 400,
+    reason: missing ? 'missing_input' : 'invalid_expression', ...extra });
+}
+
+function referencesVariable(textValue, key) {
+  return templateReferences(textValue).some(reference => reference === key || reference.startsWith(`${key}.`));
+}
+
+function derivedVariableUse(d, key) {
+  const catalog = householdVariableRows(d);
+  const scope = expressionScope([], catalog);
+  const calculations = catalog.filter(row => row.expression && expressionDependencies(row.expression.source, scope).includes(key));
+  const activities = d.prepare('SELECT id,title_template,description,supervision_title_template FROM activity_templates').all().filter(row => [row.title_template,row.description,row.supervision_title_template].some(value => referencesVariable(value, key)));
+  const checklist = d.prepare('SELECT id,title_template FROM activity_template_checklist_items').all().filter(row => referencesVariable(row.title_template, key));
+  const local = d.prepare('SELECT id,input_schema_json FROM workflow_templates').all().filter(row => {
+    const definitions = hydrateWorkflowDefinitions(d, row.id, parseJsonSafe(row.input_schema_json, []), catalog);
+    return definitions.some(variable => variable.expression && expressionDependencies(variable.expression.source, expressionScope(definitions, catalog)).includes(key));
+  });
+  return calculations.length + activities.length + checklist.length + local.length;
 }
 
 function syncWorkflowVariableDefinitions(d, workflowId, questions) {
@@ -749,6 +798,11 @@ router.post('/obligations/:id/respond', (req, res) => {
 // definition and, when required, its subject.
 router.get('/activity-options', (_req, res) => {
   try {
+    const catalog = householdVariableRows(db.get());
+    const variableFields = activity => {
+      try { return { input_schema: activityVariableSchema(db.get(), activity, catalog).input_schema }; }
+      catch (error) { return { input_schema: [], variable_error: error.message }; }
+    };
     const activities = listActivityTemplates(db.get(), { activeOnly: true }).map((activity) => ({
       id: activity.id,
       name: activity.name,
@@ -774,12 +828,19 @@ router.get('/activity-options', (_req, res) => {
       assignment_strategy: activity.assignment_strategy,
       assignment_policy: activity.assignment_policy || activity.assignment_strategy,
       subject_required: activity.subject_required,
+      ...variableFields(activity),
     }));
     res.json({ data: { activities, skills: db.get().prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all() } });
   } catch (err) {
     log.error('GET /activity-options:', err);
     res.status(500).json({ error: 'Could not load activity templates.', code: 500 });
   }
+});
+
+router.post('/activity-templates/:id/resolve', (req, res) => {
+  try {
+    res.json(resolveActivityTemplate(db.get(), Number(req.params.id), { inputs: req.body.inputs ?? {}, subjectUserId: req.body.subject_user_id ?? null }));
+  } catch (error) { expressionErrorResponse(res, error); }
 });
 
 router.get('/quick-add', (req, res) => {
@@ -942,10 +1003,32 @@ router.put('/admin/skills/:skillId/members/:userId', requireAdmin, (req, res) =>
 
 router.get('/admin/variables', requireAdmin, (req, res) => {
   try {
-    res.json({ data: householdVariableRows(db.get()), context: SYSTEM_CONTEXT_VARIABLES });
+    const d = db.get();
+    res.json({ data: householdVariableRows(d), context: SYSTEM_CONTEXT_VARIABLES, members: householdMembers(d),
+      places: d.prepare('SELECT * FROM places WHERE active = 1 ORDER BY name COLLATE NOCASE,id').all() });
   } catch (err) {
     res.status(500).json({ error: 'Could not load reusable variables.', code: 500 });
   }
+});
+
+router.post('/admin/variables/preview', requireAdmin, (req, res) => {
+  let inputSchema = [];
+  try {
+    const d = db.get();
+    const raw = req.body.variable ?? {};
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Choose a variable to preview.');
+    if (req.body.definitions !== undefined && (!Array.isArray(req.body.definitions) || req.body.definitions.length > 100)) throw new Error('Preview supports up to 100 variable definitions.');
+    const input = normalizeHouseholdVariable({ ...raw, label: raw.label || 'Calculation',
+      variable_key: raw.variable_key ?? raw.key ?? (typeof raw.id === 'string' ? raw.id : 'preview_value') });
+    const catalog = householdVariableRows(d);
+    const candidate = { ...variableCandidate(input, input.key), id: input.key };
+    const local = Array.isArray(req.body.definitions) ? req.body.definitions.map(row => ({ ...row, expression: normalizeExpression(row.expression) })) : [];
+    const definitions = expressionScope([...local, candidate], catalog);
+    validateVariableDefinitions(definitions);
+    inputSchema = variableInputSchema(definitions, [input.key]);
+    const resolved = resolveVariables(d, definitions, req.body.inputs ?? {}, { keys: [input.key], subjectUserId: req.body.subject_user_id ?? null });
+    res.json({ data: { value: resolved.values[input.key], display_value: resolved.labels[input.key], resolved_values: resolved.persisted }, input_schema: inputSchema });
+  } catch (error) { expressionErrorResponse(res, error, { input_schema: inputSchema }); }
 });
 
 router.post('/admin/variables', requireAdmin, (req, res) => {
@@ -955,14 +1038,16 @@ router.post('/admin/variables', requireAdmin, (req, res) => {
       ...req.body,
       variable_key: req.body.variable_key || availableHouseholdVariableKey(d, req.body.label),
     });
+    validateVariableCatalog(d, [...householdVariableRows(d), variableCandidate(input, -1)]);
     const result = d.prepare(`
       INSERT INTO household_variable_definitions (
         variable_key, label, description, type, kind, options_json,
-        default_value_json, active, created_by
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        default_value_json, expression_json, active, created_by
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       input.key, input.label, input.description, input.type, input.kind,
       JSON.stringify(input.options), input.defaultValue == null ? null : JSON.stringify(input.defaultValue),
+      input.expression ? JSON.stringify(input.expression) : null,
       input.active, currentUserId(req),
     );
     res.status(201).json({ data: householdVariableRows(d).find((row) => Number(row.id) === Number(result.lastInsertRowid)) });
@@ -978,14 +1063,15 @@ router.put('/admin/variables/:id', requireAdmin, (req, res) => {
     const existing = d.prepare('SELECT * FROM household_variable_definitions WHERE id = ?').get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Reusable variable not found.', code: 404 });
     const input = normalizeHouseholdVariable({ ...req.body, variable_key: existing.variable_key }, existing);
+    validateVariableCatalog(d, householdVariableRows(d).map(row => Number(row.id) === Number(existing.id) ? variableCandidate(input, existing.id) : row));
     d.prepare(`
       UPDATE household_variable_definitions
          SET label = ?, description = ?, type = ?, kind = ?, options_json = ?,
-             default_value_json = ?, active = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+             default_value_json = ?, expression_json = ?, active = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        WHERE id = ?
     `).run(
       input.label, input.description, input.type, input.kind, JSON.stringify(input.options),
-      input.defaultValue == null ? null : JSON.stringify(input.defaultValue), input.active, existing.id,
+      input.defaultValue == null ? null : JSON.stringify(input.defaultValue), input.expression ? JSON.stringify(input.expression) : null, input.active, existing.id,
     );
     res.json({ data: householdVariableRows(d).find((row) => Number(row.id) === Number(existing.id)) });
   } catch (err) {
@@ -1005,7 +1091,31 @@ router.put('/admin/variables/:id/key', requireAdmin, (req, res) => {
           FROM workflow_variable_definitions
          WHERE reusable_definition_id = ?
       `).all(existing.id);
-      const replaceToken = (value) => value == null ? value : String(value).replaceAll(`{{${existing.variable_key}}}`, `{{${nextKey}}}`);
+      const replaceToken = value => renameVariableTemplate(value, existing.variable_key, nextKey);
+      for (const variable of householdVariableRows(d)) {
+        const renamed = renameExpressionReference(variable.expression, existing.variable_key, nextKey);
+        if (renamed?.source !== variable.expression?.source) d.prepare('UPDATE household_variable_definitions SET expression_json = ? WHERE id = ?').run(JSON.stringify(renamed), variable.id);
+      }
+      for (const workflow of d.prepare('SELECT id,input_schema_json FROM workflow_templates').all()) {
+        const schema = parseJsonSafe(workflow.input_schema_json, []);
+        const shadow = schema.some(question => (question.id ?? question.key) === existing.variable_key && Number(question.reusable_definition_id) !== Number(existing.id));
+        if (shadow) continue;
+        const renamed = schema.map(question => ({ ...question, expression: renameExpressionReference(question.expression, existing.variable_key, nextKey) }));
+        d.prepare('UPDATE workflow_templates SET input_schema_json = ? WHERE id = ?').run(JSON.stringify(renamed), workflow.id);
+      }
+      for (const activity of d.prepare('SELECT id,title_template,description,supervision_title_template,location_variable_id FROM activity_templates').all()) {
+        const checklistUsesKey = d.prepare('SELECT title_template FROM activity_template_checklist_items WHERE activity_template_id = ?').all(activity.id).some(item => referencesVariable(item.title_template, existing.variable_key));
+        if (checklistUsesKey || activity.location_variable_id === existing.variable_key || [activity.title_template,activity.description,activity.supervision_title_template].some(value => referencesVariable(value, existing.variable_key))) {
+          const ambiguous = d.prepare(`SELECT wt.input_schema_json FROM workflow_templates wt JOIN workflow_template_steps ws ON ws.workflow_template_id = wt.id WHERE ws.activity_template_id = ?`).all(activity.id)
+            .some(workflow => parseJsonSafe(workflow.input_schema_json, []).some(question => (question.id ?? question.key) === existing.variable_key && Number(question.reusable_definition_id) !== Number(existing.id)));
+          if (ambiguous) throw new Error('An Activity Template also uses this key as an independent workflow field. Give that field a distinct key before renaming the reusable variable.');
+        }
+        d.prepare('UPDATE activity_templates SET title_template = ?,description = ?,supervision_title_template = ?,location_variable_id = ? WHERE id = ?').run(
+          replaceToken(activity.title_template),replaceToken(activity.description),replaceToken(activity.supervision_title_template),activity.location_variable_id === existing.variable_key ? nextKey : activity.location_variable_id,activity.id);
+      }
+      for (const item of d.prepare('SELECT id,title_template FROM activity_template_checklist_items').all()) {
+        if (referencesVariable(item.title_template, existing.variable_key)) d.prepare('UPDATE activity_template_checklist_items SET title_template = ? WHERE id = ?').run(replaceToken(item.title_template),item.id);
+      }
       for (const definition of linked) {
         const collision = d.prepare(`
           SELECT 1 FROM workflow_variable_definitions
@@ -1017,7 +1127,7 @@ router.put('/admin/variables/:id/key', requireAdmin, (req, res) => {
           const questionDefinitionId = Number(question.definition_id);
           const questionKey = question.id ?? question.key;
           if (questionDefinitionId === Number(definition.id) || questionKey === existing.variable_key) {
-            return { ...question, id: nextKey, key: undefined };
+            return { ...question, id: nextKey, key: undefined, variable_key: undefined };
           }
           return question;
         });
@@ -1034,12 +1144,14 @@ router.put('/admin/variables/:id/key', requireAdmin, (req, res) => {
           if (condition?.input === existing.variable_key) condition.input = nextKey;
           d.prepare(`
             UPDATE workflow_template_steps
-               SET title_override = ?, description_override = ?, subject_variable_id = ?, condition_json = ?
+               SET title_override = ?, description_override = ?, subject_variable_id = ?, condition_json = ?,
+                   location_variable_id = ?, assignment_variable_id = ?, assignment_policy_variable_id = ?
              WHERE id = ?
           `).run(
             replaceToken(step.title_override), replaceToken(step.description_override),
             step.subject_variable_id === existing.variable_key ? nextKey : step.subject_variable_id,
-            condition ? JSON.stringify(condition) : null, step.id,
+            condition ? JSON.stringify(condition) : null,
+            ...[step.location_variable_id,step.assignment_variable_id,step.assignment_policy_variable_id].map(value => value === existing.variable_key ? nextKey : value), step.id,
           );
         }
         d.prepare('UPDATE workflow_variable_definitions SET variable_key = ? WHERE id = ?').run(nextKey, definition.id);
@@ -1049,6 +1161,7 @@ router.put('/admin/variables/:id/key', requireAdmin, (req, res) => {
            SET variable_key = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(nextKey, existing.id);
+      validateVariableCatalog(d, householdVariableRows(d));
     })();
     res.json({ data: householdVariableRows(d).find((row) => Number(row.id) === Number(existing.id)) });
   } catch (err) {
@@ -1060,6 +1173,8 @@ router.put('/admin/variables/:id/key', requireAdmin, (req, res) => {
 router.delete('/admin/variables/:id', requireAdmin, (req, res) => {
   try {
     const d = db.get();
+    const existing = d.prepare('SELECT variable_key FROM household_variable_definitions WHERE id = ?').get(req.params.id);
+    if (existing && derivedVariableUse(d, existing.variable_key)) return res.status(409).json({ error: 'This variable is referenced by a calculation or Activity Template. Update those references first.', code: 409 });
     const usage = d.prepare('SELECT COUNT(*) AS n FROM workflow_variable_definitions WHERE reusable_definition_id = ?').get(req.params.id)?.n ?? 0;
     if (usage) return res.status(409).json({ error: `This reusable variable is used by ${usage} workflow variable${usage === 1 ? '' : 's'}.`, code: 409 });
     const result = d.prepare('DELETE FROM household_variable_definitions WHERE id = ?').run(req.params.id);
@@ -1078,19 +1193,25 @@ router.post('/admin/workflow-templates/:workflowId/variables/:definitionId/promo
        WHERE id = ? AND workflow_template_id = ?
     `).get(req.params.definitionId, req.params.workflowId);
     if (!local) return res.status(404).json({ error: 'Workflow variable not found.', code: 404 });
+    const workflow = getWorkflowTemplate(d, Number(req.params.workflowId));
+    const question = workflow.input_schema.find(row => Number(row.definition_id) === Number(local.id));
+    const expression = normalizeExpression(question?.expression);
     const promotedId = d.transaction(() => {
-      let reusable = d.prepare('SELECT id, type FROM household_variable_definitions WHERE variable_key = ? COLLATE NOCASE').get(local.variable_key);
+      let reusable = d.prepare('SELECT id, type,expression_json FROM household_variable_definitions WHERE variable_key = ? COLLATE NOCASE').get(local.variable_key);
       if (reusable && reusable.type !== local.type) throw new Error('A reusable variable with this key has a different type.');
+      if (reusable && JSON.stringify(normalizeExpression(parseJsonSafe(reusable.expression_json, null))) !== JSON.stringify(expression)) throw new Error('A reusable variable with this key has a different calculation. Use a distinct variable key.');
       if (!reusable) {
         const result = d.prepare(`
           INSERT INTO household_variable_definitions (
-            variable_key, label, type, kind, options_json, created_by
-          ) VALUES (?, ?, ?, 'field', ?, ?)
-        `).run(local.variable_key, local.label, local.type, local.options_json, currentUserId(req));
+            variable_key, label, type, kind, options_json, default_value_json,expression_json,created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(local.variable_key, local.label, local.type, question?.kind || 'field',local.options_json,
+          question?.default_value == null ? null : JSON.stringify(question.default_value),expression ? JSON.stringify(expression) : null,currentUserId(req));
         reusable = { id: Number(result.lastInsertRowid) };
       }
       d.prepare('UPDATE workflow_variable_definitions SET reusable_definition_id = ? WHERE id = ?')
         .run(reusable.id, local.id);
+      validateVariableCatalog(d, householdVariableRows(d));
       return Number(reusable.id);
     })();
     res.json({ data: { reusable_definition_id: promotedId } });
@@ -1108,6 +1229,7 @@ router.get('/admin/activity-templates', requireAdmin, (req, res) => {
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
       variables: householdVariableRows(d).filter((variable) => variable.active),
+      context: SYSTEM_CONTEXT_VARIABLES,
       places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
     });
   } catch (err) {
@@ -1206,6 +1328,7 @@ router.get('/admin/workflow-templates', requireAdmin, (req, res) => {
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
       variables: householdVariableRows(d).filter((variable) => variable.active),
+      context: SYSTEM_CONTEXT_VARIABLES,
       places: d.prepare('SELECT * FROM places ORDER BY active DESC, name COLLATE NOCASE, id').all(),
     });
   } catch (err) {

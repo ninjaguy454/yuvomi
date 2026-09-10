@@ -16,9 +16,9 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Keep the Task, Cooking Map and shared interface refinements together so an
-// older worker cannot retain mismatched component JavaScript and styles.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.3`;
+// Ship expression editors, their shared parser and profile fields together so
+// an older worker cannot retain mismatched JavaScript and styles.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.4`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -88,6 +88,7 @@ const APP_SHELL = [
   '/styles/budget.css',
   '/styles/documents.css',
   '/styles/settings.css',
+  '/styles/variable-expressions.css',
   '/styles/recipes.css',
   '/styles/recipe-pipeline.css',
   '/styles/recipe-pipeline-editor.css',
@@ -104,6 +105,8 @@ const APP_SHELL = [
   '/nav-icons.js',
   '/permissions.js',
   '/components/activity-automation.js',
+  '/components/variable-expression-editor.js',
+  '/utils/variable-expressions.js',
   '/components/detail-view.js',
   '/components/document-attach.js',
   '/components/modal.js',
@@ -284,6 +287,7 @@ const PAGE_MODULES = [
   '/settings/region-presets.js',
   '/settings/weather-location.js',
   '/settings/family-users.js',
+  '/settings/member-name-fields.js',
   '/settings/pages/personal-account.js',
   '/settings/pages/admin-email.js',
   '/settings/pages/admin-permissions.js',

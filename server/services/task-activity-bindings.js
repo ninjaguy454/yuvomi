@@ -12,6 +12,7 @@ import { resolveActivityAssignment } from './activity-eligibility.js';
 import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
 import { todayKey } from '../utils/timezone.js';
 import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
+import { substituteVariableTemplate, templateReferences } from './variable-resolution.js';
 
 export class TaskActivityBindingError extends Error {}
 
@@ -36,17 +37,23 @@ function setAssignments(d, taskId, userIds) {
   for (const userId of userIds) insert.run(taskId, userId);
 }
 
-function supervisorTitle(activity, subject) {
+function supervisorTitle(activity, subject, variableLabels = {}) {
   const template = activity.supervision_title_template || 'Supervise {subject}: {activity}';
-  return String(template)
+  return substituteVariableTemplate(String(template)
     .replaceAll('{subject}', subject?.display_name || '')
     .replaceAll('{activity}', activity.name || 'activity')
-    .trim();
+    .trim(), variableLabels, { preserveMissing: true });
 }
 
-function supportTaskDefinition(activity, subject, supervisorId, parent, recurrenceOriginId = null) {
+function supportTaskDefinition(activity, subject, supervisorId, parent, recurrenceOriginId = null, variableLabels = {}) {
+  const renderedTitle = supervisorTitle(activity, subject, variableLabels);
+  // Recurring Tasks keep their concrete text; inputs are authoring-time data.
+  // Newly required supervision therefore uses that snapshot, not raw tokens.
+  const title = templateReferences(renderedTitle).length
+    ? `Supervise ${subject?.display_name || 'the household member'}: ${parent.title}`
+    : renderedTitle;
   return {
-    title: supervisorTitle(activity, subject),
+    title,
     description: `Supervise ${subject?.display_name || 'the household member'} while they complete: ${activity.name}`,
     category: activity.category || parent.category || 'misc',
     priority: 'none',
@@ -269,6 +276,7 @@ export function applyTaskActivityBinding(d, taskId, {
   allowInactive = false,
   supportOriginTaskId = null,
   materializeChecklist = true,
+  variableLabels = {},
 } = {}) {
   const task = taskRow(d, taskId);
   if (!task) throw new TaskActivityBindingError('Task not found.');
@@ -350,6 +358,7 @@ export function applyTaskActivityBinding(d, taskId, {
       resolution.supervisor.id,
       task,
       supportOriginTaskId,
+      variableLabels,
     );
     const support = d.prepare(`
       INSERT INTO tasks (
@@ -389,6 +398,7 @@ export function applyTaskActivityBinding(d, taskId, {
       parentTaskId: task.id,
       subject: resolution.subject,
       createdBy: task.created_by,
+      variableLabels,
     });
   }
 

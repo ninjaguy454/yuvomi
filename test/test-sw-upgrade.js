@@ -139,7 +139,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/shared-display', new MockResponse('', { headers: { 'X-Shared-Display': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.3');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.4');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
@@ -219,9 +219,10 @@ test('same Kitchen .5 baseline caches receive refinement imports and fresh modul
     '/components/modal.js', '/components/activity-automation.js', '/utils/wall-mode.js',
     '/styles/tokens.css', '/styles/typography.css', '/styles/reminders.css'];
   const pagePaths = ['/pages/tasks.js', '/pages/calendar.js', '/pages/meals.js', '/pages/shopping.js',
-    '/settings/pages/personal-appearance.js', '/settings/pages/notifications.js'];
+    '/settings/pages/personal-appearance.js', '/settings/pages/notifications.js', '/settings/member-name-fields.js'];
   const newImports = ['/notification-center.js', '/utils/appearance-preferences.js', '/utils/html-escape.js',
-    '/utils/session-lifecycle.js'];
+    '/utils/session-lifecycle.js', '/components/variable-expression-editor.js', '/utils/variable-expressions.js',
+    '/styles/variable-expressions.css'];
   for (const path of shellPaths) await shell.put(path, new MockResponse(`baseline:${path}`));
   for (const path of pagePaths) await pages.put(path, new MockResponse(`baseline:${path}`));
   await locales.put('/locales/en.json', new MockResponse('baseline:locale'));

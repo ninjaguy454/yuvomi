@@ -5,6 +5,7 @@
  */
 
 import { setTaskSkills } from './task-skills.js';
+import { substituteVariableTemplate } from './variable-resolution.js';
 
 export function loadActivityChecklist(d, activityTemplateId) {
   const items = d.prepare(`
@@ -27,12 +28,9 @@ export function loadActivityChecklist(d, activityTemplateId) {
 }
 
 export function renderActivityChecklistTitle(item, activity, subject = null, variableLabels = {}) {
-  const rendered = String(item?.title_template || '')
+  const rendered = substituteVariableTemplate(String(item?.title_template || '')
     .replaceAll('{subject}', subject?.display_name || '')
-    .replaceAll('{activity}', activity?.name || 'Activity')
-    .replace(/\{\{([A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)?)\}\}/g, (token, key) => (
-      Object.hasOwn(variableLabels, key) ? String(variableLabels[key] ?? '') : token
-    ))
+    .replaceAll('{activity}', activity?.name || 'Activity'), variableLabels, { preserveMissing: true })
     .trim();
   return rendered || activity?.name || 'Checklist item';
 }

@@ -83,6 +83,9 @@ const USER_PUBLIC_COLUMNS = `
   id,
   username,
   display_name,
+  first_name,
+  last_name,
+  nickname,
   avatar_color,
   avatar_data,
   role,
@@ -362,6 +365,9 @@ function publicUser(row) {
     id: row.id,
     username: row.username,
     display_name: row.display_name,
+    first_name: row.first_name ?? null,
+    last_name: row.last_name ?? null,
+    nickname: row.nickname ?? null,
     avatar_color: row.avatar_color,
     avatar_data: row.avatar_data ?? null,
     role: row.role,
@@ -386,6 +392,13 @@ function publicUser(row) {
 }
 
 function validateMemberProfileFields(body) {
+  const names = Object.fromEntries(['first_name', 'last_name', 'nickname'].map((key) => {
+    if (body[key] === undefined) return [key, { value: undefined, error: null }];
+    if (body[key] !== null && typeof body[key] !== 'string') {
+      return [key, { value: null, error: `${key} must be text or null.` }];
+    }
+    return [key, str(body[key], key.replaceAll('_', ' '), { max: 128, required: false })];
+  }));
   const vPhone = body.phone !== undefined
     ? str(body.phone, 'Phone number', { max: MAX_SHORT, required: false })
     : { value: undefined, error: null };
@@ -400,9 +413,23 @@ function validateMemberProfileFields(body) {
       phone: vPhone.value,
       email: vEmail.value,
       birth_date: vBirthDate.value,
+      ...Object.fromEntries(Object.entries(names).map(([key, result]) => [key, result.value])),
     },
-    errors: collectErrors([vPhone, vEmail, vBirthDate]),
+    errors: collectErrors([vPhone, vEmail, vBirthDate, ...Object.values(names)]),
   };
+}
+
+function writeMemberNames(database, userId, values) {
+  if (['first_name', 'last_name', 'nickname'].every((key) => values[key] === undefined)) return;
+  database.prepare(`
+    UPDATE users
+       SET first_name = CASE WHEN ? THEN ? ELSE first_name END,
+           last_name = CASE WHEN ? THEN ? ELSE last_name END,
+           nickname = CASE WHEN ? THEN ? ELSE nickname END
+     WHERE id = ?
+  `).run(Number(values.first_name !== undefined), values.first_name ?? null,
+    Number(values.last_name !== undefined), values.last_name ?? null,
+    Number(values.nickname !== undefined), values.nickname ?? null, userId);
 }
 
 function syncFamilyMemberArtifacts(database, userId, {
@@ -2416,6 +2443,7 @@ router.post('/users', requireAuth, requireAdmin, csrfMiddleware, async (req, res
           VALUES (?, ?, ?, ?, ?, ?, ?)
         `)
         .run(username, display_name, hash, avatar_color, normalizedAvatarData ?? null, role, family_role);
+      writeMemberNames(db.get(), created.lastInsertRowid, memberFields.values);
       syncFamilyMemberArtifacts(db.get(), created.lastInsertRowid, {
         displayName: display_name,
         phone: memberFields.values.phone,
@@ -2547,6 +2575,7 @@ router.patch('/users/:id', requireAuth, requireAdmin, csrfMiddleware, async (req
         SET username = ?, display_name = ?, avatar_color = ?, avatar_data = ?, role = ?, family_role = ?
         WHERE id = ?
       `).run(username, displayName, avatarColor || '#007AFF', avatarData ?? null, nextRole, familyRole, userId);
+      writeMemberNames(db.get(), userId, memberFields.values);
 
       if (newPasswordHash) {
         db.get().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newPasswordHash, userId);
@@ -2615,6 +2644,7 @@ router.patch('/me/profile', requireAuth, csrfMiddleware, (req, res) => {
         SET display_name = ?, avatar_color = ?, avatar_data = ?
         WHERE id = ?
       `).run(displayName, avatarColor || '#007AFF', avatarData ?? null, req.authUserId);
+      writeMemberNames(db.get(), req.authUserId, memberFields.values);
       syncFamilyMemberArtifacts(db.get(), req.authUserId, {
         displayName,
         phone: memberFields.values.phone,

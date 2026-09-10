@@ -5,6 +5,8 @@ import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEdi
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
+import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOptions } from '/components/variable-expression-editor.js';
+import { renameExpressionReference } from '/utils/variable-expressions.js';
 
 const h = (value) => esc(String(value ?? ''));
 
@@ -66,25 +68,17 @@ function inputRow(label, control, hint = '') {
 }
 
 function workflowMentionOptions(panel) {
-  return [...panel.querySelectorAll('[data-workflow-question]')].flatMap((row, index) => {
+  const variables = [...panel.querySelectorAll('[data-workflow-question]')].map((row, index) => {
     const id = row.dataset.variableId;
     const label = row.querySelector('[data-question-label]')?.value.trim() || `Variable ${index + 1}`;
-    if (!id) return [];
-    const base = [{ id, label, detail: id, token: `{{${id}}}` }];
-    if (row.querySelector('[data-question-type]')?.value === 'location') {
-      base.push(
-        { id: `${id}.name`, label: `${label} name`, detail: `${id}.name`, token: `{{${id}.name}}` },
-        { id: `${id}.parent`, label: `${label} parent`, detail: `${id}.parent`, token: `{{${id}.parent}}` },
-        { id: `${id}.address`, label: `${label} address`, detail: `${id}.address`, token: `{{${id}.address}}` },
-      );
-    }
-    return base;
+    return { id, label, type: row.querySelector('[data-question-type]')?.value };
   });
+  return variableReferenceOptions([...variables, ...(panel.variableContext || [])]);
 }
 
 function mentionOptions(panel, field) {
   const context = field.dataset.variableMentions;
-  const variables = context?.startsWith('workflow') ? workflowMentionOptions(panel) : [];
+  const variables = context?.startsWith('workflow') ? workflowMentionOptions(panel) : variableReferenceOptions(panel.variableContext || []);
   const builtIns = [];
   if (['activity-title', 'activity-description', 'activity-supervision',
     'workflow-step-title', 'workflow-step-description'].includes(context)) {
@@ -335,6 +329,7 @@ function workflowVariableId(question) {
 }
 
 function renderRuntimeQuestion(question, members, places) {
+  if (question.expression || question.kind === 'value') return '';
   const key = h(workflowVariableId(question));
   const label = question.label || workflowVariableId(question);
   if (question.type === 'boolean') {
@@ -394,6 +389,11 @@ function openQuickAddTemplate(template, members, places, onCreated) {
     size: 'lg',
     onSave(panel) {
       const form = panel.querySelector('#quick-add-form');
+      questions.forEach(question => {
+        if (question.default_value == null) return;
+        const field = [...form.querySelectorAll('[data-runtime-input]')].find(input => input.dataset.runtimeInput === workflowVariableId(question));
+        if (field) field.value = String(question.default_value);
+      });
       let previewVersion = 0;
       const invalidatePreview = () => {
         previewVersion += 1;
@@ -437,6 +437,7 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
   const form = panel.querySelector('#quick-add-form');
   if (!target || !form) return;
   replaceHtml(target, `
+    ${renderResolvedVariables(preview.resolved_variables || preview.resolved_values)}
     <div class="automation-preview">
       ${preview.steps.map((step, index) => `
         <div class="automation-preview__step">
@@ -475,6 +476,12 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
 // ---------------------------------------------------------------------------
 // Admin manager
 // ---------------------------------------------------------------------------
+
+function renderResolvedVariables(values) {
+  const rows = Array.isArray(values) ? values : Object.entries(values || {}).map(([key, value]) => ({ key, value }));
+  if (!rows.length) return '';
+  return `<details class="variable-resolved-values"><summary>Calculated and saved values</summary>${rows.map(row => `<div><span>${h(row.label || row.key)}</span><strong>${h(row.display_value ?? row.value)}</strong></div>`).join('')}</details>`;
+}
 
 const AUTOMATION_TABS = [
   ['skills', 'Skills'],
@@ -564,7 +571,7 @@ async function renderVariablesManager(body, manager) {
         <div class="list-row automation-list-row">
           <div class="automation-list-row__copy">
             <strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.variable_key)}}}</code><br>
-            <small class="form-hint">${h(variable.type)} · ${variable.kind === 'value' ? 'Household value' : 'Reusable field'}${variable.usage_count ? ` · used by ${variable.usage_count} workflow variable${variable.usage_count === 1 ? '' : 's'}` : ''}</small>
+            <small class="form-hint">${h(variable.type)} · ${variable.expression ? 'Calculated value' : variable.kind === 'value' ? 'Household value' : 'Reusable field'}${variable.usage_count ? ` · used by ${variable.usage_count} workflow variable${variable.usage_count === 1 ? '' : 's'}` : ''}</small>
           </div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--ghost btn--sm" data-edit-variable="${variable.id}">Edit</button>
@@ -578,9 +585,10 @@ async function renderVariablesManager(body, manager) {
     <div class="automation-list">${context.map((variable) => `
       <div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`);
 
-  body.querySelector('#automation-add-variable')?.addEventListener('click', () => openVariableForm(null, manager));
+  const editorContext = { variables, context, members: response.members || [], places: response.places || [] };
+  body.querySelector('#automation-add-variable')?.addEventListener('click', () => openVariableForm(null, manager, { context: editorContext }));
   body.querySelectorAll('[data-edit-variable]').forEach((button) => button.addEventListener('click', () => {
-    openVariableForm(variables.find((row) => Number(row.id) === Number(button.dataset.editVariable)), manager);
+    openVariableForm(variables.find((row) => Number(row.id) === Number(button.dataset.editVariable)), manager, { context: editorContext });
   }));
   body.querySelectorAll('[data-rename-variable]').forEach((button) => button.addEventListener('click', () => {
     openVariableKeyForm(variables.find((row) => Number(row.id) === Number(button.dataset.renameVariable)), manager);
@@ -595,37 +603,46 @@ async function renderVariablesManager(body, manager) {
   }));
 }
 
-function openVariableForm(variable = null, manager = null) {
+function openVariableForm(variable = null, manager = null, { context = {}, asChild = false, onSaved = null } = {}) {
   const content = `<form id="automation-variable-form">
     ${inputRow('Variable name', `<input class="input" name="label" required maxlength="120" value="${h(variable?.label || '')}">`, 'The friendly name shown in variable suggestions.')}
     ${variable ? inputRow('Variable ID', `<code class="automation-variable-token">{{${h(variable.variable_key)}}}</code>`, 'Use Rename ID only when every reference should change.') : inputRow('Variable ID', `<input class="input" name="variable_key" maxlength="80" placeholder="Generated from the name">`, 'Lowercase letters, numbers, and underscores. Leave blank to generate it from the name.')}
     ${inputRow('Description', `<textarea class="input" name="description" rows="2">${h(variable?.description || '')}</textarea>`)}
     ${inputRow('Type', `<select class="input" name="type" id="automation-variable-type">${householdVariableTypeOptions(variable?.type || 'text')}</select>`)}
-    ${inputRow('Use', `<select class="input" name="kind"><option value="field" ${variable?.kind !== 'value' ? 'selected' : ''}>Ask when a template runs</option><option value="value" ${variable?.kind === 'value' ? 'selected' : ''}>Saved household value</option></select>`)}
     <div id="automation-variable-options" ${variable?.type === 'choice' ? '' : 'hidden'}>${inputRow('Choices', `<input class="input" name="options" value="${h((variable?.options || []).join(', '))}" placeholder="One, Two, Three">`)}</div>
-    ${inputRow('Default value', `<input class="input" name="default_value" value="${h(variable?.default_value ?? '')}">`, 'Optional. The value can still be supplied or changed when used.')}
+    ${renderVariableValueEditor(variable || {})}
     ${footer(variable ? 'Save variable' : 'Create variable')}
   </form>`;
-  openModal({
+  let modal;
+  modal = (asChild ? openChildModal : openModal)({
     title: variable ? 'Edit reusable variable' : 'New reusable variable', content,
     onSave(panel) {
       const type = panel.querySelector('#automation-variable-type');
       const options = panel.querySelector('#automation-variable-options');
-      type?.addEventListener('change', () => { options.hidden = type.value !== 'choice'; });
+      const form = panel.querySelector('#automation-variable-form');
+      const definition = () => {
+        const data = new FormData(form);
+        return { label: data.get('label'), description: data.get('description'), type: data.get('type'),
+          variable_key: variable?.variable_key || data.get('variable_key') || workflowVariableSlug(data.get('label')),
+          options: String(data.get('options') || '').split(',').map(item => item.trim()).filter(Boolean), active: true };
+      };
+      const editor = bindVariableValueEditor(panel.querySelector('[data-variable-value-editor]'), {
+        variable: variable || {}, getDefinition: definition, getDefinitions: () => context.variables || [],
+        context: context.context || [], members: context.members || [], places: context.places || [],
+      });
+      type?.addEventListener('change', () => { options.hidden = type.value !== 'choice'; editor.invalidate(); editor.refresh(); });
+      form.querySelector('[name="options"]')?.addEventListener('input', () => editor.refresh());
       panel.querySelector('#automation-variable-form')?.addEventListener('submit', async (event) => {
         event.preventDefault();
-        const data = new FormData(event.currentTarget);
-        const payload = {
-          label: data.get('label'), description: data.get('description'), type: data.get('type'),
-          kind: data.get('kind'), variable_key: data.get('variable_key') || undefined,
-          options: String(data.get('options') || '').split(',').map((item) => item.trim()).filter(Boolean),
-          default_value: data.get('default_value') || null, active: true,
-        };
+        if (!editor.validate({ focus: true })) return;
+        const payload = { ...definition(), ...editor.value() };
+        if (!variable && !form.querySelector('[name="variable_key"]').value.trim()) delete payload.variable_key;
         try {
-          if (variable) await api.put(`/automation/admin/variables/${variable.id}`, payload);
-          else await api.post('/automation/admin/variables', payload);
+          const response = variable ? await api.put(`/automation/admin/variables/${variable.id}`, payload) : await api.post('/automation/admin/variables', payload);
           toast('Reusable variable saved.');
-          await refreshAutomationManager(manager, 'variables');
+          if (asChild) await modal.close({ force: true });
+          else await refreshAutomationManager(manager, 'variables');
+          await onSaved?.(response.data);
         } catch (error) { toast(error.message, 'danger'); }
       });
     },
@@ -1203,7 +1220,7 @@ async function renderActivitiesManager(body, manager) {
 }
 
 function activityEditorContext(response) {
-  return { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [] };
+  return { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [], context: response.context ?? [] };
 }
 
 /** Review a Task-derived template draft in the same editor used by Automation. */
@@ -1265,6 +1282,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     content,
     size: 'lg',
     onSave(panel) {
+      panel.variableContext = [...context.variables, ...(context.context || [])];
       wireVariableMentions(panel);
       const createSkill = async () => {
         const skill = await openSkillEditor();
@@ -1437,7 +1455,12 @@ function renameWorkflowDraftVariable(panel, row, nextId) {
     if (!field.value.includes(previousToken)) return;
     field.value = field.value.replaceAll(previousToken, `{{${nextId}}}`);
   });
-  panel.querySelectorAll('[data-step-subject-variable], [data-step-condition-variable]').forEach((select) => {
+  panel.querySelectorAll('[data-expression-source]').forEach(field => {
+    if (!field.value.trim() || field.readOnly) return;
+    try { field.value = renameExpressionReference({ version: 1, source: field.value }, previousId, nextId)?.source || field.value; }
+    catch { /* An incomplete expression remains editable and is validated on Save. */ }
+  });
+  panel.querySelectorAll('[data-step-subject-variable], [data-step-condition-variable], [data-step-location-variable], [data-step-assignment-variable], [data-step-assignment-policy-variable]').forEach((select) => {
     [...select.options].forEach((option) => {
       if (option.value === previousId) option.value = nextId;
     });
@@ -1522,10 +1545,12 @@ function questionHtml(question = {}, workflowId = null) {
   const existingVariableId = workflowVariableId(question);
   const variableId = existingVariableId || newWorkflowVariableId();
   const type = question.type === 'select' ? 'choice' : (question.type || 'text');
-  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-definition-id="${h(question.definition_id || '')}" data-reusable-definition-id="${h(question.reusable_definition_id || '')}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}">
+  const linked = Boolean(question.reusable_definition_id);
+  const valueConfig = { kind: question.kind || 'field', default_value: question.default_value ?? null, expression: question.expression || null };
+  return `<div class="automation-question-row" data-workflow-question data-variable-id="${h(variableId)}" data-variable-definition-id="${h(question.definition_id || '')}" data-reusable-definition-id="${h(question.reusable_definition_id || '')}" data-variable-id-auto="${existingVariableId ? 'false' : 'true'}" data-variable-config="${h(JSON.stringify(valueConfig))}">
     <code class="automation-variable-token" data-variable-token title="Readable key used by this workflow">{{${h(variableId)}}}</code>
     <input class="input" data-question-label placeholder="Question or variable name" aria-label="Question or variable name" value="${h(question.label || '')}">
-    <select class="input" data-question-type>
+    <select class="input" data-question-type aria-label="Variable type" ${linked ? 'disabled' : ''}>
       <option value="household_member" ${type === 'household_member' ? 'selected' : ''}>Household Member</option>
       <option value="location" ${type === 'location' ? 'selected' : ''}>Place / Location</option>
       <option value="boolean" ${type === 'boolean' ? 'selected' : ''}>Yes/No</option>
@@ -1537,16 +1562,17 @@ function questionHtml(question = {}, workflowId = null) {
     </select>
     <div class="automation-question-actions">
       ${workflowId && question.definition_id && !question.reusable_definition_id ? `<button type="button" class="btn btn--ghost btn--sm btn--icon" data-promote-question title="Make reusable across the household" aria-label="Make ${h(question.label || variableId)} reusable"><i data-lucide="globe-2" class="icon-sm"></i></button>` : ''}
-      ${question.reusable_definition_id ? '<span class="automation-variable-scope" title="Reusable household variable"><i data-lucide="globe-2" class="icon-sm"></i></span>' : ''}
+      ${linked ? '<button type="button" class="btn btn--ghost btn--sm" data-edit-linked-variable>Edit household value</button>' : ''}
       <button type="button" class="btn btn--ghost btn--sm" data-remove-question>Remove</button>
     </div>
-    <input class="input automation-question-options" data-question-options placeholder="Choice options, comma separated" value="${h((question.options || []).join(', '))}" ${type === 'choice' ? '' : 'hidden'}>
+    <input class="input automation-question-options" data-question-options aria-label="Choice options" placeholder="Choice options, comma separated" value="${h((question.options || []).join(', '))}" ${type === 'choice' ? '' : 'hidden'} ${linked ? 'readonly' : ''}>
+    ${renderVariableValueEditor(valueConfig, { readOnly: linked })}
   </div>`;
 }
 
 function workflowEditorContext(response) {
   return { activities: response.activities ?? [], members: response.members ?? [],
-    categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [] };
+    categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [], context: response.context ?? [] };
 }
 
 async function loadWorkflowEditorContext() {
@@ -1576,9 +1602,11 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
     content,
     size: 'xl',
     onSave(panel) {
+      panel.variableContext = context.context || [];
       wireVariableMentions(panel);
       const steps = panel.querySelector('#workflow-steps');
       const questions = panel.querySelector('#workflow-questions');
+      const valueEditors = new WeakMap();
 
       const readQuestionDrafts = () => [...questions.querySelectorAll('[data-workflow-question]')].map((row) => {
         const type = row.querySelector('[data-question-type]').value;
@@ -1591,7 +1619,23 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
           options: type === 'choice'
             ? row.querySelector('[data-question-options]').value.split(',').map((x) => x.trim()).filter(Boolean)
             : [],
+          ...(valueEditors.get(row)?.value() || JSON.parse(row.dataset.variableConfig || '{}')),
         };
+      });
+
+      const allDefinitions = () => [...new Map([...context.variables, ...readQuestionDrafts()].map(item => [item.variable_key || item.id, item])).values()];
+      const bindValueEditors = () => questions.querySelectorAll('[data-workflow-question]').forEach(row => {
+        if (valueEditors.has(row)) return;
+        const config = JSON.parse(row.dataset.variableConfig || '{}');
+        const readOnly = Boolean(row.dataset.reusableDefinitionId);
+        const editor = bindVariableValueEditor(row.querySelector('[data-variable-value-editor]'), {
+          variable: config, readOnly, members: context.members, places: context.places, context: context.context || [],
+          getDefinitions: allDefinitions,
+          getDefinition: () => ({ id: row.dataset.variableId, label: row.querySelector('[data-question-label]').value.trim(), type: row.querySelector('[data-question-type]').value,
+            options: row.querySelector('[data-question-options]').value.split(',').map(item => item.trim()).filter(Boolean) }),
+          onChange: () => refreshStepVariables(),
+        });
+        valueEditors.set(row, editor);
       });
 
       const refreshStepDependencies = () => {
@@ -1612,6 +1656,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
 
       const refreshStepVariables = () => {
         const drafts = readQuestionDrafts();
+        questions.querySelectorAll('[data-workflow-question]').forEach(row => valueEditors.get(row)?.refresh());
         steps.querySelectorAll('[data-workflow-step]').forEach((row) => {
           const subjectSelect = row.querySelector('[data-step-subject-variable]');
           const locationSelect = row.querySelector('[data-step-location-variable]');
@@ -1646,6 +1691,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
       };
 
       refreshStepDependencies();
+      bindValueEditors();
       refreshStepVariables();
 
       panel.querySelector('#workflow-add-step')?.addEventListener('click', () => {
@@ -1662,6 +1708,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
       });
       panel.querySelector('#workflow-add-question')?.addEventListener('click', () => {
         questions.insertAdjacentHTML('beforeend', questionHtml({}, workflow?.id));
+        bindValueEditors();
         refreshStepVariables();
       });
       panel.querySelector('#workflow-use-reusable')?.addEventListener('click', () => {
@@ -1675,11 +1722,26 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
         questions.insertAdjacentHTML('beforeend', questionHtml({
           id: variable.variable_key, label: variable.label, type: variable.type,
           options: variable.options || [], reusable_definition_id: variable.id,
+          kind: variable.kind, default_value: variable.default_value, expression: variable.expression,
         }, workflow?.id));
+        bindValueEditors();
         refreshStepVariables();
         if (window.lucide) window.lucide.createIcons({ el: questions });
       });
       questions.addEventListener('click', (event) => {
+        const editLinked = event.target.closest('[data-edit-linked-variable]');
+        if (editLinked) {
+          const row = editLinked.closest('[data-workflow-question]');
+          const variable = context.variables.find(item => Number(item.id) === Number(row.dataset.reusableDefinitionId));
+          if (!variable) return;
+          openVariableForm(variable, null, { context, asChild: true, onSaved: saved => {
+            context.variables = context.variables.map(item => Number(item.id) === Number(saved.id) ? saved : item);
+            const draft = readQuestionDrafts().find(item => item.id === row.dataset.variableId);
+            row.insertAdjacentHTML('beforebegin', questionHtml({ ...draft, type: saved.type, options: saved.options, kind: saved.kind, default_value: saved.default_value, expression: saved.expression }, workflow?.id));
+            row.remove(); bindValueEditors(); refreshStepVariables();
+          } });
+          return;
+        }
         const promote = event.target.closest('[data-promote-question]');
         if (promote) {
           const row = promote.closest('[data-workflow-question]');
@@ -1711,6 +1773,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
         if (!row) return;
         const type = row.querySelector('[data-question-type]').value;
         row.querySelector('[data-question-options]').hidden = type !== 'choice';
+        valueEditors.get(row)?.refresh();
         refreshStepVariables();
       });
       questions.addEventListener('input', (event) => {
@@ -1746,6 +1809,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
         event.preventDefault();
         const data = new FormData(event.currentTarget);
         const inputSchema = readQuestionDrafts().filter((question) => question.id && question.label);
+        if ([...questions.querySelectorAll('[data-workflow-question]')].some(row => !valueEditors.get(row)?.validate({ focus: true }))) return;
 
         const stepRows = [...steps.querySelectorAll('[data-workflow-step]')];
         const savedKeyByDraftKey = new Map(

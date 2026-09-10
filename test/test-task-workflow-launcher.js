@@ -98,7 +98,7 @@ function runtimeHarness({ deferCreate = false } = {}) {
       : Promise.resolve({ data: { run_id: 9 } });
     return new Promise((resolve) => pending.push(resolve));
   } };
-  const renderQuickPreview = load('renderQuickPreview', { api, h: esc, window: {}, singlePendingAction: load('singlePendingAction', {}), toast: (value) => toasts.push(value),
+  const renderQuickPreview = load('renderQuickPreview', { api, h: esc, window: {}, renderResolvedVariables: load('renderResolvedVariables', { h: esc }), singlePendingAction: load('singlePendingAction', {}), toast: (value) => toasts.push(value),
     replaceHtml: (_target, html) => { preview.html = html; create = node(); } });
   const open = load('openQuickAddTemplate', { api, h: esc, inputRow: (_label, html) => html,
     footer: () => '', renderRuntimeQuestion: () => '', memberOptions: () => '',

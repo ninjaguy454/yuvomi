@@ -2266,6 +2266,7 @@
             "successWithSkipped_one": "{{count}} événement importé, {{skipped}} déjà présents.",
             "allDuplicates": "Aucun nouvel événement - tous existaient déjà."
         },
+        "memberNamesHint": "Facultatif. Les noms saisis ici peuvent être utilisés dans les processus du foyer ; votre nom affiché reste inchangé.",
         "memberPhoneLabel": "Numéro de téléphone (facultatif)",
         "memberEmailLabel": "E-mail (facultatif)",
         "memberBirthDateLabel": "Date de naissance (facultatif)",

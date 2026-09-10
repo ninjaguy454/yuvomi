@@ -2316,6 +2316,7 @@
         "inventoryFeedDisableConfirm": "Disable the feed? Existing subscriptions will no longer receive updates.",
         "inventoryFeedDisableConfirmDetail": "The link stops delivering anything immediately. Turning it back on later creates a new address that every subscriber has to enter by hand.",
         "inventoryFeedHint": "Anyone who knows this link can see which of your items' deadlines are coming up. Only share it with your own devices.",
+        "memberNamesHint": "Nem kötelező. Az itt megadott nevek használhatók a háztartási munkafolyamatokban; a megjelenített név változatlan marad.",
         "memberPhoneLabel": "Telefonszám (opcionális)",
         "memberEmailLabel": "Email (opcionális)",
         "memberBirthDateLabel": "Születésnap (opcionális)",

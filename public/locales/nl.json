@@ -2283,6 +2283,7 @@
             "successWithSkipped_one": "{{count}} afspraak geïmporteerd, {{skipped}} bestonden al.",
             "allDuplicates": "Geen nieuwe afspraken - alle bestonden al."
         },
+        "memberNamesHint": "Optioneel. Namen die je hier invult, kunnen in huishoudelijke werkstromen worden gebruikt; je weergavenaam blijft ongewijzigd.",
         "memberPhoneLabel": "Telefoonnummer (optioneel)",
         "memberEmailLabel": "E-mail (optioneel)",
         "memberBirthDateLabel": "Geboortedatum (optioneel)",

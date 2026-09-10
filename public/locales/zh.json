@@ -2266,6 +2266,7 @@
             "successWithSkipped_one": "已导入 {{count}} 个活动，{{skipped}} 个已存在。",
             "allDuplicates": "没有新活动——全部已存在。"
         },
+        "memberNamesHint": "选填。此处填写的姓名可用于家庭工作流程；您的显示名称保持不变。",
         "memberPhoneLabel": "电话号码（可选）",
         "memberEmailLabel": "电子邮件（可选）",
         "memberBirthDateLabel": "出生日期（可选）",

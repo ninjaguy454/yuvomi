@@ -62,7 +62,7 @@ export function householdMembers(d) {
   // household chore participants. Keep them out of subject pickers and every
   // automatically derived eligible rotation.
   return d.prepare(`
-    SELECT u.id, u.display_name, u.family_role, b.birth_date
+    SELECT u.id, u.display_name, u.first_name, u.last_name, u.nickname, u.family_role, b.birth_date
       FROM users u
       LEFT JOIN birthdays b ON b.family_user_id = u.id
      WHERE NOT EXISTS (

@@ -6,6 +6,7 @@ import {
 } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { prefersInkText } from '/utils/contrast.js';
+import { memberNameFields, readMemberNames } from '/settings/member-name-fields.js';
 
 function initials(name) {
   if (!name) return '?';
@@ -482,6 +483,7 @@ function renderPage(container, user, refreshFailed, accessNotice, oidcState, oid
                 <input class="form-input" type="text" id="profile-username" value="@${esc(user?.username || '')}" readonly>
                 <p class="form-hint">${t('settings.usernameFixedHint')}</p>
               </div>
+              ${memberNameFields('profile', user)}
             </div>
           </div>
           <fieldset class="settings-fieldset">
@@ -640,6 +642,7 @@ function bindEvents(container, user, profileState) {
     try {
       const response = await auth.updateProfile({
         display_name: displayName.value.trim(),
+        ...readMemberNames(container, 'profile'),
         avatar_color: avatarColor.value,
         avatar_data: profileState.avatarData,
         phone: container.querySelector('#profile-phone')?.value.trim() || null,

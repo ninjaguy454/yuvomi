@@ -2301,6 +2301,7 @@
             "successWithSkipped_one": "Naimportována {{count}} událost, {{skipped}} již existovalo.",
             "allDuplicates": "Žádné nové události - všechny už existovaly."
         },
+        "memberNamesHint": "Volitelné. Zde zadaná jména lze použít v postupech domácnosti; zobrazované jméno zůstane beze změny.",
         "memberPhoneLabel": "Telefonní číslo (volitelné)",
         "memberEmailLabel": "E-mail (volitelné)",
         "memberBirthDateLabel": "Datum narození (volitelné)",

@@ -2266,6 +2266,7 @@
             "successWithSkipped_one": "{{count}} händelse importerad, {{skipped}} fanns redan.",
             "allDuplicates": "Inga nya händelser - alla fanns redan."
         },
+        "memberNamesHint": "Valfritt. Namn som anges här kan användas i hushållets arbetsflöden; ditt visningsnamn förblir oförändrat.",
         "memberPhoneLabel": "Telefonnummer (valfritt)",
         "memberEmailLabel": "E-post (valfritt)",
         "memberBirthDateLabel": "Födelsedatum (valfritt)",

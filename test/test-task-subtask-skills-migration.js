@@ -44,7 +44,8 @@ test('10028 upgrades once to10029 without modifying existing Tasks, activities o
     const historyBefore = d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
     d.close(); d = null;
     const first = startup(path);
-    assert.deepEqual([...first.matchAll(/Migration (\d+) applied:/g)].map((match) => Number(match[1])), [10029]);
+    assert.deepEqual([...first.matchAll(/Migration (\d+) applied:/g)].map((match) => Number(match[1])),
+      ALL_MIGRATIONS.filter((migration) => migration.version > 10028).map((migration) => migration.version));
     d = new Database(path); d.pragma('foreign_keys=ON');
     assert.deepEqual(d.prepare('SELECT * FROM tasks WHERE id IN (?,?) ORDER BY id').all(taskId, childId), tasksBefore);
     assert.deepEqual(d.prepare('SELECT * FROM activity_templates WHERE id=?').get(activityId), {

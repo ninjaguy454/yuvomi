@@ -2266,6 +2266,7 @@
             "successWithSkipped_one": "{{count}} evento importado, {{skipped}} já existiam.",
             "allDuplicates": "Sem novos eventos - todos já existiam."
         },
+        "memberNamesHint": "Opcional. Os nomes inseridos aqui podem ser usados nos fluxos de trabalho da casa; seu nome de exibição permanece inalterado.",
         "memberPhoneLabel": "Telefone (opcional)",
         "memberEmailLabel": "E-mail (opcional)",
         "memberBirthDateLabel": "Data de aniversário (opcional)",

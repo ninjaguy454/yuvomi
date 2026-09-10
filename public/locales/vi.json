@@ -2283,6 +2283,7 @@
             "successWithSkipped_one": "Đã nhập {{count}} sự kiện, {{skipped}} đã tồn tại.",
             "allDuplicates": "Không có sự kiện mới - tất cả đã tồn tại."
         },
+        "memberNamesHint": "Không bắt buộc. Tên nhập ở đây có thể dùng trong quy trình công việc gia đình; tên hiển thị của bạn không thay đổi.",
         "memberPhoneLabel": "Số điện thoại (tùy chọn)",
         "memberEmailLabel": "Email (tùy chọn)",
         "memberBirthDateLabel": "Ngày sinh (tùy chọn)",

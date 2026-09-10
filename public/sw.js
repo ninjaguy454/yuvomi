@@ -16,9 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Ship expression editors, their shared parser and profile fields together so
-// an older worker cannot retain mismatched JavaScript and styles.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.4`;
+// Refresh the shared modal interaction and sheet styles together.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.5`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

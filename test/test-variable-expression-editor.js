@@ -72,10 +72,10 @@ test.before(async () => {
   browser = await puppeteer.launch({ headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || (process.platform === 'win32' && existsSync(edge) ? edge : undefined), args: ['--no-sandbox'] });
 });
 test.after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve) || resolve()); });
-async function pageAt(width = 390) {
+async function pageAt(width = 390, { touch = false } = {}) {
   catalog = [member, { id: 2, variable_key: 'friendly_name', label: 'Friendly name', type: 'text', kind: 'field', expression }]; requests = []; pending = null;
   const page = await browser.newPage(); const errors = []; page.on('pageerror', error => errors.push(error.message));
-  await page.setViewport({ width, height: 900 }); await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]); await page.goto(`${base}/expression-fixture`);
+  await page.setViewport({ width, height: touch ? 844 : 900, isMobile: touch, hasTouch: touch }); await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]); await page.goto(`${base}/expression-fixture`);
   await page.evaluate(async () => {
     await (await import('/i18n.js')).initI18n(); await (await import('/i18n.js')).setLocale('en');
     window.yuvomi = { user: { id: 7, role: 'admin' }, showToast(message) { window.lastToast = message; } };
@@ -94,6 +94,40 @@ async function openVariable(page, existing = true) {
   await page.waitForFunction(() => document.activeElement?.name === 'label');
 }
 async function setSource(page, source) { await page.$eval('[data-expression-source]', (field, source) => { field.value = source; field.dispatchEvent(new Event('input', { bubbles: true })); }, source); }
+
+for (const width of [390, 1366]) test(`dirty expression editor ignores ${width === 390 ? 'touch scrolling' : 'text selection outside the panel'} and retains Cancel protection`, async () => {
+  const { page, errors } = await pageAt(width, { touch: width === 390 });
+  try {
+    await openVariable(page);
+    // Let the editor's existing deferred snapshot of asynchronously populated
+    // fields settle before starting the interaction under test.
+    await page.waitForNetworkIdle({ idleTime: 200 });
+    await setSource(page, 'coalesce(member.nickname, member.first_name, member.display_name)');
+    await page.click('.variable-expression__reference summary');
+    if (width === 390) {
+      await page.$eval('.modal-panel__body', node => { node.scrollTop = 0; });
+      const rect = await page.$eval('.modal-panel__body', node => { const r = node.getBoundingClientRect(); return { x:r.left + 30, y:r.top + 45 }; });
+      const cdp = await page.createCDPSession();
+      await cdp.send('Input.dispatchTouchEvent', { type:'touchStart', touchPoints:[{ ...rect, id:1 }] });
+      for (let step = 1; step <= 6; step++) await cdp.send('Input.dispatchTouchEvent', { type:'touchMove', touchPoints:[{ x:rect.x, y:rect.y + 28 * step, id:1 }] });
+      await cdp.send('Input.dispatchTouchEvent', { type:'touchEnd', touchPoints:[] });
+      await cdp.detach();
+    } else {
+      const rect = await page.$eval('.variable-expression__reference summary', node => { const r = node.getBoundingClientRect(); return { x:r.left + 4, y:r.top + r.height / 2 }; });
+      await page.mouse.move(rect.x, rect.y); await page.mouse.down();
+      await page.mouse.move(1360, rect.y + 35, { steps:6 }); await page.mouse.up();
+    }
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.$('#confirm-modal-ok'), null);
+    assert.equal(await page.$eval('[data-expression-source]', node => node.value), 'coalesce(member.nickname, member.first_name, member.display_name)');
+    await page.click('#shared-modal-overlay [data-action="close-modal"]');
+    await page.waitForSelector('#confirm-modal-ok');
+    await page.click('#confirm-modal-cancel');
+    await page.waitForSelector('[data-expression-source]');
+    assert.equal(await page.$eval('[data-expression-source]', node => node.value), 'coalesce(member.nickname, member.first_name, member.display_name)');
+    assert.deepEqual(errors, []);
+  } finally { await page.close(); }
+});
 
 test('calculated value preview uses typed member samples, refreshes results and saves normal recipe-independent data', async () => {
   const { page, errors } = await pageAt();

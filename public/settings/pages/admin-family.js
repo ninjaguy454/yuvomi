@@ -10,6 +10,7 @@ import { prefersInkText } from '/utils/contrast.js';
 import { AVATAR_COLORS } from '/utils/color.js';
 import { openModal, closeModal, confirmModal } from '/components/modal.js';
 import { createRetryState, toggleRowHtml } from '/settings/components.js';
+import { memberNameFields, readMemberNames } from '/settings/member-name-fields.js';
 import {
   renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect,
 } from '/components/user-multi-select.js';
@@ -190,6 +191,7 @@ function renderPage(container) {
             <label class="form-label" for="new-member-password">${t('settings.memberPasswordLabel')}</label>
             <input class="form-input" type="password" id="new-member-password" minlength="8" required autocomplete="new-password" />
           </div>
+          ${memberNameFields('new-member')}
           <div class="form-group">
             <label class="form-label" for="new-family-role">${t('settings.familyRoleLabel')}</label>
             <select class="form-input" id="new-family-role">
@@ -572,6 +574,7 @@ async function openEditMemberModal(member, currentUser, users, container) {
             ${buildFamilyRoleOptions(member.family_role)}
           </select>
         </div>
+        ${memberNameFields('edit-member', member)}
         ${caregiverIds === null ? '' : `
         <div class="form-group">
           ${renderUserMultiSelect(
@@ -697,6 +700,7 @@ async function openEditMemberModal(member, currentUser, users, container) {
           const res = await auth.updateUser(member.id, {
             username: panel.querySelector('#edit-member-username').value.trim(),
             display_name: panel.querySelector('#edit-member-display-name').value.trim(),
+            ...readMemberNames(panel, 'edit-member'),
             avatar_color: panel.querySelector('#edit-member-avatar-color').value,
             avatar_data: state.avatarData,
             family_role: panel.querySelector('#edit-member-family-role').value,
@@ -801,6 +805,7 @@ function bindEvents(container, currentUser, users) {
       const data = {
         username: container.querySelector('#new-username').value.trim(),
         display_name: container.querySelector('#new-display-name').value.trim(),
+        ...readMemberNames(container, 'new-member'),
         // Beides zugleich weist der Server ab - er kann nicht raten, welches
         // von beidem gemeint war.
         ...(ssoOnly ? { sso_only: true } : { password: container.querySelector('#new-member-password').value }),

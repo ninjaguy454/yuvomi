@@ -440,6 +440,9 @@ export const schemas = {
             id: { type: 'integer' },
             username: { type: 'string' },
             display_name: { type: 'string' },
+            first_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member first name. Never inferred from display_name or Address Book.' },
+            last_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member last name. Null when not supplied.' },
+            nickname: { type: ['string', 'null'], maxLength: 128, description: 'Optional member nickname, independent of display_name.' },
             avatar_color: { type: 'string' },
             avatar_data: { type: ['string', 'null'], description: 'PNG, JPEG, or WebP data URL.' },
             role: { type: 'string', enum: ['admin', 'member'] },
@@ -466,6 +469,9 @@ export const schemas = {
           properties: {
             id: { type: 'integer' },
             display_name: { type: 'string' },
+            first_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member first name. Never inferred from display_name or Address Book.' },
+            last_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member last name. Null when not supplied.' },
+            nickname: { type: ['string', 'null'], maxLength: 128, description: 'Optional member nickname, independent of display_name.' },
             avatar_color: { type: 'string' },
             avatar_data: { type: ['string', 'null'], description: 'PNG, JPEG, or WebP data URL.' },
             family_role: { type: 'string', enum: ['dad', 'mom', 'parent', 'child', 'grandparent', 'relative', 'other'] },
@@ -532,6 +538,9 @@ export const schemas = {
           properties: {
             username: { type: 'string' },
             display_name: { type: 'string' },
+            first_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member first name. Never inferred from display_name or Address Book.' },
+            last_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member last name. Null when not supplied.' },
+            nickname: { type: ['string', 'null'], maxLength: 128, description: 'Optional member nickname, independent of display_name.' },
             password: { type: 'string', description: 'Required unless sso_only is true.' },
             sso_only: {
               type: 'boolean',
@@ -554,6 +563,9 @@ export const schemas = {
           properties: {
             username: { type: 'string' },
             display_name: { type: 'string' },
+            first_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member first name. Never inferred from display_name or Address Book.' },
+            last_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member last name. Null when not supplied.' },
+            nickname: { type: ['string', 'null'], maxLength: 128, description: 'Optional member nickname, independent of display_name.' },
             password: { type: 'string', description: 'Write-only. Omit or leave empty to keep the current password.' },
             sso_only: {
               type: 'boolean',
@@ -574,6 +586,9 @@ export const schemas = {
           type: 'object',
           properties: {
             display_name: { type: 'string' },
+            first_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member first name. Never inferred from display_name or Address Book.' },
+            last_name: { type: ['string', 'null'], maxLength: 128, description: 'Explicit member last name. Null when not supplied.' },
+            nickname: { type: ['string', 'null'], maxLength: 128, description: 'Optional member nickname, independent of display_name.' },
             avatar_color: { type: 'string' },
             avatar_data: { type: ['string', 'null'], description: 'PNG, JPEG, or WebP data URL. Use null to remove.' },
           },

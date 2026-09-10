@@ -33,6 +33,7 @@ const SERVER_DIR = path.join(ROOT, 'server');
  * aus `public/` importieren darf. Reine Funktionen, front- und backend-identisch.
  */
 const SHARED_ISOMORPHIC = new Set([
+  'public/utils/variable-expressions.js', // Pure bounded parser/evaluator shared by preview and execution.
   // Fixed product identity is a pure constant shared by display and server metadata.
   'public/utils/branding.js',
   // #469: Was aus einem Adressfeld eine Adresse macht - oder eine Absage. Das

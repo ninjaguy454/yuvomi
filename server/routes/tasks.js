@@ -10,7 +10,7 @@ import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion } from '../services/recurrence.js';
 import { syncTaskRewards } from '../services/rewards.js';
-import { unresolvedDependencies, syncWorkflowInstanceForTask } from '../services/activity-workflows.js';
+import { unresolvedDependencies, syncWorkflowInstanceForTask, resolveActivityTemplate } from '../services/activity-workflows.js';
 import {
   TaskActivityBindingError,
   activitySupportTasks,
@@ -1257,6 +1257,22 @@ router.post('/:id/location/promote', requireAdmin, (req, res) => {
 // --------------------------------------------------------
 router.post('/', (req, res) => {
   try {
+    const bindingRequest = parseTaskActivityBinding(req.body);
+    if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
+    const activityBinding = bindingRequest.binding;
+    let activityDraft = null;
+    if (activityBinding) {
+      try {
+        activityDraft = resolveActivityTemplate(db.get(), activityBinding.activityTemplateId, {
+          inputs: req.body.activity_inputs ?? {}, subjectUserId: activityBinding.subjectUserId, includeLabels: true,
+        });
+      } catch (error) { return res.status(400).json({ error: error.message, code: 400, reason: error.code || 'invalid_input' }); }
+      // Resolving again at Save validates current inputs without overwriting edits.
+      if (req.body.title === undefined) req.body.title = activityDraft.data.title;
+      if (req.body.description === undefined) req.body.description = activityDraft.data.description;
+    } else if (req.body.activity_inputs !== undefined) {
+      return res.status(400).json({ error: 'Choose an Activity Template before supplying its inputs.', code: 400 });
+    }
     const errors = validateTaskInput(req.body, true);
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
@@ -1286,9 +1302,6 @@ router.post('/', (req, res) => {
       : clampPoints(req.body.points);
     const visibility = normalizeVisibility(req.body.visibility);
 
-    const bindingRequest = parseTaskActivityBinding(req.body);
-    if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
-    const activityBinding = bindingRequest.binding;
     const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
     const initialSubtasks = initialSubtasksInput(req.body);
     if (activityBinding && parent_task_id) {
@@ -1401,6 +1414,7 @@ router.post('/', (req, res) => {
           commitRotation: true,
           dateKey: due_date || todayInHouseholdZone(),
           materializeChecklist: initialSubtasks === undefined,
+          variableLabels: activityDraft?.variable_labels,
         });
       }
       if (initialSubtasks !== undefined) {

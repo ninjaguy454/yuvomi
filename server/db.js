@@ -8790,6 +8790,19 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10030,
+  description: 'Explicit member names and reusable variable expressions',
+  up: `
+    -- Member identity is explicit; do not infer it from display names or contacts.
+    ALTER TABLE users ADD COLUMN first_name TEXT;
+    ALTER TABLE users ADD COLUMN last_name TEXT;
+    ALTER TABLE users ADD COLUMN nickname TEXT;
+    -- Workflow-local expressions remain in their existing input_schema_json.
+    ALTER TABLE household_variable_definitions ADD COLUMN expression_json TEXT;
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

@@ -16,6 +16,9 @@ router.get('/members', (req, res) => {
     const members = db.get().prepare(`
       SELECT u.id,
              u.display_name,
+             u.first_name,
+             u.last_name,
+             u.nickname,
              u.avatar_color,
              u.avatar_data,
              u.family_role,

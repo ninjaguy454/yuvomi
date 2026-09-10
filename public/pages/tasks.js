@@ -17,6 +17,7 @@ import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
 import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor } from '/components/activity-automation.js';
+import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
 import { resolveReminderPreset } from '/utils/reminder-offset.js';
@@ -1022,6 +1023,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         </select>
         <p class="task-field-hint">Templates fill the task instructions and use saved skills and proficiency to choose an assignee.</p>
       </div>
+      <section class="form-group" id="task-template-values" hidden></section>
 
       <section class="task-editor__section" aria-labelledby="task-main-heading">
       <h3 id="task-main-heading">Task</h3>
@@ -1546,7 +1548,17 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
         description.value = renderActivityTemplateText(activity.description);
         form.querySelector('#task-category').value = activity.category || FALLBACK_CATEGORY;
       }
+      const previous = { title: title.value, description: description.value };
+      controls.variableValues = bindActivityVariableInputs(form.querySelector('#task-template-values'), {
+        activity, members: state.users, places: state.places,
+        subjectUserId: () => Number(subject?.value) || null,
+        onResolved: resolved => {
+          if (title.value === previous.title) title.value = previous.title = resolved.title;
+          if (description.value === previous.description) description.value = previous.description = resolved.description || '';
+        },
+      });
     });
+    subject?.addEventListener('change', () => { controls.variableValues?.invalidate(); controls.variableValues?.resolve(); });
     return;
   }
   let selectedId = select.value;
@@ -1555,20 +1567,42 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
   let generatedTitle = title.value;
   let generatedDescription = description.value;
   let generatedSubtasks = controls.subtasks.getValue();
+  let variableValues = null;
   const applySubject = () => {
     const activity = template();
     if (!activity || !selectedId) return;
+    if (variableValues) { variableValues.invalidate(); variableValues.resolve(); return; }
     if (title.value === generatedTitle) title.value = generatedTitle = renderActivityTemplateText(activity.title_template || activity.name, subjectName());
     if (description.value === generatedDescription) description.value = generatedDescription = renderActivityTemplateText(activity.description, subjectName());
     if (taskCreateAttempts.has(form) || form.querySelector('#task-id').value) return;
     const rows = controls.subtasks.getValue();
     rows.forEach((row, index) => {
-      if (row.title === generatedSubtasks[index]?.title && activity.checklist?.[index]) row.title = renderActivityTemplateText(activity.checklist[index].title_template, subjectName());
+      if (row.title === generatedSubtasks[index]?.title && activity.checklist?.[index]) {
+        row.title = renderActivityTemplateText(activity.checklist[index].title_template, subjectName());
+        generatedSubtasks[index] = { ...row };
+      }
     });
     controls.subtasks.setValue(rows);
-    generatedSubtasks = rows;
   };
   applySubject();
+  variableValues = bindActivityVariableInputs(form.querySelector('#task-template-values'), {
+    activity: template(), members: state.users, places: state.places,
+    subjectUserId: () => Number(subject?.value) || null,
+    allowChange: () => !taskCreateAttempts.has(form) && !form.querySelector('#task-id').value,
+    onResolved: resolved => {
+      if (title.value === generatedTitle) title.value = generatedTitle = resolved.title;
+      if (description.value === generatedDescription) description.value = generatedDescription = resolved.description || '';
+      const rows = controls.subtasks.getValue();
+      rows.forEach((row, index) => {
+        if (row.title === generatedSubtasks[index]?.title && resolved.checklist?.[index]) {
+          row.title = resolved.checklist[index].title_template;
+          generatedSubtasks[index] = { ...row };
+        }
+      });
+      controls.subtasks.setValue(rows);
+    },
+  });
+  controls.variableValues = variableValues;
   subject?.addEventListener('change', applySubject);
   const documents = taskDocuments;
   const snapshot = () => taskDraftSnapshot(form, { tags: modalTags, documents: documents?.documentIds() || [], pendingFiles: documents?.isDirty() || false });
@@ -2057,6 +2091,11 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const submitBtn = document.getElementById('task-submit-btn');
   const taskId    = document.getElementById('task-id').value;
 
+  const variableValues = taskFormControls.get(form)?.variableValues;
+  if (!taskCreateAttempts.has(form) && variableValues && !variableValues.ready()) {
+    if (!await variableValues.resolve()) return;
+  }
+
   // Alle required-Felder sofort validieren (auch unberührte)
   if (!validateAll(form)) return;
 
@@ -2107,6 +2146,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     assigned_to:     !managedActivity && assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
     activity_template_id: managedActivity ? activityTemplateId : null,
     activity_subject_user_id: managedActivity ? activitySubjectUserId : null,
+    ...(managedActivity && variableValues ? { activity_inputs: variableValues.inputs() } : {}),
     assignment_mode: assignmentMode,
     rotation_user_ids: !managedActivity && assignmentMode === 'round_robin' ? rotationUserIds : [],
     rotation_group: assignmentMode === 'round_robin' && rotationGroup ? rotationGroup : null,

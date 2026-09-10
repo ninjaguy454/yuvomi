@@ -2336,6 +2336,7 @@
             "successWithSkipped_one": "{{count}} na kaganapan ang na-import, {{skipped}} ang umiiral na.",
             "allDuplicates": "Walang bagong kaganapan - umiiral na ang lahat."
         },
+        "memberNamesHint": "Opsyonal. Maaaring gamitin sa mga daloy ng gawain ng sambahayan ang mga pangalang inilagay rito; hindi magbabago ang iyong ipinapakitang pangalan.",
         "memberPhoneLabel": "Numero ng telepono (opsyonal)",
         "memberEmailLabel": "Email (opsyonal)",
         "memberBirthDateLabel": "Petsa ng kaarawan (opsyonal)",

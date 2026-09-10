@@ -2336,6 +2336,7 @@
             "successWithSkipped_one": "{{count}} Termin importiert, {{skipped}} bereits vorhanden.",
             "allDuplicates": "Keine neuen Termine - alle waren bereits vorhanden."
         },
+        "memberNamesHint": "Optional. Hier eingetragene Namen können in Haushaltsabläufen verwendet werden; der Anzeigename bleibt unverändert.",
         "memberPhoneLabel": "Telefonnummer (optional)",
         "memberEmailLabel": "E-Mail (optional)",
         "memberBirthDateLabel": "Geburtstag (optional)",

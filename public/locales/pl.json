@@ -2313,6 +2313,7 @@
             "successWithSkipped_one": "Zaimportowano wydarzenie: {{count}}, pominięto już istniejące: {{skipped}}.",
             "allDuplicates": "Brak nowych wydarzeń - wszystkie już istniały."
         },
+        "memberNamesHint": "Opcjonalne. Wpisane tutaj imiona i nazwiska mogą być używane w domowych przepływach pracy; wyświetlana nazwa pozostaje bez zmian.",
         "memberPhoneLabel": "Numer telefonu (opcjonalnie)",
         "memberEmailLabel": "E-mail (opcjonalnie)",
         "memberBirthDateLabel": "Data urodzin (opcjonalnie)",

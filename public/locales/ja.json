@@ -2266,6 +2266,7 @@
             "successWithSkipped_one": "{{count}} 件をインポートしました（{{skipped}} 件は既存）。",
             "allDuplicates": "新しい予定はありません。すべて既に存在します。"
         },
+        "memberNamesHint": "任意。ここに入力した名前は家庭のワークフローで使用できます。表示名は変更されません。",
         "memberPhoneLabel": "電話番号（任意）",
         "memberEmailLabel": "メールアドレス（任意）",
         "memberBirthDateLabel": "生年月日（任意）",

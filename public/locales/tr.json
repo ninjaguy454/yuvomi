@@ -2266,6 +2266,7 @@
             "successWithSkipped_one": "{{count}} etkinlik içe aktarıldı, {{skipped}} zaten vardı.",
             "allDuplicates": "Yeni etkinlik yok - hepsi zaten mevcuttu."
         },
+        "memberNamesHint": "İsteğe bağlı. Buraya girilen adlar ev iş akışlarında kullanılabilir; görünen adınız değişmez.",
         "memberPhoneLabel": "Telefon numarası (isteğe bağlı)",
         "memberEmailLabel": "E-posta (isteğe bağlı)",
         "memberBirthDateLabel": "Doğum tarihi (isteğe bağlı)",

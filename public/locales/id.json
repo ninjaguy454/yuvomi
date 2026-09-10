@@ -2313,6 +2313,7 @@
             "successWithSkipped_one": "{{count}} acara diimpor, {{skipped}} sudah ada.",
             "allDuplicates": "Tidak ada acara baru - semua sudah ada."
         },
+        "memberNamesHint": "Opsional. Nama yang dimasukkan di sini dapat digunakan dalam alur kerja rumah tangga; nama tampilan Anda tetap sama.",
         "memberPhoneLabel": "Nomor telepon (opsional)",
         "memberEmailLabel": "Email (opsional)",
         "memberBirthDateLabel": "Ulang tahun (opsional)",

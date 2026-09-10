@@ -192,17 +192,6 @@
   }
 }
 
-/* Bottom-Sheet Handle: im Glass-Modus nur die Linienfarbe umfärben. NICHT das
-   background-Shorthand setzen — das löschte das Griff-Linien-Gradient aus
-   layout.css und machte aus der dünnen Linie einen vollen 36×44-Block (#569). */
-@media (max-width: 767px) {
-  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
-    .modal-panel::before {
-      --modal-handle-color: var(--glass-border);
-    }
-  }
-}
-
 /* ================================================================
  * 4. Buttons — Specular Highlight
  *

@@ -2,7 +2,7 @@
  * Modul: Shared Modal-System
  * Zweck: Einheitliches Modal mit Focus-Trap, Escape-Handler, Overlay-Click,
  *        Focus-Restore, Scroll-Lock und aria-modal.
- *        Auf Mobile: Bottom Sheet mit Swipe-to-Close und Slide-out-Animation.
+ *        Auf Mobile: Bottom Sheet mit Slide-out-Animation.
  * Abhängigkeiten: CSS-Klassen aus layout.css (.modal-overlay, .modal-panel, etc.)
  *                 i18n.js (t)
  *
@@ -352,49 +352,49 @@ function onEscape(e) {
 }
 
 // --------------------------------------------------------
-// Swipe-to-Close (Mobile)
+// Intentional backdrop dismissal (mouse, touch and pen)
 // --------------------------------------------------------
 
-function _wireSheetSwipe(panel) {
-  let startY = 0;
-  let dragging = false;
+function _wireBackdropDismiss(overlay) {
+  let gesture = null;
+  const reset = () => { gesture = null; };
+  const isActive = () => overlay === activeOverlay && !overlay.inert && modalState === 'open';
+  const onBackdrop = (event) => event.target === overlay
+    // Touch pointers can be implicitly captured by their starting element.
+    // Check the actual release position as well as the event target.
+    && document.elementFromPoint(event.clientX, event.clientY) === overlay;
+  const moved = (event) => Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 8;
 
-  // Scroll position is now on the body, not the panel itself
-  const scrollBody = panel.querySelector('.modal-panel__body');
-
-  panel.addEventListener('touchstart', (e) => {
-    // Nur von der Handle-Zone (obere 48px) oder wenn Panel ganz oben → Swipe erlauben
-    const touchY = e.touches[0].clientY;
-    const rect = panel.getBoundingClientRect();
-    const isHandleZone = touchY - rect.top < 48;
-    const isScrolledToTop = (scrollBody ? scrollBody.scrollTop : panel.scrollTop) <= 0;
-    if (!isHandleZone && !isScrolledToTop) return;
-    startY = touchY;
-    dragging = true;
-  }, { passive: true });
-
-  panel.addEventListener('touchmove', (e) => {
-    if (!dragging) return;
-    const dy = e.touches[0].clientY - startY;
-    if (dy < 0) { panel.style.transform = 'translateY(0)'; return; } // Aufwärts: Panel zurücksetzen, dragging bleibt aktiv
-    // Erst ab 10px Bewegung animieren: Verhindert winzige Transforms durch
-    // normale Taps, die danach zurückgesetzt werden müssten.
-    if (dy > 10) panel.style.transform = `translateY(${(dy - 10) * 0.6}px)`;
-  }, { passive: true });
-
-  panel.addEventListener('touchend', (e) => {
-    if (!dragging) return;
-    dragging = false;
-    const dy = e.changedTouches[0].clientY - startY;
-    if (dy > 80) {
-      panel.style.transform = '';
-      closeModal();
-    } else {
-      // Transform-Reset per rAF verzögern: DOM-Mutationen direkt in touchend
-      // unterbrechen auf iOS WebKit die Touch→Click-Konvertierung - der click-Event
-      // auf Child-Elementen (Buttons) wird gecancelt → Buttons reagieren nicht.
-      requestAnimationFrame(() => { panel.style.transform = ''; });
+  overlay.addEventListener('pointerdown', (event) => {
+    reset();
+    if (!isActive() || event.defaultPrevented || event.button !== 0 || !event.isPrimary || !onBackdrop(event)) return;
+    gesture = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, released: false };
+  }, { capture: true, passive: true });
+  overlay.addEventListener('pointermove', (event) => {
+    if (gesture && (event.pointerId !== gesture.pointerId || moved(event) || !onBackdrop(event))) reset();
+  }, { capture: true, passive: true });
+  overlay.addEventListener('pointerup', (event) => {
+    if (!gesture) return;
+    if (!isActive() || event.pointerId !== gesture.pointerId || event.button !== 0 || moved(event) || !onBackdrop(event)) {
+      reset();
+      return;
     }
+    gesture.released = true;
+  }, { capture: true, passive: true });
+  // A canceled pan, wheel/scroll, drag, context menu or pointer leaving the
+  // overlay cannot subsequently become a backdrop tap. Listeners live only on
+  // this overlay, including while it is parked beneath a child confirmation.
+  for (const name of ['pointercancel', 'dragstart', 'contextmenu', 'scroll', 'wheel']) {
+    overlay.addEventListener(name, reset, { capture: true, passive: true });
+  }
+  // Non-hover touch pointers leave after pointerup, before the generated click.
+  overlay.addEventListener('pointerleave', () => { if (!gesture?.released) reset(); }, { passive: true });
+  overlay.addEventListener('click', (event) => {
+    const intentional = gesture?.released && isActive() && !event.defaultPrevented
+      && event.button === 0 && onBackdrop(event) && !moved(event)
+      && (!('pointerId' in event) || event.pointerId === gesture.pointerId);
+    reset();
+    if (intentional) closeModal();
   });
 }
 
@@ -750,24 +750,14 @@ export function openModal({
   _initialFormSnapshot = null;
   _initialFormTimeout = setTimeout(_snapshotNow, 150);
 
-  // Swipe-to-Close auf Mobile
-  if (window.innerWidth < 768) {
-    _wireSheetSwipe(panel);
-  }
-
   // Ab jetzt faengt die Zurueck-Geste diesen Dialog ab, statt die Seite
   // darunter zu wechseln (#871).
   _syncOverlayRegistration();
 
-  // Overlay-Click schließt Modal
-  activeOverlay.addEventListener('click', (e) => {
-    if (e.target === activeOverlay) closeModal();
-  });
-
-  // iOS PWA: touchend als Fallback
-  activeOverlay.addEventListener('touchend', (e) => {
-    if (e.target === activeOverlay) closeModal();
-  }, { passive: true });
+  // Content scrolling/selection never dismisses the sheet. A click whose down
+  // and up targets differ can be retargeted to the overlay by the browser, so
+  // checking click.target (or closing directly on touchend) is insufficient.
+  _wireBackdropDismiss(activeOverlay);
 
   // Close-Buttons: Header-X und jedes Footer-„Abbrechen" mit data-action="close-modal"
   // (kanonische Abbrechen-API der Modal-Fußzeilen, laeuft durch den Dirty-Guard).

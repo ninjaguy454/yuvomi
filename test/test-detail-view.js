@@ -18,6 +18,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir } from 'node:fs/promises';
+import { eachRule } from './css-rules.js';
 
 const read = async (path) => (await readFile(new URL(`../${path}`, import.meta.url), 'utf8'))
   .replace(/\r\n/g, '\n');
@@ -804,7 +805,9 @@ test('detail-view.css deckt beide Präsentationen und Bewegungsreduktion ab', as
 
 test('detail-view.css nutzt ausschließlich Tokens', async () => {
   const css = await detailCss();
-  const body = css.replace(/\/\*[\s\S]*?\*\//g, ''); // Kommentare erklären Werte, sie setzen keine
+  // Check declarations, including those inside media queries. A breakpoint
+  // such as @media (max-width: 639px) is a condition, not a raw styled length.
+  const body = [...eachRule(css)].map(rule => rule.body).join('\n');
   assert.doesNotMatch(body, /#[0-9a-fA-F]{3,8}\b/, 'kein rohes Hex');
   assert.doesNotMatch(body, /:\s*-?\d+(\.\d+)?(px|rem|em)\b/, 'keine rohen Längen');
   assert.doesNotMatch(body, /rgba?\(/, 'keine rohen Farben');

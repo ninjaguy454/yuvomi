@@ -4661,43 +4661,12 @@ p.field-hint--warn[hidden] {
   to   { opacity: 1; transform: translateY(0)    scale(1); }
 }
 
-/* ── Bottom Sheet: Handle + Closing Animation (Mobile < 768px) ── */
+/* ── Bottom Sheet: Closing Animation (Mobile < 768px) ── */
 @media (max-width: 767px) {
   /* Sheet am unteren Rand verankern: oben bleibt ein Streifen des geblurten
    * Moduls sichtbar (Karte über dem Modul statt zentrierter Vollbild-Dialog). */
   .modal-overlay {
     align-items: flex-end;
-  }
-
-  .modal-panel {
-    /* Extra top padding for the drag handle. position:relative steht seit #805
-     * in der Basisregel und gilt auf jeder Breite - hier stand es frueher. */
-    padding-top: calc(var(--space-4) + 20px);
-  }
-
-  .modal-panel::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    /* Visuelle Linie bleibt klein, Hit-Area ist 44px hoch */
-    width: 36px;
-    height: 44px;
-    background-color: transparent;
-    /* Nur die dünne Griff-Linie ist sichtbar; oben/unten transparent. Die
-       Linienfarbe läuft über --modal-handle-color, damit der Glass-Modus sie
-       (in glass.css) umfärben kann, OHNE das background-Shorthand zu benutzen —
-       das hatte das Gradient gelöscht und den Griff zum vollen 36×44-Block
-       gemacht (#569). */
-    background-image: linear-gradient(
-      to bottom,
-      transparent calc(50% - 2px),
-      var(--modal-handle-color, var(--color-border)) calc(50% - 2px),
-      var(--modal-handle-color, var(--color-border)) calc(50% + 2px),
-      transparent calc(50% + 2px)
-    );
-    border-radius: var(--radius-full);
   }
 
   .modal-panel--closing {

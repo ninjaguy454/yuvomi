@@ -338,7 +338,7 @@
     "test:task-draft": "node --test test/test-task-draft.js",
     "test:task-draft-ui": "node --test test/test-task-draft-ui.js",
     "test:task-requirements": "node --test test/test-task-requirements.js",
-    "test:task-subtask-skills": "node --experimental-sqlite --test test/test-task-subtask-skills.js test/test-task-subtask-skills-migration.js",
+    "test:task-subtask-skills": "node --experimental-sqlite --test test/test-task-subtask-skills.js test/test-task-subtask-skills-migration.js test/test-laundry-eligibility.js",
     "test:modal-children": "node --test test/test-modal-children.js",
     "test:task-workflow-launcher": "node --test test/test-task-workflow-launcher.js"
   },

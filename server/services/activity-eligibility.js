@@ -480,7 +480,17 @@ export function resolveActivityAssignment(d, activity, {
     commit: commitRotation,
     orderedMembers: members,
   });
-  if (!helper) throw new Error('No qualified household member is available to help with this activity.');
+  if (!helper) {
+    // A Normal subject (or helper) can be excluded solely by presence. Do not
+    // report missing skills when qualification passed but availability did not.
+    const hasQualifiedMember = subjectProficiency.proficiency === PROFICIENCY.NORMAL
+      || members.some((member) => Number(member.id) !== Number(subject.id)
+        && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL);
+    if (hasQualifiedMember) {
+      throw new Error('Qualified household members were found, but none meets this activity’s location or availability rule. Check the required presence and planned availability for this time.');
+    }
+    throw new Error('No qualified household member is available to help with this activity.');
+  }
 
   if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED && subjectMeetsPresence) {
     return {

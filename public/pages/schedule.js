@@ -1,4 +1,4 @@
-import { api } from '/api.js';
+import { api as apiClient } from '/api.js';
 import { t, formatDate } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { todayKey } from '/utils/date.js';
@@ -11,7 +11,14 @@ import { wireScrollFade } from '/utils/ux.js';
 // constraining its row lists to the narrow reading measure would recreate the
 // unused desktop column this module intentionally avoids.
 
+// Each mount owns its state and listeners. Availability may be reopened without
+// retaining another person's editor or a route-level floating action button.
+function createScheduleView({ embedded = false, places = [], onChange = null } = {}) {
+const api = Object.fromEntries(['get', 'post', 'put', 'delete'].map((method) => [method, (path, ...args) => apiClient[method](embedded ? path.replace(/^\/schedule(?=\/|$)/, '/planning/routines') : path, ...args)]));
 let root;
+let disposed = false;
+let scrollFade = null;
+const listeners = new AbortController();
 let scheduleFab = null;
 let currentUserId = null;
 let canManageOthers = false;
@@ -121,7 +128,7 @@ function statisticsSummary() {
   const types = new Map();
   let freeDays = 0;
   for (const entry of statistics.entries) {
-    if (!entry.shift_type) { freeDays += 1; continue; }
+    if (!entry.shift_type) { if (entry.is_free) freeDays += 1; continue; }
     const id = Number(entry.shift_type.id);
     const item = types.get(id) || { type: entry.shift_type, count: 0, minutes: 0, hasHours: false };
     const minutes = shiftMinutes(entry.shift_type);
@@ -178,9 +185,10 @@ async function activateView(view) {
   renderPage();
 }
 
-function typeOptions(selected, includeFree = true) {
-  const free = includeFree ? option('', t('schedule.freeDay'), selected == null || selected === '') : '';
-  return `${free}${state.types.map((type) => option(type.id, type.short_code ? `${type.short_code} · ${type.name}` : type.name, Number(selected) === Number(type.id))).join('')}`;
+function typeOptions(selected, includeFree = true, includeUnconfigured = false) {
+  const missing = includeUnconfigured ? option('__unconfigured__', 'Not configured', selected === undefined || selected === '__unconfigured__') : '';
+  const free = includeFree ? option('', t('schedule.freeDay'), selected === null || selected === '') : '';
+  return `${missing}${free}${state.types.map((type) => option(type.id, `${type.short_code ? type.short_code + ' · ' : ''}${type.name} · ${clockLabel(type)}`, Number(selected) === Number(type.id))).join('')}`;
 }
 
 function shiftPresetLabel(key) {
@@ -223,19 +231,64 @@ function shiftFields(type = {}) {
     formField(t('schedule.color'), '<input class="input form-input--color" required name="color" type="color" value="' + esc(type.color ?? SHIFT_COLOR_FALLBACK) + '">', 'schedule-color-field'),
     formField(t('schedule.startTime'), '<yuvomi-datepicker name="start_time" type="time" label="' + esc(t('schedule.startTime')) + '" value="' + esc(type.start_time ?? '') + '"></yuvomi-datepicker>'),
     formField(t('schedule.endTime'), '<yuvomi-datepicker name="end_time" type="time" label="' + esc(t('schedule.endTime')) + '" value="' + esc(type.end_time ?? '') + '"></yuvomi-datepicker>'),
+    formField('During these hours', '<select class="input" name="availability_state">' + [['busy', 'Busy — unavailable for activities'], ['available', 'Available for activities'], ['away', 'Away'], ['unknown', 'Availability unknown'], ['none', 'Display only — no availability effect']].map(([value, label]) => option(value, label, value === (type.availability_state || 'busy'))).join('') + '</select>'),
+    formField('Expected Place (optional)', '<select class="input" name="place_id">' + option('', 'No expected Place', !type.place_id) + places.map((place) => option(place.id, place.path_label || place.name, Number(place.id) === Number(type.place_id))).join('') + '</select>'),
+    '<p class="form-hint schedule-form-wide">End times at or before the start continue into the next day. Leave both times empty for an all-day entry. Display-only ranges do not affect availability or expected location.</p>',
   ].join('');
 }
 
 function patternFields(pattern = {}) {
   const active = pattern.is_active === false || pattern.is_active === 0 ? '' : ' checked';
+  const alternating = !pattern.cycle_length || Number(pattern.cycle_length) === 14;
   return [
     formField(t('schedule.name'), '<input class="input" required name="name" maxlength="200" value="' + esc(pattern.name ?? '') + '">'),
-    formField(t('schedule.anchorDate'), '<yuvomi-datepicker required name="anchor_date" type="date" label="' + esc(t('schedule.anchorDate')) + '" value="' + esc(pattern.anchor_date ?? todayKey()) + '"></yuvomi-datepicker>'),
-    formField(t('schedule.cycleLength'), '<input class="input" required name="cycle_length" type="number" min="1" max="366" value="' + esc(String(pattern.cycle_length ?? 7)) + '">'),
+    formField('Routine repeats', '<select class="input" name="routine_mode">' + option('alternating', 'Alternating weeks — Week A / Week B', alternating) + option('rotating', 'Advanced rotating routine', !alternating) + '</select>'),
+    formField(alternating ? 'Week A starts on' : t('schedule.anchorDate'), '<yuvomi-datepicker required name="anchor_date" type="date" label="' + esc(alternating ? 'Week A starts on' : t('schedule.anchorDate')) + '" value="' + esc(pattern.anchor_date ?? todayKey()) + '"></yuvomi-datepicker>', 'schedule-anchor-field'),
+    '<div class="form-field" data-cycle-length' + (alternating ? ' hidden' : '') + '><label class="label" for="routine-length-' + esc(String(pattern.id || 'new')) + '">' + esc(t('schedule.cycleLength')) + '</label><input id="routine-length-' + esc(String(pattern.id || 'new')) + '" class="input" required name="cycle_length" type="number" min="1" max="366" value="' + esc(String(pattern.cycle_length ?? 14)) + '"></div>',
     formField(t('schedule.validFrom'), '<yuvomi-datepicker name="valid_from" type="date" label="' + esc(t('schedule.validFrom')) + '" value="' + esc(pattern.valid_from ?? '') + '"></yuvomi-datepicker>'),
     formField(t('schedule.validUntil'), '<yuvomi-datepicker name="valid_until" type="date" label="' + esc(t('schedule.validUntil')) + '" value="' + esc(pattern.valid_until ?? '') + '"></yuvomi-datepicker>'),
     '<div class="form-field schedule-active-field"><span class="label">' + esc(t('schedule.active')) + '</span><label class="toggle"><input name="is_active" type="checkbox"' + active + '><span class="toggle__track"></span></label></div>',
+    '<p class="form-hint schedule-form-wide">Choose the actual hours for every day below. A day off removes only this routine’s restriction; other commitments still apply. Not configured means unknown. The example repeats before and after its start date unless limited by Applies from / until.</p>',
+    (!state.types.length ? '<p class="form-hint schedule-form-wide">Create a time range in Time ranges first, then choose it for the days below.</p>' : ''),
+    '<div class="schedule-form-wide" data-routine-preview></div>',
+    '<p class="form-hint schedule-form-wide" data-routine-resize-warning role="status"></p>',
   ].join('');
+}
+
+function readRoutineDays(form) {
+  return [...form.querySelectorAll('[data-day]')].filter((select) => select.value !== '__unconfigured__').map((select) => ({ position: Number(select.dataset.day), shift_type_id: select.value === '' ? null : Number(select.value) }));
+}
+
+function routineDayFields(length, anchor, assigned, readonly = false) {
+  const start = new Date(`${anchor}T12:00:00Z`);
+  return '<div class="schedule-days">' + Array.from({ length }, (_, position) => {
+    const date = new Date(start); date.setUTCDate(date.getUTCDate() + position);
+    const validDate = !Number.isNaN(date.getTime());
+    const label = `${length === 14 ? `Week ${position < 7 ? 'A' : 'B'} · ` : `Day ${position + 1} · `}${validDate ? date.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' }) : ''}`;
+    return '<label class="form-field"><span class="label">' + esc(label) + '</span><select class="input" data-day="' + position + '"' + (readonly ? ' disabled' : '') + '>' + typeOptions(assigned.get(position), true, true) + '</select></label>';
+  }).join('') + '</div>';
+}
+
+function bindRoutineForm(form, pattern = {}) {
+  const assigned = new Map((pattern.days || []).map((day) => [Number(day.position), day.shift_type_id]));
+  const refresh = () => {
+    form.querySelectorAll('[data-day]').forEach((select) => assigned.set(Number(select.dataset.day), select.value === '__unconfigured__' ? undefined : select.value === '' ? null : Number(select.value)));
+    const alternating = form.elements.routine_mode.value === 'alternating';
+    const count = form.elements.cycle_length;
+    if (alternating) count.value = '14';
+    form.querySelector('[data-cycle-length]').hidden = alternating;
+    const anchorLabel = alternating ? 'Week A starts on' : t('schedule.anchorDate');
+    form.querySelector('.schedule-anchor-field > .label').textContent = anchorLabel;
+    form.querySelector('[name="anchor_date"]').setAttribute('label', anchorLabel);
+    const length = Math.max(1, Math.min(366, Number(count.value) || 1));
+    const preview = form.querySelector('[data-routine-preview]');
+    preview.replaceChildren();
+    preview.insertAdjacentHTML('beforeend', routineDayFields(length, formValue(form, 'anchor_date', todayKey()), assigned));
+    const removed = [...assigned].filter(([position, type]) => position >= length && type != null).length;
+    form.querySelector('[data-routine-resize-warning]').textContent = removed ? `Saving this shorter routine removes ${removed} assigned day${removed === 1 ? '' : 's'} from the end. Increase the length again to restore them before saving.` : '';
+  };
+  form.querySelectorAll('[name="routine_mode"], [name="cycle_length"], [name="anchor_date"]').forEach((control) => control.addEventListener('change', refresh, { signal: listeners.signal }));
+  refresh();
 }
 
 function shiftTypeCard(type) {
@@ -245,7 +298,7 @@ function shiftTypeCard(type) {
     : `<p class="schedule-readonly">${esc(type?.created_by == null
         ? t('schedule.typeOrphaned')
         : t('schedule.typeOwnedBy', { user: userName(type.created_by) }))}</p>`;
-  return `<details class="card schedule-details"><summary><span class="schedule-swatch" style="--schedule-color:${esc(type.color)}"></span><span class="u-card-title u-compact">${esc(type.short_code ? `${type.short_code} · ${type.name}` : type.name)}</span> <small>${esc(clockLabel(type))}</small></summary>
+  return `<details class="card schedule-details"><summary><span class="schedule-swatch" style="--schedule-color:${esc(type.color)}"></span><span class="u-card-title u-compact">${esc(type.short_code ? `${type.short_code} · ${type.name}` : type.name)}</span> <small>${esc(clockLabel(type))} · ${esc(type.availability_state === 'none' ? 'display only' : type.availability_state || 'busy')}</small></summary>
     ${body}
   </details>`;
 }
@@ -253,11 +306,10 @@ function shiftTypeCard(type) {
 function patternCard(pattern) {
   const writable = canWrite(pattern.user_id);
   const assigned = new Map(pattern.days.map((day) => [Number(day.position), day.shift_type_id]));
-  const days = Array.from({ length: pattern.cycle_length }, (_, position) => '<div class="form-field"><label class="label">' + (position + 1) + '</label><select class="input" data-day="' + position + '">' + typeOptions(assigned.get(position)) + '</select></div>').join('');
-  return `<details class="card schedule-details" data-pattern="${pattern.id}"><summary><span class="u-card-title u-compact">${esc(pattern.name)}</span> <small>· ${esc(userName(pattern.user_id))}</small></summary>
-    ${writable ? `<form class="schedule-form" data-form="pattern-update" data-id="${pattern.id}">${patternFields(pattern)}<button class="btn btn--secondary">${esc(t('schedule.save'))}</button></form>` : ''}
-    <h3 class="u-card-title">${esc(t('schedule.cycleDays'))}</h3><div class="schedule-days">${days}</div>
-    ${writable ? `<div class="schedule-actions"><button type="button" class="btn btn--secondary" data-action="save-days" data-id="${pattern.id}">${esc(t('schedule.save'))}</button><button type="button" class="btn btn--danger" data-action="delete-pattern" data-id="${pattern.id}">${esc(t('schedule.delete'))}</button></div>` : ''}
+  const missing = Number(pattern.cycle_length) - pattern.days.filter((day) => Number(day.position) < Number(pattern.cycle_length)).length;
+  return `<details class="card schedule-details" data-pattern="${pattern.id}"><summary><span class="u-card-title u-compact">${esc(pattern.name)}</span> <small>· ${esc(userName(pattern.user_id))}${missing ? ` · ${missing} day${missing === 1 ? '' : 's'} not configured` : ''}</small></summary>
+    <p class="schedule-routine-summary form-hint">${Number(pattern.cycle_length) === 14 ? 'Alternating weeks · Week A / Week B' : `Repeats every ${Number(pattern.cycle_length)} days`}${pattern.is_active ? '' : ' · inactive'}${missing ? ` · ${missing} day${missing === 1 ? '' : 's'} not configured` : ''}</p>
+    ${writable ? `<form class="schedule-form" data-form="pattern-update" data-id="${pattern.id}">${patternFields(pattern)}<div class="schedule-actions"><button class="btn btn--secondary">Save routine and days</button><button type="button" class="btn btn--danger" data-action="delete-pattern" data-id="${pattern.id}">${esc(t('schedule.delete'))}</button></div></form>` : routineDayFields(Number(pattern.cycle_length), pattern.anchor_date, assigned, true)}
   </details>`;
 }
 
@@ -331,7 +383,7 @@ function renderToday() {
   return `<div class="list-rows">${state.entries.map((entry) => {
     const type = entry.shift_type;
     const swatchColor = type ? type.color : 'var(--color-border)';
-    const name = type ? esc(type.short_code ? `${type.short_code} · ${type.name}` : type.name) : esc(t('schedule.freeDay'));
+    const name = type ? esc(type.short_code ? `${type.short_code} · ${type.name}` : type.name) : esc(entry.is_free ? t('schedule.freeDay') : 'Not configured — availability unknown');
     const meta = type ? `${esc(userName(entry.user_id))} · ${esc(clockLabel(type))}` : esc(userName(entry.user_id));
     return `<div class="list-row schedule-entry-row"><span class="schedule-swatch" style="--schedule-color:${esc(swatchColor)}"></span><div class="list-row__main"><span class="list-row__name">${name}</span><span class="list-row__meta">${meta}</span></div></div>`;
   }).join('')}</div>`;
@@ -358,26 +410,28 @@ function renderShell() {
   root.replaceChildren();
   root.insertAdjacentHTML('beforeend', `<div class="schedule-page">
     <header class="page-toolbar schedule-toolbar">
-      <h1 class="page-toolbar__title">${esc(t('schedule.title'))}</h1>
-      <div class="page-toolbar__actions"></div>
+      ${embedded ? '<h2 class="u-section-title">Alternating and rotating routines</h2>' : `<h1 class="page-toolbar__title">${esc(t('schedule.title'))}</h1>`}
+      <div class="page-toolbar__actions">${embedded ? '<button type="button" class="btn btn--secondary" data-action="open-create" data-routine-add></button>' : ''}</div>
       <div class="sub-tabs-bar schedule-tabs page-toolbar__bar" role="tablist" aria-label="${esc(t('schedule.title'))}">
         ${tabs.map(([id, label]) => `<button class="sub-tab" type="button" role="tab" data-tab="${id}">${esc(label)}</button>`).join('')}
       </div>
     </header>
     <div class="schedule-body"></div>
   </div>`);
+  root.querySelector('.schedule-page')?.classList.toggle('schedule-page--embedded', embedded);
   // Scroll-Affordanz der Bar-Zeile (geteilter Peek-Fade, .page-toolbar__bar).
-  wireScrollFade(root.querySelector('.schedule-tabs'));
-  root.addEventListener('submit', submitForm);
+  scrollFade = wireScrollFade(root.querySelector('.schedule-tabs'));
+  root.addEventListener('submit', submitForm, { signal: listeners.signal });
   root.addEventListener('click', (event) => {
     const tabButton = event.target.closest('[data-tab]');
     if (tabButton) { activateView(tabButton.dataset.tab); return; }
     const actionButton = event.target.closest('[data-action]');
     if (actionButton) action({ currentTarget: actionButton });
-  });
+  }, { signal: listeners.signal });
 }
 
 function renderPage() {
+  if (disposed || !root?.querySelector('.schedule-body')) return;
   root.querySelectorAll('[data-tab]').forEach((button) => {
     const isActive = button.dataset.tab === activeView;
     button.classList.toggle('sub-tab--active', isActive);
@@ -402,6 +456,13 @@ function renderPage() {
   body.insertAdjacentHTML('beforeend',
     (activeView === 'statistics' || !inUse ? '' : '<section class="card card--padded schedule-today"><h2 class="u-section-title">' + esc(t('schedule.today')) + '</h2>' + renderToday() + renderScheduleWarnings() + '</section>')
     + `<div class="schedule-content">${panel}</div>`);
+  body.querySelectorAll('[data-form="pattern-update"]').forEach((form) => bindRoutineForm(form, state.patterns.find((pattern) => Number(pattern.id) === Number(form.dataset.id))));
+  const addButton = root.querySelector('[data-routine-add]');
+  if (addButton) {
+    addButton.hidden = activeView === 'statistics';
+    addButton.textContent = activeView === 'shifts' ? t('schedule.createShiftType') : activeView === 'overrides' ? t('schedule.createOverride') : t('schedule.addPattern');
+    addButton.dataset.view = activeView;
+  }
   updateScheduleFab();
   window.lucide?.createIcons({ el: body });
 }
@@ -434,6 +495,7 @@ function openOverrideEditModal(override) {
     + formField(t('schedule.date'), '<input class="input" readonly value="' + esc(override.date_key) + '">')
     + formField(t('schedule.shiftTypes'), '<select class="input" name="shift_type_id">' + typeOptions(type?.id ?? null) + '</select>')
     + formField(t('schedule.note'), '<input class="input" name="note" maxlength="5000" value="' + esc(override.note ?? '') + '">')
+    + '<p class="form-hint">A day off removes only this routine’s occurrence. Trips, other availability rules and any overnight shift that started the day before still apply.</p>'
     + '<div class="modal-actions"><button type="submit" class="btn btn--primary">' + esc(t('schedule.save')) + '</button></div></form>';
   openModal({
     title: t('schedule.editOverride'),
@@ -465,15 +527,17 @@ function openScheduleCreateModal(view) {
       + formField(t('schedule.date'), '<yuvomi-datepicker required name="date_key" type="date" label="' + esc(t('schedule.date')) + '" value="' + esc(todayKey()) + '"></yuvomi-datepicker>')
       + formField(t('schedule.shiftTypes'), '<select class="input" name="shift_type_id">' + typeOptions(null) + '</select>')
       + formField(t('schedule.note'), '<input class="input" name="note" maxlength="5000">')
+      + '<p class="form-hint">Replaces this person’s rotating routine on the selected date. A day off removes only that routine’s restriction. Trips, other availability rules and any overnight shift that started the day before still apply. Calendar commitments remain advisory.</p>'
       + '<div class="modal-actions"><button type="submit" class="btn btn--primary">' + esc(t('schedule.save')) + '</button></div></form>';
   }
   openModal({
     title,
-    size: 'md',
+    size: view === 'patterns' ? 'lg' : 'md',
     content,
     onSave: (modal) => {
       const form = modal.querySelector('#schedule-create-form');
       form?.querySelector('[name="shift_preset"]')?.addEventListener('change', () => applyShiftPreset(form));
+      if (view === 'patterns' && form) bindRoutineForm(form);
       form?.addEventListener('submit', saveCreatedSchedule);
     },
   });
@@ -489,6 +553,8 @@ async function saveCreatedSchedule(event) {
       data.user_id = Number(data.user_id);
       data.cycle_length = Number(data.cycle_length);
       data.is_active = form.elements.is_active.checked;
+      data.days = readRoutineDays(form);
+      delete data.routine_mode;
       await api.post('/schedule/patterns', data);
     }
     if (form.dataset.form === 'override-create') {
@@ -502,13 +568,16 @@ async function saveCreatedSchedule(event) {
     renderPage();
     await closeModal({ force: true });
     window.yuvomi?.showToast(t('schedule.saved'), 'success');
+    if (!disposed) await onChange?.();
   } catch (error) {
     window.yuvomi?.showToast(error.data?.error ?? t('common.errorGeneric'), 'danger');
   }
 }
 
 function formData(form) {
-  return Object.fromEntries(new FormData(form));
+  const data = Object.fromEntries(new FormData(form));
+  if ('place_id' in data) data.place_id = Number(data.place_id) || null;
+  return data;
 }
 
 function formValue(form, name, fallback = '') {
@@ -543,11 +612,15 @@ async function submitForm(event) {
       data.user_id = Number(data.user_id);
       data.cycle_length = Number(data.cycle_length);
       data.is_active = form.elements.is_active.checked;
+      data.days = readRoutineDays(form);
+      delete data.routine_mode;
       await api.post('/schedule/patterns', data);
     }
     if (form.dataset.form === 'pattern-update') {
       data.cycle_length = Number(data.cycle_length);
       data.is_active = form.elements.is_active.checked;
+      data.days = readRoutineDays(form);
+      delete data.routine_mode;
       await api.put(`/schedule/patterns/${form.dataset.id}`, data);
     }
     if (form.dataset.form === 'override-create') {
@@ -560,6 +633,7 @@ async function submitForm(event) {
     await load();
     renderPage();
     window.yuvomi?.showToast(t('schedule.saved'), 'success');
+    if (!disposed) await onChange?.();
   } catch (error) {
     if (form.dataset.form === 'statistics') {
       statistics = { ...statistics, loading: false };
@@ -607,29 +681,44 @@ async function action(event) {
     if (button.dataset.action === 'delete-override') await api.delete(`/schedule/overrides/${button.dataset.date}?user_id=${button.dataset.userId}`);
     if (button.dataset.action === 'save-days') {
       const details = button.closest('[data-pattern]');
-      const days = [...details.querySelectorAll('[data-day]')].map((select) => ({
-        position: Number(select.dataset.day),
-        shift_type_id: select.value ? Number(select.value) : null,
-      }));
+      const days = readRoutineDays(details);
       await api.put(`/schedule/patterns/${button.dataset.id}/days`, { days });
     }
     await load();
     renderPage();
     window.yuvomi?.showToast(button.dataset.action.startsWith('delete') ? t('schedule.deleted') : t('schedule.saved'), 'success');
+    if (!disposed) await onChange?.();
   } catch (error) {
     window.yuvomi?.showToast(error.data?.error ?? t('common.errorGeneric'), 'danger');
   }
 }
 
-export async function render(container, { user } = {}) {
+async function render(container, { user } = {}) {
   root = container;
   currentUserId = user?.id ?? null;
   canManageOthers = user?.role === 'admin';
   await load();
+  if (disposed) return;
   statistics = { ...statistics, userId: currentUserId, monthFrom: monthKey(), monthTo: monthKey(), from: todayKey(), to: todayKey() };
   renderShell();
-  scheduleFab = createPageFab({ id: 'schedule-fab' });
-  root.querySelector('.schedule-page')?.appendChild(scheduleFab);
+  if (!embedded) {
+    scheduleFab = createPageFab({ id: 'schedule-fab' });
+    root.querySelector('.schedule-page')?.appendChild(scheduleFab);
+  }
   renderPage();
   window.lucide?.createIcons({ el: root });
+}
+return { render, dispose() { disposed = true; listeners.abort(); scrollFade?.destroy(); scheduleFab?.remove(); } };
+}
+
+export async function render(container, options = {}) {
+  const view = createScheduleView();
+  await view.render(container, options);
+  return () => view.dispose();
+}
+
+export async function renderAvailabilityRoutines(container, options = {}) {
+  const view = createScheduleView({ ...options, embedded: true });
+  await view.render(container, options);
+  return () => view.dispose();
 }

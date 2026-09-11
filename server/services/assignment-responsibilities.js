@@ -1,4 +1,5 @@
 import { todayKey } from '../utils/timezone.js';
+import { activityPresenceWindow } from './presence.js';
 import { assertTaskMemberSkills } from './task-skills.js';
 import { notifyTaskObligations, notifyTaskClaim } from './notification-events.js';
 import {
@@ -21,7 +22,7 @@ function activityForTask(d, taskId) {
 
 function taskWindow(d, taskId) {
   const task = d.prepare(`
-    SELECT t.*, pc.place_id, pc.presence_policy
+    SELECT t.*, pc.place_id, pc.presence_policy, pc.presence_window
       FROM tasks t
       LEFT JOIN task_planning_context pc ON pc.task_id = t.id
      WHERE t.id = ?
@@ -34,8 +35,7 @@ function taskWindow(d, taskId) {
     presence: {
       policy: task.presence_policy || 'ignore',
       targetPlaceId: task.place_id || null,
-      startAt: `${task.start_date || dateKey}T00:00:00`,
-      endAt: `${dateKey}T${task.due_time || '23:59'}:00`,
+      ...activityPresenceWindow(d, { task, dateKey, windowMode: task.presence_window || 'due' }),
     },
   };
 }

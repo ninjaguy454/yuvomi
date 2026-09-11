@@ -67,7 +67,7 @@ async function laundry(overrides = {}) {
 }
 const taskBody = (activity, extra = {}) => ({ title: 'Laundry occurrence', activity_template_id: activity.id,
   activity_subject_user_id: subjectId, location: null, ...extra });
-const presenceMessage = 'Qualified household members were found, but none meets this activity’s location or availability rule. Check the required presence and planned availability for this time.';
+const presenceMessage = 'Qualified household members were found, but none meets this activity’s location requirement.';
 
 test('Laundry with no parent skills passes skill checks but missing planned presence prevents assignment', async () => {
   const activity = await laundry();

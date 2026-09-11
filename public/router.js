@@ -87,7 +87,6 @@ const ROUTES = [
   { path: '/recipes',  page: '/pages/recipes.js',   requiresAuth: true, module: 'recipes',   titleKey: 'nav.recipes' },
   { path: '/pantry',   page: '/pages/pantry.js',    requiresAuth: true, module: 'pantry',    titleKey: 'nav.pantry' },
   { path: '/inventory', page: '/pages/inventory.js', requiresAuth: true, module: 'inventory', titleKey: 'nav.inventory' },
-  { path: '/schedule', page: '/pages/schedule.js', requiresAuth: true, module: 'schedule', titleKey: 'nav.schedule' },
   { path: '/contacts', page: '/pages/contacts.js',  requiresAuth: true, module: 'contacts',  titleKey: 'nav.contacts' },
   { path: '/places',   page: '/pages/places.js',    requiresAuth: true, module: 'contacts',  titleKey: 'nav.places', style: '/styles/settings.css' },
   { path: '/budget',   page: '/pages/budget.js',    requiresAuth: true, module: 'budget',    titleKey: 'nav.budget' },
@@ -410,6 +409,7 @@ let isNavigating = false;
 // seine optionale update()-Funktion nur den betroffenen Detailbereich aus.
 let _renderedModule = null;
 let _renderedModuleName = null;
+let _renderedDispose = null;
 let _preferencesLoaded = false;
 let _disabledModules = new Set();
 // Persoenlich ausgeblendete Module (#673). Bewusst eine ZWEITE Menge neben
@@ -504,7 +504,7 @@ function syncNavigationHistory(state) {
 // Router
 // --------------------------------------------------------
 
-const ROUTE_ORDER = ['/', '/calendar', '/schedule', '/tasks', '/meals', '/recipes', '/shopping', '/pantry',
+const ROUTE_ORDER = ['/', '/calendar', '/tasks', '/meals', '/recipes', '/shopping', '/pantry',
                      '/birthdays', '/notes', '/contacts', '/places', '/budget', '/inventory', '/documents', '/housekeeping', '/health', '/settings'];
 
 const MOBILE_FAVORITE_COUNT = 3;
@@ -572,6 +572,7 @@ function setAppVersion(version) {
  * die Begründung am Kopf der Routentabelle.
  */
 function routeTitle(path) {
+  if (path === '/calendar' && new URLSearchParams(window.location.search).get('section') === 'availability') return 'Availability';
   const titleKey = ROUTES.find((route) => route.path === path)?.titleKey;
   if (titleKey) return t(titleKey);
 
@@ -742,6 +743,13 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       }
     } else {
       pushState = userOrPushState;
+    }
+
+    // Legacy bookmarks now open the same Availability surface. Historical
+    // Schedule enable/disable preferences do not hide retained routines.
+    if (path.split('?')[0] === '/schedule') {
+      path = '/calendar?section=availability';
+      if (!pushState) history.replaceState({ ...history.state, path }, '', path);
     }
 
     // Alten Pfad merken, bevor currentPath aktualisiert wird - für Richtungsberechnung
@@ -1667,6 +1675,9 @@ async function renderPage(route, previousPath = null, scrollTarget = 0) {
     const pageWrapper = document.createElement('div');
     pageWrapper.className = 'page-transition';
     pageWrapper.style.opacity = '0';
+    // Pages with embedded editors can release listeners/observers on navigation.
+    _renderedDispose?.();
+    _renderedDispose = null;
     content.replaceChildren(pageWrapper);
     // Scrollport auf Anfang, solange er leer ist. `content` IST der Scrollport
     // (#main-content == .app-content) und überlebt die Navigation; ohne diese
@@ -1727,7 +1738,11 @@ async function renderPage(route, previousPath = null, scrollTarget = 0) {
       document.documentElement.classList.remove('navigating');
     }
 
-    await renderPromise;
+    const dispose = await renderPromise;
+    if (typeof dispose === 'function') {
+      if (pageWrapper.isConnected) _renderedDispose = dispose;
+      else dispose();
+    }
 
     // Browser-Zurück/-Vor: gemerkten Stand wiederherstellen, jetzt wo der Inhalt
     // seine volle Höhe hat. Best effort - ist die Seite kürzer als beim Verlassen
@@ -3337,7 +3352,6 @@ function navItems({ catalog = false } = {}) {
     { path: '/',          label: t('nav.dashboard'), module: 'dashboard', section: NAV_SECTION.overview },
     // Plan
     { path: '/calendar',  label: t('nav.calendar'),  module: 'calendar',  section: NAV_SECTION.plan },
-    { path: '/schedule',  label: t('nav.schedule'),  module: 'schedule',  section: NAV_SECTION.plan },
     { path: '/tasks',     label: t('nav.tasks'),     module: 'tasks',     section: NAV_SECTION.plan },
     { path: '/notes',     label: t('nav.notes'),     module: 'notes',     section: NAV_SECTION.plan },
     // Haushalt — Kitchen-Gruppe zuerst, dann die übrigen Haushalts-Module

@@ -8,7 +8,7 @@
  */
 
 import { todayKey } from '../utils/timezone.js';
-import { placeWithInheritedAddress } from './presence.js';
+import { placeWithInheritedAddress, activityPresenceWindow } from './presence.js';
 import {
   householdMembers,
   loadSkillRequirements,
@@ -297,8 +297,7 @@ export function previewWorkflow(d, workflowId, {
           presence: {
             policy: planning.presence_policy,
             targetPlaceId: planning.place_id,
-            startAt: `${todayKey(d)}T00:00:00`,
-            endAt: `${todayKey(d)}T23:59:00`,
+            ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window }),
           },
         });
         output.push({
@@ -438,8 +437,7 @@ export function instantiateWorkflow(d, workflowId, {
         presence: {
           policy: planning.presence_policy,
           targetPlaceId: planning.place_id,
-          startAt: `${todayKey(d)}T00:00:00`,
-          endAt: `${todayKey(d)}T23:59:00`,
+          ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window }),
         },
       });
 

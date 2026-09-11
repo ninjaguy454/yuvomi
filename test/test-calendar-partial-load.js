@@ -26,8 +26,8 @@ test.beforeEach(() => {
     }
     if (path.startsWith('/calendar?')) return { data: [event] };
     if (path.startsWith('/tasks?')) return { data: [task] };
-    if (path.startsWith('/planning/')) return { data: [meal] };
-    if (path.startsWith('/schedule/')) return { data: { entries: [] } };
+    if (path.startsWith('/planning/routines/')) return { data: { entries: [] } };
+    if (path.startsWith('/planning/calendar-context')) return { data: [meal] };
     return { data: [] };
   };
 });
@@ -43,7 +43,7 @@ test('a failed task layer retains events and identifies partial data', async () 
 });
 
 test('a retry restores missing entries and clears the partial warning', async () => {
-  failures.set('/planning/', 503);
+  failures.set('/planning/calendar-context', 503);
   await calendar.loadRange(from, to);
   assert.deepEqual(calendar.calendarLoadSnapshot().failedLayers, ['planning']);
   failures.clear();
@@ -52,9 +52,9 @@ test('a retry restores missing entries and clears the partial warning', async ()
   assert.deepEqual(calendar.calendarLoadSnapshot().failedLayers, []);
 });
 
-test('holidays and schedule failures are visible without removing tasks', async () => {
+test('holidays and routine failures are visible without removing tasks', async () => {
   failures.set('/calendar/holidays?', 500);
-  failures.set('/schedule/', 503);
+  failures.set('/planning/routines/', 503);
   await calendar.loadRange(from, to);
   assert.deepEqual(calendar.calendarLoadSnapshot().failedLayers, ['holidays', 'schedule']);
   assert.deepEqual(calendar.calendarLoadSnapshot().tasks, [task]);
@@ -67,11 +67,17 @@ test('a denied layer is intentionally absent and does not suggest futile retries
   assert.deepEqual(calendar.calendarLoadSnapshot().events, [event, meal]);
 });
 
-test('disabled Tasks and Schedule modules make no unnecessary requests', async () => {
+test('retiring Schedule does not hide Availability routines, while disabled Tasks stay absent', async () => {
   window.yuvomi.isModuleDisabled = (name) => ['tasks', 'schedule'].includes(name);
   await calendar.loadRange(from, to);
   assert.equal(calls.some((path) => path.startsWith('/tasks?') || path.startsWith('/schedule/')), false);
+  assert.equal(calls.includes('/planning/routines/entries?from=2026-09-05&to=2026-09-12'), true);
   assert.deepEqual(calendar.calendarLoadSnapshot().failedLayers, []);
+});
+
+test('a one-day routine projection requests the preceding day for overnight shifts', async () => {
+  await calendar.loadRange('2026-09-11', '2026-09-11');
+  assert.equal(calls.includes('/planning/routines/entries?from=2026-09-10&to=2026-09-11'), true);
 });
 
 test('failure of the primary calendar keeps the established full-error state', async () => {

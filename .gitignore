@@ -113,6 +113,9 @@ seed-english-demo*.js
 # added later (the WebP variants, new locale folders) was silently dropped.
 /screenshots/
 
+# Isolated Availability browser QA database, reports, screenshots and browser profile.
+/.qa/
+
 # Database backup files
 *.db.backup-*
 

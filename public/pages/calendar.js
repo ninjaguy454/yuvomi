@@ -40,6 +40,7 @@ import { nowFields, todayKey, zonedDateKey, zonedTimeKey } from '/utils/timezone
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 import { emptyStateHTML, emptyHintHTML, mountLoadError } from '/utils/empty-state.js';
 import { renderAvailabilityManager, renderTripsManager } from '/components/activity-automation.js';
+import { routineEntriesOnDay, routineSegmentTimeLabel } from '/utils/availability-calendar.js';
 
 // --------------------------------------------------------
 // Konstanten
@@ -992,7 +993,7 @@ function activeFilterCount() {
   if (hp.holiday_show_public && !state.layerHolidays) n += 1;
   if (hp.holiday_show_school && !state.layerSchool) n += 1;
   if (!state.layerBirthdays) n += 1;
-  if (scheduleEnabled() && !state.layerSchedule) n += 1;
+  if (!state.layerSchedule) n += 1;
   return n;
 }
 
@@ -1185,9 +1186,9 @@ async function loadRange(from, to) {
         ? Promise.resolve({ data: [] })
         : loadOptionalLayer('/tasks?include_future=1'),
       loadOptionalLayer(`/calendar/holidays?from=${from}&to=${to}`),
-      scheduleEnabled()
-        ? loadOptionalLayer(`/schedule/entries?from=${from}&to=${to}`, { entries: [] })
-        : Promise.resolve({ data: { entries: [] } }),
+      // Fetch the previous starting date so overnight routines continue into
+      // the first visible day. These resolved entries remain a projection.
+      loadOptionalLayer(`/planning/routines/entries?from=${addLocalDays(from, -1)}&to=${to}`, { entries: [] }),
       loadOptionalLayer(`/planning/calendar-context?from=${from}&to=${to}`),
     ]);
     state.loadError = null;
@@ -1338,32 +1339,41 @@ function wireCalendarPlanningTabs(container) {
 }
 
 async function renderCalendarPlanningSection(container, section, user, openTripId = null) {
+  if (section === 'availability' && !document.querySelector('link[href="/styles/schedule.css"]')) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = '/styles/schedule.css';
+    document.head.appendChild(link);
+  }
   container.replaceChildren();
-  container.insertAdjacentHTML('beforeend', `<div class="calendar-planning-page page-measure--narrow">
-    <div class="page-toolbar page-toolbar--wrap page-toolbar--narrow"><h1 class="page-toolbar__title">Calendar</h1></div>
+  container.insertAdjacentHTML('beforeend', `<div class="calendar-planning-page ${section === 'availability' ? 'availability-planning-page' : 'page-measure--narrow'}">
+    <div class="page-toolbar page-toolbar--wrap"><h1 class="page-toolbar__title">${section === 'availability' ? 'Availability' : 'Calendar'}</h1></div>
     ${calendarPlanningTabs(section)}
     <section class="settings-card settings-card--automation" data-calendar-planning-host></section>
   </div>`);
   const host = container.querySelector('[data-calendar-planning-host]');
   wireCalendarPlanningTabs(container);
-  if (user?.role !== 'admin') {
+  if (section !== 'availability' && user?.role !== 'admin') {
     host.replaceChildren();
     host.insertAdjacentHTML('beforeend', '<p class="form-hint">Household administrators maintain availability and trip plans.</p>');
     return;
   }
-  const manager = { navigate: async () => {
-    if (section === 'availability') await renderAvailabilityManager(host, manager);
+  let disposeAvailability = null;
+  const manager = { user, navigate: async () => {
+    if (section === 'availability') {
+      disposeAvailability?.();
+      disposeAvailability = await renderAvailabilityManager(host, manager);
+    }
     else await renderTripsManager(host, manager, { openTripId });
   } };
   await manager.navigate();
   if (window.lucide) window.lucide.createIcons({ el: container });
+  return () => disposeAvailability?.();
 }
 
 export async function render(container, { user }) {
   const requestedSection = new URLSearchParams(window.location.search).get('section');
   if (['availability', 'trips'].includes(requestedSection)) {
-    await renderCalendarPlanningSection(container, requestedSection, user, new URLSearchParams(window.location.search).get('open'));
-    return;
+    return renderCalendarPlanningSection(container, requestedSection, user, new URLSearchParams(window.location.search).get('open'));
   }
   _container = container;
   // Die Uhr des Haushalts: state.today markiert die Heute-Zelle, die Jetzt-Linie
@@ -1489,7 +1499,7 @@ function renderToolbar() {
   // DIE UEBERLAPPUNGSWARNUNG BLEIBT IM KOPF. Sie ist eine Meldung mit
   // `role="status"`, kein Filter - im Blatt waere sie hinter einem Klick
   // versteckt, und eine Warnung, die man erst oeffnen muss, ist keine.
-  const scheduleWarningHtml = (scheduleEnabled() && state.scheduleWarnings.length) ? `
+  const scheduleWarningHtml = state.scheduleWarnings.length ? `
     <span class="cal-toolbar__schedule-warning" role="status"
           title="${esc(t('schedule.overlapWarning', { date: state.scheduleWarnings[0].date_key, user: scheduleOwnerName(state.scheduleWarnings[0]) }))}">
       <i data-lucide="triangle-alert" class="icon-sm" aria-hidden="true"></i>
@@ -2088,7 +2098,7 @@ function renderMonthDay(date, inMonth) {
   const evs      = eventsOnDay(date);
   const dayTasks = tasksOnDay(date);
   const dayHols  = holidaysOnDay(date);
-  const daySchedule = state.layerSchedule ? state.scheduleEntries.filter((entry) => entry.date_key === date && entry.shift_type) : [];
+  const daySchedule = scheduleEntriesOnDay(date);
   const isToday  = date === state.today;
   const classes  = monthDayClasses(date, inMonth);
 
@@ -2144,20 +2154,9 @@ function renderMonthDay(date, inMonth) {
 // können. Leere Tage tragen nur das Datum (die role sagt "Schaltfläche"). P1.
 function scheduleEntriesOnDay(date) {
   return state.layerSchedule
-    ? state.scheduleEntries.filter((entry) => entry.date_key === date && entry.shift_type)
+    ? routineEntriesOnDay(state.scheduleEntries, date)
     : [];
 }
-
-/**
- * Ist der Schichtplan im Haushalt ueberhaupt eingeschaltet?
- *
- * `disabled_modules` heisst "dieses Modul gibt es hier nicht". Der Routen-Guard
- * schuetzt `/schedule` - der Kalender ist aber eine MISCHSTELLE: sein Pfad nennt
- * ein Modul, sein Inhalt kommt aus mehreren. Ohne diese Frage laedt und zeigt er
- * die Schichten eines abgeschalteten Moduls weiter, samt Ebenen-Knopf. Dasselbe
- * Muster wie in dashboard.js und recipes.js.
- */
-function scheduleEnabled() { return !window.yuvomi?.isModuleDisabled?.('schedule'); }
 
 function scheduleHasTimes(entry) { return Boolean(entry.shift_type?.start_time && entry.shift_type?.end_time); }
 
@@ -2169,18 +2168,14 @@ function scheduleOwnerName(entry) {
 function scheduleEntryLabel(entry) {
   const shift = entry.shift_type.short_code || entry.shift_type.name;
   const owner = scheduleOwnerName(entry);
-  return owner ? shift + " · " + owner : shift;
+  return (owner ? shift + " · " + owner : shift) + (entry.continues_from_previous ? ' · continued' : '');
 }
 
 function scheduleEntryTitle(entry) {
   const owner = scheduleOwnerName(entry);
   const time = scheduleTimeLabel(entry.shift_type);
-  return entry.shift_type.name + (owner ? " · " + owner : "") + (time ? " · " + time : "");
-}
-
-function scheduleIsFullDayShift(entry) {
-  const type = entry.shift_type;
-  return Boolean(type?.start_time && type?.end_time && type.start_time === type.end_time);
+  return entry.shift_type.name + (owner ? " · " + owner : "") + (time ? " · " + time : "")
+    + (entry.continues_from_previous ? ` · continues from ${entry.date_key}` : '');
 }
 
 function scheduleTimeLabel(type) {
@@ -2193,16 +2188,16 @@ function scheduleTimeLabel(type) {
 function renderScheduleChip(entry, className = 'allday-holiday') {
   const type = entry.shift_type;
   const label = scheduleEntryLabel(entry);
-  const start = type.start_time ? '<small class="schedule-entry__start">' + esc(type.start_time) + '</small>' : '';
+  const time = routineSegmentTimeLabel(entry);
+  const start = time ? '<small class="schedule-entry__start">' + esc(time) + '</small>' : '';
   return `<div class="${className} schedule-entry" style="--holi-color:${esc(type.color)}" title="${esc(scheduleEntryTitle(entry))}"><span>${esc(label)}</span>${start}</div>`;
 }
 function renderScheduleTimeBlock(entry, className) {
   const type = entry.shift_type;
-  const start = timeToMinutes(type.start_time);
-  const end = timeToMinutes(type.end_time);
-  const duration = Math.max((end > start ? end : 24 * 60) - start, 30);
+  const start = entry.segment_start_minutes;
+  const duration = entry.segment_end_minutes - start;
   const bounds = className === 'week-event' ? 'left:2px;width:calc(100% - 4px);' : 'left:calc(4px);width:calc(100% - 14px);';
-  return `<div class="${className} schedule-time-block" style="top:${hourOffset(start)};height:calc(${hourOffset(duration)} - 4px);${bounds}--ev-color:${esc(type.color)}" title="${esc(scheduleEntryTitle(entry))}"><span>${esc(scheduleEntryLabel(entry))}</span><small>${esc(scheduleTimeLabel(type))}</small></div>`;
+  return `<div class="${className} schedule-time-block" style="top:${hourOffset(start)};height:${hourOffset(duration)};${bounds}--ev-color:${esc(type.color)}" title="${esc(scheduleEntryTitle(entry))}"><span>${esc(scheduleEntryLabel(entry))}</span><small>${esc(routineSegmentTimeLabel(entry))}</small></div>`;
 }
 
 function monthDayAriaLabel(date, total) {
@@ -2233,8 +2228,8 @@ function renderWeekView(container) {
   );
   const layouts = timedEvs.map((events) => layoutOverlaps(events));
   const schedule = days.map((d) => scheduleEntriesOnDay(d));
-  const scheduleChips = schedule.map((items) => state.scheduleDisplay === 'compact' ? items : items.filter((entry) => !scheduleHasTimes(entry) || scheduleIsFullDayShift(entry)));
-  const scheduleBlocks = schedule.map((items) => state.scheduleDisplay === 'blocks' ? items.filter((entry) => scheduleHasTimes(entry) && !scheduleIsFullDayShift(entry)) : []);
+  const scheduleChips = schedule.map((items) => state.scheduleDisplay === 'compact' ? items : items.filter((entry) => !scheduleHasTimes(entry)));
+  const scheduleBlocks = schedule.map((items) => state.scheduleDisplay === 'blocks' ? items.filter(scheduleHasTimes) : []);
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -2479,8 +2474,8 @@ function renderDayView(container) {
   const timed   = dayEvs.filter((e) => !isAllDayLike(e));
   const layout = layoutOverlaps(timed);
   const schedule = scheduleEntriesOnDay(state.cursor);
-  const scheduleChips = state.scheduleDisplay === 'compact' ? schedule : schedule.filter((entry) => !scheduleHasTimes(entry) || scheduleIsFullDayShift(entry));
-  const scheduleBlocks = state.scheduleDisplay === 'blocks' ? schedule.filter((entry) => scheduleHasTimes(entry) && !scheduleIsFullDayShift(entry)) : [];
+  const scheduleChips = state.scheduleDisplay === 'compact' ? schedule : schedule.filter((entry) => !scheduleHasTimes(entry));
+  const scheduleBlocks = state.scheduleDisplay === 'blocks' ? schedule.filter(scheduleHasTimes) : [];
 
   container.replaceChildren();
   // Kein eigener Datums-Header mehr: die Toolbar zeigt exakt dasselbe Datum
@@ -2741,12 +2736,10 @@ function availableLayers() {
       checked: state.layerSchool, color: hp.holiday_school_color ?? HOLIDAY_SCHOOL_FALLBACK,
     });
   }
-  if (scheduleEnabled()) {
-    rows.push({
-      key: 'schedule', label: t('schedule.overlay'),
-      checked: state.layerSchedule, color: null,
-    });
-  }
+  rows.push({
+    key: 'schedule', label: 'Availability routines',
+    checked: state.layerSchedule, color: null,
+  });
   // Der Geburtstags-Schalter braucht hier keine „gibt es welche?"-Bedingung
   // mehr: im Blatt kostet eine Zeile keine Kopfzeile, und ein Schalter, der
   // je nach Datenlage verschwindet, ist im Blatt schwerer zu finden als eine
@@ -2785,11 +2778,11 @@ function openCalendarFilters() {
   // hat er als beschrifteter Schalter zum ersten Mal einen Zustand, den man
   // ablesen kann statt ihn aus der Knopfbeschriftung zu erschliessen (der
   // Chip hiess „Volle Bloecke", wenn er sie NICHT zeigte).
-  const scheduleDisplayRow = scheduleEnabled() ? toggleRowHtml({
-    label: t('schedule.fullBlocks'),
+  const scheduleDisplayRow = toggleRowHtml({
+    label: 'Routine time blocks',
     checked: state.scheduleDisplay === 'blocks',
     attrs: { 'data-filter-schedule-display': 'true' },
-  }) : '';
+  });
 
   const meRow = (people.length > 1 && state.currentUserId != null)
     ? toggleRowHtml({

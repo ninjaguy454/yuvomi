@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Refresh the shared modal interaction and sheet styles together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.5`;
+// Refresh Availability routines, their explained windows and Calendar projection together.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.7`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -45,6 +45,7 @@ const APP_SHELL = [
   '/reminders.js',
   '/notification-center.js',
   '/utils/appearance-preferences.js',
+  '/utils/availability-calendar.js',
   '/utils/session-lifecycle.js',
   '/push.js',
   '/sw-register.js',
@@ -247,6 +248,7 @@ const PAGE_MODULES = [
   '/pages/shopping.js',
   '/pages/meals.js',
   '/pages/calendar.js',
+  '/pages/schedule.js',
   '/pages/notes.js',
   '/pages/contacts.js',
   '/pages/places.js',

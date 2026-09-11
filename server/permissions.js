@@ -50,7 +50,8 @@ export const PERMISSION_MODULES = Object.freeze([
   { key: 'housekeeping', labelKey: 'nav.housekeeping', icon: 'paintbrush',    navIds: ['housekeeping'] },
   { key: 'rewards',      labelKey: 'nav.rewards',      icon: 'award',         navIds: ['rewards'] },
   { key: 'health',       labelKey: 'nav.health',       icon: 'heart-pulse',   navIds: ['health'] },
-  { key: 'schedule',     labelKey: 'nav.schedule',     icon: 'calendar-clock', navIds: ['schedule'] },
+  // Retained permission key for routines inside Availability, with no standalone navigation.
+  { key: 'schedule',     labelKey: 'nav.schedule',     icon: 'calendar-clock', navIds: [] },
 ]);
 
 // Dashboard-Widgets mit ihrem Trägermodul (aus dashboard.js MODULE_FOR_WIDGET).

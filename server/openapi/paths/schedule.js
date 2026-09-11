@@ -9,7 +9,7 @@ import { op, jsonBody, idParam, stringPathParam } from '../helpers.js';
  * einen Eintrag je Tag und Mitglied.
  */
 export function schedulePaths() {
-  return {
+  const legacy = {
     '/api/v1/schedule/entries': {
       get: op({
         summary: 'Resolve schedule entries for a date range',
@@ -67,4 +67,13 @@ export function schedulePaths() {
       delete: op({ summary: 'Remove a per-day override', tag: 'Schedule', params: [stringPathParam('dateKey', 'Date (YYYY-MM-DD)')], stateChanging: true }),
     },
   };
+  // Same tables, ownership checks and response envelopes under Availability.
+  const canonical = Object.fromEntries(Object.entries(legacy).map(([path, methods]) => [
+    path.replace('/schedule', '/planning/routines'),
+    Object.fromEntries(Object.entries(methods).map(([method, operation]) => [method, {
+      ...operation, tags: ['Planning'],
+      description: `${operation.description || ''} Availability routine API; legacy schedule scopes and ownership remain. Missing day records are unconfigured; a null shift removes only this routine restriction. Shift types accept availability_state (busy, available, away, unknown, none) and optional place_id. Pattern POST/PUT may include days for an atomic save.`,
+    }])),
+  ]));
+  return { ...legacy, ...canonical };
 }

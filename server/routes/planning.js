@@ -1,6 +1,8 @@
 import express from 'express';
 import * as db from '../db.js';
 import { requireAdmin } from '../auth.js';
+import { tokenAllows } from '../scopes.js';
+import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import { evaluatePresence, placeWithInheritedAddress } from '../services/presence.js';
 import {
@@ -12,6 +14,7 @@ import {
   searchGooglePlaces,
 } from '../services/google-places.js';
 import { createLogger } from '../logger.js';
+import routineRouter from './schedule.js';
 import { deleteTrip, listTrips, saveTrip, tripItinerary } from '../services/trips.js';
 import { ensureDefaultHomePlace } from '../services/places.js';
 import {
@@ -23,6 +26,8 @@ import {
 } from '../services/planning-contexts.js';
 
 const router = express.Router();
+// Canonical home for the retained roster API. Legacy /schedule remains compatible.
+router.use('/routines', routineRouter);
 const log = createLogger('Planning');
 const PLACE_TYPES = new Set(['home', 'room', 'school', 'work', 'restaurant', 'store', 'hotel', 'destination', 'custom']);
 const STATES = new Set(['available', 'away', 'busy', 'unknown', 'custom']);
@@ -117,6 +122,7 @@ function placeUsage(database, id) {
   return {
     children: scalar('SELECT COUNT(*) AS n FROM places WHERE parent_place_id = ?'),
     weekly_rules: scalar('SELECT COUNT(*) AS n FROM availability_rules WHERE place_id = ?'),
+    routine_shifts: scalar('SELECT COUNT(*) AS n FROM schedule_shift_types WHERE place_id = ?'),
     dated_periods: scalar('SELECT COUNT(*) AS n FROM availability_periods WHERE place_id = ?'),
     activity_templates: scalar('SELECT COUNT(*) AS n FROM activity_templates WHERE place_id = ?'),
     workflow_steps: scalar('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE place_id = ?'),
@@ -653,7 +659,7 @@ router.get('/calendar-context', (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.get('/presence/:userId', (req, res) => {
+function getAvailability(req, res) {
   try {
     const database = db.get();
     const userId = integer(req.params.userId, { required: true });
@@ -662,9 +668,24 @@ router.get('/presence/:userId', (req, res) => {
     const startAt = string(req.query.start_at ?? new Date().toISOString(), { required: true, max: 40 });
     const endAt = string(req.query.end_at ?? startAt, { required: true, max: 40 });
     const targetPlaceId = integer(req.query.place_id);
+    const requiredDurationMinutes = optionalNumber(req.query.required_duration_minutes, 0.001, 527040, 'Required duration');
+    const windowMode = enumValue(req.query.window_mode, new Set(['start', 'due', 'completion']), 'completion', 'Evaluation window');
     if (targetPlaceId && !validPlace(database, targetPlaceId)) throw new Error('Target place does not exist.');
-    res.json({ data: evaluatePresence(database, { userId, startAt, endAt, targetPlaceId, policy }) });
+    const data = evaluatePresence(database, { userId, startAt, endAt, targetPlaceId, policy, requiredDurationMinutes, windowMode });
+    // The explained projection contains original roster names, notes and Places.
+    // Consolidation must not turn Calendar read access into a Schedule ACL bypass.
+    // Members with no roster-derived result retain ordinary Availability access.
+    const includesRoutineData = data.signals.some((signal) => signal.source === 'rotating')
+      || data.effective?.source === 'rotating' || data.current_presence?.source === 'rotating'
+      || data.routine_explanations.length > 0
+      || data.warnings.some((warning) => warning.source === 'rotating' || warning.pattern_ids);
+    const canReadRoutines = (req.authMethod !== 'api_token' || tokenAllows(req.authScopes, 'schedule', 'read'))
+      && moduleAccessVerdict(req.sessionModuleAccess, 'schedule', 'read') === MODULE_ACCESS_ALLOW;
+    if (includesRoutineData && !canReadRoutines) return res.status(403).json({ error: 'Rotating routine access is required to explain this availability.', code: 403 });
+    res.json({ data });
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
-});
+}
+router.get('/presence/:userId', getAvailability);
+router.get('/availability/:userId', getAvailability);
 
 export default router;

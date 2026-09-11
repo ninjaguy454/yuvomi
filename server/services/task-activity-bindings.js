@@ -9,6 +9,7 @@
  */
 
 import { resolveActivityAssignment } from './activity-eligibility.js';
+import { activityPresenceWindow } from './presence.js';
 import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
 import { todayKey } from '../utils/timezone.js';
 import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
@@ -230,6 +231,7 @@ export function previewTaskActivityBinding(d, {
   activityTemplateId,
   subjectUserId = null,
   dateKey = todayKey(d),
+  task = null,
   allowInactive = false,
 } = {}) {
   const id = asPositiveInt(activityTemplateId);
@@ -251,8 +253,7 @@ export function previewTaskActivityBinding(d, {
       presence: {
         policy: activity.presence_policy || 'ignore',
         targetPlaceId: activity.location_mode === 'fixed' ? activity.place_id : null,
-        startAt: `${dateKey}T00:00:00`,
-        endAt: `${dateKey}T23:59:00`,
+        ...activityPresenceWindow(d, { task, dateKey, windowMode: activity.presence_window || 'due' }),
       },
     });
     return { activity, subjectUserId: subjectId, resolution };
@@ -288,6 +289,7 @@ export function applyTaskActivityBinding(d, taskId, {
     activityTemplateId,
     subjectUserId,
     dateKey: dateKey || task.due_date || todayKey(d),
+    task,
     allowInactive,
   });
 
@@ -300,8 +302,8 @@ export function applyTaskActivityBinding(d, taskId, {
       presence: {
         policy: preview.activity.presence_policy || 'ignore',
         targetPlaceId: preview.activity.location_mode === 'fixed' ? preview.activity.place_id : null,
-        startAt: `${dateKey || task.start_date || task.due_date || todayKey(d)}T00:00:00`,
-        endAt: `${dateKey || task.due_date || todayKey(d)}T${task.due_time || '23:59'}:00`,
+        ...activityPresenceWindow(d, { task, dateKey: dateKey || task.due_date || todayKey(d),
+          windowMode: preview.activity.presence_window || 'due' }),
       },
     });
   } catch (err) {

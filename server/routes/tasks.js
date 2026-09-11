@@ -410,13 +410,14 @@ function sameTaskActivityBinding(a, b) {
     && Number(a.subjectUserId ?? a.subject_user_id ?? 0) === Number(b.subjectUserId ?? b.subject_user_id ?? 0);
 }
 
-function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false } = {}) {
+function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false, task = null } = {}) {
   if (!binding) return null;
   try {
     previewTaskActivityBinding(db.get(), {
       activityTemplateId: binding.activityTemplateId,
       subjectUserId: binding.subjectUserId,
       dateKey,
+      task,
       allowInactive,
     });
     return null;
@@ -1307,7 +1308,7 @@ router.post('/', (req, res) => {
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
-    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone());
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
 
     const taskLocation = req.body.location === undefined
@@ -1548,7 +1549,7 @@ router.put('/:id', (req, res) => {
       });
     }
     if (bindingChanged && desiredActivityBinding) {
-      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone());
+      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
       if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
     }
 

@@ -10,7 +10,7 @@
  */
 
 import { todayKey } from '../utils/timezone.js';
-import { evaluatePresence } from './presence.js';
+import { evaluatePresence, activityPresenceWindow } from './presence.js';
 
 export const PROFICIENCY = Object.freeze({
   EXCLUDED: 'excluded',
@@ -277,6 +277,10 @@ function assignmentPolicy(activity, override = null) {
   return override || activity.assignment_policy || activity.assignment_strategy || 'subject_skill';
 }
 
+function requirementName(activity, presence = null) {
+  return (presence?.policy || activity.presence_policy) === 'available_before_due' ? 'availability' : 'location';
+}
+
 function rotationKey(activity, purpose = 'primary') {
   return activity.rotation_group
     ? `activity-group:${activity.rotation_group}:${purpose}`
@@ -324,9 +328,9 @@ export function eligibleMembersForActivity(d, activity, {
     if (policy === 'ignore') return true;
     try {
       return evaluatePresence(d, {
+        ...activityPresenceWindow(d, { dateKey, windowMode: activity.presence_window || 'due' }),
+        ...(presence || {}),
         userId: member.id,
-        startAt: presence?.startAt || `${dateKey}T00:00:00`,
-        endAt: presence?.endAt || `${dateKey}T23:59:00`,
         targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null,
         policy,
       }).eligible;
@@ -364,9 +368,9 @@ export function resolveActivityAssignment(d, activity, {
     if (policy === 'ignore') return true;
     try {
       return evaluatePresence(d, {
+        ...activityPresenceWindow(d, { dateKey, windowMode: activity.presence_window || 'due' }),
+        ...(presence || {}),
         userId: member.id,
-        startAt: presence?.startAt || `${dateKey}T00:00:00`,
-        endAt: presence?.endAt || `${dateKey}T23:59:00`,
         targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null,
         policy,
       }).eligible;
@@ -386,7 +390,7 @@ export function resolveActivityAssignment(d, activity, {
     if (fixedProficiency.proficiency !== PROFICIENCY.NORMAL) {
       throw new Error('The fixed assignee is not independently qualified for this activity.');
     }
-    if (!isPresent(fixed)) throw new Error('The fixed assignee does not meet this activity’s presence requirement.');
+    if (!isPresent(fixed)) throw new Error(`The fixed assignee does not meet this activity’s ${requirementName(activity, presence)} requirement.`);
     return {
       primary: fixed,
       supervisor: null,
@@ -487,7 +491,7 @@ export function resolveActivityAssignment(d, activity, {
       || members.some((member) => Number(member.id) !== Number(subject.id)
         && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL);
     if (hasQualifiedMember) {
-      throw new Error('Qualified household members were found, but none meets this activity’s location or availability rule. Check the required presence and planned availability for this time.');
+      throw new Error(`Qualified household members were found, but none meets this activity’s ${requirementName(activity, presence)} requirement.`);
     }
     throw new Error('No qualified household member is available to help with this activity.');
   }
@@ -521,7 +525,7 @@ export function assertEligibleActivityMember(d, activity, userId, options = {}) 
     throw new Error('That household member is not independently qualified for this activity.');
   }
   if (!eligibleMembersForActivity(d, activity, options).some((row) => Number(row.id) === Number(member.id))) {
-    throw new Error('That household member does not meet this activity\'s availability or presence requirements.');
+    throw new Error(`That household member does not meet this activity's ${requirementName(activity, options.presence)} requirement.`);
   }
   return member;
 }

@@ -8803,6 +8803,17 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10031,
+  description: 'Availability: retain rotating routines and add explicit shift effects',
+  up: `
+    ALTER TABLE schedule_shift_types ADD COLUMN availability_state TEXT NOT NULL DEFAULT 'busy'
+      CHECK (availability_state IN ('busy', 'available', 'away', 'unknown', 'none'));
+    ALTER TABLE schedule_shift_types ADD COLUMN place_id INTEGER REFERENCES places(id) ON DELETE RESTRICT;
+    CREATE INDEX idx_schedule_shift_types_place ON schedule_shift_types(place_id);
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

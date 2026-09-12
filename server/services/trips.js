@@ -9,6 +9,8 @@ import {
   savePlanningContext,
 } from './planning-contexts.js';
 import { setTaskLocation } from './task-locations.js';
+import { availabilityInstantMs } from './presence.js';
+import { householdTimeZone, utcToWall, hasExplicitZone, shiftDateKey } from '../utils/timezone.js';
 
 const PHASES = ['before_departure', 'departure', 'during_trip', 'before_return', 'return_home', 'post_trip'];
 const TYPES = new Set(['vacation', 'business', 'family', 'road_trip', 'other']);
@@ -51,27 +53,38 @@ function optionalId(database, value, table, field) {
   return id;
 }
 
-function shift(value, minutes) {
-  const date = new Date(value);
-  date.setMinutes(date.getMinutes() + minutes);
+function shift(value, minutes, timezone) {
+  const wall = utcToWall(new Date(availabilityInstantMs(value, timezone)).toISOString(), timezone);
+  const date = new Date(`${wall.date}T${wall.time}Z`);
+  date.setUTCMinutes(date.getUTCMinutes() + minutes);
   return date.toISOString().slice(0, 16);
 }
 
 function defaultStages(input) {
   return [
-    { phase: 'before_departure', title: 'Prepare for departure', starts_at: shift(input.startsAt, -1440), place_id: null },
+    { phase: 'before_departure', title: 'Prepare for departure', starts_at: shift(input.startsAt, -1440, input.timezone), place_id: null },
     { phase: 'departure', title: 'Depart', starts_at: input.startsAt, place_id: null },
-    { phase: 'during_trip', title: 'At destination', starts_at: shift(input.startsAt, 60), place_id: input.destinationPlaceId },
-    { phase: 'before_return', title: 'Prepare to return', starts_at: shift(input.endsAt, -240), place_id: input.lodgingPlaceId || input.destinationPlaceId },
+    { phase: 'during_trip', title: 'At destination', starts_at: shift(input.startsAt, 60, input.timezone), place_id: input.destinationPlaceId },
+    { phase: 'before_return', title: 'Prepare to return', starts_at: shift(input.endsAt, -240, input.timezone), place_id: input.lodgingPlaceId || input.destinationPlaceId },
     { phase: 'return_home', title: 'Return home', starts_at: input.endsAt, place_id: null },
-    { phase: 'post_trip', title: 'Post-trip reset', starts_at: shift(input.endsAt, 720), place_id: null },
+    { phase: 'post_trip', title: 'Post-trip reset', starts_at: shift(input.endsAt, 720, input.timezone), place_id: null },
   ];
 }
 
 function normalize(database, body, existing = null) {
-  const startsAt = timestamp(body.starts_at ?? existing?.starts_at, 'Departure');
-  const endsAt = timestamp(body.ends_at ?? existing?.ends_at, 'Return');
-  if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) throw new Error('Return must be after departure.');
+  let startsAt = timestamp(body.starts_at ?? existing?.starts_at, 'Departure');
+  let endsAt = timestamp(body.ends_at ?? existing?.ends_at, 'Return');
+  const timezone = householdTimeZone(database);
+  const startMs = availabilityInstantMs(startsAt, timezone);
+  const endMs = availabilityInstantMs(endsAt, timezone);
+  if (startMs == null || endMs == null) throw new Error('A valid Trip window is required.');
+  if (endMs <= startMs) throw new Error('Return must be after departure.');
+  // The retained tables compare endpoints lexically. Mixed offset/wall forms
+  // must use the same representation without changing their actual instants.
+  if (hasExplicitZone(startsAt) || hasExplicitZone(endsAt)) {
+    startsAt = new Date(startMs).toISOString();
+    endsAt = new Date(endMs).toISOString();
+  }
   const tripType = body.trip_type ?? existing?.trip_type ?? 'vacation';
   const status = body.status ?? existing?.status ?? 'planning';
   if (!TYPES.has(tripType)) throw new Error('Trip type is invalid.');
@@ -80,7 +93,7 @@ function normalize(database, body, existing = null) {
     name: text(body.name ?? existing?.name, 'Trip name', { required: true, max: 120 }),
     destinationPlaceId: validPlace(database, body.destination_place_id ?? existing?.destination_place_id, 'destination Place'),
     lodgingPlaceId: validPlace(database, body.lodging_place_id ?? existing?.lodging_place_id, 'lodging Place'),
-    startsAt, endsAt, tripType, status,
+    startsAt, endsAt, tripType, status, timezone,
     createAwayPeriods: body.create_away_periods === undefined ? Boolean(existing?.create_away_periods ?? true) : body.create_away_periods === true,
     notes: text(body.notes ?? existing?.notes, 'Notes'),
     participantIds: memberIds(database, body.participant_ids ?? existing?.participant_ids ?? []),
@@ -103,11 +116,11 @@ function normalize(database, body, existing = null) {
 
 function phaseDate(input, phase) {
   const byPhase = {
-    before_departure: shift(input.startsAt, -1440), departure: input.startsAt,
-    during_trip: shift(input.startsAt, 60), before_return: shift(input.endsAt, -240),
-    return_home: input.endsAt, post_trip: shift(input.endsAt, 720),
+    before_departure: shift(input.startsAt, -1440, input.timezone), departure: input.startsAt,
+    during_trip: shift(input.startsAt, 60, input.timezone), before_return: shift(input.endsAt, -240, input.timezone),
+    return_home: input.endsAt, post_trip: shift(input.endsAt, 720, input.timezone),
   };
-  return byPhase[phase].slice(0, 10);
+  return utcToWall(new Date(availabilityInstantMs(byPhase[phase], input.timezone)).toISOString(), input.timezone).date;
 }
 
 function replaceParticipants(database, tripId, input, actorId, planningContextId = null) {
@@ -203,9 +216,17 @@ export function getTrip(database, id) {
 }
 
 export function listTrips(database, { from = null, to = null } = {}) {
-  const rows = from && to
-    ? database.prepare('SELECT id FROM trip_plans WHERE date(starts_at) <= ? AND date(ends_at) >= ? ORDER BY starts_at, id').all(to, from)
-    : database.prepare('SELECT id FROM trip_plans ORDER BY starts_at DESC, id DESC').all();
+  let rows;
+  if (from && to) {
+    const timezone = householdTimeZone(database);
+    const start = availabilityInstantMs(`${from}T00:00:00`, timezone);
+    const lastDay = availabilityInstantMs(`${to}T00:00:00`, timezone);
+    if (start == null || lastDay == null || lastDay < start) throw new Error('A valid Trip date range is required.');
+    const end = availabilityInstantMs(`${shiftDateKey(to, 1)}T00:00:00`, timezone);
+    rows = database.prepare('SELECT id, starts_at, ends_at FROM trip_plans ORDER BY starts_at, id').all()
+      .filter((row) => availabilityInstantMs(row.starts_at, timezone) < end
+        && availabilityInstantMs(row.ends_at, timezone) > start);
+  } else rows = database.prepare('SELECT id FROM trip_plans ORDER BY starts_at DESC, id DESC').all();
   return rows.map((row) => getTrip(database, row.id));
 }
 
@@ -313,9 +334,20 @@ export function deleteTrip(database, id) {
 export function tripItinerary(database, id) {
   const trip = getTrip(database, id);
   if (!trip) throw new Error('Trip not found.');
-  const from = trip.starts_at.slice(0, 10);
-  const to = trip.ends_at.slice(0, 10);
-  const eventRows = database.prepare(`SELECT * FROM calendar_events WHERE (date(start_datetime) <= ? AND date(COALESCE(end_datetime, start_datetime)) >= ?) OR (recurrence_rule IS NOT NULL AND date(start_datetime) <= ?)`).all(to, from, to);
+  const timezone = householdTimeZone(database);
+  const householdDate = (value) => {
+    const instant = availabilityInstantMs(value, timezone);
+    return instant == null ? null : utcToWall(new Date(instant).toISOString(), timezone)?.date;
+  };
+  const from = householdDate(trip.starts_at);
+  const to = householdDate(trip.ends_at);
+  if (!from || !to) throw new Error('A valid Trip date range is required.');
+  const rangeStart = availabilityInstantMs(`${from}T00:00:00`, timezone);
+  const rangeEnd = availabilityInstantMs(`${shiftDateKey(to, 1)}T00:00:00`, timezone);
+  // SQLite date() and recurring masters use their stored/UTC dates. Load one
+  // adjacent day on each side, then retain only actual household-day overlap.
+  const queryFrom = shiftDateKey(from, -1), queryTo = shiftDateKey(to, 1);
+  const eventRows = database.prepare(`SELECT * FROM calendar_events WHERE (date(start_datetime) <= ? AND date(COALESCE(end_datetime, start_datetime)) >= ?) OR (recurrence_rule IS NOT NULL AND date(start_datetime) <= ?)`).all(queryTo, queryFrom, queryTo);
   const recurring = eventRows.filter((event) => event.recurrence_rule).map((event) => event.id);
   const contextEventIds = trip.planning_context_id
     ? new Set(database.prepare(`
@@ -324,7 +356,16 @@ export function tripItinerary(database, id) {
        WHERE planning_context_id = ?
     `).all(trip.planning_context_id).map((row) => Number(row.calendar_event_id)))
     : null;
-  const events = expandRecurringEvents(eventRows, from, to, loadEventExceptions(database, recurring)).filter((event) => {
+  const events = expandRecurringEvents(eventRows, queryFrom, queryTo, loadEventExceptions(database, recurring)).filter((event) => {
+    // All-day dates keep their declared calendar meaning; timed values with
+    // explicit offsets are instants, just as in Availability and the editor.
+    const startValue = event.all_day ? event.start_datetime.slice(0, 10) : event.start_datetime;
+    const endValue = event.all_day
+      ? (event.end_datetime?.slice(0, 10) || shiftDateKey(startValue, 1))
+      : (event.end_datetime || event.start_datetime);
+    const start = availabilityInstantMs(startValue, timezone);
+    const end = availabilityInstantMs(endValue, timezone);
+    if (start == null || end == null || start >= rangeEnd || Math.max(start + 1, end) <= rangeStart) return false;
     // A context-backed Trip itinerary is an explicit projection of that Trip,
     // not a second household calendar. Related Travel Events are included by
     // their shared immutable context; unrelated appointments remain Calendar
@@ -346,11 +387,11 @@ export function tripItinerary(database, id) {
        ORDER BY date, COALESCE(scheduled_time, preferred_time), id
     `).all(from, to);
   const days = {};
-  const add = (date, kind, value) => ((days[date] ||= { stages: [], tasks: [], meals: [], events: [] })[kind].push(value));
-  trip.stages.forEach((stage) => add(stage.starts_at.slice(0, 10), 'stages', stage));
+  const add = (date, kind, value) => date && ((days[date] ||= { stages: [], tasks: [], meals: [], events: [] })[kind].push(value));
+  trip.stages.forEach((stage) => add(householdDate(stage.starts_at), 'stages', stage));
   trip.tasks.forEach((task) => add(task.due_date || from, 'tasks', task));
   meals.forEach((meal) => add(meal.date, 'meals', meal));
-  events.forEach((event) => add(event.start_datetime.slice(0, 10), 'events', event));
+  events.forEach((event) => add(event.all_day ? event.start_datetime.slice(0, 10) : householdDate(event.start_datetime), 'events', event));
   return { trip, days };
 }
 

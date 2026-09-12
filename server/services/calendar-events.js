@@ -8,7 +8,7 @@
 import { nextOccurrence, parseRRule, matchesRRuleByday } from './recurrence.js';
 import { visibilityWhere } from './visibility.js';
 import {
-  householdTimeZone, localToUTC, shiftDateKey, storedToInstantMs, todayKey, utcToWall,
+  hasExplicitZone, householdTimeZone, localToUTC, shiftDateKey, storedToInstantMs, todayKey, utcToWall,
 } from '../utils/timezone.js';
 
 // Zugewiesene Personen eines Events als JSON-Array (Multi-Assignment).
@@ -125,7 +125,9 @@ export function expandRecurringEvents(events, from, to, exceptionsByEvent = null
             newEnd = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
           } else {
             const endDate = new Date(new Date(newStart).getTime() + durationMs);
-            if (timeSuffix.includes('Z')) {
+            // Offset-bearing starts are instants too; never rebuild their end
+            // in the server's local zone and then drop that zone information.
+            if (hasExplicitZone(newStart)) {
               newEnd = endDate.toISOString().replace('.000Z', 'Z');
             } else {
               const p = n => String(n).padStart(2, '0');

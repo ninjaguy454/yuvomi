@@ -54,6 +54,7 @@ import {
 import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
+import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
 
 const log = createLogger('Tasks');
 
@@ -1455,7 +1456,7 @@ router.post('/', (req, res) => {
     res.status(201).json({ data: task });
     if (syncTarget) pushToCalDAV('Neue Aufgabe');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError) {
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError || err instanceof TaskAssignmentAvailabilityError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('POST / error:', err);
@@ -1552,6 +1553,7 @@ router.put('/:id', (req, res) => {
       const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
       if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
     }
+    const taskWindowChanged = start_date !== task.start_date || due_date !== task.due_date || due_time !== task.due_time;
 
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
@@ -1626,6 +1628,15 @@ router.put('/:id', (req, res) => {
         assignmentMode === 'round_robin' ? rotationUserIds
           : independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid),
         due_date || todayInHouseholdZone());
+    }
+    const performersChanged = !desiredActivityBinding && (!sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
+    if (!bindingChanged && status !== 'done' && (taskWindowChanged || performersChanged)) {
+      // Keep the occurrence's policy, including authored supervisor Tasks
+      // without an Activity binding. Reapplying an Activity would advance its
+      // rotation; validate the resulting people/window without rewriting work.
+      assertTaskAssignmentAvailability(db.get(), task.id,
+        performersChanged ? independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid) : null,
+        { task: { start_date, due_date, due_time, assigned_to: firstUid } });
     }
 
     // Sperre der Aufgabe (#830). Nicht mitgeschickt heisst "nicht angefasst".
@@ -1726,6 +1737,15 @@ router.put('/:id', (req, res) => {
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
+      if (taskWindowChanged) {
+        const dueAt = due_date ? `${due_date}T${due_time || '23:59'}:00` : null;
+        // Move the default response deadline with its due time. An earlier,
+        // custom, or absent deadline remains an independent choice.
+        db.get().prepare(`UPDATE planning_obligations SET due_at = ?,
+          response_deadline = CASE WHEN response_deadline = due_at THEN ? ELSE response_deadline END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          WHERE task_id = ? AND status IN ('pending', 'accepted')`).run(dueAt, dueAt, task.id);
+      }
       if (req.body.tags !== undefined) setTags(db.get(), task.id, req.body.tags);
       if (bindingChanged) {
         if (desiredActivityBinding) {
@@ -1810,7 +1830,7 @@ router.put('/:id', (req, res) => {
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError) {
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError || err instanceof TaskAssignmentAvailabilityError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('PUT /:id error:', err);

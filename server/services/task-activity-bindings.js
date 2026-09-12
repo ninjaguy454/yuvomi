@@ -384,6 +384,11 @@ export function applyTaskActivityBinding(d, taskId, {
     );
     supportTaskId = Number(support.lastInsertRowid);
     setAssignments(d, supportTaskId, [resolution.supervisor.id]);
+    // Supervision is concrete work with the same occurrence policy. Without
+    // this snapshot its own later date edit would silently use Ignore.
+    d.prepare(`INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
+      SELECT ?, place_id, presence_policy, presence_window, source
+      FROM task_planning_context WHERE task_id = ?`).run(supportTaskId, task.id);
     d.prepare(`
       INSERT INTO task_activity_support_tasks (source_task_id, task_id, role)
       VALUES (?, ?, 'supervisor')

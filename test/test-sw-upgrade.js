@@ -139,7 +139,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/shared-display', new MockResponse('', { headers: { 'X-Shared-Display': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.7');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.8');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
@@ -163,7 +163,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
 test('older releases and the previous refinement candidate upgrade to fresh Meal and Task modules', async () => {
   const env = loadWorker();
   const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4',
-    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5'];
+    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5', '2.54.0-kitchen.5-vidamia.7'];
   const oldCaches = oldReleases.flatMap((release) => [
     `yuvomi-shell-${release}`,
     `yuvomi-pages-${release}`,

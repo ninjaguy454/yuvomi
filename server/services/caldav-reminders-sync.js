@@ -17,6 +17,7 @@ import { createCalDAVClient, supportsComponent } from '../utils/caldav-client.js
 import { householdTimeZone, utcToWall } from '../utils/timezone.js';
 import { setItemTags, setTags } from '../utils/task-tags.js';
 import * as todoOutbound from './caldav-todo-outbound.js';
+import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from './assignment-responsibilities.js';
 
 // --------------------------------------------------------
 // Pure Mapping Helpers
@@ -243,7 +244,7 @@ function upsertTask(todo, accountId, createdBy, objectUrl = null) {
   const { date, time } = splitDue(todo.due, householdTimeZone(db.get()));
 
   const existing = db.get().prepare(
-    `SELECT id, priority, status FROM tasks WHERE external_uid = ? AND external_source = 'caldav' AND external_account_id = ?`
+    `SELECT id, priority, status, due_date, due_time FROM tasks WHERE external_uid = ? AND external_source = 'caldav' AND external_account_id = ?`
   ).get(todo.uid, accountId);
 
   const priority = mapVtodoPriority(todo.priority, existing?.priority);
@@ -251,12 +252,27 @@ function upsertTask(todo, accountId, createdBy, objectUrl = null) {
 
   let taskId;
   if (existing) {
+    const windowChanged = existing.due_date !== date || existing.due_time !== time;
+    if (windowChanged && status !== 'done') {
+      // A reminder can acquire a local Activity binding after its first import.
+      // Its remote edits must honor the same occurrence policy as the Task API.
+      // Unbound Tasks have no policy and retain normal CalDAV behavior.
+      assertTaskAssignmentAvailability(db.get(), existing.id, null, { task: { due_date: date, due_time: time } });
+    }
     db.get().prepare(`
       UPDATE tasks
       SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, due_time = ?,
           external_object_url = COALESCE(?, external_object_url)
       WHERE id = ?
     `).run(todo.summary, todo.description, priority, status, date, time, objectUrl, existing.id);
+    if (windowChanged) {
+      const dueAt = date ? `${date}T${time || '23:59'}:00` : null;
+      db.get().prepare(`UPDATE planning_obligations SET due_at = ?,
+        response_deadline = CASE WHEN response_deadline = due_at THEN ? ELSE response_deadline END,
+        updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+        WHERE task_id = ? AND status IN ('pending', 'accepted')`)
+        .run(dueAt, dueAt, existing.id);
+    }
     taskId = existing.id;
   } else {
     // category bleibt beim Spalten-Default 'misc' (v114) - VTODO kennt keine
@@ -432,9 +448,11 @@ async function sync({ createClient: makeClient } = {}) {
   let totalItems       = 0;
   let totalPushed      = 0;
   let successfulAccounts = 0;
+  const conflicts = [];
 
   for (const account of accounts) {
     try {
+      const conflictsBeforeAccount = conflicts.length;
       const enabledLists = db.get().prepare(`
         SELECT * FROM caldav_reminder_selection WHERE account_id = ? AND enabled = 1
       `).all(account.id);
@@ -515,7 +533,7 @@ async function sync({ createClient: makeClient } = {}) {
               if (module === 'shopping') {
                 upsertShoppingItem(sel, todo, account.id, obj.url || null);
               } else {
-                const taskId = upsertTask(todo, account.id, createdBy, obj.url || null);
+                const taskId = db.get().transaction(() => upsertTask(todo, account.id, createdBy, obj.url || null))();
                 taskRelations.set(todo.uid, {
                   taskId,
                   parentUid: todo.parentUid || null,
@@ -525,6 +543,12 @@ async function sync({ createClient: makeClient } = {}) {
               totalItems++;
             } catch (err) {
               log.error(`Failed to upsert VTODO ${todo.uid}:`, err.message);
+              if (err instanceof TaskAssignmentAvailabilityError) {
+                // Already marked seen: retain the local item, do not prune it
+                // or enqueue an outbound edit that would erase the remote change.
+                conflicts.push({ account_id: account.id, external_uid: todo.uid,
+                  title: todo.summary, reason: err.message });
+              }
             }
           }
         }
@@ -532,7 +556,9 @@ async function sync({ createClient: makeClient } = {}) {
 
       // Unteraufgaben verdrahten, sobald alle Listen des Kontos gelesen sind
       // (#671) - vorher ist die UID des Elternteils womöglich noch keine ID.
-      if (taskRelations.size > 0) {
+      // A rejected parent is absent from this pass's relation map. Rebuilding
+      // a partial map would detach its successfully imported children.
+      if (taskRelations.size > 0 && conflicts.length === conflictsBeforeAccount) {
         try {
           applyTaskRelations(taskRelations);
         } catch (err) {
@@ -628,9 +654,11 @@ async function sync({ createClient: makeClient } = {}) {
         log.error(`Uploading local shopping items failed for account ${account.id}:`, err.message);
       }
 
-      db.get().prepare('UPDATE caldav_accounts SET last_sync = ? WHERE id = ?')
-        .run(new Date().toISOString(), account.id);
-      successfulAccounts++;
+      if (conflicts.length === conflictsBeforeAccount) {
+        db.get().prepare('UPDATE caldav_accounts SET last_sync = ? WHERE id = ?')
+          .run(new Date().toISOString(), account.id);
+        successfulAccounts++;
+      }
     } catch (err) {
       log.error(`Reminders sync failed for account ${account.id}:`, err.message);
     }
@@ -638,10 +666,14 @@ async function sync({ createClient: makeClient } = {}) {
 
   log.info(`CalDAV reminders sync complete: ${successfulAccounts}/${accounts.length} accounts, ${totalItems} items.`);
   return {
-    success: true,
+    success: conflicts.length === 0,
     syncedAccounts: successfulAccounts,
     syncedItems: totalItems,
     pushedItems: totalPushed,
+    ...(conflicts.length ? {
+      conflicts,
+      error: `${conflicts.length} reminder change(s) conflict with Task availability. Their local Tasks and remote reminders were preserved. Resolve the scheduled time or assignment and sync again.`,
+    } : {}),
   };
 }
 

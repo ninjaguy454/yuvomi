@@ -15,9 +15,15 @@ function parseJson(raw, fallback) {
 }
 
 function instantMs(value, timezone) {
-  let candidate = storedToInstantMs(value, timezone);
-  if (candidate == null || hasExplicitZone(String(value))) return candidate;
-  const raw = String(value);
+  const raw = String(value ?? '').trim().replace(' ', 'T');
+  const fields = /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d{1,9})?)?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(raw);
+  if (!fields) return null;
+  const date = raw.slice(0, 10);
+  const dayMs = Date.parse(`${date}T00:00:00Z`);
+  if (!Number.isFinite(dayMs) || new Date(dayMs).toISOString().slice(0, 10) !== date
+    || Number(fields[4] || 0) > 23 || Number(fields[5] || 0) > 59 || Number(fields[6] || 0) > 59) return null;
+  let candidate = storedToInstantMs(raw, timezone);
+  if (candidate == null || hasExplicitZone(raw)) return candidate;
   const local = raw.length <= 10 ? `${raw}T00:00:00` : raw;
   const wanted = Date.parse(`${local}Z`);
   if (!Number.isFinite(wanted)) return null;
@@ -50,10 +56,14 @@ function instantMs(value, timezone) {
   return candidate;
 }
 
+// Shared by dated Availability/Trip validation so mixed offsets use this policy.
+export { instantMs as availabilityInstantMs };
+
 function timeAdjustment(localValue, instant, timezone) {
   if (hasExplicitZone(String(localValue)) || instant == null) return null;
   const wall = utcToWall(new Date(instant).toISOString(), timezone);
-  const local = String(localValue).length <= 10 ? `${localValue}T00:00:00` : String(localValue);
+  const raw = String(localValue).trim().replace(' ', 'T');
+  const local = raw.length <= 10 ? `${raw}T00:00:00` : raw.length === 16 ? `${raw}:00` : raw;
   if (!wall || `${wall.date}T${wall.time}` === local.slice(0, 19)) return null;
   return `The local time ${localValue} does not exist during the clock change; shifted forward to ${wall.date} ${wall.time}.`;
 }
@@ -133,6 +143,8 @@ function periodSignals(database, userId, startMs, endMs, timezone) {
       start_ms: rowStart,
       end_ms: rowEnd,
       advisory: false,
+      time_adjustment: timeAdjustment(row.starts_at, rowStart, timezone)
+        || (row.ends_at ? timeAdjustment(row.ends_at, rowEnd, timezone) : null),
     }];
   });
 }
@@ -230,6 +242,9 @@ function rotatingSignals(database, userId, startMs, endMs, timezone) {
 function calendarSignals(database, userId, startMs, endMs, timezone) {
   const startDate = utcToWall(new Date(startMs).toISOString(), timezone)?.date;
   const endDate = utcToWall(new Date(Math.max(startMs, endMs - 1)).toISOString(), timezone)?.date;
+  // Stored Calendar values mix household wall times and explicit offsets. A
+  // lexical UTC cutoff can exclude an overlapping +14:00/Tokyo occurrence.
+  // Fetch a one-day envelope, then filter exact instants below.
   const rows = database.prepare(`
     SELECT e.id, e.title, e.start_datetime, e.end_datetime, e.all_day,
            e.place_id, p.name AS place_name, e.recurrence_rule, e.tzid
@@ -239,7 +254,7 @@ function calendarSignals(database, userId, startMs, endMs, timezone) {
        SELECT 1 FROM event_assignments ea WHERE ea.event_id = e.id AND ea.user_id = ?
      ))
        AND (e.recurrence_rule IS NOT NULL OR e.start_datetime <= ?)
-  `).all(userId, userId, new Date(endMs).toISOString());
+  `).all(userId, userId, new Date(endMs + 86_400_000).toISOString());
   const recurringIds = rows.filter((row) => row.recurrence_rule).map((row) => row.id);
   const expanded = startDate && endDate
     ? expandRecurringEvents(rows, shiftDateKey(startDate, -1), shiftDateKey(endDate, 1), loadEventExceptions(database, recurringIds))
@@ -296,18 +311,21 @@ function segmentPolicy(database, policy, signal, locationSignal, targetPlaceId) 
     return { eligible: Boolean(usable && placeMatches), reason: !usable
       ? (signal.is_configured === false ? 'This routine day has not been configured.' : `${signalLabel(signal)}: ${signal.state}.`)
       : !placeMatches ? 'The planned location does not match this activity.'
-        : signal.state === 'available' ? `${signalLabel(signal)}: explicitly available.` : 'Availability is unknown; no planned restriction.' };
+        : signal.state === 'available' ? `${signalLabel(signal)}: explicitly available.`
+          : `${signalLabel(signal)}: availability is unknown; this policy permits unconfirmed time.` };
   }
   if (!locationSignal) return { eligible: false, reason: 'No planned location is known for this time.' };
   const home = homePlace(database);
   const atHome = home && isPlaceWithin(database, locationSignal.place_id, home.id);
   const atTarget = targetPlaceId && isPlaceWithin(database, locationSignal.place_id, targetPlaceId);
   if (policy === 'must_be_home') {
-    return { eligible: Boolean(atHome && locationSignal.state !== 'away'), reason: atHome ? 'Expected to be home.' : 'Not expected to be home.' };
+    const eligible = Boolean(atHome && locationSignal.state !== 'away');
+    return { eligible, reason: eligible ? 'Expected to be home.' : 'Not expected to be home.' };
   }
   if (policy === 'must_be_at_location') {
     if (!targetPlaceId) return { eligible: false, reason: 'This activity needs a location.' };
-    return { eligible: Boolean(atTarget && locationSignal.state !== 'away'), reason: atTarget ? 'Expected at the activity location.' : 'Not expected at the activity location.' };
+    const eligible = Boolean(atTarget && locationSignal.state !== 'away');
+    return { eligible, reason: eligible ? 'Expected at the activity location.' : 'Not expected at the activity location.' };
   }
   if (policy === 'must_be_away') {
     const away = locationSignal.state === 'away' || (locationSignal.place_id && home && !atHome);
@@ -322,7 +340,7 @@ export function activityPresenceWindow(database, {
 } = {}) {
   const timezone = householdTimeZone(database);
   const today = utcToWall(new Date().toISOString(), timezone).date;
-  const dueDate = dateKey || task?.due_date || today;
+  const dueDate = task?.start_date && !task?.due_date ? task.start_date : dateKey || task?.due_date || today;
   const startDate = task?.start_date || dueDate;
   const dueTime = task?.due_time;
   return {

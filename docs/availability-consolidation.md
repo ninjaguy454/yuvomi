@@ -24,7 +24,7 @@ Current Presence is a separate, inferred snapshot, not an input fed back into fu
 
 A missing cycle-day record is unconfigured, contributes an unknown blocking routine signal, and is visibly identified for correction. An explicitly stored null shift is a day off this routine. Existing saved null rows are preserved; the historical UI did not record whether a user deliberately selected each default Free day, so that intent cannot be reconstructed.
 
-An ordinary gap with no planned restriction remains eligible under the existing permissive policy, but is labelled unknown/no planned conflict, never confirmed availability. A shift has an explicit Availability effect (busy by default, available, away, unknown, or information only) and optional Place. Existing types keep their identity/times/colour and default to busy; untimed types span a local calendar day. Names are never parsed to guess their effect.
+An ordinary gap with no planned restriction remains eligible under the existing permissive policy, but is labelled unknown/no planned conflict, never confirmed availability. Effective weekly or manual `unknown` periods are also permissive and explicitly unconfirmed. A manual unknown period can outrank a busy roster: it is not a location-only observation. The explanation names that permissive policy; it does not assert known availability. Rotating unknown and unconfigured days block. A shift has an explicit Availability effect (busy by default, available, away, unknown, or information only) and optional Place. Existing types keep their identity/times/colour and default to busy; untimed types span a local calendar day. Names are never parsed to guess their effect.
 
 ## Explained windows and compatibility
 
@@ -34,7 +34,7 @@ The original four Schedule tables and API remain. An additive migration adds shi
 
 ## Existing behavior deliberately retained
 
-Availability routines affect Activity Template assignment, generated workflow tasks, task binding, claims and explicit reassignment through the same resolver. They do not generate tasks by themselves or rewrite existing task assignees when a routine changes. Changing only the due fields of an already-bound task also does not automatically reassign it.
+Availability routines affect Activity Template assignment, generated workflow tasks, task binding, claims and explicit reassignment through the same resolver. They do not generate tasks by themselves or rewrite existing task assignees when a routine changes. Task date edits (including inbound CalDAV edits) now revalidate the existing performers against the occurrence's policy, without automatically replacing them. Claims and obligation acceptance also recheck current eligibility. Ordinary manual Tasks and generated Trip/Meal Tasks without a configured policy remain unrestricted. Supervised work requires a shared eligible interval; that does not prove duration fit.
 
 `available_before_due` checks capacity; `must_be_home`, `must_be_at_location` and `must_be_away` check expected location. `ignore` deliberately bypasses both. A location-only policy does not assert spare time. Activities and Tasks currently have no persisted duration field; the explanation preview and resolver accept an optional duration, but existing task assignment must not be described as checking duration fit.
 
@@ -47,3 +47,5 @@ Existing permission and token-scope keys are retained. Roster APIs still require
 Existing roster data, overrides, types and statistics were surfaced through Availability first. Regression checks, 15/15 isolated HTTP acceptance checks and all nine required actual CUA browser cases established the consolidation parity gate before standalone Schedule navigation was retired. Legacy `/schedule` links now redirect to `/calendar?section=availability`; the original API, tables and permission/token-scope keys remain.
 
 See [the QA record](availability-consolidation-qa.md) for verification boundaries and the unexecuted Puppeteer tests. No production migration or production browser test has been performed. No push or deployment is authorized in this task.
+
+The subsequent [adversarial review](availability-adversarial-review.md) records boundary, lifecycle, Task-consumer and timezone corrections against consolidation commit `a02a70ce`.

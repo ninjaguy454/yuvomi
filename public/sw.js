@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Refresh Availability routines, their explained windows and Calendar projection together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.7`;
+// Refresh timezone-safe Availability editors and live Task claim controls together.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.8`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

@@ -4,7 +4,7 @@ import { openModal, openChildModal, closeModal, confirmOverModal } from '/compon
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
 import { t, formatTime } from '/i18n.js';
-import { zonedFields, todayKey } from '/utils/timezone.js';
+import { zonedFields } from '/utils/timezone.js';
 import { esc } from '/utils/html.js';
 import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOptions } from '/components/variable-expression-editor.js';
 import { renameExpressionReference } from '/utils/variable-expressions.js';
@@ -923,7 +923,7 @@ function openTripForm(trip, context, manager) {
     <div class="automation-workflow-condition">${inputRow('Trip type', `<select class="input" name="trip_type">${[['vacation','Vacation'],['business','Business'],['family','Family visit'],['road_trip','Road trip'],['other','Other']].map(([value,label]) => `<option value="${value}" ${trip?.trip_type === value ? 'selected' : ''}>${label}</option>`).join('')}</select>`)}${inputRow('Status', `<select class="input" name="status">${['planning','active','completed','cancelled'].map((value) => `<option value="${value}" ${trip?.status === value ? 'selected' : ''}>${value}</option>`).join('')}</select>`)}</div>
     <fieldset class="automation-fieldset"><legend class="label">Travelers</legend>${members.map((member) => `<label class="automation-check-row"><input type="checkbox" name="participant_id" value="${member.id}" ${selected.has(Number(member.id)) ? 'checked' : ''}>${h(member.display_name)}</label>`).join('')}</fieldset>
     <div class="automation-workflow-condition">${inputRow('Destination Place', `<select class="input" name="destination_place_id">${placeOptions(places, trip?.destination_place_id, 'No saved destination')}</select>`)}${inputRow('Lodging Place', `<select class="input" name="lodging_place_id">${placeOptions(places, trip?.lodging_place_id, 'No saved lodging')}</select>`)}</div>
-    <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at))}">`)}</div>
+    <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at, context.timezone))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at, context.timezone))}">`)}</div>
     ${inputRow('Notes', `<textarea class="input" name="notes" rows="3">${h(trip?.notes || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="create_away_periods" ${trip?.create_away_periods !== 0 ? 'checked' : ''}> Create matching Away periods for travelers</label>
     <fieldset class="automation-fieldset"><legend class="label">Create optional trip Tasks</legend><p class="form-hint">Tasks are dated relative to the trip phase and linked to the relevant saved Place.</p>${TRIP_TASKS.map(([phase,title], index) => `<label class="automation-check-row"><input type="checkbox" name="trip_task" value="${index}">${h(title)} <small class="form-hint">(${h(phase.replaceAll('_',' '))})</small></label>`).join('')}<div data-custom-trip-tasks></div><button class="btn btn--ghost" type="button" data-add-trip-task>+ Add task</button></fieldset>
@@ -949,7 +949,7 @@ function openTripForm(trip, context, manager) {
         const phase = row.querySelector('[name="custom_trip_task_phase"]')?.value;
         if (title) tasks.push({ phase, title });
       });
-      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at'), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks };
+      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: preservePlanningInstant(data.get('starts_at'), trip?.starts_at, context.timezone), ends_at: preservePlanningInstant(data.get('ends_at'), trip?.ends_at, context.timezone), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks };
       try { if (trip) await api.put(`/planning/admin/trips/${trip.id}`, payload); else await api.post('/planning/admin/trips', payload); toast('Trip saved.'); await refreshAutomationManager(manager, 'trips'); }
       catch (error) { toast(error.message, 'danger'); }
     });
@@ -995,7 +995,19 @@ function availabilityCategoryOptions(selected = 'general') {
     .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
-function localDateTimeValue(value) { return value ? String(value).slice(0, 16) : ''; }
+function localDateTimeValue(value, timezone) {
+  if (!value) return '';
+  const fields = zonedFields(value, timezone);
+  if (!fields) return '';
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${fields.year}-${pad(fields.month)}-${pad(fields.day)}T${pad(fields.hour)}:${pad(fields.minute)}`;
+}
+
+function preservePlanningInstant(value, original, timezone) {
+  // A note-only edit must not discard seconds or turn the later DST occurrence
+  // into the earlier one when datetime-local can display only the wall clock.
+  return original && value === localDateTimeValue(original, timezone) ? original : value;
+}
 
 const availabilityMounts = new WeakMap();
 
@@ -1052,10 +1064,11 @@ export async function renderAvailabilityManager(body, manager) {
     try { return { member, value: (await api.get(`/planning/presence/${member.id}?start_at=${encodeURIComponent(now)}&end_at=${encodeURIComponent(now)}`)).data }; }
     catch (error) { return { member, value: null, error: error.message || 'Current location could not be loaded.' }; }
   }));
+  const timezone = response.timezone || snapshots.find((item) => item.value?.timezone)?.value.timezone;
   replaceHtml(body, `${administrator ? managerHeader('Availability', 'automation-add-rule', 'Add weekly routine') : '<h2 class="u-section-title">Availability</h2>'}
     <p class="form-hint automation-manager__hint">When someone can reasonably perform activities. Calendar shows what is happening; Presence shows their currently expected location.</p>
     <details class="availability-priority"><summary>How overlapping commitments are resolved</summary><p class="form-hint">Manual Availability override → dated exception or Trip → dated workflow signal → rotating routine → weekly routine → advisory Calendar event. A routine’s dated override replaces only its own occurrence. A day off removes that routine’s restriction. Current Presence explains location now; it does not override future availability.</p><p class="form-hint">Unconfigured routine days are unknown and need attention. Where nothing is configured, a lack of known restrictions does not confirm that someone is free.</p></details>
-    <section class="availability-explained"><h3 class="u-section-title">Expected availability</h3><form class="availability-window-controls" data-availability-preview>${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(members, user?.id)}</select>`)}${inputRow('Date', `<input class="input" name="date" type="date" required value="${h(todayKey())}">`)}${inputRow('Activity duration (minutes)', '<input class="input" name="duration" type="number" min="1" max="1440" value="30" required>')}<button type="submit" class="btn btn--secondary">Explain availability</button></form><div data-availability-windows role="status" aria-live="polite"></div></section>
+    <section class="availability-explained"><h3 class="u-section-title">Expected availability</h3><form class="availability-window-controls" data-availability-preview>${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(members, user?.id)}</select>`)}${inputRow('Date', `<input class="input" name="date" type="date" required value="${h(localDateTimeValue(now, timezone).slice(0, 10))}">`)}${inputRow('Activity duration (minutes)', '<input class="input" name="duration" type="number" min="1" max="1440" value="30" required>')}<button type="submit" class="btn btn--secondary">Explain availability</button></form><div data-availability-windows role="status" aria-live="polite"></div></section>
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Current household location</strong><span class="form-hint">Inferred from current plans</span></div>
     <div class="automation-presence-grid" data-current-location>${currentLocationHTML(snapshots)}</div>
     ${administrator ? `<div class="automation-manager__header automation-workflow-step__header--section"><strong>Weekly routines</strong><span></span></div>
@@ -1107,10 +1120,10 @@ export async function renderAvailabilityManager(body, manager) {
     if (!disposed) replaceHtml(body.querySelector('[data-availability-routines]'), `<p class="form-hint">Rotating routines could not be loaded: ${h(error.message)}</p>`);
   }
   await explain();
-  body.querySelector('#automation-add-rule')?.addEventListener('click', () => openAvailabilityRuleForm(null, { members, places }, manager));
-  body.querySelector('#automation-add-period')?.addEventListener('click', () => openAvailabilityPeriodForm(null, { members, places }, manager));
-  body.querySelectorAll('[data-edit-rule]').forEach((button) => button.addEventListener('click', () => openAvailabilityRuleForm(rules.find((row) => Number(row.id) === Number(button.dataset.editRule)), { members, places }, manager)));
-  body.querySelectorAll('[data-edit-period]').forEach((button) => button.addEventListener('click', () => openAvailabilityPeriodForm(periods.find((row) => Number(row.id) === Number(button.dataset.editPeriod)), { members, places }, manager)));
+  body.querySelector('#automation-add-rule')?.addEventListener('click', () => openAvailabilityRuleForm(null, { members, places, timezone }, manager));
+  body.querySelector('#automation-add-period')?.addEventListener('click', () => openAvailabilityPeriodForm(null, { members, places, timezone }, manager));
+  body.querySelectorAll('[data-edit-rule]').forEach((button) => button.addEventListener('click', () => openAvailabilityRuleForm(rules.find((row) => Number(row.id) === Number(button.dataset.editRule)), { members, places, timezone }, manager)));
+  body.querySelectorAll('[data-edit-period]').forEach((button) => button.addEventListener('click', () => openAvailabilityPeriodForm(periods.find((row) => Number(row.id) === Number(button.dataset.editPeriod)), { members, places, timezone }, manager)));
   const wireDelete = (selector, rows, dataKey, path) => body.querySelectorAll(selector).forEach((button) => button.addEventListener('click', async () => {
     const row = rows.find((item) => Number(item.id) === Number(button.dataset[dataKey]));
     if (!row || !await confirmOverModal('Delete this availability entry?', { danger: true, confirmLabel: 'Delete', detail: t('settings.availabilityDeleteConfirmDetail') })) return;
@@ -1145,12 +1158,12 @@ function openAvailabilityRuleForm(rule, context, manager) {
 function openAvailabilityPeriodForm(period, context, manager) {
   const content = `<form id="automation-period-form">${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(context.members, period?.user_id)}</select>`)}
     <div class="automation-workflow-condition">${inputRow('Entry type', `<select class="input" name="source"><option value="explicit" ${period?.source !== 'manual' ? 'selected' : ''}>Dated exception</option><option value="manual" ${period?.source === 'manual' ? 'selected' : ''}>Manual override</option></select>`)}${inputRow('Category', `<select class="input" name="category">${availabilityCategoryOptions(period?.category)}</select>`)}</div>
-    <div class="automation-workflow-condition">${inputRow('Starts', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(period?.starts_at) || localDateTimeValue(new Date().toISOString()))}">`)}${inputRow('Ends / expires', `<input class="input" type="datetime-local" name="ends_at" value="${h(localDateTimeValue(period?.ends_at))}">`, 'Optional for a manual override.')}</div>
+    <div class="automation-workflow-condition">${inputRow('Starts', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(period?.starts_at, context.timezone) || localDateTimeValue(new Date().toISOString(), context.timezone))}">`)}${inputRow('Ends / expires', `<input class="input" type="datetime-local" name="ends_at" value="${h(localDateTimeValue(period?.ends_at, context.timezone))}">`, 'Optional for a manual override.')}</div>
     <div class="automation-workflow-condition">${inputRow('State', `<select class="input" name="state">${availabilityStateOptions(period?.state || 'away')}</select>`)}${inputRow('Place', `<select class="input" name="place_id">${placeOptions(context.places, period?.place_id, 'No specific Place')}</select>`)}</div>
     <div data-custom-state>${inputRow('Custom state name', `<input class="input" name="custom_state" value="${h(period?.custom_state || '')}">`)}</div>${inputRow('Note', `<textarea class="input" name="note" rows="2">${h(period?.note || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="active" ${period?.active !== 0 ? 'checked' : ''}> Active</label>${footer(period ? 'Save dated period' : 'Create dated period')}</form>`;
   openModal({ title: period ? 'Edit availability period' : 'New availability period', content, size: 'lg', onSave(panel) { wireCustomState(panel); panel.querySelector('#automation-period-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { user_id: Number(data.get('user_id')), source: data.get('source'), category: data.get('category'), state: data.get('state'), custom_state: data.get('custom_state'), place_id: Number(data.get('place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at') || null, note: data.get('note'), active: data.has('active') };
+    event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { user_id: Number(data.get('user_id')), source: data.get('source'), category: data.get('category'), state: data.get('state'), custom_state: data.get('custom_state'), place_id: Number(data.get('place_id')) || null, starts_at: preservePlanningInstant(data.get('starts_at'), period?.starts_at, context.timezone), ends_at: preservePlanningInstant(data.get('ends_at'), period?.ends_at, context.timezone) || null, note: data.get('note'), active: data.has('active') };
     try { if (period) await api.put(`/planning/admin/periods/${period.id}`, payload); else await api.post('/planning/admin/periods', payload); toast('Availability period saved.'); await refreshAutomationManager(manager, 'availability'); } catch (error) { toast(error.message, 'danger'); }
   }); } });
 }

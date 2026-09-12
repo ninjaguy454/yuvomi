@@ -281,6 +281,33 @@ function requirementName(activity, presence = null) {
   return (presence?.policy || activity.presence_policy) === 'available_before_due' ? 'availability' : 'location';
 }
 
+/** Intersect the explained resolver's eligible intervals for simultaneous work.
+ * No Task duration is inferred: require only a nonempty interval unless the
+ * caller explicitly supplied an activity duration.
+ */
+export function sharedEligibleInterval(results, requiredDurationMinutes = null) {
+  if (!results.length) return null;
+  let shared = null;
+  for (const result of results) {
+    const intervals = [];
+    for (const window of result?.windows || []) {
+      if (!window.eligible) continue;
+      const start = Date.parse(window.start_at), end = Date.parse(window.end_at);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+      const previous = intervals.at(-1);
+      if (previous && start <= previous.end) previous.end = Math.max(previous.end, end);
+      else intervals.push({ start, end });
+    }
+    shared = shared == null ? intervals : shared.flatMap((first) => intervals.map((second) => ({
+      start: Math.max(first.start, second.start), end: Math.min(first.end, second.end),
+    })).filter((interval) => interval.end > interval.start));
+    if (!shared.length) return null;
+  }
+  const minimum = requiredDurationMinutes == null ? 1 : Number(requiredDurationMinutes) * 60_000;
+  const interval = shared.find(({ start, end }) => end - start >= minimum);
+  return interval ? { start_at: new Date(interval.start).toISOString(), end_at: new Date(interval.end).toISOString() } : null;
+}
+
 function rotationKey(activity, purpose = 'primary') {
   return activity.rotation_group
     ? `activity-group:${activity.rotation_group}:${purpose}`
@@ -320,20 +347,28 @@ export function eligibleMembersForActivity(d, activity, {
   dateKey = todayKey(d),
   presence = null,
   includeSupervised = false,
+  simultaneousUserIds = [],
 } = {}) {
+  const policy = presence?.policy || activity.presence_policy || 'ignore';
+  const results = new Map();
+  const forMember = (userId) => {
+    if (!results.has(Number(userId))) results.set(Number(userId), evaluatePresence(d, {
+      ...activityPresenceWindow(d, { dateKey, windowMode: activity.presence_window || 'due' }),
+      ...(presence || {}), userId,
+      targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null, policy,
+    }));
+    return results.get(Number(userId));
+  };
   return householdMembers(d).filter((member) => {
     const proficiency = effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency;
     if (proficiency !== PROFICIENCY.NORMAL && !(includeSupervised && proficiency === PROFICIENCY.SUPERVISED)) return false;
-    const policy = presence?.policy || activity.presence_policy || 'ignore';
     if (policy === 'ignore') return true;
     try {
-      return evaluatePresence(d, {
-        ...activityPresenceWindow(d, { dateKey, windowMode: activity.presence_window || 'due' }),
-        ...(presence || {}),
-        userId: member.id,
-        targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null,
-        policy,
-      }).eligible;
+      const own = forMember(member.id);
+      if (!own.eligible) return false;
+      return simultaneousUserIds.length === 0 || sharedEligibleInterval([
+        own, ...simultaneousUserIds.filter(Boolean).map(forMember),
+      ], presence?.requiredDurationMinutes) != null;
     } catch { return false; }
   });
 }
@@ -363,17 +398,21 @@ export function resolveActivityAssignment(d, activity, {
     throw new Error('This activity requires a household member subject.');
   }
 
+  const presenceResults = new Map();
   const isPresent = (member) => {
     const policy = presence?.policy || activity.presence_policy || 'ignore';
     if (policy === 'ignore') return true;
     try {
-      return evaluatePresence(d, {
+      if (presenceResults.has(Number(member.id))) return presenceResults.get(Number(member.id))?.eligible === true;
+      const result = evaluatePresence(d, {
         ...activityPresenceWindow(d, { dateKey, windowMode: activity.presence_window || 'due' }),
         ...(presence || {}),
         userId: member.id,
         targetPlaceId: presence?.targetPlaceId ?? activity.place_id ?? null,
         policy,
-      }).eligible;
+      });
+      presenceResults.set(Number(member.id), result);
+      return result.eligible;
     } catch { return false; }
   };
 
@@ -478,6 +517,9 @@ export function resolveActivityAssignment(d, activity, {
     Number(member.id) !== Number(subject.id)
     && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
     && isPresent(member)
+    && (subjectProficiency.proficiency !== PROFICIENCY.SUPERVISED || !subjectMeetsPresence
+      || (presence?.policy || activity.presence_policy || 'ignore') === 'ignore'
+      || sharedEligibleInterval([presenceResults.get(Number(subject.id)), presenceResults.get(Number(member.id))], presence?.requiredDurationMinutes) != null)
   );
   const purpose = subjectProficiency.proficiency === PROFICIENCY.SUPERVISED ? 'supervisor' : 'primary';
   const helper = chooseRoundRobin(d, activity.id, purpose, eligibleHelpers, {
@@ -485,6 +527,12 @@ export function resolveActivityAssignment(d, activity, {
     orderedMembers: members,
   });
   if (!helper) {
+    if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED && subjectMeetsPresence
+        && members.some((member) => Number(member.id) !== Number(subject.id)
+          && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
+          && isPresent(member))) {
+      throw new Error('No qualified supervisor shares an available window with the learner.');
+    }
     // A Normal subject (or helper) can be excluded solely by presence. Do not
     // report missing skills when qualification passed but availability did not.
     const hasQualifiedMember = subjectProficiency.proficiency === PROFICIENCY.NORMAL

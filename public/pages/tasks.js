@@ -185,10 +185,16 @@ function sortedTasks(tasks, bucketKey = null) {
   });
 }
 
+function canCheckAndClaim(task) {
+  const strategy = task.activity_assignment_policy || task.activity_assignment_strategy;
+  return task.activity_assignment_state === 'open'
+    || (task.activity_assignment_state === 'unavailable' && strategy === 'open_claimable');
+}
+
 function boardTasks() {
   const tasks = filteredTasks();
   if (state.boardScope !== 'personal') return tasks;
-  return tasks.filter((task) => task.activity_assignment_state === 'open'
+  return tasks.filter((task) => canCheckAndClaim(task)
     || taskParticipants(task).some((user) => Number(user.id) === Number(state.currentUserId)));
 }
 
@@ -642,7 +648,7 @@ function renderTaskCard(task, opts = {}) {
       ${task.is_recurring ? `<span class="due-date" title="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i></span>` : ''}
       ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
       ${renderVisibilityBadge(task.visibility)}
-      ${task.activity_assignment_state === 'open' ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(t('tasks.claimTask'))}</button>` : ''}
+      ${canCheckAndClaim(task) ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button>` : ''}
     </div>
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}

@@ -48,6 +48,15 @@ export function resolveEntries({ from, to, userId, patterns, patternDays, overri
 
 /** One read-only roster projection shared by Availability, legacy APIs and Calendar. */
 export function scheduleData(database, { from, to, userId = null }) {
+  // SQL accepts numeric-string IDs, but the per-member filter below compares
+  // numbers. Normalize once so shared resolver callers cannot silently lose
+  // rotating restrictions. Only an omitted/null ID requests household data;
+  // an invalid explicit scope must never broaden into that request.
+  if (userId != null) {
+    if (!['number', 'string'].includes(typeof userId)) return { entries: [], warnings: [] };
+    userId = Number(userId);
+    if (!Number.isSafeInteger(userId) || userId < 1) return { entries: [], warnings: [] };
+  }
   const condition = userId ? 'AND user_id = ?' : '';
   const patterns = database.prepare(`SELECT * FROM schedule_patterns WHERE is_active = 1
     AND (valid_from IS NULL OR valid_from <= ?) AND (valid_until IS NULL OR valid_until >= ?) ${condition}

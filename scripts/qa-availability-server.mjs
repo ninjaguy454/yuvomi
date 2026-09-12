@@ -13,7 +13,8 @@ process.env.BACKUP_ENABLED = 'false';
 process.env.BACKUP_DIR = path.join(qa, 'backups');
 process.env.DOCUMENTS_DIR = path.join(qa, 'documents');
 process.env.PORT = '3197';
-process.env.TZ = 'America/New_York';
+// Deliberately differ from the household zone during browser acceptance.
+process.env.TZ = 'UTC';
 process.env.NODE_ENV = 'development';
 const { get } = await import('../server/db.js');
 const { hashPassword } = await import('../server/utils/password.js');
@@ -68,6 +69,27 @@ d.transaction(() => {
     VALUES('QA advisory Calendar day','2026-09-11T00:00:00','2026-09-12T00:00:00',1,?,?,?)
   `).run(calendarUser.id, admin.id, workplace?.id ?? null).lastInsertRowid) };
   d.prepare('INSERT OR IGNORE INTO event_assignments(event_id,user_id) VALUES(?,?)').run(event.id, calendarUser.id);
+})();
+// Adversarial fixtures are synthetic additions; previous browser cases remain.
+const { applyTaskActivityBinding } = await import('../server/services/task-activity-bindings.js');
+d.transaction(() => {
+  const admin = d.prepare("SELECT id FROM users WHERE username='availability-qa'").get().id;
+  if (!d.prepare("SELECT id FROM users WHERE username='partial-qa'").get()) {
+    const partial = Number(insertUser.run('partial-qa','Parker Partial',hash,'member','parent').lastInsertRowid);
+    d.prepare("INSERT INTO availability_rules(user_id,name,weekdays_json,start_time,end_time,state,created_by) VALUES(?,'Busy baseline','[0,1,2,3,4,5,6]','00:00','00:00','busy',?)").run(partial,admin);
+    for (const time of ['09','15']) d.prepare("INSERT INTO availability_periods(user_id,source,state,starts_at,ends_at,note,created_by) VALUES(?,'manual','available',?,?,?,?)")
+      .run(partial,`2026-09-11T${time}:00:00`,`2026-09-11T${time}:30:00`,'Half-hour opening',admin);
+    d.prepare("INSERT INTO availability_periods(user_id,source,state,starts_at,ends_at,note,created_by) VALUES(?,'manual','busy','2026-11-01T06:30:45Z','2026-11-01T07:30:45Z','QA later-fold offset edit',?)").run(admin,admin);
+    const open = Number(d.prepare("INSERT INTO activity_templates(name,title_template,assignment_strategy,assignment_policy,presence_policy,presence_window,subject_required) VALUES('QA stale claim','QA stale claim','fixed','open_claimable','available_before_due','due',0)").run().lastInsertRowid);
+    const staleTask = Number(d.prepare("INSERT INTO tasks(title,created_by,due_date,due_time) VALUES('QA stale claim after routine change',?,'2026-09-11','18:00')").run(admin).lastInsertRowid);
+    applyTaskActivityBinding(d,staleTask,{activityTemplateId:open});
+    // Represents an older saved eligibility result, before the restriction changed.
+    d.prepare("UPDATE task_assignment_context SET state='unavailable' WHERE task_id=?").run(staleTask);
+    const fixed = d.prepare("SELECT id FROM activity_templates WHERE name='QA work-aware task'").get().id;
+    const fixedTask = Number(d.prepare("INSERT INTO tasks(title,created_by,due_date,due_time) VALUES('QA date edit protection',?,'2026-09-19','17:00')").run(admin).lastInsertRowid);
+    const subject = d.prepare("SELECT id FROM users WHERE username='rotating-qa'").get().id;
+    applyTaskActivityBinding(d,fixedTask,{activityTemplateId:fixed,subjectUserId:subject});
+  }
 })();
 // Keep the test household accessible only on loopback.
 const { default: express } = await import('express');

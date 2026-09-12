@@ -4,7 +4,8 @@ import { requireAdmin } from '../auth.js';
 import { tokenAllows } from '../scopes.js';
 import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
 import { householdMembers } from '../services/activity-eligibility.js';
-import { evaluatePresence, placeWithInheritedAddress } from '../services/presence.js';
+import { evaluatePresence, availabilityInstantMs, placeWithInheritedAddress } from '../services/presence.js';
+import { householdTimeZone } from '../utils/timezone.js';
 import {
   googlePlacesAdminConfig,
   googlePlacesStatus,
@@ -220,12 +221,16 @@ function normalizePeriod(database, body, existing = null) {
   const userId = integer(body.user_id ?? existing?.user_id, { required: true });
   if (!validMember(database, userId)) throw new Error('Household member does not exist.');
   const startsAt = normalizeDateTime(body.starts_at ?? existing?.starts_at, 'Start');
-  const endsAt = normalizeDateTime(body.ends_at ?? existing?.ends_at, 'End', { required: false });
-  if (endsAt && new Date(endsAt).getTime() <= new Date(startsAt).getTime()) throw new Error('End must be after start.');
+  const endsAt = normalizeDateTime(body.ends_at === undefined ? existing?.ends_at : body.ends_at, 'End', { required: false });
+  const timezone = householdTimeZone(database);
+  const startMs = availabilityInstantMs(startsAt, timezone);
+  const endMs = endsAt ? availabilityInstantMs(endsAt, timezone) : null;
+  if (startMs == null || (endsAt && endMs == null)) throw new Error('A valid availability window is required.');
+  if (endsAt && endMs <= startMs) throw new Error('End must be after start.');
   const state = enumValue(body.state, STATES, existing?.state ?? 'unknown', 'Availability state');
   const customState = string(body.custom_state ?? existing?.custom_state, { max: 120 });
   if (state === 'custom' && !customState) throw new Error('Custom availability needs a label.');
-  const placeId = integer(body.place_id ?? existing?.place_id);
+  const placeId = integer(body.place_id === undefined ? existing?.place_id : body.place_id);
   const place = placeId ? validPlace(database, placeId) : null;
   if (placeId && (!place || (!place.active && Number(existing?.place_id) !== Number(placeId)))) throw new Error('Choose an active place.');
   return {
@@ -318,6 +323,7 @@ router.get('/admin/context', requireAdmin, (_req, res) => {
   try {
     const database = db.get();
     res.json({
+      timezone: householdTimeZone(database),
       places: listPlaces(database),
       members: householdMembers(database),
       rules: database.prepare(`

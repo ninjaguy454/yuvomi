@@ -42,12 +42,15 @@ export function taskStatusConfirmation(task, status) {
   return null;
 }
 
-export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal } = {}) {
+export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {} } = {}) {
   const confirmation = taskStatusConfirmation(task, status);
   const body = { status, ...taskRevision(task) };
   if (confirmation) {
     if (!await requestConfirmation(confirmation.message, { ...confirmation, closeOnConfirm: false })) return null;
     body[confirmation.flag] = true;
   }
+  // A pending projection starts only after confirmation, with the original
+  // revision still attached to the write. Cancel never paints unsaved progress.
+  beforeRequest();
   return api.patch(`/tasks/${task.id}/status`, body);
 }

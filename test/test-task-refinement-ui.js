@@ -138,6 +138,24 @@ test('confirmed completion sends the revision captured before confirmation, not 
   assert.deepEqual(value(writes), [{ path: '/tasks/1/status', body: { status: 'done', expected_revision: 4, expected_parent_revision: 9, complete_remaining: true } }]);
 });
 
+test('pending feedback begins immediately before dispatch, only after required confirmation', async () => {
+  const { changeTaskStatus, writes } = stateHarness();
+  const task = { id: 1, revision: 4, status: 'open', subtasks: [{ status: 'open' }] };
+  let accept, painted = 0;
+  const completing = changeTaskStatus(task, 'done', {
+    confirm: () => new Promise(resolve => { accept = resolve; }), beforeRequest: () => { painted++; assert.equal(writes.length, 0); },
+  });
+  assert.equal(painted, 0);
+  accept(false);
+  assert.equal(await completing, null);
+  assert.equal(painted, 0);
+  assert.equal(writes.length, 0);
+  await changeTaskStatus(task, 'done', { confirm: async () => true, beforeRequest: () => { painted++; assert.equal(writes.length, 0); } });
+  assert.equal(painted, 1);
+  assert.equal(writes.length, 1);
+  assert.equal(task.status, 'open');
+});
+
 test('reset confirmation is explicit and reopening does not send a reset or erase completion records', async () => {
   const { changeTaskStatus, writes } = stateHarness();
   const task = { id: 1, revision: 4, status: 'done' };
@@ -232,7 +250,7 @@ function detailHarness(overrides = {}) {
   const context = vm.createContext({ document: { createElement: tag => new Element(tag) }, HTMLElement: Element, window: {},
     canTask: (task, key) => task?.permissions?.[key] === true, isArchived: task => !!task.archived_at,
     t: key => key, actionableSubtasks: stateHarness().actionableSubtasks, ...overrides });
-  vm.runInContext(`${plain(read('components/task-detail.js'))}\nthis.subject={subtaskListNode,supervisionNode,commentsNode,seriesHistoryNode,runTaskDetailMutation}`, context);
+  vm.runInContext(`${plain(read('components/task-detail.js'))}\nthis.subject={subtaskListNode,progressNode,supervisionNode,commentsNode,seriesHistoryNode,runTaskDetailMutation,taskStatusResponseSnapshot,mergeTaskDetailSnapshot}`, context);
   return context.subject;
 }
 
@@ -245,6 +263,143 @@ test('normal detail exposes operational toggles and read-only required skills, n
   assert.match(row.children[1].textContent, /Washing Machine/);
   const tags = []; const walk = el => { tags.push(el.tagName); el.children?.forEach(walk); }; walk(node);
   assert.ok(!tags.includes('INPUT') && !tags.includes('SELECT') && !tags.includes('FORM'));
+});
+
+test('pending subtask paints checkbox and responsibility progress without inventing points or parent status', () => {
+  const h = detailHarness({ completionCounts: task => ({ total: 2, done: task.subtasks.filter(row => row.status === 'done').length,
+    totalPoints: 0, earnedPoints: 0 }) });
+  const task = { id: 1, revision: 9, status: 'open', points: 30, subtasks: [
+    { id: 2, revision: 3, title: 'Gather laundry', status: 'open', permissions: { complete: true } },
+    { id: 3, revision: 4, title: 'Fold laundry', status: 'open', permissions: { complete: true } },
+  ] };
+  const saved = value(task), ctx = { busy: true, pendingSubtask: { id: 2, status: 'done' }, skills: [] };
+  const row = h.subtaskListNode(task, ctx).children[0];
+  assert.equal(row.children[0].attributes['aria-pressed'], 'true');
+  assert.equal(row.children[0].attributes['aria-busy'], 'true');
+  assert.equal(row.children[0].disabled, true);
+  assert.equal(row.children[2].textContent, 'Saving…');
+  assert.match(h.progressNode(task, ctx).children[1].textContent, /1 of 2 complete · 50%/);
+  assert.deepEqual(task, saved, 'the optimistic projection is not canonical completion or reward evidence');
+  task.subtasks[0].status = 'done';
+  assert.match(h.progressNode(task, ctx).children[1].textContent, /1 of 2 complete · 50%/, 'matching live state does not count the optimistic step twice');
+  ctx.pendingSubtask.status = 'in_progress';
+  assert.match(h.progressNode(task, ctx).children[1].textContent, /0 of 2 complete · 0%/, 'reopen immediately removes this step from projected progress');
+});
+
+function pendingMutationHarness() {
+  const errors = [], paints = [];
+  const h = detailHarness({ document: { body: {}, activeElement: null }, window: { yuvomi: { showToast: message => errors.push(message) } } });
+  const task = { id: 1, revision: 9, status: 'open', assigned_to: 2, points: 30, subtasks: [
+    { id: 2, revision: 3, parent_revision: 9, title: 'Gather laundry', status: 'open' },
+  ] };
+  let invalidated = 0, reloaded = 0, changed = 0;
+  const ctx = { task, loader: { invalidate() { invalidated++; } },
+    renderOperationState() { paints.push(value({ pending: ctx.pendingSubtask || null, task })); },
+    acceptSnapshot(fresh) {
+      if (h.mergeTaskDetailSnapshot(task, fresh, ctx.minimumTaskRevision || 0)) { ctx.minimumTaskRevision = 0; ctx.refreshRequired = false; }
+    },
+    async refresh() { reloaded++; }, onChanged() { changed++; },
+  };
+  const button = { dataset: { focusKey: 'subtask-2' }, isConnected: true, disabled: false };
+  return { ...h, ctx, task, button, paints, errors, counts: () => ({ invalidated, reloaded, changed }) };
+}
+
+test('rapid repeated taps send one mutation and its acknowledgement does not wait for the surrounding Task list', async () => {
+  const h = pendingMutationHarness(), before = value(h.task);
+  let finish, calls = 0;
+  h.ctx.onChanged = () => new Promise(() => {});
+  const operation = begin => { calls++; begin(); return new Promise(resolve => { finish = resolve; }); };
+  const pending = h.runTaskDetailMutation(h.ctx, h.button, operation, { subtask: h.task.subtasks[0], status: 'done' });
+  assert.equal(h.ctx.busy, true);
+  assert.deepEqual(value(h.ctx.pendingSubtask), { id: 2, status: 'done' });
+  assert.equal(h.paints.length, 1, 'feedback is synchronous, before awaiting network');
+  assert.deepEqual(h.task, before);
+  await h.runTaskDetailMutation(h.ctx, h.button, operation, { subtask: h.task.subtasks[0], status: 'done' });
+  assert.equal(calls, 1);
+  finish({ data: { id: 2, revision: 4, status: 'done', parent_task: { ...before, revision: 10, status: 'done', subtasks: [{ ...before.subtasks[0], status: 'done', revision: 4, parent_revision: 10 }] } } });
+  await pending;
+  assert.equal(h.ctx.busy, false);
+  assert.equal(h.ctx.pendingSubtask, null);
+  assert.equal(h.task.status, 'done');
+  assert.equal(h.task.subtasks[0].status, 'done');
+  assert.equal(h.counts().reloaded, 0, 'the hydrated acknowledgement replaces an unnecessary detail GET');
+  assert.equal(h.counts().invalidated, 2, 'reads dispatched before the acknowledgement are retired');
+});
+
+test('a newer live reset/reassignment survives an older successful optimistic response', async () => {
+  const h = pendingMutationHarness(); let finish;
+  const pending = h.runTaskDetailMutation(h.ctx, h.button, begin => { begin(); return new Promise(resolve => { finish = resolve; }); },
+    { subtask: h.task.subtasks[0], status: 'done' });
+  h.ctx.acceptSnapshot({ ...h.task, revision: 12, status: 'open', assigned_to: 7,
+    subtasks: [{ ...h.task.subtasks[0], revision: 6, parent_revision: 12, status: 'open' }] });
+  finish({ data: { id: 2, revision: 4, status: 'done', parent_task: { ...h.task, revision: 10, status: 'done', assigned_to: 2,
+    subtasks: [{ ...h.task.subtasks[0], revision: 4, status: 'done' }] } } });
+  await pending;
+  assert.equal(h.task.revision, 12);
+  assert.equal(h.task.assigned_to, 7);
+  assert.equal(h.task.status, 'open');
+  assert.equal(h.task.subtasks[0].status, 'open');
+  assert.equal(h.ctx.pendingSubtask, null);
+  assert.equal(h.counts().reloaded, 0);
+});
+
+test('server supervision rejection reverts only pending paint and shows the real reason', async () => {
+  const h = pendingMutationHarness(); let reject;
+  const pending = h.runTaskDetailMutation(h.ctx, h.button, begin => { begin(); return new Promise((_resolve, no) => { reject = no; }); },
+    { subtask: h.task.subtasks[0], status: 'done' });
+  h.ctx.acceptSnapshot({ ...h.task, revision: 12, assigned_to: 7 });
+  reject(Object.assign(new Error('Rejected'), { status: 403, data: { error: 'Duane must supervise this action.' } }));
+  await pending;
+  assert.deepEqual(h.errors, ['Duane must supervise this action.']);
+  assert.equal(h.ctx.pendingSubtask, null);
+  assert.equal(h.ctx.busy, false);
+  assert.equal(h.task.assigned_to, 7);
+  assert.equal(h.task.revision, 12);
+  assert.equal(h.task.subtasks[0].status, 'open');
+  assert.equal(h.counts().changed, 0);
+  assert.equal(h.counts().invalidated, 2);
+});
+
+test('stale revision conflict clears feedback before refreshing and retains its reason if refresh fails', async () => {
+  const h = pendingMutationHarness();
+  h.ctx.refresh = async () => { assert.equal(h.ctx.pendingSubtask, null); throw new Error('Network lost'); };
+  await h.runTaskDetailMutation(h.ctx, h.button, begin => {
+    begin(); throw Object.assign(new Error('Conflict'), { status: 409, data: { error: 'This Task was reset on another device.' } });
+  }, { subtask: h.task.subtasks[0], status: 'done' });
+  assert.deepEqual(h.errors, ['This Task was reset on another device.']);
+  assert.equal(h.task.subtasks[0].status, 'open');
+  assert.equal(h.ctx.busy, false);
+});
+
+test('helper projection consumes its own parent snapshot and never replaces itself with the learner Task', () => {
+  const h = pendingMutationHarness();
+  const learner = { id: 1, revision: 10 }, helper = { id: 10, revision: 20 };
+  const response = { data: { id: 11, revision: 6, parent_task: learner, projection_parent_task: helper } };
+  assert.equal(h.taskStatusResponseSnapshot(helper, response), helper);
+  delete response.data.projection_parent_task;
+  assert.equal(h.taskStatusResponseSnapshot(helper, response), undefined, 'older compatible server responses require a targeted read');
+});
+
+test('a committed compatible response survives follow-up read failure and requires fresh parent state before another write', async () => {
+  const h = pendingMutationHarness();
+  h.ctx.refresh = async () => { throw new Error('Network lost'); };
+  await h.runTaskDetailMutation(h.ctx, h.button, begin => { begin(); return { data: {
+    id: 2, revision: 4, parent_revision: 10, parent_task_id: 1, status: 'done',
+  } }; }, { subtask: h.task.subtasks[0], status: 'done' });
+  assert.equal(h.ctx.pendingSubtask, null);
+  assert.equal(h.task.subtasks[0].status, 'done', 'an acknowledged write must not appear rejected');
+  assert.equal(h.task.status, 'open', 'unknown parent propagation is not guessed');
+  assert.equal(h.ctx.refreshRequired, true);
+  assert.match(h.errors[0], /step was saved.*details could not be refreshed/);
+  let called = false;
+  await h.runTaskDetailMutation(h.ctx, h.button, () => { called = true; });
+  assert.equal(called, false, 'no operation may use the obsolete parent revision');
+  h.ctx.acceptSnapshot({ ...h.task, revision: 9, subtasks: [{ id: 2, revision: 3, status: 'open' }] });
+  assert.equal(h.ctx.refreshRequired, true);
+  assert.equal(h.task.subtasks[0].status, 'done', 'reads older than the committed parent revision are discarded');
+  h.ctx.acceptSnapshot({ ...h.task, revision: 10, status: 'in_progress' });
+  assert.equal(h.ctx.refreshRequired, false);
+  assert.equal(h.task.status, 'in_progress');
 });
 
 test('learner detail omits transferred toggles and helper detail distinguishes direct work from supervision', () => {

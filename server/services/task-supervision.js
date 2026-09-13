@@ -138,6 +138,21 @@ export function inspectTaskSupervision(d, taskId) {
   const rows = ordinaryTaskScope(d, sourceId);
   const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);
   const actions = [], skillEligibility = new Map();
+  // This inspection is synchronous and read-only. Sibling actions commonly
+  // share the same skills and inherited completion window. Resolve those facts
+  // once here; every later inspection (including after a mutation) starts fresh.
+  const proficiencies = new Map(), availabilityResults = new Map();
+  const proficiencyFor = (skill, member, dateKey) => {
+    const key = JSON.stringify([skill.id, member.id, dateKey]);
+    if (!proficiencies.has(key)) proficiencies.set(key, effectiveSkillProficiency(d, skill, member, dateKey));
+    return proficiencies.get(key);
+  };
+  const availabilityFor = (userId, presence) => {
+    const key = JSON.stringify([userId, presence.policy, presence.targetPlaceId, presence.startAt,
+      presence.endAt, presence.windowMode, presence.requiredDurationMinutes]);
+    if (!availabilityResults.has(key)) availabilityResults.set(key, availability(d, userId, presence));
+    return availabilityResults.get(key);
+  };
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
@@ -163,7 +178,7 @@ export function inspectTaskSupervision(d, taskId) {
     // work uses the ordinary assignment-needed state and creates no helper work.
     if (!learner && !prior) continue;
     const skills = explicitSkills(d, row.id);
-    const assessed = learner ? skills.map(skill => ({ skill, ...effectiveSkillProficiency(d, skill, learner, dateKey) })) : [];
+    const assessed = learner ? skills.map(skill => ({ skill, ...proficiencyFor(skill, learner, dateKey) })) : [];
     if (row.status !== 'done' && learner) skillEligibility.set(row.id, describeSkillEligibility(assessed, row, learner));
     const excluded = assessed.filter(item => item.proficiency === 'excluded');
     const required = assessed.filter(item => item.proficiency === 'supervised').map(item => item.skill);
@@ -183,12 +198,15 @@ export function inspectTaskSupervision(d, taskId) {
     // including any skills the learner happens to know independently.
     const requiredSkills = !learner || excluded.length ? skills : required;
     const qualified = learner && requiredSkills.length ? members.filter(candidate => Number(candidate.id) !== Number(learnerId)
-      && requiredSkills.every(skill => effectiveSkillProficiency(d, skill, candidate, dateKey).proficiency === 'normal')) : [];
-    const learnerAvailability = learner ? availability(d, learner.id, presence) : null;
+      && requiredSkills.every(skill => proficiencyFor(skill, candidate, dateKey).proficiency === 'normal')) : [];
+    // Ignored Availability cannot influence this decision. A delegated action
+    // is performed by its helper, so it does not need a shared learner window.
+    const learnerAvailability = learner && presence.policy !== 'ignore' && executionMode !== 'delegated'
+      ? availabilityFor(learner.id, presence) : null;
     const candidateAvailability = new Map();
     const eligible = qualified.filter(candidate => {
       if (presence.policy === 'ignore') return true;
-      const own = availability(d, candidate.id, presence);
+      const own = availabilityFor(candidate.id, presence);
       candidateAvailability.set(candidate.id, own);
       return own.eligible && (executionMode === 'delegated'
         || learnerAvailability?.eligible && sharedEligibleInterval([learnerAvailability, own], presence.requiredDurationMinutes));
@@ -470,6 +488,7 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
           .run(counterpartId, ...snapshot, old.id);
         action.revision = old.revision + 1;
       }
+      action.counterpart_task_id = counterpartId;
       if (counterpartId) {
         setProjectionAssignees(d, counterpartId, action.state === 'assigned' ? [action.supervisor_user_id] : []);
         d.prepare(`UPDATE tasks SET title=@title,start_date=@start,due_date=@due,due_time=@time WHERE id=@id
@@ -503,7 +522,9 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
     for (const uid of supervisors.filter(id => !activeSupervisors.includes(id))) d.prepare(`INSERT INTO task_responsibilities(task_id,user_id,role,source)
       VALUES(?,?,'supervisor','task_supervision') ON CONFLICT(task_id,user_id,role)
       DO UPDATE SET status='active',source='task_supervision',updated_at=${NOW}`).run(source.id, uid);
-    view = inspectTaskSupervision(d, source.id);
+    // The persisted mappings now match these local actions. Projection status
+    // needs their links and current source status, not another eligibility pass.
+    view.support_task_id = supportId;
     const obligations = d.prepare(`SELECT * FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('pending','accepted')
       ORDER BY CASE status WHEN 'accepted' THEN 0 ELSE 1 END,id DESC`).all(source.id);
     const dueInstant = source.due_date ? availabilityInstantMs(`${source.due_date}T${source.due_time || '23:59'}:00`, householdTimeZone(d)) : null;
@@ -535,7 +556,7 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
     // These are zero-point generated views, never the source action. Repair
     // structural-change/legacy drift here so a no-status edit cannot leave a
     // contradictory helper checklist until the next operational click.
-    for (const update of supervisionProjectionUpdates(d, source.id)) {
+    for (const update of projectionUpdatesForView(d, view)) {
       const projection = task(d, update.id);
       if (!projection || projection.status === update.status) continue;
       d.prepare('UPDATE tasks SET status=? WHERE id=?').run(update.status, update.id);
@@ -659,7 +680,11 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
 }
 
 export function supervisionProjectionUpdates(d, taskId) {
-  const view = inspectTaskSupervision(d, taskId), updates = [];
+  return projectionUpdatesForView(d, inspectTaskSupervision(d, taskId));
+}
+
+function projectionUpdatesForView(d, view) {
+  const updates = [];
   for (const action of view.actions) if (action.counterpart_task_id && action.state !== 'not_required') updates.push({ id: action.counterpart_task_id,
     status: task(d, action.action_task_id)?.status || 'open' });
   if (view.support_task_id) {

@@ -116,6 +116,80 @@ test('qualified but unavailable supervisor has a distinct useful explanation',()
   assert.match(view.reason,/no single qualified supervisor shares an eligible time/i); assert.equal(view.actions[0].qualified_supervisor_count,1);
 });
 
+test('learner skill explanations distinguish independent, supervised and excluded actions without changing canonical supervision',()=>{
+  d.prepare("UPDATE users SET display_name='Frank' WHERE id=?").run(learner);
+  d.prepare("INSERT INTO birthdays(name,birth_date,family_user_id,created_by) VALUES('Frank','2021-01-01',?,?)").run(learner,admin);
+  const x=laundry(), sorting=skill('Laundry Sorting'), folding=skill('Fold Laundry');
+  setTaskSkills(d,x.independent,[sorting]); proficiency(learner,sorting,'normal');
+  const fold=task('Fold laundry',x.root,null); setTaskSkills(d,fold,[folding]);
+  proficiency(learner,folding,'supervised'); proficiency(helper,folding,'normal'); proficiency(admin,folding,'excluded');
+  for(const id of [washer,dryer]) {
+    d.prepare('DELETE FROM user_skill_proficiency WHERE user_id=? AND skill_id=?').run(learner,id);
+    d.prepare("UPDATE skills SET minimum_age=7,age_promotion='supervised' WHERE id=?").run(id);
+  }
+  const baseline=reconcileTaskSupervision(d,x.root);
+  assertSingleSupervisor(baseline,null);
+  assert.equal(baseline.state,'excluded');
+  assert.deepEqual(baseline.actions.map(a=>[a.action_task_id,a.state]),[[x.wash,'excluded'],[x.dry,'excluded'],[fold,'unresolved']]);
+  // Legacy persisted reasons remain byte-for-byte unchanged; improved wording is a read projection.
+  assert.ok(baseline.actions.every(a=>a.reason==='Frank cannot currently perform Washing Machine, even with supervision.'));
+  const capture=()=>Object.fromEntries(['tasks','task_supervision_actions','task_responsibilities','task_assignments','task_activity_support_tasks',
+    'planning_obligations','planning_obligation_events','task_activity_events','notification_inbox','task_change_clock']
+    .map(name=>[name,d.prepare(`SELECT * FROM ${name}`).all()]));
+  const before=capture(), rows=d.prepare('SELECT * FROM tasks WHERE id IN (?,?,?,?) ORDER BY id').all(x.independent,x.wash,x.dry,fold);
+  attachTaskSupervision(d,rows,learner);
+  const independent=rows.find(r=>r.id===x.independent), wash=rows.find(r=>r.id===x.wash), dry=rows.find(r=>r.id===x.dry), folded=rows.find(r=>r.id===fold);
+  assert.equal(independent.supervision_action,null);
+  assert.equal(independent.skill_eligibility[0].proficiency,'normal');
+  assert.match(independent.skill_eligibility[0].reason,/Frank.*Gather laundry.*Laundry Sorting.*independently/);
+  assert.match(wash.supervision_action.display_reason,/Frank.*Load washer.*Washing Machine.*even with supervision.*age-based/);
+  assert.match(dry.supervision_action.display_reason,/Frank.*Start dryer.*Dryer.*even with supervision.*age-based/);
+  assert.doesNotMatch(dry.supervision_action.display_reason,/Washing Machine|Load washer/);
+  assert.equal(folded.skill_eligibility[0].proficiency,'supervised');
+  assert.match(folded.supervision_action.display_reason,/Frank.*Fold laundry.*with supervision.*another action.*skill restriction/);
+  assert.match(wash.supervision.display_reason,/Load washer.*Washing Machine.*Start dryer.*Dryer/);
+  const adult=wash.supervision.supervisor_explanations.find(c=>c.user_id===helper);
+  assert.equal(adult.eligible,false);
+  assert.match(adult.display_reason,/Frank.*even with supervision.*cannot override/);
+  assert.doesNotMatch(adult.display_reason,/Not independently qualified/);
+  assert.deepEqual(wash.supervision.eligible_supervisors,[]);
+  assert.equal(wash.supervision_action.can_complete,false);
+  assert.throws(()=>taskSupervisionTransition(d,x.dry,'done',helper),/Frank.*Start dryer.*Dryer.*even with supervision/);
+  assert.doesNotThrow(()=>taskSupervisionTransition(d,x.independent,'done',learner));
+  reconcileTaskSupervision(d,x.root);
+  assert.deepEqual(capture(),before,'readable wording must not change revisions, history, obligations or notifications');
+});
+
+test('display distinguishes permitted supervised work from a missing or unavailable qualified supervisor',()=>{
+  const x=laundry(); proficiency(helper,washer,'excluded'); proficiency(helper,dryer,'excluded');
+  const unqualified=inspectTaskSupervision(d,x.root);
+  assert.equal(unqualified.state,'needed'); assert.equal(unqualified.qualified_supervisor_count,0);
+  assert.match(unqualified.actions[0].display_reason,/Eleanor.*Load washer.*Washing Machine.*with supervision.*No single qualified supervisor/);
+  assert.doesNotMatch(unqualified.actions[0].display_reason,/cannot perform.*even with supervision/);
+  proficiency(helper,washer,'normal'); proficiency(helper,dryer,'normal'); policy(x.root); busy(helper);
+  const unavailable=inspectTaskSupervision(d,x.root);
+  assert.equal(unavailable.state,'needed'); assert.equal(unavailable.qualified_supervisor_count,1);
+  assert.deepEqual(unavailable.eligible_supervisors,[]);
+  assert.match(unavailable.actions[0].display_reason,/Qualified supervisors exist, but none is available.*completion window/);
+  assert.match(unavailable.actions[0].display_reason,/Washing Machine/);
+  assert.doesNotMatch(unavailable.actions[0].display_reason,/cannot perform.*even with supervision/);
+});
+
+test('skill assessment display never adds independent or completed work to active supervision mappings',()=>{
+  const x=laundry(), sorting=skill('Laundry Sorting'); setTaskSkills(d,x.independent,[sorting]); proficiency(learner,sorting,'normal');
+  const first=reconcileTaskSupervision(d,x.root);
+  assert.equal(first.supervisor_user_id,helper); assert.equal(first.actions.length,2);
+  d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(x.wash);
+  const saved=d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(x.wash);
+  proficiency(learner,washer,'excluded');
+  const rows=d.prepare('SELECT * FROM tasks WHERE parent_task_id=? ORDER BY id').all(x.root); attachTaskSupervision(d,rows,learner);
+  assert.deepEqual(rows.find(r=>r.id===x.wash).skill_eligibility,[]);
+  assert.equal(rows.find(r=>r.id===x.wash).supervision_action.completed,true);
+  reconcileTaskSupervision(d,x.root);
+  assert.deepEqual(d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(x.wash),saved);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_supervision_actions WHERE action_task_id=?').get(x.independent).n,0);
+});
+
 test('individually available learner and helper with disjoint windows explain the lack of shared time',()=>{
   const x=laundry();
   d.prepare('UPDATE tasks SET due_time=NULL WHERE id IN (?,?,?)').run(x.root,x.wash,x.dry);

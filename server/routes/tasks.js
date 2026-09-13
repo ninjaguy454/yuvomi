@@ -786,9 +786,11 @@ function hydrateTask(task, me, supervisionViews = new Map()) {
       db.get().prepare('SELECT * FROM tasks WHERE id=?').get(row.supervision.support_task_id),me),
       state:active.some(action=>action.state==='excluded')?'excluded'
       :active.some(action=>action.state==='unresolved')?'needed':active.length?'assigned':'none'};
-    if(hiddenScope) row.supervision={...row.supervision,blocked_requirements:[],supervisor_explanations:[],
-      reason:active.length ? 'One supervisor must cover the Task’s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null};
-    if(actions.length===0)row.supervision={...row.supervision,state:'none',reason:null};
+    if(hiddenScope) {
+      const reason=active.length ? 'One supervisor must cover the Task’s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null;
+      row.supervision={...row.supervision,blocked_requirements:[],supervisor_explanations:[],reason,display_reason:reason};
+    }
+    if(actions.length===0)row.supervision={...row.supervision,state:'none',reason:null,display_reason:null};
     // The convenience projection must use the same sanitized objects; keeping
     // attachTaskSupervision's original reference would leak aggregate reasons.
     row.supervision_action=row.supervision.actions.find(action=>action.action_task_id===row.id||action.counterpart_task_id===row.id)||null;

@@ -238,6 +238,42 @@ test('supervision denial explains the visible action without disclosing a privat
   assert.equal(response.status,409);assert.ok(response.data.supervision.actions.some(action=>action.action_task_id===visible.id));
   assert.equal(response.data.supervision.actions.some(action=>action.action_task_id===hidden.id),false);
   assert.equal(JSON.stringify(response.data).includes(hidden.title),false);
+  assert.equal(typeof response.data.supervision.display_reason,'string');
+  const visibleAction=response.data.supervision.actions.find(action=>action.action_task_id===visible.id);
+  assert.equal(typeof visibleAction.display_reason,'string');
+  assert.deepEqual(visibleAction.supervisor_explanations,[]);
+});
+
+test('excluded private skill stays private in display explanations and visible row skill eligibility',async()=>{
+  const parent=seed({title:'Visible skill explanation parent'});
+  const visible=seed({title:'Visible sorting action',parent:parent.id,assigned:null});
+  const hidden=seed({title:'Secret age-restricted action',parent:parent.id,creator:other,assigned:null,visibility:'private'});
+  const makeSkill=name=>Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion) VALUES (?,0,'normal')").run(name).lastInsertRowid);
+  const visibleSkill=makeSkill('Visible sorting skill'), hiddenSkill=makeSkill('Private exclusion skill marker');
+  for(const [action,skill,proficiency] of [[visible,visibleSkill,'supervised'],[hidden,hiddenSkill,'excluded']]){
+    d.prepare('INSERT INTO task_skill_requirements(task_id,skill_id,sort_order) VALUES (?,?,0)').run(action.id,skill);
+    d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES (?,?,?,'manual',?)")
+      .run(learner,skill,proficiency,admin);
+  }
+  const assertPrivate=payload=>{
+    const serialized=JSON.stringify(payload);
+    assert.equal(serialized.includes(hidden.title),false);
+    assert.equal(serialized.includes('Private exclusion skill marker'),false);
+  };
+  for(const row of [parent,visible]){
+    const response=await request('GET',`/api/v1/tasks/${row.id}`);
+    assert.equal(response.status,200);assertPrivate(response.data);
+    const detail=response.data.data;
+    const visibleRow=row.id===visible.id?detail:detail.subtasks.find(child=>child.id===visible.id);
+    assert.ok(visibleRow.skill_eligibility,'visible row includes its own assessment');
+    assert.match(JSON.stringify(visibleRow.skill_eligibility),/Visible sorting skill/);
+    assert.equal(typeof detail.supervision.display_reason,'string');
+    assert.deepEqual(detail.supervision.supervisor_explanations,[]);
+  }
+  const response=await request('PATCH',`/api/v1/tasks/${visible.id}/status`,{status:'done',...savedRevision(visible)});
+  assert.equal(response.status,409);assertPrivate(response.data);
+  assert.equal(typeof response.data.supervision.display_reason,'string');
+  assert.ok(response.data.supervision.actions.every(action=>typeof action.display_reason==='string'));
 });
 
 test('generated supervision projections cannot be independently edited, archived, deleted or claimed',async()=>{

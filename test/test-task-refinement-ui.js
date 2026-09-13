@@ -176,6 +176,70 @@ test('supervised actions are operable by the current eligible supervisor and vis
   assert.equal(supervisor.children[0].children[0].disabled, false);
 });
 
+test('skill explanations distinguish independent, supervised and prohibited actions without changing completion access', () => {
+  const h = detailHarness();
+  const entries = [
+    { id: 2, title: 'Sort laundry', skill: 'Laundry Sorting', proficiency: 'normal', state: 'not_required', can_complete: true,
+      reason: 'Frank can perform Sort laundry independently using Laundry Sorting.' },
+    { id: 3, title: 'Fold laundry', skill: 'Fold Laundry', proficiency: 'supervised', state: 'unresolved', can_complete: false,
+      reason: 'Frank can perform Fold laundry with supervision for Fold Laundry. Supervision cannot be assigned while other actions on this Task are not permitted.' },
+    { id: 4, title: 'Load washer', skill: 'Washing Machine', proficiency: 'excluded', state: 'excluded', can_complete: false,
+      reason: 'Frank cannot perform Load washer, even with supervision: Washing Machine is not permitted by his current age policy.' },
+    { id: 5, title: 'Start dryer', skill: 'Dryer', proficiency: 'excluded', state: 'excluded', can_complete: false,
+      reason: 'Frank cannot perform Start dryer, even with supervision: Dryer is not permitted by his current age policy.' },
+  ];
+  const actions = entries.map(entry => ({ action_task_id: entry.id, action_title: entry.title,
+    state: entry.state, can_complete: entry.can_complete, reason: 'Legacy action diagnostic', display_reason: entry.reason,
+    required_skills: [{ name: entry.skill }] }));
+  const task = { id: 1, title: "Frank's Laundry", supervision: { state: 'excluded',
+    reason: 'Legacy scope diagnostic', display_reason: 'Frank cannot perform Load washer or Start dryer under the current skill settings.', actions },
+    subtasks: entries.map((entry, index) => ({ id: entry.id, title: entry.title, status: 'open', permissions: { complete: true },
+      skill_ids: [entry.id], skills: [{ id: entry.id, name: entry.skill }], supervision_action: actions[index],
+      skill_eligibility: [{ skill_id: entry.id, skill_name: entry.skill, proficiency: entry.proficiency, reason: entry.reason }] })) };
+  const ctx = { currentUserId: 4, skills: [] };
+  const node = h.subtaskListNode(task, ctx);
+  const summaries = node.children.map(row => row.children[1].textContent);
+  assert.equal(summaries[0], 'Laundry Sorting · Independent');
+  assert.equal(summaries[1], 'Fold Laundry · Supervision required');
+  assert.equal(summaries[2], 'Washing Machine · Cannot perform even with supervision');
+  assert.equal(summaries[3], 'Dryer · Cannot perform even with supervision');
+  const legacy = h.subtaskListNode({ ...task, subtasks: task.subtasks.map(({ skill_eligibility, ...subtask }) => subtask) }, ctx);
+  const toggles = view => view.children.map(row => ({ disabled: row.children[0].disabled, label: row.children[0].attributes['aria-label'] }));
+  assert.deepEqual(toggles(node), toggles(legacy), 'read-only explanations cannot grant or remove operational permission');
+  assert.deepEqual(toggles(node).map(toggle => toggle.disabled), [false, true, true, true]);
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const all = flatten(h.supervisionNode(task, {}));
+  assert.ok(all.some(el => el.textContent === 'Skill restriction'));
+  assert.ok(all.some(el => el.textContent === 'A supervisor cannot override these skill restrictions.'));
+  for (const entry of entries.slice(1)) {
+    assert.ok(all.some(el => el.textContent.includes(entry.reason)), `${entry.title} keeps its own explanation`);
+  }
+  assert.ok(!all.some(el => el.textContent.includes('Legacy')), 'presentation reasons replace, not mutate, old diagnostics');
+  assert.equal(all.filter(el => ['SELECT', 'INPUT', 'BUTTON'].includes(el.tagName)).length, 0);
+});
+
+test('a permitted supervised action explains missing supervisor availability instead of a learner skill prohibition', () => {
+  const h = detailHarness();
+  const reason = 'Eleanor can perform Load washer with supervision for Washing Machine, but no qualified supervisor is available during this Task’s completion window.';
+  const task = { id: 1, title: "Eleanor's Laundry", supervision: { state: 'needed', eligible_supervisors: [],
+    reason: 'No qualified supervisor is available during this Task’s completion window.',
+    supervisor_explanations: [{ name: 'Duane', eligible: false, reason: 'Legacy candidate diagnostic',
+      display_reason: 'Duane is qualified but unavailable during this Task’s completion window.' }],
+    actions: [{ action_task_id: 2, action_title: 'Load washer', state: 'unresolved', can_complete: false,
+      reason: 'Legacy action diagnostic', display_reason: reason, required_skills: [{ name: 'Washing Machine' }] }] }, subtasks: [{ id: 2, title: 'Load washer', status: 'open',
+      permissions: { complete: true }, skill_ids: [3], skills: [{ id: 3, name: 'Washing Machine' }],
+      skill_eligibility: [{ skill_id: 3, skill_name: 'Washing Machine', proficiency: 'supervised', reason }] }] };
+  const row = h.subtaskListNode(task, { currentUserId: 4, skills: [] }).children[0];
+  assert.equal(row.children[1].textContent, 'Washing Machine · Supervision required');
+  assert.equal(row.children[0].disabled, true);
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const all = flatten(h.supervisionNode(task, {}));
+  assert.ok(all.some(el => el.textContent.includes(reason)));
+  assert.ok(all.some(el => el.textContent === 'Duane: Duane is qualified but unavailable during this Task’s completion window.'));
+  assert.ok(!all.some(el => el.textContent.includes('Legacy')));
+  assert.ok(!all.some(el => /Skill restriction|Cannot perform even with supervision/.test(el.textContent)));
+});
+
 test('capability denial removes operational access independently of skill labels', () => {
   const h = detailHarness();
   const node = h.subtaskListNode({ subtasks: [{ id: 2, title: 'Fold laundry', status: 'done', permissions: { complete: false } }] }, { currentUserId: 4, skills: [] });

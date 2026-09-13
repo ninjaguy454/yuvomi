@@ -8,12 +8,49 @@ import { taskCapabilities, taskSupervisionManagementAllowed } from './task-acces
 import { createHash } from 'node:crypto';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
+// Request-local presentation data; never serialized as an aggregate of private siblings.
+const skillEligibilityByView = new WeakMap();
 export class TaskSupervisionError extends Error {
   constructor(message, details = {}) { super(message); this.status = 409; this.code = 'supervision_required'; this.details = details; }
 }
 function supported(d) { return !!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_supervision_actions'").get(); }
 function task(d, id) { return d.prepare('SELECT * FROM tasks WHERE id = ?').get(id); }
 function memberName(member) { return member?.display_name || 'The assignee'; }
+
+function describeSkillEligibility(assessed, action, learner) {
+  return assessed.map(item => {
+    const target = `“${action.title}” (${item.skill.name})`;
+    const reason = item.proficiency === 'normal'
+      ? `${memberName(learner)} can perform ${target} independently.`
+      : item.proficiency === 'supervised'
+        ? `${memberName(learner)} can perform ${target} with supervision.`
+        : `${memberName(learner)} cannot perform ${target}, even with supervision. ${['under_age', 'adult_only'].includes(item.reason) ? 'Current age-based skill settings' : 'Current skill settings'} do not permit it.`;
+    return { skill_id: item.skill.id, skill_name: item.skill.name, proficiency: item.proficiency, reason };
+  });
+}
+
+/** Presentation only: canonical reasons are persisted and must not change for a wording update. */
+function describeSupervisionScope(scope, actions) {
+  const pending = actions.filter(action => !action.completed && action.state !== 'not_required');
+  const excluded = pending.filter(action => action.state === 'excluded');
+  const restrictions = excluded.map(action => action.skill_eligibility.filter(skill => skill.proficiency === 'excluded').map(skill => skill.reason).join(' ')).join(' ');
+  scope.display_reason = restrictions || scope.reason;
+  for (const candidate of scope.supervisor_explanations) {
+    candidate.display_reason = restrictions
+      ? `${restrictions} Choosing ${candidate.name} as supervisor cannot override these skill restrictions.`
+      : candidate.reason;
+  }
+  for (const action of pending) {
+    if (!action.learner_user_id || !action.skill_eligibility.length) continue;
+    const qualifications = action.skill_eligibility.map(skill => skill.reason).join(' ');
+    if (action.state === 'excluded') action.display_reason = qualifications;
+    else if (restrictions) action.display_reason = `${qualifications} Supervision remains unresolved because another action on this Task has a skill restriction. A supervisor cannot override that restriction.`;
+    else if (action.state === 'assigned') action.display_reason = `${qualifications} ${scope.supervisor_name} will supervise this action.`;
+    else if (!scope.qualified_supervisor_count) action.display_reason = `${qualifications} No single qualified supervisor can cover every remaining required skill on this Task.`;
+    else if (!scope.eligible_supervisors.length) action.display_reason = `${qualifications} Qualified supervisors exist, but none is available with the learner for every required action during the Task's completion window. ${action.display_reason || ''}`;
+    else action.display_reason = `${qualifications} Choose one supervisor who can cover all remaining supervised actions.`;
+  }
+}
 
 export function taskSupervisionRootId(d, taskId) {
   if (!supported(d)) return Number(taskId);
@@ -100,7 +137,7 @@ export function inspectTaskSupervision(d, taskId) {
   const saved = d.prepare('SELECT * FROM task_supervision_actions WHERE source_task_id = ?').all(sourceId);
   const rows = ordinaryTaskScope(d, sourceId);
   const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);
-  const actions = [];
+  const actions = [], skillEligibility = new Map();
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
@@ -127,6 +164,7 @@ export function inspectTaskSupervision(d, taskId) {
     if (!learner && !prior) continue;
     const skills = explicitSkills(d, row.id);
     const assessed = learner ? skills.map(skill => ({ skill, ...effectiveSkillProficiency(d, skill, learner, dateKey) })) : [];
+    if (row.status !== 'done' && learner) skillEligibility.set(row.id, describeSkillEligibility(assessed, row, learner));
     const excluded = assessed.filter(item => item.proficiency === 'excluded');
     const required = assessed.filter(item => item.proficiency === 'supervised').map(item => item.skill);
     if (!prior && !excluded.length && !required.length && !(skills.length && !learner)) continue;
@@ -177,6 +215,7 @@ export function inspectTaskSupervision(d, taskId) {
       counterpart_task_id: prior?.counterpart_task_id || null, learner_user_id: learnerId || null, learner_name: learner?.display_name || null,
       supervisor_user_id: previousSupervisor, supervisor_name: byId.get(Number(previousSupervisor))?.display_name || null,
       required_skills: requiredSkills.map(skill => ({ id: skill.id, name: skill.name })), state, reason,
+      skill_eligibility: skillEligibility.get(row.id) || [], display_reason: `${row.title}: ${reason}`,
       revision: prior?.revision || 0, task_revision: row.revision, counterpart_revision: prior?.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null,
       eligible_supervisors: eligible.map(({ id, display_name }) => ({ id, display_name })),
       supervisor_explanations: qualified.map(({id,display_name})=>{
@@ -193,8 +232,11 @@ export function inspectTaskSupervision(d, taskId) {
   const activeSupervisorIds = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'")
     .all(sourceId).map(row => row.user_id);
   const scope = singleSupervisorScope(actions, members, activeSupervisorIds);
-  return { source_task_id: sourceId, source_revision: source.revision, support_task_id: support?.task_id || null,
+  describeSupervisionScope(scope, actions);
+  const view = { source_task_id: sourceId, source_revision: source.revision, support_task_id: support?.task_id || null,
     ...scope, actions };
+  skillEligibilityByView.set(view, skillEligibility);
+  return view;
 }
 
 /** One candidate must cover every remaining action; completed mappings are historical snapshots. */
@@ -291,7 +333,7 @@ function notifySupervision(d, source, view) {
     userId, sourceKey: taskSupervisionNotificationKey(view), category: 'automation',
     entityType: 'task', entityId: source.id, title: unresolved ? 'Supervision needed' : 'Supervision requested',
     body: pending.every(action => taskCapabilities(d, userId, { id: action.action_task_id }).view)
-      ? `${source.title}: ${pending.map(action => action.action_title).join('; ')}. ${view.reason}`
+      ? `${source.title}: ${pending.map(action => action.action_title).join('; ')}. ${view.display_reason || view.reason}`
       : 'This Task needs supervision. Review the parts you can access or contact the responsible member.',
   });
 }
@@ -501,6 +543,7 @@ export function attachTaskSupervision(d, tasks, actorId = null, sourceViews = ne
       can_complete:action.completed || action.state === 'not_required'
         || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(actorId))}))};
     row.supervision_action = row.supervision.actions.find(action => action.action_task_id === row.id || action.counterpart_task_id === row.id) || null;
+    row.skill_eligibility = row.supervision_action?.skill_eligibility || skillEligibilityByView.get(source)?.get(row.id) || [];
     row.is_supervision_projection = row.supervision.support_task_id === row.id || row.supervision_action?.counterpart_task_id === row.id;
   }
   return tasks;
@@ -535,7 +578,7 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
       ...item, source_task_id: mayView(view.source_task_id) ? view.source_task_id : null,
       counterpart_task_id: mayView(item.counterpart_task_id) ? item.counterpart_task_id : null,
       counterpart_revision: mayView(item.counterpart_task_id) ? item.counterpart_revision : null,
-      ...(hiddenScope && !item.completed ? {reason:privateReason,supervisor_explanations:[]} : {}),
+      ...(hiddenScope && !item.completed ? {reason:privateReason,display_reason:privateReason,supervisor_explanations:[]} : {}),
     }));
     const active = actions.filter(item => !item.completed && item.state !== 'not_required');
     const supervision = {
@@ -545,6 +588,7 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
       state: active.some(item => item.state === 'excluded') ? 'excluded'
         : active.some(item => item.state === 'unresolved') ? 'needed' : active.length ? 'assigned' : 'none',
       reason: active.find(item => item.state !== 'assigned')?.reason || active[0]?.reason || null,
+      display_reason: active.find(item => item.state !== 'assigned')?.display_reason || active[0]?.display_reason || null,
       actions,
     };
     throw new TaskSupervisionError(hiddenScope ? privateReason : action && !mayView(action.action_task_id)
@@ -574,7 +618,7 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
         AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=t.id)`).get(view.source_task_id)) {
       fail("Complete the original Task's subtasks before completing its overall supervision.", item);
     }
-    if (item.state === 'excluded' || item.state === 'unresolved') fail(item.reason, item);
+    if (item.state === 'excluded' || item.state === 'unresolved') fail(item.display_reason || item.reason, item);
     if (item.state === 'assigned' && Number(item.supervisor_user_id) !== Number(actorId)) {
       fail(`${item.supervisor_name || 'The assigned supervisor'} needs to complete this supervised action with ${item.learner_name || 'the assignee'}.`, item);
     }

@@ -247,8 +247,16 @@ function taskSkillSummary(task, ctx) {
     .map((skill) => [Number(skill.id), skill.name]));
   const ids = task.skill_ids || (task.skills || []).map((skill) => skill.id);
   if (!ids.length) return '';
-  const summary = ids.map((id) => names.get(Number(id)) || 'Unavailable skill').join(', ');
-  return summary;
+  // These are explanations of the resolved learner's current explicit skills,
+  // never an alternative source of permission to complete the action.
+  const assessed = task.status === 'done' ? [] : (task.skill_eligibility || task.supervision_action?.skill_eligibility || []);
+  const eligibility = new Map(assessed.map((skill) => [Number(skill.skill_id), skill]));
+  const labels = { normal: 'Independent', supervised: 'Supervision required', excluded: 'Cannot perform even with supervision' };
+  return ids.map((id) => {
+    const skill = eligibility.get(Number(id));
+    const name = names.get(Number(id)) || skill?.skill_name || 'Unavailable skill';
+    return [name, labels[skill?.proficiency]].filter(Boolean).join(' · ');
+  }).join(eligibility.size ? '; ' : ', ');
 }
 
 function lucideIcon(name) {
@@ -560,7 +568,9 @@ function subtaskListNode(task, ctx) {
       if (done && supervision.completed) {
         parts.push(supervision.supervisor_name ? `Previously supervised by ${supervision.supervisor_name}` : 'Completed supervised action');
       } else {
-        parts.push(supervision.state === 'assigned' ? 'Supervision required' : 'Supervision needed');
+        if (!(subtask.skill_eligibility || supervision.skill_eligibility || []).some((skill) => ['supervised', 'excluded'].includes(skill.proficiency))) {
+          parts.push(supervision.state === 'excluded' ? 'Cannot perform even with supervision' : 'Supervision required');
+        }
         if (supervision.state === 'assigned' && supervision.supervisor_name) parts.push(`Supervisor: ${supervision.supervisor_name}`);
       }
     }
@@ -1117,15 +1127,19 @@ function supervisionNode(task, ctx) {
   wrap.className = 'task-detail-supervision';
   wrap.setAttribute('role', 'status');
   const title = document.createElement('strong');
-  title.textContent = ['needed', 'excluded'].includes(supervision?.state) ? 'Supervision needed' : 'Supervised work';
+  title.textContent = (supervision?.state || action?.state) === 'excluded' ? 'Skill restriction'
+    : supervision?.state === 'needed' ? 'Supervision needed' : 'Supervised work';
   wrap.appendChild(title);
-  if (supervision?.reason) {
-    const reason = document.createElement('p'); reason.textContent = supervision.reason; wrap.appendChild(reason);
+  const scopeReason = supervision?.display_reason || supervision?.reason;
+  if (scopeReason) {
+    const reason = document.createElement('p'); reason.textContent = scopeReason; wrap.appendChild(reason);
   }
   const remaining = actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
   if (remaining.length) {
     const summary = document.createElement('p');
-    summary.textContent = supervision?.state === 'assigned' && supervision.supervisor_name
+    summary.textContent = remaining.some(requirement => requirement.state === 'excluded')
+      ? 'A supervisor cannot override these skill restrictions.'
+      : supervision?.state === 'assigned' && supervision.supervisor_name
       ? `Supervisor: ${supervision.supervisor_name} · Covers all remaining supervised actions.`
       : 'One supervisor must cover every remaining action requiring supervision.';
     wrap.appendChild(summary);
@@ -1152,13 +1166,13 @@ function supervisionNode(task, ctx) {
     controls.append(select, assign); wrap.appendChild(controls);
   }
   const blockedCandidates = supervision?.state !== 'assigned'
-    ? (supervision?.supervisor_explanations || []).filter(person => !person.eligible && person.reason) : [];
+    ? (supervision?.supervisor_explanations || []).filter(person => !person.eligible && (person.display_reason || person.reason)) : [];
   if (remaining.length && blockedCandidates.length) {
     const details = document.createElement('details');
     const summary = document.createElement('summary'); summary.textContent = 'Why a supervisor cannot cover this Task';
     const list = document.createElement('ul');
     for (const person of blockedCandidates) {
-      const item = document.createElement('li'); item.textContent = [person.name, person.reason].filter(Boolean).join(': ');
+      const item = document.createElement('li'); item.textContent = [person.name, person.display_reason || person.reason].filter(Boolean).join(': ');
       list.appendChild(item);
     }
     details.append(summary, list); wrap.appendChild(details);
@@ -1169,7 +1183,8 @@ function supervisionNode(task, ctx) {
     const name = document.createElement('strong'); name.textContent = requirement.action_title || task.title;
     const explanation = document.createElement('span');
     const skills = (requirement.required_skills || []).map((skill) => skill.name).join(', ');
-    const reason = !requirement.completed && requirement.reason !== supervision?.reason && requirement.state !== 'assigned' ? requirement.reason : '';
+    const actionReason = requirement.display_reason || requirement.reason;
+    const reason = !requirement.completed && actionReason !== scopeReason ? actionReason : '';
     const history = requirement.completed
       ? requirement.supervisor_name ? `Completed · Previously supervised by ${requirement.supervisor_name}` : 'Completed supervised action'
       : '';

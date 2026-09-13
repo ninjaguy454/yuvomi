@@ -108,13 +108,15 @@ export function runSearch(database, q, userId, { hiddenModules = null } = {}) {
   const results = emptySearchResults();
   const allows = (bucket) => !hiddenModules?.has(BUCKET_MODULE[bucket]);
 
+  // Task audience comes from the canonical capability and visibility boundary.
+  // An extra creator/primary-assignee filter hides household-visible Tasks and
+  // even assignee-only Tasks assigned through the multi-member relation.
   if (allows('tasks')) results.tasks = database.prepare(`
     SELECT t.id, t.title, t.status, t.priority, t.due_date
     FROM search_index s
     JOIN tasks t ON t.id = s.entity_id
     WHERE s.entity = 'task' AND s.search_index MATCH @match
       AND t.parent_task_id IS NULL
-      AND (t.created_by = @userId OR t.assigned_to = @userId)
       AND ${taskVisibilityWhere(database, userId, 't', '@userId')}
     ORDER BY CASE t.status WHEN 'done' THEN 1 ELSE 0 END,
              t.due_date ASC NULLS LAST

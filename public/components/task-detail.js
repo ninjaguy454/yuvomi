@@ -262,6 +262,75 @@ function taskSkillSummary(task, ctx) {
   }).join(eligibility.size ? '; ' : ', ');
 }
 
+function disclosureNode(ctx, key, title, className = '') {
+  const details = document.createElement('details');
+  details.className = className;
+  details.dataset.disclosureKey = key;
+  details.open = ctx.disclosures?.get(key) === true;
+  const summary = document.createElement('summary');
+  summary.dataset.focusKey = `disclosure-${key}`;
+  summary.setAttribute('tabindex', '0');
+  const label = document.createElement('span'); label.textContent = title;
+  summary.appendChild(label); details.appendChild(summary);
+  details.addEventListener('toggle', () => {
+    if (!details.isConnected) return;
+    ctx.disclosures ??= new Map();
+    ctx.disclosures.set(key, details.open);
+  });
+  return details;
+}
+
+function rememberTaskDisclosures(pane, ctx) {
+  ctx.disclosures ??= new Map();
+  pane?.querySelectorAll('details[data-disclosure-key]').forEach(details => {
+    ctx.disclosures.set(details.dataset.disclosureKey, details.open);
+  });
+}
+
+function subtaskContextNode(subtask, supervision, ctx) {
+  let skills = taskSkillSummary(subtask, ctx) || (supervision?.required_skills || []).map(skill => skill.name).filter(Boolean).join(', ');
+  const complete = subtask.status === 'done' && supervision?.completed;
+  const delegated = supervision?.execution_mode === 'delegated';
+  const helper = delegated && subtask.is_supervision_projection;
+  const label = complete ? delegated ? 'Performed by helper' : 'Supervised action completed'
+    : helper ? `Direct responsibility · You perform this${supervision.learner_name ? ` for ${supervision.learner_name}` : ' for the learner'}`
+    : supervision?.state === 'excluded' ? 'Cannot perform even with supervision'
+    : supervision?.state === 'unresolved' ? 'Supervision needed'
+    : supervision && supervision.state !== 'not_required' ? 'Supervision required' : '';
+  if (supervision?.state === 'unresolved') skills = skills.replaceAll('Supervision required', 'Supervision needed');
+  const compact = [skills, label && !skills.includes(label) ? label : '',
+    Number(subtask.points) ? t('tasks.pointsSummary', { count: Number(subtask.points) }) : ''].filter(Boolean).join(' · ');
+  if (!compact) return null;
+  if (!skills && (!supervision || supervision.state === 'not_required')) {
+    const meta = document.createElement('span'); meta.className = 'detail-subtask__meta'; meta.textContent = compact; return meta;
+  }
+  const details = disclosureNode(ctx, `subtask-skills-${subtask.id}`, compact, 'detail-subtask__requirements');
+  const explanation = document.createElement('div'); explanation.className = 'detail-subtask__explanation';
+  const add = text => { if (text) { const line = document.createElement('p'); line.textContent = text; explanation.appendChild(line); } };
+  // Display only the current canonical assessment, never manufacture permission
+  // from an expanded/collapsed state or reassess already-completed work.
+  const assessed = subtask.status === 'done' || helper ? [] : subtask.skill_eligibility || supervision?.skill_eligibility || [];
+  const skillReasons = new Set();
+  for (const skill of assessed) {
+    const reason = skill.display_reason || skill.reason;
+    if (reason) skillReasons.add(reason);
+    add([skill.skill_name, reason].filter(Boolean).join(': '));
+  }
+  if (complete) add(supervision.supervisor_name
+    ? `${delegated ? 'Performed' : 'Previously supervised'} by ${supervision.supervisor_name}`
+    : delegated ? 'Completed by the helper' : 'Completed supervised action');
+  else if (helper) add(`Direct responsibility · You perform this${supervision.learner_name ? ` for ${supervision.learner_name}` : ' for the learner'}.`);
+  else if (supervision?.state !== 'not_required' && supervision) {
+    if (supervision.supervisor_name) add(`Supervisor: ${supervision.supervisor_name}`);
+    if (subtask.is_supervision_projection) add(`${supervision.learner_name || 'The learner'} performs this with you.`);
+  }
+  const actionReason = supervision?.display_reason || supervision?.reason;
+  if (!complete && !skillReasons.has(actionReason)) add(actionReason);
+  if (!explanation.children.length) add(compact);
+  details.appendChild(explanation);
+  return details;
+}
+
 function lucideIcon(name) {
   const icon = document.createElement('i');
   icon.dataset.lucide = name;
@@ -572,32 +641,11 @@ function subtaskListNode(task, ctx) {
     label.className = 'detail-subtask__title';
     label.textContent = subtask.title;
     toggle.append(lucideIcon(done ? 'check-circle-2' : 'circle'), label);
-    const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id));
+    const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id) || Number(action.counterpart_task_id) === Number(subtask.id));
     toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
-    const meta = document.createElement('div');
-    meta.className = 'detail-subtask__meta';
-    const skills = taskSkillSummary(subtask, ctx);
-    const parts = [skills];
-    if (supervision && supervision.state !== 'not_required') {
-      if (supervision.execution_mode === 'delegated' && subtask.is_supervision_projection) {
-        parts.push(done && supervision.completed
-          ? supervision.supervisor_name ? `Performed by ${supervision.supervisor_name}` : 'Completed by the helper'
-          : `Direct responsibility · You perform this${supervision.learner_name ? ` for ${supervision.learner_name}` : ' for the learner'}`);
-      } else if (done && supervision.completed) {
-        parts.push(supervision.supervisor_name ? `Previously supervised by ${supervision.supervisor_name}` : 'Completed supervised action');
-      } else {
-        if (!(subtask.skill_eligibility || supervision.skill_eligibility || []).some((skill) => ['supervised', 'excluded'].includes(skill.proficiency))) {
-          parts.push(supervision.state === 'excluded' ? 'Cannot perform even with supervision' : 'Supervision required');
-        }
-        if (supervision.state === 'assigned' && supervision.supervisor_name) parts.push(`Supervisor: ${supervision.supervisor_name}`);
-        if (subtask.is_supervision_projection) parts.push(`${supervision.learner_name || 'The learner'} performs this with you`);
-      }
-    }
-    const points = Number(subtask.points || 0);
-    if (points) parts.push(t('tasks.pointsSummary', { count: points }));
-    meta.textContent = parts.filter(Boolean).join(' · ');
-    meta.hidden = !meta.textContent;
-    row.append(toggle, meta);
+    row.appendChild(toggle);
+    const context = subtaskContextNode(subtask, supervision, ctx);
+    if (context) row.appendChild(context);
     if (pending) {
       const saving = document.createElement('span');
       saving.className = 'detail-subtask__pending';
@@ -1105,8 +1153,13 @@ function statusSummaryNode(task, ctx) {
   summary.appendChild(control);
   const priority = priorityNode(task.priority);
   if (priority) summary.appendChild(priority);
+  const metrics = document.createElement('div'); metrics.className = 'task-detail-metrics';
+  const points = document.createElement('span'); points.className = 'task-detail-points';
+  points.textContent = t('tasks.pointsSummary', { count: Number(task.points || 0) });
+  metrics.appendChild(points);
   const progress = progressNode(task, ctx);
-  if (progress) summary.appendChild(progress);
+  if (progress) metrics.appendChild(progress);
+  summary.appendChild(metrics);
   if (ctx.refreshRequired) {
     const saved = document.createElement('span');
     saved.className = 'task-detail-progress';
@@ -1131,31 +1184,36 @@ function statusSummaryNode(task, ctx) {
 }
 
 function metadataNode(task, ctx, reminders) {
-  const grid = document.createElement('dl');
+  const grid = document.createElement('div');
   grid.className = 'task-detail-metadata';
   const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task));
   const recurrence = recurrenceRow(task.recurrence_rule, { fromCompletion: !!task.recurrence_from_completion });
-  const entries = [
-    [t('tasks.assignedLabel'), participantListNode(task, ctx)],
-    [t('tasks.dueDateLabel'), due?.label],
-    [t('tasks.startDateLabel'), task.start_date ? formatDate(task.start_date) : null],
-    [t('tasks.pointsLabel'), task.points ? String(task.points) : null],
-    [recurrence?.label || 'Repeats', recurrence?.node || recurrence?.value],
-    [t('tasks.categoryLabel'), task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : null],
-    [t('tasks.tagsLabel'), tagChipsNode(task.tags)],
-    ['Required skills', taskSkillSummary(task, ctx)],
-    [t('tasks.locationLabel'), taskLocationNode(task, ctx)],
-    ['Availability / Presence', presenceSummary(task)],
-    [t('tasks.activityTemplateLabel'), activityTemplateSummary(task)],
-    [t('reminders.sectionTitle'), taskReminderSummary(reminders)],
-  ];
-  for (const [label, value] of entries) {
-    if (!value) continue;
-    const group = document.createElement('div');
+  function entry(label, value, className = '') {
+    if (!value) return null;
+    const group = document.createElement('dl'); group.className = className;
     const term = document.createElement('dt'); term.textContent = label;
     const detail = document.createElement('dd');
     if (value instanceof HTMLElement) detail.appendChild(value); else detail.textContent = value;
-    group.append(term, detail); grid.appendChild(group);
+    group.append(term, detail); return group;
+  }
+  const assigned = entry(t('tasks.assignedLabel'), participantListNode(task, ctx), 'task-detail-metadata__assigned');
+  if (assigned) grid.appendChild(assigned);
+  const dates = document.createElement('div'); dates.className = 'task-detail-dates';
+  for (const [label, value] of [[t('tasks.startDateLabel'), task.start_date ? formatDate(task.start_date) : null],
+    [t('tasks.dueDateLabel'), due?.label]]) {
+    const date = entry(label, value); if (date) dates.appendChild(date);
+  }
+  if (dates.children.length) grid.appendChild(dates);
+  const entries = [
+    [recurrence?.label || 'Repeats', recurrence?.node || recurrence?.value],
+    [t('tasks.categoryLabel'), task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : null],
+    ['Required skills', taskSkillSummary(task, ctx)],
+    [t('tasks.locationLabel'), taskLocationNode(task, ctx)],
+    ['Availability / Presence', presenceSummary(task)],
+    [t('reminders.sectionTitle'), taskReminderSummary(reminders)],
+  ];
+  for (const [label, value] of entries) {
+    const group = entry(label, value); if (group) grid.appendChild(group);
   }
   return grid;
 }
@@ -1167,16 +1225,23 @@ function supervisionNode(task, ctx) {
   if (!actions.length && (!supervision || supervision.state === 'none')) return null;
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-supervision';
-  wrap.setAttribute('role', 'status');
   const title = document.createElement('strong');
   const hasDelegated = actions.some(requirement => requirement.execution_mode === 'delegated' && requirement.state !== 'not_required');
   title.textContent = (supervision?.state || action?.state) === 'excluded' ? 'Skill restriction'
     : supervision?.state === 'needed' ? hasDelegated ? 'Helper needed' : 'Supervision needed'
-    : hasDelegated ? 'Supervisor responsibilities' : 'Supervised work';
+    : 'Supervisor';
   wrap.appendChild(title);
   const scopeReason = supervision?.display_reason || supervision?.reason;
+  let scopeDetails = null;
   if (scopeReason) {
-    const reason = document.createElement('p'); reason.textContent = scopeReason; wrap.appendChild(reason);
+    const reason = document.createElement('p'); reason.textContent = scopeReason;
+    if (['needed', 'excluded'].includes(supervision?.state) || ['unresolved', 'excluded'].includes(action?.state)) {
+      reason.className = 'task-detail-supervision__blocked';
+      reason.setAttribute('role', 'status'); wrap.appendChild(reason);
+    } else {
+      scopeDetails = disclosureNode(ctx, 'supervision-reason', 'Supervision details', 'task-detail-supervision__explanation');
+      scopeDetails.appendChild(reason);
+    }
   }
   const remaining = actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
   if (remaining.length) {
@@ -1184,7 +1249,7 @@ function supervisionNode(task, ctx) {
     summary.textContent = remaining.some(requirement => requirement.state === 'excluded' && requirement.execution_mode !== 'delegated')
       ? 'A supervisor cannot override these skill restrictions.'
       : supervision?.state === 'assigned' && supervision.supervisor_name
-      ? `Supervisor: ${supervision.supervisor_name} · Covers all remaining ${hasDelegated ? 'supervised actions and direct responsibilities' : 'supervised actions'}.`
+      ? `${supervision.supervisor_name} · Covers all remaining ${hasDelegated ? 'supervised actions and direct responsibilities' : 'supervised actions'}.`
       : hasDelegated ? 'One supervisor must cover every remaining supervised action and every action they perform for the learner.'
       : 'One supervisor must cover every remaining action requiring supervision.';
     wrap.appendChild(summary);
@@ -1203,7 +1268,7 @@ function supervisionNode(task, ctx) {
     }
     const sourceId = supervision.source_task_id, sourceRevision = supervision.source_revision;
     const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
-    assign.textContent = 'Assign Task supervisor'; assign.dataset.taskOperation = '';
+    assign.textContent = 'Assign supervisor'; assign.dataset.taskOperation = '';
     assign.dataset.focusKey = 'assign-task-supervisor';
     assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${sourceId}/supervisor`, {
       supervisor_user_id: Number(select.value), expected_revision: sourceRevision,
@@ -1213,16 +1278,32 @@ function supervisionNode(task, ctx) {
   const blockedCandidates = supervision?.state !== 'assigned'
     ? (supervision?.supervisor_explanations || []).filter(person => !person.eligible && (person.display_reason || person.reason)) : [];
   if (remaining.length && blockedCandidates.length) {
-    const details = document.createElement('details');
-    const summary = document.createElement('summary'); summary.textContent = 'Why a supervisor cannot cover this Task';
+    const details = disclosureNode(ctx, 'supervisor-candidates', 'Why a supervisor cannot cover this Task', 'task-detail-supervision__candidates');
     const list = document.createElement('ul');
     for (const person of blockedCandidates) {
       const item = document.createElement('li'); item.textContent = [person.name, person.display_reason || person.reason].filter(Boolean).join(': ');
       list.appendChild(item);
     }
-    details.append(summary, list); wrap.appendChild(details);
+    details.appendChild(list); wrap.appendChild(details);
   }
-  for (const requirement of actions) {
+  // There is one support container for the whole Task. Older compatible
+  // responses can expose only a linked action; still show at most one link and
+  // require the same explicit permission rather than inferring it from an ID.
+  const supportId = supervision?.support_task_id || actions.find(requirement => requirement.counterpart_task_id)?.counterpart_task_id;
+  if (supportId && !task.is_supervision_projection && supervision?.can_view_support === true) {
+    const link = document.createElement('a'); link.className = 'task-detail-supervision__helper-link';
+    link.href = `/tasks?open=${supportId}`; link.textContent = 'Open helper Task'; wrap.appendChild(link);
+  }
+  if (scopeDetails) wrap.appendChild(scopeDetails);
+  // Ordinary actionable subtasks carry their own compact skill disclosures.
+  // Parent requirements, delegated learner actions, deeper descendants and
+  // completed helper history still need a discoverable, non-actionable home.
+  const represented = new Set(actionableSubtasks(task).map(child => Number(child.id)));
+  const otherActions = actions.filter(requirement => requirement.state !== 'not_required'
+    && !represented.has(Number(task.is_supervision_projection ? requirement.counterpart_task_id : requirement.action_task_id)));
+  const other = otherActions.length ? disclosureNode(ctx, 'other-helper-actions',
+    `Additional helper actions and history (${otherActions.length})`, 'task-detail-supervision__other-actions') : null;
+  for (const requirement of otherActions) {
     if (requirement.state === 'not_required') continue;
     const row = document.createElement('div'); row.className = 'task-detail-supervision__action';
     const delegated = requirement.execution_mode === 'delegated';
@@ -1240,12 +1321,9 @@ function supervisionNode(task, ctx) {
       : !requirement.completed && task.is_supervision_projection ? `${requirement.learner_name || 'The learner'} performs this with you` : '';
     explanation.textContent = [skills, ownership, history, reason].filter(Boolean).join(' · ');
     row.append(name, explanation);
-    if (requirement.counterpart_task_id && !task.is_supervision_projection && supervision?.can_view_support === true) {
-      const link = document.createElement('a'); link.href = `/tasks?open=${requirement.counterpart_task_id}`;
-      link.textContent = delegated ? 'Open helper action' : 'Open supervision work'; row.appendChild(link);
-    }
-    wrap.appendChild(row);
+    other.appendChild(row);
   }
+  if (other) wrap.appendChild(other);
   return wrap;
 }
 
@@ -1274,29 +1352,36 @@ function activityNode(task, ctx) {
 
 function secondaryMetadataNode(task, ctx) {
   const values = [assignmentSummary(task), task.locked ? t('tasks.lockedDetail') : '',
-    visibilityRow(task.visibility)?.value, task.countdown && task.due_date ? t('tasks.countdownDetail') : ''].filter(Boolean);
+    visibilityRow(task.visibility)?.value, task.countdown && task.due_date ? t('tasks.countdownDetail') : '',
+    activityTemplateSummary(task) ? `${t('tasks.activityTemplateLabel')}: ${activityTemplateSummary(task)}` : ''].filter(Boolean);
   const responsibilities = responsibilityListNode(task, ctx);
   if (!values.length && !responsibilities) return null;
-  const details = document.createElement('details'); details.className = 'task-detail-secondary';
-  const summary = document.createElement('summary'); summary.textContent = 'More details'; details.appendChild(summary);
+  const details = disclosureNode(ctx, 'more-details', 'More details', 'task-detail-secondary');
   for (const value of values) { const line = document.createElement('p'); line.textContent = value; details.appendChild(line); }
   if (responsibilities) details.appendChild(responsibilities);
   return details;
 }
 
 function renderTaskDetail(task, reminders = [], ctx) {
+  const tags = tagChipsNode(task.tags);
+  if (tags) tags.classList.add('task-detail-tags');
+  const activity = disclosureNode(ctx, 'activity', 'Activity', 'task-detail-activity-disclosure');
+  activity.appendChild(activityNode(task, ctx));
+  const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', t('tasks.historySeriesTitle'), 'task-detail-history-disclosure') : null;
+  if (history) history.appendChild(seriesHistoryNode(task, ctx));
   return [
     { node: statusSummaryNode(task, ctx) },
     { label: 'Instructions', node: descriptionNode(task, ctx), multiline: true },
-    { label: t('tasks.subtasksLabel'), node: subtaskListNode(task, ctx) },
+    { node: tags },
     { node: supervisionNode(task, ctx) },
+    { label: t('tasks.subtasksLabel'), node: subtaskListNode(task, ctx) },
     { node: metadataNode(task, ctx, reminders) },
     { node: secondaryMetadataNode(task, ctx) },
     { label: 'Open', node: taskActionNode(task) },
     { label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
     { label: t('tasks.commentsLabel'), node: commentsNode(task, ctx) },
-    { label: 'Activity', node: activityNode(task, ctx) },
-    task.is_recurring ? { label: t('tasks.historySeriesTitle'), node: seriesHistoryNode(task, ctx) } : null,
+    { node: activity },
+    { node: history },
   ];
 }
 
@@ -1578,6 +1663,7 @@ export function openTaskDetail({
     if (ctx.closed || !view.isOpen()) return;
     const pane = document.querySelector('.detail-view__pane');
     const restore = pane ? captureTaskViewport(pane, { anchors: false }) : () => {};
+    rememberTaskDisclosures(pane, ctx);
     pane?.querySelector('.task-detail-summary')?.replaceWith(statusSummaryNode(task, ctx));
     const subtasks = pane?.querySelector('.detail-task-subtasks');
     if (subtasks) subtasks.replaceWith(subtaskListNode(task, ctx) || document.createElement('div'));
@@ -1593,6 +1679,7 @@ export function openTaskDetail({
     const draftField = ctx.comments?.contains(document.activeElement) ? document.activeElement : null;
     const selection = draftField?.selectionStart == null ? null : [draftField.selectionStart, draftField.selectionEnd];
     const focus = pane?.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
+    rememberTaskDisclosures(pane, ctx);
     view.update(renderTaskDetail(task, reminder, ctx));
     if (body && scroll != null) body.scrollTop = scroll;
     if (focus) pane?.querySelector(`[data-focus-key="${focus}"]`)?.focus({ preventScroll: true });

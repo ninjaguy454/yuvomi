@@ -9,7 +9,8 @@ import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
 import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
-import { reconcileTaskMarkup } from '/utils/task-view-state.js';
+import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
+import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { bindTaskCardTouchDrag, taskDragHandle } from '/utils/task-card-drag.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
@@ -597,7 +598,10 @@ function renderActivitySubtasks(task, expanded) {
       aria-expanded="${expanded}" aria-controls="subtasks-${task.id}">
       <i data-lucide="chevron-right" class="activity-card__chevron${expanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
       <span>${esc(t('tasks.subtasksLabel'))}</span>
-      <span class="activity-card__subtasks-progress">${esc(t('tasks.subtaskProgress', { done, total: subtasks.length }))}</span>
+      <span class="activity-card__subtasks-progress activity-card__progress-label">
+        <span>${esc(t('tasks.subtaskProgress', { done, total: subtasks.length }))}</span>
+        <span class="activity-card__progress-percent">${Math.round(done / subtasks.length * 100)}%</span>
+      </span>
     </button>
     <div class="subtask-list${expanded ? ' subtask-list--visible' : ''}" id="subtasks-${task.id}">${rows}</div>
   </div>`;
@@ -618,24 +622,24 @@ function renderTaskCard(task, opts = {}) {
   const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
   const due = formatDueDate(task.due_date, task.due_time, isDone || archived);
   const location = taskLocationLabel(task);
-  const progress = completionCounts(task);
   const names = (task.assigned_users || []).map(person => person.display_name).filter(Boolean).join(', ') || task.assigned_name;
   const blocked = ['needed', 'excluded'].includes(task.supervision?.state);
   const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
   const waiting = helperWaitingLabel(task, state.currentUserId);
+  const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed' })[task.status] || task.status;
 
   return `<article class="task-card activity-card${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
       data-task-id="${task.id}">
     <div class="activity-card__summary">
       <span class="activity-card__leading">
-        ${showCheckbox ? `<input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
-          aria-label="${esc(t('tasks.selectTask'))}">` : ''}
+        ${showCheckbox ? `<label class="task-bulk-select-target"><input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
+          aria-label="${esc(`${t('tasks.selectTask')}: ${task.title}`)}"></label>` : ''}
         ${hasDetails ? `<button type="button" class="activity-card__details-toggle" data-action="toggle-activity-details" data-id="${task.id}"
           aria-expanded="${detailsExpanded}" aria-controls="activity-details-${task.id}" aria-label="${esc(t('tasks.activityDetailsToggle'))}">
           <i data-lucide="chevron-right" class="activity-card__chevron${detailsExpanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
         </button>` : '<span class="activity-card__leading-spacer" aria-hidden="true"></span>'}
       </span>
-      <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}">
+      <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}"${!board ? ' aria-keyshortcuts="Shift+Space" aria-describedby="task-selection-hint" title="Open Task. Hold to select, or press Shift+Space."' : ''}>
         <span class="activity-card__title u-card-title u-compact">${esc(task.title)}</span>
         <span class="activity-card__when">
           ${due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i>${esc(due.label)}</span>` : (renderStartDateBadge(task.start_date) || '')}
@@ -643,31 +647,37 @@ function renderTaskCard(task, opts = {}) {
         </span>
       </button>
       <span class="activity-card__points">${esc(t('tasks.pointsSummary', { count: Number(task.points || 0) }))}</span>
-      <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${!canTask(task, 'complete') || task.supervision_action?.can_complete === false ? 'disabled' : ''}
-        aria-label="${esc(isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title }))}">
-        <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
-      </button>
     </div>
+
+    <div class="activity-card__metadata">
+      <div class="activity-card__context">
+        <div class="activity-card__state">
+          ${waiting ? `<span class="activity-card__status-label activity-card__status-label--waiting">${esc(waiting)}</span>` : ''}
+          ${renderPriorityBadge(task.priority)}
+          ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date activity-card__category">${esc(catLabel(task.category))}</span>` : ''}
+          ${task.is_recurring ? `<span class="due-date" title="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i><span class="sr-only">${esc(t('tasks.recurring'))}</span></span>` : ''}
+          ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i><span class="sr-only">${esc(t('tasks.lockedBadge'))}</span></span>` : ''}
+          ${renderVisibilityBadge(task.visibility)}
+        </div>
+        ${names ? `<span class="activity-card__assignee">${esc(names)}</span>` : ''}
+      </div>
+      <div class="activity-card__controls">
+        <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${!canTask(task, 'complete') || task.supervision_action?.can_complete === false ? 'disabled' : ''}
+          title="${esc(statusLabel)}" aria-label="${esc(`${statusLabel}. ${isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`)}">
+          <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
+        </button>
+        ${board && canTask(task, 'complete') && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
+          data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
+      </div>
+    </div>
+    ${blocked ? `<div class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>${delegated ? 'Helper needed' : 'Supervision needed'}</div>` : ''}
+    ${canTask(task, 'claim') && canCheckAndClaim(task) ? `<div class="activity-card__claim"><button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button></div>` : ''}
 
     ${detailsExpanded && hasDetails ? `<div class="activity-card__details" id="activity-details-${task.id}">
       ${task.description ? `<div class="activity-card__description">${renderMarkdownLight(task.description)}</div>` : ''}
       ${renderParticipantStrip(task, participants)}
     </div>` : ''}
 
-    <div class="activity-card__metadata">
-      <span class="activity-card__status-label">${esc(waiting || ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed' })[task.status] || task.status)}</span>
-      ${names ? `<span class="activity-card__assignee">${esc(names)}</span>` : ''}
-      ${actionableSubtasks(task).length ? `<span class="activity-card__progress-label">${progress.done}/${progress.total} · ${Math.round(progress.done / progress.total * 100)}%</span>` : ''}
-      ${blocked ? `<span class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>${delegated ? 'Helper needed' : 'Supervision needed'}</span>` : ''}
-      ${renderPriorityBadge(task.priority)}
-      ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date activity-card__category">${esc(catLabel(task.category))}</span>` : ''}
-      ${task.is_recurring ? `<span class="due-date" title="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i></span>` : ''}
-      ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
-      ${renderVisibilityBadge(task.visibility)}
-      ${canTask(task, 'claim') && canCheckAndClaim(task) ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button>` : ''}
-      ${board && canTask(task, 'complete') && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
-        data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
-    </div>
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}
   </article>`;
@@ -3908,7 +3918,9 @@ function syncViewChrome(container) {
   // AUFGABEN. Der Verlauf zeigt Vorgaenge - ein Statusfilter darueber waere
   // eine Auswahl, die nichts veraendern kann.
   const search = container.querySelector('.tasks-toolbar__search');
-  if (search) search.hidden = isHistory;
+  const searchToggle = container.querySelector('#tasks-search-toggle');
+  if (search) search.hidden = isHistory || searchToggle?.getAttribute('aria-expanded') !== 'true';
+  if (searchToggle) searchToggle.hidden = isHistory;
   const filterButton = container.querySelector('#filter-toggle-btn');
   if (filterButton) filterButton.hidden = isHistory;
   // Das aufgeklappte Filter-Panel ist ein GESCHWISTER der Zeile, kein Kind -
@@ -3921,15 +3933,9 @@ function syncViewChrome(container) {
   if (groupButton) groupButton.hidden = isHistory;
   const sortButton = container.querySelector('#task-sort-btn');
   if (sortButton) sortButton.hidden = isHistory;
-  const bulkSelectBtn = container.querySelector('#btn-bulk-select');
-  if (bulkSelectBtn) {
-    bulkSelectBtn.hidden = !isList;
-    if (!isList) {
-      state.bulkSelectMode = false;
-      state.selectedTaskIds.clear();
-      bulkSelectBtn.classList.remove('btn--active');
-      bulkSelectBtn.setAttribute('aria-pressed', 'false');
-    }
+  if (!isList) {
+    state.bulkSelectMode = false;
+    state.selectedTaskIds.clear();
   }
   // Die Auswahl zu LEEREN raeumt die Leiste nicht weg: sie haengt an
   // `bar.hidden`, das nur updateBulkActionsBar setzt. Ohne diesen Aufruf blieb
@@ -4382,10 +4388,10 @@ function updateBulkActionsBar(container) {
   const selected = state.selectedTaskIds.size;
   const buttons = bar.querySelectorAll('button[id^="bulk-"]');
 
-  bar.hidden = !(state.bulkSelectMode && selected > 0);
+  bar.hidden = !state.bulkSelectMode;
   bar.classList.toggle('bulk-actions-bar--active', selected > 0);
   buttons.forEach((button) => {
-    button.disabled = selected === 0;
+    button.disabled = button.id !== 'bulk-exit' && selected === 0;
   });
 
   if (count) {
@@ -4393,19 +4399,38 @@ function updateBulkActionsBar(container) {
   }
 }
 
+const taskSelectionBindings = new WeakMap();
+function exitTaskSelection(container) {
+  const restore = captureTaskViewport(container);
+  const focusedTaskId = container.ownerDocument.activeElement?.closest('article[data-task-id]')?.dataset.taskId || [...state.selectedTaskIds][0];
+  state.bulkSelectMode = false;
+  state.selectedTaskIds.clear();
+  renderTaskList(container);
+  restore();
+  if (focusedTaskId) container.querySelector(`article[data-task-id="${focusedTaskId}"] .activity-card__open`)?.focus({ preventScroll: true });
+}
 function wireBulkSelect(container) {
-  const toggleBtn = container.querySelector('#btn-bulk-select');
-  if (!toggleBtn) return;
-
-  toggleBtn.addEventListener('click', () => {
-    state.bulkSelectMode = !state.bulkSelectMode;
-    if (!state.bulkSelectMode) {
-      state.selectedTaskIds.clear();
-    }
-    toggleBtn.classList.toggle('btn--active', state.bulkSelectMode);
-    toggleBtn.setAttribute('aria-pressed', String(state.bulkSelectMode));
-    loadTasks(container);
+  taskSelectionBindings.get(container)?.();
+  const list = container.querySelector('#task-list');
+  const controller = new AbortController();
+  const dispose = bindTaskCardSelection(list, {
+    canSelect: card => state.viewMode === 'list' && !!taskSnapshot(card.dataset.taskId),
+    onSelect: card => {
+      const restore = captureTaskViewport(container);
+      const id = Number(card.dataset.taskId);
+      state.bulkSelectMode = true;
+      state.selectedTaskIds.add(id);
+      renderTaskList(container);
+      restore();
+      list.querySelector(`.task-bulk-checkbox[data-task-id="${id}"]`)?.focus({ preventScroll: true });
+    },
   });
+  container.addEventListener('keydown', event => {
+    if (event.key !== 'Escape' || !state.bulkSelectMode || event.target.closest('[role="dialog"], [popover]:popover-open')) return;
+    event.preventDefault();
+    exitTaskSelection(container);
+  }, { signal: controller.signal });
+  taskSelectionBindings.set(container, () => { dispose(); controller.abort(); });
 }
 
 function wireBulkCheckboxes(container) {
@@ -4433,6 +4458,7 @@ function wireBulkActions(container) {
   bar.addEventListener('click', async (e) => {
     const btn = e.target.closest('button[id^="bulk-"]');
     if (!btn) return;
+    if (btn.id === 'bulk-exit') { exitTaskSelection(container); return; }
 
     const taskIds = [...state.selectedTaskIds];
     if (taskIds.length === 0) return;
@@ -4889,6 +4915,42 @@ function applyTaskPagePermissions(container) {
 
 }
 
+function wireTaskSearch(container) {
+  const toggle = container.querySelector('#tasks-search-toggle');
+  const panel = container.querySelector('#tasks-search-panel');
+  if (!toggle || !panel) return;
+  const search = wirePageSearch(container, {
+    id: 'tasks-search',
+    onQuery: (value) => {
+      if (!container.isConnected) return;
+      state.searchQuery = value;
+      syncQueryIndicator();
+      renderTaskList(container);
+    },
+  });
+  if (!search) return;
+  function syncQueryIndicator() {
+    const active = !!state.searchQuery.trim();
+    toggle.classList.toggle('tasks-toolbar__search-toggle--active', active);
+    toggle.title = active ? `${t('tasks.searchPlaceholder')}: ${state.searchQuery}` : t('tasks.searchPlaceholder');
+    toggle.setAttribute('aria-label', toggle.title);
+  }
+  function setExpanded(expanded, restoreFocus = false) {
+    toggle.setAttribute('aria-expanded', String(expanded));
+    panel.hidden = !expanded;
+    if (expanded) search.input.focus({ preventScroll: true });
+    else if (restoreFocus) toggle.focus({ preventScroll: true });
+  }
+  toggle.addEventListener('click', () => setExpanded(panel.hidden, !panel.hidden));
+  panel.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setExpanded(false, true);
+  });
+  syncQueryIndicator();
+}
+
 export async function render(container, { user }) {
   state.user = user ?? null;
   state.currentUserId = user?.id ?? null;
@@ -4930,14 +4992,21 @@ export async function render(container, { user }) {
     <div class="tasks-page page-measure--narrow">
       <div class="page-toolbar page-toolbar--wrap tasks-toolbar">
         <h1 class="page-toolbar__title">${t('tasks.title')}</h1>
+        <button type="button" class="btn btn--ghost btn--icon tasks-toolbar__search-toggle" id="tasks-search-toggle"
+                aria-label="${esc(t('tasks.searchPlaceholder'))}" title="${esc(t('tasks.searchPlaceholder'))}"
+                aria-expanded="${!!state.searchQuery.trim()}" aria-controls="tasks-search-panel">
+          <i data-lucide="search" class="icon-lg" aria-hidden="true"></i>
+        </button>
+        <div class="tasks-toolbar__search" id="tasks-search-panel"${state.searchQuery.trim() ? '' : ' hidden'}>
         ${renderPageSearch({
           id: 'tasks-search',
           label: t('tasks.searchPlaceholder'),
           placeholder: t('tasks.searchPlaceholder'),
           value: state.searchQuery,
           clearLabel: t('common.searchClear'),
-          className: 'tasks-toolbar__search page-toolbar__center',
+          className: 'tasks-toolbar__search-field',
         })}
+        </div>
         <div class="page-toolbar__actions">
           <!-- ICON PLUS LABEL, wie beim Geschwister-Umschalter in der Filterreihe
                (#group-mode-toggle, ~60 Zeilen tiefer). tasks.css:143 sagt ueber
@@ -4974,10 +5043,6 @@ export async function render(container, { user }) {
             <i data-lucide="layout-grid" class="icon-sm" aria-hidden="true"></i>
             <span class="tasks-toolbar-control__label">${t('tasks.viewToggleLabel')}</span>
           </button>
-          <button class="btn btn--ghost btn--icon" id="btn-bulk-select"
-                  title="${t('tasks.bulkSelect')}" aria-label="${t('tasks.bulkSelect')}" aria-pressed="false">
-            <i data-lucide="list-checks" class="icon-lg" aria-hidden="true"></i>
-          </button>
           <button class="btn btn--icon btn--ghost" id="btn-manage-categories"
                   aria-label="${t('tasks.manageCategories')}" title="${t('tasks.manageCategories')}">
             <i data-lucide="folder-tree" class="icon-lg" aria-hidden="true"></i>
@@ -5011,8 +5076,9 @@ export async function render(container, { user }) {
         <div class="task-control-popover" id="task-view-panel" popover="auto"></div>
         <div class="task-control-popover task-profile-popover" id="task-profile-popover" popover="auto" role="dialog"></div>
         <div class="bulk-actions-bar" id="bulk-actions-bar" hidden>
-          <span class="bulk-actions-bar__count" id="bulk-count"></span>
+          <span class="bulk-actions-bar__count" id="bulk-count" role="status" aria-live="polite"></span>
           <div class="bulk-actions-bar__actions">
+            <button type="button" class="btn btn--ghost btn--sm" id="bulk-exit">Done selecting</button>
             <button class="btn btn--secondary btn--sm" id="bulk-mark-done" data-status="done">
               <i data-lucide="check" class="icon-md" aria-hidden="true"></i>
               ${t('tasks.bulkMarkDone')}
@@ -5044,6 +5110,7 @@ export async function render(container, { user }) {
           </div>
         </div>
 
+        <p class="sr-only" id="task-selection-hint">Hold a Task for one second to select it, or press Shift and Space. Use the checkboxes to select more Tasks. Press Escape to finish selecting.</p>
         <div id="task-list">
           ${[1,2,3].map(() => `
             <div class="widget-skeleton" style="margin-bottom:var(--space-2)">
@@ -5135,13 +5202,7 @@ export async function render(container, { user }) {
   // `/tasks`, und sein Ladefehler ist ein eigener.
   renderTaskList(container);
 
-  wirePageSearch(container, {
-    id: 'tasks-search',
-    onQuery: (value) => {
-      state.searchQuery = value;
-      renderTaskList(container);
-    },
-  });
+  wireTaskSearch(container);
 
   const stopLive = watchTaskChanges(() => {
     void loadTasks(container).catch(() => {});
@@ -5169,6 +5230,8 @@ export async function render(container, { user }) {
   }
   return () => {
     stopLive();
+    taskSelectionBindings.get(container)?.();
+    taskSelectionBindings.delete(container);
     taskTouchBindings.get(container)?.dispose();
     taskTouchBindings.delete(container);
     state.dragTaskId = null;

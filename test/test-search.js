@@ -46,8 +46,10 @@ db.prepare(`INSERT INTO tasks (title, description, priority, status, created_by)
   VALUES ('Buy birthday cake', 'chocolate sponge', 'high', 'open', ?)`).run(uid);
 db.prepare(`INSERT INTO tasks (title, description, priority, status, created_by)
   VALUES ('Mow the lawn', 'garden chores', 'low', 'open', ?)`).run(uid);
-db.prepare(`INSERT INTO tasks (title, description, priority, status, created_by)
-  VALUES ('Secret cake plan', 'hidden', 'low', 'open', ?)`).run(otherUid);
+db.prepare(`INSERT INTO tasks (title, description, priority, status, visibility, created_by)
+  VALUES ('Secret cake plan', 'hidden', 'low', 'open', 'private', ?)`).run(otherUid);
+db.prepare(`INSERT INTO tasks (title, description, priority, status, visibility, created_by)
+  VALUES ('Shared cake plan', 'household', 'low', 'open', 'all', ?)`).run(otherUid);
 
 const list = db.prepare(`INSERT INTO shopping_lists (name, created_by) VALUES ('Groceries', ?)`).run(uid);
 db.prepare(`INSERT INTO shopping_items (list_id, name) VALUES (?, 'cake mix')`).run(list.lastInsertRowid);
@@ -93,11 +95,12 @@ test('Suche findet Aufgabe über Titel-Treffer (FTS MATCH)', () => {
   assert(r.tasks[0].title === 'Buy birthday cake', 'Korrekte Aufgabe');
 });
 
-test('Suche respektiert Besitzer-Filter bei Aufgaben', () => {
+test('Suche respektiert die Sichtbarkeit statt fremde Aufgaben pauschal auszuschließen', () => {
   const r = runSearch(db, 'cake', uid);
   const titles = r.tasks.map((t) => t.title);
   assert(titles.includes('Buy birthday cake'), 'Eigene Aufgabe gefunden');
-  assert(!titles.includes('Secret cake plan'), 'Fremde Aufgabe ausgeschlossen');
+  assert(titles.includes('Shared cake plan'), 'Haushaltssichtbare fremde Aufgabe gefunden');
+  assert(!titles.includes('Secret cake plan'), 'Private fremde Aufgabe ausgeschlossen');
 });
 
 test('Suche deckt alle Entitäten ab', () => {

@@ -25,15 +25,17 @@ import express from 'express';
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'search-permissions-test-secret';
 
-const { MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
 const {
-  resolvePermissions, buildSessionModuleAccess, PERMISSION_MODULES,
+  resolvePermissions, buildSessionModuleAccess, PERMISSION_MODULES, replaceSubjectPermissions,
 } = await import('../server/permissions.js');
+const { RESTRICTED_MEMBER_CAPABILITIES } = await import('../server/task-capabilities.js');
+const { taskCapabilities } = await import('../server/services/task-access.js');
 const { moduleForPath } = await import('../server/scopes.js');
 const { default: searchRouter } = await import('../server/routes/search.js');
 
 const moduleDatabase = get();
-const db = buildMigratedDatabase(MIGRATIONS);
+const db = buildMigratedDatabase(ALL_MIGRATIONS);
 _setTestDatabase(db);
 moduleDatabase.close();
 
@@ -306,4 +308,78 @@ test('Die /api/v1-Modulsperre kann diesen Endpoint gar nicht abdecken', async ()
   assert.ok(!('search' in access), 'aber `search` ist kein Permissions-Modul → der Guard greift nie');
   assert.equal(access.contacts, 'none', 'gesperrt sind die Module, die die Suche DURCHSUCHT');
   clearModuleDenials(KID);
+});
+
+// Search must use the same Task audience as normal authenticated Tasks. A
+// household-visible Task is not limited to its creator and primary assignee.
+const ELEANOR = seedUser('search-eleanor', 'member', 'child');
+const HOUSEHOLD_VIEWER = seedUser('search-household-viewer', 'member', 'parent');
+const RESTRICTED_VIEWER = seedUser('search-restricted-viewer', 'member', 'child');
+
+function visibilityTask(title, { visibility = 'all', assignees = [ELEANOR], status = 'open' } = {}) {
+  const id = Number(db.prepare(`INSERT INTO tasks
+    (title, created_by, assigned_to, visibility, status) VALUES (?, ?, ?, ?, ?)`)
+    .run(title, PARENT, assignees[0] ?? null, visibility, status).lastInsertRowid);
+  for (const userId of assignees) db.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES (?,?)').run(id, userId);
+  return db.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+}
+
+async function assertSearchVisibility(userId, task, expected) {
+  assert.equal(taskCapabilities(db, userId, task).view, expected, 'canonical Task authorization precondition');
+  const first = await searchAs(userId, task.title);
+  const refreshed = await searchAs(userId, task.title);
+  assert.equal(first.tasks.some(row => row.id === task.id), expected, 'Search agrees with canonical Task authorization');
+  assert.deepEqual(refreshed.tasks, first.tasks, 'a fresh Search read has the same audience');
+}
+
+test('household-visible Task assigned to Eleanor is searchable by creator, assignee and another household viewer', async () => {
+  const task = visibilityTask('VisibleLaundryHousehold');
+  for (const userId of [PARENT, ELEANOR, HOUSEHOLD_VIEWER]) await assertSearchVisibility(userId, task, true);
+});
+
+test('household-visible In Progress Task does not acquire a creator or assignment filter in Search', async () => {
+  const task = visibilityTask('VisibleLaundryProgress', { status: 'in_progress' });
+  await assertSearchVisibility(HOUSEHOLD_VIEWER, task, true);
+});
+
+test('private Tasks stay creator-only even when another member is explicitly assigned', async () => {
+  const task = visibilityTask('VisibleLaundryPrivate', { visibility: 'private' });
+  await assertSearchVisibility(PARENT, task, true);
+  for (const userId of [ELEANOR, HOUSEHOLD_VIEWER]) await assertSearchVisibility(userId, task, false);
+});
+
+test('assignee-only Tasks include secondary assignees and the creator but exclude other household viewers', async () => {
+  const task = visibilityTask('VisibleLaundryAudience', { visibility: 'assignees', assignees: [ELEANOR, RESTRICTED_VIEWER] });
+  for (const userId of [PARENT, ELEANOR, RESTRICTED_VIEWER]) await assertSearchVisibility(userId, task, true);
+  await assertSearchVisibility(HOUSEHOLD_VIEWER, task, false);
+});
+
+test('own-only member Search remains restricted until household Task viewing is explicitly allowed', async () => {
+  replaceSubjectPermissions(db, 'user', RESTRICTED_VIEWER, { capabilities: RESTRICTED_MEMBER_CAPABILITIES });
+  const theirs = visibilityTask('VisibleLaundryRestrictedOther');
+  const own = visibilityTask('VisibleLaundryRestrictedOwn', { assignees: [RESTRICTED_VIEWER] });
+  try {
+    await assertSearchVisibility(RESTRICTED_VIEWER, theirs, false);
+    await assertSearchVisibility(RESTRICTED_VIEWER, own, true);
+    replaceSubjectPermissions(db, 'user', RESTRICTED_VIEWER, {
+      capabilities: { ...RESTRICTED_MEMBER_CAPABILITIES, 'tasks.view_household': 'allow' },
+    });
+    await assertSearchVisibility(RESTRICTED_VIEWER, theirs, true);
+    replaceSubjectPermissions(db, 'user', RESTRICTED_VIEWER, {
+      capabilities: { ...RESTRICTED_MEMBER_CAPABILITIES, 'tasks.view_own': 'none' },
+    });
+    await assertSearchVisibility(RESTRICTED_VIEWER, own, false);
+  } finally {
+    replaceSubjectPermissions(db, 'user', RESTRICTED_VIEWER, { capabilities: {} });
+  }
+});
+
+test('module denial still removes household-visible Search Tasks despite an allowed household capability', async () => {
+  const task = visibilityTask('VisibleLaundryModuleDenied');
+  try {
+    denyModules(HOUSEHOLD_VIEWER, ['tasks']);
+    await assertSearchVisibility(HOUSEHOLD_VIEWER, task, false);
+  } finally {
+    clearModuleDenials(HOUSEHOLD_VIEWER);
+  }
 });

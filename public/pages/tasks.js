@@ -197,10 +197,10 @@ function canCheckAndClaim(task) {
 }
 
 function boardTasks() {
-  const tasks = filteredTasks();
-  if (state.boardScope !== 'personal') return tasks;
-  return tasks.filter((task) => canCheckAndClaim(task)
-    || taskParticipants(task).some((user) => Number(user.id) === Number(state.currentUserId)));
+  // The API has already authorized these rows. Device layout must not hide
+  // household-visible work assigned to someone else. An explicit assignee
+  // filter still travels through taskQuery(), just as it does in List view.
+  return filteredTasks();
 }
 
 function taskBuckets(tasks, mode, { includeEmptyAssignees = false } = {}) {
@@ -1252,7 +1252,7 @@ let state = {
   filters:         { status: ['open', 'in_progress'], priority: [], assigned_to: [], tags: [] },
   groupMode:       'category',   // 'category' | 'due'
   viewMode:        'list',       // 'list' | 'kanban' | 'calendar' | 'history'
-  boardScope:      'personal',   // personal device board | household hub board
+  boardScope:      'personal',   // device layout only; never a visibility/assignment filter
   groupModes:      { list: 'category', personal: 'category', household: 'assignee', calendar: 'category' },
   sheetSort:       { field: 'default', direction: 'asc' },
   bucketSorts:     new Map(),
@@ -1324,9 +1324,9 @@ function persistTaskLayoutState() {
 function loadTaskLayoutState() {
   const groupValues = new Set(GROUP_FIELDS().map((field) => field.value));
   const sortValues = new Set(SORT_FIELDS().map((field) => field.value));
-  // Board scope is a device-mode decision, not a Tasks preference. A hub that
-  // has Wall mode enabled always receives the household board; every other
-  // device receives the personal board.
+  // Wall preference chooses the board layout/grouping only. Ordinary Tasks
+  // always keeps the API-authorized audience, regardless of device layout.
+  // Wall dashboard presentation remains separate from this Tasks module.
   state.boardScope = deviceTaskBoardScope();
   try {
     const storedGroups = JSON.parse(localStorage.getItem(TASK_GROUP_MODES_KEY) || '{}');
@@ -5213,5 +5213,7 @@ export const __test = {
   taskCalendarDate,
   formatDayMonth,
   taskQuery,
+  boardTasks,
+  deviceTaskBoardScope,
   state,
 };

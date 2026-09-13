@@ -189,7 +189,8 @@ async function call(method, path, body) {
   const res = await fetch(`${base}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
+    // This suite tests recurrence after the user explicitly confirms operational cascades.
+    body: body ? JSON.stringify({complete_remaining:true,reset_progress:true,...body}) : undefined,
   });
   const text = await res.text();
   return { status: res.status, body: text ? JSON.parse(text) : null };
@@ -402,7 +403,8 @@ test('PUT done: Subtask einer Serie erzeugt keine Folgeinstanz', async () => {
   });
   await call('PUT', `/${sub}`, { title: 'Sub PUT', status: 'done' });
   const rows = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = 'Sub PUT'`).get();
-  assert.equal(rows.n, 1, 'Subtasks dürfen keine Folgeinstanz auslösen');
+  assert.equal(rows.n, 2, 'The final child completes its recurring parent and is copied into its one successor');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(sub).n,0,'No independent child series is generated');
 });
 
 // --------------------------------------------------------
@@ -608,7 +610,8 @@ test('PATCH done: Subtask einer Serie erzeugt keine Folgeinstanz', async () => {
   });
   await call('PATCH', `/${sub}/status`, { status: 'done' });
   const rows = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = 'Sub'`).get();
-  assert.equal(rows.n, 1, 'Subtasks dürfen keine Folgeinstanz auslösen');
+  assert.equal(rows.n, 2, 'The final child completes its recurring parent and is copied into its one successor');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(sub).n,0,'No independent child series is generated');
 });
 
 test('Subtasks einer Serie werden beim Spawnen der Folgeinstanz kopiert und zurückgesetzt (#742)', async () => {

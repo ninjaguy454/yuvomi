@@ -1,3 +1,4 @@
+import { taskVisibilityWhere } from './task-access.js';
 /** User-owned notification receipts. Domain records remain the source of truth. */
 import { resolvePermissions } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
@@ -37,7 +38,7 @@ function accessWhere(database, userId) {
   const { modules } = resolvePermissions(database, user);
   const clauses = [];
   if (modules.tasks !== 'none') clauses.push(`(n.entity_type = 'task' AND EXISTS (
-    SELECT 1 FROM tasks t WHERE t.id = n.entity_id AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}))`);
+    SELECT 1 FROM tasks t WHERE t.id = n.entity_id AND ${taskVisibilityWhere(database, userId, 't', '@me')}))`);
   if (modules.calendar !== 'none') {
     clauses.push(`(n.entity_type = 'event' AND EXISTS (SELECT 1 FROM calendar_events e
       WHERE e.id = n.entity_id AND ${visibilityWhere('e', 'event_assignments', 'event_id', '@me')}
@@ -73,7 +74,7 @@ export function notificationUrl(database, entityType, entityId, userId = null) {
   if (entityType === 'task') {
     const task = database.prepare('SELECT parent_task_id FROM tasks WHERE id = ?').get(id);
     const visibleParent = task?.parent_task_id && userId && database.prepare(`SELECT 1 FROM tasks p
-      WHERE p.id = @id AND ${visibilityWhere('p', 'task_assignments', 'task_id', '@me')}`)
+      WHERE p.id = @id AND ${taskVisibilityWhere(database, userId, 'p', '@me')}`)
       .get({ id: task.parent_task_id, me: userId });
     return visibleParent ? `/tasks?open=${task.parent_task_id}&section=subtasks` : `/tasks?open=${id}`;
   }

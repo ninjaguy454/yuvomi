@@ -1,3 +1,5 @@
+import { requireCapability } from '../middleware/require-capability.js';
+import { hasCapability } from '../permissions.js';
 /**
  * Modul: Haushalt-Einstellungen (Preferences)
  * Zweck: REST-API fuer haushaltweite Praeferenzen (via sync_config-Tabelle)
@@ -554,7 +556,13 @@ router.get('/', (req, res) => {
 // Response: { data: { visible_meal_types: string[] } }
 // --------------------------------------------------------
 
-router.put('/', (req, res) => {
+router.put('/', requireCapability('settings.personal'), (req, res, next) => {
+  if (['date_format','time_format','week_start'].some(key => req.body[key] !== undefined)
+    && !hasCapability(db.get(),req,'admin.household_settings')) {
+    return res.status(403).json({error:'Household date and time settings require an administrator.',code:403});
+  }
+  return next();
+}, (req, res) => {
   try {
     // Validate both personal choices before writing either one. These do not
     // alter household appearance or require household administration rights.
@@ -602,7 +610,7 @@ router.put('/', (req, res) => {
       cfgSet('time_format', time_format);
     }
 
-    // Wochenstart — haushaltweit, von jedem Mitglied änderbar (wie date/time_format).
+    // Week start is a household preference, protected with date/time formats above.
     if (week_start !== undefined) {
       if (!VALID_WEEK_STARTS.includes(week_start)) {
         return res.status(400).json({ error: `Ungültiger Wochenstart. Erlaubt: ${VALID_WEEK_STARTS.join(', ')}`, code: 400 });

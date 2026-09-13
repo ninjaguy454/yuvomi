@@ -1,3 +1,4 @@
+import { canCapability, getPermissions } from '../permissions.js';
 import { MODULE_ICON } from '../nav-icons.js';
 
 export const SETTINGS_STORAGE_KEY = 'yuvomi:settings:path';
@@ -423,7 +424,7 @@ const RENAMED_SETTINGS_PATHS = Object.freeze({
 
 export function filterSettingsDomains(user) {
   const isAdmin = user?.role === 'admin';
-  return SETTINGS_DOMAINS.filter((domain) => isAdmin || !domain.adminOnly);
+  return SETTINGS_DOMAINS.filter((domain) => isAdmin || SETTINGS_LEAVES.some(leaf => leaf.domainId === domain.id && settingsLeafAllowed(leaf, user)));
 }
 
 /**
@@ -441,7 +442,7 @@ export function currentSettingsPath(path) {
 export function findSettingsLeaf(path, user) {
   const target = currentSettingsPath(path);
   const leaf = SETTINGS_LEAVES.find((entry) => entry.path === target);
-  if (!leaf || (leaf.adminOnly && user?.role !== 'admin')) return null;
+  if (!leaf || !settingsLeafAllowed(leaf, user)) return null;
   return leaf;
 }
 
@@ -484,4 +485,11 @@ export function readStoredSettingsDestination(user, storage = sessionStorage) {
   // wortlos im Konto-Formular, und die Übersicht war über die App-Navigation
   // gar nicht erreichbar (Critique 2026-07-27). Der Aufrufer entscheidet.
   return null;
+}
+
+export function settingsLeafAllowed(leaf, user) {
+  if (user?.role === 'admin') return true;
+  if (leaf.id === 'modules-automation') return ['skills.manage', 'activities.view', 'workflows.view'].some(canCapability);
+  if (leaf.domainId === 'personal' && leaf.id !== 'personal-account' && getPermissions().capabilities['settings.personal'] === 'none') return false;
+  return !leaf.adminOnly;
 }

@@ -258,7 +258,7 @@ test('die Aufgaben-Detailansicht schaltet die Kaestchen frei', async () => {
   // Die Ansicht wohnt seit #918 in der geteilten Komponente - und damit gelten
   // die Kaestchen ueberall, wo eine Aufgabe geoeffnet wird, nicht nur im Modul.
   const src = await readFile(new URL('../public/components/task-detail.js', import.meta.url), 'utf8');
-  assert.match(src, /interactive:\s*true/, 'die Kaestchen sind Bedienelemente');
+  assert.match(src, /interactive:\s*canTask\(task, 'complete'\)/, 'nur berechtigte Personen bedienen die Kaestchen');
   assert.match(src, /tasks\/\$\{task\.id\}\/check/, 'sie schreiben ueber die schmale Route zurueck');
   assert.match(src, /note-md-box\[data-md-line\]/, 'ein Klick auf das Kaestchen wird erkannt');
 });
@@ -267,8 +267,12 @@ test('der Zeilenindex wird gegen den GESEHENEN Text geprueft', async () => {
   const src = await readFile(new URL('../public/components/task-detail.js', import.meta.url), 'utf8');
   assert.match(src, /splitKeepingLineEndings\(task\.description\)\[line \* 2\]/,
     'expect ist die Gegenprobe zum Index - ohne sie landet ein Haken in der falschen Zeile');
-  assert.match(src, /task\.description = res\.data\.description/,
-    'der lokale Stand kommt aus der Antwort, sonst laeuft expect beim zweiten Tap ins Leere');
+  assert.match(src, /revision[\s\S]*?Object\.assign\(task, res\.data\)/,
+    'nur eine aktuelle kanonische Antwort ersetzt den lokalen Stand');
+  assert.match(src, /checked, expect, \.\.\.taskRevision\(task\)/,
+    'ein alter Task-Stand darf auch eine noch passende Zeile nicht zurueckschreiben');
+  assert.match(src, /if \(err\.status === 409\) await ctx\.refresh\(\)/,
+    'ein Konflikt laedt den aktuellen Stand ohne einen automatischen Schreibversuch');
 });
 
 test('Dashboard und Kalender rendern Aufgabentext NICHT interaktiv', async () => {

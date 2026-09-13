@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Refresh timezone-safe Availability editors and live Task claim controls together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.8`;
+// Refresh Task capabilities, operational detail and unbuffered live updates together.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.9`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -46,6 +46,9 @@ const APP_SHELL = [
   '/notification-center.js',
   '/utils/appearance-preferences.js',
   '/utils/availability-calendar.js',
+  '/utils/task-live.js',
+  '/utils/task-state.js',
+  '/utils/task-progress.js',
   '/utils/session-lifecycle.js',
   '/push.js',
   '/sw-register.js',
@@ -440,6 +443,8 @@ self.addEventListener('fetch', (event) => {
   // API-Requests: nur GET-Whitelist read-only offline-cachen. Alles andere
   // (Mutationen, /auth/*, Nicht-Whitelist) unangetastet ans Netz durchreichen.
   if (url.pathname.startsWith('/api/')) {
+    // Event streams never finish: buffering them for offline storage prevents delivery.
+    if (request.headers?.get('accept')?.includes('text/event-stream')) return;
     if (request.method === 'GET' && isCacheableApiGet(url.pathname)) {
       event.respondWith(
         (_bypassInitDone ? Promise.resolve() : _bypassInit).then(() => {
@@ -560,6 +565,8 @@ async function networkFirst(request, cacheName) {
 async function networkFirstApi(request) {
   try {
     const response = await fetch(request);
+    // Defend against a new streaming endpoint entering the finite-response whitelist.
+    if (response.headers.get('content-type')?.includes('text/event-stream')) return response;
     // Nur erfolgreiche, gleichoriginäre (basic) Antworten cachen.
     if (response.ok && response.type === 'basic') {
       try {
@@ -641,6 +648,7 @@ async function clearReaderCache() {
 function isCacheableApiGet(pathname) {
   if (!pathname.startsWith('/api/v1')) return false;
   const rest = pathname.slice('/api/v1'.length);
+  if (rest === '/tasks/changes' || rest === '/tasks/changes/') return false;
   return API_CACHE_WHITELIST.some((p) => rest === p || rest.startsWith(`${p}/`));
 }
 

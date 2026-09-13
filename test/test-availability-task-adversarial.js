@@ -187,15 +187,22 @@ test('supervised work requires a shared eligible interval, not disjoint free por
   const options = { subjectUserId: worker, dateKey: '2026-09-11', presence: {
     policy: 'available_before_due', startAt: '2026-09-11T00:00:00', endAt: '2026-09-12T00:00:00', windowMode: 'completion',
   } };
-  assert.throws(() => resolveActivityAssignment(d, definition, options), /supervisor.*shares.*window/i);
+  const unresolved = resolveActivityAssignment(d, definition, options);
+  assert.equal(unresolved.primary.id, worker, 'a valid learner remains assigned while supervision is unresolved');
+  assert.equal(unresolved.supervisor, null);
+  assert.equal(unresolved.supervisionNeeded, true);
+  assert.match(unresolved.supervisionReason, /supervisor.*shares.*window/i);
   const supervisorType = d.prepare('SELECT shift_type_id FROM schedule_pattern_days WHERE pattern_id=?').get(supervisorPattern).shift_type_id;
   d.prepare("UPDATE schedule_shift_types SET end_time='11:00' WHERE id=?").run(supervisorType);
   const result = resolveActivityAssignment(d, definition, options);
   assert.equal(result.primary.id, worker); assert.equal(result.supervisor.id, admin);
-  assert.throws(() => resolveActivityAssignment(d, definition, { ...options, presence: { ...options.presence, requiredDurationMinutes: 90 } }), /supervisor.*shares.*window/i);
+  const tooShort = resolveActivityAssignment(d, definition, { ...options, presence: { ...options.presence, requiredDurationMinutes: 90 } });
+  assert.equal(tooShort.supervisor, null);
+  assert.equal(tooShort.supervisionNeeded, true);
+  assert.match(tooShort.supervisionReason, /90 continuous minutes/);
 });
 
-test('generated supervisor Tasks retain their availability policy for subsequent date edits', async () => {
+test('generated supervisor Tasks retain policy and follow original date edits with current supervision revalidation', async () => {
   const activityId = activity({ strategy: 'subject_skill' });
   const skill = Number(d.prepare("INSERT INTO skills(name,created_by) VALUES('Needs supervision',?)").run(admin).lastInsertRowid);
   d.prepare('INSERT INTO activity_template_skills(activity_template_id,skill_id) VALUES(?,?)').run(activityId, skill);
@@ -206,8 +213,12 @@ test('generated supervisor Tasks retain their availability policy for subsequent
   assert.equal(d.prepare('SELECT presence_policy FROM task_planning_context WHERE task_id=?').get(support)?.presence_policy, 'available_before_due');
   shift(admin);
   const denied = await put(support, { due_time: '10:00' });
-  assert.equal(denied.status, 400, JSON.stringify(denied.body));
+  assert.equal(denied.status, 403, 'generated helper dates cannot be edited independently');
   assert.equal(d.prepare('SELECT due_time FROM tasks WHERE id=?').get(support).due_time, '18:00');
+  const changed = await put(source, { due_time: '10:00' });
+  assert.equal(changed.status, 200, JSON.stringify(changed.body));
+  assert.equal(changed.body.data.supervision.state, 'needed');
+  assert.equal(d.prepare('SELECT due_time FROM tasks WHERE id=?').get(support).due_time, '10:00');
 });
 
 test('CalDAV date edits reject bound Task conflicts visibly while preserving local and remote items', async () => {

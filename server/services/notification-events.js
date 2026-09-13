@@ -5,6 +5,14 @@ import { enqueueNotification } from './notification-inbox.js';
 // A resolved request remains useful history, but should not be delivered as a
 // new request after somebody has already answered it on another device.
 export function isNotificationDeliveryCurrent(database, notification) {
+  const supervision = /^task-supervision:(\d+):revision:(\d+)$/.exec(notification.source_key || '');
+  if (supervision) {
+    const action = database.prepare(`SELECT a.*,t.status AS task_status FROM task_supervision_actions a
+      JOIN tasks t ON t.id=a.action_task_id WHERE a.id=?`).get(Number(supervision[1]));
+    return !!action && action.revision === Number(supervision[2]) && action.task_status !== 'done'
+      && (['unresolved','excluded'].includes(action.state)
+        || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(notification.user_id)));
+  }
   const obligationId = /^obligation:(\d+):assigned$/.exec(notification.source_key || '')?.[1];
   if (obligationId) {
     const obligation = database.prepare('SELECT status, responsible_user_id, task_id FROM planning_obligations WHERE id = ?').get(Number(obligationId));
@@ -62,6 +70,10 @@ export function notifyTaskObligations(database, taskId, { eligibleIds = [] } = {
     for (const userId of recipients) {
       if (notified.has(Number(userId))) continue;
       notified.add(Number(userId));
+      if (obligation.role === 'supervisor' && database.prepare(`SELECT 1 FROM task_supervision_actions a
+        JOIN notification_inbox n ON n.user_id=a.supervisor_user_id
+          AND n.source_key='task-supervision:'||a.id||':revision:'||a.revision
+        WHERE a.source_task_id=? AND a.supervisor_user_id=? AND a.state='assigned' LIMIT 1`).get(taskId,userId)) continue;
       enqueueNotification(database, {
         userId, sourceKey: `obligation:${obligation.id}:assigned`, category: taskCategory(database, taskId),
         entityType: 'task', entityId: taskId,

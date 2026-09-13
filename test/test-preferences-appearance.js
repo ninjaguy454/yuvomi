@@ -10,6 +10,7 @@ let userId = 1;
 let server;
 let base;
 test.before(async () => {
+  for (const id of [1,2]) get().prepare("INSERT INTO users(id,username,display_name,password_hash,role) VALUES(?,?,?,'x','member')").run(id,`appearance-${id}`,`Member ${id}`);
   const app = express();
   app.use(express.json());
   app.use((req, _res, next) => { req.authUserId = userId; req.authRole = 'member'; next(); });

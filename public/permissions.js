@@ -6,15 +6,15 @@
  *        ausblenden. Die VERBINDLICHE Durchsetzung bleibt serverseitig — dies ist
  *        reine UX (nichts anzeigen, was ohnehin 403 liefern würde). Siehe #467.
  *
- * Fail-open by design: Ohne geladene Rechte gilt Vollzugriff (leere Maps →
- * Standard 'write'/'allow'), passend zum serverseitigen Sparse-Modell. Der Server
- * bleibt das Gate, daher ist das clientseitige Default-Offen unkritisch.
+ * Legacy module/widget maps remain sparse. Operational capabilities and Task
+ * actions require an explicit resolved allow from the server.
  */
 
 // Navigations-/Widget-Modul → Permissions-Modulschlüssel. Muss zu
 // server/permissions.js (PERMISSION_MODULES.navIds) passen. Nicht gelistete
-// Nav-Module (dashboard, settings, third-party) sind nie gesperrt.
+// Nav-Module (settings, third-party) sind nie gesperrt.
 const NAV_TO_MODULE = Object.freeze({
+  dashboard: 'dashboard',
   calendar: 'calendar',
   schedule: 'schedule',
   birthdays: 'calendar',
@@ -33,7 +33,7 @@ const NAV_TO_MODULE = Object.freeze({
   health: 'health',
 });
 
-let _perms = { admin: false, modules: {}, widgets: {} };
+let _perms = { admin: false, modules: {}, widgets: {}, capabilities: {} };
 
 /** Übernimmt die Rechte-Payload aus einer Auth-Antwort (/me, /login). */
 export function setPermissions(payload) {
@@ -42,13 +42,14 @@ export function setPermissions(payload) {
       admin: payload.admin === true,
       modules: payload.modules && typeof payload.modules === 'object' ? payload.modules : {},
       widgets: payload.widgets && typeof payload.widgets === 'object' ? payload.widgets : {},
+      capabilities: payload.capabilities && typeof payload.capabilities === 'object' ? payload.capabilities : {},
     };
   }
 }
 
 /** Setzt den Store zurück (Logout). */
 export function clearPermissions() {
-  _perms = { admin: false, modules: {}, widgets: {} };
+  _perms = { admin: false, modules: {}, widgets: {}, capabilities: {} };
 }
 
 export function getPermissions() {
@@ -90,3 +91,11 @@ export function canSeeWidget(widgetId) {
   if (_perms.admin) return true;
   return (_perms.widgets?.[widgetId] ?? 'allow') !== 'none';
 }
+
+/** Server-supplied capabilities; sensitive or unknown capabilities fail closed. */
+export function canCapability(key) {
+  if (_perms.admin) return true;
+  if (_perms.capabilities[key] != null) return _perms.capabilities[key] === 'allow';
+  return false;
+}
+export function canTask(task, action) { return task?.permissions?.[action] === true; }

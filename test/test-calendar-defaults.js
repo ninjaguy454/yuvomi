@@ -13,7 +13,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 
-await import('../server/db.js');
+const db = await import('../server/db.js');
+for (const id of [1, 2]) db.get().prepare("INSERT INTO users (id, username, display_name, password_hash, role) VALUES (?, ?, ?, 'test', 'member')").run(id, `calendar-defaults-${id}`, `Calendar member ${id}`);
 const { default: preferencesRouter } = await import('../server/routes/preferences.js');
 
 // authUserId wird pro Request gesetzt, um Per-User-Isolation zu prüfen.

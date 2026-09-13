@@ -168,99 +168,74 @@ test('requirements controls fit desktop, tablet and mobile with readable touch t
   }
 });
 
-test('Task detail inline editor saves skills-only changes, cancellation is silent, and new subtasks include skills', async () => {
+test('Task detail shows read-only skills and operational completion without exposing structural controls', async () => {
   const page = await browser.newPage();
   try {
     requests.length = 0;
     await page.goto(`${base}/requirements-test`);
     await page.evaluate(async () => {
-      window.yuvomi = { showToast: (message) => { window.lastToast = message; } };
+      window.yuvomi = { showToast() {} };
       const { openTaskDetail } = await import('/components/task-detail.js');
-      openTaskDetail({ task: { id: 1, title: 'Prepare dinner', status: 'open', created_by: 1,
-        skill_ids: [1], skills: [{ id: 1, name: 'Kitchen safety' }], skill_assignment_needed: true,
-        subtasks: [{ id: 2, title: 'Chop vegetables', status: 'open', skill_ids: [1], skills: [{ id: 1, name: 'Kitchen safety' }], skill_assignment_needed: true }] },
-        currentUserId: 1, isAdmin: true, onChanged: () => {} });
+      openTaskDetail({ task: { id: 1, revision: 1, title: 'Prepare dinner', status: 'open', created_by: 1,
+        description: 'Follow these instructions first.', permissions: { complete: true, edit: true, comment: true },
+        skill_ids: [1], skills: [{ id: 1, name: 'Kitchen safety' }],
+        subtasks: [{ id: 2, revision: 3, parent_revision: 1, title: 'Chop vegetables', status: 'open',
+          permissions: { complete: true }, skill_ids: [1], skills: [{ id: 1, name: 'Kitchen safety' }] }] },
+        currentUserId: 1, isAdmin: true, onChanged() {} });
     });
-    await page.waitForSelector('.detail-subtask__actions button');
-    assert.equal(await page.$eval('[data-subtask-id="2"] .detail-subtask__requirements', (el) => el.open), false);
-    assert.doesNotMatch(await page.$eval('[data-subtask-id="2"]', (el) => el.innerText), /Kitchen safety/);
-    await page.click('[data-subtask-id="2"] .detail-subtask__requirements summary');
-    assert.match(await page.$eval('[data-subtask-id="2"]', (el) => el.innerText), /Kitchen safety · Needs someone with these skills/);
-    await page.click('[data-subtask-id="2"] .detail-subtask__requirements summary');
-    assert.doesNotMatch(await page.$eval('[data-subtask-id="2"]', (el) => el.innerText), /Kitchen safety/);
-    assert.match(await page.$eval('.detail-view', (el) => el.textContent), /Required skills/);
-    await page.click('.detail-subtask__actions button');
-    await page.waitForSelector('.detail-subtask__editor');
-    await page.click('.detail-subtask__editor summary');
-    await page.click('.detail-subtask__editor [data-task-skill-id][value="2"]');
-    await page.click('.detail-subtask__editor button[type="submit"]');
-    await page.waitForFunction(() => !document.querySelector('.detail-subtask__editor'));
-    assert.deepEqual(requests.filter((request) => request.method === 'PUT').map((request) => request.body), [
-      { title: 'Chop vegetables', skill_ids: [1, 2] },
-    ]);
-    assert.match(await page.$eval('[data-subtask-id="2"] .detail-subtask__meta', (el) => el.textContent), /Skill 1, Skill 2/);
-    await page.click('.detail-subtask__actions button');
-    await page.waitForSelector('.detail-subtask__editor');
-    await page.click('.detail-subtask__editor button[type="button"]');
-    assert.equal(requests.filter((request) => request.method === 'PUT').length, 1);
-    await page.click('.detail-subtask--add');
-    await page.waitForSelector('.detail-subtask__editor');
-    await page.type('.detail-subtask__editor > input', 'Slice fruit');
-    await page.click('.detail-subtask__editor summary');
-    await page.click('.detail-subtask__editor [data-task-skill-id][value="2"]');
-    await page.click('.detail-subtask__editor button[type="submit"]');
-    await page.waitForSelector('[data-subtask-id="3"]');
-    assert.deepEqual(requests.filter((request) => request.method === 'POST').map((request) => request.body), [
-      { title: 'Slice fruit', parent_task_id: 1, skill_ids: [2] },
-    ]);
-    assert.equal(requests.filter((request) => request.path === '/automation/activity-options').length, 1, 'one lazy catalogue per detail surface');
+    await page.waitForSelector('.detail-subtask__toggle');
+    assert.match(await page.$eval('[data-subtask-id="2"]', el => el.innerText), /Kitchen safety/);
+    assert.equal(await page.$('.detail-subtask__editor'), null);
+    assert.equal(await page.$('.detail-subtask__actions'), null);
+    assert.equal(await page.$('.detail-subtask--add'), null);
+    assert.equal(await page.$('.task-skill-picker'), null);
+    const positions = await page.evaluate(() => ({ description: document.querySelector('.task-detail__note').getBoundingClientRect().top,
+      subtasks: document.querySelector('.detail-task-subtasks').getBoundingClientRect().top,
+      metadata: document.querySelector('.task-detail-metadata').getBoundingClientRect().top }));
+    assert.ok(positions.description < positions.subtasks && positions.subtasks < positions.metadata);
+    await page.click('.detail-subtask__toggle');
+    await page.waitForFunction(() => !document.querySelector('.detail-subtask__toggle')?.disabled);
+    assert.deepEqual(requests.find(request => request.method === 'PATCH' && request.path === '/tasks/2/status').body,
+      { status: 'done', expected_revision: 3, expected_parent_revision: 1 });
   } finally { await page.close(); }
 });
 
-test('mobile Task detail keeps skilled subtask titles usable and opens the inline editor for template-generated children', async () => {
+test('mobile Task detail skill context and supervision labels wrap without editable administrative controls', async () => {
   const page = await browser.newPage();
   try {
     await page.setViewport({ width: 390, height: 844 });
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
     await page.goto(`${base}/requirements-test`);
     await page.evaluate(async () => {
-      window.yuvomi = { showToast: (message) => { window.lastToast = message; } };
+      window.yuvomi = { showToast() {} };
       const { openTaskDetail } = await import('/components/task-detail.js');
-      openTaskDetail({ task: { id: 1, title: 'Template dinner', status: 'open', created_by: 1,
+      openTaskDetail({ task: { id: 1, revision: 1, title: 'Template dinner', status: 'open', permissions: { complete: true },
         activity_template_id: 1, activity_template_name: 'Kitchen reset',
-        subtasks: [{ id: 2, title: 'Slice vegetables', status: 'open', created_by: 1,
-          skill_ids: [1], skills: [{ id: 1, name: 'Kitchen knife safety' }], skill_assignment_needed: true }] },
-        skills: [{ id: 1, name: 'Kitchen knife safety' }, { id: 2, name: 'Measuring' }],
-        currentUserId: 1, isAdmin: true, onChanged: () => {} });
+        subtasks: [{ id: 2, revision: 1, title: 'Slice vegetables', status: 'open', permissions: { complete: true },
+          skill_ids: [1], skills: [{ id: 1, name: 'Kitchen knife safety' }], supervision_action: {
+            state: 'assigned', supervisor_user_id: 2, supervisor_name: 'Parent', reason: 'Supervision required' } }] },
+        currentUserId: 1, isAdmin: false, onChanged() {} });
     });
-    await page.waitForSelector('.detail-subtask__actions button');
-    assert.doesNotMatch(await page.$eval('[data-subtask-id="2"]', (el) => el.innerText), /Kitchen knife safety/);
-    await page.click('[data-subtask-id="2"] .detail-subtask__requirements summary');
-    const layout = await page.$eval('[data-subtask-id="2"]', (row) => {
+    await page.waitForSelector('.detail-subtask__toggle');
+    assert.match(await page.$eval('[data-subtask-id="2"]', el => el.innerText), /Kitchen knife safety.*Supervision required.*Supervisor: Parent/s);
+    assert.equal(await page.$eval('.detail-subtask__toggle', el => el.disabled), true);
+    assert.equal(await page.$('#detail-view-edit'), null);
+    assert.equal(await page.$('.task-skill-picker'), null);
+    const layout = await page.$eval('[data-subtask-id="2"]', row => {
       const title = row.querySelector('.detail-subtask__title').getBoundingClientRect();
       const toggle = row.querySelector('.detail-subtask__toggle').getBoundingClientRect();
       const meta = row.querySelector('.detail-subtask__meta').getBoundingClientRect();
-      return { titleWidth: title.width, titleHeight: title.height, metaTop: meta.top, toggleBottom: toggle.bottom,
+      return { titleHeight: title.height, toggleHeight: toggle.height, metaTop: meta.top, toggleBottom: toggle.bottom,
         overflow: document.documentElement.scrollWidth > innerWidth };
     });
-    assert.ok(layout.titleHeight < 60, 'two words must not wrap one letter per line');
-    assert.ok(layout.metaTop >= layout.toggleBottom, 'requirements use their own row');
+    assert.ok(layout.titleHeight < 60);
+    assert.ok(layout.toggleHeight >= 44);
+    assert.ok(layout.metaTop >= layout.toggleBottom);
     assert.equal(layout.overflow, false);
-    await page.click('.detail-subtask__actions button');
-    await page.waitForSelector('.detail-subtask__editor');
-    assert.equal(await page.$eval('[data-subtask-id="2"] .detail-subtask__toggle', (el) => getComputedStyle(el).display), 'none');
-    assert.equal(await page.$eval('[data-subtask-id="2"] .detail-subtask__actions', (el) => getComputedStyle(el).display), 'none');
-    assert.equal(await page.$eval('.detail-subtask__editor > input', (el) => el.value), 'Slice vegetables');
-    await page.click('.detail-subtask__editor summary');
-    const editorLayout = await page.$eval('.detail-subtask__editor', (el) => ({
-      left: el.getBoundingClientRect().left, right: el.getBoundingClientRect().right,
-      overflow: el.scrollWidth > el.clientWidth + 1,
-    }));
-    assert.ok(editorLayout.left >= 0 && editorLayout.right <= 390, JSON.stringify(editorLayout));
-    assert.equal(editorLayout.overflow, false);
   } finally { await page.close(); }
 });
 
-test('Task Detail subtask creation returns from the existing Skill editor with its draft and selected requirement intact', async () => {
+test('subtask definitions and nested Skill creation live under Edit and preserve the draft on return', async () => {
   const page = await browser.newPage();
   try {
     requests.length = 0;
@@ -269,33 +244,33 @@ test('Task Detail subtask creation returns from the existing Skill editor with i
     await page.goto(`${base}/requirements-test`);
     await page.evaluate(async () => {
       window.yuvomi = { showToast() {} };
+      const { setPermissions } = await import('/permissions.js'); setPermissions({ admin: true });
       const { openTaskDetail } = await import('/components/task-detail.js');
-      openTaskDetail({ task: { id: 1, title: 'Keep dinner details', status: 'open', created_by: 1, subtasks: [] },
-        currentUserId: 1, isAdmin: true, onChanged() {} });
+      const { renderSubtaskEditor, bindSubtaskEditor } = await import('/components/task-requirements.js');
+      openTaskDetail({ task: { id: 1, revision: 1, title: 'Keep dinner details', status: 'open', created_by: 1,
+          permissions: { complete: true, edit: true }, subtasks: [] }, currentUserId: 1, isAdmin: true,
+        edit: { mount(_panel, pane) {
+          pane.insertAdjacentHTML('beforeend', renderSubtaskEditor({ subtasks: [{ id: 4, title: 'Measure ingredients', skill_ids: [] }], canCreateSkill: true }));
+          window.editor = bindSubtaskEditor(pane, { onCreateSkill: async () => {
+            const { openSkillEditor } = await import('/components/activity-automation.js'); return openSkillEditor();
+          } });
+        } }, onChanged() {} });
     });
-    await page.waitForSelector('.detail-subtask--add');
-    await page.click('.detail-subtask--add');
-    await page.waitForSelector('.detail-subtask__editor');
-    await page.type('.detail-subtask__editor > input', 'Measure ingredients');
-    await page.click('.detail-subtask__editor summary');
-    await page.click('.detail-subtask__editor [data-create-skill]');
+    assert.equal(await page.$('[data-task-subtask-title]'), null);
+    await page.click('#detail-view-edit');
+    await page.waitForSelector('[data-task-subtask-title]');
+    await page.click('[data-task-subtask-row] summary');
+    await page.click('[data-task-subtask-row] [data-create-skill]');
     await page.waitForSelector('#automation-skill-form');
     await page.click('#shared-modal-overlay [data-action="close-modal"]');
     await page.waitForFunction(() => !document.querySelector('#automation-skill-form'));
-    assert.equal(await page.$eval('.detail-subtask__editor > input', (el) => el.value), 'Measure ingredients');
-    await page.click('.detail-subtask__editor [data-create-skill]');
+    assert.equal(await page.$eval('[data-task-subtask-title]', el => el.value), 'Measure ingredients');
+    await page.click('[data-task-subtask-row] [data-create-skill]');
     await page.waitForSelector('#automation-skill-form');
     await page.type('#automation-skill-form [name="name"]', 'Measuring by weight');
     await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#automation-skill-form'));
-    await page.waitForFunction(() => document.querySelector('.detail-subtask__editor [data-task-skill-id][value="7"]')?.checked);
-    assert.equal(await page.$eval('.detail-subtask__editor > input', (el) => el.value), 'Measure ingredients');
-    await page.click('.detail-subtask__editor button[type="submit"]');
-    await page.waitForSelector('[data-subtask-id="3"]');
-    assert.deepEqual(requests.find((request) => request.method === 'POST' && request.path === '/tasks').body,
-      { title: 'Measure ingredients', parent_task_id: 1, skill_ids: [7] });
-    await page.click('.detail-subtask--add');
-    await page.waitForSelector('.detail-subtask__editor');
-    assert.ok(await page.$('.detail-subtask__editor [data-task-skill-id][value="7"]'), 'later subtasks retain the updated catalogue');
+    await page.waitForFunction(() => document.querySelector('[data-task-skill-id][value="7"]')?.checked);
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ id: 4, title: 'Measure ingredients', skill_ids: [7] }]);
   } finally { await page.close(); }
 });

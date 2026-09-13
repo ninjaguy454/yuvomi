@@ -1,7 +1,7 @@
 /**
  * Test: Wochenstart in der Preferences-API (#484, #465)
  * Zweck: GET liefert week_start mit Default 'monday'; PUT speichert monday/
- *        sunday/saturday (haushaltweit, von jedem Mitglied), weist Ungültiges ab.
+ *        sunday/saturday (haushaltweit, nur Admin), weist Ungültiges ab.
  * Ausführen: node --experimental-sqlite --test test/test-preferences-weekstart.js
  */
 
@@ -11,15 +11,16 @@ process.env.DB_PATH = ':memory:';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import { persistPreferenceActor } from './helpers/preferences-actor-fixture.js';
 
-await import('../server/db.js');
+const { get } = await import('../server/db.js');
 const { default: preferencesRouter } = await import('../server/routes/preferences.js');
 
 let currentRole = 'member';
 function startApp() {
   const app = express();
   app.use(express.json());
-  app.use((req, _res, next) => { req.authUserId = 1; req.authRole = currentRole; next(); });
+  app.use((req, _res, next) => { req.authUserId = 1; req.authRole = currentRole; persistPreferenceActor(get(), req); next(); });
   app.use('/', preferencesRouter);
   return new Promise((resolve) => {
     const s = app.listen(0, () => resolve({
@@ -40,8 +41,8 @@ test('GET /preferences: week_start defaults to monday', async () => {
 });
 
 for (const value of ['monday', 'sunday', 'saturday']) {
-  test(`PUT /preferences: saves week_start='${value}' (non-admin member allowed)`, async () => {
-    currentRole = 'member';
+  test(`PUT /preferences: saves week_start='${value}' (household administrator)`, async () => {
+    currentRole = 'admin';
     const { baseUrl, close } = await startApp();
     try {
       const put = await fetch(`${baseUrl}/`, {
@@ -60,6 +61,7 @@ for (const value of ['monday', 'sunday', 'saturday']) {
 }
 
 test('PUT /preferences: rejects an invalid week_start with 400', async () => {
+  currentRole = 'admin';
   const { baseUrl, close } = await startApp();
   try {
     const res = await fetch(`${baseUrl}/`, {
@@ -71,6 +73,7 @@ test('PUT /preferences: rejects an invalid week_start with 400', async () => {
 });
 
 test('PUT /preferences: omitting week_start leaves the stored value untouched', async () => {
+  currentRole = 'admin';
   const { baseUrl, close } = await startApp();
   try {
     await fetch(`${baseUrl}/`, {
@@ -84,5 +87,20 @@ test('PUT /preferences: omitting week_start leaves the stored value untouched', 
     });
     const body = await res.json();
     assert.equal(body.data.week_start, 'sunday');
+  } finally { await close(); }
+});
+
+// Household date preferences must not be mutable through personal-settings access.
+test('PUT /preferences: a member cannot change the household week start', async () => {
+  currentRole = 'member';
+  const { baseUrl, close } = await startApp();
+  try {
+    const before = (await (await fetch(`${baseUrl}/`)).json()).data.week_start;
+    const res = await fetch(`${baseUrl}/`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ week_start: before === 'monday' ? 'sunday' : 'monday' }),
+    });
+    assert.equal(res.status, 403);
+    assert.equal((await (await fetch(`${baseUrl}/`)).json()).data.week_start, before);
   } finally { await close(); }
 });

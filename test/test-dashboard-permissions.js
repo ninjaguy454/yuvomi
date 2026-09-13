@@ -452,7 +452,7 @@ test('Guard: bei voller Sperre trägt kein Feld der Antwort mehr etwas', async (
 // --------------------------------------------------------------------------
 // Warum die Route selbst filtern muss - und nicht die Middleware es tut.
 // --------------------------------------------------------------------------
-test('Die /api/v1-Modulsperre kann diesen Endpoint gar nicht abdecken', async () => {
+test('Overview has its own module gate and still filters denied child modules', async () => {
   // Der Guard in server/index.js schlägt den Pfad in scopes.js nach. Für
   // /dashboard ergibt das den Schlüssel `dashboard` - und der ist KEIN
   // Permissions-Modul (PERMISSION_MODULES), steht also nie in der Access-Map.
@@ -465,7 +465,7 @@ test('Die /api/v1-Modulsperre kann diesen Endpoint gar nicht abdecken', async ()
   const access = buildSessionModuleAccess(resolvePermissions(db, kid));
 
   assert.equal(moduleForPath('/dashboard'), 'dashboard', 'der Pfad löst auf ein Scope-Modul auf');
-  assert.ok(!('dashboard' in access), 'aber `dashboard` ist kein Permissions-Modul → der Guard greift nie');
+  assert.equal(access.dashboard, 'none', 'Overview can now be explicitly hidden as a module');
   assert.equal(access.calendar, 'none', 'gesperrt ist der Kalender, und den fragt niemand für /dashboard ab');
   clearModuleDenials(KID);
 });

@@ -1,8 +1,10 @@
 import express from 'express';
 import * as db from '../db.js';
 import { requireAdmin } from '../auth.js';
+import { requireCapability } from '../middleware/require-capability.js';
 import { tokenAllows } from '../scopes.js';
-import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
+import { taskCapabilities } from '../services/task-access.js';
+import { hasCapability, moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import { evaluatePresence, availabilityInstantMs, placeWithInheritedAddress } from '../services/presence.js';
 import { householdTimeZone } from '../utils/timezone.js';
@@ -319,7 +321,10 @@ router.post('/place-search', async (req, res) => {
   }
 });
 
-router.get('/admin/context', requireAdmin, (_req, res) => {
+router.get('/admin/context', (req, res, next) => {
+  if (hasCapability(db.get(), req, 'availability.manage') || hasCapability(db.get(), req, 'places.manage')) return next();
+  return requireAdmin(req, res, next);
+}, (_req, res) => {
   try {
     const database = db.get();
     res.json({
@@ -342,7 +347,7 @@ router.get('/admin/context', requireAdmin, (_req, res) => {
   } catch (error) { log.error('GET /admin/context', error); res.status(500).json({ error: 'Could not load availability.', code: 500 }); }
 });
 
-router.post('/admin/places', requireAdmin, (req, res) => {
+router.post('/admin/places', requireCapability('places.manage'), (req, res) => {
   try {
     const database = db.get();
     const input = normalizePlace(database, req.body);
@@ -361,7 +366,7 @@ router.post('/admin/places', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.post('/admin/places/from-google', requireAdmin, (req, res) => {
+router.post('/admin/places/from-google', requireCapability('places.manage'), (req, res) => {
   try {
     const database = db.get();
     const externalPlaceId = string(req.body.external_place_id, { required: true, max: 250 });
@@ -401,7 +406,7 @@ router.post('/admin/places/from-google', requireAdmin, (req, res) => {
   }
 });
 
-router.put('/admin/places/:id', requireAdmin, (req, res) => {
+router.put('/admin/places/:id', requireCapability('places.manage'), (req, res) => {
   try {
     const database = db.get();
     const existing = validPlace(database, integer(req.params.id, { required: true }));
@@ -423,7 +428,7 @@ router.put('/admin/places/:id', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.post('/admin/places/:id/refresh-external-id', requireAdmin, async (req, res) => {
+router.post('/admin/places/:id/refresh-external-id', requireCapability('places.manage'), async (req, res) => {
   try {
     const database = db.get();
     const place = validPlace(database, integer(req.params.id, { required: true }));
@@ -439,7 +444,7 @@ router.post('/admin/places/:id/refresh-external-id', requireAdmin, async (req, r
   }
 });
 
-router.delete('/admin/places/:id', requireAdmin, (req, res) => {
+router.delete('/admin/places/:id', requireCapability('places.manage'), (req, res) => {
   try {
     const database = db.get();
     const id = integer(req.params.id, { required: true });
@@ -454,7 +459,7 @@ router.delete('/admin/places/:id', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.post('/admin/rules', requireAdmin, (req, res) => {
+router.post('/admin/rules', requireCapability('availability.manage'), (req, res) => {
   try {
     const database = db.get();
     const input = normalizeRule(database, req.body);
@@ -466,7 +471,7 @@ router.post('/admin/rules', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.put('/admin/rules/:id', requireAdmin, (req, res) => {
+router.put('/admin/rules/:id', requireCapability('availability.manage'), (req, res) => {
   try {
     const database = db.get();
     const existing = database.prepare('SELECT * FROM availability_rules WHERE id = ?').get(integer(req.params.id, { required: true }));
@@ -479,13 +484,13 @@ router.put('/admin/rules/:id', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.delete('/admin/rules/:id', requireAdmin, (req, res) => {
+router.delete('/admin/rules/:id', requireCapability('availability.manage'), (req, res) => {
   const result = db.get().prepare('DELETE FROM availability_rules WHERE id = ?').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'Availability rule not found.', code: 404 });
   res.status(204).end();
 });
 
-router.post('/admin/periods', requireAdmin, (req, res) => {
+router.post('/admin/periods', requireCapability('availability.manage'), (req, res) => {
   try {
     const database = db.get();
     const input = normalizePeriod(database, req.body);
@@ -497,7 +502,7 @@ router.post('/admin/periods', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.put('/admin/periods/:id', requireAdmin, (req, res) => {
+router.put('/admin/periods/:id', requireCapability('availability.manage'), (req, res) => {
   try {
     const database = db.get();
     const existing = database.prepare('SELECT * FROM availability_periods WHERE id = ?').get(integer(req.params.id, { required: true }));
@@ -510,17 +515,21 @@ router.put('/admin/periods/:id', requireAdmin, (req, res) => {
   } catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
-router.delete('/admin/periods/:id', requireAdmin, (req, res) => {
+router.delete('/admin/periods/:id', requireCapability('availability.manage'), (req, res) => {
   const result = db.get().prepare('DELETE FROM availability_periods WHERE id = ?').run(req.params.id);
   if (!result.changes) return res.status(404).json({ error: 'Availability period not found.', code: 404 });
   res.status(204).end();
 });
 
+function visibleTripTasks(req, trip) {
+  return { ...trip, tasks: (trip.tasks || []).filter(task => tokenAllows(req.authScopes, 'tasks', 'read') && taskCapabilities(db.get(), req, task).view) };
+}
+
 router.get('/trips', (req, res) => {
   try {
     const from = req.query.from && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from) ? req.query.from : null;
     const to = req.query.to && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to) ? req.query.to : null;
-    res.json({ data: listTrips(db.get(), { from, to }) });
+    res.json({ data: listTrips(db.get(), { from, to }).map(trip => visibleTripTasks(req, trip)) });
   } catch (error) {
     res.status(500).json({ error: 'Could not load trips.', code: 500 });
   }
@@ -603,12 +612,12 @@ router.post('/admin/context-conflicts/:id/resolve', requireAdmin, (req, res) => 
 });
 
 router.post('/admin/trips', requireAdmin, (req, res) => {
-  try { res.status(201).json({ data: saveTrip(db.get(), req.body, currentUserId(req)) }); }
+  try { res.status(201).json({ data: visibleTripTasks(req, saveTrip(db.get(), req.body, currentUserId(req))) }); }
   catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
 });
 
 router.put('/admin/trips/:id', requireAdmin, (req, res) => {
-  try { res.json({ data: saveTrip(db.get(), req.body, currentUserId(req), integer(req.params.id, { required: true })) }); }
+  try { res.json({ data: visibleTripTasks(req, saveTrip(db.get(), req.body, currentUserId(req), integer(req.params.id, { required: true }))) }); }
   catch (error) { res.status(/not found/i.test(error.message) ? 404 : 400).json({ error: error.message, code: /not found/i.test(error.message) ? 404 : 400 }); }
 });
 
@@ -620,7 +629,12 @@ router.delete('/admin/trips/:id', requireAdmin, (req, res) => {
 });
 
 router.get('/trips/:id/itinerary', (req, res) => {
-  try { res.json({ data: tripItinerary(db.get(), integer(req.params.id, { required: true })) }); }
+  try {
+    const data = tripItinerary(db.get(), integer(req.params.id, { required: true }));
+    data.trip = visibleTripTasks(req, data.trip);
+    for (const day of Object.values(data.days)) day.tasks = visibleTripTasks(req, day).tasks;
+    res.json({ data });
+  }
   catch (error) { res.status(/not found/i.test(error.message) ? 404 : 400).json({ error: error.message, code: /not found/i.test(error.message) ? 404 : 400 }); }
 });
 

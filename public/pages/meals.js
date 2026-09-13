@@ -5,6 +5,7 @@
  */
 
 import { api } from '/api.js';
+import { canCapability } from '/permissions.js';
 import { openModal as openSharedModal, closeModal as closeSharedModal, selectModal, confirmModal, confirmOverModal, advancedSection, wireBlurValidation, reportFieldError, refreshDirtySnapshot } from '/components/modal.js';
 import { stagger, scheduleUndoableDelete, wireScrollFade } from '/utils/ux.js';
 import { t, formatDate, formatDayMonth, formatDateInput, parseDateInput, isDateInputValid } from '/i18n.js';
@@ -3482,7 +3483,9 @@ function wireOccurrenceDialog(panel, key) {
     if (action === 'meal-execution') {
       button.disabled = true;
       try {
-        const response = await api.post(`/meals/${Number(button.dataset.mealId)}/execution-tasks`, {});
+        const response = canCapability('tasks.create')
+          ? await api.post(`/meals/${Number(button.dataset.mealId)}/execution-tasks`, {})
+          : await api.get(`/meals/${Number(button.dataset.mealId)}/execution`);
         await loadWeek(state.currentWeek);
         renderWeekGrid();
         await closeSharedModal({ force: true });
@@ -3625,7 +3628,9 @@ function wireGrid(grid) {
     if (action === 'meal-execution') {
       btn.disabled = true;
       try {
-        const response = await api.post(`/meals/${Number(btn.dataset.mealId)}/execution-tasks`, {});
+        const response = canCapability('tasks.create')
+          ? await api.post(`/meals/${Number(btn.dataset.mealId)}/execution-tasks`, {})
+          : await api.get(`/meals/${Number(btn.dataset.mealId)}/execution`);
         await loadWeek(state.currentWeek);
         renderWeekGrid();
         openMealExecutionDetail(response.data);

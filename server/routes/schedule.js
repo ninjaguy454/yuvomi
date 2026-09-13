@@ -1,3 +1,4 @@
+import { hasCapability, PermissionError } from '../permissions.js';
 /** Schedule API: patterns are computed into entries, never calendar events. */
 import express from 'express';
 import * as db from '../db.js';
@@ -8,12 +9,18 @@ import { daysBetweenDateKeys } from '../utils/timezone.js';
 
 const router = express.Router();
 const log = createLogger('Schedule');
+router.use((req, res, next) => {
+  try {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !hasCapability(db.get(), req, 'availability.manage') && !hasCapability(db.get(), req, 'availability.manage_own')) throw new PermissionError('Your household permissions do not allow changing Availability routines.');
+    next();
+  } catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not check household permissions.', code: error.status || 500 }); }
+});
 const actorId = (req) => req.authUserId || req.session?.userId;
 const isAdmin = (req) => req.authRole === 'admin' || req.session?.role === 'admin';
 const fail = (res, code, error) => res.status(code).json({ error, code });
 const userExists = (value) => !!db.get().prepare('SELECT 1 FROM users WHERE id = ?').get(value);
 const typeExists = (value) => !!db.get().prepare('SELECT 1 FROM schedule_shift_types WHERE id = ?').get(value);
-const mineOrAdmin = (req, userId) => isAdmin(req) || actorId(req) === userId;
+const mineOrAdmin = (req, userId) => isAdmin(req) || hasCapability(db.get(), req, 'availability.manage') || actorId(req) === userId;
 
 /**
  * Ein Schichttyp gehoert dem Haushalt, nicht einer Person: er taucht in den
@@ -24,7 +31,7 @@ const mineOrAdmin = (req, userId) => isAdmin(req) || actorId(req) === userId;
  * `created_by` ist `ON DELETE SET NULL`: ein Typ, dessen Ersteller nicht mehr
  * da ist, wird verwaist und liegt damit bei den Admins - nicht bei allen.
  */
-const ownTypeOrAdmin = (req, type) => isAdmin(req) || (type.created_by != null && type.created_by === actorId(req));
+const ownTypeOrAdmin = (req, type) => isAdmin(req) || hasCapability(db.get(), req, 'availability.manage') || (type.created_by != null && type.created_by === actorId(req));
 
 /**
  * Hat SQLite das Loeschen wegen einer bestehenden Referenz abgelehnt?

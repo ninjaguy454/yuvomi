@@ -12,6 +12,7 @@ import { syncAllBirthdayReminders } from '../services/birthdays.js';
 import { fanOutEventReminders, eventAuthorId } from '../services/event-reminder-fanout.js';
 import { deniedModules } from '../permissions.js';
 import { tokenAllows } from '../scopes.js';
+import { taskVisibilityWhere } from '../services/task-access.js';
 
 const log    = createLogger('Reminders');
 const router = express.Router();
@@ -160,6 +161,10 @@ router.get('/pending', (req, res) => {
         AND r.dismissed   = 0
         AND r.remind_at  <= ?
         AND r.entity_type IN (${origins.map(() => '?').join(', ')})
+        AND (r.entity_type <> 'task' OR EXISTS (
+          SELECT 1 FROM tasks t WHERE t.id = r.entity_id
+            AND ${taskVisibilityWhere(db.get(), req, 't', String(Number(userId)))}
+        ))
       ORDER BY r.remind_at ASC
     `).all(userId, now, ...origins);
 

@@ -75,8 +75,8 @@ const state = {
   catalog: null,       // { modules, widgets, roles, members, defaults }
   mode: 'role',        // 'role' | 'user'
   subjectId: null,     // familyRole (role) | userId (user)
-  draft: { modules: {}, widgets: {} },     // aktuell editierte Werte
-  inherited: { modules: {}, widgets: {} }, // Rollen-Effektivwerte (nur user-Modus)
+  draft: { modules: {}, widgets: {}, capabilities: {} },     // aktuell editierte Werte
+  inherited: { modules: {}, widgets: {}, capabilities: {} }, // Rollen-Effektivwerte (nur user-Modus)
   dirty: false,
 };
 
@@ -320,6 +320,7 @@ function renderMatrix(container) {
     </div>
     <div id="perm-summary"></div>
     <div class="perm-list">${groupsHtml}${generalHtml}</div>
+    ${capabilityGroupsHtml()}
     <div class="perm-actions">
       <span class="perm-actions__status" id="perm-dirty" hidden>
         <i data-lucide="circle-dot" aria-hidden="true"></i>${esc(t('settings.permUnsaved'))}
@@ -331,6 +332,25 @@ function renderMatrix(container) {
   window.lucide?.createIcons({ el: panel });
   renderSummary(container);
   updateSaveState(panel);
+}
+
+
+function capabilityGroupsHtml() {
+  const groups = new Map();
+  for (const item of state.catalog.capabilities || []) {
+    if (!groups.has(item.group)) groups.set(item.group, []);
+    groups.get(item.group).push(item);
+  }
+  return `<div class="perm-matrix__head"><h3>What this member can do</h3><p>Choose capabilities for this profile. Module access also applies. Administrators always retain full access.</p><button type="button" class="btn btn--secondary" id="perm-participant">Use Task participant defaults</button><p class="form-hint">Allows own Tasks, completion, claims, comments and personal settings. Module choices stay as configured; save to apply.</p></div>${[...groups].map(([group, items]) => `<section class="perm-modgroup"><h4 class="perm-modgroup__general-title">${esc(group)}</h4>${items.map(item => {
+    if (item.adminOnly) return `<div class="perm-row"><span class="perm-row__name">${esc(item.label)}</span><span class="perm-row__hint">Administrators only</span></div>`;
+    const current = state.draft.capabilities[item.key] ?? (state.mode === 'user' ? 'inherit' : item.default);
+    const inherited = state.inherited.capabilities[item.key] ?? item.default;
+    const options = [
+      ...(state.mode === 'user' ? [{ value: 'inherit', label: `Inherit (${inherited === 'allow' ? 'allowed' : 'not allowed'})`, icon: 'corner-down-right' }] : []),
+      { value: 'none', label: 'Not allowed', icon: 'shield-x' }, { value: 'allow', label: 'Allowed', icon: 'shield-check' },
+    ];
+    return `<div class="perm-row"><span class="perm-row__name">${esc(item.label)}</span>${segControl({ group: `capability:${item.key}`, label: item.label, current, options })}</div>`;
+  }).join('')}</section>`).join('')}`;
 }
 
 function updateSaveState(panel) {
@@ -404,24 +424,24 @@ async function selectSubject(container, mode, id) {
   state.mode = mode;
   state.subjectId = id;
   state.dirty = false;
-  state.draft = { modules: {}, widgets: {} };
-  state.inherited = { modules: {}, widgets: {} };
+  state.draft = { modules: {}, widgets: {}, capabilities: {} };
+  state.inherited = { modules: {}, widgets: {}, capabilities: {} };
 
   if (id != null) {
     try {
       if (mode === 'role') {
         const res = await api.get(`/permissions/role/${encodeURIComponent(id)}`);
-        state.draft = { modules: { ...res.data.modules }, widgets: { ...res.data.widgets } };
+        state.draft = { modules: { ...res.data.modules }, widgets: { ...res.data.widgets }, capabilities: { ...res.data.capabilities } };
       } else {
         const member = state.catalog.members.find((m) => String(m.id) === String(id));
         const [ov, roleRes] = await Promise.all([
           api.get(`/permissions/user/${encodeURIComponent(id)}`),
           member && member.role !== 'admin'
             ? api.get(`/permissions/role/${encodeURIComponent(member.family_role)}`)
-            : Promise.resolve({ data: { modules: {}, widgets: {} } }),
+            : Promise.resolve({ data: { modules: {}, widgets: {}, capabilities: {} } }),
         ]);
-        state.draft = { modules: { ...ov.data.modules }, widgets: { ...ov.data.widgets } };
-        state.inherited = { modules: { ...roleRes.data.modules }, widgets: { ...roleRes.data.widgets } };
+        state.draft = { modules: { ...ov.data.modules }, widgets: { ...ov.data.widgets }, capabilities: { ...ov.data.capabilities } };
+        state.inherited = { modules: { ...roleRes.data.modules }, widgets: { ...roleRes.data.widgets }, capabilities: { ...roleRes.data.capabilities } };
       }
     } catch (err) {
       window.yuvomi?.showToast(err.message || t('common.errorGeneric'), 'danger');
@@ -433,9 +453,10 @@ async function selectSubject(container, mode, id) {
 }
 
 async function save(container) {
-  const payload = { modules: {}, widgets: {} };
+  const payload = { modules: {}, widgets: {}, capabilities: {} };
   for (const [k, v] of Object.entries(state.draft.modules)) if (v && v !== 'inherit') payload.modules[k] = v;
   for (const [k, v] of Object.entries(state.draft.widgets)) if (v && v !== 'inherit') payload.widgets[k] = v;
+  for (const [k, v] of Object.entries(state.draft.capabilities)) if (v && v !== 'inherit') payload.capabilities[k] = v;
 
   const url = state.mode === 'role'
     ? `/permissions/role/${encodeURIComponent(state.subjectId)}`
@@ -445,7 +466,7 @@ async function save(container) {
   if (saveBtn) saveBtn.disabled = true;
   try {
     const res = await api.put(url, payload);
-    state.draft = { modules: { ...res.data.modules }, widgets: { ...res.data.widgets } };
+    state.draft = { modules: { ...res.data.modules }, widgets: { ...res.data.widgets }, capabilities: { ...res.data.capabilities } };
     state.dirty = false;
     renderMatrix(container);
     window.yuvomi?.showToast(t('settings.permSaved', { name: subjectTitle() }), 'success');
@@ -492,6 +513,10 @@ function bindEvents(container) {
     if (opt && !opt.disabled) return applySegment(container, opt);
     if (e.target.closest('#perm-save')) return save(container);
     if (e.target.closest('#perm-reset')) return resetSubject(container);
+    if (e.target.closest('#perm-participant')) {
+      state.draft.capabilities = { ...state.catalog.profiles?.find(profile => profile.key === 'restricted_member')?.capabilities };
+      state.dirty = true; renderMatrix(container);
+    }
   });
   // Pfeiltasten innerhalb einer Segment-Gruppe (Roving)
   matrix?.addEventListener('keydown', (e) => {
@@ -514,6 +539,7 @@ function applySegment(container, opt) {
   const [type, key] = String(opt.dataset.group).split(':');
   const value = opt.dataset.value;
   if (type === 'module') state.draft.modules[key] = value;
+  else if (type === 'capability') state.draft.capabilities[key] = value;
   else state.draft.widgets[key] = value;
   state.dirty = true;
 
@@ -536,7 +562,7 @@ async function resetSubject(container) {
     detail: t('settings.permResetConfirmDetail'),
   });
   if (!ok) return;
-  state.draft = { modules: {}, widgets: {} };
+  state.draft = { modules: {}, widgets: {}, capabilities: {} };
   state.dirty = true;
   renderMatrix(container);
 }
@@ -584,8 +610,8 @@ export async function render(container, { user } = {}) {
   state.catalog = catalog;
   state.mode = 'role';
   state.subjectId = null;
-  state.draft = { modules: {}, widgets: {} };
-  state.inherited = { modules: {}, widgets: {} };
+  state.draft = { modules: {}, widgets: {}, capabilities: {} };
+  state.inherited = { modules: {}, widgets: {}, capabilities: {} };
   state.dirty = false;
 
   renderSubjectSelector(container);

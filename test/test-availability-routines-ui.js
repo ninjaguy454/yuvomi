@@ -75,6 +75,8 @@ async function mounted({ manager = false, userId = 1, width = 1366 } = {}) {
   await page.evaluate(async ({ manager, user, places }) => {
     localStorage.setItem('yuvomi-lang', 'en'); window.toasts = [];
     window.yuvomi = { showToast: (message) => window.toasts.push(message), user };
+    const { setPermissions } = await import('/permissions.js');
+    setPermissions({ admin: user.role === 'admin', capabilities: { 'availability.manage_own': 'allow' } });
     const { initI18n, setLocale } = await import('/i18n.js'); await initI18n(); await setLocale('en');
     await import('/components/datepicker.js');
     if (manager) {
@@ -118,7 +120,7 @@ test('routine creation exposes Week A/B and every day before saving; advanced ro
     await page.click('[data-routine-add]'); await page.waitForSelector('#schedule-create-form');
     assert.equal(await page.$$eval('#schedule-create-form [data-day]', (els) => els.length), 14);
     assert.match(await page.$eval('#schedule-create-form', (el) => el.textContent), /Week A.*Week B/s);
-    assert.equal(await page.$eval('[data-cycle-length]', (el) => el.hidden), true);
+    assert.equal(await page.$eval('#schedule-create-form [data-cycle-length]', (el) => el.hidden), true);
     await set(page, '#schedule-create-form [name="name"]', 'Four on four off');
     await page.select('#schedule-create-form [name="routine_mode"]', 'rotating');
     await set(page, '#schedule-create-form [name="cycle_length"]', '8');

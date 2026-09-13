@@ -1,3 +1,4 @@
+import { canCapability, isPermAdmin } from '/permissions.js';
 import { api } from '/api.js';
 import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
 import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
@@ -491,16 +492,16 @@ const AUTOMATION_TABS = [
   ['variables', 'Variables'],
 ];
 
-function validAutomationTab(tab) {
-  return AUTOMATION_TABS.some(([key]) => key === tab) ? tab : 'skills';
-}
+function allowedAutomationTabs() { return AUTOMATION_TABS.filter(([key]) => key === 'variables' ? isPermAdmin() : canCapability(({ skills: 'skills.manage', activities: 'activities.view', workflows: 'workflows.view' })[key])); }
+function validAutomationTab(tab) { const allowed = allowedAutomationTabs(); return allowed.some(([key]) => key === tab) ? tab : allowed[0]?.[0]; }
 
 export async function renderAutomationManager(container, { tab = 'skills', onTabChange = null } = {}) {
   const activeTab = validAutomationTab(tab);
+  if (!activeTab) { replaceHtml(container, '<p class="form-hint">No automation sections are available for this account.</p>'); return; }
   replaceHtml(container, `
     <div class="automation-manager">
       <div class="group-toggle automation-tabs" role="tablist" aria-label="Household automation sections">
-        ${AUTOMATION_TABS.map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === activeTab}" class="group-toggle__btn ${key === activeTab ? 'group-toggle__btn--active' : ''}" data-automation-tab="${key}">${h(label)}</button>`).join('')}
+        ${allowedAutomationTabs().map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === activeTab}" class="group-toggle__btn ${key === activeTab ? 'group-toggle__btn--active' : ''}" data-automation-tab="${key}">${h(label)}</button>`).join('')}
       </div>
       <div class="automation-manager__body"><p class="form-hint">Loading…</p></div>
     </div>`);
@@ -540,6 +541,14 @@ async function loadManagerTab(panel, tab, manager) {
     else if (tab === 'places') await renderPlacesManager(body, manager);
     else if (tab === 'availability') await renderAvailabilityManager(body, manager);
     else await renderTripsManager(body, manager);
+    if (tab === 'activities') {
+      if (!canCapability('activities.create')) body.querySelector('#automation-add-activity')?.remove();
+      if (!canCapability('activities.edit')) body.querySelectorAll('[data-edit-activity], [data-delete-activity]').forEach(el => el.remove());
+    }
+    if (tab === 'workflows') {
+      if (!canCapability('workflows.create')) body.querySelector('#automation-add-workflow')?.remove();
+      if (!canCapability('workflows.edit')) body.querySelectorAll('[data-edit-workflow], [data-delete-workflow]').forEach(el => el.remove());
+    }
     if (window.lucide) window.lucide.createIcons({ el: body });
   } catch (error) {
     replaceHtml(body, `<p class="form-hint">${h(error.message || 'Could not load automation settings.')}</p>`);
@@ -724,6 +733,7 @@ export async function renderPlacesManager(body, manager) {
     }).join('') || '<p class="form-hint">No Places yet. Start with Home, then add rooms or recurring destinations.</p>'}</div>`);
   body.querySelector('#automation-add-place')?.addEventListener('click', () => openPlaceForm(null, places, manager));
   body.querySelector('#automation-find-place')?.addEventListener('click', () => openPlaceSearchForm(places, manager));
+  if (!isPermAdmin()) body.querySelector('#automation-configure-google')?.remove();
   body.querySelector('#automation-configure-google')?.addEventListener('click', () => openGooglePlacesConfig(manager));
   body.querySelectorAll('[data-edit-place]').forEach((button) => button.addEventListener('click', () => openPlaceForm(places.find((row) => Number(row.id) === Number(button.dataset.editPlace)), places, manager)));
   body.querySelectorAll('[data-delete-place]').forEach((button) => button.addEventListener('click', async () => {
@@ -1053,7 +1063,7 @@ function availabilityWindowsHTML(result) {
 export async function renderAvailabilityManager(body, manager) {
   availabilityMounts.get(body)?.();
   const user = manager?.user || (await api.get('/auth/me')).user;
-  const administrator = user?.role === 'admin';
+  const administrator = user?.role === 'admin' || canCapability('availability.manage');
   const response = administrator ? await api.get('/planning/admin/context') : await (async () => {
     const [users, locations] = await Promise.all([api.get('/auth/users'), api.get('/planning/places')]);
     return { members: users.data || [], places: locations.data || [] };
@@ -1355,7 +1365,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <fieldset class="automation-fieldset">
       <legend class="label">Subtasks copied into each Task</legend>
       <p class="form-hint automation-manager__hint">Each generated Task gets its own editable subtask copies. Later changes to this template do not rewrite existing Tasks. Type @ to insert the person or Activity Template name; workflow variables are also resolved when a workflow runs.</p>
-      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: true })}
+      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: canCapability('skills.manage') })}
     </fieldset>
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     <div class="grid grid--2">
@@ -1376,7 +1386,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
     <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Rotation group', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Optional. Activities with the same group share one rotation cursor.')}</div>
     <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${(activity?.allow_assignment_override ?? true) ? 'checked' : ''}> Allow an admin to reassign this activity</label>
-    <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: true })}</div>
+    <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: canCapability('skills.manage') })}</div>
     ${inputRow('Location', `<select class="input" name="location_mode" id="automation-location-mode"><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No required location</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Place chosen by a workflow variable</option></select>`)}
     <div id="automation-fixed-place" ${locationMode === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed Place', `<select class="input" name="place_id">${placeOptions(context.places, activity?.place_id)}</select>`)}</div>
     <div id="automation-location-variable" ${locationMode === 'workflow' ? '' : 'hidden'}>${inputRow('Location variable', `<select class="input" name="location_variable_id"><option value="">Choose a reusable Location variable…</option>${context.variables.filter((variable) => variable.type === 'location').map((variable) => `<option value="${h(variable.variable_key)}" ${variable.variable_key === activity?.location_variable_id ? 'selected' : ''}>${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select>`, 'The workflow using this activity must include the same Location variable.')}</div>
@@ -1403,8 +1413,8 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         }
         return skill;
       };
-      const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: createSkill });
-      const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: createSkill });
+      const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: canCapability('skills.manage') ? createSkill : null });
+      const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
       const templateName = panel.querySelector('[name="name"]');
       const generatedTitle = panel.querySelector('[name="title_template"]');
       const titlePreview = panel.querySelector('[data-activity-title-preview]');
@@ -1670,8 +1680,8 @@ function questionHtml(question = {}, workflowId = null) {
       <option value="time" ${type === 'time' ? 'selected' : ''}>Time</option>
     </select>
     <div class="automation-question-actions">
-      ${workflowId && question.definition_id && !question.reusable_definition_id ? `<button type="button" class="btn btn--ghost btn--sm btn--icon" data-promote-question title="Make reusable across the household" aria-label="Make ${h(question.label || variableId)} reusable"><i data-lucide="globe-2" class="icon-sm"></i></button>` : ''}
-      ${linked ? '<button type="button" class="btn btn--ghost btn--sm" data-edit-linked-variable>Edit household value</button>' : ''}
+      ${isPermAdmin() && workflowId && question.definition_id && !question.reusable_definition_id ? `<button type="button" class="btn btn--ghost btn--sm btn--icon" data-promote-question title="Make reusable across the household" aria-label="Make ${h(question.label || variableId)} reusable"><i data-lucide="globe-2" class="icon-sm"></i></button>` : ''}
+      ${linked && isPermAdmin() ? '<button type="button" class="btn btn--ghost btn--sm" data-edit-linked-variable>Edit household value</button>' : ''}
       <button type="button" class="btn btn--ghost btn--sm" data-remove-question>Remove</button>
     </div>
     <input class="input automation-question-options" data-question-options aria-label="Choice options" placeholder="Choice options, comma separated" value="${h((question.options || []).join(', '))}" ${type === 'choice' ? '' : 'hidden'} ${linked ? 'readonly' : ''}>

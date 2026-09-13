@@ -1,3 +1,4 @@
+import { taskVisibilityWhere } from './task-access.js';
 /**
  * Modul: Countdowns (#647)
  * Zweck: Die als Countdown markierten Termine und Aufgaben zu EINER nach
@@ -343,7 +344,7 @@ function taskCountdowns(d, userId, todayKey) {
       AND t.archived_at IS NULL
       AND t.due_date IS NOT NULL
       AND t.due_date >= CASE WHEN t.is_recurring = 1 THEN @today ELSE @floor END
-      AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}
+      AND ${taskVisibilityWhere(d, userId, 't', '@me')}
   `).all({ today: todayKey, floor, me: userId });
 
   const out = [];

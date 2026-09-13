@@ -19,6 +19,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import express from 'express';
+import { persistPreferenceActor } from './helpers/preferences-actor-fixture.js';
 
 const dbmod = await import('../server/db.js');
 const db = dbmod.get();
@@ -32,6 +33,7 @@ app.use(express.json());
 app.use((req, _res, next) => {
   req.authUserId = actor.userId;
   req.authRole = actor.role;
+  persistPreferenceActor(db, req);
   next();
 });
 app.use('/', preferencesRouter);
@@ -484,9 +486,9 @@ test('PUT weather: provider=null und city="" löschen den Wert', async () => {
 test('PUT weather_user: Nicht-Objekt -> 400', async () => {
   assert.equal((await put({ weather_user: [1, 2] })).status, 400);
 });
-test('PUT weather_user: fehlende authUserId -> 401', async () => {
+test('PUT weather_user: fehlende authUserId -> 403', async () => {
   const res = await put({ weather_user: { city: 'X' } }, { userId: null });
-  assert.equal(res.status, 401);
+  assert.equal(res.status, 403);
 });
 test('PUT weather_user: Feld-Validierungen -> 400', async () => {
   assert.equal((await put({ weather_user: { lat: 91 } })).status, 400);
@@ -652,11 +654,10 @@ test('GET / verkraftet korrupte disabled_modules / module_order / mobile_nav_ord
 });
 
 // --------------------------------------------------------
-// Fehlende authUserId: per-user cfg-Helfer sind No-ops (kein Crash)
+// Fehlende authUserId: Schreibzugriffe erfordern ein Haushaltskonto.
 // --------------------------------------------------------
-test('PUT module_order ohne authUserId: cfgUserSet ist No-op, kein Fehler', async () => {
+test('PUT module_order ohne authUserId: Zugriff verweigert, keine Änderung', async () => {
   const res = await put({ module_order: ['tasks', 'calendar'] }, { userId: null });
-  assert.equal(res.status, 200);
-  // Ohne User-Kontext wird nichts per-user gespeichert -> Leseseite bleibt leer.
-  assert.deepEqual(res.body.data.module_order, []);
+  assert.equal(res.status, 403);
+  assert.equal(db.prepare('SELECT value FROM sync_config WHERE key = ?').get('module_order:user:null'), undefined);
 });

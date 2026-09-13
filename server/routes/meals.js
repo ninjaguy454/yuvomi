@@ -13,6 +13,9 @@ import { str, oneOf, date, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT, D
 import { addDays, mealWeekday, datesForTemplateInRange } from '../services/meal-recurrence.js';
 import { todayKey } from '../utils/timezone.js';
 import { requireAdmin } from '../auth.js';
+import { requireCapability } from '../middleware/require-capability.js';
+import { taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
+import { tokenAllows } from '../scopes.js';
 import { evaluatePresence } from '../services/presence.js';
 import {
   listMealCalendarConflicts,
@@ -1394,7 +1397,18 @@ router.put('/execution-settings', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/execution/prepare', (req, res) => {
+function visibleMealExecution(req, execution) {
+  if (!execution) return execution;
+  return { ...execution, tasks: (execution.tasks || []).filter(row => row.task_id
+    && tokenAllows(req.authScopes, 'tasks', 'read')
+    && taskCapabilities(db.get(), req, { id: row.task_id }).view) };
+}
+
+function visibleMealExecutionRange(req, range) {
+  return range ? { ...range, meals: range.meals.map(execution => visibleMealExecution(req, execution)) } : range;
+}
+
+router.post('/execution/prepare', requireCapability('tasks.create'), (req, res) => {
   try {
     const vFrom = date(req.body?.from, 'From date', true);
     const vTo = date(req.body?.to, 'To date', true);
@@ -1408,7 +1422,7 @@ router.post('/execution/prepare', (req, res) => {
       listId: req.body?.shopping_list_id,
       logicalKey: req.body?.logical_key,
     });
-    res.json({ data });
+    res.json({ data: visibleMealExecutionRange(req, data) });
   } catch (err) {
     log.error('POST /execution/prepare', err);
     res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not prepare meal execution.', code: err.code || 500 });
@@ -1419,19 +1433,19 @@ router.get('/:id/execution', (req, res) => {
   try {
     const data = refreshExecutionStatus(db.get(), Number(req.params.id));
     if (!data) return res.status(404).json({ error: 'Meal execution not found.', code: 'MEAL_EXECUTION_NOT_FOUND' });
-    res.json({ data });
+    res.json({ data: visibleMealExecution(req, data) });
   } catch (err) {
     log.error('GET /:id/execution', err);
     res.status(500).json({ error: 'Could not load meal execution.', code: 500 });
   }
 });
 
-router.post('/:id/execution-tasks', (req, res) => {
+router.post('/:id/execution-tasks', requireCapability('tasks.create'), (req, res) => {
   try {
     const data = ensureMealExecution(
       db.get(), Number(req.params.id), req.authUserId || req.session.userId,
     );
-    res.json({ data });
+    res.json({ data: visibleMealExecution(req, data) });
   } catch (err) {
     log.error('POST /:id/execution-tasks', err);
     res.status(err.status || 500).json({ error: err.status ? err.message : 'Could not create meal execution Tasks.', code: err.code || 500 });
@@ -1450,7 +1464,7 @@ router.post('/planning/materialize', (req, res) => {
     const execution = settings?.enabled
       ? prepareMealExecutionRange(db.get(), { from, to, actorId })
       : null;
-    res.json({ data: { created, weekStart: from, weekEnd: to, execution } });
+    res.json({ data: { created, weekStart: from, weekEnd: to, execution: visibleMealExecutionRange(req, execution) } });
   } catch (err) {
     log.error('POST /planning/materialize', err);
     res.status(500).json({ error: 'Could not prepare the meal plan.', code: 500 });
@@ -1486,9 +1500,9 @@ router.post('/selection-requests/:id/respond', (req, res) => {
       : [];
     if (selectedMeals.length && getMealExecutionSettings(db.get())?.enabled) {
       const from = weekStart(selectedMeals[0].date);
-      data.execution = prepareMealExecutionRange(db.get(), {
+      data.execution = visibleMealExecutionRange(req, prepareMealExecutionRange(db.get(), {
         from, to: weekEnd(from), actorId,
-      });
+      }));
     }
     res.json({ data });
   } catch (err) {
@@ -1669,11 +1683,12 @@ router.get('/', (req, res) => {
     if (mealIds.length) {
       const rows = db.get().prepare(`
         SELECT mes.meal_id, mes.status, mes.revision,
-          COUNT(met.id) AS task_total,
+          COUNT(t.id) AS task_total,
           SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS task_done
         FROM meal_execution_snapshots mes
         LEFT JOIN meal_execution_tasks met ON met.meal_snapshot_id = mes.id
-        LEFT JOIN tasks t ON t.id = met.task_id
+        LEFT JOIN tasks t ON t.id = met.task_id AND ${tokenAllows(req.authScopes, 'tasks', 'read')
+          ? taskVisibilityWhere(db.get(), req, 't', String(Number(req.authUserId || req.session.userId))) : '0'}
         WHERE mes.meal_id IN (${mealIds.map(() => '?').join(',')})
         GROUP BY mes.id
       `).all(...mealIds);

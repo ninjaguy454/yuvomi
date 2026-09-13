@@ -68,6 +68,7 @@ class MockRequest {
       this.url = String(input);
       this.method = init.method || 'GET';
     }
+    this.headers = new MockHeaders(init.headers || input?.headers || {});
     this.mode = init.mode || input?.mode || 'same-origin';
     this.cache = init.cache || input?.cache || 'default';
   }
@@ -364,4 +365,38 @@ test('im Bypass-Fenster (nach SW-Update) wird die API nicht gecacht', async () =
   const cache = name ? await env.caches.open(name) : null;
   const cached = cache ? await cache.match(req) : undefined;
   assert.equal(cached, undefined, 'im Bypass-Fenster darf nichts gecacht werden');
+});
+
+
+test('Task change streams bypass the service worker even without an Accept header', () => {
+  let fetched = 0;
+  const env = loadSw({ fetchImpl: async () => { fetched++; throw new Error('Worker must not handle the stream'); } });
+  for (const path of ['/tasks/changes', '/tasks/changes/?cursor=4']) {
+    const handled = dispatchFetch(env, new MockRequest(apiUrl(path)));
+    assert.equal(handled.responded, false, 'the browser owns the authenticated EventSource connection');
+  }
+  assert.equal(fetched, 0);
+});
+
+test('event-stream requests bypass offline handling under every cached API prefix', () => {
+  const env = loadSw();
+  for (const path of ['/tasks', '/calendar/live', '/dashboard/stream']) {
+    const request = new MockRequest(apiUrl(path), { headers: { Accept: 'text/event-stream' } });
+    assert.equal(dispatchFetch(env, request).responded, false);
+  }
+});
+
+test('unexpected never-ending event-stream responses are returned before cloning or consuming their body', async () => {
+  let clones = 0;
+  const stream = new MockResponse('', { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
+  stream.clone = () => {
+    clones++;
+    return { headers: stream.headers, blob: () => new Promise(() => {}) };
+  };
+  const env = loadSw({ fetchImpl: async () => stream });
+  const { result } = dispatchFetch(env, new MockRequest(apiUrl('/tasks')));
+  const delivered = await Promise.race([result, new Promise(resolve => setImmediate(() => resolve('blocked on endless body')))]);
+  assert.equal(delivered, stream, 'the response must reach EventSource while its body is still open');
+  assert.equal(clones, 0);
+  assert.equal(await apiCacheName(env), undefined, 'live events never enter offline storage');
 });

@@ -1,3 +1,4 @@
+import { canCapability } from '/permissions.js';
 import { api as apiClient } from '/api.js';
 import { t, formatDate } from '/i18n.js';
 import { esc } from '/utils/html.js';
@@ -46,7 +47,7 @@ const userName = (id) => state.users.find((user) => Number(user.id) === Number(i
   || state.users.find((user) => Number(user.id) === Number(id))?.username
   || String(id);
 const selectedOwner = () => currentUserId ?? state.users[0]?.id ?? '';
-const canWrite = (userId) => canManageOthers || Number(userId) === Number(currentUserId);
+const canWrite = (userId) => canManageOthers || (canCapability('availability.manage_own') && Number(userId) === Number(currentUserId));
 
 // Ein Schichttyp gehoert dem Haushalt und nicht einer Person: jeder darf einen
 // anlegen, aendern und loeschen nur der Ersteller oder ein Admin. Ein Typ, dessen
@@ -54,7 +55,7 @@ const canWrite = (userId) => canManageOthers || Number(userId) === Number(curren
 // Ohne diese Pruefung stuenden Formular und Loeschknopf bei jedem - und endeten
 // verlaesslich in 403.
 const canEditType = (type) => canManageOthers
-  || (type?.created_by != null && Number(type.created_by) === Number(currentUserId));
+  || (canCapability('availability.manage_own') && type?.created_by != null && Number(type.created_by) === Number(currentUserId));
 const clockLabel = (shiftType) => {
   if (!shiftType?.start_time || !shiftType?.end_time) return t('schedule.allDay');
   const crossesDay = shiftType.end_time <= shiftType.start_time;
@@ -459,10 +460,11 @@ function renderPage() {
   body.querySelectorAll('[data-form="pattern-update"]').forEach((form) => bindRoutineForm(form, state.patterns.find((pattern) => Number(pattern.id) === Number(form.dataset.id))));
   const addButton = root.querySelector('[data-routine-add]');
   if (addButton) {
-    addButton.hidden = activeView === 'statistics';
+    addButton.hidden = activeView === 'statistics' || (!canManageOthers && !canCapability('availability.manage_own'));
     addButton.textContent = activeView === 'shifts' ? t('schedule.createShiftType') : activeView === 'overrides' ? t('schedule.createOverride') : t('schedule.addPattern');
     addButton.dataset.view = activeView;
   }
+  if (!canManageOthers && !canCapability('availability.manage_own')) body.querySelectorAll('[data-action="open-create"]').forEach(el => el.remove());
   updateScheduleFab();
   window.lucide?.createIcons({ el: body });
 }
@@ -481,7 +483,7 @@ function updateScheduleFab() {
   setPageFabAction(scheduleFab, {
     label: labels[activeView],
     dockLabel: dockLabels[activeView],
-    hidden: activeView === 'statistics',
+    hidden: activeView === 'statistics' || (!canManageOthers && !canCapability('availability.manage_own')),
     onClick: () => openScheduleCreateModal(activeView),
   });
 }
@@ -696,7 +698,7 @@ async function action(event) {
 async function render(container, { user } = {}) {
   root = container;
   currentUserId = user?.id ?? null;
-  canManageOthers = user?.role === 'admin';
+  canManageOthers = user?.role === 'admin' || canCapability('availability.manage');
   await load();
   if (disposed) return;
   statistics = { ...statistics, userId: currentUserId, monthFrom: monthKey(), monthTo: monthKey(), from: todayKey(), to: todayKey() };
@@ -706,6 +708,9 @@ async function render(container, { user } = {}) {
     root.querySelector('.schedule-page')?.appendChild(scheduleFab);
   }
   renderPage();
+  if (!canManageOthers && !canCapability('availability.manage_own')) {
+    scheduleFab?.remove();
+  }
   window.lucide?.createIcons({ el: root });
 }
 return { render, dispose() { disposed = true; listeners.abort(); scrollFade?.destroy(); scheduleFab?.remove(); } };

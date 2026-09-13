@@ -274,7 +274,7 @@ test('PATCH /:id/status: the legacy archive alias enforces task and parent locks
   }
 
   const completed = await call('PATCH', `/${task.id}/status`, {
-    as: asChild, body: { status: 'done' },
+    as: asChild, body: { status: 'done', complete_remaining:true },
   });
   assert.equal(completed.status, 200, 'locking the definition still allows completion');
   const creatorArchived = await call('PATCH', `/${task.id}/status`, {

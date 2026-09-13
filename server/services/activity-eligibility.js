@@ -426,13 +426,14 @@ export function resolveActivityAssignment(d, activity, {
     // engine". Otherwise an adult-only requirement could be bypassed simply by
     // selecting a child as the fixed assignee.
     const fixedProficiency = effectiveActivityProficiency(d, activity.id, fixed, dateKey);
-    if (fixedProficiency.proficiency !== PROFICIENCY.NORMAL) {
-      throw new Error('The fixed assignee is not independently qualified for this activity.');
+    if (fixedProficiency.proficiency === PROFICIENCY.EXCLUDED) {
+      throw new Error('The fixed assignee cannot perform the required skills, even with supervision.');
     }
     if (!isPresent(fixed)) throw new Error(`The fixed assignee does not meet this activity’s ${requirementName(activity, presence)} requirement.`);
     return {
       primary: fixed,
       supervisor: null,
+      supervisionNeeded: fixedProficiency.proficiency === PROFICIENCY.SUPERVISED,
       subject,
       subjectProficiency: subject
         ? effectiveActivityProficiency(d, activity.id, subject, dateKey)
@@ -527,6 +528,19 @@ export function resolveActivityAssignment(d, activity, {
     orderedMembers: members,
   });
   if (!helper) {
+    // A learner's work remains assigned when supervision cannot yet be filled.
+    // Concrete Task reconciliation records the affected explicit actions and
+    // blocks completion until a qualified supervisor is assigned.
+    if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED && subjectMeetsPresence) {
+      const qualified = members.some(member => Number(member.id) !== Number(subject.id)
+        && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL);
+      const skills = subjectProficiency.skills.filter(item => item.proficiency === PROFICIENCY.SUPERVISED).map(item => item.skill.name).join(', ');
+      const supervisionReason = qualified
+        ? `${subject.display_name} requires supervision for ${skills}, but no qualified supervisor shares an available window${presence?.requiredDurationMinutes ? ` of ${presence.requiredDurationMinutes} continuous minutes` : ''} with the learner.`
+        : `${subject.display_name} requires supervision for ${skills}, but no qualified supervisor exists in the household.`;
+      return { primary: subject, supervisor: null, participants: [subject], subject,
+        subjectProficiency, eligible: [], supervisionNeeded: true, supervisionReason, strategy: policy };
+    }
     if (subjectProficiency.proficiency === PROFICIENCY.SUPERVISED && subjectMeetsPresence
         && members.some((member) => Number(member.id) !== Number(subject.id)
           && effectiveActivityProficiency(d, activity.id, member, dateKey).proficiency === PROFICIENCY.NORMAL
@@ -569,10 +583,10 @@ export function assertEligibleActivityMember(d, activity, userId, options = {}) 
   const member = householdMembers(d).find((row) => Number(row.id) === Number(userId));
   if (!member) throw new Error('Choose a valid household member.');
   const proficiency = effectiveActivityProficiency(d, activity.id, member, options.dateKey || todayKey(d));
-  if (proficiency.proficiency !== PROFICIENCY.NORMAL) {
-    throw new Error('That household member is not independently qualified for this activity.');
+  if (proficiency.proficiency === PROFICIENCY.EXCLUDED) {
+    throw new Error('That household member cannot perform the required skills, even with supervision.');
   }
-  if (!eligibleMembersForActivity(d, activity, options).some((row) => Number(row.id) === Number(member.id))) {
+  if (!eligibleMembersForActivity(d, activity, { ...options, includeSupervised: true }).some((row) => Number(row.id) === Number(member.id))) {
     throw new Error(`That household member does not meet this activity's ${requirementName(activity, options.presence)} requirement.`);
   }
   return member;

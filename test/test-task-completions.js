@@ -478,7 +478,7 @@ test('Das Abhaken über PATCH /:id/status schreibt den Verlauf, das Zurücknehme
     const res = await fetch(`${base}/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, reset_progress:true }),
     });
     return res.status;
   };
@@ -505,7 +505,7 @@ test('Auch das Status-Feld im Bearbeiten-Formular schreibt den Verlauf', async (
     const res = await fetch(`${base}/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Ueber PUT', status }),
+      body: JSON.stringify({ title: 'Ueber PUT', status, reset_progress:true }),
     });
     return res.status;
   };

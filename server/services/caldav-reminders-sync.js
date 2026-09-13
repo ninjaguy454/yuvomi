@@ -18,6 +18,8 @@ import { householdTimeZone, utcToWall } from '../utils/timezone.js';
 import { setItemTags, setTags } from '../utils/task-tags.js';
 import * as todoOutbound from './caldav-todo-outbound.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from './assignment-responsibilities.js';
+import { changeTaskStatus, recordTaskActivity } from './task-lifecycle.js';
+import { reconcileTaskSupervision } from './task-supervision.js';
 
 // --------------------------------------------------------
 // Pure Mapping Helpers
@@ -240,7 +242,7 @@ function updateReminderSelection(accountId, listUrl, { enabled, targetModule } =
 // ein gespiegelter Eintrag für spätere Änderungen und Löschungen unerreichbar
 // (#617). COALESCE, weil ein Abruf ohne URL den gespeicherten Wert nicht
 // entwerten darf.
-function upsertTask(todo, accountId, createdBy, objectUrl = null) {
+export function upsertTask(todo, accountId, createdBy, objectUrl = null) {
   const { date, time } = splitDue(todo.due, householdTimeZone(db.get()));
 
   const existing = db.get().prepare(
@@ -252,6 +254,13 @@ function upsertTask(todo, accountId, createdBy, objectUrl = null) {
 
   let taskId;
   if (existing) {
+    // Remote VTODOs may now carry local checklist/supervision structure.
+    // They must not bypass a supervised-action gate or silently cascade/reset.
+    const structured = !!db.get().prepare(`SELECT 1 FROM tasks WHERE parent_task_id=@id OR id=(
+      SELECT parent_task_id FROM tasks WHERE id=@id) OR (id=@id AND is_recurring=1) UNION ALL
+      SELECT 1 FROM task_activity_bindings WHERE task_id=@id UNION ALL
+      SELECT 1 FROM task_skill_requirements WHERE task_id=@id UNION ALL
+      SELECT 1 FROM task_supervision_actions WHERE source_task_id=@id OR action_task_id=@id OR counterpart_task_id=@id LIMIT 1`).get({id:existing.id});
     const windowChanged = existing.due_date !== date || existing.due_time !== time;
     if (windowChanged && status !== 'done') {
       // A reminder can acquire a local Activity binding after its first import.
@@ -264,7 +273,14 @@ function upsertTask(todo, accountId, createdBy, objectUrl = null) {
       SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, due_time = ?,
           external_object_url = COALESCE(?, external_object_url)
       WHERE id = ?
-    `).run(todo.summary, todo.description, priority, status, date, time, objectUrl, existing.id);
+    `).run(todo.summary, todo.description, priority, structured ? existing.status : status, date, time, objectUrl, existing.id);
+    if(structured) {
+      reconcileTaskSupervision(db.get(),existing.id,{actorId:createdBy});
+      if(status!==existing.status)changeTaskStatus(db.get(),existing.id,status,{actorId:createdBy,body:{}});
+    } else if(status!==existing.status && db.get().prepare("SELECT 1 FROM sqlite_master WHERE name='task_activity_events'").get()) {
+      recordTaskActivity(db.get(),existing.id,status==='done'?'completed':status==='open'?'reset':'started',
+        null,{from_status:existing.status,to_status:status,source:'caldav'});
+    }
     if (windowChanged) {
       const dueAt = date ? `${date}T${time || '23:59'}:00` : null;
       db.get().prepare(`UPDATE planning_obligations SET due_at = ?,
@@ -543,7 +559,7 @@ async function sync({ createClient: makeClient } = {}) {
               totalItems++;
             } catch (err) {
               log.error(`Failed to upsert VTODO ${todo.uid}:`, err.message);
-              if (err instanceof TaskAssignmentAvailabilityError) {
+              if (err instanceof TaskAssignmentAvailabilityError || err.status === 409 || err.status === 403) {
                 // Already marked seen: retain the local item, do not prune it
                 // or enqueue an outbound edit that would erase the remote change.
                 conflicts.push({ account_id: account.id, external_uid: todo.uid,

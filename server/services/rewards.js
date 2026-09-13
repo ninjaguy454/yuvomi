@@ -43,6 +43,12 @@ export function rewardTargets(d, taskId, actingUserId) {
     .all(taskId).map((r) => r.user_id);
   const targets = assignees.filter((id) => enrolled.has(id));
   if (targets.length) return targets;
+  // A supervisor records completion for the learner. Checklist rows can
+  // inherit that learner without a legacy assignment join of their own.
+  if (d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_supervision_actions'").get()) {
+    const learner = d.prepare('SELECT learner_user_id FROM task_supervision_actions WHERE action_task_id=?').get(taskId)?.learner_user_id;
+    if (learner) return enrolled.has(learner) ? [learner] : [];
+  }
   if (actingUserId && enrolled.has(actingUserId)) return [actingUserId];
   return [];
 }

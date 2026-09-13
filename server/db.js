@@ -8814,6 +8814,121 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10032,
+  description: 'Tasks: member capabilities, linked supervision, revisions and activity',
+  up(database) {
+    database.exec(`
+      ALTER TABLE tasks ADD COLUMN revision INTEGER NOT NULL DEFAULT 1;
+      ALTER TABLE tasks ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+      CREATE TABLE access_capabilities (
+        subject_type TEXT NOT NULL CHECK(subject_type IN ('role','user')),
+        subject_id TEXT NOT NULL, capability_key TEXT NOT NULL,
+        access TEXT NOT NULL CHECK(access IN ('none','allow')),
+        updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        PRIMARY KEY(subject_type,subject_id,capability_key)
+      );
+      CREATE INDEX idx_access_capabilities_subject ON access_capabilities(subject_type,subject_id);
+      CREATE TABLE task_supervision_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        action_task_id INTEGER NOT NULL UNIQUE REFERENCES tasks(id) ON DELETE CASCADE,
+        counterpart_task_id INTEGER UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+        learner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        supervisor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        required_skill_ids_json TEXT NOT NULL DEFAULT '[]',
+        state TEXT NOT NULL DEFAULT 'unresolved' CHECK(state IN ('assigned','unresolved','not_required','excluded')),
+        reason TEXT, revision INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+        updated_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+      );
+      CREATE INDEX idx_task_supervision_actions_source ON task_supervision_actions(source_task_id,state);
+      CREATE TABLE task_activity_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        action_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        event_type TEXT NOT NULL, details_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT(strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+      );
+      CREATE INDEX idx_task_activity_events_task ON task_activity_events(task_id,id);
+      CREATE TABLE task_change_clock (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL DEFAULT 0);
+      INSERT INTO task_change_clock(id,version) VALUES(1,0);
+    `);
+    // Only substantive fields trigger revisions: the historical updated_at
+    // trigger writes the same table and must not recursively create revisions.
+    const fields = database.prepare('PRAGMA table_info(tasks)').all()
+      .map(row => row.name).filter(name => !['revision', 'updated_at'].includes(name));
+    database.exec(`
+      CREATE TRIGGER trg_tasks_revision AFTER UPDATE OF ${fields.join(',')} ON tasks
+      WHEN ${fields.map(name => `NEW.${name} IS NOT OLD.${name}`).join(' OR ')}
+      BEGIN
+        UPDATE tasks SET revision = revision + 1 WHERE id = OLD.parent_task_id
+          AND NEW.parent_task_id IS NOT OLD.parent_task_id;
+        UPDATE tasks SET revision = revision + 1 WHERE id = NEW.id;
+      END;
+      CREATE TRIGGER trg_tasks_revision_parent AFTER UPDATE OF revision ON tasks
+      WHEN NEW.revision != OLD.revision
+      BEGIN
+        -- recursive_triggers stays OFF: historical updated_at triggers depend
+        -- on that setting. Walk every ancestor explicitly, including nested
+        -- Workflow Activities, so their reset/edit revisions cover descendants.
+        -- UNION also bounds malformed legacy cycles without recursive writes.
+        UPDATE tasks SET revision = revision + 1 WHERE id IN (
+          WITH RECURSIVE ancestors(id) AS (
+            SELECT NEW.parent_task_id
+            UNION SELECT t.parent_task_id FROM tasks t JOIN ancestors a ON t.id=a.id
+              WHERE t.parent_task_id IS NOT NULL
+          ) SELECT id FROM ancestors WHERE id IS NOT NULL AND id != NEW.id
+        );
+        UPDATE task_change_clock SET version = version + 1 WHERE id = 1;
+      END;
+      CREATE TRIGGER trg_tasks_change_insert AFTER INSERT ON tasks BEGIN
+        UPDATE tasks SET revision = revision + 1 WHERE id = NEW.parent_task_id;
+        UPDATE task_change_clock SET version = version + 1 WHERE id = 1;
+        INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)
+          VALUES(COALESCE(NEW.parent_task_id,NEW.id),NEW.id,NEW.created_by,'created',json_object('title',NEW.title));
+      END;
+      CREATE TRIGGER trg_tasks_change_delete AFTER DELETE ON tasks BEGIN
+        UPDATE tasks SET revision = revision + 1 WHERE id = OLD.parent_task_id;
+        UPDATE task_change_clock SET version = version + 1 WHERE id = 1;
+      END;
+    `);
+    const relations = {
+      task_assignments: 'task_id', task_skill_requirements: 'task_id',
+      task_tags: 'task_id', task_documents: 'task_id', task_comments: 'task_id',
+      task_responsibilities: 'task_id', task_assignment_context: 'task_id',
+      task_planning_context: 'task_id', task_activity_bindings: 'task_id',
+      task_supervision_actions: 'source_task_id',
+    };
+    for (const [table, key] of Object.entries(relations)) {
+      for (const [operation, row] of [['INSERT','NEW'],['UPDATE','NEW'],['DELETE','OLD']]) {
+        database.exec(`CREATE TRIGGER trg_${table}_revision_${operation.toLowerCase()} AFTER ${operation} ON ${table}
+          BEGIN UPDATE tasks SET revision = revision + 1 WHERE id = ${row}.${key};
+            UPDATE task_change_clock SET version = version + 1 WHERE id = 1; END;`);
+      }
+    }
+    // Eligibility and access changes also invalidate explained Task state.
+    for (const table of ['users','user_skill_proficiency','skills','availability_rules','availability_periods',
+      'schedule_patterns','schedule_pattern_days','schedule_overrides','schedule_shift_types',
+      'activity_templates','activity_template_skills','places',
+      'calendar_events','event_assignments','calendar_event_exceptions',
+      'trip_plans','trip_participants','planning_contexts','planning_context_members',
+      'access_permissions','access_capabilities']) {
+      if (!database.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table)) continue;
+      for (const operation of ['INSERT','UPDATE','DELETE']) database.exec(
+        `CREATE TRIGGER trg_${table}_task_change_${operation.toLowerCase()} AFTER ${operation} ON ${table}
+          BEGIN UPDATE task_change_clock SET version = version + 1 WHERE id = 1; END;`);
+    }
+    // Unrelated integration cursors also live in sync_config; only this setting
+    // changes the meaning of Task dates and the explained Availability window.
+    for (const [operation, row] of [['INSERT','NEW'],['UPDATE','NEW'],['DELETE','OLD']]) database.exec(
+      `CREATE TRIGGER trg_sync_config_task_change_${operation.toLowerCase()} AFTER ${operation} ON sync_config
+        WHEN ${row}.key='household_timezone'
+        BEGIN UPDATE task_change_clock SET version = version + 1 WHERE id = 1; END;`);
+  },
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

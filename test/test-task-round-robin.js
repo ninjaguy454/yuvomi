@@ -199,7 +199,7 @@ test('rotation group advances the whole cohort atomically and preserves slot off
   assert.equal(nextThird.assigned_to, grace);
 
   // Reopening any source member removes the whole untouched generated cohort.
-  const reopened = await call('PATCH', `/${second.body.data.id}/status`, { status: 'open' });
+  const reopened = await call('PATCH', `/${second.body.data.id}/status`, { status: 'open', reset_progress:true });
   assert.equal(reopened.status, 200);
   assert.equal(followupOf(first.body.data.id), undefined);
   assert.equal(followupOf(second.body.data.id), undefined);

@@ -29,6 +29,7 @@ import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
 import { toLocalDateKey } from '../../public/utils/date.js';
 import { taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
 import { visibilityWhere } from '../services/visibility.js';
+import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
 import { loadTagsFor, normalizeTags, setTags, tagKey } from '../utils/task-tags.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
@@ -47,15 +48,16 @@ class ToolError extends Error {}
 // --------------------------------------------------------
 
 function listTasks(db, actorId, args) {
+  const includeSupervision = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_activity_support_tasks'").get();
   let sql = `
     SELECT t.id, t.title, t.status, t.priority, t.category, t.due_date, t.due_time
     FROM tasks t
-    WHERE ${taskScopeWhere('t', { includeFuture: !!args.include_future, bind: '@today' })}
+    WHERE ${taskScopeWhere('t', { includeFuture: !!args.include_future, bind: '@today', includeSupervision })}
       -- Sichtbarkeit (#474): kein Zugriff auf private/eingeschränkte Aufgaben
       -- anderer. Stand hier bisher nicht, obwohl die Termin-Abfrage sie führt -
       -- ein MCP-Token sah damit jede private Aufgabe des Haushalts, und mit den
       -- Tags (#586) käme deren Freitext gleich mit.
-      AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}
+      AND ${taskVisibilityWhere(db, actorId, 't', '@me')}
   `;
   // Dieselbe Auswahl wie `GET /api/v1/tasks` und die Uebersicht (#825): eine
   // Automatisierung, die andere Aufgaben sieht als das UI, ist der Grund, aus
@@ -109,6 +111,7 @@ function listTasks(db, actorId, args) {
 }
 
 function createTask(db, actorId, args) {
+  assertTaskMutation(db, actorId, null, args, { operation: 'create' });
   const title = v.str(args.title, 'title', { required: true });
   const description = v.str(args.description, 'description', { required: false, max: v.MAX_TEXT });
   const priority = v.oneOf(args.priority, VALID_PRIORITIES, 'priority');

@@ -5,6 +5,9 @@
  */
 
 import { api } from '/api.js';
+import { canTask, canCapability } from '/permissions.js';
+import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
+import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
 import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
@@ -64,7 +67,7 @@ function viewer() {
 }
 
 function canEditTaskDefinition(task, parent = null) {
-  return canEditTaskDefinitionFor(task, parent, viewer());
+  return canTask(task, 'edit') && canEditTaskDefinitionFor(task, parent, viewer());
 }
 
 function catLabel(key, categories = state.categories) {
@@ -568,14 +571,14 @@ function renderParticipantStrip(task, participants) {
 }
 
 function renderActivitySubtasks(task, expanded) {
-  const subtasks = task.subtasks || [];
+  const subtasks = actionableSubtasks(task);
   if (!subtasks.length) return '';
   const done = subtasks.filter((subtask) => subtask.status === 'done').length;
   const rows = subtasks.map((subtask) => {
     const assignees = subtaskParticipants(subtask);
     return `<div class="subtask-item ${subtask.status === 'done' ? 'subtask-item--done' : ''}" data-subtask-id="${subtask.id}">
       <button class="subtask-item__checkbox ${subtask.status === 'done' ? 'subtask-item__checkbox--done' : ''}"
-        data-action="toggle-subtask" data-id="${subtask.id}" data-status="${subtask.status}"
+        data-action="toggle-subtask" data-id="${subtask.id}" data-status="${subtask.status}" ${!canTask(subtask, 'complete') || subtask.supervision_action?.can_complete === false ? 'disabled' : ''}
         aria-label="${esc(t('tasks.subtaskMarkDone', { title: subtask.title }))}">
         ${subtask.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
       </button>
@@ -611,9 +614,12 @@ function renderTaskCard(task, opts = {}) {
   const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
   const due = formatDueDate(task.due_date, task.due_time, isDone || archived);
   const location = taskLocationLabel(task);
+  const progress = completionCounts(task);
+  const names = (task.assigned_users || []).map(person => person.display_name).filter(Boolean).join(', ') || task.assigned_name;
+  const blocked = ['needed', 'excluded'].includes(task.supervision?.state);
 
   return `<article class="task-card activity-card${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
-      data-task-id="${task.id}"${board ? ' draggable="true"' : ''}>
+      data-task-id="${task.id}"${board && canTask(task, 'complete') ? ' draggable="true"' : ''}>
     <div class="activity-card__summary">
       <span class="activity-card__leading">
         ${showCheckbox ? `<input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
@@ -631,7 +637,7 @@ function renderTaskCard(task, opts = {}) {
         </span>
       </button>
       <span class="activity-card__points">${esc(t('tasks.pointsSummary', { count: Number(task.points || 0) }))}</span>
-      <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}"
+      <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${!canTask(task, 'complete') ? 'disabled' : ''}
         aria-label="${esc(isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title }))}">
         <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
       </button>
@@ -643,12 +649,16 @@ function renderTaskCard(task, opts = {}) {
     </div>` : ''}
 
     <div class="activity-card__metadata">
+      <span class="activity-card__status-label">${esc(({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed' })[task.status] || task.status)}</span>
+      ${names ? `<span class="activity-card__assignee">${esc(names)}</span>` : ''}
+      ${actionableSubtasks(task).length ? `<span class="activity-card__progress-label">${progress.done}/${progress.total} · ${Math.round(progress.done / progress.total * 100)}%</span>` : ''}
+      ${blocked ? '<span class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>Supervision needed</span>' : ''}
       ${renderPriorityBadge(task.priority)}
       ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date activity-card__category">${esc(catLabel(task.category))}</span>` : ''}
       ${task.is_recurring ? `<span class="due-date" title="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i></span>` : ''}
       ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
       ${renderVisibilityBadge(task.visibility)}
-      ${canCheckAndClaim(task) ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button>` : ''}
+      ${canTask(task, 'claim') && canCheckAndClaim(task) ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button>` : ''}
     </div>
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}
@@ -737,9 +747,9 @@ function renderTaskGroups(tasks, groupMode) {
       : emptyStateHTML({
         icon: 'circle-check-big',
         title: t('tasks.emptyTitle'),
-        description: t('tasks.emptyDescription'),
-        hint: t('emptyHint.tasks'),
-        action: { label: t('tasks.emptyAction'), icon: 'plus', attrs: { id: 'empty-cta-tasks' } },
+        description: canCapability('tasks.create') ? t('tasks.emptyDescription') : 'Your assigned Tasks will appear here.',
+        hint: canCapability('tasks.create') ? t('emptyHint.tasks') : undefined,
+        action: canCapability('tasks.create') ? { label: t('tasks.emptyAction'), icon: 'plus', attrs: { id: 'empty-cta-tasks' } } : undefined,
       });
   }
 
@@ -1174,11 +1184,11 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </div>
 
 
-      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId, canCreateSkill: state.isAdmin && !activityTemplateId })}</div>
+      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId, canCreateSkill: canCapability('skills.manage') && !activityTemplateId })}</div>
       <p class="task-field-hint">${activityTemplateId ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(person.display_name)).join(', ')}</p>` : ''}
       </section>
-      ${!isEdit ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: task.subtasks || [], skills: state.skills, canCreateSkill: state.isAdmin })}</section>` : ''}
+      ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: actionableSubtasks(task), skills: state.skills, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
       <section class="task-editor__section" aria-labelledby="task-where-heading">
       <h3 id="task-where-heading">Where</h3>
       ${renderTaskLocationFields(task)}
@@ -1198,7 +1208,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
           <button type="button" class="btn btn--danger-outline" data-action="delete-task"
                   data-id="${task.id}" style="margin-right:auto">${t('common.delete')}</button>` : ''}
         <button type="button" class="btn btn--ghost" data-action="close-modal">${t('common.cancel')}</button>
-        ${!isEdit ? `<button type="button" class="btn btn--secondary" data-save-as-template ${!state.isAdmin ? 'disabled title="Activity Templates are managed by household administrators"' : ''}>Save as Template</button>` : ''}
+        ${!isEdit ? `<button type="button" class="btn btn--secondary" data-save-as-template ${!canCapability('activities.create') ? 'disabled' : ''}>Save as Template</button>` : ''}
         <button type="submit" class="btn btn--primary" id="task-submit-btn">
           ${isEdit ? t('common.save') : 'Create Task'}
         </button>
@@ -1235,7 +1245,7 @@ let state = {
   // wie jeder andere Filter in dieser Leiste auch (#586).
   // Status, Priorität und Person halten mehrere Werte (#671); innerhalb einer
   // Achse wirken sie ODER, zwischen den Achsen UND. Tags bleiben UND-verknüpft.
-  filters:         { status: ['open'], priority: [], assigned_to: [], tags: [] },
+  filters:         { status: ['open', 'in_progress'], priority: [], assigned_to: [], tags: [] },
   groupMode:       'category',   // 'category' | 'due'
   viewMode:        'list',       // 'list' | 'kanban' | 'calendar' | 'history'
   boardScope:      'personal',   // personal device board | household hub board
@@ -1383,15 +1393,33 @@ function taskQuery() {
   return params.toString() ? `?${params}` : '';
 }
 
+const taskPageLoaders = new WeakMap();
+function taskSnapshot(id) {
+  return state.tasks.flatMap(task => [task, ...(task.subtasks || [])]).find(task => Number(task.id) === Number(id));
+}
 async function loadTasks(container) {
-  // Ohne Container steht diese Seite gar nicht - die Aufgabe wurde von der
-  // Uebersicht oder aus dem Kalender geoeffnet (#918), und dort frischt der
-  // Aufrufer seine eigene Ansicht auf.
-  if (!container) return;
+  if (!container || !container.isConnected) return;
   persistAssignedToMe();
-  const data  = await api.get(`/tasks${taskQuery()}`);
-  state.tasks = data.data ?? [];
-  renderTaskList(container);
+  let loader = taskPageLoaders.get(container);
+  if (!loader) {
+    loader = latestTaskLoader(() => Promise.all([api.get(`/tasks${taskQuery()}`), api.get('/automation/obligations').catch(() => ({ data: [] }))]), ([data, obligations]) => {
+      if (!container.isConnected) return;
+      state.tasks = data.data ?? [];
+      state.assignmentRequests = obligations.data ?? [];
+      applyTaskPagePermissions(container);
+      renderTaskList(container);
+    });
+    taskPageLoaders.set(container, loader);
+  }
+  try { return await loader.load(); }
+  catch (error) {
+    if (error.status === 403 && container.isConnected) {
+      state.tasks = []; state.assignmentRequests = [];
+      renderTaskList(container);
+      applyTaskPagePermissions(container);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1723,6 +1751,7 @@ function wireCountdownGate(panel) {
 
 function openTaskModal({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null } = {}, container) {
   const isEdit = !!task;
+  if (isEdit ? !canTask(task, 'edit') : !canCapability('tasks.create')) return;
   // Working-Set VOR dem Rendern setzen: renderTagChips liest ihn direkt danach.
   modalTags = normalizeTagList(task?.tags ?? presetActivityTemplate?.tags);
   openSharedModal({
@@ -1787,7 +1816,7 @@ function wireTaskForm(panel, {
     const userId = Number(panel.querySelector('[data-activity-reassign]')?.value);
     button.disabled = true;
     try {
-      await api.put(`/automation/tasks/${button.dataset.taskId}/assignment`, { user_id: userId });
+      await api.put(`/automation/tasks/${button.dataset.taskId}/assignment`, { user_id: userId, ...taskRevision(task) });
       window.yuvomi.showToast('Assignment updated.', 'success');
       await closeModal({ force: true });
       await onChanged();
@@ -1891,16 +1920,65 @@ function wireTaskForm(panel, {
     if (skill) addSkill(skill);
     return skill;
   };
-  const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: state.isAdmin ? createSkill : null });
-  const subtasks = !task ? bindSubtaskEditor(form, { skills: state.skills, onCreateSkill: state.isAdmin ? createSkill : null }) : null;
-  taskFormControls.set(form, { skills, subtasks, refreshAssignment, addSkill });
+  const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
+  const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
+  taskFormControls.set(form, { skills, subtasks, refreshAssignment, addSkill, originalTask: task ? structuredClone(task) : null });
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate, presetDates, container, onChanged, syncReady });
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
+
+  applyTaskFormPermissions(panel, task, { skills, subtasks });
 
   panel.querySelector('[data-action="delete-task"]')
     ?.addEventListener('click', (e) => deleteTaskWithUndo(e.currentTarget.dataset.id, {
       container, onChanged,
     }));
+}
+
+function applyTaskFormPermissions(panel, task, controls) {
+  const allowed = action => task ? canTask(task, action) : canCapability(`tasks.${action}`);
+  const gates = {
+    change_priority: '#task-priority', change_points: '#task-points',
+    change_category_tags: '#task-category, #task-tag-input, #task-tags',
+    change_dates: '[name="start_date"], [name="due_date"], [name="due_time"], #task-rrule-fields input, #task-rrule-fields select, #task-rrule-fields button, #task-rrule-fields yuvomi-datepicker, #task-countdown',
+    change_assignment: '#task-assignment-mode, #task-activity-subject-user, [data-ms-input="task_assigned"], #task-rotation-user-order input, #task-rotation-group, #task-rotation-position, #task-activity-template, [data-activity-reassign], [data-activity-reassign-submit]',
+    complete: '#task-status',
+  };
+  for (const [action, selectors] of Object.entries(gates)) {
+    if (allowed(action)) continue;
+    for (const field of panel.querySelectorAll(selectors)) {
+      field.disabled = true;
+      field.setAttribute('disabled', '');
+      field.setAttribute('aria-disabled', 'true');
+      if (field.tagName === 'BUTTON') field.hidden = true;
+    }
+  }
+  if (!allowed('change_required_skills')) {
+    controls.skills.setReadOnly(true);
+    for (const field of panel.querySelectorAll('[data-task-subtask-row] .task-skill-picker input, [data-task-subtask-row] .task-skill-picker button')) field.disabled = true;
+  }
+  if (!allowed('edit') && task) controls.subtasks?.setReadOnly(true);
+  if (!allowed('delete_archive')) panel.querySelector('[data-action="delete-task"]')?.remove();
+  if (!canCapability('activities.create')) panel.querySelector('[data-save-as-template]')?.remove();
+}
+
+function permittedTaskBody(body, task) {
+  if (!task) return body;
+  const gates = {
+    change_priority: ['priority'], change_points: ['points'], change_category_tags: ['category', 'tags'],
+    change_dates: ['start_date', 'due_date', 'due_time', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion', 'countdown'],
+    change_assignment: ['assigned_to', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs'],
+    change_required_skills: ['skill_ids'], complete: ['status'],
+  };
+  for (const [action, keys] of Object.entries(gates)) {
+    if (!canTask(task, action)) for (const key of keys) delete body[key];
+  }
+  if (body.subtasks && !canTask(task, 'change_required_skills')) {
+    for (const child of body.subtasks) {
+      const original = (task.subtasks || []).find(item => Number(item.id) === Number(child.id));
+      child.skill_ids = original?.skill_ids || [];
+    }
+  }
+  return body;
 }
 
 // --------------------------------------------------------
@@ -2049,7 +2127,9 @@ async function saveTaskRecord(form, body) {
   const idField = form.querySelector('#task-id');
   taskFormControls.get(form)?.subtasks?.setReadOnly(true);
   if (idField.value) {
-    await api.put(`/tasks/${idField.value}`, body);
+    const response = await api.put(`/tasks/${idField.value}`, body);
+    const controls = taskFormControls.get(form);
+    if (controls && response.data) controls.originalTask = structuredClone(response.data);
     return idField.value;
   }
 
@@ -2086,7 +2166,7 @@ async function saveTaskRecord(form, body) {
   // edited the form after a lost response, apply those edits to this same task.
   idField.value = savedTaskId;
   taskCreateAttempts.delete(form);
-  if (serialized !== attempt.serialized) await api.put(`/tasks/${savedTaskId}`, body);
+  if (serialized !== attempt.serialized) await api.put(`/tasks/${savedTaskId}`, { ...body, ...taskRevision(response.data) });
   return savedTaskId;
 }
 
@@ -2168,7 +2248,14 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   };
   const controls = taskFormControls.get(form);
   if (!managedActivity && controls) body.skill_ids = controls.skills.getValue();
-  if (controls?.subtasks && !taskId) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
+  if (controls?.subtasks) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
+  if (body.subtasks && controls?.originalTask) {
+    const original = controls.originalTask;
+    const operationalIds = new Set(actionableSubtasks(original).map(child => Number(child.id)));
+    body.subtasks.push(...(original.subtasks || []).filter(child => !operationalIds.has(Number(child.id)))
+      .map(child => ({ id: child.id, title: child.title, skill_ids: child.skill_ids || [] })));
+  }
+
   // Das Feld fehlt bei Unteraufgaben und bei bereits gespiegelten Aufgaben - in
   // beiden Fällen soll gar kein Ziel mitgeschickt werden, sonst nähme der Server
   // das Fehlen als "auf lokal zurücksetzen" (#695).
@@ -2186,6 +2273,18 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   if (dueTimeRaw && !dueTime) { resetSubmit(t('calendar.invalidDate')); return; }
   body.due_time = dueTime || null;
   if (form.status) body.status = form.status.value;
+  if (taskId && controls?.originalTask) {
+    Object.assign(body, taskRevision(controls.originalTask));
+    if (body.status !== controls.originalTask.status) {
+      const confirmation = taskStatusConfirmation(controls.originalTask, body.status);
+      if (confirmation) {
+        if (!await confirmOverModal(confirmation.message, { detail: confirmation.detail, confirmLabel: confirmation.confirmLabel, danger: confirmation.danger, closeOnConfirm: false })) {
+          submitBtn.disabled = false; submitBtn.textContent = originalLabel; return;
+        }
+        body[confirmation.flag] = true;
+      }
+    }
+  }
   if (managedActivity && activityRequiresSubject && !activitySubjectUserId) {
     resetSubmit('Choose a household member for this Activity Template.'); return;
   }
@@ -2240,7 +2339,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
 
   try {
-    const savedTaskId = await saveTaskRecord(form, body);
+    const savedTaskId = await saveTaskRecord(form, permittedTaskBody(body, controls?.originalTask));
     window.yuvomi.showToast(t(taskId ? 'tasks.savedToast' : 'tasks.createdToast'), 'success');
 
     // Erinnerung speichern oder löschen (Vorbedingungen bereits oben geprüft)
@@ -2289,7 +2388,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     await refreshTags();
     await onChanged();
   } catch (err) {
-    resetSubmit(err.message);
+    resetSubmit(err.status === 409 ? `${err.data?.error || err.message} Your draft has been kept. Close and reopen the Task to review current changes before saving again.` : err.message);
+    if (!taskCreateAttempts.has(form)) controls?.subtasks?.setReadOnly(false);
+    applyTaskFormPermissions(form, controls?.originalTask, controls);
     btnError(submitBtn);
   }
 }
@@ -2326,11 +2427,14 @@ async function moveTaskToColumn(before, column) {
   // diesem Zeitpunkt schon umgeschrieben, und die Entscheidung, ob überhaupt ein
   // Statuswechsel nötig ist, muss sich auf den alten Stand beziehen.
   if (column === 'archived') {
-    await setTaskArchived(before.id, true);
+    await setTaskArchived(before.id, true, before);
     return;
   }
-  if (before.archived_at) await setTaskArchived(before.id, false);
-  if (before.status !== column) await api.patch(`/tasks/${before.id}/status`, { status: column });
+  if (before.archived_at) {
+    await setTaskArchived(before.id, false, before);
+    before = (await api.get(`/tasks/${before.id}`)).data;
+  }
+  if (before.status !== column) return changeTaskStatus(before, column);
 }
 
 /** Optimistisches Spiegelbild von moveTaskToColumn auf dem State-Objekt. */
@@ -2345,9 +2449,7 @@ function applyColumnLocally(task, column) {
 
 /** Board-Bewegung mit optimistischem Vorgriff - der eine Weg für alle drei Gesten. */
 async function runColumnMove(task, column, container) {
-  const before = { id: task.id, status: task.status, archived_at: task.archived_at };
-  applyColumnLocally(task, column);
-  renderKanban(container);
+  const before = structuredClone(task);
   try {
     await moveTaskToColumn(before, column);
   } catch (err) {
@@ -3617,24 +3719,21 @@ function wireSwipeGestures(container) {
       flyOut: true,
       run: async (row) => {
         const taskId = row.dataset.swipeId;
-        const capturedStatus = row.dataset.swipeStatus;
-        const nextStatus = capturedStatus === 'done' ? 'open' : 'done';
+        const snapshot = taskSnapshot(taskId);
+        if (!snapshot || !canTask(snapshot, 'complete')) { await loadTasks(container); return; }
         try {
-          await toggleSubtaskStatus(taskId, capturedStatus);
+          const changed = await changeTaskStatus(snapshot, snapshot.status === 'done' ? 'in_progress' : 'done');
           await loadTasks(container);
-          window.yuvomi.showToast(
-            t(nextStatus === 'done' ? 'tasks.swipedDoneToast' : 'tasks.swipedOpenToast'),
-            'default',
-            5000,
-            async () => {
-              try {
-                await toggleSubtaskStatus(taskId, nextStatus);
-                await loadTasks(container);
-              } catch (err) {
-                window.yuvomi.showToast(err.message, 'danger');
-              }
-            },
-          );
+          if (changed?.data) {
+            // Undo uses this action's saved result, so a later edit cannot be overwritten.
+            const undoSnapshot = structuredClone(changed.data);
+            const previousStatus = snapshot.status;
+            window.yuvomi.showToast('Task status updated.', 'success', 5000, async () => {
+              try { await changeTaskStatus(undoSnapshot, previousStatus); }
+              catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
+              finally { await loadTasks(container); }
+            });
+          }
         } catch (err) {
           window.yuvomi.showToast(err.message, 'danger');
           await loadTasks(container);
@@ -4256,7 +4355,9 @@ function wireTaskLocationForm(panel) {
 }
 
 function wireAssignmentRequestsBtn(container) {
-  container.querySelector('#btn-assignment-requests')?.addEventListener('click', () => {
+  container.querySelector('#btn-assignment-requests')?.addEventListener('click', async () => {
+    try { state.assignmentRequests = (await api.get('/automation/obligations')).data || []; } catch (error) { window.yuvomi.showToast(error.message, 'danger'); return; }
+    const requestSnapshot = structuredClone(state.assignmentRequests);
     const content = state.assignmentRequests.length ? `<div class="automation-list">${state.assignmentRequests.map((request) => `
       <section class="list-row automation-list-row" data-assignment-request="${request.id}">
         <div class="automation-list-row__copy"><strong>${esc(request.task_title || 'Assignment request')}</strong><br><small class="form-hint">${request.status === 'accepted' ? 'Accepted' : 'Waiting for your response'}${request.response_deadline ? ` · due ${esc(request.response_deadline)}` : ''}</small></div>
@@ -4271,7 +4372,7 @@ function wireAssignmentRequestsBtn(container) {
         const row = button.closest('[data-assignment-request]');
         button.disabled = true;
         try {
-          await api.post(`/automation/obligations/${row.dataset.assignmentRequest}/respond`, { action: button.dataset.requestAction });
+          await api.post(`/automation/obligations/${row.dataset.assignmentRequest}/respond`, { action: button.dataset.requestAction, expected_revision: requestSnapshot.find(request => Number(request.id) === Number(row.dataset.assignmentRequest))?.task_revision });
           state.assignmentRequests = (await api.get('/automation/obligations')).data || [];
           await closeModal({ force: true });
           await loadTasks(container);
@@ -4366,10 +4467,13 @@ function wireBulkActions(container) {
     try {
       if (action === 'bulk-mark-done' || action === 'bulk-mark-open') {
         const status = btn.dataset.status;
-        await Promise.all(taskIds.map(id => api.patch(`/tasks/${id}/status`, { status })));
+        for (const id of taskIds) {
+          const task = taskSnapshot(id);
+          if (task && canTask(task, 'complete')) await changeTaskStatus(task, status);
+        }
         window.yuvomi.showToast(t('tasks.bulkStatusChanged'), 'success');
       } else if (action === 'bulk-archive') {
-        await Promise.all(taskIds.map(id => setTaskArchived(id, true)));
+        await Promise.all(taskIds.map(id => setTaskArchived(id, true, taskSnapshot(id))));
         window.yuvomi.showToast(t('tasks.bulkArchived'), 'success');
       }
 
@@ -4386,6 +4490,9 @@ function wireBulkActions(container) {
 // für mehrere Aufgaben: Karten sofort ausblenden, 5s Undo-Fenster, dann erst
 // die API-Aufrufe. Ersetzt den nativen window.confirm-Dialog (Critique P1).
 function handleBulkDelete(taskIds, container) {
+  const snapshots = new Map(taskIds.map(id => [id, structuredClone(taskSnapshot(id))]));
+  taskIds = taskIds.filter(id => snapshots.get(id) && canTask(snapshots.get(id), 'delete_archive'));
+  if (!taskIds.length) return;
   const els = taskIds
     .map(id => container.querySelector(`[data-task-id="${id}"]`))
     .filter(Boolean);
@@ -4400,7 +4507,7 @@ function handleBulkDelete(taskIds, container) {
   scheduleUndoableDelete({
     message: t('tasks.bulkDeleted'),
     commit: async ({ keepalive }) => {
-      await Promise.all(taskIds.map(id => api.delete(`/tasks/${id}`, { keepalive })));
+      await Promise.all(taskIds.map(id => api.delete(`/tasks/${id}`, { keepalive, body: JSON.stringify(taskRevision(snapshots.get(id))) })));
       taskIds.forEach(id => api.delete(`/reminders?entity_type=task&entity_id=${id}`, { keepalive }).catch(() => {}));
       if (keepalive) return; // Seite verschwindet — kein UI-Refresh mehr
       refreshReminders();
@@ -4492,55 +4599,19 @@ function wireTaskList(container) {
     }
 
     if (action === 'toggle-status') {
-      const status = target.dataset.status;
-      const nextStatus = status === 'done' ? 'open' : 'done';
-      vibrate(15);
-      // Beide Zustandsklassen führen, nicht nur die neue anhängen: der Knopf
-      // trug sonst `--open` UND `--done` gleichzeitig (gemessen 2026-08-28),
-      // und die Regel, die zuletzt im Stylesheet steht, gewann das Aussehen.
-      target.classList.toggle('task-status-btn--done', nextStatus === 'done');
-      target.classList.toggle('task-status-btn--open', nextStatus !== 'done');
-      target.closest('.task-card')?.classList.toggle('task-card--done', nextStatus === 'done');
-      // Die Quittung startet JETZT und läuft neben dem Roundtrip, nicht danach:
-      // `loadTasks()` ersetzt den Knopf, und ohne dieses Warten war `check-pop`
-      // (tasks.css:703) in 0 von 6 Messungen zu sehen. Siehe animationSettled().
-      const settled = animationSettled(target);
+      const task = taskSnapshot(id);
+      if (!task || !canTask(task, 'complete')) return;
+      target.disabled = true;
       try {
-        await toggleSubtaskStatus(id, status);
-        await settled;
-        await loadTasks(container);
-        // Derselbe Rückweg wie beim Wischen. Die Geste hatte hier zwei
-        // Endpunkte mit zwei Antworten: der Wisch bot Undo an, der Tipp - die
-        // häufigere Bedienung - liess den Eintrag kommentarlos aus dem
-        // gefilterten Bild verschwinden.
-        //
-        // Die Schlüssel heissen weiter `swiped*`: ihr TEXT ist gestenneutral
-        // ("Als erledigt markiert."), nur der Name nennt die Wischgeste. Ein
-        // Rename kostet 24 Locale-Dateien für eine Namensschuld, die kein
-        // Nutzer sieht - vermerkt statt bezahlt.
-        window.yuvomi.showToast(
-          t(nextStatus === 'done' ? 'tasks.swipedDoneToast' : 'tasks.swipedOpenToast'),
-          'default',
-          5000,
-          async () => {
-            try {
-              await toggleSubtaskStatus(id, nextStatus);
-              await loadTasks(container);
-            } catch (err) {
-              window.yuvomi.showToast(err.message, 'danger');
-            }
-          },
-        );
-      } catch (err) {
-        window.yuvomi.showToast(err.message, 'danger');
-        await loadTasks(container);
-      }
+        await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done');
+      } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
+      await loadTasks(container);
     }
 
     if (action === 'claim-activity') {
       target.disabled = true;
       try {
-        await api.post(`/automation/tasks/${id}/claim`, {});
+        await api.post(`/automation/tasks/${id}/claim`, taskRevision(taskSnapshot(id)));
         window.yuvomi.showToast('Task claimed.', 'success');
         await loadTasks(container);
       } catch (err) {
@@ -4562,7 +4633,7 @@ function wireTaskList(container) {
 
     if (action === 'toggle-subtask') {
       try {
-        await toggleSubtaskStatus(id, target.dataset.status);
+        await toggleSubtaskStatus(id, target.dataset.status, taskSnapshot(id));
         await loadTasks(container);
       } catch (err) {
         window.yuvomi.showToast(err.message, 'danger');
@@ -4584,7 +4655,7 @@ function wireTaskList(container) {
     if (action === 'archive-task' || action === 'unarchive-task') {
       const archive = action === 'archive-task';
       try {
-        await setTaskArchived(id, archive);
+        await setTaskArchived(id, archive, taskSnapshot(id));
         window.yuvomi.showToast(archive ? t('tasks.archivedToast') : t('tasks.unarchivedToast'), 'success');
         await loadTasks(container);
       } catch (err) {
@@ -4597,13 +4668,17 @@ function wireTaskList(container) {
     }
 
     if (action === 'rename-subtask') {
-      await renameSubtask({ id, title: target.dataset.title }, {
+      const snapshot = taskSnapshot(id);
+      if (!snapshot) return;
+      await renameSubtask(structuredClone(snapshot), {
         onChanged: () => loadTasks(container),
       });
     }
 
     if (action === 'delete-subtask') {
-      await deleteSubtask({ id, title: target.dataset.title }, {
+      const snapshot = taskSnapshot(id);
+      if (!snapshot) return;
+      await deleteSubtask(structuredClone(snapshot), {
         onChanged: () => loadTasks(container),
       });
     }
@@ -4812,6 +4887,20 @@ export async function openTaskById(taskId, { user = null, container = null, onCh
   });
 }
 
+function applyTaskPagePermissions(container) {
+  for (const id of ['btn-new-task', 'fab-new-task', 'empty-cta-tasks']) {
+    const button = container.querySelector(`#${id}`);
+    if (button) button.hidden = !canCapability('tasks.create');
+  }
+  const workflowButton = container.querySelector('#btn-quick-add');
+  if (workflowButton) workflowButton.hidden = !canCapability('workflows.run');
+  for (const id of ['btn-manage-categories', 'btn-manage-tags']) {
+    const button = container.querySelector(`#${id}`);
+    if (button) button.hidden = !canCapability('tasks.change_category_tags');
+  }
+
+}
+
 export async function render(container, { user }) {
   state.user = user ?? null;
   state.currentUserId = user?.id ?? null;
@@ -4984,6 +5073,8 @@ export async function render(container, { user }) {
 
   if (window.lucide) window.lucide.createIcons({ el: container });
 
+  applyTaskPagePermissions(container);
+
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
     const [tasksData, metaData, preferencesData, activityData, assignmentData, placesData, placeStatusData] = await Promise.all([
@@ -5064,6 +5155,10 @@ export async function render(container, { user }) {
     },
   });
 
+  const stopLive = watchTaskChanges(() => {
+    void loadTasks(container).catch(() => {});
+  });
+
   // Deep-Link: ?open=<id> öffnet die Detailansicht
   const openId = new URLSearchParams(window.location.search).get('open');
   if (openId) {
@@ -5084,6 +5179,12 @@ export async function render(container, { user }) {
       }
     } catch { /* Task existiert nicht oder kein Zugriff */ }
   }
+  return () => {
+    stopLive();
+    taskPageLoaders.get(container)?.dispose();
+    taskPageLoaders.delete(container);
+    state.tagResizeObserver?.disconnect();
+  };
 }
 
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.

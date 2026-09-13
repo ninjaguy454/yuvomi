@@ -107,8 +107,8 @@ test('invalid inline skills are atomic and a lost response retries the entire Ta
   const recoveredEdit = await call('PUT', `/tasks/${replay.body.data.id}`, { ...body, title: 'Recovered and edited' });
   assert.equal(recoveredEdit.status, 200, JSON.stringify(recoveredEdit.body));
   const changedChildren = await call('PUT', `/tasks/${replay.body.data.id}`, { ...body, subtasks: [] });
-  assert.equal(changedChildren.status, 409);
-  assert.equal(d.prepare('SELECT COUNT(*) AS n FROM tasks WHERE parent_task_id=?').get(replay.body.data.id).n, 1);
+  assert.equal(changedChildren.status, 200, 'Task Edit can now deliberately replace its checklist');
+  assert.equal(d.prepare('SELECT COUNT(*) AS n FROM tasks WHERE parent_task_id=?').get(replay.body.data.id).n, 0);
 });
 
 test('template skills/defaults and checklist skills survive generation but do not inherit onto empty subtasks', async () => {
@@ -171,23 +171,26 @@ test('workflow generation carries reusable defaults and independent checklist sk
     WHERE t.parent_task_id=? ORDER BY ts.sort_order`).all(primary.id).map((row) => row.skill_id), [secondSkill]);
 });
 
-test('explicit requirements gate independent assignment, self-assignment and claim; completion remains administrative', async () => {
+test('explicit requirements permit supervised assignment and claim but gate completion using current proficiency', async () => {
   proficiency(firstSkill, other, 'supervised');
-  const task = await create({ title: 'Skilled independent work', skill_ids: [firstSkill] });
-  assert.equal((await call('PUT', `/tasks/${task.id}`, { assigned_to: [other] })).status, 400);
-  assert.equal((await call('POST', '/tasks', { title: 'Unsafe direct assignment', skill_ids: [firstSkill], assigned_to: [other] })).status, 400);
+  const task = await create({ title: 'Skilled supervised work', skill_ids: [firstSkill] });
+  assert.equal(task.supervision.actions.length, 0, 'unassigned work has no hypothetical learner or helper');
+  assert.equal((await call('PUT', `/tasks/${task.id}`, { assigned_to: [other] })).status, 200);
+  assert.equal((await call('POST', '/tasks', { title: 'Valid learner assignment', skill_ids: [firstSkill], assigned_to: [other] })).status, 201);
   d.prepare(`INSERT INTO task_assignment_context(task_id,strategy,state,source) VALUES (?,'open_claimable','open','planning_context')`).run(task.id);
   d.prepare('INSERT INTO task_claim_eligibility(task_id,user_id) VALUES (?,?)').run(task.id, other);
   actor = other;
-  assert.equal((await call('PUT', `/tasks/${task.id}`, { assigned_to: [other] })).status, 400);
-  assert.equal((await call('POST', `/automation/tasks/${task.id}/claim`, {})).status, 409);
-  proficiency(firstSkill, other, 'normal');
   assert.equal((await call('POST', `/automation/tasks/${task.id}/claim`, {})).status, 200);
+  const blocked=await call('PATCH', `/tasks/${task.id}/status`, {status:'done'});
+  assert.equal(blocked.status,409); assert.match(blocked.body.error,/supervisor|supervised/i);
   proficiency(firstSkill, other, 'excluded');
-  assert.equal((await call('PUT', `/tasks/${task.id}`, { status: 'done', assigned_to: [other], skill_ids: [firstSkill] })).status, 200);
-  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, { status: 'open' })).status, 200);
-  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, { status: 'done' })).status, 200);
-  actor = admin;
+  assert.equal((await call('PUT', `/tasks/${task.id}`, {status:'done',assigned_to:[other],skill_ids:[firstSkill]})).status,409);
+  proficiency(firstSkill, other, 'normal');
+  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, {status:'done'})).status,200);
+  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, {status:'in_progress'})).status,200);
+  proficiency(firstSkill, other, 'excluded');
+  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, {status:'done'})).status,409);
+  actor=admin;
 });
 
 test('renaming and deactivating skills preserves references and delete guards cover both owners', async () => {
@@ -209,11 +212,16 @@ test('all explicit skills remain enforced when inactive, and locked subtask skil
   proficiency(firstSkill, other, 'normal'); proficiency(secondSkill, other, 'supervised');
   const task = await create({ title: 'All required skills', skill_ids: [firstSkill, secondSkill] });
   d.prepare('UPDATE skills SET active=0 WHERE id=?').run(secondSkill);
-  assert.equal((await call('PUT', `/tasks/${task.id}`, { assigned_to: [other] })).status, 400);
+  const assigned=await call('PUT', `/tasks/${task.id}`, { assigned_to: [other] });
+  assert.equal(assigned.status,200);
+  assert.ok(assigned.body.data.supervision.actions.some(action=>action.required_skills.some(skill=>skill.id===secondSkill)));
   const locked = await create({ title: 'Locked parent', locked: true, subtasks: [{ title: 'Skilled subtask', skill_ids: [secondSkill] }] });
   actor = other;
   assert.equal((await call('PUT', `/tasks/${locked.subtasks[0].id}`, { skill_ids: [] })).status, 403);
-  assert.equal((await call('PUT', `/tasks/${locked.subtasks[0].id}`, { assigned_to: [other] })).status, 400);
+  const supervised = await call('PUT', `/tasks/${locked.subtasks[0].id}`, { assigned_to: [other] });
+  assert.equal(supervised.status, 200, 'assignment can now retain a supervised learner without weakening the locked requirement');
+  assert.deepEqual(supervised.body.data.skill_ids,[secondSkill]);
+  assert.equal(supervised.body.data.supervision_action.state,'assigned');
   actor = admin;
   d.prepare('UPDATE skills SET active=1 WHERE id=?').run(secondSkill);
 });
@@ -224,7 +232,7 @@ test('recurrence copies checklist skills and keeps rotation position when the ne
     is_recurring: 1, recurrence_rule: 'FREQ=DAILY', assignment_mode: 'round_robin', rotation_user_ids: [admin, other],
     subtasks: [{ title: 'Recurring checklist', skill_ids: [secondSkill] }] });
   proficiency(firstSkill, other, 'excluded');
-  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, { status: 'done', complete_remaining: true })).status, 200);
   const next = d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(task.id);
   assert.equal(next.rotation_index, 1); assert.equal(next.assigned_to, null);
   const read = (await call('GET', `/tasks/${next.id}`)).body.data;
@@ -232,7 +240,7 @@ test('recurrence copies checklist skills and keeps rotation position when the ne
   assert.deepEqual(read.subtasks[0].skill_ids, [secondSkill]);
   assert.deepEqual(read.rotation_user_ids, [admin, other]);
   await call('PUT', `/tasks/${read.subtasks[0].id}`, { skill_ids: [] });
-  await call('PATCH', `/tasks/${task.id}/status`, { status: 'open' });
+  await call('PATCH', `/tasks/${task.id}/status`, { status: 'open', reset_progress: true });
   assert.ok(d.prepare('SELECT 1 FROM tasks WHERE id=?').get(next.id), 'editing checklist skills protects the followup from undo deletion');
 });
 
@@ -241,7 +249,7 @@ test('recurrence without explicit skills preserves legacy primary assignments ev
     is_recurring: 1, recurrence_rule: 'FREQ=DAILY' });
   const child = await create({ title: 'Legacy child', parent_task_id: task.id, assigned_to: [other] });
   d.prepare('DELETE FROM task_assignments WHERE task_id IN (?,?)').run(task.id, child.id);
-  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await call('PATCH', `/tasks/${task.id}/status`, { status: 'done', complete_remaining: true })).status, 200);
   const next = d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(task.id);
   assert.equal(next.assigned_to, admin);
   assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE parent_task_id=?').get(next.id).assigned_to, other);
@@ -254,14 +262,14 @@ test('recurrence evaluates subtask skills on its shifted due date across an age 
   d.prepare('UPDATE skills SET minimum_age=12 WHERE id=?').run(ageSkill);
   const root = await create({ title: 'Parent with later preparation', due_date: '2050-01-01', is_recurring: 1, recurrence_rule: 'FREQ=DAILY' });
   const child = await create({ title: 'Work after birthday', parent_task_id: root.id, due_date: '2050-02-20', skill_ids: [ageSkill], assigned_to: [childWorker] });
-  assert.equal((await call('PATCH', `/tasks/${root.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await call('PATCH', `/tasks/${root.id}/status`, { status: 'done', complete_remaining: true })).status, 200);
   const next = d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=?').get(child.id);
   assert.equal(next.due_date, '2050-02-21');
   assert.equal(next.assigned_to, childWorker, 'the earlier parent date must not disqualify work due after the birthday');
   assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(next.id).map((row) => row.user_id), [childWorker]);
 });
 
-test('undated recurring subtasks evaluate current proficiency rather than the future parent date', async () => {
+test('undated explicit subtasks evaluate age at the inherited parent occurrence date', async () => {
   const currentYear = new Date().getUTCFullYear();
   const childWorker = user('undated-age-worker', 'member');
   d.prepare('INSERT INTO birthdays(name,birth_date,created_by,family_user_id) VALUES (?,?,?,?)')
@@ -272,10 +280,46 @@ test('undated recurring subtasks evaluate current proficiency rather than the fu
   const root = await create({ title: 'Future parent with undated work', due_date: `${currentYear + 1}-01-01`, is_recurring: 1, recurrence_rule: 'FREQ=DAILY' });
   const child = await create({ title: 'Undated preparation', parent_task_id: root.id, skill_ids: [ageSkill], assigned_to: [childWorker] });
   d.prepare('DELETE FROM user_skill_proficiency WHERE user_id=? AND skill_id=?').run(childWorker, ageSkill);
-  assert.equal((await call('PATCH', `/tasks/${root.id}/status`, { status: 'done' })).status, 200);
+  const completed=await call('PATCH', `/tasks/${root.id}/status`, { status: 'done', complete_remaining: true });
+  assert.equal(completed.status,200,JSON.stringify(completed.body));
   const next = d.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=?').get(child.id);
-  assert.equal(next.due_date, null);
-  assert.equal(next.assigned_to, null, 'an undated child follows the same today-based qualification as a normal undated assignment');
+  assert.ok(next,'the planned occurrence is after the worker reaches the required age');
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(child.id).status,'done');
+});
+
+test('both archive API forms retire linked supervision and restore the same helper work',async()=>{
+  const required=skill('Archived supervised action'); proficiency(required,other,'supervised'); proficiency(required,admin,'normal');
+  const root=await create({title:'Archive original work',assigned_to:[other],subtasks:[{title:'Supervised action',skill_ids:[required]}]});
+  const original=(await call('GET',`/tasks/${root.id}`)).body.data;
+  const supportId=original.supervision.support_task_id, counterpartId=original.supervision.actions[0].counterpart_task_id;
+  assert.ok(supportId); assert.ok(counterpartId);
+  for(const path of [`/tasks/${root.id}/archive`,`/tasks/${root.id}/status`]) {
+    const response=await call('PATCH',path,path.endsWith('/status')?{status:'archived'}:{archived:true});
+    assert.equal(response.status,200,JSON.stringify(response.body));
+    for(const id of [supportId,counterpartId]) assert.ok(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(id).archived_at);
+    const blocked=await call('PATCH',`/tasks/${counterpartId}/status`,{status:'done'});
+    assert.equal(blocked.status,409); assert.match(blocked.body.error,/Restore the original/);
+    const restored=await call('PATCH',`/tasks/${root.id}/archive`,{archived:false});
+    assert.equal(restored.status,200,JSON.stringify(restored.body));
+    for(const id of [supportId,counterpartId]) assert.equal(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(id).archived_at,null);
+  }
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_activity_support_tasks WHERE source_task_id=?').get(root.id).n,1);
+});
+
+test('deleting a source action or replacing the checklist cannot leave orphan supervisor counterparts',async()=>{
+  const required=skill('Removable supervised action'); proficiency(required,other,'supervised'); proficiency(required,admin,'normal');
+  for(const method of ['DELETE','PUT']) {
+    const root=await create({title:`Remove ${method} source action`,assigned_to:[other],subtasks:[{title:'Remove this action',skill_ids:[required]}]});
+    const initial=(await call('GET',`/tasks/${root.id}`)).body.data;
+    const action=initial.supervision.actions[0], supportId=initial.supervision.support_task_id;
+    const response=await call(method,method==='DELETE'?`/tasks/${action.action_task_id}`:`/tasks/${root.id}`,method==='PUT'?{subtasks:[]}:undefined);
+    assert.equal(response.status,200,JSON.stringify(response.body));
+    assert.equal(d.prepare('SELECT id FROM tasks WHERE id=?').get(action.counterpart_task_id),undefined);
+    assert.equal(d.prepare('SELECT id FROM task_supervision_actions WHERE id=?').get(action.id),undefined);
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks WHERE parent_task_id=?').get(supportId).n,0);
+    assert.ok(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(supportId).archived_at,'empty helper container is retired');
+    assert.equal(d.prepare('SELECT id FROM tasks WHERE id=?').get(root.id).id,root.id);
+  }
 });
 
 test('root skill/date edits preserve child-only participants without inheriting requirements', async () => {

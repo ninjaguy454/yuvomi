@@ -1,3 +1,4 @@
+import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
 /**
  * Reusable activity/workflow engine.
  *
@@ -309,6 +310,8 @@ export function previewWorkflow(d, workflowId, {
           subject: activitySubject,
           assigned_to: resolution.primary,
           supervisor: resolution.supervisor,
+          supervision_needed: Boolean(resolution.supervisionNeeded),
+          supervision_reason: resolution.supervisionReason || null,
           supervisor_title: resolution.supervisor ? supervisorTitle(activity, activitySubject, variableLabels) : null,
           subject_proficiency: resolution.subjectProficiency?.proficiency ?? null,
           assignment_policy: assignment.policy,
@@ -474,6 +477,7 @@ export function instantiateWorkflow(d, workflowId, {
         VALUES (?, ?)
       `);
       checklistTaskIds.forEach((checklistTaskId) => requireChecklistItem.run(primaryTaskId, checklistTaskId));
+      if (resolution.primary) assertTaskSupervisionAssignee(d, primaryTaskId, resolution.primary.id);
       if (planning.place_id || planning.presence_policy !== 'ignore') {
         d.prepare(`
           INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
@@ -497,34 +501,16 @@ export function instantiateWorkflow(d, workflowId, {
         ...planning,
       });
 
-      if (resolution.supervisor) {
-        const supervisionTaskId = insertTask(d, {
-          title: supervisorTitle(activity, activitySubject, variableLabels),
-          description: `Supervise ${activitySubject?.display_name || 'the household member'} while they complete: ${activity.name}`,
-          category: activity.category,
-          assignedTo: resolution.supervisor.id,
-          createdBy,
-          parentTaskId,
-          dueDate: todayKey(d),
-        });
-        d.prepare(`
-          INSERT INTO workflow_instance_tasks (
-            workflow_instance_id, workflow_step_id, task_id, role
-          ) VALUES (?, ?, ?, 'supervisor')
-        `).run(instanceId, step.id, supervisionTaskId);
-        if (planning.place_id || planning.presence_policy !== 'ignore') {
-          d.prepare(`
-            INSERT INTO task_planning_context (task_id, place_id, presence_policy, presence_window, source)
-            VALUES (?, ?, ?, ?, 'workflow')
-          `).run(supervisionTaskId, planning.place_id, planning.presence_policy, planning.presence_window);
-        }
+      const supervision = reconcileTaskSupervision(d, primaryTaskId, { actorId: createdBy });
+      if (supervision.support_task_id) {
+        const supervisionTaskId = supervision.support_task_id;
+        d.prepare(`INSERT OR IGNORE INTO workflow_instance_tasks(workflow_instance_id,workflow_step_id,task_id,role)
+          VALUES(?,?,?,'supervisor')`).run(instanceId, step.id, supervisionTaskId);
         stepTaskIds.push(supervisionTaskId);
-        generated.push({
-          task_id: supervisionTaskId,
-          role: 'supervisor',
-          step_key: step.step_key,
-          assigned_to: resolution.supervisor,
-        });
+        const supervisionMembers = d.prepare(`SELECT u.id,u.display_name,u.avatar_color,u.avatar_data FROM task_assignments a
+          JOIN users u ON u.id=a.user_id WHERE a.task_id=? ORDER BY u.id`).all(supervisionTaskId);
+        generated.push({ task_id: supervisionTaskId, role: 'supervisor', step_key: step.step_key,
+          assigned_to: supervisionMembers[0] || null, participants: supervisionMembers, supervision });
       }
 
       generatedByStep.set(step.step_key, stepTaskIds);
@@ -594,7 +580,7 @@ export function unresolvedDependencies(d, taskId) {
 }
 
 /** Keep workflow instance and event parent status in sync with generated work. */
-export function syncWorkflowInstanceForTask(d, taskId) {
+export function syncWorkflowInstanceForTask(d, taskId, { syncParent = true } = {}) {
   const link = d.prepare(`
     SELECT wit.workflow_instance_id, wi.parent_task_id
       FROM workflow_instance_tasks wit
@@ -615,7 +601,7 @@ export function syncWorkflowInstanceForTask(d, taskId) {
        SET status = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
      WHERE id = ?
   `).run(status, link.workflow_instance_id);
-  if (link.parent_task_id) {
+  if (syncParent && link.parent_task_id) {
     d.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, link.parent_task_id);
   }
   return { workflowInstanceId: link.workflow_instance_id, status };

@@ -1279,7 +1279,8 @@ test('personal appearance leaf owns theme, locale, and regional preferences', ()
   // Datums- und Zeitformat gelten haushaltweit und sind fuer jedes Mitglied
   // aenderbar (server/routes/preferences.js). Der Hinweis muss an beiden
   // Selects haengen, sonst behauptet das Blatt wieder das Gegenteil.
-  assert.match(source, /id="formats-household-hint"[^>]*>\$\{t\('settings\.formatsHouseholdHint'\)\}/);
+  assert.match(source, /id="formats-household-hint"[^>]*>\$\{t\('settings\.adminOnly'\)\}/);
+  assert.match(source, /id="formats-household-hint"[\s\S]*?\$\{isAdmin \? `[\s\S]*?id="date-format-select"/);
   assert.match(source, /id="date-format-select"[^>]*aria-describedby="formats-household-hint date-format-error"/);
   assert.match(source, /id="time-format-select"[^>]*aria-describedby="formats-household-hint time-format-error"/);
   assert.match(source, /role="alert"[^>]*>\$\{t\('settings\.loadError'\)\}/);
@@ -14149,23 +14150,18 @@ test('die Lesemass-Liste kappt kein selbstpolsterndes Element (#758)', () => {
     + 'Polster steht, und muss es einrechnen (siehe .list-tabs-bar in shopping.css).');
 });
 
-test('ein Teilschritt lässt sich korrigieren und entfernen, nicht nur abhaken (#748)', () => {
-  const tasksPage = read('../public/pages/tasks.js');
-  const taskDetail = read('../public/components/task-detail.js');
-  const row = /function renderActivitySubtasks\([\s\S]*?\n\}/.exec(tasksPage);
-  assert.ok(row, 'the live subtask row must exist');
-  assert.match(row[0], /data-action="toggle-subtask"/);
-  assert.match(row[0], /subtask-item__title" data-action="open-task"/,'the compact row opens the canonical detail surface');
-  const detailRows = taskDetail.match(/function subtaskListNode\([\s\S]*?\n\}/)?.[0];
-  assert.ok(detailRows);
-  assert.match(detailRows, /rename\.addEventListener\('click',[\s\S]*?inlineTitleEditor\([\s\S]*?renameSubtask\(/);
-  assert.match(detailRows, /remove\.addEventListener\('click',[\s\S]*?deleteSubtask\(/);
-  assert.match(detailRows, /actions\.append\(rename, remove\)/);
-  assert.match(taskDetail, /export async function renameSubtask\(/);
-  assert.match(taskDetail, /export async function deleteSubtask\(/);
-  assert.match(taskDetail, /export async function deleteSubtask[\s\S]{0,500}confirmModal/);
-  assert.match(detailRows, /rename\.className = 'btn btn--ghost btn--icon btn--icon-sm'/);
-  assert.match(detailRows, /remove\.className = 'btn btn--ghost btn--icon btn--icon-sm'/);
+test('Task detail keeps operational subtasks while definitions and skills use Edit', () => {
+  const page = read('../public/pages/tasks.js');
+  const detail = read('../public/components/task-detail.js');
+  const rows = /function subtaskListNode\([\s\S]*?\n\}/.exec(detail)?.[0];
+  assert.ok(rows);
+  assert.match(rows, /changeTaskStatus\(/);
+  assert.match(rows, /taskSkillSummary\(/);
+  assert.doesNotMatch(rows, /renderSkillPicker|inlineTitleEditor|renameSubtask|deleteSubtask|addSubtask/);
+  assert.match(page, /task-subtasks-heading[\s\S]*?renderSubtaskEditor/);
+  assert.match(page, /controls\?\.subtasks\) body\.subtasks/);
+  assert.match(detail, /export async function renameSubtask\(/, 'compatibility helper retained');
+  assert.match(detail, /export async function deleteSubtask\(/, 'compatibility helper retained');
 });
 
 test('Task Workflows launcher reserves activity templates for the canonical Task form', () => {
@@ -14722,65 +14718,14 @@ test('der schmale Zustand der Kueche steht hinter seinem Bauteil', () => {
  *
  * Guard-Ebene: Struktur (aus Quelltext und Stylesheet gelesen).
  * ──────────────────────────────────────────────────────────────────────────── */
-test('the shared Task detail preserves editing, archive and first-subtask actions on touch (#925)', () => {
-  const page   = read('../public/pages/tasks.js');
+test('shared Task detail retains Edit and archive with a touch-accessible first-subtask editor', () => {
+  const page = read('../public/pages/tasks.js');
   const detail = read('../public/components/task-detail.js');
   assert.match(page, /activity-card__open" data-action="open-task"/);
-
-  // 3. Und wo faengt die Leseansicht sie auf? Der Wert ist der Aufruf, der die
-  //    Handlung im Detail-Pfad ausloest.
-  const TOUCH_PATH = {
-    'add-subtask':     'addSubtask(',
-    'edit-task':       'wireTaskForm(',
-    'archive-task':    'toggleTaskArchive(',
-    'unarchive-task':  'toggleTaskArchive(',
-  };
-
-  // Der Detail-Pfad: die Ansicht selbst und die Knoten, die sie baut. Ab
-  // `function subtaskListNode` bis zum Ende von `openTaskDetail` liegen beide.
-  // Sie wohnen seit #918 in der geteilten Komponente - genau darum greift der
-  // Ersatzweg jetzt auch dort, wo die Aufgabe aus der Uebersicht geoeffnet wird.
-  const detailStart = detail.indexOf('function subtaskListNode(');
-  const detailEnd   = detail.indexOf('async function advanceTaskStatus(');
-  assert.ok(detailStart > -1 && detailEnd > detailStart,
-    'der Detail-Pfad (subtaskListNode ... openTaskDetail) ist nicht mehr auffindbar - '
-    + 'der Guard misst sonst die falsche Datei-Haelfte');
-  // Das Bearbeiten-Formular gehoert dem Modul und wird der Ansicht gereicht
-  // (#918); der Mount-Block ist deshalb Teil desselben Wegs.
-  const mountStart = page.indexOf('function openTaskView(');
-  const mountEnd   = page.indexOf('export async function openTaskById(');
-  assert.ok(mountStart > -1 && mountEnd > mountStart,
-    'der Mount-Block des Bearbeiten-Formulars ist nicht mehr auffindbar');
-  const detailPath = detail.slice(detailStart, detailEnd) + page.slice(mountStart, mountEnd);
-
-  for (const [action, call] of Object.entries(TOUCH_PATH)) {
-    assert.ok(detailPath.includes(call),
-      `"${action}" verschwindet unter 640px, und der Detail-Pfad ruft ${call} nicht - `
-      + 'auf dem Telefon gibt es dann keinen Weg zu dieser Handlung (genau #925)');
-  }
-
-  // 4. Und der Aufruf muss ERREICHBAR sein, nicht bloss dastehen. Die erste
-  //    Fassung dieses Guards endete bei Schritt 3 und blieb gruen, als die
-  //    Gegenprobe den Abschnitt wieder auf `if (!task.subtasks?.length) return
-  //    null` zurueckdrehte: der Add-Block stand noch im Quelltext, nur lief er
-  //    nie. Genau der Zustand von #925 - der Weg existiert und ist zu.
-  //
-  //    Messbar ist die Regel dahinter: ein Abschnitt darf nur wegfallen, wenn
-  //    er auch nichts ANZUBIETEN hat. Die Bedingung, die den Add-Knopf gattert,
-  //    muss deshalb im Frueh-Ausstieg mitgelesen werden.
-  const nodeFn = /function subtaskListNode\([\s\S]*?\n\}/.exec(detail);
-  assert.ok(nodeFn, 'subtaskListNode ist nicht mehr auffindbar');
-  const gate = /^\s*const (\w+) = [^\n]*canEditTaskDefinition\(task[,)]/m.exec(nodeFn[0]);
-  assert.ok(gate,
-    'subtaskListNode gattert den Anlege-Weg nicht mehr an canEditTaskDefinition - '
-    + 'entweder darf jetzt jeder anlegen, oder der Knopf ist weg (#925)');
-  const bail = /if \([^)]*\)\s*return null;/.exec(nodeFn[0]);
-  assert.ok(bail, 'der Frueh-Ausstieg von subtaskListNode ist nicht mehr auffindbar');
-  assert.ok(bail[0].includes(gate[1]),
-    `der Abschnitt steigt bei leerer Liste aus, ohne "${gate[1]}" zu lesen - dann faellt er `
-    + 'auch dann weg, wenn er den Anlege-Knopf zu zeigen haette, und auf dem Telefon '
-    + 'gibt es keinen Weg zur ERSTEN Unteraufgabe (#925)');
-  assert.ok(new RegExp(`if \\(${gate[1]}\\)`).test(nodeFn[0]),
-    `der Anlege-Knopf haengt nicht mehr an "${gate[1]}" - der Guard misst dann eine `
-    + 'Bedingung, die den Knopf gar nicht mehr gattert');
+  assert.match(detail, /edit: canEdit && edit/);
+  assert.match(detail, /toggleTaskArchive\(task, button, ctx\)/);
+  assert.match(page, /function openTaskView[\s\S]*?wireTaskForm\(/);
+  assert.match(page, /!task\.parent_task_id && !task\.is_supervision_projection[\s\S]*?renderSubtaskEditor\(/,
+    'the empty parent Task gets the same subtask editor when Edit opens');
+  assert.match(read('../public/styles/tasks.css'), /detail-subtask__toggle \{ min-height: 44px/);
 });

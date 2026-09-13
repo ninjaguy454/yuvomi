@@ -110,7 +110,7 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
 }
 
 function subtaskRow(subtask, skills, template, index, canCreateSkill = false) {
-  return `<div class="task-subtask-editor__row" data-task-subtask-row>
+  return `<div class="task-subtask-editor__row" data-task-subtask-row${!template && subtask.id ? ` data-subtask-id="${Number(subtask.id)}"` : ''}>
     <div class="task-subtask-editor__main">
       <input class="input" data-task-subtask-title ${template ? 'data-variable-mentions="activity-title"' : ''}
         aria-label="Subtask ${index + 1}" maxlength="200" placeholder="Subtask name"
@@ -139,6 +139,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
   const pickers = new Map();
   let readOnly = false;
   const getValue = () => [...rows.children].map((row) => ({
+    ...(!template && row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     skill_ids: pickers.get(row).getValue(),
   }));

@@ -10,6 +10,8 @@ import express from 'express';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
 import { getBalance, isEnrolled, postLedger } from '../services/rewards.js';
+import { taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
+import { tokenAllows } from '../scopes.js';
 
 const log = createLogger('Rewards');
 const router = express.Router();
@@ -90,7 +92,8 @@ router.get('/overview', (req, res) => {
     // angelegte Prämien, Aufgaben mit Punktewert).
     const participantCount = d.prepare('SELECT COUNT(*) AS n FROM reward_participants WHERE enabled = 1').get().n;
     const catalogCount = d.prepare('SELECT COUNT(*) AS n FROM reward_catalog WHERE is_active = 1').get().n;
-    const pointedTaskCount = d.prepare('SELECT COUNT(*) AS n FROM tasks WHERE points > 0').get().n;
+    const pointedTaskCount = tokenAllows(req.authScopes, 'tasks', 'read')
+      ? d.prepare(`SELECT COUNT(*) AS n FROM tasks t WHERE points > 0 AND ${taskVisibilityWhere(d, req, 't', '@me')}`).get({ me: actingUser(req) }).n : 0;
     res.json({ data: {
       balances, catalog, pendingCount: pending,
       isAdmin: req.authRole === 'admin', me: actingUser(req),
@@ -274,6 +277,16 @@ router.get('/ledger', (req, res) => {
       ORDER BY l.created_at DESC, l.id DESC
       LIMIT @limit
     `).all({ userId, limit });
+    // Keep earned amounts/history intact; a copied Task title is still Task
+    // content and must not bypass its current visibility through the ledger.
+    for (const row of rows) {
+      if (!row.task_id) continue;
+      const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(row.task_id);
+      if (!tokenAllows(req.authScopes, 'tasks', 'read') || (task && !taskCapabilities(db.get(), req, task).view)) {
+        row.reason = null;
+        row.task_id = null;
+      }
+    }
     res.json({ data: rows });
   } catch (err) {
     log.error('GET /ledger error:', err);

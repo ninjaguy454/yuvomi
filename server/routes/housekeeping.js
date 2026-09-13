@@ -1,3 +1,6 @@
+import { assertCapability } from '../permissions.js';
+import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
+import { changeTaskStatus } from '../services/task-lifecycle.js';
 /**
  * Modul: Housekeeping
  * Zweck: REST-API fuer Ponto/Financeiro, tarefas dinamicas, insumos e ocorrencias
@@ -536,6 +539,24 @@ function defaultShoppingList(actorId) {
   return result.lastInsertRowid;
 }
 
+// Payment Task compatibility paths obey the same member capabilities.
+router.use((req, res, next) => {
+  try {
+    if (req.method === 'POST' && req.path === '/work-sessions/check-in' && housekeepingPaymentTasksEnabled(db.get())) assertCapability(db.get(), req, 'tasks.create');
+    const match = /^\/visits\/(\d+)(\/pay)?$/.exec(req.path);
+    if (match && !['GET','HEAD'].includes(req.method)) {
+      const session = db.get().prepare('SELECT payment_task_id FROM housekeeping_work_sessions WHERE id = ?').get(Number(match[1]));
+      const task = session?.payment_task_id && db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(session.payment_task_id);
+      if (task) {
+        const operation = match[2] ? 'status' : req.method === 'DELETE' ? 'delete' : 'documents';
+        assertTaskMutation(db.get(), req, task, {}, { operation });
+        if (req.method === 'PUT') assertCapability(db.get(), req, 'tasks.change_dates');
+      }
+    }
+    next();
+  } catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not check household permissions.', code: error.status || 500 }); }
+});
+
 router.get('/dashboard', (_req, res) => {
   try {
     res.json({ data: housekeepingDashboard() });
@@ -722,7 +743,7 @@ router.get('/visits', (req, res) => {
       FROM housekeeping_work_sessions hws
       LEFT JOIN housekeeping_workers hw ON hw.id = hws.worker_id
       LEFT JOIN users u ON u.id = hw.user_id
-      LEFT JOIN tasks t ON t.id = hws.payment_task_id
+      LEFT JOIN tasks t ON t.id = hws.payment_task_id AND ${taskVisibilityWhere(db.get(), req, 't', String(Number(req.authUserId || req.session?.userId)))}
       LEFT JOIN family_documents fd ON fd.id = hws.receipt_document_id
       WHERE substr(hws.check_in, 1, 7) = ?
         AND (? IS NULL OR hws.worker_id = ?)
@@ -814,7 +835,7 @@ router.get('/visits/:id', (req, res) => {
       FROM housekeeping_work_sessions hws
       LEFT JOIN housekeeping_workers hw ON hw.id = hws.worker_id
       LEFT JOIN users u ON u.id = hw.user_id
-      LEFT JOIN tasks t ON t.id = hws.payment_task_id
+      LEFT JOIN tasks t ON t.id = hws.payment_task_id AND ${taskVisibilityWhere(db.get(), req, 't', String(Number(req.authUserId || req.session?.userId)))}
       LEFT JOIN family_documents fd ON fd.id = hws.receipt_document_id
       WHERE hws.id = ?
     `).get(vId.value);
@@ -916,13 +937,16 @@ router.post('/visits/:id/pay', (req, res) => {
     db.get().transaction(() => {
       db.get().prepare('UPDATE housekeeping_work_sessions SET paid_at = ? WHERE id = ?').run(paidAt, existing.id);
       if (existing.payment_task_id) {
-        db.get().prepare('UPDATE tasks SET status = ? WHERE id = ?').run('done', existing.payment_task_id);
+        changeTaskStatus(db.get(),existing.payment_task_id,'done',{
+          actorId:req.authUserId||req.session.userId,body:req.body,
+        });
       }
     })();
     const row = db.get().prepare('SELECT * FROM housekeeping_work_sessions WHERE id = ?').get(existing.id);
     res.json({ data: publicSession(row), summary: monthlySummary(row.check_in.slice(0, 7)) });
   } catch (err) {
     log.error('POST /visits/:id/pay error:', err);
+    if(err.status)return res.status(err.status).json({error:err.message,code:err.status,...err.details});
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });

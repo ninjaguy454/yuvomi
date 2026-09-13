@@ -40,6 +40,7 @@ export function isNotificationDeliveryCurrent(database, notification) {
     return Boolean(obligation.task_id && database.prepare("SELECT 1 FROM task_assignment_context WHERE task_id = ? AND state = 'open'").get(obligation.task_id));
   }
   if (/^task:\d+:assigned:/.test(notification.source_key || '')) {
+    if (delegatedLearner(database, notification.entity_id) === Number(notification.user_id)) return false;
     return Boolean(database.prepare(`SELECT 1 FROM task_assignments a JOIN tasks t ON t.id = a.task_id
       WHERE a.task_id = @task AND a.user_id = @user AND t.status != 'done' AND t.archived_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM notification_inbox newer
@@ -60,6 +61,11 @@ function taskCategory(database, taskId) {
   return ['activity_template', 'workflow'].includes(source) ? 'automation' : 'tasks';
 }
 
+function delegatedLearner(database, taskId) {
+  const action = inspectTaskSupervision(database, taskId).actions.find(row => Number(row.action_task_id) === Number(taskId));
+  return action?.execution_mode === 'delegated' && action.state !== 'not_required' ? Number(action.learner_user_id) : null;
+}
+
 export function notifyTaskAssignments(database, taskId, previousIds = [], { managed = false, role = null } = {}) {
   const task = database.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task) return;
@@ -68,9 +74,10 @@ export function notifyTaskAssignments(database, taskId, previousIds = [], { mana
   if (!managed && database.prepare('SELECT 1 FROM task_assignment_context WHERE task_id = ?').get(taskId)) return;
   const before = new Set(previousIds.map(Number));
   const recipients = database.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(taskId);
+  const excludedLearner = delegatedLearner(database, taskId);
   const eventKey = `task:${taskId}:assigned:${randomUUID()}`;
   for (const { user_id: userId } of recipients) {
-    if (before.has(Number(userId))) continue;
+    if (before.has(Number(userId)) || Number(userId) === excludedLearner) continue;
     enqueueNotification(database, {
       userId, sourceKey: eventKey, category: taskCategory(database, taskId), entityType: 'task', entityId: taskId,
       title: role ? `New ${role} responsibility` : 'Task assigned to you', body: task.title,

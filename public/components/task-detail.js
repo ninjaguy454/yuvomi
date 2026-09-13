@@ -44,6 +44,7 @@ import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { canTask } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision } from '/utils/task-state.js';
+import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
@@ -249,7 +250,8 @@ function taskSkillSummary(task, ctx) {
   if (!ids.length) return '';
   // These are explanations of the resolved learner's current explicit skills,
   // never an alternative source of permission to complete the action.
-  const assessed = task.status === 'done' ? [] : (task.skill_eligibility || task.supervision_action?.skill_eligibility || []);
+  const helperPerforms = task.is_supervision_projection && task.supervision_action?.execution_mode === 'delegated';
+  const assessed = task.status === 'done' || helperPerforms ? [] : (task.skill_eligibility || task.supervision_action?.skill_eligibility || []);
   const eligibility = new Map(assessed.map((skill) => [Number(skill.skill_id), skill]));
   const labels = { normal: 'Independent', supervised: 'Supervision required', excluded: 'Cannot perform even with supervision' };
   return ids.map((id) => {
@@ -417,7 +419,7 @@ function responsibilityListNode(task, ctx) {
   return wrap;
 }
 
-function progressNode(task) {
+function progressNode(task, ctx) {
   if (!actionableSubtasks(task).length) return null;
   const progress = completionCounts(task);
   const wrap = document.createElement('div');
@@ -427,7 +429,10 @@ function progressNode(task) {
   meter.value = progress.done;
   meter.setAttribute('aria-label', t('tasks.subtasksLabel'));
   const label = document.createElement('span');
-  label.textContent = `${progress.done} of ${progress.total} complete · ${Math.round(progress.done / progress.total * 100)}%`;
+  const hasDelegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated');
+  const ownSteps = hasDelegated && !task.is_supervision_projection
+    ? Number(task.assigned_to) === Number(ctx.currentUserId) ? 'Your steps: ' : 'Learner steps: ' : '';
+  label.textContent = `${ownSteps}${progress.done} of ${progress.total} complete · ${Math.round(progress.done / progress.total * 100)}%`;
   if (progress.totalPoints > 0) {
     label.append(document.createTextNode(` · ${t('tasks.progressPointsValue', progress)}`));
   }
@@ -565,13 +570,18 @@ function subtaskListNode(task, ctx) {
     const skills = taskSkillSummary(subtask, ctx);
     const parts = [skills];
     if (supervision && supervision.state !== 'not_required') {
-      if (done && supervision.completed) {
+      if (supervision.execution_mode === 'delegated' && subtask.is_supervision_projection) {
+        parts.push(done && supervision.completed
+          ? supervision.supervisor_name ? `Performed by ${supervision.supervisor_name}` : 'Completed by the helper'
+          : `Direct responsibility · You perform this${supervision.learner_name ? ` for ${supervision.learner_name}` : ' for the learner'}`);
+      } else if (done && supervision.completed) {
         parts.push(supervision.supervisor_name ? `Previously supervised by ${supervision.supervisor_name}` : 'Completed supervised action');
       } else {
         if (!(subtask.skill_eligibility || supervision.skill_eligibility || []).some((skill) => ['supervised', 'excluded'].includes(skill.proficiency))) {
           parts.push(supervision.state === 'excluded' ? 'Cannot perform even with supervision' : 'Supervision required');
         }
         if (supervision.state === 'assigned' && supervision.supervisor_name) parts.push(`Supervisor: ${supervision.supervisor_name}`);
+        if (subtask.is_supervision_projection) parts.push(`${supervision.learner_name || 'The learner'} performs this with you`);
       }
     }
     const points = Number(subtask.points || 0);
@@ -1067,7 +1077,7 @@ function statusSummaryNode(task, ctx) {
     select.appendChild(option);
   }
   select.value = task.status;
-  select.disabled = isArchived(task) || !canTask(task, 'complete');
+  select.disabled = isArchived(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
   select.addEventListener('change', async () => {
     const requested = select.value;
     select.value = task.status;
@@ -1078,8 +1088,16 @@ function statusSummaryNode(task, ctx) {
   summary.appendChild(control);
   const priority = priorityNode(task.priority);
   if (priority) summary.appendChild(priority);
-  const progress = progressNode(task);
+  const progress = progressNode(task, ctx);
   if (progress) summary.appendChild(progress);
+  const waiting = helperWaitingLabel(task, ctx.currentUserId);
+  if (waiting) {
+    const message = document.createElement('span');
+    message.className = 'task-detail-progress';
+    message.setAttribute('role', 'status');
+    message.textContent = waiting;
+    summary.appendChild(message);
+  }
   if (isArchived(task)) {
     const archived = document.createElement('span');
     archived.textContent = `Archived · ${formatDate(task.archived_at)}`;
@@ -1127,8 +1145,10 @@ function supervisionNode(task, ctx) {
   wrap.className = 'task-detail-supervision';
   wrap.setAttribute('role', 'status');
   const title = document.createElement('strong');
+  const hasDelegated = actions.some(requirement => requirement.execution_mode === 'delegated' && requirement.state !== 'not_required');
   title.textContent = (supervision?.state || action?.state) === 'excluded' ? 'Skill restriction'
-    : supervision?.state === 'needed' ? 'Supervision needed' : 'Supervised work';
+    : supervision?.state === 'needed' ? hasDelegated ? 'Helper needed' : 'Supervision needed'
+    : hasDelegated ? 'Supervisor responsibilities' : 'Supervised work';
   wrap.appendChild(title);
   const scopeReason = supervision?.display_reason || supervision?.reason;
   if (scopeReason) {
@@ -1137,10 +1157,11 @@ function supervisionNode(task, ctx) {
   const remaining = actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
   if (remaining.length) {
     const summary = document.createElement('p');
-    summary.textContent = remaining.some(requirement => requirement.state === 'excluded')
+    summary.textContent = remaining.some(requirement => requirement.state === 'excluded' && requirement.execution_mode !== 'delegated')
       ? 'A supervisor cannot override these skill restrictions.'
       : supervision?.state === 'assigned' && supervision.supervisor_name
-      ? `Supervisor: ${supervision.supervisor_name} · Covers all remaining supervised actions.`
+      ? `Supervisor: ${supervision.supervisor_name} · Covers all remaining ${hasDelegated ? 'supervised actions and direct responsibilities' : 'supervised actions'}.`
+      : hasDelegated ? 'One supervisor must cover every remaining supervised action and every action they perform for the learner.'
       : 'One supervisor must cover every remaining action requiring supervision.';
     wrap.appendChild(summary);
   }
@@ -1151,7 +1172,7 @@ function supervisionNode(task, ctx) {
     const select = document.createElement('select'); select.className = 'input input--sm';
     select.dataset.immediateAction = '';
     select.dataset.focusKey = 'task-supervisor';
-    select.setAttribute('aria-label', 'Supervisor for all remaining supervised actions');
+    select.setAttribute('aria-label', hasDelegated ? 'Supervisor for all remaining supervised actions and direct responsibilities' : 'Supervisor for all remaining supervised actions');
     for (const person of supervision.eligible_supervisors) {
       const option = document.createElement('option'); option.value = person.id; option.textContent = person.display_name;
       option.selected = Number(person.id) === Number(supervision.supervisor_user_id); select.appendChild(option);
@@ -1180,19 +1201,24 @@ function supervisionNode(task, ctx) {
   for (const requirement of actions) {
     if (requirement.state === 'not_required') continue;
     const row = document.createElement('div'); row.className = 'task-detail-supervision__action';
-    const name = document.createElement('strong'); name.textContent = requirement.action_title || task.title;
+    const delegated = requirement.execution_mode === 'delegated';
+    const name = document.createElement('strong'); name.textContent = [delegated ? 'Direct responsibility' : '', requirement.action_title || task.title].filter(Boolean).join(': ');
     const explanation = document.createElement('span');
     const skills = (requirement.required_skills || []).map((skill) => skill.name).join(', ');
     const actionReason = requirement.display_reason || requirement.reason;
     const reason = !requirement.completed && actionReason !== scopeReason ? actionReason : '';
     const history = requirement.completed
-      ? requirement.supervisor_name ? `Completed · Previously supervised by ${requirement.supervisor_name}` : 'Completed supervised action'
+      ? delegated ? requirement.supervisor_name ? `Completed · Performed by ${requirement.supervisor_name}` : 'Completed by the helper'
+      : requirement.supervisor_name ? `Completed · Previously supervised by ${requirement.supervisor_name}` : 'Completed supervised action'
       : '';
-    explanation.textContent = [skills, history, reason].filter(Boolean).join(' · ');
+    const ownership = !requirement.completed && delegated
+      ? `${requirement.supervisor_name || 'The helper'} performs this for ${requirement.learner_name || 'the learner'}`
+      : !requirement.completed && task.is_supervision_projection ? `${requirement.learner_name || 'The learner'} performs this with you` : '';
+    explanation.textContent = [skills, ownership, history, reason].filter(Boolean).join(' · ');
     row.append(name, explanation);
     if (requirement.counterpart_task_id && !task.is_supervision_projection && supervision?.can_view_support === true) {
       const link = document.createElement('a'); link.href = `/tasks?open=${requirement.counterpart_task_id}`;
-      link.textContent = 'Open supervision work'; row.appendChild(link);
+      link.textContent = delegated ? 'Open helper action' : 'Open supervision work'; row.appendChild(link);
     }
     wrap.appendChild(row);
   }
@@ -1204,7 +1230,7 @@ function activityNode(task, ctx) {
   const status = document.createElement('p'); status.className = 'form-hint'; status.textContent = t('common.loading');
   wrap.appendChild(status);
   const labels = { created: 'Created', assigned: 'Assigned', reassigned: 'Reassigned', supervisor_assigned: 'Supervisor assigned',
-    started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
+    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
   ctx.activityRequest = api.get(`/tasks/${task.id}/activity`);
   ctx.activityRequest.then((response) => {
     if (ctx.closed || !wrap.isConnected) return;

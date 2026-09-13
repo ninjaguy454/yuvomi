@@ -1,7 +1,8 @@
 /**
  * Activity Template checklist definitions are authoring-time data. When an
  * Activity creates a Task, these rows are copied into ordinary Task subtasks;
- * the generated Task owns those copies from then on.
+ * the generated Task owns those copies from then on. The source definition ID
+ * records provenance without making future template edits rewrite occurrences.
  */
 
 import { setTaskSkills } from './task-skills.js';
@@ -51,10 +52,16 @@ export function materializeActivityChecklist(d, {
     INSERT INTO tasks (
       title, description, category, priority, status, start_date, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
-      assignment_mode, rotation_index, points, visibility, countdown, locked
-    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0)
+      assignment_mode, rotation_index, points, visibility, countdown, locked,
+      activity_template_checklist_item_id
+    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0, ?)
   `);
+  const sourceDefinition = d.prepare('SELECT id FROM activity_template_checklist_items WHERE id=? AND activity_template_id=?');
   return items.map((item) => {
+    // Persist only the supplied authoritative identity; never infer old links
+    // from a title or checklist position.
+    const sourceItemId = Number.isSafeInteger(Number(item.id))
+      ? sourceDefinition.get(Number(item.id), activity.id)?.id ?? null : null;
     const taskId = Number(insert.run(
       renderActivityChecklistTitle(item, activity, subject, variableLabels),
       activity.category || parent.category || 'misc',
@@ -64,8 +71,13 @@ export function materializeActivityChecklist(d, {
       createdBy || parent.created_by,
       parent.id,
       parent.visibility || 'all',
+      sourceItemId,
     ).lastInsertRowid);
     setTaskSkills(d, taskId, item.skill_ids || item.skills?.map((skill) => skill.id) || []);
+    if (sourceItemId) d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)
+      VALUES(?,?,?,'template_action_created',?)`).run(parent.id, taskId, createdBy || parent.created_by,
+        JSON.stringify({title: renderActivityChecklistTitle(item, activity, subject, variableLabels),
+          activity_template_id: activity.id, activity_template_checklist_item_id: sourceItemId}));
     return taskId;
   });
 }

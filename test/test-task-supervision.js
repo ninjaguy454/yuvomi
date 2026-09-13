@@ -116,7 +116,7 @@ test('qualified but unavailable supervisor has a distinct useful explanation',()
   assert.match(view.reason,/no single qualified supervisor shares an eligible time/i); assert.equal(view.actions[0].qualified_supervisor_count,1);
 });
 
-test('learner skill explanations distinguish independent, supervised and excluded actions without changing canonical supervision',()=>{
+test('learner skill explanations distinguish independent, supervised and delegated actions without read-side mutations',()=>{
   d.prepare("UPDATE users SET display_name='Frank' WHERE id=?").run(learner);
   d.prepare("INSERT INTO birthdays(name,birth_date,family_user_id,created_by) VALUES('Frank','2021-01-01',?,?)").run(learner,admin);
   const x=laundry(), sorting=skill('Laundry Sorting'), folding=skill('Fold Laundry');
@@ -128,11 +128,10 @@ test('learner skill explanations distinguish independent, supervised and exclude
     d.prepare("UPDATE skills SET minimum_age=7,age_promotion='supervised' WHERE id=?").run(id);
   }
   const baseline=reconcileTaskSupervision(d,x.root);
-  assertSingleSupervisor(baseline,null);
-  assert.equal(baseline.state,'excluded');
-  assert.deepEqual(baseline.actions.map(a=>[a.action_task_id,a.state]),[[x.wash,'excluded'],[x.dry,'excluded'],[fold,'unresolved']]);
-  // Legacy persisted reasons remain byte-for-byte unchanged; improved wording is a read projection.
-  assert.ok(baseline.actions.every(a=>a.reason==='Frank cannot currently perform Washing Machine, even with supervision.'));
+  assertSingleSupervisor(baseline,helper);
+  assert.equal(baseline.state,'assigned');
+  assert.deepEqual(baseline.actions.map(a=>[a.action_task_id,a.execution_mode,a.state]),
+    [[x.wash,'delegated','assigned'],[x.dry,'delegated','assigned'],[fold,'supervised','assigned']]);
   const capture=()=>Object.fromEntries(['tasks','task_supervision_actions','task_responsibilities','task_assignments','task_activity_support_tasks',
     'planning_obligations','planning_obligation_events','task_activity_events','notification_inbox','task_change_clock']
     .map(name=>[name,d.prepare(`SELECT * FROM ${name}`).all()]));
@@ -146,15 +145,17 @@ test('learner skill explanations distinguish independent, supervised and exclude
   assert.match(dry.supervision_action.display_reason,/Frank.*Start dryer.*Dryer.*even with supervision.*age-based/);
   assert.doesNotMatch(dry.supervision_action.display_reason,/Washing Machine|Load washer/);
   assert.equal(folded.skill_eligibility[0].proficiency,'supervised');
-  assert.match(folded.supervision_action.display_reason,/Frank.*Fold laundry.*with supervision.*another action.*skill restriction/);
-  assert.match(wash.supervision.display_reason,/Load washer.*Washing Machine.*Start dryer.*Dryer/);
+  assert.match(folded.supervision_action.display_reason,/Frank.*Fold laundry.*with supervision.*Duane will supervise/);
+  assert.match(wash.supervision.display_reason,/Duane.*Washing Machine.*Dryer/);
   const adult=wash.supervision.supervisor_explanations.find(c=>c.user_id===helper);
-  assert.equal(adult.eligible,false);
-  assert.match(adult.display_reason,/Frank.*even with supervision.*cannot override/);
+  assert.equal(adult.eligible,true);
+  assert.match(adult.display_reason,/every remaining/);
   assert.doesNotMatch(adult.display_reason,/Not independently qualified/);
-  assert.deepEqual(wash.supervision.eligible_supervisors,[]);
+  assert.deepEqual(wash.supervision.eligible_supervisors.map(person=>person.id),[helper]);
   assert.equal(wash.supervision_action.can_complete,false);
-  assert.throws(()=>taskSupervisionTransition(d,x.dry,'done',helper),/Frank.*Start dryer.*Dryer.*even with supervision/);
+  assert.match(dry.supervision_action.display_reason,/helper's responsibility.*Frank must not perform.*Duane will perform/);
+  assert.throws(()=>taskSupervisionTransition(d,x.dry,'done',learner),/Duane|helper/);
+  assert.doesNotThrow(()=>taskSupervisionTransition(d,x.dry,'done',helper));
   assert.doesNotThrow(()=>taskSupervisionTransition(d,x.independent,'done',learner));
   reconcileTaskSupervision(d,x.root);
   assert.deepEqual(capture(),before,'readable wording must not change revisions, history, obligations or notifications');
@@ -170,7 +171,7 @@ test('display distinguishes permitted supervised work from a missing or unavaila
   const unavailable=inspectTaskSupervision(d,x.root);
   assert.equal(unavailable.state,'needed'); assert.equal(unavailable.qualified_supervisor_count,1);
   assert.deepEqual(unavailable.eligible_supervisors,[]);
-  assert.match(unavailable.actions[0].display_reason,/Qualified supervisors exist, but none is available.*completion window/);
+  assert.match(unavailable.actions[0].display_reason,/Qualified supervisors exist, but none can cover every required action.*completion window/);
   assert.match(unavailable.actions[0].display_reason,/Washing Machine/);
   assert.doesNotMatch(unavailable.actions[0].display_reason,/cannot perform.*even with supervision/);
 });
@@ -236,11 +237,13 @@ test('proficiency progression stops requiring current help without deleting comp
   assert.equal(next.actions.find(a=>a.action_task_id===x.dry).state,'not_required');
   assert.equal(next.support_task_id,view.support_task_id);
 });
-test('excluded requirements cannot be bypassed by fixed assignment or a qualified supervisor',()=>{
+test('excluded child requirements transfer performance to the helper without permitting the learner to do the action',()=>{
   const x=laundry(); proficiency(learner,washer,'excluded');
-  assert.throws(()=>assertTaskSupervisionAssignee(d,x.root,learner),/cannot perform one or more explicit Task or subtask requirements, even with supervision/);
-  const view=reconcileTaskSupervision(d,x.root); assert.equal(view.state,'excluded');
-  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',helper),/even with supervision/);
+  assert.doesNotThrow(()=>assertTaskSupervisionAssignee(d,x.root,learner));
+  const view=reconcileTaskSupervision(d,x.root); assert.equal(view.state,'assigned');
+  assert.equal(view.actions.find(action=>action.action_task_id===x.wash).execution_mode,'delegated');
+  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',learner),/helper|Duane/);
+  assert.doesNotThrow(()=>taskSupervisionTransition(d,x.wash,'done',helper));
 });
 test('fixed Activity accepts a supervised actual learner and attaches parent-level linked work',()=>{
   const root=task(), id=activity('fixed',[washer]);
@@ -444,13 +447,16 @@ test('ordinary grandchildren share their ancestor Task learner and supervisor in
   for(const actor of [admin,helper]) assert.throws(()=>taskSupervisionTransition(d,dry,'done',actor),/supervis/i);
 });
 
-test('prospective assignee validation checks inherited descendants using the replacement while preserving explicit child performers',()=>{
+test('prospective assignee retains excluded inherited descendants as helper work while preserving explicit child performers',()=>{
   const root=task(), phase=task('Laundry phase',root,null), wash=task('Load washer',phase,null);
   setTaskSkills(d,wash,[washer]); proficiency(helper,washer,'excluded');
-  assert.throws(()=>assertTaskSupervisionAssignee(d,root,helper),/even with supervision/);
+  assert.doesNotThrow(()=>assertTaskSupervisionAssignee(d,root,helper));
   assert.doesNotThrow(()=>assertTaskSupervisionAssignee(d,root,learner));
+  d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(helper,root);
+  assert.equal(inspectTaskSupervision(d,root).actions.find(action=>action.action_task_id===wash).execution_mode,'delegated');
   d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(learner,phase);
   assert.doesNotThrow(()=>assertTaskSupervisionAssignee(d,root,helper),'an explicitly assigned intermediate Task retains its own learner');
+  assert.equal(inspectTaskSupervision(d,root).actions.find(action=>action.action_task_id===wash).execution_mode,'supervised');
 });
 
 test('legacy nested supervisor containers consolidate into one active scope without losing progress or Activity',()=>{

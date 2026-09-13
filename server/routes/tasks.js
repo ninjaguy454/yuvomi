@@ -779,7 +779,7 @@ function hydrateTask(task, me, supervisionViews = new Map()) {
     if(hiddenScope) actions=actions.map(action=>({...action,
       reason:action.completed ? 'Historical supervision is recorded for this completed action.'
         : action.state==='not_required' ? 'This action does not currently require supervision.'
-        : `This action requires supervision for ${action.required_skills.map(skill=>skill.name).join(', ')}. One supervisor must cover the Task’s entire remaining supervised scope.`,
+        : `This action ${action.execution_mode==='delegated'?'must be performed by the helper':'requires supervision'} for ${action.required_skills.map(skill=>skill.name).join(', ')}. One supervisor must cover the Task’s entire remaining helper scope.`,
       supervisor_explanations:[],blocked_requirements:[]}));
     const active=actions.filter(action=>!action.completed&&action.state!=='not_required');
     row.supervision={...row.supervision,actions,can_view_support:!!row.supervision.support_task_id&&mayAccessTask(
@@ -797,8 +797,13 @@ function hydrateTask(task, me, supervisionViews = new Map()) {
   }
   attachTaskActivityBindings(db.get(),[task]);attachTaskLocations(db.get(),[task]);attachTaskActionLinks([task]);
   const isSupport=task.supervision?.support_task_id===task.id;
-  const operational=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
+  const structural=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
+  const operational=structural.filter(child=>isSupport||!child.is_delegated_action);
   task.subtask_total=operational.length;task.subtask_done=operational.filter(child=>child.status==='done').length;
+  task.waiting_on_helper=!isSupport && task.status!=='done'
+    && operational.every(child=>child.status==='done')
+    && (structural.some(child=>child.is_delegated_action&&child.status!=='done')
+      || task.supervision_action?.action_task_id===task.id && task.supervision_action?.state!=='not_required');
   return task;
 }
 
@@ -1502,7 +1507,7 @@ router.post('/', (req, res) => {
       : requestedUserIds;
     const firstUid = userIds[0] ?? null;
     if (!activityBinding) assertTaskSkillAssignments(db.get(), skillIds,
-      assignmentMode === 'round_robin' ? rotationUserIds : userIds, due_date || todayInHouseholdZone());
+      assignmentMode === 'round_robin' ? rotationUserIds : userIds, due_date || todayInHouseholdZone(), {allowDelegation:!!parent_task_id});
 
     // Sync-Ziel (#695). Unteraufgaben bekommen keines: sie gehören zu ihrer
     // Elternaufgabe, und als eigenständiges VTODO stünden sie gleichrangig
@@ -1772,7 +1777,7 @@ router.put('/:id', (req, res) => {
       assertTaskSkillAssignments(db.get(), skillIds,
         assignmentMode === 'round_robin' ? rotationUserIds
           : independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid),
-        due_date || todayInHouseholdZone());
+        due_date || todayInHouseholdZone(), {allowDelegation:!!task.parent_task_id});
     }
     const performersChanged = !desiredActivityBinding && (!sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
     if (!bindingChanged && status !== 'done' && (taskWindowChanged || performersChanged)) {
@@ -2263,14 +2268,14 @@ function spawnRecurrenceFollowupSingle(task) {
       const newSub = db.get().prepare(`
         INSERT INTO tasks (title, description, category, priority, status,
           start_date, due_date, due_time, assigned_to, created_by, parent_task_id,
-          is_recurring, recurrence_rule, points, visibility, recurrence_origin_id)
-        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?)
+          is_recurring, recurrence_rule, points, visibility, recurrence_origin_id, activity_template_checklist_item_id)
+        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
       `).run(
         sub.title, sub.description, sub.category, sub.priority,
         shiftedStartDate(sub.start_date, subAnchorDate, nextDate) ?? sub.start_date,
         subDueDate,
         sub.due_time, subAssignedTo, sub.created_by, newTask.lastInsertRowid,
-        sub.points, sub.visibility, sub.id
+        sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null
       );
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);

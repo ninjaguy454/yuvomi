@@ -61,6 +61,25 @@ test('subtask completion keeps count and point progress together', () => {
   });
 });
 
+test('learner count and point progress excludes delegated work before and after helper completion', () => {
+  const task = { status: 'in_progress', subtasks: [
+    { status: 'done', points: 3 },
+    { status: 'open', points: 5, supervision_action: { execution_mode: 'supervised' } },
+    { status: 'open', points: 7, supervision_action: { execution_mode: 'delegated' } },
+  ] };
+  assert.deepEqual(completionCounts(task), { done: 1, total: 2, earnedPoints: 3, totalPoints: 8 });
+  task.subtasks[2].status = 'done';
+  assert.deepEqual(completionCounts(task), { done: 1, total: 2, earnedPoints: 3, totalPoints: 8 });
+  assert.deepEqual(completionCounts({ is_supervision_projection: true, subtasks: [{ ...task.subtasks[2], is_supervision_projection: true, points: 0 }] }),
+    { done: 1, total: 1, earnedPoints: 0, totalPoints: 0 });
+});
+
+test('all transferred actions do not invent a remaining learner step or claim parent points', () => {
+  assert.deepEqual(completionCounts({ status: 'in_progress', points: 20, waiting_on_helper: true, subtasks: [
+    { status: 'open', points: 7, supervision_action: { execution_mode: 'delegated' } },
+  ] }), { done: 0, total: 0, earnedPoints: 0, totalPoints: 0 });
+});
+
 test('Task location labels prefer the normalized location contract', () => {
   assert.equal(taskLocationLabel({ location: { label: 'Library', address: '1 Main St' } }), 'Library');
   assert.equal(taskLocationLabel({ location: { address: '1 Main St' } }), '1 Main St');

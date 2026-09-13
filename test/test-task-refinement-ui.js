@@ -246,6 +246,8 @@ class Element {
   setAttribute(key, val) { this.attributes[key] = val; }
   addEventListener(key, fn) { this.listeners[key] = fn; }
 }
+const elementText = el => [el?.textContent, ...(el?.children || []).map(elementText)].filter(Boolean).join(' ');
+const contextSummary = el => elementText(el.children.find(child => child.tagName === 'SUMMARY') || el);
 function detailHarness(overrides = {}) {
   const context = vm.createContext({ document: { createElement: tag => new Element(tag) }, HTMLElement: Element, window: {},
     canTask: (task, key) => task?.permissions?.[key] === true, isArchived: task => !!task.archived_at,
@@ -260,7 +262,9 @@ test('normal detail exposes operational toggles and read-only required skills, n
   const node = h.subtaskListNode(task, { currentUserId: 4, skills: [] });
   const row = node.children[0];
   assert.equal(row.children[0].tagName, 'BUTTON');
-  assert.match(row.children[1].textContent, /Washing Machine/);
+  assert.match(contextSummary(row.children[1]), /Washing Machine/);
+  assert.equal(row.children[1].tagName, 'DETAILS');
+  assert.equal(row.children[1].open, false);
   const tags = []; const walk = el => { tags.push(el.tagName); el.children?.forEach(walk); }; walk(node);
   assert.ok(!tags.includes('INPUT') && !tags.includes('SELECT') && !tags.includes('FORM'));
 });
@@ -277,7 +281,7 @@ test('pending subtask paints checkbox and responsibility progress without invent
   assert.equal(row.children[0].attributes['aria-pressed'], 'true');
   assert.equal(row.children[0].attributes['aria-busy'], 'true');
   assert.equal(row.children[0].disabled, true);
-  assert.equal(row.children[2].textContent, 'Saving…');
+  assert.equal(row.children.find(child => child.className === 'detail-subtask__pending').textContent, 'Saving…');
   assert.match(h.progressNode(task, ctx).children[1].textContent, /1 of 2 complete · 50%/);
   assert.deepEqual(task, saved, 'the optimistic projection is not canonical completion or reward evidence');
   task.subtasks[0].status = 'done';
@@ -417,9 +421,9 @@ test('learner detail omits transferred toggles and helper detail distinguishes d
     ...row, id: row.id + 10, is_supervision_projection: true, permissions: { complete: true },
     supervision_action: { ...row.supervision_action, can_complete: true },
   })) }, { currentUserId: 5, skills: [] });
-  assert.match(helper.children[0].children[1].textContent, /Frank performs this with you/);
-  assert.match(helper.children[1].children[1].textContent, /Direct responsibility · You perform this for Frank/);
-  assert.doesNotMatch(helper.children[1].children[1].textContent, /Supervision required|performs this with you/);
+  assert.match(elementText(helper.children[0].children[1]), /Frank performs this with you/);
+  assert.match(elementText(helper.children[1].children[1]), /Direct responsibility · You perform this for Frank/);
+  assert.doesNotMatch(elementText(helper.children[1].children[1]), /Supervision required|performs this with you/);
   assert.deepEqual(helper.children.map(row => row.children[0].disabled), [false, false]);
 });
 
@@ -450,7 +454,7 @@ test('supervised actions are operable by the current eligible supervisor and vis
   const learner = h.subtaskListNode(task, { currentUserId: 4, skills: [] });
   const supervisor = h.subtaskListNode(task, { currentUserId: 5, skills: [] });
   assert.equal(learner.children[0].children[0].disabled, true);
-  assert.match(learner.children[0].children[1].textContent, /Supervision required.*Supervisor: Parent/);
+  assert.match(elementText(learner.children[0].children[1]), /Supervision required.*Supervisor: Parent/);
   assert.equal(supervisor.children[0].children[0].disabled, false);
 });
 
@@ -476,9 +480,9 @@ test('skill explanations distinguish independent, supervised and prohibited acti
       skill_eligibility: [{ skill_id: entry.id, skill_name: entry.skill, proficiency: entry.proficiency, reason: entry.reason }] })) };
   const ctx = { currentUserId: 4, skills: [] };
   const node = h.subtaskListNode(task, ctx);
-  const summaries = node.children.map(row => row.children[1].textContent);
+  const summaries = node.children.map(row => contextSummary(row.children[1]));
   assert.equal(summaries[0], 'Laundry Sorting · Independent');
-  assert.equal(summaries[1], 'Fold Laundry · Supervision required');
+  assert.equal(summaries[1], 'Fold Laundry · Supervision needed');
   assert.equal(summaries[2], 'Washing Machine · Cannot perform even with supervision');
   assert.equal(summaries[3], 'Dryer · Cannot perform even with supervision');
   const legacy = h.subtaskListNode({ ...task, subtasks: task.subtasks.map(({ skill_eligibility, ...subtask }) => subtask) }, ctx);
@@ -490,7 +494,7 @@ test('skill explanations distinguish independent, supervised and prohibited acti
   assert.ok(all.some(el => el.textContent === 'Skill restriction'));
   assert.ok(all.some(el => el.textContent === 'A supervisor cannot override these skill restrictions.'));
   for (const entry of entries.slice(1)) {
-    assert.ok(all.some(el => el.textContent.includes(entry.reason)), `${entry.title} keeps its own explanation`);
+    assert.ok(elementText(node).includes(entry.reason), `${entry.title} keeps its own explanation in the matching subtask disclosure`);
   }
   assert.ok(!all.some(el => el.textContent.includes('Legacy')), 'presentation reasons replace, not mutate, old diagnostics');
   assert.equal(all.filter(el => ['SELECT', 'INPUT', 'BUTTON'].includes(el.tagName)).length, 0);
@@ -508,11 +512,11 @@ test('a permitted supervised action explains missing supervisor availability ins
       permissions: { complete: true }, skill_ids: [3], skills: [{ id: 3, name: 'Washing Machine' }],
       skill_eligibility: [{ skill_id: 3, skill_name: 'Washing Machine', proficiency: 'supervised', reason }] }] };
   const row = h.subtaskListNode(task, { currentUserId: 4, skills: [] }).children[0];
-  assert.equal(row.children[1].textContent, 'Washing Machine · Supervision required');
+  assert.equal(contextSummary(row.children[1]), 'Washing Machine · Supervision needed');
   assert.equal(row.children[0].disabled, true);
   const flatten = el => [el, ...el.children.flatMap(flatten)];
   const all = flatten(h.supervisionNode(task, {}));
-  assert.ok(all.some(el => el.textContent.includes(reason)));
+  assert.ok(elementText(row).includes(reason), 'the canonical action reason is available in its subtask disclosure');
   assert.ok(all.some(el => el.textContent === 'Duane: Duane is qualified but unavailable during this Task’s completion window.'));
   assert.ok(!all.some(el => el.textContent.includes('Legacy')));
   assert.ok(!all.some(el => /Skill restriction|Cannot perform even with supervision/.test(el.textContent)));
@@ -525,10 +529,10 @@ test('capability denial removes operational access independently of skill labels
   assert.equal(node.children[0].children[0].attributes['aria-label'], 'Reopen: Fold laundry');
 });
 
-test('detail hierarchy keeps instructions and subtasks before compact metadata, comments before Activity', () => {
+test('detail hierarchy keeps tags after instructions and one supervisor summary before subtasks, with Activity collapsed below comments', () => {
   const source = read('components/task-detail.js');
   const render = source.slice(source.indexOf('function renderTaskDetail('), source.indexOf('\n/**\n * Die Notiz'));
-  const order = ['statusSummaryNode', 'descriptionNode', 'subtaskListNode', 'supervisionNode', 'metadataNode', 'documentListNode', 'commentsNode', 'activityNode'];
+  const order = ['statusSummaryNode', 'descriptionNode', '{ node: tags }', 'supervisionNode', 'subtaskListNode', 'metadataNode', 'documentListNode', 'commentsNode', '{ node: activity }'];
   assert.deepEqual(order.map(name => render.indexOf(name)).sort((a, b) => a - b), order.map(name => render.indexOf(name)));
 });
 
@@ -578,7 +582,7 @@ test('all supervised actions share one Task-level supervisor picker and source r
   assert.equal(selectors.length, 1, 'one control covers the entire source Task');
   assert.equal(selectors[0].attributes['aria-label'], 'Supervisor for all remaining supervised actions');
   assert.deepEqual(selectors[0].children.map(option => option.textContent), ['Parent', 'Other parent']);
-  assert.equal(all.filter(el => el.textContent === 'Supervisor: Parent · Covers all remaining supervised actions.').length, 1);
+  assert.equal(all.filter(el => el.textContent === 'Parent · Covers all remaining supervised actions.').length, 1);
   const assign = all.find(el => el.tagName === 'BUTTON');
   selectors[0].value = '6';
   task.supervision.source_revision = 99;
@@ -626,7 +630,7 @@ test('completed action helpers are clearly historical while the remaining scope 
   const flatten = el => [el, ...el.children.flatMap(flatten)];
   let all = flatten(h.supervisionNode(task, {}));
   assert.ok(all.some(el => el.textContent === 'Washing Machine · Completed · Previously supervised by Previous parent'));
-  assert.equal(all.filter(el => el.textContent.includes('Supervisor:')).length, 1);
+  assert.equal(all.filter(el => el.textContent === 'Current parent · Covers all remaining supervised actions.').length, 1);
   assert.ok(!all.some(el => el.textContent.includes('Supervisor: Previous parent')));
   task.supervision.actions[1].completed = true;
   task.supervision.state = 'none';
@@ -639,8 +643,8 @@ test('completed subtask context does not present its historical helper as the cu
   const task = { subtasks: [{ id: 2, title: 'Load washer', status: 'done', permissions: { complete: true }, supervision_action: {
     state: 'fulfilled', completed: true, supervisor_user_id: 5, supervisor_name: 'Previous parent', can_complete: true } }] };
   const meta = h.subtaskListNode(task, { currentUserId: 4, skills: [] }).children[0].children[1];
-  assert.match(meta.textContent, /Previously supervised by Previous parent/);
-  assert.doesNotMatch(meta.textContent, /Supervision needed|Supervisor:/);
+  assert.match(elementText(meta), /Previously supervised by Previous parent/);
+  assert.doesNotMatch(elementText(meta), /Supervision needed|Supervisor:/);
 });
 
 test('Task mutations restore a focused supervisor control after disabling and replacing it', async () => {

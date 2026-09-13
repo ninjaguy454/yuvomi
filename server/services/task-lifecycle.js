@@ -4,7 +4,7 @@ import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
-import { reconcileTaskSupervision, taskSupervisionTransition, supervisionProjectionUpdates, taskSupervisionRootId } from './task-supervision.js';
+import { reconcileTaskSupervision, inspectTaskSupervision, taskSupervisionTransition, supervisionProjectionUpdates, taskSupervisionRootId } from './task-supervision.js';
 
 let recurrenceHooks = null;
 // Recurrence keeps its established anchored/group implementation in the Tasks
@@ -37,6 +37,9 @@ export function assertTaskRevision(d, task, body = {}, {required = false, requir
 }
 
 export function actionableSubtasks(d, taskId) {
+  // This is the structural completion scope, including transferred originals.
+  // Learner progress is a separate read projection: removing helper-owned work
+  // here would complete the overall occurrence before that work is finished.
   return d.prepare(`SELECT t.* FROM tasks t WHERE t.parent_task_id = ? AND t.archived_at IS NULL
     AND NOT EXISTS (SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id = t.id)
     AND NOT EXISTS (SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id = t.id)
@@ -132,6 +135,15 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     // children in a parent completion/reset confirmation.
     if(authorize)for(const child of status==='done'?incomplete:status==='open'?descendants.filter(row=>row.status!=='open'):[])
       assertTaskMutation(d,actorId,child,{status},{operation:'status'});
+    if (status === 'done' && incomplete.length) {
+      const incompleteIds = new Set(incomplete.map(child => child.id));
+      const helperPending = inspectTaskSupervision(d, task.id).actions.some(action =>
+        action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed
+        && incompleteIds.has(action.action_task_id) && Number(action.supervisor_user_id) !== Number(actorId));
+      if (helperPending) throw new TaskStateError(
+        'A helper must finish the transferred steps before this whole Task can be completed. Finish the steps you are responsible for in the checklist.',
+        {reason: 'waiting_for_helper'});
+    }
     if (status==='done' && incomplete.length && body.complete_remaining!==true)
       throw new TaskStateError('Completing this Task will also complete its remaining subtasks.',
         {confirmation_required:'complete_remaining',remaining:incomplete.length});

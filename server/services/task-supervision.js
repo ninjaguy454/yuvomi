@@ -29,26 +29,23 @@ function describeSkillEligibility(assessed, action, learner) {
   });
 }
 
-/** Presentation only: canonical reasons are persisted and must not change for a wording update. */
+/** Explain proficiency separately from who is responsible for doing the action. */
 function describeSupervisionScope(scope, actions) {
   const pending = actions.filter(action => !action.completed && action.state !== 'not_required');
-  const excluded = pending.filter(action => action.state === 'excluded');
-  const restrictions = excluded.map(action => action.skill_eligibility.filter(skill => skill.proficiency === 'excluded').map(skill => skill.reason).join(' ')).join(' ');
-  scope.display_reason = restrictions || scope.reason;
+  scope.display_reason = scope.reason;
   for (const candidate of scope.supervisor_explanations) {
-    candidate.display_reason = restrictions
-      ? `${restrictions} Choosing ${candidate.name} as supervisor cannot override these skill restrictions.`
-      : candidate.reason;
+    candidate.display_reason = candidate.reason;
   }
   for (const action of pending) {
     if (!action.learner_user_id || !action.skill_eligibility.length) continue;
     const qualifications = action.skill_eligibility.map(skill => skill.reason).join(' ');
-    if (action.state === 'excluded') action.display_reason = qualifications;
-    else if (restrictions) action.display_reason = `${qualifications} Supervision remains unresolved because another action on this Task has a skill restriction. A supervisor cannot override that restriction.`;
-    else if (action.state === 'assigned') action.display_reason = `${qualifications} ${scope.supervisor_name} will supervise this action.`;
+    const ownership = action.execution_mode === 'delegated'
+      ? ` This action is the helper's responsibility; ${action.learner_name} must not perform it.` : '';
+    if (action.state === 'assigned') action.display_reason = `${qualifications}${ownership} ${scope.supervisor_name} will ${action.execution_mode === 'delegated' ? 'perform' : 'supervise'} this action.`;
     else if (!scope.qualified_supervisor_count) action.display_reason = `${qualifications} No single qualified supervisor can cover every remaining required skill on this Task.`;
-    else if (!scope.eligible_supervisors.length) action.display_reason = `${qualifications} Qualified supervisors exist, but none is available with the learner for every required action during the Task's completion window. ${action.display_reason || ''}`;
-    else action.display_reason = `${qualifications} Choose one supervisor who can cover all remaining supervised actions.`;
+    else if (!scope.eligible_supervisors.length) action.display_reason = `${qualifications} Qualified supervisors exist, but none can cover every required action during the Task's completion window. ${action.display_reason || ''}`;
+    else action.display_reason = `${qualifications} Choose one supervisor who can cover all remaining helper actions.`;
+    if (action.state !== 'assigned') action.display_reason += ownership;
   }
 }
 
@@ -111,19 +108,22 @@ function availability(d, userId, presence) {
   catch { return { eligible: false, reason: 'The Task completion window is invalid.', windows: [] }; }
 }
 
-/** Explicit exclusions remain a hard assignment boundary; supervised is valid with a visible gate. */
+/** Checklist exclusions delegate the action; explicit whole-Task assignment requirements remain separate. */
 export function assertTaskSupervisionAssignee(d, taskId, userId) {
   const source = task(d, taskId), member = householdMembers(d).find(row => Number(row.id) === Number(userId));
   if (!source || !member) throw new TaskSupervisionError('Choose a current household member.');
-  const actions = ordinaryTaskScope(d, source.id);
-  for (const action of actions) {
-    const { dateKey, learnerId, archived } = context(d, {...source,assigned_to:userId},
-      action.id === source.id ? {...action,assigned_to:userId} : action);
-    if (archived) continue;
-    if (action.id !== source.id && learnerId && Number(learnerId) !== Number(userId)) continue;
-    const excluded = explicitSkills(d, action.id).filter(skill => effectiveSkillProficiency(d, skill, member, dateKey).proficiency === 'excluded');
-    if (excluded.length) throw new TaskSupervisionError(`${member.display_name} cannot perform one or more explicit Task or subtask requirements, even with supervision.`);
+  // Assignment/claim/obligation acceptance still obey an Activity's explicit
+  // whole-Task requirements. Descendant requirements describe its actions,
+  // which can instead be delegated after resolving this actual learner.
+  if (!source.parent_task_id || d.prepare('SELECT 1 FROM task_activity_bindings WHERE task_id=?').get(source.id)) {
+    const {dateKey} = context(d,source,source);
+    if (explicitSkills(d,source.id).some(skill => effectiveSkillProficiency(d,skill,member,dateKey).proficiency==='excluded'))
+      throw new TaskSupervisionError(`${member.display_name} cannot perform one or more explicit Task requirements, even with supervision.`);
   }
+  // The occurrence retains its learner. Reconciliation gives excluded
+  // actions to the linked helper instead of treating the learner as capable.
+  // Whole-Activity assignment/claim requirements are checked by their own
+  // canonical skill policy before this resolved-assignee boundary.
 }
 
 /** Pure read: profile and Availability changes expose stale supervision without rewriting assignments. */
@@ -178,31 +178,34 @@ export function inspectTaskSupervision(d, taskId) {
         counterpart_revision: prior.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null });
       continue;
     }
-    const requiredSkills = !learner ? skills : excluded.length ? excluded.map(item => item.skill) : required;
-    const qualified = learner && required.length ? members.filter(candidate => Number(candidate.id) !== Number(learnerId)
-      && required.every(skill => effectiveSkillProficiency(d, skill, candidate, dateKey).proficiency === 'normal')) : [];
+    const executionMode = excluded.length ? 'delegated' : 'supervised';
+    // A person doing the action themselves must cover ALL its explicit skills,
+    // including any skills the learner happens to know independently.
+    const requiredSkills = !learner || excluded.length ? skills : required;
+    const qualified = learner && requiredSkills.length ? members.filter(candidate => Number(candidate.id) !== Number(learnerId)
+      && requiredSkills.every(skill => effectiveSkillProficiency(d, skill, candidate, dateKey).proficiency === 'normal')) : [];
     const learnerAvailability = learner ? availability(d, learner.id, presence) : null;
     const candidateAvailability = new Map();
     const eligible = qualified.filter(candidate => {
       if (presence.policy === 'ignore') return true;
       const own = availability(d, candidate.id, presence);
       candidateAvailability.set(candidate.id, own);
-      return learnerAvailability?.eligible && own.eligible && sharedEligibleInterval([learnerAvailability, own], presence.requiredDurationMinutes);
+      return own.eligible && (executionMode === 'delegated'
+        || learnerAvailability?.eligible && sharedEligibleInterval([learnerAvailability, own], presence.requiredDurationMinutes));
     });
     const previousSupervisor = prior ? prior.supervisor_user_id : d.prepare(`SELECT user_id FROM task_responsibilities
       WHERE task_id = ? AND role = 'supervisor' AND status = 'active' ORDER BY user_id LIMIT 1`).get(sourceId)?.user_id ?? null;
     const assignedValid = eligible.some(candidate => Number(candidate.id) === Number(previousSupervisor));
     let state = 'not_required', reason = `${memberName(learner)} can perform this action independently.`;
     if (!learner && skills.length) { state = 'unresolved'; reason = 'Choose an assignee before supervision can be evaluated.'; }
-    else if (excluded.length) { state = 'excluded'; reason = `${memberName(learner)} cannot currently perform ${excluded.map(item => item.skill.name).join(', ')}, even with supervision.`; }
-    else if (required.length) {
+    else if (requiredSkills.length) {
       state = assignedValid ? 'assigned' : 'unresolved';
-      const names = required.map(skill => skill.name).join(', ');
+      const names = requiredSkills.map(skill => skill.name).join(', ');
       if (assignedValid) reason = `${memberName(learner)} requires supervision for ${names}. ${byId.get(Number(previousSupervisor)).display_name} will supervise this action.`;
       else if (!qualified.length) reason = `${memberName(learner)} requires supervision for ${names}, but no qualified supervisor exists in the household.`;
       else if (!eligible.length) {
         reason = `${memberName(learner)} requires supervision for ${names}, but no qualified supervisor shares an eligible time in the Task's completion window.`;
-        if (learnerAvailability?.eligible === false && learnerAvailability.reason) reason += ` ${memberName(learner)}: ${learnerAvailability.reason}`;
+        if (executionMode !== 'delegated' && learnerAvailability?.eligible === false && learnerAvailability.reason) reason += ` ${memberName(learner)}: ${learnerAvailability.reason}`;
         else {
           const blocked = qualified.find(candidate => candidateAvailability.get(candidate.id)?.eligible === false);
           if (blocked && candidateAvailability.get(blocked.id)?.reason) reason += ` ${blocked.display_name}: ${candidateAvailability.get(blocked.id).reason}`;
@@ -210,18 +213,24 @@ export function inspectTaskSupervision(d, taskId) {
       }
       else if (previousSupervisor) reason = `The assigned supervisor can no longer supervise ${memberName(learner)} for ${names}. Assign an eligible supervisor.`;
       else reason = `${memberName(learner)} requires supervision for ${names}. Assign an eligible supervisor.`;
+      if (executionMode === 'delegated') {
+        reason = `${memberName(learner)} must not perform ${names}, even with supervision. The helper must perform this action instead.`;
+        if (!qualified.length) reason += ' No independently qualified helper exists in the household.';
+        else if (!eligible.length) reason += ' No qualified helper is available during the Task’s completion window.'
+          + qualified.map(candidate => ` ${candidate.display_name}: ${candidateAvailability.get(candidate.id)?.reason || 'No eligible time.'}`).join('');
+      }
     }
     actions.push({ id: prior?.id || null, source_task_id: sourceId, action_task_id: row.id, action_title: row.title,
       counterpart_task_id: prior?.counterpart_task_id || null, learner_user_id: learnerId || null, learner_name: learner?.display_name || null,
       supervisor_user_id: previousSupervisor, supervisor_name: byId.get(Number(previousSupervisor))?.display_name || null,
-      required_skills: requiredSkills.map(skill => ({ id: skill.id, name: skill.name })), state, reason,
+      required_skills: requiredSkills.map(skill => ({ id: skill.id, name: skill.name })), execution_mode: executionMode, state, reason,
       skill_eligibility: skillEligibility.get(row.id) || [], display_reason: `${row.title}: ${reason}`,
       revision: prior?.revision || 0, task_revision: row.revision, counterpart_revision: prior?.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null,
       eligible_supervisors: eligible.map(({ id, display_name }) => ({ id, display_name })),
       supervisor_explanations: qualified.map(({id,display_name})=>{
         const canSupervise=eligible.some(candidate=>candidate.id===id), own=candidateAvailability.get(id);
         const explanation=presence.policy==='ignore'?'This Task does not restrict Availability or Presence.'
-          : learnerAvailability?.eligible===false?`${memberName(learner)}: ${learnerAvailability.reason}`
+          : executionMode!=='delegated'&&learnerAvailability?.eligible===false?`${memberName(learner)}: ${learnerAvailability.reason}`
             : own?.eligible===false?own.reason
               : !canSupervise?'No shared eligible time with the learner.':own?.reason;
         return {user_id:id,name:display_name,eligible:canSupervise,reason:explanation};
@@ -244,7 +253,7 @@ function singleSupervisorScope(actions, members, activeSupervisorIds = []) {
   const pending = actions.filter(action => !action.completed && action.state !== 'not_required');
   if (!pending.length) return { state: 'none', reason: null, supervisor_user_id: null, supervisor_name: null,
     eligible_supervisors: [], qualified_supervisor_count: 0, supervisor_explanations: [], blocked_requirements: [] };
-  const impossible = pending.some(action => action.state === 'excluded' || !action.learner_user_id);
+  const impossible = pending.some(action => !action.learner_user_id);
   const qualified = impossible ? [] : members.filter(member => pending.every(action => action.qualified_supervisor_ids?.includes(member.id)));
   const eligible = qualified.filter(member => pending.every(action => action.eligible_supervisors.some(candidate => candidate.id === member.id)));
   const priorIds = [...new Set(pending.map(action => action.supervisor_user_id).filter(Boolean).map(Number))];
@@ -265,14 +274,18 @@ function singleSupervisorScope(actions, members, activeSupervisorIds = []) {
       blocked_action_ids: (gaps.length ? gaps : blocked).map(action => action.action_task_id) };
   });
   let reason;
-  if (impossible) reason = pending.find(action => action.state === 'excluded' || !action.learner_user_id).reason;
+  if (impossible) reason = pending.find(action => !action.learner_user_id).reason;
   else if (!qualified.length) reason = `No single qualified supervisor exists in the household for all remaining requirements: ${required.join(', ')}.`;
-  else if (!eligible.length) reason = `No single qualified supervisor shares an eligible time with the learner for every remaining required action (${required.join(', ')}).`
+  else if (!eligible.length) reason = (pending.some(action => action.execution_mode === 'delegated')
+    ? `No single qualified supervisor is available for all remaining helper work (${required.join(', ')}). Supervised actions also require an eligible time with the learner.`
+    : `No single qualified supervisor shares an eligible time with the learner for every remaining required action (${required.join(', ')}).`)
     + (qualified.length === 1 ? ` ${explanations.find(item => item.user_id === qualified[0].id)?.reason || ''}` : '');
-  else if (selected) reason = `${selected.display_name} will supervise all remaining required actions (${required.join(', ')}).`;
+  else if (selected) reason = pending.some(action => action.execution_mode === 'delegated')
+    ? `${selected.display_name} will cover all remaining helper work (${required.join(', ')}), performing delegated actions and helping the learner with supervised actions.`
+    : `${selected.display_name} will supervise all remaining required actions (${required.join(', ')}).`;
   else if (priorIds.length) reason = 'The previous supervision assignment can no longer cover the entire Task. One eligible supervisor must cover every remaining required action.';
   else reason = `Assign one eligible supervisor for all remaining requirements: ${required.join(', ')}.`;
-  const state = impossible && pending.some(action => action.state === 'excluded') ? 'excluded' : selected ? 'assigned' : 'needed';
+  const state = selected ? 'assigned' : 'needed';
   const blockedRequirements = pending.filter(action => !selected).map(action => ({ action_task_id: action.action_task_id,
     action_title: action.action_title, required_skills: action.required_skills,
     qualified_supervisor_ids: action.qualified_supervisor_ids || [], eligible_supervisor_ids: action.eligible_supervisors.map(member => member.id) }));
@@ -280,7 +293,7 @@ function singleSupervisorScope(actions, members, activeSupervisorIds = []) {
     action.previous_supervisor_user_id = action.supervisor_user_id || null;
     action.supervisor_user_id = selected?.id || null;
     action.supervisor_name = selected?.display_name || null;
-    if (action.state !== 'excluded') action.state = selected ? 'assigned' : 'unresolved';
+    action.state = selected ? 'assigned' : 'unresolved';
     action.reason = reason;
     action.eligible_supervisors = eligible.map(({ id, display_name }) => ({ id, display_name }));
     action.qualified_supervisor_count = qualified.length;
@@ -329,11 +342,13 @@ function notifySupervision(d, source, view) {
   const recipients = unresolved ? [source.created_by, ...d.prepare("SELECT id FROM users WHERE role='admin'").all().map(row => row.id)]
     : view.state === 'assigned' ? [view.supervisor_user_id] : [];
   const pending = view.actions.filter(action => !action.completed && action.state !== 'not_required');
+  const delegated = pending.some(action => action.execution_mode === 'delegated');
   for (const userId of new Set(recipients.filter(Boolean).map(Number))) enqueueNotification(d, {
     userId, sourceKey: taskSupervisionNotificationKey(view), category: 'automation',
-    entityType: 'task', entityId: source.id, title: unresolved ? 'Supervision needed' : 'Supervision requested',
+    entityType: 'task', entityId: source.id, title: delegated ? (unresolved ? 'Helper needed' : 'Helper work assigned')
+      : unresolved ? 'Supervision needed' : 'Supervision requested',
     body: pending.every(action => taskCapabilities(d, userId, { id: action.action_task_id }).view)
-      ? `${source.title}: ${pending.map(action => action.action_title).join('; ')}. ${view.display_reason || view.reason}`
+      ? `${source.title}: ${pending.map(action => `${action.execution_mode === 'delegated' ? 'Perform' : 'Supervise'}: ${action.action_title}`).join('; ')}. ${view.display_reason || view.reason}`
       : 'This Task needs supervision. Review the parts you can access or contact the responsible member.',
   });
 }
@@ -433,45 +448,49 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       }
       const old = previous.find(row => row.action_task_id === action.action_task_id);
       action.supervisor_user_id = selected && action.state !== 'not_required' ? selected.id : null;
-      if (selected && action.state !== 'excluded' && action.state !== 'not_required') {
+      if (selected && action.state !== 'not_required') {
         action.state = 'assigned'; action.supervisor_name = selected.display_name;
         // Persist action-local facts. Completing another action must not create
         // a fresh assignment event/request just because the scope got shorter.
-        action.reason = `${selected.display_name} will supervise this action (${action.required_skills.map(skill => skill.name).join(', ')}).`;
+        action.reason = `${selected.display_name} will ${action.execution_mode === 'delegated' ? 'perform' : 'supervise'} this action (${action.required_skills.map(skill => skill.name).join(', ')}).`;
       } else if (action.state === 'assigned') { action.state = 'unresolved'; action.reason = 'Supervision is needed. Assign one eligible supervisor for the entire Task.'; }
       let counterpartId = old?.counterpart_task_id || null;
-      if (!counterpartId && supportId && action.state !== 'not_required') counterpartId = insertProjection(d, source, `Supervise: ${action.action_title}`, supportId, action.supervisor_user_id);
-      const snapshot = [action.learner_user_id, action.supervisor_user_id, JSON.stringify(action.required_skills.map(skill => skill.id)), action.state, action.reason];
-      const changed = !old || [old.learner_user_id, old.supervisor_user_id, old.required_skill_ids_json, old.state, old.reason].some((value, index) => value !== snapshot[index]);
+      const projectionTitle = action.execution_mode === 'delegated' ? action.action_title : `Supervise: ${action.action_title}`;
+      if (!counterpartId && supportId && action.state !== 'not_required') counterpartId = insertProjection(d, source, projectionTitle, supportId, action.supervisor_user_id);
+      const snapshot = [action.learner_user_id, action.supervisor_user_id, JSON.stringify(action.required_skills.map(skill => skill.id)), action.state, action.reason, action.execution_mode];
+      const changed = !old || [old.learner_user_id, old.supervisor_user_id, old.required_skill_ids_json, old.state, old.reason, old.execution_mode].some((value, index) => value !== snapshot[index]);
       if (!old) {
         action.id = Number(d.prepare(`INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,
-          learner_user_id,supervisor_user_id,required_skill_ids_json,state,reason) VALUES(?,?,?,?,?,?,?,?)`)
+          learner_user_id,supervisor_user_id,required_skill_ids_json,state,reason,execution_mode) VALUES(?,?,?,?,?,?,?,?,?)`)
           .run(source.id, action.action_task_id, counterpartId, ...snapshot).lastInsertRowid);
         action.revision = 1;
       } else if (changed || counterpartId !== old.counterpart_task_id) {
         d.prepare(`UPDATE task_supervision_actions SET counterpart_task_id=?,learner_user_id=?,supervisor_user_id=?,
-          required_skill_ids_json=?,state=?,reason=?,revision=revision+1,updated_at=${NOW} WHERE id=?`)
+          required_skill_ids_json=?,state=?,reason=?,execution_mode=?,revision=revision+1,updated_at=${NOW} WHERE id=?`)
           .run(counterpartId, ...snapshot, old.id);
         action.revision = old.revision + 1;
       }
       if (counterpartId) {
         setProjectionAssignees(d, counterpartId, action.state === 'assigned' ? [action.supervisor_user_id] : []);
-        d.prepare('UPDATE tasks SET title=?,start_date=?,due_date=?,due_time=? WHERE id=?')
-          .run(`Supervise: ${action.action_title}`, source.start_date, source.due_date, source.due_time, counterpartId);
+        d.prepare(`UPDATE tasks SET title=@title,start_date=@start,due_date=@due,due_time=@time WHERE id=@id
+          AND (title IS NOT @title OR start_date IS NOT @start OR due_date IS NOT @due OR due_time IS NOT @time)`)
+          .run({title:projectionTitle,start:source.start_date,due:source.due_date,time:source.due_time,id:counterpartId});
         syncProjectionArchive(d, counterpartId, action.state === 'not_required');
       }
       // An event is visible through its own action. Keep its explanation local
       // so a shared Task-level candidate failure cannot reveal a private sibling.
       const actionSkills = action.required_skills.map(skill => skill.name).join(', ');
       const activityReason = action.state === 'assigned'
-        ? `${action.supervisor_name} will supervise this action (${actionSkills}).`
+        ? `${action.supervisor_name} will ${action.execution_mode === 'delegated' ? 'perform' : 'supervise'} this action (${actionSkills}).`
         : action.state === 'not_required' ? 'This action no longer requires active supervision.'
           : action.state === 'excluded' ? `The assignee cannot currently perform this action's requirements (${actionSkills}), even with supervision.`
             : `One eligible supervisor is needed for the entire Task. This action requires ${actionSkills}.`;
       if (changed) d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)
         VALUES(?,?,?,?,?)`).run(source.id, action.action_task_id, actorId,
-          action.state === 'assigned' ? 'supervisor_assigned' : action.state === 'not_required' ? 'supervision_not_required' : 'supervision_needed',
+          action.execution_mode === 'delegated' && old?.execution_mode !== 'delegated' ? 'action_delegated'
+            : action.state === 'assigned' ? 'supervisor_assigned' : action.state === 'not_required' ? 'supervision_not_required' : 'supervision_needed',
           JSON.stringify({ title: action.action_title, learner_user_id: action.learner_user_id, supervisor_user_id: action.supervisor_user_id,
+            execution_mode: action.execution_mode, previous_execution_mode: old?.execution_mode || null,
             previous_supervisor_user_id: old?.supervisor_user_id || null,
             required_skills: action.required_skills.map(skill => skill.name), reason: activityReason }));
       changedScope ||= changed;
@@ -508,8 +527,9 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
     }
     if (supportId) {
       setProjectionAssignees(d, supportId, supervisors);
-      d.prepare('UPDATE tasks SET start_date=?,due_date=?,due_time=? WHERE id=?')
-        .run(source.start_date, source.due_date, source.due_time, supportId);
+      d.prepare(`UPDATE tasks SET start_date=@start,due_date=@due,due_time=@time WHERE id=@id
+        AND (start_date IS NOT @start OR due_date IS NOT @due OR due_time IS NOT @time)`)
+        .run({start:source.start_date,due:source.due_date,time:source.due_time,id:supportId});
       syncProjectionArchive(d, supportId, source.archived_at || view.actions.every(action => action.state === 'not_required'));
     }
     // These are zero-point generated views, never the source action. Repair
@@ -540,11 +560,15 @@ export function attachTaskSupervision(d, tasks, actorId = null, sourceViews = ne
     if (!sourceViews.has(sourceId)) sourceViews.set(sourceId, inspectTaskSupervision(d, sourceId));
     const source = sourceViews.get(sourceId);
     row.supervision = actorId == null ? source : {...source, may_assign: taskSupervisionManagementAllowed(d, actorId, sourceId), actions:source.actions.map(action=>({...action,
-      can_complete:action.completed || action.state === 'not_required'
+      can_complete:(action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
         || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(actorId))}))};
     row.supervision_action = row.supervision.actions.find(action => action.action_task_id === row.id || action.counterpart_task_id === row.id) || null;
     row.skill_eligibility = row.supervision_action?.skill_eligibility || skillEligibilityByView.get(source)?.get(row.id) || [];
     row.is_supervision_projection = row.supervision.support_task_id === row.id || row.supervision_action?.counterpart_task_id === row.id;
+    row.is_delegated_action = row.supervision_action?.execution_mode === 'delegated'
+      && row.supervision_action.state !== 'not_required' && !row.is_supervision_projection;
+    if (row.is_delegated_action && row.permissions && !row.supervision_action.can_complete)
+      row.permissions = {...row.permissions, complete:false};
   }
   return tasks;
 }
@@ -610,6 +634,11 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
   }
   const container = view.support_task_id === Number(taskId);
   const check = container ? view.actions.filter(row => !row.completed && row.state !== 'not_required') : action ? [action] : [];
+  for (const item of check) if (item.execution_mode === 'delegated' && item.state !== 'not_required'
+    && Number(item.supervisor_user_id) !== Number(actorId)
+    && !(status !== 'done' && taskSupervisionManagementAllowed(d, actorId, view.source_task_id))) {
+    fail(`${item.supervisor_name || 'An eligible helper'} must perform “${item.action_title}” for ${item.learner_name || 'the learner'}. The learner must not perform this action, even with supervision.`, item);
+  }
   if (status === 'done') for (const item of check) {
     if (item.completed) continue;
     if ((container || Number(taskId) === Number(item.counterpart_task_id)) && item.action_task_id === view.source_task_id
@@ -620,7 +649,9 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
     }
     if (item.state === 'excluded' || item.state === 'unresolved') fail(item.display_reason || item.reason, item);
     if (item.state === 'assigned' && Number(item.supervisor_user_id) !== Number(actorId)) {
-      fail(`${item.supervisor_name || 'The assigned supervisor'} needs to complete this supervised action with ${item.learner_name || 'the assignee'}.`, item);
+      fail(item.execution_mode === 'delegated'
+        ? `${item.supervisor_name || 'The assigned helper'} must perform this action for ${item.learner_name || 'the assignee'}.`
+        : `${item.supervisor_name || 'The assigned supervisor'} needs to complete this supervised action with ${item.learner_name || 'the assignee'}.`, item);
     }
   }
   return { taskId: action?.action_task_id || Number(taskId), projectionTaskIds: action?.counterpart_task_id ? [action.counterpart_task_id] : [], sourceTaskId: view.source_task_id,

@@ -34,27 +34,33 @@ export function copyTaskSkills(d, sourceTaskId, targetTaskId) {
   setTaskSkills(d, targetTaskId, loadTaskSkillIds(d, sourceTaskId));
 }
 
-export function assertTaskSkillAssignments(d, skillIds, userIds, dateKey = todayKey(d)) {
+export function assertTaskSkillAssignments(d, skillIds, userIds, dateKey = todayKey(d), { allowDelegation = false } = {}) {
   if (!skillIds.length || !userIds.length) return;
   const skills = d.prepare(`SELECT * FROM skills WHERE id IN (${skillIds.map(() => '?').join(',')})`).all(...skillIds);
   const members = householdMembers(d);
   for (const userId of userIds) {
     const member = members.find((item) => Number(item.id) === Number(userId));
-    if (!member || skills.some((skill) => effectiveSkillProficiency(d, skill, member, dateKey).proficiency === 'excluded')) {
+    // A structured child retains its intended learner as the structural
+    // assignee. The linked helper owns an explicitly prohibited action; that
+    // relationship never authorizes the learner to perform it. Standalone
+    // Task/Activity assignment keeps its existing explicit skill boundary.
+    if (!member || (!allowDelegation && skills.some((skill) => effectiveSkillProficiency(d, skill, member, dateKey).proficiency === 'excluded'))) {
       throw new TaskSkillError('Choose someone permitted to perform every required skill, independently or with supervision.');
     }
   }
 }
 
 export function assertTaskMemberSkills(d, taskId, userId) {
-  const task = d.prepare('SELECT due_date FROM tasks WHERE id = ?').get(taskId);
-  assertTaskSkillAssignments(d, loadTaskSkillIds(d, taskId), [userId], task?.due_date || todayKey(d));
+  const task = d.prepare('SELECT due_date,parent_task_id FROM tasks WHERE id = ?').get(taskId);
+  assertTaskSkillAssignments(d, loadTaskSkillIds(d, taskId), [userId], task?.due_date || todayKey(d),
+    { allowDelegation: !!task?.parent_task_id });
 }
 
 export function qualifiedTaskAssignees(d, taskId, userIds, dateKey) {
   const ids = loadTaskSkillIds(d, taskId);
+  const task = d.prepare('SELECT parent_task_id FROM tasks WHERE id = ?').get(taskId);
   return userIds.filter((userId) => {
-    try { assertTaskSkillAssignments(d, ids, [userId], dateKey); return true; }
+    try { assertTaskSkillAssignments(d, ids, [userId], dateKey, { allowDelegation: !!task?.parent_task_id }); return true; }
     catch (error) { if (error instanceof TaskSkillError) return false; throw error; }
   });
 }

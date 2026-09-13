@@ -10,7 +10,7 @@ const value = (object) => JSON.parse(JSON.stringify(object));
 function stateHarness() {
   const writes = [];
   const context = vm.createContext({ api: { patch: async (path, body) => { writes.push({ path, body }); return { data: { id: 1, status: body.status, revision: 5 } }; } }, confirmOverModal: async () => true });
-  vm.runInContext(`${plain(read('utils/task-progress.js'))}\n${plain(read('utils/task-state.js'))}\nthis.subject={actionableSubtasks,taskRevision,taskStatusConfirmation,changeTaskStatus}`, context);
+  vm.runInContext(`${plain(read('utils/task-progress.js'))}\n${plain(read('utils/task-state.js'))}\nthis.subject={actionableSubtasks,structuralSubtasks,helperWaitingLabel,taskRevision,taskStatusConfirmation,changeTaskStatus}`, context);
   return { ...context.subject, writes };
 }
 
@@ -19,6 +19,88 @@ test('progress excludes archived/support children while the supervision view cou
   const task = { subtasks: [{ id: 1 }, { id: 2, archived_at: '2050-01-01' }, { id: 3, is_supervision_projection: true }, { id: 4, is_support_task: true }] };
   assert.deepEqual(value(actionableSubtasks(task)).map(x => x.id), [1]);
   assert.deepEqual(value(actionableSubtasks({ ...task, is_supervision_projection: true })).map(x => x.id), [1, 3]);
+});
+
+test('delegated source actions leave learner progress and completion confirmation while definitions and helper work remain', () => {
+  const { actionableSubtasks, structuralSubtasks, taskStatusConfirmation } = stateHarness();
+  const task = { status: 'in_progress', subtasks: [
+    { id: 1, status: 'done' },
+    { id: 2, status: 'done', supervision_action: { execution_mode: 'supervised' } },
+    { id: 3, status: 'open', supervision_action: { execution_mode: 'delegated' } },
+    { id: 4, status: 'done', supervision_action: { execution_mode: 'delegated' } },
+  ] };
+  assert.deepEqual(value(actionableSubtasks(task)).map(row => row.id), [1, 2]);
+  assert.deepEqual(value(structuralSubtasks(task)).map(row => row.id), [1, 2, 3, 4], 'Edit retains all original definitions and stable IDs');
+  assert.equal(taskStatusConfirmation(task, 'done'), null, 'learner confirmation must not offer to complete helper responsibilities');
+  assert.deepEqual(value(actionableSubtasks({ is_supervision_projection: true,
+    subtasks: task.subtasks.slice(2).map(row => ({ ...row, is_supervision_projection: true })) })).map(row => row.id), [3, 4]);
+  task.subtasks[2].supervision_action.state = 'not_required';
+  assert.deepEqual(value(actionableSubtasks(task)).map(row => row.id), [1, 2, 3], 'independent action returns to learner scope after reconciliation');
+});
+
+test('waiting on helper is an explained state without declaring the occurrence Completed', () => {
+  const { helperWaitingLabel } = stateHarness();
+  const task = { assigned_to: 3, status: 'in_progress', waiting_on_helper: true };
+  assert.equal(helperWaitingLabel(task, 3), 'Your steps complete · waiting on supervisor');
+  assert.equal(helperWaitingLabel(task, 1), 'Learner steps complete · waiting on supervisor');
+  assert.equal(helperWaitingLabel({ ...task, waiting_on_helper: false }, 3), '');
+  assert.equal(task.status, 'in_progress');
+});
+
+test('assigned helper confirms delegated parent completion while learner progress remains responsibility-only', async () => {
+  const { actionableSubtasks, taskStatusConfirmation, changeTaskStatus, writes } = stateHarness();
+  const task = { id: 1, revision: 12, status: 'in_progress', subtasks: [
+    { id: 2, status: 'done' },
+    { id: 3, status: 'open', permissions: { complete: true }, supervision_action: {
+      execution_mode: 'delegated', state: 'assigned', can_complete: true } },
+  ] };
+  const confirmation = taskStatusConfirmation(task, 'done');
+  assert.equal(confirmation.flag, 'complete_remaining');
+  assert.match(confirmation.detail, /including direct helper responsibilities/);
+  assert.deepEqual(value(actionableSubtasks(task)).map(row => row.id), [2], 'confirmation scope must not alter the learner denominator');
+  const before = value(task);
+  assert.equal(await changeTaskStatus(task, 'done', { confirm: async () => false }), null);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(task, before);
+  await changeTaskStatus(task, 'done', { confirm: async () => true });
+  assert.deepEqual(value(writes), [{ path: '/tasks/1/status', body: { status: 'done', expected_revision: 12, complete_remaining: true } }]);
+});
+
+test('unknown, denied or partial helper permission does not offer completion of delegated responsibilities', () => {
+  const { taskStatusConfirmation } = stateHarness();
+  const task = { status: 'in_progress', subtasks: [
+    { id: 2, status: 'done' },
+    { id: 3, status: 'open', supervision_action: { execution_mode: 'delegated', state: 'assigned', can_complete: true } },
+    { id: 4, status: 'open', supervision_action: { execution_mode: 'delegated', state: 'unresolved', can_complete: false } },
+  ] };
+  assert.equal(taskStatusConfirmation(task, 'done'), null);
+  delete task.subtasks[2].supervision_action.can_complete;
+  assert.equal(taskStatusConfirmation(task, 'done'), null, 'missing eligibility is not permission');
+  task.subtasks[2].supervision_action.can_complete = true;
+  task.subtasks[2].permissions = { complete: false };
+  assert.equal(taskStatusConfirmation(task, 'done'), null, 'explicit capability denial remains authoritative');
+  task.subtasks[0].status = 'open';
+  const learnerConfirmation = taskStatusConfirmation(task, 'done');
+  assert.equal(learnerConfirmation.flag, 'complete_remaining');
+  assert.doesNotMatch(learnerConfirmation.detail, /direct helper responsibilities/);
+});
+
+test('reset discloses completed delegated work even when the learner has no progress and cancel preserves it', async () => {
+  const { taskStatusConfirmation, changeTaskStatus, writes } = stateHarness();
+  const task = { id: 1, revision: 15, status: 'in_progress', subtasks: [
+    { id: 2, status: 'open' },
+    { id: 3, status: 'done', supervision_action: { execution_mode: 'delegated', state: 'assigned', can_complete: false } },
+  ] };
+  const confirmation = taskStatusConfirmation(task, 'open');
+  assert.equal(confirmation.flag, 'reset_progress');
+  assert.match(confirmation.detail, /Completed helper actions will also be reset/);
+  assert.match(confirmation.detail, /Completion history is retained/);
+  const before = value(task);
+  assert.equal(await changeTaskStatus(task, 'open', { confirm: async () => false }), null);
+  assert.deepEqual(task, before);
+  assert.deepEqual(writes, []);
+  await changeTaskStatus(task, 'open', { confirm: async () => true });
+  assert.deepEqual(value(writes), [{ path: '/tasks/1/status', body: { status: 'open', expected_revision: 15, reset_progress: true } }]);
 });
 
 test('starting without completed subtasks does not create a redundant reset warning', () => {
@@ -163,6 +245,47 @@ test('normal detail exposes operational toggles and read-only required skills, n
   assert.match(row.children[1].textContent, /Washing Machine/);
   const tags = []; const walk = el => { tags.push(el.tagName); el.children?.forEach(walk); }; walk(node);
   assert.ok(!tags.includes('INPUT') && !tags.includes('SELECT') && !tags.includes('FORM'));
+});
+
+test('learner detail omits transferred toggles and helper detail distinguishes direct work from supervision', () => {
+  const h = detailHarness();
+  const task = { subtasks: [
+    { id: 2, title: 'Gather laundry', status: 'open', permissions: { complete: true } },
+    { id: 3, title: 'Fold laundry', status: 'open', permissions: { complete: true }, supervision_action: {
+      execution_mode: 'supervised', state: 'assigned', learner_name: 'Frank', supervisor_name: 'Duane', can_complete: false } },
+    { id: 4, title: 'Load washer', status: 'open', permissions: { complete: false }, supervision_action: {
+      execution_mode: 'delegated', state: 'assigned', learner_name: 'Frank', supervisor_name: 'Duane', can_complete: false } },
+  ] };
+  const learner = h.subtaskListNode(task, { currentUserId: 3, skills: [] });
+  assert.deepEqual(learner.children.map(row => row.dataset.subtaskId), ['2', '3']);
+  const helper = h.subtaskListNode({ is_supervision_projection: true, subtasks: task.subtasks.slice(1).map(row => ({
+    ...row, id: row.id + 10, is_supervision_projection: true, permissions: { complete: true },
+    supervision_action: { ...row.supervision_action, can_complete: true },
+  })) }, { currentUserId: 5, skills: [] });
+  assert.match(helper.children[0].children[1].textContent, /Frank performs this with you/);
+  assert.match(helper.children[1].children[1].textContent, /Direct responsibility · You perform this for Frank/);
+  assert.doesNotMatch(helper.children[1].children[1].textContent, /Supervision required|performs this with you/);
+  assert.deepEqual(helper.children.map(row => row.children[0].disabled), [false, false]);
+});
+
+test('delegated helper scope explains direct responsibility without suggesting the learner can perform it', () => {
+  const h = detailHarness();
+  const task = { id: 1, title: "Frank's Laundry", supervision: { state: 'needed', can_view_support: false,
+    display_reason: 'No single available household member can cover all remaining actions.',
+    actions: [{ action_task_id: 2, action_title: 'Load washer', execution_mode: 'delegated', state: 'unresolved', learner_name: 'Frank',
+      required_skills: [{ name: 'Washing Machine' }],
+      display_reason: 'Frank must not perform Load washer under the current Washing Machine settings. A qualified helper must perform this action.' }] } };
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  let all = flatten(h.supervisionNode(task, {}));
+  assert.ok(all.some(el => el.textContent === 'Helper needed'));
+  assert.ok(all.some(el => el.textContent === 'Direct responsibility: Load washer'));
+  assert.ok(all.some(el => el.textContent.includes('The helper performs this for Frank')));
+  assert.ok(!all.some(el => /cannot override|Frank performs this with you/.test(el.textContent)));
+  task.supervision.actions[0] = { ...task.supervision.actions[0], completed: true, supervisor_name: 'Duane' };
+  task.supervision.state = 'none';
+  all = flatten(h.supervisionNode(task, {}));
+  assert.ok(all.some(el => el.textContent.includes('Completed · Performed by Duane')));
+  assert.ok(!all.some(el => el.textContent.includes('Previously supervised')));
 });
 
 test('supervised actions are operable by the current eligible supervisor and visibly restricted for the learner', () => {

@@ -8929,6 +8929,18 @@ FORK_MIGRATIONS.push({
   },
 });
 
+FORK_MIGRATIONS.push({
+  version: 10033,
+  description: 'Tasks: distinguish supervised and delegated helper actions',
+  up: `ALTER TABLE task_supervision_actions ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'supervised'
+    CHECK(execution_mode IN ('supervised','delegated'));
+    ALTER TABLE tasks ADD COLUMN activity_template_checklist_item_id INTEGER
+      REFERENCES activity_template_checklist_items(id) ON DELETE SET NULL;
+    CREATE TRIGGER trg_tasks_checklist_origin_revision AFTER UPDATE OF activity_template_checklist_item_id ON tasks
+      WHEN NEW.activity_template_checklist_item_id IS NOT OLD.activity_template_checklist_item_id
+      BEGIN UPDATE tasks SET revision=revision+1 WHERE id=NEW.id; END;`,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

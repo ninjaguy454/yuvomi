@@ -7,6 +7,7 @@
 import { api } from '/api.js';
 import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
+import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
@@ -129,7 +130,7 @@ let taskDocuments = null;
 
 /** Progress for the first-class subtasks assigned to one household member. */
 function participantCompletion(task, userId) {
-  const assigned = (task.subtasks || []).filter((subtask) =>
+  const assigned = actionableSubtasks(task).filter((subtask) =>
     subtaskParticipants(subtask, state.users).some((user) => Number(user.id) === Number(userId))
   );
   if (!assigned.length) return completionCounts(task);
@@ -143,6 +144,7 @@ function participantCompletion(task, userId) {
 }
 
 function progressLabel(progress) {
+  if (!progress.total) return 'No learner steps';
   if (state.progressMode === 'count') return t('tasks.progressCountValue', progress);
   if (state.progressMode === 'points' && progress.totalPoints > 0) {
     return t('tasks.progressPointsValue', progress);
@@ -565,7 +567,7 @@ function renderParticipantStrip(task, participants) {
   return `<div class="activity-card__participants" aria-label="${esc(t('tasks.participantsLabel'))}">
     ${participants.map((participant) => `<div class="activity-card__participant">
       ${renderProfileAvatarButton(participant, 34)}
-      <span class="activity-card__participant-progress">${esc(progressLabel(participantCompletion(task, participant.id)))}</span>
+      <span class="activity-card__participant-progress">${esc(participant.role === 'supervisor' && !task.is_supervision_projection ? 'Supervisor' : progressLabel(participantCompletion(task, participant.id)))}</span>
     </div>`).join('')}
   </div>`;
 }
@@ -582,7 +584,7 @@ function renderActivitySubtasks(task, expanded) {
         aria-label="${esc(t('tasks.subtaskMarkDone', { title: subtask.title }))}">
         ${subtask.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
       </button>
-      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}</button>
+      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
       <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: Number(subtask.points || 0) }))}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
@@ -617,9 +619,11 @@ function renderTaskCard(task, opts = {}) {
   const progress = completionCounts(task);
   const names = (task.assigned_users || []).map(person => person.display_name).filter(Boolean).join(', ') || task.assigned_name;
   const blocked = ['needed', 'excluded'].includes(task.supervision?.state);
+  const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
+  const waiting = helperWaitingLabel(task, state.currentUserId);
 
   return `<article class="task-card activity-card${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
-      data-task-id="${task.id}"${board && canTask(task, 'complete') ? ' draggable="true"' : ''}>
+      data-task-id="${task.id}"${board && canTask(task, 'complete') && task.supervision_action?.can_complete !== false ? ' draggable="true"' : ''}>
     <div class="activity-card__summary">
       <span class="activity-card__leading">
         ${showCheckbox ? `<input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
@@ -637,7 +641,7 @@ function renderTaskCard(task, opts = {}) {
         </span>
       </button>
       <span class="activity-card__points">${esc(t('tasks.pointsSummary', { count: Number(task.points || 0) }))}</span>
-      <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${!canTask(task, 'complete') ? 'disabled' : ''}
+      <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${!canTask(task, 'complete') || task.supervision_action?.can_complete === false ? 'disabled' : ''}
         aria-label="${esc(isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title }))}">
         <i data-lucide="check" class="task-status-btn__check" aria-hidden="true"></i>
       </button>
@@ -649,10 +653,10 @@ function renderTaskCard(task, opts = {}) {
     </div>` : ''}
 
     <div class="activity-card__metadata">
-      <span class="activity-card__status-label">${esc(({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed' })[task.status] || task.status)}</span>
+      <span class="activity-card__status-label">${esc(waiting || ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed' })[task.status] || task.status)}</span>
       ${names ? `<span class="activity-card__assignee">${esc(names)}</span>` : ''}
       ${actionableSubtasks(task).length ? `<span class="activity-card__progress-label">${progress.done}/${progress.total} · ${Math.round(progress.done / progress.total * 100)}%</span>` : ''}
-      ${blocked ? '<span class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>Supervision needed</span>' : ''}
+      ${blocked ? `<span class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>${delegated ? 'Helper needed' : 'Supervision needed'}</span>` : ''}
       ${renderPriorityBadge(task.priority)}
       ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date activity-card__category">${esc(catLabel(task.category))}</span>` : ''}
       ${task.is_recurring ? `<span class="due-date" title="${esc(t('tasks.recurring'))}"><i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i></span>` : ''}
@@ -1188,7 +1192,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       <p class="task-field-hint">${activityTemplateId ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(person.display_name)).join(', ')}</p>` : ''}
       </section>
-      ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: actionableSubtasks(task), skills: state.skills, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
+      ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
       <section class="task-editor__section" aria-labelledby="task-where-heading">
       <h3 id="task-where-heading">Where</h3>
       ${renderTaskLocationFields(task)}
@@ -2253,7 +2257,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   if (controls?.subtasks) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
   if (body.subtasks && controls?.originalTask) {
     const original = controls.originalTask;
-    const operationalIds = new Set(actionableSubtasks(original).map(child => Number(child.id)));
+    const operationalIds = new Set(structuralSubtasks(original).map(child => Number(child.id)));
     body.subtasks.push(...(original.subtasks || []).filter(child => !operationalIds.has(Number(child.id)))
       .map(child => ({ id: child.id, title: child.title, skill_ids: child.skill_ids || [] })));
   }

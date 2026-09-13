@@ -145,6 +145,22 @@ function nextAttempt(d, taskId, role) {
     .get(taskId, role)?.n || 1);
 }
 
+// Task due dates describe the work; an expired one is not a usable invitation
+// deadline. There is no configurable Task response window in the legacy model.
+// Give a new request 24 elapsed hours when its inherited deadline has passed.
+const DEFAULT_RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+function newResponseDeadline(d, deadline, nowAt, dueAt) {
+  if (deadline == null) return null; // An explicitly absent deadline stays absent.
+  const timezone = householdTimeZone(d);
+  const nowMs = availabilityInstantMs(nowAt, timezone);
+  if (nowMs == null) throw new Error('A valid reconciliation time is required.');
+  const deadlineMs = availabilityInstantMs(deadline, timezone);
+  if (deadlineMs != null && deadlineMs > nowMs) return deadline;
+  const dueMs = availabilityInstantMs(dueAt, timezone);
+  return dueMs != null && dueMs > nowMs ? dueAt : new Date(nowMs + DEFAULT_RESPONSE_WINDOW_MS).toISOString();
+}
+
 function createTaskObligation(d, taskId, userId, {
   role = 'primary',
   group = null,
@@ -153,6 +169,8 @@ function createTaskObligation(d, taskId, userId, {
   fallbackSource = null,
   metadata = null,
   status = 'pending',
+  responseDeadline = dueAt,
+  nowAt = new Date().toISOString(),
 } = {}) {
   const attempt = nextAttempt(d, taskId, role);
   const logicalKey = `task:${taskId}:${role}:attempt:${attempt}`;
@@ -163,7 +181,8 @@ function createTaskObligation(d, taskId, userId, {
       parent_obligation_id, fallback_source, metadata_json
     ) VALUES ('task', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
-    taskId, taskId, logicalKey, role, userId || null, group, dueAt, dueAt, status,
+    taskId, taskId, logicalKey, role, userId || null, group, dueAt,
+    parentObligationId || fallbackSource === 'manual_override' ? newResponseDeadline(d, responseDeadline, nowAt, dueAt) : responseDeadline, status,
     attempt, parentObligationId, fallbackSource, metadata ? JSON.stringify(metadata) : null,
   );
   return Number(result.lastInsertRowid);
@@ -361,11 +380,23 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
   })();
 }
 
-export function respondToTaskObligation(d, obligationId, action, actorUserId, note = null) {
+export function respondToTaskObligation(d, obligationId, action, actorUserId, note = null, { nowAt = new Date().toISOString() } = {}) {
   return d.transaction(() => {
     const obligation = d.prepare("SELECT * FROM planning_obligations WHERE id = ? AND entity_type = 'task'").get(obligationId);
     if (!obligation) throw new Error('Assignment request not found.');
     if (!['pending', 'accepted'].includes(obligation.status)) throw new Error('This assignment request is already closed.');
+    const source = d.prepare('SELECT assigned_to,status,archived_at FROM tasks WHERE id=?').get(obligation.task_id);
+    if (!source || source.status === 'done' || source.archived_at != null) throw new Error('This Task is no longer active.');
+    if (obligation.role === 'primary' && Number(source.assigned_to) !== Number(obligation.responsible_user_id)) {
+      throw new Error('This assignment request is no longer current.');
+    }
+    if (action === 'timeout') {
+      const deadlineMs = availabilityInstantMs(obligation.response_deadline, householdTimeZone(d));
+      const nowMs = availabilityInstantMs(nowAt, householdTimeZone(d));
+      if (obligation.status !== 'pending' || deadlineMs == null || nowMs == null || deadlineMs > nowMs) {
+        throw new Error('This assignment request is not awaiting an overdue response.');
+      }
+    }
     if (action !== 'timeout' && obligation.responsible_user_id && Number(obligation.responsible_user_id) !== Number(actorUserId)) {
       throw new Error('This assignment request belongs to another household member.');
     }
@@ -379,6 +410,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
         }
       } else assertTaskSupervisionAssignee(d, obligation.task_id, obligation.responsible_user_id || actorUserId);
       if (obligation.role !== 'supervisor') assertTaskAssignmentAvailability(d, obligation.task_id, [obligation.responsible_user_id || actorUserId]);
+      if (obligation.status === 'accepted') return obligation;
       d.prepare(`UPDATE planning_obligations SET status = 'accepted', responded_at = ${nowSql()}, response_note = ?, updated_at = ${nowSql()} WHERE id = ?`)
         .run(note, obligation.id);
       event(d, obligation.id, 'accepted', actorUserId);
@@ -389,6 +421,16 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
     d.prepare(`UPDATE planning_obligations SET status = ?, responded_at = ${nowSql()}, response_note = ?, updated_at = ${nowSql()} WHERE id = ?`)
       .run(closedStatus, note, obligation.id);
     event(d, obligation.id, closedStatus, actorUserId);
+
+    // A missed/declined request does not undo a resolved fixed, subject-based
+    // or manually chosen owner. Changing that person requires assignment Edit.
+    const context = d.prepare('SELECT strategy FROM task_assignment_context WHERE task_id=?').get(obligation.task_id);
+    const manual = obligation.fallback_source === 'manual_override'
+      || d.prepare("SELECT 1 FROM task_responsibilities WHERE task_id=? AND user_id=? AND role='primary' AND status='active' AND source IN ('manual_override','assignment_repair')")
+        .get(obligation.task_id, obligation.responsible_user_id);
+    if (obligation.role === 'primary' && (['fixed','subject_skill'].includes(context?.strategy) || manual)) {
+      return { ...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id), fallback: null, assignment_retained: true };
+    }
 
     if (obligation.role === 'supervisor' && inspectTaskSupervision(d, obligation.task_id).actions.length) {
       // One refusal applies to the entire remaining supervised scope. Never
@@ -432,6 +474,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       const replacementId = createTaskObligation(d, obligation.task_id, replacement.id, {
         role: obligation.role, dueAt: obligation.due_at, parentObligationId: obligation.id,
         fallbackSource: `${closedStatus}:${obligation.responsible_user_id}`,
+        responseDeadline: obligation.response_deadline, nowAt,
       });
       event(d, replacementId, 'fallback_assigned', actorUserId, { previous_obligation_id: obligation.id });
       notifyTaskObligations(d, obligation.task_id);
@@ -470,6 +513,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       dueAt: obligation.due_at, parentObligationId: obligation.id,
       fallbackSource: `${closedStatus}:${obligation.responsible_user_id || 'open'}`,
       metadata: { base_strategy: d.prepare('SELECT strategy FROM task_assignment_context WHERE task_id = ?').get(obligation.task_id)?.strategy },
+      responseDeadline: obligation.response_deadline, nowAt,
     });
     event(d, replacementId, 'fallback_assigned', actorUserId, { previous_obligation_id: obligation.id });
     reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId });
@@ -478,24 +522,46 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
   })();
 }
 
-export function obligationInbox(d, userId, { includeAll = false, nowAt = new Date().toISOString() } = {}) {
+/** Explicit maintenance mutation. Never invoke from a read or live observer.
+ * Each sweep captures pending requests once; newly issued requests have their
+ * own future window. Accepted responses and completed work do not expire.
+ */
+export function reconcileOverdueTaskObligations(d, { nowAt = new Date().toISOString(), actorUserId = null, taskIds = null } = {}) {
   const timezone = householdTimeZone(d), nowMs = availabilityInstantMs(nowAt, timezone);
+  if (nowMs == null) throw new Error('A valid reconciliation time is required.');
+  const selected = taskIds == null ? null : new Set(taskIds.map(Number));
+  return d.transaction(() => {
   const expired = d.prepare(`
-    SELECT o.* FROM planning_obligations o
-     WHERE o.entity_type = 'task' AND o.status IN ('pending', 'accepted')
+    SELECT o.* FROM planning_obligations o JOIN tasks t ON t.id=o.task_id
+     WHERE o.entity_type = 'task' AND o.status = 'pending'
+       AND t.status != 'done' AND t.archived_at IS NULL
        AND o.response_deadline IS NOT NULL
      ORDER BY o.id
   `).all().filter(row => {
+    if (selected && !selected.has(Number(row.task_id))) return false;
+    if (row.role === 'primary' && row.responsible_user_id == null) return false; // Open work still requires a claim.
     // Legacy linked helpers used the Task due time as an implicit response
-    // deadline. Read-time timeout must not strip overdue supervision work.
+    // deadline. Expiry must not strip overdue supervision work.
     if (row.role === 'supervisor' && row.response_deadline === row.due_at
       && d.prepare('SELECT 1 FROM task_supervision_actions WHERE source_task_id=? AND supervisor_user_id=?').get(row.task_id,row.responsible_user_id)) return false;
     const deadlineMs = availabilityInstantMs(row.response_deadline, timezone);
     return deadlineMs != null && nowMs != null && deadlineMs <= nowMs;
   });
+  const results = [];
   for (const row of expired) {
-    try { respondToTaskObligation(d, row.id, 'timeout', row.responsible_user_id || null); } catch { /* keep the inbox readable */ }
+    // A prior item may have retired a duplicate legacy request. A stale
+    // primary request must never replace the Task's newer actual owner.
+    const current = d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(row.id);
+    if (current?.status !== 'pending') continue;
+    if (row.role === 'primary' && Number(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(row.task_id)?.assigned_to) !== Number(row.responsible_user_id)) continue;
+    results.push(respondToTaskObligation(d, row.id, 'timeout', actorUserId, null, { nowAt }));
   }
+  return { processed: results.length, results };
+  })();
+}
+
+/** Pure projection: opening any inbox must not change household work. */
+export function obligationInbox(d, userId, { includeAll = false } = {}) {
   const where = includeAll ? '' : 'AND o.responsible_user_id = ?';
   return d.prepare(`
     SELECT o.*, t.title AS task_title, t.revision AS task_revision,

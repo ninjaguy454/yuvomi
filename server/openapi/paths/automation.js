@@ -15,6 +15,11 @@ export function automationPaths() {
     '/api/v1/automation/admin/obligations': {
       get: op({ summary: 'List assignment obligations for the household', tag: 'Automation', admin: true }),
     },
+    '/api/v1/automation/admin/obligations/reconcile': {
+      post: op({ summary: 'Explicitly reconcile overdue Task assignment requests', tag: 'Automation', admin: true,
+        stateChanging: true, requestBody: jsonBody(null),
+        description: 'Body: { task_ids: [1], expected_revisions: { "1": 7 }, expected_parent_revisions?: { "1": 4 } }. Select 1–100 distinct Tasks. Parent revisions are required for subtasks. All snapshots and assignment permissions are checked before any mutation; missing snapshots return 428, malformed snapshots 400, stale snapshots 409. Only pending overdue responses on active Tasks are processed. Accepted requests and fixed, subject-based or manually selected owners do not rotate. Inbox GETs never reconcile.' }),
+    },
     '/api/v1/automation/tasks/{id}/claim': {
       post: op({
         summary: 'Claim an open or claimable Task',

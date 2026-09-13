@@ -1278,11 +1278,51 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-sm);
   padding: var(--space-3);
-  cursor: grab;
-  user-select: none;
+  cursor: default;
   transition: box-shadow var(--transition-fast), opacity var(--transition-fast),
               transform var(--transition-fast);
 }
+
+/* Card bodies remain native scroll/text surfaces. Only the labelled move
+ * button arms a drag; touch movement before its stationary hold still scrolls. */
+.task-card__drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  margin-inline-start: auto;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: grab;
+  touch-action: auto;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+.task-card__drag-handle:hover,
+.task-card__drag-handle--ready {
+  background: var(--color-accent-light);
+  color: var(--color-text-primary);
+}
+
+.task-card__drag-handle:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.kanban-card--dragging .task-card__drag-handle { cursor: grabbing; }
+
+.task-card__drag-handle svg { width: 18px; height: 18px; pointer-events: none; }
+
+/* The handle shares the compact metadata row without squeezing the title or
+ * becoming clipped behind other badges in narrow Kanban columns. */
+.kanban-card .activity-card__metadata { flex-wrap: wrap; }
 
 .kanban-card:hover {
   box-shadow: var(--shadow-md);
@@ -2697,11 +2737,6 @@
 .task-status-bucket__body {
   min-height: 56px;
   padding: var(--space-2) 0;
-}
-
-.task-status-bucket__body .activity-card {
-  cursor: grab;
-  user-select: none;
 }
 
 /* Board cards keep the points in the upper-right metadata position while the

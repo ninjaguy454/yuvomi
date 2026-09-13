@@ -9,6 +9,8 @@ import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
 import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
+import { reconcileTaskMarkup } from '/utils/task-view-state.js';
+import { bindTaskCardTouchDrag, taskDragHandle } from '/utils/task-card-drag.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
 import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
@@ -623,7 +625,7 @@ function renderTaskCard(task, opts = {}) {
   const waiting = helperWaitingLabel(task, state.currentUserId);
 
   return `<article class="task-card activity-card${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
-      data-task-id="${task.id}"${board && canTask(task, 'complete') && task.supervision_action?.can_complete !== false ? ' draggable="true"' : ''}>
+      data-task-id="${task.id}">
     <div class="activity-card__summary">
       <span class="activity-card__leading">
         ${showCheckbox ? `<input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
@@ -663,6 +665,8 @@ function renderTaskCard(task, opts = {}) {
       ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i></span>` : ''}
       ${renderVisibilityBadge(task.visibility)}
       ${canTask(task, 'claim') && canCheckAndClaim(task) ? `<button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button>` : ''}
+      ${board && canTask(task, 'complete') && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
+        data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
     </div>
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}
@@ -762,7 +766,7 @@ function renderTaskGroups(tasks, groupMode) {
     const sorted = sortedTasks(groupTasks, `list:${groupMode}:${id}`);
     const collapsed = isGroupCollapsed(groupMode, id);
     return `
-    <div class="task-group list-group">
+    <div class="task-group list-group" data-view-key="list:${esc(groupMode)}:${esc(id)}">
       <!-- Gruppenkopf als echte Ueberschrift (Critique 2026-08-10): /tasks
            hatte genau EIN h-Element im ganzen Dokument, und wer per H-Taste
            navigiert, kam damit auf den Seitentitel und nicht weiter. Der
@@ -1400,6 +1404,17 @@ function taskQuery() {
 const taskPageLoaders = new WeakMap();
 function taskSnapshot(id) {
   return state.tasks.flatMap(task => [task, ...(task.subtasks || [])]).find(task => Number(task.id) === Number(id));
+}
+
+function taskViewportScope() {
+  return JSON.stringify([state.viewMode, state.boardScope, state.groupMode, taskQuery(), state.searchQuery,
+    state.sheetSort, [...state.bucketSorts], state.history.userId, state.calendarCursor]);
+}
+
+function reconcileTaskListMarkup(listEl, html) {
+  const visibleIds = new Set(filteredTasks().map(task => Number(task.id)));
+  state.selectedTaskIds = new Set([...state.selectedTaskIds].filter(id => visibleIds.has(Number(id))));
+  return reconcileTaskMarkup(listEl, html, taskViewportScope());
 }
 async function loadTasks(container) {
   if (!container || !container.isConnected) return;
@@ -2507,6 +2522,7 @@ function renderBoardStatusSection(bucketKey, status, tasks) {
 }
 
 function renderKanban(container) {
+  if (state.dragTaskId) { state.pendingViewRefresh = container; return; }
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
   state.boardScope = deviceTaskBoardScope();
@@ -2517,8 +2533,7 @@ function renderKanban(container) {
   });
   const isSearch = state.searchQuery.trim().length > 0;
   if (!buckets.length || (isSearch && !tasks.length)) {
-    listEl.replaceChildren();
-    listEl.insertAdjacentHTML('beforeend', emptyStateHTML({
+    reconcileTaskListMarkup(listEl, emptyStateHTML({
       variant: isSearch ? 'no-results' : 'empty',
       icon: isSearch ? undefined : 'circle-check-big',
       title: isSearch ? t('tasks.noResultsTitle') : t('tasks.personalBoardEmpty'),
@@ -2531,8 +2546,7 @@ function renderKanban(container) {
   }
 
   const boardClass = state.boardScope === 'household' ? ' task-board--household' : ' task-board--personal';
-  listEl.replaceChildren();
-  listEl.insertAdjacentHTML('beforeend', `<div class="kanban-board task-board${boardClass}" data-board-scope="${state.boardScope}">
+  reconcileTaskListMarkup(listEl, `<div class="kanban-board task-board${boardClass}" data-view-key="board:${state.boardScope}" data-board-scope="${state.boardScope}">
     ${buckets.map((bucket) => {
       const bucketKey = `${state.boardScope}:${state.groupMode}:${bucket.id}`;
       const bucketSort = state.bucketSorts.get(bucketKey);
@@ -2540,7 +2554,7 @@ function renderKanban(container) {
         ['open', []], ['in_progress', []], ['done', []], ['archived', []],
       ]);
       bucket.tasks.forEach((task) => (byStatus.get(kanbanColumnOf(task)) || byStatus.get('open')).push(task));
-      return `<section class="kanban-col task-board__bucket" data-bucket-key="${esc(bucketKey)}">
+      return `<section class="kanban-col task-board__bucket" data-view-key="bucket:${esc(bucketKey)}" data-bucket-key="${esc(bucketKey)}">
         <header class="kanban-col__header task-board__bucket-header">
           <div class="task-board__bucket-title">
             ${bucket.user ? renderAvatarStack([normalizeParticipant(bucket.user)], { size: 30, maxVisible: 1 }) : ''}
@@ -2568,18 +2582,23 @@ function renderKanban(container) {
   wireResponsiveTaskTags(listEl);
 }
 
+const wiredKanbanBoards = new WeakSet();
 function wireKanbanDrag(container) {
   const board = container.querySelector('.kanban-board');
-  if (!board) return;
+  if (!board || wiredKanbanBoards.has(board)) return;
+  wiredKanbanBoards.add(board);
 
   board.addEventListener('dragstart', (e) => {
-    const card = e.target.closest('.kanban-card[data-task-id]');
-    if (!card) return;
+    const handle = taskDragHandle(e.target, board);
+    const card = handle?.closest('.kanban-card[data-task-id]');
+    const task = card && taskSnapshot(card.dataset.taskId);
+    if (!task || !canTask(task, 'complete') || task.supervision_action?.can_complete === false) { e.preventDefault(); return; }
     state.dragTaskId = card.dataset.taskId;
     state.dragBucketKey = card.closest('[data-bucket-key]')?.dataset.bucketKey || null;
     card.classList.add('kanban-card--dragging');
     board.classList.add('kanban-board--dragging');
     e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', String(task.id));
   });
 
   board.addEventListener('dragend', (e) => {
@@ -2592,9 +2611,11 @@ function wireKanbanDrag(container) {
     );
     state.dragTaskId = null;
     state.dragBucketKey = null;
+    flushPendingTaskView();
   });
 
   board.addEventListener('dragover', (e) => {
+    if (!state.dragTaskId) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     const zone = e.target.closest('[data-drop-zone]');
@@ -2648,7 +2669,7 @@ function wireKanbanDrag(container) {
     if (e.target.closest('[data-action], [data-tag-filter]')) return;
 
     // Klick auf Kanban-Card öffnet Edit-Modal
-    if (e.target.closest('[draggable]')) {
+    if (e.target.closest('.kanban-card[data-task-id]')) {
       const card = e.target.closest('.kanban-card[data-task-id]');
       if (!card) return;
       try {
@@ -2668,112 +2689,40 @@ function wireKanbanDrag(container) {
 // Kanban-Touch-Drag (Mobile)
 // --------------------------------------------------------
 
+const taskTouchBindings = new WeakMap();
+function flushPendingTaskView() {
+  const container = state.pendingViewRefresh;
+  state.pendingViewRefresh = null;
+  if (container?.isConnected) renderTaskList(container);
+}
+
 function wireKanbanTouch(container) {
   const board = container.querySelector('.kanban-board');
-  if (!board) return;
-
-  let dragging = null;
-  let ghost = null;
-  let taskId = null;
-  let originX = 0, originY = 0;
-  let originLeft = 0, originTop = 0;
-  let activeZone = null;
-  let sourceBucketKey = null;
-  let started = false;
-
-  function cleanup() {
-    ghost?.remove();
-    ghost = null;
-    board.classList.remove('kanban-board--dragging');
-    if (dragging) {
-      dragging.classList.remove('kanban-card--dragging');
-      dragging = null;
-    }
-    board.querySelectorAll('.kanban-col__body--over').forEach((el) =>
-      el.classList.remove('kanban-col__body--over')
-    );
-    activeZone = null;
-    started = false;
-    taskId = null;
-    sourceBucketKey = null;
-  }
-
-  board.addEventListener('touchstart', (e) => {
-    const card = e.target.closest('.kanban-card[data-task-id]');
-    if (!card || e.target.closest('[data-action], [data-next-status], [data-tag-filter]')) return;
-    dragging = card;
-    taskId = card.dataset.taskId;
-    sourceBucketKey = card.closest('[data-bucket-key]')?.dataset.bucketKey || null;
-    const touch = e.touches[0];
-    originX = touch.clientX;
-    originY = touch.clientY;
-    const rect = card.getBoundingClientRect();
-    originLeft = rect.left;
-    originTop = rect.top;
-    started = false;
-  }, { passive: true });
-
-  board.addEventListener('touchmove', (e) => {
-    if (!dragging) return;
-    const touch = e.touches[0];
-    const dx = touch.clientX - originX;
-    const dy = touch.clientY - originY;
-
-    if (!started && Math.sqrt(dx * dx + dy * dy) < 8) return;
-
-    if (!started) {
-      started = true;
-      ghost = dragging.cloneNode(true);
-      ghost.className = 'kanban-card kanban-card--ghost';
-      ghost.style.width = dragging.getBoundingClientRect().width + 'px';
-      ghost.style.left = originLeft + 'px';
-      ghost.style.top = originTop + 'px';
-      document.body.appendChild(ghost);
-      dragging.classList.add('kanban-card--dragging');
-      board.classList.add('kanban-board--dragging');
-    }
-
-    e.preventDefault();
-    ghost.style.left = (originLeft + dx) + 'px';
-    ghost.style.top = (originTop + dy) + 'px';
-
-    ghost.style.visibility = 'hidden';
-    const el = document.elementFromPoint(touch.clientX, touch.clientY);
-    ghost.style.visibility = '';
-
-    const zone = el?.closest('[data-drop-zone]');
-    board.querySelectorAll('.kanban-col__body--over').forEach((z) =>
-      z.classList.remove('kanban-col__body--over')
-    );
-    if (zone) {
-      zone.classList.add('kanban-col__body--over');
-      activeZone = zone;
-    } else {
-      activeZone = null;
-    }
-  }, { passive: false });
-
-  board.addEventListener('touchend', async () => {
-    if (!dragging) return;
-    const zone = activeZone;
-    const tid = taskId;
-    const fromBucketKey = sourceBucketKey;
-    const task = state.tasks.find((tk) => String(tk.id) === String(tid));
-    cleanup();
-
-    if (!zone || !task) return;
-    const targetBucketKey = zone.closest('[data-bucket-key]')?.dataset.bucketKey || null;
-    if (fromBucketKey && targetBucketKey && fromBucketKey !== targetBucketKey) {
-      window.yuvomi.showToast(t('tasks.moveBetweenBucketsHint'), 'default');
-      return;
-    }
-    const column = zone.dataset.dropZone;
-    if (kanbanColumnOf(task) === column) return;
-
-    await runColumnMove(task, column, container);
-  }, { passive: true });
-
-  board.addEventListener('touchcancel', cleanup, { passive: true });
+  const existing = taskTouchBindings.get(container);
+  if (existing?.board === board) return;
+  existing?.dispose();
+  if (!board) { taskTouchBindings.delete(container); return; }
+  const dispose = bindTaskCardTouchDrag(board, {
+    canDrag: card => {
+      const task = taskSnapshot(card.dataset.taskId);
+      return !!task && canTask(task, 'complete') && task.supervision_action?.can_complete !== false;
+    },
+    onDragStateChange: active => {
+      state.dragTaskId = active ? board.querySelector('.kanban-card--dragging')?.dataset.taskId : null;
+      if (!active) flushPendingTaskView();
+    },
+    onDrop: async ({ taskId, sourceBucketKey, zone }) => {
+      const task = taskSnapshot(taskId);
+      if (!task || !canTask(task, 'complete')) return;
+      const targetBucketKey = zone.closest('[data-bucket-key]')?.dataset.bucketKey || null;
+      if (sourceBucketKey && targetBucketKey && sourceBucketKey !== targetBucketKey) {
+        window.yuvomi.showToast(t('tasks.moveBetweenBucketsHint'), 'default');
+        return;
+      }
+      if (kanbanColumnOf(task) !== zone.dataset.dropZone) await runColumnMove(task, zone.dataset.dropZone, container);
+    },
+  });
+  taskTouchBindings.set(container, { board, dispose });
 }
 
 // --------------------------------------------------------
@@ -2832,7 +2781,7 @@ function renderHistoryEntry(entry) {
   // steht als Text in der Metazeile. Ohne aria-hidden liest die Sprachausgabe
   // „AJ ... Alex Johnson" - derselbe Mensch zweimal, einmal als Kuerzel.
   return `
-    <button type="button" class="list-row history-row" data-history-task="${entry.task_id}">
+    <button type="button" class="list-row history-row" data-view-key="history-entry:${esc(entry.id ?? `${entry.task_id}:${entry.completed_at}`)}" data-history-task="${entry.task_id}">
       <span class="history-row__avatar" aria-hidden="true">${avatar}</span>
       <span class="list-row__main history-row__main">
         <span class="list-row__name">${esc(entry.title)}</span>
@@ -2868,15 +2817,16 @@ function renderHistoryPeople() {
 /** Die Personen-Chips verdrahten - beide Zweige von renderHistory zeigen sie. */
 function wireHistoryPeople(root, container) {
   root.querySelectorAll('[data-history-user]').forEach((btn) => {
-    btn.addEventListener('click', () => {
+    btn.onclick = () => {
       const raw = btn.dataset.historyUser;
       state.history.userId = raw === '' ? null : Number(raw);
       loadHistory(container);
-    });
+    };
   });
 }
 
 function renderHistory(container) {
+  if (!container.isConnected || state.viewMode !== 'history') return;
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
 
@@ -2904,7 +2854,7 @@ function renderHistory(container) {
   const { entries, hasMore } = state.history;
   const body = entries.length
     ? groupHistoryByDay(entries).map(({ day, entries: dayEntries }) => `
-        <div class="task-group list-group">
+        <div class="task-group list-group" data-view-key="history:${esc(day)}">
           <h2 class="list-group__title">
             <span>${esc(historyDayLabel(day))}</span>
             <span class="list-group__count">${dayEntries.length}</span>
@@ -2925,8 +2875,7 @@ function renderHistory(container) {
       hint: state.history.userId === null ? t('tasks.historyEmptyHint') : undefined,
     });
 
-  listEl.replaceChildren();
-  listEl.insertAdjacentHTML('beforeend', `
+  const retained = reconcileTaskListMarkup(listEl, `
     ${renderHistoryPeople()}
     ${body}
     ${hasMore ? `<div class="history-more">
@@ -2934,18 +2883,19 @@ function renderHistory(container) {
     </div>` : ''}
   `);
   if (window.lucide) window.lucide.createIcons({ el: listEl });
-  stagger(listEl.querySelectorAll('.history-row'));
+  if (!retained) stagger(listEl.querySelectorAll('.history-row'));
 
   wireHistoryPeople(listEl, container);
-  listEl.querySelector('#history-more')?.addEventListener('click', (e) => {
+  const more = listEl.querySelector('#history-more');
+  if (more) more.onclick = (e) => {
     // Kein Zuruecksetzen noetig und keins moeglich: `loadHistory` faengt seinen
     // Fehler selbst ab und wirft nie, und danach baut `renderHistory` die
     // Flaeche samt diesem Knopf neu auf - der Spinner geht mit ihm.
-    btnLoading(e.currentTarget);
-    loadHistory(container, { append: true });
-  });
+    const stop = btnLoading(e.currentTarget);
+    loadHistory(container, { append: true }).finally(stop);
+  };
   listEl.querySelectorAll('[data-history-task]').forEach((row) => {
-    row.addEventListener('click', () => openTaskFromHistory(row.dataset.historyTask, container));
+    row.onclick = () => openTaskFromHistory(row.dataset.historyTask, container);
   });
 }
 
@@ -2973,6 +2923,10 @@ async function loadHistory(container, { append = false } = {}) {
     // eslint-disable-next-line no-await-in-loop
     await state.history.loading;
   }
+  if (!container.isConnected || state.viewMode !== 'history') return;
+  const userId = state.history.userId;
+  const current = () => container.isConnected && state.viewMode === 'history' && state.history.userId === userId;
+  const retainedCount = !append && state.history.loadedUserId === userId ? state.history.entries.length : 50;
   let release;
   state.history.loading = new Promise((r) => { release = r; });
   const params = new URLSearchParams({ limit: '50' });
@@ -2982,19 +2936,31 @@ async function loadHistory(container, { append = false } = {}) {
     params.set('before_id', String(state.history.cursor.before_id));
   }
   try {
-    const res = await api.get(`/tasks/completions?${params}`);
-    state.history.entries = append ? [...state.history.entries, ...(res.data ?? [])] : (res.data ?? []);
+    let res = await api.get(`/tasks/completions?${params}`);
+    const entries = [...(res.data ?? [])];
+    // Refresh the pages already opened, using the existing pagination contract.
+    while (!append && current() && entries.length < retainedCount && res.has_more && res.next_cursor) {
+      params.set('before_at', res.next_cursor.before_at);
+      params.set('before_id', String(res.next_cursor.before_id));
+      res = await api.get(`/tasks/completions?${params}`);
+      if (!res.data?.length) break;
+      entries.push(...res.data);
+    }
+    if (!current()) return;
+    state.history.entries = append ? [...state.history.entries, ...entries] : entries;
+    state.history.loadedUserId = userId;
     state.history.hasMore = !!res.has_more;
     state.history.cursor = res.next_cursor ?? null;
     state.history.error = null;
   } catch (err) {
+    if (!current()) return;
     console.error('[Tasks] Verlauf-Ladefehler:', err.message);
     state.history.error = err;
     if (!append) { state.history.entries = []; state.history.hasMore = false; state.history.cursor = null; }
   } finally {
     state.history.loading = null;
     release();
-    renderHistory(container);
+    if (current()) renderHistory(container);
   }
 }
 
@@ -3187,8 +3153,7 @@ function renderTaskCalendar(container) {
   state.calendarEventsAbort?.abort();
   const days = buildTaskMonthDays(state.calendarCursor, state.calendarWeekStart);
   const range = state.calendarSelection;
-  listEl.replaceChildren();
-  listEl.insertAdjacentHTML('beforeend', `<div class="task-calendar-layout">
+  reconcileTaskListMarkup(listEl, `<div class="task-calendar-layout" data-view-key="calendar">
     <section class="task-calendar" aria-label="${esc(t('tasks.calendarView'))}">
       <header class="task-calendar__header">
         <div class="task-calendar__navigation">
@@ -3396,6 +3361,11 @@ function wireTaskCalendar(container) {
 }
 
 function renderTaskList(container) {
+  if (state.dragTaskId) { state.pendingViewRefresh = container; return; }
+  if (state.viewMode !== 'kanban') {
+    taskTouchBindings.get(container)?.dispose();
+    taskTouchBindings.delete(container);
+  }
   // VOR dem Ladefehler der Aufgaben: der Verlauf hat seinen eigenen Bestand und
   // seinen eigenen Fehler. Ein gescheitertes `/tasks` sagt nichts darüber, ob
   // die Vorgänge zu haben sind - stünde die Weiche danach, zeigte der Verlauf
@@ -3436,17 +3406,17 @@ function renderTaskList(container) {
   state.calendarEventsAbort?.abort();
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
-  listEl.replaceChildren();
-  listEl.insertAdjacentHTML('beforeend', renderTaskGroups(filteredTasks(), state.groupMode));
+  const retained = reconcileTaskListMarkup(listEl, renderTaskGroups(filteredTasks(), state.groupMode));
   if (window.lucide) window.lucide.createIcons({ el: listEl });
   wireResponsiveTaskTags(listEl);
-  stagger(listEl.querySelectorAll('.swipe-row, .kanban-card'));
+  if (!retained) stagger(listEl.querySelectorAll('.swipe-row, .kanban-card'));
   updateBulkActionsBar(container);
   wireSwipeGestures(container);
   maybeShowSwipeHint(container);
-  listEl.querySelector('#empty-cta-tasks')?.addEventListener('click', () => {
+  const emptyCreate = listEl.querySelector('#empty-cta-tasks');
+  if (emptyCreate) emptyCreate.onclick = () => {
     document.querySelector('.page-fab')?.click();
-  });
+  };
 }
 
 function makeRemoveSpan() {
@@ -3714,11 +3684,13 @@ function saveRecentFilter(filters) {
   try { localStorage.setItem(RECENT_FILTERS_KEY, JSON.stringify(recent.slice(0, RECENT_FILTERS_MAX))); } catch {}
 }
 
+const wiredTaskSwipeRows = new WeakSet();
 function wireSwipeGestures(container) {
   const listEl = container.querySelector('#task-list');
   if (!listEl) return;
-
-  wireSwipeRows(listEl, {
+  const rows = [...listEl.querySelectorAll('.swipe-row')].filter(row => !wiredTaskSwipeRows.has(row));
+  rows.forEach(row => wiredTaskSwipeRows.add(row));
+  wireSwipeRows({ querySelectorAll: () => rows }, {
     card: '.task-card',
     // Vor 2.0.0 öffnete derselbe Wisch hier den Bearbeiten-Dialog: eine der
     // zwei Listen, in denen die Seiten wirklich getauscht haben.
@@ -4620,6 +4592,7 @@ function wireTaskList(container) {
       try {
         await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done');
       } catch (err) { window.yuvomi.showToast(err.message, 'danger'); }
+      finally { target.disabled = false; }
       await loadTasks(container);
     }
 
@@ -5196,6 +5169,10 @@ export async function render(container, { user }) {
   }
   return () => {
     stopLive();
+    taskTouchBindings.get(container)?.dispose();
+    taskTouchBindings.delete(container);
+    state.dragTaskId = null;
+    state.pendingViewRefresh = null;
     taskPageLoaders.get(container)?.dispose();
     taskPageLoaders.delete(container);
     state.tagResizeObserver?.disconnect();
@@ -5204,6 +5181,9 @@ export async function render(container, { user }) {
 
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.
 export const __test = {
+  loadTasks,
+  renderTaskList,
+  renderKanban,
   shiftTaskCalendarPickerYear,
   groupBy,
   groupKey,

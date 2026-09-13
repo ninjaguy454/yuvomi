@@ -46,6 +46,7 @@ import { canTask } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision } from '/utils/task-state.js';
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
+import { captureTaskViewport } from '/utils/task-view-state.js';
 import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -1576,9 +1577,11 @@ export function openTaskDetail({
   ctx.renderOperationState = () => {
     if (ctx.closed || !view.isOpen()) return;
     const pane = document.querySelector('.detail-view__pane');
+    const restore = pane ? captureTaskViewport(pane, { anchors: false }) : () => {};
     pane?.querySelector('.task-detail-summary')?.replaceWith(statusSummaryNode(task, ctx));
     const subtasks = pane?.querySelector('.detail-task-subtasks');
     if (subtasks) subtasks.replaceWith(subtaskListNode(task, ctx) || document.createElement('div'));
+    restore();
   };
   ctx.acceptSnapshot = (fresh) => {
     if (!view.isOpen()) return;

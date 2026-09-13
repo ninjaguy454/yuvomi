@@ -2,6 +2,48 @@
 import { actorId, actorPermissions, PermissionError } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
 
+// Only synchronous response hydration opts into this scope. It never survives
+// a request, contains no lifecycle decisions, and is suspended for mutations.
+const readProjections = new WeakMap();
+export function withTaskReadProjection(d, actor, read) {
+  const previous = readProjections.get(d), me = actorId(actor);
+  const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(),
+    changesStatement:d.prepare('SELECT total_changes() AS count')};
+  if (scope.changes === undefined) scope.changes = scope.changesStatement.get().count;
+  readProjections.set(d, scope);
+  try {
+    const result = read();
+    if (result && typeof result.then === 'function') throw new TypeError('Task read projections must be synchronous.');
+    return result;
+  } finally {
+    if (previous) readProjections.set(d, previous);
+    else readProjections.delete(d);
+  }
+}
+function currentReadProjection(d) {
+  const scope = readProjections.get(d);
+  // Never cache reads from an open transaction: rollback/savepoint rollback
+  // can undo a write without advancing total_changes() a second time.
+  if (!scope || d.inTransaction) return null;
+  // Callers are read-only. This inexpensive connection-local guard also makes
+  // future accidental writes (even rolled-back ones) invalidate every snapshot.
+  const changes = scope.changesStatement.get().count;
+  if (changes !== scope.changes) {
+    scope.capabilities.clear(); scope.tables.clear(); scope.permissions = null; scope.changes = changes;
+  }
+  return scope;
+}
+function projectionFor(d, actor) {
+  const scope = currentReadProjection(d);
+  return scope?.actorId === actorId(actor) ? scope : null;
+}
+function readPermissions(d, actor) {
+  const scope = projectionFor(d, actor);
+  if (!scope) return actorPermissions(d, actor);
+  scope.permissions ||= actorPermissions(d, actor);
+  return scope.permissions;
+}
+
 const ids = value => [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value]).map(Number))].sort((a, b) => a - b);
 const equal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const assignments = (d, task) => task?.id ? ids(d.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(task.id).map(row => row.user_id).concat(task.assigned_to || [])) : ids(task?.assigned_to);
@@ -21,7 +63,7 @@ export function taskVisibilityWhere(d, actor, alias = 't', bind = '?') {
     WHERE mapped.counterpart_task_id=${alias}.id AND NOT ${sourceVisible}))` : originalVisibility;
   if (actor == null) return base; // Shared Wall projections retain their existing public-visibility boundary.
   if (!Number.isSafeInteger(me) || me <= 0) return `(${base} AND 0)`;
-  const p = actorPermissions(d, actor);
+  const p = readPermissions(d, actor);
   if (p.capabilities['tasks.view_household'] === 'allow') return base;
   if (p.capabilities['tasks.view_own'] !== 'allow') return `(${base} AND 0)`;
   const projectionGuard = (supportTable(d) ? ` AND NOT EXISTS (SELECT 1 FROM task_activity_support_tasks os WHERE os.task_id=${alias}.id)` : '')
@@ -37,8 +79,11 @@ export function taskVisibilityWhere(d, actor, alias = 't', bind = '?') {
 }
 
 export function taskCapabilities(d, actor, sourceTask) {
-  const me = actorId(actor), p = actorPermissions(d, actor), allow = key => p.capabilities[`tasks.${key}`] === 'allow';
-  const task = sourceTask?.id ? d.prepare('SELECT * FROM tasks WHERE id = ?').get(sourceTask.id) || sourceTask : sourceTask;
+  const scope = projectionFor(d, actor), id = sourceTask?.id == null ? null : Number(sourceTask.id);
+  if (scope && id != null && scope.capabilities.has(id)) return {...scope.capabilities.get(id)};
+  const me = actorId(actor), p = readPermissions(d, actor), allow = key => p.capabilities[`tasks.${key}`] === 'allow';
+  const stored = sourceTask?.id ? d.prepare('SELECT * FROM tasks WHERE id = ?').get(sourceTask.id) : null;
+  const task = stored || sourceTask;
   const parent = task?.parent_task_id ? d.prepare('SELECT * FROM tasks WHERE id = ?').get(task.parent_task_id) : null;
   const assigned = assignments(d, task);
   const mappedSource = task?.id && supervisionTable(d) ? d.prepare(`SELECT t.* FROM task_supervision_actions a
@@ -65,6 +110,9 @@ export function taskCapabilities(d, actor, sourceTask) {
   for (const key of ['delete_archive', 'change_assignment', 'reassign', 'change_priority', 'change_points', 'change_category_tags', 'change_dates', 'change_required_skills']) result[key] = definition && allow(key);
   result.comment = view && allow('comment');
   result.claim = view && !projection && allow('claim');
+  // Missing/draft Tasks retain their existing input-based fallback. Two such
+  // inputs need not mean the same thing, so only persisted records are cached.
+  if (scope && stored) scope.capabilities.set(id, {...result});
   return result;
 }
 export function attachTaskCapabilities(d, actor, tasks) {
@@ -79,7 +127,7 @@ export function attachTaskCapabilities(d, actor, tasks) {
 export function taskSupervisionManagementAllowed(d, actor, sourceTaskId) {
   const source = d.prepare('SELECT * FROM tasks WHERE id = ?').get(sourceTaskId);
   if (!source) return false;
-  const p = actorPermissions(d, actor), me = actorId(actor);
+  const p = readPermissions(d, actor), me = actorId(actor);
   const capabilities = taskCapabilities(d, actor, source);
   return Boolean((p.admin || Number(source.created_by) === me)
     && capabilities.view && capabilities.change_assignment && capabilities.reassign);
@@ -87,6 +135,12 @@ export function taskSupervisionManagementAllowed(d, actor, sourceTaskId) {
 
 /** Operational status actions do not require permission to edit definitions. */
 export function assertTaskMutation(d, actor, task, body = {}, { operation = task ? 'update' : 'create' } = {}) {
+  const previous = readProjections.get(d);
+  readProjections.delete(d);
+  try { return assertCurrentTaskMutation(d, actor, task, body, {operation}); }
+  finally { if (previous) readProjections.set(d, previous); }
+}
+function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const p = actorPermissions(d, actor);
   const requireKey = key => { if (p.capabilities[`tasks.${key}`] !== 'allow') throw new PermissionError('Your household permissions do not allow this Task action.'); };
   if (!task) {
@@ -151,5 +205,12 @@ function nonDefaultCreateValue(field, value) {
   return true;
 }
 
-function supervisionTable(d) { return !!d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_supervision_actions'").get(); }
-function supportTable(d) { return !!d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'task_activity_support_tasks'").get(); }
+function projectionTable(d, name) {
+  const scope = currentReadProjection(d);
+  if (scope?.tables.has(name)) return scope.tables.get(name);
+  const exists = !!d.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  if (scope) scope.tables.set(name, exists);
+  return exists;
+}
+function supervisionTable(d) { return projectionTable(d, 'task_supervision_actions'); }
+function supportTable(d) { return projectionTable(d, 'task_activity_support_tasks'); }

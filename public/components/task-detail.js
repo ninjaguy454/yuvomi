@@ -422,8 +422,14 @@ function responsibilityListNode(task, ctx) {
 function progressNode(task, ctx) {
   if (!actionableSubtasks(task).length) return null;
   const progress = completionCounts(task);
+  const pending = ctx.pendingSubtask;
+  const child = pending && actionableSubtasks(task).find(row => Number(row.id) === Number(pending.id));
+  // Only the count is optimistic. Earned points, parent status, history and
+  // responsibility ownership remain the last accepted server snapshot.
+  if (child) progress.done += Number(pending.status === 'done') - Number(child.status === 'done');
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-progress';
+  wrap.setAttribute('aria-busy', String(!!child));
   const meter = document.createElement('progress');
   meter.max = progress.total;
   meter.value = progress.done;
@@ -553,18 +559,20 @@ function subtaskListNode(task, ctx) {
     row.dataset.subtaskId = String(subtask.id);
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    const done = subtask.status === 'done';
+    const pending = Number(ctx.pendingSubtask?.id) === Number(subtask.id) ? ctx.pendingSubtask : null;
+    const done = (pending?.status || subtask.status) === 'done';
     toggle.className = `detail-subtask__toggle${done ? ' detail-subtask__toggle--done' : ''}`;
     toggle.dataset.taskOperation = '';
     toggle.dataset.focusKey = `subtask-${subtask.id}`;
     toggle.setAttribute('aria-pressed', String(done));
+    toggle.setAttribute('aria-busy', String(!!pending));
     toggle.setAttribute('aria-label', `${done ? 'Reopen' : 'Complete'}: ${subtask.title}`);
     const label = document.createElement('span');
     label.className = 'detail-subtask__title';
     label.textContent = subtask.title;
     toggle.append(lucideIcon(done ? 'check-circle-2' : 'circle'), label);
     const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id));
-    toggle.disabled = isArchived(task) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
+    toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
     const meta = document.createElement('div');
     meta.className = 'detail-subtask__meta';
     const skills = taskSkillSummary(subtask, ctx);
@@ -589,9 +597,17 @@ function subtaskListNode(task, ctx) {
     meta.textContent = parts.filter(Boolean).join(' · ');
     meta.hidden = !meta.textContent;
     row.append(toggle, meta);
+    if (pending) {
+      const saving = document.createElement('span');
+      saving.className = 'detail-subtask__pending';
+      saving.setAttribute('role', 'status');
+      saving.textContent = 'Saving…';
+      row.appendChild(saving);
+    }
     toggle.addEventListener('click', async () => {
       if (ctx.busy) return;
-      await ctx.runMutation(toggle, () => changeTaskStatus(subtask, done ? 'in_progress' : 'done'));
+      const status = done ? 'in_progress' : 'done';
+      await ctx.runMutation(toggle, beforeRequest => changeTaskStatus(subtask, status, { beforeRequest }), { subtask, status });
     });
     wrap.appendChild(row);
   }
@@ -1077,7 +1093,7 @@ function statusSummaryNode(task, ctx) {
     select.appendChild(option);
   }
   select.value = task.status;
-  select.disabled = isArchived(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
+  select.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
   select.addEventListener('change', async () => {
     const requested = select.value;
     select.value = task.status;
@@ -1090,6 +1106,13 @@ function statusSummaryNode(task, ctx) {
   if (priority) summary.appendChild(priority);
   const progress = progressNode(task, ctx);
   if (progress) summary.appendChild(progress);
+  if (ctx.refreshRequired) {
+    const saved = document.createElement('span');
+    saved.className = 'task-detail-progress';
+    saved.setAttribute('role', 'status');
+    saved.textContent = 'Step saved · refreshing Task details';
+    summary.appendChild(saved);
+  }
   const waiting = helperWaitingLabel(task, ctx.currentUserId);
   if (waiting) {
     const message = document.createElement('span');
@@ -1356,24 +1379,81 @@ async function toggleDescriptionCheck(task, box, ctx) {
   }
 }
 
-async function runTaskDetailMutation(ctx, button, operation) {
-  if (ctx.busy) return;
+/** The status response already contains its hydrated source parent. */
+function taskStatusResponseSnapshot(task, response) {
+  return [response?.data, response?.data?.parent_task, response?.data?.projection_parent_task]
+    .find(row => Number(row?.id) === Number(task?.id) && Number.isInteger(row?.revision));
+}
+
+function mergeTaskDetailSnapshot(task, fresh, minimumRevision = 0) {
+  if (!fresh || Number(fresh.revision || 0) < Math.max(Number(task.revision || 0), minimumRevision)) return false;
+  Object.assign(task, fresh);
+  return true;
+}
+
+function mergeAcknowledgedSubtask(task, fresh) {
+  const child = task?.subtasks?.find(row => Number(row.id) === Number(fresh?.id));
+  if (!child || !Number.isInteger(fresh?.revision) || fresh.revision < Number(child.revision || 0)) return;
+  const { parent_task, projection_parent_task, ...saved } = fresh;
+  Object.assign(child, saved);
+}
+
+async function runTaskDetailMutation(ctx, button, operation, { subtask, status } = {}) {
+  if (ctx.busy || ctx.refreshRequired) return;
   // Disabling a focused button can move focus to the document before refresh
   // captures it. Keep that key, but never take focus away from a newer action.
   const focusKey = document.activeElement === button ? button.dataset.focusKey : null;
   ctx.busy = true;
   button.disabled = true;
   ctx.loader?.invalidate();
+  const beginPending = subtask ? () => {
+    ctx.pendingSubtask = { id: subtask.id, status };
+    ctx.renderOperationState?.();
+  } : undefined;
   try {
-    const result = await operation();
-    if (result !== null) { await ctx.refresh(); await ctx.onChanged(); }
+    const result = await operation(beginPending);
+    if (result !== null) {
+      if (subtask) {
+        // Ignore any read started before this acknowledgement. A later live
+        // snapshot may already be newer; acceptSnapshot keeps that revision.
+        ctx.loader?.invalidate();
+        const fresh = taskStatusResponseSnapshot(ctx.task, result);
+        if (fresh && ctx.acceptSnapshot) {
+          ctx.pendingSubtask = null;
+          ctx.acceptSnapshot(fresh);
+        } else {
+          // Older compatible responses may omit this projection's parent.
+          // The child write has already committed even if the read now fails.
+          const minimum = Number(result.data?.parent_revision || 0);
+          ctx.minimumTaskRevision = Math.max(ctx.minimumTaskRevision || 0, minimum);
+          let failed = false;
+          try { await ctx.refresh(); } catch { failed = true; }
+          if (Number(ctx.task.revision || 0) < minimum || failed && !minimum) {
+            if (failed) ctx.loader?.invalidate();
+            mergeAcknowledgedSubtask(ctx.task, result.data);
+            ctx.refreshRequired = true;
+            if (failed) window.yuvomi?.showToast('This step was saved, but Task details could not be refreshed. Reopen this Task to continue.', 'warning');
+          }
+        }
+        // Surrounding cards/calendar are secondary to this acknowledged action.
+        // Their reload must neither delay the checkbox nor report a saved
+        // mutation as failed if that independent read fails.
+        void Promise.resolve().then(() => ctx.onChanged()).catch(() => {});
+      } else { await ctx.refresh(); await ctx.onChanged(); }
+    }
   } catch (error) {
-    if (error.status === 409) await ctx.refresh();
+    if (subtask) { ctx.loader?.invalidate(); ctx.pendingSubtask = null; ctx.renderOperationState?.(); }
     window.yuvomi?.showToast(error.status === 409
       ? (error.data?.error || 'This Task changed. Review its current state before trying again.')
-      : error.message, 'danger');
+      : (error.data?.error || error.message), 'danger');
+    if (error.status === 409) {
+      // A failed refresh must not hide the server's actual rejection reason.
+      try { await ctx.refresh(); } catch { /* later live refresh will retry */ }
+    }
   } finally {
+    if (subtask) ctx.pendingSubtask = null;
     ctx.busy = false;
+    if (subtask) ctx.renderOperationState?.();
     if (button.isConnected) button.disabled = false;
     if (!ctx.closed && focusKey && (!document.activeElement || document.activeElement === document.body)) {
       const target = document.querySelector('.detail-view__pane')?.querySelector(`[data-focus-key="${focusKey}"]`);
@@ -1433,7 +1513,7 @@ export function openTaskDetail({
 }) {
   const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged };
   ctx.refresh = async () => { if (!ctx.closed) await ctx.loader?.load(); };
-  ctx.runMutation = (button, operation) => runTaskDetailMutation(ctx, button, operation);
+  ctx.runMutation = (button, operation, options) => runTaskDetailMutation(ctx, button, operation, options);
 
   const archived = isArchived(task);
 
@@ -1491,11 +1571,19 @@ export function openTaskDetail({
       mount: (panel, pane) => edit.mount(panel, pane),
     } : undefined,
   });
-  ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`), (response) => {
+  // Pending feedback replaces only operational regions: no Activity, comments,
+  // recurrence history or full Task-list request is needed to paint a tap.
+  ctx.renderOperationState = () => {
+    if (ctx.closed || !view.isOpen()) return;
+    const pane = document.querySelector('.detail-view__pane');
+    pane?.querySelector('.task-detail-summary')?.replaceWith(statusSummaryNode(task, ctx));
+    const subtasks = pane?.querySelector('.detail-task-subtasks');
+    if (subtasks) subtasks.replaceWith(subtaskListNode(task, ctx) || document.createElement('div'));
+  };
+  ctx.acceptSnapshot = (fresh) => {
     if (!view.isOpen()) return;
-    const fresh = response.data;
-    if (!fresh || Number(fresh.revision || 0) < Number(task.revision || 0)) return;
-    Object.assign(task, fresh);
+    if (!mergeTaskDetailSnapshot(task, fresh, ctx.minimumTaskRevision || 0)) return;
+    ctx.minimumTaskRevision = 0; ctx.refreshRequired = false;
     const pane = document.querySelector('.detail-view__pane');
     const body = pane?.closest('.modal-panel__body');
     const scroll = body?.scrollTop;
@@ -1521,7 +1609,8 @@ export function openTaskDetail({
       if (title) title.textContent = task.title;
     }
     ctx.refreshComments?.();
-  });
+  };
+  ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`), response => ctx.acceptSnapshot(response.data));
   ctx.stopLive = watchTaskChanges(() => { void ctx.refresh().catch((error) => {
     if ([403, 404].includes(error.status) && view.isOpen()) {
       ctx.closed = true; ctx.stopLive?.();

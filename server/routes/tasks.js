@@ -55,7 +55,7 @@ import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
-import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed } from '../services/task-access.js';
+import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, configureTaskRecurrence, recordTaskActivity, taskActivity } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
 import { taskChangesStream } from '../services/task-changes.js';
@@ -1343,7 +1343,7 @@ router.get('/', (req, res) => {
     attachTaskLocations(db.get(), rows);
     attachTaskActionLinks(rows);
     const supervisionViews=new Map(); // One synchronous, read-only response.
-    res.json({ data: attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me) });
+    res.json({ data: withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me)) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET / error:', err);
@@ -1383,7 +1383,7 @@ router.get('/:id', (req, res) => {
     attachTaskLocations(db.get(), [task]);
     attachTaskActionLinks([task]);
     attachTags([task]);
-    res.json({ data: {...task,...hydrateTask(task,me)} });
+    res.json({ data: withTaskReadProjection(db.get(),me,()=>({...task,...hydrateTask(task,me)})) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id error:', err);
@@ -2352,10 +2352,22 @@ router.patch('/:id/status', (req,res) => {
     }
     const result=changeTaskStatus(db.get(),Number(req.params.id),req.body.status,
       {actorId:req.authUserId||req.session.userId,body:req.body});
-    const supervisionViews=new Map();
-    const task=hydrateTask(result.task,req.authUserId||req.session.userId,supervisionViews);
-    if(result.parent_task && mayAccessTask(result.parent_task,req.authUserId||req.session.userId))
-      task.parent_task=hydrateTask(result.parent_task,req.authUserId||req.session.userId,supervisionViews);
+    const task=withTaskReadProjection(db.get(),req.authUserId||req.session.userId,()=>{
+      const supervisionViews=new Map();
+      const task=hydrateTask(result.task,req.authUserId||req.session.userId,supervisionViews);
+      if(result.parent_task && mayAccessTask(result.parent_task,req.authUserId||req.session.userId))
+        task.parent_task=hydrateTask(result.parent_task,req.authUserId||req.session.userId,supervisionViews);
+      // A helper checkbox mutates its linked source action. Return its visible
+      // helper checklist too, so that detail can acknowledge the canonical state
+      // without another read. Keep authorization on each parent independently.
+      if(task.is_supervision_projection && task.supervision_action?.counterpart_task_id===task.id
+        && task.parent_task_id && task.parent_task_id!==result.parent_task?.id) {
+        const projectionParent=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.parent_task_id);
+        if(projectionParent && mayAccessTask(projectionParent,req.authUserId||req.session.userId))
+          task.projection_parent_task=hydrateTask(projectionParent,req.authUserId||req.session.userId,supervisionViews);
+      }
+      return task;
+    });
     res.json({data:task});
     if(result.pending||result.undone)pushToCalDAV('Statuswechsel');
   } catch(err) {

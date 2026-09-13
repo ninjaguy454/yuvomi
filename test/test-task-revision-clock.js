@@ -8,7 +8,7 @@ const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { changeTaskStatus } = await import('../server/services/task-lifecycle.js');
 const d=new Database(':memory:');
 d.pragma('foreign_keys=ON');
-for(const migration of ALL_MIGRATIONS.filter(row=>row.version!==10032)) {
+for(const migration of ALL_MIGRATIONS.filter(row=>row.version<10032)) {
   if(typeof migration.up==='function')migration.up(d);else d.exec(migration.up);
   migration.afterUp?.(d);
 }

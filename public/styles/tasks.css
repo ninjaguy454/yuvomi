@@ -1600,6 +1600,8 @@
 .task-detail-activity p { margin: 0; }
 .detail-view__pane:has(.task-detail-summary) .detail-row__text { align-items: stretch; }
 .detail-view__pane:has(.task-detail-summary) .detail-subtask__toggle { min-height: 44px; }
+.detail-subtask__toggle[aria-busy="true"] { opacity: 1; }
+.detail-subtask__pending { color: var(--color-text-secondary); font-size: var(--text-xs); padding-inline-start: calc(var(--icon-sm) + var(--space-2)); }
 .detail-view__pane:has(.task-detail-summary) .detail-subtask__meta { padding-inline-start: calc(var(--icon-sm) + var(--space-2)); white-space: normal; }
 .detail-view__pane:has(.task-detail-summary) .detail-row--multiline .detail-row__value { white-space: normal; }
 .activity-card__status-label { font-weight: var(--font-weight-semibold); }

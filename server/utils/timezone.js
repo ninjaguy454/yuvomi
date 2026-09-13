@@ -14,6 +14,29 @@
  * `resolveHouseholdLocale(database)` in server/utils/i18n.js.
  */
 
+// Formatter construction is expensive during repeated Availability resolution.
+// Cache only immutable ICU formatters, never a household's current setting or
+// a time-dependent conversion/result. The bound also covers caller-supplied zones.
+const timeZoneFormatters = new Map();
+function timeZoneFormatter(kind, zone) {
+  // An omitted zone means the runtime default, which can change with process.env.TZ.
+  // Do not cache that implicit setting.
+  const key = typeof zone === 'string' ? JSON.stringify([kind, zone]) : null;
+  if (key && timeZoneFormatters.has(key)) return timeZoneFormatters.get(key);
+  const options = kind === 'validate' ? { timeZone: zone } : {
+    timeZone: zone, year: 'numeric',
+    month: kind === 'local' ? 'numeric' : '2-digit', day: kind === 'local' ? 'numeric' : '2-digit',
+    hour: kind === 'local' ? 'numeric' : '2-digit', minute: kind === 'local' ? 'numeric' : '2-digit',
+    second: kind === 'local' ? 'numeric' : '2-digit', hour12: false,
+  };
+  const formatter = new Intl.DateTimeFormat('en-US', options);
+  if (key) {
+    if (timeZoneFormatters.size >= 96) timeZoneFormatters.delete(timeZoneFormatters.keys().next().value);
+    timeZoneFormatters.set(key, formatter);
+  }
+  return formatter;
+}
+
 /**
  * Ist `zone` eine von dieser Node-/ICU-Version gekannte IANA-Zone?
  * @param {unknown} zone
@@ -22,7 +45,7 @@
 export function isValidTimeZone(zone) {
   if (typeof zone !== 'string' || !zone.trim()) return false;
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: zone });
+    timeZoneFormatter('validate', zone);
     return true;
   } catch { return false; }
 }
@@ -191,10 +214,7 @@ export function localToUTC(localStr, tzid) {
   try {
     const fakeUTC = new Date(localStr + 'Z');
     if (isNaN(fakeUTC.getTime())) return localStr;
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tzid, year: 'numeric', month: 'numeric', day: 'numeric',
-      hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false,
-    }).formatToParts(fakeUTC);
+    const parts = timeZoneFormatter('local', tzid).formatToParts(fakeUTC);
     const get = (type) => {
       const part = parts.find((p) => p.type === type);
       const v = part ? part.value : '0';
@@ -222,10 +242,7 @@ export function utcToWall(iso, tzid) {
   try {
     const d = new Date(iso);
     if (isNaN(d.getTime())) return null;
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: tzid, year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    }).formatToParts(d);
+    const parts = timeZoneFormatter('wall', tzid).formatToParts(d);
     const g = (t) => { const p = parts.find((x) => x.type === t); return p ? p.value : '00'; };
     let hh = g('hour'); if (hh === '24') hh = '00'; // Mitternacht '24' → '00'
     return { date: `${g('year')}-${g('month')}-${g('day')}`, time: `${hh}:${g('minute')}:${g('second')}` };

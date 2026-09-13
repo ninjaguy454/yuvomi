@@ -45,6 +45,7 @@ import {
   obligationInbox,
   overrideTaskAssignment,
   respondToTaskObligation,
+  reconcileOverdueTaskObligations,
 } from '../services/assignment-responsibilities.js';
 
 const router = express.Router();
@@ -804,6 +805,35 @@ router.get('/admin/obligations', requireAdmin, (req, res) => {
     res.json({ data: visibleObligations(req, obligationInbox(db.get(), currentUserId(req), { includeAll: true })) });
   } catch (err) {
     res.status(500).json({ error: 'Could not load household assignment requests.', code: 500 });
+  }
+});
+
+// Explicit, bounded maintenance command. Reads and live refreshes never call
+// this route. Require current Task snapshots before processing any request.
+router.post('/admin/obligations/reconcile', requireAdmin, (req, res) => {
+  try {
+    const ids = req.body.task_ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 100
+      || ids.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(ids).size !== ids.length) {
+      return res.status(400).json({ error: 'Choose between 1 and 100 distinct Tasks to reconcile.', code: 400 });
+    }
+    const d = db.get();
+    const result = d.transaction(() => {
+      for (const id of ids) {
+        const task = d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+        if (!task) throw Object.assign(new Error('Task not found.'), { status: 404 });
+        assertTaskMutation(d, req, task, {}, { operation: 'assignment' });
+        const revisions = req.body.expected_revisions;
+        const revision = revisions && Object.hasOwn(revisions, id) ? revisions[id] : undefined;
+        const parents = req.body.expected_parent_revisions;
+        const parentRevision = parents && Object.hasOwn(parents, id) ? parents[id] : undefined;
+        assertTaskRevision(d, task, { expected_revision: revision, expected_parent_revision: parentRevision }, { required: true, requireParent: true });
+      }
+      return reconcileOverdueTaskObligations(d, { taskIds: ids, actorUserId: currentUserId(req) });
+    })();
+    res.json({ data: result });
+  } catch (err) {
+    res.status(err.status || 409).json({ error: err.message, code: err.status || 409, ...err.details });
   }
 });
 

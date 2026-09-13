@@ -9,7 +9,7 @@ const { inspectTaskSupervision, reconcileTaskSupervision, taskSupervisionTransit
   attachTaskSupervision, assertTaskSupervisionAssignee } = await import('../server/services/task-supervision.js');
 const { applyTaskActivityBinding, copyTaskActivityBinding } = await import('../server/services/task-activity-bindings.js');
 const { setTaskSkills, copyTaskSkills, attachTaskSkills } = await import('../server/services/task-skills.js');
-const { respondToTaskObligation, obligationInbox } = await import('../server/services/assignment-responsibilities.js');
+const { respondToTaskObligation, obligationInbox, reconcileOverdueTaskObligations } = await import('../server/services/assignment-responsibilities.js');
 const { resolveActivityAssignment } = await import('../server/services/activity-eligibility.js');
 const { isNotificationDeliveryCurrent, notifyTaskObligations } = await import('../server/services/notification-events.js');
 const { changeTaskStatus } = await import('../server/services/task-lifecycle.js');
@@ -659,9 +659,11 @@ test('household evening remains assigned after UTC midnight and explicit local r
   d.prepare("UPDATE planning_obligations SET response_deadline='2026-09-12T23:30:00' WHERE id=?").run(obligation.id);
   reconcileTaskSupervision(d,x.root);
   assert.equal(d.prepare('SELECT response_deadline FROM planning_obligations WHERE id=?').get(obligation.id).response_deadline,'2026-09-12T23:30:00','a separately configured response deadline survives reconciliation');
-  obligationInbox(d,helper,{nowAt:'2026-09-13T03:29:59Z'});
+  reconcileOverdueTaskObligations(d,{nowAt:'2026-09-13T03:29:59Z'});
   assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(obligation.id).status,'pending');
   obligationInbox(d,helper,{nowAt:'2026-09-13T03:30:00Z'});
+  assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(obligation.id).status,'pending','reading an expired request cannot process it');
+  reconcileOverdueTaskObligations(d,{nowAt:'2026-09-13T03:30:00Z'});
   assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(obligation.id).status,'timed_out');
   assert.equal(inspectTaskSupervision(d,x.root).state,'needed');
 });
@@ -699,9 +701,9 @@ test('separate supervisor response deadlines retain household DST and explicit-o
     const x=laundry(); reconcileTaskSupervision(d,x.root);
     const row=d.prepare("SELECT * FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status='pending'").get(x.root);
     d.prepare('UPDATE planning_obligations SET response_deadline=? WHERE id=?').run(deadline,row.id);
-    obligationInbox(d,helper,{nowAt:before});
+    reconcileOverdueTaskObligations(d,{nowAt:before});
     assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(row.id).status,'pending');
-    obligationInbox(d,helper,{nowAt:at});
+    reconcileOverdueTaskObligations(d,{nowAt:at});
     assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(row.id).status,'timed_out');
   }
 });

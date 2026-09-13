@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
@@ -122,8 +123,8 @@ test('manual override and claim cannot bypass adult-only safety', () => {
   const activity = addActivity('open_claimable');
   const taskId = addTask('Adult only');
   applyTaskActivityBinding(database, taskId, { activityTemplateId: activity.id });
-  assert.throws(() => claimTask(database, taskId, child), /not independently qualified/i);
-  assert.throws(() => overrideTaskAssignment(database, taskId, child, admin), /not independently qualified/i);
+  assert.throws(() => claimTask(database, taskId, child), /cannot perform.*even with supervision/i);
+  assert.throws(() => overrideTaskAssignment(database, taskId, child, admin), /cannot perform.*even with supervision/i);
 });
 
 test('decline creates an occurrence-local fallback without moving the base rotation cursor', () => {
@@ -154,7 +155,7 @@ const base = `http://127.0.0.1:${server.address().port}/api/v1`;
 test.after(() => { server.close(); database.close(); });
 
 async function call(method, path, body) {
-  const response = await fetch(`${base}${path}`, {
+  const response = await modernTaskFetch(database,`${base}${path}`, {
     method, headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   });

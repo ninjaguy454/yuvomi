@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
@@ -57,7 +58,7 @@ const base = `http://127.0.0.1:${server.address().port}/api/v1/tasks`;
 test.after(() => server.close());
 
 async function call(method, path, body) {
-  const response = await fetch(`${base}${path}`, {
+  const response = await modernTaskFetch(db,`${base}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -199,7 +200,7 @@ test('rotation group advances the whole cohort atomically and preserves slot off
   assert.equal(nextThird.assigned_to, grace);
 
   // Reopening any source member removes the whole untouched generated cohort.
-  const reopened = await call('PATCH', `/${second.body.data.id}/status`, { status: 'open' });
+  const reopened = await call('PATCH', `/${second.body.data.id}/status`, { status: 'open', reset_progress:true });
   assert.equal(reopened.status, 200);
   assert.equal(followupOf(first.body.data.id), undefined);
   assert.equal(followupOf(second.body.data.id), undefined);

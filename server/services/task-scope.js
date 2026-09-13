@@ -52,12 +52,14 @@
  *                                         '?' (positional) oder benannt wie '@today'
  * @returns {string} SQL-Fragment (ohne führendes AND), nie leer
  */
-export function taskScopeWhere(alias, { includeFuture = false, includeSubtasks = false, bind = '?' } = {}) {
+export function taskScopeWhere(alias, { includeFuture = false, includeSubtasks = false, includeSupervision = false, bind = '?' } = {}) {
   const parts = [];
 
   // Eine Unteraufgabe ist ein Punkt ihrer Elternaufgabe, kein eigener
   // Listeneintrag: allein gezeigt fehlt ihr der Satz, zu dem sie gehört.
-  if (!includeSubtasks) parts.push(`${alias}.parent_task_id IS NULL`);
+  if (!includeSubtasks) parts.push(includeSupervision
+    ? `(${alias}.parent_task_id IS NULL OR EXISTS (SELECT 1 FROM task_activity_support_tasks tsupport WHERE tsupport.task_id=${alias}.id))`
+    : `${alias}.parent_task_id IS NULL`);
 
   // `start_date` ist Yuvomis „ab wann taucht das auf" - eine Aufgabe ohne
   // Startdatum gilt als sofort begonnen.

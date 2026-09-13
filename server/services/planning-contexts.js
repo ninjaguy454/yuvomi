@@ -1,5 +1,7 @@
 import { reconcilePlanningContextMealOccurrences } from './meal-plans.js';
 import { notifyPlanningContext, notifyPlanningConflict, notifyTaskObligations } from './notification-events.js';
+import { availabilityInstantMs } from './presence.js';
+import { householdTimeZone, hasExplicitZone } from '../utils/timezone.js';
 
 const CONTEXT_TYPES = new Set(['home', 'travel', 'custom']);
 const CONTEXT_STATUSES = new Set(['active', 'conflict', 'resolved', 'completed', 'cancelled']);
@@ -43,12 +45,25 @@ function timestamp(value, field) {
   return result;
 }
 
-function timeValue(value) {
-  return Date.parse(value.length === 10 ? `${value}T00:00:00Z` : value);
+function timeValue(value, database) {
+  return availabilityInstantMs(value, householdTimeZone(database));
 }
 
-function validateWindow(startsAt, endsAt) {
-  if (timeValue(endsAt) <= timeValue(startsAt)) throw new Error('Planning context end must be after its start.');
+function storageWindow(startsAt, endsAt, database) {
+  // These retained tables compare endpoint strings in CHECK constraints. A
+  // window assembled from distinct sources can mix UTC/offset and household
+  // wall times even when each source was valid on its own. Preserve floating
+  // pairs; put both endpoints on the same instant scale when either is zoned.
+  return hasExplicitZone(startsAt) || hasExplicitZone(endsAt)
+    ? [new Date(timeValue(startsAt, database)).toISOString(), new Date(timeValue(endsAt, database)).toISOString()]
+    : [startsAt, endsAt];
+}
+
+function validateWindow(startsAt, endsAt, database) {
+  const start = timeValue(startsAt, database);
+  const end = timeValue(endsAt, database);
+  if (start == null || end == null) throw new Error('A valid planning context window is required.');
+  if (end <= start) throw new Error('Planning context end must be after its start.');
 }
 
 function validPlace(database, value) {
@@ -288,13 +303,16 @@ function conflictCandidates(database) {
       for (let secondIndex = firstIndex + 1; secondIndex < contexts.length; secondIndex += 1) {
         const left = contexts[firstIndex];
         const right = contexts[secondIndex];
-        const leftStart = timeValue(left.starts_at);
-        const rightStart = timeValue(right.starts_at);
-        const leftEnd = timeValue(left.ends_at);
-        const rightEnd = timeValue(right.ends_at);
-        const overlapStart = leftStart >= rightStart ? left.starts_at : right.starts_at;
-        const overlapEnd = leftEnd <= rightEnd ? left.ends_at : right.ends_at;
-        if (timeValue(overlapEnd) <= timeValue(overlapStart)) continue;
+        const leftStart = timeValue(left.starts_at, database);
+        const rightStart = timeValue(right.starts_at, database);
+        const leftEnd = timeValue(left.ends_at, database);
+        const rightEnd = timeValue(right.ends_at, database);
+        const [overlapStart, overlapEnd] = storageWindow(
+          leftStart >= rightStart ? left.starts_at : right.starts_at,
+          leftEnd <= rightEnd ? left.ends_at : right.ends_at,
+          database,
+        );
+        if (timeValue(overlapEnd, database) <= timeValue(overlapStart, database)) continue;
         pairs.push({
           userId,
           firstContextId: Math.min(Number(left.planning_context_id), Number(right.planning_context_id)),
@@ -502,9 +520,10 @@ export function savePlanningContext(database, body, actorId, id = null) {
   const status = body.status ?? existing?.status ?? 'active';
   if (!CONTEXT_TYPES.has(contextType)) throw new Error('Planning context type is invalid.');
   if (!CONTEXT_STATUSES.has(status)) throw new Error('Planning context status is invalid.');
-  const startsAt = timestamp(body.starts_at ?? body.startsAt ?? existing?.starts_at, 'Planning context start');
-  const endsAt = timestamp(body.ends_at ?? body.endsAt ?? existing?.ends_at, 'Planning context end');
-  validateWindow(startsAt, endsAt);
+  let startsAt = timestamp(body.starts_at ?? body.startsAt ?? existing?.starts_at, 'Planning context start');
+  let endsAt = timestamp(body.ends_at ?? body.endsAt ?? existing?.ends_at, 'Planning context end');
+  validateWindow(startsAt, endsAt, database);
+  [startsAt, endsAt] = storageWindow(startsAt, endsAt, database);
   const placeId = validPlace(database, body.place_id ?? body.placeId ?? existing?.place_id);
   const members = validatedMemberIds(database, body.member_ids ?? body.memberIds, { required: false });
   let savedId = contextId;
@@ -866,12 +885,13 @@ export function reconcileTravelPlanningContext(database, contextId, actorId = nu
     if (projection.placeIds.size > 1) {
       throw new Error('Travel sources in one planning context must share the same destination Place.');
     }
-    const startsAt = projection.windows.reduce((value, window) => (
-      timeValue(window.startsAt) < timeValue(value) ? window.startsAt : value
+    const earliestStart = projection.windows.reduce((value, window) => (
+      timeValue(window.startsAt, database) < timeValue(value, database) ? window.startsAt : value
     ), projection.windows[0].startsAt);
-    const endsAt = projection.windows.reduce((value, window) => (
-      timeValue(window.endsAt) > timeValue(value) ? window.endsAt : value
+    const latestEnd = projection.windows.reduce((value, window) => (
+      timeValue(window.endsAt, database) > timeValue(value, database) ? window.endsAt : value
     ), projection.windows[0].endsAt);
+    const [startsAt, endsAt] = storageWindow(earliestStart, latestEnd, database);
     const allTripsComplete = projection.calendarRows.length === 0
       && projection.tripRows.length > 0
       && projection.tripRows.every((trip) => trip.status === 'completed');

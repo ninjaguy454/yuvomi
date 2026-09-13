@@ -1,3 +1,4 @@
+import { taskVisibilityWhere } from '../services/task-access.js';
 /**
  * Modul: VTODO-Tags (Aufgaben und Einkaufsposten)
  * Zweck: Lesen, Schreiben und Normalisieren der freien Tags einer Aufgabe (#586).
@@ -213,7 +214,7 @@ export function allTags(database, me = null) {
     SELECT MIN(tt.tag) AS tag, COUNT(*) AS count
     FROM task_tags tt
     JOIN tasks t ON t.id = tt.task_id
-    WHERE ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}
+    WHERE ${taskVisibilityWhere(database, me, 't', '@me')}
     GROUP BY tt.tag_key
     ORDER BY count DESC, tag COLLATE NOCASE ASC
   `).all({ me });
@@ -241,7 +242,7 @@ export function taskIdsWithTag(database, tag, me = null) {
     FROM task_tags tt
     JOIN tasks t ON t.id = tt.task_id
     WHERE tt.tag_key = ?
-      AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}
+      AND ${taskVisibilityWhere(database, me, 't', '@me')}
     ORDER BY t.id
   `).all(tagKey(tag), { me }).map((r) => r.id);
 }

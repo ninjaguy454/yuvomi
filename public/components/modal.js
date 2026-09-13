@@ -303,7 +303,8 @@ export function focusFirstField(panel) {
 
 function serializeForm(container) {
   const inputs = container.querySelectorAll('input:not([type="file"]), select, textarea');
-  return JSON.stringify(Array.from(inputs, (el) => {
+  // Saved operational selectors are not unsaved form data. Edit/comment fields remain tracked.
+  return JSON.stringify(Array.from(inputs).filter((el) => !el.hasAttribute?.('data-immediate-action')).map((el) => {
     const value = el.type === 'checkbox' || el.type === 'radio'
       ? [el.value, el.checked]
       : el.multiple && el.tagName === 'SELECT'

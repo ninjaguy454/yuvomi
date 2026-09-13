@@ -1,3 +1,4 @@
+import { taskVisibilityWhere } from './task-access.js';
 /**
  * Modul: Aufgaben-Erledigungen (Verlauf)
  * Zweck: Den Übergang einer Aufgabe nach 'done' als Ereignis festhalten und
@@ -173,7 +174,7 @@ const SELECT_SQL = `
  */
 export function completionFeed(d, { me, limit = 50, userId = null, beforeAt = null, beforeId = null }) {
   const size = Math.min(Math.max(Number(limit) || 50, 1), 200);
-  const where = [VISIBLE_SQL];
+  const where = [taskVisibilityWhere(d, me, 't', '@me')];
   const params = { me, size };
 
   if (userId != null) { where.push('c.user_id = @user_id'); params.user_id = userId; }
@@ -225,7 +226,7 @@ export function seriesHistory(d, { me, taskId, limit = 20 }) {
       c.task_id   IN (SELECT id FROM chain)
       OR c.series_id IN (SELECT id FROM chain)
       OR c.series_id IN (SELECT series_id FROM task_completions WHERE task_id IN (SELECT id FROM chain))
-    ) AND ${VISIBLE_SQL}
+    ) AND ${taskVisibilityWhere(d, me, 't', '@me')}
     ORDER BY c.completed_at DESC, c.id DESC
     LIMIT @size
   `).all({ me, task: taskId, size });

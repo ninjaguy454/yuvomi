@@ -170,6 +170,9 @@ router.patch('/caldav/accounts/:id/reminder-lists', requireAdmin, (req, res) => 
 router.post('/caldav/reminders/sync', requireAdmin, async (req, res) => {
   try {
     const result = await caldavReminders.sync();
+    if (result.conflicts?.length) {
+      return res.status(409).json({ error: result.error, code: 409, data: result });
+    }
     res.json({ data: result });
   } catch (err) {
     log.error('CalDAV reminders sync failed:', err);

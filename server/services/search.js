@@ -1,3 +1,4 @@
+import { taskVisibilityWhere } from './task-access.js';
 /**
  * Modul: Such-Service (FTS5)
  * Zweck: Reine Suchlogik gegen den FTS5-Index `search_index` (Migration 44).
@@ -114,6 +115,7 @@ export function runSearch(database, q, userId, { hiddenModules = null } = {}) {
     WHERE s.entity = 'task' AND s.search_index MATCH @match
       AND t.parent_task_id IS NULL
       AND (t.created_by = @userId OR t.assigned_to = @userId)
+      AND ${taskVisibilityWhere(database, userId, 't', '@userId')}
     ORDER BY CASE t.status WHEN 'done' THEN 1 ELSE 0 END,
              t.due_date ASC NULLS LAST
     LIMIT @limit

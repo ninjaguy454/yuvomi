@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 /**
  * Modul: Aufgaben-Verlauf-Test (#791)
  * Zweck: Das Erledigen einer Aufgabe wird als Ereignis festgehalten, das
@@ -391,7 +392,7 @@ test.after(() => { server.close(); db.close(); });
 
 async function call(path, as = mom) {
   actor = as;
-  const res = await fetch(`${base}${path}`);
+  const res = await modernTaskFetch(db,`${base}${path}`);
   const text = await res.text();
   return { status: res.status, body: text ? JSON.parse(text) : null };
 }
@@ -475,10 +476,10 @@ test('Das Abhaken über PATCH /:id/status schreibt den Verlauf, das Zurücknehme
   const id = makeTask({ title: 'Ueber PATCH' });
   const patch = async (status, as) => {
     actor = as;
-    const res = await fetch(`${base}/${id}/status`, {
+    const res = await modernTaskFetch(db,`${base}/${id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
+      body: JSON.stringify({ status, reset_progress:true }),
     });
     return res.status;
   };
@@ -502,10 +503,10 @@ test('Auch das Status-Feld im Bearbeiten-Formular schreibt den Verlauf', async (
   const id = makeTask({ title: 'Ueber PUT' });
   actor = kid;
   const put = async (status) => {
-    const res = await fetch(`${base}/${id}`, {
+    const res = await modernTaskFetch(db,`${base}/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title: 'Ueber PUT', status }),
+      body: JSON.stringify({ title: 'Ueber PUT', status, reset_progress:true }),
     });
     return res.status;
   };
@@ -526,7 +527,7 @@ test('Ablegen ist kein Abhaken und schreibt nichts', async () => {
   db.prepare('DELETE FROM task_completions').run();
   const id = makeTask({ title: 'Wird abgelegt' });
   actor = mom;
-  const res = await fetch(`${base}/${id}/status`, {
+  const res = await modernTaskFetch(db,`${base}/${id}/status`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status: 'archived' }),

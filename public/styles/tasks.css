@@ -1566,6 +1566,51 @@
   text-transform: capitalize;
 }
 
+.task-detail-summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  width: 100%;
+}
+.task-detail-status { display: flex; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.task-detail-status select { width: auto; min-height: 44px; }
+.task-detail-summary .task-detail-progress { flex: 1 0 min(100%, 15rem); }
+.task-detail-metadata {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3) var(--space-5);
+  width: 100%;
+  margin: 0;
+  padding-block: var(--space-2);
+}
+.task-detail-metadata > div { min-width: 0; }
+.task-detail-metadata dt { color: var(--color-text-tertiary); font-size: var(--text-xs); }
+.task-detail-metadata dd { margin: 0; font-size: var(--text-sm); overflow-wrap: anywhere; }
+.task-detail-metadata .task-detail-participants { gap: var(--space-2); }
+.task-detail-metadata .task-detail-participant { padding: var(--space-1) 0; }
+.task-detail-supervision { width: 100%; display: grid; gap: var(--space-2); padding: var(--space-3); border-radius: var(--radius-md); background: var(--color-surface-2); border: 1px solid var(--color-border); }
+.task-detail-supervision p { margin: 0; }
+.task-detail-supervision__action { display: grid; gap: var(--space-1); font-size: var(--text-sm); }
+.task-detail-supervision__controls { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+.task-detail-supervision__controls select { flex: 1 1 10rem; width: auto; }
+.task-detail-secondary { width: 100%; font-size: var(--text-sm); }
+.task-detail-secondary summary { cursor: pointer; padding-block: var(--space-2); }
+.task-detail-activity { display: grid; gap: var(--space-2); font-size: var(--text-sm); }
+.task-detail-activity p { margin: 0; }
+.detail-view__pane:has(.task-detail-summary) .detail-row__text { align-items: stretch; }
+.detail-view__pane:has(.task-detail-summary) .detail-subtask__toggle { min-height: 44px; }
+.detail-view__pane:has(.task-detail-summary) .detail-subtask__meta { padding-inline-start: calc(var(--icon-sm) + var(--space-2)); white-space: normal; }
+.detail-view__pane:has(.task-detail-summary) .detail-row--multiline .detail-row__value { white-space: normal; }
+.activity-card__status-label { font-weight: var(--font-weight-semibold); }
+.activity-card__assignee { max-width: 18rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-card__blocker { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: var(--font-weight-semibold); }
+@media (max-width: 639px) {
+  .task-detail-metadata { gap: var(--space-3); }
+  .task-detail-metadata .task-detail-participant__avatar { display: none; }
+  .task-detail-supervision__controls > * { width: 100%; }
+}
+
 .task-detail-progress,
 .task-detail-location {
   display: flex;

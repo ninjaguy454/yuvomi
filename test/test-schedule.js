@@ -230,13 +230,19 @@ test('overlapping patterns return a warning and the newer valid_from pattern win
   assert.deepEqual(response.body.data.warnings, [{ user_id: Number(carol), date_key: '2027-01-20', pattern_ids: [Number(newPattern), Number(oldPattern)] }]);
 });
 
-test('calendar defaults to compact Schedule strips, includes their start time, and keeps 24-hour shifts in their start-day strip', () => {
+test('calendar retains compact strips and projects 24-hour routines across their actual two dates', async () => {
   const calendarPage = readFileSync(new URL('../public/pages/calendar.js', import.meta.url), 'utf8');
   assert.match(calendarPage, /scheduleDisplay: 'compact'/);
   assert.match(calendarPage, /schedule-entry__start/);
-  assert.match(calendarPage, /function scheduleIsFullDayShift\(entry\)/);
-  assert.match(calendarPage, /scheduleHasTimes\(entry\) && !scheduleIsFullDayShift\(entry\)/);
-  assert.match(calendarPage, /!scheduleHasTimes\(entry\) \|\| scheduleIsFullDayShift\(entry\)/);
+  const { routineEntriesOnDay, routineSegmentTimeLabel } = await import('../public/utils/availability-calendar.js');
+  const occurrence = { date_key: '2026-09-11', user_id: 1, shift_type: { name: '24-hour duty', start_time: '08:00', end_time: '08:00' } };
+  const [first] = routineEntriesOnDay([occurrence], '2026-09-11');
+  const [second] = routineEntriesOnDay([occurrence], '2026-09-12');
+  assert.equal(routineSegmentTimeLabel(first), '08:00–24:00');
+  assert.equal(routineSegmentTimeLabel(second), '00:00–08:00');
+  assert.equal(second.continues_from_previous, true);
+  assert.equal(first.segment_end_minutes - first.segment_start_minutes + second.segment_end_minutes, 1440);
+  assert.deepEqual(routineEntriesOnDay([occurrence], '2026-09-13'), []);
 });
 
 

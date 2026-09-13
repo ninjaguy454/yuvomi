@@ -6,6 +6,7 @@ import { clearLeafEdits, confirmLeafExit, watchLeafForms } from './dirty-guard.j
 import { resetPreferencesCache } from './preferences-cache.js';
 import {
   SETTINGS_LEAVES,
+  settingsLeafAllowed,
   filterSettingsDomains,
   findSettingsLeaf,
   settingsOverviewUrl,
@@ -86,7 +87,7 @@ function createLink(href, className) {
 function allowedLeavesForDomain(domainId, user) {
   return SETTINGS_LEAVES.filter((entry) => (
     entry.domainId === domainId
-    && (!entry.adminOnly || user?.role === 'admin')
+    && settingsLeafAllowed(entry, user)
   ));
 }
 

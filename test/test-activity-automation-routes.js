@@ -3,6 +3,7 @@ import http from 'node:http';
 import test from 'node:test';
 import express from 'express';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { modernTaskMutationBody } from './helpers/task-client-revision-fixture.js';
 
 process.env.DB_PATH = ':memory:';
 process.env.TZ = 'UTC';
@@ -50,9 +51,9 @@ const frank = addUser('frank', 'Frank', 'member', 'child', '2020-08-25');
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.authUserId = admin;
-  req.authRole = 'admin';
-  req.session = { userId: admin, role: 'admin' };
+  req.authUserId = Number(req.headers['x-test-user']) || admin;
+  req.authRole = db.prepare('SELECT role FROM users WHERE id=?').get(req.authUserId).role;
+  req.session = { userId: req.authUserId, role: req.authRole };
   next();
 });
 app.use('/api/v1/automation', automationRouter);
@@ -63,10 +64,11 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}/api/v1`;
 test.after(() => server.close());
 
-async function call(method, path, body) {
+async function call(method, path, body, actorId = admin) {
+  body=modernTaskMutationBody(db,method,path,body);
   const response = await fetch(`${base}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-test-user': String(actorId) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const raw = await response.text();
@@ -226,7 +228,9 @@ test('admins can build skills, activities and a Quick Add workflow from the API'
   assert.deepEqual(blocked.body.dependencies.map((row) => row.id), [washTask.task_id]);
 
   assert.equal((await call('PATCH', `/tasks/${washTask.task_id}/status`, { status: 'done' })).status, 200);
-  assert.equal((await call('PATCH', `/tasks/${bedTask.task_id}/status`, { status: 'done' })).status, 200);
+  const supervisedCompletion=await call('PATCH', `/tasks/${bedTask.task_id}/status`, { status: 'done' },supervisorTask.assigned_to.id);
+  assert.equal(supervisedCompletion.status,200,JSON.stringify(supervisedCompletion.body));
+  assert.equal(db.prepare('SELECT status FROM tasks WHERE id=?').get(supervisorTask.task_id).status,'done','supervisor view synchronizes without a redundant completion');
   assert.equal((await call('PATCH', `/tasks/${supervisorTask.task_id}/status`, { status: 'done' })).status, 200);
 
   const parent = db.prepare('SELECT status FROM tasks WHERE id = ?').get(created.body.data.parent_task_id);

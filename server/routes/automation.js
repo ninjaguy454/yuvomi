@@ -1,3 +1,4 @@
+import { assertTaskRevision } from '../services/task-lifecycle.js';
 /**
  * Household automation API.
  *
@@ -9,6 +10,9 @@
 import express from 'express';
 import * as db from '../db.js';
 import { requireAdmin } from '../auth.js';
+import { requireCapability } from '../middleware/require-capability.js';
+import { assertCapability, hasCapability } from '../permissions.js';
+import { assertTaskMutation, taskCapabilities } from '../services/task-access.js';
 import {
   PROFICIENCY,
   ASSIGNMENT_STRATEGIES,
@@ -746,9 +750,49 @@ function replaceWorkflowSteps(d, workflowId, steps) {
 // Runtime endpoints
 // ---------------------------------------------------------------------------
 
+// Compatibility runtime paths share the Task module and capability boundary.
+router.use((req, res, next) => {
+  try {
+    const path=req.path.toLowerCase().replace(/\/+$/, '')||'/';
+    if (/^\/obligations(?:\/|$)/.test(path)) {
+      assertCapability(db.get(), req, req.method === 'GET' ? 'tasks.view_own' : 'tasks.complete_own');
+    } else if (/^\/(activity-options|activity-templates)(?:\/|$)/.test(path)) {
+      assertCapability(db.get(), req, 'activities.view');
+    } else if (/^\/quick-add(?:\/|$)/.test(path)) {
+      assertCapability(db.get(), req, 'workflows.view');
+      if (path.endsWith('/create')) { assertCapability(db.get(), req, 'workflows.run'); assertCapability(db.get(), req, 'tasks.create'); }
+    }
+    return next();
+  } catch (error) { return res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not check household permissions.', code: error.status || 500 }); }
+});
+router.param('id',(req,res,next,value)=>{
+  const route=req.route.path;
+  if (!['/tasks/:id/claim','/tasks/:id/assignment','/obligations/:id/respond'].includes(route)) return next();
+  if (!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)<1)
+    return res.status(404).json({error:'Task not found.',code:404});
+  try {
+    let task;
+    if (route==='/obligations/:id/respond') {
+      const obligation=db.get().prepare('SELECT task_id FROM planning_obligations WHERE id=? AND responsible_user_id=?').get(Number(value),currentUserId(req));
+      task=obligation?.task_id&&db.get().prepare('SELECT * FROM tasks WHERE id=?').get(obligation.task_id);
+      if(task&&!taskCapabilities(db.get(),req,task).view) return res.status(404).json({error:'Task not found.',code:404});
+    } else {
+      task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
+      if(!task)return res.status(404).json({error:'Task not found.',code:404});
+      assertTaskMutation(db.get(),req,task,req.body,{operation:route.endsWith('/claim')?'claim':'assignment'});
+    }
+    if(task)assertTaskRevision(db.get(),task,req.body||{},{required:true,requireParent:true});
+    return next();
+  }catch(error){return res.status(error.status||500).json({error:error.message,code:error.status||500,...error.details});}
+});
+
+function visibleObligations(req, rows) {
+  return rows.filter(row => !row.task_id || taskCapabilities(db.get(), req, { id: row.task_id }).view);
+}
+
 router.get('/obligations', (req, res) => {
   try {
-    res.json({ data: obligationInbox(db.get(), currentUserId(req)) });
+    res.json({ data: visibleObligations(req, obligationInbox(db.get(), currentUserId(req))) });
   } catch (err) {
     log.error('GET /obligations:', err);
     res.status(500).json({ error: 'Could not load assignment requests.', code: 500 });
@@ -757,7 +801,7 @@ router.get('/obligations', (req, res) => {
 
 router.get('/admin/obligations', requireAdmin, (req, res) => {
   try {
-    res.json({ data: obligationInbox(db.get(), currentUserId(req), { includeAll: true }) });
+    res.json({ data: visibleObligations(req, obligationInbox(db.get(), currentUserId(req), { includeAll: true })) });
   } catch (err) {
     res.status(500).json({ error: 'Could not load household assignment requests.', code: 500 });
   }
@@ -771,7 +815,7 @@ router.post('/tasks/:id/claim', (req, res) => {
   }
 });
 
-router.put('/tasks/:id/assignment', requireAdmin, (req, res) => {
+router.put('/tasks/:id/assignment', (req, res) => {
   try {
     const userId = intOrNull(req.body.user_id, { min: 1 });
     if (!userId) throw new Error('Choose a household member.');
@@ -861,7 +905,7 @@ router.get('/quick-add', (req, res) => {
     }));
     res.json({
       data: templates,
-      activities,
+      activities: hasCapability(d, req, 'activities.view') ? activities : [],
       members: householdMembers(d),
       places: d.prepare('SELECT * FROM places WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all(),
     });
@@ -914,12 +958,12 @@ router.get('/member-skills/:userId', (req, res) => {
 // Admin definition endpoints
 // ---------------------------------------------------------------------------
 
-router.get('/admin/skills', requireAdmin, (req, res) => {
+router.get('/admin/skills', requireCapability('skills.manage'), (req, res) => {
   try { res.json({ data: skillRowsWithMembers(db.get()) }); }
   catch (err) { res.status(500).json({ error: 'Could not load skills.', code: 500 }); }
 });
 
-router.post('/admin/skills', requireAdmin, (req, res) => {
+router.post('/admin/skills', requireCapability('skills.manage'), (req, res) => {
   try {
     const d = db.get();
     const input = normalizeSkillInput(req.body);
@@ -936,7 +980,7 @@ router.post('/admin/skills', requireAdmin, (req, res) => {
   }
 });
 
-router.put('/admin/skills/:id', requireAdmin, (req, res) => {
+router.put('/admin/skills/:id', requireCapability('skills.manage'), (req, res) => {
   try {
     const d = db.get();
     const existing = d.prepare('SELECT * FROM skills WHERE id = ?').get(req.params.id);
@@ -954,7 +998,7 @@ router.put('/admin/skills/:id', requireAdmin, (req, res) => {
   }
 });
 
-router.delete('/admin/skills/:id', requireAdmin, (req, res) => {
+router.delete('/admin/skills/:id', requireCapability('skills.manage'), (req, res) => {
   try {
     const d = db.get();
     const skill = d.prepare('SELECT * FROM skills WHERE id = ?').get(req.params.id);
@@ -974,7 +1018,7 @@ router.delete('/admin/skills/:id', requireAdmin, (req, res) => {
   }
 });
 
-router.put('/admin/skills/:skillId/members/:userId', requireAdmin, (req, res) => {
+router.put('/admin/skills/:skillId/members/:userId', requireCapability('skills.manage'), (req, res) => {
   try {
     const d = db.get();
     const skill = d.prepare('SELECT * FROM skills WHERE id = ?').get(req.params.skillId);
@@ -1220,7 +1264,7 @@ router.post('/admin/workflow-templates/:workflowId/variables/:definitionId/promo
   }
 });
 
-router.get('/admin/activity-templates', requireAdmin, (req, res) => {
+router.get('/admin/activity-templates', requireCapability('activities.view'), (req, res) => {
   try {
     const d = db.get();
     res.json({
@@ -1237,7 +1281,7 @@ router.get('/admin/activity-templates', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/admin/activity-templates', requireAdmin, (req, res) => {
+router.post('/admin/activity-templates', requireCapability('activities.create'), (req, res) => {
   try {
     const d = db.get();
     const input = normalizeActivityInput(d, req.body);
@@ -1269,7 +1313,7 @@ router.post('/admin/activity-templates', requireAdmin, (req, res) => {
   }
 });
 
-router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
+router.put('/admin/activity-templates/:id', requireCapability('activities.edit'), (req, res) => {
   try {
     const d = db.get();
     const existing = getActivityTemplate(d, Number(req.params.id));
@@ -1303,7 +1347,7 @@ router.put('/admin/activity-templates/:id', requireAdmin, (req, res) => {
   }
 });
 
-router.delete('/admin/activity-templates/:id', requireAdmin, (req, res) => {
+router.delete('/admin/activity-templates/:id', requireCapability('activities.edit'), (req, res) => {
   try {
     const d = db.get();
     const workflowUse = d.prepare('SELECT COUNT(*) AS n FROM workflow_template_steps WHERE activity_template_id = ?').get(req.params.id)?.n ?? 0;
@@ -1318,7 +1362,7 @@ router.delete('/admin/activity-templates/:id', requireAdmin, (req, res) => {
   }
 });
 
-router.get('/admin/workflow-templates', requireAdmin, (req, res) => {
+router.get('/admin/workflow-templates', requireCapability('workflows.view'), (req, res) => {
   try {
     const d = db.get();
     const workflows = listWorkflowTemplates(d).map((row) => getWorkflowTemplate(d, row.id));
@@ -1336,7 +1380,7 @@ router.get('/admin/workflow-templates', requireAdmin, (req, res) => {
   }
 });
 
-router.post('/admin/workflow-templates', requireAdmin, (req, res) => {
+router.post('/admin/workflow-templates', requireCapability('workflows.create'), (req, res) => {
   try {
     const d = db.get();
     const input = normalizeWorkflowInput(d, req.body);
@@ -1369,7 +1413,7 @@ router.post('/admin/workflow-templates', requireAdmin, (req, res) => {
   }
 });
 
-router.put('/admin/workflow-templates/:id', requireAdmin, (req, res) => {
+router.put('/admin/workflow-templates/:id', requireCapability('workflows.edit'), (req, res) => {
   try {
     const d = db.get();
     const existing = getWorkflowTemplate(d, Number(req.params.id));
@@ -1397,7 +1441,7 @@ router.put('/admin/workflow-templates/:id', requireAdmin, (req, res) => {
   }
 });
 
-router.delete('/admin/workflow-templates/:id', requireAdmin, (req, res) => {
+router.delete('/admin/workflow-templates/:id', requireCapability('workflows.edit'), (req, res) => {
   try {
     const result = db.get().prepare('DELETE FROM workflow_templates WHERE id = ?').run(req.params.id);
     if (!result.changes) return res.status(404).json({ error: 'Workflow template not found.', code: 404 });

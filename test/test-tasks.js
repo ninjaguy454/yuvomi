@@ -232,15 +232,15 @@ test('Teilaufgaben der Detailansicht sind abhakbar, nicht nur lesbar', () => {
     'die Zeile muss ein <button> sein, damit Tastatur und Screenreader denselben Weg haben');
   assert(/addEventListener\('click'/.test(body),
     'ohne eigenen Listener bleibt die Zeile tot: der Container-Handler erreicht den Top-Layer nicht');
-  assert(/toggleSubtaskStatus\(/.test(body),
-    'der Klick muss denselben Statuswechsel auslösen wie in der Listenkarte');
+  assert(/changeTaskStatus\(subtask,/.test(body),
+    'der Klick nutzt denselben bestaetigten Statuswechsel mit gespeicherter Revision wie die Listenkarte');
 });
 
 // #671: Jede Filterachse nimmt mehrere Werte. Ein einzelner String im State
 // liefe beim ersten .includes/.forEach in einen TypeError.
 test('Filter-Achsen halten Listen, nicht einzelne Werte', () => {
   const source = readFileSync(new URL('../public/pages/tasks.js', import.meta.url), 'utf8');
-  assert(/filters:\s*\{ status: \['open'\], priority: \[\], assigned_to: \[\], tags: \[\] \}/.test(source),
+  assert(/filters:\s*\{ status: \['open', 'in_progress'\], priority: \[\], assigned_to: \[\], tags: \[\] \}/.test(source),
     'der Anfangszustand muss je Achse eine Liste sein');
   for (const axis of ['status', 'priority', 'assigned_to']) {
     assert(new RegExp(`state\\.filters\\.${axis}\\.forEach\\(\\(v\\) => params\\.append\\('${axis}', v\\)\\)`).test(source),

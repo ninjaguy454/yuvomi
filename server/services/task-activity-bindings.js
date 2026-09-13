@@ -9,6 +9,8 @@
  */
 
 import { resolveActivityAssignment } from './activity-eligibility.js';
+import { reconcileTaskSupervision } from './task-supervision.js';
+import { activityPresenceWindow } from './presence.js';
 import { listTaskResponsibilities, recordTaskAssignment } from './assignment-responsibilities.js';
 import { todayKey } from '../utils/timezone.js';
 import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
@@ -85,6 +87,13 @@ export function matchesGeneratedActivitySupportTask(d, parentTaskId, support, re
   const parent = taskRow(d, parentTaskId);
   const binding = getTaskActivityBinding(d, parentTaskId);
   if (!parent || !binding || !support) return false;
+  if (d.prepare('SELECT 1 FROM task_supervision_actions WHERE source_task_id=? AND counterpart_task_id IS NOT NULL').get(parentTaskId)) {
+    return support.title === `Supervise ${parent.title}` && support.description == null
+      && support.category === parent.category && support.status === 'open' && support.priority === 'none'
+      && support.start_date === parent.start_date && support.due_date === parent.due_date && support.due_time === parent.due_time
+      && support.parent_task_id === parent.id && !support.points && !support.is_recurring
+      && Number(support.recurrence_origin_id) === Number(recurrenceOriginTaskId);
+  }
   const activity = activityTemplate(d, binding.activity_template_id);
   if (!activity) return false;
   const subject = binding.subject_user_id
@@ -212,11 +221,15 @@ export function ordinaryActivitySubtasks(d, sourceTaskId) {
        AND NOT EXISTS (
          SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id = t.id
        )
-     ORDER BY t.id ASC
+       AND NOT EXISTS (SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id = t.id)
+     ORDER BY t.sort_order ASC, t.id ASC
   `).all(sourceTaskId);
 }
 
 function deleteSupportTasks(d, sourceTaskId) {
+  // Linked action history survives unbinding. Reconciliation can retire a
+  // requirement without deleting its completed source/counterpart evidence.
+  if (d.prepare('SELECT 1 FROM task_supervision_actions WHERE source_task_id=?').get(sourceTaskId)) return;
   const rows = activitySupportTasks(d, sourceTaskId);
   if (!rows.length) return;
   const placeholders = rows.map(() => '?').join(',');
@@ -230,6 +243,7 @@ export function previewTaskActivityBinding(d, {
   activityTemplateId,
   subjectUserId = null,
   dateKey = todayKey(d),
+  task = null,
   allowInactive = false,
 } = {}) {
   const id = asPositiveInt(activityTemplateId);
@@ -251,8 +265,7 @@ export function previewTaskActivityBinding(d, {
       presence: {
         policy: activity.presence_policy || 'ignore',
         targetPlaceId: activity.location_mode === 'fixed' ? activity.place_id : null,
-        startAt: `${dateKey}T00:00:00`,
-        endAt: `${dateKey}T23:59:00`,
+        ...activityPresenceWindow(d, { task, dateKey, windowMode: activity.presence_window || 'due' }),
       },
     });
     return { activity, subjectUserId: subjectId, resolution };
@@ -288,6 +301,7 @@ export function applyTaskActivityBinding(d, taskId, {
     activityTemplateId,
     subjectUserId,
     dateKey: dateKey || task.due_date || todayKey(d),
+    task,
     allowInactive,
   });
 
@@ -300,8 +314,8 @@ export function applyTaskActivityBinding(d, taskId, {
       presence: {
         policy: preview.activity.presence_policy || 'ignore',
         targetPlaceId: preview.activity.location_mode === 'fixed' ? preview.activity.place_id : null,
-        startAt: `${dateKey || task.start_date || task.due_date || todayKey(d)}T00:00:00`,
-        endAt: `${dateKey || task.due_date || todayKey(d)}T${task.due_time || '23:59'}:00`,
+        ...activityPresenceWindow(d, { task, dateKey: dateKey || task.due_date || todayKey(d),
+          windowMode: preview.activity.presence_window || 'due' }),
       },
     });
   } catch (err) {
@@ -349,44 +363,6 @@ export function applyTaskActivityBinding(d, taskId, {
   } else {
     d.prepare('DELETE FROM task_planning_context WHERE task_id = ?').run(task.id);
   }
-  deleteSupportTasks(d, task.id);
-  let supportTaskId = null;
-  if (resolution.supervisor) {
-    const supportDefinition = supportTaskDefinition(
-      preview.activity,
-      resolution.subject,
-      resolution.supervisor.id,
-      task,
-      supportOriginTaskId,
-      variableLabels,
-    );
-    const support = d.prepare(`
-      INSERT INTO tasks (
-        title, description, category, priority, status,
-        start_date, due_date, due_time, assigned_to, created_by, parent_task_id,
-        is_recurring, recurrence_rule, assignment_mode, rotation_index,
-        points, visibility, countdown, recurrence_origin_id
-      ) VALUES (?, ?, ?, 'none', 'open', ?, ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, ?)
-    `).run(
-      supportDefinition.title,
-      supportDefinition.description,
-      supportDefinition.category,
-      supportDefinition.start_date,
-      supportDefinition.due_date,
-      supportDefinition.due_time,
-      supportDefinition.assigned_to,
-      supportDefinition.created_by,
-      supportDefinition.parent_task_id,
-      supportDefinition.visibility,
-      supportDefinition.recurrence_origin_id,
-    );
-    supportTaskId = Number(support.lastInsertRowid);
-    setAssignments(d, supportTaskId, [resolution.supervisor.id]);
-    d.prepare(`
-      INSERT INTO task_activity_support_tasks (source_task_id, task_id, role)
-      VALUES (?, ?, 'supervisor')
-    `).run(task.id, supportTaskId);
-  }
 
   recordTaskAssignment(d, task.id, preview.activity, resolution);
 
@@ -402,10 +378,21 @@ export function applyTaskActivityBinding(d, taskId, {
     });
   }
 
+  const supervision = reconcileTaskSupervision(d, task.id, { actorId: task.created_by });
+  // The authoring preview can only propose a parent-skill helper. Return the
+  // concrete Task's whole-scope choice after its explicit checklist is known.
+  resolution.supervisor = supervision.supervisor_user_id ? d.prepare(`SELECT id,display_name,avatar_color,avatar_data,role,family_role
+    FROM users WHERE id=?`).get(supervision.supervisor_user_id) : null;
+  if (supervision.support_task_id && supportOriginTaskId) {
+    d.prepare('UPDATE tasks SET recurrence_origin_id=? WHERE id=? AND recurrence_origin_id IS NULL')
+      .run(supportOriginTaskId, supervision.support_task_id);
+  }
+
   return {
     binding: getTaskActivityBinding(d, task.id),
     resolution,
-    support_task_id: supportTaskId,
+    support_task_id: supervision.support_task_id,
+    supervision,
   };
 }
 

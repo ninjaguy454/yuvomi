@@ -186,7 +186,7 @@ test('fixed assignment cannot bypass skill or adult-only eligibility', () => {
       commitRotation: false,
       dateKey: '2026-08-25',
     }),
-    /not independently qualified/i,
+    /cannot perform.*even with supervision/i,
   );
 });
 

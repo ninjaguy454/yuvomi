@@ -17,9 +17,7 @@ const userIdParam = {
   description: 'Member the overrides belong to.',
 };
 
-const BODY = 'Body: { modules, widgets } - `modules` maps a module key to `none`, `read` or `write`, '
-  + '`widgets` maps a widget id to `none` or `allow`. The set is replaced as a whole; entries that '
-  + 'match the default are not stored, so a profile only ever holds what actually deviates.';
+const BODY = 'Body: { modules, widgets, capabilities? }. modules map keys to none/read/write; widgets and capabilities map keys to none/allow. Role profiles apply before member overrides. Explicit member allows may override role denials; missing keys inherit. Capabilities omitted by a legacy client stay unchanged; capabilities:{} clears their overrides. Administrative security controls cannot be delegated.';
 
 export function permissionsPaths() {
   return {

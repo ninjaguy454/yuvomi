@@ -1,9 +1,12 @@
-import { todayKey } from '../utils/timezone.js';
+import { todayKey, householdTimeZone } from '../utils/timezone.js';
+import { activityPresenceWindow, evaluateAvailability, availabilityInstantMs } from './presence.js';
 import { assertTaskMemberSkills } from './task-skills.js';
 import { notifyTaskObligations, notifyTaskClaim } from './notification-events.js';
+import { inspectTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, TaskSupervisionError } from './task-supervision.js';
 import {
   assertEligibleActivityMember,
   eligibleMembersForActivity,
+  sharedEligibleInterval,
 } from './activity-eligibility.js';
 
 function nowSql() {
@@ -19,14 +22,15 @@ function activityForTask(d, taskId) {
   `).get(taskId) ?? null;
 }
 
-function taskWindow(d, taskId) {
-  const task = d.prepare(`
-    SELECT t.*, pc.place_id, pc.presence_policy
+function taskWindow(d, taskId, taskOverride = null) {
+  const stored = d.prepare(`
+    SELECT t.*, pc.place_id, pc.presence_policy, pc.presence_window
       FROM tasks t
       LEFT JOIN task_planning_context pc ON pc.task_id = t.id
      WHERE t.id = ?
   `).get(taskId);
-  if (!task) throw new Error('Task not found.');
+  if (!stored) throw new Error('Task not found.');
+  const task = { ...stored, ...(taskOverride || {}) };
   const dateKey = task.due_date || task.start_date || todayKey(d);
   return {
     task,
@@ -34,10 +38,46 @@ function taskWindow(d, taskId) {
     presence: {
       policy: task.presence_policy || 'ignore',
       targetPlaceId: task.place_id || null,
-      startAt: `${task.start_date || dateKey}T00:00:00`,
-      endAt: `${dateKey}T${task.due_time || '23:59'}:00`,
+      ...activityPresenceWindow(d, { task, dateKey, windowMode: task.presence_window || 'due' }),
     },
   };
+}
+
+export class TaskAssignmentAvailabilityError extends Error {}
+
+/** Revalidate existing people without consuming a rotation or rewriting work.
+ * Task planning context is the occurrence's policy, including Workflow overrides.
+ * Beneficiaries and people visible only through their own subtasks are not
+ * performers of this Task and must not block editing its time window.
+ */
+export function assertTaskAssignmentAvailability(d, taskId, userIds = null, { task = null } = {}) {
+  const window = taskWindow(d, taskId, task);
+  if (window.presence.policy === 'ignore') return;
+  const performers = d.prepare(`SELECT user_id, role FROM task_responsibilities WHERE task_id = ?
+    AND status = 'active' AND role IN ('primary', 'participant', 'supervisor')
+    AND source != 'subtasks'`).all(taskId);
+  const linkedSupervision = inspectTaskSupervision(d, taskId).actions.length > 0;
+  const operationalPerformers = linkedSupervision ? performers.filter(row => row.role !== 'supervisor') : performers;
+  const supervised = operationalPerformers.some((row) => row.role === 'supervisor');
+  const selected = [...(userIds ?? [
+    window.task.assigned_to,
+    ...operationalPerformers.map((row) => row.user_id),
+  ])];
+  if (supervised) selected.push(...operationalPerformers.map((row) => row.user_id));
+  const results = [];
+  for (const userId of new Set(selected.filter(Boolean).map(Number))) {
+    let result = null;
+    try { result = evaluateAvailability(d, { ...window.presence, userId }); }
+    catch { /* Invalid windows fail closed, using the same public requirement error. */ }
+    if (!result?.eligible) {
+      const requirement = window.presence.policy === 'available_before_due' ? 'availability' : 'location';
+      throw new TaskAssignmentAvailabilityError(`The assignee does not meet this Task's ${requirement} requirement for its scheduled time.`);
+    }
+    results.push(result);
+  }
+  if (supervised && !sharedEligibleInterval(results, window.presence.requiredDurationMinutes)) {
+    throw new TaskAssignmentAvailabilityError('The learner and supervisor do not share an available window for this Task.');
+  }
 }
 
 function eligibleStandaloneClaimMember(d, taskId, userId) {
@@ -185,7 +225,8 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
   if (resolution.primary) addResponsibility(d, taskId, resolution.primary.id, 'primary', source);
   for (const participant of participants) addResponsibility(d, taskId, participant.id, 'participant', source);
   if (resolution.subject) addResponsibility(d, taskId, resolution.subject.id, 'beneficiary', source);
-  if (resolution.supervisor) addResponsibility(d, taskId, resolution.supervisor.id, 'supervisor', source);
+  // Template previews only know the parent requirements. The concrete Task's
+  // linked resolver selects one helper after its entire checklist exists.
   replaceLegacyAssignments(d, taskId, [
     ...participants.map((row) => row.id),
     ...subtaskParticipantIds,
@@ -205,11 +246,6 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
     for (const participant of participants.filter((row) => Number(row.id) !== Number(resolution.primary?.id))) {
       createTaskObligation(d, taskId, participant.id, {
         role: 'participant', dueAt, metadata: { strategy: policy, activity_template_id: activity.id },
-      });
-    }
-    if (resolution.supervisor) {
-      createTaskObligation(d, taskId, resolution.supervisor.id, {
-        role: 'supervisor', dueAt, metadata: { strategy: policy, activity_template_id: activity.id },
       });
     }
     notifyTaskObligations(d, taskId, { eligibleIds: (resolution.eligible || []).map((member) => member.id) });
@@ -237,7 +273,7 @@ export function claimTask(d, taskId, userId) {
   return d.transaction(() => {
     const context = d.prepare("SELECT * FROM task_assignment_context WHERE task_id = ? AND strategy = 'open_claimable'").get(taskId);
     if (!context) throw new Error('This task is not claimable.');
-    if (context.state !== 'open') throw new Error('This task has already been claimed.');
+    if (!['open', 'unavailable'].includes(context.state)) throw new Error('This task has already been claimed.');
     const activity = activityForTask(d, taskId);
     let member;
     if (activity) {
@@ -255,14 +291,22 @@ export function claimTask(d, taskId, userId) {
       // occurrence-local pool; absence from that pool is a hard denial.
       member = eligibleStandaloneClaimMember(d, taskId, userId);
       assertTaskMemberSkills(d, taskId, userId);
+      assertTaskAssignmentAvailability(d, taskId, [userId]);
     }
+    assertTaskSupervisionAssignee(d, taskId, member.id);
     const changed = d.prepare(`
       UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()}
-       WHERE task_id = ? AND state = 'open'
+       WHERE task_id = ? AND state IN ('open', 'unavailable')
     `).run(taskId);
     if (changed.changes !== 1) throw new Error('This task was claimed by someone else.');
     d.prepare('UPDATE tasks SET assigned_to = ? WHERE id = ?').run(member.id, taskId);
-    replaceLegacyAssignments(d, taskId, [member.id]);
+    const subtaskParticipants = d.prepare(`SELECT user_id FROM task_responsibilities
+      WHERE task_id = ? AND role = 'participant' AND source = 'subtasks' AND status = 'active'`)
+      .all(taskId).map((row) => row.user_id);
+    replaceLegacyAssignments(d, taskId, [member.id, ...subtaskParticipants]);
+    d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()}
+      WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'
+      AND source != 'subtasks'`).run(taskId);
     addResponsibility(d, taskId, member.id, 'primary', 'claim');
     addResponsibility(d, taskId, member.id, 'participant', 'claim');
     const open = d.prepare("SELECT * FROM planning_obligations WHERE task_id = ? AND role = 'primary' AND status = 'pending' ORDER BY attempt DESC LIMIT 1").get(taskId);
@@ -274,6 +318,7 @@ export function claimTask(d, taskId, userId) {
     } else {
       notifyTaskClaim(d, taskId, null, userId);
     }
+    reconcileTaskSupervision(d, taskId, { actorId: userId });
     return { task_id: Number(taskId), assigned_to: member, state: 'assigned' };
   })();
 }
@@ -293,7 +338,11 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
     const member = activity
       ? assertEligibleActivityMember(d, activity, targetUserId, taskWindow(d, taskId))
       : eligibleStandaloneClaimMember(d, taskId, targetUserId);
-    if (!activity) assertTaskMemberSkills(d, taskId, targetUserId);
+    if (!activity) {
+      assertTaskMemberSkills(d, taskId, targetUserId);
+      assertTaskAssignmentAvailability(d, taskId, [targetUserId]);
+    }
+    assertTaskSupervisionAssignee(d, taskId, member.id);
     supersedeActiveTaskObligations(d, taskId);
     d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`).run(taskId);
     d.prepare(`UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()} WHERE task_id = ?`).run(taskId);
@@ -306,6 +355,7 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
       fallbackSource: 'manual_override', metadata: { actor_user_id: actorUserId },
     });
     event(d, id, 'override_assigned', actorUserId, { target_user_id: member.id });
+    reconcileTaskSupervision(d, taskId, { actorId: actorUserId });
     notifyTaskObligations(d, taskId);
     return { task_id: Number(taskId), assigned_to: member, state: 'assigned' };
   })();
@@ -320,6 +370,15 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       throw new Error('This assignment request belongs to another household member.');
     }
     if (action === 'accept') {
+      const supervision = inspectTaskSupervision(d, obligation.task_id);
+      if (obligation.role === 'supervisor') {
+        const pending = supervision.actions.filter(row => !row.completed && row.state !== 'not_required');
+        if (Number(supervision.supervisor_user_id) !== Number(actorUserId) || !pending.length
+          || pending.some(row => row.state !== 'assigned' || Number(row.supervisor_user_id) !== Number(actorUserId))) {
+          throw new TaskSupervisionError('This supervision assignment is no longer current. Open the Task to review its supervision requirements.');
+        }
+      } else assertTaskSupervisionAssignee(d, obligation.task_id, obligation.responsible_user_id || actorUserId);
+      if (obligation.role !== 'supervisor') assertTaskAssignmentAvailability(d, obligation.task_id, [obligation.responsible_user_id || actorUserId]);
       d.prepare(`UPDATE planning_obligations SET status = 'accepted', responded_at = ${nowSql()}, response_note = ?, updated_at = ${nowSql()} WHERE id = ?`)
         .run(note, obligation.id);
       event(d, obligation.id, 'accepted', actorUserId);
@@ -331,6 +390,24 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       .run(closedStatus, note, obligation.id);
     event(d, obligation.id, closedStatus, actorUserId);
 
+    if (obligation.role === 'supervisor' && inspectTaskSupervision(d, obligation.task_id).actions.length) {
+      // One refusal applies to the entire remaining supervised scope. Never
+      // select independent fallbacks that split a Task across several helpers.
+      const supervision = inspectTaskSupervision(d, obligation.task_id);
+      if (supervision.supervisor_user_id && Number(supervision.supervisor_user_id) !== Number(obligation.responsible_user_id)) {
+        // A delayed response to an older request cannot replace the current
+        // Task supervisor. Reconciliation retires any legacy duplicate role.
+        reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId });
+        return { ...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id), fallback: null };
+      }
+      const attempted = new Set(d.prepare("SELECT responsible_user_id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('declined','timed_out')")
+        .all(obligation.task_id).map(row => Number(row.responsible_user_id)));
+      const replacement = supervision.eligible_supervisors.find(member => !attempted.has(Number(member.id))) || null;
+      reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId,
+        supervisorUserId: replacement?.id || null });
+      return { ...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id), fallback: replacement };
+    }
+
     const activity = activityForTask(d, obligation.task_id);
     if (obligation.role !== 'primary') {
       const window = taskWindow(d, obligation.task_id);
@@ -339,7 +416,9 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       const attempted = new Set(d.prepare('SELECT responsible_user_id FROM planning_obligations WHERE task_id = ? AND role = ? AND responsible_user_id IS NOT NULL')
         .all(obligation.task_id, obligation.role).map((row) => Number(row.responsible_user_id)));
       const replacement = activity
-        ? eligibleMembersForActivity(d, activity, window).find((member) => !used.has(Number(member.id)) && !attempted.has(Number(member.id)))
+        ? eligibleMembersForActivity(d, activity, { ...window,
+          simultaneousUserIds: obligation.role === 'supervisor' ? [window.task.assigned_to] : [],
+        }).find((member) => !used.has(Number(member.id)) && !attempted.has(Number(member.id)))
         : null;
       d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND user_id = ? AND role = ? AND status = 'active'`)
         .run(obligation.task_id, obligation.responsible_user_id, obligation.role);
@@ -362,12 +441,24 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       .all(obligation.task_id).map((row) => Number(row.responsible_user_id));
     const window = taskWindow(d, obligation.task_id);
     const fallback = activity
-      ? eligibleMembersForActivity(d, activity, window).find((member) => !previous.includes(Number(member.id)))
+      ? eligibleMembersForActivity(d, activity, window).find((member) => {
+        if (previous.includes(Number(member.id))) return false;
+        try { assertTaskSupervisionAssignee(d, obligation.task_id, member.id); return true; } catch { return false; }
+      })
       : null;
     if (!fallback) {
       d.prepare(`UPDATE task_assignment_context SET state = 'unavailable', updated_at = ${nowSql()} WHERE task_id = ?`).run(obligation.task_id);
       d.prepare('UPDATE tasks SET assigned_to = NULL WHERE id = ?').run(obligation.task_id);
-      replaceLegacyAssignments(d, obligation.task_id, []);
+      // The declined person no longer performs the parent Task. Keep any
+      // separately authored subtask visibility and other participants intact.
+      d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()}
+        WHERE task_id = ? AND user_id = ? AND role IN ('primary', 'participant')
+          AND status = 'active' AND source != 'subtasks'`).run(obligation.task_id, obligation.responsible_user_id);
+      const remainingParticipants = d.prepare(`SELECT DISTINCT user_id FROM task_responsibilities
+        WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`)
+        .all(obligation.task_id).map((row) => row.user_id);
+      replaceLegacyAssignments(d, obligation.task_id, remainingParticipants);
+      reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId });
       return { ...d.prepare('SELECT * FROM planning_obligations WHERE id = ?').get(obligation.id), fallback: null };
     }
     d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`).run(obligation.task_id);
@@ -381,25 +472,35 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
       metadata: { base_strategy: d.prepare('SELECT strategy FROM task_assignment_context WHERE task_id = ?').get(obligation.task_id)?.strategy },
     });
     event(d, replacementId, 'fallback_assigned', actorUserId, { previous_obligation_id: obligation.id });
+    reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId });
     notifyTaskObligations(d, obligation.task_id);
     return { ...d.prepare('SELECT * FROM planning_obligations WHERE id = ?').get(obligation.id), fallback: fallback, replacement_obligation_id: replacementId };
   })();
 }
 
-export function obligationInbox(d, userId, { includeAll = false } = {}) {
+export function obligationInbox(d, userId, { includeAll = false, nowAt = new Date().toISOString() } = {}) {
+  const timezone = householdTimeZone(d), nowMs = availabilityInstantMs(nowAt, timezone);
   const expired = d.prepare(`
-    SELECT id, responsible_user_id FROM planning_obligations
-     WHERE entity_type = 'task' AND status IN ('pending', 'accepted')
-       AND response_deadline IS NOT NULL
-       AND response_deadline <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-     ORDER BY id
-  `).all();
+    SELECT o.* FROM planning_obligations o
+     WHERE o.entity_type = 'task' AND o.status IN ('pending', 'accepted')
+       AND o.response_deadline IS NOT NULL
+     ORDER BY o.id
+  `).all().filter(row => {
+    // Legacy linked helpers used the Task due time as an implicit response
+    // deadline. Read-time timeout must not strip overdue supervision work.
+    if (row.role === 'supervisor' && row.response_deadline === row.due_at
+      && d.prepare('SELECT 1 FROM task_supervision_actions WHERE source_task_id=? AND supervisor_user_id=?').get(row.task_id,row.responsible_user_id)) return false;
+    const deadlineMs = availabilityInstantMs(row.response_deadline, timezone);
+    return deadlineMs != null && nowMs != null && deadlineMs <= nowMs;
+  });
   for (const row of expired) {
     try { respondToTaskObligation(d, row.id, 'timeout', row.responsible_user_id || null); } catch { /* keep the inbox readable */ }
   }
   const where = includeAll ? '' : 'AND o.responsible_user_id = ?';
   return d.prepare(`
-    SELECT o.*, t.title AS task_title, m.title AS meal_title, m.date AS meal_date,
+    SELECT o.*, t.title AS task_title, t.revision AS task_revision,
+      (SELECT revision FROM tasks WHERE id=t.parent_task_id) AS task_parent_revision,
+      m.title AS meal_title, m.date AS meal_date,
            u.display_name AS responsible_name
       FROM planning_obligations o
       LEFT JOIN tasks t ON t.id = o.task_id

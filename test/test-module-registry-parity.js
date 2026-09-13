@@ -184,7 +184,7 @@ const README_HEADINGS = {
   calendar: 'Calendar',
   notes: 'Notes &amp; Contacts',
   contacts: 'Notes &amp; Contacts',
-  schedule: 'Schedule',
+  schedule: 'Availability',
   budget: 'Budget',
   documents: 'Documents',
   health: 'Health',
@@ -237,11 +237,11 @@ function navModuleKeys(source) {
   return [...source.slice(start, end).matchAll(/module:\s*'([a-z-]+)'/g)].map((m) => m[1]);
 }
 
-test('jedes rechteverwaltete Modul hat einen Eintrag in navItems()', () => {
+test('jedes rechteverwaltete Modul mit Navigation hat einen Eintrag in navItems()', () => {
   const keys = navModuleKeys(read('../public/router.js'));
   assert.ok(keys.length >= 15, `nur ${keys.length} Nav-Eintraege gefunden - der Leser greift nicht mehr`);
 
-  const missing = PERMISSION_MODULES.map((m) => m.key).filter((key) => !keys.includes(key));
+  const missing = PERMISSION_MODULES.filter((m) => m.navIds.length).map((m) => m.key).filter((key) => !keys.includes(key));
   assert.deepEqual(missing, [],
     'Modul ohne Nav-Eintrag: die Route bleibt registriert, aber Seitenleiste, Mobilnavigation und Katalog verlieren es');
 });

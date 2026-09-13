@@ -17,6 +17,7 @@
 import { t, formatDate, formatDayMonth, formatTime } from '/i18n.js';
 import { parseLocalDateKey } from '/utils/date.js';
 import { nowFields } from '/utils/timezone.js';
+import { actionableSubtasks } from '/utils/task-progress.js';
 import { isPreviewable } from '/utils/document-preview.js';
 
 // --------------------------------------------------------
@@ -202,7 +203,7 @@ export function subtaskParticipants(subtask, users = []) {
 
 /** Completion and point totals shared by cards and the canonical detail view. */
 export function completionCounts(task) {
-  const subtasks = task?.subtasks || [];
+  const subtasks = actionableSubtasks(task);
   if (subtasks.length) {
     return {
       done: subtasks.filter((subtask) => subtask.status === 'done').length,

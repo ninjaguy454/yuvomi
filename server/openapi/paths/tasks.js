@@ -32,6 +32,11 @@ export function tasksPaths() {
       post: op({ summary: 'Create task', tag: 'Tasks', stateChanging: true, requestBody: jsonBody(null), description: 'Body accepts `locked: true` to close the task definition to everyone but its creator and administrators (#830). A subtask under a locked parent inherits the lock, and adding one requires the same rights. Top-level Tasks may also use `activity_template_id`/`activity_subject_user_id`, fixed or round-robin assignment fields, and `location` (`saved_place`, one-use `google_place`, or `manual`). Attaching an Activity Template lets its assignment/supervision rules own the occurrence and materializes its first-class Task subtasks once.' }),
     },
     '/api/v1/tasks/meta/options': { get: op({ summary: 'Get task metadata', tag: 'Tasks' }) },
+    '/api/v1/tasks/changes': {
+      get: op({summary:'Stream Task invalidation versions',tag:'Tasks',
+        description:'Long-lived Server-Sent Events stream containing change versions, never Task payloads. Use EventSource or another streaming client and reload authorized Task reads after changes. This stream is not suitable for the bounded JSON/MCP call_api_operation bridge. Authentication and permissions are revalidated while connected.',
+        responses:{200:{description:'Task change version stream',content:{'text/event-stream':{schema:{type:'string'}}}},401:{$ref:'#/components/responses/Unauthorized'},403:{$ref:'#/components/responses/Forbidden'}}}),
+    },
     '/api/v1/tasks/completions': {
       get: op({
         summary: 'List completed tasks, newest first',
@@ -94,6 +99,14 @@ export function tasksPaths() {
         requestBody: jsonBody(null),
         description: 'Creates or reuses a Vidamia Place keyed by Google external_place_id, then changes only the Task location reference to the immutable Vidamia Place ID. The Task itself is not recreated.',
       }),
+    },
+    '/api/v1/tasks/{id}/supervisor': {
+      post: op({summary:'Choose the single supervisor for a Task',tag:'Tasks',params:[idParam()],stateChanging:true,
+        requestBody:jsonBody(null),description:'Body: { supervisor_user_id }. The Task creator or a household administrator with assignment permission may choose one household member who can supervise every remaining required action. The learner, progress and historical supervision remain intact. Partial skill coverage cannot be split across people.'}),
+    },
+    '/api/v1/tasks/{id}/activity': {
+      get: op({summary:'Read Task activity history',tag:'Tasks',params:[idParam(),{name:'limit',in:'query',required:false,schema:{type:'integer',minimum:1,maximum:100,default:60}}],
+        description:'Returns append-only Task activity, including recorded supervision, lifecycle changes and historical actors. Events are filtered by the current caller visibility of the underlying action.'}),
     },
     '/api/v1/tasks/{id}/status': {
       patch: op({ summary: 'Update task status', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: { status }. Sending `archived` files the task away without touching its status - use PATCH /archive instead. Deliberately open on a locked task: ticking one off is the interaction the lock exists to preserve.' }),

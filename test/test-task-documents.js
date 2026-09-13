@@ -74,6 +74,14 @@ function createHarness({ userId = ALICE, role = 'admin' } = {}) {
         await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
       }
       const base = `http://127.0.0.1:${server.address().port}/api/v1/tasks`;
+      // Existing document tests exercise an authorized current client. Capture
+      // its snapshot through the public API; explicit stale revisions stay stale.
+      const id = pathname.match(/^\/(\d+)/)?.[1];
+      if (id && ['PUT', 'DELETE'].includes(method) && body?.expected_revision == null) {
+        const snapshot = await (await fetch(`${base}/${id}`)).json();
+        if (snapshot.data) body = { ...body, expected_revision: snapshot.data.revision,
+          ...(snapshot.data.parent_revision != null ? { expected_parent_revision: snapshot.data.parent_revision } : {}) };
+      }
       const res = await fetch(`${base}${pathname}`, {
         method,
         headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },

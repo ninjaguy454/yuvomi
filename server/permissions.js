@@ -26,6 +26,8 @@
  */
 
 import { MODULE_KEYS } from './scopes.js';
+import { PERMISSION_CAPABILITIES, CAPABILITY_BY_KEY, RESTRICTED_MEMBER_CAPABILITIES, PermissionError } from './task-capabilities.js';
+export { PERMISSION_CAPABILITIES, PermissionError } from './task-capabilities.js';
 
 // Familienrollen (Subjekt-Achse „role"). Spiegelt den CHECK-Constraint der
 // users.family_role-Spalte (Migration, db.js).
@@ -37,6 +39,7 @@ export const FAMILY_ROLES = Object.freeze([
 // `navIds` = zugehörige Navigations-/Kitchen-IDs im Frontend (für die Nav-Filterung;
 // mehrere Nav-Einträge können sich ein Modul teilen, z. B. calendar+birthdays).
 export const PERMISSION_MODULES = Object.freeze([
+  { key: 'dashboard', labelKey: 'nav.dashboard', icon: 'layout-dashboard', navIds: ['dashboard'] },
   { key: 'calendar',     labelKey: 'nav.calendar',     icon: 'calendar',      navIds: ['calendar', 'birthdays'] },
   { key: 'tasks',        labelKey: 'nav.tasks',        icon: 'check-square',  navIds: ['tasks'] },
   { key: 'notes',        labelKey: 'nav.notes',        icon: 'sticky-note',   navIds: ['notes'] },
@@ -50,7 +53,8 @@ export const PERMISSION_MODULES = Object.freeze([
   { key: 'housekeeping', labelKey: 'nav.housekeeping', icon: 'paintbrush',    navIds: ['housekeeping'] },
   { key: 'rewards',      labelKey: 'nav.rewards',      icon: 'award',         navIds: ['rewards'] },
   { key: 'health',       labelKey: 'nav.health',       icon: 'heart-pulse',   navIds: ['health'] },
-  { key: 'schedule',     labelKey: 'nav.schedule',     icon: 'calendar-clock', navIds: ['schedule'] },
+  // Retained permission key for routines inside Availability, with no standalone navigation.
+  { key: 'schedule',     labelKey: 'nav.schedule',     icon: 'calendar-clock', navIds: [] },
 ]);
 
 // Dashboard-Widgets mit ihrem Trägermodul (aus dashboard.js MODULE_FOR_WIDGET).
@@ -130,9 +134,10 @@ export function resolvePermissions(database, user) {
   const isAdmin = user?.role === 'admin';
   const modules = {};
   const widgets = {};
+  const capabilities = Object.fromEntries(PERMISSION_CAPABILITIES.map(c => [c.key, isAdmin ? 'allow' : c.default]));
   for (const m of PERMISSION_MODULES) modules[m.key] = isAdmin ? 'write' : MODULE_DEFAULT;
   for (const w of PERMISSION_WIDGETS) widgets[w.id] = isAdmin ? 'allow' : WIDGET_DEFAULT;
-  if (isAdmin) return { admin: true, modules, widgets };
+  if (isAdmin) return { admin: true, modules, widgets, capabilities };
 
   const apply = (rows) => {
     for (const r of rows) {
@@ -152,11 +157,22 @@ export function resolvePermissions(database, user) {
     apply(loadSubjectRows(database, 'user', user.id));
   }
 
+  const applyCapabilities = (type, id) => {
+    for (const row of loadCapabilityRows(database, type, id)) {
+      const spec = CAPABILITY_BY_KEY.get(row.capability_key);
+      if (spec && !spec.adminOnly) capabilities[spec.key] = row.access;
+    }
+  };
+  if (user?.family_role && FAMILY_ROLE_SET.has(user.family_role)) applyCapabilities('role', user.family_role);
+  if (user?.id != null) applyCapabilities('user', user.id);
+  for (const c of PERMISSION_CAPABILITIES) {
+    if (c.adminOnly || (c.module && (modules[c.module] === 'none' || (modules[c.module] === 'read' && c.access === 'write')))) capabilities[c.key] = 'none';
+  }
   // Widgets erben die Modulsperre.
   for (const w of PERMISSION_WIDGETS) {
     if (w.module && modules[w.module] === 'none') widgets[w.id] = 'none';
   }
-  return { admin: false, modules, widgets };
+  return { admin: false, modules, widgets, capabilities };
 }
 
 /**
@@ -248,8 +264,7 @@ export function moduleAccessVerdict(sessionModuleAccess, moduleKey, access) {
  * Dashboard-Widgets aus — die verbindliche Durchsetzung bleibt serverseitig.
  */
 export function clientPermissions(database, user) {
-  const { admin, modules, widgets } = resolvePermissions(database, user);
-  return { admin, modules, widgets };
+  return resolvePermissions(database, user);
 }
 
 /** Voller Katalog für die Admin-UI (Module, Widgets, Rollen). */
@@ -261,6 +276,8 @@ export function permissionCatalog() {
     moduleAccessLevels: [...MODULE_ACCESS_LEVELS],
     widgetAccessLevels: [...WIDGET_ACCESS_LEVELS],
     defaults: { module: MODULE_DEFAULT, widget: WIDGET_DEFAULT },
+    capabilities: PERMISSION_CAPABILITIES,
+    profiles: [{ key: 'restricted_member', label: 'Own Tasks and personal settings', capabilities: RESTRICTED_MEMBER_CAPABILITIES }],
   };
 }
 
@@ -279,7 +296,7 @@ export function getSubjectPermissions(database, subjectType, subjectId) {
     if (r.resource_type === 'module' && MODULE_KEY_SET.has(r.resource_key)) modules[r.resource_key] = r.access;
     else if (r.resource_type === 'widget' && WIDGET_ID_SET.has(r.resource_key)) widgets[r.resource_key] = r.access;
   }
-  return { modules, widgets };
+  return { modules, widgets, capabilities: Object.fromEntries(loadCapabilityRows(database, subjectType, subjectId).map(row => [row.capability_key, row.access])) };
 }
 
 /**
@@ -289,18 +306,18 @@ export function getSubjectPermissions(database, subjectType, subjectId) {
  * ungültigen Werten.
  * @returns {{ resource_type: string, resource_key: string, access: string }[]}
  */
-export function normalizePermissionInput({ modules = {}, widgets = {} } = {}) {
+export function normalizePermissionInput({ modules = {}, widgets = {} } = {}, { preserveDefaults = false } = {}) {
   const rows = [];
   for (const [key, access] of Object.entries(modules || {})) {
     if (!MODULE_KEY_SET.has(key)) throw new Error(`Unknown module: ${key}`);
     if (!MODULE_ACCESS_SET.has(access)) throw new Error(`Invalid module access: ${access}`);
-    if (access === MODULE_DEFAULT) continue; // Standard nicht speichern
+    if (access === MODULE_DEFAULT && !preserveDefaults) continue; // Standard nicht speichern
     rows.push({ resource_type: 'module', resource_key: key, access });
   }
   for (const [id, access] of Object.entries(widgets || {})) {
     if (!WIDGET_ID_SET.has(id)) throw new Error(`Unknown widget: ${id}`);
     if (!WIDGET_ACCESS_SET.has(access)) throw new Error(`Invalid widget access: ${access}`);
-    if (access === WIDGET_DEFAULT) continue;
+    if (access === WIDGET_DEFAULT && !preserveDefaults) continue;
     rows.push({ resource_type: 'widget', resource_key: id, access });
   }
   return rows;
@@ -313,7 +330,8 @@ export function normalizePermissionInput({ modules = {}, widgets = {} } = {}) {
  * @param {import('better-sqlite3-multiple-ciphers').Database} database
  */
 export function replaceSubjectPermissions(database, subjectType, subjectId, input) {
-  const rows = normalizePermissionInput(input);
+  const rows = normalizePermissionInput(input, { preserveDefaults: subjectType === 'user' });
+  const capabilities = input?.capabilities === undefined ? null : normalizeCapabilityInput(input.capabilities);
   const del = database.prepare('DELETE FROM access_permissions WHERE subject_type = ? AND subject_id = ?');
   const ins = database.prepare(`
     INSERT INTO access_permissions (subject_type, subject_id, resource_type, resource_key, access)
@@ -326,6 +344,11 @@ export function replaceSubjectPermissions(database, subjectType, subjectId, inpu
   try {
     del.run(subjectType, String(subjectId));
     for (const r of rows) ins.run(subjectType, String(subjectId), r.resource_type, r.resource_key, r.access);
+    if (capabilities !== null) {
+      database.prepare('DELETE FROM access_capabilities WHERE subject_type = ? AND subject_id = ?').run(subjectType, String(subjectId));
+      const saveCapability = database.prepare('INSERT INTO access_capabilities (subject_type, subject_id, capability_key, access) VALUES (?, ?, ?, ?)');
+      for (const [key, access] of capabilities) saveCapability.run(subjectType, String(subjectId), key, access);
+    }
     database.exec('COMMIT');
   } catch (err) {
     database.exec('ROLLBACK');
@@ -336,4 +359,30 @@ export function replaceSubjectPermissions(database, subjectType, subjectId, inpu
 
 export function isValidFamilyRole(role) {
   return FAMILY_ROLE_SET.has(role);
+}
+
+/** Legacy schema fixtures may read rights before the additive table exists. */
+function loadCapabilityRows(database, type, id) {
+  try { return database.prepare('SELECT capability_key, access FROM access_capabilities WHERE subject_type = ? AND subject_id = ?').all(type, String(id)); }
+  catch (error) { if (/no such table: access_capabilities/.test(error.message)) return []; throw error; }
+}
+function normalizeCapabilityInput(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid capabilities.');
+  return Object.entries(input).map(([key, value]) => {
+    const item = CAPABILITY_BY_KEY.get(key);
+    if (!item) throw new Error(`Unknown capability: ${key}`);
+    if (!['allow', 'none'].includes(value)) throw new Error(`Invalid capability access: ${value}`);
+    if (item.adminOnly && value === 'allow') throw new Error(`Invalid capability: ${item.label} is administrator-only.`);
+    return [key, value];
+  });
+}
+export function actorId(actor) { return Number(actor && typeof actor === 'object' ? actor.authUserId || actor.id || actor.session?.userId : actor); }
+export function actorPermissions(database, actor) {
+  const user = database.prepare('SELECT id, role, family_role FROM users WHERE id = ?').get(actorId(actor));
+  if (!user) throw new PermissionError('This household account is no longer available.');
+  return resolvePermissions(database, user);
+}
+export function hasCapability(database, actor, key) { return actorPermissions(database, actor).capabilities[key] === 'allow'; }
+export function assertCapability(database, actor, key) {
+  if (!hasCapability(database, actor, key)) throw new PermissionError(`Your household permissions do not allow: ${CAPABILITY_BY_KEY.get(key)?.label || 'this action'}.`);
 }

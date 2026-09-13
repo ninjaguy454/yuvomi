@@ -205,6 +205,7 @@ test('the reused Activity editor saves reusable fields and per-subtask skills th
   } };
   let mounted, renderedSubtasks, renderedSkills;
   const open = load('openActivityForm', {
+    canCapability: () => true,
     singlePendingAction: load('singlePendingAction', {}),
     h: esc, t: (key) => key, inputRow: (_label, html) => html, footer: () => '',
     categoryOptions: () => '', memberOptions: () => '', placeOptions: () => '',

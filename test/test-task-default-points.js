@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 /**
  * Test: Konfigurierbare Standard-Punkte für Aufgaben (#578)
  * Zweck: Deckt die Invarianten des Features ab —
@@ -82,7 +83,7 @@ test.after(() => { server.close(); db.close(); });
 
 async function call(method, path, { as, body } = {}) {
   if (as) actor = as;
-  const res = await fetch(`${origin}${path}`, {
+  const res = await modernTaskFetch(db,`${origin}${path}`, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

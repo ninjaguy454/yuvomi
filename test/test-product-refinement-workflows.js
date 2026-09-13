@@ -5,6 +5,7 @@ import { esc } from '../public/utils/html.js';
 
 const taskSource = readFileSync(new URL('../public/pages/tasks.js', import.meta.url), 'utf8').replace(/\r/g, '');
 const automationSource = readFileSync(new URL('../public/components/activity-automation.js', import.meta.url), 'utf8').replace(/\r/g, '');
+const stateSource = readFileSync(new URL('../public/utils/task-state.js', import.meta.url), 'utf8').replace(/\r/g, '');
 
 // Run the production functions with controlled browser boundaries. No live
 // account, server, or database is involved in failure/retry tests.
@@ -13,6 +14,7 @@ function loadFunction(source, name, bindings, prefix = '') {
   assert.ok(declaration, `Missing production function ${name}`);
   return new Function(...Object.keys(bindings), `${prefix}\nreturn (${declaration.replace(/^export /, '')});`)(...Object.values(bindings));
 }
+const taskRevision = loadFunction(stateSource, 'taskRevision', {});
 
 test('automation fields associate labels and hints without replacing existing field IDs', () => {
   const inputRow = loadFunction(automationSource, 'inputRow', { h: esc }, 'let inputRowSequence = 0;');
@@ -146,10 +148,12 @@ function taskSaveFixture(failurePath, { initialError = new Error('Ancillary save
   };
   const taskFormControls = new WeakMap();
   const taskCreateAttempts = new WeakMap();
-  const saveTaskRecord = loadFunction(taskSource, 'saveTaskRecord', { api, t: (key) => key, taskFormControls, taskCreateAttempts });
+  const saveTaskRecord = loadFunction(taskSource, 'saveTaskRecord', { api, t: (key) => key, taskFormControls, taskCreateAttempts, taskRevision });
+  const permittedTaskBody = loadFunction(taskSource, 'permittedTaskBody', { canTask: () => true });
+  const applyTaskFormPermissions = loadFunction(taskSource, 'applyTaskFormPermissions', { canTask: () => true, canCapability: () => true });
   const save = loadFunction(taskSource, 'handleFormSubmit', {
     document: { getElementById: (id) => fields[`#${id}`] },
-    api, saveTaskRecord, taskFormControls, taskCreateAttempts,
+    api, saveTaskRecord, taskFormControls, taskCreateAttempts, permittedTaskBody, applyTaskFormPermissions, taskRevision,
     validateAll: () => true, t: (key) => key,
     parseDateInput: (value) => value, isDateInputValid: () => true,
     getRRuleValues: () => ({ valid_until: true }), normalizeTagList: () => [], modalTags: [],
@@ -258,11 +262,12 @@ test('activity reassignment closes and refreshes after success, and recovers aft
     const panel = { querySelector: (selector) => selector === '[data-activity-reassign-submit]' ? button : { value: '3' } };
     const event = { currentTarget: button };
     const actions = [];
-    new Function('panel', 'api', 'window', 'closeModal', 'onChanged', listener)(
+    new Function('panel', 'api', 'window', 'closeModal', 'onChanged', 'taskRevision', 'task', listener)(
       panel,
-      { put: async () => { event.currentTarget = null; if (fail) throw new Error('Cannot reassign'); } },
+      { put: async (path, body) => { assert.equal(path, '/automation/tasks/42/assignment'); assert.deepEqual(body, {user_id:3, expected_revision:7}); event.currentTarget = null; if (fail) throw new Error('Cannot reassign'); } },
       { yuvomi: { showToast: (message) => actions.push(message) } },
       async () => actions.push('closed'), async () => actions.push('refreshed'),
+      taskRevision, {id:42, revision:7},
     );
     await button.listeners.click(event);
     if (fail) {
@@ -278,15 +283,18 @@ test('assignment request responses use the shared close action and refresh Tasks
     button.closest = () => ({ dataset: { assignmentRequest: '9' } });
     const trigger = fakeNode();
     const actions = [];
+    let reads = 0;
     const wire = loadFunction(taskSource, 'wireAssignmentRequestsBtn', {
+      taskRevision,
       state: { assignmentRequests: [{ id: 9, task_title: 'Laundry', status: 'pending' }] }, esc,
       openSharedModal: ({ onSave }) => onSave({ querySelectorAll: () => [button] }),
-      api: { post: async () => actions.push(action), get: async () => ({ data: [] }) },
+      api: { post: async (path, body) => { assert.equal(path, '/automation/obligations/9/respond'); assert.deepEqual(body, {action, expected_revision:8, expected_parent_revision:5}); actions.push(action); },
+        get: async () => ({ data: reads++ === 0 ? [{ id:9, task_title:'Laundry', status:'pending', task_revision:8, task_parent_revision:5 }] : [] }) },
       closeModal: async () => actions.push('closed'), loadTasks: async () => actions.push('refreshed'),
       window: { yuvomi: { showToast: (message) => actions.push(message) } },
     });
     wire({ querySelector: () => trigger });
-    trigger.listeners.click();
+    await trigger.listeners.click();
     await button.listeners.click();
     assert.deepEqual(actions, [action, 'closed', 'refreshed', action === 'accept' ? 'Assignment accepted.' : 'Assignment declined.']);
   }

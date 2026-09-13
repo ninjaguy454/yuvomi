@@ -1,3 +1,5 @@
+import { hasCapability } from '../permissions.js';
+import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
 import { APP_NAME } from '../utils/brand.js';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
@@ -136,8 +138,8 @@ function tasksFor(database, userId) {
     SELECT t.*, p.name AS place_name, tl.user_label AS location_label, tl.manual_address,
            COALESCE(p.external_place_id, tl.external_place_id) AS google_place_id
       FROM tasks t LEFT JOIN task_locations tl ON tl.task_id = t.id LEFT JOIN places p ON p.id = tl.place_id
-     WHERE t.parent_task_id IS NULL AND t.archived_at IS NULL AND t.status != 'done'
-       AND ${visibilityWhere('t', 'task_assignments', 'task_id')}
+     WHERE (t.parent_task_id IS NULL OR EXISTS (SELECT 1 FROM task_activity_support_tasks ss WHERE ss.task_id = t.id)) AND t.archived_at IS NULL AND t.status != 'done'
+       AND ${taskVisibilityWhere(database, userId, 't')}
      ORDER BY CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END, t.due_date, t.due_time, t.priority, t.id
      LIMIT 100
   `).all(userId, userId);
@@ -259,9 +261,10 @@ router.get('/', (req, res) => {
   const viewModule = { tasks: 'tasks', 'add-task': 'tasks', calendar: 'calendar', event: 'calendar', meals: 'meals', recipes: 'meals', recipe: 'meals' }[view];
   const verdict = moduleAccessVerdict(req.sessionModuleAccess, viewModule, view === 'add-task' ? 'write' : 'read');
   if (verdict !== MODULE_ACCESS_ALLOW) return deniedPage(req, res, verdict);
+  if (view === 'add-task' && !hasCapability(database, req, 'tasks.create')) return deniedPage(req, res);
   const timeZone = householdTimeZone(database);
   const sections = [];
-  if ((view === 'today' || view === 'tasks') && canAccess(req.sessionModuleAccess, 'tasks')) sections.push(`<section><h1>Open Tasks</h1>${taskList(tasksFor(database, req.authUserId), canAccess(req.sessionModuleAccess, 'tasks', 'write'))}</section>`);
+  if ((view === 'today' || view === 'tasks') && canAccess(req.sessionModuleAccess, 'tasks')) sections.push(`<section><h1>Open Tasks</h1>${taskList(tasksFor(database, req.authUserId), canAccess(req.sessionModuleAccess, 'tasks', 'write') && hasCapability(database, req, 'tasks.create'))}</section>`);
   if (view === 'today' && canAccess(req.sessionModuleAccess, 'calendar')) sections.push(`<section><h1>Calendar - ${h(date)}</h1>${eventList(calendarFor(database, req.authUserId, date), date, timeZone)}<p><a href="/reader?view=calendar&amp;date=${h(date)}">Open Calendar</a></p></section>`);
   if (view === 'calendar') sections.push(`<section><h1>Calendar</h1>${monthCalendar(database, req.authUserId, date)}</section>`);
   if ((view === 'today' || view === 'meals') && canAccess(req.sessionModuleAccess, 'meals')) sections.push(`<section><h1>Meals - ${h(date)}</h1>${mealList(mealsFor(database, date))}</section>`);
@@ -287,6 +290,8 @@ router.post('/tasks', (req, res) => {
     return res.status(400).type('html').send(page('Add Task', taskForm(csrf(req), 'Check the title, date, and time.', req.body), pageOptions(req)));
   }
   const assignee = req.body.assign_to_me ? req.authUserId : null;
+  try { assertTaskMutation(db.get(), req, null, { ...req.body, assigned_to: assignee }, { operation: 'create' }); }
+  catch (error) { return res.status(error.status || 500).type('text').send(error.status ? error.message : 'Could not check household permissions.'); }
   db.get().transaction(() => {
     const result = db.get().prepare(`INSERT INTO tasks (title, description, category, priority, due_date, due_time, assigned_to, created_by, visibility) VALUES (?, ?, 'misc', ?, ?, ?, ?, ?, 'all')`).run(title, description, priority, dueDate, dueTime, assignee, req.authUserId);
     if (assignee) db.get().prepare('INSERT INTO task_assignments (task_id, user_id) VALUES (?, ?)').run(result.lastInsertRowid, assignee);

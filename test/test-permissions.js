@@ -178,7 +178,7 @@ test('Leere Eingabe = „von Rolle erben" (alle Overrides entfernt)', () => {
   addUser(db, { id: 11, role: 'member', family_role: 'child' });
   replaceSubjectPermissions(db, 'user', 11, { modules: { budget: 'none' } });
   replaceSubjectPermissions(db, 'user', 11, {}); // zurücksetzen
-  assert.deepEqual(getSubjectPermissions(db, 'user', 11), { modules: {}, widgets: {} });
+  assert.deepEqual(getSubjectPermissions(db, 'user', 11), { modules: {}, widgets: {}, capabilities: {} });
 });
 
 test('normalizePermissionInput: unbekannte/ungültige Werte werfen', () => {

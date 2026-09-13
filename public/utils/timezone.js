@@ -140,10 +140,12 @@ function formatterFor(zone) {
  * tun.
  *
  * @param {Date|string|number|null|undefined} value
+ * @param {string|null} [zone] Explicit source timezone when a resolver response
+ * names its household timezone; defaults to the configured display timezone.
  * @returns {{year:number,month:number,day:number,hour:number,minute:number,second:number}|null}
  *          `null`, wenn der Wert nicht lesbar ist
  */
-export function zonedFields(value) {
+export function zonedFields(value, zone = displayTimeZone()) {
   if (value === null || value === undefined || value === '') return null;
 
   // Wanduhrzeit: direkt lesen. Ein Umweg über `new Date()` wäre hier nicht nur
@@ -163,7 +165,7 @@ export function zonedFields(value) {
   const d = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(d.getTime())) return null;
 
-  const zone = displayTimeZone();
+  if (!isValidTimeZone(zone)) zone = null;
   if (!zone) {
     return {
       year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(),

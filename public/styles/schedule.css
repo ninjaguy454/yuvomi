@@ -494,3 +494,81 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* Embedded routines use Availability's content width and ordinary controls.
+ * No route-level FAB, outer page padding or independent module accent. */
+.schedule-page--embedded {
+  --module-accent: var(--module-calendar);
+  padding-block-end: 0;
+}
+
+.schedule-page--embedded .schedule-toolbar {
+  padding-inline: 0;
+  margin-block-end: 0;
+}
+
+.schedule-page--embedded .schedule-tabs,
+.schedule-page--embedded .schedule-today,
+.schedule-page--embedded .schedule-content {
+  margin-inline: 0;
+}
+
+.schedule-form > .schedule-form-wide {
+  grid-column: 1 / -1;
+}
+
+.schedule-form [hidden],
+.schedule-modal-form [hidden] {
+  display: none;
+}
+
+.schedule-routine-summary {
+  margin: var(--space-3) var(--space-4);
+}
+
+.schedule-form [data-routine-preview] .schedule-days {
+  margin: 0;
+}
+
+.schedule-details > .schedule-form {
+  padding-block-end: var(--space-3);
+}
+
+.schedule-modal-form .schedule-days {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+}
+
+.availability-explained,
+.availability-window-controls {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.availability-window-controls {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  align-items: end;
+}
+
+.availability-window-controls .input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.availability-window .list-row__meta {
+  white-space: normal;
+}
+
+.availability-priority {
+  margin-block: var(--space-3);
+}
+
+.availability-priority > summary {
+  cursor: pointer;
+  min-height: var(--target-lg);
+  align-content: center;
+}
+
+[data-availability-routines] {
+  margin-block-start: var(--space-6);
+}

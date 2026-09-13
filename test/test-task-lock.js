@@ -16,6 +16,7 @@ import http from 'node:http';
 import test from 'node:test';
 import Database from 'better-sqlite3-multiple-ciphers';
 import express from 'express';
+import { modernTaskMutationBody } from './helpers/task-client-revision-fixture.js';
 
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'task-lock-test-secret';
@@ -87,6 +88,7 @@ test.after(() => { server.close(); db.close(); });
 
 async function call(method, path, { as, body } = {}) {
   if (as) actor = as;
+  body = modernTaskMutationBody(db, method, path, body);
   const res = await fetch(`${base}${path}`, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
@@ -274,7 +276,7 @@ test('PATCH /:id/status: the legacy archive alias enforces task and parent locks
   }
 
   const completed = await call('PATCH', `/${task.id}/status`, {
-    as: asChild, body: { status: 'done' },
+    as: asChild, body: { status: 'done', complete_remaining:true },
   });
   assert.equal(completed.status, 200, 'locking the definition still allows completion');
   const creatorArchived = await call('PATCH', `/${task.id}/status`, {

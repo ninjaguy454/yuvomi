@@ -54,6 +54,12 @@ import {
 import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
+import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
+import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed } from '../services/task-access.js';
+import { assertTaskRevision, changeTaskStatus, configureTaskRecurrence, recordTaskActivity, taskActivity } from '../services/task-lifecycle.js';
+import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
+import { taskChangesStream } from '../services/task-changes.js';
+import { assertCapability } from '../permissions.js';
 
 const log = createLogger('Tasks');
 
@@ -101,6 +107,54 @@ function resolveTaskSyncTarget(value) {
 }
 
 const router = express.Router();
+
+// Same permission and revision checks for both mounted compatibility prefixes.
+router.use((req,res,next) => {
+  if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
+  try {
+    const path = req.path.toLowerCase().replace(/\/+$/, '') || '/';
+    if (/^\/(tags|categories)(\/|$)/.test(path)) assertCapability(db.get(),req,'tasks.change_category_tags');
+    if (req.method === 'POST' && path === '/') {
+      assertTaskMutation(db.get(),req,null,req.body,{operation:'create'});
+      if (req.body.parent_task_id) {
+        const parent = db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.body.parent_task_id);
+        if (parent) {
+          assertTaskMutation(db.get(),req,parent,{subtasks:[]},{operation:'update'});
+          assertTaskRevision(db.get(),parent,{expected_revision:req.body.expected_parent_revision},{required:true});
+        }
+      }
+    }
+    next();
+  } catch(error) {
+    res.status(error.status||403).json({error:error.message,code:error.status||403,...error.details});
+  }
+});
+// Bind checks to Express's matched route and decoded parameter. Matching raw
+// req.path allowed encoded IDs, case aliases and trailing slashes to skip them.
+router.param('id',(req,res,next,value)=>{
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value)<1)
+    return res.status(404).json({error:'Task not found.',code:404});
+  if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
+  const route=req.route.path;
+  if (route==='/:id/supervisor' || route==='/:id/location/promote') return next();
+  try {
+    const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
+    if (!task) return res.status(404).json({error:'Task not found.',code:404});
+    const action=route.split('/')[2];
+    const body=req.body||{};
+    const operation=action==='comments'?'comment'
+      :action==='status'&&body.status==='archived'?'archive'
+      :action||(req.method==='DELETE'?'delete':'update');
+    assertTaskMutation(db.get(),req,task,body,{operation});
+    if (!(req.method==='POST'&&route==='/:id/comments'))
+      assertTaskRevision(db.get(),task,body,{required:true,requireParent:true});
+    return next();
+  } catch(error) {
+    return res.status(error.status||403).json({error:error.message,code:error.status||403,...error.details});
+  }
+});
+router.get('/changes', taskChangesStream);
+configureTaskRecurrence({spawn:spawnRecurrenceFollowup,discard:discardRecurrenceFollowup});
 
 // --------------------------------------------------------
 // Konstanten
@@ -302,6 +356,50 @@ function initialSubtasksInput(body) {
   });
 }
 
+function editedSubtasksInput(task, body, actor) {
+  if(body.subtasks===undefined)return undefined;
+  if(task.parent_task_id)throw new TaskSkillError('Edit subtasks on the original Task.');
+  const normalized=initialSubtasksInput(body);
+  const existing=ordinaryActivitySubtasks(db.get(),task.id);
+  const seen=new Set();
+  const next=normalized.map((item,index)=>{
+    let id=body.subtasks[index].id;
+    // Idempotent retry from an older create form without child IDs.
+    if(id==null && normalized.length===existing.length
+      && normalized.every((candidate,i)=>candidate.title===existing[i].title
+        && sameIdOrder(candidate.skillIds,loadTaskSkillIds(db.get(),existing[i].id))))id=existing[index].id;
+    if(id!=null) {
+      id=Number(id);
+      const child=existing.find(row=>row.id===id);
+      if(!child||seen.has(id))throw new TaskSkillError('Choose each existing subtask only once.');
+      seen.add(id);
+      assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds},{operation:'update'});
+    } else assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,skill_ids:item.skillIds},{operation:'create'});
+    return {...item,id};
+  });
+  for(const child of existing.filter(row=>!seen.has(row.id)))
+    assertTaskMutation(db.get(),actor,child,{}, {operation:'delete'});
+  return {next,remove:existing.filter(row=>!seen.has(row.id))};
+}
+
+function applyEditedSubtasks(task, edited, actorId) {
+  if(!edited)return;
+  for(const child of edited.remove) {
+    recordTaskActivity(db.get(),task.id,'subtask_removed',actorId,{title:child.title},child.id);
+    queueTodoDeletion('tasks',child);
+    deleteTaskSupervisionProjections(db.get(),child.id);
+    db.get().prepare('DELETE FROM tasks WHERE id=?').run(child.id);
+  }
+  for(const [order,child] of edited.next.entries()) {
+    let id=child.id;
+    if(id) db.get().prepare('UPDATE tasks SET title=?,sort_order=? WHERE id=?').run(child.title,order,id);
+    else id=Number(db.get().prepare(`INSERT INTO tasks(title,category,status,start_date,due_date,due_time,
+      parent_task_id,created_by,visibility,sort_order) VALUES(?,?,'open',?,?,?,?,?,?,?)`)
+      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order).lastInsertRowid);
+    if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
+  }
+}
+
 /**
  * Attach an optional typed action to a Task without teaching the Tasks module
  * about Meals, Trips, or any other destination. The link remains generic and
@@ -410,17 +508,19 @@ function sameTaskActivityBinding(a, b) {
     && Number(a.subjectUserId ?? a.subject_user_id ?? 0) === Number(b.subjectUserId ?? b.subject_user_id ?? 0);
 }
 
-function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false } = {}) {
+function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false, task = null } = {}) {
   if (!binding) return null;
   try {
     previewTaskActivityBinding(db.get(), {
       activityTemplateId: binding.activityTemplateId,
       subjectUserId: binding.subjectUserId,
       dateKey,
+      task,
       allowInactive,
     });
     return null;
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     return err.message;
   }
 }
@@ -568,15 +668,7 @@ function syncHousekeepingPaymentStatus(d, taskId, status) {
  * Moduls. Neu ist nur, dass Unsichtbares auch unantastbar ist.
  */
 function mayAccessTask(task, me) {
-  if (!task) return false;
-  if (task.visibility === 'all') return true;
-  if (task.created_by === me) return true;
-  if (task.visibility === 'assignees') {
-    return !!db.get().prepare(
-      'SELECT 1 FROM task_assignments WHERE task_id = ? AND user_id = ?'
-    ).get(task.id, me);
-  }
-  return false;
+  return !!task && taskCapabilities(db.get(),me,task).view;
 }
 
 /**
@@ -636,7 +728,7 @@ function editableTaskIds(ids, req) {
   const byId = new Map(rows.map((r) => [r.id, r]));
   return ids.filter((id) => {
     const row = byId.get(id);
-    return row ? mayEditTaskDefinition(row, req) : true;
+    return !!row && mayEditTaskDefinition(row, req) && taskCapabilities(db.get(),req,row).change_category_tags;
   });
 }
 
@@ -645,7 +737,7 @@ function sameFieldValue(a, b) {
   return String(a ?? '') === String(b ?? '');
 }
 
-function loadSubtasks(taskId, me) {
+function loadSubtasks(taskId, me, supervisionViews) {
   // Eine Unteraufgabe trägt eine eigene Sichtbarkeit (POST nimmt das Feld
   // entgegen). Sie hing hier noch nie an der Regel: unter einer geteilten
   // Elternaufgabe wurde eine private Unteraufgabe samt Titel ausgeliefert.
@@ -656,14 +748,56 @@ function loadSubtasks(taskId, me) {
     FROM tasks t
     LEFT JOIN users u ON t.assigned_to = u.id
     WHERE t.parent_task_id = ?
-      AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}
-    ORDER BY t.created_at ASC
+      AND ${taskVisibilityWhere(db.get(), me, 't', '@me')}
+    ORDER BY t.sort_order, t.created_at, t.id
   `).all(taskId, { me }).map(addAssignedUsers);
   // Unteraufgaben sind Aufgaben und können Tags tragen - über den CalDAV-Spiegel
   // bekommen sie welche, ohne dass jemand sie hier vergibt. Ohne das Anhängen
   // wären sie in der Antwort einfach nicht da, und ein PUT auf Basis dieser
   // Zeile schriebe sie still weg.
+  const parentRevision = db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(taskId)?.revision;
+  for (const row of rows) row.parent_revision = parentRevision;
+  attachTaskCapabilities(db.get(),me,rows);
+  attachTaskSupervision(db.get(),rows,me,supervisionViews);
   return attachTags(rows);
+}
+
+function hydrateTask(task, me, supervisionViews = new Map()) {
+  if (!task) return task;
+  task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
+    u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
+    FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
+  addAssignedUsers(task);
+  task.subtasks=loadSubtasks(task.id,me,supervisionViews);
+  if(task.parent_task_id)task.parent_revision=db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision;
+  attachTags([task]);attachTaskCapabilities(db.get(),me,[task]);attachTaskSupervision(db.get(),[task],me,supervisionViews);
+  for(const row of [task,...task.subtasks])if(row.supervision) {
+    // A shared parent does not expose a separately private child's title.
+    let actions=row.supervision.actions.filter(action=>mayAccessTask(
+      db.get().prepare('SELECT * FROM tasks WHERE id=?').get(action.action_task_id),me));
+    const hiddenScope=actions.length!==row.supervision.actions.length;
+    if(hiddenScope) actions=actions.map(action=>({...action,
+      reason:action.completed ? 'Historical supervision is recorded for this completed action.'
+        : action.state==='not_required' ? 'This action does not currently require supervision.'
+        : `This action requires supervision for ${action.required_skills.map(skill=>skill.name).join(', ')}. One supervisor must cover the Task’s entire remaining supervised scope.`,
+      supervisor_explanations:[],blocked_requirements:[]}));
+    const active=actions.filter(action=>!action.completed&&action.state!=='not_required');
+    row.supervision={...row.supervision,actions,can_view_support:!!row.supervision.support_task_id&&mayAccessTask(
+      db.get().prepare('SELECT * FROM tasks WHERE id=?').get(row.supervision.support_task_id),me),
+      state:active.some(action=>action.state==='excluded')?'excluded'
+      :active.some(action=>action.state==='unresolved')?'needed':active.length?'assigned':'none'};
+    if(hiddenScope) row.supervision={...row.supervision,blocked_requirements:[],supervisor_explanations:[],
+      reason:active.length ? 'One supervisor must cover the Task’s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null};
+    if(actions.length===0)row.supervision={...row.supervision,state:'none',reason:null};
+    // The convenience projection must use the same sanitized objects; keeping
+    // attachTaskSupervision's original reference would leak aggregate reasons.
+    row.supervision_action=row.supervision.actions.find(action=>action.action_task_id===row.id||action.counterpart_task_id===row.id)||null;
+  }
+  attachTaskActivityBindings(db.get(),[task]);attachTaskLocations(db.get(),[task]);attachTaskActionLinks([task]);
+  const isSupport=task.supervision?.support_task_id===task.id;
+  const operational=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
+  task.subtask_total=operational.length;task.subtask_done=operational.filter(child=>child.status==='done').length;
+  return task;
 }
 
 /**
@@ -719,6 +853,7 @@ router.get('/categories', (_req, res) => {
   try {
     res.json({ data: loadTaskCategories() });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /categories error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -750,6 +885,7 @@ router.get('/sync-targets', (_req, res) => {
     `).all();
     res.json({ data: { caldav } });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /sync-targets error:', err);
     res.status(500).json({ error: 'Failed to list sync targets.', code: 500 });
   }
@@ -788,6 +924,7 @@ router.get('/completions', (req, res) => {
       next_cursor: hasMore && last ? { before_at: last.completed_at, before_id: last.id } : null,
     });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /completions error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -803,6 +940,7 @@ router.get('/tags', (req, res) => {
   try {
     res.json({ data: allTags(db.get(), req.authUserId || req.session.userId) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /tags error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -838,7 +976,7 @@ function visibleTaskIds(ids, me) {
   return db.get().prepare(`
     SELECT t.id AS id FROM tasks t
     WHERE t.id IN (${placeholders})
-      AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}
+      AND ${taskVisibilityWhere(db.get(),me,'t','@me')}
   `).all(...ids, { me }).map((r) => r.id);
 }
 
@@ -881,6 +1019,7 @@ router.post('/tags/apply', (req, res) => {
     res.json({ data: { updated: changed.length, skipped: targets.length - allowed.length, tags: allTags(db.get(), me) } });
     pushTagChanges(changed, 'Tag-Vergabe');
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('POST /tags/apply error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -918,6 +1057,7 @@ router.put('/tags/:tag', (req, res) => {
     res.json({ data: { updated: changed.length, skipped: affected.length - allowed.length, tag: to, tags: allTags(db.get(), me) } });
     pushTagChanges(changed, 'Tag-Umbenennung');
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PUT /tags/:tag error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -942,6 +1082,7 @@ router.delete('/tags/:tag', (req, res) => {
     res.json({ data: { updated: changed.length, skipped: affected.length - allowed.length, tags: allTags(db.get(), me) } });
     pushTagChanges(changed, 'Tag-Löschung');
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('DELETE /tags/:tag error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -967,6 +1108,7 @@ router.post('/categories', (req, res) => {
     const cat = db.get().prepare('SELECT key, name, label_key, sort_order FROM task_categories WHERE key = ?').get(key);
     res.status(201).json({ data: cat });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('POST /categories error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -980,6 +1122,7 @@ router.patch('/categories/reorder', (req, res) => {
     db.get().transaction(() => order.forEach((key, i) => update.run(i, key)))();
     res.json({ data: loadTaskCategories() });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PATCH /categories/reorder error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1004,6 +1147,7 @@ router.put('/categories/:key', (req, res) => {
     const updated = db.get().prepare('SELECT key, name, label_key, sort_order FROM task_categories WHERE key = ?').get(cat.key);
     res.json({ data: updated });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PUT /categories/:key error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1025,6 +1169,7 @@ router.delete('/categories/:key', (req, res) => {
     db.get().prepare('DELETE FROM task_categories WHERE key = ?').run(cat.key);
     res.status(204).end();
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('DELETE /categories/:key error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1038,6 +1183,7 @@ router.delete('/categories/:key', (req, res) => {
 // --------------------------------------------------------
 router.get('/', (req, res) => {
   try {
+    const me = req.authUserId || req.session.userId;
     const { status, priority, assigned_to, category, tag, include_future, archived } = req.query;
 
     let sql = `
@@ -1054,9 +1200,9 @@ router.get('/', (req, res) => {
         -- dieselbe Regel fehlte hier. Ohne den Filter zeigt die Zeile fremde
         -- private Titel und bietet Aktionen darauf an.
         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id
-           AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_total,
+           AND ${taskVisibilityWhere(db.get(), me, 's')})                         AS subtask_total,
         (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.status = 'done'
-           AND ${visibilityWhere('s', 'task_assignments', 'task_id')})                         AS subtask_done,
+           AND ${taskVisibilityWhere(db.get(), me, 's')})                         AS subtask_done,
         (SELECT json_group_array(json_object(
                   'id', s.id, 'title', s.title, 'description', s.description,
                   'status', s.status, 'priority', s.priority,
@@ -1078,11 +1224,11 @@ router.get('/', (req, res) => {
                    FROM tasks s
                    LEFT JOIN users su ON su.id = s.assigned_to
                   WHERE s.parent_task_id = t.id
-                    AND ${visibilityWhere('s', 'task_assignments', 'task_id')}
+                    AND ${taskVisibilityWhere(db.get(), me, 's')}
                   ORDER BY s.created_at ASC) s) AS subtasks
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE ${taskScopeWhere('t', { includeFuture: !!include_future })}
+      WHERE ${taskScopeWhere('t', { includeFuture: !!include_future, includeSupervision:true })}
     `;
     const params = [];
 
@@ -1166,8 +1312,7 @@ router.get('/', (req, res) => {
     }
 
     // Sichtbarkeit (#474): eigene + für alle sichtbare + zugewiesene-sichtbare.
-    const me = req.authUserId || req.session.userId;
-    sql += ` AND ${visibilityWhere('t', 'task_assignments', 'task_id')}`;
+    sql += ` AND ${taskVisibilityWhere(db.get(), me, 't')}`;
     params.push(me, me);
 
     // Die drei Unteraufgaben-Subqueries oben tragen dieselbe Bedingung und damit
@@ -1190,8 +1335,10 @@ router.get('/', (req, res) => {
     attachTaskActivityBindings(db.get(), rows);
     attachTaskLocations(db.get(), rows);
     attachTaskActionLinks(rows);
-    res.json({ data: attachTags(attachDocumentCounts(rows, me)) });
+    const supervisionViews=new Map(); // One synchronous, read-only response.
+    res.json({ data: attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET / error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1210,14 +1357,13 @@ router.get('/:id', (req, res) => {
         u.avatar_data AS assigned_avatar, ${ASSIGNED_USERS_SQL}
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE t.id = ? AND t.parent_task_id IS NULL
-        AND ${visibilityWhere('t', 'task_assignments', 'task_id')}
+      WHERE t.id = ?
+        AND ${taskVisibilityWhere(db.get(), me, 't')}
     `).get(req.params.id, me, me);
 
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
 
     addAssignedUsers(task);
-    task.subtasks = loadSubtasks(task.id, me);
     attachDocumentCounts([task], me);
     // Die verknüpften Dokumente beim Namen, nicht nur gezählt (#733). Die
     // Detailansicht zeigte hier seit jeher eine Zeile „Dokumente" an, las dafür
@@ -1230,8 +1376,9 @@ router.get('/:id', (req, res) => {
     attachTaskLocations(db.get(), [task]);
     attachTaskActionLinks([task]);
     attachTags([task]);
-    res.json({ data: task });
+    res.json({ data: {...task,...hydrateTask(task,me)} });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -1239,10 +1386,13 @@ router.get('/:id', (req, res) => {
 
 router.post('/:id/location/promote', requireAdmin, (req, res) => {
   try {
-    const task = db.get().prepare('SELECT id FROM tasks WHERE id = ? AND parent_task_id IS NULL').get(req.params.id);
+    const task = db.get().prepare('SELECT * FROM tasks WHERE id = ? AND parent_task_id IS NULL').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
+    assertTaskMutation(db.get(),req,task,{location:{}},{operation:'update'});
+    assertTaskRevision(db.get(),task,req.body,{required:true});
     res.json({ data: promoteTaskGoogleLocation(db.get(), task.id, req.body || {}, req.authUserId || req.session.userId) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     const missing = /does not have/i.test(err.message);
     res.status(missing ? 404 : 400).json({ error: err.message, code: missing ? 404 : 400 });
   }
@@ -1307,7 +1457,7 @@ router.post('/', (req, res) => {
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
-    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone());
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
 
     const taskLocation = req.body.location === undefined
@@ -1435,6 +1585,9 @@ router.post('/', (req, res) => {
       if (taskLocation !== undefined) {
         setTaskLocation(db.get(), Number(result.lastInsertRowid), taskLocation, req.authUserId || req.session.userId);
       }
+      const actual = db.get().prepare('SELECT assigned_to FROM tasks WHERE id=?').get(result.lastInsertRowid);
+      if (actual.assigned_to) assertTaskSupervisionAssignee(db.get(),Number(result.lastInsertRowid),actual.assigned_to);
+      reconcileTaskSupervision(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});
       notifyTaskAssignments(db.get(), Number(result.lastInsertRowid));
       return result.lastInsertRowid;
     })();
@@ -1450,11 +1603,11 @@ router.post('/', (req, res) => {
     attachTaskActivityBindings(db.get(), [task]);
     attachTaskLocations(db.get(), [task]);
     attachTags([task]);
-    task.subtasks = loadSubtasks(task.id, req.authUserId || req.session.userId);
-    res.status(201).json({ data: task });
+    res.status(201).json({ data: hydrateTask(task,req.authUserId||req.session.userId) });
     if (syncTarget) pushToCalDAV('Neue Aufgabe');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError || err instanceof TaskAssignmentAvailabilityError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('POST / error:', err);
@@ -1520,7 +1673,8 @@ router.put('/:id', (req, res) => {
       const blockedBy = unresolvedDependencies(db.get(), task.id);
       if (blockedBy.length) {
         return res.status(409).json({
-          error: 'Complete required earlier activities first.', code: 409, dependencies: blockedBy,
+          error: 'Complete required earlier activities first.', code: 409,
+          dependencies: blockedBy.filter(item => mayAccessTask(db.get().prepare('SELECT * FROM tasks WHERE id=?').get(item.id), req.authUserId || req.session.userId)),
         });
       }
     }
@@ -1531,16 +1685,7 @@ router.put('/:id', (req, res) => {
     const desiredActivityBinding = bindingRequest.binding;
     const skillsBefore = loadTaskSkillIds(db.get(), task.id);
     const skillIds = taskSkillInput(req.body, task.id, desiredActivityBinding?.activityTemplateId);
-    if (req.body.subtasks !== undefined) {
-      // A recovered create can PUT other edited fields with the frozen initial
-      // checklist. Accept that unchanged payload, never silently discard edits.
-      const requested = initialSubtasksInput({ subtasks: req.body.subtasks });
-      const current = ordinaryActivitySubtasks(db.get(), task.id);
-      if (requested.length !== current.length || requested.some((item, index) => item.title !== current[index].title
-          || !sameIdOrder(item.skillIds, loadTaskSkillIds(db.get(), current[index].id)))) {
-        return res.status(409).json({ error: 'This Task is already saved. Edit its subtasks individually.', code: 409 });
-      }
-    }
+    const editedSubtasks = editedSubtasksInput(task,req.body,req);
     const bindingChanged = !sameTaskActivityBinding(desiredActivityBinding, existingActivityBinding);
     if (bindingChanged && desiredActivityBinding && task.rotation_group) {
       return res.status(409).json({
@@ -1548,9 +1693,10 @@ router.put('/:id', (req, res) => {
       });
     }
     if (bindingChanged && desiredActivityBinding) {
-      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone());
+      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
       if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
     }
+    const taskWindowChanged = start_date !== task.start_date || due_date !== task.due_date || due_time !== task.due_time;
 
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
@@ -1625,6 +1771,15 @@ router.put('/:id', (req, res) => {
         assignmentMode === 'round_robin' ? rotationUserIds
           : independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid),
         due_date || todayInHouseholdZone());
+    }
+    const performersChanged = !desiredActivityBinding && (!sameIdOrder(userIds, assignedBefore) || firstUid !== task.assigned_to);
+    if (!bindingChanged && status !== 'done' && (taskWindowChanged || performersChanged)) {
+      // Keep the occurrence's policy, including authored supervisor Tasks
+      // without an Activity binding. Reapplying an Activity would advance its
+      // rotation; validate the resulting people/window without rewriting work.
+      assertTaskAssignmentAvailability(db.get(), task.id,
+        performersChanged ? independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid) : null,
+        { task: { start_date, due_date, due_time, assigned_to: firstUid } });
     }
 
     // Sperre der Aufgabe (#830). Nicht mitgeschickt heisst "nicht angefasst".
@@ -1718,13 +1873,30 @@ router.put('/:id', (req, res) => {
           points = ?, visibility = ?, countdown = ?, locked = ?
         WHERE id = ?
       `).run(title.trim(), description, category, priority,
-             status, start_date, due_date, due_time, firstUid,
+             task.status, start_date, due_date, due_time, firstUid,
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, req.params.id);
+      applyEditedSubtasks({...task,start_date,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
+      if (taskWindowChanged) {
+        // Checklist dates copied from the parent follow its edit. Explicit
+        // child-specific dates/times retain their independent meaning.
+        db.get().prepare(`UPDATE tasks SET
+          start_date=CASE WHEN start_date IS ? THEN ? ELSE start_date END,
+          due_date=CASE WHEN due_date IS ? THEN ? ELSE due_date END,
+          due_time=CASE WHEN due_time IS ? THEN ? ELSE due_time END
+          WHERE parent_task_id=?`).run(task.start_date,start_date,task.due_date,due_date,task.due_time,due_time,task.id);
+        const dueAt = due_date ? `${due_date}T${due_time || '23:59'}:00` : null;
+        // Move the default response deadline with its due time. An earlier,
+        // custom, or absent deadline remains an independent choice.
+        db.get().prepare(`UPDATE planning_obligations SET due_at = ?,
+          response_deadline = CASE WHEN response_deadline = due_at THEN ? ELSE response_deadline END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
+          WHERE task_id = ? AND status IN ('pending', 'accepted')`).run(dueAt, dueAt, task.id);
+      }
       if (req.body.tags !== undefined) setTags(db.get(), task.id, req.body.tags);
       if (bindingChanged) {
         if (desiredActivityBinding) {
@@ -1744,33 +1916,22 @@ router.put('/:id', (req, res) => {
         ).run(syncTarget?.accountId ?? null, syncTarget?.listUrl ?? null, task.id);
       }
       if (archiveRequested && !task.archived_at) setArchived(task.id, true);
-      syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
-      // Punkte erst nach setAssignments: die Zuständigen werden daraus abgeleitet.
-      syncTaskRewards(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
-      // Derselbe Übergang, ein zweiter Vorgang: der Verlauf hält fest, DASS
-      // abgehakt wurde (#791). Bewusst neben der Punktevergabe statt in ihr -
-      // Punkte gehen an die Zuständigen und nur bei eingeschaltetem Modul, ein
-      // Verlaufseintrag gilt für jede Aufgabe und nennt die handelnde Person.
-      syncTaskCompletion(db.get(), task.id, task.status, status, req.authUserId || req.session.userId);
-      syncWorkflowInstanceForTask(db.get(), task.id);
-      if (status === 'done' && task.status !== 'done') {
-        db.get().prepare("UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status IN ('pending', 'accepted')").run(task.id);
-        db.get().prepare("UPDATE task_responsibilities SET status = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'active'").run(task.id);
-        db.get().prepare("UPDATE task_assignment_context SET state = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(task.id);
-      } else if (task.status === 'done' && status !== 'done') {
-        db.get().prepare("UPDATE task_responsibilities SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'fulfilled'").run(task.id);
-        db.get().prepare("UPDATE task_assignment_context SET state = CASE WHEN strategy = 'open_claimable' AND (SELECT assigned_to FROM tasks WHERE id = ?) IS NULL THEN 'open' ELSE 'assigned' END, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(task.id, task.id);
-      }
       if (taskLocation !== undefined) {
         setTaskLocation(db.get(), task.id, taskLocation, req.authUserId || req.session.userId);
       }
 
-      // Auch über das Bearbeiten-Formular lässt sich ein Abhaken zurücknehmen -
-      // die Folgeinstanz muss dann genauso verschwinden wie beim Klick auf die
-      // Checkbox (#650).
-      if (task.status === 'done' && status !== 'done') {
-        undone = discardRecurrenceFollowup(task.id);
+      reconcileTaskSupervision(db.get(),task.id,{actorId:req.authUserId||req.session.userId});
+      if(firstUid && (performersChanged||editedSubtasks||!sameIdOrder(skillIds,skillsBefore)))
+        assertTaskSupervisionAssignee(db.get(),task.id,firstUid);
+      if(status!==task.status) {
+        const operation=changeTaskStatus(db.get(),task.id,status,{actorId:req.authUserId||req.session.userId,
+          // The adapter checked the submitted revision before this atomic edit.
+          // Its definition changes above have already advanced that revision.
+          requireRevision:false,
+          body:{complete_remaining:req.body.complete_remaining,reset_progress:req.body.reset_progress}});
+        pending=operation.pending;undone=operation.undone;
       }
+      recordTaskActivity(db.get(),task.id,'edited',req.authUserId||req.session.userId,{title:title.trim()});
 
       // Nur was die Schreibarbeit unten braucht, liegt in der Transaktion: die
       // frische Zeile und ihre Tags (der Feldvergleich kennt tags_key). Das
@@ -1796,20 +1957,19 @@ router.put('/:id', (req, res) => {
       // Das Status-Dropdown im Bearbeiten-Formular hakt genauso ab wie die Checkbox -
       // also muss es die Serie genauso weiterschreiben. Grundlage ist die frisch
       // gelesene Zeile, damit im selben Zug geänderte Regel/Fälligkeit schon zählen.
-      if (status === 'done' && task.status !== 'done') spawnRecurrenceFollowup(updated);
+
       notifyTaskAssignments(db.get(), task.id, assignedBefore);
     })();
 
     addAssignedUsers(updated);
     attachTaskActivityBindings(db.get(), [updated]);
     attachTaskLocations(db.get(), [updated]);
-    updated.subtasks = loadSubtasks(updated.id, req.authUserId || req.session.userId);
-
-    res.json({ data: updated });
+    res.json({ data: hydrateTask(updated,req.authUserId||req.session.userId) });
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
-    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
+    if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError || err instanceof TaskAssignmentAvailabilityError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
     log.error('PUT /:id error:', err);
@@ -1844,6 +2004,15 @@ function recurrenceFollowupOf(taskId) {
  * (editiert, erledigt, hinzugefügt oder gelöscht).
  */
 function isFollowupSubtasksTouched(followup) {
+  // A baseline is recorded only after the complete generated tree, assignment
+  // and supervision have settled. Any later revision can contain user work.
+  // Older occurrences have no reliable baseline, so preserve them conservatively.
+  const baseline = db.get().prepare(`SELECT details_json FROM task_activity_events
+    WHERE task_id=? AND action_task_id=? AND event_type='recurrence_generated'
+    ORDER BY id DESC LIMIT 1`).get(followup.id,followup.id);
+  let generatedRevision;
+  try { generatedRevision=JSON.parse(baseline?.details_json||'null')?.revision; } catch { return true; }
+  if(!Number.isSafeInteger(generatedRevision)||generatedRevision!==followup.revision)return true;
   const originTaskId = followup.recurrence_origin_id;
   if (originTaskId && !sameIdOrder(loadTaskSkillIds(db.get(), followup.id), loadTaskSkillIds(db.get(), originTaskId))) return true;
   const originSubtasks = originTaskId ? ordinaryActivitySubtasks(db.get(), originTaskId) : [];
@@ -2114,7 +2283,10 @@ function spawnRecurrenceFollowupSingle(task) {
       });
     }
     copyTaskLocation(db.get(), task.id, Number(newTask.lastInsertRowid), task.created_by);
+    reconcileTaskSupervision(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by});
     notifyTaskAssignments(db.get(), Number(newTask.lastInsertRowid));
+    recordTaskActivity(db.get(),Number(newTask.lastInsertRowid),'recurrence_generated',task.created_by,
+      {title:task.title,revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(newTask.lastInsertRowid).revision});
   })();
 }
 
@@ -2156,90 +2328,33 @@ function spawnRecurrenceFollowup(task) {
 // Response: { data: { id, status, archived_at } }
 // 'archived' legt die Aufgabe ab, ohne ihren Status anzufassen (#688).
 // --------------------------------------------------------
-router.patch('/:id/status', (req, res) => {
+router.patch('/:id/status', (req,res) => {
   try {
-    const { status } = req.body;
-    if (!VALID_STATUSES.includes(status))
-      return res.status(400).json({ error: `Invalid status. Allowed: ${VALID_STATUSES.join(', ')}`, code: 400 });
-
-    // Ganze Zeile, nicht nur der Status: die Rückrichtung (#617) braucht die
-    // externen Kennungen, um den Statuswechsel dem CalDAV-Objekt zuzuordnen.
-    const prev = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
-    if (!prev)
-      return res.status(404).json({ error: 'Task not found.', code: 404 });
-    if (!mayAccessTask(prev, req.authUserId || req.session.userId)) {
-      return res.status(404).json({ error: 'Task not found.', code: 404 });
+    const previous=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+    if(!previous||!mayAccessTask(previous,req.authUserId||req.session.userId))
+      return res.status(404).json({error:'Task not found.',code:404});
+    if(req.body.status===ARCHIVE_STATUS) {
+      if(!mayEditTaskDefinition(previous,req))return res.status(403).json(LOCKED_ERROR);
+      assertTaskMutation(db.get(),req,previous,req.body,{operation:'archive'});
+      const archived_at=db.get().transaction(()=>{
+        const value=setArchived(previous.id,true);
+        reconcileTaskSupervision(db.get(),previous.id,{actorId:req.authUserId||req.session.userId});
+        return value;
+      })();
+      return res.json({data:{...previous,archived_at,revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(previous.id).revision}});
     }
-
-    // Ablegen ist kein Statuswechsel: kein Punkte-Storno, keine Serien-Bewegung,
-    // kein CalDAV-Push. Genau daran hing #688 - die Ablage überschrieb das 'done'
-    // und syncTaskRewards nahm die Gutschrift dafür wieder zurück.
-    if (status === ARCHIVE_STATUS) {
-      // The compatibility alias must enforce the same lock as /:id/archive.
-      if (!mayEditTaskDefinition(prev, req)) return res.status(403).json(LOCKED_ERROR);
-      const archivedAt = setArchived(req.params.id, true);
-      return res.json({ data: { id: Number(req.params.id), status: prev.status, archived_at: archivedAt } });
-    }
-
-    if (status === 'done' && prev.status !== 'done') {
-      const blockedBy = unresolvedDependencies(db.get(), Number(req.params.id));
-      if (blockedBy.length) {
-        return res.status(409).json({
-          error: 'Complete required earlier activities first.', code: 409, dependencies: blockedBy,
-        });
-      }
-    }
-
-    // Statuswechsel und die Serien-Bewegung, die daraus folgt, sind eine Einheit:
-    // scheitert das Nachlegen oder das Zurücknehmen der Folgeinstanz, darf die
-    // Aufgabe nicht trotzdem umgeschaltet zurückbleiben. Sonst endete die Serie
-    // still (kein Nachfolger) oder stünde doppelt da - genau die beiden Fehler,
-    // gegen die dieser Block gebaut ist. Der Outbound-Marker gehört mit hinein:
-    // ohne Statuswechsel gibt es auch nichts zu pushen.
-    let pending = false;
-    let undone  = 0;
-    db.get().transaction(() => {
-      db.get().prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, req.params.id);
-      pending = markTodoOutbound('tasks', prev, { ...prev, status });
-
-      syncHousekeepingPaymentStatus(db.get(), req.params.id, status);
-      // Punkte-Gutschrift/Storno an den Aufgaben-Statuswechsel koppeln.
-      syncTaskRewards(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
-      // Der Verlauf hängt am selben Übergang (#791). Dieser Weg trägt ihn
-      // dreifach: Checkbox, Swipe und die Sammelaktion gehen alle hier durch.
-      syncTaskCompletion(db.get(), Number(req.params.id), prev.status, status, req.authUserId || req.session.userId);
-      syncWorkflowInstanceForTask(db.get(), Number(req.params.id));
-      if (status === 'done' && prev.status !== 'done') {
-        db.get().prepare("UPDATE planning_obligations SET status = 'fulfilled', responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'), updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status IN ('pending', 'accepted')")
-          .run(req.params.id);
-        db.get().prepare("UPDATE task_responsibilities SET status = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'active'")
-          .run(req.params.id);
-        db.get().prepare("UPDATE task_assignment_context SET state = 'fulfilled', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?")
-          .run(req.params.id);
-      } else if (prev.status === 'done' && status !== 'done') {
-        db.get().prepare("UPDATE task_responsibilities SET status = 'active', updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ? AND status = 'fulfilled'").run(req.params.id);
-        db.get().prepare("UPDATE task_assignment_context SET state = CASE WHEN strategy = 'open_claimable' AND (SELECT assigned_to FROM tasks WHERE id = ?) IS NULL THEN 'open' ELSE 'assigned' END, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE task_id = ?").run(req.params.id, req.params.id);
-      }
-
-      // Zurückgenommenes Abhaken macht auch die Folgeinstanz rückgängig (#650).
-      // Sonst stünde die beim Erledigen erzeugte nächste Instanz neben der wieder
-      // geöffneten Aufgabe - die Serie sähe doppelt aus.
-      if (prev.status === 'done' && status !== 'done') {
-        undone = discardRecurrenceFollowup(Number(req.params.id));
-      }
-
-      // Wiederkehrende Aufgabe: nächste Instanz erstellen wenn erledigt
-      if (status === 'done' && prev.status !== 'done') {
-        spawnRecurrenceFollowup(db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id));
-      }
-    })();
-
-    res.json({ data: { id: Number(req.params.id), status, archived_at: prev.archived_at } });
-
-    if (pending || undone) pushToCalDAV('Statuswechsel');
-  } catch (err) {
-    log.error('PATCH /:id/status error:', err);
-    res.status(500).json({ error: 'Internal server error.', code: 500 });
+    const result=changeTaskStatus(db.get(),Number(req.params.id),req.body.status,
+      {actorId:req.authUserId||req.session.userId,body:req.body});
+    const supervisionViews=new Map();
+    const task=hydrateTask(result.task,req.authUserId||req.session.userId,supervisionViews);
+    if(result.parent_task && mayAccessTask(result.parent_task,req.authUserId||req.session.userId))
+      task.parent_task=hydrateTask(result.parent_task,req.authUserId||req.session.userId,supervisionViews);
+    res.json({data:task});
+    if(result.pending||result.undone)pushToCalDAV('Statuswechsel');
+  } catch(err) {
+    if(err.status||err.code===409)return res.status(err.status||409).json({error:err.message,code:err.status||409,...err.details});
+    log.error('PATCH /:id/status error:',err);
+    res.status(500).json({error:'Internal server error.',code:500});
   }
 });
 
@@ -2269,9 +2384,15 @@ router.patch('/:id/archive', (req, res) => {
 
     // Der Status bleibt unangetastet - eine zurückgeholte Aufgabe steht wieder
     // genau dort, wo sie beim Ablegen stand.
-    const archivedAt = setArchived(task.id, req.body.archived !== false);
-    res.json({ data: { id: task.id, status: task.status, archived_at: archivedAt } });
+    const archivedAt = db.get().transaction(() => {
+      const value = setArchived(task.id, req.body.archived !== false);
+      reconcileTaskSupervision(db.get(), task.id, { actorId: req.authUserId || req.session.userId });
+      return value;
+    })();
+    res.json({ data: { id: task.id, status: task.status, archived_at: archivedAt,
+      revision: db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.id).revision } });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PATCH /:id/archive error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2350,6 +2471,7 @@ router.patch('/:id/check', (req, res) => {
 
     if (pending) pushToCalDAV('Checklisten-Haken');
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PATCH /:id/check error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2380,13 +2502,19 @@ router.delete('/:id', (req, res) => {
     ).all(req.params.id, req.params.id);
     const queued = doomed.reduce((n, row) => n + (queueTodoDeletion('tasks', row) ? 1 : 0), 0);
 
-    const result = db.get().prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
+    const result = db.get().transaction(() => {
+      const survivingSources = deleteTaskSupervisionProjections(db.get(), Number(req.params.id));
+      const removed = db.get().prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
+      for (const sourceId of survivingSources) reconcileTaskSupervision(db.get(), sourceId, { actorId: req.authUserId || req.session.userId });
+      return removed;
+    })();
     if (result.changes === 0)
       return res.status(404).json({ error: 'Task not found.', code: 404 });
     res.json({ ok: true });
 
     if (queued) pushToCalDAV('Löschung');
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('DELETE /:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2406,9 +2534,15 @@ const DOC_VISIBLE_SQL = documentVisibleSql('d', 'me');
 /** Aufgabe nur zurückgeben, wenn sie für die betrachtende Person sichtbar ist. */
 function findVisibleTask(id, me) {
   return db.get().prepare(`
-    SELECT t.id, t.locked, t.created_by, t.parent_task_id FROM tasks t
-    WHERE t.id = ? AND ${visibilityWhere('t', 'task_assignments', 'task_id')}
+    SELECT t.* FROM tasks t
+    WHERE t.id = ? AND ${taskVisibilityWhere(db.get(), me, 't')}
   `).get(id, me, me);
+}
+
+function taskMutationVersion(taskId) {
+  const row=db.get().prepare(`SELECT t.revision AS task_revision,p.revision AS task_parent_revision
+    FROM tasks t LEFT JOIN tasks p ON p.id=t.parent_task_id WHERE t.id=?`).get(taskId);
+  return row || {};
 }
 
 /** Für die Person sichtbare, mit der Aufgabe verknüpfte Dokumente. */
@@ -2434,6 +2568,43 @@ function loadTaskDocuments(taskId, me) {
 // Titel der Aufgabe, und eine geratene ID darf darüber nichts verraten - 404
 // statt 403, weil die bloße Existenz schon eine Auskunft ist (Muster aus #769).
 // --------------------------------------------------------
+router.post('/:id/supervisor',(req,res)=>{
+  try {
+    const me=req.authUserId||req.session.userId;
+    const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+    if(!task||!mayAccessTask(task,me))return res.status(404).json({error:'Task not found.',code:404});
+    const source=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(taskSupervisionRootId(db.get(),task.id));
+    if(!source||!mayAccessTask(source,me))return res.status(404).json({error:'Task not found.',code:404});
+    if(!taskSupervisionManagementAllowed(db.get(),req,source.id))
+      return res.status(403).json({error:'Only the Task creator or a household administrator with assignment permission can choose its supervisor.',code:403});
+    if(req.body.action_task_id!==undefined) {
+      const actionId=req.body.action_task_id;
+      if(!Number.isSafeInteger(actionId)||actionId<1||taskSupervisionRootId(db.get(),actionId)!==source.id)
+        return res.status(400).json({error:'Choose an action belonging to this Task.',code:400});
+    }
+    const supervisor=req.body.supervisor_user_id;
+    if(supervisor!==null && (!Number.isSafeInteger(supervisor)||supervisor<1))
+      return res.status(400).json({error:'Choose a household supervisor.',code:400});
+    db.get().transaction(()=>{
+      assertTaskRevision(db.get(),task,req.body,{required:true});
+      if(source.id!==task.id)
+        assertTaskRevision(db.get(),source,{expected_revision:req.body.expected_source_revision},{required:true});
+      reconcileTaskSupervision(db.get(),source.id,{actorId:me,supervisorUserId:supervisor});
+    })();
+    res.json({data:hydrateTask(task,me)});
+  }catch(error){res.status(error.status||400).json({error:error.message,code:error.status||400,...error.details});}
+});
+
+router.get('/:id/activity',(req,res)=>{
+  const me=req.authUserId||req.session.userId;
+  const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+  if(!task||!mayAccessTask(task,me))return res.status(404).json({error:'Task not found.',code:404});
+  const events=taskActivity(db.get(),task.id,req.query.limit).filter(event=>
+    event.action_task_id ? mayAccessTask(db.get().prepare('SELECT * FROM tasks WHERE id=?').get(event.action_task_id),me)
+      : event.actor_user_id===me);
+  res.json({data:events});
+});
+
 router.get('/:id/completions', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;
@@ -2443,6 +2614,7 @@ router.get('/:id/completions', (req, res) => {
     }
     res.json({ data: seriesHistory(db.get(), { me, taskId: Number(req.params.id), limit: req.query.limit }) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id/completions error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2454,8 +2626,9 @@ router.get('/:id/documents', (req, res) => {
     const me = req.authUserId || req.session.userId;
     const task = findVisibleTask(req.params.id, me);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
-    res.json({ data: loadTaskDocuments(task.id, me) });
+    res.json({ data: loadTaskDocuments(task.id, me), ...taskMutationVersion(task.id) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id/documents error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2495,8 +2668,9 @@ router.put('/:id/documents', (req, res) => {
       for (const id of visibleIds) ins.run(task.id, id, me);
     })();
 
-    res.json({ data: loadTaskDocuments(task.id, me) });
+    res.json({ data: loadTaskDocuments(task.id, me), ...taskMutationVersion(task.id) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PUT /:id/documents error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2586,8 +2760,9 @@ router.get('/:id/comments', (req, res) => {
     const me = req.authUserId || req.session.userId;
     const task = findVisibleTask(req.params.id, me);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
-    res.json({ data: loadTaskComments(task.id) });
+    res.json({ data: loadTaskComments(task.id), ...taskMutationVersion(task.id) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id/comments error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2599,7 +2774,7 @@ router.post('/:id/comments', (req, res) => {
     const me = req.authUserId || req.session.userId;
     const task = db.get().prepare(`
       SELECT t.id, t.title FROM tasks t
-      WHERE t.id = ? AND ${visibilityWhere('t', 'task_assignments', 'task_id')}
+      WHERE t.id = ? AND ${taskVisibilityWhere(db.get(), me, 't')}
     `).get(req.params.id, me, me);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
 
@@ -2617,9 +2792,10 @@ router.post('/:id/comments', (req, res) => {
       FROM task_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?
     `).get(result.lastInsertRowid);
 
-    res.status(201).json({ data: row });
+    res.status(201).json({ data: row, ...taskMutationVersion(task.id) });
     notifyMentions(task, row, me);
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('POST /:id/comments error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2649,12 +2825,13 @@ router.patch('/:id/comments/:commentId', (req, res) => {
              u.display_name AS author_name, u.avatar_color AS author_color
       FROM task_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?
     `).get(found.row.id);
-    res.json({ data: row });
+    res.json({ data: row, ...taskMutationVersion(found.task.id) });
     // Wer beim Korrigieren jemanden dazuholt, meint ihn genauso wie beim
     // Schreiben - ohne diesen Aufruf staende der Name farbig da und niemand
     // erfuehre davon.
     notifyMentions(found.task, row, found.me, found.row.comment);
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PATCH /:id/comments/:commentId error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2670,8 +2847,9 @@ router.delete('/:id/comments/:commentId', (req, res) => {
       });
     }
     db.get().prepare('DELETE FROM task_comments WHERE id = ?').run(found.row.id);
-    res.json({ data: { id: found.row.id } });
+    res.json({ data: { id: found.row.id }, ...taskMutationVersion(found.task.id) });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('DELETE /:id/comments/:commentId error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2703,6 +2881,7 @@ router.get('/meta/options', (req, res) => {
       default_points: defaultTaskPoints(),
     });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /meta/options error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2728,6 +2907,7 @@ router.get('/points/affected', (req, res) => {
     }
     res.json({ data: { count: countRebasableTasks(points) } });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /points/affected error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2764,6 +2944,7 @@ router.post('/points/rebase', (req, res) => {
 
     res.json({ data: { updated: result.changes } });
   } catch (err) {
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('POST /points/rebase error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }

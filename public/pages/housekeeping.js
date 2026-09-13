@@ -16,6 +16,12 @@ import { wireScrollFade } from '/utils/ux.js';
 import { amountPlaceholder, amountStep, amountIsSavable, smallestUnitLabel } from '/utils/money.js';
 import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 
+function paymentTaskRevision(visit) {
+  return {
+    ...(Number.isInteger(visit.payment_task_revision) ? {expected_revision:visit.payment_task_revision} : {}),
+    ...(Number.isInteger(visit.payment_task_parent_revision) ? {expected_parent_revision:visit.payment_task_parent_revision} : {}),
+  };
+}
 
 
 function localDate(d = new Date()) {
@@ -609,7 +615,7 @@ function renderReports(content) {
       const visit = visits.find((item) => String(item.id) === btn.dataset.payReport);
       if (!visit) return;
       try {
-        await api.post(`/housekeeping/visits/${visit.id}/pay`, {});
+        await api.post(`/housekeeping/visits/${visit.id}/pay`, paymentTaskRevision(visit));
         window.yuvomi?.showToast(t('housekeeping.visitPaidToast'), 'success');
         await loadData();
         renderReports(content);
@@ -657,7 +663,7 @@ function openVisitReportModal(visit, content = null) {
     onSave(panel) {
       panel.querySelector('#visit-report-pay')?.addEventListener('click', async () => {
         try {
-          await api.post(`/housekeeping/visits/${visit.id}/pay`, {});
+          await api.post(`/housekeeping/visits/${visit.id}/pay`, paymentTaskRevision(visit));
           window.yuvomi?.showToast(t('housekeeping.visitPaidToast'), 'success');
           closeModal({ force: true });
           await loadData();
@@ -746,7 +752,7 @@ function renderStaff(content) {
       const visit = state.staffVisits.find((item) => String(item.id) === btn.dataset.payVisit);
       if (!visit) return;
       try {
-        await api.post(`/housekeeping/visits/${visit.id}/pay`, {});
+        await api.post(`/housekeeping/visits/${visit.id}/pay`, paymentTaskRevision(visit));
         window.yuvomi?.showToast(t('housekeeping.visitPaidToast'), 'success');
         await loadData();
         await loadStaffVisits();
@@ -763,7 +769,7 @@ function renderStaff(content) {
       if (!await confirmModal(t('housekeeping.deleteVisitConfirm'),
         { danger: true, confirmLabel: t('common.delete'), detail: t('housekeeping.deleteVisitConfirmDetail') })) return;
       try {
-        await api.delete(`/housekeeping/visits/${visit.id}`);
+        await api.delete(`/housekeeping/visits/${visit.id}`, paymentTaskRevision(visit));
         window.yuvomi?.showToast(t('housekeeping.visitDeletedToast'), 'success');
         await loadData();
         await loadStaffVisits();
@@ -983,6 +989,7 @@ function openVisitEditModal(visit, content, { onDone } = {}) {
             receiptDocumentId = receipt.data?.id || receiptDocumentId;
           }
           await api.put(`/housekeeping/visits/${visit.id}`, {
+            ...paymentTaskRevision(visit),
             date: dateValue,
             ...(visit.rate_type === 'hourly'
               ? { minutes_worked: minutesWorked }

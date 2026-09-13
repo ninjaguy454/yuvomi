@@ -1,3 +1,4 @@
+import { canCapability } from '/permissions.js';
 import { api } from '/api.js';
 import { renderPlacesManager } from '/components/activity-automation.js';
 import { t } from '/i18n.js';
@@ -24,7 +25,7 @@ async function renderReadOnlyAddressBook(host) {
   const places = response.data || [];
   host.insertAdjacentHTML('beforeend', `
     <div class="automation-manager__header"><strong>Places address book</strong></div>
-    <p class="form-hint automation-manager__hint">Household administrators can add, search, and edit reusable Places. Everyone can view saved destinations and open them in Google Maps.</p>
+    <p class="form-hint automation-manager__hint">Members with Place management permission can add, search, and edit reusable Places. Everyone can view saved destinations and open them in Google Maps.</p>
     <div class="automation-list">${places.map((place) => {
       const destination = mapsUrl(place);
       return `<div class="list-row automation-list-row">
@@ -49,7 +50,7 @@ export async function render(container, { user } = {}) {
     </div>`);
 
   const host = container.querySelector('#places-address-book');
-  if (user?.role !== 'admin') {
+  if (user?.role !== 'admin' && !canCapability('places.manage')) {
     await renderReadOnlyAddressBook(host);
     return;
   }

@@ -17,6 +17,7 @@ process.env.DB_PATH = ':memory:';
 
 import assert from 'node:assert/strict';
 import express from 'express';
+import { persistPreferenceActor } from './helpers/preferences-actor-fixture.js';
 import test from 'node:test';
 
 const { get } = await import('../server/db.js');
@@ -57,6 +58,7 @@ function startApp() {
   app.use((req, _res, next) => {
     req.authUserId = currentUserId;
     req.authRole = currentRole;
+    persistPreferenceActor(get(), req);
     next();
   });
   app.use('/', preferencesRouter);

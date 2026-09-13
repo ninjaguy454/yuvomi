@@ -2,7 +2,7 @@ import { op, jsonBody, idParam } from '../helpers.js';
 
 /** Places, availability/presence, trips and Calendar planning projections. */
 export function planningPaths() {
-  return {
+  const paths = {
     '/api/v1/planning/places': {
       get: op({
         summary: 'List reusable Vidamia Places',
@@ -144,9 +144,12 @@ export function planningPaths() {
           { name: 'start_at', in: 'query', required: false, schema: { type: 'string', format: 'date-time' } },
           { name: 'end_at', in: 'query', required: false, schema: { type: 'string', format: 'date-time' } },
           { name: 'place_id', in: 'query', required: false, schema: { type: 'integer' } },
+          { name: 'window_mode', in: 'query', required: false, schema: { type: 'string', enum: ['start', 'due', 'completion'] } },
+          { name: 'required_duration_minutes', in: 'query', required: false, schema: { type: 'number', minimum: 0.001, maximum: 527040 } },
         ],
-        description: 'Combines recurring rules and dated periods and returns eligibility plus the contributing availability signals.',
+        description: 'Single explained resolver: manual Availability overrides, dated/trip periods, rotating routines, weekly rules, advisory Calendar. Returns interval windows, continuous available_windows, qualifying_window, eligibility/reason, provenance, and a separate inferred current_presence. A roster day off removes only that roster restriction. Missing cycle days are unknown, not free. Range is limited to 731 days.',
       }),
     },
   };
+  return { ...paths, '/api/v1/planning/availability/{userId}': paths['/api/v1/planning/presence/{userId}'] };
 }

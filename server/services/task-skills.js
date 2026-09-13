@@ -40,8 +40,8 @@ export function assertTaskSkillAssignments(d, skillIds, userIds, dateKey = today
   const members = householdMembers(d);
   for (const userId of userIds) {
     const member = members.find((item) => Number(item.id) === Number(userId));
-    if (!member || skills.some((skill) => effectiveSkillProficiency(d, skill, member, dateKey).proficiency !== 'normal')) {
-      throw new TaskSkillError('Choose someone who can independently perform every required skill.');
+    if (!member || skills.some((skill) => effectiveSkillProficiency(d, skill, member, dateKey).proficiency === 'excluded')) {
+      throw new TaskSkillError('Choose someone permitted to perform every required skill, independently or with supervision.');
     }
   }
 }
@@ -81,10 +81,17 @@ export function attachTaskSkills(d, tasks) {
     if (!byTask.has(taskId)) byTask.set(taskId, []);
     byTask.get(taskId).push(skill);
   }
+  const parentIds = [...new Set(tasks.map(task => task.parent_task_id).filter(Boolean))];
+  const parents = parentIds.length ? new Map(d.prepare(`SELECT p.id,p.assigned_to,u.display_name AS assigned_name
+    FROM tasks p LEFT JOIN users u ON u.id=p.assigned_to WHERE p.id IN (${parentIds.map(()=>'?').join(',')})`)
+    .all(...parentIds).map(row=>[Number(row.id),row])) : new Map();
   for (const task of tasks) {
     task.skills = byTask.get(task.id) || [];
     task.skill_ids = task.skills.map((skill) => skill.id);
-    task.skill_assignment_needed = task.skill_ids.length > 0 && task.assigned_to == null;
+    const parent = parents.get(Number(task.parent_task_id));
+    task.effective_assignee_id = task.assigned_to ?? parent?.assigned_to ?? null;
+    task.effective_assignee_name = task.assigned_name || (task.assigned_to == null ? parent?.assigned_name : null) || null;
+    task.skill_assignment_needed = task.skill_ids.length > 0 && task.effective_assignee_id == null;
   }
   return tasks;
 }

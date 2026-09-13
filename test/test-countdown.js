@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 /**
  * Modul: Countdowns (#647)
  * Zweck: Die drei Zusicherungen, an denen dieses Feature hängt:
@@ -436,7 +437,7 @@ test('das Zurücksetzen einer Serie nimmt die Markierung mit (#647 + #658)', asy
   const base = `http://127.0.0.1:${server.address().port}/api/v1/tasks`;
 
   try {
-    const created = await fetch(base, {
+    const created = await modernTaskFetch(get(),base, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -451,7 +452,7 @@ test('das Zurücksetzen einer Serie nimmt die Markierung mit (#647 + #658)', asy
     const { data: task } = await created.json();
     assert.equal(task.countdown, 1, 'die Markierung kam beim Anlegen nicht an');
 
-    const done = await fetch(`${base}/${task.id}/status`, {
+    const done = await modernTaskFetch(get(),`${base}/${task.id}/status`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'done' }),
@@ -493,7 +494,7 @@ test('ein PUT ohne das Feld löscht eine gesetzte Markierung nicht', async () =>
 
   try {
     const id = seedTask({ title: 'Versicherung', due: '2026-12-01', countdown: 1 });
-    const res = await fetch(`${base}/${id}`, {
+    const res = await modernTaskFetch(get(),`${base}/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title: 'Versicherung', due_date: '2026-12-01' }),

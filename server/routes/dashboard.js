@@ -1,3 +1,4 @@
+import { taskVisibilityWhere } from '../services/task-access.js';
 /**
  * Modul: Dashboard
  * Zweck: Aggregierter Endpoint - liefert Daten aller Dashboard-Widgets in einem Request
@@ -130,6 +131,7 @@ router.get('/', (req, res) => {
   const d = db.get();
   const result = {};
   const userId = req.authUserId || req.session.userId;
+  const includeSupervision = !!db.get().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_activity_support_tasks'").get();
 
   /* WIDGET-OPTIONEN KOMMEN ALS QUERY-PARAMETER, NICHT AUS DEM GESPEICHERTEN
    * LAYOUT (#814). Der Server kennt die Widget-Ids bewusst nicht - sie gehören
@@ -254,8 +256,8 @@ router.get('/', (req, res) => {
         -- archivierte Aufgabe ist aus dem Lauf genommen, und wer sie von hier aus
         -- öffnete, fand sie in der Liste nicht wieder.
         AND t.archived_at IS NULL
-        AND ${taskScopeWhere('t', { bind: '@today' })}
-        AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}${taskCategoryAnd}
+        AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
+        AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
       ORDER BY
         CASE WHEN __due_sort IS NOT NULL AND __due_sort < @now THEN 0 ELSE 1 END ASC,
         __due_sort IS NULL ASC,
@@ -282,8 +284,8 @@ router.get('/', (req, res) => {
     result.openTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
       WHERE t.status != 'done' AND t.archived_at IS NULL
-        AND ${taskScopeWhere('t', { bind: '@today' })}
-        AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}${taskCategoryAnd}
+        AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
+        AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
     `).get({ me: userId, today: todayLocalKey, ...taskCategoryBinds }).n;
   } catch (err) {
     log.error('openTaskCount error:', err.message);
@@ -297,8 +299,8 @@ router.get('/', (req, res) => {
       SELECT COUNT(*) AS n FROM tasks t
       WHERE t.status != 'done' AND t.archived_at IS NULL
         AND t.due_date IS NOT NULL AND t.due_date < @today
-        AND ${taskScopeWhere('t', { bind: '@today' })}
-        AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}${taskCategoryAnd}
+        AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
+        AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
     `).get({ today: todayLocalKey, me: userId, ...taskCategoryBinds }).n;
   } catch (err) {
     log.error('overdueTaskCount error:', err.message);
@@ -692,8 +694,8 @@ router.get('/', (req, res) => {
       FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
       WHERE t.status != 'done' AND t.archived_at IS NULL
         AND t.due_date IS NOT NULL AND t.due_date <= @today
-        AND ${taskScopeWhere('t', { bind: '@today' })}
-        AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}${taskCategoryAnd}
+        AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
+        AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
       GROUP BY ta.user_id
     `).all({ today: todayLocalKey, me: userId, ...taskCategoryBinds });
   } catch (err) {
@@ -709,8 +711,8 @@ router.get('/', (req, res) => {
       SELECT COUNT(*) AS n FROM tasks t
       WHERE t.status = 'done' AND t.archived_at IS NULL
         AND t.due_date = @today
-        AND ${taskScopeWhere('t', { bind: '@today' })}
-        AND ${visibilityWhere('t', 'task_assignments', 'task_id', '@me')}${taskCategoryAnd}
+        AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
+        AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
     `).get({ today: todayLocalKey, me: userId, ...taskCategoryBinds }).n;
   } catch (err) {
     log.error('tasksDoneToday error:', err.message);

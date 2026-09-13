@@ -47,7 +47,10 @@ test('10028 upgrades once to10029 without modifying existing Tasks, activities o
     assert.deepEqual([...first.matchAll(/Migration (\d+) applied:/g)].map((match) => Number(match[1])),
       ALL_MIGRATIONS.filter((migration) => migration.version > 10028).map((migration) => migration.version));
     d = new Database(path); d.pragma('foreign_keys=ON');
-    assert.deepEqual(d.prepare('SELECT * FROM tasks WHERE id IN (?,?) ORDER BY id').all(taskId, childId), tasksBefore);
+    const oldTaskColumns=Object.keys(tasksBefore[0]).join(',');
+    assert.deepEqual(d.prepare(`SELECT ${oldTaskColumns} FROM tasks WHERE id IN (?,?) ORDER BY id`).all(taskId, childId), tasksBefore);
+    assert.deepEqual(d.prepare('SELECT revision,sort_order FROM tasks WHERE id IN (?,?) ORDER BY id').all(taskId,childId),
+      [{revision:1,sort_order:0},{revision:1,sort_order:0}]);
     assert.deepEqual(d.prepare('SELECT * FROM activity_templates WHERE id=?').get(activityId), {
       ...activityBefore, priority: 'none', points: 0, tags_json: '[]',
     });

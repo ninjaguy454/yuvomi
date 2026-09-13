@@ -94,6 +94,8 @@ async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin
     await import('/components/datepicker.js');
     const { handleBackNavigation } = await import('/utils/overlay-history.js');
     addEventListener('popstate', () => handleBackNavigation());
+    const { setPermissions } = await import('/permissions.js');
+    setPermissions({ admin: role === 'admin', capabilities: Object.fromEntries(['tasks.create', 'tasks.change_priority', 'tasks.change_points', 'tasks.change_category_tags', 'tasks.change_dates', 'tasks.change_assignment', 'tasks.change_required_skills', 'activities.view', 'workflows.view', 'workflows.run'].map(key => [key, 'allow'])) });
     const { render } = await import('/pages/tasks.js');
     await render(document.querySelector('#fixture'), { user: { id: userId, role } });
   }, { userId, role });

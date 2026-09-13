@@ -3,12 +3,14 @@ import http from 'node:http';
 import test from 'node:test';
 import express from 'express';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { modernTaskMutationBody } from './helpers/task-client-revision-fixture.js';
 
 process.env.DB_PATH = ':memory:';
 process.env.TZ = 'UTC';
 
 const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
+const { inspectTaskSupervision } = await import('../server/services/task-supervision.js');
 
 function buildTestDb() {
   const database = new Database(':memory:');
@@ -106,9 +108,9 @@ db.prepare(`
 const app = express();
 app.use(express.json());
 app.use((req, _res, next) => {
-  req.authUserId = admin;
-  req.authRole = 'admin';
-  req.session = { userId: admin, role: 'admin' };
+  req.authUserId = Number(req.headers['x-test-user']) || admin;
+  req.authRole = db.prepare('SELECT role FROM users WHERE id=?').get(req.authUserId).role;
+  req.session = { userId: req.authUserId, role: req.authRole };
   next();
 });
 app.use('/api/v1/tasks', tasksRouter);
@@ -118,14 +120,22 @@ await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const base = `http://127.0.0.1:${server.address().port}/api/v1/tasks`;
 test.after(() => server.close());
 
-async function call(method, path, body) {
+async function call(method, path, body, actorId = admin) {
+  body=modernTaskMutationBody(db,method,path,body);
   const response = await fetch(`${base}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'x-test-user': String(actorId) },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await response.text();
   return { status: response.status, body: text ? JSON.parse(text) : null };
+}
+
+// These recurrence tests deliberately confirm parent completion. Supervision is
+// completed by its assigned helper; permission/gate rejection has its own suite.
+async function finish(id) {
+  const action = inspectTaskSupervision(db,id).actions.find(row=>['assigned','unresolved'].includes(row.state)&&!row.completed);
+  return call('PATCH', `/${id}/status`, {status:'done',complete_remaining:true}, action?.supervisor_user_id || action?.eligible_supervisors[0]?.id || admin);
 }
 
 function task(id) {
@@ -202,7 +212,7 @@ test('recurring Activity Template task re-resolves eligible round robin each occ
     [{ title: 'Move laundry to the dryer' }],
   );
 
-  assert.equal((await call('PATCH', `/${first.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await finish(first.id)).status, 200);
   const second = followupOf(first.id);
   assert.ok(second);
   assert.ok([grace, mom].includes(second.assigned_to));
@@ -218,7 +228,7 @@ test('recurring Activity Template task re-resolves eligible round robin each occ
   // Eligibility is evaluated again for the next occurrence, not frozen as a
   // roster when the series was first created.
   setProficiency(first.assigned_to, laundrySkill, 'excluded');
-  assert.equal((await call('PATCH', `/${second.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await finish(second.id)).status, 200);
   const third = followupOf(second.id);
   assert.ok(third);
   assert.equal(third.assigned_to, second.assigned_to);
@@ -286,14 +296,14 @@ test('recurrence undo treats regenerated supervision as part of the untouched ne
   const source = task(created.body.data.id);
   assert.ok(supportOf(source.id));
 
-  await call('PATCH', `/${source.id}/status`, { status: 'done' });
+  await finish(source.id);
   const next = followupOf(source.id);
   assert.ok(next);
   const nextSupport = supportOf(next.id);
   assert.ok(nextSupport);
   assert.ok(nextSupport.recurrence_origin_id, 'generated support work links to prior occurrence support');
 
-  const reopened = await call('PATCH', `/${source.id}/status`, { status: 'open' });
+  const reopened = await call('PATCH', `/${source.id}/status`, { status: 'open', reset_progress: true });
   assert.equal(reopened.status, 200);
   assert.equal(followupOf(source.id), undefined, 'untouched generated occurrence is discarded atomically');
 });
@@ -312,7 +322,7 @@ test('legacy manual task round robin remains independent when no Activity Templa
   assert.equal(bindingOf(first.id), undefined);
   assert.equal(first.assignment_mode, 'round_robin');
 
-  await call('PATCH', `/${first.id}/status`, { status: 'done' });
+  await finish(first.id);
   const next = followupOf(first.id);
   assert.ok(next);
   assert.equal(next.assignment_mode, 'round_robin');
@@ -352,8 +362,8 @@ test('root-only recurrence keeps template subtasks, supervision and responsibili
   assert.ok(responsibilityRoles.includes('beneficiary'));
   assert.ok(responsibilityRoles.includes('supervisor'));
 
-  assert.equal((await call('PATCH', `/${sourceChecklist.id}/status`, { status: 'done' })).status, 200);
-  assert.equal((await call('PATCH', `/${source.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await finish(sourceChecklist.id)).status, 200);
+  assert.equal((await finish(source.id)).status, 200);
 
   const next = followupOf(source.id);
   assert.ok(next, 'the recurring root creates one top-level follow-up');
@@ -378,7 +388,7 @@ test('root-only recurrence keeps template subtasks, supervision and responsibili
 
   // recurrence_origin_id also links copied subtasks. Reopening the old child
   // must not mistake its copied child for the root follow-up and delete it.
-  assert.equal((await call('PATCH', `/${sourceChecklist.id}/status`, { status: 'open' })).status, 200);
+  assert.equal((await call('PATCH', `/${sourceChecklist.id}/status`, { status: 'open', reset_progress: true })).status, 200);
   assert.ok(task(next.id), 'the top-level next occurrence remains');
   assert.ok(task(nextChecklist[0].id), 'its copied checklist remains');
   assert.ok(task(nextSupport.id), 'its generated supervision work remains');
@@ -425,7 +435,7 @@ test('bound recurrence preserves assigned-subtask participation and private pare
        AND source = 'subtasks' AND status = 'active'
   `).get(source.id, frank));
 
-  assert.equal((await call('PATCH', `/${source.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await finish(source.id)).status, 200);
   const next = followupOf(source.id);
   assert.ok(next);
   const copiedSubtask = db.prepare(`
@@ -464,7 +474,7 @@ test('recurrence treats an empty Task-owned checklist as authoritative after tem
     INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order)
     VALUES (?, 'Added after the Task was authored', 0)
   `).run(emptyActivity);
-  assert.equal((await call('PATCH', `/${emptySource.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await finish(emptySource.id)).status, 200);
   const emptyNext = followupOf(emptySource.id);
   assert.ok(emptyNext);
   assert.equal(db.prepare(`
@@ -504,7 +514,7 @@ test('recurrence treats an empty Task-owned checklist as authoritative after tem
        SET title_template = 'Current template replacement'
      WHERE activity_template_id = ?
   `).run(deletedActivity);
-  assert.equal((await call('PATCH', `/${deletedSource.id}/status`, { status: 'done' })).status, 200);
+  assert.equal((await finish(deletedSource.id)).status, 200);
   const deletedNext = followupOf(deletedSource.id);
   assert.ok(deletedNext);
   assert.equal(db.prepare(`
@@ -539,30 +549,34 @@ test('normal-to-supervised recurrence traces new support and preserves touched f
     const source = task(created.body.data.id);
     assert.equal(supportOf(source.id), undefined, 'normal proficiency needs no support work');
     setProficiency(grace, skill, 'supervised');
-    assert.equal((await call('PATCH', `/${source.id}/status`, { status: 'done' })).status, 200);
+    assert.equal((await finish(source.id)).status, 200);
     const next = followupOf(source.id);
     const support = supportOf(next.id);
     assert.ok(support, 'the next occurrence reflects newly supervised proficiency');
-    assert.equal(support.recurrence_origin_id, source.id, 'first support links to the previous root occurrence');
+    assert.equal(support.recurrence_origin_id, supportOf(source.id)?.id || source.id,
+      'fresh support links to the prior support created by current-eligibility revalidation, or the prior root');
     return { source, next, support };
   }
 
   const untouched = await createNext('Untouched newly supervised recurrence');
-  assert.equal((await call('PATCH', `/${untouched.source.id}/status`, { status: 'open' })).status, 200);
+  assert.equal((await call('PATCH', `/${untouched.source.id}/status`, { status: 'open', reset_progress: true })).status, 200);
   assert.equal(followupOf(untouched.source.id), undefined, 'an untouched generated support row is safely reversible');
 
   const edited = await createNext('Edited newly supervised recurrence');
   const editedSupport = await call('PUT', `/${edited.support.id}`, {
     title: 'Household-edited supervision work',
   });
-  assert.equal(editedSupport.status, 200, JSON.stringify(editedSupport.body));
-  assert.equal((await call('PATCH', `/${edited.source.id}/status`, { status: 'open' })).status, 200);
-  assert.ok(followupOf(edited.source.id), 'editing new support prevents destructive recurrence undo');
+  assert.equal(editedSupport.status, 403, 'linked supervisor work cannot be independently redefined');
+  const discussion = await call('POST', `/${edited.support.id}/comments`, { comment: 'Please bring the clean sheets.' });
+  assert.equal(discussion.status, 201, JSON.stringify(discussion.body));
+  assert.equal((await call('PATCH', `/${edited.source.id}/status`, { status: 'open', reset_progress: true })).status, 200);
+  assert.ok(followupOf(edited.source.id), 'discussion on new support prevents destructive recurrence undo');
 
   const deleted = await createNext('Deleted newly supervised recurrence');
-  assert.equal((await call('DELETE', `/${deleted.support.id}`)).status, 200);
-  assert.equal((await call('PATCH', `/${deleted.source.id}/status`, { status: 'open' })).status, 200);
-  assert.ok(followupOf(deleted.source.id), 'deleting new support prevents destructive recurrence undo');
+  assert.equal((await call('DELETE', `/${deleted.support.id}`)).status, 403, 'linked supervisor work cannot be detached by deleting its projection');
+  assert.equal((await call('POST', `/${deleted.support.id}/comments`, { comment: 'Keep this occurrence for the upcoming visit.' })).status, 201);
+  assert.equal((await call('PATCH', `/${deleted.source.id}/status`, { status: 'open', reset_progress: true })).status, 200);
+  assert.ok(followupOf(deleted.source.id), 'commented helper work prevents destructive recurrence undo');
 });
 
 test('Activity round-robin cursor rolls back on failed recurrence and retry advances it exactly once', async () => {
@@ -608,7 +622,7 @@ test('Activity round-robin cursor rolls back on failed recurrence and retry adva
       SELECT RAISE(ABORT, 'forced follow-up binding failure');
     END
   `);
-  const failed = await call('PATCH', `/${source.id}/status`, { status: 'done' });
+  const failed = await finish(source.id);
   assert.equal(failed.status, 500);
   assert.equal(task(source.id).status, 'open', 'completion rolls back with the failed follow-up');
   assert.equal(followupOf(source.id), undefined, 'no partial root follow-up remains');
@@ -620,7 +634,7 @@ test('Activity round-robin cursor rolls back on failed recurrence and retry adva
     .get(activity).n, 1, 'only the original binding remains');
   db.exec('DROP TRIGGER fail_retry_safe_followup_binding');
 
-  const retried = await call('PATCH', `/${source.id}/status`, { status: 'done' });
+  const retried = await finish(source.id);
   assert.equal(retried.status, 200, JSON.stringify(retried.body));
   const next = followupOf(source.id);
   assert.ok(next);
@@ -637,7 +651,7 @@ test('Activity round-robin cursor rolls back on failed recurrence and retry adva
        AND NOT EXISTS (SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id = t.id)
   `).get(next.id).n, 1, 'retry creates the template subtask exactly once');
 
-  const repeated = await call('PATCH', `/${source.id}/status`, { status: 'done' });
+  const repeated = await finish(source.id);
   assert.equal(repeated.status, 200);
   assert.equal(
     db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE recurrence_origin_id = ? AND parent_task_id IS NULL')

@@ -1,9 +1,11 @@
+import { canCapability, isPermAdmin } from '/permissions.js';
 import { api } from '/api.js';
 import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
 import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
-import { t } from '/i18n.js';
+import { t, formatTime } from '/i18n.js';
+import { zonedFields } from '/utils/timezone.js';
 import { esc } from '/utils/html.js';
 import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOptions } from '/components/variable-expression-editor.js';
 import { renameExpressionReference } from '/utils/variable-expressions.js';
@@ -490,16 +492,16 @@ const AUTOMATION_TABS = [
   ['variables', 'Variables'],
 ];
 
-function validAutomationTab(tab) {
-  return AUTOMATION_TABS.some(([key]) => key === tab) ? tab : 'skills';
-}
+function allowedAutomationTabs() { return AUTOMATION_TABS.filter(([key]) => key === 'variables' ? isPermAdmin() : canCapability(({ skills: 'skills.manage', activities: 'activities.view', workflows: 'workflows.view' })[key])); }
+function validAutomationTab(tab) { const allowed = allowedAutomationTabs(); return allowed.some(([key]) => key === tab) ? tab : allowed[0]?.[0]; }
 
 export async function renderAutomationManager(container, { tab = 'skills', onTabChange = null } = {}) {
   const activeTab = validAutomationTab(tab);
+  if (!activeTab) { replaceHtml(container, '<p class="form-hint">No automation sections are available for this account.</p>'); return; }
   replaceHtml(container, `
     <div class="automation-manager">
       <div class="group-toggle automation-tabs" role="tablist" aria-label="Household automation sections">
-        ${AUTOMATION_TABS.map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === activeTab}" class="group-toggle__btn ${key === activeTab ? 'group-toggle__btn--active' : ''}" data-automation-tab="${key}">${h(label)}</button>`).join('')}
+        ${allowedAutomationTabs().map(([key, label]) => `<button type="button" role="tab" aria-selected="${key === activeTab}" class="group-toggle__btn ${key === activeTab ? 'group-toggle__btn--active' : ''}" data-automation-tab="${key}">${h(label)}</button>`).join('')}
       </div>
       <div class="automation-manager__body"><p class="form-hint">Loading…</p></div>
     </div>`);
@@ -539,6 +541,14 @@ async function loadManagerTab(panel, tab, manager) {
     else if (tab === 'places') await renderPlacesManager(body, manager);
     else if (tab === 'availability') await renderAvailabilityManager(body, manager);
     else await renderTripsManager(body, manager);
+    if (tab === 'activities') {
+      if (!canCapability('activities.create')) body.querySelector('#automation-add-activity')?.remove();
+      if (!canCapability('activities.edit')) body.querySelectorAll('[data-edit-activity], [data-delete-activity]').forEach(el => el.remove());
+    }
+    if (tab === 'workflows') {
+      if (!canCapability('workflows.create')) body.querySelector('#automation-add-workflow')?.remove();
+      if (!canCapability('workflows.edit')) body.querySelectorAll('[data-edit-workflow], [data-delete-workflow]').forEach(el => el.remove());
+    }
     if (window.lucide) window.lucide.createIcons({ el: body });
   } catch (error) {
     replaceHtml(body, `<p class="form-hint">${h(error.message || 'Could not load automation settings.')}</p>`);
@@ -723,6 +733,7 @@ export async function renderPlacesManager(body, manager) {
     }).join('') || '<p class="form-hint">No Places yet. Start with Home, then add rooms or recurring destinations.</p>'}</div>`);
   body.querySelector('#automation-add-place')?.addEventListener('click', () => openPlaceForm(null, places, manager));
   body.querySelector('#automation-find-place')?.addEventListener('click', () => openPlaceSearchForm(places, manager));
+  if (!isPermAdmin()) body.querySelector('#automation-configure-google')?.remove();
   body.querySelector('#automation-configure-google')?.addEventListener('click', () => openGooglePlacesConfig(manager));
   body.querySelectorAll('[data-edit-place]').forEach((button) => button.addEventListener('click', () => openPlaceForm(places.find((row) => Number(row.id) === Number(button.dataset.editPlace)), places, manager)));
   body.querySelectorAll('[data-delete-place]').forEach((button) => button.addEventListener('click', async () => {
@@ -922,7 +933,7 @@ function openTripForm(trip, context, manager) {
     <div class="automation-workflow-condition">${inputRow('Trip type', `<select class="input" name="trip_type">${[['vacation','Vacation'],['business','Business'],['family','Family visit'],['road_trip','Road trip'],['other','Other']].map(([value,label]) => `<option value="${value}" ${trip?.trip_type === value ? 'selected' : ''}>${label}</option>`).join('')}</select>`)}${inputRow('Status', `<select class="input" name="status">${['planning','active','completed','cancelled'].map((value) => `<option value="${value}" ${trip?.status === value ? 'selected' : ''}>${value}</option>`).join('')}</select>`)}</div>
     <fieldset class="automation-fieldset"><legend class="label">Travelers</legend>${members.map((member) => `<label class="automation-check-row"><input type="checkbox" name="participant_id" value="${member.id}" ${selected.has(Number(member.id)) ? 'checked' : ''}>${h(member.display_name)}</label>`).join('')}</fieldset>
     <div class="automation-workflow-condition">${inputRow('Destination Place', `<select class="input" name="destination_place_id">${placeOptions(places, trip?.destination_place_id, 'No saved destination')}</select>`)}${inputRow('Lodging Place', `<select class="input" name="lodging_place_id">${placeOptions(places, trip?.lodging_place_id, 'No saved lodging')}</select>`)}</div>
-    <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at))}">`)}</div>
+    <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at, context.timezone))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at, context.timezone))}">`)}</div>
     ${inputRow('Notes', `<textarea class="input" name="notes" rows="3">${h(trip?.notes || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="create_away_periods" ${trip?.create_away_periods !== 0 ? 'checked' : ''}> Create matching Away periods for travelers</label>
     <fieldset class="automation-fieldset"><legend class="label">Create optional trip Tasks</legend><p class="form-hint">Tasks are dated relative to the trip phase and linked to the relevant saved Place.</p>${TRIP_TASKS.map(([phase,title], index) => `<label class="automation-check-row"><input type="checkbox" name="trip_task" value="${index}">${h(title)} <small class="form-hint">(${h(phase.replaceAll('_',' '))})</small></label>`).join('')}<div data-custom-trip-tasks></div><button class="btn btn--ghost" type="button" data-add-trip-task>+ Add task</button></fieldset>
@@ -948,7 +959,7 @@ function openTripForm(trip, context, manager) {
         const phase = row.querySelector('[name="custom_trip_task_phase"]')?.value;
         if (title) tasks.push({ phase, title });
       });
-      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at'), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks };
+      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: preservePlanningInstant(data.get('starts_at'), trip?.starts_at, context.timezone), ends_at: preservePlanningInstant(data.get('ends_at'), trip?.ends_at, context.timezone), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks };
       try { if (trip) await api.put(`/planning/admin/trips/${trip.id}`, payload); else await api.post('/planning/admin/trips', payload); toast('Trip saved.'); await refreshAutomationManager(manager, 'trips'); }
       catch (error) { toast(error.message, 'danger'); }
     });
@@ -994,28 +1005,135 @@ function availabilityCategoryOptions(selected = 'general') {
     .map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
-function localDateTimeValue(value) { return value ? String(value).slice(0, 16) : ''; }
+function localDateTimeValue(value, timezone) {
+  if (!value) return '';
+  const fields = zonedFields(value, timezone);
+  if (!fields) return '';
+  const pad = (number) => String(number).padStart(2, '0');
+  return `${fields.year}-${pad(fields.month)}-${pad(fields.day)}T${pad(fields.hour)}:${pad(fields.minute)}`;
+}
+
+function preservePlanningInstant(value, original, timezone) {
+  // A note-only edit must not discard seconds or turn the later DST occurrence
+  // into the earlier one when datetime-local can display only the wall clock.
+  return original && value === localDateTimeValue(original, timezone) ? original : value;
+}
+
+const availabilityMounts = new WeakMap();
+
+function availabilitySignalLabel(signal) {
+  return signal?.rule_name || signal?.pattern_name || signal?.shift_name || signal?.context_name || signal?.trip_name || signal?.title || signal?.note || signal?.source || 'No active signal';
+}
+
+function planningTime(value, timezone) {
+  if (!value) return '';
+  const fields = zonedFields(value, timezone);
+  if (!fields) return String(value);
+  const pad = (number) => String(number).padStart(2, '0');
+  return formatTime(`${fields.year}-${pad(fields.month)}-${pad(fields.day)}T${pad(fields.hour)}:${pad(fields.minute)}`);
+}
+
+function planningTimeRange(start, end, timezone) {
+  const first = zonedFields(start, timezone);
+  const last = zonedFields(end, timezone);
+  const crossesDate = first && last && (first.year !== last.year || first.month !== last.month || first.day !== last.day);
+  return `${planningTime(start, timezone)}–${planningTime(end, timezone)}${crossesDate ? ' (next day)' : ''}`;
+}
+
+function currentLocationHTML(snapshots) {
+  return snapshots.map(({ member, value, error }) => {
+    if (error) return `<div class="automation-presence-card"><strong>${h(member.display_name || member.username)}</strong><span>Current location unavailable</span><small>${h(error)}</small></div>`;
+    const presence = value?.current_presence;
+    const place = presence?.place;
+    // The legacy top-level effective signal can be an advisory Calendar event.
+    const availability = value?.windows?.[0];
+    return `<div class="automation-presence-card"><strong>${h(member.display_name || member.username)}</strong><span>Expected location: ${h(place?.path_label || place?.name || 'Unknown')}</span><small>${h(presence?.reason || 'No current location signal')}</small><small>Source: ${h(presence?.source || 'None')}${presence?.at ? ` · checked ${h(planningTime(presence.at, value?.timezone))}` : ''}</small><small>Availability now: ${h(availability?.effective?.custom_state || availability?.state || 'unknown')}</small></div>`;
+  }).join('');
+}
+
+function availabilityWindowsHTML(result) {
+  const windows = result?.windows || [];
+  return `<p class="form-hint">${h(result?.reason || 'No availability information for this day.')}</p>
+    ${(result?.warnings || []).length ? `<div class="schedule-warnings" role="status">${result.warnings.map((warning) => `<p>${h(typeof warning === 'string' ? warning : warning.reason || warning.message || (warning.pattern_ids ? `Overlapping routines on ${warning.date_key}; the newer applicable routine is used.` : warning.code) || 'Routine needs attention')}</p>`).join('')}</div>` : ''}
+    ${(result?.routine_explanations || []).length ? `<div class="form-hint">${result.routine_explanations.map((entry) => `<p>${h(entry.date_key)} · ${h(entry.reason)}${entry.note ? ` · ${h(entry.note)}` : ''}</p>`).join('')}</div>` : ''}
+    ${result?.timezone ? `<p class="form-hint">Times shown in ${h(result.timezone)}.</p>` : ''}
+    <div class="list-rows">${windows.map((window) => `<div class="list-row availability-window"><div class="list-row__main"><strong>${h(planningTimeRange(window.start_at, window.end_at, result?.timezone))} · ${h(window.state || 'unknown')}</strong><span class="list-row__meta">${h(window.reason || availabilitySignalLabel(window.effective || window))}</span>${window.expected_place ? `<span class="list-row__meta">Expected at ${h(window.expected_place.path_label || window.expected_place.name)}</span>` : ''}<span class="list-row__meta">${window.confirmed_available ? 'Confirmed availability' : window.availability_usable ? 'No known restriction; availability is not confirmed' : 'Unavailable for this window'}</span>${window.overridden_sources?.length ? `<small class="form-hint">Takes precedence over: ${h(window.overridden_sources.map((signal) => typeof signal === 'string' ? signal : availabilitySignalLabel(signal)).join(', '))}</small>` : ''}${window.advisory_events?.length ? `<small class="form-hint">Calendar: ${h(window.advisory_events.map(availabilitySignalLabel).join(', '))}</small>` : ''}</div></div>`).join('') || '<p class="form-hint">Availability is unknown; no windows returned.</p>'}</div>`;
+}
 
 export async function renderAvailabilityManager(body, manager) {
-  const response = await api.get('/planning/admin/context');
+  availabilityMounts.get(body)?.();
+  const user = manager?.user || (await api.get('/auth/me')).user;
+  const administrator = user?.role === 'admin' || canCapability('availability.manage');
+  const response = administrator ? await api.get('/planning/admin/context') : await (async () => {
+    const [users, locations] = await Promise.all([api.get('/auth/users'), api.get('/planning/places')]);
+    return { members: users.data || [], places: locations.data || [] };
+  })();
   const { rules = [], periods = [], members = [], places = [] } = response;
   const now = new Date().toISOString();
   const snapshots = await Promise.all(members.map(async (member) => {
     try { return { member, value: (await api.get(`/planning/presence/${member.id}?start_at=${encodeURIComponent(now)}&end_at=${encodeURIComponent(now)}`)).data }; }
-    catch { return { member, value: null }; }
+    catch (error) { return { member, value: null, error: error.message || 'Current location could not be loaded.' }; }
   }));
-  replaceHtml(body, `${managerHeader('Availability and Presence', 'automation-add-rule', 'Add weekly rule')}
-    <p class="form-hint automation-manager__hint">Manual overrides win over dated exceptions, workflow signals, recurring rules, and advisory Calendar events. Presence is evaluated for the activity’s useful time window—not merely where someone is now.</p>
-    <div class="automation-manager__header automation-workflow-step__header--section"><strong>Current household snapshot</strong><span></span></div>
-    <div class="automation-presence-grid">${snapshots.map(({ member, value }) => `<div class="automation-presence-card"><strong>${h(member.display_name)}</strong><span>${h(value?.effective?.custom_state || value?.effective?.state || 'Unknown')}</span><small>${h(value?.effective?.place?.path_label || value?.effective?.place_name || value?.effective?.source || 'No active signal')}</small></div>`).join('')}</div>
-    <div class="automation-manager__header automation-workflow-step__header--section"><strong>Weekly schedules</strong><span></span></div>
+  const timezone = response.timezone || snapshots.find((item) => item.value?.timezone)?.value.timezone;
+  replaceHtml(body, `${administrator ? managerHeader('Availability', 'automation-add-rule', 'Add weekly routine') : '<h2 class="u-section-title">Availability</h2>'}
+    <p class="form-hint automation-manager__hint">When someone can reasonably perform activities. Calendar shows what is happening; Presence shows their currently expected location.</p>
+    <details class="availability-priority"><summary>How overlapping commitments are resolved</summary><p class="form-hint">Manual Availability override → dated exception or Trip → dated workflow signal → rotating routine → weekly routine → advisory Calendar event. A routine’s dated override replaces only its own occurrence. A day off removes that routine’s restriction. Current Presence explains location now; it does not override future availability.</p><p class="form-hint">Unconfigured routine days are unknown and need attention. Where nothing is configured, a lack of known restrictions does not confirm that someone is free.</p></details>
+    <section class="availability-explained"><h3 class="u-section-title">Expected availability</h3><form class="availability-window-controls" data-availability-preview>${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(members, user?.id)}</select>`)}${inputRow('Date', `<input class="input" name="date" type="date" required value="${h(localDateTimeValue(now, timezone).slice(0, 10))}">`)}${inputRow('Activity duration (minutes)', '<input class="input" name="duration" type="number" min="1" max="1440" value="30" required>')}<button type="submit" class="btn btn--secondary">Explain availability</button></form><div data-availability-windows role="status" aria-live="polite"></div></section>
+    <div class="automation-manager__header automation-workflow-step__header--section"><strong>Current household location</strong><span class="form-hint">Inferred from current plans</span></div>
+    <div class="automation-presence-grid" data-current-location>${currentLocationHTML(snapshots)}</div>
+    ${administrator ? `<div class="automation-manager__header automation-workflow-step__header--section"><strong>Weekly routines</strong><span></span></div>
     <div class="automation-list">${rules.map((rule) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(rule.display_name)} · ${h(rule.name)}</strong><br><small class="form-hint">${rule.weekdays.map((day) => WEEKDAYS.find((item) => item[1] === day)?.[0]).filter(Boolean).join(', ')} · ${h(rule.start_time)}–${h(rule.end_time)} · ${h(rule.custom_state || rule.state)}${rule.place_name ? ` at ${h(rule.place_name)}` : ''}${rule.active ? '' : ' · inactive'}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-rule="${rule.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-rule="${rule.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No recurring availability rules yet.</p>'}</div>
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Dated exceptions and manual overrides</strong><button type="button" class="btn btn--secondary btn--sm" id="automation-add-period"><i data-lucide="calendar-plus" class="icon-md"></i>Add dated period</button></div>
-    <div class="automation-list">${periods.map((period) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(period.display_name)} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>`);
-  body.querySelector('#automation-add-rule')?.addEventListener('click', () => openAvailabilityRuleForm(null, { members, places }, manager));
-  body.querySelector('#automation-add-period')?.addEventListener('click', () => openAvailabilityPeriodForm(null, { members, places }, manager));
-  body.querySelectorAll('[data-edit-rule]').forEach((button) => button.addEventListener('click', () => openAvailabilityRuleForm(rules.find((row) => Number(row.id) === Number(button.dataset.editRule)), { members, places }, manager)));
-  body.querySelectorAll('[data-edit-period]').forEach((button) => button.addEventListener('click', () => openAvailabilityPeriodForm(periods.find((row) => Number(row.id) === Number(button.dataset.editPeriod)), { members, places }, manager)));
+    <div class="automation-list">${periods.map((period) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(period.display_name)} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>` : '<p class="form-hint">Household administrators maintain weekly routines, Trips and dated Availability exceptions. You can maintain your own alternating and rotating routines below.</p>'}
+    <section data-availability-routines></section>`);
+  let disposed = false;
+  let disposeRoutines = null;
+  let previewRevision = 0;
+  const cleanup = () => { disposed = true; previewRevision += 1; disposeRoutines?.(); };
+  availabilityMounts.set(body, cleanup);
+  const preview = body.querySelector('[data-availability-preview]');
+  const explain = async () => {
+    const revision = ++previewRevision;
+    const output = body.querySelector('[data-availability-windows]');
+    if (!preview.reportValidity()) return;
+    const data = new FormData(preview);
+    const date = data.get('date');
+    const following = new Date(`${date}T12:00:00Z`); following.setUTCDate(following.getUTCDate() + 1);
+    const query = new URLSearchParams({ start_at: `${date}T00:00:00`, end_at: `${following.toISOString().slice(0, 10)}T00:00:00`, required_duration_minutes: data.get('duration'), policy: 'available_before_due', window_mode: 'completion' });
+    replaceHtml(output, '<p class="form-hint">Resolving availability…</p>');
+    try {
+      const result = await api.get(`/planning/availability/${encodeURIComponent(data.get('user_id'))}?${query}`);
+      if (!disposed && revision === previewRevision && body.contains(output)) replaceHtml(output, availabilityWindowsHTML(result.data));
+    } catch (error) {
+      if (!disposed && revision === previewRevision && body.contains(output)) replaceHtml(output, `<p class="form-hint">${h(error.message || 'Availability could not be loaded.')}</p>`);
+    }
+  };
+  preview.addEventListener('submit', (event) => { event.preventDefault(); explain(); });
+  const refreshExplanation = async () => {
+    const current = new Date().toISOString();
+    await Promise.all([explain(), (async () => {
+      const updated = await Promise.all(members.map(async (member) => {
+        try { return { member, value: (await api.get(`/planning/presence/${member.id}?start_at=${encodeURIComponent(current)}&end_at=${encodeURIComponent(current)}`)).data }; }
+        catch (error) { return { member, value: null, error: error.message || 'Current location could not be loaded.' }; }
+      }));
+      if (!disposed) {
+        const output = body.querySelector('[data-current-location]');
+        if (output) replaceHtml(output, currentLocationHTML(updated));
+      }
+    })()]);
+  };
+  const { renderAvailabilityRoutines } = await import('/pages/schedule.js');
+  try {
+    disposeRoutines = await renderAvailabilityRoutines(body.querySelector('[data-availability-routines]'), { user, places, onChange: refreshExplanation });
+    if (disposed) disposeRoutines?.();
+  } catch (error) {
+    if (!disposed) replaceHtml(body.querySelector('[data-availability-routines]'), `<p class="form-hint">Rotating routines could not be loaded: ${h(error.message)}</p>`);
+  }
+  await explain();
+  body.querySelector('#automation-add-rule')?.addEventListener('click', () => openAvailabilityRuleForm(null, { members, places, timezone }, manager));
+  body.querySelector('#automation-add-period')?.addEventListener('click', () => openAvailabilityPeriodForm(null, { members, places, timezone }, manager));
+  body.querySelectorAll('[data-edit-rule]').forEach((button) => button.addEventListener('click', () => openAvailabilityRuleForm(rules.find((row) => Number(row.id) === Number(button.dataset.editRule)), { members, places, timezone }, manager)));
+  body.querySelectorAll('[data-edit-period]').forEach((button) => button.addEventListener('click', () => openAvailabilityPeriodForm(periods.find((row) => Number(row.id) === Number(button.dataset.editPeriod)), { members, places, timezone }, manager)));
   const wireDelete = (selector, rows, dataKey, path) => body.querySelectorAll(selector).forEach((button) => button.addEventListener('click', async () => {
     const row = rows.find((item) => Number(item.id) === Number(button.dataset[dataKey]));
     if (!row || !await confirmOverModal('Delete this availability entry?', { danger: true, confirmLabel: 'Delete', detail: t('settings.availabilityDeleteConfirmDetail') })) return;
@@ -1023,6 +1141,7 @@ export async function renderAvailabilityManager(body, manager) {
     catch (error) { toast(error.message, 'danger'); }
   }));
   wireDelete('[data-delete-rule]', rules, 'deleteRule', 'rules'); wireDelete('[data-delete-period]', periods, 'deletePeriod', 'periods');
+  return cleanup;
 }
 
 function wireCustomState(panel) {
@@ -1034,10 +1153,10 @@ function wireCustomState(panel) {
 function openAvailabilityRuleForm(rule, context, manager) {
   const selectedDays = new Set((rule?.weekdays || []).map(Number));
   const content = `<form id="automation-rule-form">
-    ${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(context.members, rule?.user_id)}</select>`)}${inputRow('Schedule name', `<input class="input" name="name" required value="${h(rule?.name || '')}" placeholder="School hours">`)}
+    ${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(context.members, rule?.user_id)}</select>`)}${inputRow('Routine name', `<input class="input" name="name" required value="${h(rule?.name || '')}" placeholder="School hours">`)}
     <fieldset class="automation-fieldset"><legend class="label">Days</legend><div class="automation-weekday-grid">${WEEKDAYS.map(([label, day]) => `<label class="automation-check-row"><input type="checkbox" name="weekday" value="${day}" ${selectedDays.has(day) ? 'checked' : ''}>${label}</label>`).join('')}</div></fieldset>
     <div class="automation-workflow-condition">${inputRow('Start time', `<input class="input" type="time" name="start_time" required value="${h(rule?.start_time || '09:00')}">`)}${inputRow('End time', `<input class="input" type="time" name="end_time" required value="${h(rule?.end_time || '17:00')}">`)}</div>
-    <div class="automation-workflow-condition">${inputRow('State', `<select class="input" name="state">${availabilityStateOptions(rule?.state)}</select>`)}${inputRow('Category', `<select class="input" name="category">${availabilityCategoryOptions(rule?.category)}</select>`)}</div>
+    <div class="automation-workflow-condition">${inputRow('Availability during these hours', `<select class="input" name="state">${availabilityStateOptions(rule?.state || 'busy')}</select>`)}${inputRow('Category', `<select class="input" name="category">${availabilityCategoryOptions(rule?.category)}</select>`)}</div>
     <div data-custom-state>${inputRow('Custom state name', `<input class="input" name="custom_state" value="${h(rule?.custom_state || '')}">`)}</div>${inputRow('Place', `<select class="input" name="place_id">${placeOptions(context.places, rule?.place_id, 'No specific Place')}</select>`)}
     <label class="automation-check-row"><input type="checkbox" name="active" ${rule?.active !== 0 ? 'checked' : ''}> Active</label>${footer(rule ? 'Save weekly rule' : 'Create weekly rule')}</form>`;
   openModal({ title: rule ? 'Edit weekly availability' : 'New weekly availability', content, size: 'lg', onSave(panel) { wireCustomState(panel); panel.querySelector('#automation-rule-form')?.addEventListener('submit', async (event) => {
@@ -1049,12 +1168,12 @@ function openAvailabilityRuleForm(rule, context, manager) {
 function openAvailabilityPeriodForm(period, context, manager) {
   const content = `<form id="automation-period-form">${inputRow('Household member', `<select class="input" name="user_id" required>${memberOptions(context.members, period?.user_id)}</select>`)}
     <div class="automation-workflow-condition">${inputRow('Entry type', `<select class="input" name="source"><option value="explicit" ${period?.source !== 'manual' ? 'selected' : ''}>Dated exception</option><option value="manual" ${period?.source === 'manual' ? 'selected' : ''}>Manual override</option></select>`)}${inputRow('Category', `<select class="input" name="category">${availabilityCategoryOptions(period?.category)}</select>`)}</div>
-    <div class="automation-workflow-condition">${inputRow('Starts', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(period?.starts_at) || localDateTimeValue(new Date().toISOString()))}">`)}${inputRow('Ends / expires', `<input class="input" type="datetime-local" name="ends_at" value="${h(localDateTimeValue(period?.ends_at))}">`, 'Optional for a manual override.')}</div>
+    <div class="automation-workflow-condition">${inputRow('Starts', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(period?.starts_at, context.timezone) || localDateTimeValue(new Date().toISOString(), context.timezone))}">`)}${inputRow('Ends / expires', `<input class="input" type="datetime-local" name="ends_at" value="${h(localDateTimeValue(period?.ends_at, context.timezone))}">`, 'Optional for a manual override.')}</div>
     <div class="automation-workflow-condition">${inputRow('State', `<select class="input" name="state">${availabilityStateOptions(period?.state || 'away')}</select>`)}${inputRow('Place', `<select class="input" name="place_id">${placeOptions(context.places, period?.place_id, 'No specific Place')}</select>`)}</div>
     <div data-custom-state>${inputRow('Custom state name', `<input class="input" name="custom_state" value="${h(period?.custom_state || '')}">`)}</div>${inputRow('Note', `<textarea class="input" name="note" rows="2">${h(period?.note || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="active" ${period?.active !== 0 ? 'checked' : ''}> Active</label>${footer(period ? 'Save dated period' : 'Create dated period')}</form>`;
   openModal({ title: period ? 'Edit availability period' : 'New availability period', content, size: 'lg', onSave(panel) { wireCustomState(panel); panel.querySelector('#automation-period-form')?.addEventListener('submit', async (event) => {
-    event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { user_id: Number(data.get('user_id')), source: data.get('source'), category: data.get('category'), state: data.get('state'), custom_state: data.get('custom_state'), place_id: Number(data.get('place_id')) || null, starts_at: data.get('starts_at'), ends_at: data.get('ends_at') || null, note: data.get('note'), active: data.has('active') };
+    event.preventDefault(); const data = new FormData(event.currentTarget); const payload = { user_id: Number(data.get('user_id')), source: data.get('source'), category: data.get('category'), state: data.get('state'), custom_state: data.get('custom_state'), place_id: Number(data.get('place_id')) || null, starts_at: preservePlanningInstant(data.get('starts_at'), period?.starts_at, context.timezone), ends_at: preservePlanningInstant(data.get('ends_at'), period?.ends_at, context.timezone) || null, note: data.get('note'), active: data.has('active') };
     try { if (period) await api.put(`/planning/admin/periods/${period.id}`, payload); else await api.post('/planning/admin/periods', payload); toast('Availability period saved.'); await refreshAutomationManager(manager, 'availability'); } catch (error) { toast(error.message, 'danger'); }
   }); } });
 }
@@ -1246,7 +1365,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <fieldset class="automation-fieldset">
       <legend class="label">Subtasks copied into each Task</legend>
       <p class="form-hint automation-manager__hint">Each generated Task gets its own editable subtask copies. Later changes to this template do not rewrite existing Tasks. Type @ to insert the person or Activity Template name; workflow variables are also resolved when a workflow runs.</p>
-      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: true })}
+      ${renderSubtaskEditor({ subtasks: activity?.checklist || [], skills: context.skills, template: true, canCreateSkill: canCapability('skills.manage') })}
     </fieldset>
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, activity?.category || 'misc')}</select>`)}
     <div class="grid grid--2">
@@ -1267,7 +1386,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
     <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Rotation group', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Optional. Activities with the same group share one rotation cursor.')}</div>
     <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${(activity?.allow_assignment_override ?? true) ? 'checked' : ''}> Allow an admin to reassign this activity</label>
-    <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: true })}</div>
+    <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: canCapability('skills.manage') })}</div>
     ${inputRow('Location', `<select class="input" name="location_mode" id="automation-location-mode"><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No required location</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Place chosen by a workflow variable</option></select>`)}
     <div id="automation-fixed-place" ${locationMode === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed Place', `<select class="input" name="place_id">${placeOptions(context.places, activity?.place_id)}</select>`)}</div>
     <div id="automation-location-variable" ${locationMode === 'workflow' ? '' : 'hidden'}>${inputRow('Location variable', `<select class="input" name="location_variable_id"><option value="">Choose a reusable Location variable…</option>${context.variables.filter((variable) => variable.type === 'location').map((variable) => `<option value="${h(variable.variable_key)}" ${variable.variable_key === activity?.location_variable_id ? 'selected' : ''}>${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select>`, 'The workflow using this activity must include the same Location variable.')}</div>
@@ -1294,8 +1413,8 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         }
         return skill;
       };
-      const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: createSkill });
-      const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: createSkill });
+      const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: canCapability('skills.manage') ? createSkill : null });
+      const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
       const templateName = panel.querySelector('[name="name"]');
       const generatedTitle = panel.querySelector('[name="title_template"]');
       const titlePreview = panel.querySelector('[data-activity-title-preview]');
@@ -1561,8 +1680,8 @@ function questionHtml(question = {}, workflowId = null) {
       <option value="time" ${type === 'time' ? 'selected' : ''}>Time</option>
     </select>
     <div class="automation-question-actions">
-      ${workflowId && question.definition_id && !question.reusable_definition_id ? `<button type="button" class="btn btn--ghost btn--sm btn--icon" data-promote-question title="Make reusable across the household" aria-label="Make ${h(question.label || variableId)} reusable"><i data-lucide="globe-2" class="icon-sm"></i></button>` : ''}
-      ${linked ? '<button type="button" class="btn btn--ghost btn--sm" data-edit-linked-variable>Edit household value</button>' : ''}
+      ${isPermAdmin() && workflowId && question.definition_id && !question.reusable_definition_id ? `<button type="button" class="btn btn--ghost btn--sm btn--icon" data-promote-question title="Make reusable across the household" aria-label="Make ${h(question.label || variableId)} reusable"><i data-lucide="globe-2" class="icon-sm"></i></button>` : ''}
+      ${linked && isPermAdmin() ? '<button type="button" class="btn btn--ghost btn--sm" data-edit-linked-variable>Edit household value</button>' : ''}
       <button type="button" class="btn btn--ghost btn--sm" data-remove-question>Remove</button>
     </div>
     <input class="input automation-question-options" data-question-options aria-label="Choice options" placeholder="Choice options, comma separated" value="${h((question.options || []).join(', '))}" ${type === 'choice' ? '' : 'hidden'} ${linked ? 'readonly' : ''}>

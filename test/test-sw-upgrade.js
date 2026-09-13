@@ -139,11 +139,12 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/shared-display', new MockResponse('', { headers: { 'X-Shared-Display': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.5');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.9');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
-    '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png', '/favicon.ico']) {
+    '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png', '/favicon.ico',
+    '/utils/task-live.js', '/utils/task-state.js', '/utils/task-progress.js']) {
     assert.equal((await shell.match(path))?.body, `fresh:${path}`, `${path} must use the new branding`);
     assert.equal(shell.addedRequests.find(request => keyOf(request) === path)?.cache, 'reload',
       `${path} must bypass the previous HTTP cache`);
@@ -163,7 +164,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
 test('older releases and the previous refinement candidate upgrade to fresh Meal and Task modules', async () => {
   const env = loadWorker();
   const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4',
-    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1'];
+    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5', '2.54.0-kitchen.5-vidamia.7', '2.54.0-kitchen.5-vidamia.8'];
   const oldCaches = oldReleases.flatMap((release) => [
     `yuvomi-shell-${release}`,
     `yuvomi-pages-${release}`,

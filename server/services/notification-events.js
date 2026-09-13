@@ -1,14 +1,41 @@
 /** Thin adapters from committed domain changes to user notification receipts. */
 import { randomUUID } from 'node:crypto';
 import { enqueueNotification } from './notification-inbox.js';
+import { inspectTaskSupervision, taskSupervisionNotificationKey } from './task-supervision.js';
 
 // A resolved request remains useful history, but should not be delivered as a
 // new request after somebody has already answered it on another device.
 export function isNotificationDeliveryCurrent(database, notification) {
+  const scope = /^task-supervision-scope:(\d+):[a-f0-9]+$/.exec(notification.source_key || '');
+  if (scope) {
+    const view = inspectTaskSupervision(database, Number(scope[1]));
+    return notification.source_key === taskSupervisionNotificationKey(view)
+      && (['needed','excluded'].includes(view.state)
+        || (view.state === 'assigned' && Number(view.supervisor_user_id) === Number(notification.user_id)));
+  }
+  const supervision = /^task-supervision:(\d+):revision:(\d+)$/.exec(notification.source_key || '');
+  if (supervision) {
+    const action = database.prepare(`SELECT a.*,t.status AS task_status FROM task_supervision_actions a
+      JOIN tasks t ON t.id=a.action_task_id WHERE a.id=?`).get(Number(supervision[1]));
+    if (action && database.prepare("SELECT 1 FROM notification_inbox WHERE entity_type='task' AND entity_id=? AND source_key LIKE ? LIMIT 1")
+      .get(action.source_task_id,`task-supervision-scope:${action.source_task_id}:%`)) return false;
+    const view = action ? inspectTaskSupervision(database, action.source_task_id) : null;
+    return !!action && action.revision === Number(supervision[2]) && action.task_status !== 'done'
+      && (['unresolved','excluded'].includes(action.state)
+        || (view?.state === 'assigned' && Number(view.supervisor_user_id) === Number(notification.user_id)));
+  }
   const obligationId = /^obligation:(\d+):assigned$/.exec(notification.source_key || '')?.[1];
   if (obligationId) {
-    const obligation = database.prepare('SELECT status, responsible_user_id, task_id FROM planning_obligations WHERE id = ?').get(Number(obligationId));
+    const obligation = database.prepare('SELECT status, responsible_user_id, task_id, role FROM planning_obligations WHERE id = ?').get(Number(obligationId));
     if (!obligation || obligation.status !== 'pending') return false;
+    if (obligation.role === 'supervisor') {
+      const view = inspectTaskSupervision(database, obligation.task_id);
+      if (view.actions.some(action => action.id)) return false; // Linked supervision owns its one scope request.
+      return view.state === 'assigned' && Number(view.supervisor_user_id) === Number(notification.user_id)
+        && Number(obligation.responsible_user_id) === Number(notification.user_id)
+        && !database.prepare('SELECT 1 FROM notification_inbox WHERE user_id=? AND source_key=?')
+          .get(notification.user_id,taskSupervisionNotificationKey(view));
+    }
     if (obligation.responsible_user_id) return Number(obligation.responsible_user_id) === Number(notification.user_id);
     return Boolean(obligation.task_id && database.prepare("SELECT 1 FROM task_assignment_context WHERE task_id = ? AND state = 'open'").get(obligation.task_id));
   }
@@ -62,6 +89,15 @@ export function notifyTaskObligations(database, taskId, { eligibleIds = [] } = {
     for (const userId of recipients) {
       if (notified.has(Number(userId))) continue;
       notified.add(Number(userId));
+      if (obligation.role === 'supervisor') {
+        const view = inspectTaskSupervision(database, taskId);
+        // Completing a step changes the scope key, but does not create a new
+        // helper assignment. Never fall back to a second obligation request.
+        if (view.actions.some(action => action.id)) continue;
+        if (view.state !== 'assigned' || Number(view.supervisor_user_id) !== Number(userId)
+          || database.prepare('SELECT 1 FROM notification_inbox WHERE user_id=? AND source_key=?')
+            .get(userId,taskSupervisionNotificationKey(view))) continue;
+      }
       enqueueNotification(database, {
         userId, sourceKey: `obligation:${obligation.id}:assigned`, category: taskCategory(database, taskId),
         entityType: 'task', entityId: taskId,

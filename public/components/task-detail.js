@@ -42,8 +42,9 @@ import { splitKeepingLineEndings } from '/utils/markdown-checklist.js';
 import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
-import { isNavModuleReadOnly } from '/permissions.js';
-import { renderSkillPicker, bindSkillPicker } from '/components/task-requirements.js';
+import { canTask } from '/permissions.js';
+import { actionableSubtasks, changeTaskStatus, taskRevision } from '/utils/task-state.js';
+import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -57,14 +58,15 @@ import {
 // Schreibwege, die die Ansicht selbst geht
 // --------------------------------------------------------
 
-export async function toggleSubtaskStatus(id, currentStatus) {
-  const next = currentStatus === 'done' ? 'open' : 'done';
-  await api.patch(`/tasks/${id}/status`, { status: next });
+export async function toggleSubtaskStatus(id, currentStatus, snapshot = null) {
+  const task = snapshot || (await api.get(`/tasks/${id}`)).data;
+  return changeTaskStatus(task, currentStatus === 'done' ? 'in_progress' : 'done');
 }
 
 /** Ablegen bzw. zurückholen (#688) - der Status bleibt dabei, wie er war. */
-export async function setTaskArchived(id, archived) {
-  await api.patch(`/tasks/${id}/archive`, { archived });
+export async function setTaskArchived(id, archived, snapshot = null) {
+  const task = snapshot || (await api.get(`/tasks/${id}`)).data;
+  return api.patch(`/tasks/${id}/archive`, { archived, ...taskRevision(task) });
 }
 
 /**
@@ -99,7 +101,10 @@ function taskRowsIn(container, id) {
  * die Zeile im DOM hat - die Liste, das Widget, der Kalendertag -, sieht sie
  * sofort gehen. Wer nicht, sieht sie mit `onChanged` verschwinden.
  */
-export async function deleteTaskWithUndo(id, { container = null, onChanged = () => {} } = {}) {
+export async function deleteTaskWithUndo(id, { container = null, onChanged = () => {}, task = null } = {}) {
+  let snapshot;
+  try { snapshot = structuredClone(task || (await api.get(`/tasks/${id}`)).data); }
+  catch (error) { window.yuvomi?.showToast(error.message, 'danger'); return; }
   closeModal({ force: true });
   const rows = taskRowsIn(container, id);
   for (const el of rows) el.style.display = 'none';
@@ -107,7 +112,7 @@ export async function deleteTaskWithUndo(id, { container = null, onChanged = () 
   scheduleUndoableDelete({
     message: t('tasks.deletedToast'),
     commit: async ({ keepalive }) => {
-      await api.delete(`/tasks/${id}`, { keepalive });
+      await api.delete(`/tasks/${id}`, { keepalive, body: JSON.stringify(taskRevision(snapshot)) });
       // Erinnerungen für diese Aufgabe ebenfalls entfernen
       api.delete(`/reminders?entity_type=task&entity_id=${id}`, { keepalive }).catch(() => {});
       if (keepalive) return; // Seite verschwindet — kein UI-Refresh mehr
@@ -162,7 +167,7 @@ export async function renameSubtask(subtask, {
   if (!title || (title.trim() === currentTitle && !skillsChanged)) return null;
   try {
     const nextTitle = title.trim();
-    const response = await api.put(`/tasks/${subtask.id}`, { title: nextTitle,
+    const response = await api.put(`/tasks/${subtask.id}`, { title: nextTitle, ...taskRevision(subtask),
       ...(skillIds === undefined ? {} : { skill_ids: skillIds }) });
     subtask.title = nextTitle;
     if (skillIds !== undefined) {
@@ -189,7 +194,7 @@ export async function deleteSubtask(subtask, { onChanged = () => {} } = {}) {
   });
   if (!ok) return false;
   try {
-    await api.delete(`/tasks/${subtask.id}`);
+    await api.delete(`/tasks/${subtask.id}`, { body: JSON.stringify(taskRevision(subtask)) });
     await onChanged();
     return true;
   } catch (err) {
@@ -205,11 +210,7 @@ export async function deleteSubtask(subtask, { onChanged = () => {} } = {}) {
 // Was aus dem aktuellen Status als Nächstes kommt. Abgelegte Aufgaben führen
 // keine Weiterschaltung: sie sind aus dem Lauf genommen, nicht angehalten - ihr
 // Knopf holt zurück (siehe openTaskDetail).
-const NEXT_STATUS = {
-  open:        { status: 'in_progress', labelKey: 'tasks.detailStart',  icon: 'circle-dot' },
-  in_progress: { status: 'done',        labelKey: 'tasks.detailFinish', icon: 'check' },
-  done:        { status: 'open',        labelKey: 'tasks.detailReopen', icon: 'rotate-ccw' },
-};
+
 
 /** Prioritätsbadge als DOM - dieselbe Optik wie auf der Karte. */
 function priorityNode(priority) {
@@ -247,7 +248,7 @@ function taskSkillSummary(task, ctx) {
   const ids = task.skill_ids || (task.skills || []).map((skill) => skill.id);
   if (!ids.length) return '';
   const summary = ids.map((id) => names.get(Number(id)) || 'Unavailable skill').join(', ');
-  return task.skill_assignment_needed ? `${summary} · Needs someone with these skills` : summary;
+  return summary;
 }
 
 function lucideIcon(name) {
@@ -386,66 +387,12 @@ function participantButton(person, role, ctx) {
 
 function participantListNode(task, ctx) {
   const people = taskParticipants(task);
-  const mayAdd = canEditTaskDefinition(task, null, ctx)
-    && !isArchived(task)
-    && !task.activity_template_name;
-  if (!people.length && !mayAdd) return null;
+  if (!people.length) return null;
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-participants';
   for (const person of people) {
     const button = participantButton(person, person.role, ctx);
     if (button) wrap.appendChild(button);
-  }
-  if (mayAdd) {
-    const controls = document.createElement('div');
-    controls.className = 'task-detail-participant-add';
-    const select = document.createElement('select');
-    select.className = 'input input--sm';
-    select.setAttribute('aria-label', 'Participant');
-    const placeholder = document.createElement('option');
-    placeholder.value = '';
-    placeholder.textContent = 'Choose a person';
-    select.appendChild(placeholder);
-    const existingIds = new Set(people.map((person) => Number(person.id || person.user_id)));
-    for (const person of (ctx.users || [])) {
-      if (existingIds.has(Number(person.id))) continue;
-      const option = document.createElement('option');
-      option.value = String(person.id);
-      option.textContent = person.display_name;
-      select.appendChild(option);
-    }
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'btn btn--ghost btn--sm';
-    add.textContent = '+ Add participant';
-    add.disabled = select.options.length < 2;
-    add.addEventListener('click', async () => {
-      const userId = Number(select.value);
-      if (!userId) { select.focus(); return; }
-      const person = (ctx.users || []).find((candidate) => Number(candidate.id) === userId);
-      if (!person) return;
-      add.disabled = true;
-      select.disabled = true;
-      try {
-        const assignedIds = new Set((task.assigned_users || []).map((candidate) => Number(candidate.id)));
-        assignedIds.add(userId);
-        await api.put(`/tasks/${task.id}`, { assigned_to: [...assignedIds] });
-        task.assigned_users = [...(task.assigned_users || []), person];
-        const chip = participantButton(person, null, ctx);
-        if (chip) wrap.insertBefore(chip, controls);
-        select.querySelector(`option[value="${userId}"]`)?.remove();
-        select.value = '';
-        add.disabled = select.options.length < 2;
-        await ctx.onChanged();
-      } catch (err) {
-        add.disabled = false;
-        window.yuvomi.showToast(err.message, 'danger');
-      } finally {
-        select.disabled = false;
-      }
-    });
-    controls.append(select, add);
-    wrap.appendChild(controls);
   }
   return wrap;
 }
@@ -463,7 +410,7 @@ function responsibilityListNode(task, ctx) {
 }
 
 function progressNode(task) {
-  if (!task.subtasks?.length) return null;
+  if (!actionableSubtasks(task).length) return null;
   const progress = completionCounts(task);
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-progress';
@@ -472,7 +419,7 @@ function progressNode(task) {
   meter.value = progress.done;
   meter.setAttribute('aria-label', t('tasks.subtasksLabel'));
   const label = document.createElement('span');
-  label.textContent = t('tasks.subtaskProgress', progress);
+  label.textContent = `${progress.done} of ${progress.total} complete · ${Math.round(progress.done / progress.total * 100)}%`;
   if (progress.totalPoints > 0) {
     label.append(document.createTextNode(` · ${t('tasks.progressPointsValue', progress)}`));
   }
@@ -489,19 +436,16 @@ function activityTemplateSummary(task) {
 
 function assignmentSummary(task) {
   if (!task.activity_assignment_policy && !task.activity_assignment_state) return '';
-  const parts = [task.activity_assignment_policy, task.activity_assignment_state]
-    .filter(Boolean)
-    .map((value) => String(value).replaceAll('_', ' '));
+  const labels = { fixed: 'Fixed household member', open_claimable: 'Available to claim', assigned: 'Assigned', open: 'Available to claim', unavailable: 'Assignment needs attention', fulfilled: 'Completed', supervised_completion: 'Supervised completion', round_robin: 'Rotating assignment' };
+  const parts = [task.activity_assignment_policy, task.activity_assignment_state].filter(Boolean).map((value) => labels[value] || String(value).replaceAll('_', ' '));
   if (task.activity_assignment_override_allowed) parts.push(t('tasks.assignmentOverrideAllowed'));
   return parts.join(' · ');
 }
 
 function presenceSummary(task) {
-  if (!task.activity_place_name && (!task.activity_presence_policy || task.activity_presence_policy === 'ignore')) return '';
-  return [task.activity_place_name, task.activity_presence_policy, task.activity_presence_window]
-    .filter(Boolean)
-    .map((value) => String(value).replaceAll('_', ' '))
-    .join(' · ');
+  const policies = { ignore: '', available_before_due: 'An available opening before it is due', must_be_home: 'Expected to be at Home', must_be_at_location: 'Expected to be at the required place' };
+  const windows = { at_due_time: 'At the due time', useful_completion_window: 'During the completion window', now: 'Now' };
+  return [task.activity_place_name, policies[task.activity_presence_policy] || '', windows[task.activity_presence_window] || ''].filter(Boolean).join(' · ');
 }
 
 function taskLocationNode(task, ctx) {
@@ -532,6 +476,7 @@ function taskLocationNode(task, ctx) {
     actions.appendChild(navigate);
   }
   if (ctx.isAdmin && location.kind === 'google_place') {
+    const revision = taskRevision(task);
     const promote = document.createElement('button');
     promote.type = 'button';
     promote.className = 'btn btn--secondary btn--sm';
@@ -539,7 +484,7 @@ function taskLocationNode(task, ctx) {
     promote.addEventListener('click', async () => {
       promote.disabled = true;
       try {
-        await api.post(`/tasks/${task.id}/location/promote`, { name: location.label, type: 'custom' });
+        await api.post(`/tasks/${task.id}/location/promote`, { name: location.label, type: 'custom', ...revision });
         window.yuvomi.showToast(t('tasks.locationSavedToYuvomiPlaces'), 'success');
         await closeDetailView({ force: true });
         await ctx.onChanged();
@@ -584,248 +529,52 @@ function taskLocationNode(task, ctx) {
  * weitere über die aufgeklappte Liste ging (#925).
  */
 function subtaskListNode(task, ctx) {
-  const mayAdd = canEditTaskDefinition(task, null, ctx) && !isArchived(task) && !task.parent_task_id;
-  if (!task.subtasks?.length && !mayAdd) return null;
-
-  // These are child Task records with their own assignees, points and identity.
-  // Markdown checklist syntax is rendered only by descriptionNode below.
+  const children = actionableSubtasks(task);
+  // Definitions and required skills are edited only in Edit.
+  if (!children.length) return null;
   const wrap = document.createElement('div');
   wrap.className = 'detail-subtasks detail-task-subtasks';
-
-  let skillsRequest;
-  const editingSkills = async (subtask = null) => {
-    if (!skillsRequest) skillsRequest = Array.isArray(ctx.skills)
-      ? Promise.resolve(ctx.skills)
-      : api.get('/automation/activity-options').then((response) => response.data?.skills || []);
-    try {
-      const available = await skillsRequest;
-      return [...new Map([...(subtask?.skills || []), ...available].map((skill) => [Number(skill.id), skill])).values()];
-    } catch (error) {
-      skillsRequest = null;
-      window.yuvomi.showToast(error.message || 'Could not load skills.', 'danger');
-      return null;
-    }
-  };
-
-  const inlineTitleEditor = ({ value = '', selectedSkills = [], skills = [], save, cancel, saveLabel }) => {
-    const form = document.createElement('form');
-    form.className = 'detail-subtask__editor';
-    const input = document.createElement('input');
-    input.className = 'input input--sm';
-    input.value = value;
-    input.maxLength = 200;
-    input.required = true;
-    input.setAttribute('aria-label', saveLabel);
-    const submit = document.createElement('button');
-    submit.type = 'submit';
-    submit.className = 'btn btn--primary btn--sm';
-    submit.textContent = 'Save';
-    const dismiss = document.createElement('button');
-    dismiss.type = 'button';
-    dismiss.className = 'btn btn--ghost btn--sm';
-    dismiss.textContent = 'Cancel';
-    dismiss.addEventListener('click', cancel);
-    input.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') { event.preventDefault(); cancel(); }
-    });
-    form.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const nextTitle = input.value.trim();
-      if (!nextTitle) { input.focus(); return; }
-      input.disabled = submit.disabled = dismiss.disabled = true;
-      picker.setReadOnly(true);
-      try { await save(nextTitle, picker.getValue()); }
-      catch (err) {
-        input.disabled = submit.disabled = dismiss.disabled = false;
-        picker.setReadOnly(false);
-        window.yuvomi.showToast(err.message, 'danger');
-      }
-    });
-    form.append(input, submit, dismiss);
-    form.insertAdjacentHTML('beforeend', renderSkillPicker({ skills, selectedIds: selectedSkills, canCreateSkill: ctx.isAdmin }));
-    const picker = bindSkillPicker(form, { onCreateSkill: ctx.isAdmin ? async () => {
-      const { openSkillEditor } = await import('/components/activity-automation.js');
-      const skill = await openSkillEditor();
-      if (skill) {
-        ctx.skills = [...new Map([...skills, ...(ctx.skills || []), skill].map((entry) => [Number(entry.id), entry])).values()];
-        skillsRequest = Promise.resolve(ctx.skills);
-      }
-      return skill;
-    } : null });
-    queueMicrotask(() => { input.focus(); input.select(); });
-    return form;
-  };
-
-  const appendRow = (subtask) => {
+  for (const subtask of children) {
     const row = document.createElement('div');
     row.className = 'detail-subtask';
     row.dataset.subtaskId = String(subtask.id);
-
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    toggle.className = 'detail-subtask__toggle';
-
-    const icon = document.createElement('i');
-    icon.className = 'icon-sm';
-    icon.setAttribute('aria-hidden', 'true');
+    const done = subtask.status === 'done';
+    toggle.className = `detail-subtask__toggle${done ? ' detail-subtask__toggle--done' : ''}`;
+    toggle.dataset.taskOperation = '';
+    toggle.dataset.focusKey = `subtask-${subtask.id}`;
+    toggle.setAttribute('aria-pressed', String(done));
+    toggle.setAttribute('aria-label', `${done ? 'Reopen' : 'Complete'}: ${subtask.title}`);
     const label = document.createElement('span');
     label.className = 'detail-subtask__title';
+    label.textContent = subtask.title;
+    toggle.append(lucideIcon(done ? 'check-circle-2' : 'circle'), label);
+    const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id));
+    toggle.disabled = isArchived(task) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
     const meta = document.createElement('div');
     meta.className = 'detail-subtask__meta';
-    const requirements = document.createElement('details');
-    requirements.className = 'detail-subtask__requirements';
-    const requirementsLabel = document.createElement('summary');
-    requirementsLabel.textContent = 'Required skills';
-    const requirementsContent = document.createElement('div');
-    requirements.append(requirementsLabel, requirementsContent);
-
-    const paint = () => {
-      const done = subtask.status === 'done';
-      toggle.classList.toggle('detail-subtask__toggle--done', done);
-      toggle.dataset.status = subtask.status || 'open';
-      toggle.setAttribute('aria-pressed', String(done));
-      toggle.setAttribute('aria-label', t('tasks.subtaskMarkDone', { title: subtask.title }));
-      icon.dataset.lucide = done ? 'check-circle-2' : 'circle';
-      label.textContent = subtask.title;
-      const parts = [];
-      const assignees = subtaskParticipants(subtask, ctx.users);
-      const pointCount = Number(subtask.points || 0);
-      if (assignees.length) parts.push(assignees.map((person) => person.display_name).filter(Boolean).join(', '));
-      if (pointCount > 0) parts.push(t('tasks.pointsSummary', { count: pointCount }));
-      const skills = taskSkillSummary(subtask, ctx);
-      requirementsContent.textContent = skills;
-      requirementsLabel.setAttribute('aria-label', `Required skills for ${subtask.title}`);
-      meta.replaceChildren();
-      if (parts.length) meta.append(document.createTextNode(parts.join(' · ')));
-      if (skills) meta.append(requirements);
-      meta.hidden = !parts.length && !skills;
-      if (window.lucide) window.lucide.createIcons({ el: toggle });
-    };
-    toggle.append(icon, label);
-    paint();
-
-    toggle.addEventListener('click', async () => {
-      const previous = subtask.status || 'open';
-      subtask.status = previous === 'done' ? 'open' : 'done';
-      toggle.disabled = true;
-      paint();
-      try {
-        await toggleSubtaskStatus(subtask.id, previous);
-        await ctx.onChanged();
-      } catch (err) {
-        subtask.status = previous;
-        paint();
-        window.yuvomi.showToast(err.message, 'danger');
-      } finally {
-        toggle.disabled = false;
+    const skills = taskSkillSummary(subtask, ctx);
+    const parts = [skills];
+    if (supervision && supervision.state !== 'not_required') {
+      if (done && supervision.completed) {
+        parts.push(supervision.supervisor_name ? `Previously supervised by ${supervision.supervisor_name}` : 'Completed supervised action');
+      } else {
+        parts.push(supervision.state === 'assigned' ? 'Supervision required' : 'Supervision needed');
+        if (supervision.state === 'assigned' && supervision.supervisor_name) parts.push(`Supervisor: ${supervision.supervisor_name}`);
       }
-    });
-    row.append(toggle, meta);
-
-    if (canEditTaskDefinition(subtask, task, ctx) && !isArchived(task)) {
-      const actions = document.createElement('div');
-      actions.className = 'detail-subtask__actions';
-
-      const rename = document.createElement('button');
-      rename.type = 'button';
-      rename.className = 'btn btn--ghost btn--icon btn--icon-sm';
-      rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
-      rename.appendChild(lucideIcon('pencil'));
-      rename.addEventListener('click', async () => {
-        rename.disabled = true;
-        const skills = await editingSkills(subtask);
-        rename.disabled = false;
-        if (!skills || !row.isConnected) return;
-        const originalChildren = [...row.children];
-        originalChildren.forEach((child) => { child.hidden = true; });
-        const cancel = () => {
-          editor.remove();
-          originalChildren.forEach((child) => { child.hidden = false; });
-          paint();
-          rename.focus();
-        };
-        const editor = inlineTitleEditor({
-          value: subtask.title,
-          selectedSkills: subtask.skill_ids || [],
-          skills,
-          saveLabel: t('tasks.subtaskRename', { title: subtask.title }),
-          cancel,
-          save: async (nextTitle, skillIds) => {
-            await renameSubtask(subtask, {
-              onChanged: ctx.onChanged, title: nextTitle, skillIds, throwOnError: true,
-            });
-            rename.setAttribute('aria-label', t('tasks.subtaskRename', { title: subtask.title }));
-            paint();
-            cancel();
-          },
-        });
-        row.appendChild(editor);
-      });
-
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'btn btn--ghost btn--icon btn--icon-sm';
-      remove.setAttribute('aria-label', t('tasks.subtaskDelete', { title: subtask.title }));
-      remove.appendChild(lucideIcon('trash-2'));
-      remove.addEventListener('click', async () => {
-        const deleted = await deleteSubtask(subtask, { onChanged: ctx.onChanged });
-        if (!deleted) return;
-        task.subtasks = (task.subtasks || []).filter((item) => Number(item.id) !== Number(subtask.id));
-        row.remove();
-      });
-
-      actions.append(rename, remove);
-      row.appendChild(actions);
     }
-
-    wrap.appendChild(row);
-    if (window.lucide) window.lucide.createIcons({ el: row });
-    return row;
-  };
-
-  (task.subtasks || []).forEach(appendRow);
-
-  if (mayAdd) {
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'detail-subtask detail-subtask--add';
-    const label = document.createElement('span');
-    label.textContent = t('tasks.subtaskAdd');
-    add.replaceChildren(label);
-
-    add.addEventListener('click', async () => {
-      add.disabled = true;
-      const skills = await editingSkills();
-      add.disabled = false;
-      if (!skills || !add.isConnected) return;
-      add.hidden = true;
-      const cancel = () => {
-        editor.remove();
-        add.hidden = false;
-        add.focus();
-      };
-      const editor = inlineTitleEditor({
-        skills,
-        saveLabel: t('tasks.subtaskAdd'),
-        cancel,
-        save: async (title, skillIds) => {
-          const created = await addSubtask(task.id, {
-            ...ctx, title, skillIds, throwOnError: true,
-          });
-          if (created) {
-            task.subtasks = [...(task.subtasks || []), created];
-            wrap.insertBefore(appendRow(created), editor);
-            await ctx.onChanged();
-          }
-          cancel();
-        },
-      });
-      wrap.insertBefore(editor, add);
+    const points = Number(subtask.points || 0);
+    if (points) parts.push(t('tasks.pointsSummary', { count: points }));
+    meta.textContent = parts.filter(Boolean).join(' · ');
+    meta.hidden = !meta.textContent;
+    row.append(toggle, meta);
+    toggle.addEventListener('click', async () => {
+      if (ctx.busy) return;
+      await ctx.runMutation(toggle, () => changeTaskStatus(subtask, done ? 'in_progress' : 'done'));
     });
-
-    wrap.appendChild(add);
+    wrap.appendChild(row);
   }
-  if (window.lucide) window.lucide.createIcons({ el: wrap });
   return wrap;
 }
 
@@ -944,7 +693,7 @@ function commentRowNode(comment, { onChanged, ctx }) {
   head.append(author, when);
 
   const mine = comment.user_id === ctx.currentUserId;
-  if ((mine || ctx.isAdmin) && !isNavModuleReadOnly('tasks')) {
+  if ((mine || ctx.isAdmin) && canTask(ctx.task, 'comment')) {
     const actions = document.createElement('div');
     actions.className = 'task-comment__actions';
 
@@ -982,11 +731,12 @@ function commentRowNode(comment, { onChanged, ctx }) {
     // kein Datensatz mit Anhängseln: Zurücknehmen ist die ehrlichere Antwort
     // als Vorher-Fragen.
     del.addEventListener('click', () => {
+      const revision = comment.task_revision_snapshot || taskRevision(ctx.task);
       row.hidden = true;
       scheduleUndoableDelete({
         message: t('tasks.commentDeletedToast'),
         commit: async ({ keepalive }) => {
-          await api.delete(`/tasks/${comment.task_id}/comments/${comment.id}`, { keepalive });
+          await api.delete(`/tasks/${comment.task_id}/comments/${comment.id}`, { keepalive, body: JSON.stringify(revision) });
           if (keepalive) return; // Seite verschwindet - kein Nachladen mehr
           await onChanged();
         },
@@ -1006,6 +756,9 @@ function commentRowNode(comment, { onChanged, ctx }) {
 
 /** Eine Zeile gegen ein Eingabefeld tauschen, ohne die Liste neu zu laden. */
 function startCommentEdit(row, comment, { onChanged, ctx }) {
+  // Keep the version that produced this rendered comment, even if live Task
+  // refreshes continue while the discussion draft is being edited.
+  const revision = comment.task_revision_snapshot || taskRevision(ctx.task);
   const form = document.createElement('form');
   form.className = 'task-comment__edit';
 
@@ -1041,7 +794,10 @@ function startCommentEdit(row, comment, { onChanged, ctx }) {
     if (!value) return;
     save.disabled = true;
     try {
-      await api.patch(`/tasks/${comment.task_id}/comments/${comment.id}`, { comment: value });
+      await api.patch(`/tasks/${comment.task_id}/comments/${comment.id}`, { comment: value, ...revision });
+      // The reload guard preserves active drafts. This edit is now saved, so
+      // retire its form before requesting the canonical comment list.
+      row.replaceChildren();
       await onChanged();
     } catch (err) {
       save.disabled = false;
@@ -1156,8 +912,11 @@ function wireMentionSuggest(field, ctx) {
 
 /** Der ganze Abschnitt: Liste, Eingabe, Nachladen. */
 function commentsNode(task, ctx) {
+  if (ctx.comments) return ctx.comments;
   const wrap = document.createElement('div');
   wrap.className = 'task-comments';
+  ctx.comments = wrap;
+  let requestSequence = 0;
 
   const list = document.createElement('div');
   list.className = 'task-comments__list';
@@ -1167,8 +926,11 @@ function commentsNode(task, ctx) {
   list.appendChild(status);
 
   const load = async () => {
+    if (list.querySelector('.task-comment__edit')) return;
+    const request = ++requestSequence;
     try {
       const res = await api.get(`/tasks/${task.id}/comments`);
+      if (request !== requestSequence || ctx.closed || list.querySelector('.task-comment__edit')) return;
       const comments = res.data ?? [];
       list.replaceChildren();
       if (!comments.length) {
@@ -1177,10 +939,12 @@ function commentsNode(task, ctx) {
         empty.textContent = t('tasks.commentsEmpty');
         list.appendChild(empty);
       } else {
-        for (const comment of comments) list.appendChild(commentRowNode(comment, { onChanged: load, ctx }));
+        const revision = taskRevision({ revision: res.task_revision, parent_revision: res.task_parent_revision });
+        for (const comment of comments) list.appendChild(commentRowNode({ ...comment, task_revision_snapshot: revision }, { onChanged: load, ctx }));
       }
       if (window.lucide) window.lucide.createIcons({ el: list });
     } catch {
+      if (request !== requestSequence || ctx.closed || list.querySelector('.task-comment__edit')) return;
       list.replaceChildren();
       const failed = document.createElement('p');
       failed.className = 'task-comments__status';
@@ -1193,7 +957,8 @@ function commentsNode(task, ctx) {
   // Eingabefeld: die API weist seinen POST mit 403 ab, und ein Formular, das
   // zum Schreiben einlaedt und dann nicht abschickt, ist dieselbe leere Zusage
   // wie der fehlende Knopf, der #700 ausgeloest hat.
-  if (isNavModuleReadOnly('tasks')) {
+  ctx.refreshComments = load;
+  if (!canTask(task, 'comment')) {
     wrap.append(list);
     load();
     return wrap;
@@ -1227,7 +992,7 @@ function commentsNode(task, ctx) {
     submit.disabled = true;
     try {
       await api.post(`/tasks/${task.id}/comments`, { comment: value });
-      field.value = '';
+      if (field.value.trim() === value) field.value = '';
       await load();
     } catch (err) {
       window.yuvomi.showToast(err.message ?? t('common.errorGeneric'), 'danger');
@@ -1273,61 +1038,200 @@ function taskActionNode(task) {
   return button;
 }
 
-function renderTaskDetail(task, reminders = [], ctx) {
-  const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task));
-  const participants = participantListNode(task, ctx);
+function statusSummaryNode(task, ctx) {
+  const summary = document.createElement('div');
+  summary.className = 'task-detail-summary';
+  const control = document.createElement('label');
+  control.className = 'task-detail-status';
+  const label = document.createElement('span');
+  label.textContent = 'Status';
+  const select = document.createElement('select');
+  select.className = 'input input--sm';
+  select.dataset.taskOperation = '';
+  select.dataset.immediateAction = '';
+  select.dataset.focusKey = 'status';
+  select.setAttribute('aria-label', 'Task status');
+  for (const [value, text] of [['open', 'Not Started'], ['in_progress', 'In Progress'], ['done', 'Completed']]) {
+    const option = document.createElement('option');
+    option.value = value; option.textContent = text;
+    select.appendChild(option);
+  }
+  select.value = task.status;
+  select.disabled = isArchived(task) || !canTask(task, 'complete');
+  select.addEventListener('change', async () => {
+    const requested = select.value;
+    select.value = task.status;
+    await ctx.runMutation(select, () => changeTaskStatus(task, requested));
+    if (select.isConnected) select.value = task.status;
+  });
+  control.append(label, select);
+  summary.appendChild(control);
+  const priority = priorityNode(task.priority);
+  if (priority) summary.appendChild(priority);
+  const progress = progressNode(task);
+  if (progress) summary.appendChild(progress);
+  if (isArchived(task)) {
+    const archived = document.createElement('span');
+    archived.textContent = `Archived · ${formatDate(task.archived_at)}`;
+    summary.appendChild(archived);
+  }
+  return summary;
+}
 
+function metadataNode(task, ctx, reminders) {
+  const grid = document.createElement('dl');
+  grid.className = 'task-detail-metadata';
+  const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task));
+  const recurrence = recurrenceRow(task.recurrence_rule, { fromCompletion: !!task.recurrence_from_completion });
+  const entries = [
+    [t('tasks.assignedLabel'), participantListNode(task, ctx)],
+    [t('tasks.dueDateLabel'), due?.label],
+    [t('tasks.startDateLabel'), task.start_date ? formatDate(task.start_date) : null],
+    [t('tasks.pointsLabel'), task.points ? String(task.points) : null],
+    [recurrence?.label || 'Repeats', recurrence?.node || recurrence?.value],
+    [t('tasks.categoryLabel'), task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : null],
+    [t('tasks.tagsLabel'), tagChipsNode(task.tags)],
+    ['Required skills', taskSkillSummary(task, ctx)],
+    [t('tasks.locationLabel'), taskLocationNode(task, ctx)],
+    ['Availability / Presence', presenceSummary(task)],
+    [t('tasks.activityTemplateLabel'), activityTemplateSummary(task)],
+    [t('reminders.sectionTitle'), taskReminderSummary(reminders)],
+  ];
+  for (const [label, value] of entries) {
+    if (!value) continue;
+    const group = document.createElement('div');
+    const term = document.createElement('dt'); term.textContent = label;
+    const detail = document.createElement('dd');
+    if (value instanceof HTMLElement) detail.appendChild(value); else detail.textContent = value;
+    group.append(term, detail); grid.appendChild(group);
+  }
+  return grid;
+}
+
+function supervisionNode(task, ctx) {
+  const supervision = task.supervision;
+  const action = task.supervision_action;
+  const actions = supervision?.actions || (action ? [action] : []);
+  if (!actions.length && (!supervision || supervision.state === 'none')) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'task-detail-supervision';
+  wrap.setAttribute('role', 'status');
+  const title = document.createElement('strong');
+  title.textContent = ['needed', 'excluded'].includes(supervision?.state) ? 'Supervision needed' : 'Supervised work';
+  wrap.appendChild(title);
+  if (supervision?.reason) {
+    const reason = document.createElement('p'); reason.textContent = supervision.reason; wrap.appendChild(reason);
+  }
+  const remaining = actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
+  if (remaining.length) {
+    const summary = document.createElement('p');
+    summary.textContent = supervision?.state === 'assigned' && supervision.supervisor_name
+      ? `Supervisor: ${supervision.supervisor_name} · Covers all remaining supervised actions.`
+      : 'One supervisor must cover every remaining action requiring supervision.';
+    wrap.appendChild(summary);
+  }
+  // Candidates and permission belong to the source Task's complete scope. Never
+  // reconstruct a picker from one action's candidate list or historical helper.
+  if (remaining.length && supervision?.may_assign === true && supervision.source_task_id && supervision.eligible_supervisors?.length) {
+    const controls = document.createElement('div'); controls.className = 'task-detail-supervision__controls';
+    const select = document.createElement('select'); select.className = 'input input--sm';
+    select.dataset.immediateAction = '';
+    select.dataset.focusKey = 'task-supervisor';
+    select.setAttribute('aria-label', 'Supervisor for all remaining supervised actions');
+    for (const person of supervision.eligible_supervisors) {
+      const option = document.createElement('option'); option.value = person.id; option.textContent = person.display_name;
+      option.selected = Number(person.id) === Number(supervision.supervisor_user_id); select.appendChild(option);
+    }
+    const sourceId = supervision.source_task_id, sourceRevision = supervision.source_revision;
+    const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
+    assign.textContent = 'Assign Task supervisor'; assign.dataset.taskOperation = '';
+    assign.dataset.focusKey = 'assign-task-supervisor';
+    assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${sourceId}/supervisor`, {
+      supervisor_user_id: Number(select.value), expected_revision: sourceRevision,
+    })));
+    controls.append(select, assign); wrap.appendChild(controls);
+  }
+  const blockedCandidates = supervision?.state !== 'assigned'
+    ? (supervision?.supervisor_explanations || []).filter(person => !person.eligible && person.reason) : [];
+  if (remaining.length && blockedCandidates.length) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary'); summary.textContent = 'Why a supervisor cannot cover this Task';
+    const list = document.createElement('ul');
+    for (const person of blockedCandidates) {
+      const item = document.createElement('li'); item.textContent = [person.name, person.reason].filter(Boolean).join(': ');
+      list.appendChild(item);
+    }
+    details.append(summary, list); wrap.appendChild(details);
+  }
+  for (const requirement of actions) {
+    if (requirement.state === 'not_required') continue;
+    const row = document.createElement('div'); row.className = 'task-detail-supervision__action';
+    const name = document.createElement('strong'); name.textContent = requirement.action_title || task.title;
+    const explanation = document.createElement('span');
+    const skills = (requirement.required_skills || []).map((skill) => skill.name).join(', ');
+    const reason = !requirement.completed && requirement.reason !== supervision?.reason && requirement.state !== 'assigned' ? requirement.reason : '';
+    const history = requirement.completed
+      ? requirement.supervisor_name ? `Completed · Previously supervised by ${requirement.supervisor_name}` : 'Completed supervised action'
+      : '';
+    explanation.textContent = [skills, history, reason].filter(Boolean).join(' · ');
+    row.append(name, explanation);
+    if (requirement.counterpart_task_id && !task.is_supervision_projection && supervision?.can_view_support === true) {
+      const link = document.createElement('a'); link.href = `/tasks?open=${requirement.counterpart_task_id}`;
+      link.textContent = 'Open supervision work'; row.appendChild(link);
+    }
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+function activityNode(task, ctx) {
+  const wrap = document.createElement('div'); wrap.className = 'task-detail-activity';
+  const status = document.createElement('p'); status.className = 'form-hint'; status.textContent = t('common.loading');
+  wrap.appendChild(status);
+  const labels = { created: 'Created', assigned: 'Assigned', reassigned: 'Reassigned', supervisor_assigned: 'Supervisor assigned',
+    started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
+  ctx.activityRequest = api.get(`/tasks/${task.id}/activity`);
+  ctx.activityRequest.then((response) => {
+    if (ctx.closed || !wrap.isConnected) return;
+    wrap.replaceChildren();
+    const rows = response.data || [];
+    if (!rows.length) { status.textContent = 'No activity recorded yet.'; wrap.appendChild(status); }
+    for (const entry of rows) {
+      const row = document.createElement('p');
+      const detail = entry.details || {};
+      row.textContent = [labels[entry.event_type] || String(entry.event_type || 'Updated').replaceAll('_', ' '), detail.title,
+        entry.actor_name, `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
+      wrap.appendChild(row);
+    }
+  }).catch(() => { status.textContent = 'Activity could not be loaded.'; });
+  return wrap;
+}
+
+function secondaryMetadataNode(task, ctx) {
+  const values = [assignmentSummary(task), task.locked ? t('tasks.lockedDetail') : '',
+    visibilityRow(task.visibility)?.value, task.countdown && task.due_date ? t('tasks.countdownDetail') : ''].filter(Boolean);
+  const responsibilities = responsibilityListNode(task, ctx);
+  if (!values.length && !responsibilities) return null;
+  const details = document.createElement('details'); details.className = 'task-detail-secondary';
+  const summary = document.createElement('summary'); summary.textContent = 'More details'; details.appendChild(summary);
+  for (const value of values) { const line = document.createElement('p'); line.textContent = value; details.appendChild(line); }
+  if (responsibilities) details.appendChild(responsibilities);
+  return details;
+}
+
+function renderTaskDetail(task, reminders = [], ctx) {
   return [
-    { icon: 'circle-dot', label: t('tasks.statusLabel'), value: STATUS_LABELS()[task.status] ?? task.status },
-    // Eigene Zeile statt eines Ersatzes für den Status: die Ablage sagt etwas
-    // ANDERES als „offen/erledigt", nicht dasselbe anders (#688).
-    { icon: 'archive', label: t('tasks.archivedLabel'), value: isArchived(task) ? formatDate(task.archived_at) : '' },
-    { icon: 'flag', label: t('tasks.priorityLabel'), node: priorityNode(task.priority) },
-    // Nur wenn gesetzt - eine Zeile "nicht gesperrt" an jeder Aufgabe waere
-    // Rauschen. Die leere `value` blendet die Zeile aus (#830).
-    { icon: 'lock', label: t('tasks.lockedLabel'), value: task.locked ? t('tasks.lockedDetail') : '' },
-    { icon: 'clock', label: t('tasks.dueDateLabel'), value: due?.label ?? '' },
-    { icon: 'calendar-clock', label: t('tasks.startDateLabel'), value: task.start_date ? formatDate(task.start_date) : '' },
-    recurrenceRow(task.recurrence_rule, { fromCompletion: !!task.recurrence_from_completion }),
-    { icon: 'folder', label: t('tasks.categoryLabel'), value: task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : '' },
-    { icon: 'sparkles', label: t('tasks.activityTemplateLabel'), value: activityTemplateSummary(task) },
-    { icon: 'route', label: t('tasks.assignmentLabel'), value: assignmentSummary(task) },
-    participants
-      ? { icon: 'users', label: t('tasks.participantsLabel'), node: participants, multiline: true }
-      : assignedRow(task.assigned_users, t('tasks.assignedLabel')),
-    { icon: 'user-check', label: t('tasks.responsibilitiesLabel'), node: responsibilityListNode(task, ctx), multiline: true },
-    { icon: 'badge-check', label: 'Required skills', value: taskSkillSummary(task, ctx) },
-    { icon: 'award', label: t('tasks.pointsLabel'), value: task.points ? String(task.points) : '' },
-    { icon: 'chart-no-axes-column-increasing', label: t('tasks.subtasksLabel'), node: progressNode(task) },
-    { icon: 'tag', label: t('tasks.tagsLabel'), node: tagChipsNode(task.tags) },
-    { icon: 'list-checks', label: t('tasks.subtasksLabel'), node: subtaskListNode(task, ctx) },
-    { icon: 'paperclip', label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
-    { icon: 'bell', label: t('reminders.sectionTitle'), value: taskReminderSummary(reminders) },
-    { icon: 'map-pin-check', label: t('tasks.availabilityPlaceLabel'), value: presenceSummary(task) },
-    { icon: 'map-pin', label: t('tasks.locationLabel'), node: taskLocationNode(task, ctx), multiline: true },
-    { icon: 'external-link', label: 'Open', node: taskActionNode(task) },
-    visibilityRow(task.visibility),
-    // Nur wenn markiert (#647) - eine Zeile „Countdown: nein" an jeder Aufgabe
-    // erklärte ein Feld, statt eine Frage zu beantworten.
-    //
-    // UND NUR MIT FÄLLIGKEIT, weil die Zeile sonst etwas Unwahres sagt. Sie hing
-    // allein an `task.countdown` und behauptete „Zählt auf der Übersicht
-    // herunter" auch dann, wenn es nichts gab, worauf gezählt werden konnte -
-    // eine Falschaussage in der Leseansicht wiegt schwerer als der fehlende
-    // Riegel im Formular, weil sie den Irrtum bestätigt statt ihn zu verhindern.
-    // Der Riegel steht jetzt trotzdem auch dort (`wireCountdownGate`).
-    { icon: 'hourglass', label: t('dashboard.countdownTitle'), value: task.countdown && task.due_date ? t('tasks.countdownDetail') : '' },
-    { icon: 'align-left', label: t('tasks.descriptionLabel'), node: descriptionNode(task), multiline: true },
-    // „Wann war das zuletzt dran" - nur bei wiederkehrenden Aufgaben (#791).
-    // Eine einmalige Aufgabe beantwortet die Frage schon mit ihrem Status: sie
-    // ist erledigt oder nicht, und ein Verlauf mit genau einer Zeile darin
-    // wiederholte nur, was zwei Zeilen weiter oben steht.
-    task.is_recurring
-      ? { icon: 'history', label: t('tasks.historySeriesTitle'), node: seriesHistoryNode(task), multiline: true }
-      : null,
-    // Ganz unten und immer sichtbar: die Unterhaltung ist der einzige Abschnitt,
-    // der auch dann etwas anbietet, wenn er leer ist - nämlich das Eingabefeld.
-    { icon: 'message-square', label: t('tasks.commentsLabel'), node: commentsNode(task, ctx), multiline: true },
+    { node: statusSummaryNode(task, ctx) },
+    { label: 'Instructions', node: descriptionNode(task, ctx), multiline: true },
+    { label: t('tasks.subtasksLabel'), node: subtaskListNode(task, ctx) },
+    { node: supervisionNode(task, ctx) },
+    { node: metadataNode(task, ctx, reminders) },
+    { node: secondaryMetadataNode(task, ctx) },
+    { label: 'Open', node: taskActionNode(task) },
+    { label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
+    { label: t('tasks.commentsLabel'), node: commentsNode(task, ctx) },
+    { label: 'Activity', node: activityNode(task, ctx) },
+    task.is_recurring ? { label: t('tasks.historySeriesTitle'), node: seriesHistoryNode(task, ctx) } : null,
   ];
 }
 
@@ -1343,7 +1247,7 @@ function renderTaskDetail(task, reminders = [], ctx) {
  * Der Renderer maskiert selbst, deshalb ist insertAdjacentHTML hier zulaessig -
  * dieselbe Zusicherung, auf der notes.js und dashboard.js bereits stehen.
  */
-function descriptionNode(task) {
+function descriptionNode(task, ctx) {
   const text = (task.description ?? '').trim();
   if (!text) return null;
   const box = document.createElement('div');
@@ -1353,11 +1257,11 @@ function descriptionNode(task) {
   // sind also die der Aufgabe) und sie kennt die Aufgaben-Id. Das Dashboard und
   // die Kalender-Chips bekommen diese Optionen deshalb ausdrücklich nicht.
   box.insertAdjacentHTML('beforeend', renderMarkdownLight(text, {
-    checklist: { interactive: true, toggleLabel: t('tasks.checklistToggle') },
+    checklist: { interactive: canTask(task, 'complete'), toggleLabel: t('tasks.checklistToggle') },
   }));
   box.addEventListener('click', (e) => {
     const hit = e.target.closest('.note-md-box[data-md-line]');
-    if (hit) toggleDescriptionCheck(task, hit);
+    if (hit && canTask(task, 'complete')) toggleDescriptionCheck(task, hit, ctx);
   });
   return box;
 }
@@ -1377,7 +1281,7 @@ function descriptionNode(task) {
  * sonst liefe `expect` beim zweiten Tap gegen einen Text, den nur der Client
  * kennt.
  */
-async function toggleDescriptionCheck(task, box) {
+async function toggleDescriptionCheck(task, box, ctx) {
   const line    = parseInt(box.dataset.mdLine, 10);
   const checked = box.dataset.mdChecked !== '1';
   const expect  = splitKeepingLineEndings(task.description)[line * 2];
@@ -1398,14 +1302,42 @@ async function toggleDescriptionCheck(task, box) {
 
   paint(checked);
   try {
-    const res = await api.patch(`/tasks/${task.id}/check`, { line, checked, expect });
-    task.description = res.data.description;
+    const res = await api.patch(`/tasks/${task.id}/check`, { line, checked, expect, ...taskRevision(task) });
+    if (Number(res.data?.revision || 0) >= Number(task.revision || 0)) Object.assign(task, res.data);
+    await ctx.refresh();
   } catch (err) {
     paint(!checked);
+    if (err.status === 409) await ctx.refresh();
     window.yuvomi?.showToast(
       err.status === 409 ? t('tasks.checkConflict') : (err.data?.error ?? t('common.unknownError')),
       'danger',
     );
+  }
+}
+
+async function runTaskDetailMutation(ctx, button, operation) {
+  if (ctx.busy) return;
+  // Disabling a focused button can move focus to the document before refresh
+  // captures it. Keep that key, but never take focus away from a newer action.
+  const focusKey = document.activeElement === button ? button.dataset.focusKey : null;
+  ctx.busy = true;
+  button.disabled = true;
+  ctx.loader?.invalidate();
+  try {
+    const result = await operation();
+    if (result !== null) { await ctx.refresh(); await ctx.onChanged(); }
+  } catch (error) {
+    if (error.status === 409) await ctx.refresh();
+    window.yuvomi?.showToast(error.status === 409
+      ? (error.data?.error || 'This Task changed. Review its current state before trying again.')
+      : error.message, 'danger');
+  } finally {
+    ctx.busy = false;
+    if (button.isConnected) button.disabled = false;
+    if (!ctx.closed && focusKey && (!document.activeElement || document.activeElement === document.body)) {
+      const target = document.querySelector('.detail-view__pane')?.querySelector(`[data-focus-key="${focusKey}"]`);
+      if (target && !target.disabled) target.focus({ preventScroll: true });
+    }
   }
 }
 
@@ -1458,15 +1390,18 @@ export function openTaskDetail({
   onChanged = () => {},
   edit = null,
 }) {
-  const ctx = { users, skills, currentUserId, isAdmin, categories, container, onChanged };
+  const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged };
+  ctx.refresh = async () => { if (!ctx.closed) await ctx.loader?.load(); };
+  ctx.runMutation = (button, operation) => runTaskDetailMutation(ctx, button, operation);
+
   const archived = isArchived(task);
-  const next = archived ? null : NEXT_STATUS[task.status];
+
   // Gesperrte Aufgabe (#830): der Weiterschalt-Knopf bleibt, Loeschen, Ablegen
   // und Bearbeiten fallen weg. Die Detailansicht ist der zweite Einstieg neben
   // der Zeile - blendete nur die Zeile aus, waere die Sperre hier zu umgehen.
-  const canEdit = canEditTaskDefinition(task, null, ctx);
+  const canEdit = canTask(task, 'edit') && canEditTaskDefinition(task, null, ctx);
 
-  const actions = canEdit ? [{
+  const actions = canTask(task, 'delete_archive') && canEditTaskDefinition(task, null, ctx) ? [{
     id: 'task-detail-delete',
     label: t('common.delete'),
     variant: 'danger-ghost',
@@ -1481,7 +1416,7 @@ export function openTaskDetail({
     },
   }] : [];
 
-  if (!archived && task.activity_assignment_state === 'open') {
+  if (!archived && canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable')) {
     actions.push({
       id: 'task-detail-claim',
       label: t('tasks.claimTask'),
@@ -1491,21 +1426,9 @@ export function openTaskDetail({
     });
   }
 
-  // Der häufigste Grund, eine Aufgabe zu öffnen, ist sie abzuhaken. Bisher
-  // führte dieser Weg durch ein Formular mit sieben Auswahlfeldern.
-  if (next) {
-    actions.push({
-      id: 'task-detail-advance',
-      label: t(next.labelKey),
-      variant: 'secondary',
-      icon: next.icon,
-      onClick: ({ button }) => advanceTaskStatus(task, next.status, button, ctx),
-    });
-  }
-
   // Ablegen und Zurückholen sind derselbe Schalter - was er tut, hängt daran, wo
   // die Aufgabe gerade liegt.
-  if (canEdit) {
+  if (canTask(task, 'delete_archive') && canEditTaskDefinition(task, null, ctx)) {
     actions.push({
       id: 'task-detail-archive',
       label: archived ? t('tasks.unarchiveButton') : t('tasks.archiveButton'),
@@ -1515,23 +1438,62 @@ export function openTaskDetail({
     });
   }
 
-  openDetailView({
+  const view = openDetailView({
     title: task.title,
     size: 'lg',
     sections: renderTaskDetail(task, reminder, ctx),
     actions,
+    onClose: () => { ctx.closed = true; ctx.loader?.dispose(); ctx.stopLive?.(); },
     edit: canEdit && edit ? {
       label: t('common.edit'),
       title: t('tasks.editTask'),
       mount: (panel, pane) => edit.mount(panel, pane),
     } : undefined,
   });
+  ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`), (response) => {
+    if (!view.isOpen()) return;
+    const fresh = response.data;
+    if (!fresh || Number(fresh.revision || 0) < Number(task.revision || 0)) return;
+    Object.assign(task, fresh);
+    const pane = document.querySelector('.detail-view__pane');
+    const body = pane?.closest('.modal-panel__body');
+    const scroll = body?.scrollTop;
+    const draftField = ctx.comments?.contains(document.activeElement) ? document.activeElement : null;
+    const selection = draftField?.selectionStart == null ? null : [draftField.selectionStart, draftField.selectionEnd];
+    const focus = pane?.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
+    view.update(renderTaskDetail(task, reminder, ctx));
+    if (body && scroll != null) body.scrollTop = scroll;
+    if (focus) pane?.querySelector(`[data-focus-key="${focus}"]`)?.focus({ preventScroll: true });
+    if (draftField?.isConnected) { draftField.focus({ preventScroll: true }); if (selection) draftField.setSelectionRange(...selection); }
+    const commentsForm = ctx.comments?.querySelector('.task-comments__form');
+    if (commentsForm) {
+      commentsForm.hidden = !canTask(task, 'comment');
+      commentsForm.querySelectorAll('input, textarea, button').forEach(control => { control.disabled = !canTask(task, 'comment'); });
+    }
+    for (const [id, permission] of [['detail-view-edit', 'edit'], ['task-detail-delete', 'delete_archive'], ['task-detail-archive', 'delete_archive'], ['task-detail-claim', 'claim']]) {
+      const control = document.getElementById(id);
+      if (control) control.hidden = !canTask(task, permission);
+    }
+    const editing = document.querySelector('.detail-view__form');
+    if (!editing || editing.hidden) {
+      const title = document.getElementById('shared-modal-title');
+      if (title) title.textContent = task.title;
+    }
+    ctx.refreshComments?.();
+  });
+  ctx.stopLive = watchTaskChanges(() => { void ctx.refresh().catch((error) => {
+    if ([403, 404].includes(error.status) && view.isOpen()) {
+      ctx.closed = true; ctx.stopLive?.();
+      view.update([{ label: 'Task unavailable', value: 'This Task was removed or you no longer have access.' }]);
+    }
+  }); });
+  return view;
 }
 
 async function claimOpenTask(task, button, ctx) {
   const stop = btnLoading(button);
   try {
-    await api.post(`/automation/tasks/${task.id}/claim`, {});
+    await api.post(`/automation/tasks/${task.id}/claim`, taskRevision(task));
     task.activity_assignment_state = 'assigned';
     await closeDetailView({ force: true });
     window.yuvomi.showToast(t('tasks.claimedToast'), 'success');
@@ -1539,30 +1501,6 @@ async function claimOpenTask(task, button, ctx) {
   } catch (err) {
     stop();
     window.yuvomi.showToast(err.data?.error || err.message || t('common.errorGeneric'), 'danger');
-  }
-}
-
-/**
- * Status aus der Detailansicht weiterschalten. Optimistisch: Der Knopf zeigt
- * den neuen Stand sofort, weil das Abhaken sonst wie ein verschluckter Klick
- * wirkt. Scheitert der Aufruf, kommt die alte Beschriftung zurück.
- */
-async function advanceTaskStatus(task, status, button, ctx) {
-  const previous = task.status;
-  const stop = btnLoading(button);
-  try {
-    await api.patch(`/tasks/${task.id}/status`, { status });
-    task.status = status;
-    // Der Status steht bereits beim Server - eine Verwerfen-Frage danach böte
-    // an, etwas rückgängig zu machen, was gar nicht mehr aussteht (#625).
-    await closeDetailView({ force: true });
-    await ctx.onChanged();
-  } catch (err) {
-    task.status = previous;
-    stop();
-    // Gescheitert ist ein Schreibvorgang, kein Laden - tasks.loadError („Aufgabe
-    // konnte nicht geladen werden") beschriebe den falschen Vorgang.
-    window.yuvomi.showToast(err.message ?? t('common.errorGeneric'), 'danger');
   }
 }
 
@@ -1575,7 +1513,7 @@ async function toggleTaskArchive(task, button, ctx) {
   const stop = btnLoading(button);
   const archived = isArchived(task);
   try {
-    await setTaskArchived(task.id, !archived);
+    await setTaskArchived(task.id, !archived, task);
     task.archived_at = archived ? null : new Date().toISOString();
     await closeDetailView({ force: true });
     window.yuvomi.showToast(archived ? t('tasks.unarchivedToast') : t('tasks.archivedToast'), 'success');
@@ -1594,7 +1532,7 @@ async function toggleTaskArchive(task, button, ctx) {
  * eine Historie an jeder davon wäre Ladearbeit für eine Zeile, die man erst
  * beim Öffnen sieht.
  */
-function seriesHistoryNode(task) {
+function seriesHistoryNode(task, ctx = {}) {
   // Ohne eigene Ueberschrift: die Detailzeile traegt ihr Label schon, und eine
   // zweite daneben saehe aus wie ein zweiter Abschnitt.
   const list = document.createElement('div');
@@ -1604,13 +1542,20 @@ function seriesHistoryNode(task) {
   placeholder.textContent = t('common.loading');
   list.appendChild(placeholder);
 
-  api.get(`/tasks/${task.id}/completions?limit=10`).then((res) => {
+  const activityRequest = ctx.activityRequest;
+  api.get(`/tasks/${task.id}/completions?limit=10`).then(async (res) => {
     const entries = res.data ?? [];
+    const activity = !entries.length && activityRequest ? await activityRequest.catch(() => ({ data: [] })) : null;
+    if (ctx.closed || !list.isConnected) return;
     list.replaceChildren();
     if (!entries.length) {
       const none = document.createElement('p');
       none.className = 'detail-history__empty';
-      none.textContent = t('tasks.historySeriesEmpty');
+      const completed = activity?.data?.find(entry => entry.event_type === 'completed' && Number(entry.action_task_id) === Number(task.id));
+      none.textContent = completed
+        ? [`${formatDate(completed.created_at)} ${formatTime(completed.created_at)}`, completed.actor_name,
+          'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
+        : 'No completed occurrences currently recorded.';
       list.appendChild(none);
       return;
     }

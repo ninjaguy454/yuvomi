@@ -116,7 +116,12 @@ function requiredAccess(method) {
  * @returns {string|null} Modul-Schlüssel oder null (unbekannt/nicht scopebar).
  */
 function moduleForPath(path) {
-  const segment = String(path || '').replace(/^\/+/, '').split('/')[0];
+  const normalized = String(path || '').replace(/^\/+/, '');
+  // Keep existing roster ACLs/token scopes when its API moves into Availability.
+  if (/^planning\/routines(?:\/|$)/.test(normalized)) return 'schedule';
+  if (/^planning\/(?:availability|presence)(?:\/|$)/.test(normalized)) return 'calendar';
+  if (/^automation\/(?:tasks|obligations|activity-options|activity-templates|quick-add)(?:\/|$)/.test(normalized)) return 'tasks';
+  const segment = normalized.split('/')[0];
   return PREFIX_TO_MODULE.get(segment) || null;
 }
 

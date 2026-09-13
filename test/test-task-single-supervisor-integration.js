@@ -154,12 +154,24 @@ test('aggregate supervision explanations never reveal private action requirement
   d.prepare("UPDATE tasks SET title='Hidden dryer action',visibility='private',created_by=? WHERE id=?").run(second,dry);
   d.prepare("UPDATE skills SET name='Private skill marker' WHERE id=?").run(dryer);
   reconcileTaskSupervision(d,source);
+  const full=await request('GET',`/${source}`,undefined,second);
+  assert.equal(full.status,200);
+  assert.match(full.data.data.supervision.display_reason,/Private skill marker/);
+  assert.ok(full.data.data.supervision.supervisor_explanations.length>0);
+  assert.ok(full.data.data.supervision.supervisor_explanations.every(candidate=>typeof candidate.display_reason==='string'));
   const response=await request('GET',`/${source}`,undefined,learner);
   assert.equal(response.status,200);const detail=response.data.data;
   assert.equal(detail.supervision.may_assign,false);assert.equal(detail.supervision.actions.length,1);
   assert.equal(JSON.stringify(detail).includes('Private skill marker'),false);
   assert.equal(JSON.stringify(detail).includes('Hidden dryer action'),false);
   assert.match(detail.supervision.reason,/entire remaining supervised scope/);
+  assert.equal(typeof detail.supervision.display_reason,'string');
+  assert.deepEqual(detail.supervision.supervisor_explanations,[]);
+  assert.ok(detail.supervision.actions.every(action=>typeof action.display_reason==='string'));
+  assert.ok(detail.supervision.actions.every(action=>action.supervisor_explanations.length===0));
+  const visible=detail.subtasks.find(action=>action.id===wash);
+  assert.ok(visible.skill_eligibility,'visible child keeps its own skill assessment');
+  assert.match(JSON.stringify(visible.skill_eligibility),/Washing Machine/);
 });
 
 test('visible supervision Activity and nested consolidation history do not reveal private sibling requirements',async()=>{

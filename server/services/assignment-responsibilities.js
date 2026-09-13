@@ -225,7 +225,8 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
   if (resolution.primary) addResponsibility(d, taskId, resolution.primary.id, 'primary', source);
   for (const participant of participants) addResponsibility(d, taskId, participant.id, 'participant', source);
   if (resolution.subject) addResponsibility(d, taskId, resolution.subject.id, 'beneficiary', source);
-  if (resolution.supervisor) addResponsibility(d, taskId, resolution.supervisor.id, 'supervisor', source);
+  // Template previews only know the parent requirements. The concrete Task's
+  // linked resolver selects one helper after its entire checklist exists.
   replaceLegacyAssignments(d, taskId, [
     ...participants.map((row) => row.id),
     ...subtaskParticipantIds,
@@ -245,11 +246,6 @@ export function recordTaskAssignment(d, taskId, activity, resolution, {
     for (const participant of participants.filter((row) => Number(row.id) !== Number(resolution.primary?.id))) {
       createTaskObligation(d, taskId, participant.id, {
         role: 'participant', dueAt, metadata: { strategy: policy, activity_template_id: activity.id },
-      });
-    }
-    if (resolution.supervisor) {
-      createTaskObligation(d, taskId, resolution.supervisor.id, {
-        role: 'supervisor', dueAt, metadata: { strategy: policy, activity_template_id: activity.id },
       });
     }
     notifyTaskObligations(d, taskId, { eligibleIds: (resolution.eligible || []).map((member) => member.id) });
@@ -376,8 +372,11 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
     if (action === 'accept') {
       const supervision = inspectTaskSupervision(d, obligation.task_id);
       if (obligation.role === 'supervisor') {
-        const affected = supervision.actions.filter(row => !row.completed && Number(row.supervisor_user_id) === Number(actorUserId));
-        if (!affected.length || affected.some(row => row.state !== 'assigned')) throw new TaskSupervisionError(affected.find(row => row.state !== 'assigned')?.reason || 'This supervision assignment is no longer current.');
+        const pending = supervision.actions.filter(row => !row.completed && row.state !== 'not_required');
+        if (Number(supervision.supervisor_user_id) !== Number(actorUserId) || !pending.length
+          || pending.some(row => row.state !== 'assigned' || Number(row.supervisor_user_id) !== Number(actorUserId))) {
+          throw new TaskSupervisionError('This supervision assignment is no longer current. Open the Task to review its supervision requirements.');
+        }
       } else assertTaskSupervisionAssignee(d, obligation.task_id, obligation.responsible_user_id || actorUserId);
       if (obligation.role !== 'supervisor') assertTaskAssignmentAvailability(d, obligation.task_id, [obligation.responsible_user_id || actorUserId]);
       d.prepare(`UPDATE planning_obligations SET status = 'accepted', responded_at = ${nowSql()}, response_note = ?, updated_at = ${nowSql()} WHERE id = ?`)
@@ -392,16 +391,21 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
     event(d, obligation.id, closedStatus, actorUserId);
 
     if (obligation.role === 'supervisor' && inspectTaskSupervision(d, obligation.task_id).actions.length) {
-      // Keep the learner; the declined/expired helper request cannot leave a live counterpart assigned.
+      // One refusal applies to the entire remaining supervised scope. Never
+      // select independent fallbacks that split a Task across several helpers.
       const supervision = inspectTaskSupervision(d, obligation.task_id);
+      if (supervision.supervisor_user_id && Number(supervision.supervisor_user_id) !== Number(obligation.responsible_user_id)) {
+        // A delayed response to an older request cannot replace the current
+        // Task supervisor. Reconciliation retires any legacy duplicate role.
+        reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId });
+        return { ...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id), fallback: null };
+      }
       const attempted = new Set(d.prepare("SELECT responsible_user_id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('declined','timed_out')")
         .all(obligation.task_id).map(row => Number(row.responsible_user_id)));
-      const pending = supervision.actions.filter(row => !row.completed && row.state !== 'not_required'
-        && Number(row.supervisor_user_id) === Number(obligation.responsible_user_id));
-      const replacements = pending.map(row => ({ action:row, candidate:row.eligible_supervisors.find(member=>!attempted.has(Number(member.id))) }));
+      const replacement = supervision.eligible_supervisors.find(member => !attempted.has(Number(member.id))) || null;
       reconcileTaskSupervision(d, obligation.task_id, { actorId: actorUserId,
-        supervisorAssignments:Object.fromEntries(replacements.map(({action,candidate})=>[action.action_task_id,candidate?.id||null])) });
-      return { ...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id), fallback: replacements.find(row=>row.candidate)?.candidate || null };
+        supervisorUserId: replacement?.id || null });
+      return { ...d.prepare('SELECT * FROM planning_obligations WHERE id=?').get(obligation.id), fallback: replacement };
     }
 
     const activity = activityForTask(d, obligation.task_id);

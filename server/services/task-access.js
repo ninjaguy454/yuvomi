@@ -26,7 +26,13 @@ export function taskVisibilityWhere(d, actor, alias = 't', bind = '?') {
   if (p.capabilities['tasks.view_own'] !== 'allow') return `(${base} AND 0)`;
   const projectionGuard = (supportTable(d) ? ` AND NOT EXISTS (SELECT 1 FROM task_activity_support_tasks os WHERE os.task_id=${alias}.id)` : '')
     + (supervisionTable(d) ? ` AND NOT EXISTS (SELECT 1 FROM task_supervision_actions oc WHERE oc.counterpart_task_id=${alias}.id)` : '');
-  const supervision = supervisionTable(d) ? ` OR EXISTS (SELECT 1 FROM task_supervision_actions sa WHERE sa.supervisor_user_id = ${me} AND sa.state = 'assigned' AND (${alias}.id = sa.source_task_id OR ${alias}.id = sa.action_task_id OR ${alias}.id = sa.counterpart_task_id))` : '';
+  const supervision = supervisionTable(d) ? ` OR EXISTS (SELECT 1 FROM task_supervision_actions sa
+    JOIN tasks supervised_action ON supervised_action.id=sa.action_task_id
+    JOIN task_responsibilities current_helper ON current_helper.task_id=sa.source_task_id
+      AND current_helper.user_id=sa.supervisor_user_id AND current_helper.role='supervisor' AND current_helper.status='active'
+    WHERE sa.supervisor_user_id = ${me} AND sa.state = 'assigned'
+      AND supervised_action.status!='done' AND supervised_action.archived_at IS NULL
+      AND (${alias}.id = sa.source_task_id OR ${alias}.id = sa.action_task_id OR ${alias}.id = sa.counterpart_task_id))` : '';
   return `(${base} AND (${ownSql(alias, me, projectionGuard)}${supervision}))`;
 }
 
@@ -40,7 +46,14 @@ export function taskCapabilities(d, actor, sourceTask) {
   const projection = !!mappedSource || (task?.id && supportTable(d)
     && !!d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE task_id=?').get(task.id));
   const parentOwn = parent && (Number(parent.created_by) === me || assignments(d, parent).includes(me));
-  const supervised = task?.id && supervisionTable(d) ? d.prepare("SELECT action_task_id, counterpart_task_id, source_task_id FROM task_supervision_actions WHERE supervisor_user_id = ? AND state = 'assigned' AND (? = action_task_id OR ? = counterpart_task_id OR ? = source_task_id)").all(me, task.id, task.id, task.id) : [];
+  const supervised = task?.id && supervisionTable(d) ? d.prepare(`SELECT sa.action_task_id, sa.counterpart_task_id, sa.source_task_id
+    FROM task_supervision_actions sa JOIN tasks supervised_action ON supervised_action.id=sa.action_task_id
+    JOIN task_responsibilities current_helper ON current_helper.task_id=sa.source_task_id
+      AND current_helper.user_id=sa.supervisor_user_id AND current_helper.role='supervisor' AND current_helper.status='active'
+    WHERE sa.supervisor_user_id = ? AND sa.state = 'assigned'
+      AND supervised_action.status!='done' AND supervised_action.archived_at IS NULL
+      AND (? = sa.action_task_id OR ? = sa.counterpart_task_id OR ? = sa.source_task_id)`)
+    .all(me, task.id, task.id, task.id) : [];
   const own = Number(task?.created_by) === me || assigned.includes(me) || (!projection && parent && !assigned.length && parentOwn);
   const canSeeRow = row => row && (row.visibility === 'all' || !row.visibility || Number(row.created_by) === me
     || (row.visibility === 'assignees' && assignments(d,row).includes(me)));
@@ -60,6 +73,16 @@ export function attachTaskCapabilities(d, actor, tasks) {
     if (Array.isArray(task.subtasks)) attachTaskCapabilities(d, actor, task.subtasks);
   }
   return tasks;
+}
+
+/** Choosing a helper changes the canonical Task's whole supervised scope. */
+export function taskSupervisionManagementAllowed(d, actor, sourceTaskId) {
+  const source = d.prepare('SELECT * FROM tasks WHERE id = ?').get(sourceTaskId);
+  if (!source) return false;
+  const p = actorPermissions(d, actor), me = actorId(actor);
+  const capabilities = taskCapabilities(d, actor, source);
+  return Boolean((p.admin || Number(source.created_by) === me)
+    && capabilities.view && capabilities.change_assignment && capabilities.reassign);
 }
 
 /** Operational status actions do not require permission to edit definitions. */

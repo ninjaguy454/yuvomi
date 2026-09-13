@@ -556,8 +556,12 @@ function subtaskListNode(task, ctx) {
     const skills = taskSkillSummary(subtask, ctx);
     const parts = [skills];
     if (supervision && supervision.state !== 'not_required') {
-      parts.push(supervision.state === 'assigned' ? 'Supervision required' : 'Supervision needed');
-      if (supervision.supervisor_name) parts.push(`Supervisor: ${supervision.supervisor_name}`);
+      if (done && supervision.completed) {
+        parts.push(supervision.supervisor_name ? `Previously supervised by ${supervision.supervisor_name}` : 'Completed supervised action');
+      } else {
+        parts.push(supervision.state === 'assigned' ? 'Supervision required' : 'Supervision needed');
+        if (supervision.state === 'assigned' && supervision.supervisor_name) parts.push(`Supervisor: ${supervision.supervisor_name}`);
+      }
     }
     const points = Number(subtask.points || 0);
     if (points) parts.push(t('tasks.pointsSummary', { count: points }));
@@ -1109,35 +1113,62 @@ function supervisionNode(task, ctx) {
   if (supervision?.reason) {
     const reason = document.createElement('p'); reason.textContent = supervision.reason; wrap.appendChild(reason);
   }
+  const remaining = actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
+  if (remaining.length) {
+    const summary = document.createElement('p');
+    summary.textContent = supervision?.state === 'assigned' && supervision.supervisor_name
+      ? `Supervisor: ${supervision.supervisor_name} · Covers all remaining supervised actions.`
+      : 'One supervisor must cover every remaining action requiring supervision.';
+    wrap.appendChild(summary);
+  }
+  // Candidates and permission belong to the source Task's complete scope. Never
+  // reconstruct a picker from one action's candidate list or historical helper.
+  if (remaining.length && supervision?.may_assign === true && supervision.source_task_id && supervision.eligible_supervisors?.length) {
+    const controls = document.createElement('div'); controls.className = 'task-detail-supervision__controls';
+    const select = document.createElement('select'); select.className = 'input input--sm';
+    select.dataset.immediateAction = '';
+    select.dataset.focusKey = 'task-supervisor';
+    select.setAttribute('aria-label', 'Supervisor for all remaining supervised actions');
+    for (const person of supervision.eligible_supervisors) {
+      const option = document.createElement('option'); option.value = person.id; option.textContent = person.display_name;
+      option.selected = Number(person.id) === Number(supervision.supervisor_user_id); select.appendChild(option);
+    }
+    const sourceId = supervision.source_task_id, sourceRevision = supervision.source_revision;
+    const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
+    assign.textContent = 'Assign Task supervisor'; assign.dataset.taskOperation = '';
+    assign.dataset.focusKey = 'assign-task-supervisor';
+    assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${sourceId}/supervisor`, {
+      supervisor_user_id: Number(select.value), expected_revision: sourceRevision,
+    })));
+    controls.append(select, assign); wrap.appendChild(controls);
+  }
+  const blockedCandidates = supervision?.state !== 'assigned'
+    ? (supervision?.supervisor_explanations || []).filter(person => !person.eligible && person.reason) : [];
+  if (remaining.length && blockedCandidates.length) {
+    const details = document.createElement('details');
+    const summary = document.createElement('summary'); summary.textContent = 'Why a supervisor cannot cover this Task';
+    const list = document.createElement('ul');
+    for (const person of blockedCandidates) {
+      const item = document.createElement('li'); item.textContent = [person.name, person.reason].filter(Boolean).join(': ');
+      list.appendChild(item);
+    }
+    details.append(summary, list); wrap.appendChild(details);
+  }
   for (const requirement of actions) {
     if (requirement.state === 'not_required') continue;
     const row = document.createElement('div'); row.className = 'task-detail-supervision__action';
     const name = document.createElement('strong'); name.textContent = requirement.action_title || task.title;
     const explanation = document.createElement('span');
     const skills = (requirement.required_skills || []).map((skill) => skill.name).join(', ');
-    const reason = requirement.reason !== supervision?.reason && requirement.state !== 'assigned' ? requirement.reason : '';
-    explanation.textContent = [skills, requirement.supervisor_name ? `Supervisor: ${requirement.supervisor_name}` : 'No supervisor assigned', reason].filter(Boolean).join(' · ');
+    const reason = !requirement.completed && requirement.reason !== supervision?.reason && requirement.state !== 'assigned' ? requirement.reason : '';
+    const history = requirement.completed
+      ? requirement.supervisor_name ? `Completed · Previously supervised by ${requirement.supervisor_name}` : 'Completed supervised action'
+      : '';
+    explanation.textContent = [skills, history, reason].filter(Boolean).join(' · ');
     row.append(name, explanation);
     if (requirement.counterpart_task_id && !task.is_supervision_projection && supervision?.can_view_support === true) {
       const link = document.createElement('a'); link.href = `/tasks?open=${requirement.counterpart_task_id}`;
       link.textContent = 'Open supervision work'; row.appendChild(link);
-    }
-    if (canTask(task, 'reassign') && canTask(task, 'change_assignment') && requirement.eligible_supervisors?.length) {
-      const controls = document.createElement('div'); controls.className = 'task-detail-supervision__controls';
-      const select = document.createElement('select'); select.className = 'input input--sm';
-      select.dataset.immediateAction = '';
-      select.setAttribute('aria-label', `Supervisor for ${requirement.action_title || task.title}`);
-      for (const person of requirement.eligible_supervisors) {
-        const option = document.createElement('option'); option.value = person.id; option.textContent = person.display_name;
-        option.selected = Number(person.id) === Number(requirement.supervisor_user_id); select.appendChild(option);
-      }
-      const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
-      assign.textContent = 'Assign supervisor'; assign.dataset.taskOperation = '';
-      assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${requirement.action_task_id}/supervisor`, {
-        supervisor_user_id: Number(select.value), expected_revision: requirement.task_revision,
-        ...(Number(requirement.action_task_id) !== Number(supervision?.source_task_id) ? { expected_parent_revision: supervision?.source_revision } : {}),
-      })));
-      controls.append(select, assign); row.appendChild(controls);
     }
     wrap.appendChild(row);
   }
@@ -1275,6 +1306,32 @@ async function toggleDescriptionCheck(task, box, ctx) {
   }
 }
 
+async function runTaskDetailMutation(ctx, button, operation) {
+  if (ctx.busy) return;
+  // Disabling a focused button can move focus to the document before refresh
+  // captures it. Keep that key, but never take focus away from a newer action.
+  const focusKey = document.activeElement === button ? button.dataset.focusKey : null;
+  ctx.busy = true;
+  button.disabled = true;
+  ctx.loader?.invalidate();
+  try {
+    const result = await operation();
+    if (result !== null) { await ctx.refresh(); await ctx.onChanged(); }
+  } catch (error) {
+    if (error.status === 409) await ctx.refresh();
+    window.yuvomi?.showToast(error.status === 409
+      ? (error.data?.error || 'This Task changed. Review its current state before trying again.')
+      : error.message, 'danger');
+  } finally {
+    ctx.busy = false;
+    if (button.isConnected) button.disabled = false;
+    if (!ctx.closed && focusKey && (!document.activeElement || document.activeElement === document.body)) {
+      const target = document.querySelector('.detail-view__pane')?.querySelector(`[data-focus-key="${focusKey}"]`);
+      if (target && !target.disabled) target.focus({ preventScroll: true });
+    }
+  }
+}
+
 /**
  * Der eine Einstieg in eine bestehende Aufgabe - fuer jede Ansicht, die eine
  * anbietet (#918).
@@ -1326,21 +1383,7 @@ export function openTaskDetail({
 }) {
   const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged };
   ctx.refresh = async () => { if (!ctx.closed) await ctx.loader?.load(); };
-  ctx.runMutation = async (button, operation) => {
-    if (ctx.busy) return;
-    ctx.busy = true;
-    button.disabled = true;
-    ctx.loader?.invalidate();
-    try {
-      const result = await operation();
-      if (result !== null) { await ctx.refresh(); await ctx.onChanged(); }
-    } catch (error) {
-      if (error.status === 409) await ctx.refresh();
-      window.yuvomi?.showToast(error.status === 409
-        ? (error.data?.error || 'This Task changed. Review its current state before trying again.')
-        : error.message, 'danger');
-    } finally { ctx.busy = false; if (button.isConnected) button.disabled = false; }
-  };
+  ctx.runMutation = (button, operation) => runTaskDetailMutation(ctx, button, operation);
 
   const archived = isArchived(task);
 

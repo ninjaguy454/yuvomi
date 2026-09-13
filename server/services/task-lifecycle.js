@@ -82,7 +82,9 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     d.prepare("UPDATE task_assignment_context SET state='fulfilled' WHERE task_id=?").run(task.id);
     recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id));
   } else if (task.status === 'done') {
-    d.prepare("UPDATE task_responsibilities SET status='active' WHERE task_id=? AND status='fulfilled'").run(task.id);
+    // Historical supervisors are not all revived when an occurrence reopens.
+    // The reconciler chooses one person for its new remaining scope below.
+    d.prepare("UPDATE task_responsibilities SET status='active' WHERE task_id=? AND status='fulfilled' AND role!='supervisor'").run(task.id);
     d.prepare(`UPDATE task_assignment_context SET state=CASE WHEN strategy='open_claimable'
       AND (SELECT assigned_to FROM tasks WHERE id=?) IS NULL THEN 'open' ELSE 'assigned' END WHERE task_id=?`).run(task.id,task.id);
     if(!preserveFollowup)effects.undone += recurrenceHooks?.discard(task.id) || 0;
@@ -199,6 +201,9 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
       syncProjections(taskSupervisionRootId(d,parentId));
     }
     syncProjections(gate.sourceTaskId||task.parent_task_id||task.id);
+    const supervisionRoots = new Set([gate.sourceTaskId, ...effects.changedTaskIds].filter(Boolean)
+      .map(id => taskSupervisionRootId(d,id)));
+    for (const sourceId of supervisionRoots) reconcileTaskSupervision(d,sourceId,{actorId});
     return {pending:effects.pending,undone:effects.undone,task:d.prepare('SELECT * FROM tasks WHERE id=?').get(requested.id),
       parent_task:task.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.parent_task_id):null};
   })();

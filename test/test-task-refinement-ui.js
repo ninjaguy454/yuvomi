@@ -150,7 +150,7 @@ function detailHarness(overrides = {}) {
   const context = vm.createContext({ document: { createElement: tag => new Element(tag) }, HTMLElement: Element, window: {},
     canTask: (task, key) => task?.permissions?.[key] === true, isArchived: task => !!task.archived_at,
     t: key => key, actionableSubtasks: stateHarness().actionableSubtasks, ...overrides });
-  vm.runInContext(`${plain(read('components/task-detail.js'))}\nthis.subject={subtaskListNode,supervisionNode,commentsNode,seriesHistoryNode}`, context);
+  vm.runInContext(`${plain(read('components/task-detail.js'))}\nthis.subject={subtaskListNode,supervisionNode,commentsNode,seriesHistoryNode,runTaskDetailMutation}`, context);
   return context.subject;
 }
 
@@ -220,6 +220,116 @@ test('restricted learners see supervision context without inaccessible support l
   assert.equal(flatten(node).filter(el => el.textContent === reason).length, 1);
   task.supervision.can_view_support = true;
   assert.equal(flatten(h.supervisionNode(task, {})).filter(el => el.tagName === 'A').length, 1);
+});
+
+test('all supervised actions share one Task-level supervisor picker and source revision', async () => {
+  const writes = [];
+  const h = detailHarness({ api: { post: async (path, body) => { writes.push({ path, body }); } } });
+  const task = { id: 90, title: 'Supervise Laundry', is_supervision_projection: true,
+    supervision: { source_task_id: 1, source_revision: 7, state: 'assigned', may_assign: true,
+      supervisor_user_id: 5, supervisor_name: 'Parent', eligible_supervisors: [{ id: 5, display_name: 'Parent' }, { id: 6, display_name: 'Other parent' }],
+      actions: [{ action_task_id: 2, action_title: 'Load washer', state: 'assigned', supervisor_name: 'Parent', eligible_supervisors: [{ id: 8, display_name: 'Washer-only helper' }] },
+        { action_task_id: 3, action_title: 'Start dryer', state: 'assigned', supervisor_name: 'Parent', eligible_supervisors: [{ id: 9, display_name: 'Dryer-only helper' }] }] } };
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const all = flatten(h.supervisionNode(task, { runMutation: (_button, write) => write() }));
+  const selectors = all.filter(el => el.tagName === 'SELECT');
+  assert.equal(selectors.length, 1, 'one control covers the entire source Task');
+  assert.equal(selectors[0].attributes['aria-label'], 'Supervisor for all remaining supervised actions');
+  assert.deepEqual(selectors[0].children.map(option => option.textContent), ['Parent', 'Other parent']);
+  assert.equal(all.filter(el => el.textContent === 'Supervisor: Parent · Covers all remaining supervised actions.').length, 1);
+  const assign = all.find(el => el.tagName === 'BUTTON');
+  selectors[0].value = '6';
+  task.supervision.source_revision = 99;
+  await assign.listeners.click();
+  assert.deepEqual(value(writes), [{ path: '/tasks/1/supervisor', body: { supervisor_user_id: 6, expected_revision: 7 } }]);
+});
+
+test('split skill coverage is explained without offering individual-action helper choices', () => {
+  const h = detailHarness();
+  const task = { id: 1, title: 'Laundry', permissions: { reassign: true, change_assignment: true }, supervision: {
+    source_task_id: 1, source_revision: 7, state: 'needed', may_assign: true, qualified_supervisor_count: 0, eligible_supervisors: [],
+    reason: 'No single household member can supervise both Washing Machine and Dryer.',
+    supervisor_explanations: [{ user_id: 5, name: 'Alex', eligible: false, reason: 'Cannot supervise Dryer.' },
+      { user_id: 6, name: 'Sam', eligible: false, reason: 'Cannot supervise Washing Machine.' }],
+    actions: [{ action_task_id: 2, action_title: 'Load washer', state: 'unresolved', eligible_supervisors: [{ id: 5, display_name: 'Alex' }] },
+      { action_task_id: 3, action_title: 'Start dryer', state: 'unresolved', eligible_supervisors: [{ id: 6, display_name: 'Sam' }] }],
+  } };
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  const all = flatten(h.supervisionNode(task, {}));
+  assert.equal(all.filter(el => el.tagName === 'SELECT' || el.tagName === 'BUTTON').length, 0);
+  assert.ok(all.some(el => el.textContent === task.supervision.reason));
+  assert.ok(all.some(el => el.textContent === 'Alex: Cannot supervise Dryer.'));
+  assert.ok(all.some(el => el.textContent === 'Sam: Cannot supervise Washing Machine.'));
+});
+
+test('manual supervisor selection requires explicit source permission rather than local assignment controls', () => {
+  const h = detailHarness();
+  const task = { id: 1, permissions: { reassign: true, change_assignment: true }, supervision: {
+    source_task_id: 1, source_revision: 7, state: 'needed', may_assign: false,
+    eligible_supervisors: [{ id: 5, display_name: 'Parent' }],
+    actions: [{ action_task_id: 2, state: 'unresolved', eligible_supervisors: [{ id: 5, display_name: 'Parent' }] }],
+  } };
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  assert.equal(flatten(h.supervisionNode(task, {})).filter(el => el.tagName === 'SELECT').length, 0);
+  delete task.supervision.may_assign;
+  assert.equal(flatten(h.supervisionNode(task, {})).filter(el => el.tagName === 'SELECT').length, 0, 'older or redacted responses cannot infer permission');
+});
+
+test('completed action helpers are clearly historical while the remaining scope has one current supervisor', () => {
+  const h = detailHarness();
+  const task = { id: 1, title: 'Laundry', supervision: { source_task_id: 1, state: 'assigned',
+    supervisor_user_id: 6, supervisor_name: 'Current parent', may_assign: true, eligible_supervisors: [{ id: 6, display_name: 'Current parent' }],
+    actions: [{ action_task_id: 2, action_title: 'Load washer', state: 'fulfilled', completed: true, supervisor_name: 'Previous parent', required_skills: [{ name: 'Washing Machine' }] },
+      { action_task_id: 3, action_title: 'Start dryer', state: 'assigned', completed: false, supervisor_name: 'Current parent', required_skills: [{ name: 'Dryer' }] }] } };
+  const flatten = el => [el, ...el.children.flatMap(flatten)];
+  let all = flatten(h.supervisionNode(task, {}));
+  assert.ok(all.some(el => el.textContent === 'Washing Machine · Completed · Previously supervised by Previous parent'));
+  assert.equal(all.filter(el => el.textContent.includes('Supervisor:')).length, 1);
+  assert.ok(!all.some(el => el.textContent.includes('Supervisor: Previous parent')));
+  task.supervision.actions[1].completed = true;
+  task.supervision.state = 'none';
+  all = flatten(h.supervisionNode(task, {}));
+  assert.equal(all.filter(el => el.tagName === 'SELECT').length, 0, 'completed history cannot acquire a new active supervisor');
+});
+
+test('completed subtask context does not present its historical helper as the current supervisor', () => {
+  const h = detailHarness();
+  const task = { subtasks: [{ id: 2, title: 'Load washer', status: 'done', permissions: { complete: true }, supervision_action: {
+    state: 'fulfilled', completed: true, supervisor_user_id: 5, supervisor_name: 'Previous parent', can_complete: true } }] };
+  const meta = h.subtaskListNode(task, { currentUserId: 4, skills: [] }).children[0].children[1];
+  assert.match(meta.textContent, /Previously supervised by Previous parent/);
+  assert.doesNotMatch(meta.textContent, /Supervision needed|Supervisor:/);
+});
+
+test('Task mutations restore a focused supervisor control after disabling and replacing it', async () => {
+  const document = { body: {}, activeElement: null };
+  const replacement = { disabled: false, focus(options) { document.activeElement = this; assert.equal(options.preventScroll, true); } };
+  document.querySelector = selector => {
+    assert.equal(selector, '.detail-view__pane');
+    return { querySelector(key) { assert.equal(key, '[data-focus-key="assign-task-supervisor"]'); return replacement; } };
+  };
+  const button = { dataset: { focusKey: 'assign-task-supervisor' }, isConnected: false,
+    set disabled(value) { if(value) document.activeElement = document.body; } };
+  document.activeElement = button;
+  const ctx = { refresh: async () => {}, onChanged: async () => {} };
+  await detailHarness({ document }).runTaskDetailMutation(ctx, button, async () => ({}));
+  assert.equal(document.activeElement, replacement);
+  assert.equal(ctx.busy, false);
+});
+
+test('a late Task mutation does not steal focus from a comment or a closed detail', async () => {
+  const document = { body: {}, activeElement: null, querySelector() { throw new Error('Must not restore an obsolete focus target'); } };
+  const button = { dataset: { focusKey: 'assign-task-supervisor' }, isConnected: false,
+    set disabled(value) { if(value) document.activeElement = document.body; } };
+  const comment = {};
+  const ctx = { refresh: async () => {}, onChanged: async () => { document.activeElement = comment; } };
+  document.activeElement = button;
+  await detailHarness({ document }).runTaskDetailMutation(ctx, button, async () => ({}));
+  assert.equal(document.activeElement, comment);
+  document.activeElement = button;
+  ctx.closed = true; ctx.onChanged = async () => {};
+  await detailHarness({ document }).runTaskDetailMutation(ctx, button, async () => ({}));
+  assert.equal(document.activeElement, document.body);
 });
 
 test('new Tasks views include work in progress and do not advertise creation to restricted members', () => {

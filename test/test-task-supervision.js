@@ -44,12 +44,29 @@ function busy(user,start='08:00',end='16:00') { const shift=Number(d.prepare("IN
   const pattern=Number(d.prepare("INSERT INTO schedule_patterns(user_id,name,anchor_date,cycle_length) VALUES(?,'Daily','2026-09-14',1)").run(user).lastInsertRowid);
   d.prepare('INSERT INTO schedule_pattern_days(pattern_id,position,shift_type_id) VALUES(?,0,?)').run(pattern,shift); return pattern; }
 function policy(id) { d.prepare("INSERT INTO task_planning_context(task_id,presence_policy,presence_window,source) VALUES(?,'available_before_due','due','activity_template')").run(id); }
+function assertSingleSupervisor(view, expected) {
+  const wanted = expected == null ? [] : [expected];
+  const pending = view.actions.filter(action => !action.completed && action.state !== 'not_required');
+  assert.equal(view.supervisor_user_id, expected);
+  assert.deepEqual([...new Set(pending.filter(action => action.state === 'assigned').map(action => action.supervisor_user_id))], wanted);
+  assert.deepEqual(d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active' ORDER BY user_id").all(view.source_task_id).map(row => row.user_id), wanted);
+  assert.deepEqual(d.prepare("SELECT responsible_user_id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('pending','accepted') ORDER BY responsible_user_id").all(view.source_task_id).map(row => row.responsible_user_id), wanted);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_activity_support_tasks WHERE source_task_id=?').get(view.source_task_id).n, 1);
+  assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(view.support_task_id).assigned_to, expected);
+  assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(view.support_task_id).map(row => row.user_id), wanted);
+  for (const action of pending) {
+    assert.equal(action.supervisor_user_id, expected);
+    assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(action.counterpart_task_id).assigned_to, expected);
+    assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(action.counterpart_task_id).map(row => row.user_id), wanted);
+  }
+}
 
 test('legacy fixed learner is evaluated against explicit child skills without writes or parent skill inheritance',()=>{
   const x=laundry(), before=d.totalChanges;
   const view=inspectTaskSupervision(d,x.root);
   assert.equal(view.state,'needed'); assert.deepEqual(view.actions.map(a=>a.action_task_id),[x.wash,x.dry]);
-  assert.match(view.actions[0].reason,/Eleanor requires supervision for Washing Machine/);
+  assert.equal(view.actions[0].learner_name,'Eleanor'); assert.match(view.actions[0].reason,/Washing Machine/);
+  assert.match(view.reason,/one eligible supervisor.*all remaining requirements/i);
   assert.equal(d.prepare('SELECT COUNT(*) n FROM task_supervision_actions').get().n,0);
   assert.equal(d.totalChanges,before);
 });
@@ -59,6 +76,7 @@ test('one supervisor container contains only the actual deficient actions and li
   assert.ok(view.actions.every(a=>a.learner_user_id===learner&&a.supervisor_user_id===helper));
   assert.equal(d.prepare('SELECT COUNT(*) n FROM task_activity_support_tasks WHERE source_task_id=?').get(x.root).n,1);
   assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks WHERE parent_task_id=?').get(view.support_task_id).n,2);
+  assertSingleSupervisor(view,helper);
   const rows=[d.prepare('SELECT * FROM tasks WHERE id=?').get(view.support_task_id),d.prepare('SELECT * FROM tasks WHERE id=?').get(view.actions[0].counterpart_task_id)];
   attachTaskSupervision(d,rows,helper); assert.ok(rows.every(row=>row.is_supervision_projection)); assert.equal(rows[1].supervision_action.can_complete,true);
 });
@@ -85,17 +103,17 @@ test('learner cannot complete supervised action; assigned supervisor maps both v
 test('no qualified supervisor preserves learner and exposes required skills with deduplicated creator notification',()=>{
   const x=laundry(); proficiency(helper,washer,'excluded'); proficiency(helper,dryer,'excluded');
   const view=reconcileTaskSupervision(d,x.root);
-  assert.equal(view.state,'needed'); assert.match(view.reason,/no qualified supervisor exists/);
+  assert.equal(view.state,'needed'); assert.match(view.reason,/no single qualified supervisor exists/i);
   assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(x.root).assigned_to,learner);
   const count=d.prepare("SELECT COUNT(*) n FROM notification_inbox WHERE title='Supervision needed'").get().n;
-  assert.equal(count,2); reconcileTaskSupervision(d,x.root);
+  assert.equal(count,1); reconcileTaskSupervision(d,x.root);
   assert.equal(d.prepare("SELECT COUNT(*) n FROM notification_inbox WHERE title='Supervision needed'").get().n,count);
-  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',learner),/no qualified supervisor/);
+  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',learner),/no single qualified supervisor/i);
 });
 test('qualified but unavailable supervisor has a distinct useful explanation',()=>{
   const x=laundry(); policy(x.root); busy(helper);
   const view=reconcileTaskSupervision(d,x.root); assert.equal(view.state,'needed');
-  assert.match(view.reason,/no qualified supervisor shares an eligible time/); assert.equal(view.actions[0].qualified_supervisor_count,1);
+  assert.match(view.reason,/no single qualified supervisor shares an eligible time/i); assert.equal(view.actions[0].qualified_supervisor_count,1);
 });
 
 test('individually available learner and helper with disjoint windows explain the lack of shared time',()=>{
@@ -105,23 +123,30 @@ test('individually available learner and helper with disjoint windows explain th
   busy(learner,'12:00','00:00'); busy(helper,'00:00','12:00');
   const view=reconcileTaskSupervision(d,x.root);
   assert.equal(view.state,'needed');
-  assert.equal(view.actions[0].supervisor_explanations[0].eligible,false);
-  assert.match(view.actions[0].supervisor_explanations[0].reason,/No shared eligible time with the learner/);
+  const explanation=view.supervisor_explanations.find(candidate=>candidate.user_id===helper);
+  assert.equal(explanation.eligible,false);
+  assert.match(explanation.reason,/No shared eligible time with the learner/);
 });
-test('current supervisor Availability change blocks execution and marks unresolved without silently picking another',()=>{
+test('current supervisor Availability change invalidates every pending action and selects one replacement',()=>{
   const x=laundry(); policy(x.root); const first=reconcileTaskSupervision(d,x.root);
   proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal'); busy(helper);
-  const live=inspectTaskSupervision(d,x.root); assert.equal(live.state,'needed'); assert.equal(live.actions[0].supervisor_user_id,helper);
-  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',helper),/no longer supervise/);
-  const updated=reconcileTaskSupervision(d,x.root); assert.equal(updated.actions[0].supervisor_user_id,helper); assert.equal(updated.actions[0].state,'unresolved');
+  const live=inspectTaskSupervision(d,x.root); assert.equal(live.state,'needed');
+  assert.equal(live.supervisor_user_id,null); assert.ok(live.actions.every(action=>action.state==='unresolved'));
+  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',helper),/supervis/i);
+  const updated=reconcileTaskSupervision(d,x.root); assert.equal(updated.state,'assigned');
+  assertSingleSupervisor(updated,admin);
   assert.equal(updated.support_task_id,first.support_task_id);
+  assert.deepEqual(updated.actions.map(action=>action.counterpart_task_id),first.actions.map(action=>action.counterpart_task_id));
+  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',helper),/Admin needs to complete/);
+  assert.doesNotThrow(()=>taskSupervisionTransition(d,x.wash,'done',admin));
 });
-test('manual supervisor choice is qualified, action-scoped, and does not replace unrelated action assignment',()=>{
+test('manual supervisor choice through any action must cover the entire Task and replaces all pending assignments',()=>{
   const x=laundry(); reconcileTaskSupervision(d,x.root); proficiency(admin,washer,'normal');
-  assert.throws(()=>reconcileTaskSupervision(d,x.dry,{supervisorUserId:admin}),/independently qualified/);
+  assert.throws(()=>reconcileTaskSupervision(d,x.wash,{supervisorUserId:admin}),/qualified|every|all/i);
+  assertSingleSupervisor(inspectTaskSupervision(d,x.root),helper);
+  proficiency(admin,dryer,'normal');
   const view=reconcileTaskSupervision(d,x.wash,{supervisorUserId:admin});
-  assert.equal(view.actions.find(a=>a.action_task_id===x.wash).supervisor_user_id,admin);
-  assert.equal(view.actions.find(a=>a.action_task_id===x.dry).supervisor_user_id,helper);
+  assertSingleSupervisor(view,admin);
 });
 test('removed supervisor remains visibly unresolved and cannot authorize completion',()=>{
   const x=laundry(); reconcileTaskSupervision(d,x.root); d.prepare('DELETE FROM users WHERE id=?').run(helper);
@@ -179,12 +204,60 @@ test('supervisor decline keeps learner and synchronizes counterpart to unresolve
   assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(x.root).assigned_to,learner);
   assert.ok(view.actions.every(action=>d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(action.counterpart_task_id).assigned_to===null));
 });
+
+test('supervisor decline chooses one whole-scope fallback and preserves the same linked work',()=>{
+  const x=laundry(), first=reconcileTaskSupervision(d,x.root);
+  proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  const request=d.prepare("SELECT id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status='pending'").get(x.root);
+  respondToTaskObligation(d,request.id,'decline',helper);
+  const view=inspectTaskSupervision(d,x.root); assertSingleSupervisor(view,admin);
+  assert.equal(view.support_task_id,first.support_task_id);
+  assert.deepEqual(view.actions.map(action=>action.counterpart_task_id),first.actions.map(action=>action.counterpart_task_id));
+  assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(request.id).status,'declined');
+  assert.throws(()=>respondToTaskObligation(d,request.id,'accept',helper),/closed/);
+  assertSingleSupervisor(inspectTaskSupervision(d,x.root),admin);
+});
+
+test('supervisor decline cannot fall back to a helper who covers only part of the remaining requirements',()=>{
+  const x=laundry(); reconcileTaskSupervision(d,x.root); proficiency(admin,washer,'normal');
+  const request=d.prepare("SELECT id FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status='pending'").get(x.root);
+  respondToTaskObligation(d,request.id,'decline',helper);
+  const view=inspectTaskSupervision(d,x.root); assert.equal(view.state,'needed'); assertSingleSupervisor(view,null);
+  reconcileTaskSupervision(d,x.root);
+  assertSingleSupervisor(inspectTaskSupervision(d,x.root),null);
+});
 test('stale supervision notification revisions stop delivery after assignment is resolved',()=>{
   const x=laundry(); proficiency(helper,washer,'excluded'); proficiency(helper,dryer,'excluded'); reconcileTaskSupervision(d,x.root);
-  const receipt=d.prepare("SELECT * FROM notification_inbox WHERE source_key LIKE 'task-supervision:%' LIMIT 1").get();
+  const receipt=d.prepare("SELECT * FROM notification_inbox WHERE source_key LIKE 'task-supervision-scope:%' LIMIT 1").get();
   assert.equal(isNotificationDeliveryCurrent(d,receipt),true);
   proficiency(helper,washer,'normal'); proficiency(helper,dryer,'normal'); reconcileTaskSupervision(d,x.root,{supervisorUserId:helper});
   assert.equal(isNotificationDeliveryCurrent(d,receipt),false);
+});
+
+test('one scoped request lists all required actions and is superseded when the single supervisor changes',()=>{
+  const x=laundry(); reconcileTaskSupervision(d,x.root);
+  const notices=d.prepare("SELECT * FROM notification_inbox WHERE entity_id=? AND title='Supervision requested'").all(x.root);
+  assert.equal(notices.length,1); const first=notices[0];
+  assert.equal(first.user_id,helper); assert.match(first.body,/Load washer/); assert.match(first.body,/Start dryer/);
+  assert.equal(isNotificationDeliveryCurrent(d,first),true);
+  proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  reconcileTaskSupervision(d,x.root,{supervisorUserId:admin});
+  assert.equal(isNotificationDeliveryCurrent(d,first),false);
+  const current=d.prepare("SELECT * FROM notification_inbox WHERE entity_id=? AND user_id=? AND title='Supervision requested'").all(x.root,admin);
+  assert.equal(current.length,1); assert.equal(isNotificationDeliveryCurrent(d,current[0]),true);
+  reconcileTaskSupervision(d,x.root); notifyTaskObligations(d,x.root);
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM notification_inbox WHERE entity_id=? AND user_id=? AND title='Supervision requested'").get(x.root,admin).n,1);
+});
+
+test('completing one supervised action does not request the same supervisor again for the remaining work',()=>{
+  const x=laundry(), view=reconcileTaskSupervision(d,x.root);
+  const receipts=()=>d.prepare("SELECT COUNT(*) n FROM notification_inbox WHERE entity_id=? AND user_id=? AND title='Supervision requested'").get(x.root,helper).n;
+  const assignments=()=>d.prepare("SELECT COUNT(*) n FROM task_activity_events WHERE task_id=? AND event_type='supervisor_assigned'").get(x.root).n;
+  assert.equal(receipts(),1);const beforeEvents=assignments();
+  changeTaskStatus(d,view.actions.find(action=>action.action_task_id===x.wash).counterpart_task_id,'done',{actorId:helper,authorize:false});
+  reconcileTaskSupervision(d,x.root);notifyTaskObligations(d,x.root);
+  assert.equal(receipts(),1);assert.equal(assignments(),beforeEvents);
+  assertSingleSupervisor(inspectTaskSupervision(d,x.root),helper);
 });
 
 test('canonical lifecycle completes and reopens both learner and supervisor projections atomically',()=>{
@@ -251,15 +324,239 @@ test('completed legacy Tasks never gain invented historical supervision assignme
   assert.equal(d.prepare('SELECT COUNT(*) n FROM task_supervision_actions').get().n,0);
 });
 
-test('different explicit requirements may resolve different qualified helpers in one linked container',()=>{
+test('split parent and child skill coverage remains unresolved instead of assigning different helpers',()=>{
   const root=task(), dry=task('Start dryer',root,null); setTaskSkills(d,dry,[dryer]);
   proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
   const id=activity('subject_skill',[washer]);
   applyTaskActivityBinding(d,root,{activityTemplateId:id,subjectUserId:learner});
   const view=inspectTaskSupervision(d,root);
-  assert.equal(view.state,'assigned');
-  assert.equal(view.actions.find(a=>a.action_task_id===root).supervisor_user_id,helper);
-  assert.equal(view.actions.find(a=>a.action_task_id===dry).supervisor_user_id,admin);
+  assert.equal(view.state,'needed');
+  assertSingleSupervisor(view,null);
+  assert.match(view.reason,/single|one.*supervisor/i);
+  assert.match(view.reason,/Washing Machine/); assert.match(view.reason,/Dryer/);
+  assert.ok(view.actions.every(action=>action.eligible_supervisors.length===0));
+  assert.throws(()=>taskSupervisionTransition(d,root,'done',helper),/supervis/i);
+  assert.throws(()=>taskSupervisionTransition(d,dry,'done',admin),/supervis/i);
+});
+
+test('two helpers who each cover only one supervised subtask cannot jointly qualify as a Task supervisor',()=>{
+  const x=laundry(); proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
+  const view=reconcileTaskSupervision(d,x.root);
+  assert.equal(view.state,'needed'); assertSingleSupervisor(view,null);
+  assert.equal(view.qualified_supervisor_count,0); assert.deepEqual(view.eligible_supervisors,[]);
+  assert.match(view.reason,/Washing Machine/); assert.match(view.reason,/Dryer/);
+  assert.match(view.reason,/single|one.*supervisor/i);
+  assert.ok(view.blocked_requirements.length>0);
+  for (const candidate of [admin,helper]) {
+    assert.throws(()=>reconcileTaskSupervision(d,x.root,{supervisorUserId:candidate}),/qualified|all|every/i);
+  }
+  assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(x.root).assigned_to,learner);
+  assert.deepEqual(d.prepare('SELECT id,status FROM tasks WHERE id IN (?,?,?) ORDER BY id').all(x.independent,x.wash,x.dry).map(row=>row.status),['open','open','open']);
+});
+
+test('ordinary grandchildren share their ancestor Task learner and supervisor intersection',()=>{
+  const root=task(), wash=task('Load washer',root,null), phase=task('Dry phase',root,null), dry=task('Start dryer',phase,null);
+  setTaskSkills(d,wash,[washer]); setTaskSkills(d,dry,[dryer]);
+  proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
+  const view=reconcileTaskSupervision(d,root);
+  assert.equal(view.state,'needed'); assertSingleSupervisor(view,null);
+  assert.deepEqual(view.actions.map(action=>action.action_task_id),[wash,dry]);
+  assert.ok(view.actions.every(action=>action.learner_user_id===learner));
+  assert.match(view.reason,/Washing Machine/); assert.match(view.reason,/Dryer/);
+  const nested=reconcileTaskSupervision(d,dry);
+  assert.equal(nested.source_task_id,root); assert.equal(nested.support_task_id,view.support_task_id);
+  assertSingleSupervisor(nested,null);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_activity_support_tasks').get().n,1);
+  for(const actor of [admin,helper]) assert.throws(()=>taskSupervisionTransition(d,dry,'done',actor),/supervis/i);
+});
+
+test('prospective assignee validation checks inherited descendants using the replacement while preserving explicit child performers',()=>{
+  const root=task(), phase=task('Laundry phase',root,null), wash=task('Load washer',phase,null);
+  setTaskSkills(d,wash,[washer]); proficiency(helper,washer,'excluded');
+  assert.throws(()=>assertTaskSupervisionAssignee(d,root,helper),/even with supervision/);
+  assert.doesNotThrow(()=>assertTaskSupervisionAssignee(d,root,learner));
+  d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(learner,phase);
+  assert.doesNotThrow(()=>assertTaskSupervisionAssignee(d,root,helper),'an explicitly assigned intermediate Task retains its own learner');
+});
+
+test('legacy nested supervisor containers consolidate into one active scope without losing progress or Activity',()=>{
+  const root=task(), wash=task('Load washer',root,null), phase=task('Dry phase',root,learner), dry=task('Start dryer',phase,null);
+  setTaskSkills(d,wash,[washer]); setTaskSkills(d,dry,[dryer]);
+  proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
+  const main=task('Supervise Laundry',root,helper), extra=task('Supervise Dry phase',phase,admin);
+  const washProjection=task('Supervise Load washer',main,helper), dryProjection=task('Supervise Start dryer',extra,admin);
+  for(const [source,container,action,counterpart,supervisor,required] of [
+    [root,main,wash,washProjection,helper,washer],[phase,extra,dry,dryProjection,admin,dryer],
+  ]) {
+    d.prepare("INSERT INTO task_activity_support_tasks(source_task_id,task_id,role) VALUES(?,?,'supervisor')").run(source,container);
+    d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,required_skill_ids_json,state,reason) VALUES(?,?,?,?,?,?,'assigned','Historical assignment')")
+      .run(source,action,counterpart,learner,supervisor,JSON.stringify([required]));
+    for(const target of [container,counterpart]) d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(target,supervisor);
+    d.prepare("INSERT INTO task_responsibilities(task_id,user_id,role,source) VALUES(?,?,'supervisor','task_supervision')").run(source,supervisor);
+    d.prepare("INSERT INTO planning_obligations(entity_type,entity_id,task_id,logical_key,role,responsible_user_id) VALUES('task',?,?,?,'supervisor',?)")
+      .run(source,source,`task:${source}:legacy-supervision`,supervisor);
+    d.prepare("INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json) VALUES(?,?,?,'supervisor_assigned',?)")
+      .run(source,action,admin,JSON.stringify({supervisor_user_id:supervisor,required_skills:[required]}));
+  }
+  d.prepare("UPDATE tasks SET status='done' WHERE id IN (?,?)").run(wash,washProjection);
+  d.prepare("UPDATE tasks SET status='in_progress' WHERE id=?").run(root);
+  d.prepare("INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json) VALUES(?,?,?,'completed','{}')").run(root,wash,helper);
+  const history=d.prepare('SELECT * FROM task_activity_events ORDER BY id').all(), tasks=d.prepare('SELECT COUNT(*) n FROM tasks').get().n;
+  const view=reconcileTaskSupervision(d,dry);
+  assert.equal(view.source_task_id,root); assertSingleSupervisor(view,admin);
+  assert.equal(view.support_task_id,main);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks').get().n,tasks);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_supervision_actions WHERE source_task_id=?').get(root).n,2);
+  assert.equal(d.prepare('SELECT parent_task_id FROM tasks WHERE id=?').get(dryProjection).parent_task_id,main);
+  assert.ok(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(extra).archived_at);
+  assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(extra).assigned_to,null);
+  assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(extra),[]);
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'").get(phase).n,0);
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('pending','accepted')").get(phase).n,0);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(wash).status,'done');
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(washProjection).status,'done');
+  assert.equal(d.prepare('SELECT supervisor_user_id FROM task_supervision_actions WHERE action_task_id=?').get(wash).supervisor_user_id,helper);
+  for(const event of history) assert.deepEqual(d.prepare('SELECT * FROM task_activity_events WHERE id=?').get(event.id),event);
+  const again=reconcileTaskSupervision(d,phase); assert.equal(again.source_task_id,root); assertSingleSupervisor(again,admin);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks').get().n,tasks);
+});
+
+test('an Activity-bound descendant remains a separate occurrence with its own single supervisor',()=>{
+  const group=task('Workflow',null,null), first=task('Washer activity',null,learner), next=task('Dryer activity',null,learner);
+  const firstActivity=activity('fixed',[washer]), nextActivity=activity('fixed',[dryer]);
+  proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
+  applyTaskActivityBinding(d,first,{activityTemplateId:firstActivity}); applyTaskActivityBinding(d,next,{activityTemplateId:nextActivity});
+  d.prepare('UPDATE tasks SET parent_task_id=? WHERE id IN (?,?)').run(group,first,next);
+  const a=inspectTaskSupervision(d,first), b=inspectTaskSupervision(d,next), container=reconcileTaskSupervision(d,group);
+  assert.equal(a.source_task_id,first); assertSingleSupervisor(a,helper);
+  assert.equal(b.source_task_id,next); assertSingleSupervisor(b,admin);
+  assert.equal(container.actions.length,0); assert.equal(container.support_task_id,null);
+  assert.notEqual(a.support_task_id,b.support_task_id);
+});
+
+test('multiple members qualified for every action select exactly one stable supervisor without duplicate work',()=>{
+  proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  const x=laundry(), first=reconcileTaskSupervision(d,x.root);
+  assert.equal(first.state,'assigned'); assert.equal(first.eligible_supervisors.length,2);
+  const selected=first.supervisor_user_id; assert.ok([admin,helper].includes(selected));
+  assertSingleSupervisor(first,selected);
+  const ids=first.actions.map(action=>action.counterpart_task_id), before=d.prepare('SELECT COUNT(*) n FROM tasks').get().n;
+  for (let attempt=0;attempt<3;attempt++) {
+    const view=reconcileTaskSupervision(d,x.root);
+    assertSingleSupervisor(view,selected); assert.equal(view.support_task_id,first.support_task_id);
+    assert.deepEqual(view.actions.map(action=>action.counterpart_task_id),ids);
+  }
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks').get().n,before);
+});
+
+test('Availability must qualify the same candidate for every supervised action window',()=>{
+  const x=laundry(); policy(x.root);
+  proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  d.prepare("UPDATE tasks SET due_time='16:00' WHERE id=?").run(x.dry);
+  busy(helper,'11:00','13:00'); busy(admin,'15:00','17:00');
+  const view=reconcileTaskSupervision(d,x.root);
+  assert.equal(view.state,'needed'); assert.equal(view.qualified_supervisor_count,2);
+  assertSingleSupervisor(view,null); assert.deepEqual(view.eligible_supervisors,[]);
+  assert.ok(view.actions.every(action=>action.eligible_supervisors.length===0));
+  assert.match(view.reason,/eligible|available|Availability/i);
+  assert.ok(view.supervisor_explanations.every(candidate=>candidate.eligible===false));
+});
+
+test('invalid supervisor with no whole-scope replacement clears all active assignments and preserves learner progress',()=>{
+  const x=laundry(); policy(x.root); const first=reconcileTaskSupervision(d,x.root);
+  changeTaskStatus(d,x.independent,'done',{actorId:learner,authorize:false});
+  busy(helper); proficiency(admin,washer,'normal');
+  const view=reconcileTaskSupervision(d,x.root);
+  assert.equal(view.state,'needed'); assertSingleSupervisor(view,null);
+  assert.equal(view.support_task_id,first.support_task_id);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(x.independent).status,'done');
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(x.root).status,'in_progress');
+  assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',helper),/supervis/i);
+  assert.ok(d.prepare("SELECT COUNT(*) n FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='superseded'").get(x.root).n>=1);
+});
+
+test('replacement covers remaining scope while completed supervision stays historical and out of active helper assignments',()=>{
+  const x=laundry(), first=reconcileTaskSupervision(d,x.root), wash=first.actions.find(action=>action.action_task_id===x.wash);
+  changeTaskStatus(d,wash.counterpart_task_id,'done',{actorId:helper,authorize:false});
+  const historical=d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(x.wash);
+  const events=d.prepare('SELECT * FROM task_activity_events WHERE action_task_id=? ORDER BY id').all(x.wash);
+  proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
+  const view=reconcileTaskSupervision(d,x.root);
+  assert.equal(view.state,'assigned'); assertSingleSupervisor(view,admin);
+  assert.equal(view.support_task_id,first.support_task_id);
+  assert.deepEqual(d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(x.wash),historical);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(x.wash).status,'done');
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(wash.counterpart_task_id).status,'done');
+  assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(wash.counterpart_task_id).assigned_to,null);
+  assert.deepEqual(d.prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(wash.counterpart_task_id),[]);
+  const currentEvents=d.prepare('SELECT * FROM task_activity_events WHERE action_task_id=? ORDER BY id').all(x.wash);
+  for (const event of events) assert.deepEqual(currentEvents.find(current=>current.id===event.id),event);
+  assert.doesNotThrow(()=>taskSupervisionTransition(d,x.dry,'done',admin));
+});
+
+test('reopening historical supervised work reevaluates the expanded scope without reviving its former active helper',()=>{
+  const x=laundry(), first=reconcileTaskSupervision(d,x.root), wash=first.actions.find(action=>action.action_task_id===x.wash);
+  changeTaskStatus(d,wash.counterpart_task_id,'done',{actorId:helper,authorize:false});
+  const history=d.prepare('SELECT * FROM task_activity_events WHERE action_task_id=? ORDER BY id').all(x.wash);
+  proficiency(helper,dryer,'excluded'); proficiency(admin,dryer,'normal');
+  assertSingleSupervisor(reconcileTaskSupervision(d,x.root),admin);
+  changeTaskStatus(d,x.wash,'in_progress',{actorId:admin,authorize:false});
+  const reopened=inspectTaskSupervision(d,x.root);
+  assert.equal(reopened.state,'needed'); assertSingleSupervisor(reopened,null);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(x.wash).status,'in_progress');
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(wash.counterpart_task_id).status,'in_progress');
+  for (const event of history) assert.deepEqual(d.prepare('SELECT * FROM task_activity_events WHERE id=?').get(event.id),event);
+  for (const actor of [admin,helper]) assert.throws(()=>taskSupervisionTransition(d,x.wash,'done',actor),/supervis/i);
+});
+
+test('legacy split helpers consolidate through the same container and preserve prior assignment Activity',()=>{
+  const x=laundry(), first=reconcileTaskSupervision(d,x.root), dry=first.actions.find(action=>action.action_task_id===x.dry);
+  proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  d.prepare('UPDATE task_supervision_actions SET supervisor_user_id=? WHERE action_task_id=?').run(admin,x.dry);
+  d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(admin,dry.counterpart_task_id);
+  d.prepare('UPDATE task_assignments SET user_id=? WHERE task_id=?').run(admin,dry.counterpart_task_id);
+  d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(first.support_task_id,admin);
+  d.prepare("INSERT INTO task_responsibilities(task_id,user_id,role,source) VALUES(?,?,'supervisor','task_supervision')").run(x.root,admin);
+  d.prepare("INSERT INTO planning_obligations(entity_type,entity_id,task_id,logical_key,role,responsible_user_id,attempt) VALUES('task',?,?,?,'supervisor',?,2)").run(x.root,x.root,`task:${x.root}:legacy-second-supervisor`,admin);
+  const history=d.prepare('SELECT * FROM task_activity_events ORDER BY id').all(), count=d.prepare('SELECT COUNT(*) n FROM tasks').get().n;
+  const stale=inspectTaskSupervision(d,x.root); assert.equal(stale.state,'needed'); assert.equal(stale.supervisor_user_id,null);
+  const view=reconcileTaskSupervision(d,x.root); assert.equal(view.state,'assigned');
+  assertSingleSupervisor(view,view.supervisor_user_id);
+  assert.equal(view.support_task_id,first.support_task_id);
+  assert.deepEqual(view.actions.map(action=>action.counterpart_task_id),first.actions.map(action=>action.counterpart_task_id));
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks').get().n,count);
+  for (const event of history) assert.deepEqual(d.prepare('SELECT * FROM task_activity_events WHERE id=?').get(event.id),event);
+});
+
+test('legacy per-action supervisor override cannot split the Task and a rejected request changes nothing',()=>{
+  const x=laundry(); reconcileTaskSupervision(d,x.root);
+  proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  const capture=()=>({actions:d.prepare('SELECT * FROM task_supervision_actions ORDER BY id').all(),
+    responsibilities:d.prepare('SELECT * FROM task_responsibilities ORDER BY task_id,user_id,role').all(),
+    clock:d.prepare('SELECT version FROM task_change_clock').get().version});
+  const before=capture();
+  assert.throws(()=>reconcileTaskSupervision(d,x.root,{supervisorAssignments:{[x.wash]:admin,[x.dry]:helper}}),/one|single|same/i);
+  assert.deepEqual(capture(),before); assertSingleSupervisor(inspectTaskSupervision(d,x.root),helper);
+});
+
+test('a subsequent occurrence independently selects one helper instead of copying the prior occurrence assignment',()=>{
+  const x=laundry(), id=activity(); applyTaskActivityBinding(d,x.root,{activityTemplateId:id});
+  const first=inspectTaskSupervision(d,x.root); assertSingleSupervisor(first,helper);
+  for (const action of first.actions) changeTaskStatus(d,action.counterpart_task_id,'done',{actorId:helper,authorize:false});
+  proficiency(helper,dryer,'excluded'); proficiency(admin,washer,'normal'); proficiency(admin,dryer,'normal');
+  const next=task('Next laundry'), wash=task('Load washer',next,null), dry=task('Start dryer',next,null);
+  copyTaskSkills(d,x.wash,wash); copyTaskSkills(d,x.dry,dry); copyTaskActivityBinding(d,x.root,next);
+  const view=inspectTaskSupervision(d,next); assertSingleSupervisor(view,admin);
+  assert.notEqual(view.support_task_id,first.support_task_id);
+  for (const action of view.actions) {
+    assert.equal(action.completed,false);
+    assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(action.action_task_id).status,'open');
+  }
+  for (const action of first.actions) {
+    const historical=d.prepare('SELECT supervisor_user_id FROM task_supervision_actions WHERE action_task_id=?').get(action.action_task_id);
+    assert.equal(historical.supervisor_user_id,helper);
+    assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(action.action_task_id).status,'done');
+  }
 });
 
 test('Workflow grouping parent does not duplicate ownership of Activity child supervision',()=>{

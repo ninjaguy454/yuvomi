@@ -379,6 +379,10 @@ export function applyTaskActivityBinding(d, taskId, {
   }
 
   const supervision = reconcileTaskSupervision(d, task.id, { actorId: task.created_by });
+  // The authoring preview can only propose a parent-skill helper. Return the
+  // concrete Task's whole-scope choice after its explicit checklist is known.
+  resolution.supervisor = supervision.supervisor_user_id ? d.prepare(`SELECT id,display_name,avatar_color,avatar_data,role,family_role
+    FROM users WHERE id=?`).get(supervision.supervisor_user_id) : null;
   if (supervision.support_task_id && supportOriginTaskId) {
     d.prepare('UPDATE tasks SET recurrence_origin_id=? WHERE id=? AND recurrence_origin_id IS NULL')
       .run(supportOriginTaskId, supervision.support_task_id);

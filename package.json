@@ -343,7 +343,7 @@
     "test:task-subtask-skills": "node --experimental-sqlite --test test/test-task-subtask-skills.js test/test-task-subtask-skills-migration.js test/test-laundry-eligibility.js",
     "test:modal-children": "node --test test/test-modal-children.js",
     "test:task-workflow-launcher": "node --test test/test-task-workflow-launcher.js",
-    "test:tasks-refinement": "node --loader ./test/test-browser-loader.mjs --experimental-sqlite --test --test-concurrency=2 test/test-task-capabilities.js test/test-task-lifecycle-refinement.js test/test-task-supervision.js test/test-task-revision-clock.js test/test-task-caldav-lifecycle.js test/test-task-supervision-request-cache.js test/test-task-refinement-ui.js"
+    "test:tasks-refinement": "node --loader ./test/test-browser-loader.mjs --experimental-sqlite --test --test-concurrency=2 test/test-task-capabilities.js test/test-task-lifecycle-refinement.js test/test-task-supervision.js test/test-task-revision-clock.js test/test-task-caldav-lifecycle.js test/test-task-supervision-request-cache.js test/test-task-refinement-ui.js test/test-task-single-supervisor-integration.js test/test-task-supervision-refresh.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

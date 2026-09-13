@@ -50,8 +50,8 @@ test('new requests and action-time eligibility never reuse an earlier response s
   try {
     sourceEvaluations=0;const current=await read('/'+root);
     assert.equal(sourceEvaluations,1);assert.equal(current.supervision.state,'needed');
-    assert.match(current.supervision.reason,/no qualified supervisor/);
-    assert.throws(()=>taskSupervisionTransition(d,child,'done',helper),/no qualified supervisor/);
+    assert.match(current.supervision.reason,/no single qualified supervisor/i);
+    assert.throws(()=>taskSupervisionTransition(d,child,'done',helper),/no single qualified supervisor/i);
     assert.equal(earlier.supervision.state,'assigned');
   }finally{d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=? AND skill_id=?").run(helper,skill);}
 });

@@ -55,9 +55,9 @@ import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
-import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
+import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, configureTaskRecurrence, recordTaskActivity, taskActivity } from '../services/task-lifecycle.js';
-import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections } from '../services/task-supervision.js';
+import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
 import { taskChangesStream } from '../services/task-changes.js';
 import { assertCapability } from '../permissions.js';
 
@@ -759,16 +759,25 @@ function hydrateTask(task, me, supervisionViews = new Map()) {
   attachTags([task]);attachTaskCapabilities(db.get(),me,[task]);attachTaskSupervision(db.get(),[task],me,supervisionViews);
   for(const row of [task,...task.subtasks])if(row.supervision) {
     // A shared parent does not expose a separately private child's title.
-    const actions=row.supervision.actions.filter(action=>mayAccessTask(
+    let actions=row.supervision.actions.filter(action=>mayAccessTask(
       db.get().prepare('SELECT * FROM tasks WHERE id=?').get(action.action_task_id),me));
+    const hiddenScope=actions.length!==row.supervision.actions.length;
+    if(hiddenScope) actions=actions.map(action=>({...action,
+      reason:action.completed ? 'Historical supervision is recorded for this completed action.'
+        : action.state==='not_required' ? 'This action does not currently require supervision.'
+        : `This action requires supervision for ${action.required_skills.map(skill=>skill.name).join(', ')}. One supervisor must cover the Task’s entire remaining supervised scope.`,
+      supervisor_explanations:[],blocked_requirements:[]}));
     const active=actions.filter(action=>!action.completed&&action.state!=='not_required');
     row.supervision={...row.supervision,actions,can_view_support:!!row.supervision.support_task_id&&mayAccessTask(
       db.get().prepare('SELECT * FROM tasks WHERE id=?').get(row.supervision.support_task_id),me),
       state:active.some(action=>action.state==='excluded')?'excluded'
       :active.some(action=>action.state==='unresolved')?'needed':active.length?'assigned':'none'};
+    if(hiddenScope) row.supervision={...row.supervision,blocked_requirements:[],supervisor_explanations:[],
+      reason:active.length ? 'One supervisor must cover the Task’s entire remaining supervised scope. Some requirements are not visible to you; ask the creator or a household administrator for help.' : null};
     if(actions.length===0)row.supervision={...row.supervision,state:'none',reason:null};
-    else row.supervision.reason=actions.find(action=>!action.completed&&['unresolved','excluded'].includes(action.state))?.reason
-      ||actions.find(action=>!action.completed)?.reason||null;
+    // The convenience projection must use the same sanitized objects; keeping
+    // attachTaskSupervision's original reference would leak aggregate reasons.
+    row.supervision_action=row.supervision.actions.find(action=>action.action_task_id===row.id||action.counterpart_task_id===row.id)||null;
   }
   attachTaskActivityBindings(db.get(),[task]);attachTaskLocations(db.get(),[task]);attachTaskActionLinks([task]);
   const isSupport=task.supervision?.support_task_id===task.id;
@@ -2539,13 +2548,23 @@ router.post('/:id/supervisor',(req,res)=>{
     const me=req.authUserId||req.session.userId;
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
     if(!task||!mayAccessTask(task,me))return res.status(404).json({error:'Task not found.',code:404});
-    assertTaskMutation(db.get(),req,task,{}, {operation:'assignment'});
+    const source=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(taskSupervisionRootId(db.get(),task.id));
+    if(!source||!mayAccessTask(source,me))return res.status(404).json({error:'Task not found.',code:404});
+    if(!taskSupervisionManagementAllowed(db.get(),req,source.id))
+      return res.status(403).json({error:'Only the Task creator or a household administrator with assignment permission can choose its supervisor.',code:403});
     assertTaskRevision(db.get(),task,req.body);
+    if(req.body.expected_source_revision!==undefined)
+      assertTaskRevision(db.get(),source,{expected_revision:req.body.expected_source_revision});
+    if(req.body.action_task_id!==undefined) {
+      const actionId=req.body.action_task_id;
+      if(!Number.isSafeInteger(actionId)||actionId<1||taskSupervisionRootId(db.get(),actionId)!==source.id)
+        return res.status(400).json({error:'Choose an action belonging to this Task.',code:400});
+    }
     const supervisor=req.body.supervisor_user_id;
     if(supervisor!==null && (!Number.isSafeInteger(supervisor)||supervisor<1))
       return res.status(400).json({error:'Choose a household supervisor.',code:400});
     db.get().transaction(()=>{
-      reconcileTaskSupervision(db.get(),task.id,{actorId:me,supervisorUserId:supervisor,actionTaskId:req.body.action_task_id});
+      reconcileTaskSupervision(db.get(),source.id,{actorId:me,supervisorUserId:supervisor});
     })();
     res.json({data:hydrateTask(task,me)});
   }catch(error){res.status(error.status||400).json({error:error.message,code:error.status||400,...error.details});}

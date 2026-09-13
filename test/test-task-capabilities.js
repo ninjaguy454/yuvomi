@@ -90,6 +90,7 @@ test('assigned supervisor owns the linked action but not independent learner wor
   const action=seed({parent:own.id,assigned:null}), independent=seed({parent:own.id,assigned:null});
   const support=seed({parent:own.id,assigned:supervisor}), counterpart=seed({parent:support.id,assigned:supervisor});
   d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state) VALUES (?,?,?,?,?,'assigned')").run(own.id,action.id,counterpart.id,learner,supervisor);
+  d.prepare("INSERT INTO task_responsibilities(task_id,user_id,role,status,source) VALUES (?,?,'supervisor','active','supervision')").run(own.id,supervisor);
   assert.equal(taskCapabilities(d,supervisor,action).complete,true);
   assert.equal(taskCapabilities(d,supervisor,counterpart).complete,true);
   assert.equal(taskCapabilities(d,supervisor,own).view,true);

@@ -27,6 +27,9 @@ function connect() {
   }
   stream = new EventSource('/api/v1/tasks/changes');
   stream.addEventListener('open', notify);
+  // Permission revocation closes an already-authorized stream. A reconnect
+  // rejected with 403 will never emit open/change, so refresh on error too.
+  stream.addEventListener('error', notify);
   const changed = (event) => {
     let next;
     try { next = JSON.parse(event.data)?.version; } catch { /* reconnect still refreshes */ }
@@ -39,8 +42,17 @@ function connect() {
   stream.addEventListener('tasks', changed);
 }
 
+function suspend() {
+  stream?.close(); stream = null;
+  notificationGeneration++;
+  clearTimeout(timer); clearTimeout(retryTimer); timer = retryTimer = null;
+}
+
 function resume() {
-  if (document.hidden) { stream?.close(); stream = null; return; }
+  if (document.hidden || navigator.onLine === false) { suspend(); return; }
+  // Native EventSource stops retrying after an HTTP authorization rejection.
+  // A later resume may follow restored permissions; discard the closed object.
+  if (stream?.readyState === 2) { stream.close(); stream = null; }
   connect();
   notify();
 }
@@ -51,18 +63,24 @@ export function watchTaskChanges(callback) {
     document.addEventListener('visibilitychange', resume);
     window.addEventListener('focus', resume);
     window.addEventListener('online', resume);
+    window.addEventListener('offline', suspend);
+    window.addEventListener('pagehide', suspend);
+    window.addEventListener('pageshow', resume);
+    window.addEventListener('auth:expired', suspend);
     window.addEventListener('task-data-changed', notify);
     connect();
   }
   return () => {
     subscribers.delete(callback);
     if (subscribers.size) return;
-    stream?.close(); stream = null; version = null;
-    notificationGeneration++;
-    clearTimeout(timer); clearTimeout(retryTimer); timer = retryTimer = null;
+    suspend(); version = null;
     document.removeEventListener('visibilitychange', resume);
     window.removeEventListener('focus', resume);
     window.removeEventListener('online', resume);
+    window.removeEventListener('offline', suspend);
+    window.removeEventListener('pagehide', suspend);
+    window.removeEventListener('pageshow', resume);
+    window.removeEventListener('auth:expired', suspend);
     window.removeEventListener('task-data-changed', notify);
   };
 }

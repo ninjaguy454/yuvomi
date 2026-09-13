@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 /**
  * Test: Antippbare Checklisten in Aufgaben (Discussion #917)
  *
@@ -73,7 +74,7 @@ globalThis.fetch = (input, init) => {
 test.after(() => { globalThis.fetch = realFetch; });
 
 async function call(method, path, body) {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const res = await modernTaskFetch(database,`${baseUrl}${path}`, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
     body: body ? JSON.stringify(body) : undefined,

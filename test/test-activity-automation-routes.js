@@ -3,6 +3,7 @@ import http from 'node:http';
 import test from 'node:test';
 import express from 'express';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { modernTaskMutationBody } from './helpers/task-client-revision-fixture.js';
 
 process.env.DB_PATH = ':memory:';
 process.env.TZ = 'UTC';
@@ -64,6 +65,7 @@ const base = `http://127.0.0.1:${server.address().port}/api/v1`;
 test.after(() => server.close());
 
 async function call(method, path, body, actorId = admin) {
+  body=modernTaskMutationBody(db,method,path,body);
   const response = await fetch(`${base}${path}`, {
     method,
     headers: { 'Content-Type': 'application/json', 'x-test-user': String(actorId) },

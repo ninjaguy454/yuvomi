@@ -498,7 +498,9 @@ export function obligationInbox(d, userId, { includeAll = false, nowAt = new Dat
   }
   const where = includeAll ? '' : 'AND o.responsible_user_id = ?';
   return d.prepare(`
-    SELECT o.*, t.title AS task_title, t.revision AS task_revision, m.title AS meal_title, m.date AS meal_date,
+    SELECT o.*, t.title AS task_title, t.revision AS task_revision,
+      (SELECT revision FROM tasks WHERE id=t.parent_task_id) AS task_parent_revision,
+      m.title AS meal_title, m.date AS meal_date,
            u.display_name AS responsible_name
       FROM planning_obligations o
       LEFT JOIN tasks t ON t.id = o.task_id

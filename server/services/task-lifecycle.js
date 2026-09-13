@@ -17,13 +17,17 @@ export class TaskStateError extends Error {
   }
 }
 
-export function assertTaskRevision(d, task, body = {}) {
+export function assertTaskRevision(d, task, body = {}, {required = false, requireParent = false} = {}) {
+  if ((required && body.expected_revision === undefined)
+      || (requireParent && task.parent_task_id && body.expected_parent_revision === undefined))
+    throw new TaskStateError('Refresh this Task before changing it. Older clients must update before saving Task changes.',
+      {reason:'revision_required',task_id:task.id},428);
   for (const [key, actual] of [
     ['expected_revision', task.revision],
     ['expected_parent_revision', task.parent_task_id
       ? d.prepare('SELECT revision FROM tasks WHERE id = ?').get(task.parent_task_id)?.revision : null],
   ]) {
-    if (body[key] === undefined) continue; // Compatibility clients may omit CAS.
+    if (body[key] === undefined) continue; // Explicit trusted/internal callers may omit CAS.
     if (!Number.isSafeInteger(body[key]) || body[key] < 1)
       throw new TaskStateError('Invalid Task revision.', {}, 400);
     if (body[key] !== actual)
@@ -93,13 +97,13 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
 }
 
 /** Atomic child/parent/projection transition, including recurrence and rewards. */
-export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, authorize=true}={}) {
+export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, authorize=true, requireRevision=authorize}={}) {
   if (!['open','in_progress','done'].includes(status)) throw new TaskStateError('Invalid Task status.',{},400);
   return d.transaction(() => {
     const requested = d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
     if (!requested) throw new TaskStateError('Task not found.',{},404);
     if (authorize) assertTaskMutation(d,actorId,requested,{status},{operation:'status'});
-    assertTaskRevision(d,requested,body);
+    assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
     // Includes legacy Tasks whose mappings did not exist before this action.
     reconcileTaskSupervision(d,requested.id,{actorId});
     const gate = taskSupervisionTransition(d,requested.id,status,actorId);

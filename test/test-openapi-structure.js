@@ -19,6 +19,34 @@ const moduleFiles = readdirSync(pathsDir)
   .filter((f) => f.endsWith('.js') && f !== 'index.js')
   .sort();
 
+test('Task and alternate write contracts expose required revisions and safe append/create exceptions',()=>{
+  const paths=buildOpenApiSpec({},'release').paths;
+  for(const [path,method] of [
+    ['/api/v1/tasks/{id}','put'],['/api/v1/tasks/{id}','delete'],
+    ['/api/v1/tasks/{id}/status','patch'],['/api/v1/tasks/{id}/archive','patch'],
+    ['/api/v1/tasks/{id}/check','patch'],['/api/v1/tasks/{id}/documents','put'],
+    ['/api/v1/tasks/{id}/comments/{commentId}','patch'],['/api/v1/tasks/{id}/comments/{commentId}','delete'],
+    ['/api/v1/tasks/{id}/location/promote','post'],['/api/v1/tasks/{id}/supervisor','post'],
+    ['/api/v1/automation/tasks/{id}/claim','post'],['/api/v1/automation/tasks/{id}/assignment','put'],
+  ]){
+    const operation=paths[path][method],schema=operation.requestBody.content['application/json'].schema;
+    assert.ok(schema.required.includes('expected_revision'),`${method} ${path}`);
+    assert.equal(schema.properties.expected_revision.minimum,1);
+    if(!path.endsWith('/supervisor'))assert.ok(schema.properties.expected_parent_revision);
+    assert.ok(operation.responses[428]);assert.ok(operation.responses[409]);
+  }
+  const supervisor=paths['/api/v1/tasks/{id}/supervisor'].post;
+  assert.ok(supervisor.requestBody.content['application/json'].schema.properties.expected_source_revision);
+  assert.match(supervisor.description,/canonical source Task/);
+  for(const path of ['/api/v1/automation/obligations/{id}/respond','/api/v1/housekeeping/visits/{id}/pay']){
+    const schema=paths[path].post.requestBody.content['application/json'].schema;
+    assert.ok(schema.properties.expected_revision);assert.ok(!schema.required.includes('expected_revision'),'Task-less actions remain valid');
+  }
+  assert.ok(!paths['/api/v1/tasks'].post.requestBody.content['application/json'].schema.required?.includes('expected_revision'));
+  assert.match(paths['/api/v1/tasks'].post.description,/top-level Task needs no revision/);
+  assert.match(paths['/api/v1/tasks/{id}/comments'].post.description,/does not require Task revision/);
+});
+
 async function fragmentOf(file) {
   const mod = await import(new URL(file, pathsDir));
   const fnNames = Object.keys(mod).filter((k) => typeof mod[k] === 'function');

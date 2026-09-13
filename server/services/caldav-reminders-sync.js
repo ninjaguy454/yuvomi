@@ -276,7 +276,9 @@ export function upsertTask(todo, accountId, createdBy, objectUrl = null) {
     `).run(todo.summary, todo.description, priority, structured ? existing.status : status, date, time, objectUrl, existing.id);
     if(structured) {
       reconcileTaskSupervision(db.get(),existing.id,{actorId:createdBy});
-      if(status!==existing.status)changeTaskStatus(db.get(),existing.id,status,{actorId:createdBy,body:{}});
+      // Provider synchronization already resolves its object version in the
+      // inbound transaction; it is not an interactive revision-less Task edit.
+      if(status!==existing.status)changeTaskStatus(db.get(),existing.id,status,{actorId:createdBy,body:{},requireRevision:false});
     } else if(status!==existing.status && db.get().prepare("SELECT 1 FROM sqlite_master WHERE name='task_activity_events'").get()) {
       recordTaskActivity(db.get(),existing.id,status==='done'?'completed':status==='open'?'reset':'started',
         null,{from_status:existing.status,to_status:status,source:'caldav'});

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { modernTaskMutationBody } from './helpers/task-client-revision-fixture.js';
 
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'availability-task-adversarial-test';
@@ -50,6 +51,7 @@ function shift(userId = worker, { start = '08:00', end = '16:00', anchor = '2026
   return pattern;
 }
 async function put(id, body) {
+  body=modernTaskMutationBody(d,'PUT',`/tasks/${id}`,body);
   const result = await fetch(`${origin}/tasks/${id}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   return { status: result.status, body: await result.json() };
 }

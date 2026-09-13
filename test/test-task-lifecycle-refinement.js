@@ -15,8 +15,10 @@ for(const migration of ALL_MIGRATIONS) {
 }
 _setTestDatabase(d);
 const admin=Number(d.prepare("INSERT INTO users(username,display_name,password_hash,role) VALUES('task-admin','Parent','x','admin')").run().lastInsertRowid);
+d.exec('CREATE TABLE IF NOT EXISTS sessions(sid TEXT PRIMARY KEY,sess TEXT NOT NULL,expired_at INTEGER NOT NULL)');
+d.prepare('INSERT INTO sessions(sid,sess,expired_at) VALUES(?,?,?)').run('task-lifecycle-session',JSON.stringify({userId:admin}),Date.now()+60_000);
 const app=express();app.use(express.json());
-app.use((req,res,next)=>{req.authUserId=admin;req.authRole='admin';req.session={userId:admin};next();});
+app.use((req,res,next)=>{req.authUserId=admin;req.authRole='admin';req.authMethod='session';req.sessionID='task-lifecycle-session';req.session={userId:admin};next();});
 app.use('/tasks',tasksRouter);
 const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
 const base=`http://127.0.0.1:${server.address().port}/tasks`;

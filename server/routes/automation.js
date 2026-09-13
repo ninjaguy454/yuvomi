@@ -753,29 +753,37 @@ function replaceWorkflowSteps(d, workflowId, steps) {
 // Compatibility runtime paths share the Task module and capability boundary.
 router.use((req, res, next) => {
   try {
-    if (/^\/tasks\/\d+\/(claim|assignment)$/.test(req.path)) {
-      const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(Number(req.path.split('/')[2]));
-      if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
-      assertTaskMutation(db.get(), req, task, req.body, { operation: req.path.endsWith('/claim') ? 'claim' : 'assignment' });
-      assertTaskRevision(db.get(), task, req.body);
-    } else if (/^\/obligations(?:\/|$)/.test(req.path)) {
+    const path=req.path.toLowerCase().replace(/\/+$/, '')||'/';
+    if (/^\/obligations(?:\/|$)/.test(path)) {
       assertCapability(db.get(), req, req.method === 'GET' ? 'tasks.view_own' : 'tasks.complete_own');
-      if (req.method !== 'GET' && /^\/obligations\/\d+\/respond$/.test(req.path)) {
-        const obligation = db.get().prepare('SELECT task_id FROM planning_obligations WHERE id = ? AND responsible_user_id = ?').get(Number(req.path.split('/')[2]), currentUserId(req));
-        const task = obligation?.task_id && db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(obligation.task_id);
-        if (task) {
-          if (!taskCapabilities(db.get(), req, task).view) return res.status(404).json({ error: 'Task not found.', code: 404 });
-          assertTaskRevision(db.get(), task, req.body);
-        }
-      }
-    } else if (/^\/(activity-options|activity-templates)(?:\/|$)/.test(req.path)) {
+    } else if (/^\/(activity-options|activity-templates)(?:\/|$)/.test(path)) {
       assertCapability(db.get(), req, 'activities.view');
-    } else if (/^\/quick-add(?:\/|$)/.test(req.path)) {
+    } else if (/^\/quick-add(?:\/|$)/.test(path)) {
       assertCapability(db.get(), req, 'workflows.view');
-      if (req.path.endsWith('/create')) { assertCapability(db.get(), req, 'workflows.run'); assertCapability(db.get(), req, 'tasks.create'); }
+      if (path.endsWith('/create')) { assertCapability(db.get(), req, 'workflows.run'); assertCapability(db.get(), req, 'tasks.create'); }
     }
     return next();
   } catch (error) { return res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not check household permissions.', code: error.status || 500 }); }
+});
+router.param('id',(req,res,next,value)=>{
+  const route=req.route.path;
+  if (!['/tasks/:id/claim','/tasks/:id/assignment','/obligations/:id/respond'].includes(route)) return next();
+  if (!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)<1)
+    return res.status(404).json({error:'Task not found.',code:404});
+  try {
+    let task;
+    if (route==='/obligations/:id/respond') {
+      const obligation=db.get().prepare('SELECT task_id FROM planning_obligations WHERE id=? AND responsible_user_id=?').get(Number(value),currentUserId(req));
+      task=obligation?.task_id&&db.get().prepare('SELECT * FROM tasks WHERE id=?').get(obligation.task_id);
+      if(task&&!taskCapabilities(db.get(),req,task).view) return res.status(404).json({error:'Task not found.',code:404});
+    } else {
+      task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
+      if(!task)return res.status(404).json({error:'Task not found.',code:404});
+      assertTaskMutation(db.get(),req,task,req.body,{operation:route.endsWith('/claim')?'claim':'assignment'});
+    }
+    if(task)assertTaskRevision(db.get(),task,req.body||{},{required:true,requireParent:true});
+    return next();
+  }catch(error){return res.status(error.status||500).json({error:error.message,code:error.status||500,...error.details});}
 });
 
 function visibleObligations(req, rows) {

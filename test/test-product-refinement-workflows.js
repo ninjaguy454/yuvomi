@@ -285,10 +285,11 @@ test('assignment request responses use the shared close action and refresh Tasks
     const actions = [];
     let reads = 0;
     const wire = loadFunction(taskSource, 'wireAssignmentRequestsBtn', {
+      taskRevision,
       state: { assignmentRequests: [{ id: 9, task_title: 'Laundry', status: 'pending' }] }, esc,
       openSharedModal: ({ onSave }) => onSave({ querySelectorAll: () => [button] }),
-      api: { post: async (path, body) => { assert.equal(path, '/automation/obligations/9/respond'); assert.deepEqual(body, {action, expected_revision:8}); actions.push(action); },
-        get: async () => ({ data: reads++ === 0 ? [{ id:9, task_title:'Laundry', status:'pending', task_revision:8 }] : [] }) },
+      api: { post: async (path, body) => { assert.equal(path, '/automation/obligations/9/respond'); assert.deepEqual(body, {action, expected_revision:8, expected_parent_revision:5}); actions.push(action); },
+        get: async () => ({ data: reads++ === 0 ? [{ id:9, task_title:'Laundry', status:'pending', task_revision:8, task_parent_revision:5 }] : [] }) },
       closeModal: async () => actions.push('closed'), loadTasks: async () => actions.push('refreshed'),
       window: { yuvomi: { showToast: (message) => actions.push(message) } },
     });

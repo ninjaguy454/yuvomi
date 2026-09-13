@@ -1,6 +1,6 @@
 import { assertCapability } from '../permissions.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
-import { changeTaskStatus } from '../services/task-lifecycle.js';
+import { assertTaskRevision, changeTaskStatus } from '../services/task-lifecycle.js';
 /**
  * Modul: Housekeeping
  * Zweck: REST-API fuer Ponto/Financeiro, tarefas dinamicas, insumos e ocorrencias
@@ -100,6 +100,8 @@ function publicSession(row) {
     worker_id: row.worker_id ?? null,
     calendar_event_id: row.calendar_event_id ?? null,
     payment_task_id: row.payment_task_id ?? null,
+    payment_task_revision: row.payment_task_revision ?? null,
+    payment_task_parent_revision: row.payment_task_parent_revision ?? null,
     receipt_document_id: row.receipt_document_id ?? null,
     check_in: row.check_in,
     check_out: row.check_out,
@@ -542,17 +544,24 @@ function defaultShoppingList(actorId) {
 // Payment Task compatibility paths obey the same member capabilities.
 router.use((req, res, next) => {
   try {
-    if (req.method === 'POST' && req.path === '/work-sessions/check-in' && housekeepingPaymentTasksEnabled(db.get())) assertCapability(db.get(), req, 'tasks.create');
-    const match = /^\/visits\/(\d+)(\/pay)?$/.exec(req.path);
-    if (match && !['GET','HEAD'].includes(req.method)) {
-      const session = db.get().prepare('SELECT payment_task_id FROM housekeeping_work_sessions WHERE id = ?').get(Number(match[1]));
+    const path=req.path.toLowerCase().replace(/\/+$/, '')||'/';
+    if (req.method === 'POST' && path === '/work-sessions/check-in' && housekeepingPaymentTasksEnabled(db.get())) assertCapability(db.get(), req, 'tasks.create');
+    next();
+  } catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not check household permissions.', code: error.status || 500 }); }
+});
+router.param('id',(req,res,next,value)=>{
+  if (!['/visits/:id','/visits/:id/pay'].includes(req.route.path)||['GET','HEAD'].includes(req.method)) return next();
+  if(!/^\d+$/.test(value)||!Number.isSafeInteger(Number(value))||Number(value)<1)
+    return res.status(404).json({error:'Visit not found.',code:404});
+  try {
+      const session = db.get().prepare('SELECT payment_task_id FROM housekeeping_work_sessions WHERE id = ?').get(Number(value));
       const task = session?.payment_task_id && db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(session.payment_task_id);
       if (task) {
-        const operation = match[2] ? 'status' : req.method === 'DELETE' ? 'delete' : 'documents';
+        const operation = req.route.path.endsWith('/pay') ? 'status' : req.method === 'DELETE' ? 'delete' : 'documents';
         assertTaskMutation(db.get(), req, task, {}, { operation });
         if (req.method === 'PUT') assertCapability(db.get(), req, 'tasks.change_dates');
+        assertTaskRevision(db.get(),task,req.body||{},{required:true,requireParent:true});
       }
-    }
     next();
   } catch (error) { res.status(error.status || 500).json({ error: error.status ? error.message : 'Could not check household permissions.', code: error.status || 500 }); }
 });
@@ -738,6 +747,8 @@ router.get('/visits', (req, res) => {
              u.avatar_color AS worker_avatar_color,
              u.avatar_data AS worker_avatar_data,
              t.status AS payment_task_status,
+             t.revision AS payment_task_revision,
+             (SELECT revision FROM tasks WHERE id=t.parent_task_id) AS payment_task_parent_revision,
              t.title AS payment_task_title,
              fd.name AS receipt_document_name
       FROM housekeeping_work_sessions hws
@@ -830,6 +841,8 @@ router.get('/visits/:id', (req, res) => {
              u.avatar_color AS worker_avatar_color,
              u.avatar_data  AS worker_avatar_data,
              t.status  AS payment_task_status,
+             t.revision AS payment_task_revision,
+             (SELECT revision FROM tasks WHERE id=t.parent_task_id) AS payment_task_parent_revision,
              t.title   AS payment_task_title,
              fd.name   AS receipt_document_name
       FROM housekeeping_work_sessions hws

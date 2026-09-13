@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 /**
  * Modul: Aufgaben-Tags (#586)
  * Zweck: Hält die zwei Dinge fest, die dieses Feature ausmachen und die je für
@@ -101,7 +102,7 @@ function createHarness({ userId = ALICE, role = 'admin' } = {}) {
         await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
       }
       const base = `http://127.0.0.1:${server.address().port}/api/v1/tasks`;
-      const res = await fetch(`${base}${pathname}`, {
+      const res = await modernTaskFetch(get(),`${base}${pathname}`, {
         method,
         headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),

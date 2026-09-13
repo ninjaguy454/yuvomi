@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import test from 'node:test';
@@ -51,7 +52,7 @@ const base = `http://127.0.0.1:${server.address().port}/api/v1`;
 test.after(() => { server.close(); d.close(); });
 test.afterEach(() => { actor = admin; });
 async function call(method, path, body, key) {
-  const response = await fetch(`${base}${path}`, { method,
+  const response = await modernTaskFetch(d,`${base}${path}`, { method,
     headers: { 'Content-Type': 'application/json', ...(key ? { 'Idempotency-Key': key } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body) });
   const raw = await response.text();

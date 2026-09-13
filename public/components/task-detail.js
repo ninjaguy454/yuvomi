@@ -476,6 +476,7 @@ function taskLocationNode(task, ctx) {
     actions.appendChild(navigate);
   }
   if (ctx.isAdmin && location.kind === 'google_place') {
+    const revision = taskRevision(task);
     const promote = document.createElement('button');
     promote.type = 'button';
     promote.className = 'btn btn--secondary btn--sm';
@@ -483,7 +484,7 @@ function taskLocationNode(task, ctx) {
     promote.addEventListener('click', async () => {
       promote.disabled = true;
       try {
-        await api.post(`/tasks/${task.id}/location/promote`, { name: location.label, type: 'custom' });
+        await api.post(`/tasks/${task.id}/location/promote`, { name: location.label, type: 'custom', ...revision });
         window.yuvomi.showToast(t('tasks.locationSavedToYuvomiPlaces'), 'success');
         await closeDetailView({ force: true });
         await ctx.onChanged();
@@ -730,11 +731,12 @@ function commentRowNode(comment, { onChanged, ctx }) {
     // kein Datensatz mit Anhängseln: Zurücknehmen ist die ehrlichere Antwort
     // als Vorher-Fragen.
     del.addEventListener('click', () => {
+      const revision = comment.task_revision_snapshot || taskRevision(ctx.task);
       row.hidden = true;
       scheduleUndoableDelete({
         message: t('tasks.commentDeletedToast'),
         commit: async ({ keepalive }) => {
-          await api.delete(`/tasks/${comment.task_id}/comments/${comment.id}`, { keepalive });
+          await api.delete(`/tasks/${comment.task_id}/comments/${comment.id}`, { keepalive, body: JSON.stringify(revision) });
           if (keepalive) return; // Seite verschwindet - kein Nachladen mehr
           await onChanged();
         },
@@ -754,6 +756,9 @@ function commentRowNode(comment, { onChanged, ctx }) {
 
 /** Eine Zeile gegen ein Eingabefeld tauschen, ohne die Liste neu zu laden. */
 function startCommentEdit(row, comment, { onChanged, ctx }) {
+  // Keep the version that produced this rendered comment, even if live Task
+  // refreshes continue while the discussion draft is being edited.
+  const revision = comment.task_revision_snapshot || taskRevision(ctx.task);
   const form = document.createElement('form');
   form.className = 'task-comment__edit';
 
@@ -789,7 +794,10 @@ function startCommentEdit(row, comment, { onChanged, ctx }) {
     if (!value) return;
     save.disabled = true;
     try {
-      await api.patch(`/tasks/${comment.task_id}/comments/${comment.id}`, { comment: value });
+      await api.patch(`/tasks/${comment.task_id}/comments/${comment.id}`, { comment: value, ...revision });
+      // The reload guard preserves active drafts. This edit is now saved, so
+      // retire its form before requesting the canonical comment list.
+      row.replaceChildren();
       await onChanged();
     } catch (err) {
       save.disabled = false;
@@ -931,7 +939,8 @@ function commentsNode(task, ctx) {
         empty.textContent = t('tasks.commentsEmpty');
         list.appendChild(empty);
       } else {
-        for (const comment of comments) list.appendChild(commentRowNode(comment, { onChanged: load, ctx }));
+        const revision = taskRevision({ revision: res.task_revision, parent_revision: res.task_parent_revision });
+        for (const comment of comments) list.appendChild(commentRowNode({ ...comment, task_revision_snapshot: revision }, { onChanged: load, ctx }));
       }
       if (window.lucide) window.lucide.createIcons({ el: list });
     } catch {

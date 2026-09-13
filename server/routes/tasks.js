@@ -112,31 +112,45 @@ const router = express.Router();
 router.use((req,res,next) => {
   if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
   try {
-    if (/^\/(tags|categories)(\/|$)/.test(req.path)) assertCapability(db.get(),req,'tasks.change_category_tags');
-    const match = /^\/(\d+)(?:\/(status|archive|check|documents|comments))?(?:\/\d+)?$/.exec(req.path);
-    if (match) {
-      const task = db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(match[1]));
-      if (task) {
-        const operation = match[2] === 'comments' ? 'comment'
-          : match[2] === 'status' && req.body.status === 'archived' ? 'archive'
-          : match[2] || (req.method === 'DELETE' ? 'delete' : 'update');
-        assertTaskMutation(db.get(),req,task,req.body,{operation});
-        assertTaskRevision(db.get(),task,req.body);
-      }
-    } else if (req.method === 'POST' && req.path === '/') {
+    const path = req.path.toLowerCase().replace(/\/+$/, '') || '/';
+    if (/^\/(tags|categories)(\/|$)/.test(path)) assertCapability(db.get(),req,'tasks.change_category_tags');
+    if (req.method === 'POST' && path === '/') {
       assertTaskMutation(db.get(),req,null,req.body,{operation:'create'});
       if (req.body.parent_task_id) {
         const parent = db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.body.parent_task_id);
         if (parent) {
           assertTaskMutation(db.get(),req,parent,{subtasks:[]},{operation:'update'});
-          if (req.body.expected_parent_revision !== undefined)
-            assertTaskRevision(db.get(),parent,{expected_revision:req.body.expected_parent_revision});
+          assertTaskRevision(db.get(),parent,{expected_revision:req.body.expected_parent_revision},{required:true});
         }
       }
     }
     next();
   } catch(error) {
     res.status(error.status||403).json({error:error.message,code:error.status||403,...error.details});
+  }
+});
+// Bind checks to Express's matched route and decoded parameter. Matching raw
+// req.path allowed encoded IDs, case aliases and trailing slashes to skip them.
+router.param('id',(req,res,next,value)=>{
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value)<1)
+    return res.status(404).json({error:'Task not found.',code:404});
+  if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
+  const route=req.route.path;
+  if (route==='/:id/supervisor' || route==='/:id/location/promote') return next();
+  try {
+    const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
+    if (!task) return res.status(404).json({error:'Task not found.',code:404});
+    const action=route.split('/')[2];
+    const body=req.body||{};
+    const operation=action==='comments'?'comment'
+      :action==='status'&&body.status==='archived'?'archive'
+      :action||(req.method==='DELETE'?'delete':'update');
+    assertTaskMutation(db.get(),req,task,body,{operation});
+    if (!(req.method==='POST'&&route==='/:id/comments'))
+      assertTaskRevision(db.get(),task,body,{required:true,requireParent:true});
+    return next();
+  } catch(error) {
+    return res.status(error.status||403).json({error:error.message,code:error.status||403,...error.details});
   }
 });
 router.get('/changes', taskChangesStream);
@@ -1372,8 +1386,10 @@ router.get('/:id', (req, res) => {
 
 router.post('/:id/location/promote', requireAdmin, (req, res) => {
   try {
-    const task = db.get().prepare('SELECT id FROM tasks WHERE id = ? AND parent_task_id IS NULL').get(req.params.id);
+    const task = db.get().prepare('SELECT * FROM tasks WHERE id = ? AND parent_task_id IS NULL').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
+    assertTaskMutation(db.get(),req,task,{location:{}},{operation:'update'});
+    assertTaskRevision(db.get(),task,req.body,{required:true});
     res.json({ data: promoteTaskGoogleLocation(db.get(), task.id, req.body || {}, req.authUserId || req.session.userId) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -1909,6 +1925,9 @@ router.put('/:id', (req, res) => {
         assertTaskSupervisionAssignee(db.get(),task.id,firstUid);
       if(status!==task.status) {
         const operation=changeTaskStatus(db.get(),task.id,status,{actorId:req.authUserId||req.session.userId,
+          // The adapter checked the submitted revision before this atomic edit.
+          // Its definition changes above have already advanced that revision.
+          requireRevision:false,
           body:{complete_remaining:req.body.complete_remaining,reset_progress:req.body.reset_progress}});
         pending=operation.pending;undone=operation.undone;
       }
@@ -2520,6 +2539,12 @@ function findVisibleTask(id, me) {
   `).get(id, me, me);
 }
 
+function taskMutationVersion(taskId) {
+  const row=db.get().prepare(`SELECT t.revision AS task_revision,p.revision AS task_parent_revision
+    FROM tasks t LEFT JOIN tasks p ON p.id=t.parent_task_id WHERE t.id=?`).get(taskId);
+  return row || {};
+}
+
 /** Für die Person sichtbare, mit der Aufgabe verknüpfte Dokumente. */
 function loadTaskDocuments(taskId, me) {
   return db.get().prepare(`
@@ -2552,9 +2577,6 @@ router.post('/:id/supervisor',(req,res)=>{
     if(!source||!mayAccessTask(source,me))return res.status(404).json({error:'Task not found.',code:404});
     if(!taskSupervisionManagementAllowed(db.get(),req,source.id))
       return res.status(403).json({error:'Only the Task creator or a household administrator with assignment permission can choose its supervisor.',code:403});
-    assertTaskRevision(db.get(),task,req.body);
-    if(req.body.expected_source_revision!==undefined)
-      assertTaskRevision(db.get(),source,{expected_revision:req.body.expected_source_revision});
     if(req.body.action_task_id!==undefined) {
       const actionId=req.body.action_task_id;
       if(!Number.isSafeInteger(actionId)||actionId<1||taskSupervisionRootId(db.get(),actionId)!==source.id)
@@ -2564,6 +2586,9 @@ router.post('/:id/supervisor',(req,res)=>{
     if(supervisor!==null && (!Number.isSafeInteger(supervisor)||supervisor<1))
       return res.status(400).json({error:'Choose a household supervisor.',code:400});
     db.get().transaction(()=>{
+      assertTaskRevision(db.get(),task,req.body,{required:true});
+      if(source.id!==task.id)
+        assertTaskRevision(db.get(),source,{expected_revision:req.body.expected_source_revision},{required:true});
       reconcileTaskSupervision(db.get(),source.id,{actorId:me,supervisorUserId:supervisor});
     })();
     res.json({data:hydrateTask(task,me)});
@@ -2601,7 +2626,7 @@ router.get('/:id/documents', (req, res) => {
     const me = req.authUserId || req.session.userId;
     const task = findVisibleTask(req.params.id, me);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
-    res.json({ data: loadTaskDocuments(task.id, me) });
+    res.json({ data: loadTaskDocuments(task.id, me), ...taskMutationVersion(task.id) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id/documents error:', err);
@@ -2643,7 +2668,7 @@ router.put('/:id/documents', (req, res) => {
       for (const id of visibleIds) ins.run(task.id, id, me);
     })();
 
-    res.json({ data: loadTaskDocuments(task.id, me) });
+    res.json({ data: loadTaskDocuments(task.id, me), ...taskMutationVersion(task.id) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('PUT /:id/documents error:', err);
@@ -2735,7 +2760,7 @@ router.get('/:id/comments', (req, res) => {
     const me = req.authUserId || req.session.userId;
     const task = findVisibleTask(req.params.id, me);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
-    res.json({ data: loadTaskComments(task.id) });
+    res.json({ data: loadTaskComments(task.id), ...taskMutationVersion(task.id) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id/comments error:', err);
@@ -2767,7 +2792,7 @@ router.post('/:id/comments', (req, res) => {
       FROM task_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?
     `).get(result.lastInsertRowid);
 
-    res.status(201).json({ data: row });
+    res.status(201).json({ data: row, ...taskMutationVersion(task.id) });
     notifyMentions(task, row, me);
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -2800,7 +2825,7 @@ router.patch('/:id/comments/:commentId', (req, res) => {
              u.display_name AS author_name, u.avatar_color AS author_color
       FROM task_comments c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = ?
     `).get(found.row.id);
-    res.json({ data: row });
+    res.json({ data: row, ...taskMutationVersion(found.task.id) });
     // Wer beim Korrigieren jemanden dazuholt, meint ihn genauso wie beim
     // Schreiben - ohne diesen Aufruf staende der Name farbig da und niemand
     // erfuehre davon.
@@ -2822,7 +2847,7 @@ router.delete('/:id/comments/:commentId', (req, res) => {
       });
     }
     db.get().prepare('DELETE FROM task_comments WHERE id = ?').run(found.row.id);
-    res.json({ data: { id: found.row.id } });
+    res.json({ data: { id: found.row.id }, ...taskMutationVersion(found.task.id) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('DELETE /:id/comments/:commentId error:', err);

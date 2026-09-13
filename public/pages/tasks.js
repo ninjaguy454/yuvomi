@@ -2166,7 +2166,9 @@ async function saveTaskRecord(form, body) {
   // edited the form after a lost response, apply those edits to this same task.
   idField.value = savedTaskId;
   taskCreateAttempts.delete(form);
-  if (serialized !== attempt.serialized) await api.put(`/tasks/${savedTaskId}`, { ...body, ...taskRevision(response.data) });
+  if (serialized !== attempt.serialized) response = await api.put(`/tasks/${savedTaskId}`, { ...body, ...taskRevision(response.data) });
+  const controls = taskFormControls.get(form);
+  if (controls && response.data) controls.originalTask = structuredClone(response.data);
   return savedTaskId;
 }
 
@@ -2364,7 +2366,14 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       // Teil benennt, der nicht geklappt hat.
       if (documentIds) {
         try {
-          await api.put(`/tasks/${savedTaskId}/documents`, { document_ids: documentIds });
+          const response = await api.put(`/tasks/${savedTaskId}/documents`, {
+            document_ids: documentIds, ...taskRevision(taskFormControls.get(form)?.originalTask),
+          });
+          const saved = taskFormControls.get(form)?.originalTask;
+          if (saved && Number.isInteger(response.task_revision)) {
+            saved.revision = response.task_revision;
+            saved.parent_revision = response.task_parent_revision;
+          }
         } catch (err) {
           console.error('[Tasks] document link error:', err);
           // Das Formular bleibt STEHEN: die Aufgabe ist gespeichert, aber die
@@ -4372,7 +4381,9 @@ function wireAssignmentRequestsBtn(container) {
         const row = button.closest('[data-assignment-request]');
         button.disabled = true;
         try {
-          await api.post(`/automation/obligations/${row.dataset.assignmentRequest}/respond`, { action: button.dataset.requestAction, expected_revision: requestSnapshot.find(request => Number(request.id) === Number(row.dataset.assignmentRequest))?.task_revision });
+          const request = requestSnapshot.find(request => Number(request.id) === Number(row.dataset.assignmentRequest));
+          await api.post(`/automation/obligations/${row.dataset.assignmentRequest}/respond`, { action: button.dataset.requestAction,
+            ...taskRevision({ revision: request?.task_revision, parent_revision: request?.task_parent_revision }) });
           state.assignmentRequests = (await api.get('/automation/obligations')).data || [];
           await closeModal({ force: true });
           await loadTasks(container);

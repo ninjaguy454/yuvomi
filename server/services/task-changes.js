@@ -5,6 +5,11 @@ import { actorPermissions } from '../permissions.js';
 const subscribers = new Set();
 let timer = null;
 function allowed(d,req) {
+  // Long-lived requests retain the original Session object after logout. The
+  // persisted session, not that snapshot, authorizes every event/heartbeat.
+  if (req.authMethod !== 'session' || !req.sessionID) return false;
+  const row = d.prepare('SELECT sess FROM sessions WHERE sid=? AND expired_at>?').get(req.sessionID, Date.now());
+  if (!row || Number(JSON.parse(row.sess)?.userId) !== Number(req.authUserId)) return false;
   const p=actorPermissions(d,req);
   return p.modules.tasks !== 'none'
     && (p.capabilities['tasks.view_own']==='allow'||p.capabilities['tasks.view_household']==='allow');

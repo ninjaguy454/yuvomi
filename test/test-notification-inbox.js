@@ -168,11 +168,12 @@ test('ordinary task creation and effective reassignment notify once; identical s
   assert.equal(created.status, 201);
   const id = created.body.data.id;
   assert.equal(inbox.listNotificationInbox(database, bob).unreadCount, 1);
-  assert.equal((await request(`/tasks/${id}`, { method: 'PUT', body: { title: 'Same assignment', assigned_to: [bob] } })).status, 200);
+  const revision=()=>({expected_revision:database.prepare('SELECT revision FROM tasks WHERE id=?').get(id).revision});
+  assert.equal((await request(`/tasks/${id}`, { method: 'PUT', body: { title: 'Same assignment', assigned_to: [bob], ...revision() } })).status, 200);
   assert.equal(inbox.listNotificationInbox(database, bob).unreadCount, 1);
-  await request(`/tasks/${id}`, { method: 'PUT', body: { assigned_to: [alice] } });
+  assert.equal((await request(`/tasks/${id}`, { method: 'PUT', body: { assigned_to: [alice], ...revision() } })).status,200);
   assert.equal(inbox.listNotificationInbox(database, alice).unreadCount, 1);
-  await request(`/tasks/${id}`, { method: 'PUT', body: { assigned_to: [bob] } });
+  assert.equal((await request(`/tasks/${id}`, { method: 'PUT', body: { assigned_to: [bob], ...revision() } })).status,200);
   assert.equal(inbox.listNotificationInbox(database, bob).unreadCount, 2);
   const receipts = database.prepare('SELECT * FROM notification_inbox WHERE user_id = ? ORDER BY id').all(bob);
   assert.equal(events.isNotificationDeliveryCurrent(database, receipts[0]), false,
@@ -190,7 +191,7 @@ test('comment mentions persist once and use the same inbox delivery path as assi
   let rows = inbox.listNotificationInbox(database, bob).items;
   assert.equal(rows.length, 1);
   assert.match(rows[0].body, /Alice: @Bob/);
-  await request(`/tasks/${id}/comments/${created.body.data.id}`, { method: 'PATCH', body: { comment: '@Bob please review this.' } });
+  assert.equal((await request(`/tasks/${id}/comments/${created.body.data.id}`, { method: 'PATCH', body: { comment: '@Bob please review this.',expected_revision:database.prepare('SELECT revision FROM tasks WHERE id=?').get(id).revision } })).status,200);
   rows = inbox.listNotificationInbox(database, bob).items;
   assert.equal(rows.length, 1);
   assert.equal(database.prepare('SELECT delivery_scope FROM notification_inbox WHERE id = ?').get(rows[0].id).delivery_scope, 'user');

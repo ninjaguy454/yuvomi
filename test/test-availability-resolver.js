@@ -3,6 +3,7 @@ import test from 'node:test';
 import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import express from 'express';
+import { modernTaskMutationBody } from './helpers/task-client-revision-fixture.js';
 
 // This suite must never discover the application's deployment database.
 assert.equal(process.env.DB_PATH, ':memory:', 'Set DB_PATH=:memory: externally before running this suite.');
@@ -26,6 +27,7 @@ const server = http.createServer(app);
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 test.after(() => server.close());
 async function taskRequest(method, path, body) {
+  body=modernTaskMutationBody(database,method,path,body);
   const response = await fetch(`http://127.0.0.1:${server.address().port}/tasks${path}`, {
     method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });

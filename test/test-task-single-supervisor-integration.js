@@ -1,3 +1,4 @@
+import { modernTaskFetch } from './helpers/task-client-revision-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
@@ -45,7 +46,7 @@ function proficiency(user,skill,value){d.prepare(`INSERT INTO user_skill_profici
 function makeTask(title,parent=null,assigned=learner){return Number(d.prepare("INSERT INTO tasks(title,created_by,parent_task_id,assigned_to,due_date,due_time) VALUES(?,?,?,?,'2026-09-14','12:00')").run(title,admin,parent,assigned).lastInsertRowid);}
 const revision=id=>d.prepare('SELECT revision FROM tasks WHERE id=?').get(id).revision;
 const pending=()=>d.prepare("SELECT * FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('pending','accepted')").all(source);
-async function request(method,path,body,as=admin){actor=as;const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:await response.json()};}
+async function request(method,path,body,as=admin){actor=as;const response=await modernTaskFetch(d,base+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,data:await response.json()};}
 
 test('legacy action-scoped supervisor route assigns one helper to the whole Task',async()=>{
   const before=reconcileTaskSupervision(d,source);

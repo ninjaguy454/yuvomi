@@ -57,6 +57,10 @@ test.after(()=>{clearPermissions();server.close();d.close();});
 test.beforeEach(()=>{d.prepare('DELETE FROM access_capabilities').run();d.prepare('DELETE FROM access_permissions').run();actor=learner;});
 const configure=(capabilities,modules={})=>replaceSubjectPermissions(d,'user',learner,{modules,capabilities});
 const restricted=()=>configure(RESTRICTED_MEMBER_CAPABILITIES);
+const savedRevision=task=>{
+  const row=d.prepare('SELECT revision,parent_task_id FROM tasks WHERE id=?').get(task.id);
+  return {expected_revision:row.revision,...(row.parent_task_id?{expected_parent_revision:d.prepare('SELECT revision FROM tasks WHERE id=?').get(row.parent_task_id).revision}:{})};
+};
 async function request(method,path,body,as=learner){actor=as;const response=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),redirect:'manual'});const text=await response.text();let data;try{data=JSON.parse(text);}catch{data=text;}return {status:response.status,data};}
 
 test('existing members keep Task rights; management remains denied by default',()=>{assert.equal(hasCapability(d,learner,'tasks.edit_others'),true);assert.equal(hasCapability(d,learner,'skills.manage'),false);assert.equal(hasCapability(d,learner,'availability.manage_own'),true);});
@@ -207,7 +211,7 @@ test('Meal execution projection hides another member Task snapshot',async()=>{
 test('public child status response does not disclose its private parent',async()=>{
   const parent=seed({title:'Secret parent instructions',creator:other,assigned:other,visibility:'private'});
   const visible=seed({title:'Public child',creator:other,assigned:learner,parent:parent.id});
-  const response=await request('PATCH',`/api/v1/tasks/${visible.id}/status`,{status:'done'});
+  const response=await request('PATCH',`/api/v1/tasks/${visible.id}/status`,{status:'done',...savedRevision(visible)});
   assert.equal(response.status,200);assert.equal(response.data.data.parent_task,undefined);
   assert.equal(JSON.stringify(response.data).includes(parent.title),false);
 });
@@ -217,7 +221,7 @@ test('blocked status and legacy update omit private dependency titles and IDs',a
   const dependent=seed({title:'Public dependent'});
   d.prepare('INSERT INTO workflow_task_dependencies(task_id,depends_on_task_id) VALUES (?,?)').run(dependent.id,privateTask.id);
   for(const [method,path] of [['PATCH',`/api/v1/tasks/${dependent.id}/status`],['PUT',`/api/v1/tasks/${dependent.id}`]]){
-    const response=await request(method,path,{status:'done'});
+    const response=await request(method,path,{status:'done',...savedRevision(dependent)});
     assert.equal(response.status,409);assert.deepEqual(response.data.dependencies,[]);
     assert.equal(JSON.stringify(response.data).includes(privateTask.title),false);
   }
@@ -230,7 +234,7 @@ test('supervision denial explains the visible action without disclosing a privat
   const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion) VALUES ('Permission supervised skill',0,'normal')").run().lastInsertRowid);
   d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES (?,?,'supervised','manual',?)").run(learner,skill,admin);
   for(const action of [visible,hidden])d.prepare('INSERT INTO task_skill_requirements(task_id,skill_id,sort_order) VALUES (?,?,0)').run(action.id,skill);
-  const response=await request('PATCH',`/api/v1/tasks/${visible.id}/status`,{status:'done'});
+  const response=await request('PATCH',`/api/v1/tasks/${visible.id}/status`,{status:'done',...savedRevision(visible)});
   assert.equal(response.status,409);assert.ok(response.data.supervision.actions.some(action=>action.action_task_id===visible.id));
   assert.equal(response.data.supervision.actions.some(action=>action.action_task_id===hidden.id),false);
   assert.equal(JSON.stringify(response.data).includes(hidden.title),false);
@@ -272,7 +276,7 @@ test('parent bulk completion cannot bypass a supervised grandchild',async()=>{
   const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion) VALUES ('Nested supervised skill',0,'normal')").run().lastInsertRowid);
   d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES (?,?,'supervised','manual',?)").run(learner,skill,admin);
   d.prepare('INSERT INTO task_skill_requirements(task_id,skill_id,sort_order) VALUES (?,?,0)').run(leaf.id,skill);
-  const response=await request('PATCH',`/api/v1/tasks/${source.id}/status`,{status:'done',complete_remaining:true});
+  const response=await request('PATCH',`/api/v1/tasks/${source.id}/status`,{status:'done',complete_remaining:true,...savedRevision(source)});
   assert.equal(response.status,409);assert.match(response.data.error,/supervis/i);
   for(const row of [source,child,leaf])assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(row.id).status,'open');
 });

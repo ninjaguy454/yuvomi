@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Refresh Task capabilities, operational detail and unbuffered live updates together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.10`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.11`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -45,6 +45,7 @@ const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/con
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
   '/components/emoji-picker.js',
+  '/components/point-adjustment.js',
   '/utils/emoji-catalog.js',
   '/utils/reward-request.js',
   '/utils/reward-live.js',

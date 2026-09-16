@@ -19,6 +19,7 @@ import { emptyStateHTML, mountLoadError } from '/utils/empty-state.js';
 import { openEmojiPicker } from '/components/emoji-picker.js';
 import { rewardRequest } from '/utils/reward-request.js';
 import { watchRewardChanges } from '/utils/reward-live.js';
+import { openPointAdjustment } from '/components/point-adjustment.js';
 
 const TABS = ['overview', 'catalog', 'ledger'];
 
@@ -154,7 +155,7 @@ function updateRewardsFab() {
   if ((state.tab === 'catalog' || state.tab === 'overview') && isAdmin()) {
     setPageFabAction(fab, { label: t('rewards.addReward'), onClick: () => openRewardModal(null) });
   } else if (state.tab === 'ledger' && isAdmin()) {
-    setPageFabAction(fab, { label: t('rewards.grantBonus'), onClick: () => openBonusModal() });
+    setPageFabAction(fab, { label: 'Adjust points', onClick: () => openBonusModal() });
   } else {
     setPageFabAction(fab, { hidden: true });
   }
@@ -521,6 +522,15 @@ function ledgerReason(row) {
   return t(`rewards.ledgerType.${row.type}`);
 }
 
+function ledgerContext(row) {
+  const parts=[row.type==='adjust'?'Points adjustment':t(`rewards.ledgerType.${row.type}`)];
+  if(row.actor_name)parts.push(`By ${row.actor_name}`);
+  if(row.related_task_id)parts.push(`Task #${row.related_task_id}`);
+  if(row.related_reward_id)parts.push(`Reward #${row.related_reward_id}`);
+  if(row.related_ledger_id)parts.push(`Ledger entry #${row.related_ledger_id}`);
+  return parts.join(' · ');
+}
+
 function renderLedger(el) {
   el.replaceChildren();
   const filterChips = [{ id: null, label: t('rewards.all') }]
@@ -537,6 +547,8 @@ function renderLedger(el) {
         <span class="rw-ledger-row__icon rw-ledger-row__icon--${esc(row.type)}"><i data-lucide="${LEDGER_ICON[row.type] || 'circle'}" aria-hidden="true"></i></span>
         <div class="rw-ledger-row__text">
           <p class="rw-ledger-row__reason">${esc(ledgerReason(row))}</p>
+          <p class="rw-ledger-row__meta">${esc(ledgerContext(row))}</p>
+          ${isAdmin()?`<button type="button" class="btn btn--secondary btn--sm" data-adjust-ledger="${row.id}">Adjust points</button>`:''}
           <p class="rw-ledger-row__meta">${esc(row.user_name)} · ${esc(formatDate(row.created_at))}</p>
         </div>
         <span class="rw-delta ${positive ? 'rw-delta--pos' : 'rw-delta--neg'}">${positive ? '+' : '−'}${fmtPoints(Math.abs(row.delta))}</span>
@@ -561,6 +573,7 @@ function renderLedger(el) {
     state.ledgerFilter = val === '' ? null : Number(val);
     await refreshActiveTab();
   }));
+  el.querySelectorAll('[data-adjust-ledger]').forEach(button=>button.onclick=()=>openBonusModal(state.ledger.find(row=>row.id===Number(button.dataset.adjustLedger))));
   icons(el);
 }
 
@@ -700,60 +713,10 @@ async function decideRedemption(id, action, btn) {
   }
 }
 
-function openBonusModal() {
-  const members = enrolledMembers();
-  if (!members.length) { confirmModal(t('rewards.emptyOverviewAdmin'), { confirmLabel: t('rewards.gotIt') }); return; }
-  openModal({
-    title: t('rewards.grantBonus'),
-    content: `
-      <form id="rw-bonus-form" novalidate>
-        <div class="form-group">
-          <label class="label" for="rw-bonus-member">${esc(t('rewards.member'))}</label>
-          <select class="input" id="rw-bonus-member">
-            ${members.map((m) => `<option value="${m.id}">${esc(m.display_name)} · ${esc(pointsLabel(m.balance))}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="label" for="rw-bonus-points">${esc(t('rewards.pointsSigned'))}</label>
-          <input class="input" id="rw-bonus-points" type="number" inputmode="numeric" step="1" placeholder="10" required>
-          <p class="rw-hint">${esc(t('rewards.pointsSignedHint'))}</p>
-        </div>
-        <div class="form-group">
-          <label class="label" for="rw-bonus-reason">${esc(t('rewards.reasonOptional'))}</label>
-          <input class="input" id="rw-bonus-reason" maxlength="200" placeholder="${esc(t('rewards.reasonPlaceholder'))}">
-        </div>
-        <div id="rw-bonus-error" class="form-error" hidden></div>
-        <div class="modal-panel__footer modal-panel__footer--plain">
-          <button type="submit" class="btn btn--primary" id="rw-bonus-submit">${esc(t('common.save'))}</button>
-        </div>
-      </form>`,
-    onSave: (panel) => {
-      panel.querySelector('#rw-bonus-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const errEl = panel.querySelector('#rw-bonus-error');
-        const submit = panel.querySelector('#rw-bonus-submit');
-        const delta = Math.trunc(Number(panel.querySelector('#rw-bonus-points').value));
-        if (!Number.isFinite(delta) || delta === 0) {
-          errEl.textContent = t('rewards.pointsSignedHint'); errEl.hidden = false; return;
-        }
-        submit.disabled = true; errEl.hidden = true;
-        try {
-          await api.post('/rewards/bonus', {
-            user_id: Number(panel.querySelector('#rw-bonus-member').value),
-            delta,
-            reason: panel.querySelector('#rw-bonus-reason').value.trim() || undefined,
-          });
-          await closeModal({ force: true });
-          toast(t('rewards.toastBonus'));
-          await refreshActiveTab();
-        } catch (err) {
-          errEl.textContent = err?.message || t('common.error'); errEl.hidden = false; submit.disabled = false;
-        }
-      });
-    },
-  });
+function openBonusModal(reference = null) {
+  if (!isAdmin()) return;
+  openPointAdjustment({actorId:state.user.id,members:enrolledMembers(),reference,onSaved:refreshActiveTab});
 }
-
 function openRewardModal(item) {
   if (!isAdmin()) return;
   const isEdit = !!item;

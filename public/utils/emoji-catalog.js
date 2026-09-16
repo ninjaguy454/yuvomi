@@ -33,7 +33,8 @@ export function emojiWindow(count, scrollTop, height, width) {
   const rowHeight = 60;
   const firstRow = Math.max(0, Math.floor(scrollTop / rowHeight) - 1);
   const rows = Math.ceil(height / rowHeight) + 2;
-  return { columns, rowHeight, first: firstRow * columns, last: Math.min(count, (firstRow + rows) * columns), height: Math.ceil(count / columns) * rowHeight };
+  return { columns, rowHeight, first: firstRow * columns, last: Math.min(count, (firstRow + rows) * columns), height: Math.ceil(count / columns) * rowHeight,
+    visibleFirst: Math.max(0, Math.floor(scrollTop / rowHeight)) * columns, visibleLast: Math.min(count, Math.ceil((scrollTop + height) / rowHeight) * columns) };
 }
 
 const recentKey = userId => userId == null ? null : `vidamia-emoji-recents:${String(userId)}`;

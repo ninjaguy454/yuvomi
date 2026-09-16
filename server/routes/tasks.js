@@ -9,6 +9,7 @@ import express from 'express';
 import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion } from '../services/recurrence.js';
+import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFrontier, isRecurrenceFrontier } from '../services/task-recurrence-frontier.js';
 import { syncTaskRewards } from '../services/rewards.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask, resolveActivityTemplate } from '../services/activity-workflows.js';
 import {
@@ -56,7 +57,7 @@ import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, cop
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
 import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection } from '../services/task-access.js';
-import { assertTaskRevision, changeTaskStatus, configureTaskRecurrence, recordTaskActivity, taskActivity } from '../services/task-lifecycle.js';
+import { assertTaskRevision, changeTaskStatus, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
 import { taskChangesStream } from '../services/task-changes.js';
 import { assertCapability } from '../permissions.js';
@@ -2000,9 +2001,10 @@ router.put('/:id', (req, res) => {
  */
 function recurrenceFollowupOf(taskId) {
   return db.get().prepare(
-    `SELECT * FROM tasks
-      WHERE recurrence_origin_id = ? AND parent_task_id IS NULL
-      ORDER BY id LIMIT 1`
+    `SELECT t.* FROM tasks t LEFT JOIN task_recurrence_occurrences o ON o.task_id=t.id
+      WHERE t.recurrence_origin_id = ? AND t.parent_task_id IS NULL
+        AND COALESCE(o.state,'materialized')='materialized'
+      ORDER BY t.id LIMIT 1`
   ).get(taskId) ?? null;
 }
 
@@ -2182,6 +2184,7 @@ function shiftedStartDate(startDate, dueDate, nextDue) {
  */
 function spawnRecurrenceFollowupSingle(task) {
   if (!task?.is_recurring || !task.recurrence_rule || task.parent_task_id) return;
+  if (!isRecurrenceFrontier(db.get(),task.id)) return;
   // Höchstens eine Folgeinstanz je Erledigung - sonst legt doppeltes Abhaken nach.
   if (recurrenceFollowupOf(task.id)) return;
 
@@ -2196,6 +2199,14 @@ function spawnRecurrenceFollowupSingle(task) {
     fromCompletion: !!task.recurrence_from_completion,
   });
   if (!nextDate) return;
+  const occurrence=registerRecurrenceOccurrence(db.get(),task.id);
+  // An early completion-relative action can calculate the very same date as
+  // the occurrence being completed. Do not silently strand the series or
+  // create a duplicate: reject and roll back the whole operational mutation.
+  if(db.get().prepare(`SELECT 1 FROM task_recurrence_occurrences
+    WHERE series_id=? AND occurrence_key=? AND state='materialized'`).get(occurrence.series_id,nextDate))throw new TaskStateError(
+      'This completion would repeat an already materialized recurrence date. Complete this occurrence later or review its recurrence dates.',
+      {reason:'recurrence_date_conflict',occurrence_date:nextDate});
 
   const existingAssignments = db.get()
     .prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
@@ -2222,7 +2233,7 @@ function spawnRecurrenceFollowupSingle(task) {
   const taskActivityBinding = getTaskActivityBinding(db.get(), task.id);
   const existingSubtasks = ordinaryActivitySubtasks(db.get(), task.id);
 
-  db.get().transaction(() => {
+  return db.get().transaction(() => {
     const newTask = db.get().prepare(`
       INSERT INTO tasks (title, description, category, priority, status,
         start_date, due_date, due_time, assigned_to, created_by, is_recurring, recurrence_rule,
@@ -2249,6 +2260,7 @@ function spawnRecurrenceFollowupSingle(task) {
       task.countdown ? 1 : 0,
       task.id
     );
+    registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
     setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);
@@ -2277,6 +2289,7 @@ function spawnRecurrenceFollowupSingle(task) {
         sub.due_time, subAssignedTo, sub.created_by, newTask.lastInsertRowid,
         sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null
       );
+      registerRecurrenceAction(db.get(),Number(newSub.lastInsertRowid));
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
       setTags(db.get(), newSub.lastInsertRowid, subTags);
       copyTaskSkills(db.get(), sub.id, newSub.lastInsertRowid);
@@ -2294,10 +2307,17 @@ function spawnRecurrenceFollowupSingle(task) {
     notifyTaskAssignments(db.get(), Number(newTask.lastInsertRowid));
     recordTaskActivity(db.get(),Number(newTask.lastInsertRowid),'recurrence_generated',task.created_by,
       {title:task.title,revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(newTask.lastInsertRowid).revision});
+    return Number(newTask.lastInsertRowid);
   })();
 }
 
 function spawnRecurrenceFollowup(task) {
+  return db.get().transaction(()=>spawnRecurrenceFollowupLocked(task?.id)).immediate();
+}
+
+function spawnRecurrenceFollowupLocked(taskId) {
+  const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  if(!task||task.status!=='done'||!isRecurrenceFrontier(db.get(),task.id))return;
   if (!task?.rotation_group) return spawnRecurrenceFollowupSingle(task);
 
   const cohort = db.get().prepare(`
@@ -2306,6 +2326,7 @@ function spawnRecurrenceFollowup(task) {
      ORDER BY rotation_slot ASC, id ASC
   `).all(task.rotation_group, task.rotation_cycle);
   if (!cohort.length || cohort.some((member) => member.status !== 'done')) return;
+  if (cohort.some((member) => !isRecurrenceFrontier(db.get(),member.id))) return;
   if (cohort.some((member) => recurrenceFollowupOf(member.id))) return;
 
   const roster = loadRotationUserIds(db.get(), cohort[0].id);
@@ -2326,6 +2347,25 @@ function spawnRecurrenceFollowup(task) {
   db.get().transaction(() => {
     for (const member of cohort) spawnRecurrenceFollowupSingle(member);
   })();
+}
+
+/** Explicit mutation/reconciliation entry point. GETs never materialize Tasks.
+ * The caller may name any historical member; only its latest surviving
+ * materialized frontier may advance. Archive alone never moves that frontier. */
+export function reconcileTaskRecurrence(taskId) {
+  return db.get().transaction(()=>{
+    const before=recurrenceFrontier(db.get(),Number(taskId));
+    if(!before)return {frontier_task_id:null,generated_task_ids:[]};
+    const prior=new Set(db.get().prepare('SELECT task_id FROM task_recurrence_occurrences').all().map(row=>row.task_id));
+    try {spawnRecurrenceFollowupLocked(before.id);}
+    catch(error) {
+      if(error.details?.reason==='recurrence_date_conflict')return {frontier_task_id:before.id,generated_task_ids:[],
+        reason:error.details.reason,explanation:error.message};
+      throw error;
+    }
+    return {frontier_task_id:recurrenceFrontier(db.get(),before.id)?.id||null,
+      generated_task_ids:db.get().prepare("SELECT task_id FROM task_recurrence_occurrences WHERE state='materialized'").all().map(row=>row.task_id).filter(id=>!prior.has(id))};
+  }).immediate();
 }
 
 // --------------------------------------------------------
@@ -2522,6 +2562,9 @@ router.delete('/:id', (req, res) => {
     const queued = doomed.reduce((n, row) => n + (queueTodoDeletion('tasks', row) ? 1 : 0), 0);
 
     const result = db.get().transaction(() => {
+      // Preserve proven series identity before ON DELETE SET NULL severs the
+      // legacy predecessor chain. Older deletions never authorize hole filling.
+      registerRecurrenceOccurrence(db.get(),Number(req.params.id));
       const survivingSources = deleteTaskSupervisionProjections(db.get(), Number(req.params.id));
       const removed = db.get().prepare('DELETE FROM tasks WHERE id = ?').run(req.params.id);
       for (const sourceId of survivingSources) reconcileTaskSupervision(db.get(), sourceId, { actorId: req.authUserId || req.session.userId });

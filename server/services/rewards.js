@@ -7,6 +7,8 @@
  * Abhängigkeiten: better-sqlite3-Handle (synchron), wird vom Aufrufer übergeben.
  */
 
+import { rewardOccurrenceProvenance } from './task-recurrence-frontier.js';
+
 const REWARD_TX = `
   INSERT INTO reward_ledger (user_id, delta, type, reason, task_id, redemption_id, created_by)
   VALUES (@user_id, @delta, @type, @reason, @task_id, @redemption_id, @created_by)
@@ -76,15 +78,17 @@ export function rewardTargets(d, taskId, actingUserId) {
 
 /** One award per occurrence, with the recipients frozen at the first award.
  * The claim and every ledger row commit together, including through callers
- * outside the Task lifecycle. A recurrence is a different Task ID; reopening,
- * reassignment, retries and helper projections are not new occurrences. */
+ * outside the Task lifecycle. Regenerated rows share their original logical
+ * series/date/action claim; reopening, deletion and retries cannot award twice. */
 export function awardForCompletion(d, taskId, actingUserId) {
   return d.transaction(() => {
     const task = d.prepare('SELECT id, points, title FROM tasks WHERE id = ?').get(taskId);
     if (!task || !Number.isInteger(task.points) || task.points <= 0) return false;
     const targets = rewardTargets(d, taskId, actingUserId);
     if (!targets.length) return false;
-    const claim = d.prepare('INSERT OR IGNORE INTO reward_task_awards(task_id) VALUES (?)').run(taskId);
+    const provenance=rewardOccurrenceProvenance(d,taskId);
+    if(provenance.retired)return false;
+    const claim = d.prepare('INSERT OR IGNORE INTO reward_task_awards(task_id,logical_key) VALUES (?,?)').run(taskId,provenance.logicalKey);
     if (!claim.changes) return false;
     const ins = d.prepare(`INSERT INTO reward_ledger (user_id, delta, type, reason, task_id, created_by)
       VALUES (?, ?, 'earn', ?, ?, ?)`);
@@ -115,12 +119,77 @@ export class RewardError extends Error {
 /** A client must retain this key after a timeout. A new key means a deliberately
  * new redemption, not a retry. Durable records do not expire with the generic
  * API response cache. */
-export function validateRedemptionKey(value) {
+export function validateRedemptionKey(value, action = 'redeeming') {
   if (value == null || value === '') throw new RewardError(
-    'Refresh Rewards before redeeming. A request ID is required to protect your points.', 428, 'request_id_required');
+    `Refresh Rewards before ${action}. A request ID is required to protect your points.`, 428, 'request_id_required');
   if (typeof value !== 'string' || !value.trim() || value.length > 255 || /[^\x20-\x7E]/.test(value))
     throw new RewardError('Request ID must contain 1 to 255 printable characters.');
   return value.trim();
+}
+
+/** Manual corrections append a distinct ledger entry. The permanent request
+ * claim and signed delta commit together under SQLite's write reservation;
+ * neither a timeout nor a process restart turns the retry into another credit.
+ * References are validated once, then retained as historical provenance. */
+export function createPointAdjustment(d, {actorId, userId, delta, reason, taskId = null,
+  catalogId = null, ledgerId = null, requestKey, entryKind = 'adjust'}) {
+  const key = validateRedemptionKey(requestKey, 'adjusting points');
+  const identifier = (value, label, optional = false) => {
+    if (optional && (value == null || value === '')) return null;
+    if (!['number','string'].includes(typeof value) || String(value).trim() === ''
+        || !Number.isSafeInteger(Number(value)) || Number(value) <= 0)
+      throw new RewardError(`${label} must be a valid record ID.`);
+    return Number(value);
+  };
+  userId = identifier(userId, 'Member');
+  taskId = identifier(taskId, 'Related Task', true);
+  catalogId = identifier(catalogId, 'Related Reward', true);
+  ledgerId = identifier(ledgerId, 'Related ledger entry', true);
+  if (!['number','string'].includes(typeof delta) || !Number.isSafeInteger(Number(delta))
+      || Number(delta) === 0 || Math.abs(Number(delta)) > 1_000_000)
+    throw new RewardError('Enter a non-zero whole number of points between -1,000,000 and 1,000,000.');
+  delta = Number(delta);
+  if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 200)
+    throw new RewardError('Explain the adjustment in 1 to 200 characters.');
+  reason = reason.trim();
+  const type=entryKind==='bonus'&&delta>0?'bonus':'adjust';
+  const fingerprint = JSON.stringify([userId,delta,reason,taskId,catalogId,ledgerId,type]);
+  return d.transaction(() => {
+    if (d.prepare('SELECT role FROM users WHERE id=?').get(actorId)?.role !== 'admin')
+      throw new RewardError('Only a household administrator can adjust points.',403);
+    const existing=d.prepare('SELECT * FROM reward_adjustment_requests WHERE actor_user_id=? AND request_key=?').get(actorId,key);
+    if (existing) {
+      if (existing.request_fingerprint !== fingerprint)
+        throw new RewardError('This request ID already belongs to a different points adjustment.',409,'request_id_conflict');
+      const row=d.prepare('SELECT * FROM reward_ledger WHERE id=?').get(existing.ledger_id);
+      if (!row) throw new RewardError('The original adjustment is no longer available. Its request ID cannot be reused.',410);
+      return {row, balance:getBalance(d,userId), replayed:true};
+    }
+    if (!isEnrolled(d,userId) || d.prepare('SELECT 1 FROM housekeeping_workers WHERE user_id=?').get(userId))
+      throw new RewardError('Choose a household member who participates in Rewards.');
+    if (taskId && !d.prepare('SELECT 1 FROM tasks WHERE id=?').get(taskId))
+      throw new RewardError('Related Task not found.',404);
+    if (catalogId && !d.prepare('SELECT 1 FROM reward_catalog WHERE id=?').get(catalogId))
+      throw new RewardError('Related Reward not found.',404);
+    const referenced=ledgerId ? d.prepare('SELECT * FROM reward_ledger WHERE id=?').get(ledgerId) : null;
+    if (ledgerId && !referenced) throw new RewardError('Related ledger entry not found.',404);
+    if (referenced && referenced.user_id!==userId)
+      throw new RewardError('The related ledger entry belongs to a different member.');
+    if (referenced?.task_id && taskId && referenced.task_id!==taskId)
+      throw new RewardError('The selected Task does not match the related ledger entry.');
+    if (referenced?.redemption_id && catalogId) {
+      const redemption=d.prepare('SELECT catalog_id FROM reward_redemptions WHERE id=?').get(referenced.redemption_id);
+      if (redemption?.catalog_id && redemption.catalog_id!==catalogId)
+        throw new RewardError('The selected Reward does not match the related ledger entry.');
+    }
+    const relatedTask=taskId || referenced?.task_id || null;
+    const result=postLedger(d,{userId,delta,type,reason,taskId:relatedTask,createdBy:actorId});
+    d.prepare(`INSERT INTO reward_adjustment_requests
+      (actor_user_id,request_key,request_fingerprint,ledger_id,related_task_id,related_catalog_id,related_ledger_id)
+      VALUES (?,?,?,?,?,?,?)`).run(actorId,key,fingerprint,result.lastInsertRowid,relatedTask,catalogId,ledgerId);
+    return {row:d.prepare('SELECT * FROM reward_ledger WHERE id=?').get(result.lastInsertRowid),
+      balance:getBalance(d,userId),replayed:false};
+  }).immediate();
 }
 
 /** Check the current balance while holding SQLite's write reservation, then

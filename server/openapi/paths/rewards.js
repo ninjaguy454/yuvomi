@@ -33,7 +33,13 @@ export function rewardsPaths() {
       patch: op({ summary: 'Decide a redemption (fulfill/reject/cancel)', tag: 'Rewards', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
     },
     '/api/v1/rewards/bonus': {
-      post: op({ summary: 'Grant manual bonus / correction points', tag: 'Rewards', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+      post: op({ summary: 'Compatibility manual bonus / correction (required reason and stable Idempotency-Key/request_id)', tag: 'Rewards', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/rewards/adjustments': {
+      post: op({ summary: 'Append signed points adjustment; required user_id/delta/reason and durable Idempotency-Key/request_id, optional related_task_id/related_reward_id/related_ledger_id', tag: 'Rewards', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/rewards/adjustment-options': {
+      get: op({ summary: 'Visible Task and Reward references for an administrator points adjustment', tag: 'Rewards', admin: true }),
     },
   };
 }

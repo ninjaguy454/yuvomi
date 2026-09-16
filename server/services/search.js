@@ -117,6 +117,7 @@ export function runSearch(database, q, userId, { hiddenModules = null } = {}) {
     JOIN tasks t ON t.id = s.entity_id
     WHERE s.entity = 'task' AND s.search_index MATCH @match
       AND t.parent_task_id IS NULL
+      AND t.archived_at IS NULL
       AND ${taskVisibilityWhere(database, userId, 't', '@userId')}
     ORDER BY CASE t.status WHEN 'done' THEN 1 ELSE 0 END,
              t.due_date ASC NULLS LAST

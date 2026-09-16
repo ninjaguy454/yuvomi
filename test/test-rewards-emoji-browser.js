@@ -140,6 +140,43 @@ test('Android-compatible hold opens variants without selection; keyboard-height 
   }finally{await page.close();}
 });
 
+test('cold categories reveal at most 48 initial glyphs, progressively fill visible rows, and cancel stale search work',async()=>{
+  const page=await mount({width:1920,height:1080,mobile:true});try{
+    await openPicker(page);
+    const initial=await page.evaluate(()=>{
+      document.querySelector('[data-category="1"]').click();
+      const buttons=[...document.querySelectorAll('.emoji-picker__grid button')];
+      return {glyphs:buttons.filter(button=>button.textContent).length,dom:buttons.length,pending:buttons.filter(button=>button.disabled&&button.hasAttribute('data-pending-glyph')).length};
+    });
+    assert.equal(initial.glyphs,48);assert.ok(initial.dom<=144);assert.equal(initial.pending,initial.dom-48);
+    await page.waitForFunction(()=>document.querySelector('.emoji-picker__grid').getAttribute('aria-busy')==='false');
+    assert.equal(await page.$eval('.emoji-picker__grid [data-index="119"]',el=>el.disabled),false);
+    assert.equal(await page.$eval('.emoji-picker__grid [data-index="120"]',el=>el.disabled),true);
+    await page.$eval('.emoji-picker__viewport',el=>el.scrollTop=50);
+    await page.waitForFunction(()=>!document.querySelector('.emoji-picker__grid [data-index="120"]').disabled);
+    await page.evaluate(()=>{
+      const grid=document.querySelector('.emoji-picker__grid');window.retainedTile=grid.querySelector('[data-index="36"]');window.rowChanges=[];
+      window.rowObserver=new MutationObserver(records=>{for(const record of records)for(const node of [...record.addedNodes,...record.removedNodes])if(node.dataset?.index)window.rowChanges.push(Number(node.dataset.index));});
+      window.rowObserver.observe(grid,{childList:true});document.querySelector('.emoji-picker__viewport').scrollTop=120;
+    });
+    await page.waitForSelector('.emoji-picker__grid [data-index="144"]');
+    const rowChanges=await page.evaluate(()=>{window.rowObserver.disconnect();return {same:window.retainedTile===document.querySelector('.emoji-picker__grid [data-index="36"]'),indexes:window.rowChanges};});
+    assert.equal(rowChanges.same,true);assert.ok(rowChanges.indexes.every(index=>index<12||index>=144),JSON.stringify(rowChanges));
+    await page.evaluate(()=>{
+      const input=document.querySelector('.emoji-picker input');
+      for(const value of ['b','birth','money','ice cream']){input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}
+    });
+    await wait(150);
+    assert.deepEqual(await page.$$eval('.emoji-picker__grid button',buttons=>buttons.map(button=>button.textContent)),['🍨','🍦']);
+    await page.click('[data-category="1"]');await page.focus('.emoji-picker__grid [data-index="36"]');await page.keyboard.press('ArrowDown');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.index),'48');assert.equal(await page.evaluate(()=>document.activeElement.disabled),false);
+    await page.click('[data-category="8"]');await page.$eval('.emoji-picker__viewport',el=>el.scrollTop=el.scrollHeight);
+    await page.waitForFunction(()=>document.querySelector('.emoji-picker__grid').getAttribute('aria-busy')==='false');
+    const last=await page.$$eval('.emoji-picker__grid button',buttons=>buttons.at(-1).textContent);assert.ok(last);
+    await page.click('[data-category="1"]');await page.click('[data-cancel]');await wait(100);assert.equal(await page.$('.emoji-picker'),null);
+  }finally{await page.close();}
+});
+
 test('WebView-compatible target records cold and warm rendering costs under four-times CPU throttling',async t=>{
   const page=await mount({width:1920,height:1080,mobile:true});try{
     const cdp=await page.createCDPSession();await cdp.send('Emulation.setCPUThrottlingRate',{rate:4});
@@ -152,9 +189,11 @@ test('WebView-compatible target records cold and warm rendering costs under four
       }
       const viewport=document.querySelector('.emoji-picker__viewport');document.querySelector('[data-category="1"]').click();
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+      while(document.querySelector('.emoji-picker__grid').getAttribute('aria-busy')==='true')await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       const start=performance.now();viewport.scrollTop=120;
       await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       const coldScroll=performance.now()-start;
+      while(document.querySelector('.emoji-picker__grid').getAttribute('aria-busy')==='true')await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       viewport.scrollTop=0;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       const warm=performance.now();viewport.scrollTop=120;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
       return{search:results,scroll:coldScroll,warmScroll:performance.now()-warm,tiles:document.querySelectorAll('.emoji-picker__grid button').length};

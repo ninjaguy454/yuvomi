@@ -44,44 +44,74 @@ export function openEmojiPicker({ current = null, userId = null, locale = getLoc
     const navigation = dialog.querySelector('nav');
     const count = dialog.querySelector('[role=status]');
     const variants = dialog.querySelector('.emoji-picker__variants');
-    let token, settled = false, index = [], results = [], category = '0', frame = null, gesture = null, held = false, painted = '', resultVersion = 0;
+    let token, settled = false, index = [], results = [], category = '0', frame = null, glyphFrame = null, gesture = null, held = false, painted = '', resultVersion = 0;
     const known = new Map();
     const finish = value => {
       if (settled) return;
-      settled = true; clearTimeout(gesture?.timer); cancelAnimationFrame(frame); observer?.disconnect();
+      settled = true; clearTimeout(gesture?.timer); cancelAnimationFrame(frame); cancelAnimationFrame(glyphFrame); observer?.disconnect();
       if (token != null) dropOverlay(token);
       dialog.close(); dialog.remove();
       if (previousFocus?.isConnected) previousFocus.focus({ preventScroll: true });
       if (typeof value === 'string') rememberEmoji(userId, value);
       resolve(value);
     };
-    const tile = item => {
+    const tile = (item, pending = false) => {
       const button = document.createElement('button'); button.type = 'button'; button.className = 'emoji-picker__tile';
-      button.textContent = item.emoji; button.dataset.emoji = item.emoji; button.title = item.label;
+      button.textContent = pending ? '' : item.emoji; button.dataset.emoji = item.emoji; button.title = item.label;
+      if (pending) { button.dataset.pendingGlyph = ''; button.disabled = true; }
       button.setAttribute('aria-label', `${item.label}${item.variants?.length ? '; hold or press Shift+F10 for variations' : ''}`);
       button.setAttribute('aria-pressed', String(item.emoji === current));
       if (item.variants?.length) button.dataset.variants = '';
       return button;
     };
+    const reveal = button => {
+      button.textContent = button.dataset.emoji; delete button.dataset.pendingGlyph; button.disabled = false;
+    };
+    // Native color-glyph shaping/rasterization can dominate the first category
+    // paint on WebView hardware. Render the first 48 glyphs promptly, then yield
+    // between small visible batches; overscan rows do not need glyphs yet.
+    const revealVisible = (limit, range = emojiWindow(results.length, viewport.scrollTop, viewport.clientHeight, viewport.clientWidth)) => {
+      const pending = [...grid.querySelectorAll('[data-pending-glyph]')].filter(button => Number(button.dataset.index) >= range.visibleFirst && Number(button.dataset.index) < range.visibleLast);
+      pending.slice(0, limit).forEach(reveal);
+      const more = pending.length > limit;
+      grid.setAttribute('aria-busy', String(more));
+      return more;
+    };
+    const scheduleGlyphs = () => {
+      glyphFrame = requestAnimationFrame(() => {
+        glyphFrame = requestAnimationFrame(() => {
+          glyphFrame = null;
+          if (!settled && revealVisible(12)) scheduleGlyphs();
+        });
+      });
+    };
     const paint = () => {
       frame = null;
+      if (settled) return;
       const range = emojiWindow(results.length, viewport.scrollTop, viewport.clientHeight, viewport.clientWidth);
-      const signature = `${resultVersion}:${range.first}:${range.last}:${range.columns}`;
+      const signature = `${resultVersion}:${range.first}:${range.last}:${range.columns}:${range.visibleFirst}:${range.visibleLast}`;
       if (signature === painted) return;
       painted = signature;
+      cancelAnimationFrame(glyphFrame); glyphFrame = null;
       grid.style.height = `${range.height}px`;
       const active = document.activeElement?.dataset?.emoji;
       const existing = new Map([...grid.children].map(button => [button.dataset.emoji, button]));
-      const retained = new Set();
-      results.slice(range.first, range.last).forEach((item, offset) => {
+      const items = results.slice(range.first, range.last), wanted = new Set(items.map(item => item.emoji));
+      // Remove departing rows first. Otherwise a one-row scroll moves every
+      // retained button past the departing row and relays out all color glyphs.
+      for (const [emoji, button] of existing) if (!wanted.has(emoji)) button.remove();
+      items.forEach((item, offset) => {
         const position = range.first + offset;
-        const button = existing.get(item.emoji) || tile(item); button.dataset.index = String(position); retained.add(button);
-        button.style.top = `${Math.floor(position / range.columns) * range.rowHeight}px`;
-        button.style.left = `${(position % range.columns) * 100 / range.columns}%`;
-        button.style.width = `${100 / range.columns}%`;
+        const button = existing.get(item.emoji) || tile(item, true);
+        if (button.dataset.index !== String(position) || button.dataset.columns !== String(range.columns)) {
+          button.dataset.index = String(position); button.dataset.columns = String(range.columns);
+          button.style.top = `${Math.floor(position / range.columns) * range.rowHeight}px`;
+          button.style.left = `${(position % range.columns) * 100 / range.columns}%`;
+          button.style.width = `${100 / range.columns}%`;
+        }
         if (grid.children[offset] !== button) grid.insertBefore(button, grid.children[offset] || null);
       });
-      for (const button of existing.values()) if (!retained.has(button)) button.remove();
+      if (revealVisible(48, range)) scheduleGlyphs();
       if (active) [...grid.children].find(button => button.dataset.emoji === active)?.focus({ preventScroll: true });
     };
     const schedulePaint = () => { if (!frame) frame = requestAnimationFrame(paint); };
@@ -99,17 +129,17 @@ export function openEmojiPicker({ current = null, userId = null, locale = getLoc
     const showVariants = value => {
       const item = known.get(value);
       if (!item?.variants?.length) return;
-      variants.querySelector('div').replaceChildren(...[item, ...item.variants].map(tile)); variants.hidden = false;
+      variants.querySelector('div').replaceChildren(...[item, ...item.variants].map(item => tile(item))); variants.hidden = false;
     };
     const cancelHold = () => { clearTimeout(gesture?.timer); gesture = null; };
     grid.addEventListener('pointerdown', event => {
-      const button = event.target.closest('[data-variants]'); if (!button || event.button !== 0) return;
+      const button = event.target.closest('[data-variants]'); if (!button || button.disabled || event.button !== 0) return;
       held = false; gesture = { x: event.clientX, y: event.clientY, timer: setTimeout(() => { held = true; showVariants(button.dataset.emoji); }, 550) };
     });
     grid.addEventListener('pointermove', event => { if (gesture && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 8) cancelHold(); });
     grid.addEventListener('pointerup', cancelHold); grid.addEventListener('pointercancel', cancelHold);
     viewport.addEventListener('scroll', () => { cancelHold(); schedulePaint(); }, { passive: true });
-    grid.addEventListener('contextmenu', event => { const button = event.target.closest('[data-variants]'); if (button) { event.preventDefault(); showVariants(button.dataset.emoji); } });
+    grid.addEventListener('contextmenu', event => { const button = event.target.closest('[data-variants]'); if (button && !button.disabled) { event.preventDefault(); showVariants(button.dataset.emoji); } });
     dialog.addEventListener('click', event => {
       const button = event.target.closest('[data-emoji]'); if (!button) return;
       if (held && grid.contains(button)) { held = false; return; }
@@ -125,7 +155,9 @@ export function openEmojiPicker({ current = null, userId = null, locale = getLoc
       const top = Math.floor(next / range.columns) * range.rowHeight;
       if (top < viewport.scrollTop) viewport.scrollTop = top;
       else if (top + range.rowHeight > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = top + range.rowHeight - viewport.clientHeight;
-      paint(); grid.querySelector(`[data-index="${next}"]`)?.focus({ preventScroll: true });
+      paint(); const target = grid.querySelector(`[data-index="${next}"]`);
+      if (target?.hasAttribute('data-pending-glyph')) reveal(target);
+      target?.focus({ preventScroll: true });
     });
     input.addEventListener('input', refresh);
     navigation.addEventListener('click', event => { const button = event.target.closest('[data-category]'); if (button) { category = button.dataset.category; input.value = ''; refresh(); } });

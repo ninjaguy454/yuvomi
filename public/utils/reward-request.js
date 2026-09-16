@@ -24,7 +24,7 @@ function pendingCache(storage, storageKey, useDefaultArea) {
   return caches.get(storageKey);
 }
 
-export function rewardRequest(userId, body, storage) {
+function requestStore(userId, storage) {
   const useDefaultArea = storage === undefined;
   if (useDefaultArea) {
     try { storage = globalThis.sessionStorage; } catch { storage = null; }
@@ -47,7 +47,28 @@ export function rewardRequest(userId, body, storage) {
     try { storage?.setItem(storageKey, JSON.stringify([...cache.pending.values()])); } catch { /* the shared cache still retains every unresolved key */ }
   };
   mergeStored();
-  const intent = JSON.stringify([body.catalog_id, body.user_id, body.note || '']);
+  return {cache,mergeStored,write};
+}
+
+/** Restore the oldest unresolved adjustment before allowing a different one.
+ * Its stored intent is the original submitted snapshot, not current form data. */
+export function pendingPointAdjustment(userId,storage) {
+  const {cache}=requestStore(userId,storage);
+  for(const request of cache.pending.values()) {
+    let value;try{value=JSON.parse(request.intent);}catch{continue;}
+    if(!Array.isArray(value)||value[0]!=='adjustment'||value.length!==7)continue;
+    const [,user_id,delta,reason,related_task_id,related_reward_id,related_ledger_id]=value;
+    if(!Number.isSafeInteger(user_id)||!Number.isSafeInteger(delta)||!delta||typeof reason!=='string')continue;
+    return {key:request.key,body:{user_id,delta,reason,related_task_id,related_reward_id,related_ledger_id}};
+  }
+  return null;
+}
+
+export function rewardRequest(userId, body, storage) {
+  const {cache,mergeStored,write}=requestStore(userId,storage);
+  const intent = body.operation==='adjustment'
+    ? JSON.stringify(['adjustment',body.user_id,body.delta,body.reason,body.related_task_id || null,body.related_reward_id || null,body.related_ledger_id || null])
+    : JSON.stringify([body.catalog_id, body.user_id, body.note || '']);
   let request = [...cache.pending.values()].find(item => item.intent === intent);
   if (!request) { request = { intent, key: newRewardRequestKey() }; cache.pending.set(request.key, request); }
   write();

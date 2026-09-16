@@ -9,7 +9,7 @@
 import express from 'express';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
-import { getBalance, isEnrolled, postLedger, createRedemption, decideRedemption, RewardError } from '../services/rewards.js';
+import { createPointAdjustment, createRedemption, decideRedemption, RewardError } from '../services/rewards.js';
 import { taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
 import { tokenAllows } from '../scopes.js';
 import { actorPermissions } from '../permissions.js';
@@ -19,7 +19,6 @@ const log = createLogger('Rewards');
 const router = express.Router();
 
 const MAX_COST = 1_000_000;
-const MAX_BONUS = 1_000_000;
 
 router.get('/changes',createChangesStream({table:'reward_change_clock',deniedMessage:'Rewards access is not enabled.',
   canRead:(d,req)=>actorPermissions(d,req).modules.rewards!=='none'}));
@@ -269,11 +268,13 @@ router.get('/ledger', (req, res) => {
     const userId = req.query.user_id != null && req.query.user_id !== '' ? toInt(req.query.user_id) : null;
     const rows = db.get().prepare(`
       SELECT l.id, l.user_id, l.delta, l.type, l.reason, l.task_id, l.redemption_id, l.created_at,
+             adj.related_task_id,adj.related_catalog_id AS related_reward_id,adj.related_ledger_id,
              u.display_name AS user_name, u.avatar_color AS user_color, u.avatar_data AS user_avatar,
              a.display_name AS actor_name
       FROM reward_ledger l
       JOIN users u ON u.id = l.user_id
       LEFT JOIN users a ON a.id = l.created_by
+      LEFT JOIN reward_adjustment_requests adj ON adj.ledger_id=l.id
       ${userId ? 'WHERE l.user_id = @userId' : ''}
       ORDER BY l.created_at DESC, l.id DESC
       LIMIT @limit
@@ -281,11 +282,16 @@ router.get('/ledger', (req, res) => {
     // Keep earned amounts/history intact; a copied Task title is still Task
     // content and must not bypass its current visibility through the ledger.
     for (const row of rows) {
-      if (!row.task_id) continue;
-      const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(row.task_id);
-      if (!tokenAllows(req.authScopes, 'tasks', 'read') || (task && !taskCapabilities(db.get(), req, task).view)) {
+      const taskId=row.task_id || row.related_task_id;
+      // earn.reason is a copied Task title. ON DELETE SET NULL removes the
+      // authorizing Task, not its private title; orphan earnings fail closed.
+      if (!taskId) { if(row.type==='earn')row.reason=null; continue; }
+      const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+      if (!tokenAllows(req.authScopes, 'tasks', 'read') || !task || !taskCapabilities(db.get(), req, task).view) {
         row.reason = null;
         row.task_id = null;
+        row.related_task_id = null;
+        row.related_ledger_id = null;
       }
     }
     res.json({ data: rows });
@@ -369,28 +375,35 @@ router.patch('/redemptions/:id', (req, res) => {
 });
 
 // --------------------------------------------------------
-// POST /bonus — manuelle Punkte (Bonus positiv, Korrektur negativ). Admin.
+// Manual signed adjustments. /bonus remains a compatibility alias; both paths
+// require the same reason, live admin authorization, and durable request key.
 // --------------------------------------------------------
-router.post('/bonus', requireAdmin, (req, res) => {
+router.get('/adjustment-options',requireAdmin,(req,res)=>{
+  const d=db.get();
+  const tasks=tokenAllows(req.authScopes,'tasks','read')
+    ? d.prepare(`SELECT t.id,t.title FROM tasks t WHERE ${taskVisibilityWhere(d,req,'t','@me')} ORDER BY t.id DESC LIMIT 1000`).all({me:actingUser(req)}) : [];
+  res.json({data:{tasks,rewards:d.prepare('SELECT id,name FROM reward_catalog ORDER BY name COLLATE NOCASE').all()}});
+});
+
+router.post(['/adjustments','/bonus'], requireAdmin, (req, res) => {
   try {
     const d = db.get();
-    const userId = toInt(req.body?.user_id);
-    const delta = toInt(req.body?.delta);
-    const reason = req.body?.reason != null ? String(req.body.reason).trim().slice(0, 200) || null : null;
-    if (!Number.isFinite(userId)) return res.status(400).json({ error: 'user_id is required.', code: 400 });
-    if (!Number.isFinite(delta) || delta === 0)
-      return res.status(400).json({ error: 'delta must be a non-zero number.', code: 400 });
-    if (Math.abs(delta) > MAX_BONUS)
-      return res.status(400).json({ error: 'delta out of range.', code: 400 });
-    if (!isEnrolled(d, userId))
-      return res.status(400).json({ error: 'User does not participate in the reward system.', code: 400 });
-
-    postLedger(d, {
-      userId, delta, type: delta > 0 ? 'bonus' : 'adjust', reason, createdBy: actingUser(req),
-    });
-    res.status(201).json({ data: { user_id: userId, balance: getBalance(d, userId) } });
+    const body=req.body || {};
+    const safeId=value=>['string','number'].includes(typeof value)&&Number.isSafeInteger(Number(value))&&Number(value)>0?Number(value):null;
+    const referenced=safeId(body.related_ledger_id) ? d.prepare('SELECT task_id FROM reward_ledger WHERE id=?').get(Number(body.related_ledger_id)) : null;
+    const taskId=safeId(body.related_task_id) || referenced?.task_id;
+    if (taskId) {
+      const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+      if (!tokenAllows(req.authScopes,'tasks','read') || (task && !taskCapabilities(d,req,task).view))
+        throw new RewardError('You cannot link this Task to a points adjustment.',403);
+    }
+    const result=createPointAdjustment(d,{actorId:actingUser(req),userId:body.user_id,delta:body.delta,reason:body.reason,
+      taskId:body.related_task_id,catalogId:body.related_reward_id,ledgerId:body.related_ledger_id,
+      requestKey:req.get('Idempotency-Key') ?? body.request_id,entryKind:/^\/bonus\/?$/i.test(req.path)?'bonus':'adjust'});
+    res.status(result.replayed?200:201).json({data:{...result.row,balance:result.balance},replayed:result.replayed});
   } catch (err) {
-    log.error('POST /bonus error:', err);
+    if(err instanceof RewardError)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason});
+    log.error('POST /adjustments error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });

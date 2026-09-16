@@ -41,6 +41,17 @@ test('virtual row calculation keeps DOM bounded and exposes last rows', () => {
     assert.equal(last.last, 1914); assert.ok(last.first > 0);
   }
 });
+
+test('only visible glyph rows are requested, including partial rows during scrolling', () => {
+  const top = emojiWindow(1914, 0, 560, 1100);
+  assert.equal(top.visibleFirst, 0); assert.equal(top.visibleLast, 120);
+  assert.ok(top.visibleLast < top.last);
+  const partial = emojiWindow(1914, 50, 560, 1100);
+  assert.equal(partial.first, top.first); assert.equal(partial.last, top.last);
+  assert.equal(partial.visibleLast, 132); // New partial row without changing overscan.
+  const end = emojiWindow(1914, top.height - 560, 560, 1100);
+  assert.equal(end.visibleLast, 1914); assert.ok(end.visibleFirst >= end.first);
+});
 test('recent choices are bounded, sequence-safe and isolated per member', () => {
   const store = storage(); rememberEmoji(1, '👨‍👩‍👧‍👦', store); rememberEmoji(2, '🍿', store); rememberEmoji(1, '👍🏽', store);
   assert.deepEqual(recentEmojis(1, store), ['👍🏽', '👨‍👩‍👧‍👦']); assert.deepEqual(recentEmojis(2, store), ['🍿']);

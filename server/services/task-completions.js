@@ -1,4 +1,5 @@
 import { taskVisibilityWhere } from './task-access.js';
+import { registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 /**
  * Modul: Aufgaben-Erledigungen (Verlauf)
  * Zweck: Den Übergang einer Aufgabe nach 'done' als Ereignis festhalten und
@@ -53,6 +54,8 @@ const CHAIN_CTE = `
 `;
 
 export function seriesRootOf(d, taskId) {
+  const durable=d.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(taskId);
+  if(durable)return durable.series_id;
   const row = d.prepare(`${CHAIN_CTE} SELECT id FROM chain ORDER BY depth DESC LIMIT 1`)
     .get({ task: taskId });
   return row?.id ?? taskId;
@@ -70,6 +73,7 @@ export function seriesRootOf(d, taskId) {
 export function recordCompletion(d, taskId, actingUserId) {
   const task = d.prepare('SELECT id, parent_task_id, recurrence_origin_id FROM tasks WHERE id = ?').get(taskId);
   if (!task || task.parent_task_id) return;
+  const occurrence=registerRecurrenceOccurrence(d,taskId);
 
   // Die Serie wird vom direkten Vorgänger GEERBT, wenn der schon einen Eintrag
   // hat - ein Index-Zugriff statt eines Kettenlaufs. Das ist der Normalfall
@@ -85,7 +89,7 @@ export function recordCompletion(d, taskId, actingUserId) {
   d.prepare(`
     INSERT OR IGNORE INTO task_completions (task_id, series_id, user_id)
     VALUES (?, ?, ?)
-  `).run(taskId, inherited?.series_id ?? seriesRootOf(d, taskId), actingUserId || null);
+  `).run(taskId, occurrence?.series_id ?? inherited?.series_id ?? seriesRootOf(d, taskId), actingUserId || null);
 }
 
 /**
@@ -220,6 +224,7 @@ export function completionFeed(d, { me, limit = 50, userId = null, beforeAt = nu
  */
 export function seriesHistory(d, { me, taskId, limit = 20 }) {
   const size = Math.min(Math.max(Number(limit) || 20, 1), 100);
+  const seriesId=d.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(taskId)?.series_id??null;
   return d.prepare(`
     ${CHAIN_CTE}
     ${SELECT_SQL}
@@ -227,8 +232,9 @@ export function seriesHistory(d, { me, taskId, limit = 20 }) {
       c.task_id   IN (SELECT id FROM chain)
       OR c.series_id IN (SELECT id FROM chain)
       OR c.series_id IN (SELECT series_id FROM task_completions WHERE task_id IN (SELECT id FROM chain))
+      OR c.series_id = @seriesId
     ) AND ${taskVisibilityWhere(d, me, 't', '@me')}
     ORDER BY c.completed_at DESC, c.id DESC
     LIMIT @size
-  `).all({ me, task: taskId, size });
+  `).all({ me, task: taskId, size, seriesId });
 }

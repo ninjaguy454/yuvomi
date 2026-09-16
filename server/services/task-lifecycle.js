@@ -1,5 +1,6 @@
 /** One operational transition for REST and compatibility writers. */
 import { syncTaskRewards } from './rewards.js';
+import { retiredRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
@@ -132,6 +133,9 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     if (!requested) throw new TaskStateError('Task not found.',{},404);
     if (authorize) assertTaskMutation(d,actorId,requested,{status},{operation:'status'});
     assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
+    if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
+      'This historical occurrence was retired. Its recorded progress is preserved; use the current occurrence instead.',
+      {reason:'occurrence_retired'});
     if(status==='done')assertRecurringCompletionStarted(d,requested.id);
     // Includes legacy Tasks whose mappings did not exist before this action.
     reconcileTaskSupervision(d,requested.id,{actorId});

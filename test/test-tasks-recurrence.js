@@ -503,7 +503,7 @@ test('PATCH done: erledigungsverankerte Serie wird ab heute fällig, nicht ab de
   assert.notEqual(followup.due_date, dayKey(4));
 });
 
-test('PATCH done: die Folgeinstanz erbt den Anker, sonst kippt die Serie ab dem zweiten Lauf', async () => {
+test('PATCH done: die Folgeinstanz erbt den Anker, sonst kippt die Serie ab dem zweiten Lauf', async (t) => {
   const id = insertTask({
     title: 'Pflanzen düngen', status: 'open', due_date: dayKey(-5), created_by: uid,
     is_recurring: 1, recurrence_rule: 'FREQ=WEEKLY', recurrence_from_completion: 1,
@@ -512,9 +512,11 @@ test('PATCH done: die Folgeinstanz erbt den Anker, sonst kippt die Serie ab dem 
   const second = openInstances('Pflanzen düngen')[0];
   assert.equal(second.recurrence_from_completion, 1);
 
-  // Zweiter Durchlauf: heute abgehakt, obwohl erst in einer Woche fällig →
-  // wieder heute + 7 statt fällig + 7.
-  await call('PATCH', `/${second.id}/status`, { status: 'done' });
+  // Complete on a later day: this verifies completion-relative inheritance
+  // without asking for a second materialized occurrence on the same date.
+  t.mock.timers.enable({apis:['Date'],now:new Date(Date.now()+3*DAY)});
+  const completed=await call('PATCH', `/${second.id}/status`, { status: 'done' });
+  assert.equal(completed.status,200);
   const third = openInstances('Pflanzen düngen')[0];
   assert.equal(third.due_date, dayKey(7));
 });

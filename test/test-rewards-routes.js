@@ -59,7 +59,7 @@ test.after(() => server.close());
 
 async function call(method, route, { actor: a = ADMIN, body } = {}) {
   actor = a;
-  const headers = method==='POST' && route==='/redemptions' ? {'Idempotency-Key':crypto.randomUUID()} : {};
+  const headers = method==='POST' && ['/redemptions','/bonus','/adjustments'].includes(route) ? {'Idempotency-Key':crypto.randomUUID()} : {};
   let payload;
   if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
   const res = await fetch(`${baseUrl}${route}`, { method, headers, body: payload });

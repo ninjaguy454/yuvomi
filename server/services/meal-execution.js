@@ -509,7 +509,7 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
       // the exact definition the household acted on.
       if (!output.task_id || frozen) continue;
       const task = existingTask;
-      if (!task || task.status === 'done' || task.archived_at) continue;
+      if (!task || ['done', 'expired'].includes(task.status) || task.archived_at) continue;
       database.prepare(`
         UPDATE tasks SET title = ?, description = ?, start_date = ?, due_date = ?, due_time = ?, assigned_to = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?

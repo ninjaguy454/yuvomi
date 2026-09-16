@@ -1091,7 +1091,7 @@ function agendaSegmentKind(ev, dayStr) {
  */
 function filterTasksForCalendar(tasks) {
   return tasks.filter(
-    (t) => t.due_date && t.status !== 'done' && !t.archived_at
+    (t) => t.due_date && ['open', 'in_progress'].includes(t.status) && !t.archived_at
   );
 }
 

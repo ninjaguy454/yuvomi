@@ -334,7 +334,7 @@ function segmentPolicy(database, policy, signal, locationSignal, targetPlaceId) 
   return { eligible: false, reason: 'Unknown presence policy.' };
 }
 
-/** A task's date-only start is midnight; an untimed due date includes the full day. */
+/** Reuse the Task's local start/due window; absent times retain date-only behavior. */
 export function activityPresenceWindow(database, {
   task = null, dateKey, windowMode = 'due', requiredDurationMinutes = null,
 } = {}) {
@@ -344,7 +344,7 @@ export function activityPresenceWindow(database, {
   const startDate = task?.start_date || dueDate;
   const dueTime = task?.due_time;
   return {
-    startAt: `${startDate}T00:00:00`,
+    startAt: `${startDate}T${task?.start_time || '00:00'}:00`,
     endAt: dueTime ? `${dueDate}T${dueTime}:00`
       : windowMode === 'completion' ? `${shiftDateKey(dueDate, 1)}T00:00:00` : `${dueDate}T23:59:59.999`,
     windowMode,

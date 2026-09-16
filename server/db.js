@@ -18,6 +18,7 @@
  */
 
 import Database from 'better-sqlite3-multiple-ciphers';
+import { addTaskExpirationSchema } from './services/task-expiration-schema.js';
 import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
 import path from 'path';
 import fs from 'node:fs/promises';
@@ -8996,6 +8997,13 @@ FORK_MIGRATIONS.push({
         CREATE TRIGGER trg_${table}_change_${operation.toLowerCase()} AFTER ${operation} ON ${table}
         BEGIN UPDATE reward_change_clock SET version=version+1 WHERE id=1; END;`);
   },
+});
+
+FORK_MIGRATIONS.push({
+  version: 10035,
+  description: 'Tasks: optional deadline expiration, terminal missed occurrences and start time',
+  foreignKeysOff: true,
+  up: addTaskExpirationSchema,
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

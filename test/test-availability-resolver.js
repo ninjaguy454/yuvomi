@@ -208,6 +208,18 @@ test('task useful-window helper honors dates/mode and actual assignment respects
   assert.equal(dateOnly.endAt, '2026-09-08T00:00:00');
 });
 
+test('timed Task availability begins at its useful-window start across household DST changes', () => {
+  database.prepare("UPDATE sync_config SET value='America/New_York' WHERE key='household_timezone'").run();
+  for (const [day,utcStart] of [['2026-03-08','2026-03-08T11:00:00.000Z'],['2026-11-01','2026-11-01T12:00:00.000Z']]) {
+    const window=activityPresenceWindow(database,{task:{start_date:day,start_time:'07:00',due_date:day,due_time:'08:00'},windowMode:'completion'});
+    assert.equal(window.startAt,`${day}T07:00:00`);
+    assert.equal(window.endAt,`${day}T08:00:00`);
+    const resolved=evaluateAvailability(database,{userId,...window,policy:'ignore'});
+    assert.equal(resolved.windows[0].start_at,utcStart);
+    assert.equal(Date.parse(resolved.windows.at(-1).end_at)-Date.parse(resolved.windows[0].start_at),60*60*1000);
+  }
+});
+
 test('invalid, reverse and unbounded windows fail clearly', () => {
   assert.throws(() => evaluate('11:00', '10:00'), /valid availability window/);
   assert.throws(() => evaluate('10:00', '11:00', { requiredDurationMinutes: 0 }), /positive number/);

@@ -50,11 +50,11 @@ export function materializeActivityChecklist(d, {
   if (!items.length) return [];
   const insert = d.prepare(`
     INSERT INTO tasks (
-      title, description, category, priority, status, start_date, due_date, due_time,
+      title, description, category, priority, status, start_date, start_time, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
       assignment_mode, rotation_index, points, visibility, countdown, locked,
       activity_template_checklist_item_id
-    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0, ?)
+    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0, ?)
   `);
   const sourceDefinition = d.prepare('SELECT id FROM activity_template_checklist_items WHERE id=? AND activity_template_id=?');
   return items.map((item) => {
@@ -66,6 +66,7 @@ export function materializeActivityChecklist(d, {
       renderActivityChecklistTitle(item, activity, subject, variableLabels),
       activity.category || parent.category || 'misc',
       parent.start_date,
+      parent.start_time ?? null,
       parent.due_date,
       parent.due_time,
       createdBy || parent.created_by,

@@ -1372,6 +1372,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       ${inputRow('Priority', `<select class="input" name="priority">${PRIORITIES().map(({ value, label }) => `<option value="${value}" ${(activity?.priority || 'none') === value ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`)}
       ${inputRow('Points', `<input class="input" type="number" name="points" min="0" step="1" inputmode="numeric" value="${Math.max(0, Math.trunc(Number(activity?.points) || 0))}">`)}
     </div>
+    ${inputRow('When incomplete at deadline', `<select class="input" name="expiration_policy"><option value="keep_overdue" ${(activity?.expiration_policy || 'keep_overdue') === 'keep_overdue' ? 'selected' : ''}>Keep overdue</option><option value="expire_incomplete" ${activity?.expiration_policy === 'expire_incomplete' ? 'selected' : ''}>Expire incomplete</option></select>`, 'Copied into new Tasks. Expire incomplete uses each Task’s Due Time, or the end of its due date in the household timezone, and awards 0 completion points. Choose a due date when creating the Task. Scheduled repeats continue; Repeat from completion pauses until the expired occurrence is reopened and completed.')}
     ${inputRow('Tags', `<input class="input" name="tags" value="${h(normalizeTagList(activity?.tags).join(', '))}">`, 'Separate tags with commas.')}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
       <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper, based on proficiency</option>
@@ -1455,6 +1456,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           name: data.get('name'), title_template: data.get('title_template'),
           description: data.get('description'), category: data.get('category'),
           priority: data.get('priority'), points: Math.max(0, Math.trunc(Number(data.get('points')) || 0)),
+          expiration_policy: data.get('expiration_policy') || 'keep_overdue',
           tags: normalizeTagList(String(data.get('tags') || '').split(',')),
           assignment_strategy: data.get('assignment_strategy'),
           subject_required: data.has('subject_required'),

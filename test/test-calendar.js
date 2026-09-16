@@ -377,6 +377,7 @@ test('filterTasksForCalendar: done- und abgelegte Tasks werden gefiltert', () =>
     { id: 1, title: 'A', due_date: '2026-06-15', status: 'done', archived_at: null },
     { id: 2, title: 'B', due_date: '2026-06-16', status: 'open', archived_at: null },
     { id: 3, title: 'C', due_date: '2026-06-17', status: 'open', archived_at: '2026-06-01T10:00:00Z' },
+    { id: 4, title: 'Expired', due_date: '2026-06-17', status: 'expired', archived_at: null },
   ];
   const result = ftc(tasks);
   assert(result.length === 1, 'Nur 1 Task erwartet');

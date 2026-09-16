@@ -13,6 +13,7 @@ export function actionableSubtasks(task) {
 }
 
 export function helperWaitingLabel(task, userId) {
+  if (task?.status === 'expired') return '';
   if (!task?.waiting_on_helper) return '';
   const learnerId = task.assigned_to ?? task.supervision?.learner_user_id;
   return Number(userId) === Number(learnerId) && learnerId != null

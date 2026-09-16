@@ -41,6 +41,7 @@ export const STATUSES = () => [
   { value: 'open',        label: t('tasks.statusOpen')       },
   { value: 'in_progress', label: t('tasks.statusInProgress') },
   { value: 'done',        label: t('tasks.statusDone')       },
+  { value: 'expired',     label: 'Expired'                  },
 ];
 
 // In der Filterleiste bleibt das Archiv ein Wert neben den Status - dort ist es
@@ -58,6 +59,16 @@ export const STATUS_LABELS   = () => Object.fromEntries(FILTER_STATUSES().map((s
 /** Liegt die Aufgabe in der Ablage? Einzige Stelle, die das entscheidet. */
 export function isArchived(task) {
   return !!task?.archived_at;
+}
+
+/** Expiration is a lifecycle state; archive remains an independent placement. */
+export function isExpired(task) {
+  return task?.status === 'expired';
+}
+
+/** Keep the configured reward intact for the next occurrence or an explicit reopen. */
+export function taskCompletionPoints(task) {
+  return isExpired(task) ? 0 : Number(task?.points || 0);
 }
 
 /**

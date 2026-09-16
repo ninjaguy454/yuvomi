@@ -8,8 +8,8 @@ import { createLogger } from '../logger.js';
 import express from 'express';
 import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
-import { nextDueAfterCompletion } from '../services/recurrence.js';
-import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFrontier, isRecurrenceFrontier } from '../services/task-recurrence-frontier.js';
+import { nextDueAfterCompletion, nextDueAfterExpiration } from '../services/recurrence.js';
+import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFrontier, isRecurrenceFrontier, isTerminalRecurrenceOccurrence } from '../services/task-recurrence-frontier.js';
 import { syncTaskRewards } from '../services/rewards.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask, resolveActivityTemplate } from '../services/activity-workflows.js';
 import {
@@ -24,7 +24,7 @@ import {
   ordinaryActivitySubtasks,
   previewTaskActivityBinding,
 } from '../services/task-activity-bindings.js';
-import { completionFeed, seriesHistory, syncTaskCompletion } from '../services/task-completions.js';
+import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../services/task-completions.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
 import { normalizeVisibility, visibilityWhere } from '../services/visibility.js';
 import {
@@ -57,8 +57,9 @@ import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, cop
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
 import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection } from '../services/task-access.js';
-import { assertTaskRevision, changeTaskStatus, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
+import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
+import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs } from '../services/task-window.js';
 import { taskChangesStream } from '../services/task-changes.js';
 import { assertCapability } from '../permissions.js';
 
@@ -142,6 +143,7 @@ router.param('id',(req,res,next,value)=>{
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
     if (!task) return res.status(404).json({error:'Task not found.',code:404});
     const action=route.split('/')[2];
+    if(action==='check')assertTaskWindowAction(db.get(),task.id);
     const body=req.body||{};
     const operation=action==='comments'?'comment'
       :action==='status'&&body.status==='archived'?'archive'
@@ -395,8 +397,8 @@ function applyEditedSubtasks(task, edited, actorId) {
     let id=child.id;
     if(id) db.get().prepare('UPDATE tasks SET title=?,sort_order=? WHERE id=?').run(child.title,order,id);
     else id=Number(db.get().prepare(`INSERT INTO tasks(title,category,status,start_date,due_date,due_time,
-      parent_task_id,created_by,visibility,sort_order) VALUES(?,?,'open',?,?,?,?,?,?,?)`)
-      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order).lastInsertRowid);
+      parent_task_id,created_by,visibility,sort_order,start_time) VALUES(?,?,'open',?,?,?,?,?,?,?,?)`)
+      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time).lastInsertRowid);
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
   }
 }
@@ -801,7 +803,7 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   const structural=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
   const operational=structural.filter(child=>isSupport||!child.is_delegated_action);
   task.subtask_total=operational.length;task.subtask_done=operational.filter(child=>child.status==='done').length;
-  task.waiting_on_helper=!isSupport && task.status!=='done'
+  task.waiting_on_helper=!isSupport && !['done','expired'].includes(task.status)
     && operational.every(child=>child.status==='done')
     && (structural.some(child=>child.is_delegated_action&&child.status!=='done')
       || task.supervision_action?.action_task_id===task.id && task.supervision_action?.state!=='not_required');
@@ -844,10 +846,21 @@ function validateTaskInput(body, isCreate = true, currentRule = undefined) {
     v.date(body.start_date, 'start_date'),
     v.date(body.due_date,   'due_date'),
     v.time(body.due_time,   'due_time'),
+    v.time(body.start_time, 'start_time'),
+    v.oneOf(body.expiration_policy, EXPIRATION_POLICIES, 'expiration_policy'),
     ruleUnchanged ? {} : v.rrule(body.recurrence_rule, 'recurrence_rule'),
     v.num(body.points,      'points'),
     validateTags(body.tags),
   ]);
+}
+
+function validateTaskWindow(task) {
+  if(!EXPIRATION_POLICIES.includes(task.expiration_policy))return 'Choose a valid expiration policy.';
+  if(task.start_time && !task.start_date)return 'Start Time requires a Start Date.';
+  if(task.expiration_policy==='expire_incomplete' && !task.due_date)return 'Expire incomplete requires a Due Date.';
+  const start=taskStartMs(db.get(),task),deadline=taskDeadlineMs(db.get(),task);
+  if((task.start_time||task.expiration_policy==='expire_incomplete')&&start!=null&&deadline!=null&&start>=deadline)return 'Due Time must be after the Task start.';
+  return null;
 }
 
 // --------------------------------------------------------
@@ -916,7 +929,7 @@ router.get('/sync-targets', (_req, res) => {
 router.get('/completions', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;
-    const { entries, hasMore } = completionFeed(db.get(), {
+    const { entries, hasMore } = occurrenceFeed(db.get(), {
       me,
       limit: req.query.limit,
       userId: req.query.user_id ? Number(req.query.user_id) : null,
@@ -929,7 +942,7 @@ router.get('/completions', (req, res) => {
       has_more: hasMore,
       // Der Cursor kommt vom Server, damit die Oberfläche nicht wissen muss,
       // woraus er sich zusammensetzt - er ist ein Paar, kein Zeitstempel.
-      next_cursor: hasMore && last ? { before_at: last.completed_at, before_id: last.id } : null,
+      next_cursor: hasMore && last ? { before_at: last.occurred_at, before_id: last.id } : null,
     });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -1282,6 +1295,8 @@ router.get('/', (req, res) => {
       else if (!archiveQuery)                      sql += ' AND t.archived_at IS NULL';
     }
 
+    if(!rawStatuses.length && !archiveQuery)sql += " AND t.status!='expired'";
+
     const priorities = asList(priority);
     if (priorities.length) {
       sql += ` AND t.priority IN (${priorities.map(() => '?').join(', ')})`;
@@ -1435,7 +1450,7 @@ router.post('/', (req, res) => {
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
     const templateDefaults = req.body.activity_template_id
-      ? db.get().prepare('SELECT description,category,priority,points,tags_json FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
+      ? db.get().prepare('SELECT description,category,priority,points,tags_json,expiration_policy FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
       : null;
 
     const {
@@ -1444,6 +1459,8 @@ router.post('/', (req, res) => {
       category        = templateDefaults?.category ?? FALLBACK_CATEGORY,
       priority        = templateDefaults?.priority ?? 'none',
       start_date      = null,
+      start_time      = null,
+      expiration_policy = templateDefaults?.expiration_policy ?? 'keep_overdue',
       due_date        = null,
       due_time        = null,
       parent_task_id  = null,
@@ -1465,7 +1482,7 @@ router.post('/', (req, res) => {
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
-    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
+    const bindingError = validateTaskActivityBindingRequest(activityBinding, due_date || todayInHouseholdZone(), { task: { start_date, start_time, due_date, due_time } });
     if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
 
     const taskLocation = req.body.location === undefined
@@ -1545,20 +1562,24 @@ router.post('/', (req, res) => {
       if (!mayEditTaskDefinition(parent, req)) return res.status(403).json(LOCKED_ERROR);
     }
 
+    const windowError = validateTaskWindow({start_date,start_time,due_date,due_time,expiration_policy});
+    if(windowError)return res.status(400).json({error:windowError,code:400});
+    assertTaskMutation(db.get(),req,null,{...req.body,expiration_policy},{operation:'create'});
     const taskId = db.get().transaction(() => {
+      if(parent_task_id)assertTaskWindowAction(db.get(),Number(parent_task_id));
       const result = db.get().prepare(`
         INSERT INTO tasks
           (title, description, category, priority, start_date, due_date, due_time,
            assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
            recurrence_from_completion, assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
-           points, visibility, countdown, locked)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           points, visibility, countdown, locked, start_time, expiration_policy)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         title.trim(), description, category, priority,
         start_date, due_date, due_time, firstUid, req.authUserId || req.session.userId, parent_task_id,
         is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
         assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
-        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0
+        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
@@ -1577,11 +1598,11 @@ router.post('/', (req, res) => {
       }
       if (initialSubtasks !== undefined) {
         const insertChild = db.get().prepare(`INSERT INTO tasks
-          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility)
-          VALUES (?,?,?,?,?,?,?,?)`);
+          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility, start_time)
+          VALUES (?,?,?,?,?,?,?,?,?)`);
         for (const child of initialSubtasks) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
-            result.lastInsertRowid, start_date, due_date, due_time, visibility).lastInsertRowid);
+            result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time).lastInsertRowid);
           setTaskSkills(db.get(), childId, child.skillIds);
         }
       }
@@ -1640,6 +1661,7 @@ router.put('/:id', (req, res) => {
       return res.status(404).json({ error: 'Task not found.', code: 404 });
     }
 
+    assertTaskWindowAction(db.get(),task.id);
     const errors = validateTaskInput(req.body, false, task.recurrence_rule);
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
@@ -1649,6 +1671,8 @@ router.put('/:id', (req, res) => {
       category        = task.category,
       priority        = task.priority,
       start_date      = task.start_date,
+      start_time      = task.start_time,
+      expiration_policy = task.expiration_policy,
       due_date        = task.due_date,
       due_time        = task.due_time,
       is_recurring    = task.is_recurring,
@@ -1659,6 +1683,8 @@ router.put('/:id', (req, res) => {
       // Markierung nicht stillschweigend löschen.
       countdown       = task.countdown,
     } = req.body;
+    const windowError = validateTaskWindow({start_date,start_time,due_date,due_time,expiration_policy});
+    if(windowError)return res.status(400).json({error:windowError,code:400});
     const points = req.body.points !== undefined ? clampPoints(req.body.points) : task.points;
     const visibility = req.body.visibility !== undefined
       ? normalizeVisibility(req.body.visibility, task.visibility)
@@ -1677,6 +1703,7 @@ router.put('/:id', (req, res) => {
       ? task.status
       : req.body.status;
 
+    if(status!==task.status)assertTaskWindowAction(db.get(),task.id);
     if (status === 'done' && task.status !== 'done') {
       const blockedBy = unresolvedDependencies(db.get(), task.id);
       if (blockedBy.length) {
@@ -1701,10 +1728,10 @@ router.put('/:id', (req, res) => {
       });
     }
     if (bindingChanged && desiredActivityBinding) {
-      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), { task: { start_date, due_date, due_time } });
+      const bindingError = validateTaskActivityBindingRequest(desiredActivityBinding, due_date || todayInHouseholdZone(), { task: { start_date, start_time, due_date, due_time } });
       if (bindingError) return res.status(400).json({ error: bindingError, code: 400 });
     }
-    const taskWindowChanged = start_date !== task.start_date || due_date !== task.due_date || due_time !== task.due_time;
+    const taskWindowChanged = start_time !== task.start_time || start_date !== task.start_date || due_date !== task.due_date || due_time !== task.due_time;
 
     const assignedBefore = db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
       .all(task.id).map((r) => r.user_id);
@@ -1787,7 +1814,7 @@ router.put('/:id', (req, res) => {
       // rotation; validate the resulting people/window without rewriting work.
       assertTaskAssignmentAvailability(db.get(), task.id,
         performersChanged ? independentlyAssignedTaskMembers(task.id, userIds, assignedBefore, firstUid) : null,
-        { task: { start_date, due_date, due_time, assigned_to: firstUid } });
+        { task: { start_date, start_time, due_date, due_time, assigned_to: firstUid } });
     }
 
     // Sperre der Aufgabe (#830). Nicht mitgeschickt heisst "nicht angefasst".
@@ -1821,7 +1848,7 @@ router.put('/:id', (req, res) => {
     if (!mayEditTaskDefinition(task, req)) {
       const wanted = {
         title: title.trim(), description, category, priority,
-        start_date, due_date, due_time,
+        start_date, start_time, expiration_policy, due_date, due_time,
         is_recurring: is_recurring ? 1 : 0, recurrence_rule,
         recurrence_from_completion: recurrence_from_completion ? 1 : 0,
         assignment_mode: assignmentMode,
@@ -1872,20 +1899,25 @@ router.put('/:id', (req, res) => {
     let undone  = 0;
     let updated;
     db.get().transaction(() => {
+      const current=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
+      if(!current)throw new TaskStateError('Task not found.',{},404);
+      assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
+      assertTaskMutation(db.get(),req,current,req.body,{operation:'update'});
+      assertTaskWindowAction(db.get(),current.id);
       db.get().prepare(`
         UPDATE tasks SET
           title = ?, description = ?, category = ?, priority = ?,
           status = ?, start_date = ?, due_date = ?, due_time = ?, assigned_to = ?,
           is_recurring = ?, recurrence_rule = ?, recurrence_from_completion = ?,
           assignment_mode = ?, rotation_index = ?, rotation_group = ?, rotation_slot = ?, rotation_cycle = ?,
-          points = ?, visibility = ?, countdown = ?, locked = ?
+          points = ?, visibility = ?, countdown = ?, locked = ?, start_time = ?, expiration_policy = ?
         WHERE id = ?
       `).run(title.trim(), description, category, priority,
              task.status, start_date, due_date, due_time, firstUid,
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
-             points, visibility, countdown ? 1 : 0, locked, req.params.id);
-      applyEditedSubtasks({...task,start_date,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
+             points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, req.params.id);
+      applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
       setRotationMembers(db.get(), task.id, assignmentMode === 'round_robin' ? rotationUserIds : []);
@@ -1893,10 +1925,11 @@ router.put('/:id', (req, res) => {
         // Checklist dates copied from the parent follow its edit. Explicit
         // child-specific dates/times retain their independent meaning.
         db.get().prepare(`UPDATE tasks SET
+          start_time=CASE WHEN start_time IS ? THEN ? ELSE start_time END,
           start_date=CASE WHEN start_date IS ? THEN ? ELSE start_date END,
           due_date=CASE WHEN due_date IS ? THEN ? ELSE due_date END,
           due_time=CASE WHEN due_time IS ? THEN ? ELSE due_time END
-          WHERE parent_task_id=?`).run(task.start_date,start_date,task.due_date,due_date,task.due_time,due_time,task.id);
+          WHERE parent_task_id=?`).run(task.start_time,start_time,task.start_date,start_date,task.due_date,due_date,task.due_time,due_time,task.id);
         const dueAt = due_date ? `${due_date}T${due_time || '23:59'}:00` : null;
         // Move the default response deadline with its due time. An earlier,
         // custom, or absent deadline remains an independent choice.
@@ -1967,7 +2000,7 @@ router.put('/:id', (req, res) => {
       // gelesene Zeile, damit im selben Zug geänderte Regel/Fälligkeit schon zählen.
 
       notifyTaskAssignments(db.get(), task.id, assignedBefore);
-    })();
+    }).immediate();
 
     addAssignedUsers(updated);
     attachTaskActivityBindings(db.get(), [updated]);
@@ -2182,7 +2215,7 @@ function shiftedStartDate(startDate, dueDate, nextDue) {
  * Savepoint. Sie bleibt trotzdem stehen: sie hält Aufgabe, Zuweisungen und Tags
  * auch dann zusammen, wenn später jemand von außerhalb einer Transaktion ruft.
  */
-function spawnRecurrenceFollowupSingle(task) {
+function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
   if (!task?.is_recurring || !task.recurrence_rule || task.parent_task_id) return;
   if (!isRecurrenceFrontier(db.get(),task.id)) return;
   // Höchstens eine Folgeinstanz je Erledigung - sonst legt doppeltes Abhaken nach.
@@ -2192,7 +2225,7 @@ function spawnRecurrenceFollowupSingle(task) {
   // (Vorgabe, holt übersprungene Vorkommen auf, damit die nächste Instanz
   // nicht selbst überfällig entsteht) oder ab dem Tag des Abhakens.
   const completedOn = todayInHouseholdZone();
-  const nextDate = nextDueAfterCompletion({
+  const nextDate = (task.status === 'expired' || expirationAnchor ? nextDueAfterExpiration : nextDueAfterCompletion)({
     anchorDate: task.due_date,
     rule: task.recurrence_rule,
     completedOn,
@@ -2238,8 +2271,8 @@ function spawnRecurrenceFollowupSingle(task) {
       INSERT INTO tasks (title, description, category, priority, status,
         start_date, due_date, due_time, assigned_to, created_by, is_recurring, recurrence_rule,
         assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
-        points, visibility, recurrence_from_completion, countdown, recurrence_origin_id)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        points, visibility, recurrence_from_completion, countdown, recurrence_origin_id, start_time, expiration_policy)
+      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.title, task.description, task.category, task.priority,
       shiftedStartDate(task.start_date, task.due_date, nextDate),
@@ -2258,7 +2291,7 @@ function spawnRecurrenceFollowupSingle(task) {
       // Erledigung rechnet - der Countdown, der genau davon lebt, dürfte beim
       // ersten Zurücksetzen nicht verschwinden.
       task.countdown ? 1 : 0,
-      task.id
+      task.id, task.start_time, task.expiration_policy || 'keep_overdue'
     );
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
@@ -2280,14 +2313,14 @@ function spawnRecurrenceFollowupSingle(task) {
       const newSub = db.get().prepare(`
         INSERT INTO tasks (title, description, category, priority, status,
           start_date, due_date, due_time, assigned_to, created_by, parent_task_id,
-          is_recurring, recurrence_rule, points, visibility, recurrence_origin_id, activity_template_checklist_item_id)
-        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?)
+          is_recurring, recurrence_rule, points, visibility, recurrence_origin_id, activity_template_checklist_item_id, start_time, expiration_policy)
+        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?)
       `).run(
         sub.title, sub.description, sub.category, sub.priority,
         shiftedStartDate(sub.start_date, subAnchorDate, nextDate) ?? sub.start_date,
         subDueDate,
         sub.due_time, subAssignedTo, sub.created_by, newTask.lastInsertRowid,
-        sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null
+        sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null, sub.start_time, sub.expiration_policy || 'keep_overdue'
       );
       registerRecurrenceAction(db.get(),Number(newSub.lastInsertRowid));
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);
@@ -2317,7 +2350,7 @@ function spawnRecurrenceFollowup(task) {
 
 function spawnRecurrenceFollowupLocked(taskId) {
   const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
-  if(!task||task.status!=='done'||!isRecurrenceFrontier(db.get(),task.id))return;
+  if(!task||!isTerminalRecurrenceOccurrence(task)||!isRecurrenceFrontier(db.get(),task.id))return;
   if (!task?.rotation_group) return spawnRecurrenceFollowupSingle(task);
 
   const cohort = db.get().prepare(`
@@ -2325,7 +2358,8 @@ function spawnRecurrenceFollowupLocked(taskId) {
      WHERE rotation_group = ? COLLATE NOCASE AND rotation_cycle = ? AND parent_task_id IS NULL
      ORDER BY rotation_slot ASC, id ASC
   `).all(task.rotation_group, task.rotation_cycle);
-  if (!cohort.length || cohort.some((member) => member.status !== 'done')) return;
+  if (!cohort.length || cohort.some((member) => !isTerminalRecurrenceOccurrence(member))) return;
+  if (cohort.some(member=>member.status==='expired'&&member.recurrence_from_completion))return;
   if (cohort.some((member) => !isRecurrenceFrontier(db.get(),member.id))) return;
   if (cohort.some((member) => recurrenceFollowupOf(member.id))) return;
 
@@ -2345,7 +2379,7 @@ function spawnRecurrenceFollowupLocked(taskId) {
   // Nested transaction becomes a savepoint when called from PUT/PATCH. Either
   // every next position is generated or none are.
   db.get().transaction(() => {
-    for (const member of cohort) spawnRecurrenceFollowupSingle(member);
+    for (const member of cohort) spawnRecurrenceFollowupSingle(member,{expirationAnchor:cohort.some(row=>row.status==='expired')});
   })();
 }
 
@@ -2375,6 +2409,15 @@ export function reconcileTaskRecurrence(taskId) {
 // Response: { data: { id, status, archived_at } }
 // 'archived' legt die Aufgabe ab, ohne ihren Status anzufassen (#688).
 // --------------------------------------------------------
+router.post('/:id/reopen', (req,res)=>{
+  try {
+    const errors=validateTaskInput(req.body,false);
+    if(errors.length)return res.status(400).json({error:errors.join(' '),code:400});
+    const task=reopenExpiredTask(db.get(),Number(req.params.id),{actorId:req.authUserId||req.session.userId,body:req.body});
+    res.json({data:hydrateTask(task,req.authUserId||req.session.userId)});
+  } catch(error) {res.status(error.status||500).json({error:error.message,code:error.status||500,...error.details});}
+});
+
 router.patch('/:id/status', (req,res) => {
   try {
     const previous=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
@@ -2503,30 +2546,22 @@ router.patch('/:id/check', (req, res) => {
     if (expect !== undefined && expect !== null && typeof expect !== 'string')
       return res.status(400).json({ error: 'Invalid line check.', code: 400 });
 
-    const result = toggleChecklistLine(task.description, line, checked, expect);
-    if (!result.ok) {
-      return res.status(409).json({
-        error: 'The task has changed in the meantime.',
-        code:  409,
-        reason: result.reason,
-      });
-    }
-
-    // `changed: false` heißt, der Punkt stand schon so - dann bleibt die Zeile
-    // unangetastet, sonst zöge ein folgenloser Tap `updated_at` hoch und
-    // meldete der CalDAV-Gegenstelle eine Änderung, die keine ist.
     let pending = false;
-    if (result.changed) {
-      db.get().transaction(() => {
-        db.get().prepare('UPDATE tasks SET description = ? WHERE id = ?').run(result.content, id);
-        // Die Beschreibung ist ein gespiegeltes Feld: ohne diesen Marker bliebe
-        // ein Haken auf einer CalDAV-Aufgabe lokal und der nächste Inbound
-        // überschriebe ihn wieder.
-        pending = markTodoOutbound('tasks', task, { ...task, description: result.content });
-      })();
-    }
-
-    res.json({ data: { id, description: result.content } });
+    const result=db.get().transaction(()=>{
+      const current=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id);
+      if(!current)throw new TaskStateError('Task not found.',{},404);
+      assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
+      assertTaskMutation(db.get(),req,current,req.body,{operation:'check'});
+      assertTaskWindowAction(db.get(),id);
+      const result=toggleChecklistLine(current.description,line,checked,expect);
+      if(!result.ok)throw new TaskStateError('The task has changed in the meantime.',{reason:result.reason});
+      if(result.changed) {
+        db.get().prepare('UPDATE tasks SET description=? WHERE id=?').run(result.content,id);
+        pending=markTodoOutbound('tasks',current,{...current,description:result.content});
+      }
+      return result;
+    }).immediate();
+    res.json({data:{id,description:result.content}});
 
     if (pending) pushToCalDAV('Checklisten-Haken');
   } catch (err) {
@@ -2674,7 +2709,7 @@ router.get('/:id/completions', (req, res) => {
     if (!task || !mayAccessTask(task, me)) {
       return res.status(404).json({ error: 'Task not found.', code: 404 });
     }
-    res.json({ data: seriesHistory(db.get(), { me, taskId: Number(req.params.id), limit: req.query.limit }) });
+    res.json({ data: occurrenceHistory(db.get(), { me, taskId: Number(req.params.id), limit: req.query.limit }) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id/completions error:', err);

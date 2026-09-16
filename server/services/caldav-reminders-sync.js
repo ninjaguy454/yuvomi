@@ -18,7 +18,7 @@ import { householdTimeZone, utcToWall } from '../utils/timezone.js';
 import { setItemTags, setTags } from '../utils/task-tags.js';
 import * as todoOutbound from './caldav-todo-outbound.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from './assignment-responsibilities.js';
-import { changeTaskStatus, recordTaskActivity } from './task-lifecycle.js';
+import { assertTaskWindowAction, changeTaskStatus, recordTaskActivity } from './task-lifecycle.js';
 import { reconcileTaskSupervision } from './task-supervision.js';
 
 // --------------------------------------------------------
@@ -243,11 +243,22 @@ function updateReminderSelection(accountId, listUrl, { enabled, targetModule } =
 // (#617). COALESCE, weil ein Abruf ohne URL den gespeicherten Wert nicht
 // entwerten darf.
 export function upsertTask(todo, accountId, createdBy, objectUrl = null) {
+  return db.get().transaction(()=>upsertTaskLocked(todo,accountId,createdBy,objectUrl)).immediate();
+}
+
+function upsertTaskLocked(todo, accountId, createdBy, objectUrl = null) {
   const { date, time } = splitDue(todo.due, householdTimeZone(db.get()));
 
   const existing = db.get().prepare(
-    `SELECT id, priority, status, due_date, due_time FROM tasks WHERE external_uid = ? AND external_source = 'caldav' AND external_account_id = ?`
+    `SELECT id, priority, status, due_date, due_time, expiration_policy FROM tasks WHERE external_uid = ? AND external_source = 'caldav' AND external_account_id = ?`
   ).get(todo.uid, accountId);
+
+  // A provider status refresh is not an authorized lifecycle reopen. Preserve
+  // the missed occurrence until an editor explicitly reactivates it locally.
+  if (existing?.status === 'expired') return existing.id;
+  // Check the original local deadline before importing a provider's changed
+  // due date; otherwise a late provider completion could move its own gate.
+  if (existing) assertTaskWindowAction(db.get(),existing.id);
 
   const priority = mapVtodoPriority(todo.priority, existing?.priority);
   const status   = mapVtodoStatus(todo, existing?.status);
@@ -256,7 +267,7 @@ export function upsertTask(todo, accountId, createdBy, objectUrl = null) {
   if (existing) {
     // Remote VTODOs may now carry local checklist/supervision structure.
     // They must not bypass a supervised-action gate or silently cascade/reset.
-    const structured = !!db.get().prepare(`SELECT 1 FROM tasks WHERE parent_task_id=@id OR id=(
+    const structured = existing.expiration_policy === 'expire_incomplete' || !!db.get().prepare(`SELECT 1 FROM tasks WHERE parent_task_id=@id OR id=(
       SELECT parent_task_id FROM tasks WHERE id=@id) OR (id=@id AND is_recurring=1) UNION ALL
       SELECT 1 FROM task_activity_bindings WHERE task_id=@id UNION ALL
       SELECT 1 FROM task_skill_requirements WHERE task_id=@id UNION ALL

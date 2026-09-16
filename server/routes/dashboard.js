@@ -251,7 +251,7 @@ router.get('/', (req, res) => {
         END AS __due_sort
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE t.status != 'done'
+      WHERE t.status NOT IN ('done', 'expired')
         -- Abgelegtes gehört nicht in „Heute auf einen Blick" (#688): eine
         -- archivierte Aufgabe ist aus dem Lauf genommen, und wer sie von hier aus
         -- öffnete, fand sie in der Liste nicht wieder.
@@ -283,7 +283,7 @@ router.get('/', (req, res) => {
   if (allows('tasks')) try {
     result.openTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
-      WHERE t.status != 'done' AND t.archived_at IS NULL
+      WHERE t.status NOT IN ('done', 'expired') AND t.archived_at IS NULL
         AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
     `).get({ me: userId, today: todayLocalKey, ...taskCategoryBinds }).n;
@@ -297,7 +297,7 @@ router.get('/', (req, res) => {
   if (allows('tasks')) try {
     result.overdueTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
-      WHERE t.status != 'done' AND t.archived_at IS NULL
+      WHERE t.status NOT IN ('done', 'expired') AND t.archived_at IS NULL
         AND t.due_date IS NOT NULL AND t.due_date < @today
         AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
@@ -692,7 +692,7 @@ router.get('/', (req, res) => {
     result.memberTodayTasks = d.prepare(`
       SELECT ta.user_id AS user_id, COUNT(*) AS open_count
       FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
-      WHERE t.status != 'done' AND t.archived_at IS NULL
+      WHERE t.status NOT IN ('done', 'expired') AND t.archived_at IS NULL
         AND t.due_date IS NOT NULL AND t.due_date <= @today
         AND ${taskScopeWhere('t', { bind: '@today', includeSupervision })}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}

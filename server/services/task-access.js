@@ -160,6 +160,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const c = taskCapabilities(d, actor, task);
   if (!c.view) throw new PermissionError('Task not found.', 404);
   const requireAction = key => { if (!c[key]) throw new PermissionError('Your household permissions do not allow this Task action.'); };
+  if (operation === 'reopen') { requireAction('edit'); return requireAction('change_dates'); }
   if (['status', 'check'].includes(operation)) return requireAction('complete');
   if (['delete', 'archive'].includes(operation)) return requireAction('delete_archive');
   if (operation === 'comment') return requireAction('comment');
@@ -177,7 +178,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   };
   if (body.status === 'archived') requireAction('delete_archive');
   else if (changed('status')) requireAction('complete');
-  const definitionFields = ['title', 'description', 'visibility', 'sync_target', 'locked', 'parent_task_id', 'location', 'countdown', 'subtasks', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding'];
+  const definitionFields = ['title', 'description', 'visibility', 'sync_target', 'locked', 'parent_task_id', 'location', 'countdown', 'subtasks', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding', 'expiration_policy'];
   if (definitionFields.some(changed)) requireAction('edit');
   const me = actorId(actor);
   // Joining/leaving only one's own assignment is the legacy claim interaction,
@@ -196,10 +197,11 @@ const idsOrStrings = value => (Array.isArray(value) ? value : []).map(String).so
 const PROTECTED_FIELDS = Object.freeze({
   change_assignment: ['assigned_to', 'assignment_mode', 'rotation_user_ids', 'rotation_group', 'rotation_slot', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding'],
   change_priority: ['priority'], change_points: ['points'], change_category_tags: ['category', 'tags'],
-  change_dates: ['start_date', 'due_date', 'due_time', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion'],
+  change_dates: ['expiration_policy', 'start_time', 'start_date', 'due_date', 'due_time', 'is_recurring', 'recurrence_rule', 'recurrence_from_completion'],
   change_required_skills: ['skill_ids', 'activity_template_id', 'activity_binding'],
 });
 function nonDefaultCreateValue(field, value) {
+  if (field === 'expiration_policy' && value === 'keep_overdue') return false;
   if (value == null || value === '' || value === false || value === 0 || (Array.isArray(value) && !value.length)) return false;
   if ((field === 'priority' && value === 'none') || (field === 'category' && value === 'misc') || (field === 'assignment_mode' && value === 'fixed')) return false;
   return true;

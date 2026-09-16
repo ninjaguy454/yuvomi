@@ -32,6 +32,7 @@ import { startScheduler as startSplitExpenseScheduler } from './services/split-e
 import { startScheduler as startPushScheduler } from './services/push-scheduler.js';
 import { startScheduler as startMedicationScheduler } from './services/medication-scheduler.js';
 import { startScheduler as startRecipeProviderScheduler } from './services/recipe-provider-sync.js';
+import { startTaskExpiration } from './services/task-expiration.js';
 import { startTaskSupervisionRefresh } from './services/task-supervision-refresh.js';
 import { emailService } from './services/email.js';
 import { passwordLoginWarning, OIDC_PASSWORD_SENTINEL } from './services/oidc.js';
@@ -611,6 +612,7 @@ app.listen(PORT, () => {
   // Backup-Scheduler starten
   startBackupScheduler();
   startSplitExpenseScheduler();
+  startTaskExpiration();
   startPushScheduler();
   startMedicationScheduler();
   startRecipeProviderScheduler();

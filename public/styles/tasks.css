@@ -33,11 +33,10 @@
 .task-editor .task-field-hint { margin-top: var(--space-1); }
 .task-editor__basics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
 .task-editor__basics .task-tags-field { grid-column: 1 / -1; }
-.task-editor__dates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.task-editor__dates { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
 .task-sync-integration > summary { cursor: pointer; font-weight: var(--font-weight-medium); margin-bottom: var(--space-2); }
 @media (max-width: 639px) {
   .task-editor__basics, .task-editor__dates { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .task-editor__dates > :last-child { grid-column: 1 / -1; }
   .modal-panel:has(.task-editor) > .modal-panel__footer { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-2); }
   .modal-panel:has(.task-editor) > .modal-panel__footer #task-submit-btn { grid-column: 1 / -1; }
   .modal-panel:has(.task-editor) > .modal-panel__footer .btn { min-width: 0; margin: 0; }
@@ -816,6 +815,9 @@
 }
 
 .task-status-btn--done .task-status-btn__check { display: block; }
+.task-status-btn--expired .task-status-btn__check { display: block; color: var(--color-text-secondary); }
+.task-status-btn--expired::after { border-color: var(--color-border); background: var(--color-surface); }
+.activity-card__status-label--expired, .task-detail-expiration { color: var(--color-text-secondary); }
 
 .task-card__body {
   flex: 1;

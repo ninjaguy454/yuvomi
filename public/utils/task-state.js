@@ -43,6 +43,8 @@ export function taskStatusConfirmation(task, status) {
 }
 
 export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {} } = {}) {
+  if (task.status === 'expired') throw new Error('Reopen this expired Task before changing its status.');
+  if (status === 'expired') throw new Error('Tasks expire automatically at their deadline.');
   const confirmation = taskStatusConfirmation(task, status);
   const body = { status, ...taskRevision(task) };
   if (confirmation) {
@@ -53,4 +55,18 @@ export async function changeTaskStatus(task, status, { confirm: requestConfirmat
   // revision still attached to the write. Cancel never paints unsaved progress.
   beforeRequest();
   return api.patch(`/tasks/${task.id}/status`, body);
+}
+
+/** Reopening is an explicit lifecycle action, separate from marking work done. */
+export async function reopenExpiredTask(task, { confirm: requestConfirmation = confirmOverModal } = {}) {
+  if (task.status !== 'expired' || task.archived_at || !task.permissions?.edit || !task.permissions?.change_dates) {
+    throw new Error('You cannot reopen this Task. Archived Tasks must first be unarchived.');
+  }
+  const body = { expiration_policy: 'keep_overdue', ...taskRevision(task) };
+  const confirmed = await requestConfirmation('Reopen this expired Task?', {
+    detail: `Saved subtask progress is retained and its ${Number(task.points || 0)} completion points become available again. This occurrence switches to Keep overdue. Already-created future occurrences stay unchanged. For Repeat from completion, future occurrences will also keep overdue. You can set a new deadline and expiration policy in Edit.`,
+    confirmLabel: 'Reopen Task', closeOnConfirm: false,
+  });
+  if (!confirmed) return null;
+  return api.post(`/tasks/${task.id}/reopen`, body);
 }

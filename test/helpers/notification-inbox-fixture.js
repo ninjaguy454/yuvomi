@@ -5,6 +5,7 @@ export function addNotificationInboxFixture(database) {
   database.exec(`
     ALTER TABLE tasks ADD COLUMN visibility TEXT NOT NULL DEFAULT 'all';
     ALTER TABLE tasks ADD COLUMN parent_task_id INTEGER;
+    ALTER TABLE tasks ADD COLUMN status TEXT NOT NULL DEFAULT 'open';
     ALTER TABLE calendar_events ADD COLUMN visibility TEXT NOT NULL DEFAULT 'all';
     ALTER TABLE calendar_events ADD COLUMN created_by INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE calendar_events ADD COLUMN external_source TEXT;

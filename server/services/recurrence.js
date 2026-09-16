@@ -314,6 +314,23 @@ function nextDueAfterCompletion({ anchorDate, rule, completedOn, fromCompletion 
 }
 
 /**
+ * Advance a missed calendar occurrence without inventing a completion date.
+ *
+ * Calendar recurrence always advances exactly one scheduled occurrence. A
+ * reconciliation after downtime can then expire each missed occurrence in
+ * order while retaining its historical identity and the original calendar
+ * anchor. Local due times travel separately from these date-only keys, so
+ * advancing a day does not add 24 hours to a timezone-dependent timestamp.
+ *
+ * A completion-relative interval has no new anchor when work expires. It
+ * therefore waits for an authorized reopen followed by actual completion;
+ * expiration never starts that interval or changes the configured mode.
+ */
+function nextDueAfterExpiration({ anchorDate, rule, fromCompletion = false }) {
+  return fromCompletion ? null : nextOccurrence(anchorDate, rule);
+}
+
+/**
  * Prüft, ob ein Datum zum BYDAY-Wochentagsfilter der Regel passt.
  * Ohne BYDAY (oder ohne parsebare Regel) gilt jedes Datum als passend – dann
  * steuern allein DTSTART und nextOccurrence die Serie. Fängt Serien ab, deren
@@ -356,5 +373,5 @@ export function rruleLine(rule) {
 }
 
 export {
-  parseRRule, nextOccurrence, nextOccurrenceAfter, nextDueAfterCompletion, matchesRRuleByday,
+  parseRRule, nextOccurrence, nextOccurrenceAfter, nextDueAfterCompletion, nextDueAfterExpiration, matchesRRuleByday,
 };

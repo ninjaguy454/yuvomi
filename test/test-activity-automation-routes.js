@@ -75,6 +75,45 @@ async function call(method, path, body, actorId = admin) {
   return { status: response.status, body: raw ? JSON.parse(raw) : null };
 }
 
+test('Activity expiration defaults, validation, authorization and Task snapshots use the existing editor capabilities', async () => {
+  const created = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Get Ready for the Day', assignment_strategy: 'fixed', fixed_user_id: grace, points: 2,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.data.id;
+  assert.equal(created.body.data.expiration_policy, 'keep_overdue');
+  for (const value of ['done', '', null, false]) {
+    const invalid = await call('PUT', `/automation/admin/activity-templates/${id}`, { expiration_policy: value });
+    assert.equal(invalid.status, 400, JSON.stringify(invalid.body));
+  }
+  const denied = await call('PUT', `/automation/admin/activity-templates/${id}`, { expiration_policy: 'expire_incomplete' }, grace);
+  assert.equal(denied.status, 403, JSON.stringify(denied.body));
+  assert.equal(db.prepare('SELECT expiration_policy FROM activity_templates WHERE id=?').get(id).expiration_policy, 'keep_overdue');
+  const updated = await call('PUT', `/automation/admin/activity-templates/${id}`, { expiration_policy: 'expire_incomplete' });
+  assert.equal(updated.status, 200, JSON.stringify(updated.body));
+  assert.equal(updated.body.data.expiration_policy, 'expire_incomplete');
+  const retained = await call('PUT', `/automation/admin/activity-templates/${id}`, { description: 'Morning checklist' });
+  assert.equal(retained.body.data.expiration_policy, 'expire_incomplete', 'an older editor cannot silently reset the policy');
+  const options = await call('GET', '/automation/activity-options');
+  assert.equal(options.body.data.activities.find(item => item.id === id).expiration_policy, 'expire_incomplete');
+  const resolved = await call('POST', `/automation/activity-templates/${id}/resolve`, {});
+  assert.equal(resolved.body.data.expiration_policy, 'expire_incomplete');
+
+  const makeTask = extra => call('POST', '/tasks', {
+    title: 'Get Ready for the Day', activity_template_id: id,
+    due_date: '2099-09-14', due_time: '08:00', ...extra,
+  });
+  const inherited = await makeTask({});
+  assert.equal(inherited.status, 201, JSON.stringify(inherited.body));
+  assert.equal(inherited.body.data.expiration_policy, 'expire_incomplete');
+  assert.equal(inherited.body.data.points, 2);
+  const override = await makeTask({ expiration_policy: 'keep_overdue' });
+  assert.equal(override.status, 201, JSON.stringify(override.body));
+  assert.equal(override.body.data.expiration_policy, 'keep_overdue');
+  await call('PUT', `/automation/admin/activity-templates/${id}`, { expiration_policy: 'keep_overdue' });
+  assert.equal(db.prepare('SELECT expiration_policy FROM tasks WHERE id=?').get(inherited.body.data.id).expiration_policy, 'expire_incomplete');
+});
+
 test('built-in household skills are editable through Skills but cannot be deleted', async () => {
   const listed = await call('GET', '/automation/admin/skills');
   assert.equal(listed.status, 200, JSON.stringify(listed.body));

@@ -96,10 +96,22 @@ function context(d, source, action) {
   }
   const pc = chain.map(item => d.prepare('SELECT * FROM task_planning_context WHERE task_id = ?').get(item.id)).find(Boolean) || {};
   const occurrence = { ...source, ...action };
-  for (const key of ['due_date', 'due_time', 'start_date']) occurrence[key] = chain.find(item => item[key])?.[key] || null;
+  for (const key of ['due_date', 'due_time', 'start_date', 'start_time']) occurrence[key] = chain.find(item => item[key])?.[key] || null;
   const dateKey = occurrence.due_date || occurrence.start_date || todayKey(d);
+  // Workflow/Activity bindings delimit eligibility scopes, but a terminal
+  // ancestor still closes the useful completion window for every descendant.
+  let expiredTask = chain.find(item => item.status === 'expired');
+  let ancestor = source;
+  const ancestorIds = new Set(chain.map(item => item.id));
+  while (!expiredTask && ancestor?.parent_task_id && !ancestorIds.has(ancestor.parent_task_id)) {
+    ancestor = task(d, ancestor.parent_task_id);
+    if (!ancestor) break;
+    ancestorIds.add(ancestor.id);
+    if (ancestor.status === 'expired') expiredTask = ancestor;
+  }
   return { dateKey, learnerId: chain.find(item => item.assigned_to)?.assigned_to || null,
-    archived: chain.some(item => item.archived_at), presence: { policy: pc.presence_policy || 'ignore', targetPlaceId: pc.place_id || null,
+    archived: chain.some(item => item.archived_at), expired: Boolean(expiredTask), expired_at: expiredTask?.expired_at ?? null,
+    presence: { policy: pc.presence_policy || 'ignore', targetPlaceId: pc.place_id || null,
     ...activityPresenceWindow(d, { task: occurrence, dateKey, windowMode: pc.presence_window || 'due' }) } };
 }
 
@@ -156,7 +168,17 @@ export function inspectTaskSupervision(d, taskId) {
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
-    const { dateKey, presence, learnerId, archived } = context(d, source, row);
+    const { dateKey, presence, learnerId, archived, expired, expired_at } = context(d, source, row);
+    if (expired && row.status !== 'done') {
+      if (prior) actions.push({ ...prior, action_title: row.title, state: 'not_required',
+        reason: 'The original Task or action expired incomplete.', expired: true, expired_at, archived,
+        learner_name: byId.get(Number(prior.learner_user_id))?.display_name || null,
+        supervisor_name: byId.get(Number(prior.supervisor_user_id))?.display_name || null,
+        required_skills: JSON.parse(prior.required_skill_ids_json || '[]').map(id => d.prepare('SELECT id,name FROM skills WHERE id=?').get(id)).filter(Boolean),
+        eligible_supervisors: [], completed: false, status: row.status, task_revision: row.revision,
+        counterpart_revision: prior.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null });
+      continue;
+    }
     // Archived work is not an operational obligation. Preserve its linkage so
     // restoring the original action restores the same helper projection.
     if (archived) {
@@ -324,9 +346,9 @@ function singleSupervisorScope(actions, members, activeSupervisorIds = []) {
 }
 
 function insertProjection(d, source, title, parentId, assignedTo) {
-  const id = Number(d.prepare(`INSERT INTO tasks(title,description,category,priority,status,start_date,due_date,due_time,
-    assigned_to,created_by,parent_task_id,points,visibility) VALUES(?,NULL,?,'none','open',?,?,?,?,?,?,0,?)`)
-    .run(title, source.category || 'misc', source.start_date, source.due_date, source.due_time,
+  const id = Number(d.prepare(`INSERT INTO tasks(title,description,category,priority,status,start_date,start_time,due_date,due_time,
+    assigned_to,created_by,parent_task_id,points,visibility) VALUES(?,NULL,?,'none','open',?,?,?,?,?,?,?,0,?)`)
+    .run(title, source.category || 'misc', source.start_date, source.start_time ?? null, source.due_date, source.due_time,
       assignedTo || null, source.created_by, parentId, source.visibility || 'all').lastInsertRowid);
   d.prepare(`INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source)
     SELECT ?,place_id,presence_policy,presence_window,source FROM task_planning_context WHERE task_id = ?`).run(id, source.id);
@@ -355,7 +377,7 @@ export function taskSupervisionNotificationKey(view) {
 }
 
 function notifySupervision(d, source, view) {
-  if (source.status === 'done' || view.state === 'none') return;
+  if (['done', 'expired'].includes(source.status) || view.state === 'none') return;
   const unresolved = ['needed', 'excluded'].includes(view.state);
   const recipients = unresolved ? [source.created_by, ...d.prepare("SELECT id FROM users WHERE role='admin'").all().map(row => row.id)]
     : view.state === 'assigned' ? [view.supervisor_user_id] : [];
@@ -465,7 +487,9 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
         continue;
       }
       const old = previous.find(row => row.action_task_id === action.action_task_id);
-      action.supervisor_user_id = selected && action.state !== 'not_required' ? selected.id : null;
+      // Expiration retires work, preserving the historical responsible person.
+      action.supervisor_user_id = action.expired ? old?.supervisor_user_id ?? null
+        : selected && action.state !== 'not_required' ? selected.id : null;
       if (selected && action.state !== 'not_required') {
         action.state = 'assigned'; action.supervisor_name = selected.display_name;
         // Persist action-local facts. Completing another action must not create
@@ -491,10 +515,10 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       action.counterpart_task_id = counterpartId;
       if (counterpartId) {
         setProjectionAssignees(d, counterpartId, action.state === 'assigned' ? [action.supervisor_user_id] : []);
-        d.prepare(`UPDATE tasks SET title=@title,start_date=@start,due_date=@due,due_time=@time WHERE id=@id
-          AND (title IS NOT @title OR start_date IS NOT @start OR due_date IS NOT @due OR due_time IS NOT @time)`)
-          .run({title:projectionTitle,start:source.start_date,due:source.due_date,time:source.due_time,id:counterpartId});
-        syncProjectionArchive(d, counterpartId, action.state === 'not_required');
+        d.prepare(`UPDATE tasks SET title=@title,start_date=@start,start_time=@startTime,due_date=@due,due_time=@time WHERE id=@id
+          AND (title IS NOT @title OR start_date IS NOT @start OR start_time IS NOT @startTime OR due_date IS NOT @due OR due_time IS NOT @time)`)
+          .run({title:projectionTitle,start:source.start_date,startTime:source.start_time ?? null,due:source.due_date,time:source.due_time,id:counterpartId});
+        if (!action.expired || action.archived) syncProjectionArchive(d, counterpartId, action.state === 'not_required');
       }
       // An event is visible through its own action. Keep its explanation local
       // so a shared Task-level candidate failure cannot reveal a private sibling.
@@ -548,10 +572,12 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
     }
     if (supportId) {
       setProjectionAssignees(d, supportId, supervisors);
-      d.prepare(`UPDATE tasks SET start_date=@start,due_date=@due,due_time=@time WHERE id=@id
-        AND (start_date IS NOT @start OR due_date IS NOT @due OR due_time IS NOT @time)`)
-        .run({start:source.start_date,due:source.due_date,time:source.due_time,id:supportId});
-      syncProjectionArchive(d, supportId, source.archived_at || view.actions.every(action => action.state === 'not_required'));
+      d.prepare(`UPDATE tasks SET start_date=@start,start_time=@startTime,due_date=@due,due_time=@time WHERE id=@id
+        AND (start_date IS NOT @start OR start_time IS NOT @startTime OR due_date IS NOT @due OR due_time IS NOT @time)`)
+        .run({start:source.start_date,startTime:source.start_time ?? null,due:source.due_date,time:source.due_time,id:supportId});
+      if (source.archived_at || !context(d, source, source).expired && !view.actions.some(action => action.expired)) {
+        syncProjectionArchive(d, supportId, source.archived_at || view.actions.every(action => action.state === 'not_required'));
+      }
     }
     // These are zero-point generated views, never the source action. Repair
     // structural-change/legacy drift here so a no-status edit cannot leave a
@@ -559,7 +585,8 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
     for (const update of projectionUpdatesForView(d, view)) {
       const projection = task(d, update.id);
       if (!projection || projection.status === update.status) continue;
-      d.prepare('UPDATE tasks SET status=? WHERE id=?').run(update.status, update.id);
+      d.prepare(`UPDATE tasks SET status=?,expired_at=CASE WHEN ?='expired' THEN COALESCE(expired_at,?,${NOW}) ELSE NULL END WHERE id=?`)
+        .run(update.status, update.status, update.expired_at ?? null, update.id);
       d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)
         VALUES(?,?,?,'supervision_synchronized',?)`).run(source.id, update.id, actorId,
           JSON.stringify({ title: projection.title, from_status: projection.status, to_status: update.status }));
@@ -581,8 +608,8 @@ export function attachTaskSupervision(d, tasks, actorId = null, sourceViews = ne
     if (!sourceViews.has(sourceId)) sourceViews.set(sourceId, inspectTaskSupervision(d, sourceId));
     const source = sourceViews.get(sourceId);
     row.supervision = actorId == null ? source : {...source, may_assign: taskSupervisionManagementAllowed(d, actorId, sourceId), actions:source.actions.map(action=>({...action,
-      can_complete:(action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
-        || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(actorId))}))};
+      can_complete:!action.expired && ((action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
+        || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(actorId)))}))};
     row.supervision_action = row.supervision.actions.find(action => action.action_task_id === row.id || action.counterpart_task_id === row.id) || null;
     row.skill_eligibility = row.supervision_action?.skill_eligibility || skillEligibilityByView.get(source)?.get(row.id) || [];
     row.is_supervision_projection = row.supervision.support_task_id === row.id || row.supervision_action?.counterpart_task_id === row.id;
@@ -642,6 +669,9 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
   };
   const requested = task(d, taskId);
   const source = task(d,view.source_task_id);
+  if (requested && source && context(d, source, requested).expired) {
+    throw new TaskSupervisionError('Reopen the expired original Task before changing its progress.');
+  }
   const effectiveAssignee = requested && source ? context(d,source,requested).learnerId : null;
   if (status === 'done' && requested?.status !== 'done' && !effectiveAssignee && explicitSkills(d, taskId).length) {
     throw new TaskSupervisionError('Choose an assignee before completing a Task with required skills.');
@@ -685,12 +715,19 @@ export function supervisionProjectionUpdates(d, taskId) {
 
 function projectionUpdatesForView(d, view) {
   const updates = [];
-  for (const action of view.actions) if (action.counterpart_task_id && action.state !== 'not_required') updates.push({ id: action.counterpart_task_id,
-    status: task(d, action.action_task_id)?.status || 'open' });
+  for (const action of view.actions) if (action.counterpart_task_id && (action.state !== 'not_required' || action.expired)) updates.push({ id: action.counterpart_task_id,
+    status: action.expired ? 'expired' : task(d, action.action_task_id)?.status || 'open',
+    ...(action.expired ? { expired_at: action.expired_at } : {}) });
   if (view.support_task_id) {
-    const relevant = updates.filter(update => view.actions.some(action => action.counterpart_task_id === update.id && action.state !== 'not_required'));
-    updates.push({ id: view.support_task_id, status: relevant.every(update => update.status === 'done') ? 'done'
-      : relevant.some(update => update.status !== 'open') ? 'in_progress' : 'open' });
+    const source = task(d, view.source_task_id), support = task(d, view.support_task_id);
+    const relevant = updates.filter(update => view.actions.some(action => action.counterpart_task_id === update.id && (action.state !== 'not_required' || action.expired)));
+    const sourceContext = source && context(d, source, source);
+    const expired = sourceContext?.expired
+      || relevant.some(update => update.status === 'expired') && relevant.every(update => ['done', 'expired'].includes(update.status));
+    updates.push({ id: view.support_task_id, status: expired ? support?.status === 'done' ? 'done' : 'expired'
+      : relevant.every(update => update.status === 'done') ? 'done'
+        : relevant.some(update => ['done', 'in_progress'].includes(update.status)) ? 'in_progress' : 'open',
+      ...(expired ? { expired_at: sourceContext?.expired_at || relevant.find(update => update.expired_at)?.expired_at || null } : {}) });
   }
   return updates;
 }

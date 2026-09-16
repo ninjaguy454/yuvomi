@@ -43,7 +43,7 @@ import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { canTask } from '/permissions.js';
-import { actionableSubtasks, changeTaskStatus, taskRevision } from '/utils/task-state.js';
+import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, taskRevision } from '/utils/task-state.js';
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { captureTaskViewport } from '/utils/task-view-state.js';
@@ -51,7 +51,7 @@ import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
   FALLBACK_CATEGORY, PRIORITY_LABELS, STATUS_LABELS,
-  isArchived, canEditTaskDefinition, catLabel, normalizeTagList,
+  isArchived, isExpired, taskCompletionPoints, canEditTaskDefinition, catLabel, normalizeTagList,
   docMime, docHref, docIcon, formatDueDate,
   normalizeParticipant, taskParticipants, subtaskParticipants, completionCounts, taskLocationLabel,
 } from '/utils/task-fields.js';
@@ -642,7 +642,7 @@ function subtaskListNode(task, ctx) {
     label.textContent = subtask.title;
     toggle.append(lucideIcon(done ? 'check-circle-2' : 'circle'), label);
     const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id) || Number(action.counterpart_task_id) === Number(subtask.id));
-    toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
+    toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || isExpired(subtask) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
     row.appendChild(toggle);
     const context = subtaskContextNode(subtask, supervision, ctx);
     if (context) row.appendChild(context);
@@ -1141,8 +1141,11 @@ function statusSummaryNode(task, ctx) {
     option.value = value; option.textContent = text;
     select.appendChild(option);
   }
+  if (isExpired(task)) {
+    const option = document.createElement('option'); option.value = 'expired'; option.textContent = 'Expired'; select.appendChild(option);
+  }
   select.value = task.status;
-  select.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
+  select.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
   select.addEventListener('change', async () => {
     const requested = select.value;
     select.value = task.status;
@@ -1155,11 +1158,24 @@ function statusSummaryNode(task, ctx) {
   if (priority) summary.appendChild(priority);
   const metrics = document.createElement('div'); metrics.className = 'task-detail-metrics';
   const points = document.createElement('span'); points.className = 'task-detail-points';
-  points.textContent = t('tasks.pointsSummary', { count: Number(task.points || 0) });
+  points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(task) });
   metrics.appendChild(points);
   const progress = progressNode(task, ctx);
   if (progress) metrics.appendChild(progress);
   summary.appendChild(metrics);
+  if (isExpired(task)) {
+    const expired = document.createElement('span');
+    expired.className = 'task-detail-expiration';
+    expired.textContent = `Expired incomplete${task.expired_at ? ` · ${formatDate(task.expired_at)} ${formatTime(task.expired_at)}` : ''} · No completion points awarded`;
+    summary.appendChild(expired);
+    if (!isArchived(task) && canTask(task, 'edit') && canTask(task, 'change_dates')) {
+      const reopen = document.createElement('button'); reopen.type = 'button'; reopen.className = 'btn btn--secondary btn--sm';
+      reopen.textContent = 'Reopen Task'; reopen.dataset.taskOperation = ''; reopen.dataset.focusKey = 'reopen';
+      reopen.disabled = !!ctx.busy || !!ctx.refreshRequired;
+      reopen.addEventListener('click', () => ctx.runMutation(reopen, () => reopenExpiredTask(task)));
+      summary.appendChild(reopen);
+    }
+  }
   if (ctx.refreshRequired) {
     const saved = document.createElement('span');
     saved.className = 'task-detail-progress';
@@ -1186,7 +1202,7 @@ function statusSummaryNode(task, ctx) {
 function metadataNode(task, ctx, reminders) {
   const grid = document.createElement('div');
   grid.className = 'task-detail-metadata';
-  const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task));
+  const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task) || isExpired(task));
   const recurrence = recurrenceRow(task.recurrence_rule, { fromCompletion: !!task.recurrence_from_completion });
   function entry(label, value, className = '') {
     if (!value) return null;
@@ -1199,12 +1215,14 @@ function metadataNode(task, ctx, reminders) {
   const assigned = entry(t('tasks.assignedLabel'), participantListNode(task, ctx), 'task-detail-metadata__assigned');
   if (assigned) grid.appendChild(assigned);
   const dates = document.createElement('div'); dates.className = 'task-detail-dates';
-  for (const [label, value] of [[t('tasks.startDateLabel'), task.start_date ? formatDate(task.start_date) : null],
+  for (const [label, value] of [[t('tasks.startDateLabel'), task.start_date ? `${formatDate(task.start_date)}${task.start_time ? ` · ${formatTime(task.start_time)}` : ''}` : null],
     [t('tasks.dueDateLabel'), due?.label]]) {
     const date = entry(label, value); if (date) dates.appendChild(date);
   }
   if (dates.children.length) grid.appendChild(dates);
   const entries = [
+    ['When incomplete at deadline', task.expiration_policy === 'expire_incomplete' ? 'Expire incomplete at Due Time · 0 completion points' : 'Keep overdue'],
+    ['After expiration', task.expiration_policy === 'expire_incomplete' && task.is_recurring ? task.recurrence_from_completion ? 'Repeat from completion pauses until this occurrence is reopened and completed.' : 'The next occurrence keeps its scheduled date and time.' : null],
     [recurrence?.label || 'Repeats', recurrence?.node || recurrence?.value],
     [t('tasks.categoryLabel'), task.category && task.category !== FALLBACK_CATEGORY ? catLabel(task.category, ctx.categories) : null],
     ['Required skills', taskSkillSummary(task, ctx)],
@@ -1243,7 +1261,10 @@ function supervisionNode(task, ctx) {
       scopeDetails.appendChild(reason);
     }
   }
-  const remaining = actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
+  if (isExpired(task)) {
+    const ended = document.createElement('p'); ended.textContent = 'This occurrence expired. Remaining supervision and helper work is no longer actionable; saved history is retained.'; wrap.appendChild(ended);
+  }
+  const remaining = isExpired(task) ? [] : actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
   if (remaining.length) {
     const summary = document.createElement('p');
     summary.textContent = remaining.some(requirement => requirement.state === 'excluded' && requirement.execution_mode !== 'delegated')
@@ -1332,7 +1353,7 @@ function activityNode(task, ctx) {
   const status = document.createElement('p'); status.className = 'form-hint'; status.textContent = t('common.loading');
   wrap.appendChild(status);
   const labels = { created: 'Created', assigned: 'Assigned', reassigned: 'Reassigned', supervisor_assigned: 'Supervisor assigned',
-    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
+    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Expired incomplete · 0 completion points', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
   ctx.activityRequest = api.get(`/tasks/${task.id}/activity`);
   ctx.activityRequest.then((response) => {
     if (ctx.closed || !wrap.isConnected) return;
@@ -1367,7 +1388,7 @@ function renderTaskDetail(task, reminders = [], ctx) {
   if (tags) tags.classList.add('task-detail-tags');
   const activity = disclosureNode(ctx, 'activity', 'Activity', 'task-detail-activity-disclosure');
   activity.appendChild(activityNode(task, ctx));
-  const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', t('tasks.historySeriesTitle'), 'task-detail-history-disclosure') : null;
+  const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', 'Occurrence history', 'task-detail-history-disclosure') : null;
   if (history) history.appendChild(seriesHistoryNode(task, ctx));
   return [
     { node: statusSummaryNode(task, ctx) },
@@ -1539,7 +1560,9 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
   } finally {
     if (subtask) ctx.pendingSubtask = null;
     ctx.busy = false;
-    if (subtask) ctx.renderOperationState?.();
+    // Reopening refreshes while busy too: repaint after clearing it so newly
+    // permitted controls do not stay disabled until another live event.
+    ctx.renderOperationState?.();
     if (button.isConnected) button.disabled = false;
     if (!ctx.closed && focusKey && (!document.activeElement || document.activeElement === document.body)) {
       const target = document.querySelector('.detail-view__pane')?.querySelector(`[data-focus-key="${focusKey}"]`);
@@ -1623,7 +1646,7 @@ export function openTaskDetail({
     },
   }] : [];
 
-  if (!archived && canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable')) {
+  if (!archived && !isExpired(task) && canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable')) {
     actions.push({
       id: 'task-detail-claim',
       label: t('tasks.claimTask'),
@@ -1657,6 +1680,10 @@ export function openTaskDetail({
       mount: (panel, pane) => edit.mount(panel, pane),
     } : undefined,
   });
+  // Keep the permitted editor available after explicit reopening, but do not
+  // offer a definition write while this occurrence is expired.
+  const editControl = document.getElementById('detail-view-edit');
+  if (editControl) editControl.hidden = isExpired(task);
   // Pending feedback replaces only operational regions: no Activity, comments,
   // recurrence history or full Task-list request is needed to paint a tap.
   ctx.renderOperationState = () => {
@@ -1691,7 +1718,7 @@ export function openTaskDetail({
     }
     for (const [id, permission] of [['detail-view-edit', 'edit'], ['task-detail-delete', 'delete_archive'], ['task-detail-archive', 'delete_archive'], ['task-detail-claim', 'claim']]) {
       const control = document.getElementById(id);
-      if (control) control.hidden = !canTask(task, permission);
+      if (control) control.hidden = !canTask(task, permission) || (id === 'detail-view-edit' || id === 'task-detail-claim') && isExpired(task);
     }
     const editing = document.querySelector('.detail-view__form');
     if (!editing || editing.hidden) {
@@ -1771,23 +1798,24 @@ function seriesHistoryNode(task, ctx = {}) {
     if (!entries.length) {
       const none = document.createElement('p');
       none.className = 'detail-history__empty';
-      const completed = activity?.data?.find(entry => entry.event_type === 'completed' && Number(entry.action_task_id) === Number(task.id));
-      none.textContent = completed
-        ? [`${formatDate(completed.created_at)} ${formatTime(completed.created_at)}`, completed.actor_name,
-          'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
-        : 'No completed occurrences currently recorded.';
+      const terminal = activity?.data?.find(entry => ['completed', 'expired'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
+      none.textContent = terminal
+        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.actor_name,
+          terminal.event_type === 'expired' ? 'Expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
+        : 'No completed or expired occurrences currently recorded.';
       list.appendChild(none);
       return;
     }
     for (const entry of entries) {
+      const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
       const row = document.createElement('p');
       row.className = 'detail-history__row';
       const when = document.createElement('span');
       when.className = 'detail-history__when';
-      when.textContent = `${historyDayLabel(zonedDateKey(entry.completed_at))}, ${formatTime(entry.completed_at)}`;
+      when.textContent = `${historyDayLabel(zonedDateKey(occurredAt))}, ${formatTime(occurredAt)}`;
       const who = document.createElement('span');
       who.className = 'detail-history__who';
-      who.textContent = entry.user_name || t('tasks.historyUnknownMember');
+      who.textContent = [entry.event_type === 'expired' ? 'Expired · 0 completion points' : 'Completed', entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
       row.append(when, who);
       list.appendChild(row);
     }

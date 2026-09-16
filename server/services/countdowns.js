@@ -340,7 +340,7 @@ function taskCountdowns(d, userId, todayKey) {
     SELECT t.id, t.title, t.due_date, t.is_recurring, t.recurrence_from_completion
     FROM tasks t
     WHERE t.countdown = 1
-      AND t.status != 'done'
+      AND t.status NOT IN ('done', 'expired')
       AND t.archived_at IS NULL
       AND t.due_date IS NOT NULL
       AND t.due_date >= CASE WHEN t.is_recurring = 1 THEN @today ELSE @floor END

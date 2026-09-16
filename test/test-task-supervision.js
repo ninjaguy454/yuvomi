@@ -61,6 +61,74 @@ function assertSingleSupervisor(view, expected) {
   }
 }
 
+test('expiration retires helper work without completion, points, archive changes or loss of mapping history',()=>{
+  const x=laundry();
+  d.prepare("UPDATE tasks SET start_date='2026-09-14',start_time='07:00',due_time='08:00' WHERE id=?").run(x.root);
+  const before=reconcileTaskSupervision(d,x.root);
+  const completed=before.actions.find(action=>action.action_task_id===x.wash);
+  d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(x.wash);
+  reconcileTaskSupervision(d,x.root);
+  const count=sql=>d.prepare(sql).get().n;
+  const points=count('SELECT COUNT(*) n FROM reward_ledger');
+  const notifications=count('SELECT COUNT(*) n FROM notification_inbox');
+  d.prepare("UPDATE tasks SET status='expired',expired_at='2026-09-14T08:00:00Z' WHERE id=?").run(x.root);
+  const view=reconcileTaskSupervision(d,x.root);
+  const expired=view.actions.find(action=>action.action_task_id===x.dry);
+  assert.equal(view.state,'none');
+  assert.equal(expired.state,'not_required');
+  assert.equal(expired.supervisor_user_id,helper,'retain the person responsible when the window closed');
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(completed.counterpart_task_id).status,'done');
+  for(const id of [before.support_task_id,expired.counterpart_task_id]) {
+    const row=d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
+    assert.equal(row.status,'expired');assert.equal(row.archived_at,null);assert.equal(row.points,0);
+    assert.equal(row.start_time,'07:00');assert.equal(row.expired_at,'2026-09-14T08:00:00Z');
+  }
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('pending','accepted')").get(x.root).n,0);
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'").get(x.root).n,0);
+  assert.equal(count('SELECT COUNT(*) n FROM reward_ledger'),points);
+  assert.equal(count('SELECT COUNT(*) n FROM notification_inbox'),notifications);
+  assert.throws(()=>taskSupervisionTransition(d,expired.counterpart_task_id,'done',helper),/Reopen the expired original Task/);
+  const rows=[d.prepare('SELECT * FROM tasks WHERE id=?').get(expired.counterpart_task_id)];
+  attachTaskSupervision(d,rows,helper);assert.equal(rows[0].supervision_action.can_complete,false);
+  const changes=d.totalChanges;
+  inspectTaskSupervision(d,x.root);assert.equal(d.totalChanges,changes,'inspection stays read-only');
+  reconcileTaskSupervision(d,x.root);assert.equal(d.totalChanges,changes,'repeated retirement is idempotent');
+  d.prepare("UPDATE tasks SET archived_at='2026-09-14T09:00:00Z' WHERE id=?").run(x.root);
+  reconcileTaskSupervision(d,x.root);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(expired.counterpart_task_id).status,'expired');
+  assert.ok(d.prepare('SELECT archived_at FROM tasks WHERE id=?').get(expired.counterpart_task_id).archived_at);
+});
+
+test('reopening an expired occurrence reuses helper mappings and preserves already completed steps',()=>{
+  const x=laundry(),before=reconcileTaskSupervision(d,x.root);
+  d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(x.wash);
+  reconcileTaskSupervision(d,x.root);
+  d.prepare("UPDATE tasks SET status='expired',expired_at='2026-09-14T08:00:00Z' WHERE id=?").run(x.root);
+  reconcileTaskSupervision(d,x.root);
+  d.prepare("UPDATE tasks SET status='open',expired_at=NULL WHERE id=?").run(x.root);
+  const reopened=reconcileTaskSupervision(d,x.root);
+  assert.equal(reopened.state,'assigned');
+  assert.equal(reopened.support_task_id,before.support_task_id);
+  assert.deepEqual(reopened.actions.map(action=>action.counterpart_task_id),before.actions.map(action=>action.counterpart_task_id));
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(before.support_task_id).status,'in_progress');
+  const completed=reopened.actions.find(action=>action.action_task_id===x.wash);
+  assert.equal(completed.completed,true);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(completed.counterpart_task_id).status,'done');
+  assert.ok(reopened.actions.every(action=>!action.expired));
+});
+
+test('an expired workflow ancestor prevents activity-scoped helper discovery',()=>{
+  const container=task('Workflow'),source=task('Morning activity',container,learner),child=task('Load washer',source,null);
+  const template=activity();
+  d.prepare('INSERT INTO task_activity_bindings(task_id,activity_template_id) VALUES(?,?)').run(source,template);
+  setTaskSkills(d,child,[washer]);
+  d.prepare("UPDATE tasks SET status='expired',expired_at='2026-09-14T08:00:00Z' WHERE id=?").run(container);
+  const changes=d.totalChanges;
+  assert.equal(inspectTaskSupervision(d,source).state,'none');assert.equal(d.totalChanges,changes);
+  assert.equal(reconcileTaskSupervision(d,source).support_task_id,null);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_supervision_actions').get().n,0);
+});
+
 test('legacy fixed learner is evaluated against explicit child skills without writes or parent skill inheritance',()=>{
   const x=laundry(), before=d.totalChanges;
   const view=inspectTaskSupervision(d,x.root);

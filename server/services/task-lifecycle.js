@@ -1,12 +1,14 @@
 /** One operational transition for REST and compatibility writers. */
 import { syncTaskRewards } from './rewards.js';
-import { retiredRecurrenceOccurrence } from './task-recurrence-frontier.js';
+import { retiredRecurrenceOccurrence, registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
 import { reconcileTaskSupervision, inspectTaskSupervision, taskSupervisionTransition, supervisionProjectionUpdates, taskSupervisionRootId } from './task-supervision.js';
+import * as v from '../middleware/validate.js';
 import { todayKey } from '../utils/timezone.js';
+import { taskDeadlineMs, taskStartMs, taskExpirationDue, taskWindowAncestors, EXPIRATION_POLICIES } from './task-window.js';
 
 let recurrenceHooks = null;
 // Recurrence keeps its established anchored/group implementation in the Tasks
@@ -33,12 +35,21 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
     const id = pending.pop();
     if(seen.has(id))continue;
     seen.add(id);
-    const task = d.prepare('SELECT id,parent_task_id,is_recurring,start_date FROM tasks WHERE id=?').get(id);
+    const task = d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
     if(!task)continue;
-    if(task.is_recurring && task.start_date && task.start_date > day)
-      throw new TaskStateError(`This occurrence starts on ${task.start_date}; it cannot be completed yet.`,
-        {reason:'occurrence_not_started',task_id:task.id,start_date:task.start_date});
+    if(task.is_recurring && task.start_date && (task.start_date > day || taskStartMs(d,task) > Number(now)))
+      throw new TaskStateError(`This occurrence starts on ${task.start_date}${task.start_time ? ` at ${task.start_time}` : ''}; it cannot be completed yet.`,
+        {reason:'occurrence_not_started',task_id:task.id,start_date:task.start_date,start_time:task.start_time});
     if(task.parent_task_id)pending.push(task.parent_task_id);
+  }
+}
+
+/** Shared by REST and compatibility writers, including changes to child actions. */
+export function assertTaskWindowAction(d, taskId, now = new Date()) {
+  for (const task of taskWindowAncestors(d,taskId)) {
+    if (task.status === 'expired' || taskExpirationDue(d,task,now))
+      throw new TaskStateError('This Task has expired. An authorized editor must explicitly reopen it before progress can change.',
+        {reason:'task_expired',task_id:task.id});
   }
 }
 
@@ -85,10 +96,11 @@ export function taskActivity(d, taskId, limit = 60) {
     .map(({details_json, ...row}) => ({...row, details: JSON.parse(details_json)}));
 }
 
-function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false}={}) {
+function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false,now=new Date()}={}) {
   if (task.status === status) return;
+  assertTaskWindowAction(d,task.id,now);
   if (status === 'done') {
-    assertRecurringCompletionStarted(d,task.id);
+    assertRecurringCompletionStarted(d,task.id,now);
     const dependencies = unresolvedDependencies(d, task.id);
     if (dependencies.length) throw new TaskStateError('Complete required earlier activities first.',
       {dependencies: dependencies.filter(item => actorId != null && taskCapabilities(d,actorId,item).view)});
@@ -126,17 +138,19 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
 }
 
 /** Atomic child/parent/projection transition, including recurrence and rewards. */
-export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, authorize=true, requireRevision=authorize}={}) {
+export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, authorize=true, requireRevision=authorize,now=null}={}) {
   if (!['open','in_progress','done'].includes(status)) throw new TaskStateError('Invalid Task status.',{},400);
   return d.transaction(() => {
+    now ??= new Date();
     const requested = d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
     if (!requested) throw new TaskStateError('Task not found.',{},404);
     if (authorize) assertTaskMutation(d,actorId,requested,{status},{operation:'status'});
     assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
+    assertTaskWindowAction(d,requested.id,now);
     if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
       'This historical occurrence was retired. Its recorded progress is preserved; use the current occurrence instead.',
       {reason:'occurrence_retired'});
-    if(status==='done')assertRecurringCompletionStarted(d,requested.id);
+    if(status==='done')assertRecurringCompletionStarted(d,requested.id,now);
     // Includes legacy Tasks whose mappings did not exist before this action.
     reconcileTaskSupervision(d,requested.id,{actorId});
     const gate = taskSupervisionTransition(d,requested.id,status,actorId);
@@ -189,14 +203,14 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
       if(containerActions.length && status==='done' && actionableSubtasks(d,child.id).some(row=>row.status!=='done'))
         throw new TaskStateError('Complete the original Task’s independent steps before recording supervision of the whole Task.');
     }
-    for (const child of targets) applyTransition(d,child,status,actorId,effects);
-    applyTransition(d,task,status,actorId,effects);
+    for (const child of targets) applyTransition(d,child,status,actorId,effects,{now});
+    applyTransition(d,task,status,actorId,effects,{now});
     // A Workflow may depend on the linked supervision Task. Publish the
     // authoritative action to that projection before checking its parent.
     const syncProjections = sourceId => {
       for (const projection of supervisionProjectionUpdates(d,sourceId)) {
         const previous=d.prepare('SELECT * FROM tasks WHERE id=?').get(projection.id ?? projection.taskId);
-        if (previous) applyTransition(d,previous,projection.status,actorId,effects);
+        if (previous && projection.status !== 'expired') applyTransition(d,previous,projection.status,actorId,effects,{now});
       }
     };
     syncProjections(gate.sourceTaskId||task.parent_task_id||task.id);
@@ -228,7 +242,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
           // Derived progress must not roll back a valid child action while
           // another Workflow dependency is still outstanding.
           if(next==='done'&&unresolvedDependencies(d,parent.id).length) {
-            if(parent.status==='open')applyTransition(d,parent,'in_progress',actorId,effects);
+            if(parent.status==='open')applyTransition(d,parent,'in_progress',actorId,effects,{now});
             continue;
           }
           try { taskSupervisionTransition(d,parent.id,next,actorId); }
@@ -236,12 +250,12 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
             // Completing an independent final step must not be rolled back
             // merely because the parent explicitly requires a supervisor.
             if(next==='done'&&error.code==='supervision_required') {
-              if(parent.status==='open')applyTransition(d,parent,'in_progress',actorId,effects);
+              if(parent.status==='open')applyTransition(d,parent,'in_progress',actorId,effects,{now});
               continue;
             }
             throw error;
           }
-          applyTransition(d,parent,next,actorId,effects,{preserveFollowup:true});
+          applyTransition(d,parent,next,actorId,effects,{preserveFollowup:true,now});
         }
       }
       syncProjections(taskSupervisionRootId(d,parentId));
@@ -252,5 +266,99 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     for (const sourceId of supervisionRoots) reconcileTaskSupervision(d,sourceId,{actorId});
     return {pending:effects.pending,undone:effects.undone,task:d.prepare('SELECT * FROM tasks WHERE id=?').get(requested.id),
       parent_task:task.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.parent_task_id):null};
-  })();
+  }).immediate();
+}
+
+/** A terminal occurrence, never a completion. Original points and completed
+ * children stay intact so history and the next occurrence retain their meaning. */
+export function expireTask(d, taskId, {now=new Date()}={}) {
+  return d.transaction(() => {
+    const source=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+    if (!taskExpirationDue(d,source,now)) return {expired:false,task:source};
+    if(source.is_recurring&&!source.parent_task_id&&!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
+    // Retain a retryable frontier even if the adapter's successor transaction
+    // rolls back before it can register the source's first occurrence.
+    if(source.is_recurring&&!source.parent_task_id)registerRecurrenceOccurrence(d,source.id);
+    const at=new Date(taskDeadlineMs(d,source)).toISOString();
+    const rows=d.prepare(`WITH RECURSIVE scope(id) AS (SELECT ?
+      UNION SELECT t.id FROM tasks t JOIN scope p ON t.parent_task_id=p.id
+      UNION SELECT s.task_id FROM task_activity_support_tasks s JOIN scope p ON s.source_task_id=p.id
+      UNION SELECT a.counterpart_task_id FROM task_supervision_actions a JOIN scope p ON a.source_task_id=p.id
+        WHERE a.counterpart_task_id IS NOT NULL)
+      SELECT t.* FROM tasks t JOIN scope p ON p.id=t.id`).all(taskId);
+    for(const row of rows) {
+      if(!['open','in_progress'].includes(row.status))continue;
+      d.prepare("UPDATE tasks SET status='expired',expired_at=? WHERE id=? AND status IN ('open','in_progress')").run(at,row.id);
+      d.prepare("UPDATE task_responsibilities SET status='cancelled' WHERE task_id=? AND status='active'").run(row.id);
+      d.prepare("UPDATE planning_obligations SET status='cancelled',updated_at=? WHERE task_id=? AND status IN ('pending','accepted')").run(at,row.id);
+      // No fulfillment, rewards, completion ledger, or successful workflow transition.
+      d.prepare("UPDATE task_assignment_context SET state='cancelled' WHERE task_id=? AND state!='fulfilled'").run(row.id);
+      d.prepare("UPDATE task_supervision_actions SET state='not_required',reason='The Task expired incomplete.',revision=revision+1,updated_at=? WHERE action_task_id=? AND state!='not_required'").run(at,row.id);
+    }
+    recordTaskActivity(d,source.id,'expired',null,{title:source.title,from_status:source.status,to_status:'expired',expired_at:at,points_awarded:0,
+      recurrence_paused:!!(source.is_recurring&&source.recurrence_from_completion)});
+    // The adapter's nested transaction rolls back a failed materialization,
+    // while the expiration itself remains durable. Startup/timer reconciliation
+    // retries this terminal frontier; a missing eligible assignee cannot keep
+    // yesterday's Task actionable indefinitely.
+    let recurrenceError=null;
+    try { recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(source.id)); }
+    catch(error) { recurrenceError=error; }
+    return {expired:true,task:d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId),recurrenceError};
+  }).immediate();
+}
+
+export function resumeExpiredTaskRecurrence(d,taskId) {
+  const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  if(task?.status!=='expired'||!task.is_recurring||task.recurrence_from_completion||task.parent_task_id)return;
+  if(!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
+  return recurrenceHooks.spawn(task);
+}
+
+/** Explicit authorized reactivation preserves partial progress and successors. */
+export function reopenExpiredTask(d,taskId,{actorId,body={},now=new Date()}={}) {
+  return d.transaction(()=>{
+    const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+    if(!task)throw new TaskStateError('Task not found.',{},404);
+    assertTaskMutation(d,actorId,task,body,{operation:'reopen'});
+    assertTaskRevision(d,task,body,{required:true,requireParent:true});
+    if(task.status!=='expired')throw new TaskStateError('Only expired Tasks can be reopened.');
+    if(task.archived_at)throw new TaskStateError('Restore this Task from the archive before reopening it.');
+    if(taskWindowAncestors(d,taskId).some(row=>row.id!==task.id&&row.status==='expired'))
+      throw new TaskStateError('Reopen the expired parent Task first.',{reason:'parent_expired'});
+    const errors=v.collectErrors([v.date(body.due_date,'due_date'),v.time(body.due_time,'due_time')]);
+    if(errors.length)throw new TaskStateError(errors.join(' '),{},400);
+    const policy=body.expiration_policy===undefined?task.expiration_policy:body.expiration_policy;
+    if(!EXPIRATION_POLICIES.includes(policy))throw new TaskStateError('Invalid expiration policy.',{},400);
+    const candidate={...task,expiration_policy:policy,due_date:body.due_date??task.due_date,due_time:body.due_time??task.due_time,status:'open'};
+    if(candidate.due_date&&taskDeadlineMs(d,candidate)==null)throw new TaskStateError('Choose a valid deadline.',{},400);
+    if(taskStartMs(d,candidate)!=null&&taskDeadlineMs(d,candidate)!=null&&taskStartMs(d,candidate)>=taskDeadlineMs(d,candidate))throw new TaskStateError('The deadline must be after the start.',{},400);
+    if(policy==='expire_incomplete'&&(!candidate.due_date||taskExpirationDue(d,candidate,now)))
+      throw new TaskStateError('Choose a future deadline or Keep overdue when reopening this occurrence.',{reason:'new_deadline_required'},400);
+    const rows=d.prepare(`WITH RECURSIVE scope(id) AS (SELECT ?
+      UNION SELECT t.id FROM tasks t JOIN scope p ON t.parent_task_id=p.id
+      UNION SELECT s.task_id FROM task_activity_support_tasks s JOIN scope p ON s.source_task_id=p.id
+      UNION SELECT a.counterpart_task_id FROM task_supervision_actions a JOIN scope p ON a.source_task_id=p.id WHERE a.counterpart_task_id IS NOT NULL)
+      SELECT t.* FROM tasks t JOIN scope p ON p.id=t.id`).all(taskId);
+    for(const row of rows)if(row.status==='expired') {
+      const projection=d.prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id=?
+        UNION ALL SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=? LIMIT 1`).get(row.id,row.id);
+      if(!projection)assertTaskMutation(d,actorId,row,{}, {operation:'reopen'});
+    }
+    for(const row of rows)if(row.status==='expired') {
+      const progress=d.prepare("SELECT 1 FROM tasks WHERE parent_task_id=? AND status='done'").get(row.id);
+      d.prepare('UPDATE tasks SET status=?,expired_at=NULL WHERE id=?').run(progress?'in_progress':'open',row.id);
+      d.prepare("UPDATE task_responsibilities SET status='active' WHERE task_id=? AND status='cancelled' AND role!='supervisor'").run(row.id);
+      d.prepare("UPDATE task_assignment_context SET state=CASE WHEN strategy='open_claimable' AND (SELECT assigned_to FROM tasks WHERE id=?) IS NULL THEN 'open' ELSE 'assigned' END WHERE task_id=?").run(row.id,row.id);
+      if(row.id!==taskId)d.prepare(`UPDATE tasks SET
+        due_date=CASE WHEN due_date IS ? THEN ? ELSE due_date END,
+        due_time=CASE WHEN due_time IS ? THEN ? ELSE due_time END WHERE id=?`)
+        .run(task.due_date,candidate.due_date,task.due_time,candidate.due_time,row.id);
+    }
+    d.prepare('UPDATE tasks SET expiration_policy=?,due_date=?,due_time=? WHERE id=?').run(policy,candidate.due_date,candidate.due_time,taskId);
+    reconcileTaskSupervision(d,taskId,{actorId});
+    recordTaskActivity(d,taskId,'reopened',actorId,{title:task.title,from_status:'expired',to_status:d.prepare('SELECT status FROM tasks WHERE id=?').get(taskId).status,
+      expiration_policy:policy,previous_expired_at:task.expired_at});
+    return d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  }).immediate();
 }

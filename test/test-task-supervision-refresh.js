@@ -111,6 +111,16 @@ test('completed and archived sources are left intact by the operational maintena
   assert.equal(d.prepare('SELECT supervisor_user_id FROM task_supervision_actions WHERE action_task_id=?').get(action).supervisor_user_id,before.supervisor_user_id);
 });
 
+test('expired sources are excluded from periodic supervision refresh',()=>{
+  const before=reconcileTaskSupervision(d,root);
+  d.prepare("UPDATE tasks SET status='expired',expired_at='2026-09-14T12:00:00Z' WHERE id=?").run(root);
+  reconcileTaskSupervision(d,root);
+  const changes=d.totalChanges;
+  assert.equal(refreshExistingTaskSupervision(d).inspected,0);
+  assert.equal(d.totalChanges,changes);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(before.support_task_id).status,'expired');
+});
+
 test('one failed source does not stop independent linked Tasks from being examined',()=>{
   reconcileTaskSupervision(d,root);const other=task('Second laundry');const child=task('Other washer',other);setTaskSkills(d,child,[skill]);
   reconcileTaskSupervision(d,other);const errors=[];

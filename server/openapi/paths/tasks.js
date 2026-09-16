@@ -12,7 +12,7 @@ export function tasksPaths() {
         tag: 'Tasks',
         description: 'Several tags narrow the result: a task must carry all of them. Tag matching ignores case, including non-ASCII letters. Archived tasks are omitted unless asked for. Rows also carry flattened Activity Template/subject/assignment metadata, responsibility records, rotation members, first-class subtasks and a normalized saved, Google, or manual `location` with navigation URL.',
         params: [
-          { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'archived'] }, description: 'Repeatable; several values are OR-ed. "archived" is not a status but the separate archive axis and behaves like the `archived` parameter.' },
+          { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'archived'] }, description: 'Repeatable; several values are OR-ed. Expired occurrences are historical and excluded by default. "archived" is the separate archive axis and behaves like the `archived` parameter.' },
           { name: 'archived',    in: 'query', required: false, schema: { type: 'string', enum: ['1', 'only'] }, description: 'Archived tasks are hidden by default. `1` includes them, `only` returns just the archive. A task keeps its own status while archived.' },
           { name: 'priority',    in: 'query', required: false, schema: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'urgent'] } },
           { name: 'assigned_to', in: 'query', required: false, schema: { type: 'integer' }, description: 'Family member ID.' },
@@ -29,7 +29,7 @@ export function tasksPaths() {
           { name: 'include_future', in: 'query', required: false, schema: { type: 'string' }, description: 'Any non-empty value also returns tasks whose start date lies in the future.' },
         ],
       }),
-      post: op({ summary: 'Create task', tag: 'Tasks', stateChanging: true, requestBody: jsonBody(null), description: 'Body accepts `locked: true` to close the task definition to everyone but its creator and administrators (#830). A subtask under a locked parent inherits the lock, and adding one requires the same rights. Top-level Tasks may also use `activity_template_id`/`activity_subject_user_id`, fixed or round-robin assignment fields, and `location` (`saved_place`, one-use `google_place`, or `manual`). Attaching an Activity Template lets its assignment/supervision rules own the occurrence and materializes its first-class Task subtasks once.' }),
+      post: op({ summary: 'Create task', tag: 'Tasks', stateChanging: true, requestBody: jsonBody(null), description: 'Body accepts `locked: true` to close the task definition to everyone but its creator and administrators (#830). A subtask under a locked parent inherits the lock, and adding one requires the same rights. Top-level Tasks may also use `activity_template_id`/`activity_subject_user_id`, fixed or round-robin assignment fields, and `location` (`saved_place`, one-use `google_place`, or `manual`). Attaching an Activity Template lets its assignment/supervision rules own the occurrence and materializes its first-class Task subtasks once. Optional `start_time` (HH:mm) complements `start_date`. `expiration_policy` is `keep_overdue` by default or `expire_incomplete`; the latter requires `due_date` and uses `due_time`, or the end of that household-local day when time is omitted. Expiration is automatic, awards no completion points, and advances calendar recurrence without shifting its anchor. Repeat-from-completion waits for actual successful completion after an authorized reopen.' }),
     },
     '/api/v1/tasks/meta/options': { get: op({ summary: 'Get task metadata', tag: 'Tasks' }) },
     '/api/v1/tasks/changes': {
@@ -39,13 +39,13 @@ export function tasksPaths() {
     },
     '/api/v1/tasks/completions': {
       get: op({
-        summary: 'List completed tasks, newest first',
+        summary: 'List completed and expired Task occurrences, newest first',
         tag: 'Tasks',
-        description: 'The household history of who ticked off which task, and when (#791). Recording started with the release that introduced it, so nothing before that appears. Timestamps are UTC instants; which calendar day one belongs to is a question for the display timezone, which is why there is no date range here. Only tasks the caller may see are returned, evaluated live against the task - a task later set to private disappears from the history too. Subtasks are never recorded: a checklist item is part of its parent instruction, and the completion of the parent is the event.',
+        description: 'The household occurrence history includes successful completion and expired incomplete work. Each row carries `event_type` (`completed` or `expired`) and UTC `occurred_at`. A completion has `completed_at` and a null `expired_at`; an expiration has a null `completed_at`, its deadline in `expired_at`, no completing user, and `points: 0`. Expiration rows come from Task activity events and never create task-completion earns or completion records. Archive remains independent: authorized history preserves archived expired occurrences. Only Tasks currently visible to the caller are returned. Subtask progress stays in Task activity instead of becoming separate top-level occurrence history. Use the returned cursor unchanged; expiration event IDs may be negative.',
         params: [
           { name: 'limit',     in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 200, default: 50 } },
-          { name: 'user_id',   in: 'query', required: false, schema: { type: 'integer' }, description: 'Only completions by this member - who ticked it off, which is not necessarily who it was assigned to.' },
-          { name: 'before_at', in: 'query', required: false, schema: { type: 'string' }, description: 'Cursor, taken from `next_cursor` of the previous page. Paired with before_id because several completions can share a second.' },
+          { name: 'user_id',   in: 'query', required: false, schema: { type: 'integer' }, description: 'Successful completions by this member and expired occurrences assigned to this member.' },
+          { name: 'before_at', in: 'query', required: false, schema: { type: 'string' }, description: 'Cursor, taken from `next_cursor` of the previous page. Paired with before_id; history orders by occurred_at and event ID.' },
           { name: 'before_id', in: 'query', required: false, schema: { type: 'integer' }, description: 'Cursor, taken from `next_cursor` of the previous page.' },
         ],
       }),
@@ -86,7 +86,7 @@ export function tasksPaths() {
     },
     '/api/v1/tasks/{id}': {
       get: op({ summary: 'Get task', tag: 'Tasks', params: [idParam()], description: 'Returns the same enriched Task contract used by Tasks, Calendar and Dashboard, including Activity Template, assignment/responsibility, participants, rotation, subtasks, documents and normalized Place/location information.' }),
-      put: op({ summary: 'Update task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'On a locked task (`locked: 1`) only the creator and administrators may change the definition - title, description, category, priority, dates, recurrence, points, visibility, tags, sync target, the lock itself, and assigning other members. Everyone else may still send the full body as long as the outcome differs only in `status` or in their own entry in `assigned_to`; anything else answers 403. The comparison is against the stored values, not against which fields were sent. Activity Template bindings, rotation groups/members, and saved/Google/manual `location` are definition fields; updating them preserves immutable Task identity and validates the referenced household data.' }),
+      put: op({ summary: 'Update task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'On a locked task (`locked: 1`) only the creator and administrators may change the definition - title, description, category, priority, dates, recurrence, points, visibility, tags, sync target, the lock itself, and assigning other members. Everyone else may still send the full body as long as the outcome differs only in `status` or in their own entry in `assigned_to`; anything else answers 403. The comparison is against the stored values, not against which fields were sent. Activity Template bindings, rotation groups/members, and saved/Google/manual `location` are definition fields; updating them preserves immutable Task identity and validates the referenced household data. `start_time` and `expiration_policy` (`keep_overdue` or `expire_incomplete`) require the existing date/lifecycle settings authority. Expiration uses the existing due date/time in the household timezone. Changing settings or sending status open/done does not reactivate an expired occurrence; use POST /tasks/{id}/reopen explicitly. Archived expired Tasks retain status expired.' }),
       delete: op({ summary: 'Delete task', tag: 'Tasks', params: [idParam()], stateChanging: true, description: 'On a locked task, the creator and administrators only (403 otherwise).' }),
     },
     '/api/v1/tasks/{id}/location/promote': {
@@ -110,6 +110,10 @@ export function tasksPaths() {
     },
     '/api/v1/tasks/{id}/status': {
       patch: op({ summary: 'Update task status', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body: { status }. Sending `archived` files the task away without touching its status - use PATCH /archive instead. Deliberately open on a locked task: ticking one off is the interaction the lock exists to preserve.' }),
+    },
+    '/api/v1/tasks/{id}/reopen': {
+      post: op({summary:'Reopen an expired Task',tag:'Tasks',params:[idParam()],stateChanging:true,requestBody:jsonBody(null),
+        description:'Requires the current lifecycle edit permission and expected_revision (plus expected_parent_revision for a subtask). Provide a future due_date/due_time or expiration_policy: keep_overdue. Preserves completed subtasks, history, and any existing recurrence successor. Archived occurrences must be restored first. Expiration itself never awards completion points.'}),
     },
     '/api/v1/tasks/{id}/archive': {
       patch: op({ summary: 'Archive or restore a task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Archives the task by default. Send `{ "archived": false }` to bring it back. The status is left untouched: a task that was done stays done, and no reward booking changes. Filing a task removes it from everyone\'s view, so on a locked task this is the creator and administrators only.' }),
@@ -135,10 +139,10 @@ export function tasksPaths() {
     },
     '/api/v1/tasks/{id}/completions': {
       get: op({
-        summary: 'List completions of this task and its repetition chain',
+        summary: 'List completed and expired occurrences of this Task series',
         tag: 'Tasks',
         params: [idParam(), { name: 'limit', in: 'query', required: false, schema: { type: 'integer', minimum: 1, maximum: 100, default: 20 } }],
-        description: 'Answers "when was this last done" for a recurring task (#791). A completed repeating task spawns a follow-up instance, so its history is spread across a chain of rows; this walks the chain to its root and returns the whole series, newest first. A task the caller cannot see answers 404.',
+        description: 'Returns visible occurrence history for this Task and its durable recurrence series, newest first. The row contract matches GET /tasks/completions: event_type is completed or expired, occurred_at orders both, and expired rows have completed_at null, expired_at at the deadline, no completing user, and zero points. Archived expired occurrences remain historical entries. A Task the caller cannot see answers 404.',
       }),
     },
     '/api/v1/tasks/{id}/comments': {

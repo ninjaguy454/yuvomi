@@ -3307,7 +3307,7 @@ function renderSearchResults(container, data, onClose) {
   }
 
   makeSection('nav.tasks',    'tasks',    tasks,    (i) => `/tasks?open=${i.id}`, null,
-    (i) => (i.due_date ? formatDate(i.due_date) : ''));
+    (i) => [i.status === 'expired' ? 'Expired · 0 completion points' : '', i.due_date ? formatDate(i.due_date) : ''].filter(Boolean).join(' · '));
   makeSection('nav.calendar', 'calendar', events,   (i) => `/calendar?open=${i.id}`, null,
     (i) => (i.start_datetime ? `${formatDate(i.start_datetime)}${i.all_day ? '' : ` · ${formatTime(i.start_datetime)}`}` : ''));
   makeSection('nav.notes',    'notes',    notes,    (i) => `/notes?open=${i.id}`);

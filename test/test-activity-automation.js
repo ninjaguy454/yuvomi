@@ -382,3 +382,22 @@ test('workflow preview simulates repeated Activity Template rotation without con
   `).get(rotatingActivity)?.last_user_id ?? null;
   assert.equal(afterCreate, mom);
 });
+
+test('workflow activity occurrences snapshot expiration policy without changing the workflow container', () => {
+  const activityId = addActivity({ name: 'Morning activity', title: 'Morning activity', strategy: 'fixed', subjectRequired: 0, fixedUserId: admin });
+  db.prepare("UPDATE activity_templates SET expiration_policy='expire_incomplete',points=2 WHERE id=?").run(activityId);
+  const workflowId = Number(db.prepare("INSERT INTO workflow_templates(name,category,subject_required,created_by) VALUES('Morning workflow','misc',0,?)")
+    .run(admin).lastInsertRowid);
+  db.prepare("INSERT INTO workflow_template_steps(workflow_template_id,activity_template_id,step_key,sort_order) VALUES(?,?,'morning',0)")
+    .run(workflowId,activityId);
+  assert.equal(previewWorkflow(db,workflowId).steps[0].expiration_policy,'expire_incomplete');
+  const instance = instantiateWorkflow(db,workflowId,{createdBy:admin});
+  const primary = instance.tasks.find(item => item.role === 'primary');
+  const occurrence = db.prepare('SELECT * FROM tasks WHERE id=?').get(primary.task_id);
+  assert.equal(occurrence.expiration_policy,'expire_incomplete');
+  assert.equal(occurrence.points,2);
+  assert.ok(occurrence.due_date,'date-only workflows expire at the end of their existing local due day');
+  assert.equal(db.prepare('SELECT expiration_policy FROM tasks WHERE id=?').get(instance.parent_task_id).expiration_policy,'keep_overdue');
+  db.prepare("UPDATE activity_templates SET expiration_policy='keep_overdue' WHERE id=?").run(activityId);
+  assert.equal(db.prepare('SELECT expiration_policy FROM tasks WHERE id=?').get(primary.task_id).expiration_policy,'expire_incomplete');
+});

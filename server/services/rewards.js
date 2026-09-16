@@ -1,3 +1,4 @@
+import { taskWindowAncestors } from './task-window.js';
 /**
  * Modul: Rewards (Belohnungen)
  * Zweck: Punkte-Vergabe bei Aufgaben-Erledigung und Salden-Berechnung aus dem
@@ -84,6 +85,7 @@ export function awardForCompletion(d, taskId, actingUserId) {
   return d.transaction(() => {
     const task = d.prepare('SELECT id, points, title FROM tasks WHERE id = ?').get(taskId);
     if (!task || !Number.isInteger(task.points) || task.points <= 0) return false;
+    if (taskWindowAncestors(d,taskId).some(row=>row.status==='expired')) return false;
     const targets = rewardTargets(d, taskId, actingUserId);
     if (!targets.length) return false;
     const provenance=rewardOccurrenceProvenance(d,taskId);

@@ -97,6 +97,13 @@ export function recurrenceFrontier(d,taskId) {
 
 export function isRecurrenceFrontier(d,taskId) {return recurrenceFrontier(d,taskId)?.id===Number(taskId);}
 
+/** Expiration closes the occurrence without asserting successful completion.
+ * Its provenance remains materialized: archived or expired history must still
+ * prevent an older occurrence from regenerating the same calendar slot. */
+export function isTerminalRecurrenceOccurrence(task) {
+  return Boolean(task && (task.status === 'done' || task.status === 'expired' || task.expired_at));
+}
+
 /** Original action lineage survives deletion just like occurrence lineage.
  * A copied child inherits only its explicit predecessor's identity, never its
  * title, position, skill or due date. Helper projections are not reward work. */

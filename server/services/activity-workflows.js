@@ -147,6 +147,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId });
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
+      expiration_policy: activity.expiration_policy ?? 'keep_overdue',
       checklist: activity.checklist.map(item => ({ ...item, title_template: renderActivityChecklistTitle(item, activity, subject, resolved.labels) })),
       inputs: resolved.persisted, resolved_variables: resolved.summary },
     input_schema: schema.input_schema,
@@ -317,6 +318,7 @@ export function previewWorkflow(d, workflowId, {
           assignment_policy: assignment.policy,
           depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
           category: activity.category,
+          expiration_policy: activity.expiration_policy ?? 'keep_overdue',
           ...planning,
         });
       }
@@ -351,14 +353,15 @@ function insertTask(d, {
   dueTime = null,
   priority = 'none',
   points = 0,
+  expirationPolicy = 'keep_overdue',
   tags = [],
 }) {
   const result = d.prepare(`
     INSERT INTO tasks (
       title, description, category, priority, status, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
-      assignment_mode, rotation_index, points, visibility, countdown, locked
-    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0)
+      assignment_mode, rotation_index, points, visibility, countdown, locked, expiration_policy
+    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0, ?)
   `).run(
     title,
     description,
@@ -370,6 +373,7 @@ function insertTask(d, {
     createdBy,
     parentTaskId,
     points,
+    expirationPolicy,
   );
   const taskId = Number(result.lastInsertRowid);
   setTags(d, taskId, tags);
@@ -450,6 +454,7 @@ export function instantiateWorkflow(d, workflowId, {
         category: activity.category,
         priority: activity.priority,
         points: activity.points,
+        expirationPolicy: activity.expiration_policy ?? 'keep_overdue',
         tags: activity.tags,
         assignedTo: resolution.primary?.id ?? null,
         createdBy,

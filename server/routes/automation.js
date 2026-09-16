@@ -154,6 +154,9 @@ function normalizeActivityInput(d, body, existing = null) {
   if (!['none', 'low', 'medium', 'high', 'urgent'].includes(priority)) throw new Error('Choose a valid priority.');
   const points = body.points ?? existing?.points ?? 0;
   if (!Number.isSafeInteger(Number(points)) || Number(points) < 0 || Number(points) > 100000) throw new Error('Points must be a whole number from 0 to 100000.');
+  const expirationPolicy = body.expiration_policy === undefined
+    ? (existing?.expiration_policy ?? 'keep_overdue') : body.expiration_policy;
+  if (!['keep_overdue', 'expire_incomplete'].includes(expirationPolicy)) throw new Error('Choose a valid expiration policy.');
   const tags = body.tags === undefined ? (existing?.tags || []) : body.tags;
   if (!Array.isArray(tags) && typeof tags !== 'string') throw new Error('Tags must be a list.');
 
@@ -199,6 +202,7 @@ function normalizeActivityInput(d, body, existing = null) {
     category,
     priority,
     points: Number(points),
+    expirationPolicy,
     tags: normalizeTags(tags),
     assignmentStrategy,
     legacyAssignmentStrategy: ['subject_skill', 'eligible_round_robin', 'fixed'].includes(assignmentStrategy)
@@ -885,6 +889,7 @@ router.get('/activity-options', (_req, res) => {
       category: activity.category,
       priority: activity.priority,
       points: activity.points,
+      expiration_policy: activity.expiration_policy,
       tags: activity.tags,
       skills: activity.skills,
       skill_ids: activity.skills.map((skill) => skill.id),
@@ -931,6 +936,7 @@ router.get('/quick-add', (req, res) => {
       description: activity.description,
       category: activity.category,
       assignment_strategy: activity.assignment_strategy,
+      expiration_policy: activity.expiration_policy,
       subject_required: activity.subject_required,
     }));
     res.json({
@@ -1322,8 +1328,8 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
           subject_required, fixed_user_id, supervision_title_template, active, created_by,
           location_mode, place_id, location_variable_id, presence_policy, presence_window,
           assignment_policy, allow_assignment_override, participant_count, rotation_group,
-          priority, points, tags_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          priority, points, tags_json, expiration_policy
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
         input.legacyAssignmentStrategy, input.subjectRequired, input.fixedUserId,
@@ -1331,7 +1337,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
         input.locationMode, input.placeId, input.locationVariableId,
         input.presencePolicy, input.presenceWindow, input.assignmentStrategy,
         input.allowAssignmentOverride, input.participantCount, input.rotationGroup,
-        input.priority, input.points, JSON.stringify(input.tags),
+        input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
@@ -1357,7 +1363,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
                supervision_title_template = ?, active = ?, location_mode = ?,
                place_id = ?, location_variable_id = ?, presence_policy = ?, presence_window = ?,
                assignment_policy = ?, allow_assignment_override = ?, participant_count = ?, rotation_group = ?,
-               priority = ?, points = ?, tags_json = ?,
+               priority = ?, points = ?, tags_json = ?, expiration_policy = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(
@@ -1366,7 +1372,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.supervisionTitleTemplate, input.active, input.locationMode,
         input.placeId, input.locationVariableId, input.presencePolicy,
         input.presenceWindow, input.assignmentStrategy, input.allowAssignmentOverride,
-        input.participantCount, input.rotationGroup, input.priority, input.points, JSON.stringify(input.tags), existing.id,
+        input.participantCount, input.rotationGroup, input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
       saveActivityChecklist(d, existing.id, input.checklist);

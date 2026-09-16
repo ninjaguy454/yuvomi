@@ -251,6 +251,7 @@ const contextSummary = el => elementText(el.children.find(child => child.tagName
 function detailHarness(overrides = {}) {
   const context = vm.createContext({ document: { createElement: tag => new Element(tag) }, HTMLElement: Element, window: {},
     canTask: (task, key) => task?.permissions?.[key] === true, isArchived: task => !!task.archived_at,
+    isExpired: task => task?.status === 'expired',
     t: key => key, actionableSubtasks: stateHarness().actionableSubtasks, ...overrides });
   vm.runInContext(`${plain(read('components/task-detail.js'))}\nthis.subject={subtaskListNode,progressNode,supervisionNode,commentsNode,seriesHistoryNode,runTaskDetailMutation,taskStatusResponseSnapshot,mergeTaskDetailSnapshot}`, context);
   return context.subject;
@@ -307,6 +308,17 @@ function pendingMutationHarness() {
   const button = { dataset: { focusKey: 'subtask-2' }, isConnected: true, disabled: false };
   return { ...h, ctx, task, button, paints, errors, counts: () => ({ invalidated, reloaded, changed }) };
 }
+
+test('parent reopen repaints enabled operation controls after its busy refresh finishes', async () => {
+  const h = pendingMutationHarness(), busyStates = [];
+  h.task.status = 'expired';
+  h.ctx.refresh = async () => { assert.equal(h.ctx.busy, true); h.task.status = 'in_progress'; };
+  h.ctx.renderOperationState = () => busyStates.push(h.ctx.busy);
+  await h.runTaskDetailMutation(h.ctx, h.button, async () => ({ data: { ...h.task, status: 'in_progress' } }));
+  assert.deepEqual(busyStates, [false], 'refreshing while busy must not leave the newly reopened controls disabled');
+  assert.equal(h.ctx.busy, false);
+  assert.equal(h.task.status, 'in_progress');
+});
 
 test('rapid repeated taps send one mutation and its acknowledgement does not wait for the surrounding Task list', async () => {
   const h = pendingMutationHarness(), before = value(h.task);
@@ -727,5 +739,5 @@ test('child completion is not reported as parent completion and empty net histor
     { event_type: 'completed', action_task_id: 2, created_at: '2026-09-12T14:30:00Z' },
   ] }) });
   await new Promise(setImmediate);
-  assert.equal(node.children[0].textContent, 'No completed occurrences currently recorded.');
+  assert.equal(node.children[0].textContent, 'No completed or expired occurrences currently recorded.');
 });

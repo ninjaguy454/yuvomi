@@ -61,6 +61,7 @@ function supportTaskDefinition(activity, subject, supervisorId, parent, recurren
     priority: 'none',
     status: 'open',
     start_date: parent.start_date ?? null,
+    start_time: parent.start_time ?? null,
     due_date: parent.due_date ?? null,
     due_time: parent.due_time ?? null,
     assigned_to: Number(supervisorId),
@@ -90,7 +91,7 @@ export function matchesGeneratedActivitySupportTask(d, parentTaskId, support, re
   if (d.prepare('SELECT 1 FROM task_supervision_actions WHERE source_task_id=? AND counterpart_task_id IS NOT NULL').get(parentTaskId)) {
     return support.title === `Supervise ${parent.title}` && support.description == null
       && support.category === parent.category && support.status === 'open' && support.priority === 'none'
-      && support.start_date === parent.start_date && support.due_date === parent.due_date && support.due_time === parent.due_time
+      && support.start_date === parent.start_date && support.start_time === parent.start_time && support.due_date === parent.due_date && support.due_time === parent.due_time
       && support.parent_task_id === parent.id && !support.points && !support.is_recurring
       && Number(support.recurrence_origin_id) === Number(recurrenceOriginTaskId);
   }

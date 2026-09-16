@@ -238,3 +238,38 @@ export function seriesHistory(d, { me, taskId, limit = 20 }) {
     LIMIT @size
   `).all({ me, task: taskId, size, seriesId });
 }
+
+// Expiration history is an activity event, never a task_completions record.
+// Keep existing completion IDs/cursors stable; negative IDs identify expiration
+// events without colliding with completion IDs at the same timestamp.
+const OCCURRENCE_HISTORY_SQL = `WITH occurrence_history AS (
+  SELECT id,task_id,series_id,user_id,completed_at,completed_at AS occurred_at,
+    NULL AS expired_at,'completed' AS event_type FROM task_completions
+  UNION ALL
+  SELECT -e.id,e.action_task_id,COALESCE(o.series_id,e.action_task_id),NULL,NULL,
+    json_extract(e.details_json,'$.expired_at'),json_extract(e.details_json,'$.expired_at'),'expired'
+  FROM task_activity_events e JOIN tasks et ON et.id=e.action_task_id
+  LEFT JOIN task_recurrence_occurrences o ON o.task_id=et.id
+  WHERE e.event_type='expired' AND et.parent_task_id IS NULL
+)
+SELECT c.*,u.display_name AS user_name,u.avatar_color AS user_color,u.avatar_data AS user_avatar,
+  t.title,t.category,CASE WHEN c.event_type='expired' THEN 0 ELSE t.points END AS points,t.is_recurring,t.visibility
+FROM occurrence_history c JOIN tasks t ON t.id=c.task_id LEFT JOIN users u ON u.id=c.user_id`;
+
+export function occurrenceFeed(d,{me,limit=50,userId=null,beforeAt=null,beforeId=null,seriesId=null}={}) {
+  const size=Math.min(Math.max(Number(limit)||50,1),200),params={me,size};
+  const where=[taskVisibilityWhere(d,me,'t','@me')];
+  if(userId!=null) {
+    where.push(`(c.user_id=@user OR (c.event_type='expired' AND
+      (t.assigned_to=@user OR EXISTS(SELECT 1 FROM task_assignments a WHERE a.task_id=t.id AND a.user_id=@user))))`);
+    params.user=userId;
+  }
+  if(beforeAt){where.push('(c.occurred_at<@before OR (c.occurred_at=@before AND c.id<@id))');params.before=beforeAt;params.id=Number(beforeId)||0;}
+  if(seriesId!=null){where.push('c.series_id=@series');params.series=seriesId;}
+  const rows=d.prepare(`${OCCURRENCE_HISTORY_SQL} WHERE ${where.join(' AND ')} ORDER BY c.occurred_at DESC,c.id DESC LIMIT @size+1`).all(params);
+  return {entries:rows.slice(0,size),hasMore:rows.length>size};
+}
+
+export function occurrenceHistory(d,{me,taskId,limit=20}) {
+  return occurrenceFeed(d,{me,limit,seriesId:seriesRootOf(d,taskId)}).entries;
+}

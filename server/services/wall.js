@@ -134,7 +134,7 @@ export function wallDashboard(d,hostId,hydrateTask) {
   const result={config,canConfigure:p.admin,today,timezone:householdTimeZone(d),users,
     urgentTasks:[],upcomingEvents:[],todayMeals:[],shoppingLists:[],pinnedNotes:[],points:[],rewardCatalog:[],presence:[],notification:{mode:config.privacy.notifications}};
   if(allows('tasks')) {
-    const rows=d.prepare(`SELECT t.* FROM tasks t WHERE t.status!='done' AND t.archived_at IS NULL
+    const rows=d.prepare(`SELECT t.* FROM tasks t WHERE t.status NOT IN ('done','expired') AND t.archived_at IS NULL
       AND ${taskScopeWhere('t',{bind:'@today',includeSupervision:true})}
       AND ${taskVisibilityWhere(d,hostId,'t','@me')} AND ${taskVisibilityWhere(d,null,'t','0')}
       ORDER BY t.due_date IS NULL,t.due_date,t.due_time,t.id LIMIT 24`).all({today,me:hostId});

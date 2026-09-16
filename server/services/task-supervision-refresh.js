@@ -13,11 +13,11 @@ export function refreshExistingTaskSupervision(database, {
 } = {}) {
   const sources = database.prepare(`SELECT DISTINCT a.source_task_id FROM task_supervision_actions a
     JOIN tasks source ON source.id=a.source_task_id
-    WHERE source.status!='done' AND source.archived_at IS NULL ORDER BY a.source_task_id`).all();
+    WHERE source.status NOT IN ('done','expired') AND source.archived_at IS NULL ORDER BY a.source_task_id`).all();
   const result = { inspected: 0, reconciled: 0, failed: 0 };
   const canonicalSources = [...new Set(sources.map(row=>taskSupervisionRootId(database,row.source_task_id)))].filter(id=>{
     const source=database.prepare('SELECT status,archived_at FROM tasks WHERE id=?').get(id);
-    return source && source.status!=='done' && source.archived_at===null;
+    return source && !['done','expired'].includes(source.status) && source.archived_at===null;
   });
   for (const sourceId of canonicalSources) {
     try {

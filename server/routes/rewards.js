@@ -9,15 +9,19 @@
 import express from 'express';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
-import { getBalance, isEnrolled, postLedger } from '../services/rewards.js';
+import { createPointAdjustment, createRedemption, decideRedemption, RewardError } from '../services/rewards.js';
 import { taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
 import { tokenAllows } from '../scopes.js';
+import { actorPermissions } from '../permissions.js';
+import { createChangesStream } from '../services/change-stream.js';
 
 const log = createLogger('Rewards');
 const router = express.Router();
 
 const MAX_COST = 1_000_000;
-const MAX_BONUS = 1_000_000;
+
+router.get('/changes',createChangesStream({table:'reward_change_clock',deniedMessage:'Rewards access is not enabled.',
+  canRead:(d,req)=>actorPermissions(d,req).modules.rewards!=='none'}));
 
 function requireAdmin(req, res, next) {
   if (req.authRole !== 'admin') {
@@ -36,14 +40,6 @@ const MEMBER_FILTER = 'NOT EXISTS (SELECT 1 FROM housekeeping_workers hw WHERE h
 function toInt(val) {
   const n = Math.trunc(Number(val));
   return Number.isFinite(n) ? n : NaN;
-}
-
-// Haushaltweiter Freigabe-Schalter (sync_config). Default an: fehlender Wert =>
-// Einlösungen müssen bestätigt werden (Verhalten wie bisher). '0' => sofortige
-// Gutschrift ohne Eltern-Freigabe.
-function requiresApproval(d) {
-  const row = d.prepare("SELECT value FROM sync_config WHERE key = 'rewards_require_approval'").get();
-  return !row || row.value !== '0';
 }
 
 /** Rangfolge mit gleichen Rängen bei Punktegleichstand. */
@@ -171,7 +167,7 @@ router.get('/catalog', (req, res) => {
 function readCatalogInput(body) {
   const name = String(body?.name ?? '').trim();
   const cost = toInt(body?.cost);
-  const icon = body?.icon != null ? String(body.icon).trim().slice(0, 8) || null : null;
+  const icon = body?.icon != null ? String(body.icon).trim() || null : null;
   const description = body?.description != null ? String(body.description).trim() || null : null;
   const sort_order = Number.isFinite(toInt(body?.sort_order)) ? toInt(body.sort_order) : 0;
   return { name, cost, icon, description, sort_order };
@@ -184,6 +180,8 @@ router.post('/catalog', requireAdmin, (req, res) => {
   try {
     const { name, cost, icon, description, sort_order } = readCatalogInput(req.body);
     if (!name) return res.status(400).json({ error: 'name is required.', code: 400 });
+    if (req.body?.icon != null && String(req.body.icon).length > 128)
+      return res.status(400).json({ error: 'Icon is too long.', code: 400 });
     if (!Number.isFinite(cost) || cost < 1 || cost > MAX_COST)
       return res.status(400).json({ error: 'cost must be a positive number.', code: 400 });
 
@@ -211,6 +209,8 @@ router.patch('/catalog/:id', requireAdmin, (req, res) => {
 
     const name = req.body?.name != null ? String(req.body.name).trim() : existing.name;
     if (!name) return res.status(400).json({ error: 'name is required.', code: 400 });
+    if (req.body?.icon != null && String(req.body.icon).length > 128)
+      return res.status(400).json({ error: 'Icon is too long.', code: 400 });
     let cost = existing.cost;
     if (req.body?.cost != null) {
       cost = toInt(req.body.cost);
@@ -223,7 +223,7 @@ router.patch('/catalog/:id', requireAdmin, (req, res) => {
     // gesendete `null` durch `String()` - und speicherte den Text "null" als
     // Icon. Deshalb bleiben die drei Faelle hier ausdruecklich getrennt.
     const icon = req.body?.icon === undefined ? existing.icon
-      : (req.body.icon === null ? null : String(req.body.icon).trim().slice(0, 8) || null);
+      : (req.body.icon === null ? null : String(req.body.icon).trim() || null);
     const description = req.body?.description === undefined ? existing.description
       : (req.body.description === null ? null : String(req.body.description).trim() || null);
     const sort_order = req.body?.sort_order !== undefined && Number.isFinite(toInt(req.body.sort_order))
@@ -268,11 +268,13 @@ router.get('/ledger', (req, res) => {
     const userId = req.query.user_id != null && req.query.user_id !== '' ? toInt(req.query.user_id) : null;
     const rows = db.get().prepare(`
       SELECT l.id, l.user_id, l.delta, l.type, l.reason, l.task_id, l.redemption_id, l.created_at,
+             adj.related_task_id,adj.related_catalog_id AS related_reward_id,adj.related_ledger_id,
              u.display_name AS user_name, u.avatar_color AS user_color, u.avatar_data AS user_avatar,
              a.display_name AS actor_name
       FROM reward_ledger l
       JOIN users u ON u.id = l.user_id
       LEFT JOIN users a ON a.id = l.created_by
+      LEFT JOIN reward_adjustment_requests adj ON adj.ledger_id=l.id
       ${userId ? 'WHERE l.user_id = @userId' : ''}
       ORDER BY l.created_at DESC, l.id DESC
       LIMIT @limit
@@ -280,11 +282,16 @@ router.get('/ledger', (req, res) => {
     // Keep earned amounts/history intact; a copied Task title is still Task
     // content and must not bypass its current visibility through the ledger.
     for (const row of rows) {
-      if (!row.task_id) continue;
-      const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(row.task_id);
-      if (!tokenAllows(req.authScopes, 'tasks', 'read') || (task && !taskCapabilities(db.get(), req, task).view)) {
+      const taskId=row.task_id || row.related_task_id;
+      // earn.reason is a copied Task title. ON DELETE SET NULL removes the
+      // authorizing Task, not its private title; orphan earnings fail closed.
+      if (!taskId) { if(row.type==='earn')row.reason=null; continue; }
+      const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+      if (!tokenAllows(req.authScopes, 'tasks', 'read') || !task || !taskCapabilities(db.get(), req, task).view) {
         row.reason = null;
         row.task_id = null;
+        row.related_task_id = null;
+        row.related_ledger_id = null;
       }
     }
     res.json({ data: rows });
@@ -332,41 +339,16 @@ router.post('/redemptions', (req, res) => {
     const targetId = req.body?.user_id != null && req.authRole === 'admin' ? toInt(req.body.user_id) : me;
     if (!targetId) return res.status(400).json({ error: 'user_id is required.', code: 400 });
 
-    const item = d.prepare('SELECT * FROM reward_catalog WHERE id = ? AND is_active = 1').get(toInt(req.body?.catalog_id));
-    if (!item) return res.status(404).json({ error: 'Reward not found.', code: 404 });
-    if (!isEnrolled(d, targetId))
-      return res.status(400).json({ error: 'User does not participate in the reward system.', code: 400 });
-
-    const balance = getBalance(d, targetId);
-    if (balance < item.cost)
-      return res.status(400).json({ error: 'Insufficient points.', code: 400 });
-
     const note = req.body?.note != null ? String(req.body.note).trim().slice(0, 500) || null : null;
-    // Ohne Eltern-Freigabe (haushaltweit deaktiviert) wird die Einlösung sofort
-    // gutgeschrieben; die reservierten Punkte bleiben abgezogen (keine Rückbuchung).
-    const autoFulfill = !requiresApproval(d);
-
-    const redemptionId = d.transaction(() => {
-      const r = autoFulfill
-        ? d.prepare(`
-            INSERT INTO reward_redemptions (user_id, catalog_id, reward_name, reward_icon, cost, note, requested_by, status, decided_by, decided_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'fulfilled', ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
-          `).run(targetId, item.id, item.name, item.icon, item.cost, note, me, me)
-        : d.prepare(`
-            INSERT INTO reward_redemptions (user_id, catalog_id, reward_name, reward_icon, cost, note, requested_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-          `).run(targetId, item.id, item.name, item.icon, item.cost, note, me);
-      // Punkte sofort reservieren, damit sie nicht doppelt ausgegeben werden.
-      postLedger(d, {
-        userId: targetId, delta: -item.cost, type: 'redeem',
-        reason: item.name, redemptionId: r.lastInsertRowid, createdBy: me,
-      });
-      return r.lastInsertRowid;
-    })();
-
-    const row = d.prepare('SELECT * FROM reward_redemptions WHERE id = ?').get(redemptionId);
-    res.status(201).json({ data: row });
+    const headerKey = req.get('Idempotency-Key');
+    if (headerKey && req.body?.request_id && headerKey !== req.body.request_id)
+      throw new RewardError('Request ID and Idempotency-Key must match.');
+    const {row,replayed} = createRedemption(d, {actorId:me,userId:targetId,
+      catalogId:toInt(req.body?.catalog_id),note,requestKey:req.body?.request_id ?? headerKey});
+    if(replayed)res.set('Idempotent-Replayed','true');
+    res.status(replayed?200:201).json({data:row});
   } catch (err) {
+    if(err instanceof RewardError)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason});
     log.error('POST /redemptions error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -382,68 +364,46 @@ router.patch('/redemptions/:id', (req, res) => {
     const d = db.get();
     const me = actingUser(req);
     const action = req.body?.action;
-    const row = d.prepare('SELECT * FROM reward_redemptions WHERE id = ?').get(toInt(req.params.id));
-    if (!row) return res.status(404).json({ error: 'Redemption not found.', code: 404 });
-    if (row.status !== 'pending')
-      return res.status(409).json({ error: 'Redemption already decided.', code: 409 });
-
-    const isAdmin = req.authRole === 'admin';
-    if ((action === 'fulfill' || action === 'reject') && !isAdmin)
-      return res.status(403).json({ error: 'Admin access required.', code: 403 });
-    if (action === 'cancel' && !isAdmin && row.user_id !== me)
-      return res.status(403).json({ error: 'Not allowed.', code: 403 });
-    if (!['fulfill', 'reject', 'cancel'].includes(action))
-      return res.status(400).json({ error: 'Invalid action.', code: 400 });
-
-    const nextStatus = action === 'fulfill' ? 'fulfilled' : action === 'reject' ? 'rejected' : 'cancelled';
-
-    d.transaction(() => {
-      if (action !== 'fulfill') {
-        // Reservierte Punkte zurückgeben.
-        postLedger(d, {
-          userId: row.user_id, delta: row.cost, type: 'reversal',
-          reason: row.reward_name, redemptionId: row.id, createdBy: me,
-        });
-      }
-      d.prepare(`
-        UPDATE reward_redemptions SET status = ?, decided_by = ?,
-          decided_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-          updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
-        WHERE id = ?
-      `).run(nextStatus, me, row.id);
-    })();
-
-    const updated = d.prepare('SELECT * FROM reward_redemptions WHERE id = ?').get(row.id);
-    res.json({ data: updated });
+    const updated = decideRedemption(d,{actorId:me,isAdmin:req.authRole==='admin',
+      redemptionId:toInt(req.params.id),action});
+    res.json({data:updated});
   } catch (err) {
+    if(err instanceof RewardError)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason});
     log.error('PATCH /redemptions/:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });
 
 // --------------------------------------------------------
-// POST /bonus — manuelle Punkte (Bonus positiv, Korrektur negativ). Admin.
+// Manual signed adjustments. /bonus remains a compatibility alias; both paths
+// require the same reason, live admin authorization, and durable request key.
 // --------------------------------------------------------
-router.post('/bonus', requireAdmin, (req, res) => {
+router.get('/adjustment-options',requireAdmin,(req,res)=>{
+  const d=db.get();
+  const tasks=tokenAllows(req.authScopes,'tasks','read')
+    ? d.prepare(`SELECT t.id,t.title FROM tasks t WHERE ${taskVisibilityWhere(d,req,'t','@me')} ORDER BY t.id DESC LIMIT 1000`).all({me:actingUser(req)}) : [];
+  res.json({data:{tasks,rewards:d.prepare('SELECT id,name FROM reward_catalog ORDER BY name COLLATE NOCASE').all()}});
+});
+
+router.post(['/adjustments','/bonus'], requireAdmin, (req, res) => {
   try {
     const d = db.get();
-    const userId = toInt(req.body?.user_id);
-    const delta = toInt(req.body?.delta);
-    const reason = req.body?.reason != null ? String(req.body.reason).trim().slice(0, 200) || null : null;
-    if (!Number.isFinite(userId)) return res.status(400).json({ error: 'user_id is required.', code: 400 });
-    if (!Number.isFinite(delta) || delta === 0)
-      return res.status(400).json({ error: 'delta must be a non-zero number.', code: 400 });
-    if (Math.abs(delta) > MAX_BONUS)
-      return res.status(400).json({ error: 'delta out of range.', code: 400 });
-    if (!isEnrolled(d, userId))
-      return res.status(400).json({ error: 'User does not participate in the reward system.', code: 400 });
-
-    postLedger(d, {
-      userId, delta, type: delta > 0 ? 'bonus' : 'adjust', reason, createdBy: actingUser(req),
-    });
-    res.status(201).json({ data: { user_id: userId, balance: getBalance(d, userId) } });
+    const body=req.body || {};
+    const safeId=value=>['string','number'].includes(typeof value)&&Number.isSafeInteger(Number(value))&&Number(value)>0?Number(value):null;
+    const referenced=safeId(body.related_ledger_id) ? d.prepare('SELECT task_id FROM reward_ledger WHERE id=?').get(Number(body.related_ledger_id)) : null;
+    const taskId=safeId(body.related_task_id) || referenced?.task_id;
+    if (taskId) {
+      const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+      if (!tokenAllows(req.authScopes,'tasks','read') || (task && !taskCapabilities(d,req,task).view))
+        throw new RewardError('You cannot link this Task to a points adjustment.',403);
+    }
+    const result=createPointAdjustment(d,{actorId:actingUser(req),userId:body.user_id,delta:body.delta,reason:body.reason,
+      taskId:body.related_task_id,catalogId:body.related_reward_id,ledgerId:body.related_ledger_id,
+      requestKey:req.get('Idempotency-Key') ?? body.request_id,entryKind:/^\/bonus\/?$/i.test(req.path)?'bonus':'adjust'});
+    res.status(result.replayed?200:201).json({data:{...result.row,balance:result.balance},replayed:result.replayed});
   } catch (err) {
-    log.error('POST /bonus error:', err);
+    if(err instanceof RewardError)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason});
+    log.error('POST /adjustments error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });

@@ -7,10 +7,11 @@
 
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import crypto from 'node:crypto';
 import test from 'node:test';
 import express from 'express';
 import Database from 'better-sqlite3-multiple-ciphers';
-import { MIGRATIONS, _setTestDatabase } from '../server/db.js';
+import { ALL_MIGRATIONS, _setTestDatabase } from '../server/db.js';
 import {
   awardForCompletion, reverseTaskEarnings, syncTaskRewards, getBalance, isEnrolled,
 } from '../server/services/rewards.js';
@@ -24,7 +25,7 @@ function buildTestDb() {
   db.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (
     version INTEGER PRIMARY KEY, description TEXT NOT NULL,
     applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')))`);
-  for (const m of MIGRATIONS) {
+  for (const m of ALL_MIGRATIONS) {
     if (typeof m.up === 'function') m.up(db); else db.exec(m.up);
     if (typeof m.afterUp === 'function') m.afterUp(db);
     db.prepare('INSERT INTO schema_migrations (version, description) VALUES (?, ?)').run(m.version, m.description);
@@ -83,13 +84,15 @@ test('Vergabe ist idempotent (Doppelaufruf ändert nichts)', () => {
   assert.equal(earns, 1);
 });
 
-test('syncTaskRewards: done→open storniert die Vergabe', () => {
+test('syncTaskRewards: reopening retains the original award and recompletion does not award again', () => {
   const before = getBalance(db, child1);
   const taskId = makeTask(40, [child1]);
   syncTaskRewards(db, taskId, 'open', 'done', admin);
   assert.equal(getBalance(db, child1), before + 40);
   syncTaskRewards(db, taskId, 'done', 'open', admin);
-  assert.equal(getBalance(db, child1), before, 'Storno stellt Saldo wieder her');
+  assert.equal(getBalance(db, child1), before + 40, 'the original earn remains recorded');
+  syncTaskRewards(db, taskId, 'open', 'done', admin);
+  assert.equal(getBalance(db, child1), before + 40, 'no second award');
 });
 
 test('Ohne Zuweisung erhält die handelnde Person (Kiosk)', () => {
@@ -127,7 +130,7 @@ function request(method, path, body) {
   return new Promise((resolve, reject) => {
     const data = body ? JSON.stringify(body) : null;
     const req = http.request({ host: '127.0.0.1', port, path, method,
-      headers: { 'Content-Type': 'application/json' } }, (res) => {
+      headers: { 'Content-Type': 'application/json', ...(method==='POST' && path.endsWith('/redemptions') ? {'Idempotency-Key':crypto.randomUUID()} : {}) } }, (res) => {
       let raw = '';
       res.on('data', (c) => { raw += c; });
       res.on('end', () => resolve({ status: res.statusCode, body: raw ? JSON.parse(raw) : null }));

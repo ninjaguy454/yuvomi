@@ -38,6 +38,7 @@ import { hasIcon } from '/utils/lucide-icons.js';
 import { prefersInkText } from '/utils/contrast.js';
 import { openQuickLinksManager } from '/components/quick-links-manager.js';
 import { attachOverlay } from '/utils/overlay-history.js';
+import { mountWallDashboard } from '/components/wall-dashboard.js';
 
 // Hält den AbortController des aktuellen FAB-Listeners - wird bei jedem render() erneuert.
 let _fabController = null;
@@ -1770,7 +1771,7 @@ function renderRewardsWidget(rewards) {
       <div class="widget__empty">
         <i data-lucide="award" class="empty-state__icon" aria-hidden="true"></i>
         <div>${t('dashboard.noRewards')}</div>
-        ${emptyStateCta('/rewards', t('rewards.addReward'))}
+        ${emptyStateCta('/rewards?new=1', t('rewards.addReward'))}
       </div>
     </div>`;
   }
@@ -3727,6 +3728,15 @@ export async function render(container, { user }) {
   // Massstab, Dichte und Bedienbarkeit aendern sich. Ob er laeuft, hat der
   // Router bereits an der Wurzel vermerkt (utils/wall-mode.js).
   const wallMode = isWallActive();
+  if (wallMode) {
+    return mountWallDashboard(container, {
+      user, signal: _fabController.signal,
+      renderers: { tasks: renderUrgentTasks, calendar: renderUpcomingEvents,
+        meals: renderTodayMeals, shopping: renderShoppingLists,
+        notes: renderPinnedNotes, points: renderRewardsWidget,
+        weather: renderWeatherWidget, clock: renderClockWidget },
+    });
+  }
 
   setHtml(container, `
     <div class="dashboard${wallMode ? ' dashboard--wall' : ''}">

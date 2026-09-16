@@ -70,7 +70,7 @@ function startup(path) {
   return `${result.stdout}\n${result.stderr}`;
 }
 
-test('supported startup upgrades populated schema 10032 once to 10033 and restart preserves the entire migration ledger', () => {
+test('supported startup upgrades populated schema 10032 once through current additive migrations and restart preserves the entire migration ledger', () => {
   const directory = mkdtempSync(join(tmpdir(), 'vidamia-delegated-migration-')), path = join(directory, 'fixture.db');
   let d;
   try {
@@ -78,7 +78,7 @@ test('supported startup upgrades populated schema 10032 once to 10033 and restar
     const before = capture(d), ledgerBefore = d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
     assert.equal(ledgerBefore.at(-1).version, 10032); d.close(); d = null;
     const output = startup(path);
-    assert.deepEqual([...output.matchAll(/Migration (\d+) applied:/g)].map(match => Number(match[1])), [10033]);
+    assert.deepEqual([...output.matchAll(/Migration (\d+) applied:/g)].map(match => Number(match[1])), ALL_MIGRATIONS.filter(m=>m.version>10032).map(m=>m.version));
     d = new Database(path); d.pragma('foreign_keys=ON');
     for (const [name, rows] of Object.entries(before)) {
       const columns = rows.length ? Object.keys(rows[0]).join(',') : '*';
@@ -89,14 +89,14 @@ test('supported startup upgrades populated schema 10032 once to 10033 and restar
     assert.ok(d.prepare('SELECT activity_template_checklist_item_id FROM tasks').all().every(row => row.activity_template_checklist_item_id == null));
     assert.equal(d.prepare('SELECT state FROM task_supervision_actions WHERE action_task_id=?').get(ids.current).state, 'excluded', 'schema migration does not perform the operational reconciliation');
     const ledger = d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
-    assert.deepEqual(ledger.filter(row => row.version <= 10032), ledgerBefore); assert.equal(ledger.length, ledgerBefore.length + 1);
+    assert.deepEqual(ledger.filter(row => row.version <= 10032), ledgerBefore); assert.equal(ledger.length, ledgerBefore.length + ALL_MIGRATIONS.filter(m=>m.version>10032).length);
     assert.throws(() => d.prepare("UPDATE task_supervision_actions SET execution_mode='learner' WHERE action_task_id=?").run(ids.current), /CHECK/);
     const migrated = capture(d); d.close(); d = null;
     const restarted = startup(path); assert.doesNotMatch(restarted, /Migration \d+ applied:/);
     d = new Database(path);
     assert.deepEqual(d.prepare('SELECT * FROM schema_migrations ORDER BY version').all(), ledger);
     assert.deepEqual(capture(d), migrated); assert.deepEqual(d.pragma('foreign_key_check'), []);
-    assert.equal(d.prepare('SELECT MAX(version) version FROM schema_migrations').get().version, 10033);
+    assert.equal(d.prepare('SELECT MAX(version) version FROM schema_migrations').get().version, ALL_MIGRATIONS.at(-1).version);
   } finally {
     d?.close();
     assert.equal(dirname(resolve(path)), resolve(directory));

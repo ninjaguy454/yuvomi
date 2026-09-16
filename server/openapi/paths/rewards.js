@@ -5,6 +5,9 @@ export function rewardsPaths() {
     '/api/v1/rewards/overview': {
       get: op({ summary: 'Reward overview (balances, catalog, pending count)', tag: 'Rewards' }),
     },
+    '/api/v1/rewards/changes': {
+      get: op({ summary: 'Session-authorized live Reward revision stream (no personal content)', tag: 'Rewards' }),
+    },
     '/api/v1/rewards/participants': {
       get: op({ summary: 'List members with participation flag and balance', tag: 'Rewards', admin: true }),
     },
@@ -24,13 +27,19 @@ export function rewardsPaths() {
     },
     '/api/v1/rewards/redemptions': {
       get: op({ summary: 'List redemption requests (filter by status)', tag: 'Rewards' }),
-      post: op({ summary: 'Request a redemption (reserves points)', tag: 'Rewards', stateChanging: true, requestBody: jsonBody(null) }),
+      post: op({ summary: 'Request a redemption (reserves points once; stable Idempotency-Key or request_id required, missing ID returns 428)', tag: 'Rewards', stateChanging: true, requestBody: jsonBody(null) }),
     },
     '/api/v1/rewards/redemptions/{id}': {
       patch: op({ summary: 'Decide a redemption (fulfill/reject/cancel)', tag: 'Rewards', params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
     },
     '/api/v1/rewards/bonus': {
-      post: op({ summary: 'Grant manual bonus / correction points', tag: 'Rewards', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+      post: op({ summary: 'Compatibility manual bonus / correction (required reason and stable Idempotency-Key/request_id)', tag: 'Rewards', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/rewards/adjustments': {
+      post: op({ summary: 'Append signed points adjustment; required user_id/delta/reason and durable Idempotency-Key/request_id, optional related_task_id/related_reward_id/related_ledger_id', tag: 'Rewards', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+    },
+    '/api/v1/rewards/adjustment-options': {
+      get: op({ summary: 'Visible Task and Reward references for an administrator points adjustment', tag: 'Rewards', admin: true }),
     },
   };
 }

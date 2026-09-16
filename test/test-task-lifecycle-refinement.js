@@ -177,7 +177,8 @@ test('ordinary Task without subtasks completes normally',async()=>{
   assert.equal(result.status,200);assert.equal(result.data.status,'done');assert.equal(result.data.subtask_total,0);
 });
 
-test('concurrent final child completion generates exactly one fresh anchored occurrence',async()=>{
+test('concurrent final child completion generates exactly one fresh anchored occurrence',async(t)=>{
+  t.mock.timers.enable({apis:['Date'],now:new Date('2099-01-03T12:00:00Z')});
   const task=await fixture({start_date:'2099-01-03',due_date:'2099-01-03',is_recurring:1,recurrence_rule:'FREQ=WEEKLY'});
   await transition(task.subtasks[0],'done');const fresh=await read(task.id);
   const result=await transition(fresh.subtasks[1],'done');assert.equal(result.status,200);

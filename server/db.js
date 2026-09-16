@@ -18,6 +18,7 @@
  */
 
 import Database from 'better-sqlite3-multiple-ciphers';
+import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
 import path from 'path';
 import fs from 'node:fs/promises';
 import { mkdirSync, existsSync, renameSync, rmSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs';
@@ -8939,6 +8940,62 @@ FORK_MIGRATIONS.push({
     CREATE TRIGGER trg_tasks_checklist_origin_revision AFTER UPDATE OF activity_template_checklist_item_id ON tasks
       WHEN NEW.activity_template_checklist_item_id IS NOT OLD.activity_template_checklist_item_id
       BEGIN UPDATE tasks SET revision=revision+1 WHERE id=NEW.id; END;`,
+});
+
+FORK_MIGRATIONS.push({
+  version: 10034,
+  description: 'Rewards: durable awards, redemptions and adjustments; recurring occurrence provenance',
+  up: `
+    CREATE TABLE reward_task_awards (
+      task_id INTEGER PRIMARY KEY,
+      logical_key TEXT,
+      retired_at TEXT,
+      retirement_reason TEXT,
+      awarded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    CREATE UNIQUE INDEX idx_reward_task_awards_logical
+      ON reward_task_awards(logical_key) WHERE retired_at IS NULL;
+    -- Existing ledger amounts, recipients and timestamps remain untouched.
+    INSERT INTO reward_task_awards(task_id,awarded_at)
+      SELECT task_id,MIN(created_at) FROM reward_ledger
+      WHERE type='earn' AND task_id IS NOT NULL GROUP BY task_id;
+    CREATE TABLE reward_redemption_requests (
+      actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      request_key TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      redemption_id INTEGER REFERENCES reward_redemptions(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      PRIMARY KEY(actor_user_id,request_key)
+    );
+    CREATE TABLE reward_adjustment_requests (
+      actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      request_key TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      ledger_id INTEGER UNIQUE REFERENCES reward_ledger(id) ON DELETE SET NULL,
+      related_task_id INTEGER,
+      related_catalog_id INTEGER,
+      related_ledger_id INTEGER,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      PRIMARY KEY(actor_user_id,request_key)
+    );
+    ${RECURRENCE_PROVENANCE_SQL}
+    -- Do not rewrite historical rows even if an old installation has duplicate
+    -- deductions/refunds. Every new ledger writer must respect this boundary.
+    CREATE TRIGGER trg_reward_redemption_once BEFORE INSERT ON reward_ledger
+      WHEN NEW.redemption_id IS NOT NULL AND NEW.type IN ('redeem','reversal')
+        AND EXISTS(SELECT 1 FROM reward_ledger WHERE redemption_id=NEW.redemption_id AND type=NEW.type)
+      BEGIN SELECT RAISE(ABORT,'A redemption may be deducted or refunded only once'); END;
+    CREATE TABLE reward_change_clock(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO reward_change_clock(id,version) VALUES(1,0);
+  `,
+  afterUp(database) {
+    backfillRecurrenceProvenance(database);
+    backfillRecurrenceAwardProvenance(database);
+    for(const table of ['reward_ledger','reward_catalog','reward_redemptions','reward_participants'])
+      for(const operation of ['INSERT','UPDATE','DELETE']) database.exec(`
+        CREATE TRIGGER trg_${table}_change_${operation.toLowerCase()} AFTER ${operation} ON ${table}
+        BEGIN UPDATE reward_change_clock SET version=version+1 WHERE id=1; END;`);
+  },
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

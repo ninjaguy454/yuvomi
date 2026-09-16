@@ -206,7 +206,7 @@ function boardTasks() {
   return filteredTasks();
 }
 
-function taskBuckets(tasks, mode, { includeEmptyAssignees = false } = {}) {
+function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveStatuses = false } = {}) {
   if (mode === 'none') return [{ id: 'all', label: t('tasks.groupAll'), tasks }];
   if (mode === 'assignee') {
     const buckets = new Map();
@@ -233,11 +233,11 @@ function taskBuckets(tasks, mode, { includeEmptyAssignees = false } = {}) {
   if (mode === 'category') return groupBy(tasks, 'category');
   if (mode === 'due') return groupBy(tasks, 'due');
   if (mode === 'status') {
-    const order = [...STATUSES(), { value: 'archived', label: t('tasks.statusArchived') }];
+    const order = mergeActiveStatuses ? KANBAN_SECTIONS() : [...STATUSES(), { value: 'archived', label: t('tasks.statusArchived') }];
     return order.map((status) => ({
       id: status.value,
       label: status.label,
-      tasks: tasks.filter((task) => kanbanColumnOf(task) === status.value),
+      tasks: tasks.filter((task) => (mergeActiveStatuses ? kanbanSectionOf(task) : kanbanColumnOf(task)) === status.value),
     })).filter((bucket) => bucket.tasks.length);
   }
   if (mode === 'location') {
@@ -2439,16 +2439,28 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
 // Die Spalten sind der Weg einer Aufgabe. Die letzte ist keine Station dieses
 // Wegs, sondern die Ablage daneben (#688) - deshalb steht dort 'archived' und
 // nicht ein vierter Status.
-const KANBAN_COLS = () => [
-  { status: 'open',        label: t('tasks.kanbanOpen'),       colorVar: '--color-text-secondary' },
-  { status: 'in_progress', label: t('tasks.kanbanInProgress'), colorVar: '--color-warning'        },
-  { status: 'done',        label: t('tasks.kanbanDone'),       colorVar: '--color-success'        },
-  { status: 'archived',    label: t('tasks.kanbanArchived'),   colorVar: '--color-text-tertiary'  },
+const KANBAN_SECTIONS = () => [
+  { value: 'active', label: 'Active' },
+  { value: 'done', label: t('tasks.kanbanDone') },
+  { value: 'archived', label: t('tasks.kanbanArchived') },
 ];
 
 /** In welcher Spalte steht die Aufgabe? Die Ablage sticht den Status. */
 function kanbanColumnOf(task) {
   return isArchived(task) ? 'archived' : task.status;
+}
+
+// Active is a board presentation group, never a persisted Task status.
+function kanbanSectionOf(task) {
+  const status = kanbanColumnOf(task);
+  return status === 'open' || status === 'in_progress' ? 'active' : status;
+}
+
+function statusForBoardDrop(task, section) {
+  if (section !== 'active') return section;
+  // Restoring archived work retains its status. Reopening completed work uses
+  // the existing In Progress transition so it does not reset checklist progress.
+  return task.archived_at ? task.status : task.status === 'done' ? 'in_progress' : task.status;
 }
 
 
@@ -2461,6 +2473,7 @@ function kanbanColumnOf(task) {
  * Aufgabe kam als offene zurück (#688).
  */
 async function moveTaskToColumn(before, column) {
+  const nextStatus = statusForBoardDrop(before, column);
   // `before` ist der Stand VOR dem optimistischen Update - der State ist zu
   // diesem Zeitpunkt schon umgeschrieben, und die Entscheidung, ob überhaupt ein
   // Statuswechsel nötig ist, muss sich auf den alten Stand beziehen.
@@ -2472,17 +2485,18 @@ async function moveTaskToColumn(before, column) {
     await setTaskArchived(before.id, false, before);
     before = (await api.get(`/tasks/${before.id}`)).data;
   }
-  if (before.status !== column) return changeTaskStatus(before, column);
+  if (before.status !== nextStatus) return changeTaskStatus(before, nextStatus);
 }
 
 /** Optimistisches Spiegelbild von moveTaskToColumn auf dem State-Objekt. */
 function applyColumnLocally(task, column) {
+  const nextStatus = statusForBoardDrop(task, column);
   if (column === 'archived') {
     task.archived_at = new Date().toISOString();
     return;
   }
   task.archived_at = null;
-  task.status = column;
+  task.status = nextStatus;
 }
 
 /** Board-Bewegung mit optimistischem Vorgriff - der eine Weg für alle drei Gesten. */
@@ -2501,11 +2515,20 @@ async function runColumnMove(task, column, container) {
 function isBoardSectionCollapsed(key, status) {
   if (state.expandedBoardSections.has(key)) return false;
   if (state.collapsedBoardSections.has(key)) return true;
+  if (status === 'active') {
+    const bucketKey = key.slice(0, -':active'.length);
+    // Carry forward the two old sections: keep their work visible if either
+    // section was expanded. Explicit choices on the new section take priority.
+    return ['open', 'in_progress'].every((legacyStatus) => {
+      const legacyBucket = bucketKey.replace(/:status:active$/, `:status:${legacyStatus}`);
+      return isBoardSectionCollapsed(`${legacyBucket}:${legacyStatus}`, legacyStatus);
+    });
+  }
   return status !== 'open';
 }
 
 function renderBoardStatusSection(bucketKey, status, tasks) {
-  const statusLabel = status === 'archived'
+  const statusLabel = status === 'active' ? 'Active' : status === 'archived'
     ? t('tasks.statusArchived')
     : (STATUS_LABELS()[status] || status);
   const sectionKey = `${bucketKey}:${status}`;
@@ -2540,6 +2563,7 @@ function renderKanban(container) {
   const tasks = boardTasks();
   const buckets = taskBuckets(tasks, state.groupMode, {
     includeEmptyAssignees: state.boardScope === 'household' && state.groupMode === 'assignee',
+    mergeActiveStatuses: true,
   });
   const isSearch = state.searchQuery.trim().length > 0;
   if (!buckets.length || (isSearch && !tasks.length)) {
@@ -2561,9 +2585,9 @@ function renderKanban(container) {
       const bucketKey = `${state.boardScope}:${state.groupMode}:${bucket.id}`;
       const bucketSort = state.bucketSorts.get(bucketKey);
       const byStatus = new Map([
-        ['open', []], ['in_progress', []], ['done', []], ['archived', []],
+        ['active', []], ['done', []], ['archived', []],
       ]);
-      bucket.tasks.forEach((task) => (byStatus.get(kanbanColumnOf(task)) || byStatus.get('open')).push(task));
+      bucket.tasks.forEach((task) => (byStatus.get(kanbanSectionOf(task)) || byStatus.get('active')).push(task));
       return `<section class="kanban-col task-board__bucket" data-view-key="bucket:${esc(bucketKey)}" data-bucket-key="${esc(bucketKey)}">
         <header class="kanban-col__header task-board__bucket-header">
           <div class="task-board__bucket-title">
@@ -2578,10 +2602,8 @@ function renderKanban(container) {
           </button>
         </header>
         <div class="task-board__bucket-scroll">
-          ${renderBoardStatusSection(bucketKey, 'open', byStatus.get('open'))}
-          ${renderBoardStatusSection(bucketKey, 'in_progress', byStatus.get('in_progress'))}
-          ${renderBoardStatusSection(bucketKey, 'done', byStatus.get('done'))}
-          ${byStatus.get('archived').length ? renderBoardStatusSection(bucketKey, 'archived', byStatus.get('archived')) : ''}
+          ${KANBAN_SECTIONS().filter(({ value }) => state.groupMode === 'status' ? value === bucket.id : value !== 'archived' || byStatus.get(value).length)
+            .map(({ value }) => renderBoardStatusSection(bucketKey, value, byStatus.get(value))).join('')}
         </div>
       </section>`;
     }).join('')}
@@ -2656,7 +2678,7 @@ function wireKanbanDrag(container) {
       return;
     }
     const task   = state.tasks.find((t) => String(t.id) === String(state.dragTaskId));
-    if (!task || kanbanColumnOf(task) === column) return;
+    if (!task || kanbanSectionOf(task) === column) return;
 
     await runColumnMove(task, column, container);
   });
@@ -2729,7 +2751,7 @@ function wireKanbanTouch(container) {
         window.yuvomi.showToast(t('tasks.moveBetweenBucketsHint'), 'default');
         return;
       }
-      if (kanbanColumnOf(task) !== zone.dataset.dropZone) await runColumnMove(task, zone.dataset.dropZone, container);
+      if (kanbanSectionOf(task) !== zone.dataset.dropZone) await runColumnMove(task, zone.dataset.dropZone, container);
     },
   });
   taskTouchBindings.set(container, { board, dispose });
@@ -5244,6 +5266,10 @@ export async function render(container, { user }) {
 
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.
 export const __test = {
+  taskBuckets,
+  kanbanSectionOf,
+  statusForBoardDrop,
+  isBoardSectionCollapsed,
   loadTasks,
   renderTaskList,
   renderKanban,

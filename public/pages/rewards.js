@@ -16,6 +16,10 @@ import { wireTablist } from '/utils/tablist.js';
 import { wireScrollFade } from '/utils/ux.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { emptyStateHTML, mountLoadError } from '/utils/empty-state.js';
+import { openEmojiPicker } from '/components/emoji-picker.js';
+import { rewardRequest } from '/utils/reward-request.js';
+import { watchRewardChanges } from '/utils/reward-live.js';
+import { openPointAdjustment } from '/components/point-adjustment.js';
 
 const TABS = ['overview', 'catalog', 'ledger'];
 
@@ -118,32 +122,6 @@ function icons(scope) {
 // Datenladen
 // --------------------------------------------------------
 
-async function loadOverview() {
-  // Alte Salden für den Count-up merken, bevor sie überschrieben werden.
-  state.prevBalances = new Map((state.overview?.balances || []).map((b) => [b.id, b.balance]));
-  const res = await api.get('/rewards/overview');
-  state.overview = res.data;
-  state.catalog = res.data.catalog || [];
-  if (isAdmin()) {
-    const r = await api.get('/rewards/redemptions?status=pending');
-    state.redemptions = r.data || [];
-  } else {
-    const r = await api.get('/rewards/redemptions');
-    state.redemptions = (r.data || []).filter((x) => x.user_id === state.overview.me && x.status === 'pending');
-  }
-}
-
-async function loadCatalog() {
-  const res = await api.get(`/rewards/catalog${isAdmin() ? '?all=1' : ''}`);
-  state.catalog = res.data || [];
-}
-
-async function loadLedger() {
-  const q = state.ledgerFilter ? `?user_id=${encodeURIComponent(state.ledgerFilter)}` : '';
-  const res = await api.get(`/rewards/ledger${q}`);
-  state.ledger = res.data || [];
-}
-
 function balances() {
   return state.overview?.balances || [];
 }
@@ -169,14 +147,15 @@ function tabButton(tab, icon, label) {
 
 // Kontext-FAB: eine Primäraktion unten rechts, die dem aktiven Tab folgt.
 let fab = null;
+let renderGeneration = 0;
 
 // FAB-Aktion je Tab setzen (nur Admins erstellen; sonst ausgeblendet).
 function updateRewardsFab() {
   if (!fab) return;
-  if (state.tab === 'catalog' && isAdmin()) {
+  if ((state.tab === 'catalog' || state.tab === 'overview') && isAdmin()) {
     setPageFabAction(fab, { label: t('rewards.addReward'), onClick: () => openRewardModal(null) });
   } else if (state.tab === 'ledger' && isAdmin()) {
-    setPageFabAction(fab, { label: t('rewards.grantBonus'), onClick: () => openBonusModal() });
+    setPageFabAction(fab, { label: 'Adjust points', onClick: () => openBonusModal() });
   } else {
     setPageFabAction(fab, { hidden: true });
   }
@@ -213,16 +192,37 @@ function content() {
   return document.getElementById('rewards-content');
 }
 
-async function renderCurrentTab(container) {
+async function renderCurrentTab(container, { quiet = false } = {}) {
   const el = content();
   if (!el) return;
-  el.replaceChildren();
-  el.insertAdjacentHTML('beforeend', renderSkeletonList({ rows: 3 }));
+  const generation = ++renderGeneration;
+  const tab = state.tab;
+  if (!quiet) {
+    el.replaceChildren();
+    el.insertAdjacentHTML('beforeend', renderSkeletonList({ rows: 3 }));
+  }
   try {
-    if (state.tab === 'overview') { await loadOverview(); renderOverview(el); }
-    else if (state.tab === 'catalog') { await Promise.all([loadCatalog(), loadOverview()]); renderCatalog(el); }
-    else { await Promise.all([loadLedger(), loadOverview()]); renderLedger(el); }
+    // Overview returns only active catalog items. Do not race it against the
+    // admin's all-items catalog and nondeterministically hide archived rewards.
+    const admin = isAdmin();
+    const filter = state.ledgerFilter ? `?user_id=${encodeURIComponent(state.ledgerFilter)}` : '';
+    const [overview, redemptions, extra] = await Promise.all([
+      api.get('/rewards/overview'),
+      api.get(`/rewards/redemptions${admin ? '?status=pending' : ''}`),
+      tab === 'catalog' ? api.get(`/rewards/catalog${admin ? '?all=1' : ''}`)
+        : tab === 'ledger' ? api.get(`/rewards/ledger${filter}`) : null,
+    ]);
+    if (generation !== renderGeneration || !el.isConnected || tab !== state.tab) return;
+    state.prevBalances = new Map((state.overview?.balances || []).map(member => [member.id, member.balance]));
+    state.overview = overview.data;
+    state.redemptions = (redemptions.data || []).filter(row => admin || (row.user_id === state.overview.me && row.status === 'pending'));
+    state.catalog = tab === 'catalog' ? extra.data || [] : overview.data.catalog || [];
+    if (tab === 'ledger') state.ledger = extra.data || [];
+    if (tab === 'overview') renderOverview(el);
+    else if (tab === 'catalog') renderCatalog(el);
+    else renderLedger(el);
   } catch (err) {
+    if (generation !== renderGeneration || !el.isConnected) return;
     // War ein Leerzustand ohne Rolle und ohne Ausweg - der gefangene Fehler
     // wurde nicht einmal gelesen. Jetzt traegt er den Statuscode und einen
     // Wiederholen-CTA auf denselben Tab.
@@ -435,7 +435,7 @@ function wireOverview(el) {
 function handleSetupStep(action) {
   if (action === 'participants') openParticipantsModal();
   else if (action === 'tasks') location.href = '/tasks';
-  else if (action === 'catalog') document.querySelector('[data-rw-tab="catalog"]')?.click();
+  else if (action === 'catalog' && isAdmin()) openRewardModal(null);
 }
 
 // --------------------------------------------------------
@@ -482,6 +482,7 @@ function renderCatalog(el) {
   const header = isAdmin() ? `
     <div class="rw-section__head">
       <h2 class="rw-section__title"><i data-lucide="gift" aria-hidden="true"></i>${esc(t('rewards.tabCatalog'))}</h2>
+      <button type="button" class="btn btn--primary rw-add-reward">${esc(t('rewards.addReward'))}</button>
     </div>` : '';
   if (!items.length) {
     const action = isAdmin()
@@ -521,6 +522,15 @@ function ledgerReason(row) {
   return t(`rewards.ledgerType.${row.type}`);
 }
 
+function ledgerContext(row) {
+  const parts=[row.type==='adjust'?'Points adjustment':t(`rewards.ledgerType.${row.type}`)];
+  if(row.actor_name)parts.push(`By ${row.actor_name}`);
+  if(row.related_task_id)parts.push(`Task #${row.related_task_id}`);
+  if(row.related_reward_id)parts.push(`Reward #${row.related_reward_id}`);
+  if(row.related_ledger_id)parts.push(`Ledger entry #${row.related_ledger_id}`);
+  return parts.join(' · ');
+}
+
 function renderLedger(el) {
   el.replaceChildren();
   const filterChips = [{ id: null, label: t('rewards.all') }]
@@ -537,6 +547,8 @@ function renderLedger(el) {
         <span class="rw-ledger-row__icon rw-ledger-row__icon--${esc(row.type)}"><i data-lucide="${LEDGER_ICON[row.type] || 'circle'}" aria-hidden="true"></i></span>
         <div class="rw-ledger-row__text">
           <p class="rw-ledger-row__reason">${esc(ledgerReason(row))}</p>
+          <p class="rw-ledger-row__meta">${esc(ledgerContext(row))}</p>
+          ${isAdmin()?`<button type="button" class="btn btn--secondary btn--sm" data-adjust-ledger="${row.id}">Adjust points</button>`:''}
           <p class="rw-ledger-row__meta">${esc(row.user_name)} · ${esc(formatDate(row.created_at))}</p>
         </div>
         <span class="rw-delta ${positive ? 'rw-delta--pos' : 'rw-delta--neg'}">${positive ? '+' : '−'}${fmtPoints(Math.abs(row.delta))}</span>
@@ -559,9 +571,9 @@ function renderLedger(el) {
   el.querySelectorAll('[data-filter]').forEach((chip) => chip.addEventListener('click', async () => {
     const val = chip.dataset.filter;
     state.ledgerFilter = val === '' ? null : Number(val);
-    await loadLedger();
-    renderLedger(el);
+    await refreshActiveTab();
   }));
+  el.querySelectorAll('[data-adjust-ledger]').forEach(button=>button.onclick=()=>openBonusModal(state.ledger.find(row=>row.id===Number(button.dataset.adjustLedger))));
   icons(el);
 }
 
@@ -618,6 +630,8 @@ async function openRedeemModal(memberId, presetItemId = null) {
       const summary = panel.querySelector('#rw-redeem-summary');
       const errEl = panel.querySelector('#rw-redeem-error');
       const submit = panel.querySelector('#rw-redeem-submit');
+      let submitting = false;
+      let attempt = null;
 
       const refresh = () => {
         const cost = Number(itemEl.selectedOptions[0]?.dataset.cost || 0);
@@ -638,14 +652,19 @@ async function openRedeemModal(memberId, presetItemId = null) {
 
       panel.querySelector('#rw-redeem-form').addEventListener('submit', async (e) => {
         e.preventDefault();
+        if (submitting || submit.disabled) return;
         errEl.hidden = true;
-        submit.disabled = true;
+        submitting = true; submit.disabled = true;
+        const body = {
+          catalog_id: Number(itemEl.value),
+          user_id: Number(memberEl.value),
+          note: panel.querySelector('#rw-redeem-note').value.trim() || undefined,
+        };
+        attempt ||= rewardRequest(state.user.id, body);
+        memberEl.disabled = true; itemEl.disabled = true; panel.querySelector('#rw-redeem-note').disabled = true;
         try {
-          await api.post('/rewards/redemptions', {
-            catalog_id: Number(itemEl.value),
-            user_id: Number(memberEl.value),
-            note: panel.querySelector('#rw-redeem-note').value.trim() || undefined,
-          });
+          await api.post('/rewards/redemptions', { ...body, request_id: attempt.key }, { headers: { 'Idempotency-Key': attempt.key } });
+          attempt.finish();
           await closeModal({ force: true });
           toast(isAdmin() ? t('rewards.toastRedeemed') : t('rewards.toastRequested'));
           await refreshActiveTab();
@@ -653,6 +672,12 @@ async function openRedeemModal(memberId, presetItemId = null) {
           errEl.textContent = err?.message || t('rewards.redeemError');
           errEl.hidden = false;
           submit.disabled = false;
+          if ([400, 403, 404, 422].includes(err?.status)) {
+            attempt.finish(); attempt = null;
+            memberEl.disabled = false; itemEl.disabled = false; panel.querySelector('#rw-redeem-note').disabled = false;
+          }
+        } finally {
+          submitting = false;
         }
       });
     },
@@ -688,70 +713,22 @@ async function decideRedemption(id, action, btn) {
   }
 }
 
-function openBonusModal() {
-  const members = enrolledMembers();
-  if (!members.length) { confirmModal(t('rewards.emptyOverviewAdmin'), { confirmLabel: t('rewards.gotIt') }); return; }
-  openModal({
-    title: t('rewards.grantBonus'),
-    content: `
-      <form id="rw-bonus-form" novalidate>
-        <div class="form-group">
-          <label class="label" for="rw-bonus-member">${esc(t('rewards.member'))}</label>
-          <select class="input" id="rw-bonus-member">
-            ${members.map((m) => `<option value="${m.id}">${esc(m.display_name)} · ${esc(pointsLabel(m.balance))}</option>`).join('')}
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="label" for="rw-bonus-points">${esc(t('rewards.pointsSigned'))}</label>
-          <input class="input" id="rw-bonus-points" type="number" inputmode="numeric" step="1" placeholder="10" required>
-          <p class="rw-hint">${esc(t('rewards.pointsSignedHint'))}</p>
-        </div>
-        <div class="form-group">
-          <label class="label" for="rw-bonus-reason">${esc(t('rewards.reasonOptional'))}</label>
-          <input class="input" id="rw-bonus-reason" maxlength="200" placeholder="${esc(t('rewards.reasonPlaceholder'))}">
-        </div>
-        <div id="rw-bonus-error" class="form-error" hidden></div>
-        <div class="modal-panel__footer modal-panel__footer--plain">
-          <button type="submit" class="btn btn--primary" id="rw-bonus-submit">${esc(t('common.save'))}</button>
-        </div>
-      </form>`,
-    onSave: (panel) => {
-      panel.querySelector('#rw-bonus-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const errEl = panel.querySelector('#rw-bonus-error');
-        const submit = panel.querySelector('#rw-bonus-submit');
-        const delta = Math.trunc(Number(panel.querySelector('#rw-bonus-points').value));
-        if (!Number.isFinite(delta) || delta === 0) {
-          errEl.textContent = t('rewards.pointsSignedHint'); errEl.hidden = false; return;
-        }
-        submit.disabled = true; errEl.hidden = true;
-        try {
-          await api.post('/rewards/bonus', {
-            user_id: Number(panel.querySelector('#rw-bonus-member').value),
-            delta,
-            reason: panel.querySelector('#rw-bonus-reason').value.trim() || undefined,
-          });
-          await closeModal({ force: true });
-          toast(t('rewards.toastBonus'));
-          await refreshActiveTab();
-        } catch (err) {
-          errEl.textContent = err?.message || t('common.error'); errEl.hidden = false; submit.disabled = false;
-        }
-      });
-    },
-  });
+function openBonusModal(reference = null) {
+  if (!isAdmin()) return;
+  openPointAdjustment({actorId:state.user.id,members:enrolledMembers(),reference,onSaved:refreshActiveTab});
 }
-
 function openRewardModal(item) {
+  if (!isAdmin()) return;
   const isEdit = !!item;
   openModal({
     title: isEdit ? t('rewards.editReward') : t('rewards.addReward'),
     content: `
       <form id="rw-reward-form" novalidate>
         <div class="modal-grid modal-grid--2">
-          <div class="form-group" style="flex:0 0 88px">
-            <label class="label" for="rw-reward-icon">${esc(t('rewards.iconLabel'))}</label>
-            <input class="input rw-emoji-input" id="rw-reward-icon" maxlength="4" value="${esc(item?.icon ?? '')}" placeholder="🎁">
+          <div class="form-group">
+            <label class="label" for="rw-choose-icon">${esc(t('rewards.iconLabel'))}</label>
+            <input type="hidden" id="rw-reward-icon" value="${esc(item?.icon ?? '')}">
+            <button type="button" class="btn btn--secondary rw-emoji-picker-trigger" id="rw-choose-icon"><span class="rw-emoji-picker-trigger__value" aria-hidden="true">${esc(item?.icon || '🎁')}</span><span>Choose icon</span></button>
           </div>
           <div class="form-group">
             <label class="label" for="rw-reward-name">${esc(t('rewards.nameLabel'))}<span class="required-marker" aria-hidden="true"> *</span></label>
@@ -778,20 +755,35 @@ function openRewardModal(item) {
         </div>
       </form>`,
     onSave: (panel) => {
+      panel.querySelector('#rw-choose-icon').addEventListener('click', async () => {
+        const input = panel.querySelector('#rw-reward-icon');
+        const value = await openEmojiPicker({ current: input.value || null, userId: state.user.id });
+        if (value === undefined || !panel.isConnected) return;
+        input.value = value || '';
+        panel.querySelector('.rw-emoji-picker-trigger__value').textContent = value || '🎁';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
       panel.querySelector('#rw-reward-delete')?.addEventListener('click', async () => {
         // confirmOverModal statt confirmModal: „Abbrechen" gibt das Belohnungs-
         // Formular unverändert zurück; bestätigt schliesst es die Frage selbst.
         const ok = await confirmOverModal(t('rewards.confirmDeleteReward', { reward: item.name }),
-          { confirmLabel: t('common.delete'), danger: true, detail: t('rewards.confirmDeleteRewardDetail') });
+          { confirmLabel: t('common.delete'), danger: true, detail: t('rewards.confirmDeleteRewardDetail'), closeOnConfirm: false });
         if (!ok) return;
-        await api.delete(`/rewards/catalog/${item.id}`);
-        toast(t('rewards.toastRewardDeleted'), 'default');
-        await refreshActiveTab();
+        const button = panel.querySelector('#rw-reward-delete'); button.disabled = true;
+        try {
+          await api.delete(`/rewards/catalog/${item.id}`);
+          await closeModal({ force: true });
+          toast(t('rewards.toastRewardDeleted'), 'default');
+          await refreshActiveTab();
+        } catch (error) {
+          const message = panel.querySelector('#rw-reward-error'); message.textContent = error?.message || t('common.error'); message.hidden = false; button.disabled = false;
+        }
       });
       panel.querySelector('#rw-reward-form').addEventListener('submit', async (e) => {
         e.preventDefault();
         const errEl = panel.querySelector('#rw-reward-error');
         const submit = panel.querySelector('#rw-reward-submit');
+        if (submit.disabled) return;
         const name = panel.querySelector('#rw-reward-name').value.trim();
         const cost = Math.trunc(Number(panel.querySelector('#rw-reward-cost').value));
         if (!name) { errEl.textContent = t('rewards.nameRequired'); errEl.hidden = false; return; }
@@ -921,8 +913,21 @@ async function refreshActiveTab() {
 }
 
 export async function render(container, { user } = {}) {
+  if (state.user?.id !== user?.id) {
+    state.tab = 'overview'; state.overview = null; state.catalog = []; state.ledger = []; state.redemptions = []; state.ledgerFilter = null;
+  }
   state.user = user || null;
+  const params = new URLSearchParams(location.search);
+  if (params.get('new') === '1' && isAdmin()) state.tab = 'catalog';
   if (!TABS.includes(state.tab)) state.tab = 'overview';
   renderShell(container);
   await renderCurrentTab(container);
+  if (params.get('new') === '1' && isAdmin()) {
+    params.delete('new'); history.replaceState(history.state, '', `${location.pathname}${params.size ? `?${params}` : ''}${location.hash}`);
+    openRewardModal(null);
+  }
+  const stop = watchRewardChanges(() => {
+    if (container.isConnected) void renderCurrentTab(container, { quiet: true });
+  });
+  return () => { renderGeneration++; stop(); };
 }

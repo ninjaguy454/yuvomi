@@ -104,8 +104,7 @@ class MockCacheStorage {
 }
 
 /** Lädt sw.js in eine frische Sandbox und liefert Handles für Listener + Caches. */
-function loadSw({ fetchImpl } = {}) {
-  const cacheStorage = new MockCacheStorage();
+function loadSw({ fetchImpl, cacheStorage = new MockCacheStorage() } = {}) {
   const ctl = { fetchImpl: fetchImpl || (async () => new MockResponse('{}', { status: 200 })) };
   const listeners = {};
   const self = {
@@ -128,9 +127,71 @@ function loadSw({ fetchImpl } = {}) {
   return {
     listeners, caches: cacheStorage,
     cacheNames: runInContext('({ SHELL_CACHE, API_CACHE })', context),
+    ready: runInContext('wallReady', context),
     setFetch: (f) => { ctl.fetchImpl = f; },
   };
 }
+
+test('Wall entry clears personal API cache and offline requests cannot read older private content', async () => {
+  const env=loadSw({fetchImpl:async()=>new MockResponse('{"private":"secret"}')});
+  const req=new MockRequest(apiUrl('/tasks'));
+  await dispatchFetch(env,req).result;
+  await dispatchMessage(env,{type:'WALL_MODE',enabled:true});
+  env.setFetch(async()=>{throw new Error('offline');});
+  const res=await dispatchFetch(env,req).result;
+  assert.equal(res.status,503);assert.equal(JSON.stringify(await res.json()).includes('secret'),false);
+});
+
+test('personal response begun before Wall entry cannot repopulate its offline cache',async()=>{
+  let release;
+  const env=loadSw({fetchImpl:()=>new Promise(resolve=>{release=resolve;})});
+  const req=new MockRequest(apiUrl('/tasks'));const response=dispatchFetch(env,req).result;
+  while(!release)await Promise.resolve();
+  await dispatchMessage(env,{type:'WALL_MODE',enabled:true});
+  release(new MockResponse('{"private":"secret"}'));await response;
+  const cached=await(await env.caches.open(env.cacheNames.API_CACHE)).match(req);assert.equal(cached,undefined);
+});
+
+test('Wall API lock persists in device storage and explicit exit permits fresh personal caching',async()=>{
+  const env=loadSw();await dispatchMessage(env,{type:'WALL_MODE',enabled:true});
+  const stored=await(await env.caches.open('yuvomi-device-privacy')).match('/wall-mode');assert.equal(stored.headers.get('x-wall-mode'),'1');
+  const req=new MockRequest(apiUrl('/tasks'));await dispatchFetch(env,req).result;
+  assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(req),undefined);
+  await dispatchMessage(env,{type:'WALL_MODE',enabled:false});await dispatchFetch(env,req).result;
+  assert.ok(await(await env.caches.open(env.cacheNames.API_CACHE)).match(req));
+});
+
+test('a slower older Wall exit cannot overwrite a newer entry in persisted worker state',async()=>{
+  const env=loadSw();await env.ready;
+  const cache=await env.caches.open('yuvomi-device-privacy');
+  const put=cache.put.bind(cache);let release;
+  cache.put=async(key,response)=>{
+    if(key==='/wall-mode'&&response.headers.get('x-wall-mode')==='0')await new Promise(resolve=>{release=resolve;});
+    return put(key,response);
+  };
+  const exit=dispatchMessage(env,{type:'WALL_MODE',enabled:false});
+  while(!release)await Promise.resolve();
+  const enter=dispatchMessage(env,{type:'WALL_MODE',enabled:true});
+  // Let the newer write finish first if the implementation is unordered.
+  for(let i=0;i<12;i++)await Promise.resolve();
+  release();await Promise.all([exit,enter]);
+  assert.equal((await cache.match('/wall-mode')).headers.get('x-wall-mode'),'1');
+  const restarted=loadSw({cacheStorage:env.caches});await restarted.ready;
+  const request=new MockRequest(apiUrl('/tasks'));
+  await dispatchFetch(restarted,request).result;
+  assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(request),undefined);
+});
+
+test('Wall entry clears personal API content even if persisting its lock fails',async()=>{
+  const env=loadSw();await env.ready;
+  const request=new MockRequest(apiUrl('/tasks'));await dispatchFetch(env,request).result;
+  const privacy=await env.caches.open('yuvomi-device-privacy');
+  privacy.put=async()=>{throw new Error('QuotaExceededError');};
+  await dispatchMessage(env,{type:'WALL_MODE',enabled:true});
+  assert.equal(await env.caches.has(env.cacheNames.API_CACHE),false);
+  const restarted=loadSw({cacheStorage:env.caches,fetchImpl:async()=>{throw new Error('offline');}});
+  assert.equal((await dispatchFetch(restarted,request).result).status,503);
+});
 
 function apiUrl(path) { return `${ORIGIN}/api/v1${path}`; }
 

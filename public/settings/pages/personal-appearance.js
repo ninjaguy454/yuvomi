@@ -9,6 +9,8 @@ import { appendCurrencyOptions, persistCurrencySelection } from '/settings/curre
 import { getPreferences, savePreferences } from '/settings/preferences-cache.js';
 import { toggleRowHtml } from '/settings/components.js';
 import { isWallModeEnabled, setWallModeEnabled } from '/utils/wall-mode.js';
+import { api } from '/api.js';
+import { clearApiCache } from '/sw-register.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
 import { applyAppearancePreferences, normalizeAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
 import {
@@ -476,14 +478,17 @@ function bindEvents(container, user) {
   // Wirksam wird er auf der Dashboard-Route - der Toast sagt das, statt den
   // Nutzer wortlos aus den Einstellungen zu werfen.
   const wallToggle = container.querySelector('#wall-mode-toggle');
-  wallToggle?.addEventListener('change', () => {
-    setWallModeEnabled(wallToggle.checked);
-    window.yuvomi?.showToast(
-      wallToggle.checked
-        ? t('settings.wallModeOn', { page: t('nav.dashboard') })
-        : t('settings.wallModeOff'),
-      'success',
-    );
+  wallToggle?.addEventListener('change', async () => {
+    if (!wallToggle.checked) { wallToggle.checked=true; window.yuvomi?.navigate('/'); return; }
+    wallToggle.disabled=true;
+    try {
+      await api.post('/wall/enter',{});
+      setWallModeEnabled(true);
+      clearApiCache();
+      navigator.serviceWorker?.controller?.postMessage({type:'WALL_MODE',enabled:true});
+      window.yuvomi?.navigate('/');
+    } catch(error) {wallToggle.checked=false;window.yuvomi?.showToast(error.message,'error');}
+    finally {wallToggle.disabled=false;}
   });
 
   const localeSelect = container.querySelector('#locale-select');

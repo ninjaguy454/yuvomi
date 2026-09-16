@@ -90,6 +90,9 @@ function purgeExpired(conn) {
  * Idempotenz-Middleware. Muss NACH requireAuth laufen (`req.authUserId`).
  */
 function idempotencyMiddleware(req, res, next) {
+  // Manual point corrections have permanent, transaction-bound provenance and
+  // must recheck administrator access on every retry, including after demotion.
+  if (/^\/rewards\/(?:adjustments|bonus)\/?$/i.test(req.path)) return next();
   const key = req.get(HEADER);
   // `undefined` heisst „kein Header" - ein LEERER Header dagegen ist ein
   // Aufrufer, der Retry-Sicherheit zu haben glaubt und keine bekaeme. Der wird

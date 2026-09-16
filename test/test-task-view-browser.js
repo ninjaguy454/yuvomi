@@ -281,7 +281,7 @@ test('card and board-section expansion preserve sibling identity and horizontal 
       assert.equal(after.sameOther, true);
       assert.equal(after.focused, '25', 'expansion control retains keyboard context');
     }
-    const section = '[data-action="toggle-board-section"][data-section-key="personal:category:group-2:in_progress"]';
+    const section = '[data-action="toggle-board-section"][data-section-key="personal:category:group-2:done"]';
     await tap(page, section); await frames(page);
     assert.equal(await page.$eval(section, node => node.getAttribute('aria-expanded')), 'true');
     near((await position(page, 25)).x, before.x, 'direct renderKanban section path retains horizontal scroll');
@@ -541,5 +541,114 @@ test('repeated empty List renders bind the create call to action only once', asy
     await tap(page, '#empty-cta-tasks');
     assert.equal(await page.evaluate(() => window.createInvocations), 1);
     assert.equal(await page.evaluate(() => window.savedEmptyAction === document.getElementById('empty-cta-tasks')), true);
+  } finally { await page.close(); }
+});
+
+for (const scope of ['personal', 'household']) {
+  test(`Kanban ${scope} places Open and In Progress together in Active, including live updates`, async () => {
+    const page = await mounted('kanban', scope === 'household' ? { width: 1920, height: 1080 } : { width: 390, height: 844 });
+    try {
+      fixture.tasks[1].status = 'in_progress';
+      fixture.tasks[2].status = 'done';
+      await refresh(page);
+      await page.evaluate(value => {
+        localStorage.setItem('yuvomi-wall-mode', value === 'household' ? '1' : '0');
+        window.subject.state.groupModes[value] = value === 'household' ? 'assignee' : 'category';
+        window.subject.renderKanban(window.taskContainer);
+      }, scope);
+      const inspect = () => page.evaluate(() => {
+        const card = id => document.querySelector(`.task-card[data-task-id="${id}"]`);
+        return { section1: card(1).closest('[data-board-section]').dataset.boardSection,
+          section2: card(2).closest('[data-board-section]').dataset.boardSection,
+          icon1: card(1).querySelector('[data-action="toggle-status"]').getAttribute('aria-label'),
+          icon2: card(2).querySelector('[data-action="toggle-status"]').getAttribute('aria-label'),
+          oldBanners: document.querySelectorAll('[data-section-status="open"], [data-section-status="in_progress"]').length,
+          completed: document.querySelectorAll('[data-section-status="done"]').length };
+      });
+      const initial = await inspect();
+      assert.ok(initial.section1.endsWith(':active')); assert.equal(initial.section1, initial.section2);
+      assert.match(initial.icon1, /Not Started/); assert.match(initial.icon2, /In Progress/);
+      assert.equal(initial.oldBanners, 0); assert.ok(initial.completed > 0);
+      fixture.tasks.push(taskRow(777, { title: 'Live assigned in-progress work', category: 'group-0', status: 'in_progress' }));
+      await emitLive(page, 700);
+      await page.waitForSelector('.task-card[data-task-id="777"]');
+      assert.equal(await page.$eval('.task-card[data-task-id="777"]', node => node.closest('[data-board-section]').dataset.boardSection), initial.section1);
+      await refresh(page); assert.deepEqual(await inspect(), initial);
+      assert.equal(fixture.writes.length, 0, 'grouping and live refresh are read-only');
+    } finally { await page.close(); }
+  });
+}
+
+test('saved Kanban status grouping merges Active without changing List status grouping or archived status', async () => {
+  const page = await mounted('kanban');
+  try {
+    fixture.tasks[1].status = 'in_progress'; fixture.tasks[2].status = 'done';
+    fixture.tasks[3].archived_at = '2026-09-15T12:00:00Z';
+    await refresh(page);
+    const result = await page.evaluate(() => {
+      const { state, taskBuckets, renderKanban, statusForBoardDrop } = window.subject;
+      state.groupModes.personal = 'status'; renderKanban(window.taskContainer);
+      return { buckets: [...document.querySelectorAll('[data-bucket-key].task-board__bucket')].map(node => node.dataset.bucketKey),
+        listStatuses: taskBuckets(state.tasks, 'status').map(bucket => bucket.id),
+        active: [...document.querySelectorAll('[data-board-section="personal:status:active:active"] .task-card')].map(node => Number(node.dataset.taskId)),
+        restore: ['open', 'in_progress', 'done'].map(status => statusForBoardDrop({ status, archived_at: 'saved' }, 'active')) };
+    });
+    assert.deepEqual(result.buckets, ['personal:status:active', 'personal:status:done', 'personal:status:archived']);
+    assert.deepEqual(result.listStatuses, ['open', 'in_progress', 'done', 'archived']);
+    assert.ok(result.active.includes(1) && result.active.includes(2));
+    assert.ok(!result.active.includes(3) && !result.active.includes(4));
+    assert.deepEqual(result.restore, ['open', 'in_progress', 'done']);
+    assert.equal(fixture.writes.length, 0);
+  } finally { await page.close(); }
+});
+
+test('Active carries forward legacy collapse choices and retains new choices through refresh', async () => {
+  const page = await mounted('kanban');
+  try {
+    const result = await page.evaluate(() => {
+      const { state, isBoardSectionCollapsed, renderKanban } = window.subject;
+      const key = 'personal:category:group-0';
+      const checks = [isBoardSectionCollapsed(`${key}:active`, 'active')];
+      state.collapsedBoardSections.add(`${key}:open`);
+      checks.push(isBoardSectionCollapsed(`${key}:active`, 'active'));
+      state.expandedBoardSections.add(`${key}:in_progress`);
+      checks.push(isBoardSectionCollapsed(`${key}:active`, 'active'));
+      state.expandedBoardSections.delete(`${key}:in_progress`);
+      state.collapsedBoardSections.add('personal:status:open:open');
+      checks.push(isBoardSectionCollapsed('personal:status:active:active', 'active'));
+      renderKanban(window.taskContainer);
+      return checks;
+    });
+    assert.deepEqual(result, [false, true, false, true]);
+    const selector = '[data-section-key="personal:category:group-0:active"]';
+    assert.equal(await page.$eval(selector, node => node.getAttribute('aria-expanded')), 'false');
+    await tap(page, selector); await emitLive(page, 701); await refresh(page);
+    assert.equal(await page.$eval(selector, node => node.getAttribute('aria-expanded')), 'true');
+    assert.equal(fixture.writes.length, 0);
+  } finally { await page.close(); }
+});
+
+test('dropping inside Active never resets In Progress; Completed to Active uses the existing reopen transition', async () => {
+  const page = await mounted('kanban');
+  try {
+    fixture.tasks[1].status = 'in_progress';
+    fixture.tasks[2].status = 'done'; fixture.tasks[2].subtasks = [];
+    await refresh(page);
+    await tap(page, '[data-section-key="personal:category:group-0:done"]');
+    const drop = id => page.evaluate(taskId => {
+      const handle = document.querySelector(`.task-card[data-task-id="${taskId}"] [data-task-drag-handle]`);
+      const zone = document.querySelector('[data-board-section="personal:category:group-0:active"] [data-drop-zone]');
+      const dataTransfer = new DataTransfer();
+      handle.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
+      zone.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer }));
+      handle.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }));
+    }, id);
+    await drop(2); await frames(page);
+    assert.equal(fixture.writes.length, 0); assert.equal(fixture.tasks[1].status, 'in_progress');
+    await drop(3); await until(() => fixture.writes.length === 1);
+    await page.waitForFunction(() => window.subject.state.tasks.find(row => row.id === 3)?.status === 'in_progress');
+    assert.equal(fixture.writes[0].body.status, 'in_progress');
+    assert.equal(fixture.writes[0].body.expected_revision, 1);
+    assert.ok(!fixture.writes.some(write => write.body.status === 'active' || write.body.status === 'open'));
   } finally { await page.close(); }
 });

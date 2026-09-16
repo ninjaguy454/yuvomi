@@ -383,3 +383,41 @@ test('module denial still removes household-visible Search Tasks despite an allo
     clearModuleDenials(HOUSEHOLD_VIEWER);
   }
 });
+
+for (const status of ['open', 'in_progress', 'done']) {
+  test(`ordinary Search includes unarchived ${status} Tasks and excludes them after archiving`, async () => {
+    const task = visibilityTask(`ArchiveSearch${status.replaceAll('_', '')}`, { status });
+    await assertSearchVisibility(HOUSEHOLD_VIEWER, task, true);
+    db.prepare('UPDATE tasks SET archived_at=CURRENT_TIMESTAMP WHERE id=?').run(task.id);
+    assert.equal(taskCapabilities(db, HOUSEHOLD_VIEWER, task).view, true, 'archive is a presentation filter, not an authorization change');
+    for (const userId of [PARENT, ELEANOR, HOUSEHOLD_VIEWER]) {
+      const response = await searchAs(userId, task.title);
+      assert.equal(response.tasks.some(row => row.id === task.id), false);
+    }
+  });
+}
+
+test('private archived Tasks never leak; unarchiving restores only their authorized audience', async () => {
+  const task = visibilityTask('ArchiveSearchPrivate', { visibility: 'private' });
+  db.prepare('UPDATE tasks SET archived_at=CURRENT_TIMESTAMP WHERE id=?').run(task.id);
+  for (const userId of [PARENT, ELEANOR, HOUSEHOLD_VIEWER]) {
+    assert.equal((await searchAs(userId, task.title)).tasks.length, 0);
+  }
+  db.prepare('UPDATE tasks SET archived_at=NULL WHERE id=?').run(task.id);
+  await assertSearchVisibility(PARENT, task, true);
+  await assertSearchVisibility(HOUSEHOLD_VIEWER, task, false);
+});
+
+test('archived recurring history cannot crowd active occurrences out of the Search limit', async () => {
+  let predecessor = null;
+  for (let i = 0; i < 8; i++) {
+    const occurrence = visibilityTask(`ArchiveSeriesLaundry ${i}`, { status: 'done' });
+    db.prepare(`UPDATE tasks SET is_recurring=1, recurrence_rule='FREQ=WEEKLY;BYDAY=FR',
+      recurrence_origin_id=?, archived_at=CURRENT_TIMESTAMP WHERE id=?`).run(predecessor, occurrence.id);
+    predecessor = occurrence.id;
+  }
+  const active = visibilityTask('ArchiveSeriesLaundry next');
+  db.prepare('UPDATE tasks SET is_recurring=1,recurrence_origin_id=? WHERE id=?').run(predecessor, active.id);
+  const response = await searchAs(HOUSEHOLD_VIEWER, 'ArchiveSeriesLaundry');
+  assert.deepEqual(response.tasks.map(row => row.id), [active.id]);
+});

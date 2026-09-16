@@ -685,10 +685,12 @@ test('points for an inherited supervised learner action go to the learner and re
   const awards=d.prepare("SELECT user_id,delta,created_by FROM reward_ledger WHERE task_id=? AND type='earn'").all(x.wash);
   assert.deepEqual(awards,[{user_id:learner,delta:7,created_by:helper}]);
   changeTaskStatus(d,action.counterpart_task_id,'in_progress',{actorId:helper,authorize:false});
-  assert.equal(d.prepare("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'").get(x.wash).n,0);
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'").get(x.wash).n,1,
+    'reopening preserves the learner award and its original supervisor attribution');
   d.prepare('UPDATE reward_participants SET enabled=0 WHERE user_id=?').run(learner);
   changeTaskStatus(d,action.counterpart_task_id,'done',{actorId:helper,authorize:false});
-  assert.equal(d.prepare("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'").get(x.wash).n,0,'an unenrolled learner does not transfer their reward to the helper');
+  assert.deepEqual(d.prepare("SELECT user_id,delta,created_by FROM reward_ledger WHERE task_id=? AND type='earn'").all(x.wash),awards,
+    'unenrollment and recompletion cannot reaward or transfer the original reward to the helper');
 });
 
 test('archived source or individual action retires linked helper work without losing restore history',()=>{

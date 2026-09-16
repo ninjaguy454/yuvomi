@@ -1,10 +1,12 @@
 /** One operational transition for REST and compatibility writers. */
 import { syncTaskRewards } from './rewards.js';
+import { retiredRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
 import { reconcileTaskSupervision, inspectTaskSupervision, taskSupervisionTransition, supervisionProjectionUpdates, taskSupervisionRootId } from './task-supervision.js';
+import { todayKey } from '../utils/timezone.js';
 
 let recurrenceHooks = null;
 // Recurrence keeps its established anchored/group implementation in the Tasks
@@ -14,6 +16,29 @@ export function configureTaskRecurrence(hooks) { recurrenceHooks = hooks; }
 export class TaskStateError extends Error {
   constructor(message, details = {}, status = 409) {
     super(message); this.status = status; this.code = status; this.details = details;
+  }
+}
+
+/** A future recurring occurrence can be viewed, but none of its original or
+ * linked helper actions may be completed before its household-local start day.
+ * Use the structural ancestry too: a Workflow's Activity binding creates a
+ * supervision boundary, not permission to bypass the enclosing occurrence. */
+export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
+  const day = todayKey(d, now);
+  const mapped = d.prepare(`SELECT source_task_id FROM task_supervision_actions
+    WHERE action_task_id=? OR counterpart_task_id=? UNION
+    SELECT source_task_id FROM task_activity_support_tasks WHERE task_id=?`).all(taskId,taskId,taskId);
+  const pending = [Number(taskId),...mapped.map(row=>row.source_task_id)], seen = new Set();
+  while(pending.length) {
+    const id = pending.pop();
+    if(seen.has(id))continue;
+    seen.add(id);
+    const task = d.prepare('SELECT id,parent_task_id,is_recurring,start_date FROM tasks WHERE id=?').get(id);
+    if(!task)continue;
+    if(task.is_recurring && task.start_date && task.start_date > day)
+      throw new TaskStateError(`This occurrence starts on ${task.start_date}; it cannot be completed yet.`,
+        {reason:'occurrence_not_started',task_id:task.id,start_date:task.start_date});
+    if(task.parent_task_id)pending.push(task.parent_task_id);
   }
 }
 
@@ -63,6 +88,7 @@ export function taskActivity(d, taskId, limit = 60) {
 function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false}={}) {
   if (task.status === status) return;
   if (status === 'done') {
+    assertRecurringCompletionStarted(d,task.id);
     const dependencies = unresolvedDependencies(d, task.id);
     if (dependencies.length) throw new TaskStateError('Complete required earlier activities first.',
       {dependencies: dependencies.filter(item => actorId != null && taskCapabilities(d,actorId,item).view)});
@@ -107,6 +133,10 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     if (!requested) throw new TaskStateError('Task not found.',{},404);
     if (authorize) assertTaskMutation(d,actorId,requested,{status},{operation:'status'});
     assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
+    if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
+      'This historical occurrence was retired. Its recorded progress is preserved; use the current occurrence instead.',
+      {reason:'occurrence_retired'});
+    if(status==='done')assertRecurringCompletionStarted(d,requested.id);
     // Includes legacy Tasks whose mappings did not exist before this action.
     reconcileTaskSupervision(d,requested.id,{actorId});
     const gate = taskSupervisionTransition(d,requested.id,status,actorId);

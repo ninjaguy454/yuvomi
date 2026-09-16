@@ -40,6 +40,9 @@ function caption(photo) {
 }
 
 async function start() {
+  // Personal photo albums are not a shared-display feed. Fully Kiosk owns
+  // device sleep/brightness; the Wall surface never requests private photos.
+  if (document.documentElement.hasAttribute('data-wall-mode')) return false;
   const currentRun = ++run;
   try {
     const payload = await api.get('/screensaver/photos');

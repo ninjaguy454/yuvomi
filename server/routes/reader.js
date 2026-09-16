@@ -25,6 +25,7 @@ const DUMMY_HASH = '$2b$12$invalidhashfortimingprotection000000000000000000000';
 // Reader login remains session-only, but handlers consume the same canonical
 // authenticated-user slot as the rest of Yuvomi.
 router.use((req, res, next) => {
+  if (req.session?.wallMode) return res.status(423).type('html').send('<!doctype html><html><body><p>This shared display is locked to Wall Mode.</p><a href="/">Return to Wall Mode</a></body></html>');
   // Login, redirects and validation errors can also contain session-specific
   // state or private drafts. Protect every Reader response before any handler.
   res.setHeader('Cache-Control', 'private, no-store');

@@ -9,6 +9,7 @@ import { setPermissions, clearPermissions } from '/permissions.js';
 import { setHouseholdSize, clearHouseholdSize } from '/utils/household.js';
 import { forgetLayoutHint } from '/utils/dashboard-layout-hint.js';
 import { broadcastSessionChange } from '/utils/session-lifecycle.js';
+import { setWallModeEnabled } from '/utils/wall-mode.js';
 
 const API_BASE = '/api/v1';
 
@@ -65,7 +66,7 @@ async function apiFetch(path, options = {}, _retried = false) {
     // Für den zweiten Faktor gilt dasselbe: dort heißt 401 "falscher Code" oder
     // "der Wartezustand ist abgelaufen" - beides gehört auf die Anmeldeseite
     // gesagt und nicht in einen Sitzungsabbruch übersetzt (#672).
-    if (path !== '/auth/login' && path !== '/auth/2fa/verify') {
+    if (path !== '/auth/login' && path !== '/auth/2fa/verify' && path !== '/wall/identify') {
       window.dispatchEvent(new CustomEvent('auth:expired'));
       throw new Error('Sitzung abgelaufen.');
     }
@@ -103,6 +104,11 @@ async function apiFetch(path, options = {}, _retried = false) {
   if (data?.csrfToken) _csrfToken = data.csrfToken;
 
   if (!response.ok) {
+    if (response.status === 423 && data?.reason === 'wall_mode_locked') {
+      setWallModeEnabled(true);
+      clearApiCache();
+      window.dispatchEvent(new CustomEvent('yuvomi:wall-lock'));
+    }
     const message = data?.error || `HTTP ${response.status}`;
     throw new ApiError(message, response.status, data);
   }
@@ -158,7 +164,7 @@ class ApiError extends Error {
 // --------------------------------------------------------
 
 const api = {
-  get: (path) => apiFetch(path, { method: 'GET' }),
+  get: (path, opts = {}) => apiFetch(path, { ...opts, method: 'GET' }),
 
   post: (path, body, opts = {}) => apiFetch(path, {
     method: 'POST',
@@ -245,6 +251,7 @@ const auth = {
   },
   me: async () => {
     const res = await api.get('/auth/me');
+    if (res?.wallMode === true) setWallModeEnabled(true);
     setPermissions(res?.permissions);
     // Neben den Rechten die zweite Angabe, die JEDE Seite braucht und die
     // niemand einzeln holen soll: die Haushaltsgroesse (utils/household.js).

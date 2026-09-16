@@ -29,6 +29,7 @@ import { passwordResetService as defaultResetService } from './services/password
 import { inviteService as defaultInviteService } from './services/invites.js';
 import { parseScopes, serializeScopes, normalizeScopes } from './scopes.js';
 import { hashPassword, normalizePassword, verifyPassword } from './utils/password.js';
+import { wallSessionAllows, preserveWallSessionLock } from './services/wall-session.js';
 import { resolvePermissions, buildSessionModuleAccess, clientPermissions } from './permissions.js';
 import { requireAdmin } from './middleware/require-admin.js';
 import * as twoFactor from './services/two-factor.js';
@@ -135,6 +136,8 @@ class BetterSQLiteStore extends session.Store {
 
   set(sid, sess, callback) {
     try {
+      const previous = db.get().prepare('SELECT sess FROM sessions WHERE sid=?').get(sid);
+      preserveWallSessionLock(previous ? JSON.parse(previous.sess) : null, sess);
       const ttl = sess.cookie?.maxAge ?? 7 * 24 * 60 * 60 * 1000;
       const expiredAt = Date.now() + ttl;
       db.get()
@@ -678,6 +681,7 @@ function requireAuth(req, res, next) {
   }
 
   if (req.session && req.session.userId) {
+    if (!wallSessionAllows(req)) return res.status(423).json({error:'This shared display is locked to Wall Mode. Identify an administrator to exit.',code:423,reason:'wall_mode_locked'});
     req.authMethod = 'session';
     req.authUserId = req.session.userId;
     req.authRole = req.session.role;
@@ -1857,10 +1861,11 @@ router.get('/me', requireAuth, (req, res) => {
     });
 
     res.json({
-      user: publicUser(user),
+      user: req.session.wallMode ? {id:user.id,display_name:user.display_name,avatar_color:user.avatar_color,role:user.role,family_role:user.family_role} : publicUser(user),
       permissions: clientPermissions(db.get(), user),
       householdSize: householdSize(db.get()),
       csrfToken: req.session.csrfToken,
+      wallMode: !!req.session.wallMode,
     });
   } catch (err) {
     log.error('/me error:', err);

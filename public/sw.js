@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Refresh Task capabilities, operational detail and unbuffered live updates together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.9`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.10`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -28,6 +28,15 @@ const API_CACHE     = `yuvomi-api-${CACHE_VERSION}`;
 const BYPASS_CACHE  = 'yuvomi-bypass-flag';
 const DEVICE_PRIVACY_CACHE = 'yuvomi-device-privacy';
 const ALL_CACHES    = [SHELL_CACHE, PAGES_CACHE, LOCALES_CACHE, ASSETS_CACHE];
+let wallLocked = null;
+let wallEpoch = 0;
+let wallUpdate = Promise.resolve();
+const wallReady = (async () => {
+  try {
+    const stored = await (await caches.open(DEVICE_PRIVACY_CACHE)).match('/wall-mode');
+    if (wallLocked === null) wallLocked = stored?.headers.get('x-wall-mode') === '1';
+  } catch { if (wallLocked === null) wallLocked = true; }
+})();
 
 // GET-API-Pfade (nach /api/v1), die für Read-only-Offline gecacht werden dürfen.
 // NUR Lese-Endpunkte — niemals /auth/* oder Mutationen. Prefix-Match.
@@ -35,6 +44,18 @@ const API_CACHE_WHITELIST = ['/calendar', '/tasks', '/shopping', '/meals', '/con
 
 // App-Shell: sofort benötigt für ersten Render
 const APP_SHELL = [
+  '/components/emoji-picker.js',
+  '/utils/emoji-catalog.js',
+  '/utils/reward-request.js',
+  '/utils/reward-live.js',
+  '/styles/emoji-picker.css',
+  '/components/wall-dashboard.js',
+  '/styles/wall-dashboard.css',
+  '/utils/task-view-state.js',
+  '/utils/task-card-selection.js',
+  '/utils/task-card-drag.js',
+  '/data/emoji/catalog.js',
+  ...['de','es','fr','it','sv','ru','zh','ja','hi','pt','uk','pl','nl','vi','hu','ko'].map(locale => `/data/emoji/${locale}.json`),
   '/',
   '/index.html',
   '/api.js',
@@ -563,18 +584,21 @@ async function networkFirst(request, cacheName) {
 // Netzfehler → Cache-Fallback, sonst 503-JSON {error:'offline'}.
 // --------------------------------------------------------
 async function networkFirstApi(request) {
+  await wallReady;
+  const epoch = wallEpoch;
   try {
     const response = await fetch(request);
     // Defend against a new streaming endpoint entering the finite-response whitelist.
     if (response.headers.get('content-type')?.includes('text/event-stream')) return response;
     // Nur erfolgreiche, gleichoriginäre (basic) Antworten cachen.
-    if (response.ok && response.type === 'basic') {
+    if (response.ok && response.type === 'basic' && !wallLocked && epoch === wallEpoch) {
       try {
         const cache   = await caches.open(API_CACHE);
         const cloned  = response.clone();
         const headers = new Headers(cloned.headers);
         headers.set('x-cached-at', String(Date.now()));
         const body = await cloned.blob();
+        if (wallLocked || epoch !== wallEpoch) return response;
         await cache.put(request, new Response(body, {
           status: cloned.status,
           statusText: cloned.statusText,
@@ -587,7 +611,7 @@ async function networkFirstApi(request) {
     try {
       const cache  = await caches.open(API_CACHE);
       const cached = await cache.match(request);
-      if (cached) return cached;
+      if (cached && !wallLocked && epoch === wallEpoch) return cached;
     } catch { /* Storage may be unavailable along with the network. */ }
     return new Response(JSON.stringify({ error: 'offline' }), {
       status: 503,
@@ -656,6 +680,23 @@ function isCacheableApiGet(pathname) {
 // Nachrichten vom Client: API-Cache leeren (Logout/Session-Ende)
 // --------------------------------------------------------
 self.addEventListener('message', (event) => {
+  if (event.data?.type === 'WALL_MODE' && typeof event.data.enabled === 'boolean') {
+    wallLocked = event.data.enabled;
+    wallEpoch++;
+    const enabled = wallLocked;
+    // Cache writes are asynchronous. An older slow exit must not finish after
+    // a newer entry and persist a permissive flag for the next worker process.
+    wallUpdate = wallUpdate.catch(() => {}).then(async () => {
+      // Clear private data even when saving the preference fails (for example
+      // a full WebView cache). The in-memory lock is already authoritative.
+      if (enabled) await caches.delete(API_CACHE).catch(() => {});
+      try {
+        const cache = await caches.open(DEVICE_PRIVACY_CACHE);
+        await cache.put('/wall-mode', new Response('', {headers:{'x-wall-mode':enabled?'1':'0'}}));
+      } catch { /* Private cache was removed; a missing flag cannot restore it. */ }
+    });
+    event.waitUntil(wallUpdate);
+  }
   if (event.data && event.data.type === 'CLEAR_API_CACHE') {
     event.waitUntil(Promise.all([caches.delete(API_CACHE), clearReaderCache()]));
   }

@@ -100,10 +100,10 @@ test('delegated subtask reward follows its actual helper even with a stale struc
   assert.deepEqual(earns(delegated.counterpart_task_id), []);
   assert.deepEqual(earns(view.support_task_id), []);
   change(delegated.counterpart_task_id, 'in_progress', helper);
-  assert.deepEqual(earns(x.delegated), []);
+  assert.deepEqual(earns(x.delegated), [{user_id: helper, delta: 7, created_by: helper}], 'reopening preserves earned history');
   d.prepare('UPDATE reward_participants SET enabled=0 WHERE user_id=?').run(helper);
   change(delegated.counterpart_task_id, 'done', helper);
-  assert.deepEqual(earns(x.delegated), [], 'unenrolled helper never transfers prohibited work points to the learner');
+  assert.deepEqual(earns(x.delegated), [{user_id: helper, delta: 7, created_by: helper}], 'unenrollment/recompletion cannot reaward or transfer historical points');
 });
 
 test('supervised action points still belong to learner and parent legacy assignment never rewards helper', () => {

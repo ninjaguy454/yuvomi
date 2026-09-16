@@ -1,0 +1,19 @@
+.emoji-picker{box-sizing:border-box;width:min(960px,calc(100vw - 24px));max-width:none;max-height:calc(100dvh - 24px);margin:auto;padding:20px;border:1px solid var(--color-border);border-radius:var(--radius-xl,18px);background:var(--color-surface);color:var(--color-text-primary);box-shadow:var(--shadow-xl);overflow:hidden}
+.emoji-picker::backdrop{background:var(--color-overlay)}
+.emoji-picker[open]{display:flex;flex-direction:column}.emoji-picker>*{flex:none}.emoji-picker .emoji-picker__viewport{flex:1 1 auto}
+.emoji-picker__header,.emoji-picker__footer{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.emoji-picker__header h2{font-size:1.4rem;margin:0}.emoji-picker__search{display:block;margin-block:14px}.emoji-picker__search input{box-sizing:border-box;width:100%;min-height:48px}
+.emoji-picker__categories{display:flex;gap:6px;overflow-x:auto;overscroll-behavior:contain;padding-bottom:8px;scrollbar-width:thin}
+.emoji-picker__categories button{flex:none;min-height:44px;padding:8px 12px;border:1px solid var(--color-border-control);border-radius:99px;color:inherit;background:transparent;font:inherit;text-transform:capitalize;touch-action:manipulation}
+.emoji-picker__categories button[aria-pressed=true]{background:var(--color-surface-3);border-color:var(--color-accent)}
+.emoji-picker__count{margin:8px 0;font-size:.875rem;color:var(--color-text-secondary)}
+.emoji-picker__viewport{height:min(46dvh,440px);min-height:120px;overflow-y:auto;overscroll-behavior:contain;touch-action:pan-y;scrollbar-gutter:stable}
+.emoji-picker__grid{position:relative;width:100%}.emoji-picker__tile{height:56px;min-width:44px;min-height:44px;border:2px solid transparent;border-radius:10px;font:32px/1 "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;background:transparent;color:inherit;touch-action:pan-y;user-select:none;-webkit-user-select:none;cursor:pointer}
+.emoji-picker__grid .emoji-picker__tile{position:absolute}.emoji-picker__tile[aria-pressed=true]{background:var(--color-surface-3);border-color:var(--color-accent)}
+.emoji-picker .emoji-picker__tile{font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;contain:layout style paint;content-visibility:auto;contain-intrinsic-size:auto 56px}
+.emoji-picker__tile:focus-visible{outline:3px solid var(--color-accent);outline-offset:-3px}.emoji-picker__tile[data-variants]::after{content:'▾';font:10px/1 sans-serif;display:block;position:absolute;bottom:3px;right:7px}
+.emoji-picker__variants{padding:8px 0;border-top:1px solid var(--color-border)}.emoji-picker__variants[hidden]{display:none}.emoji-picker__variants>div{display:flex;flex-wrap:wrap;max-height:180px;overflow-y:auto}.emoji-picker__variants .emoji-picker__tile{width:56px;position:relative}.emoji-picker__variants>button{float:right;min-width:44px;min-height:44px;background:transparent;color:inherit;border:0;font-size:24px}.emoji-picker__footer{padding-top:10px;border-top:1px solid var(--color-border);font-size:.8rem;color:var(--color-text-secondary)}
+.rw-emoji-picker-trigger{display:flex;align-items:center;gap:10px;min-height:48px;width:100%;text-align:start}.rw-emoji-picker-trigger__value{font-family:"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif;font-size:1.65rem}
+@media(min-width:1600px){.emoji-picker{width:min(1120px,75vw);padding:28px}.emoji-picker__viewport{height:min(52dvh,560px)}}
+@media(max-height:560px){.emoji-picker{padding:10px}.emoji-picker__header h2{font-size:1.1rem}.emoji-picker__search{margin:6px 0}.emoji-picker__viewport{height:34dvh;min-height:60px}.emoji-picker__footer{padding-top:4px}.emoji-picker__footer>span{display:none}.emoji-picker__variants>div{max-height:64px}}
+@media(prefers-reduced-motion:reduce){.emoji-picker *{scroll-behavior:auto}}

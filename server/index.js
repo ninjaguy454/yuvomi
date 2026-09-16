@@ -36,6 +36,7 @@ import { startTaskSupervisionRefresh } from './services/task-supervision-refresh
 import { emailService } from './services/email.js';
 import { passwordLoginWarning, OIDC_PASSWORD_SENTINEL } from './services/oidc.js';
 import dashboardRouter from './routes/dashboard.js';
+import wallRouter from './routes/wall.js';
 import tasksRouter from './routes/tasks.js';
 import shoppingRouter from './routes/shopping.js';
 import mealsRouter from './routes/meals.js';
@@ -448,6 +449,9 @@ app.use('/api/v1', (req, res, next) => {
   return next();
 });
 app.use('/api/v1', csrfMiddleware);
+// Wall proofs must be verified before any cached mutation response is considered.
+// Canonical Task revisions and the durable Rewards ledger supply idempotency.
+app.use('/api/v1/wall', wallRouter);
 // Retry-Sicherheit für schreibende Aufrufer (#822): greift nur, wenn ein
 // `Idempotency-Key` mitkommt, und liegt hinter Auth, Scopes und CSRF - ein
 // abgewiesener Aufruf darf keinen Schlüssel verbrauchen.

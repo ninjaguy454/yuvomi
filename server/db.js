@@ -8941,6 +8941,43 @@ FORK_MIGRATIONS.push({
       BEGIN UPDATE tasks SET revision=revision+1 WHERE id=NEW.id; END;`,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10034,
+  description: 'Rewards: durable occurrence awards and retry-safe redemption provenance',
+  up: `
+    CREATE TABLE reward_task_awards (
+      task_id INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+      awarded_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+    );
+    -- Existing ledger amounts, recipients and timestamps remain untouched.
+    INSERT INTO reward_task_awards(task_id,awarded_at)
+      SELECT task_id,MIN(created_at) FROM reward_ledger
+      WHERE type='earn' AND task_id IS NOT NULL GROUP BY task_id;
+    CREATE TABLE reward_redemption_requests (
+      actor_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      request_key TEXT NOT NULL,
+      request_fingerprint TEXT NOT NULL,
+      redemption_id INTEGER REFERENCES reward_redemptions(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+      PRIMARY KEY(actor_user_id,request_key)
+    );
+    -- Do not rewrite historical rows even if an old installation has duplicate
+    -- deductions/refunds. Every new ledger writer must respect this boundary.
+    CREATE TRIGGER trg_reward_redemption_once BEFORE INSERT ON reward_ledger
+      WHEN NEW.redemption_id IS NOT NULL AND NEW.type IN ('redeem','reversal')
+        AND EXISTS(SELECT 1 FROM reward_ledger WHERE redemption_id=NEW.redemption_id AND type=NEW.type)
+      BEGIN SELECT RAISE(ABORT,'A redemption may be deducted or refunded only once'); END;
+    CREATE TABLE reward_change_clock(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO reward_change_clock(id,version) VALUES(1,0);
+  `,
+  afterUp(database) {
+    for(const table of ['reward_ledger','reward_catalog','reward_redemptions','reward_participants'])
+      for(const operation of ['INSERT','UPDATE','DELETE']) database.exec(`
+        CREATE TRIGGER trg_${table}_change_${operation.toLowerCase()} AFTER ${operation} ON ${table}
+        BEGIN UPDATE reward_change_clock SET version=version+1 WHERE id=1; END;`);
+  },
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

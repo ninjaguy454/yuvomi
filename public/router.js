@@ -38,7 +38,7 @@ import {
 } from '/utils/nav-badges.js';
 import { isNewerVersion, displayVersion } from '/utils/version.js';
 import { setMaxUploadBytes } from '/utils/upload-limit.js';
-import { syncWallMode } from '/utils/wall-mode.js';
+import { syncWallMode, isWallModeEnabled } from '/utils/wall-mode.js';
 import {
   rememberScrollPosition,
   scrollPositionFor,
@@ -403,6 +403,11 @@ let currentUser = null;
 let _navBuiltForUserId = null;
 let currentPath = null;
 let isNavigating = false;
+// A Wall-only document has never rendered personal content. Crossing into Wall
+// from a personal document instead replaces it once: pending page renders and
+// modal callbacks cannot be reliably cancelled by an ordinary SPA navigation.
+let _wallOnlyDocument = isWallModeEnabled();
+let _wallPrivacyTransitioning = false;
 // Zuletzt erfolgreich gerendertes Seiten-Modul. Erlaubt Soft-Navigation
 // innerhalb desselben Moduls (z. B. Settings-Blatt → Blatt): Statt das Modul
 // komplett neu zu rendern (Teardown + Slide-Transition), tauscht das Modul über
@@ -719,6 +724,8 @@ function navigationHistoryControls({ showLabels = false, mobile = false } = {}) 
  * @param {boolean} pushState - false beim initialen Load und popstate
  */
 async function navigate(path, userOrPushState = true, pushState = true) {
+  if (_wallPrivacyTransitioning) return;
+  if (isWallModeEnabled() && !['/login', '/setup'].includes(path.split('?')[0])) path = '/';
   if (isNavigating) return;
   isNavigating = true;
 
@@ -839,6 +846,11 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       }
     }
 
+    if (currentUser && isWallModeEnabled() && basePath !== '/') {
+      currentPath = null;
+      isNavigating = false;
+      return navigate('/');
+    }
     route = allRoutes().find((r) => r.path === basePath) ?? route;
 
     // Split-Guest-Weiche: Gäste einer Ausgabenteilung sehen nur das Budget-Modul.
@@ -1185,7 +1197,7 @@ let _notificationHeaderButton = null;
 /** Move the one inbox control with the current module's header, including soft renders. */
 function adoptNotificationHeader() {
   const main = document.getElementById('main-content');
-  if (!main || !currentUser || currentUser.access_scope === 'split_guest') {
+  if (!main || !currentUser || currentUser.access_scope === 'split_guest' || isWallModeEnabled()) {
     _notificationHeaderButton?.remove();
     return;
   }
@@ -4304,6 +4316,26 @@ function forgetSessionState() {
 }
 
 let sessionReloading = false;
+function enforceWallPrivacyBoundary() {
+  if (!isWallModeEnabled() || _wallOnlyDocument || _wallPrivacyTransitioning) return;
+  _wallPrivacyTransitioning = true;
+  // Hide first, including body-level dialogs. An already-dispatched private
+  // response may still invoke its old callback until this document is replaced.
+  // Clearing the shell alone would let that callback reopen a private modal.
+  document.documentElement.style.visibility = 'hidden';
+  try { _renderedDispose?.(); } catch { /* privacy teardown must continue */ }
+  _renderedDispose = null;
+  _renderedModule = null;
+  _renderedModuleName = null;
+  forgetSessionState();
+  document.getElementById('app')?.replaceChildren();
+  // Unlike navigate(), this cannot be dropped while isNavigating is true. The
+  // persisted Wall flag routes an offline shell to Wall too; no personal API
+  // cache or old module closure crosses the boundary. Repeated lock events in
+  // an established Wall document do not replace it or interrupt interaction.
+  window.location.replace('/');
+}
+
 function refreshAfterSessionChange() {
   if (sessionReloading) return;
   sessionReloading = true;
@@ -4326,7 +4358,11 @@ async function verifyResumedSession() {
     try {
       const response = await api.get('/auth/me');
       if (sessionRevision() !== expectedRevision || currentUser?.id !== expectedUserId) return;
-      if (response?.user?.id !== expectedUserId) refreshAfterSessionChange();
+      if (response?.wallMode && !isWallModeEnabled()) {
+        const { setWallModeEnabled } = await import('/utils/wall-mode.js');
+        setWallModeEnabled(true);
+        navigate('/');
+      } else if (response?.user?.id !== expectedUserId) refreshAfterSessionChange();
     } catch { /* expiry uses auth:expired; network failures keep the offline view */ }
     finally { resumeIdentityRequest = null; }
   })();
@@ -4336,6 +4372,16 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') void verifyResumedSession();
 });
 window.addEventListener('focus', () => { void verifyResumedSession(); });
+window.addEventListener('yuvomi:wall-lock', enforceWallPrivacyBoundary);
+window.addEventListener('yuvomi:wall-mode-change', event => {
+  if (event.detail?.enabled) enforceWallPrivacyBoundary();
+  else _wallOnlyDocument = false;
+});
+window.addEventListener('storage', event => {
+  if (event.key !== 'yuvomi-wall-mode') return;
+  if (event.newValue === '1') enforceWallPrivacyBoundary();
+  else _wallOnlyDocument = false;
+});
 window.addEventListener('pageshow', (event) => {
   if (event.persisted) void verifyResumedSession();
 });

@@ -26,6 +26,7 @@ process.env.DB_PATH = ':memory:';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
+import crypto from 'node:crypto';
 
 const dbmod = await import('../server/db.js');
 const { default: rewardsRouter } = await import('../server/routes/rewards.js');
@@ -58,7 +59,7 @@ test.after(() => server.close());
 
 async function call(method, route, { actor: a = ADMIN, body } = {}) {
   actor = a;
-  const headers = {};
+  const headers = method==='POST' && route==='/redemptions' ? {'Idempotency-Key':crypto.randomUUID()} : {};
   let payload;
   if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }
   const res = await fetch(`${baseUrl}${route}`, { method, headers, body: payload });

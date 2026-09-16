@@ -74,41 +74,107 @@ export function rewardTargets(d, taskId, actingUserId) {
   return [];
 }
 
-/**
- * Punkte für eine erledigte Aufgabe gutschreiben. Idempotent: der partielle
- * UNIQUE-Index (task_id, user_id) WHERE type='earn' verhindert Doppelvergabe,
- * falls der Statuswechsel mehrfach eintrifft.
- */
+/** One award per occurrence, with the recipients frozen at the first award.
+ * The claim and every ledger row commit together, including through callers
+ * outside the Task lifecycle. A recurrence is a different Task ID; reopening,
+ * reassignment, retries and helper projections are not new occurrences. */
 export function awardForCompletion(d, taskId, actingUserId) {
-  const task = d.prepare('SELECT id, points, title FROM tasks WHERE id = ?').get(taskId);
-  if (!task || !Number.isInteger(task.points) || task.points <= 0) return;
-  const targets = rewardTargets(d, taskId, actingUserId);
-  if (!targets.length) return;
-  const ins = d.prepare(`INSERT OR IGNORE INTO ${'reward_ledger'} (user_id, delta, type, reason, task_id, created_by)
-    VALUES (?, ?, 'earn', ?, ?, ?)`);
-  for (const uid of targets) {
-    ins.run(uid, task.points, task.title || null, taskId, actingUserId || null);
-  }
+  return d.transaction(() => {
+    const task = d.prepare('SELECT id, points, title FROM tasks WHERE id = ?').get(taskId);
+    if (!task || !Number.isInteger(task.points) || task.points <= 0) return false;
+    const targets = rewardTargets(d, taskId, actingUserId);
+    if (!targets.length) return false;
+    const claim = d.prepare('INSERT OR IGNORE INTO reward_task_awards(task_id) VALUES (?)').run(taskId);
+    if (!claim.changes) return false;
+    const ins = d.prepare(`INSERT INTO reward_ledger (user_id, delta, type, reason, task_id, created_by)
+      VALUES (?, ?, 'earn', ?, ?, ?)`);
+    for (const uid of targets) ins.run(uid, task.points, task.title || null, taskId, actingUserId || null);
+    return true;
+  }).immediate();
 }
 
-/**
- * Vergabe zurücknehmen, wenn eine Aufgabe von 'done' zurückgesetzt wird. Die
- * earn-Buchungen werden entfernt (nicht per Gegenbuchung), damit ein erneutes
- * Erledigen sauber neu vergibt und der Ledger nicht mit Toggle-Rauschen wächst.
- */
-export function reverseTaskEarnings(d, taskId) {
-  d.prepare("DELETE FROM reward_ledger WHERE task_id = ? AND type = 'earn'").run(taskId);
-}
+/** Compatibility export: reopening is operational state, never ledger erasure.
+ * An administrator can make an explicit, reasoned adjustment when needed. */
+export function reverseTaskEarnings(_d, _taskId) {}
 
 /**
- * Zentrale Kopplung an den Aufgaben-Statuswechsel. Vergibt beim Übergang nach
- * 'done' und storniert beim Verlassen von 'done'. Alles andere ist ein No-op.
+ * Award the first rewardable completion. Historical earnings survive reopening.
  */
 export function syncTaskRewards(d, taskId, oldStatus, newStatus, actingUserId) {
   const wasDone = oldStatus === 'done';
   const isDone = newStatus === 'done';
   if (isDone && !wasDone) awardForCompletion(d, taskId, actingUserId);
-  else if (wasDone && !isDone) reverseTaskEarnings(d, taskId);
+}
+
+export class RewardError extends Error {
+  constructor(message, status = 400, reason = null) {
+    super(message); this.status = status; this.reason = reason;
+  }
+}
+
+/** A client must retain this key after a timeout. A new key means a deliberately
+ * new redemption, not a retry. Durable records do not expire with the generic
+ * API response cache. */
+export function validateRedemptionKey(value) {
+  if (value == null || value === '') throw new RewardError(
+    'Refresh Rewards before redeeming. A request ID is required to protect your points.', 428, 'request_id_required');
+  if (typeof value !== 'string' || !value.trim() || value.length > 255 || /[^\x20-\x7E]/.test(value))
+    throw new RewardError('Request ID must contain 1 to 255 printable characters.');
+  return value.trim();
+}
+
+/** Check the current balance while holding SQLite's write reservation, then
+ * atomically persist the intent, redemption and its one deduction. */
+export function createRedemption(d, {actorId, userId, catalogId, note = null, requestKey}) {
+  const key = validateRedemptionKey(requestKey);
+  const fingerprint = JSON.stringify([userId, catalogId, note]);
+  return d.transaction(() => {
+    const existing = d.prepare('SELECT * FROM reward_redemption_requests WHERE actor_user_id=? AND request_key=?')
+      .get(actorId, key);
+    if (existing) {
+      if (existing.request_fingerprint !== fingerprint)
+        throw new RewardError('This request ID already belongs to a different redemption.', 409, 'request_id_conflict');
+      const row = d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(existing.redemption_id);
+      if (!row) throw new RewardError('This redemption is no longer available. Its request cannot be reused.', 410);
+      return {row, replayed: true};
+    }
+    const item = d.prepare('SELECT * FROM reward_catalog WHERE id=? AND is_active=1').get(catalogId);
+    if (!item) throw new RewardError('Reward not found.', 404);
+    if (!isEnrolled(d, userId)) throw new RewardError('User does not participate in the reward system.');
+    if (getBalance(d, userId) < item.cost) throw new RewardError('Insufficient points.');
+    const autoFulfill = d.prepare("SELECT value FROM sync_config WHERE key='rewards_require_approval'").get()?.value === '0';
+    const result = d.prepare(`INSERT INTO reward_redemptions
+      (user_id,catalog_id,reward_name,reward_icon,cost,note,requested_by,status,decided_by,decided_at)
+      VALUES (?,?,?,?,?,?,?, ?,?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)`)
+      .run(userId,item.id,item.name,item.icon,item.cost,note,actorId,autoFulfill?'fulfilled':'pending',
+        autoFulfill?actorId:null,autoFulfill?1:0);
+    postLedger(d, {userId,delta:-item.cost,type:'redeem',reason:item.name,
+      redemptionId:result.lastInsertRowid,createdBy:actorId});
+    d.prepare(`INSERT INTO reward_redemption_requests(actor_user_id,request_key,request_fingerprint,redemption_id)
+      VALUES (?,?,?,?)`).run(actorId,key,fingerprint,result.lastInsertRowid);
+    return {row:d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(result.lastInsertRowid),replayed:false};
+  }).immediate();
+}
+
+/** Decisions and refunds share one transaction. Identical retries are a no-op;
+ * conflicting decisions cannot refund a fulfilled or already refunded request. */
+export function decideRedemption(d, {actorId, isAdmin, redemptionId, action}) {
+  if (!['fulfill','reject','cancel'].includes(action)) throw new RewardError('Invalid action.');
+  return d.transaction(() => {
+    const row = d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(redemptionId);
+    if (!row) throw new RewardError('Redemption not found.',404);
+    if ((action==='fulfill'||action==='reject')&&!isAdmin) throw new RewardError('Admin access required.',403);
+    if (action==='cancel'&&!isAdmin&&row.user_id!==actorId) throw new RewardError('Not allowed.',403);
+    const status = action==='fulfill'?'fulfilled':action==='reject'?'rejected':'cancelled';
+    if (row.status===status) return row;
+    if (row.status!=='pending') throw new RewardError('Redemption already decided.',409);
+    if (action!=='fulfill') postLedger(d,{userId:row.user_id,delta:row.cost,type:'reversal',
+      reason:row.reward_name,redemptionId:row.id,createdBy:actorId});
+    d.prepare(`UPDATE reward_redemptions SET status=?,decided_by=?,
+      decided_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`)
+      .run(status,actorId,row.id);
+    return d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(row.id);
+  }).immediate();
 }
 
 /** Freie Buchung (Bonus/Korrektur/Reversal) — vom Route-Handler genutzt. */

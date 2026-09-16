@@ -91,7 +91,8 @@ export function recordCompletion(d, taskId, actingUserId) {
 /**
  * Erledigung zurücknehmen. Löscht statt gegenzubuchen - ein Haken, der dreimal
  * hin und her geht, ist kein Verlauf, sondern Rauschen (dieselbe Entscheidung
- * wie reverseTaskEarnings).
+ * wie die ursprüngliche Erledigungsansicht). Der Rewards-Ledger wird dabei
+ * ausdrücklich nicht gelöscht: eine erneute Erledigung vergibt keine Punkte.
  */
 export function revokeCompletion(d, taskId) {
   d.prepare('DELETE FROM task_completions WHERE task_id = ?').run(taskId);

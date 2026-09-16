@@ -762,7 +762,7 @@ function loadSubtasks(taskId, me, supervisionViews) {
   return attachTags(rows);
 }
 
-function hydrateTask(task, me, supervisionViews = new Map()) {
+export function hydrateTask(task, me, supervisionViews = new Map()) {
   if (!task) return task;
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}

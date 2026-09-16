@@ -1353,7 +1353,7 @@ function activityNode(task, ctx) {
   const status = document.createElement('p'); status.className = 'form-hint'; status.textContent = t('common.loading');
   wrap.appendChild(status);
   const labels = { created: 'Created', assigned: 'Assigned', reassigned: 'Reassigned', supervisor_assigned: 'Supervisor assigned',
-    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Expired incomplete · 0 completion points', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
+    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Task expired · 0 completion points', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
   ctx.activityRequest = api.get(`/tasks/${task.id}/activity`);
   ctx.activityRequest.then((response) => {
     if (ctx.closed || !wrap.isConnected) return;
@@ -1364,7 +1364,7 @@ function activityNode(task, ctx) {
       const row = document.createElement('p');
       const detail = entry.details || {};
       row.textContent = [labels[entry.event_type] || String(entry.event_type || 'Updated').replaceAll('_', ' '), detail.title,
-        entry.actor_name, `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
+        entry.event_type === 'expired' ? null : entry.actor_name, `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
       wrap.appendChild(row);
     }
   }).catch(() => { status.textContent = 'Activity could not be loaded.'; });
@@ -1800,8 +1800,8 @@ function seriesHistoryNode(task, ctx = {}) {
       none.className = 'detail-history__empty';
       const terminal = activity?.data?.find(entry => ['completed', 'expired'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
       none.textContent = terminal
-        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.actor_name,
-          terminal.event_type === 'expired' ? 'Expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
+        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.actor_name,
+          terminal.event_type === 'expired' ? 'Task expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
         : 'No completed or expired occurrences currently recorded.';
       list.appendChild(none);
       return;
@@ -1815,7 +1815,9 @@ function seriesHistoryNode(task, ctx = {}) {
       when.textContent = `${historyDayLabel(zonedDateKey(occurredAt))}, ${formatTime(occurredAt)}`;
       const who = document.createElement('span');
       who.className = 'detail-history__who';
-      who.textContent = [entry.event_type === 'expired' ? 'Expired · 0 completion points' : 'Completed', entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
+      who.textContent = entry.event_type === 'expired'
+        ? 'Task expired · 0 completion points'
+        : ['Completed', entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
       row.append(when, who);
       list.appendChild(row);
     }
@@ -1829,3 +1831,5 @@ function seriesHistoryNode(task, ctx = {}) {
 
   return list;
 }
+
+export const __test = { activityNode, seriesHistoryNode };

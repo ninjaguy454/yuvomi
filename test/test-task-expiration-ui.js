@@ -9,6 +9,7 @@ import { helperWaitingLabel } from '../public/utils/task-progress.js';
 globalThis.HTMLElement ??= class {};
 globalThis.customElements ??= { define() {}, get() {} };
 const { __test: ui } = await import('../public/pages/tasks.js');
+const { __test: detail } = await import('../public/components/task-detail.js');
 
 const morning = () => ({ id: 1, title: 'Get Ready for the Day', status: 'expired', points: 2, expiration_policy: 'expire_incomplete',
   start_date: '2026-09-14', start_time: '07:00', due_date: '2026-09-14', due_time: '08:00', expired_at: '2026-09-14T12:00:00Z',
@@ -77,11 +78,80 @@ test('restricted Task editors cannot submit deadline policy or start-time change
 });
 
 test('expired history uses its actual transition time and never pretends completion', () => {
-  const entry = { id: 10, task_id: 1, event_type: 'expired', title: 'Get Ready for the Day', completed_at: null, expired_at: '2026-09-14T12:00:00Z', user_name: 'Alex' };
+  const entry = { id: 10, task_id: 1, event_type: 'expired', title: 'Get Ready for the Day', completed_at: null, expired_at: '2026-09-14T12:00:00Z', user_name: null };
   const html = ui.renderHistoryEntry(entry);
-  assert.match(html, /Expired · 0 completion points/);
+  assert.match(html, /Task expired · 0 completion points/);
   assert.match(html, /datetime="2026-09-14T12:00:00Z"/);
   assert.match(html, /history-entry:expired:10/);
+  assert.match(html, /data-lucide="clock"/);
+  assert.doesNotMatch(html, /historyUnknownMember|Completed/);
+  assert.doesNotMatch(ui.renderHistoryEntry({ ...entry, user_name: 'Misleading actor', user_avatar: 'member-avatar.png' }), /Misleading actor|member-avatar/);
+  for (const event_type of ['completed', undefined]) {
+    const completed = { ...entry, event_type, expired_at: null, completed_at: '2026-09-14T11:59:59Z' };
+    assert.match(ui.renderHistoryEntry({ ...completed, user_name: 'Alex' }), /Alex/);
+    assert.match(ui.renderHistoryEntry(completed), /tasks.historyUnknownMember/);
+    assert.doesNotMatch(ui.renderHistoryEntry(completed), /Task expired|data-lucide="clock"/);
+  }
+});
+
+// Exercise the real asynchronous detail renderers with only their DOM/API edges stubbed.
+async function renderedHistory({ events = [], occurrences = [] }, render) {
+  const originalDocument = globalThis.document, originalGet = api.get;
+  class Node {
+    children = []; isConnected = true; ownText = '';
+    set textContent(value) { this.ownText = String(value); this.children = []; }
+    get textContent() { return this.ownText + this.children.map(child => child.textContent).join(''); }
+    append(...children) { this.children.push(...children); }
+    appendChild(child) { this.append(child); return child; }
+    replaceChildren(...children) { this.ownText = ''; this.children = children; }
+  }
+  try {
+    globalThis.document = { createElement: () => new Node() };
+    api.get = async path => ({ data: path.endsWith('/activity') ? events : occurrences });
+    const ctx = {}, activity = detail.activityNode(morning(), ctx);
+    const history = render === 'activity' ? activity : detail.seriesHistoryNode(morning(), ctx);
+    await new Promise(resolve => setImmediate(resolve));
+    return history.textContent;
+  } finally { globalThis.document = originalDocument; api.get = originalGet; }
+}
+
+test('Task detail Activity labels automatic expiration without a member and preserves manual action attribution', async () => {
+  const events = ['expired', 'status_changed', 'reopened', 'completed', 'archived', 'member_removed'].map((event_type, id) => ({
+    id, event_type, actor_name: event_type === 'expired' ? 'Misleading actor' : 'Alex', created_at: '2026-09-14T12:00:00Z', details: { title: 'Morning routine' },
+  }));
+  const text = await renderedHistory({ events }, 'activity');
+  assert.match(text, /Task expired · 0 completion points · Morning routine/);
+  assert.doesNotMatch(text, /Misleading actor|historyUnknownMember/);
+  for (const label of ['Status changed', 'Reopened', 'Completed', 'archived', 'member removed']) {
+    assert.ok(text.includes(`${label} · Morning routine · Alex`));
+  }
+});
+
+test('Task detail occurrence history distinguishes automatic expiry from a removed completing member, including archived occurrences', async () => {
+  const base = { user_name: null, archived_at: '2026-09-15T12:00:00Z' };
+  const completed = { ...base, completed_at: '2026-09-14T11:59:59Z', expired_at: null };
+  const text = await renderedHistory({ occurrences: [
+    { ...base, event_type: 'expired', expired_at: '2026-09-14T12:00:00Z', completed_at: null },
+    { ...base, event_type: 'expired', expired_at: '2026-09-14T12:00:00Z', completed_at: null, user_name: 'Misleading actor' },
+    { ...completed, event_type: 'completed' },
+    { ...completed, event_type: 'completed', user_name: 'Alex' },
+    { ...completed, user_name: 'Legacy member' },
+    completed,
+  ] });
+  assert.match(text, /Task expired · 0 completion points/);
+  assert.doesNotMatch(text, /Task expired · 0 completion points ·|Misleading actor/);
+  assert.match(text, /Completed · tasks.historyUnknownMember/);
+  assert.match(text, /Completed · Alex/);
+  assert.match(text, /Completed · Legacy member/);
+});
+
+test('Task detail Activity fallback retains automatic expiration without attributing a member', async () => {
+  const event = { event_type: 'expired', action_task_id: 1, actor_name: 'Misleading actor', created_at: '2026-09-14T12:00:00Z' };
+  const text = await renderedHistory({ events: [event] });
+  assert.match(text, /Task expired · 0 completion points · History retained in Activity/);
+  assert.doesNotMatch(text, /Misleading actor|historyUnknownMember|Historical completion/);
+  const completion = await renderedHistory({ events: [{ ...event, event_type: 'completed', actor_name: 'Alex' }] });
+  assert.match(completion, /Alex · Historical completion retained in Activity/);
 });
 
 test('completion and manual expiration are rejected before a status request', async () => {

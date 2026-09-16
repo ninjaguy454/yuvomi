@@ -2837,8 +2837,9 @@ function groupHistoryByDay(entries) {
 function renderHistoryEntry(entry) {
   const expired = entry.event_type === 'expired';
   const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
-  const name = entry.user_name || t('tasks.historyUnknownMember');
-  const avatar = renderAvatarStack(
+  // Expiration is automatic; a missing actor is not a removed household member.
+  const name = expired ? '' : entry.user_name || t('tasks.historyUnknownMember');
+  const avatar = expired ? '<i data-lucide="clock" aria-hidden="true"></i>' : renderAvatarStack(
     [{ display_name: name, color: entry.user_color, avatar_data: entry.user_avatar }],
     { size: 32, maxVisible: 1 },
   );
@@ -2851,8 +2852,7 @@ function renderHistoryEntry(entry) {
       <span class="list-row__main history-row__main">
         <span class="list-row__name">${esc(entry.title)}</span>
         <span class="list-row__meta">
-          ${expired ? 'Expired · 0 completion points · ' : ''}
-          ${esc(name)}${entry.is_recurring
+          ${expired ? 'Task expired · 0 completion points' : esc(name)}${entry.is_recurring
             ? ` <i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i>` : ''}
         </span>
       </span>

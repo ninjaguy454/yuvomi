@@ -30,7 +30,7 @@ app.use('/api/v1', (req, res) => {
   if (req.path === '/planning/place-search/status') return res.json({ data: { configured: false } });
   if (req.path === '/preferences') return res.json({ data: {} });
   if (req.path === '/tasks/1/activity') return res.json({ data: task.status === 'expired' ? [{ id: 1, event_type: 'expired', action_task_id: 1, created_at: task.expired_at }] : [] });
-  if (req.path.endsWith('/completions')) return res.json({ data: task.status === 'expired' ? [{ id: 1, task_id: 1, event_type: 'expired', expired_at: task.expired_at, occurred_at: task.expired_at, completed_at: null, title: task.title, user_name: 'Alex' }] : [] });
+  if (req.path.endsWith('/completions')) return res.json({ data: task.status === 'expired' ? [{ id: 1, task_id: 1, event_type: 'expired', expired_at: task.expired_at, occurred_at: task.expired_at, completed_at: null, title: task.title, user_id: null, user_name: null, user_avatar: null }] : [] });
   if (/^\/tasks\/\d+$/.test(req.path)) return res.json({ data: req.path === '/tasks/4' ? successor : task });
   if (req.path === '/tasks') {
     const statuses = [req.query.status].flat().filter(Boolean);

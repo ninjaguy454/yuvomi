@@ -154,7 +154,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   const contextualAssignee=schema.definitions.find(row=>row.id==='assignee' && row.type==='household_member'
     && row.kind==='value' && !row.expression && row.default_value==null);
   if(contextualAssignee) {
-    const occurrence={start_time:activity.start_time??null,due_time:activity.due_time??null,...task};
+    const occurrence={start_date:activity.start_date??null,due_date:activity.due_date??null,start_time:activity.start_time??null,due_time:activity.due_time??null,...task};
     const resolvedAssignment=previewTaskActivityBinding(d,{activityTemplateId:activity.id,subjectUserId,
       assignmentOverrideUserId,task:occurrence,dateKey:occurrence.due_date||todayKey(d)}).resolution;
     if(resolvedAssignment.primary)contextValues.assignee=resolvedAssignment.primary.id;
@@ -163,6 +163,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
       expiration_policy: activity.expiration_policy ?? 'keep_overdue',
+      start_date: activity.start_date ?? null, due_date: activity.due_date ?? null,
       start_time: activity.start_time ?? null, due_time: activity.due_time ?? null,
       recurrence_rule: activity.recurrence_rule ?? null, recurrence_from_completion: activity.recurrence_from_completion || 0,
       is_recurring: activity.recurrence_rule ? 1 : 0,

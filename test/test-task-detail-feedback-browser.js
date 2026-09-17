@@ -6,7 +6,8 @@ import express from 'express';
 import puppeteer from 'puppeteer';
 
 // Real detail/API/icon modules with held HTTP writes. These checks distinguish
-// a painted checkbox SVG from an aria-only state and exercise the queued UI.
+// an actual SVG/check path in the DOM from aria-only state and exercise the queue.
+// rAF precedes paint; full-application raster evidence is collected separately.
 let fixture, server, browser, base;
 const app=express();app.use(express.json());
 app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));

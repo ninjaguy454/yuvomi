@@ -2692,6 +2692,7 @@
 }
 
 .activity-card .subtask-item__checkbox {
+  touch-action: manipulation;
   width: 44px;
   height: 44px;
   border: 0;

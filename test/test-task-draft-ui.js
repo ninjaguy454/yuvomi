@@ -20,6 +20,7 @@ const templates = [
   { id: 13, name: 'Personal preparation', title_template: 'Prepare for {subject}', description: 'Personal supplies', category: 'misc', priority: 'none', points: 0, tags: [],
     assignment_strategy: 'subject_skill', subject_required: 1, location_mode: 'none', skill_ids: [], checklist: [{ title_template: 'Pack for {subject}', skill_ids: [3] }] },
   { id: 14, name: 'Morning routine', title_template: 'Get Ready for the Day', points: 2, assignment_strategy: 'fixed', fixed_user_id: 2,
+    start_date: '2026-09-21', due_date: '2026-09-21',
     allow_assignment_override: 1, start_time: '07:00', due_time: '08:00', expiration_policy: 'expire_incomplete',
     recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0,
     checklist: [{ title_template: 'Get dressed', is_optional: 0, skill_ids: [] }, { title_template: 'Put in earrings', is_optional: 1, skill_ids: [] }] },
@@ -445,6 +446,8 @@ test('fixed template defaults, permitted assignee change and recurring times rea
     assert.equal(await page.$eval('#task-fixed-assignment', el => el.hidden), false);
     assert.equal(await value(page, '#task-start-time'), '07:00');
     assert.equal(await value(page, '#task-due-time'), '08:00');
+    assert.match(await value(page, '#task-start-date'), /21/);
+    assert.match(await value(page, '#task-due-date'), /21/);
     await set(page, '#task-start-date', '2026-09-17'); await set(page, '#task-due-date', '2026-09-17');
     await page.click('[data-ms-input="task_assigned"][value="2"]');
     await page.click('[data-ms-input="task_assigned"][value="1"]');
@@ -479,6 +482,7 @@ test('Save as Template refreshes the existing picker without replacing draft or 
     assert.equal(await page.$eval('[data-ms-input="task_assigned"][value="2"]', el => el.checked), true);
     const template = requests.find(r => r.path === '/automation/admin/activity-templates' && r.method === 'POST').body;
     assert.equal(Number(template.fixed_user_id), 2); assert.equal(template.start_time, '07:00'); assert.equal(template.due_time, '08:00');
+    assert.equal(template.start_date, '2026-09-17'); assert.equal(template.due_date, '2026-09-17');
     await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#task-form'));
     assert.deepEqual(requests.find(r => r.path === '/tasks' && r.method === 'POST').body.assigned_to, [2]);
@@ -492,6 +496,7 @@ test('template back to Blank clears template assignment and accepts a fresh manu
     await selectTemplate(page, 14, 'Get Ready for the Day');
     await selectTemplate(page, '', '');
     assert.equal(await value(page, '#task-start-time'), '');
+    assert.equal(await value(page, '#task-start-date'), ''); assert.equal(await value(page, '#task-due-date'), '');
     await set(page, '#task-title', 'Blank again');
     await page.click('[data-ms-input="task_assigned"][value="2"]');
     await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
@@ -500,6 +505,45 @@ test('template back to Blank clears template assignment and accepts a fresh manu
     assert.equal(body.activity_template_id, null); assert.deepEqual(body.assigned_to, [2]);
   } finally { await page.dispose(); }
 });
+
+for (const width of [1366, 390]) {
+  test(`Activity date/time rows, multi-day save and validation focus work at ${width}px`, async () => {
+    requests.length = 0; preferenceValues.clear();
+    const page = await mounted({ width });
+    try {
+      await set(page, '#task-title', 'Weekly Homework');
+      await set(page, '#task-start-date', '2026-09-21'); await set(page, '#task-start-time', '15:30');
+      await set(page, '#task-due-date', '2026-09-25'); await set(page, '#task-due-time', '07:00');
+      await page.click('[data-save-as-template]'); await page.waitForSelector('#automation-activity-form');
+      const geometry = await page.evaluate(() => {
+        const rect = id => { const r = document.querySelector(id).getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right }; };
+        return ['#activity-start-date', '#activity-start-time', '#activity-due-date', '#activity-due-time'].map(rect);
+      });
+      if (width > 640) {
+        assert.equal(geometry[0].y, geometry[1].y); assert.equal(geometry[2].y, geometry[3].y);
+        assert.ok(geometry[0].x < geometry[1].x && geometry[2].y > geometry[0].y);
+      } else {
+        assert.ok(geometry.every((r, i) => !i || r.y > geometry[i - 1].y));
+        assert.ok(geometry.every(r => r.x >= 0 && r.right <= width), 'schedule controls stay within the mobile viewport');
+      }
+      await set(page, '#activity-due-date', '2026-09-20');
+      await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-activity-error]:not([hidden])');
+      assert.equal(await page.evaluate(() => document.activeElement.closest('yuvomi-datepicker')?.id), 'activity-due-date');
+      assert.match(await page.evaluate(() => window.toasts.at(-1)), /Due date and time/);
+      assert.equal(requests.filter(r => r.path === '/automation/admin/activity-templates' && r.method === 'POST').length, 0);
+      assert.equal(await value(page, '#activity-start-time'), '15:30');
+      await set(page, '#activity-due-date', '2026-09-25');
+      await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.querySelector('#automation-activity-form'));
+      const payload = requests.find(r => r.path === '/automation/admin/activity-templates' && r.method === 'POST').body;
+      assert.equal(payload.start_date, '2026-09-21'); assert.equal(payload.due_date, '2026-09-25');
+      assert.equal(payload.start_time, '15:30'); assert.equal(payload.due_time, '07:00');
+      assert.match(await value(page, '#task-due-date'), /25/);
+      assert.deepEqual(page.fixtureErrors || [], []);
+    } finally { await page.dispose(); }
+  });
+}
 
 test('contextual Assignee resolution follows the selected Eleanor and blocked resolution announces an error before creation', async () => {
   requests.length = 0; createReceipts.clear(); preferenceValues.clear();

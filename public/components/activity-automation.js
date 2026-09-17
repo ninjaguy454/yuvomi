@@ -4,7 +4,7 @@ import { renderGooglePlacesSettings } from '/components/google-places-settings.j
 import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
-import { t, formatTime, formatTimeInput, parseTimeInput } from '/i18n.js';
+import { t, formatTime, formatTimeInput, parseTimeInput, formatDateInput, parseDateInput, isDateInputValid } from '/i18n.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues } from '/rrule-ui.js';
 import { zonedFields } from '/utils/timezone.js';
 import { esc } from '/utils/html.js';
@@ -1345,9 +1345,11 @@ function activityEditorContext(response) {
 
 function activityTimingFields(activity) {
   return `<fieldset class="automation-fieldset"><legend class="label">Reusable schedule</legend>
-    <p class="form-hint">Times and recurrence are copied into new Tasks. Choose the start and due dates for each Task.</p>
+    <p class="form-hint">Optional dates set the initial Task window and recurrence anchor. Times use the household timezone. New Tasks copy this schedule; existing Tasks keep their own dates.</p>
     <div class="grid grid--2">
+      <div class="form-group"><label class="label" for="activity-start-date">Start date</label><yuvomi-datepicker type="date" id="activity-start-date" name="start_date" value="${h(formatDateInput(activity?.start_date || ''))}"></yuvomi-datepicker></div>
       <div class="form-group"><label class="label" for="activity-start-time">Start time</label><yuvomi-datepicker type="time" id="activity-start-time" name="start_time" value="${h(formatTimeInput(activity?.start_time || ''))}"></yuvomi-datepicker></div>
+      <div class="form-group"><label class="label" for="activity-due-date">Due date</label><yuvomi-datepicker type="date" id="activity-due-date" name="due_date" value="${h(formatDateInput(activity?.due_date || ''))}"></yuvomi-datepicker></div>
       <div class="form-group"><label class="label" for="activity-due-time">Due time</label><yuvomi-datepicker type="time" id="activity-due-time" name="due_time" value="${h(formatTimeInput(activity?.due_time || ''))}"></yuvomi-datepicker></div>
     </div>
     ${renderRRuleFields('activity', activity?.recurrence_rule, { allowFromCompletion: true, fromCompletion: !!activity?.recurrence_from_completion })}
@@ -1361,12 +1363,24 @@ function activityChecklistPayload(items) {
 
 function activityTimingPayload(form) {
   const values = {};
+  for (const field of ['start_date', 'due_date']) {
+    const raw = form.querySelector(`[name="${field}"]`)?.value || '';
+    if (raw && !isDateInputValid(raw)) return { error: `Enter a valid ${field === 'start_date' ? 'start' : 'due'} date.`, field };
+    values[field] = parseDateInput(raw) || null;
+  }
   for (const field of ['start_time', 'due_time']) {
     const control = form.querySelector(`[name="${field}"]`);
     const raw = control?.value || '';
     const parsed = parseTimeInput(raw);
     if (raw && !parsed) return { error: `Enter a valid ${field === 'start_time' ? 'start' : 'due'} time.`, field };
     values[field] = parsed || null;
+  }
+  if (values.start_date && values.due_date) {
+    if (`${values.start_date}T${values.start_time || '00:00'}` > `${values.due_date}T${values.due_time || '23:59'}`) {
+      return { error: 'Due date and time must be at or after the start date and time.', field: 'due_date' };
+    }
+  } else if (!values.start_date && !values.due_date && values.start_time && values.due_time && values.start_time >= values.due_time) {
+    return { error: 'Due time must be after start time, or choose start and due dates for a window across days.', field: 'due_time' };
   }
   const recurrence = getRRuleValues(form, 'activity');
   if (!recurrence.valid_until) return { error: 'Enter a valid recurrence end date.', field: 'activity-rrule-until' };
@@ -1401,7 +1415,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
   const locationMode = activity?.location_mode || 'none';
   const content = `<form id="automation-activity-form" novalidate>
     <p class="task-template-error" data-activity-error role="alert" tabindex="-1" hidden></p>
-    ${asChild && activity && !editing ? '<p class="form-hint automation-form-intro">Review the reusable details below. Dates, reminders and attached documents stay with this Task.</p>' : ''}
+    ${asChild && activity && !editing ? '<p class="form-hint automation-form-intro">Review the reusable details and initial schedule below. Reminders and attached documents stay with this Task.</p>' : ''}
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
     ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}"><small class="form-hint" data-activity-title-preview></small>`, 'This is the Task title, separate from the reusable Template name above. A person is included only when you explicitly insert the person variable with @.')}
     ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3" data-variable-mentions="activity-description" aria-autocomplete="list" aria-expanded="false">${h(activity?.description || '')}</textarea>`, 'Type @ to insert the person or Activity Template name.')}

@@ -12,6 +12,8 @@ process.env.SESSION_SECRET ??= 'test-session-secret-at-least-32-characters-long'
 const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { default: automationRouter } = await import('../server/routes/automation.js');
 const { default: tasksRouter } = await import('../server/routes/tasks.js');
+const { changeTaskStatus, expireTask } = await import('../server/services/task-lifecycle.js');
+const { taskStartMs, taskDeadlineMs } = await import('../server/services/task-window.js');
 
 function buildTestDb() {
   const database = new Database(':memory:');
@@ -112,6 +114,87 @@ test('Activity expiration defaults, validation, authorization and Task snapshots
   assert.equal(override.body.data.expiration_policy, 'keep_overdue');
   await call('PUT', `/automation/admin/activity-templates/${id}`, { expiration_policy: 'keep_overdue' });
   assert.equal(db.prepare('SELECT expiration_policy FROM tasks WHERE id=?').get(inherited.body.data.id).expiration_policy, 'expire_incomplete');
+});
+
+test('Activity date and time defaults survive create/edit/catalog/resolve and Task inheritance without rewriting existing occurrences', async () => {
+  const schedule = { start_date: '2026-09-21', start_time: '15:30', due_date: '2026-09-25', due_time: '07:00', recurrence_rule: 'FREQ=WEEKLY', recurrence_from_completion: 0 };
+  const created = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Weekly Homework', assignment_strategy: 'fixed', fixed_user_id: grace, subject_required: false, points: 5, ...schedule,
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const id = created.body.data.id;
+  for (const [key, expected] of Object.entries(schedule)) assert.equal(created.body.data[key], expected, key);
+  const preserved = await call('PUT', `/automation/admin/activity-templates/${id}`, { description: 'Do homework after school.' });
+  const options = await call('GET', '/automation/activity-options');
+  const resolved = await call('POST', `/automation/activity-templates/${id}/resolve`, {});
+  const task = await call('POST', '/tasks', { activity_template_id: id });
+  assert.equal(task.status, 201, JSON.stringify(task.body));
+  for (const row of [preserved.body.data, options.body.data.activities.find(row => row.id === id), resolved.body.data, task.body.data]) {
+    for (const [key, expected] of Object.entries(schedule)) assert.equal(row[key], expected, key);
+  }
+  await call('PUT', `/automation/admin/activity-templates/${id}`, { start_date: '2026-09-28', due_date: '2026-10-02' });
+  assert.equal(db.prepare('SELECT start_date FROM tasks WHERE id=?').get(task.body.data.id).start_date, schedule.start_date);
+  const override = await call('POST', '/tasks', { activity_template_id: id, start_date: null, start_time: null, due_date: null, due_time: null });
+  assert.equal(override.status, 201, JSON.stringify(override.body));
+  assert.equal(override.body.data.start_date, null); assert.equal(override.body.data.due_date, null);
+  const timeOnly = await call('POST', '/automation/admin/activity-templates', { name: 'Time only', start_time: '07:00', due_time: '08:00' });
+  assert.equal(timeOnly.status, 201, JSON.stringify(timeOnly.body));
+  assert.equal(timeOnly.body.data.start_date, null); assert.equal(timeOnly.body.data.due_date, null);
+});
+
+test('Activity date/time validation allows multi-day windows and rejects invalid or reversed boundaries before persistence', async () => {
+  const schedule = { name: 'Date validation', start_date: '2026-09-21', start_time: '15:30', due_date: '2026-09-25', due_time: '07:00' };
+  for (const bad of [{ start_date: '2026-02-30' }, { due_date: '2026-09-20' }, { due_date: '2026-09-21' }, { start_time: '29:99' }]) {
+    const response = await call('POST', '/automation/admin/activity-templates', { ...schedule, ...bad });
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+  }
+  const equal = await call('POST', '/automation/admin/activity-templates', { ...schedule, due_date: schedule.start_date, due_time: schedule.start_time });
+  assert.equal(equal.status, 201, JSON.stringify(equal.body));
+  const denied = await call('PUT', `/automation/admin/activity-templates/${equal.body.data.id}`, { due_date: '2026-09-25' }, grace);
+  assert.equal(denied.status, 403);
+});
+
+test('inherited morning weekdays and Monday-Friday homework windows retain anchors, local times and DST through recurrence', async () => {
+  db.prepare("INSERT OR REPLACE INTO sync_config(key,value) VALUES('household_timezone','America/New_York')").run();
+  const make = async (name, schedule) => {
+    const activity = await call('POST', '/automation/admin/activity-templates', {
+      name, assignment_strategy: 'fixed', fixed_user_id: grace, subject_required: false, ...schedule,
+    });
+    assert.equal(activity.status, 201, JSON.stringify(activity.body));
+    const task = await call('POST', '/tasks', { activity_template_id: activity.body.data.id });
+    assert.equal(task.status, 201, JSON.stringify(task.body));
+    return task.body.data;
+  };
+  const morning = await make('Anchored morning', { start_date: '2026-09-14', due_date: '2026-09-14', start_time: '07:00', due_time: '08:00',
+    recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', expiration_policy: 'expire_incomplete', points: 2 });
+  expireTask(db, morning.id, { now: new Date('2026-09-14T12:00:00Z') });
+  const tuesday = db.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(morning.id);
+  assert.equal(tuesday.start_date, '2026-09-15'); assert.equal(tuesday.due_date, '2026-09-15');
+  assert.equal(tuesday.start_time, '07:00'); assert.equal(tuesday.due_time, '08:00');
+  assert.equal(tuesday.points, 2); assert.equal(tuesday.expiration_policy, 'expire_incomplete');
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM reward_ledger WHERE task_id=?').get(morning.id).n, 0);
+  for (const [friday, monday, fridayDeadline, mondayStart] of [
+    ['2026-03-06', '2026-03-09', '2026-03-06T13:00:00Z', '2026-03-09T11:00:00.000Z'],
+    ['2026-10-30', '2026-11-02', '2026-10-30T12:00:00Z', '2026-11-02T12:00:00.000Z'],
+  ]) {
+    const beforeDst = await make(`Morning DST ${friday}`, { start_date: friday, due_date: friday, start_time: '07:00', due_time: '08:00',
+      recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', expiration_policy: 'expire_incomplete', points: 2 });
+    expireTask(db, beforeDst.id, { now: new Date(fridayDeadline) });
+    const afterDst = db.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(beforeDst.id);
+    assert.equal(afterDst.start_date, monday); assert.equal(afterDst.due_date, monday);
+    assert.equal(afterDst.start_time, '07:00'); assert.equal(afterDst.due_time, '08:00');
+    assert.equal(new Date(taskStartMs(db, afterDst)).toISOString(), mondayStart);
+  }
+  const homework = await make('Anchored homework', { start_date: '2026-10-26', due_date: '2026-10-30', start_time: '15:30', due_time: '07:00',
+    recurrence_rule: 'FREQ=WEEKLY', recurrence_from_completion: 0, expiration_policy: 'keep_overdue', points: 5 });
+  changeTaskStatus(db, homework.id, 'done', { actorId: grace, requireRevision: false, now: new Date('2026-10-29T20:00:00Z') });
+  const next = db.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(homework.id);
+  assert.equal(next.start_date, '2026-11-02'); assert.equal(next.due_date, '2026-11-06');
+  assert.equal(next.start_time, '15:30'); assert.equal(next.due_time, '07:00');
+  assert.equal(next.points, 5); assert.equal(next.expiration_policy, 'keep_overdue');
+  assert.equal(new Date(taskStartMs(db, homework)).toISOString(), '2026-10-26T19:30:00.000Z');
+  assert.equal(new Date(taskStartMs(db, next)).toISOString(), '2026-11-02T20:30:00.000Z');
+  assert.equal(new Date(taskDeadlineMs(db, next)).toISOString(), '2026-11-06T12:00:00.000Z');
 });
 
 test('built-in household skills are editable through Skills but cannot be deleted', async () => {

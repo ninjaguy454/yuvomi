@@ -1,5 +1,13 @@
 # Task Details checkbox latency — 2026-09-17
 
+Measurement correction from the subsequent investigation: the original full-app
+timing harness below sampled a captured DOM/SVG-presence value at rAF, not actual
+painted pixels, and covered only the Task Details modal. It did not measure the
+expanded list/Kanban subtask controls, which still waited for HTTP acknowledgement
+and a list refresh. Those historical timing figures must not be read as proof of
+production-visible latency. See `task-feedback-followup-20260917.md` for corrected
+full-application measurements, separate raster evidence, and remaining limits.
+
 Scope: completion/reopening feedback and request-local optionality lookup cost. No Task lifecycle, points, recurrence, authorization, migration or production changes. Candidate is based on production source `b55bbe08aa2d6b300fbab33567c3b37545eb4be2`; publication/deployment are expressly excluded.
 
 ## Diagnosis and comparison with the earlier optimization

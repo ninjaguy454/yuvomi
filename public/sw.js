@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Load Task detail feedback and its revision-safe queue together on PWA clients.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.13`;
+// Load immediate card feedback and the complete reusable schedule together.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.14`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -71,6 +71,7 @@ const APP_SHELL = [
   '/utils/task-live.js',
   '/utils/task-state.js',
   '/utils/task-subtask-queue.js',
+  '/utils/task-card-subtasks.js',
   '/utils/task-progress.js',
   '/utils/session-lifecycle.js',
   '/push.js',

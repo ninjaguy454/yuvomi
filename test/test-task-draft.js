@@ -46,7 +46,8 @@ test('Save as Template copies reusable fields and excludes occurrence-only setti
   assert.equal(result.place_id, 2); assert.equal(result.assignment_strategy, 'fixed');
   assert.equal(result.fixed_user_id, 7); assert.equal(result.subject_required, 0);
   assert.equal(result.recurrence_rule, 'FREQ=DAILY');
-  for (const key of ['due_date', 'countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
+  assert.equal(result.due_date, '2026-09-08');
+  for (const key of ['countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
 });
 test('template conversion retains existing strategy; multiple manual assignees do not become a rotation', () => {
   const draft = { title: 'Prep', assigned_users: [1, 2], location: { kind: 'manual', user_label: 'Temporary' } };
@@ -59,13 +60,25 @@ test('template conversion retains existing strategy; multiple manual assignees d
 
 test('morning template round trip keeps reusable times, anchored weekdays, fixed assignee and fresh optional state', () => {
   const activity = taskDraftToActivity({ title: 'Get Ready for the Day', assigned_users: [7], points: 2,
+    start_date: '2026-09-21', due_date: '2026-09-21',
     start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
     recurrence_from_completion: 0, expiration_policy: 'expire_incomplete',
     subtasks: [{ id: 20, title: 'Get dressed', status: 'done' }, { id: 21, title: 'Put in earrings', is_optional: 1, status: 'done', skill_ids: [4] }] });
   const draft = createManualTaskDraft({ template: activity });
   assert.equal(draft.assigned_to, 7); assert.equal(draft.points, 2);
   assert.equal(draft.start_time, '07:00'); assert.equal(draft.due_time, '08:00');
+  assert.equal(draft.start_date, '2026-09-21'); assert.equal(draft.due_date, '2026-09-21');
   assert.equal(draft.recurrence_rule, 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
   assert.equal(draft.recurrence_from_completion, 0); assert.equal(draft.expiration_policy, 'expire_incomplete');
   assert.deepEqual(draft.subtasks.map(row => [row.id, row.status, row.is_optional]), [[undefined, undefined, 0], [undefined, undefined, 1]]);
+});
+
+test('template dates copy without fabricating missing dates; calendar selections override both boundaries', () => {
+  const template = { start_date: '2026-09-21', due_date: '2026-09-25', start_time: '15:30', due_time: '07:00' };
+  assert.equal(createManualTaskDraft({ template }).due_date, '2026-09-25');
+  const selected = createManualTaskDraft({ template, presetDates: { start_date: null, due_date: '2026-09-29' } });
+  assert.equal(selected.start_date, null); assert.equal(selected.due_date, '2026-09-29');
+  const timeOnly = createManualTaskDraft({ template: { start_time: '07:00', due_time: '08:00' } });
+  assert.equal(timeOnly.start_date, null); assert.equal(timeOnly.due_date, null);
+  assert.equal(createManualTaskDraft().start_date, null, 'switch to Blank clears template schedule');
 });

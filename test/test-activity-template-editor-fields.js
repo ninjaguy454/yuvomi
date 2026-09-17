@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
-import { parseTimeInput } from '../public/i18n.js';
+import { parseTimeInput, parseDateInput, isDateInputValid } from '../public/i18n.js';
 import { esc } from '../public/utils/html-escape.js';
 
 const read = path => readFileSync(new URL(`../public/${path}`, import.meta.url), 'utf8');
@@ -11,7 +11,7 @@ const result = value => JSON.parse(JSON.stringify(value));
 const rruleContext = vm.createContext({ t: key => key, formatDateInput: value => value, parseDateInput: value => value,
   isDateInputValid: value => /^\d{4}-\d{2}-\d{2}$/.test(value), formatDate: value => value });
 vm.runInContext(`${plain(read('rrule-ui.js'))}\nthis.subject={renderRRuleFields,getRRuleValues};`, rruleContext);
-const context = vm.createContext({ ...rruleContext.subject, esc, parseTimeInput, formatTimeInput: value => value });
+const context = vm.createContext({ ...rruleContext.subject, esc, parseTimeInput, parseDateInput, isDateInputValid, formatDateInput: value => value, formatTimeInput: value => value });
 vm.runInContext(`${plain(read('components/activity-automation.js'))}\nthis.subject={activityTimingFields,activityTimingPayload,activityChecklistPayload,memberOptions};`, context);
 const ui = context.subject;
 function formFixture(overrides = {}) {
@@ -23,20 +23,32 @@ function formFixture(overrides = {}) {
   }, querySelectorAll: () => ['MO', 'TU', 'WE', 'TH', 'FR'].map(day => ({ dataset: { day } })) };
 }
 
-test('template times reuse the shared datepicker and weekly recurrence controls without introducing dates', () => {
-  const html = ui.activityTimingFields({ start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 });
+test('template dates and times use the shared datepicker in start then due rows', () => {
+  const html = ui.activityTimingFields({ start_date: '2026-09-21', due_date: '2026-09-21', start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 });
   assert.match(html, /yuvomi-datepicker type="time"[^>]+name="start_time" value="07:00"/);
   assert.match(html, /name="due_time" value="08:00"/);
   assert.match(html, /activity-rrule-from-completion/);
   assert.equal((html.match(/data-day="(?:MO|TU|WE|TH|FR)" aria-label="[^"]+" aria-pressed="true"/g) || []).length, 5);
-  assert.doesNotMatch(html, /name="(?:start_date|due_date)"/);
+  assert.deepEqual([...html.matchAll(/name="((?:start|due)_(?:date|time))"/g)].map(match => match[1]), ['start_date', 'start_time', 'due_date', 'due_time']);
+  assert.match(html, /name="start_date" value="[^"]+"/);
+  assert.match(ui.activityTimingFields({ start_time: '07:00', due_time: '08:00' }), /name="start_date" value=""/);
 });
 
 test('unchanged template schedule retains weekdays and completion-relative opt-in', () => {
-  assert.deepEqual(result(ui.activityTimingPayload(formFixture())), { values: { start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 } });
+  assert.deepEqual(result(ui.activityTimingPayload(formFixture())), { values: { start_date: null, due_date: null, start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 } });
   assert.equal(ui.activityTimingPayload(formFixture({ fromCompletion: true })).values.recurrence_from_completion, 1);
   assert.equal(ui.activityTimingPayload(formFixture({ 'activity-rrule-freq': '', fromCompletion: true })).values.recurrence_from_completion, 0);
   assert.equal(ui.activityTimingPayload(formFixture({ start_time: '', due_time: '' })).values.start_time, null);
+});
+
+test('template windows retain multi-day dates and validate complete date/time boundaries', () => {
+  const homework = { start_date: '2026-09-21', start_time: '15:30', due_date: '2026-09-25', due_time: '07:00' };
+  const values = ui.activityTimingPayload(formFixture(homework)).values;
+  for (const [key, value] of Object.entries(homework)) assert.equal(values[key], value);
+  assert.equal(ui.activityTimingPayload(formFixture({ ...homework, due_date: '2026-09-20' })).field, 'due_date');
+  assert.equal(ui.activityTimingPayload(formFixture({ ...homework, due_date: homework.start_date })).field, 'due_date');
+  assert.equal(ui.activityTimingPayload(formFixture({ start_date: 'bad' })).field, 'start_date');
+  assert.equal(ui.activityTimingPayload(formFixture({ ...homework, due_date: homework.start_date, due_time: homework.start_time })).error, undefined);
 });
 
 test('template timing validation identifies bad fields while accepting local 12-hour input', () => {

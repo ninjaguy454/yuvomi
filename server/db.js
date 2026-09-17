@@ -9023,6 +9023,15 @@ FORK_MIGRATIONS.push({
   `,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10037,
+  description: 'Activities: optional reusable start and due dates',
+  up: `
+    ALTER TABLE activity_templates ADD COLUMN start_date TEXT;
+    ALTER TABLE activity_templates ADD COLUMN due_date TEXT;
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

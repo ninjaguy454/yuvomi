@@ -214,9 +214,12 @@ export function subtaskParticipants(subtask, users = []) {
 
 /** Completion and point totals shared by cards and the canonical detail view. */
 export function completionCounts(task) {
-  const subtasks = actionableSubtasks(task);
-  if (subtasks.length || structuralSubtasks(task).length) {
+  const actions = actionableSubtasks(task);
+  const subtasks = actions.filter(child => !child.is_optional);
+  const optional = actions.filter(child => !!child.is_optional);
+  if (actions.length || structuralSubtasks(task).length) {
     return {
+      ...(optional.length ? { optionalTotal: optional.length, optionalDone: optional.filter(child => child.status === 'done').length } : {}),
       done: subtasks.filter((subtask) => subtask.status === 'done').length,
       total: subtasks.length,
       earnedPoints: subtasks.filter((subtask) => subtask.status === 'done')

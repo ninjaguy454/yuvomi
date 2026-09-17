@@ -496,19 +496,22 @@ function progressNode(task, ctx) {
   const child = pending && actionableSubtasks(task).find(row => Number(row.id) === Number(pending.id));
   // Only the count is optimistic. Earned points, parent status, history and
   // responsibility ownership remain the last accepted server snapshot.
-  if (child) progress.done += Number(pending.status === 'done') - Number(child.status === 'done');
+  if (child) {
+    const key = child.is_optional ? 'optionalDone' : 'done';
+    progress[key] += Number(pending.status === 'done') - Number(child.status === 'done');
+  }
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-progress';
   wrap.setAttribute('aria-busy', String(!!child));
   const meter = document.createElement('progress');
-  meter.max = progress.total;
+  meter.max = progress.total || 1;
   meter.value = progress.done;
   meter.setAttribute('aria-label', t('tasks.subtasksLabel'));
   const label = document.createElement('span');
   const hasDelegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated');
   const ownSteps = hasDelegated && !task.is_supervision_projection
     ? Number(task.assigned_to) === Number(ctx.currentUserId) ? 'Your steps: ' : 'Learner steps: ' : '';
-  label.textContent = `${ownSteps}${progress.done} of ${progress.total} complete · ${Math.round(progress.done / progress.total * 100)}%`;
+  label.textContent = `${ownSteps}${progress.done} of ${progress.total}${progress.optionalTotal ? ' required' : ''} complete${progress.total ? ` · ${Math.round(progress.done / progress.total * 100)}%` : ''}${progress.optionalTotal ? ` · ${progress.optionalDone} of ${progress.optionalTotal} optional` : ''}`;
   if (progress.totalPoints > 0) {
     label.append(document.createTextNode(` · ${t('tasks.progressPointsValue', progress)}`));
   }
@@ -639,10 +642,11 @@ function subtaskListNode(task, ctx) {
     toggle.setAttribute('aria-label', `${done ? 'Reopen' : 'Complete'}: ${subtask.title}`);
     const label = document.createElement('span');
     label.className = 'detail-subtask__title';
-    label.textContent = subtask.title;
+    label.textContent = `${subtask.title}${subtask.is_optional ? ' · Optional' : ''}`;
     toggle.append(lucideIcon(done ? 'check-circle-2' : 'circle'), label);
     const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id) || Number(action.counterpart_task_id) === Number(subtask.id));
-    toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || isExpired(subtask) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
+    toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || isExpired(subtask) || (task.status === 'done' && !!subtask.is_optional) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
+    if (task.status === 'done' && subtask.is_optional) toggle.title = 'Reopen the parent Task before changing optional progress.';
     row.appendChild(toggle);
     const context = subtaskContextNode(subtask, supervision, ctx);
     if (context) row.appendChild(context);

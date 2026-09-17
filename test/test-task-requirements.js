@@ -20,6 +20,8 @@ app.use('/api/v1', (req, res) => {
     id: 3, ...req.body, status: 'open', skills: (req.body.skill_ids || []).map((id) => ({ id, name: `Skill ${id}` })),
   } });
   if (req.path === '/automation/activity-options') return res.json({ data: { skills: [{ id: 1, name: 'Kitchen safety' }, { id: 2, name: 'Knife skills' }] } });
+  if (req.path === '/automation/admin/activity-templates' && req.method === 'GET') return res.json({ data: [], skills: [{ id: 1, name: 'Kitchen safety' }], members: [{ id: 2, display_name: 'Eleanor' }], categories: [], variables: [], places: [] });
+  if (req.path === '/automation/admin/activity-templates' && req.method === 'POST') return res.status(201).json({ data: { id: 80, ...req.body } });
   if (req.path === '/automation/admin/skills' && req.method === 'POST') return res.status(201).json({ data: { id: 7, ...req.body } });
   return res.json({ data: [] });
 });
@@ -102,24 +104,26 @@ test('subtask editor adds, edits, assigns skills, reorders and removes rows with
   const page = await mounted('subtasks', { subtasks: [{ title: 'Chop', skill_ids: [2] }, { title: 'Wash', skill_ids: [1] }] });
   try {
     assert.equal(await page.$eval('[data-task-subtask-action="up"]', (el) => el.disabled), true);
+    await page.click('.task-subtask-editor__actions summary');
     await page.click('[data-task-subtask-action="down"]');
     assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [
-      { title: 'Wash', skill_ids: [1] }, { title: 'Chop', skill_ids: [2] },
+      { title: 'Wash', skill_ids: [1], is_optional: 0 }, { title: 'Chop', skill_ids: [2], is_optional: 0 },
     ]);
     await page.click('[data-task-subtask-add]');
     await page.type('[data-task-subtask-row]:last-child [data-task-subtask-title]', 'Serve');
-    await page.click('[data-task-subtask-row]:last-child summary');
+    await page.click('[data-task-subtask-row]:last-child .task-skill-picker summary');
     await page.click('[data-task-subtask-row]:last-child [data-task-skill-id][value="1"]');
-    assert.deepEqual((await page.evaluate(() => window.editor.getValue())).at(-1), { title: 'Serve', skill_ids: [1] });
+    assert.deepEqual((await page.evaluate(() => window.editor.getValue())).at(-1), { title: 'Serve', skill_ids: [1], is_optional: 0 });
+    await page.click('.task-subtask-editor__actions summary');
     await page.click('[data-task-subtask-action="remove"]');
     assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [
-      { title: 'Chop', skill_ids: [2] }, { title: 'Serve', skill_ids: [1] },
+      { title: 'Chop', skill_ids: [2], is_optional: 0 }, { title: 'Serve', skill_ids: [1], is_optional: 0 },
     ]);
     assert.equal(await page.$eval('[data-task-subtask-title]', (el) => el.getAttribute('aria-label')), 'Subtask 1');
     const changeCount = await page.evaluate(() => window.changes.length);
     assert.ok(changeCount > 3);
     await page.evaluate(() => window.editor.setValue([{ title_template: 'Fresh template', skill_ids: [2] }]));
-    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title: 'Fresh template', skill_ids: [2] }]);
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title_template: 'Fresh template', title: 'Fresh template', skill_ids: [2], is_optional: 0 }]);
     assert.equal(await page.evaluate(() => window.changes.length), changeCount, 'programmatic reset is silent');
     await page.evaluate(() => window.editor.setValue([]));
     assert.deepEqual(await page.evaluate(() => window.editor.getValue()), []);
@@ -132,8 +136,8 @@ test('subtask editor keeps read-only drafts unchanged and disposal removes event
     await page.evaluate(() => window.editor.setReadOnly(true));
     assert.equal(await page.$eval('[data-task-subtask-title]', (el) => el.disabled), true);
     await page.click('[data-task-subtask-add]');
-    await page.click('[data-task-subtask-action="remove"]');
-    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title: 'Rest', skill_ids: [1] }]);
+    await page.evaluate(() => document.querySelector('[data-task-subtask-action="remove"]').click());
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title: 'Rest', skill_ids: [1], is_optional: 0 }]);
     await page.evaluate(() => window.editor.setReadOnly(false));
     await page.click('[data-task-subtask-add]');
     assert.equal((await page.evaluate(() => window.editor.getValue())).length, 2);
@@ -147,7 +151,8 @@ test('requirements controls fit desktop, tablet and mobile with readable touch t
   for (const width of [1366, 768, 390]) {
     const page = await mounted('subtasks', { subtasks: [{ title: 'A long but ordinary household subtask', skill_ids: [1, 2] }] }, { width, height: 900 });
     try {
-      await page.click('summary');
+      await page.click('.task-skill-picker summary');
+      await page.click('.task-subtask-editor__actions summary');
       for (const theme of ['neutral', 'warm', 'cool']) for (const appearance of ['light', 'dark']) {
         const measured = await page.evaluate(({ theme, appearance }) => {
           document.documentElement.dataset.colorTheme = theme;
@@ -217,6 +222,7 @@ test('mobile Task detail skill context and supervision labels wrap without edita
         currentUserId: 1, isAdmin: false, onChanged() {} });
     });
     await page.waitForSelector('.detail-subtask__toggle');
+    await page.click('[data-subtask-id="2"] .detail-subtask__requirements summary');
     assert.match(await page.$eval('[data-subtask-id="2"]', el => el.innerText), /Kitchen knife safety.*Supervision required.*Supervisor: Parent/s);
     assert.equal(await page.$eval('.detail-subtask__toggle', el => el.disabled), true);
     assert.equal(await page.$('#detail-view-edit'), null);
@@ -224,7 +230,7 @@ test('mobile Task detail skill context and supervision labels wrap without edita
     const layout = await page.$eval('[data-subtask-id="2"]', row => {
       const title = row.querySelector('.detail-subtask__title').getBoundingClientRect();
       const toggle = row.querySelector('.detail-subtask__toggle').getBoundingClientRect();
-      const meta = row.querySelector('.detail-subtask__meta').getBoundingClientRect();
+      const meta = row.querySelector('.detail-subtask__requirements').getBoundingClientRect();
       return { titleHeight: title.height, toggleHeight: toggle.height, metaTop: meta.top, toggleBottom: toggle.bottom,
         overflow: document.documentElement.scrollWidth > innerWidth };
     });
@@ -259,7 +265,7 @@ test('subtask definitions and nested Skill creation live under Edit and preserve
     assert.equal(await page.$('[data-task-subtask-title]'), null);
     await page.click('#detail-view-edit');
     await page.waitForSelector('[data-task-subtask-title]');
-    await page.click('[data-task-subtask-row] summary');
+    await page.click('[data-task-subtask-row] .task-skill-picker summary');
     await page.click('[data-task-subtask-row] [data-create-skill]');
     await page.waitForSelector('#automation-skill-form');
     await page.click('#shared-modal-overlay [data-action="close-modal"]');
@@ -271,6 +277,100 @@ test('subtask definitions and nested Skill creation live under Edit and preserve
     await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#automation-skill-form'));
     await page.waitForFunction(() => document.querySelector('[data-task-skill-id][value="7"]')?.checked);
-    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ id: 4, title: 'Measure ingredients', skill_ids: [7] }]);
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ id: 4, title: 'Measure ingredients', skill_ids: [7], is_optional: 0 }]);
+  } finally { await page.close(); }
+});
+
+test('real mouse drag preserves complete subtask objects and Optional after moving a completed row', async () => {
+  const models = [
+    { id: 11, title: 'Brush teeth', status: 'done', is_optional: 0, skill_ids: [1], extra: { keep: 'history' } },
+    { id: 12, title: 'Stretch', status: 'open', is_optional: 1, skill_ids: [2] },
+    { id: 13, title: 'Pack bag', status: 'open', is_optional: 0, skill_ids: [] },
+  ];
+  const page = await mounted('subtasks', { subtasks: models });
+  try {
+    await page.evaluate(() => window.editor.ready);
+    await page.click('[data-subtask-id="11"] [data-task-subtask-optional]');
+    const handle = await page.$('[data-subtask-id="11"] [data-task-subtask-handle]');
+    const start = await handle.boundingBox();
+    const target = await (await page.$('[data-subtask-id="13"]')).boundingBox();
+    await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(start.x + start.width / 2, target.y + target.height - 4, { steps: 20 });
+    assert.ok(await page.$('.sortable-ghost'), 'the dragged row marks its insertion position');
+    await page.mouse.up();
+    await page.waitForFunction(() => window.editor.getValue().at(-1).id === 11);
+    const value = await page.evaluate(() => window.editor.getValue());
+    assert.deepEqual(value.map(row => row.id), [12, 13, 11]);
+    assert.deepEqual(value.at(-1), { ...models[0], is_optional: 1 });
+    assert.match(await page.$eval('[data-task-subtask-announcement]', element => element.textContent), /position 3 of 3/);
+    await page.focus('[data-subtask-id="11"] .task-subtask-editor__actions summary');
+    await page.keyboard.press('Enter');
+    await page.focus('[data-subtask-id="11"] [data-task-subtask-action="up"]');
+    await page.keyboard.press('Enter');
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue().map(row => row.id)), [12, 11, 13]);
+    assert.equal(await page.$eval('[data-subtask-id="11"] .task-subtask-editor__actions', element => element.open), false);
+  } finally { await page.close(); }
+});
+
+test('touch scroll outside the handle does not reorder; held handle supports touch drag', async () => {
+  const page = await mounted('subtasks', { subtasks: Array.from({ length: 18 }, (_, index) => ({ id: index + 1, title: `Step ${index + 1}`, skill_ids: [], is_optional: index === 1 ? 1 : 0 })) }, { width: 390, height: 700, isMobile: true, hasTouch: true });
+  const client = await page.createCDPSession();
+  const touch = (type, x, y) => client.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y }] });
+  try {
+    await page.evaluate(() => window.editor.ready);
+    await touch('touchStart', 170, 480);
+    for (let y = 460; y >= 150; y -= 25) { await touch('touchMove', 170, y); await new Promise(resolve => setTimeout(resolve, 20)); }
+    await touch('touchEnd');
+    assert.ok(await page.evaluate(() => window.scrollY > 30), 'ordinary touch swipes scroll the editor');
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue().map(row => row.id)), Array.from({ length: 18 }, (_, index) => index + 1));
+    await page.evaluate(() => window.scrollTo(0, 0));
+    const start = await (await page.$('[data-subtask-id="1"] [data-task-subtask-handle]')).boundingBox();
+    const target = await (await page.$('[data-subtask-id="3"]')).boundingBox();
+    const x = start.x + start.width / 2, from = start.y + start.height / 2, to = target.y + target.height - 4;
+    await touch('touchStart', x, from);
+    await new Promise(resolve => setTimeout(resolve, 280));
+    for (let step = 1; step <= 15; step++) { await touch('touchMove', x, from + (to - from) * step / 15); await new Promise(resolve => setTimeout(resolve, 20)); }
+    await touch('touchEnd');
+    await page.waitForFunction(() => window.editor.getValue()[0].id !== 1);
+    assert.equal(await page.evaluate(() => window.editor.getValue().find(row => row.id === 2).is_optional), 1);
+    assert.equal(await page.evaluate(() => window.editor.getValue().length), 18);
+  } finally { await client.detach(); await page.close(); }
+});
+
+test('Activity Template editor preserves weekday schedule, times and Optional while saving without occurrence dates', async () => {
+  const page = await browser.newPage();
+  try {
+    requests.length = 0;
+    await page.goto(`${base}/requirements-test`);
+    await page.evaluate(async () => {
+      window.yuvomi = { showToast() {} };
+      await import('/components/datepicker.js');
+      const { initI18n } = await import('/i18n.js'); await initI18n();
+      const { setPermissions } = await import('/permissions.js'); setPermissions({ admin: true });
+      const { openActivityTemplateEditor } = await import('/components/activity-automation.js');
+      await openActivityTemplateEditor({ asChild: false, draft: {
+        name: 'Morning routine', title_template: 'Get Ready for the Day', start_time: '07:00', due_time: '08:00',
+        recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0,
+        points: 2, expiration_policy: 'expire_incomplete', assignment_strategy: 'fixed', fixed_user_id: 2,
+        checklist: [{ title_template: 'Brush teeth', skill_ids: [1], is_optional: 0 }, { title_template: 'Stretch', skill_ids: [], is_optional: 1 }],
+      } });
+    });
+    await page.waitForSelector('#automation-activity-form');
+    assert.equal(await page.$eval('#activity-start-time', element => element.value), '07:00');
+    assert.equal(await page.$eval('#activity-due-time', element => element.value), '08:00');
+    assert.equal(await page.$eval('#activity-rrule-from-completion', element => element.checked), false);
+    assert.equal(await page.$$eval('#activity-rrule-weekdays [aria-pressed="true"]', elements => elements.length), 5);
+    await page.click('#shared-modal-overlay [type="submit"]');
+    await page.waitForFunction(() => !document.querySelector('#automation-activity-form'));
+    const saved = requests.find(request => request.method === 'POST' && request.path === '/automation/admin/activity-templates').body;
+    assert.equal(saved.start_time, '07:00'); assert.equal(saved.due_time, '08:00');
+    assert.equal(saved.recurrence_rule, 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
+    assert.equal(saved.recurrence_from_completion, 0);
+    assert.equal(saved.expiration_policy, 'expire_incomplete');
+    assert.equal(Number(saved.fixed_user_id), 2);
+    assert.deepEqual(saved.checklist.map(row => row.is_optional), [0, 1]);
+    assert.deepEqual(saved.checklist[0].skill_ids, [1]);
+    assert.equal('start_date' in saved, false); assert.equal('due_date' in saved, false);
   } finally { await page.close(); }
 });

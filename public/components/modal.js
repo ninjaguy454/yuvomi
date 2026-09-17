@@ -230,7 +230,7 @@ function trapFocus(container, initialFocus = 'first-field') {
     const tag = e.target.tagName;
     if (tag !== 'INPUT' && tag !== 'TEXTAREA' && tag !== 'SELECT') return;
     setTimeout(() => {
-      e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (e.target.isConnected && document.activeElement === e.target) e.target.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }, 300);
   }
   container.addEventListener('focusin', onInputFocus);
@@ -254,15 +254,22 @@ function trapFocus(container, initialFocus = 'first-field') {
  */
 function applyInitialFocus(container, initialFocus) {
   if (initialFocus === 'none') return;
+  const focusUnlessMoved = target => {
+    const active = document.activeElement;
+    // A quick submit may already have focused a validation error. Opening the
+    // modal must not take that focus back or scroll away from the explanation.
+    if (active !== container && container.contains(active) && active?.matches('input, select, textarea, button, [aria-invalid="true"]')) return;
+    if (target.isConnected) target.focus();
+  };
 
   if (initialFocus && typeof initialFocus.focus === 'function') {
-    setTimeout(() => initialFocus.focus(), 50);
+    setTimeout(() => focusUnlessMoved(initialFocus), 50);
     return;
   }
 
   const first = visibleFocusable(container, FIRST_FIELD)[0] ?? visibleFocusable(container)[0];
   if (first) {
-    setTimeout(() => first.focus(), 50);
+    setTimeout(() => focusUnlessMoved(first), 50);
   }
 }
 

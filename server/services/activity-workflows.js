@@ -19,6 +19,8 @@ import {
 import { recordTaskAssignment } from './assignment-responsibilities.js';
 import { loadActivityChecklist, materializeActivityChecklist, renderActivityChecklistTitle } from './activity-template-checklist.js';
 import { setTags } from '../utils/task-tags.js';
+import { previewTaskActivityBinding } from './task-activity-bindings.js';
+import { taskOptionalContext } from './task-optional.js';
 import {
   hydrateWorkflowDefinitions, resolveVariables, substituteVariableTemplate,
   templateReferences, expressionScope, expressionDependencies, definitionsForTemplates, variableInputSchema,
@@ -137,17 +139,33 @@ export function activityVariableSchema(d, activity, catalog) {
 }
 
 /** Returns an ordinary editable Task draft; does not create Tasks or advance rotation. */
-export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUserId = null, includeLabels = false } = {}) {
+export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUserId = null, includeLabels = false,
+  assignmentOverrideUserId = null, task = null } = {}) {
   const activity = getActivityTemplate(d, activityId);
   if (!activity?.active) throw new Error('Activity template not found.');
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (subjectUserId != null && !subject) throw new Error('Choose a household member.');
   if (activity.subject_required && !subject) throw Object.assign(new Error('Choose a household member first.'), { code: 'missing_input' });
   const schema = activityVariableSchema(d, activity);
-  const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId });
+  const contextValues={};
+  // The existing reusable Assignee value denotes this Activity occurrence's
+  // resolved performer only when it has no authored expression or fixed value.
+  // Do not reinterpret arbitrary member variables or overwrite configured data.
+  const contextualAssignee=schema.definitions.find(row=>row.id==='assignee' && row.type==='household_member'
+    && row.kind==='value' && !row.expression && row.default_value==null);
+  if(contextualAssignee) {
+    const occurrence={start_time:activity.start_time??null,due_time:activity.due_time??null,...task};
+    const resolvedAssignment=previewTaskActivityBinding(d,{activityTemplateId:activity.id,subjectUserId,
+      assignmentOverrideUserId,task:occurrence,dateKey:occurrence.due_date||todayKey(d)}).resolution;
+    if(resolvedAssignment.primary)contextValues.assignee=resolvedAssignment.primary.id;
+  }
+  const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId, contextValues });
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
       expiration_policy: activity.expiration_policy ?? 'keep_overdue',
+      start_time: activity.start_time ?? null, due_time: activity.due_time ?? null,
+      recurrence_rule: activity.recurrence_rule ?? null, recurrence_from_completion: activity.recurrence_from_completion || 0,
+      is_recurring: activity.recurrence_rule ? 1 : 0,
       checklist: activity.checklist.map(item => ({ ...item, title_template: renderActivityChecklistTitle(item, activity, subject, resolved.labels) })),
       inputs: resolved.persisted, resolved_variables: resolved.summary },
     input_schema: schema.input_schema,
@@ -299,7 +317,8 @@ export function previewWorkflow(d, workflowId, {
           presence: {
             policy: planning.presence_policy,
             targetPlaceId: planning.place_id,
-            ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window }),
+            ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window,
+              task: {start_date:activity.start_time?todayKey(d):null,start_time:activity.start_time,due_date:todayKey(d),due_time:activity.due_time} }),
           },
         });
         output.push({
@@ -351,6 +370,8 @@ function insertTask(d, {
   parentTaskId = null,
   dueDate = null,
   dueTime = null,
+  startDate = null,
+  startTime = null,
   priority = 'none',
   points = 0,
   expirationPolicy = 'keep_overdue',
@@ -360,8 +381,8 @@ function insertTask(d, {
     INSERT INTO tasks (
       title, description, category, priority, status, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
-      assignment_mode, rotation_index, points, visibility, countdown, locked, expiration_policy
-    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0, ?)
+      assignment_mode, rotation_index, points, visibility, countdown, locked, expiration_policy, start_date, start_time
+    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0, ?, ?, ?)
   `).run(
     title,
     description,
@@ -374,6 +395,8 @@ function insertTask(d, {
     parentTaskId,
     points,
     expirationPolicy,
+    startDate,
+    startTime,
   );
   const taskId = Number(result.lastInsertRowid);
   setTags(d, taskId, tags);
@@ -444,7 +467,8 @@ export function instantiateWorkflow(d, workflowId, {
         presence: {
           policy: planning.presence_policy,
           targetPlaceId: planning.place_id,
-          ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window }),
+          ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window,
+            task: {start_date:activity.start_time?todayKey(d):null,start_time:activity.start_time,due_date:todayKey(d),due_time:activity.due_time} }),
         },
       });
 
@@ -460,6 +484,9 @@ export function instantiateWorkflow(d, workflowId, {
         createdBy,
         parentTaskId,
         dueDate: todayKey(d),
+        dueTime: activity.due_time ?? null,
+        startDate: activity.start_time ? todayKey(d) : null,
+        startTime: activity.start_time ?? null,
       });
       d.prepare(`
         INSERT INTO workflow_instance_tasks (
@@ -481,7 +508,8 @@ export function instantiateWorkflow(d, workflowId, {
         INSERT OR IGNORE INTO workflow_task_dependencies (task_id, depends_on_task_id)
         VALUES (?, ?)
       `);
-      checklistTaskIds.forEach((checklistTaskId) => requireChecklistItem.run(primaryTaskId, checklistTaskId));
+      checklistTaskIds.filter(id=>!taskOptionalContext(d,id).is_optional)
+        .forEach((checklistTaskId) => requireChecklistItem.run(primaryTaskId, checklistTaskId));
       if (resolution.primary) assertTaskSupervisionAssignee(d, primaryTaskId, resolution.primary.id);
       if (planning.place_id || planning.presence_policy !== 'ignore') {
         d.prepare(`
@@ -574,6 +602,18 @@ export function instantiateWorkflow(d, workflowId, {
   })();
 }
 
+/** Optional work and its generated helper do not hold the workflow open. */
+function requiredWorkflowDependency(d, taskId) {
+  if(taskOptionalContext(d,taskId).is_optional)return false;
+  const support=d.prepare('SELECT source_task_id FROM task_activity_support_tasks WHERE task_id=?').get(taskId);
+  if(!support)return true;
+  const actions=d.prepare(`SELECT a.action_task_id,a.state,t.status FROM task_supervision_actions a
+    JOIN tasks t ON t.id=a.action_task_id WHERE a.source_task_id=?`).all(support.source_task_id);
+  // Preserve the dependency of legacy helper rows without granular mappings.
+  return !actions.length || actions.some(action=>action.state!=='not_required' && action.status!=='done'
+    && !taskOptionalContext(d,action.action_task_id).is_optional);
+}
+
 export function unresolvedDependencies(d, taskId) {
   return d.prepare(`
     SELECT dep.id, dep.title, dep.status
@@ -581,7 +621,7 @@ export function unresolvedDependencies(d, taskId) {
       JOIN tasks dep ON dep.id = wtd.depends_on_task_id
      WHERE wtd.task_id = ? AND dep.status != 'done'
      ORDER BY dep.id
-  `).all(taskId);
+  `).all(taskId).filter(row=>requiredWorkflowDependency(d,row.id));
 }
 
 /** Keep workflow instance and event parent status in sync with generated work. */
@@ -595,11 +635,11 @@ export function syncWorkflowInstanceForTask(d, taskId, { syncParent = true } = {
   if (!link) return null;
 
   const remaining = d.prepare(`
-    SELECT COUNT(*) AS n
+    SELECT t.id
       FROM workflow_instance_tasks wit
       JOIN tasks t ON t.id = wit.task_id
      WHERE wit.workflow_instance_id = ? AND t.status != 'done'
-  `).get(link.workflow_instance_id)?.n ?? 0;
+  `).all(link.workflow_instance_id).filter(row=>requiredWorkflowDependency(d,row.id)).length;
   const status = remaining === 0 ? 'done' : 'open';
   d.prepare(`
     UPDATE workflow_instances

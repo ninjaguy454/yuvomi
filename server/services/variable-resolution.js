@@ -141,7 +141,7 @@ export function variableInputSchema(definitions, keys = definitions.map(variable
   return definitions.filter(row => wanted.has(variableKey(row)) && !variableKey(row).startsWith('context.') && !row.expression && row.kind !== 'value');
 }
 
-export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserId = null, now = new Date() } = {}) {
+export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserId = null, contextValues = {}, now = new Date() } = {}) {
   if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) throw new Error('Variable inputs must be an object.');
   const definitions = expressionScope(variables);
   validateVariableDefinitions(definitions);
@@ -163,6 +163,13 @@ export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserI
     if (row.expression) continue; // Computed values are never accepted from the client.
     if (row.kind === 'value') continue;
     values[key] = normalizeVariableValue(d, row, value);
+  }
+  // Only a trusted domain resolver supplies these contextual values. Explicit
+  // definitions and editable inputs retain their own meaning.
+  for (const [key,value] of Object.entries(contextValues)) {
+    const row=byKey.get(key);
+    if(row && row.kind==='value' && !row.expression && row.default_value==null && !Object.hasOwn(values,key))
+      values[key]=normalizeVariableValue(d,row,value);
   }
   for (const row of definitions) {
     if (!needed.has(row.id) || row.expression || Object.hasOwn(values, row.id) || row.default_value == null) continue;

@@ -9006,6 +9006,23 @@ FORK_MIGRATIONS.push({
   up: addTaskExpirationSchema,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10036,
+  description: 'Activities: optional checklist actions and reusable schedule defaults',
+  up: `
+    ALTER TABLE tasks ADD COLUMN is_optional INTEGER NOT NULL DEFAULT 0 CHECK(is_optional IN (0,1));
+    ALTER TABLE activity_template_checklist_items ADD COLUMN is_optional INTEGER NOT NULL DEFAULT 0 CHECK(is_optional IN (0,1));
+    ALTER TABLE activity_templates ADD COLUMN start_time TEXT;
+    ALTER TABLE activity_templates ADD COLUMN due_time TEXT;
+    ALTER TABLE activity_templates ADD COLUMN recurrence_rule TEXT;
+    ALTER TABLE activity_templates ADD COLUMN recurrence_from_completion INTEGER NOT NULL DEFAULT 0 CHECK(recurrence_from_completion IN (0,1));
+    ALTER TABLE task_activity_bindings ADD COLUMN assignment_override_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+    CREATE TRIGGER trg_tasks_optional_revision AFTER UPDATE OF is_optional ON tasks
+      WHEN NEW.is_optional IS NOT OLD.is_optional
+      BEGIN UPDATE tasks SET revision=revision+1 WHERE id=NEW.id; END;
+  `,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

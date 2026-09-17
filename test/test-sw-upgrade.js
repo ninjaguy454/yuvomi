@@ -140,7 +140,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/wall-mode', new MockResponse('', { headers: { 'X-Wall-Mode': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.11');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.12');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
@@ -150,6 +150,11 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
     assert.equal((await shell.match(path))?.body, `fresh:${path}`, `${path} must use the new branding`);
     assert.equal(shell.addedRequests.find(request => keyOf(request) === path)?.cache, 'reload',
       `${path} must bypass the previous HTTP cache`);
+  }
+  const pages = await env.caches.open(env.cacheNames.PAGES_CACHE);
+  for (const path of ['/utils/subtask-reorder.js', '/utils/task-form-validation.js']) {
+    assert.equal((await pages.match(path))?.body, `fresh:${path}`, `${path} must be staged for offline Task editors`);
+    assert.equal(pages.addedRequests.find(request => keyOf(request) === path)?.cache, 'reload');
   }
   assert.equal((await oldShell.match('/index.html'))?.body, 'previous product identity');
 

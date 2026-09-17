@@ -58,7 +58,7 @@ function prefersReducedMotion() {
  *        bekommt das rohe SortableJS-Event (item, oldIndex, newIndex, ...)
  * @returns {Promise<object|null>} die Sortable-Instanz (zum späteren `.destroy()`) oder null
  */
-export async function makeSortable(listEl, { handle, draggable, filter, onEnd } = {}) {
+export async function makeSortable(listEl, { handle, draggable, filter, onEnd, delay = 120, touchStartThreshold = 5 } = {}) {
   if (!listEl || typeof onEnd !== 'function') return null;
   const Sortable = await loadSortable();
   const reduced = prefersReducedMotion();
@@ -68,9 +68,9 @@ export async function makeSortable(listEl, { handle, draggable, filter, onEnd } 
     filter,
     animation: reduced ? 0 : 150,
     easing: 'cubic-bezier(0.34, 1.56, 0.64, 1)',
-    delay: 120,
+    delay,
     delayOnTouchOnly: true,
-    touchStartThreshold: 5,
+    touchStartThreshold,
     // Statt nativem HTML5-DnD: eigene Maus/Touch-Simulation. Konsistentes
     // Verhalten über Browser/Eingabegeräte hinweg und volle Kontrolle über
     // ghost/chosen/drag-CSS (native DnD überschreibt das Drag-Bild sonst mit

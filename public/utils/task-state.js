@@ -20,18 +20,18 @@ export function taskStatusConfirmation(task, status) {
     const action = supervisionOf(child);
     return action?.execution_mode === 'delegated' && action.state !== 'not_required';
   });
-  const pendingDelegated = delegated.filter((child) => child.status !== 'done');
+  const pendingDelegated = delegated.filter((child) => child.status !== 'done' && !child.is_optional);
   // Progress belongs to the learner projection. A permitted helper's parent
   // completion can affect the original structure, so its confirmation must
   // explicitly include those direct responsibilities as well.
   const completesHelperWork = pendingDelegated.length > 0
     && pendingDelegated.every((child) => supervisionOf(child)?.can_complete === true && child.permissions?.complete !== false);
-  const children = completesHelperWork ? structural : actionableSubtasks(task);
+  const children = (completesHelperWork ? structural : actionableSubtasks(task)).filter(child => !child.is_optional);
   if (status === 'done' && children.some((child) => child.status !== 'done')) {
     return { flag: 'complete_remaining', message: 'Complete this Task and its remaining subtasks?',
       detail: completesHelperWork
         ? 'Remaining subtasks, including direct helper responsibilities, will also be marked complete. Required supervision still applies.'
-        : 'The remaining subtasks will also be marked complete. Required supervision still applies.',
+        : 'The remaining required subtasks will also be marked complete. Optional subtasks stay as they are. Required supervision still applies.',
       confirmLabel: 'Complete Task' };
   }
   if (status === 'open' && (task.status === 'done' || structural.some((child) => child.status === 'done'))) {

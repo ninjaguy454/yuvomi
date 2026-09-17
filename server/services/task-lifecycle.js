@@ -9,6 +9,7 @@ import { reconcileTaskSupervision, inspectTaskSupervision, taskSupervisionTransi
 import * as v from '../middleware/validate.js';
 import { todayKey } from '../utils/timezone.js';
 import { taskDeadlineMs, taskStartMs, taskExpirationDue, taskWindowAncestors, EXPIRATION_POLICIES } from './task-window.js';
+import { taskOptionalContext } from './task-optional.js';
 
 let recurrenceHooks = null;
 // Recurrence keeps its established anchored/group implementation in the Tasks
@@ -45,12 +46,15 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
 }
 
 /** Shared by REST and compatibility writers, including changes to child actions. */
-export function assertTaskWindowAction(d, taskId, now = new Date()) {
+export function assertTaskWindowAction(d, taskId, now = new Date(), {optionalReopenScope=null}={}) {
   for (const task of taskWindowAncestors(d,taskId)) {
     if (task.status === 'expired' || taskExpirationDue(d,task,now))
       throw new TaskStateError('This Task has expired. An authorized editor must explicitly reopen it before progress can change.',
         {reason:'task_expired',task_id:task.id});
   }
+  const optional=taskOptionalContext(d,taskId);
+  if(optional.closed_parent&&!optionalReopenScope?.has(optional.closed_parent.id))throw new TaskStateError('Reopen the completed parent Task before changing an optional action.',
+    {reason:'optional_parent_completed',task_id:optional.closed_parent.id});
 }
 
 export function assertTaskRevision(d, task, body = {}, {required = false, requireParent = false} = {}) {
@@ -96,9 +100,9 @@ export function taskActivity(d, taskId, limit = 60) {
     .map(({details_json, ...row}) => ({...row, details: JSON.parse(details_json)}));
 }
 
-function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false,now=new Date()}={}) {
+function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false,now=new Date(),optionalReopenScope=null}={}) {
   if (task.status === status) return;
-  assertTaskWindowAction(d,task.id,now);
+  assertTaskWindowAction(d,task.id,now,{optionalReopenScope});
   if (status === 'done') {
     assertRecurringCompletionStarted(d,task.id,now);
     const dependencies = unresolvedDependencies(d, task.id);
@@ -169,6 +173,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
       for(const child of rows) {
         if(visited.has(child.id))continue;
         visited.add(child.id);
+        if(status==='done'&&child.is_optional&&!containerActions.length)continue;
         collectDescendants(actionableSubtasks(d,child.id));
         descendants.push(child);
       }
@@ -200,11 +205,15 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     for (const child of targets) {
       if (authorize) assertTaskMutation(d,actorId,child,{status},{operation:'status'});
       taskSupervisionTransition(d,child.id,status,actorId);
-      if(containerActions.length && status==='done' && actionableSubtasks(d,child.id).some(row=>row.status!=='done'))
+      if(containerActions.length && status==='done' && actionableSubtasks(d,child.id).some(row=>!row.is_optional&&row.status!=='done'))
         throw new TaskStateError('Complete the original Task’s independent steps before recording supervision of the whole Task.');
     }
-    for (const child of targets) applyTransition(d,child,status,actorId,effects,{now});
-    applyTransition(d,task,status,actorId,effects,{now});
+    // Only an explicitly authorized, confirmed parent reset may reset optional
+    // descendants while their old parent statuses still record completion.
+    const optionalReopenScope=status==='open'?new Set([task.id,...targets.map(child=>child.id)]):null;
+    const preserveFollowup=task.status==='done'&&actionableSubtasks(d,task.id).some(child=>child.is_optional);
+    for (const child of targets) applyTransition(d,child,status,actorId,effects,{now,optionalReopenScope});
+    applyTransition(d,task,status,actorId,effects,{preserveFollowup,now,optionalReopenScope});
     // A Workflow may depend on the linked supervision Task. Publish the
     // authoritative action to that projection before checking its parent.
     const syncProjections = sourceId => {
@@ -235,7 +244,8 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
       const parent = d.prepare('SELECT * FROM tasks WHERE id=?').get(parentId);
       const siblings = actionableSubtasks(d,parent.id);
       if (siblings.length) {
-        const allDone=siblings.every(child=>child.status==='done');
+        const required=siblings.filter(child=>!child.is_optional);
+        const allDone=required.length>0&&required.every(child=>child.status==='done');
         const someProgress=siblings.some(child=>child.status!=='open');
         const next=allDone?'done':parent.status==='done'?'in_progress':someProgress&&parent.status==='open'?'in_progress':parent.status;
         if (next!==parent.status) {

@@ -4,7 +4,8 @@ import { renderGooglePlacesSettings } from '/components/google-places-settings.j
 import { openModal, openChildModal, closeModal, confirmOverModal } from '/components/modal.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { PRIORITIES, normalizeTagList, catLabel } from '/utils/task-fields.js';
-import { t, formatTime } from '/i18n.js';
+import { t, formatTime, formatTimeInput, parseTimeInput } from '/i18n.js';
+import { renderRRuleFields, bindRRuleEvents, getRRuleValues } from '/rrule-ui.js';
 import { zonedFields } from '/utils/timezone.js';
 import { esc } from '/utils/html.js';
 import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOptions } from '/components/variable-expression-editor.js';
@@ -1342,6 +1343,47 @@ function activityEditorContext(response) {
   return { skills: response.skills ?? [], members: response.members ?? [], categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [], context: response.context ?? [] };
 }
 
+function activityTimingFields(activity) {
+  return `<fieldset class="automation-fieldset"><legend class="label">Reusable schedule</legend>
+    <p class="form-hint">Times and recurrence are copied into new Tasks. Choose the start and due dates for each Task.</p>
+    <div class="grid grid--2">
+      <div class="form-group"><label class="label" for="activity-start-time">Start time</label><yuvomi-datepicker type="time" id="activity-start-time" name="start_time" value="${h(formatTimeInput(activity?.start_time || ''))}"></yuvomi-datepicker></div>
+      <div class="form-group"><label class="label" for="activity-due-time">Due time</label><yuvomi-datepicker type="time" id="activity-due-time" name="due_time" value="${h(formatTimeInput(activity?.due_time || ''))}"></yuvomi-datepicker></div>
+    </div>
+    ${renderRRuleFields('activity', activity?.recurrence_rule, { allowFromCompletion: true, fromCompletion: !!activity?.recurrence_from_completion })}
+  </fieldset>`;
+}
+
+function activityChecklistPayload(items) {
+  return items.map(item => ({ ...item, title_template: item.title.trim(), is_optional: item.is_optional ? 1 : 0 }))
+    .filter(item => item.title_template);
+}
+
+function activityTimingPayload(form) {
+  const values = {};
+  for (const field of ['start_time', 'due_time']) {
+    const control = form.querySelector(`[name="${field}"]`);
+    const raw = control?.value || '';
+    const parsed = parseTimeInput(raw);
+    if (raw && !parsed) return { error: `Enter a valid ${field === 'start_time' ? 'start' : 'due'} time.`, field };
+    values[field] = parsed || null;
+  }
+  const recurrence = getRRuleValues(form, 'activity');
+  if (!recurrence.valid_until) return { error: 'Enter a valid recurrence end date.', field: 'activity-rrule-until' };
+  return { values: { ...values, recurrence_rule: recurrence.recurrence_rule, recurrence_from_completion: recurrence.recurrence_from_completion ? 1 : 0 } };
+}
+
+function showActivityFormError(panel, message, field = null) {
+  const summary = panel.querySelector('[data-activity-error]');
+  summary.textContent = message;
+  summary.hidden = false;
+  const target = field ? panel.querySelector(`[name="${field}"], #${field}`) : summary;
+  if (field) target?.setAttribute('aria-invalid', 'true');
+  target?.scrollIntoView?.({ block: 'nearest' });
+  target?.focus?.();
+  toast(message, 'danger');
+}
+
 /** Review a Task-derived template draft in the same editor used by Automation. */
 export async function openActivityTemplateEditor({ draft = null, onSaved = null, onSkillCreated = null, asChild = true } = {}) {
   const parent = document.getElementById('shared-modal-overlay');
@@ -1357,8 +1399,9 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
   const selectedSkills = activity?.skill_ids ?? activity?.skills ?? [];
   const strategy = activity?.assignment_policy || activity?.assignment_strategy || 'subject_skill';
   const locationMode = activity?.location_mode || 'none';
-  const content = `<form id="automation-activity-form">
-    ${asChild && activity && !editing ? '<p class="form-hint automation-form-intro">Review the reusable details below. Dates, reminders, recurrence and attached documents stay with this Task.</p>' : ''}
+  const content = `<form id="automation-activity-form" novalidate>
+    <p class="task-template-error" data-activity-error role="alert" tabindex="-1" hidden></p>
+    ${asChild && activity && !editing ? '<p class="form-hint automation-form-intro">Review the reusable details below. Dates, reminders and attached documents stay with this Task.</p>' : ''}
     ${inputRow('Template name', `<input class="input" name="name" required value="${h(activity?.name || '')}">`, 'The reusable name shown in the Activity Template library.')}
     ${inputRow('Generated task title', `<input class="input" name="title_template" data-variable-mentions="activity-title" aria-autocomplete="list" aria-expanded="false" required value="${h(activity?.title_template || activity?.name || '')}"><small class="form-hint" data-activity-title-preview></small>`, 'This is the Task title, separate from the reusable Template name above. A person is included only when you explicitly insert the person variable with @.')}
     ${inputRow('Description / instructions', `<textarea class="input" name="description" rows="3" data-variable-mentions="activity-description" aria-autocomplete="list" aria-expanded="false">${h(activity?.description || '')}</textarea>`, 'Type @ to insert the person or Activity Template name.')}
@@ -1372,6 +1415,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       ${inputRow('Priority', `<select class="input" name="priority">${PRIORITIES().map(({ value, label }) => `<option value="${value}" ${(activity?.priority || 'none') === value ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`)}
       ${inputRow('Points', `<input class="input" type="number" name="points" min="0" step="1" inputmode="numeric" value="${Math.max(0, Math.trunc(Number(activity?.points) || 0))}">`)}
     </div>
+    ${activityTimingFields(activity)}
     ${inputRow('When incomplete at deadline', `<select class="input" name="expiration_policy"><option value="keep_overdue" ${(activity?.expiration_policy || 'keep_overdue') === 'keep_overdue' ? 'selected' : ''}>Keep overdue</option><option value="expire_incomplete" ${activity?.expiration_policy === 'expire_incomplete' ? 'selected' : ''}>Expire incomplete</option></select>`, 'Copied into new Tasks. Expire incomplete uses each Task’s Due Time, or the end of its due date in the household timezone, and awards 0 completion points. Choose a due date when creating the Task. Scheduled repeats continue; Repeat from completion pauses until the expired occurrence is reopened and completed.')}
     ${inputRow('Tags', `<input class="input" name="tags" value="${h(normalizeTagList(activity?.tags).join(', '))}">`, 'Separate tags with commas.')}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
@@ -1396,12 +1440,14 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     ${inputRow('Supervision task title', `<input class="input" name="supervision_title_template" data-variable-mentions="activity-supervision" aria-autocomplete="list" aria-expanded="false" value="${h(activity?.supervision_title_template || 'Supervise {subject}: {activity}')}">`, 'Type @ to insert the person or Activity Template name. Used only when the person requires supervision.')}
     ${footer(editing ? 'Save template' : 'Create template')}
   </form>`;
-  let child;
+  let child, disposeSubtasks = () => {};
   child = (asChild ? openChildModal : openModal)({
     title: editing ? 'Edit Activity Template' : 'New Activity Template',
     content,
     size: 'lg',
+    onClose: () => disposeSubtasks(),
     onSave(panel) {
+      bindRRuleEvents(panel, 'activity');
       panel.variableContext = [...context.variables, ...(context.context || [])];
       wireVariableMentions(panel);
       const createSkill = async () => {
@@ -1415,6 +1461,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         return skill;
       };
       const subtasks = bindSubtaskEditor(panel, { skills: context.skills, template: true, onCreateSkill: canCapability('skills.manage') ? createSkill : null });
+      disposeSubtasks = () => subtasks.dispose();
       const requiredSkills = bindSkillPicker(panel.querySelector('[data-activity-skills]'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
       const templateName = panel.querySelector('[name="name"]');
       const generatedTitle = panel.querySelector('[name="title_template"]');
@@ -1451,12 +1498,22 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
       locationSelect?.addEventListener('change', refreshLocation);
       panel.querySelector('#automation-activity-form')?.addEventListener('submit', singlePendingAction(panel.querySelector('[type="submit"]'), async (event) => {
         event.preventDefault();
-        const data = new FormData(event.currentTarget);
+        const form = event.currentTarget;
+        const data = new FormData(form);
+        panel.querySelector('[data-activity-error]').hidden = true;
+        panel.querySelectorAll('[aria-invalid="true"]').forEach(control => control.removeAttribute('aria-invalid'));
+        if (!String(data.get('name') || '').trim()) { showActivityFormError(panel, 'Enter a template name.', 'name'); return; }
+        if (!String(data.get('title_template') || '').trim()) { showActivityFormError(panel, 'Enter a generated task title.', 'title_template'); return; }
+        if (!form.checkValidity()) { const invalid = form.querySelector(':invalid'); showActivityFormError(panel, invalid?.validationMessage || 'Check the highlighted field.', invalid?.name); return; }
+        if (data.get('assignment_strategy') === 'fixed' && !data.get('fixed_user_id')) { showActivityFormError(panel, 'Choose a fixed assignee.', 'fixed_user_id'); return; }
+        const timing = activityTimingPayload(form);
+        if (timing.error) { showActivityFormError(panel, timing.error, timing.field); return; }
         const payload = {
           name: data.get('name'), title_template: data.get('title_template'),
           description: data.get('description'), category: data.get('category'),
           priority: data.get('priority'), points: Math.max(0, Math.trunc(Number(data.get('points')) || 0)),
           expiration_policy: data.get('expiration_policy') || 'keep_overdue',
+          ...timing.values,
           tags: normalizeTagList(String(data.get('tags') || '').split(',')),
           assignment_strategy: data.get('assignment_strategy'),
           subject_required: data.has('subject_required'),
@@ -1471,9 +1528,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           location_variable_id: data.get('location_variable_id') || null,
           presence_policy: data.get('presence_policy'),
           presence_window: data.get('presence_window'),
-          checklist: subtasks.getValue()
-            .map((item) => ({ title_template: item.title.trim(), skill_ids: item.skill_ids }))
-            .filter((item) => item.title_template),
+          checklist: activityChecklistPayload(subtasks.getValue()),
           active: true,
         };
         try {
@@ -1484,7 +1539,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           if (asChild) await child.close({ force: true });
           else await refreshAutomationManager(manager, 'activities');
           await onSaved?.(response.data);
-        } catch (error) { toast(error.message, 'danger'); }
+        } catch (error) { showActivityFormError(panel, error.message); }
       }));
     },
   });

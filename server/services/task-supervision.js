@@ -6,6 +6,7 @@ import { enqueueNotification } from './notification-inbox.js';
 import { syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { taskCapabilities, taskSupervisionManagementAllowed } from './task-access.js';
 import { createHash } from 'node:crypto';
+import { taskOptionalContext } from './task-optional.js';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Request-local presentation data; never serialized as an aggregate of private siblings.
@@ -41,6 +42,7 @@ function describeSupervisionScope(scope, actions) {
     const qualifications = action.skill_eligibility.map(skill => skill.reason).join(' ');
     const ownership = action.execution_mode === 'delegated'
       ? ` This action is the helper's responsibility; ${action.learner_name} must not perform it.` : '';
+    if(action.is_optional){action.display_reason=`${qualifications}${ownership} ${action.reason}`;continue;}
     if (action.state === 'assigned') action.display_reason = `${qualifications}${ownership} ${scope.supervisor_name} will ${action.execution_mode === 'delegated' ? 'perform' : 'supervise'} this action.`;
     else if (!scope.qualified_supervisor_count) action.display_reason = `${qualifications} No single qualified supervisor can cover every remaining required skill on this Task.`;
     else if (!scope.eligible_supervisors.length) action.display_reason = `${qualifications} Qualified supervisors exist, but none can cover every required action during the Task's completion window. ${action.display_reason || ''}`;
@@ -169,9 +171,11 @@ export function inspectTaskSupervision(d, taskId) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
     const { dateKey, presence, learnerId, archived, expired, expired_at } = context(d, source, row);
-    if (expired && row.status !== 'done') {
+    const optional=taskOptionalContext(d,row.id);
+    if ((expired||optional.closed_parent) && row.status !== 'done') {
       if (prior) actions.push({ ...prior, action_title: row.title, state: 'not_required',
-        reason: 'The original Task or action expired incomplete.', expired: true, expired_at, archived,
+        reason: expired?'The original Task or action expired incomplete.':'The parent Task is complete; reopen it before performing this optional action.',
+        expired, expired_at, closed_optional:Boolean(optional.closed_parent), archived,
         learner_name: byId.get(Number(prior.learner_user_id))?.display_name || null,
         supervisor_name: byId.get(Number(prior.supervisor_user_id))?.display_name || null,
         required_skills: JSON.parse(prior.required_skill_ids_json || '[]').map(id => d.prepare('SELECT id,name FROM skills WHERE id=?').get(id)).filter(Boolean),
@@ -278,6 +282,7 @@ export function inspectTaskSupervision(d, taskId) {
       qualified_supervisor_count: qualified.length, completed: false, status: row.status });
     actions[actions.length - 1].qualified_supervisor_ids = qualified.map(candidate => candidate.id);
   }
+  for(const action of actions)action.is_optional=taskOptionalContext(d,action.action_task_id).is_optional;
   const activeSupervisorIds = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'")
     .all(sourceId).map(row => row.user_id);
   const scope = singleSupervisorScope(actions, members, activeSupervisorIds);
@@ -290,7 +295,10 @@ export function inspectTaskSupervision(d, taskId) {
 
 /** One candidate must cover every remaining action; completed mappings are historical snapshots. */
 function singleSupervisorScope(actions, members, activeSupervisorIds = []) {
-  const pending = actions.filter(action => !action.completed && action.state !== 'not_required');
+  const allPending = actions.filter(action => !action.completed && action.state !== 'not_required');
+  const requiredPending=allPending.filter(action=>!action.is_optional);
+  // An optional skill gap must never invalidate the helper for required work.
+  const pending=requiredPending.length?requiredPending:allPending;
   if (!pending.length) return { state: 'none', reason: null, supervisor_user_id: null, supervisor_name: null,
     eligible_supervisors: [], qualified_supervisor_count: 0, supervisor_explanations: [], blocked_requirements: [] };
   const impossible = pending.some(action => !action.learner_user_id);
@@ -488,13 +496,14 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       }
       const old = previous.find(row => row.action_task_id === action.action_task_id);
       // Expiration retires work, preserving the historical responsible person.
-      action.supervisor_user_id = action.expired ? old?.supervisor_user_id ?? null
-        : selected && action.state !== 'not_required' ? selected.id : null;
-      if (selected && action.state !== 'not_required') {
-        action.state = 'assigned'; action.supervisor_name = selected.display_name;
+      const actionSupervisor=selected&&(!action.is_optional||action.eligible_supervisors.some(member=>member.id===selected.id))?selected:null;
+      action.supervisor_user_id = action.expired||action.closed_optional ? old?.supervisor_user_id ?? null
+        : actionSupervisor && action.state !== 'not_required' ? actionSupervisor.id : null;
+      if (actionSupervisor && action.state !== 'not_required') {
+        action.state = 'assigned'; action.supervisor_name = actionSupervisor.display_name;
         // Persist action-local facts. Completing another action must not create
         // a fresh assignment event/request just because the scope got shorter.
-        action.reason = `${selected.display_name} will ${action.execution_mode === 'delegated' ? 'perform' : 'supervise'} this action (${action.required_skills.map(skill => skill.name).join(', ')}).`;
+        action.reason = `${actionSupervisor.display_name} will ${action.execution_mode === 'delegated' ? 'perform' : 'supervise'} this action (${action.required_skills.map(skill => skill.name).join(', ')}).`;
       } else if (action.state === 'assigned') { action.state = 'unresolved'; action.reason = 'Supervision is needed. Assign one eligible supervisor for the entire Task.'; }
       let counterpartId = old?.counterpart_task_id || null;
       const projectionTitle = action.execution_mode === 'delegated' ? action.action_title : `Supervise: ${action.action_title}`;
@@ -514,6 +523,7 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       }
       action.counterpart_task_id = counterpartId;
       if (counterpartId) {
+        d.prepare('UPDATE tasks SET is_optional=? WHERE id=? AND is_optional!=?').run(action.is_optional?1:0,counterpartId,action.is_optional?1:0);
         setProjectionAssignees(d, counterpartId, action.state === 'assigned' ? [action.supervisor_user_id] : []);
         d.prepare(`UPDATE tasks SET title=@title,start_date=@start,start_time=@startTime,due_date=@due,due_time=@time WHERE id=@id
           AND (title IS NOT @title OR start_date IS NOT @start OR start_time IS NOT @startTime OR due_date IS NOT @due OR due_time IS NOT @time)`)
@@ -608,7 +618,7 @@ export function attachTaskSupervision(d, tasks, actorId = null, sourceViews = ne
     if (!sourceViews.has(sourceId)) sourceViews.set(sourceId, inspectTaskSupervision(d, sourceId));
     const source = sourceViews.get(sourceId);
     row.supervision = actorId == null ? source : {...source, may_assign: taskSupervisionManagementAllowed(d, actorId, sourceId), actions:source.actions.map(action=>({...action,
-      can_complete:!action.expired && ((action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
+      can_complete:!action.expired && !action.closed_optional && ((action.execution_mode !== 'delegated' && action.completed) || action.state === 'not_required'
         || (action.state === 'assigned' && Number(action.supervisor_user_id) === Number(actorId)))}))};
     row.supervision_action = row.supervision.actions.find(action => action.action_task_id === row.id || action.counterpart_task_id === row.id) || null;
     row.skill_eligibility = row.supervision_action?.skill_eligibility || skillEligibilityByView.get(source)?.get(row.id) || [];
@@ -684,6 +694,8 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
     fail('This supervision action is no longer required. Open the original Task to change its progress.', action);
   }
   const container = view.support_task_id === Number(taskId);
+  if(container&&source?.status==='done'&&view.actions.some(row=>row.closed_optional))
+    throw new TaskSupervisionError('Reopen the completed parent Task before changing optional helper work.');
   const check = container ? view.actions.filter(row => !row.completed && row.state !== 'not_required') : action ? [action] : [];
   for (const item of check) if (item.execution_mode === 'delegated' && item.state !== 'not_required'
     && Number(item.supervisor_user_id) !== Number(actorId)
@@ -693,7 +705,7 @@ export function taskSupervisionTransition(d, taskId, status, actorId) {
   if (status === 'done') for (const item of check) {
     if (item.completed) continue;
     if ((container || Number(taskId) === Number(item.counterpart_task_id)) && item.action_task_id === view.source_task_id
-      && d.prepare(`SELECT 1 FROM tasks t WHERE t.parent_task_id=? AND t.status!='done' AND t.archived_at IS NULL
+      && d.prepare(`SELECT 1 FROM tasks t WHERE t.parent_task_id=? AND t.status!='done' AND t.archived_at IS NULL AND t.is_optional=0
         AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
         AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=t.id)`).get(view.source_task_id)) {
       fail("Complete the original Task's subtasks before completing its overall supervision.", item);
@@ -725,6 +737,7 @@ function projectionUpdatesForView(d, view) {
     const expired = sourceContext?.expired
       || relevant.some(update => update.status === 'expired') && relevant.every(update => ['done', 'expired'].includes(update.status));
     updates.push({ id: view.support_task_id, status: expired ? support?.status === 'done' ? 'done' : 'expired'
+      : !relevant.length&&view.actions.some(action=>action.closed_optional) ? support?.status||'open'
       : relevant.every(update => update.status === 'done') ? 'done'
         : relevant.some(update => ['done', 'in_progress'].includes(update.status)) ? 'in_progress' : 'open',
       ...(expired ? { expired_at: sourceContext?.expired_at || relevant.find(update => update.expired_at)?.expired_at || null } : {}) });

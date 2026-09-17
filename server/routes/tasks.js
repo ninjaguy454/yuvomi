@@ -59,7 +59,7 @@ import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } fro
 import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
-import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs } from '../services/task-window.js';
+import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
 import { taskChangesStream } from '../services/task-changes.js';
 import { assertCapability } from '../permissions.js';
 
@@ -355,8 +355,16 @@ function initialSubtasksInput(body) {
     if (!item || typeof item !== 'object' || typeof item.title !== 'string' || !item.title.trim() || item.title.trim().length > 200) {
       throw new TaskSkillError('Give each subtask a name of at most 200 characters.');
     }
-    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids) };
+    if (item.is_optional !== undefined && ![true,false,0,1].includes(item.is_optional)) throw new TaskSkillError('Subtask optional must be true or false.');
+    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids),
+      isOptional: item.is_optional === undefined ? undefined : item.is_optional ? 1 : 0 };
   });
+}
+
+function assertOptionalityEdit(task, value) {
+  if (value === undefined || Number(!!value) === Number(task.is_optional || 0)) return;
+  if (taskWindowAncestors(db.get(),task.id).some(row=>row.id!==task.id&&row.status==='done'))
+    throw new TaskStateError('Reopen the completed parent Task before changing whether its subtasks are optional.',{reason:'optional_parent_completed'});
 }
 
 function editedSubtasksInput(task, body, actor) {
@@ -376,9 +384,14 @@ function editedSubtasksInput(task, body, actor) {
       const child=existing.find(row=>row.id===id);
       if(!child||seen.has(id))throw new TaskSkillError('Choose each existing subtask only once.');
       seen.add(id);
-      assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds},{operation:'update'});
-    } else assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,skill_ids:item.skillIds},{operation:'create'});
-    return {...item,id};
+      item.isOptional ??= child.is_optional || 0;
+      assertOptionalityEdit(child,item.isOptional);
+      assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds,is_optional:item.isOptional},{operation:'update'});
+    } else {
+      if(task.status==='done')throw new TaskStateError('Reopen the completed parent Task before adding checklist steps.',{reason:'optional_parent_completed'});
+      assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,skill_ids:item.skillIds,is_optional:item.isOptional},{operation:'create'});
+    }
+    return {...item,isOptional:item.isOptional ?? 0,id};
   });
   for(const child of existing.filter(row=>!seen.has(row.id)))
     assertTaskMutation(db.get(),actor,child,{}, {operation:'delete'});
@@ -395,10 +408,13 @@ function applyEditedSubtasks(task, edited, actorId) {
   }
   for(const [order,child] of edited.next.entries()) {
     let id=child.id;
-    if(id) db.get().prepare('UPDATE tasks SET title=?,sort_order=? WHERE id=?').run(child.title,order,id);
+    if(id) {
+      assertOptionalityEdit(db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id),child.isOptional);
+      db.get().prepare('UPDATE tasks SET title=?,sort_order=?,is_optional=? WHERE id=?').run(child.title,order,child.isOptional,id);
+    }
     else id=Number(db.get().prepare(`INSERT INTO tasks(title,category,status,start_date,due_date,due_time,
-      parent_task_id,created_by,visibility,sort_order,start_time) VALUES(?,?,'open',?,?,?,?,?,?,?,?)`)
-      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time).lastInsertRowid);
+      parent_task_id,created_by,visibility,sort_order,start_time,is_optional) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?)`)
+      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional).lastInsertRowid);
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
   }
 }
@@ -474,12 +490,13 @@ function setAssignments(d, taskId, userIds) {
 function parseTaskActivityBinding(body, existing = null) {
   const hasTemplate = Object.prototype.hasOwnProperty.call(body, 'activity_template_id');
   const hasSubject = Object.prototype.hasOwnProperty.call(body, 'activity_subject_user_id');
-  if (!hasTemplate && !hasSubject) {
+  if (!hasTemplate && !hasSubject && body.assigned_to === undefined) {
     return {
       specified: false,
       binding: existing ? {
         activityTemplateId: Number(existing.activity_template_id),
         subjectUserId: existing.subject_user_id == null ? null : Number(existing.subject_user_id),
+        assignmentOverrideUserId: existing.assignment_override_user_id ?? null,
       } : null,
     };
   }
@@ -501,14 +518,34 @@ function parseTaskActivityBinding(body, existing = null) {
       return { specified: true, error: 'activity_subject_user_id must be a positive integer or null.' };
     }
   }
-  return { specified: true, binding: { activityTemplateId, subjectUserId } };
+  const sameTemplate = Number(existing?.activity_template_id) === activityTemplateId;
+  let assignmentOverrideUserId = sameTemplate ? existing?.assignment_override_user_id ?? null : null;
+  const requested = parseAssignedTo(body.assigned_to);
+  const currentAssignment = sameTemplate && existing?.task_id ? db.get().prepare(`
+    SELECT user_id FROM task_assignments WHERE task_id=?
+    UNION SELECT assigned_to AS user_id FROM tasks WHERE id=? AND assigned_to IS NOT NULL
+    ORDER BY user_id`).all(existing.task_id,existing.task_id).map(row=>Number(row.user_id)) : null;
+  // Full editors echo the current assignee. That does not authorize or request
+  // a new fixed override, and a subject change must still resolve its new person.
+  const unchangedAssignment = currentAssignment && sameIdOrder([...requested].sort((a,b)=>a-b),currentAssignment);
+  if (requested.length && !unchangedAssignment) {
+    if (requested.length !== 1 || !Number.isSafeInteger(requested[0]) || requested[0] <= 0) return {specified:true,error:'Choose one valid Activity Template assignee.'};
+    const activity = db.get().prepare('SELECT fixed_user_id,assignment_policy,assignment_strategy,allow_assignment_override FROM activity_templates WHERE id=?').get(activityTemplateId);
+    if (activity && !activity.allow_assignment_override) {
+      if ((activity.assignment_policy || activity.assignment_strategy) !== 'fixed' || Number(activity.fixed_user_id) !== requested[0])
+        return {specified:true,error:'This Activity Template does not allow changing its assignee.'};
+      assignmentOverrideUserId = null;
+    } else assignmentOverrideUserId = requested[0];
+  }
+  return { specified: true, binding: { activityTemplateId, subjectUserId, assignmentOverrideUserId } };
 }
 
 function sameTaskActivityBinding(a, b) {
   if (!a && !b) return true;
   if (!a || !b) return false;
   return Number(a.activityTemplateId ?? a.activity_template_id) === Number(b.activityTemplateId ?? b.activity_template_id)
-    && Number(a.subjectUserId ?? a.subject_user_id ?? 0) === Number(b.subjectUserId ?? b.subject_user_id ?? 0);
+    && Number(a.subjectUserId ?? a.subject_user_id ?? 0) === Number(b.subjectUserId ?? b.subject_user_id ?? 0)
+    && Number(a.assignmentOverrideUserId ?? a.assignment_override_user_id ?? 0) === Number(b.assignmentOverrideUserId ?? b.assignment_override_user_id ?? 0);
 }
 
 function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = false, task = null } = {}) {
@@ -517,6 +554,7 @@ function validateTaskActivityBindingRequest(binding, dateKey, { allowInactive = 
     previewTaskActivityBinding(db.get(), {
       activityTemplateId: binding.activityTemplateId,
       subjectUserId: binding.subjectUserId,
+      assignmentOverrideUserId: binding.assignmentOverrideUserId,
       dateKey,
       task,
       allowInactive,
@@ -801,11 +839,11 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   attachTaskActivityBindings(db.get(),[task]);attachTaskLocations(db.get(),[task]);attachTaskActionLinks([task]);
   const isSupport=task.supervision?.support_task_id===task.id;
   const structural=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
-  const operational=structural.filter(child=>isSupport||!child.is_delegated_action);
+  const operational=structural.filter(child=>!child.is_optional&&(isSupport||!child.is_delegated_action));
   task.subtask_total=operational.length;task.subtask_done=operational.filter(child=>child.status==='done').length;
   task.waiting_on_helper=!isSupport && !['done','expired'].includes(task.status)
     && operational.every(child=>child.status==='done')
-    && (structural.some(child=>child.is_delegated_action&&child.status!=='done')
+    && (structural.some(child=>!child.is_optional&&child.is_delegated_action&&child.status!=='done')
       || task.supervision_action?.action_task_id===task.id && task.supervision_action?.state!=='not_required');
   return task;
 }
@@ -848,6 +886,7 @@ function validateTaskInput(body, isCreate = true, currentRule = undefined) {
     v.time(body.due_time,   'due_time'),
     v.time(body.start_time, 'start_time'),
     v.oneOf(body.expiration_policy, EXPIRATION_POLICIES, 'expiration_policy'),
+    v.oneOf(body.is_optional, [true,false,0,1], 'is_optional'),
     ruleUnchanged ? {} : v.rrule(body.recurrence_rule, 'recurrence_rule'),
     v.num(body.points,      'points'),
     validateTags(body.tags),
@@ -1220,19 +1259,19 @@ router.get('/', (req, res) => {
         -- sie mit. loadSubtasks() (Detailansicht) filtert seit jeher richtig -
         -- dieselbe Regel fehlte hier. Ohne den Filter zeigt die Zeile fremde
         -- private Titel und bietet Aktionen darauf an.
-        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id
+        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.is_optional=0
            AND ${taskVisibilityWhere(db.get(), me, 's')})                         AS subtask_total,
-        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.status = 'done'
+        (SELECT COUNT(*) FROM tasks s WHERE s.parent_task_id = t.id AND s.is_optional=0 AND s.status = 'done'
            AND ${taskVisibilityWhere(db.get(), me, 's')})                         AS subtask_done,
         (SELECT json_group_array(json_object(
                   'id', s.id, 'title', s.title, 'description', s.description,
-                  'status', s.status, 'priority', s.priority,
+                  'status', s.status, 'priority', s.priority, 'is_optional', s.is_optional,
                   'due_date', s.due_date, 'due_time', s.due_time,
                   'points', s.points, 'assigned_to', s.assigned_to,
                   'assigned_name', s.assigned_name,
                   'assigned_users', json(s.assigned_users_json)
                 ))
-           FROM (SELECT s.id, s.title, s.description, s.status, s.priority,
+           FROM (SELECT s.id, s.title, s.description, s.status, s.priority, s.is_optional,
                         s.due_date, s.due_time, s.points, s.assigned_to,
                         su.display_name AS assigned_name,
                         (SELECT json_group_array(json_object(
@@ -1438,6 +1477,7 @@ router.post('/', (req, res) => {
       try {
         activityDraft = resolveActivityTemplate(db.get(), activityBinding.activityTemplateId, {
           inputs: req.body.activity_inputs ?? {}, subjectUserId: activityBinding.subjectUserId, includeLabels: true,
+          assignmentOverrideUserId:activityBinding.assignmentOverrideUserId,task:req.body,
         });
       } catch (error) { return res.status(400).json({ error: error.message, code: 400, reason: error.code || 'invalid_input' }); }
       // Resolving again at Save validates current inputs without overwriting edits.
@@ -1450,7 +1490,7 @@ router.post('/', (req, res) => {
     if (errors.length) return res.status(400).json({ error: errors.join(' '), code: 400 });
 
     const templateDefaults = req.body.activity_template_id
-      ? db.get().prepare('SELECT description,category,priority,points,tags_json,expiration_policy FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
+      ? db.get().prepare('SELECT * FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
       : null;
 
     const {
@@ -1459,16 +1499,18 @@ router.post('/', (req, res) => {
       category        = templateDefaults?.category ?? FALLBACK_CATEGORY,
       priority        = templateDefaults?.priority ?? 'none',
       start_date      = null,
-      start_time      = null,
+      start_time      = templateDefaults?.start_time ?? null,
       expiration_policy = templateDefaults?.expiration_policy ?? 'keep_overdue',
       due_date        = null,
-      due_time        = null,
+      due_time        = templateDefaults?.due_time ?? null,
       parent_task_id  = null,
-      is_recurring    = 0,
-      recurrence_rule = null,
-      recurrence_from_completion = 0,
+      is_optional     = 0,
+      is_recurring    = templateDefaults?.recurrence_rule ? 1 : 0,
+      recurrence_rule = templateDefaults?.recurrence_rule ?? null,
+      recurrence_from_completion = templateDefaults?.recurrence_from_completion ?? 0,
       countdown       = 0,
     } = req.body;
+    if (is_optional && !parent_task_id) return res.status(400).json({error:'Only subtasks can be optional.',code:400});
     // Ohne expliziten Wert greift der Haushalt-Standard (#578) — aber nur für
     // Hauptaufgaben: Subtasks sind Checklisten-Punkte der Elternaufgabe und
     // würden den Punktewert sonst vervielfachen. Eine ausdrückliche 0 bleibt 0.
@@ -1566,20 +1608,24 @@ router.post('/', (req, res) => {
     if(windowError)return res.status(400).json({error:windowError,code:400});
     assertTaskMutation(db.get(),req,null,{...req.body,expiration_policy},{operation:'create'});
     const taskId = db.get().transaction(() => {
-      if(parent_task_id)assertTaskWindowAction(db.get(),Number(parent_task_id));
+      if(parent_task_id){
+        assertTaskWindowAction(db.get(),Number(parent_task_id));
+        if(taskWindowAncestors(db.get(),Number(parent_task_id)).some(row=>row.status==='done'))
+          throw new TaskStateError('Reopen the completed parent Task before adding checklist steps.',{reason:'optional_parent_completed'});
+      }
       const result = db.get().prepare(`
         INSERT INTO tasks
           (title, description, category, priority, start_date, due_date, due_time,
            assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
            recurrence_from_completion, assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
-           points, visibility, countdown, locked, start_time, expiration_policy)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           points, visibility, countdown, locked, start_time, expiration_policy, is_optional)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         title.trim(), description, category, priority,
         start_date, due_date, due_time, firstUid, req.authUserId || req.session.userId, parent_task_id,
         is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
         assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
-        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy
+        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
@@ -1590,6 +1636,7 @@ router.post('/', (req, res) => {
         applyTaskActivityBinding(db.get(), Number(result.lastInsertRowid), {
           activityTemplateId: activityBinding.activityTemplateId,
           subjectUserId: activityBinding.subjectUserId,
+          assignmentOverrideUserId: activityBinding.assignmentOverrideUserId,
           commitRotation: true,
           dateKey: due_date || todayInHouseholdZone(),
           materializeChecklist: initialSubtasks === undefined,
@@ -1598,11 +1645,11 @@ router.post('/', (req, res) => {
       }
       if (initialSubtasks !== undefined) {
         const insertChild = db.get().prepare(`INSERT INTO tasks
-          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility, start_time)
-          VALUES (?,?,?,?,?,?,?,?,?)`);
+          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility, start_time, is_optional)
+          VALUES (?,?,?,?,?,?,?,?,?,?)`);
         for (const child of initialSubtasks) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
-            result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time).lastInsertRowid);
+            result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0).lastInsertRowid);
           setTaskSkills(db.get(), childId, child.skillIds);
         }
       }
@@ -1673,6 +1720,7 @@ router.put('/:id', (req, res) => {
       start_date      = task.start_date,
       start_time      = task.start_time,
       expiration_policy = task.expiration_policy,
+      is_optional     = task.is_optional,
       due_date        = task.due_date,
       due_time        = task.due_time,
       is_recurring    = task.is_recurring,
@@ -1683,6 +1731,8 @@ router.put('/:id', (req, res) => {
       // Markierung nicht stillschweigend löschen.
       countdown       = task.countdown,
     } = req.body;
+    if (is_optional && !task.parent_task_id) return res.status(400).json({error:'Only subtasks can be optional.',code:400});
+    assertOptionalityEdit(task,is_optional);
     const windowError = validateTaskWindow({start_date,start_time,due_date,due_time,expiration_policy});
     if(windowError)return res.status(400).json({error:windowError,code:400});
     const points = req.body.points !== undefined ? clampPoints(req.body.points) : task.points;
@@ -1904,19 +1954,20 @@ router.put('/:id', (req, res) => {
       assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
       assertTaskMutation(db.get(),req,current,req.body,{operation:'update'});
       assertTaskWindowAction(db.get(),current.id);
+      assertOptionalityEdit(current,is_optional);
       db.get().prepare(`
         UPDATE tasks SET
           title = ?, description = ?, category = ?, priority = ?,
           status = ?, start_date = ?, due_date = ?, due_time = ?, assigned_to = ?,
           is_recurring = ?, recurrence_rule = ?, recurrence_from_completion = ?,
           assignment_mode = ?, rotation_index = ?, rotation_group = ?, rotation_slot = ?, rotation_cycle = ?,
-          points = ?, visibility = ?, countdown = ?, locked = ?, start_time = ?, expiration_policy = ?
+          points = ?, visibility = ?, countdown = ?, locked = ?, start_time = ?, expiration_policy = ?, is_optional = ?
         WHERE id = ?
       `).run(title.trim(), description, category, priority,
              task.status, start_date, due_date, due_time, firstUid,
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
-             points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, req.params.id);
+             points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, req.params.id);
       applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
@@ -1944,6 +1995,7 @@ router.put('/:id', (req, res) => {
           applyTaskActivityBinding(db.get(), task.id, {
             activityTemplateId: desiredActivityBinding.activityTemplateId,
             subjectUserId: desiredActivityBinding.subjectUserId,
+            assignmentOverrideUserId: desiredActivityBinding.assignmentOverrideUserId,
             commitRotation: true,
             dateKey: due_date || todayInHouseholdZone(),
           });
@@ -2313,14 +2365,14 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       const newSub = db.get().prepare(`
         INSERT INTO tasks (title, description, category, priority, status,
           start_date, due_date, due_time, assigned_to, created_by, parent_task_id,
-          is_recurring, recurrence_rule, points, visibility, recurrence_origin_id, activity_template_checklist_item_id, start_time, expiration_policy)
-        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?)
+          is_recurring, recurrence_rule, points, visibility, recurrence_origin_id, activity_template_checklist_item_id, start_time, expiration_policy, is_optional)
+        VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sub.title, sub.description, sub.category, sub.priority,
         shiftedStartDate(sub.start_date, subAnchorDate, nextDate) ?? sub.start_date,
         subDueDate,
         sub.due_time, subAssignedTo, sub.created_by, newTask.lastInsertRowid,
-        sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null, sub.start_time, sub.expiration_policy || 'keep_overdue'
+        sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null, sub.start_time, sub.expiration_policy || 'keep_overdue', sub.is_optional || 0
       );
       registerRecurrenceAction(db.get(),Number(newSub.lastInsertRowid));
       setAssignments(db.get(), newSub.lastInsertRowid, subAssignments);

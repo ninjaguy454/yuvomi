@@ -19,7 +19,7 @@ test('template values and skills are copied without sharing mutable arrays or oc
   const template = { name: 'Prep', title_template: 'Prepare dinner', description: 'Carefully', priority: 'high', points: 8, tags: ['home'], skill_ids: [1], checklist: [{ title_template: 'Chop', skill_ids: [2] }] };
   const draft = createManualTaskDraft({ template, places });
   assert.equal(draft.title, 'Prepare dinner'); assert.equal(draft.points, 8);
-  assert.deepEqual(draft.subtasks, [{ title: 'Chop', skill_ids: [2] }]);
+  assert.deepEqual(draft.subtasks, [{ title: 'Chop', skill_ids: [2], is_optional: 0 }]);
   draft.subtasks[0].skill_ids.push(3); assert.deepEqual(template.checklist[0].skill_ids, [2]);
   const blank = createManualTaskDraft({ places });
   for (const field of ['title', 'description']) assert.equal(blank[field], '');
@@ -41,11 +41,12 @@ test('dirty comparison means difference from baseline, including custom fields a
 test('Save as Template copies reusable fields and excludes occurrence-only settings', () => {
   const draft = { title: 'Prep', description: 'Dinner', priority: 'high', category: 'misc', points: 8, tags: ['home'], skill_ids: [1], subtasks: [{ title: 'Chop', skill_ids: [2] }], location: { kind: 'saved_place', place_id: 2 }, assigned_users: [7], due_date: '2026-09-08', recurrence_rule: 'FREQ=DAILY', countdown: 1, documents: [3], reminder: { remind_at: 'now' } };
   const result = taskDraftToActivity(draft);
-  assert.deepEqual(result.checklist, [{ title_template: 'Chop', skill_ids: [2] }]);
+  assert.deepEqual(result.checklist, [{ title_template: 'Chop', skill_ids: [2], is_optional: 0 }]);
   assert.deepEqual(result.skill_ids, [1]); assert.equal(result.location_mode, 'fixed');
   assert.equal(result.place_id, 2); assert.equal(result.assignment_strategy, 'fixed');
   assert.equal(result.fixed_user_id, 7); assert.equal(result.subject_required, 0);
-  for (const key of ['due_date', 'recurrence_rule', 'countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
+  assert.equal(result.recurrence_rule, 'FREQ=DAILY');
+  for (const key of ['due_date', 'countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
 });
 test('template conversion retains existing strategy; multiple manual assignees do not become a rotation', () => {
   const draft = { title: 'Prep', assigned_users: [1, 2], location: { kind: 'manual', user_label: 'Temporary' } };
@@ -54,4 +55,17 @@ test('template conversion retains existing strategy; multiple manual assignees d
   const result = taskDraftToActivity(draft, { id: 4, assignment_strategy: 'eligible_round_robin', rotation_group: 'Kitchen', subject_required: 1 });
   assert.equal(result.id, undefined); assert.equal(result.assignment_strategy, 'eligible_round_robin');
   assert.equal(result.rotation_group, 'Kitchen'); assert.equal(result.subject_required, 1);
+});
+
+test('morning template round trip keeps reusable times, anchored weekdays, fixed assignee and fresh optional state', () => {
+  const activity = taskDraftToActivity({ title: 'Get Ready for the Day', assigned_users: [7], points: 2,
+    start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
+    recurrence_from_completion: 0, expiration_policy: 'expire_incomplete',
+    subtasks: [{ id: 20, title: 'Get dressed', status: 'done' }, { id: 21, title: 'Put in earrings', is_optional: 1, status: 'done', skill_ids: [4] }] });
+  const draft = createManualTaskDraft({ template: activity });
+  assert.equal(draft.assigned_to, 7); assert.equal(draft.points, 2);
+  assert.equal(draft.start_time, '07:00'); assert.equal(draft.due_time, '08:00');
+  assert.equal(draft.recurrence_rule, 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
+  assert.equal(draft.recurrence_from_completion, 0); assert.equal(draft.expiration_policy, 'expire_incomplete');
+  assert.deepEqual(draft.subtasks.map(row => [row.id, row.status, row.is_optional]), [[undefined, undefined, 0], [undefined, undefined, 1]]);
 });

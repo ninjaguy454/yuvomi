@@ -320,6 +320,14 @@ test('parent reopen repaints enabled operation controls after its busy refresh f
   assert.equal(h.task.status, 'in_progress');
 });
 
+test('optional pending work does not prompt to bulk-complete it with the parent', () => {
+  const { taskStatusConfirmation } = stateHarness();
+  assert.equal(taskStatusConfirmation({ status: 'in_progress', subtasks: [
+    { id: 1, status: 'done' }, { id: 2, status: 'open', is_optional: 1 },
+    { id: 3, status: 'open', is_optional: 1, supervision_action: { execution_mode: 'delegated', state: 'unresolved' } },
+  ] }, 'done'), null);
+});
+
 test('rapid repeated taps send one mutation and its acknowledgement does not wait for the surrounding Task list', async () => {
   const h = pendingMutationHarness(), before = value(h.task);
   let finish, calls = 0;

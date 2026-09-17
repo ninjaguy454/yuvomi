@@ -10,7 +10,7 @@ import { substituteVariableTemplate } from './variable-resolution.js';
 
 export function loadActivityChecklist(d, activityTemplateId) {
   const items = d.prepare(`
-    SELECT id, title_template, sort_order
+    SELECT id, title_template, sort_order, is_optional
       FROM activity_template_checklist_items
      WHERE activity_template_id = ?
      ORDER BY sort_order ASC, id ASC
@@ -53,8 +53,8 @@ export function materializeActivityChecklist(d, {
       title, description, category, priority, status, start_date, start_time, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
       assignment_mode, rotation_index, points, visibility, countdown, locked,
-      activity_template_checklist_item_id
-    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0, ?)
+      activity_template_checklist_item_id, is_optional
+    ) VALUES (?, NULL, ?, 'none', 'open', ?, ?, ?, ?, NULL, ?, ?, 0, NULL, 'fixed', 0, 0, ?, 0, 0, ?, ?)
   `);
   const sourceDefinition = d.prepare('SELECT id FROM activity_template_checklist_items WHERE id=? AND activity_template_id=?');
   return items.map((item) => {
@@ -73,6 +73,7 @@ export function materializeActivityChecklist(d, {
       parent.id,
       parent.visibility || 'all',
       sourceItemId,
+      item.is_optional ? 1 : 0,
     ).lastInsertRowid);
     setTaskSkills(d, taskId, item.skill_ids || item.skills?.map((skill) => skill.id) || []);
     if (sourceItemId) d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)

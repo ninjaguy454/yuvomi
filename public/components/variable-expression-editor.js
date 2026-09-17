@@ -171,7 +171,7 @@ export function bindVariableValueEditor(root, { variable = {}, getDefinition, ge
 }
 
 /** Resolve native Activity Template fields before copying them into a Task. */
-export function bindActivityVariableInputs(host, { activity, members = [], places = [], subjectUserId = () => null, onResolved = () => {}, allowChange = () => true } = {}) {
+export function bindActivityVariableInputs(host, { activity, members = [], places = [], subjectUserId = () => null, resolutionContext = () => ({}), onResolved = () => {}, allowChange = () => true } = {}) {
   const templates = [activity?.title_template, activity?.description, ...(activity?.checklist || []).map(item => item.title_template)];
   const active = Boolean(activity && (activity.variable_error || templates.some(text => String(text || '').includes('{{'))));
   if (!active) { host.replaceChildren(); host.hidden = true; return null; }
@@ -185,7 +185,7 @@ export function bindActivityVariableInputs(host, { activity, members = [], place
   const inputs = () => Object.fromEntries([...host.querySelectorAll('[data-variable-input]')].flatMap(field => {
     const value = readVariableInput(field); return value === null ? [] : [[field.dataset.variableInput, value]];
   }));
-  const signature = () => JSON.stringify([subjectUserId(), inputs()]);
+  const signature = () => JSON.stringify([subjectUserId(), inputs(), resolutionContext()]);
   const invalidate = () => { version += 1; resolvedSignature = null; status.textContent = 'Apply these values before saving the Task.'; };
   const resolve = async () => {
     if (!allowChange()) return false;
@@ -194,7 +194,7 @@ export function bindActivityVariableInputs(host, { activity, members = [], place
     const current = signature(), attempt = ++version;
     button.disabled = true; status.textContent = 'Applying values…';
     try {
-      const response = await api.post(`/automation/activity-templates/${activity.id}/resolve`, { inputs: inputs(), subject_user_id: subjectUserId() });
+      const response = await api.post(`/automation/activity-templates/${activity.id}/resolve`, { ...resolutionContext(), inputs: inputs(), subject_user_id: subjectUserId() });
       if (!content.isConnected || version !== attempt || current !== signature()) return false;
       onResolved(response.data); resolvedSignature = current;
       status.textContent = 'Values applied. You can still edit the Task instructions.'; return true;
@@ -208,5 +208,6 @@ export function bindActivityVariableInputs(host, { activity, members = [], place
   button.addEventListener('click', resolve);
   if (!schema.some(item => item.default_value == null) && !activity.variable_error) resolve();
   else status.textContent = activity.variable_error || 'Choose the values, then apply them to the Task.';
-  return { inputs, resolve, invalidate, ready: () => signature() === resolvedSignature };
+  return { inputs, resolve, invalidate, ready: () => signature() === resolvedSignature,
+    errorMessage: () => status.textContent || 'Choose the required template values.' };
 }

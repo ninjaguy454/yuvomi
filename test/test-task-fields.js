@@ -61,6 +61,15 @@ test('subtask completion keeps count and point progress together', () => {
   });
 });
 
+test('nine required morning actions show complete without counting unfinished optional earrings', () => {
+  const task = { points: 2, subtasks: [...Array.from({ length: 9 }, (_, id) => ({ id, status: 'done', is_optional: 0 })),
+    { id: 10, title: 'Put in earrings', status: 'open', is_optional: 1 }] };
+  assert.deepEqual(completionCounts(task), { done: 9, total: 9, earnedPoints: 0, totalPoints: 0, optionalDone: 0, optionalTotal: 1 });
+  task.subtasks[9].status = 'done';
+  assert.equal(completionCounts(task).done, 9);
+  assert.equal(completionCounts(task).optionalDone, 1);
+});
+
 test('learner count and point progress excludes delegated work before and after helper completion', () => {
   const task = { status: 'in_progress', subtasks: [
     { status: 'done', points: 3 },

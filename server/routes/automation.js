@@ -40,6 +40,7 @@ import {
 import { createLogger } from '../logger.js';
 import { normalizeSkillIds } from '../services/task-skills.js';
 import { normalizeTags } from '../utils/task-tags.js';
+import * as v from '../middleware/validate.js';
 import {
   claimTask,
   obligationInbox,
@@ -157,6 +158,13 @@ function normalizeActivityInput(d, body, existing = null) {
   const expirationPolicy = body.expiration_policy === undefined
     ? (existing?.expiration_policy ?? 'keep_overdue') : body.expiration_policy;
   if (!['keep_overdue', 'expire_incomplete'].includes(expirationPolicy)) throw new Error('Choose a valid expiration policy.');
+  const startTime = body.start_time === undefined ? existing?.start_time ?? null : body.start_time || null;
+  const dueTime = body.due_time === undefined ? existing?.due_time ?? null : body.due_time || null;
+  const recurrenceRule = body.recurrence_rule === undefined ? existing?.recurrence_rule ?? null : body.recurrence_rule || null;
+  const timingErrors = v.collectErrors([v.time(startTime, 'start_time'), v.time(dueTime, 'due_time'), v.rrule(recurrenceRule, 'recurrence_rule')]);
+  if (timingErrors.length) throw new Error(timingErrors.join(' '));
+  if (startTime && dueTime && startTime >= dueTime) throw new Error('Due Time must be after Start Time.');
+  const recurrenceFromCompletion = recurrenceRule ? bool(body.recurrence_from_completion, !!existing?.recurrence_from_completion) : 0;
   const tags = body.tags === undefined ? (existing?.tags || []) : body.tags;
   if (!Array.isArray(tags) && typeof tags !== 'string') throw new Error('Tags must be a list.');
 
@@ -187,9 +195,14 @@ function normalizeActivityInput(d, body, existing = null) {
     if (item?.skill_ids === undefined && !prior && existing?.checklist?.some((row) => row.skill_ids?.length)) {
       throw new Error('Reload the Activity Template editor to preserve its subtask skills.');
     }
+    if (item?.is_optional === undefined && !prior && existing?.checklist?.some(row=>row.is_optional)) {
+      throw new Error('Reload the Activity Template editor to preserve which subtasks are optional.');
+    }
+    if (item?.is_optional !== undefined && ![true, false, 0, 1].includes(item.is_optional)) throw new Error('Subtask optional must be true or false.');
     return {
       titleTemplate,
       sortOrder: index,
+      isOptional: item?.is_optional === undefined ? prior?.is_optional ?? 0 : item.is_optional ? 1 : 0,
       skillIds: normalizeSkillIds(d, item?.skill_ids,
         prior?.skill_ids || (item?.skills || []).map((skill) => skill.id)),
     };
@@ -203,6 +216,7 @@ function normalizeActivityInput(d, body, existing = null) {
     priority,
     points: Number(points),
     expirationPolicy,
+    startTime, dueTime, recurrenceRule, recurrenceFromCompletion,
     tags: normalizeTags(tags),
     assignmentStrategy,
     legacyAssignmentStrategy: ['subject_skill', 'eligible_round_robin', 'fixed'].includes(assignmentStrategy)
@@ -352,12 +366,12 @@ function normalizeWorkflowConditionValue(d, question, value) {
 function saveActivityChecklist(d, activityId, checklist) {
   d.prepare('DELETE FROM activity_template_checklist_items WHERE activity_template_id = ?').run(activityId);
   const insert = d.prepare(`
-    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order)
-    VALUES (?, ?, ?)
+    INSERT INTO activity_template_checklist_items (activity_template_id, title_template, sort_order, is_optional)
+    VALUES (?, ?, ?, ?)
   `);
   const insertSkill = d.prepare('INSERT INTO activity_template_checklist_skills(checklist_item_id,skill_id,sort_order) VALUES (?,?,?)');
   checklist.forEach((item) => {
-    const itemId = insert.run(activityId, item.titleTemplate, item.sortOrder).lastInsertRowid;
+    const itemId = insert.run(activityId, item.titleTemplate, item.sortOrder, item.isOptional).lastInsertRowid;
     item.skillIds.forEach((skillId, order) => insertSkill.run(itemId, skillId, order));
   });
 }
@@ -890,6 +904,9 @@ router.get('/activity-options', (_req, res) => {
       priority: activity.priority,
       points: activity.points,
       expiration_policy: activity.expiration_policy,
+      start_time: activity.start_time, due_time: activity.due_time,
+      recurrence_rule: activity.recurrence_rule, recurrence_from_completion: activity.recurrence_from_completion,
+      is_recurring: activity.recurrence_rule ? 1 : 0,
       tags: activity.tags,
       skills: activity.skills,
       skill_ids: activity.skills.map((skill) => skill.id),
@@ -918,7 +935,11 @@ router.get('/activity-options', (_req, res) => {
 
 router.post('/activity-templates/:id/resolve', (req, res) => {
   try {
-    res.json(resolveActivityTemplate(db.get(), Number(req.params.id), { inputs: req.body.inputs ?? {}, subjectUserId: req.body.subject_user_id ?? null }));
+    const assigned=req.body.assigned_to;
+    if(assigned!==undefined && (!Array.isArray(assigned)||assigned.length!==1||!Number.isSafeInteger(Number(assigned[0]))||Number(assigned[0])<=0))
+      throw new Error('Choose one valid Activity Template assignee.');
+    res.json(resolveActivityTemplate(db.get(), Number(req.params.id), { inputs: req.body.inputs ?? {}, subjectUserId: req.body.subject_user_id ?? null,
+      assignmentOverrideUserId:assigned?.[0]??null,task:req.body.task??null }));
   } catch (error) { expressionErrorResponse(res, error); }
 });
 
@@ -1328,8 +1349,8 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
           subject_required, fixed_user_id, supervision_title_template, active, created_by,
           location_mode, place_id, location_variable_id, presence_policy, presence_window,
           assignment_policy, allow_assignment_override, participant_count, rotation_group,
-          priority, points, tags_json, expiration_policy
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          priority, points, tags_json, expiration_policy, start_time, due_time, recurrence_rule, recurrence_from_completion
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
         input.legacyAssignmentStrategy, input.subjectRequired, input.fixedUserId,
@@ -1338,6 +1359,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
         input.presencePolicy, input.presenceWindow, input.assignmentStrategy,
         input.allowAssignmentOverride, input.participantCount, input.rotationGroup,
         input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy,
+        input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
@@ -1364,6 +1386,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
                place_id = ?, location_variable_id = ?, presence_policy = ?, presence_window = ?,
                assignment_policy = ?, allow_assignment_override = ?, participant_count = ?, rotation_group = ?,
                priority = ?, points = ?, tags_json = ?, expiration_policy = ?,
+               start_time = ?, due_time = ?, recurrence_rule = ?, recurrence_from_completion = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(
@@ -1372,7 +1395,8 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.supervisionTitleTemplate, input.active, input.locationMode,
         input.placeId, input.locationVariableId, input.presencePolicy,
         input.presenceWindow, input.assignmentStrategy, input.allowAssignmentOverride,
-        input.participantCount, input.rotationGroup, input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy, existing.id,
+        input.participantCount, input.rotationGroup, input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy,
+        input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
       saveActivityChecklist(d, existing.id, input.checklist);

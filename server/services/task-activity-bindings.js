@@ -121,7 +121,7 @@ export function matchesGeneratedActivitySupportTask(d, parentTaskId, support, re
 
 export function getTaskActivityBinding(d, taskId) {
   return d.prepare(`
-    SELECT b.task_id, b.activity_template_id, b.subject_user_id,
+    SELECT b.task_id, b.activity_template_id, b.subject_user_id, b.assignment_override_user_id,
            a.name AS activity_template_name,
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
@@ -152,7 +152,7 @@ export function attachTaskActivityBindings(d, tasks) {
   if (!ids.length) return tasks;
   const placeholders = ids.map(() => '?').join(',');
   const rows = d.prepare(`
-    SELECT t.id AS task_id, b.activity_template_id, b.subject_user_id,
+    SELECT t.id AS task_id, b.activity_template_id, b.subject_user_id, b.assignment_override_user_id,
            a.name AS activity_template_name,
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
@@ -185,6 +185,7 @@ export function attachTaskActivityBindings(d, tasks) {
     task.activity_subject_required = binding?.activity_subject_required ?? null;
     task.activity_template_active = binding?.activity_template_active ?? null;
     task.activity_subject_user_id = binding?.subject_user_id ?? null;
+    task.activity_assignment_override_user_id = binding?.assignment_override_user_id ?? null;
     task.activity_subject_name = binding?.activity_subject_name ?? null;
     task.activity_place_id = binding?.activity_place_id ?? null;
     task.activity_place_name = binding?.activity_place_name ?? null;
@@ -243,6 +244,7 @@ function deleteSupportTasks(d, sourceTaskId) {
 export function previewTaskActivityBinding(d, {
   activityTemplateId,
   subjectUserId = null,
+  assignmentOverrideUserId = null,
   dateKey = todayKey(d),
   task = null,
   allowInactive = false,
@@ -258,9 +260,14 @@ export function previewTaskActivityBinding(d, {
   if (subjectUserId != null && subjectUserId !== '' && !subjectId) {
     throw new TaskActivityBindingError('Choose a valid household member subject.');
   }
+  const overrideId = assignmentOverrideUserId == null ? null : asPositiveInt(assignmentOverrideUserId);
+  if (assignmentOverrideUserId != null && !overrideId) throw new TaskActivityBindingError('Choose a valid household member assignee.');
+  if (overrideId && !activity.allow_assignment_override) throw new TaskActivityBindingError('This Activity Template does not allow changing its assignee.');
   try {
     const resolution = resolveActivityAssignment(d, activity, {
       subjectUserId: subjectId,
+      assignmentPolicyOverride: overrideId ? 'fixed' : null,
+      fixedUserIdOverride: overrideId,
       commitRotation: false,
       dateKey,
       presence: {
@@ -269,7 +276,7 @@ export function previewTaskActivityBinding(d, {
         ...activityPresenceWindow(d, { task, dateKey, windowMode: activity.presence_window || 'due' }),
       },
     });
-    return { activity, subjectUserId: subjectId, resolution };
+    return { activity, subjectUserId: subjectId, assignmentOverrideUserId: overrideId, resolution };
   } catch (err) {
     throw new TaskActivityBindingError(err.message);
   }
@@ -285,6 +292,7 @@ export function previewTaskActivityBinding(d, {
 export function applyTaskActivityBinding(d, taskId, {
   activityTemplateId,
   subjectUserId = null,
+  assignmentOverrideUserId = null,
   commitRotation = true,
   dateKey = null,
   allowInactive = false,
@@ -301,6 +309,7 @@ export function applyTaskActivityBinding(d, taskId, {
   const preview = previewTaskActivityBinding(d, {
     activityTemplateId,
     subjectUserId,
+    assignmentOverrideUserId,
     dateKey: dateKey || task.due_date || todayKey(d),
     task,
     allowInactive,
@@ -310,6 +319,8 @@ export function applyTaskActivityBinding(d, taskId, {
   try {
     resolution = resolveActivityAssignment(d, preview.activity, {
       subjectUserId: preview.subjectUserId,
+      assignmentPolicyOverride: preview.assignmentOverrideUserId ? 'fixed' : null,
+      fixedUserIdOverride: preview.assignmentOverrideUserId,
       commitRotation,
       dateKey: dateKey || task.due_date || todayKey(d),
       presence: {
@@ -329,13 +340,14 @@ export function applyTaskActivityBinding(d, taskId, {
 
   d.prepare(`
     INSERT INTO task_activity_bindings (
-      task_id, activity_template_id, subject_user_id, updated_at
-    ) VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      task_id, activity_template_id, subject_user_id, assignment_override_user_id, updated_at
+    ) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     ON CONFLICT(task_id) DO UPDATE SET
       activity_template_id = excluded.activity_template_id,
       subject_user_id = excluded.subject_user_id,
+      assignment_override_user_id = excluded.assignment_override_user_id,
       updated_at = excluded.updated_at
-  `).run(task.id, preview.activity.id, preview.subjectUserId);
+  `).run(task.id, preview.activity.id, preview.subjectUserId, preview.assignmentOverrideUserId);
 
   // Manual task rotation is intentionally cleared. Future occurrences resolve
   // from current proficiency and Activity Template rotation state instead.
@@ -365,7 +377,7 @@ export function applyTaskActivityBinding(d, taskId, {
     d.prepare('DELETE FROM task_planning_context WHERE task_id = ?').run(task.id);
   }
 
-  recordTaskAssignment(d, task.id, preview.activity, resolution);
+  recordTaskAssignment(d, task.id, preview.activity, resolution, {strategy:preview.assignmentOverrideUserId?'fixed':null});
 
   // Copy authoring-time checklist definitions exactly once. From this point on
   // the subtasks belong to the Task and are never rewritten by template edits.
@@ -416,11 +428,16 @@ export function copyTaskActivityBinding(d, sourceTaskId, targetTaskId, {
 } = {}) {
   const sourceBinding = getTaskActivityBinding(d, sourceTaskId);
   if (!sourceBinding) return null;
+  const currentActivity = activityTemplate(d, sourceBinding.activity_template_id);
   const sourceSupport = activitySupportTasks(d, sourceTaskId).find((row) => row.role === 'supervisor') ?? null;
   const target = taskRow(d, targetTaskId);
   return applyTaskActivityBinding(d, targetTaskId, {
     activityTemplateId: sourceBinding.activity_template_id,
     subjectUserId: sourceBinding.subject_user_id,
+    // Assignment overrides apply to future occurrences only while the current
+    // template permits them. Keep the source occurrence's binding as history.
+    assignmentOverrideUserId: currentActivity?.allow_assignment_override
+      ? sourceBinding.assignment_override_user_id : null,
     commitRotation,
     dateKey: dateKey || target?.due_date || todayKey(d),
     // Existing series continue even if an admin later deactivates the template;

@@ -1,6 +1,7 @@
 /** One Task authorization boundary for REST, Reader, MCP and aggregate readers. */
 import { actorId, actorPermissions, PermissionError } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
+import { taskOptionalContext } from './task-optional.js';
 
 // Only synchronous response hydration opts into this scope. It never survives
 // a request, contains no lifecycle decisions, and is suspended for mutations.
@@ -118,6 +119,10 @@ export function taskCapabilities(d, actor, sourceTask) {
 export function attachTaskCapabilities(d, actor, tasks) {
   for (const task of tasks) {
     task.permissions = taskCapabilities(d, actor, task);
+    // A closed optional branch is a lifecycle restriction, not a change to the
+    // member's permissions. Hide its progress controls while retaining the
+    // explicit parent-reopening error for attempted mutations.
+    if (task.parent_task_id && taskOptionalContext(d, task.id).closed_parent) task.permissions.complete = false;
     if (Array.isArray(task.subtasks)) attachTaskCapabilities(d, actor, task.subtasks);
   }
   return tasks;
@@ -178,7 +183,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   };
   if (body.status === 'archived') requireAction('delete_archive');
   else if (changed('status')) requireAction('complete');
-  const definitionFields = ['title', 'description', 'visibility', 'sync_target', 'locked', 'parent_task_id', 'location', 'countdown', 'subtasks', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding', 'expiration_policy'];
+  const definitionFields = ['title', 'description', 'visibility', 'sync_target', 'locked', 'parent_task_id', 'location', 'countdown', 'subtasks', 'is_optional', 'activity_template_id', 'activity_subject_user_id', 'activity_inputs', 'activity_binding', 'expiration_policy'];
   if (definitionFields.some(changed)) requireAction('edit');
   const me = actorId(actor);
   // Joining/leaving only one's own assignment is the legacy claim interaction,

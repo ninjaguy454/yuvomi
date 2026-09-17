@@ -9,14 +9,21 @@ const source = readFileSync(new URL('../public/components/modal.js', import.meta
   .replace(/^import[\s\S]*?;\r?\n/gm, '')
   .replace(/^export /gm, '');
 
-function modalHarness() {
+function modalHarness({ deferredTimers = false } = {}) {
   const document = { activeElement: null };
+  const timers = new Map();
+  let nextTimer = 0;
   const context = vm.createContext({
     document,
     getComputedStyle: (el) => ({ visibility: el.visibility }),
     matchMedia: () => ({ matches: false }),
-    setTimeout: (callback) => { callback(); return 1; },
-    clearTimeout: () => {},
+    setTimeout: (callback) => {
+      const id = ++nextTimer;
+      if (deferredTimers) timers.set(id, callback);
+      else callback();
+      return id;
+    },
+    clearTimeout: id => timers.delete(id),
   });
   vm.runInContext(`${source}\nthis.modal = {
     trapFocus, applyInitialFocus, focusFirstField, isFormDirty,
@@ -28,10 +35,19 @@ function modalHarness() {
       tagName: 'INPUT', type: 'text', name: '', id: '', value: '',
       tabIndex: 0, checked: false, multiple: false, selectedOptions: [],
       hiddenAncestor: false, disabled: false, rendered: true, visibility: 'visible',
-      matches: function () { return this.disabled; },
+      isConnected: true, ariaInvalid: false, scrollCalls: [],
+      matches: function (selector) {
+        return selector.split(',').some(part => {
+          const match = part.trim();
+          if (match === ':disabled') return this.disabled;
+          if (match === '[aria-invalid="true"]') return this.ariaInvalid;
+          return match.toUpperCase() === this.tagName;
+        });
+      },
       closest: function () { return this.hiddenAncestor ? {} : null; },
       getClientRects: function () { return this.rendered ? [{}] : []; },
       focus: function () { document.activeElement = this; },
+      scrollIntoView: function (options) { this.scrollCalls.push(options); },
       ...options,
     };
   }
@@ -50,13 +66,21 @@ function modalHarness() {
         return controls;
       },
       querySelector: () => null,
+      contains: function (element) { return element === this || controls.includes(element); },
       addEventListener: (name, listener) => listeners.set(name, listener),
       setAttribute: function (name, value) { this[name] = value; },
       focus: function () { document.activeElement = this; },
     };
   }
 
-  return { modal: context.modal, document, control, container };
+  return {
+    modal: context.modal, document, control, container,
+    flushTimers() {
+      const pending = [...timers.values()];
+      timers.clear();
+      for (const callback of pending) callback();
+    },
+  };
 }
 
 // Run the real confirmation orchestration and suspend/restore helpers. Only the
@@ -279,6 +303,55 @@ test('focus skips hidden, collapsed, inert, disabled and excluded controls', () 
   modal.trapFocus(panel, 'none');
   assert.equal(tab(panel), true);
   assert.equal(document.activeElement, field);
+});
+
+for (const initialFocus of ['first-field', 'explicit']) {
+  test(`delayed ${initialFocus} focus preserves a field already focused by validation`, () => {
+    const { modal, document, control, container, flushTimers } = modalHarness({ deferredTimers: true });
+    const title = control({ id: 'task-title' });
+    const due = control({ id: 'task-due-date', ariaInvalid: true });
+    const panel = container([title, due]);
+    panel.focus();
+    modal.applyInitialFocus(panel, initialFocus === 'explicit' ? title : initialFocus);
+    due.focus();
+    flushTimers();
+    assert.equal(document.activeElement, due, 'the delayed modal setup must retain validation focus');
+  });
+}
+
+test('delayed initial focus still selects a field when focus has not moved and skips detached targets', () => {
+  const { modal, document, control, container, flushTimers } = modalHarness({ deferredTimers: true });
+  const title = control();
+  const panel = container([title]);
+  panel.focus();
+  modal.applyInitialFocus(panel, 'first-field');
+  flushTimers();
+  assert.equal(document.activeElement, title);
+
+  panel.focus();
+  modal.applyInitialFocus(panel, title);
+  title.isConnected = false;
+  flushTimers();
+  assert.equal(document.activeElement, panel);
+});
+
+test('delayed field scrolling follows current focus and ignores disconnected fields', () => {
+  const { modal, control, container, flushTimers } = modalHarness({ deferredTimers: true });
+  const title = control();
+  const due = control();
+  const panel = container([title, due]);
+  modal.trapFocus(panel, 'none');
+  title.focus();
+  panel.listeners.get('focusin')({ target: title });
+  due.focus();
+  panel.listeners.get('focusin')({ target: due });
+  flushTimers();
+  assert.equal(title.scrollCalls.length, 0, 'a stale focus event must not scroll away from the current field');
+  assert.equal(due.scrollCalls.length, 1);
+  panel.listeners.get('focusin')({ target: due });
+  due.isConnected = false;
+  flushTimers();
+  assert.equal(due.scrollCalls.length, 1);
 });
 
 test('a heading focus enters the current Tab sequence and empty panels retain focus', () => {

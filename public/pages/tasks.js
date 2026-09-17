@@ -14,7 +14,7 @@ import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { bindTaskCardTouchDrag, taskDragHandle } from '/utils/task-card-drag.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
-import { openModal as openSharedModal, closeModal, wireBlurValidation, validateAll, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
+import { openModal as openSharedModal, closeModal, wireBlurValidation, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
 import { stagger, vibrate, scheduleUndoableDelete, animationSettled } from '/utils/ux.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
@@ -27,6 +27,7 @@ import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor } from '
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
+import { taskFormErrors, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
 import { resolveReminderPreset } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { renderDocumentAttachField, bindDocumentAttachField } from '/components/document-attach.js';
@@ -134,7 +135,7 @@ let taskDocuments = null;
 /** Progress for the first-class subtasks assigned to one household member. */
 function participantCompletion(task, userId) {
   const assigned = actionableSubtasks(task).filter((subtask) =>
-    subtaskParticipants(subtask, state.users).some((user) => Number(user.id) === Number(userId))
+    !subtask.is_optional && subtaskParticipants(subtask, state.users).some((user) => Number(user.id) === Number(userId))
   );
   if (!assigned.length) return completionCounts(task);
   return {
@@ -582,16 +583,16 @@ function renderParticipantStrip(task, participants) {
 function renderActivitySubtasks(task, expanded) {
   const subtasks = actionableSubtasks(task);
   if (!subtasks.length) return '';
-  const done = subtasks.filter((subtask) => subtask.status === 'done').length;
+  const { done, total, optionalTotal, optionalDone } = completionCounts(task);
   const rows = subtasks.map((subtask) => {
     const assignees = subtaskParticipants(subtask);
     return `<div class="subtask-item ${subtask.status === 'done' ? 'subtask-item--done' : ''}" data-subtask-id="${subtask.id}">
       <button class="subtask-item__checkbox ${subtask.status === 'done' ? 'subtask-item__checkbox--done' : ''}"
-        data-action="toggle-subtask" data-id="${subtask.id}" data-status="${subtask.status}" ${isExpired(task) || isExpired(subtask) || !canTask(subtask, 'complete') || subtask.supervision_action?.can_complete === false ? 'disabled' : ''}
+        data-action="toggle-subtask" data-id="${subtask.id}" data-status="${subtask.status}" ${isExpired(task) || isExpired(subtask) || (task.status === 'done' && subtask.is_optional) || !canTask(subtask, 'complete') || subtask.supervision_action?.can_complete === false ? 'disabled' : ''}
         aria-label="${esc(t('tasks.subtaskMarkDone', { title: subtask.title }))}">
         ${subtask.status === 'done' ? '<i data-lucide="check" class="subtask-item__checkbox-icon" aria-hidden="true"></i>' : ''}
       </button>
-      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
+      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_optional ? ' · Optional' : ''}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
       <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(subtask) }))}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
@@ -603,8 +604,8 @@ function renderActivitySubtasks(task, expanded) {
       <i data-lucide="chevron-right" class="activity-card__chevron${expanded ? ' activity-card__chevron--open' : ''}" aria-hidden="true"></i>
       <span>${esc(t('tasks.subtasksLabel'))}</span>
       <span class="activity-card__subtasks-progress activity-card__progress-label">
-        <span>${esc(t('tasks.subtaskProgress', { done, total: subtasks.length }))}</span>
-        <span class="activity-card__progress-percent">${Math.round(done / subtasks.length * 100)}%</span>
+        <span>${esc(optionalTotal ? `${done} of ${total} required complete · ${optionalDone} of ${optionalTotal} optional` : t('tasks.subtaskProgress', { done, total }))}</span>
+        ${total ? `<span class="activity-card__progress-percent">${Math.round(done / total * 100)}%</span>` : ''}
       </span>
     </button>
     <div class="subtask-list${expanded ? ' subtask-list--visible' : ''}" id="subtasks-${task.id}">${rows}</div>
@@ -1110,7 +1111,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
                  value="${esc(formatDateInput(presetDueDate))}"></yuvomi-datepicker>
         </div>
         <div class="form-group">
-          <label class="label" for="task-due-time">${t('tasks.dueTimeLabel')}</label>
+          <label class="label" for="task-due-time">Due time</label>
           <yuvomi-datepicker type="time" id="task-due-time" name="due_time"
                  value="${esc(formatTimeInput(task?.due_time ?? ''))}"></yuvomi-datepicker>
         </div>
@@ -1180,6 +1181,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
       <div id="task-fixed-assignment" class="form-group" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         ${renderUserMultiSelect(users, selectedIds, 'task_assigned', 'tasks.assignedLabel')}
+        <p id="task-template-assignment-hint" class="task-field-hint" hidden></p>
       </div>
 
       <div id="task-round-robin-assignment" class="form-group" style="margin-top:var(--space-4)"${assignmentMode === 'round_robin' && !isSoloHousehold() ? '' : ' hidden'}>
@@ -1586,13 +1588,24 @@ function wireAssignmentMode(panel) {
   if (!mode || !fixed || !rotation) return;
   const update = () => {
     const managed = !!activity?.value;
+    const template = state.activityTemplates.find(entry => Number(entry.id) === Number(activity?.value));
+    const templateFixed = managed && template?.assignment_strategy === 'fixed';
+    const overrideAllowed = templateFixed && !!template.allow_assignment_override && canCapability('tasks.change_assignment');
     const requiresSubject = managed
       && activity.selectedOptions?.[0]?.dataset.subjectRequired === '1';
     const manualVisible = !managed && !isSoloHousehold();
     if (subject) subject.hidden = !requiresSubject;
     if (modeWrap) modeWrap.hidden = !manualVisible;
     const roundRobin = manualVisible && mode.value === 'round_robin';
-    fixed.hidden = !manualVisible || roundRobin;
+    fixed.hidden = (!manualVisible && !templateFixed) || roundRobin;
+    fixed.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input => {
+      input.disabled = templateFixed && !overrideAllowed;
+    });
+    const hint = panel.querySelector('#task-template-assignment-hint');
+    if (hint) {
+      hint.hidden = !templateFixed;
+      hint.textContent = overrideAllowed ? 'This template has a fixed assignee. Choose one member to override it for this recurring Task.' : 'The assignee is fixed by this Activity Template.';
+    }
     rotation.hidden = !roundRobin;
   };
   activity?.addEventListener('change', update);
@@ -1620,6 +1633,19 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
   const description = form.querySelector('#task-description');
   const controls = taskFormControls.get(form);
   if (!select) return;
+  const resolutionContext = () => {
+    const activity = state.activityTemplates.find(entry => Number(entry.id) === Number(select.value));
+    const canOverride = activity?.assignment_strategy === 'fixed' && activity.allow_assignment_override && canCapability('tasks.change_assignment');
+    return {
+      ...(canOverride ? { assigned_to: getSelectedUserIds(form, 'task_assigned') } : {}),
+      task: {
+        start_date: parseDateInput(form.querySelector('#task-start-date')?.value || '') || null,
+        start_time: parseTimeInput(form.querySelector('#task-start-time')?.value || '') || null,
+        due_date: parseDateInput(form.querySelector('#task-due-date')?.value || '') || null,
+        due_time: parseTimeInput(form.querySelector('#task-due-time')?.value || '') || null,
+      },
+    };
+  };
   if (task) {
     select.addEventListener('change', () => {
       const activity = state.activityTemplates.find((entry) => Number(entry.id) === Number(select.value));
@@ -1634,6 +1660,7 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
       controls.variableValues = bindActivityVariableInputs(form.querySelector('#task-template-values'), {
         activity, members: state.users, places: state.places,
         subjectUserId: () => Number(subject?.value) || null,
+        resolutionContext,
         onResolved: resolved => {
           if (title.value === previous.title) title.value = previous.title = resolved.title;
           if (description.value === previous.description) description.value = previous.description = resolved.description || '';
@@ -1670,6 +1697,7 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
   variableValues = bindActivityVariableInputs(form.querySelector('#task-template-values'), {
     activity: template(), members: state.users, places: state.places,
     subjectUserId: () => Number(subject?.value) || null,
+    resolutionContext,
     allowChange: () => !taskCreateAttempts.has(form) && !form.querySelector('#task-id').value,
     onResolved: resolved => {
       if (title.value === generatedTitle) title.value = generatedTitle = resolved.title;
@@ -1747,6 +1775,9 @@ async function saveTaskAsTemplate(form) {
     priority: form.querySelector('#task-priority').value, category: form.querySelector('#task-category').value,
     points: form.querySelector('#task-points').value,
     expiration_policy: form.querySelector('#task-expiration-policy').value,
+    start_time: parseTimeInput(form.querySelector('#task-start-time').value) || null,
+    due_time: parseTimeInput(form.querySelector('#task-due-time').value) || null,
+    ...getRRuleValues(form, 'task'),
     tags: normalizeTagList([...modalTags, ...form.querySelector('#task-tag-input').value.split(',')]),
     location: readTaskLocation(form), assigned_users: getSelectedUserIds(form, 'task_assigned'),
     skill_ids: controls.skills.getValue(), subtasks: controls.subtasks.getValue().filter((step) => step.title.trim()),
@@ -1754,10 +1785,20 @@ async function saveTaskAsTemplate(form) {
   const button = document.querySelector('[data-save-as-template]');
   button.disabled = true;
   try {
-    await openActivityTemplateEditor({ draft, asChild: true, onSkillCreated: controls.addSkill, onSaved: async () => {
+    await openActivityTemplateEditor({ draft, asChild: true, onSkillCreated: controls.addSkill, onSaved: async (saved) => {
       const result = await api.get('/automation/activity-options');
       state.activityTemplates = result.data?.activities || state.activityTemplates;
+      if (saved?.id && !state.activityTemplates.some(entry => Number(entry.id) === Number(saved.id))) state.activityTemplates.push(saved);
       state.skills = result.data?.skills || state.skills;
+      const select = form.querySelector('#task-activity-template');
+      const selected = select.value;
+      for (const template of state.activityTemplates) {
+        let option = [...select.options].find(entry => entry.value === String(template.id));
+        if (!option) { option = document.createElement('option'); option.value = String(template.id); select.append(option); }
+        option.textContent = template.name;
+        option.dataset.subjectRequired = template.subject_required ? '1' : '0';
+      }
+      select.value = selected;
       window.yuvomi.showToast('Activity Template saved. Your Task draft is still here.', 'success');
     } });
   } catch (error) { window.yuvomi.showToast(error.data?.error || error.message, 'danger'); }
@@ -2228,13 +2269,14 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const submitBtn = document.getElementById('task-submit-btn');
   const taskId    = document.getElementById('task-id').value;
 
+  const draftErrors = taskFormErrors(form);
+  if (draftErrors.length) { showTaskFormErrors(form, draftErrors, { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" }); return; }
   const variableValues = taskFormControls.get(form)?.variableValues;
   if (!taskCreateAttempts.has(form) && variableValues && !variableValues.ready()) {
-    if (!await variableValues.resolve()) return;
+    if (!await variableValues.resolve()) {
+      showTaskFormErrors(form, [{ field: 'task-template-values', message: variableValues.errorMessage() }], { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" }); return;
+    }
   }
-
-  // Alle required-Felder sofort validieren (auch unberührte)
-  if (!validateAll(form)) return;
 
   errorEl.hidden = true;
   submitBtn.disabled = true;
@@ -2249,8 +2291,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const rrule = getRRuleValues(form, 'task');
   const reminderToggle = form.querySelector('#reminder-toggle');
   if ((startDateRaw && !isDateInputValid(startDateRaw)) || !isDateInputValid(dueDateRaw) || !rrule.valid_until) {
-    errorEl.textContent = t('calendar.invalidDate');
-    errorEl.hidden = false;
+    showTaskFormErrors(form, [{ field: !rrule.valid_until ? 'task-rrule-fields' : 'task-due-date', message: 'Enter a valid date.' }]);
     submitBtn.disabled = false;
     submitBtn.textContent = originalLabel;
     return;
@@ -2267,6 +2308,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     ? Number(form.querySelector('#task-activity-subject-user')?.value || 0) || null
     : null;
   const managedActivity = Number.isInteger(activityTemplateId) && activityTemplateId > 0;
+  const selectedTemplate = state.activityTemplates.find(entry => Number(entry.id) === activityTemplateId);
+  const overrideAssignment = managedActivity && selectedTemplate?.assignment_strategy === 'fixed' && selectedTemplate.allow_assignment_override && canCapability('tasks.change_assignment');
   const assignmentMode = managedActivity ? 'fixed' : (form.querySelector('#task-assignment-mode')?.value || 'fixed');
   const rotationUserIds = managedActivity ? [] : getRotationUserIds(form);
   const rotationGroup = managedActivity ? '' : (form.querySelector('#task-rotation-group')?.value.trim() || '');
@@ -2280,7 +2323,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     tags,
     start_date:      startDate || null,
     due_date:        dueDate || null,
-    assigned_to:     !managedActivity && assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
+    assigned_to:     (!managedActivity || overrideAssignment) && assignmentMode === 'fixed' ? getSelectedUserIds(form, 'task_assigned') : [],
     activity_template_id: managedActivity ? activityTemplateId : null,
     activity_subject_user_id: managedActivity ? activitySubjectUserId : null,
     ...(managedActivity && variableValues ? { activity_inputs: variableValues.inputs() } : {}),
@@ -2317,8 +2360,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const dueTime = parseTimeInput(dueTimeRaw);
   const resetSubmit = (msg) => {
     const recoveringChildren = controls?.subtasks && (taskCreateAttempts.has(form) || form.querySelector('#task-id').value);
-    errorEl.textContent = recoveringChildren ? `${msg} Finish saving this Task to confirm its subtasks; you can edit them afterward.` : msg;
-    errorEl.hidden = false;
+    const message = recoveringChildren ? `${msg} Finish saving this Task to confirm its subtasks; you can edit them afterward.` : msg;
+    showTaskFormErrors(form, [{ field: taskErrorField(msg), message }], { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" });
     submitBtn.disabled = false;
     submitBtn.textContent = originalLabel;
   };
@@ -2345,6 +2388,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   }
   if (managedActivity && activityRequiresSubject && !activitySubjectUserId) {
     resetSubmit('Choose a household member for this Activity Template.'); return;
+  }
+  if (overrideAssignment && body.assigned_to.length !== 1) {
+    resetSubmit('Choose one assignee for this Activity Template.'); return;
   }
   if (!managedActivity && assignmentMode === 'round_robin') {
     if (!rrule.is_recurring) { resetSubmit('Round robin requires a recurring task.'); return; }

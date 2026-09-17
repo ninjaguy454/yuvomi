@@ -350,6 +350,7 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
     if (!context) throw new Error('This task is not managed by an assignment policy.');
     if (!context.override_allowed) throw new Error('Assignment overrides are disabled for this activity.');
     const activity = activityForTask(d, taskId);
+    if(activity&&!activity.allow_assignment_override)throw new Error('Assignment overrides are disabled for this activity.');
     // Context-backed open Tasks have no Activity Template. Their explicit
     // claim pool is still a hard eligibility boundary for administrator
     // reassignment, just as Activity-backed Tasks retain their full checks.
@@ -368,6 +369,10 @@ export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
     d.prepare(`UPDATE task_responsibilities SET status = 'superseded', updated_at = ${nowSql()} WHERE task_id = ? AND role IN ('primary', 'participant') AND status = 'active'`).run(taskId);
     d.prepare(`UPDATE task_assignment_context SET state = 'assigned', updated_at = ${nowSql()} WHERE task_id = ?`).run(taskId);
     d.prepare('UPDATE tasks SET assigned_to = ? WHERE id = ?').run(member.id, taskId);
+    // Keep an explicitly permitted choice with the binding so future copies
+    // do not silently revert to the template's fixed default assignee.
+    d.prepare(`UPDATE task_activity_bindings SET assignment_override_user_id=?,updated_at=${nowSql()}
+      WHERE task_id=? AND assignment_override_user_id IS NOT ?`).run(member.id,taskId,member.id);
     replaceLegacyAssignments(d, taskId, [member.id]);
     addResponsibility(d, taskId, member.id, 'primary', 'manual_override');
     addResponsibility(d, taskId, member.id, 'participant', 'manual_override');

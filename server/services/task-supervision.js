@@ -6,7 +6,7 @@ import { enqueueNotification } from './notification-inbox.js';
 import { syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { taskCapabilities, taskSupervisionManagementAllowed } from './task-access.js';
 import { createHash } from 'node:crypto';
-import { taskOptionalContext } from './task-optional.js';
+import { createTaskOptionalContextReader } from './task-optional.js';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Request-local presentation data; never serialized as an aggregate of private siblings.
@@ -150,6 +150,7 @@ export function inspectTaskSupervision(d, taskId) {
   const members = householdMembers(d), byId = new Map(members.map(m => [Number(m.id), m]));
   const saved = d.prepare('SELECT * FROM task_supervision_actions WHERE source_task_id = ?').all(sourceId);
   const rows = ordinaryTaskScope(d, sourceId);
+  const optionalContextFor = createTaskOptionalContextReader(d, rows);
   const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);
   const actions = [], skillEligibility = new Map();
   // This inspection is synchronous and read-only. Sibling actions commonly
@@ -171,7 +172,7 @@ export function inspectTaskSupervision(d, taskId) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
     const { dateKey, presence, learnerId, archived, expired, expired_at } = context(d, source, row);
-    const optional=taskOptionalContext(d,row.id);
+    const optional=optionalContextFor(row.id);
     if ((expired||optional.closed_parent) && row.status !== 'done') {
       if (prior) actions.push({ ...prior, action_title: row.title, state: 'not_required',
         reason: expired?'The original Task or action expired incomplete.':'The parent Task is complete; reopen it before performing this optional action.',
@@ -282,7 +283,7 @@ export function inspectTaskSupervision(d, taskId) {
       qualified_supervisor_count: qualified.length, completed: false, status: row.status });
     actions[actions.length - 1].qualified_supervisor_ids = qualified.map(candidate => candidate.id);
   }
-  for(const action of actions)action.is_optional=taskOptionalContext(d,action.action_task_id).is_optional;
+  for(const action of actions)action.is_optional=optionalContextFor(action.action_task_id).is_optional;
   const activeSupervisorIds = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'")
     .all(sourceId).map(row => row.user_id);
   const scope = singleSupervisorScope(actions, members, activeSupervisorIds);

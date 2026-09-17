@@ -140,12 +140,12 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/wall-mode', new MockResponse('', { headers: { 'X-Wall-Mode': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.12');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.13');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
     '/icons/icon-192.png', '/icons/icon-512.png', '/icons/apple-touch-icon.png', '/favicon.ico',
-    '/utils/task-live.js', '/utils/task-state.js', '/utils/task-progress.js',
+    '/utils/task-live.js', '/utils/task-state.js', '/utils/task-progress.js', '/utils/task-subtask-queue.js',
     '/components/wall-dashboard.js', '/utils/wall-mode.js', '/utils/reward-live.js', '/components/point-adjustment.js']) {
     assert.equal((await shell.match(path))?.body, `fresh:${path}`, `${path} must use the new branding`);
     assert.equal(shell.addedRequests.find(request => keyOf(request) === path)?.cache, 'reload',

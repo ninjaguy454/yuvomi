@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Refresh the morning Task editor, reusable schedules and Optional controls together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.12`;
+// Load Task detail feedback and its revision-safe queue together on PWA clients.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.13`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -70,6 +70,7 @@ const APP_SHELL = [
   '/utils/availability-calendar.js',
   '/utils/task-live.js',
   '/utils/task-state.js',
+  '/utils/task-subtask-queue.js',
   '/utils/task-progress.js',
   '/utils/session-lifecycle.js',
   '/push.js',

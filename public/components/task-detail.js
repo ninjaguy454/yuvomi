@@ -46,7 +46,7 @@ import { canTask } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, taskRevision } from '/utils/task-state.js';
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
-import { captureTaskViewport } from '/utils/task-view-state.js';
+import { createSubtaskQueue } from '/utils/task-subtask-queue.js';
 import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
@@ -332,6 +332,13 @@ function subtaskContextNode(subtask, supervision, ctx) {
 }
 
 function lucideIcon(name) {
+  const key = String(name).replace(/(\w)(\w*)(_|-|\s*)/g, (_all, head, tail) => head.toUpperCase() + tail.toLowerCase());
+  const definition = window.lucide?.icons?.[key];
+  if (definition && window.lucide?.createElement) {
+    const svg = window.lucide.createElement(definition);
+    svg.setAttribute('class', 'icon-sm'); svg.setAttribute('aria-hidden', 'true');
+    return svg;
+  }
   const icon = document.createElement('i');
   icon.dataset.lucide = name;
   icon.className = 'icon-sm';
@@ -492,17 +499,17 @@ function responsibilityListNode(task, ctx) {
 function progressNode(task, ctx) {
   if (!actionableSubtasks(task).length) return null;
   const progress = completionCounts(task);
-  const pending = ctx.pendingSubtask;
-  const child = pending && actionableSubtasks(task).find(row => Number(row.id) === Number(pending.id));
-  // Only the count is optimistic. Earned points, parent status, history and
-  // responsibility ownership remain the last accepted server snapshot.
-  if (child) {
+  const pending = ctx.pendingSubtasks || new Map(ctx.pendingSubtask ? [[Number(ctx.pendingSubtask.id), ctx.pendingSubtask]] : []);
+  // The overlay never changes canonical progress, earned points or history.
+  for (const child of actionableSubtasks(task)) {
+    const intent = pending.get(Number(child.id));
+    if (!intent) continue;
     const key = child.is_optional ? 'optionalDone' : 'done';
-    progress[key] += Number(pending.status === 'done') - Number(child.status === 'done');
+    progress[key] += Number(intent.status === 'done') - Number(child.status === 'done');
   }
   const wrap = document.createElement('div');
   wrap.className = 'task-detail-progress';
-  wrap.setAttribute('aria-busy', String(!!child));
+  wrap.setAttribute('aria-busy', String(pending.size > 0));
   const meter = document.createElement('progress');
   meter.max = progress.total || 1;
   meter.value = progress.done;
@@ -568,22 +575,24 @@ function taskLocationNode(task, ctx) {
     actions.appendChild(navigate);
   }
   if (ctx.isAdmin && location.kind === 'google_place') {
-    const revision = taskRevision(task);
     const promote = document.createElement('button');
     promote.type = 'button';
     promote.className = 'btn btn--secondary btn--sm';
+    promote.dataset.focusKey = 'promote-location';
     promote.textContent = t('tasks.saveToYuvomiPlaces');
     promote.addEventListener('click', async () => {
+      if (ctx.busy || ctx.queue?.busy) return;
+      ctx.busy = true; ctx.renderOperationState?.();
       promote.disabled = true;
       try {
-        await api.post(`/tasks/${task.id}/location/promote`, { name: location.label, type: 'custom', ...revision });
+        await api.post(`/tasks/${task.id}/location/promote`, { name: location.label, type: 'custom', ...taskRevision(task) });
         window.yuvomi.showToast(t('tasks.locationSavedToYuvomiPlaces'), 'success');
         await closeDetailView({ force: true });
         await ctx.onChanged();
       } catch (err) {
         promote.disabled = false;
         window.yuvomi.showToast(err.message, 'danger');
-      }
+      } finally { ctx.busy = false; ctx.renderOperationState?.(); }
     });
     actions.appendChild(promote);
   }
@@ -620,19 +629,39 @@ function taskLocationNode(task, ctx) {
  * Auf dem iPhone gab es damit keinen Weg zur ERSTEN Teilaufgabe, während jede
  * weitere über die aufgeklappte Liste ging (#925).
  */
-function subtaskListNode(task, ctx) {
-  const children = actionableSubtasks(task);
-  // Definitions and required skills are edited only in Edit.
-  if (!children.length) return null;
-  const wrap = document.createElement('div');
-  wrap.className = 'detail-subtasks detail-task-subtasks';
-  for (const subtask of children) {
+function subtaskSupervision(task, subtask) {
+  return subtask.supervision_action || task.supervision?.actions?.find(action => Number(action.action_task_id) === Number(subtask.id) || Number(action.counterpart_task_id) === Number(subtask.id));
+}
+
+function subtaskPermitted(task, subtask, ctx) {
+  const supervision = subtaskSupervision(task, subtask);
+  return !ctx.busy && !ctx.refreshRequired && !isArchived(task) && !isExpired(task) && !isExpired(subtask)
+    && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, 'complete')
+    && !(supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete
+      : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
+}
+
+// A checkbox must contain pixels during the pending frame. A data-lucide <i>
+// needs a later document-wide icon pass, which used to wait for the HTTP ACK.
+function subtaskCheckboxIcon(done) {
+  if (!document.createElementNS) return lucideIcon(done ? 'check-circle-2' : 'circle');
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  for (const [key, value] of Object.entries({ viewBox: '0 0 24 24', width: '24', height: '24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2', 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': 'true', class: 'icon-sm detail-subtask__checkbox' })) svg.setAttribute(key, value);
+  const circle = document.createElementNS(svg.namespaceURI, 'circle');
+  circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '10');
+  const check = document.createElementNS(svg.namespaceURI, 'path');
+  check.setAttribute('d', done ? 'm8 12 3 3 5-6' : '');
+  svg.append(circle, check);
+  return svg;
+}
+
+function subtaskRowNode(task, subtask, ctx) {
     const row = document.createElement('div');
     row.className = 'detail-subtask';
     row.dataset.subtaskId = String(subtask.id);
     const toggle = document.createElement('button');
     toggle.type = 'button';
-    const pending = Number(ctx.pendingSubtask?.id) === Number(subtask.id) ? ctx.pendingSubtask : null;
+    const pending = ctx.pendingSubtasks?.get(Number(subtask.id)) || (Number(ctx.pendingSubtask?.id) === Number(subtask.id) ? ctx.pendingSubtask : null);
     const done = (pending?.status || subtask.status) === 'done';
     toggle.className = `detail-subtask__toggle${done ? ' detail-subtask__toggle--done' : ''}`;
     toggle.dataset.taskOperation = '';
@@ -643,9 +672,9 @@ function subtaskListNode(task, ctx) {
     const label = document.createElement('span');
     label.className = 'detail-subtask__title';
     label.textContent = `${subtask.title}${subtask.is_optional ? ' · Optional' : ''}`;
-    toggle.append(lucideIcon(done ? 'check-circle-2' : 'circle'), label);
-    const supervision = subtask.supervision_action || task.supervision?.actions?.find((action) => Number(action.action_task_id) === Number(subtask.id) || Number(action.counterpart_task_id) === Number(subtask.id));
-    toggle.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || isExpired(subtask) || (task.status === 'done' && !!subtask.is_optional) || !canTask(subtask, 'complete') || (supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
+    toggle.append(subtaskCheckboxIcon(done), label);
+    const supervision = subtaskSupervision(task, subtask);
+    toggle.disabled = !!pending || !!ctx.queue?.blocked || !subtaskPermitted(task, subtask, ctx);
     if (task.status === 'done' && subtask.is_optional) toggle.title = 'Reopen the parent Task before changing optional progress.';
     row.appendChild(toggle);
     const context = subtaskContextNode(subtask, supervision, ctx);
@@ -658,13 +687,128 @@ function subtaskListNode(task, ctx) {
       row.appendChild(saving);
     }
     toggle.addEventListener('click', async () => {
-      if (ctx.busy) return;
-      const status = done ? 'in_progress' : 'done';
-      await ctx.runMutation(toggle, beforeRequest => changeTaskStatus(subtask, status, { beforeRequest }), { subtask, status });
+      const current = actionableSubtasks(task).find(child => Number(child.id) === Number(subtask.id));
+      if (!current || !subtaskPermitted(task, current, ctx)) return;
+      const status = current.status === 'done' ? 'in_progress' : 'done';
+      if (ctx.queue) {
+        if (document.activeElement === toggle) ctx.pendingFocusKey = toggle.dataset.focusKey;
+        ctx.queue.enqueue(current.id, status);
+      }
+      else await ctx.runMutation(toggle, beforeRequest => changeTaskStatus(current, status, { beforeRequest }), { subtask: current, status });
     });
-    wrap.appendChild(row);
-  }
+    return row;
+}
+
+function subtaskListNode(task, ctx) {
+  const children = actionableSubtasks(task);
+  if (!children.length) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'detail-subtasks detail-task-subtasks';
+  for (const subtask of children) wrap.appendChild(subtaskRowNode(task, subtask, ctx));
   return wrap;
+}
+
+// Preserve controls, focus and disclosure nodes when their contents change.
+// This is local to Task operational regions, not a modal-wide renderer.
+function patchTaskDetailNode(current, fresh) {
+  if (!current || !fresh || current.nodeType !== fresh.nodeType || current.nodeName !== fresh.nodeName
+    || current.dataset?.disclosureKey !== fresh.dataset?.disclosureKey) {
+    current?.replaceWith(fresh); return;
+  }
+  if (current.nodeType === 3) { if (current.data !== fresh.data) current.data = fresh.data; return; }
+  const keepOpen = current.tagName === 'DETAILS' ? current.open : null;
+  const selectedValue = fresh.tagName === 'SELECT' ? fresh.value : null;
+  if (current.classList.contains('detail-row__value')) fresh.classList.add('detail-row__value');
+  for (const attribute of [...current.attributes]) if (!fresh.hasAttribute(attribute.name) && attribute.name !== 'open') current.removeAttribute(attribute.name);
+  for (const attribute of [...fresh.attributes]) if (attribute.name !== 'open' && current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
+  const children = [...fresh.childNodes];
+  for (let index = 0; index < children.length; index++) {
+    if (current.childNodes[index]) patchTaskDetailNode(current.childNodes[index], children[index]);
+    else current.appendChild(children[index]);
+  }
+  while (current.childNodes.length > children.length) current.lastChild.remove();
+  if (keepOpen !== null) current.open = keepOpen;
+  if (selectedValue !== null) current.value = selectedValue;
+}
+
+function pendingParentStatus(task, ctx) {
+  const pending = ctx.pendingSubtasks;
+  if (!pending?.size || isArchived(task) || isExpired(task) || task.is_supervision_projection) return task.status;
+  const required = actionableSubtasks(task).filter(child => !child.is_optional);
+  const changed = required.filter(child => pending.has(Number(child.id)));
+  // The read projection does not expose a complete Workflow dependency graph.
+  // Predict starting/reopening, but leave final completion/points authoritative.
+  if (task.status === 'open' && changed.some(child => pending.get(Number(child.id)).status === 'done'
+    && (!subtaskSupervision(task, child) || subtaskSupervision(task, child).state === 'not_required'))) return 'in_progress';
+  if (task.status === 'done' && changed.some(child => pending.get(Number(child.id)).status !== 'done')) return 'in_progress';
+  return task.status;
+}
+
+function updateTaskOperationState(pane, task, ctx) {
+  const summary = pane?.querySelector('.task-detail-summary');
+  if (summary) patchTaskDetailNode(summary, statusSummaryNode(task, ctx));
+  for (const child of actionableSubtasks(task)) {
+    const row = pane?.querySelector(`[data-subtask-id="${child.id}"]`);
+    const toggle = row?.querySelector('.detail-subtask__toggle');
+    if (!toggle) continue;
+    const pending = ctx.pendingSubtasks?.get(Number(child.id));
+    const done = (pending?.status || child.status) === 'done';
+    toggle.classList.toggle('detail-subtask__toggle--done', done);
+    toggle.setAttribute('aria-pressed', String(done));
+    toggle.setAttribute('aria-busy', String(!!pending));
+    toggle.setAttribute('aria-label', `${done ? 'Reopen' : 'Complete'}: ${child.title}`);
+    toggle.disabled = !!pending || !!ctx.queue?.blocked || !subtaskPermitted(task, child, ctx);
+    toggle.querySelector('.detail-subtask__checkbox path')?.setAttribute('d', done ? 'm8 12 3 3 5-6' : '');
+    let saving = row.querySelector('.detail-subtask__pending');
+    if (pending && !saving) {
+      saving = document.createElement('span'); saving.className = 'detail-subtask__pending';
+      saving.setAttribute('role', 'status'); saving.textContent = 'Saving…'; row.appendChild(saving);
+    } else if (!pending) saving?.remove();
+  }
+  for (const id of ['detail-view-edit', 'task-detail-delete', 'task-detail-archive', 'task-detail-claim']) {
+    const control = document.getElementById(id);
+    if (control) control.disabled = !!ctx.busy || !!ctx.queue?.busy;
+  }
+  for (const key of ['assign-task-supervisor', 'task-supervisor', 'promote-location']) {
+    const control = pane?.querySelector(`[data-focus-key="${key}"]`);
+    if (control) control.disabled = !!ctx.busy || !!ctx.queue?.busy;
+  }
+  pane?.querySelectorAll('.note-md-box[data-md-line]').forEach(control => {
+    control.setAttribute('aria-disabled', String(!!ctx.busy || !!ctx.queue?.busy));
+  });
+}
+
+function taskDetailDefinitionKey(task) {
+  const fields = ['title', 'description', 'tags', 'documents', 'priority', 'start_date', 'start_time', 'due_date', 'due_time',
+    'expiration_policy', 'expired_at', 'archived_at', 'recurrence_rule', 'recurrence_from_completion', 'is_recurring',
+    'category', 'required_skills', 'skill_ids', 'skills', 'skill_eligibility', 'location', 'assigned_to', 'assigned_users', 'assigned_name', 'assigned_color', 'assigned_avatar',
+    'locked', 'visibility', 'countdown', 'action_link', 'permissions'];
+  return JSON.stringify(Object.fromEntries(Object.entries(task).filter(([key]) => fields.includes(key) || key.startsWith('activity_') && key !== 'activity_assignment_state')));
+}
+
+function reconcileTaskSubtasks(pane, task, ctx) {
+  const list = pane?.querySelector('.detail-task-subtasks');
+  if (!list) return;
+  const children = actionableSubtasks(task), keep = new Set(children.map(child => String(child.id)));
+  for (const row of [...list.children]) if (!keep.has(row.dataset.subtaskId)) row.remove();
+  for (const [index, child] of children.entries()) {
+    const key = subtaskRenderKey(task, child);
+    let row = list.querySelector(`[data-subtask-id="${child.id}"]`);
+    if (!row) row = subtaskRowNode(task, child, ctx);
+    else if (ctx.childRenderKeys?.get(Number(child.id)) !== key) patchTaskDetailNode(row, subtaskRowNode(task, child, ctx));
+    if (list.children[index] !== row) list.insertBefore(row, list.children[index] || null);
+    ctx.childRenderKeys.set(Number(child.id), key);
+  }
+}
+
+function subtaskRenderKey(task, child) {
+  const { revision, parent_revision, ...visible } = child;
+  return JSON.stringify([visible, subtaskSupervision(task, child)]);
+}
+
+function supervisionNodePresent(task) {
+  return (task.supervision?.actions || (task.supervision_action ? [task.supervision_action] : [])).length
+    || task.supervision && task.supervision.state !== 'none';
 }
 
 /**
@@ -1148,8 +1292,9 @@ function statusSummaryNode(task, ctx) {
   if (isExpired(task)) {
     const option = document.createElement('option'); option.value = 'expired'; option.textContent = 'Expired'; select.appendChild(option);
   }
-  select.value = task.status;
-  select.disabled = !!ctx.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
+  select.value = pendingParentStatus(task, ctx);
+  select.setAttribute('aria-busy', String(!!ctx.pendingSubtasks?.size));
+  select.disabled = !!ctx.busy || !!ctx.queue?.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
   select.addEventListener('change', async () => {
     const requested = select.value;
     select.value = task.status;
@@ -1291,12 +1436,13 @@ function supervisionNode(task, ctx) {
       const option = document.createElement('option'); option.value = person.id; option.textContent = person.display_name;
       option.selected = Number(person.id) === Number(supervision.supervisor_user_id); select.appendChild(option);
     }
-    const sourceId = supervision.source_task_id, sourceRevision = supervision.source_revision;
     const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
     assign.textContent = 'Assign supervisor'; assign.dataset.taskOperation = '';
     assign.dataset.focusKey = 'assign-task-supervisor';
-    assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${sourceId}/supervisor`, {
-      supervisor_user_id: Number(select.value), expected_revision: sourceRevision,
+    assign.dataset.sourceId = String(supervision.source_task_id);
+    assign.dataset.sourceRevision = String(supervision.source_revision);
+    assign.addEventListener('click', () => ctx.runMutation(assign, () => api.post(`/tasks/${assign.dataset.sourceId}/supervisor`, {
+      supervisor_user_id: Number(select.value), expected_revision: Number(assign.dataset.sourceRevision),
     })));
     controls.append(select, assign); wrap.appendChild(controls);
   }
@@ -1457,6 +1603,7 @@ function descriptionNode(task, ctx) {
  * kennt.
  */
 async function toggleDescriptionCheck(task, box, ctx) {
+  if (ctx.busy || ctx.queue?.busy) return;
   const line    = parseInt(box.dataset.mdLine, 10);
   const checked = box.dataset.mdChecked !== '1';
   const expect  = splitKeepingLineEndings(task.description)[line * 2];
@@ -1476,6 +1623,7 @@ async function toggleDescriptionCheck(task, box, ctx) {
   };
 
   paint(checked);
+  ctx.busy = true; ctx.renderOperationState?.();
   try {
     const res = await api.patch(`/tasks/${task.id}/check`, { line, checked, expect, ...taskRevision(task) });
     if (Number(res.data?.revision || 0) >= Number(task.revision || 0)) Object.assign(task, res.data);
@@ -1487,7 +1635,7 @@ async function toggleDescriptionCheck(task, box, ctx) {
       err.status === 409 ? t('tasks.checkConflict') : (err.data?.error ?? t('common.unknownError')),
       'danger',
     );
-  }
+  } finally { ctx.busy = false; ctx.renderOperationState?.(); }
 }
 
 /** The status response already contains its hydrated source parent. */
@@ -1510,7 +1658,7 @@ function mergeAcknowledgedSubtask(task, fresh) {
 }
 
 async function runTaskDetailMutation(ctx, button, operation, { subtask, status } = {}) {
-  if (ctx.busy || ctx.refreshRequired) return;
+  if (ctx.busy || ctx.queue?.busy || ctx.refreshRequired) return;
   // Disabling a focused button can move focus to the document before refresh
   // captures it. Keep that key, but never take focus away from a newer action.
   const focusKey = document.activeElement === button ? button.dataset.focusKey : null;
@@ -1624,7 +1772,8 @@ export function openTaskDetail({
   onChanged = () => {},
   edit = null,
 }) {
-  const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged };
+  const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged,
+    pendingSubtasks: new Map(), childRenderKeys: new Map() };
   ctx.refresh = async () => { if (!ctx.closed) await ctx.loader?.load(); };
   ctx.runMutation = (button, operation, options) => runTaskDetailMutation(ctx, button, operation, options);
 
@@ -1677,7 +1826,7 @@ export function openTaskDetail({
     size: 'lg',
     sections: renderTaskDetail(task, reminder, ctx),
     actions,
-    onClose: () => { ctx.closed = true; ctx.loader?.dispose(); ctx.stopLive?.(); },
+    onClose: () => { ctx.closed = true; ctx.queue?.dispose(); ctx.loader?.dispose(); ctx.stopLive?.(); },
     edit: canEdit && edit ? {
       label: t('common.edit'),
       title: t('tasks.editTask'),
@@ -1688,22 +1837,29 @@ export function openTaskDetail({
   // offer a definition write while this occurrence is expired.
   const editControl = document.getElementById('detail-view-edit');
   if (editControl) editControl.hidden = isExpired(task);
-  // Pending feedback replaces only operational regions: no Activity, comments,
-  // recurrence history or full Task-list request is needed to paint a tap.
+  for (const child of actionableSubtasks(task)) ctx.childRenderKeys.set(Number(child.id), subtaskRenderKey(task, child));
+  // Pending feedback changes existing controls without layout reads, icon scans,
+  // Activity reads or rebuilding any subtask/skill disclosure.
   ctx.renderOperationState = () => {
     if (ctx.closed || !view.isOpen()) return;
     const pane = document.querySelector('.detail-view__pane');
-    const restore = pane ? captureTaskViewport(pane, { anchors: false }) : () => {};
-    rememberTaskDisclosures(pane, ctx);
-    pane?.querySelector('.task-detail-summary')?.replaceWith(statusSummaryNode(task, ctx));
-    const subtasks = pane?.querySelector('.detail-task-subtasks');
-    if (subtasks) subtasks.replaceWith(subtaskListNode(task, ctx) || document.createElement('div'));
-    restore();
+    updateTaskOperationState(pane, task, ctx);
   };
-  ctx.acceptSnapshot = (fresh) => {
-    if (!view.isOpen()) return;
-    if (!mergeTaskDetailSnapshot(task, fresh, ctx.minimumTaskRevision || 0)) return;
+  ctx.acceptSnapshot = (fresh, source = 'live') => {
+    if (ctx.closed || !view.isOpen()) return false;
+    // An external read can carry newer permissions without a Task revision
+    // increment. An equal-revision ACK confirms the write, but must not replace
+    // that newer read's eligibility/metadata with its earlier projection.
+    if (source === 'ack' && (ctx.liveSnapshotEpoch || 0) > (ctx.sentLiveEpoch || 0)
+      && Number(fresh.revision) <= Number(task.revision)) return Number(fresh.revision) === Number(task.revision);
+    const oldKey = taskDetailDefinitionKey(task);
+    const oldRevision = task.revision;
+    const oldSupervision = JSON.stringify([task.supervision, task.supervision_action]);
+    const oldStatus = task.status;
+    const oldAssignment = task.activity_assignment_state;
+    if (!mergeTaskDetailSnapshot(task, fresh, ctx.minimumTaskRevision || 0)) return false;
     ctx.minimumTaskRevision = 0; ctx.refreshRequired = false;
+    if (source === 'live') { ctx.liveSnapshotEpoch = (ctx.liveSnapshotEpoch || 0) + 1; ctx.queue?.invalidate(fresh); }
     const pane = document.querySelector('.detail-view__pane');
     const body = pane?.closest('.modal-panel__body');
     const scroll = body?.scrollTop;
@@ -1711,7 +1867,27 @@ export function openTaskDetail({
     const selection = draftField?.selectionStart == null ? null : [draftField.selectionStart, draftField.selectionEnd];
     const focus = pane?.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
     rememberTaskDisclosures(pane, ctx);
-    view.update(renderTaskDetail(task, reminder, ctx));
+    const structuralChange = oldKey !== taskDetailDefinitionKey(task)
+      || (!!pane?.querySelector('.detail-task-subtasks') !== !!actionableSubtasks(task).length)
+      || (!!pane?.querySelector('.task-detail-supervision') !== !!supervisionNodePresent(task));
+    if (structuralChange) view.update(renderTaskDetail(task, reminder, ctx));
+    else {
+      reconcileTaskSubtasks(pane, task, ctx);
+      ctx.renderOperationState();
+      if (oldSupervision !== JSON.stringify([task.supervision, task.supervision_action])) {
+        const supervision = pane?.querySelector('.task-detail-supervision');
+        if (supervision) patchTaskDetailNode(supervision, supervisionNode(task, ctx));
+      }
+      if (oldStatus !== task.status) {
+        const metadata = pane?.querySelector('.task-detail-metadata');
+        if (metadata) patchTaskDetailNode(metadata, metadataNode(task, ctx, reminder));
+      }
+      if (oldAssignment !== task.activity_assignment_state) {
+        const details = pane?.querySelector('.task-detail-secondary');
+        if (details) patchTaskDetailNode(details, secondaryMetadataNode(task, ctx));
+      }
+      if (oldRevision !== task.revision) ctx.historyDirty = true;
+    }
     if (body && scroll != null) body.scrollTop = scroll;
     if (focus) pane?.querySelector(`[data-focus-key="${focus}"]`)?.focus({ preventScroll: true });
     if (draftField?.isConnected) { draftField.focus({ preventScroll: true }); if (selection) draftField.setSelectionRange(...selection); }
@@ -1729,12 +1905,81 @@ export function openTaskDetail({
       const title = document.getElementById('shared-modal-title');
       if (title) title.textContent = task.title;
     }
-    ctx.refreshComments?.();
+    if (source === 'live') {
+      if (ctx.queue?.busy) ctx.commentsDirty = true;
+      else { ctx.commentsDirty = false; ctx.refreshComments?.(); ctx.refreshVisibleHistory(); }
+    }
+    return true;
   };
+  ctx.refreshVisibleHistory = () => {
+    if (!ctx.historyDirty || ctx.closed) return;
+    const pane = document.querySelector('.detail-view__pane');
+    for (const [selector, content, render] of [
+      ['.task-detail-activity-disclosure', '.task-detail-activity', activityNode],
+      ['.task-detail-history-disclosure', '.detail-history', seriesHistoryNode],
+    ]) {
+      const disclosure = pane?.querySelector(selector);
+      if (disclosure?.open) disclosure.querySelector(content)?.replaceWith(render(task, ctx));
+    }
+    ctx.historyDirty = false;
+  };
+  document.querySelector('.detail-view__pane')?.addEventListener('toggle', event => {
+    if (event.target.matches('.task-detail-activity-disclosure, .task-detail-history-disclosure') && event.target.open) {
+      ctx.historyDirty = true; ctx.refreshVisibleHistory();
+    }
+  }, true);
+  ctx.queue = createSubtaskQueue({
+    getTask: () => task,
+    getChild: id => actionableSubtasks(task).find(child => Number(child.id) === Number(id)),
+    canDispatch: child => subtaskPermitted(task, child, ctx) || 'This step is no longer available. Review the current Task before trying again.',
+    send: async (child, status) => {
+      ctx.sentLiveEpoch = ctx.liveSnapshotEpoch || 0;
+      ctx.loader?.invalidate();
+      const result = await changeTaskStatus(child, status);
+      if (!result) throw new Error('This step was not changed.');
+      ctx.savedChildChange = true;
+      ctx.loader?.invalidate();
+      const fresh = taskStatusResponseSnapshot(task, result);
+      if (fresh) return fresh;
+      const minimum = Number(result.data?.parent_revision || 0);
+      ctx.minimumTaskRevision = Math.max(ctx.minimumTaskRevision || 0, minimum);
+      try {
+        const response = await api.get(`/tasks/${task.id}`);
+        if (Number(response.data?.revision || 0) >= minimum) return response.data;
+      } catch { /* The child may already be committed; never retry the write. */ }
+      mergeAcknowledgedSubtask(task, result.data);
+      ctx.refreshRequired = true;
+      throw new Error('This step was saved, but Task details could not be refreshed. Reopen this Task to continue.');
+    },
+    accept: fresh => ctx.acceptSnapshot(fresh, 'ack'),
+    onPending: pending => { ctx.pendingSubtasks = pending; ctx.renderOperationState(); },
+    onError: error => {
+      if (ctx.queueErrorRefresh) return;
+      window.yuvomi?.showToast(error.data?.error || error.message, 'danger');
+      // One rejected request can cancel several queued intents. Report the
+      // reason once and share one canonical refresh rather than one per step.
+      ctx.queueErrorRefresh = Promise.resolve().then(() => {
+        if (!ctx.refreshRequired) return ctx.refresh();
+      }).catch(() => {}).finally(() => { ctx.queueErrorRefresh = null; });
+    },
+    onDrain: () => {
+      ctx.renderOperationState(); ctx.refreshVisibleHistory();
+      if (ctx.commentsDirty) { ctx.commentsDirty = false; ctx.refreshComments?.(); }
+      if (ctx.pendingFocusKey && (!document.activeElement || document.activeElement === document.body)) {
+        const control = document.querySelector('.detail-view__pane')?.querySelector(`[data-focus-key="${ctx.pendingFocusKey}"]`);
+        if (control && !control.disabled) control.focus({ preventScroll: true });
+      }
+      ctx.pendingFocusKey = null;
+      if (ctx.savedChildChange) {
+        ctx.savedChildChange = false;
+        void Promise.resolve().then(() => ctx.onChanged()).catch(() => {});
+      }
+    },
+  });
   ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`), response => ctx.acceptSnapshot(response.data));
   ctx.stopLive = watchTaskChanges(() => { void ctx.refresh().catch((error) => {
     if ([403, 404].includes(error.status) && view.isOpen()) {
-      ctx.closed = true; ctx.stopLive?.();
+      ctx.closed = true; ctx.queue?.dispose(); ctx.loader?.dispose(); ctx.stopLive?.();
       view.update([{ label: 'Task unavailable', value: 'This Task was removed or you no longer have access.' }]);
     }
   }); });

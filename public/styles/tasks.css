@@ -3426,3 +3426,22 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+.task-edit-scope__choices {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: var(--space-4) 0;
+  padding: 0;
+  border: 0;
+}
+.task-edit-scope__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.task-edit-scope__option input { flex: 0 0 auto; margin-top: 0.25em; }
+.task-edit-scope__option:has(input:disabled) { opacity: 0.6; cursor: default; }

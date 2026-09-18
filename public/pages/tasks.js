@@ -15,7 +15,7 @@ import { createTaskCardSubtasks, taskCardPendingProjection } from '/utils/task-c
 import { bindTaskCardTouchDrag, taskDragHandle } from '/utils/task-card-drag.js';
 import { renderMonthYearPicker, dateInSelectedMonth } from '/components/month-year-picker.js';
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues, describeRRule } from '/rrule-ui.js';
-import { openModal as openSharedModal, closeModal, wireBlurValidation, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
+import { openModal as openSharedModal, openChildModal, closeModal, wireBlurValidation, btnSuccess, btnError, btnLoading, confirmOverModal, mountFooter, refreshDirtySnapshot } from '/components/modal.js';
 import { stagger, vibrate, scheduleUndoableDelete, animationSettled } from '/utils/ux.js';
 import { wireSwipeRows, maybeShowSwipeHint } from '/utils/swipe-row.js';
 import { t, getLocale, formatDate, formatDayMonth, formatTime, formatDateInput, parseDateInput, isDateInputValid, formatTimeInput, parseTimeInput } from '/i18n.js';
@@ -29,6 +29,7 @@ import { bindActivityVariableInputs } from '/components/variable-expression-edit
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
 import { resolveActivityDueDate } from '/utils/activity-schedule.js';
+import { taskEditDefinition, taskEditResultMessage } from '/utils/task-edit-scope.js';
 import { taskFormErrors, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
 import { resolveReminderPreset } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
@@ -978,6 +979,7 @@ function wireTagBadgeFilter(container) {
 function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null, occurrenceStartDate = null } = {}) {
   const isEdit = !!task;
   const existingTask = task;
+  const historicalSeriesEdit = task?.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task));
   task = task || createManualTaskDraft({ template: presetActivityTemplate, places: state.places, defaultPoints: state.defaultPoints, presetDates, occurrenceStartDate });
   const presetStartDate = task.start_date;
   const presetDueDate = task.due_date;
@@ -1001,9 +1003,10 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       inactive: true,
     });
   }
-  const activityOptions = activityTemplates.map((activity) =>
-    `<option value="${activity.id}" data-subject-required="${activity.subject_required ? '1' : '0'}" ${activityTemplateId === Number(activity.id) ? 'selected' : ''}>${esc(activity.name)}${activity.inactive ? ' (inactive)' : ''}</option>`
-  ).join('');
+  const activityOptions = activityTemplates.map((activity) => {
+    const policy = taskActivityAssignmentPolicy(activity, task, activity.id);
+    return `<option value="${activity.id}" data-subject-required="${policy.subject_required ? '1' : '0'}" ${activityTemplateId === Number(activity.id) ? 'selected' : ''}>${esc(activity.name)}${activity.inactive ? ' (inactive)' : ''}</option>`;
+  }).join('');
   const activitySubjectOptions = users.map((user) =>
     `<option value="${user.id}" ${activitySubjectUserId === Number(user.id) ? 'selected' : ''}>${esc(user.display_name)}</option>`
   ).join('');
@@ -1063,6 +1066,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
   return `
     <form id="task-form" class="task-editor" novalidate>
       <input type="hidden" id="task-id" value="${task?.id ?? ''}">
+      ${historicalSeriesEdit ? '<p class="task-field-hint" id="task-historical-edit-hint">Edit the series for future occurrences. This historical occurrence, including its status, reminders and documents, will be preserved.</p>' : ''}
 
       <div class="form-group task-template-picker">
         <label class="label" for="task-activity-template">Start from an Activity Template</label>
@@ -1104,6 +1108,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </section>
       <section class="task-editor__section" aria-labelledby="task-when-heading">
       <h3 id="task-when-heading">When</h3>
+      ${task.recurrence_series_id != null ? '<p class="task-field-hint">Future occurrences use the recurrence rule, times and number of days between Start and Due. Moving both dates by the same number of days does not shift the series.</p>' : ''}
       <div class="task-editor__dates"><div class="form-group">
           <label class="label" for="task-start-date">${t('tasks.startDateLabel')}</label>
           <yuvomi-datepicker type="date" id="task-start-date" name="start_date"
@@ -1229,8 +1234,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       </div>
 
 
-      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId, canCreateSkill: canCapability('skills.manage') && !activityTemplateId })}</div>
-      <p class="task-field-hint">${activityTemplateId ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
+      <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId && task.recurrence_series_id == null, canCreateSkill: canCapability('skills.manage') && (!activityTemplateId || task.recurrence_series_id != null) })}</div>
+      <p class="task-field-hint">${activityTemplateId && task.recurrence_series_id == null ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(person.display_name)).join(', ')}</p>` : ''}
       </section>
       ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
@@ -1686,7 +1691,18 @@ function wireVisibilityWarning(panel, selectSel, msName, warnSel) {
   update();
 }
 
-function wireAssignmentMode(panel) {
+function taskActivityAssignmentPolicy(activity, task, templateId) {
+  if (task?.recurrence_series_id != null && Number(task.activity_template_id) === Number(templateId)) {
+    return { ...activity,
+      assignment_strategy: task.activity_assignment_strategy ?? activity?.assignment_strategy,
+      allow_assignment_override: task.activity_assignment_override_allowed ?? activity?.allow_assignment_override,
+      subject_required: task.activity_subject_required ?? activity?.subject_required,
+    };
+  }
+  return activity;
+}
+
+function wireAssignmentMode(panel, task) {
   const activity = panel.querySelector('#task-activity-template');
   const subject = panel.querySelector('#task-activity-subject');
   const modeWrap = panel.querySelector('#task-manual-assignment-mode');
@@ -1696,9 +1712,10 @@ function wireAssignmentMode(panel) {
   if (!mode || !fixed || !rotation) return;
   const update = () => {
     const managed = !!activity?.value;
-    const template = state.activityTemplates.find(entry => Number(entry.id) === Number(activity?.value));
+    const template = taskActivityAssignmentPolicy(state.activityTemplates.find(entry => Number(entry.id) === Number(activity?.value)), task, activity?.value);
     const templateFixed = managed && template?.assignment_strategy === 'fixed';
-    const overrideAllowed = templateFixed && !!template.allow_assignment_override && canCapability('tasks.change_assignment');
+    const assignmentAllowed = task ? canTask(task, 'change_assignment') : canCapability('tasks.change_assignment');
+    const overrideAllowed = templateFixed && !!template.allow_assignment_override && assignmentAllowed;
     const requiresSubject = managed
       && activity.selectedOptions?.[0]?.dataset.subjectRequired === '1';
     const manualVisible = !managed && !isSoloHousehold();
@@ -1707,7 +1724,7 @@ function wireAssignmentMode(panel) {
     const roundRobin = manualVisible && mode.value === 'round_robin';
     fixed.hidden = (!manualVisible && !templateFixed) || roundRobin;
     fixed.querySelectorAll('[data-ms-input="task_assigned"]').forEach(input => {
-      input.disabled = templateFixed && !overrideAllowed;
+      input.disabled = !assignmentAllowed || (templateFixed && !overrideAllowed);
     });
     const hint = panel.querySelector('#task-template-assignment-hint');
     if (hint) {
@@ -1742,8 +1759,8 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
   const controls = taskFormControls.get(form);
   if (!select) return;
   const resolutionContext = () => {
-    const activity = state.activityTemplates.find(entry => Number(entry.id) === Number(select.value));
-    const canOverride = activity?.assignment_strategy === 'fixed' && activity.allow_assignment_override && canCapability('tasks.change_assignment');
+    const activity = taskActivityAssignmentPolicy(state.activityTemplates.find(entry => Number(entry.id) === Number(select.value)), task, select.value);
+    const canOverride = activity?.assignment_strategy === 'fixed' && activity.allow_assignment_override && (task ? canTask(task, 'change_assignment') : canCapability('tasks.change_assignment'));
     return {
       ...(canOverride ? { assigned_to: getSelectedUserIds(form, 'task_assigned') } : {}),
       task: {
@@ -1758,7 +1775,7 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
     select.addEventListener('change', () => {
       const activity = state.activityTemplates.find((entry) => Number(entry.id) === Number(select.value));
       controls.skills.setValue(activity?.skill_ids || []);
-      controls.skills.setReadOnly(!!activity);
+      controls.skills.setReadOnly((!!activity && task.recurrence_series_id == null) || !canTask(task, 'change_required_skills'));
       if (activity) {
         title.value = renderActivityTemplateText(activity.title_template || activity.name);
         description.value = renderActivityTemplateText(activity.description);
@@ -2022,7 +2039,7 @@ function wireTaskForm(panel, {
   // RRULE-Events binden
   bindRRuleEvents(panel, 'task');
   bindUserMultiSelect(panel, 'task_assigned');
-  const refreshAssignment = wireAssignmentMode(panel);
+  const refreshAssignment = wireAssignmentMode(panel, task);
 
   wireVisibilityWarning(panel, '#task-visibility', 'task_assigned', '#task-visibility-warning');
   wireCountdownGate(panel);
@@ -2143,6 +2160,13 @@ function wireTaskForm(panel, {
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
   applyTaskFormPermissions(panel, task, { skills, subtasks });
+  if (task) {
+    const controls = taskFormControls.get(form);
+    controls.editBaseline = readTaskEditState(form, controls);
+    syncReady?.then(() => {
+      if (controls.editBaseline) controls.editBaseline.occurrence.sync_target = form.querySelector('#task-sync-target')?.value || null;
+    });
+  }
 
   panel.querySelector('[data-action="delete-task"]')
     ?.addEventListener('click', (e) => deleteTaskWithUndo(e.currentTarget.dataset.id, {
@@ -2173,6 +2197,21 @@ function applyTaskFormPermissions(panel, task, controls) {
     for (const field of panel.querySelectorAll('[data-task-subtask-row] .task-skill-picker input, [data-task-subtask-row] .task-skill-picker button')) field.disabled = true;
   }
   if (!allowed('edit') && task) controls.subtasks?.setReadOnly(true);
+  if (task?.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task))) {
+    for (const field of panel.querySelectorAll('#task-status, #task-sync-target, .reminder-section input, .reminder-section select, .reminder-section button, [data-doc-attach] input, [data-doc-attach] button')) {
+      field.disabled = true;
+      field.setAttribute('aria-describedby', 'task-historical-edit-hint');
+    }
+    const documents = panel.querySelector('[data-doc-attach]');
+    if (documents && !documents.dataset.historicalReadOnly) {
+      documents.dataset.historicalReadOnly = 'true';
+      // Disabled buttons do not prevent native file drops onto the field.
+      for (const type of ['dragover', 'drop']) documents.addEventListener(type, event => {
+        event.preventDefault(); event.stopImmediatePropagation();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
+      }, true);
+    }
+  }
   if (!allowed('delete_archive')) panel.querySelector('[data-action="delete-task"]')?.remove();
   if (!canCapability('activities.create')) panel.querySelector('[data-save-as-template]')?.remove();
 }
@@ -2339,13 +2378,64 @@ function openTaskCategoryManager(container) {
 // form starts a separate create. The server retains replay receipts for 24h.
 const taskCreateAttempts = new WeakMap();
 
+function readTaskEditState(form, controls) {
+  const value = id => form.querySelector(`#${id}`)?.value || '';
+  const checked = id => !!form.querySelector(`#${id}`)?.checked;
+  const recurrence = getRRuleValues(form, 'task');
+  const dates = { start_date: parseDateInput(value('task-start-date')) || null, due_date: parseDateInput(value('task-due-date')) || null };
+  const definition = taskEditDefinition({
+    title: value('task-title'), description: value('task-description'), category: value('task-category'), priority: value('task-priority'),
+    points: value('task-points'), tags: normalizeTagList([...modalTags, ...value('task-tag-input').split(',')]),
+    subtasks: controls.subtasks?.getValue() || [], skill_ids: controls.skills.getValue(),
+    assigned_to: getSelectedUserIds(form, 'task_assigned'), assignment_mode: value('task-assignment-mode'),
+    rotation_user_ids: getRotationUserIds(form), rotation_group: value('task-rotation-group'), rotation_slot: Number(value('task-rotation-position') || 1) - 1,
+    activity_template_id: value('task-activity-template'), activity_subject_user_id: value('task-activity-subject-user'),
+    activity_inputs: controls.variableValues?.inputs() || {},
+    visibility: value('task-visibility'), countdown: checked('task-countdown'), locked: checked('task-locked'), location: readTaskLocation(form),
+    start_time: parseTimeInput(value('task-start-time')), due_time: parseTimeInput(value('task-due-time')), ...dates, ...recurrence,
+    expiration_policy: value('task-expiration-policy'),
+  });
+  return { definition, occurrence: { ...dates, status: value('task-status'), sync_target: value('task-sync-target') || null,
+    reminder: [checked('reminder-toggle'), value('reminder-offset'), value('reminder-custom-amount'), value('reminder-custom-unit')],
+    documents: taskDocuments?.documentIds() || [], pendingFiles: !!taskDocuments?.isDirty(),
+  } };
+}
+
+async function chooseTaskEditScope(submitButton, task) {
+  let selection = null;
+  const historical = task.status === 'done' || isExpired(task) || isArchived(task);
+  const child = openChildModal({
+    title: 'Apply changes', size: 'sm',
+    content: `<form id="task-edit-scope-form"><p id="task-edit-scope-question">Where would you like these changes to apply?</p>
+      ${historical ? '<p class="form-hint">This historical occurrence will be preserved.</p>' : ''}
+      <fieldset class="task-edit-scope__choices" aria-labelledby="task-edit-scope-question">
+        <label class="task-edit-scope__option"><input type="radio" name="edit_scope" value="occurrence" ${historical ? 'disabled' : 'checked'}><span>This occurrence only<br><small class="form-hint">Changes only this Task.</small></span></label>
+        <label class="task-edit-scope__option"><input type="radio" name="edit_scope" value="future" ${task.permissions?.edit_series === false ? 'disabled' : ''} ${historical ? 'checked' : ''}><span>This and future occurrences<br><small class="form-hint">Changes this Task and future occurrences in this recurring series.</small></span></label>
+      </fieldset>
+      <div class="modal-panel__footer"><button type="button" class="btn btn--secondary" data-task-scope-cancel>Cancel</button><button type="submit" id="task-scope-apply" class="btn btn--primary">Apply</button></div>
+    </form>`,
+    onSave(panel) {
+      panel.querySelector('[data-task-scope-cancel]').addEventListener('click', () => child.close({ force: true }));
+      panel.querySelector('#task-edit-scope-form').addEventListener('submit', async event => {
+        event.preventDefault();
+        selection = panel.querySelector('[name="edit_scope"]:checked').value;
+        await child.close({ force: true });
+      });
+      panel.querySelector('[name="edit_scope"]:checked').focus();
+    },
+  });
+  await child.closed;
+  if (submitButton.isConnected) submitButton.focus({ preventScroll: true });
+  return selection;
+}
+
 async function saveTaskRecord(form, body) {
   const idField = form.querySelector('#task-id');
   taskFormControls.get(form)?.subtasks?.setReadOnly(true);
   if (idField.value) {
     const response = await api.put(`/tasks/${idField.value}`, body);
     const controls = taskFormControls.get(form);
-    if (controls && response.data) controls.originalTask = structuredClone(response.data);
+    if (controls && response.data) { controls.originalTask = structuredClone(response.data); controls.lastSaveResponse = response; }
     return idField.value;
   }
 
@@ -2394,6 +2484,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const errorEl   = document.getElementById('task-form-error');
   const submitBtn = document.getElementById('task-submit-btn');
   const taskId    = document.getElementById('task-id').value;
+  if (submitBtn.disabled) return;
 
   const draftErrors = taskFormErrors(form);
   if (draftErrors.length) { showTaskFormErrors(form, draftErrors, { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" }); return; }
@@ -2434,8 +2525,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     ? Number(form.querySelector('#task-activity-subject-user')?.value || 0) || null
     : null;
   const managedActivity = Number.isInteger(activityTemplateId) && activityTemplateId > 0;
-  const selectedTemplate = state.activityTemplates.find(entry => Number(entry.id) === activityTemplateId);
-  const overrideAssignment = managedActivity && selectedTemplate?.assignment_strategy === 'fixed' && selectedTemplate.allow_assignment_override && canCapability('tasks.change_assignment');
+  const originalTask = taskFormControls.get(form)?.originalTask;
+  const selectedTemplate = taskActivityAssignmentPolicy(state.activityTemplates.find(entry => Number(entry.id) === activityTemplateId), originalTask, activityTemplateId);
+  const overrideAssignment = managedActivity && selectedTemplate?.assignment_strategy === 'fixed' && selectedTemplate.allow_assignment_override && (originalTask ? canTask(originalTask, 'change_assignment') : canCapability('tasks.change_assignment'));
   const assignmentMode = managedActivity ? 'fixed' : (form.querySelector('#task-assignment-mode')?.value || 'fixed');
   const rotationUserIds = managedActivity ? [] : getRotationUserIds(form);
   const rotationGroup = managedActivity ? '' : (form.querySelector('#task-rotation-group')?.value.trim() || '');
@@ -2468,12 +2560,12 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     location:        readTaskLocation(form),
   };
   const controls = taskFormControls.get(form);
-  if (!managedActivity && controls) body.skill_ids = controls.skills.getValue();
+  if ((!managedActivity || controls?.originalTask?.recurrence_series_id != null) && controls) body.skill_ids = controls.skills.getValue();
   if (controls?.subtasks) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
   if (body.subtasks && controls?.originalTask) {
     const original = controls.originalTask;
     const operationalIds = new Set(structuralSubtasks(original).map(child => Number(child.id)));
-    body.subtasks.push(...(original.subtasks || []).filter(child => !operationalIds.has(Number(child.id)))
+    body.subtasks.push(...(original.subtasks || []).filter(child => !child.archived_at && !operationalIds.has(Number(child.id)))
       .map(child => ({ id: child.id, title: child.title, skill_ids: child.skill_ids || [] })));
   }
 
@@ -2553,6 +2645,24 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     remindAt = new Date(dueDateTime.getTime() - offsetMs).toISOString().slice(0, 19);
   }
 
+  if (taskId && controls?.editBaseline) {
+    const edited = readTaskEditState(form, controls);
+    if (JSON.stringify(edited) === JSON.stringify(controls.editBaseline)) {
+      await closeModal({ force: true });
+      return;
+    }
+    if (controls.originalTask?.recurrence_series_id != null
+        && JSON.stringify(edited.definition) !== JSON.stringify(controls.editBaseline.definition)) {
+      // Validation precedes this choice; uploads and all mutations follow it.
+      submitBtn.disabled = false; submitBtn.textContent = originalLabel;
+      const scope = await chooseTaskEditScope(submitBtn, controls.originalTask);
+      if (!scope || !form.isConnected) return;
+      submitBtn.disabled = true; submitBtn.textContent = t('common.saving');
+      body.edit_scope = scope;
+      if (scope === 'future') body.expected_series_revision = controls.originalTask.recurrence_series_revision;
+    }
+  }
+
   // Wartende Uploads VOR dem Speichern der Aufgabe (#733): scheitert der
   // Upload, soll die Aufgabe nicht mit dem Gefühl gespeichert sein, der Beleg
   // hänge dran. Dasselbe Vorgehen wie bei den Belegen im Budget.
@@ -2561,7 +2671,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   // der Aufgabe hängt.
   let documentIds = null;
   try {
-    documentIds = taskDocuments ? await taskDocuments.commit() : null;
+    const historicalFuture = body.edit_scope === 'future' && (controls?.originalTask?.status === 'done'
+      || isExpired(controls?.originalTask) || isArchived(controls?.originalTask));
+    documentIds = !historicalFuture && taskDocuments ? await taskDocuments.commit() : null;
   } catch (err) {
     resetSubmit(err.message || t('common.errorGeneric'));
     btnError(submitBtn);
@@ -2570,10 +2682,10 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
 
   try {
     const savedTaskId = await saveTaskRecord(form, permittedTaskBody(body, controls?.originalTask));
-    window.yuvomi.showToast(t(taskId ? 'tasks.savedToast' : 'tasks.createdToast'), 'success');
+    window.yuvomi.showToast(taskEditResultMessage(controls?.lastSaveResponse, t(taskId ? 'tasks.savedToast' : 'tasks.createdToast')), 'success');
 
     // Erinnerung speichern oder löschen (Vorbedingungen bereits oben geprüft)
-    if (savedTaskId) {
+    if (savedTaskId && !controls?.lastSaveResponse?.series_edit?.current_preserved) {
       if (wantsReminder) {
         await api.post('/reminders', { entity_type: 'task', entity_id: savedTaskId, remind_at: remindAt });
         refreshReminders();

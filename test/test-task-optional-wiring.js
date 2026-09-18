@@ -130,7 +130,8 @@ test('permitted fixed-template assignee choices persist through edit and recurre
   const activity=await template();
   const task=await create({activity_template_id:activity.id,assigned_to:[other]});
   assert.equal(task.assigned_to,other);assert.equal(task.activity_assignment_override_user_id,other);
-  let result=await call('PUT',`/tasks/${task.id}`,{expected_revision:read(task.id).revision,assigned_to:[eleanor]});
+  let result=await call('PUT',`/tasks/${task.id}`,{expected_revision:read(task.id).revision,
+    edit_scope:'future',expected_series_revision:task.recurrence_series_revision,assigned_to:[eleanor]});
   assert.equal(result.status,200,JSON.stringify(result));assert.equal(result.data.assigned_to,eleanor);
   changeTaskStatus(d,task.id,'done',{actorId:eleanor,requireRevision:false,body:{complete_remaining:true}});
   assert.equal(successor(task.id).assigned_to,eleanor);
@@ -147,7 +148,7 @@ test('switching template to Blank respects the chosen manual assignee without re
   assert.equal(result.status,200,JSON.stringify(result));assert.equal(result.data.assigned_to,other);assert.equal(result.data.activity_template_id,null);
 });
 
-for(const terminal of ['done','expired'])test(`disabled template overrides leave ${terminal} occurrence history intact and resolve one successor under current policy`,async()=>{
+for(const terminal of ['done','expired'])test(`disabled source-template overrides leave ${terminal} history and its independent series assignment intact`,async()=>{
   d.prepare('INSERT INTO reward_participants(user_id,enabled) VALUES(?,1)').run(other);
   const activity=await template(),task=await create({activity_template_id:activity.id,assigned_to:[other]});
   const updated=await call('PUT',`/automation/admin/activity-templates/${activity.id}`,{allow_assignment_override:false});
@@ -159,8 +160,8 @@ for(const terminal of ['done','expired'])test(`disabled template overrides leave
   assert.equal(read(task.id).status,terminal);assert.equal(read(task.id).assigned_to,other);
   assert.equal(d.prepare('SELECT assignment_override_user_id FROM task_activity_bindings WHERE task_id=?').get(task.id).assignment_override_user_id,other);
   const next=successor(task.id);
-  assert.ok(next);assert.equal(next.assigned_to,eleanor);assert.equal(next.due_date,'2026-09-22');assert.equal(next.points,2);
-  assert.equal(d.prepare('SELECT assignment_override_user_id FROM task_activity_bindings WHERE task_id=?').get(next.id).assignment_override_user_id,null);
+  assert.ok(next);assert.equal(next.assigned_to,other);assert.equal(next.due_date,'2026-09-22');assert.equal(next.points,2);
+  assert.equal(d.prepare('SELECT assignment_override_user_id FROM task_activity_bindings WHERE task_id=?').get(next.id).assignment_override_user_id,other);
   assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(task.id).n,1);
   assert.deepEqual(d.prepare("SELECT delta FROM reward_ledger WHERE task_id=? AND type='earn'").all(task.id).map(row=>row.delta),terminal==='done'?[2]:[]);
   assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger WHERE task_id=?').get(next.id).n,0);

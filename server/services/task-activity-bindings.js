@@ -15,6 +15,8 @@ import { listTaskResponsibilities, recordTaskAssignment } from './assignment-res
 import { todayKey } from '../utils/timezone.js';
 import { loadActivityChecklist, materializeActivityChecklist } from './activity-template-checklist.js';
 import { substituteVariableTemplate, templateReferences } from './variable-resolution.js';
+import { parseTaskActivitySnapshot, readTaskActivityDefinition, taskActivitySnapshot } from './task-activity-snapshot.js';
+export { captureTaskActivityBindingDefinition, updateTaskActivitySnapshotSkills } from './task-activity-snapshot.js';
 
 export class TaskActivityBindingError extends Error {}
 
@@ -95,7 +97,7 @@ export function matchesGeneratedActivitySupportTask(d, parentTaskId, support, re
       && support.parent_task_id === parent.id && !support.points && !support.is_recurring
       && Number(support.recurrence_origin_id) === Number(recurrenceOriginTaskId);
   }
-  const activity = activityTemplate(d, binding.activity_template_id);
+  const activity = readTaskActivityDefinition(d, parentTaskId);
   if (!activity) return false;
   const subject = binding.subject_user_id
     ? d.prepare('SELECT id, display_name FROM users WHERE id = ?').get(binding.subject_user_id)
@@ -120,8 +122,8 @@ export function matchesGeneratedActivitySupportTask(d, parentTaskId, support, re
 }
 
 export function getTaskActivityBinding(d, taskId) {
-  return d.prepare(`
-    SELECT b.task_id, b.activity_template_id, b.subject_user_id, b.assignment_override_user_id,
+  const binding = d.prepare(`
+    SELECT b.task_id, b.activity_template_id, b.subject_user_id, b.assignment_override_user_id, b.definition_snapshot_json,
            a.name AS activity_template_name,
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
@@ -143,6 +145,16 @@ export function getTaskActivityBinding(d, taskId) {
       LEFT JOIN places p ON p.id = pc.place_id
      WHERE b.task_id = ?
   `).get(taskId) ?? null;
+  const snapshot = binding ? taskActivitySnapshot(d, taskId, binding) : null;
+  if (snapshot) {
+    binding.definition_snapshot_json = JSON.stringify(snapshot);
+    binding.activity_template_name = snapshot.name;
+    binding.activity_assignment_strategy = snapshot.assignment_strategy;
+    binding.activity_subject_required = snapshot.subject_required;
+    binding.activity_assignment_policy = snapshot.assignment_policy || snapshot.assignment_strategy;
+    binding.activity_assignment_override_allowed = snapshot.allow_assignment_override;
+  }
+  return binding;
 }
 
 /** Attach flattened binding metadata to task API rows without N+1 queries. */
@@ -152,7 +164,7 @@ export function attachTaskActivityBindings(d, tasks) {
   if (!ids.length) return tasks;
   const placeholders = ids.map(() => '?').join(',');
   const rows = d.prepare(`
-    SELECT t.id AS task_id, b.activity_template_id, b.subject_user_id, b.assignment_override_user_id,
+    SELECT t.id AS task_id, b.activity_template_id, b.subject_user_id, b.assignment_override_user_id, b.definition_snapshot_json,
            a.name AS activity_template_name,
            a.assignment_strategy AS activity_assignment_strategy,
            a.subject_required AS activity_subject_required,
@@ -179,6 +191,15 @@ export function attachTaskActivityBindings(d, tasks) {
   const responsibilities = listTaskResponsibilities(d, ids);
   for (const task of tasks) {
     const binding = byTask.get(Number(task.id));
+    const snapshot = binding ? taskActivitySnapshot(d, task.id, binding) : null;
+    if (snapshot) {
+      binding.activity_template_name = snapshot.name;
+      binding.activity_assignment_strategy = snapshot.assignment_strategy;
+      binding.activity_subject_required = snapshot.subject_required;
+      binding.activity_assignment_policy = snapshot.assignment_policy || snapshot.assignment_strategy;
+      binding.activity_assignment_override_allowed = snapshot.allow_assignment_override;
+    }
+    task.activity_definition_snapshot = Boolean(snapshot);
     task.activity_template_id = binding?.activity_template_id ?? null;
     task.activity_template_name = binding?.activity_template_name ?? null;
     task.activity_assignment_strategy = binding?.activity_assignment_strategy ?? null;
@@ -248,11 +269,14 @@ export function previewTaskActivityBinding(d, {
   dateKey = todayKey(d),
   task = null,
   allowInactive = false,
+  activitySnapshot = null,
+  definitionSnapshot = null,
 } = {}) {
   const id = asPositiveInt(activityTemplateId);
   if (!id) throw new TaskActivityBindingError('Choose a valid activity template.');
-  const activity = activityTemplate(d, id);
+  const activity = parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot) || activityTemplate(d, id);
   if (!activity) throw new TaskActivityBindingError('Activity template not found.');
+  if (Number(activity.id) !== id) throw new TaskActivityBindingError('The recurring Activity definition belongs to another template.');
   if (!allowInactive && !activity.active) {
     throw new TaskActivityBindingError('That activity template is inactive.');
   }
@@ -299,6 +323,8 @@ export function applyTaskActivityBinding(d, taskId, {
   supportOriginTaskId = null,
   materializeChecklist = true,
   variableLabels = {},
+  activitySnapshot = null,
+  definitionSnapshot = null,
 } = {}) {
   const task = taskRow(d, taskId);
   if (!task) throw new TaskActivityBindingError('Task not found.');
@@ -306,6 +332,9 @@ export function applyTaskActivityBinding(d, taskId, {
     throw new TaskActivityBindingError('Activity templates can only be attached to top-level tasks.');
   }
 
+  const existingBinding = getTaskActivityBinding(d, task.id);
+  const snapshot = parseTaskActivitySnapshot(activitySnapshot ?? definitionSnapshot
+    ?? (Number(existingBinding?.activity_template_id) === Number(activityTemplateId) ? existingBinding?.definition_snapshot_json : null));
   const preview = previewTaskActivityBinding(d, {
     activityTemplateId,
     subjectUserId,
@@ -313,6 +342,7 @@ export function applyTaskActivityBinding(d, taskId, {
     dateKey: dateKey || task.due_date || todayKey(d),
     task,
     allowInactive,
+    activitySnapshot: snapshot,
   });
 
   let resolution;
@@ -336,18 +366,17 @@ export function applyTaskActivityBinding(d, taskId, {
 
   // Read before the upsert: after it, every first-time binding would look
   // existing and its authoring-time checklist would never be materialized.
-  const existingBinding = getTaskActivityBinding(d, task.id);
-
   d.prepare(`
     INSERT INTO task_activity_bindings (
-      task_id, activity_template_id, subject_user_id, assignment_override_user_id, updated_at
-    ) VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      task_id, activity_template_id, subject_user_id, assignment_override_user_id, definition_snapshot_json, updated_at
+    ) VALUES (?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     ON CONFLICT(task_id) DO UPDATE SET
       activity_template_id = excluded.activity_template_id,
       subject_user_id = excluded.subject_user_id,
       assignment_override_user_id = excluded.assignment_override_user_id,
+      definition_snapshot_json = excluded.definition_snapshot_json,
       updated_at = excluded.updated_at
-  `).run(task.id, preview.activity.id, preview.subjectUserId, preview.assignmentOverrideUserId);
+  `).run(task.id, preview.activity.id, preview.subjectUserId, preview.assignmentOverrideUserId, snapshot ? JSON.stringify(snapshot) : null);
 
   // Manual task rotation is intentionally cleared. Future occurrences resolve
   // from current proficiency and Activity Template rotation state instead.
@@ -428,11 +457,12 @@ export function copyTaskActivityBinding(d, sourceTaskId, targetTaskId, {
 } = {}) {
   const sourceBinding = getTaskActivityBinding(d, sourceTaskId);
   if (!sourceBinding) return null;
-  const currentActivity = activityTemplate(d, sourceBinding.activity_template_id);
+  const currentActivity = readTaskActivityDefinition(d, sourceTaskId);
   const sourceSupport = activitySupportTasks(d, sourceTaskId).find((row) => row.role === 'supervisor') ?? null;
   const target = taskRow(d, targetTaskId);
   return applyTaskActivityBinding(d, targetTaskId, {
     activityTemplateId: sourceBinding.activity_template_id,
+    activitySnapshot: parseTaskActivitySnapshot(sourceBinding.definition_snapshot_json),
     subjectUserId: sourceBinding.subject_user_id,
     // Assignment overrides apply to future occurrences only while the current
     // template permits them. Keep the source occurrence's binding as history.

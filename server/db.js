@@ -20,6 +20,7 @@
 import Database from 'better-sqlite3-multiple-ciphers';
 import { addTaskExpirationSchema } from './services/task-expiration-schema.js';
 import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
+import { TASK_SERIES_SCHEMA_SQL, initializeTaskSeries } from './services/task-series.js';
 import path from 'path';
 import fs from 'node:fs/promises';
 import { mkdirSync, existsSync, renameSync, rmSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs';
@@ -9034,6 +9035,13 @@ FORK_MIGRATIONS.push({
     ALTER TABLE tasks ADD COLUMN due_date_offset_days INTEGER
       CHECK(due_date_offset_days IS NULL OR (typeof(due_date_offset_days) = 'integer' AND due_date_offset_days >= 0));
   `,
+});
+
+FORK_MIGRATIONS.push({
+  version: 10038,
+  description: 'Tasks: independent versioned recurring Activity definitions',
+  up: TASK_SERIES_SCHEMA_SQL,
+  afterUp: initializeTaskSeries,
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

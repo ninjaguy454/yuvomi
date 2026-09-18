@@ -1,4 +1,5 @@
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
+import { readTaskActivityDefinition } from './task-activity-snapshot.js';
 import { activityPresenceWindow, evaluateAvailability, availabilityInstantMs } from './presence.js';
 import { assertTaskMemberSkills } from './task-skills.js';
 import { notifyTaskObligations, notifyTaskClaim } from './notification-events.js';
@@ -14,12 +15,7 @@ function nowSql() {
 }
 
 function activityForTask(d, taskId) {
-  return d.prepare(`
-    SELECT a.*, b.subject_user_id
-      FROM task_activity_bindings b
-      JOIN activity_templates a ON a.id = b.activity_template_id
-     WHERE b.task_id = ?
-  `).get(taskId) ?? null;
+  return readTaskActivityDefinition(d, taskId);
 }
 
 function taskWindow(d, taskId, taskOverride = null) {

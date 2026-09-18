@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Load immediate card feedback and relative reusable schedules together.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.15`;
+// Load scoped series editing with the existing immediate Task feedback path.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.16`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -73,6 +73,7 @@ const APP_SHELL = [
   '/utils/task-subtask-queue.js',
   '/utils/task-card-subtasks.js',
   '/utils/activity-schedule.js',
+  '/utils/task-edit-scope.js',
   '/utils/task-progress.js',
   '/utils/session-lifecycle.js',
   '/push.js',

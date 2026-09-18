@@ -1503,7 +1503,7 @@ function activityNode(task, ctx) {
   const status = document.createElement('p'); status.className = 'form-hint'; status.textContent = t('common.loading');
   wrap.appendChild(status);
   const labels = { created: 'Created', assigned: 'Assigned', reassigned: 'Reassigned', supervisor_assigned: 'Supervisor assigned',
-    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Task expired · 0 completion points', reopened: 'Reopened', edited: 'Edited', status_changed: 'Status changed' };
+    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Task expired · 0 completion points', reopened: 'Reopened', edited: 'Edited', occurrence_edited: 'This occurrence edited', series_edited: 'This and future occurrences edited', status_changed: 'Status changed' };
   ctx.activityRequest = api.get(`/tasks/${task.id}/activity`);
   ctx.activityRequest.then((response) => {
     if (ctx.closed || !wrap.isConnected) return;
@@ -1782,7 +1782,9 @@ export function openTaskDetail({
   // Gesperrte Aufgabe (#830): der Weiterschalt-Knopf bleibt, Loeschen, Ablegen
   // und Bearbeiten fallen weg. Die Detailansicht ist der zweite Einstieg neben
   // der Zeile - blendete nur die Zeile aus, waere die Sperre hier zu umgehen.
-  const canEdit = canTask(task, 'edit') && canEditTaskDefinition(task, null, ctx);
+  const historicalSeries = task.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || archived);
+  const canEdit = historicalSeries ? canTask(task, 'edit_series')
+    : canTask(task, 'edit') && canEditTaskDefinition(task, null, ctx);
 
   const actions = canTask(task, 'delete_archive') && canEditTaskDefinition(task, null, ctx) ? [{
     id: 'task-detail-delete',
@@ -1833,10 +1835,10 @@ export function openTaskDetail({
       mount: (panel, pane) => edit.mount(panel, pane),
     } : undefined,
   });
-  // Keep the permitted editor available after explicit reopening, but do not
-  // offer a definition write while this occurrence is expired.
+  // Expired occurrences stay historical. A permitted series edit can change
+  // their future definition without reopening or rewriting this occurrence.
   const editControl = document.getElementById('detail-view-edit');
-  if (editControl) editControl.hidden = isExpired(task);
+  if (editControl) editControl.hidden = isExpired(task) && !(task.recurrence_series_id != null && canTask(task, 'edit_series'));
   for (const child of actionableSubtasks(task)) ctx.childRenderKeys.set(Number(child.id), subtaskRenderKey(task, child));
   // Pending feedback changes existing controls without layout reads, icon scans,
   // Activity reads or rebuilding any subtask/skill disclosure.
@@ -1898,7 +1900,8 @@ export function openTaskDetail({
     }
     for (const [id, permission] of [['detail-view-edit', 'edit'], ['task-detail-delete', 'delete_archive'], ['task-detail-archive', 'delete_archive'], ['task-detail-claim', 'claim']]) {
       const control = document.getElementById(id);
-      if (control) control.hidden = !canTask(task, permission) || (id === 'detail-view-edit' || id === 'task-detail-claim') && isExpired(task);
+      if (control) control.hidden = id === 'detail-view-edit' && task.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task))
+        ? !canTask(task, 'edit_series') : !canTask(task, permission) || (id === 'detail-view-edit' || id === 'task-detail-claim') && isExpired(task);
     }
     const editing = document.querySelector('.detail-view__form');
     if (!editing || editing.hidden) {

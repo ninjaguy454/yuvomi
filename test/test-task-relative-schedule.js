@@ -134,7 +134,9 @@ const groupFields = (slot, group = 'Relative chores') => ({
   assignment_mode: 'round_robin', rotation_user_ids: [parent, learner], rotation_group: group, rotation_slot: slot,
 });
 async function joinRelative(id, slot, extra = {}) {
+  const current=(await call('GET',`/tasks/${id}`)).data;
   return call('PUT', `/tasks/${id}`, { expected_revision: read(id).revision, activity_template_id: null,
+    edit_scope:'future',expected_series_revision:current.recurrence_series_revision,
     ...groupFields(slot), ...extra });
 }
 

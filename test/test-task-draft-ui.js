@@ -31,6 +31,7 @@ const templates = [
 ];
 const workflow = { id: 21, name: 'Evening reset', description: 'Two connected Tasks', subject_required: 0, input_schema: [], steps: [] };
 const preferenceValues = new Map(), requests = [];
+let editFixture = null, editFailure = null;
 const createReceipts = new Map();
 const app = express();
 const shellStyles = [...readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').matchAll(/<link rel="stylesheet" href="[^"]+"\s*\/>/g)].map(([tag]) => tag).join('');
@@ -38,6 +39,16 @@ app.use(express.json());
 app.use('/api/v1', (req, res) => {
   const userId = Number(req.headers.cookie?.match(/(?:^|;\s*)draft-user=(\d+)/)?.[1] || 1);
   requests.push({ method: req.method, path: req.path, userId, body: req.body });
+  if (req.path === '/reminders' && req.method === 'GET') return res.json({ data: null });
+  if (req.path === '/tasks/70' && editFixture) {
+    if (req.method === 'PUT') {
+      if (editFailure) return res.status(editFailure.status).json({ error: editFailure.message });
+      const currentPreserved = req.body.edit_scope === 'future' && ['done', 'expired'].includes(editFixture.status);
+      editFixture = { ...editFixture, ...req.body, assigned_to: 2, revision: editFixture.revision + 1 };
+      return res.json({ data: editFixture, series_edit: { preserved: req.body.edit_scope === 'future' ? [80] : [], current_preserved: currentPreserved } });
+    }
+    return res.json({ data: editFixture });
+  }
   if (req.path === '/automation/activity-templates/15/resolve' && req.method === 'POST') {
     if (req.body.subject_user_id !== 2) return res.status(400).json({ error: 'Choose or enter a value for “Assignee”.' });
     return res.json({ data: { title: 'Eleanor Get Ready for School', description: '', checklist: [] } });
@@ -90,7 +101,8 @@ test.after(async () => {
   await new Promise((resolve) => server?.close(resolve) || resolve());
 });
 
-async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin' } = {}) {
+async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin', editTask = null } = {}) {
+  if (editTask) { editFixture = structuredClone(editTask); editFailure = null; }
   const context = await browser.createBrowserContext();
   const page = await context.newPage();
   await page.setViewport({ width, height: 900 });
@@ -114,7 +126,10 @@ async function mounted({ userId = 1, width = 1366, newTask = true, role = 'admin
     await render(document.querySelector('#fixture'), { user: { id: userId, role } });
   }, { userId, role });
   assert.deepEqual(page.fixtureErrors || [], []);
-  if (newTask) { await page.click(width < 1024 ? '#fab-new-task' : '#btn-new-task'); await page.waitForSelector('#task-form'); }
+  if (editTask) {
+    await page.evaluate(async () => { const { openTaskById } = await import('/pages/tasks.js'); await openTaskById(70, { user: { id: 1, role: 'admin' } }); });
+    await page.click('#detail-view-edit'); await page.waitForSelector('#task-form');
+  } else if (newTask) { await page.click(width < 1024 ? '#fab-new-task' : '#btn-new-task'); await page.waitForSelector('#task-form'); }
   page.dispose = () => context.close();
   return page;
 }
@@ -596,5 +611,180 @@ test('contextual Assignee resolution follows the selected Eleanor and blocked re
     const resolution = requests.filter(r => r.path === '/automation/activity-templates/15/resolve').at(-1);
     assert.equal(resolution.body.subject_user_id, 2);
     assert.deepEqual(resolution.body.task, { start_date: null, start_time: null, due_date: null, due_time: null });
+  } finally { await page.dispose(); }
+});
+
+const seriesEditFixture = () => ({ id: 70, title: 'Weekly homework', description: 'Read and write', revision: 7,
+  permissions: Object.fromEntries(['edit', 'edit_series', 'complete', 'delete_archive', 'change_priority', 'change_points', 'change_category_tags', 'change_dates', 'change_assignment', 'change_required_skills'].map(key => [key, true])),
+  recurrence_series_id: 9, recurrence_series_revision: 3, is_recurring: 1, recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO',
+  status: 'open', priority: 'none', category: 'misc', points: 5, tags: ['School'], assigned_to: 2, created_by: 1,
+  start_date: '2026-09-21', due_date: '2026-09-25', start_time: '15:30', due_time: '07:30',
+  visibility: 'all', assignment_mode: 'fixed', location: { kind: 'none' }, documents: [], skill_ids: [],
+  subtasks: [{ id: 71, title: 'Read', status: 'open', skill_ids: [], is_optional: 0 },
+    { id: 72, title: 'Extra practice', status: 'open', skill_ids: [], is_optional: 1 }] });
+const mutations = () => requests.filter(request => !['GET', 'HEAD'].includes(request.method));
+async function saveEdit(page) { await page.focus('#task-submit-btn'); await page.keyboard.press('Enter'); }
+
+for (const width of [1366, 390]) {
+  test(`recurring Save validates before scope and Cancel keeps the same complete draft at ${width}px`, async () => {
+    const page = await mounted({ width, editTask: seriesEditFixture() }); requests.length = 0;
+    try {
+      await set(page, '#task-title', ''); await saveEdit(page);
+      assert.equal(await page.$('#task-edit-scope-form'), null);
+      assert.equal(mutations().length, 0);
+      await set(page, '#task-title', 'Revised homework');
+      await set(page, '#task-description', 'Keep all these details');
+      await page.evaluate(() => { window.editDraft = document.querySelector('#task-form'); });
+      await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+      assert.equal(await value(page, '[name="edit_scope"]:checked'), 'occurrence');
+      assert.equal(mutations().length, 0);
+      assert.equal(await page.$eval('#task-edit-scope-form', el => el.getBoundingClientRect().right <= innerWidth), true);
+      if (process.env.TASK_SCOPE_QA_OUTPUT) {
+        mkdirSync(process.env.TASK_SCOPE_QA_OUTPUT, { recursive: true });
+        await page.screenshot({ path: `${process.env.TASK_SCOPE_QA_OUTPUT}/edit-scope-${width}.png` });
+      }
+      await page.focus('[name="edit_scope"]:checked'); await page.keyboard.press('ArrowDown');
+      assert.equal(await value(page, '[name="edit_scope"]:checked'), 'future');
+      await page.click('[data-task-scope-cancel]');
+      await page.waitForFunction(() => !document.querySelector('#task-edit-scope-form'));
+      assert.equal(await page.evaluate(() => window.editDraft === document.querySelector('#task-form')), true);
+      assert.equal(await value(page, '#task-description'), 'Keep all these details');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'task-submit-btn');
+      assert.equal(mutations().length, 0);
+      assert.equal(await page.$eval('#task-submit-btn', el => el.disabled), false);
+    } finally { await page.dispose(); }
+  });
+}
+
+test('recurring Apply defaults to occurrence and future carries the series revision with preserved feedback', async () => {
+  for (const scope of ['occurrence', 'future']) {
+    const page = await mounted({ editTask: seriesEditFixture() }); requests.length = 0;
+    try {
+      await set(page, '#task-points', '6'); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+      if (scope === 'future') await page.click('[name="edit_scope"][value="future"]');
+      await page.focus('#task-scope-apply'); await page.keyboard.press('Enter');
+      await page.waitForFunction(() => !document.querySelector('#task-form'));
+      const write = requests.find(request => request.path === '/tasks/70' && request.method === 'PUT');
+      assert.equal(write.body.edit_scope, scope); assert.equal(write.body.expected_revision, 7);
+      assert.equal(write.body.expected_series_revision, scope === 'future' ? 3 : undefined);
+      if (scope === 'future') assert.match(await page.evaluate(() => window.toasts.join(' ')), /1 future occurrence was preserved/);
+    } finally { await page.dispose(); }
+  }
+});
+
+test('unchanged recurring Edit Save closes without any mutation or scope dialog', async () => {
+  const page = await mounted({ editTask: seriesEditFixture() }); requests.length = 0;
+  try {
+    await saveEdit(page); await page.waitForFunction(() => !document.querySelector('#task-form'));
+    assert.equal(await page.$('#task-edit-scope-form'), null); assert.equal(mutations().length, 0);
+  } finally { await page.dispose(); }
+});
+
+test('nonrecurring and unchanged-span occurrence date edits save without scope', async () => {
+  for (const recurring of [false, true]) {
+    const fixture = seriesEditFixture();
+    if (!recurring) { fixture.recurrence_series_id = null; fixture.is_recurring = 0; fixture.recurrence_rule = null; }
+    const page = await mounted({ editTask: fixture }); requests.length = 0;
+    try {
+      if (recurring) { await set(page, '#task-start-date', '2026-09-28'); await set(page, '#task-due-date', '2026-10-02'); }
+      else await set(page, '#task-title', 'One-off homework');
+      await saveEdit(page); await page.waitForFunction(() => !document.querySelector('#task-form'));
+      assert.equal(await page.$('#task-edit-scope-form'), null);
+      assert.equal(requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body.edit_scope, undefined);
+    } finally { await page.dispose(); }
+  }
+});
+
+test('live invalidation keeps an unsaved editor draft and stale series rejection preserves it', async () => {
+  const page = await mounted({ editTask: seriesEditFixture() }); requests.length = 0;
+  try {
+    editFailure = { status: 409, message: 'This recurring series changed. Reload before applying future changes.' };
+    await set(page, '#task-title', 'Preserved conflict draft');
+    await set(page, '#task-description', 'Keep my unsaved instructions');
+    await page.evaluate(() => { window.conflictDraft = document.querySelector('#task-form'); });
+    editFixture = { ...editFixture, title: 'Saved by another client', revision: 8, recurrence_series_revision: 4 };
+    await Promise.all([
+      page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/tasks' && response.request().method() === 'GET'),
+      page.evaluate(() => window.dispatchEvent(new Event('task-data-changed'))),
+    ]);
+    assert.equal(await page.evaluate(() => window.conflictDraft === document.querySelector('#task-form')), true);
+    assert.equal(await value(page, '#task-title'), 'Preserved conflict draft');
+    assert.equal(await value(page, '#task-description'), 'Keep my unsaved instructions');
+    await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+    await page.click('[name="edit_scope"][value="future"]'); await page.click('#task-scope-apply');
+    await page.waitForSelector('#task-form-error:not([hidden])');
+    assert.equal(await value(page, '#task-title'), 'Preserved conflict draft');
+    assert.match(await page.evaluate(() => window.toasts.join(' ')), /This recurring series changed/);
+    assert.equal(requests.filter(request => request.path === '/tasks/70' && request.method === 'PUT').length, 1);
+  } finally { editFailure = null; await page.dispose(); }
+});
+
+test('an existing series uses its frozen fixed-assignee override policy after the source template changes', async () => {
+  const activity = templates.find(template => template.id === 14), previous = structuredClone(activity);
+  Object.assign(activity, { assignment_strategy: 'open_claimable', allow_assignment_override: 0, subject_required: 1 });
+  const fixture = { ...seriesEditFixture(), activity_template_id: 14, activity_assignment_strategy: 'fixed',
+    activity_assignment_override_allowed: 1, activity_subject_required: 0 };
+  const page = await mounted({ editTask: fixture }); requests.length = 0;
+  try {
+    assert.equal(await page.$eval('#task-fixed-assignment', el => el.hidden), false);
+    assert.equal(await page.$eval('#task-activity-subject', el => el.hidden), true);
+    assert.equal(await page.$eval('[data-ms-input="task_assigned"][value="1"]', el => el.disabled), false);
+    await page.click('[data-ms-input="task_assigned"][value="2"]');
+    await page.click('[data-ms-input="task_assigned"][value="1"]');
+    await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+    await page.click('[name="edit_scope"][value="future"]'); await page.click('#task-scope-apply');
+    await page.waitForFunction(() => !document.querySelector('#task-form'));
+    const body = requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body;
+    assert.deepEqual(body.assigned_to, [1]); assert.equal(body.activity_subject_user_id, null);
+  } finally { Object.assign(activity, previous); await page.dispose(); }
+});
+
+test('series template skills remain editable by an authorized user and archived actions stay absent', async () => {
+  const fixture = { ...seriesEditFixture(), activity_template_id: 14, activity_subject_required: 0 };
+  fixture.subtasks.push({ id: 73, title: 'Historical removed step', status: 'done', archived_at: '2026-09-20 00:00:00', skill_ids: [] });
+  const page = await mounted({ editTask: fixture }); requests.length = 0;
+  try {
+    const skill = '#task-root-skills [data-task-skill-id][value="3"]';
+    assert.equal(await page.$eval(skill, el => el.matches(':disabled')), false);
+    await page.click('#task-root-skills summary');
+    await page.click(skill); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+    await page.click('#task-scope-apply');
+    await page.waitForFunction(() => !document.querySelector('#task-form'));
+    const body = requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body;
+    assert.deepEqual(body.skill_ids, [3]); assert.equal(body.subtasks.some(step => step.id === 73), false);
+  } finally { await page.dispose(); }
+});
+
+test('future scope is disabled when the server does not authorize series editing', async () => {
+  const fixture = seriesEditFixture(); fixture.permissions.edit_series = false;
+  const page = await mounted({ editTask: fixture }); requests.length = 0;
+  try {
+    await set(page, '#task-title', 'Allowed occurrence edit'); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+    assert.equal(await page.$eval('[name="edit_scope"][value="future"]', el => el.disabled), true);
+    assert.equal(await value(page, '[name="edit_scope"]:checked'), 'occurrence');
+    await page.click('[data-task-scope-cancel]'); assert.equal(mutations().length, 0);
+  } finally { await page.dispose(); }
+});
+
+test('expired historical series offers future-only editing and explains preservation', async () => {
+  const fixture = seriesEditFixture(); fixture.status = 'expired';
+  const page = await mounted({ editTask: fixture }); requests.length = 0;
+  try {
+    const locked = '#task-status, #task-sync-target, .reminder-section input, .reminder-section select, [data-doc-attach] input, [data-doc-attach] button';
+    assert.ok(await page.$$eval(locked, fields => fields.length > 5 && fields.every(field => field.disabled)));
+    assert.match(await page.$eval('#task-historical-edit-hint', el => el.textContent), /status, reminders and documents, will be preserved/);
+    await page.$eval('[data-doc-attach]', field => {
+      const transfer = new DataTransfer(); transfer.items.add(new File(['history'], 'history.txt', { type: 'text/plain' }));
+      field.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }));
+    });
+    assert.equal(await page.$$eval('.doc-attach__chip--pending', fields => fields.length), 0);
+    await set(page, '#task-title', 'Future homework title'); await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+    assert.equal(await page.$eval('[name="edit_scope"][value="occurrence"]', el => el.disabled), true);
+    assert.equal(await value(page, '[name="edit_scope"]:checked'), 'future');
+    assert.match(await page.$eval('#task-edit-scope-form', el => el.textContent), /historical occurrence will be preserved/);
+    await page.click('#task-scope-apply'); await page.waitForFunction(() => !document.querySelector('#task-form'));
+    assert.equal(requests.find(request => request.path === '/tasks/70' && request.method === 'PUT').body.status, undefined);
+    assert.equal(mutations().some(request => /^\/(?:reminders|documents)(?:\/|$)/.test(request.path) || request.path.endsWith('/documents')), false);
+    assert.match(await page.evaluate(() => window.toasts.join(' ')), /This historical occurrence was preserved/);
   } finally { await page.dispose(); }
 });

@@ -370,6 +370,7 @@ test('PUT done: im selben Speichern geänderte Regel gilt schon für die Folgein
   const newDue = dayKey(-1);
   await call('PUT', `/${id}`, {
     title: 'Filter wechseln', status: 'done',
+    edit_scope: 'future', expected_series_revision: 1,
     recurrence_rule: 'FREQ=MONTHLY', due_date: newDue,
   });
 
@@ -388,7 +389,8 @@ test('PUT done: im selben Speichern abgeschaltete Wiederholung erzeugt keine Fol
     title: 'Filter entkalken', status: 'open', due_date: dayKey(-1), created_by: uid,
     is_recurring: 1, recurrence_rule: 'FREQ=WEEKLY',
   });
-  await call('PUT', `/${id}`, { title: 'Filter entkalken', status: 'done', is_recurring: 0 });
+  await call('PUT', `/${id}`, { title: 'Filter entkalken', status: 'done', is_recurring: 0,
+    edit_scope: 'future', expected_series_revision: 1 });
 
   const rows = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = 'Filter entkalken'`).get();
   assert.equal(rows.n, 1, 'Wer die Wiederholung abschaltet, beendet die Serie bewusst');
@@ -599,6 +601,7 @@ test('PUT done: im selben Speichern gesetzter Anker gilt sofort', async () => {
   });
   await call('PUT', `/${id}`, {
     title: 'Kalkfilter tauschen', status: 'done', recurrence_from_completion: 1,
+    edit_scope: 'future', expected_series_revision: 1,
   });
   assert.equal(openInstances('Kalkfilter tauschen')[0].due_date, dayKey(7));
 });

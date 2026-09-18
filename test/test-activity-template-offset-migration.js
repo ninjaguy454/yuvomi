@@ -11,7 +11,7 @@ process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'template-offset-migration-test';
 const { ALL_MIGRATIONS } = await import('../server/db.js');
 
-test('10036 encrypted production-shaped schedules gain only relative offsets at10037 and restart without replay', () => {
+test('10036 encrypted production-shaped schedules gain relative offsets at10037 and series at10038 without replay', () => {
   const directory = mkdtempSync(path.join(tmpdir(), 'activity-template-offset-'));
   const databasePath = path.join(directory, 'database.db');
   const key = randomBytes(32).toString('hex');
@@ -62,7 +62,7 @@ test('10036 encrypted production-shaped schedules gain only relative offsets at1
       return child.stdout + child.stderr;
     };
     const first = boot();
-    assert.deepEqual([...first.matchAll(/Migration (\d+) applied:/g)].map(row => Number(row[1])), [10037]);
+    assert.deepEqual([...first.matchAll(/Migration (\d+) applied:/g)].map(row => Number(row[1])), [10037,10038]);
     const migrated = open({ readonly: true });
     const after = migrated.prepare('SELECT * FROM activity_templates ORDER BY id').all();
     for (let index = 0; index < original.length; index++) {
@@ -74,8 +74,9 @@ test('10036 encrypted production-shaped schedules gain only relative offsets at1
     assert.deepEqual(migrated.prepare('SELECT * FROM tasks WHERE id=1').get(), { ...taskBefore, due_date_offset_days: null });
     assert.equal(migrated.prepare('SELECT is_optional FROM activity_template_checklist_items').get().is_optional, 1);
     const history = migrated.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
-    assert.deepEqual(history.filter(row => row.version !== 10037), originalHistory);
-    assert.equal(history.length, originalHistory.length + 1);
+    assert.deepEqual(history.filter(row => row.version <= 10036), originalHistory);
+    assert.equal(history.length, originalHistory.length + 2);
+    assert.equal(migrated.prepare('SELECT COUNT(*) n FROM task_recurrence_series').get().n,0,'non-recurring Tasks gain no series');
     assert.equal(migrated.pragma('integrity_check', { simple: true }), 'ok');
     assert.deepEqual(migrated.pragma('foreign_key_check'), []);
     migrated.close();

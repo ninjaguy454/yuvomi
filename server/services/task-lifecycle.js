@@ -2,6 +2,7 @@
 import { syncTaskRewards } from './rewards.js';
 import { retiredRecurrenceOccurrence, registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { calendarDayOffset } from './activity-schedule.js';
+import { authoritativeTaskRecurrence, ensureSeriesDefinition } from './task-series.js';
 import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
@@ -286,10 +287,12 @@ export function expireTask(d, taskId, {now=new Date()}={}) {
   return d.transaction(() => {
     const source=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
     if (!taskExpirationDue(d,source,now)) return {expired:false,task:source};
-    if(source.is_recurring&&!source.parent_task_id&&!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
+    if(!source.parent_task_id)ensureSeriesDefinition(d,source.id);
+    const recurrence=authoritativeTaskRecurrence(d,source);
+    if(recurrence.is_recurring&&!source.parent_task_id&&!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
     // Retain a retryable frontier even if the adapter's successor transaction
     // rolls back before it can register the source's first occurrence.
-    if(source.is_recurring&&!source.parent_task_id)registerRecurrenceOccurrence(d,source.id);
+    if(recurrence.is_recurring&&!source.parent_task_id)registerRecurrenceOccurrence(d,source.id);
     const at=new Date(taskDeadlineMs(d,source)).toISOString();
     const rows=d.prepare(`WITH RECURSIVE scope(id) AS (SELECT ?
       UNION SELECT t.id FROM tasks t JOIN scope p ON t.parent_task_id=p.id
@@ -307,7 +310,7 @@ export function expireTask(d, taskId, {now=new Date()}={}) {
       d.prepare("UPDATE task_supervision_actions SET state='not_required',reason='The Task expired incomplete.',revision=revision+1,updated_at=? WHERE action_task_id=? AND state!='not_required'").run(at,row.id);
     }
     recordTaskActivity(d,source.id,'expired',null,{title:source.title,from_status:source.status,to_status:'expired',expired_at:at,points_awarded:0,
-      recurrence_paused:!!(source.is_recurring&&source.recurrence_from_completion)});
+      recurrence_paused:!!(recurrence.is_recurring&&recurrence.recurrence_from_completion)});
     // The adapter's nested transaction rolls back a failed materialization,
     // while the expiration itself remains durable. Startup/timer reconciliation
     // retries this terminal frontier; a missing eligible assignee cannot keep
@@ -321,7 +324,8 @@ export function expireTask(d, taskId, {now=new Date()}={}) {
 
 export function resumeExpiredTaskRecurrence(d,taskId) {
   const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
-  if(task?.status!=='expired'||!task.is_recurring||task.recurrence_from_completion||task.parent_task_id)return;
+  const recurrence=task?authoritativeTaskRecurrence(d,task):null;
+  if(task?.status!=='expired'||!recurrence.is_recurring||recurrence.recurrence_from_completion||task.parent_task_id)return;
   if(!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
   return recurrenceHooks.spawn(task);
 }

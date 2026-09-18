@@ -1083,6 +1083,13 @@ router.delete('/admin/skills/:id', requireCapability('skills.manage'), (req, res
       UNION ALL SELECT 'an Activity Template subtask' FROM activity_template_checklist_skills WHERE skill_id = ? LIMIT 1`)
       .get(req.params.id, req.params.id, req.params.id);
     if (inUse) return res.status(409).json({ error: `This skill is required by ${inUse.owner}.`, code: 409 });
+    const seriesUse = d.prepare(`SELECT 1 FROM task_activity_bindings binding,
+        json_each(binding.definition_snapshot_json,'$.required_skill_ids') requirement
+        WHERE requirement.value=?
+      UNION ALL SELECT 1 FROM task_recurrence_definitions definition,json_tree(definition.definition_json) field,
+        json_each(CASE WHEN field.type='array' AND field.key IN ('skill_ids','required_skill_ids') THEN field.value ELSE '[]' END) requirement
+        WHERE requirement.value=? LIMIT 1`).get(Number(req.params.id),Number(req.params.id));
+    if (seriesUse) return res.status(409).json({ error: 'This skill is required by a recurring Task definition.', code: 409 });
     const result = d.prepare('DELETE FROM skills WHERE id = ?').run(req.params.id);
     res.status(204).end();
   } catch (err) {

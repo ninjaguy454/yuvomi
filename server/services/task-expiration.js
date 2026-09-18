@@ -17,7 +17,7 @@ export function reconcileTaskExpirations(d,{now=new Date(),maxOccurrences=500,on
   // Scan every frontier: ended rules are harmless no-ops and must not consume
   // a retry limit that would permanently starve a later recoverable series.
   const pending=d.prepare(`SELECT t.id FROM tasks t JOIN task_recurrence_occurrences o ON o.task_id=t.id
-    WHERE t.status='expired' AND t.is_recurring=1 AND t.recurrence_from_completion=0 AND o.state='materialized'
+    WHERE t.status='expired' AND o.state='materialized'
       AND NOT EXISTS(SELECT 1 FROM task_recurrence_occurrences later WHERE later.series_id=o.series_id
         AND later.state='materialized' AND later.generation>o.generation)`).all();
   for(const {id} of pending)try {resumeExpiredTaskRecurrence(d,id);}

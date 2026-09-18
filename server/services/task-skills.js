@@ -1,6 +1,7 @@
 /** Task and subtask skill requirements use the household's existing skill IDs. */
 import { effectiveSkillProficiency, householdMembers } from './activity-eligibility.js';
 import { todayKey } from '../utils/timezone.js';
+import { taskActivitySnapshot, activitySnapshotSkills } from './task-activity-snapshot.js';
 
 export class TaskSkillError extends Error {}
 
@@ -86,6 +87,12 @@ export function attachTaskSkills(d, tasks) {
   for (const { task_id: taskId, ...skill } of rows) {
     if (!byTask.has(taskId)) byTask.set(taskId, []);
     byTask.get(taskId).push(skill);
+  }
+  // Series definitions freeze requirement IDs, while the skill's current
+  // safety/proficiency rules remain authoritative at each action.
+  for (const binding of d.prepare(`SELECT * FROM task_activity_bindings WHERE task_id IN (${ids.map(() => '?').join(',')})`).all(...ids)) {
+    const snapshot = taskActivitySnapshot(d, binding.task_id, binding);
+    if (snapshot) byTask.set(binding.task_id, activitySnapshotSkills(d, snapshot));
   }
   const parentIds = [...new Set(tasks.map(task => task.parent_task_id).filter(Boolean))];
   const parents = parentIds.length ? new Map(d.prepare(`SELECT p.id,p.assigned_to,u.display_name AS assigned_name

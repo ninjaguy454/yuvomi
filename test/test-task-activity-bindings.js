@@ -435,6 +435,15 @@ test('bound recurrence preserves assigned-subtask participation and private pare
        AND source = 'subtasks' AND status = 'active'
   `).get(source.id, frank));
 
+  // Direct occurrence edits do not silently redefine an independent series.
+  // Explicitly publish the current concrete checklist to its future scope.
+  const definition = (await call('GET', `/${source.id}`)).body.data;
+  const published = await call('PUT', `/${source.id}`, {
+    edit_scope: 'future', expected_series_revision: definition.recurrence_series_revision,
+    subtasks: [{ id: subtaskCreated.body.data.id, title: 'Delegated first-class subtask', skill_ids: [], is_optional: 0 }],
+  });
+  assert.equal(published.status,200,JSON.stringify(published.body));
+
   assert.equal((await finish(source.id)).status, 200);
   const next = followupOf(source.id);
   assert.ok(next);
@@ -509,6 +518,11 @@ test('recurrence treats an empty Task-owned checklist as authoritative after tem
   `).get(deletedSource.id);
   assert.ok(deletedStep);
   assert.equal((await call('DELETE', `/${deletedStep.id}`)).status, 200);
+  const current = (await call('GET', `/${deletedSource.id}`)).body.data;
+  const published = await call('PUT', `/${deletedSource.id}`, {
+    edit_scope:'future',expected_series_revision:current.recurrence_series_revision,subtasks:[],
+  });
+  assert.equal(published.status,200,JSON.stringify(published.body));
   db.prepare(`
     UPDATE activity_template_checklist_items
        SET title_template = 'Current template replacement'
@@ -643,7 +657,12 @@ test('Activity round-robin cursor rolls back on failed recurrence and retry adva
     SELECT last_user_id FROM activity_rotation_state
      WHERE activity_template_id = ? AND purpose = 'primary'
   `).get(activity).last_user_id;
-  assert.equal(cursorAfter, next.assigned_to);
+  assert.equal(cursorAfter, cursorBefore, 'an independent series no longer consumes the reusable template cursor');
+  const seriesId=db.prepare('SELECT series_id FROM task_recurrence_occurrences WHERE task_id=?').get(source.id).series_id;
+  const seriesCursor=db.prepare('SELECT cursor_user_id,occurrence_count FROM assignment_rotation_state WHERE rotation_key=?')
+    .get(`series:${seriesId}:primary`);
+  assert.equal(seriesCursor.cursor_user_id,next.assigned_to);
+  assert.equal(seriesCursor.occurrence_count,1,'the successful series generation consumes exactly one turn');
   assert.equal(bindingOf(next.id).activity_template_id, activity);
   assert.equal(db.prepare(`
     SELECT COUNT(*) AS n FROM tasks t
@@ -663,5 +682,7 @@ test('Activity round-robin cursor rolls back on failed recurrence and retry adva
     SELECT last_user_id FROM activity_rotation_state
      WHERE activity_template_id = ? AND purpose = 'primary'
   `).get(activity).last_user_id, cursorAfter, 'idempotent retry does not consume another cursor turn');
+  assert.deepEqual(db.prepare('SELECT cursor_user_id,occurrence_count FROM assignment_rotation_state WHERE rotation_key=?')
+    .get(`series:${seriesId}:primary`),seriesCursor,'retry preserves the independent series cursor');
   assert.deepEqual(db.pragma('foreign_key_check'), []);
 });

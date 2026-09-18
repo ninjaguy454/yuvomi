@@ -7,6 +7,7 @@ import { syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { taskCapabilities, taskSupervisionManagementAllowed } from './task-access.js';
 import { createHash } from 'node:crypto';
 import { createTaskOptionalContextReader } from './task-optional.js';
+import { taskActivitySnapshot, activitySnapshotSkills } from './task-activity-snapshot.js';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Request-local presentation data; never serialized as an aggregate of private siblings.
@@ -82,6 +83,8 @@ function ordinaryTaskScope(d, sourceId) {
 
 function explicitSkills(d, taskId) {
   const binding = d.prepare('SELECT activity_template_id FROM task_activity_bindings WHERE task_id = ?').get(taskId);
+  const snapshot = binding ? taskActivitySnapshot(d, taskId) : null;
+  if (snapshot) return activitySnapshotSkills(d, snapshot);
   return binding ? d.prepare(`SELECT s.* FROM activity_template_skills r JOIN skills s ON s.id = r.skill_id
     WHERE r.activity_template_id = ? ORDER BY r.sort_order,s.id`).all(binding.activity_template_id)
     : d.prepare(`SELECT s.* FROM task_skill_requirements r JOIN skills s ON s.id = r.skill_id

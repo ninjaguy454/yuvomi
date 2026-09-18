@@ -391,7 +391,8 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
     if(id!=null) {
       id=Number(id);
       const child=existing.find(row=>row.id===id);
-      if(!child||seen.has(id))throw new TaskSkillError('Choose each existing subtask only once.');
+      if(!child)throw new TaskSkillError('Only existing editable subtasks from this Task can be selected.');
+      if(seen.has(id))throw new TaskSkillError('Choose each existing subtask only once.');
       seen.add(id);
       item.isOptional ??= child.is_optional || 0;
       if(!definitionOnly)assertOptionalityEdit(child,item.isOptional);

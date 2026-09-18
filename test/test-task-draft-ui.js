@@ -298,6 +298,7 @@ test('lost create response freezes subject-generated subtasks, preserves assignm
     await page.click('#task-submit-btn');
     await page.waitForFunction(() => document.querySelector('#task-form-error')?.hidden === false && document.querySelector('#task-submit-btn')?.disabled === false);
     assert.equal(createReceipts.size, 1, 'the accepted server-side Task exists despite the missing response');
+    assert.match(await page.$eval('#task-form-error', el => el.textContent), /Finish saving this Task to confirm its subtasks; you can edit them afterward/);
     assert.equal(await page.$eval('[data-task-subtask-title]', (el) => el.disabled), true);
     await page.select('#task-activity-subject-user', '2');
     assert.equal(await value(page, '[data-task-subtask-title]'), 'Pack for Alex', 'subject changes cannot rebuild a possibly-persisted child snapshot');
@@ -624,6 +625,86 @@ const seriesEditFixture = () => ({ id: 70, title: 'Weekly homework', description
     { id: 72, title: 'Extra practice', status: 'open', skill_ids: [], is_optional: 1 }] });
 const mutations = () => requests.filter(request => !['GET', 'HEAD'].includes(request.method));
 async function saveEdit(page) { await page.focus('#task-submit-btn'); await page.keyboard.press('Enter'); }
+
+// Real API responses include historical children and generated supervision
+// rows alongside authored actions. Only the visible source actions belong in
+// the structural editor payload; a delegated source remains one such action.
+const legacySeriesEditFixture = () => ({
+  ...seriesEditFixture(), activity_template_id: 14, activity_assignment_strategy: 'fixed',
+  activity_assignment_override_allowed: 1, activity_subject_required: 0, status: 'in_progress',
+  subtasks: [
+    { id: 71, title: 'Read', status: 'done', completed_at: '2026-09-21 16:00:00', skill_ids: [3], is_optional: 0 },
+    { id: 72, title: 'Extra practice', status: 'open', skill_ids: [], is_optional: 1 },
+    { id: 73, title: 'Helper-owned source action', status: 'open', skill_ids: [3], is_optional: 0,
+      supervision_action: { action_task_id: 73, execution_mode: 'delegated', state: 'pending' } },
+    { id: 74, title: 'Historical removed action', status: 'done', archived_at: '2026-09-20 00:00:00', skill_ids: [], is_optional: 0 },
+    { id: 75, title: 'Generated helper projection', status: 'open', is_supervision_projection: 1, skill_ids: [3] },
+    { id: 76, title: 'Generated support work', status: 'open', is_support_task: 1, skill_ids: [] },
+  ],
+});
+
+for (const width of [1366, 390]) {
+  for (const scope of ['occurrence', 'future']) {
+    test(`editor compatibility: scheduling-only ${scope} save sends only visible source action IDs at ${width}px`, async () => {
+      const fixture = legacySeriesEditFixture();
+      const page = await mounted({ width, editTask: fixture }); requests.length = 0;
+      try {
+        assert.deepEqual(await page.$$eval('[data-task-subtask-row]', rows => rows.map(row => Number(row.dataset.subtaskId))), [71, 72, 73]);
+        await set(page, '#task-start-time', '16:00');
+        await set(page, '#task-due-time', '08:00');
+        await set(page, '#task-due-date', '2026-09-23');
+        await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+        await page.click(`[name="edit_scope"][value="${scope}"]`);
+        await page.focus('#task-scope-apply'); await page.keyboard.press('Enter');
+        await page.waitForFunction(() => !document.querySelector('#task-form'));
+        const writes = requests.filter(request => request.path === '/tasks/70' && request.method === 'PUT');
+        assert.equal(writes.length, 1);
+        const body = writes[0].body;
+        assert.equal(body.edit_scope, scope);
+        assert.equal(body.expected_revision, 7);
+        assert.equal(body.expected_series_revision, scope === 'future' ? 3 : undefined);
+        assert.equal(body.start_time, '16:00'); assert.equal(body.due_time, '08:00');
+        assert.equal(body.start_date, '2026-09-21'); assert.equal(body.due_date, '2026-09-23');
+        assert.deepEqual(body.subtasks.map(step => step.id), [71, 72, 73]);
+        assert.equal(new Set(body.subtasks.map(step => step.id)).size, body.subtasks.length);
+        assert.deepEqual(body.subtasks, fixture.subtasks.slice(0, 3), 'scheduling changes preserve source IDs, optional state, skills and completed progress');
+        assert.deepEqual(page.fixtureErrors || [], []);
+      } finally { await page.dispose(); }
+    });
+  }
+}
+
+for (const [width, status] of [[1366, 400], [390, 409]]) {
+  test(`editor compatibility: rejected existing PUT preserves an editable draft without create recovery instructions (${status}, ${width}px)`, async () => {
+    const page = await mounted({ width, editTask: legacySeriesEditFixture() }); requests.length = 0;
+    try {
+      const message = status === 409 ? 'This recurring series changed. Reload before applying future changes.' : 'A subtask no longer belongs to this Task. Reload the Task before saving.';
+      editFailure = { status, message };
+      await set(page, '#task-start-time', '16:00');
+      await set(page, '#task-description', 'Keep my scheduling edit and instructions');
+      await page.evaluate(() => { window.rejectedEditDraft = document.querySelector('#task-form'); });
+      await saveEdit(page); await page.waitForSelector('#task-edit-scope-form');
+      await page.click('[name="edit_scope"][value="future"]');
+      await page.focus('#task-scope-apply'); await page.keyboard.press('Enter');
+      await page.waitForSelector('#task-form-error:not([hidden])');
+      assert.equal(await page.evaluate(() => window.rejectedEditDraft === document.querySelector('#task-form')), true);
+      assert.equal(await value(page, '#task-start-time'), '16:00');
+      assert.equal(await value(page, '#task-description'), 'Keep my scheduling edit and instructions');
+      const error = await page.$eval('#task-form-error', el => el.textContent);
+      assert.ok(error.includes(message));
+      assert.doesNotMatch(error, /Finish saving this Task to confirm its subtasks|you can edit them afterward/);
+      assert.equal(await page.$eval('#task-submit-btn', el => el.disabled), false);
+      assert.equal(await page.$$eval('[data-task-subtask-title], [data-task-subtask-optional], [data-task-subtask-add]', fields => fields.every(field => !field.disabled)), true);
+      assert.equal(await page.$$eval('[data-task-subtask-handle]', fields => fields.every(field => field.getAttribute('aria-disabled') === 'false')), true);
+      await page.focus('[data-subtask-id="72"] [data-task-subtask-title]');
+      await page.keyboard.press('End'); await page.keyboard.type(' revised');
+      assert.equal(await value(page, '[data-subtask-id="72"] [data-task-subtask-title]'), 'Extra practice revised');
+      assert.deepEqual(await page.$$eval('[data-task-subtask-row]', rows => rows.map(row => Number(row.dataset.subtaskId))), [71, 72, 73]);
+      assert.equal(requests.filter(request => request.path === '/tasks/70' && request.method === 'PUT').length, 1);
+      assert.deepEqual(page.fixtureErrors || [], []);
+    } finally { editFailure = null; await page.dispose(); }
+  });
+}
 
 for (const width of [1366, 390]) {
   test(`recurring Save validates before scope and Cancel keeps the same complete draft at ${width}px`, async () => {

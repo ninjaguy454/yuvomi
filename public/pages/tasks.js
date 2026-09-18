@@ -2561,13 +2561,9 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   };
   const controls = taskFormControls.get(form);
   if ((!managedActivity || controls?.originalTask?.recurrence_series_id != null) && controls) body.skill_ids = controls.skills.getValue();
+  // The editor contains source actions only. Archived actions and generated
+  // helper projections stay under server reconciliation, not this replace-set.
   if (controls?.subtasks) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
-  if (body.subtasks && controls?.originalTask) {
-    const original = controls.originalTask;
-    const operationalIds = new Set(structuralSubtasks(original).map(child => Number(child.id)));
-    body.subtasks.push(...(original.subtasks || []).filter(child => !child.archived_at && !operationalIds.has(Number(child.id)))
-      .map(child => ({ id: child.id, title: child.title, skill_ids: child.skill_ids || [] })));
-  }
 
   // Das Feld fehlt bei Unteraufgaben und bei bereits gespiegelten Aufgaben - in
   // beiden Fällen soll gar kein Ziel mitgeschickt werden, sonst nähme der Server
@@ -2577,7 +2573,8 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const dueTimeRaw = form.due_time?.value || '';
   const dueTime = parseTimeInput(dueTimeRaw);
   const resetSubmit = (msg) => {
-    const recoveringChildren = controls?.subtasks && (taskCreateAttempts.has(form) || form.querySelector('#task-id').value);
+    const recoveringChildren = controls?.subtasks && (taskCreateAttempts.has(form)
+      || (!controls.editBaseline && form.querySelector('#task-id').value));
     const message = recoveringChildren ? `${msg} Finish saving this Task to confirm its subtasks; you can edit them afterward.` : msg;
     showTaskFormErrors(form, [{ field: taskErrorField(msg), message }], { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" });
     submitBtn.disabled = false;

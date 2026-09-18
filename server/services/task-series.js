@@ -3,7 +3,7 @@
  * bootstrap or advance an occurrence. */
 import { backfillRecurrenceProvenance, registerRecurrenceOccurrence, registerRecurrenceAction } from './task-recurrence-frontier.js';
 import { addCalendarDays } from './activity-schedule.js';
-import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter } from './recurrence.js';
+import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter, parseRRule } from './recurrence.js';
 import { captureTaskActivityBindingDefinition } from './task-activity-snapshot.js';
 
 export const TASK_SERIES_SCHEMA_SQL = `
@@ -209,7 +209,7 @@ export function seriesMaterializationPlan(d,task,{completedOn,expirationAnchor=f
 /** Plan the successor of the supplied nominal occurrence, without inserting
  * or editing anything. Callers can chain returned dates to reconcile existing
  * untouched future occurrences under one selected definition. */
-export function planSeriesOccurrence(_d,definition,occurrence,{anchorStartDate,anchorDueDate,completedOn=null,expired=false}={}) {
+export function planSeriesOccurrence(d,definition,occurrence,{anchorStartDate,anchorDueDate,completedOn=null,expired=false}={}) {
   const configuration=definition?.data.task;if(!configuration?.is_recurring||!configuration.recurrence_rule)return null;
   const relative=configuration.due_date_offset_days!=null;
   const previousAnchor=relative?(anchorStartDate??occurrence.planned_start_date):(anchorDueDate??occurrence.planned_due_date);
@@ -227,6 +227,19 @@ export function planSeriesOccurrence(_d,definition,occurrence,{anchorStartDate,a
     nextAnchor=(expired?nextDueAfterExpiration:nextDueAfterCompletion)({anchorDate:previousAnchor||definitionAnchor,
       rule:configuration.recurrence_rule,completedOn,fromCompletion:false});
   }
+  // A cadence edit can move the selected concrete occurrence onto the first
+  // slot of its new rule while retaining its durable nominal/award identity.
+  // That slot is already represented by this Task. Skip it only with proof of
+  // a this-and-future cadence change; one-off date overrides keep their anchor.
+  if(nextAnchor && !configuration.recurrence_from_completion
+    && occurrence.definition_id===definition.id && !occurrence.exception_reason
+    && definition.source_task_id===occurrence.task_id && definition.effective_generation===occurrence.generation) {
+    const selected=d.prepare('SELECT start_date,due_date FROM tasks WHERE id=?').get(occurrence.task_id);
+    const concreteAnchor=relative?selected?.start_date:selected?.due_date;
+    if(concreteAnchor!==previousAnchor && nextAnchor===concreteAnchor
+      && cadenceChangedAtOccurrence(d,definition,occurrence))
+      nextAnchor=nextOccurrenceAfter(definitionAnchor||previousAnchor,configuration.recurrence_rule,addCalendarDays(nextAnchor,1));
+  }
   if(!nextAnchor)return null;
   const legacyLead=configuration.start_date&&configuration.due_date
     ? (Date.parse(`${configuration.due_date}T00:00:00Z`)-Date.parse(`${configuration.start_date}T00:00:00Z`))/86400000:null;
@@ -234,4 +247,22 @@ export function planSeriesOccurrence(_d,definition,occurrence,{anchorStartDate,a
   const dueDate=relative?addCalendarDays(startDate,configuration.due_date_offset_days):nextAnchor;
   if(!dueDate)throw new Error('The next recurring Activity has an invalid date window.');
   return {configuration,start_date:startDate,due_date:dueDate,relative};
+}
+
+function cadenceChangedAtOccurrence(d,definition,occurrence) {
+  const cadence=task=>{
+    const parsed=parseRRule(task.recurrence_rule);if(!parsed)return null;
+    // Equivalent RRULE serialization and termination limits do not move slots.
+    return JSON.stringify([parsed.freq,parsed.interval,[...new Set(parsed.byday)].sort(),!!task.recurrence_from_completion]);
+  };
+  const revisions=d.prepare(`SELECT source_task_id,effective_generation,definition_json FROM task_recurrence_definitions
+    WHERE series_id=? AND effective_generation<=? AND id<=? ORDER BY id DESC`)
+    .all(occurrence.series_id,occurrence.generation,definition.id);
+  for(let index=0;index<revisions.length-1;index++) {
+    const newer=cadence(JSON.parse(revisions[index].definition_json).task);
+    const older=cadence(JSON.parse(revisions[index+1].definition_json).task);
+    if(newer&&older&&newer!==older)
+      return revisions[index].source_task_id===occurrence.task_id && revisions[index].effective_generation===occurrence.generation;
+  }
+  return false;
 }

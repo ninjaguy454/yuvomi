@@ -37,6 +37,144 @@ async function edit(id,body){return request('PUT',`/tasks/${id}`,{expected_revis
   expected_series_revision:taskSeriesState(d,id).revision,edit_scope:'future',...body});}
 async function finish(id){return request('PATCH',`/tasks/${id}/status`,{expected_revision:row(id).revision,status:'done',complete_remaining:true});}
 
+async function weeklyLaundry({date,day,relative=false,offset=0,interval=1}) {
+  const templateId=relative?Number(d.prepare(`INSERT INTO activity_templates(name,title_template,created_by,assignment_policy,assignment_strategy,
+    fixed_user_id,start_time,due_time,due_date_offset_days,subject_required) VALUES('Weekly Laundry','Weekly Laundry',1,'fixed','fixed',1,'07:00','20:00',?,0)`)
+    .run(offset).lastInsertRowid):null;
+  const dueDate=relative?new Date(Date.parse(`${date}T00:00:00Z`)+offset*86400000).toISOString().slice(0,10):date;
+  const created=await request('POST','/tasks',{title:'Isolated weekly Laundry',assigned_to:[1],
+    ...(templateId?{activity_template_id:templateId}:{}),start_date:date,start_time:'07:00',due_date:dueDate,due_time:'20:00',is_recurring:true,
+    recurrence_rule:`FREQ=WEEKLY;INTERVAL=${interval};BYDAY=${day}`,
+    subtasks:[{title:'Wash laundry',skill_ids:[]},{title:'Optional finishing step',skill_ids:[],is_optional:true}]});
+  assert.equal(row(created.data.id).due_date_offset_days,relative?offset:null);
+  return created.data.id;
+}
+
+for(const relative of [false,true])for(const [day,dates] of [
+  ['SA',['2026-09-19','2026-09-26','2026-10-03']],
+  ['FR',['2026-09-11','2026-09-18','2026-09-25']],
+])test(`${relative?'relative':'legacy'} weekly ${day} advances exactly seven calendar days without regenerating its selected date`,async t=>{
+  const first=await weeklyLaundry({date:dates[0],day,relative}),seriesId=taskSeriesState(d,first).series_id;
+  let current=first;
+  for(const [index,date] of dates.entries()) {
+    assert.equal(row(current).start_date,date);assert.equal(row(current).due_date,date);
+    assert.equal(taskSeriesState(d,current).occurrence.generation,index);
+    if(index===dates.length-1)break;
+    t.mock.timers.setTime(Date.parse(`${date}T12:00:00Z`));
+    await finish(current);
+    const successor=next(current);assert.ok(successor);
+    assert.notEqual(successor.due_date,date);assert.equal(successor.due_date,dates[index+1]);
+    await finish(current);
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(current).n,1);
+    current=successor.id;
+  }
+  const materialized=d.prepare("SELECT occurrence_key FROM task_recurrence_occurrences WHERE series_id=? AND state='materialized' ORDER BY generation").all(seriesId);
+  assert.deepEqual(materialized.map(value=>value.occurrence_key),dates);
+});
+
+for(const relative of [false,true])for(const [oldDay,oldDate,day,dates] of [
+  ['FR','2026-09-18','SA',['2026-09-19','2026-09-26','2026-10-03']],
+  ['SA','2026-09-12','FR',['2026-09-11','2026-09-18','2026-09-25']],
+])test(`${relative?'relative':'legacy'} ${oldDay} to ${day} series schedule edit never rematerializes the selected date`,async t=>{
+  const id=await weeklyLaundry({date:oldDate,day:oldDay,relative});
+  const actionIds=d.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY sort_order,id').all(id).map(value=>value.id);
+  t.mock.timers.setTime(Date.parse(`${dates[0]}T12:00:00Z`));
+  const edited=await edit(id,{start_date:dates[0],due_date:dates[0],recurrence_rule:`FREQ=WEEKLY;INTERVAL=1;BYDAY=${day}`});
+  assert.equal(edited.series_edit.scope,'future');assert.equal(row(id).due_date,dates[0]);
+  assert.deepEqual(d.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY sort_order,id').all(id).map(value=>value.id),actionIds);
+  await finish(id);
+  const successor=next(id);assert.ok(successor);assert.equal(successor.due_date,dates[1]);
+  assert.equal(successor.recurrence_rule,`FREQ=WEEKLY;INTERVAL=1;BYDAY=${day}`);
+  t.mock.timers.setTime(Date.parse(`${dates[1]}T12:00:00Z`));
+  await finish(successor.id);assert.equal(next(successor.id).due_date,dates[2]);
+  assert.deepEqual(d.prepare('SELECT due_date FROM tasks WHERE parent_task_id IS NULL ORDER BY id').all().map(value=>value.due_date),dates);
+});
+
+test('an already-saved Saturday cadence with Friday nominal provenance advances without repairing history',async t=>{
+  const first=await weeklyLaundry({date:'2026-09-11',day:'FR'});
+  t.mock.timers.setTime(Date.parse('2026-09-11T12:00:00Z'));await finish(first);
+  const current=next(first),history=row(first);
+  t.mock.timers.setTime(Date.parse('2026-09-19T12:00:00Z'));
+  await edit(current.id,{start_date:'2026-09-19',due_date:'2026-09-19',recurrence_rule:'FREQ=WEEKLY;BYDAY=SA'});
+  await edit(current.id,{due_time:'21:00'});
+  const before=taskSeriesState(d,current.id);
+  assert.equal(before.occurrence.generation,1);assert.equal(before.occurrence.planned_due_date,'2026-09-18');
+  assert.equal(before.occurrence.occurrence_key,'2026-09-18');assert.equal(before.definition.data.task.due_date,'2026-09-18');
+  assert.equal(row(current.id).due_date,'2026-09-19');assert.equal(before.revision,3);
+  await finish(current.id);assert.equal(next(current.id).due_date,'2026-09-26');
+  t.mock.timers.setTime(Date.parse('2026-09-26T12:00:00Z'));
+  await finish(next(current.id).id);assert.equal(next(next(current.id).id).due_date,'2026-10-03');
+  assert.deepEqual(row(first),history);assert.deepEqual(taskSeriesState(d,current.id).occurrence,before.occurrence);
+  assert.deepEqual(taskSeriesState(d,current.id).definition,before.definition);
+});
+
+test('a weekday series edit reconciles an untouched materialized successor past the selected concrete date',async t=>{
+  const id=await weeklyLaundry({date:'2026-09-18',day:'FR'});
+  t.mock.timers.setTime(Date.parse('2026-09-18T12:00:00Z'));await finish(id);
+  const materialized=next(id),actionIds=d.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY id').all(materialized.id);
+  // A legacy reopened occurrence can retain an already materialized successor.
+  // Keep its completion receipt as historical evidence while making current
+  // progress incomplete; the future tree remains exactly at its saved baseline.
+  d.prepare("UPDATE tasks SET status='open' WHERE id=? OR parent_task_id=?").run(id,id);
+  const receipt=d.prepare('SELECT * FROM task_completions WHERE task_id=?').get(id);
+  t.mock.timers.setTime(Date.parse('2026-09-19T12:00:00Z'));
+  const edited=await edit(id,{start_date:'2026-09-19',due_date:'2026-09-19',recurrence_rule:'FREQ=WEEKLY;BYDAY=SA'});
+  assert.deepEqual(edited.series_edit.updated,[materialized.id]);assert.deepEqual(edited.series_edit.preserved,[]);
+  assert.equal(row(materialized.id).due_date,'2026-09-26');assert.equal(next(id).id,materialized.id);
+  assert.deepEqual(d.prepare('SELECT id FROM tasks WHERE parent_task_id=? ORDER BY id').all(materialized.id),actionIds);
+  assert.deepEqual(d.prepare('SELECT * FROM task_completions WHERE task_id=?').get(id),receipt);
+  await finish(id);assert.equal(next(id).id,materialized.id,'finishing the older occurrence cannot branch the latest frontier');
+  t.mock.timers.setTime(Date.parse('2026-09-26T12:00:00Z'));await finish(materialized.id);
+  assert.equal(next(materialized.id).due_date,'2026-10-03');
+  assert.deepEqual(d.prepare('SELECT due_date FROM tasks WHERE parent_task_id IS NULL ORDER BY id').all().map(value=>value.due_date),
+    ['2026-09-19','2026-09-26','2026-10-03']);
+});
+
+test('a Saturday cadence edit keeps a two-day relative Due offset and two-week interval',async t=>{
+  const id=await weeklyLaundry({date:'2026-09-18',day:'FR',relative:true,offset:2,interval:2});
+  t.mock.timers.setTime(Date.parse('2026-09-19T12:00:00Z'));
+  await edit(id,{start_date:'2026-09-19',due_date:'2026-09-21',recurrence_rule:'FREQ=WEEKLY;INTERVAL=2;BYDAY=SA'});
+  await finish(id);const successor=next(id);
+  assert.equal(successor.start_date,'2026-10-03');assert.equal(successor.due_date,'2026-10-05');assert.equal(successor.due_date_offset_days,2);
+  t.mock.timers.setTime(Date.parse('2026-10-03T12:00:00Z'));await finish(successor.id);
+  assert.equal(next(successor.id).start_date,'2026-10-17');assert.equal(next(successor.id).due_date,'2026-10-19');
+});
+
+test('an occurrence-only weekday and date override does not change the durable Friday cadence',async t=>{
+  const id=await weeklyLaundry({date:'2026-09-18',day:'FR'}),before=taskSeriesState(d,id);
+  t.mock.timers.setTime(Date.parse('2026-09-19T12:00:00Z'));
+  await edit(id,{edit_scope:'occurrence',start_date:'2026-09-19',due_date:'2026-09-19',recurrence_rule:'FREQ=WEEKLY;BYDAY=SA'});
+  await finish(id);assert.equal(next(id).due_date,'2026-09-25');
+  assert.deepEqual(taskSeriesState(d,id).definition,before.definition);assert.equal(taskSeriesState(d,id).revision,before.revision);
+});
+
+test('a title and concrete date edit alone never supplies proof of a changed cadence',async t=>{
+  const id=await weeklyLaundry({date:'2026-09-18',day:'SA'});
+  t.mock.timers.setTime(Date.parse('2026-09-19T12:00:00Z'));
+  await edit(id,{title:'One-date translation',start_date:'2026-09-19',due_date:'2026-09-19'});
+  await finish(id);assert.equal(next(id).due_date,'2026-09-19','the unchanged series still owns its nominal Saturday slot');
+});
+
+test('equivalent rule formatting and an end limit do not turn a date override into a cadence change',async t=>{
+  for(const [day,rule,storedRule] of [
+    ['SA','FREQ=WEEKLY;BYDAY=SA'],
+    ['SA,SU','FREQ=WEEKLY;INTERVAL=1;BYDAY=SU,SA'],
+    ['SA','FREQ=WEEKLY;INTERVAL=1;BYDAY=SA;UNTIL=20261231'],
+    ['SA','FREQ=WEEKLY;BYDAY=SA','RRULE:BYDAY=SA;INTERVAL=1;FREQ=WEEKLY'],
+  ]) {
+    const id=await weeklyLaundry({date:'2026-09-18',day});
+    if(storedRule) {
+      // Older imports can retain a prefixed/reordered equivalent RRULE.
+      const definition=taskSeriesState(d,id).definition;definition.data.task.recurrence_rule=storedRule;
+      d.prepare('UPDATE tasks SET recurrence_rule=? WHERE id=?').run(storedRule,id);
+      d.prepare('UPDATE task_recurrence_definitions SET definition_json=? WHERE id=?').run(JSON.stringify(definition.data),definition.id);
+    }
+    t.mock.timers.setTime(Date.parse('2026-09-19T12:00:00Z'));
+    await edit(id,{title:'Equivalent cadence',start_date:'2026-09-19',due_date:'2026-09-19',recurrence_rule:rule});
+    await finish(id);assert.equal(next(id).due_date,'2026-09-19',rule);
+  }
+});
+
 for(const relative of [false,true])test(`a combined title and concrete date shift keeps the ${relative?'relative':'legacy'} calendar anchor`,async()=>{
   const id=await seed(relative);
   const result=await edit(id,{title:'School morning',start_date:'2026-09-13',due_date:'2026-09-13'});

@@ -2,11 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { structuralSubtasks } from '../public/utils/task-progress.js';
 
 process.env.DB_PATH=':memory:';process.env.SESSION_SECRET='series-edits-isolated-test';process.env.LOG_LEVEL='error';
 const {ALL_MIGRATIONS,_setTestDatabase}=await import('../server/db.js');
 const {default:tasksRouter}=await import('../server/routes/tasks.js');
 const {default:automationRouter}=await import('../server/routes/automation.js');
+const {initializeTaskSeries}=await import('../server/services/task-series.js');
+const {backfillRecurrenceAwardProvenance}=await import('../server/services/task-recurrence-frontier.js');
+const {reconcileTaskSupervision}=await import('../server/services/task-supervision.js');
+const {setTaskSkills}=await import('../server/services/task-skills.js');
 let d,parent,grace,eleanor,frankie,server,base;
 test.beforeEach(async t=>{
   t.mock.timers.enable({apis:['Date'],now:new Date('2026-09-14T11:30:00Z')});
@@ -291,3 +296,139 @@ test('exact morning routine: Gracelynn adds deodorant and optional earrings, Ele
   assertFresh(eWednesday,eleanor,[...names,'Put in earrings'],9);
   assert.deepEqual(taskSnapshot(f.id),frankieBefore);assert.deepEqual(templateSnapshot(),templateBefore);
 });
+
+// Seed the pre-provenance shape directly, then run the same bootstrap as the
+// recurring-series migration. The helper container is a direct child, but is
+// never a source action; counterpart children belong beneath that container.
+async function legacyLaundry() {
+  const activity=await template({name:'Legacy Laundry',title_template:'Legacy Laundry',points:0,
+    start_time:'00:00',due_time:'23:59',recurrence_rule:'FREQ=WEEKLY;BYDAY=SA'});
+  const root=Number(d.prepare(`INSERT INTO tasks(title,created_by,assigned_to,is_recurring,recurrence_rule,
+    start_date,start_time,due_date,due_time,status) VALUES('Legacy Laundry',?,?,1,'FREQ=WEEKLY;BYDAY=SA',
+    '2026-09-12','00:00','2026-09-12','23:59','open')`).run(parent,eleanor).lastInsertRowid);
+  d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(root,eleanor);
+  d.prepare('INSERT INTO task_activity_bindings(task_id,activity_template_id) VALUES(?,?)').run(root,activity.id);
+  const child=(title,order,optional=0)=>Number(d.prepare(`INSERT INTO tasks(title,created_by,parent_task_id,
+    sort_order,is_optional,start_date,start_time,due_date,due_time) VALUES(?,?,?,?,?,'2026-09-12','00:00','2026-09-12','23:59')`)
+    .run(title,parent,root,order,optional).lastInsertRowid);
+  const independent=child('Gather laundry',0),remaining=child('Put clothes away',1),optional=child('Wash spare bag',2,1);
+  const supervised=child('Sort laundry',3),delegated=child('Run washing machine',4),removed=child('Former completed action',5);
+  d.prepare("UPDATE tasks SET status='done',archived_at='2026-09-12T22:00:00Z' WHERE id=?").run(removed);
+  d.prepare("INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json) VALUES(?,?,?,'completed','{}')")
+    .run(root,removed,eleanor);
+  for(const [action,name,proficiency] of [[supervised,'Sort laundry safely','supervised'],[delegated,'Washing machine controls','excluded']]) {
+    const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES(?,0,'normal',?)").run(name,parent).lastInsertRowid);
+    for(const [id,value] of [[parent,'normal'],[eleanor,proficiency],[grace,'excluded'],[frankie,'excluded']])
+      d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source) VALUES(?,?,?,'manual')").run(id,skill,value);
+    setTaskSkills(d,action,[skill]);
+  }
+  const helper=reconcileTaskSupervision(d,root,{actorId:parent,notify:false});
+  assert.equal(row(helper.support_task_id).parent_task_id,root);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_recurrence_actions').get().n,0,'fixture starts without action provenance');
+  backfillRecurrenceAwardProvenance(d);
+  initializeTaskSeries(d);
+  const hydrated=await detail(root);
+  assert.ok(hydrated.subtasks.some(step=>step.id===helper.support_task_id&&step.is_supervision_projection));
+  assert.deepEqual(structuralSubtasks(hydrated).map(step=>step.id),[independent,remaining,optional,supervised,delegated]);
+  const actions=d.prepare('SELECT task_id,action_key FROM task_recurrence_actions WHERE occurrence_task_id=? ORDER BY task_id').all(root);
+  assert.ok(actions.some(action=>action.task_id===removed),'archived original retains provenance');
+  assert.ok(!actions.some(action=>action.task_id===helper.support_task_id),'helper never becomes a recurring source action');
+  assert.equal(new Set(actions.map(action=>action.action_key)).size,actions.length);
+  return {root,activity,independent,remaining,optional,supervised,delegated,removed,helper};
+}
+
+const editableSteps=task=>structuralSubtasks(task).map(step=>({id:step.id,title:step.title,
+  is_optional:step.is_optional,skill_ids:step.skill_ids||[]}));
+const seriesRows=()=>d.prepare('SELECT * FROM task_recurrence_definitions ORDER BY id').all();
+
+for(const editScope of ['occurrence','future'])for(const progress of ['unstarted','partial','reopened']) {
+  test(`legacy Laundry scheduling-only ${editScope} save preserves ${progress} progress, source IDs and helper history`,async()=>{
+    const fixture=await legacyLaundry(),{root,independent,optional,removed,helper}=fixture;
+    if(progress!=='unstarted') {
+      await finish(independent,eleanor);await finish(optional,eleanor);
+      for(const action of helper.actions.filter(action=>[fixture.supervised,fixture.delegated].includes(action.action_task_id)))
+        await finish(action.counterpart_task_id,parent);
+      if(progress==='reopened') {
+        for(const id of [independent,optional,...helper.actions.map(action=>action.counterpart_task_id).filter(Boolean)]) {
+          const reopened=await call('PATCH',`/tasks/${id}/status`,{status:'open'},parent);
+          assert.equal(reopened.status,200,JSON.stringify(reopened));
+        }
+        assert.ok(active(root).every(step=>step.status==='open'));
+      }
+    }
+    const comment=await call('POST',`/tasks/${independent}/comments`,{comment:'Preserve this legacy action evidence.'});
+    assert.equal(comment.status,201,JSON.stringify(comment));const doc=document(independent);
+    const hydrated=await detail(root),draft=editableSteps(hydrated);
+    const sourceState=()=>children(root).map(({id,parent_task_id,title,status,is_optional,archived_at})=>({id,parent_task_id,title,status,is_optional,archived_at}));
+    const sourceBefore=sourceState(),removedBefore=row(removed),definitionsBefore=seriesRows();
+    const skillsBefore=d.prepare('SELECT * FROM task_skill_requirements ORDER BY task_id,skill_id').all();
+    const actionsBefore=d.prepare('SELECT * FROM task_recurrence_actions ORDER BY task_id').all();
+    const historyBefore=d.prepare('SELECT * FROM task_activity_events ORDER BY id').all();
+    if(progress!=='unstarted')assert.ok(historyBefore.some(event=>event.action_task_id===independent&&event.event_type==='completed'));
+    if(progress==='reopened')assert.ok(historyBefore.some(event=>event.action_task_id===independent&&event.event_type==='reset'));
+    const completionsBefore=d.prepare('SELECT * FROM task_completions ORDER BY id').all();
+    const ledgerBefore=d.prepare('SELECT * FROM reward_ledger ORDER BY id').all();
+    const mappings=()=>d.prepare('SELECT id,source_task_id,action_task_id,counterpart_task_id,execution_mode FROM task_supervision_actions ORDER BY id').all();
+    const mappingsBefore=mappings(),templateBefore=d.prepare('SELECT * FROM activity_templates WHERE id=?').get(fixture.activity.id);
+    const saved=await edit(root,{edit_scope:editScope,start_date:'2026-09-11',due_date:'2026-09-11',
+      recurrence_rule:'FREQ=WEEKLY;BYDAY=FR',subtasks:draft});
+    assert.equal(saved.status,200,JSON.stringify(saved));
+    assert.equal(saved.data.start_date,'2026-09-11');assert.equal(saved.data.due_date,'2026-09-11');
+    assert.equal(saved.data.recurrence_rule,'FREQ=WEEKLY;BYDAY=FR');
+    assert.equal(saved.data.status,hydrated.status);assert.equal(saved.data.subtask_done,hydrated.subtask_done);
+    assert.equal(saved.data.subtask_total,hydrated.subtask_total);
+    assert.deepEqual(sourceState(),sourceBefore);assert.deepEqual(row(removed),removedBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM task_skill_requirements ORDER BY task_id,skill_id').all(),skillsBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM task_recurrence_actions ORDER BY task_id').all(),actionsBefore);
+    assert.deepEqual(mappings(),mappingsBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM task_completions ORDER BY id').all(),completionsBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),ledgerBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM task_activity_events WHERE id<=? ORDER BY id').all(historyBefore.at(-1).id),historyBefore);
+    assert.equal(d.prepare('SELECT comment FROM task_comments WHERE task_id=?').get(independent).comment,'Preserve this legacy action evidence.');
+    assert.ok(d.prepare('SELECT 1 FROM task_documents WHERE task_id=? AND document_id=?').get(independent,doc));
+    assert.deepEqual(d.prepare('SELECT * FROM activity_templates WHERE id=?').get(fixture.activity.id),templateBefore);
+    if(editScope==='occurrence')assert.deepEqual(seriesRows(),definitionsBefore);
+    else {
+      assert.equal(seriesRows().length,definitionsBefore.length+1);
+      const definition=JSON.parse(seriesRows().at(-1).definition_json);
+      assert.equal(definition.task.recurrence_rule,'FREQ=WEEKLY;BYDAY=FR');
+      assert.deepEqual(definition.subtasks.map(step=>step.source_task_id),draft.map(step=>step.id));
+      assert.equal(new Set(definition.subtasks.map(step=>step.action_key)).size,draft.length);
+      assert.equal(definition.subtasks.find(step=>step.source_task_id===optional).task.is_optional,1);
+    }
+    assert.deepEqual(d.pragma('foreign_key_check'),[]);
+  });
+}
+
+test('legacy Laundry hydrated source checklist saves unchanged without new revisions or history',async()=>{
+  const {root}=await legacyLaundry(),hydrated=await detail(root);
+  const before={tasks:d.prepare('SELECT * FROM tasks ORDER BY id').all(),definitions:seriesRows(),
+    history:d.prepare('SELECT * FROM task_activity_events ORDER BY id').all()};
+  const result=await edit(root,{edit_scope:'occurrence',subtasks:editableSteps(hydrated)});
+  assert.equal(result.status,200,JSON.stringify(result));assert.equal(result.unchanged,true);
+  assert.deepEqual({tasks:d.prepare('SELECT * FROM tasks ORDER BY id').all(),definitions:seriesRows(),
+    history:d.prepare('SELECT * FROM task_activity_events ORDER BY id').all()},before);
+});
+
+for(const invalid of ['duplicate source','support container','helper counterpart','archived action','foreign source']) {
+  test(`legacy Laundry still rejects ${invalid} in the editable source list without partial writes`,async()=>{
+    const fixture=await legacyLaundry(),task=await detail(fixture.root),subtasks=editableSteps(task);
+    let invalidId=fixture.independent;
+    if(invalid==='support container')invalidId=fixture.helper.support_task_id;
+    if(invalid==='helper counterpart')invalidId=fixture.helper.actions.find(action=>action.counterpart_task_id).counterpart_task_id;
+    if(invalid==='archived action')invalidId=fixture.removed;
+    if(invalid==='foreign source')invalidId=Number(d.prepare("INSERT INTO tasks(title,created_by) VALUES('Unrelated Task',?)").run(parent).lastInsertRowid);
+    const invalidRow=row(invalidId);
+    subtasks.push({id:invalidId,title:invalidRow.title,skill_ids:[],is_optional:0});
+    const before={tasks:d.prepare('SELECT * FROM tasks ORDER BY id').all(),definitions:seriesRows(),
+      provenance:d.prepare('SELECT * FROM task_recurrence_actions ORDER BY task_id').all(),
+      history:d.prepare('SELECT * FROM task_activity_events ORDER BY id').all()};
+    const result=await edit(fixture.root,{edit_scope:'future',start_date:'2026-09-11',due_date:'2026-09-11',subtasks});
+    assert.equal(result.status,400,JSON.stringify(result));
+    assert.equal(result.error,invalid==='duplicate source'?'Choose each existing subtask only once.'
+      :'Only existing editable subtasks from this Task can be selected.');
+    assert.deepEqual({tasks:d.prepare('SELECT * FROM tasks ORDER BY id').all(),definitions:seriesRows(),
+      provenance:d.prepare('SELECT * FROM task_recurrence_actions ORDER BY task_id').all(),
+      history:d.prepare('SELECT * FROM task_activity_events ORDER BY id').all()},before);
+  });
+}

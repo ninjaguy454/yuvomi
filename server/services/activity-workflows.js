@@ -9,6 +9,7 @@ import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-
  */
 
 import { todayKey } from '../utils/timezone.js';
+import { addCalendarDays, resolveActivitySchedule } from './activity-schedule.js';
 import { placeWithInheritedAddress, activityPresenceWindow } from './presence.js';
 import {
   householdMembers,
@@ -154,7 +155,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   const contextualAssignee=schema.definitions.find(row=>row.id==='assignee' && row.type==='household_member'
     && row.kind==='value' && !row.expression && row.default_value==null);
   if(contextualAssignee) {
-    const occurrence={start_date:activity.start_date??null,due_date:activity.due_date??null,start_time:activity.start_time??null,due_time:activity.due_time??null,...task};
+    const occurrence=resolveActivitySchedule(activity,task);
     const resolvedAssignment=previewTaskActivityBinding(d,{activityTemplateId:activity.id,subjectUserId,
       assignmentOverrideUserId,task:occurrence,dateKey:occurrence.due_date||todayKey(d)}).resolution;
     if(resolvedAssignment.primary)contextValues.assignee=resolvedAssignment.primary.id;
@@ -163,7 +164,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
       expiration_policy: activity.expiration_policy ?? 'keep_overdue',
-      start_date: activity.start_date ?? null, due_date: activity.due_date ?? null,
+      due_date_offset_days: activity.due_date_offset_days ?? null,
       start_time: activity.start_time ?? null, due_time: activity.due_time ?? null,
       recurrence_rule: activity.recurrence_rule ?? null, recurrence_from_completion: activity.recurrence_from_completion || 0,
       is_recurring: activity.recurrence_rule ? 1 : 0,
@@ -279,10 +280,21 @@ function stepAssignment(activity, step, inputs) {
   return { policy, fixedUserId };
 }
 
+function workflowActivitySchedule(activity, startDate) {
+  if (!addCalendarDays(startDate, 0)) throw new Error('Choose a valid workflow Start Date.');
+  // Untimed legacy definitions keep their existing workflow date behavior.
+  // Configured relative schedules get a concrete occurrence Start Date even
+  // when the reusable Start Time itself is intentionally blank.
+  const legacy = activity.due_date_offset_days == null
+    ? { start_date: activity.start_time ? startDate : null, due_date: startDate } : {};
+  return resolveActivitySchedule(activity, legacy, { fallbackStartDate: startDate });
+}
+
 /** Pure preview. It intentionally does not advance any rotation cursor. */
 export function previewWorkflow(d, workflowId, {
   subjectUserId = null,
   inputs = {},
+  startDate = todayKey(d),
 } = {}) {
   const workflow = getWorkflowTemplate(d, workflowId);
   if (!workflow || !workflow.active) throw new Error('Workflow template not found.');
@@ -310,16 +322,18 @@ export function previewWorkflow(d, workflowId, {
         const activitySubject = stepSubject(d, step, subject, runtimeInputs);
         const planning = stepPlanningContext(d, activity, step, runtimeInputs);
         const assignment = stepAssignment(activity, step, runtimeInputs);
+        const schedule = workflowActivitySchedule(activity, startDate);
         const resolution = resolveActivityAssignment(d, activity, {
           subjectUserId: activitySubject?.id ?? null,
+          dateKey: schedule.due_date || startDate,
           commitRotation: true,
           assignmentPolicyOverride: assignment.policy,
           fixedUserIdOverride: assignment.fixedUserId,
           presence: {
             policy: planning.presence_policy,
             targetPlaceId: planning.place_id,
-            ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window,
-              task: {start_date:activity.start_time?todayKey(d):null,start_time:activity.start_time,due_date:todayKey(d),due_time:activity.due_time} }),
+            ...activityPresenceWindow(d, { dateKey: schedule.due_date || startDate, windowMode: planning.presence_window,
+              task: schedule }),
           },
         });
         output.push({
@@ -339,6 +353,7 @@ export function previewWorkflow(d, workflowId, {
           depends_on: activeDependencyKeys(workflow, activeStepKeys, step),
           category: activity.category,
           expiration_policy: activity.expiration_policy ?? 'keep_overdue',
+          ...schedule,
           ...planning,
         });
       }
@@ -373,6 +388,7 @@ function insertTask(d, {
   dueTime = null,
   startDate = null,
   startTime = null,
+  dueDateOffsetDays = null,
   priority = 'none',
   points = 0,
   expirationPolicy = 'keep_overdue',
@@ -382,8 +398,8 @@ function insertTask(d, {
     INSERT INTO tasks (
       title, description, category, priority, status, due_date, due_time,
       assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
-      assignment_mode, rotation_index, points, visibility, countdown, locked, expiration_policy, start_date, start_time
-    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0, ?, ?, ?)
+      assignment_mode, rotation_index, points, visibility, countdown, locked, expiration_policy, start_date, start_time, due_date_offset_days
+    ) VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 0, NULL, 'fixed', 0, ?, 'all', 0, 0, ?, ?, ?, ?)
   `).run(
     title,
     description,
@@ -398,6 +414,7 @@ function insertTask(d, {
     expirationPolicy,
     startDate,
     startTime,
+    dueDateOffsetDays,
   );
   const taskId = Number(result.lastInsertRowid);
   setTags(d, taskId, tags);
@@ -418,6 +435,7 @@ export function instantiateWorkflow(d, workflowId, {
   subjectUserId = null,
   inputs = {},
   createdBy,
+  startDate = todayKey(d),
 } = {}) {
   const workflow = getWorkflowTemplate(d, workflowId);
   if (!workflow || !workflow.active) throw new Error('Workflow template not found.');
@@ -446,7 +464,7 @@ export function instantiateWorkflow(d, workflowId, {
       description: substituteVariableTemplate(workflow.description, variableLabels),
       category: workflow.category || 'misc',
       createdBy,
-      dueDate: todayKey(d),
+      dueDate: startDate,
     });
     d.prepare('UPDATE workflow_instances SET parent_task_id = ? WHERE id = ?')
       .run(parentTaskId, instanceId);
@@ -460,16 +478,18 @@ export function instantiateWorkflow(d, workflowId, {
       const activitySubject = stepSubject(d, step, subject, runtimeInputs);
       const planning = stepPlanningContext(d, activity, step, runtimeInputs);
       const assignment = stepAssignment(activity, step, runtimeInputs);
+      const schedule = workflowActivitySchedule(activity, startDate);
       const resolution = resolveActivityAssignment(d, activity, {
         subjectUserId: activitySubject?.id ?? null,
+        dateKey: schedule.due_date || startDate,
         commitRotation: true,
         assignmentPolicyOverride: assignment.policy,
         fixedUserIdOverride: assignment.fixedUserId,
         presence: {
           policy: planning.presence_policy,
           targetPlaceId: planning.place_id,
-          ...activityPresenceWindow(d, { dateKey: todayKey(d), windowMode: planning.presence_window,
-            task: {start_date:activity.start_time?todayKey(d):null,start_time:activity.start_time,due_date:todayKey(d),due_time:activity.due_time} }),
+          ...activityPresenceWindow(d, { dateKey: schedule.due_date || startDate, windowMode: planning.presence_window,
+            task: schedule }),
         },
       });
 
@@ -484,10 +504,11 @@ export function instantiateWorkflow(d, workflowId, {
         assignedTo: resolution.primary?.id ?? null,
         createdBy,
         parentTaskId,
-        dueDate: todayKey(d),
-        dueTime: activity.due_time ?? null,
-        startDate: activity.start_time ? todayKey(d) : null,
-        startTime: activity.start_time ?? null,
+        dueDate: schedule.due_date,
+        dueTime: schedule.due_time,
+        startDate: schedule.start_date,
+        startTime: schedule.start_time,
+        dueDateOffsetDays: schedule.due_date_offset_days,
       });
       d.prepare(`
         INSERT INTO workflow_instance_tasks (

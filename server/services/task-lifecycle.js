@@ -1,6 +1,7 @@
 /** One operational transition for REST and compatibility writers. */
 import { syncTaskRewards } from './rewards.js';
 import { retiredRecurrenceOccurrence, registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
+import { calendarDayOffset } from './activity-schedule.js';
 import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
@@ -365,7 +366,9 @@ export function reopenExpiredTask(d,taskId,{actorId,body={},now=new Date()}={}) 
         due_time=CASE WHEN due_time IS ? THEN ? ELSE due_time END WHERE id=?`)
         .run(task.due_date,candidate.due_date,task.due_time,candidate.due_time,row.id);
     }
-    d.prepare('UPDATE tasks SET expiration_policy=?,due_date=?,due_time=? WHERE id=?').run(policy,candidate.due_date,candidate.due_time,taskId);
+    const dueDateOffset = task.due_date_offset_days == null ? null : calendarDayOffset(task.start_date, candidate.due_date);
+    d.prepare('UPDATE tasks SET expiration_policy=?,due_date=?,due_time=?,due_date_offset_days=? WHERE id=?')
+      .run(policy,candidate.due_date,candidate.due_time,dueDateOffset,taskId);
     reconcileTaskSupervision(d,taskId,{actorId});
     recordTaskActivity(d,taskId,'reopened',actorId,{title:task.title,from_status:'expired',to_status:d.prepare('SELECT status FROM tasks WHERE id=?').get(taskId).status,
       expiration_policy:policy,previous_expired_at:task.expired_at});

@@ -116,8 +116,8 @@ test('Activity expiration defaults, validation, authorization and Task snapshots
   assert.equal(db.prepare('SELECT expiration_policy FROM tasks WHERE id=?').get(inherited.body.data.id).expiration_policy, 'expire_incomplete');
 });
 
-test('Activity date and time defaults survive create/edit/catalog/resolve and Task inheritance without rewriting existing occurrences', async () => {
-  const schedule = { start_date: '2026-09-21', start_time: '15:30', due_date: '2026-09-25', due_time: '07:00', recurrence_rule: 'FREQ=WEEKLY', recurrence_from_completion: 0 };
+test('Activity relative schedule survives create/edit/catalog/resolve and Task inheritance without rewriting existing occurrences', async () => {
+  const schedule = { start_time: '15:30', due_date_offset_days: 4, due_time: '07:30', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO', recurrence_from_completion: 0 };
   const created = await call('POST', '/automation/admin/activity-templates', {
     name: 'Weekly Homework', assignment_strategy: 'fixed', fixed_user_id: grace, subject_required: false, points: 5, ...schedule,
   });
@@ -127,41 +127,70 @@ test('Activity date and time defaults survive create/edit/catalog/resolve and Ta
   const preserved = await call('PUT', `/automation/admin/activity-templates/${id}`, { description: 'Do homework after school.' });
   const options = await call('GET', '/automation/activity-options');
   const resolved = await call('POST', `/automation/activity-templates/${id}/resolve`, {});
-  const task = await call('POST', '/tasks', { activity_template_id: id });
+  const task = await call('POST', '/tasks', { activity_template_id: id, start_date: '2026-09-21' });
   assert.equal(task.status, 201, JSON.stringify(task.body));
-  for (const row of [preserved.body.data, options.body.data.activities.find(row => row.id === id), resolved.body.data, task.body.data]) {
+  for (const row of [preserved.body.data, options.body.data.activities.find(row => row.id === id), resolved.body.data]) {
     for (const [key, expected] of Object.entries(schedule)) assert.equal(row[key], expected, key);
+    assert.equal(Object.hasOwn(row, 'start_date'), false);
+    assert.equal(Object.hasOwn(row, 'due_date'), false);
   }
-  await call('PUT', `/automation/admin/activity-templates/${id}`, { start_date: '2026-09-28', due_date: '2026-10-02' });
-  assert.equal(db.prepare('SELECT start_date FROM tasks WHERE id=?').get(task.body.data.id).start_date, schedule.start_date);
+  assert.equal(task.body.data.start_date, '2026-09-21'); assert.equal(task.body.data.due_date, '2026-09-25');
+  assert.equal(task.body.data.start_time, '15:30'); assert.equal(task.body.data.due_time, '07:30');
+  assert.equal(db.prepare('SELECT due_date_offset_days FROM tasks WHERE id=?').get(task.body.data.id).due_date_offset_days, 4);
+  await call('PUT', `/automation/admin/activity-templates/${id}`, { due_date_offset_days: 1 });
+  assert.equal(db.prepare('SELECT due_date FROM tasks WHERE id=?').get(task.body.data.id).due_date, '2026-09-25');
   const override = await call('POST', '/tasks', { activity_template_id: id, start_date: null, start_time: null, due_date: null, due_time: null });
   assert.equal(override.status, 201, JSON.stringify(override.body));
   assert.equal(override.body.data.start_date, null); assert.equal(override.body.data.due_date, null);
   const timeOnly = await call('POST', '/automation/admin/activity-templates', { name: 'Time only', start_time: '07:00', due_time: '08:00' });
   assert.equal(timeOnly.status, 201, JSON.stringify(timeOnly.body));
-  assert.equal(timeOnly.body.data.start_date, null); assert.equal(timeOnly.body.data.due_date, null);
+  assert.equal(timeOnly.body.data.due_date_offset_days, 0);
+  const untimed = await call('POST', '/automation/admin/activity-templates', { name: 'Untimed' });
+  assert.equal(untimed.body.data.due_date_offset_days, null);
+  const addedTime = await call('PUT', `/automation/admin/activity-templates/${untimed.body.data.id}`, { due_time: '17:00' });
+  assert.equal(addedTime.body.data.due_date_offset_days, 0);
+  const cleared = await call('PUT', `/automation/admin/activity-templates/${untimed.body.data.id}`, { due_date_offset_days: null });
+  assert.equal(cleared.body.data.due_date_offset_days, null);
+  const unchanged = await call('PUT', `/automation/admin/activity-templates/${untimed.body.data.id}`, { description: 'Unspecified due dates stay unspecified.' });
+  assert.equal(unchanged.body.data.due_date_offset_days, null);
 });
 
-test('Activity date/time validation allows multi-day windows and rejects invalid or reversed boundaries before persistence', async () => {
-  const schedule = { name: 'Date validation', start_date: '2026-09-21', start_time: '15:30', due_date: '2026-09-25', due_time: '07:00' };
-  for (const bad of [{ start_date: '2026-02-30' }, { due_date: '2026-09-20' }, { due_date: '2026-09-21' }, { start_time: '29:99' }]) {
+test('Activity relative schedule validates whole-day offsets and never silently infers an overnight window', async () => {
+  const schedule = { name: 'Offset validation', start_time: '22:00', due_date_offset_days: 1, due_time: '06:00' };
+  for (const bad of [-1, 1.5, 3651, true, [], {}, '', 'one']) {
+    const response = await call('POST', '/automation/admin/activity-templates', { ...schedule, due_date_offset_days: bad });
+    assert.equal(response.status, 400, JSON.stringify(response.body));
+    assert.match(response.body.error, /whole number/i);
+  }
+  for (const bad of [{ due_date_offset_days: 0 }, { start_time: '29:99' }]) {
     const response = await call('POST', '/automation/admin/activity-templates', { ...schedule, ...bad });
     assert.equal(response.status, 400, JSON.stringify(response.body));
+    if (bad.due_date_offset_days === 0) assert.match(response.body.error, /Set Due to 1 day later/);
   }
-  const equal = await call('POST', '/automation/admin/activity-templates', { ...schedule, due_date: schedule.start_date, due_time: schedule.start_time });
+  const overnight = await call('POST', '/automation/admin/activity-templates', schedule);
+  assert.equal(overnight.status, 201, JSON.stringify(overnight.body));
+  for (const offset of [0, 4, 8, 3650]) {
+    const valid = await call('POST', '/automation/admin/activity-templates', { name: `Offset ${offset}`, due_date_offset_days: offset });
+    assert.equal(valid.status, 201, JSON.stringify(valid.body));
+    assert.equal(valid.body.data.due_date_offset_days, offset);
+  }
+  const equal = await call('POST', '/automation/admin/activity-templates', { ...schedule, due_date_offset_days: 0, due_time: schedule.start_time });
   assert.equal(equal.status, 201, JSON.stringify(equal.body));
-  const denied = await call('PUT', `/automation/admin/activity-templates/${equal.body.data.id}`, { due_date: '2026-09-25' }, grace);
+  const denied = await call('PUT', `/automation/admin/activity-templates/${equal.body.data.id}`, { due_date_offset_days: 4 }, grace);
   assert.equal(denied.status, 403);
+  assert.equal(db.pragma('table_info(activity_templates)').some(column => ['start_date', 'due_date'].includes(column.name)), false);
 });
 
 test('inherited morning weekdays and Monday-Friday homework windows retain anchors, local times and DST through recurrence', async () => {
   db.prepare("INSERT OR REPLACE INTO sync_config(key,value) VALUES('household_timezone','America/New_York')").run();
   const make = async (name, schedule) => {
+    const { start_date, due_date, ...reusable } = schedule;
+    const due_date_offset_days = Math.round((Date.parse(due_date) - Date.parse(start_date)) / 86400000);
     const activity = await call('POST', '/automation/admin/activity-templates', {
-      name, assignment_strategy: 'fixed', fixed_user_id: grace, subject_required: false, ...schedule,
+      name, assignment_strategy: 'fixed', fixed_user_id: grace, subject_required: false, ...reusable, due_date_offset_days,
     });
     assert.equal(activity.status, 201, JSON.stringify(activity.body));
-    const task = await call('POST', '/tasks', { activity_template_id: activity.body.data.id });
+    const task = await call('POST', '/tasks', { activity_template_id: activity.body.data.id, start_date });
     assert.equal(task.status, 201, JSON.stringify(task.body));
     return task.body.data;
   };
@@ -185,16 +214,43 @@ test('inherited morning weekdays and Monday-Friday homework windows retain ancho
     assert.equal(afterDst.start_time, '07:00'); assert.equal(afterDst.due_time, '08:00');
     assert.equal(new Date(taskStartMs(db, afterDst)).toISOString(), mondayStart);
   }
-  const homework = await make('Anchored homework', { start_date: '2026-10-26', due_date: '2026-10-30', start_time: '15:30', due_time: '07:00',
-    recurrence_rule: 'FREQ=WEEKLY', recurrence_from_completion: 0, expiration_policy: 'keep_overdue', points: 5 });
+  const homework = await make('Anchored homework', { start_date: '2026-10-26', due_date: '2026-10-30', start_time: '15:30', due_time: '07:30',
+    recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO', recurrence_from_completion: 0, expiration_policy: 'keep_overdue', points: 5 });
   changeTaskStatus(db, homework.id, 'done', { actorId: grace, requireRevision: false, now: new Date('2026-10-29T20:00:00Z') });
   const next = db.prepare('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(homework.id);
   assert.equal(next.start_date, '2026-11-02'); assert.equal(next.due_date, '2026-11-06');
-  assert.equal(next.start_time, '15:30'); assert.equal(next.due_time, '07:00');
+  assert.equal(next.start_time, '15:30'); assert.equal(next.due_time, '07:30');
   assert.equal(next.points, 5); assert.equal(next.expiration_policy, 'keep_overdue');
   assert.equal(new Date(taskStartMs(db, homework)).toISOString(), '2026-10-26T19:30:00.000Z');
   assert.equal(new Date(taskStartMs(db, next)).toISOString(), '2026-11-02T20:30:00.000Z');
-  assert.equal(new Date(taskDeadlineMs(db, next)).toISOString(), '2026-11-06T12:00:00.000Z');
+  assert.equal(new Date(taskDeadlineMs(db, next)).toISOString(), '2026-11-06T12:30:00.000Z');
+});
+
+test('Workflow API resolves relative due dates from its concrete occurrence date and rejects invalid dates', async () => {
+  const activity = await call('POST', '/automation/admin/activity-templates', {
+    name: 'Workflow homework', assignment_strategy: 'fixed', fixed_user_id: grace, subject_required: false,
+    start_time: '15:30', due_date_offset_days: 4, due_time: '07:30',
+  });
+  assert.equal(activity.status, 201, JSON.stringify(activity.body));
+  const workflow = await call('POST', '/automation/admin/workflow-templates', {
+    name: 'Homework week', subject_required: false, quick_add_enabled: true, input_schema: [],
+    steps: [{ step_key: 'homework', activity_template_id: activity.body.data.id, depends_on: [] }],
+  });
+  assert.equal(workflow.status, 201, JSON.stringify(workflow.body));
+  for (const action of ['preview', 'create']) {
+    const invalid = await call('POST', `/automation/quick-add/${workflow.body.data.id}/${action}`, { start_date: '2026-02-30' });
+    assert.equal(invalid.status, 400, JSON.stringify(invalid.body));
+  }
+  const preview = await call('POST', `/automation/quick-add/${workflow.body.data.id}/preview`, { start_date: '2026-10-05' });
+  assert.equal(preview.status, 200, JSON.stringify(preview.body));
+  const created = await call('POST', `/automation/quick-add/${workflow.body.data.id}/create`, { start_date: '2026-10-05' });
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const taskId = created.body.data.tasks.find(row => row.role === 'primary').task_id;
+  for (const row of [preview.body.data.steps[0], db.prepare('SELECT * FROM tasks WHERE id=?').get(taskId)]) {
+    assert.equal(row.start_date, '2026-10-05'); assert.equal(row.due_date, '2026-10-09');
+    assert.equal(row.start_time, '15:30'); assert.equal(row.due_time, '07:30');
+    assert.equal(row.due_date_offset_days, 4);
+  }
 });
 
 test('built-in household skills are editable through Skills but cannot be deleted', async () => {

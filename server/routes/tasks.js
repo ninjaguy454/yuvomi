@@ -9,6 +9,7 @@ import express from 'express';
 import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration } from '../services/recurrence.js';
+import { addCalendarDays, calendarDayOffset, resolveActivitySchedule } from '../services/activity-schedule.js';
 import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFrontier, isRecurrenceFrontier, isTerminalRecurrenceOccurrence } from '../services/task-recurrence-frontier.js';
 import { syncTaskRewards } from '../services/rewards.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask, resolveActivityTemplate } from '../services/activity-workflows.js';
@@ -642,6 +643,7 @@ function currentRotationGroupState(d, rotationGroup, taskId = null) {
 function rotationGroupConfigError(d, {
   taskId = null, joining = false, assignmentMode, rotationGroup, rotationSlot,
   rotationUserIds, recurrenceRule, recurrenceFromCompletion, dueDate, dueTime,
+  startDate = null, dueDateOffset = null,
 }) {
   if (!rotationGroup) return null;
   if (assignmentMode !== 'round_robin') return 'Rotation groups require round-robin assignment.';
@@ -658,6 +660,9 @@ function rotationGroupConfigError(d, {
     if (!sameIdOrder(loadRotationUserIds(d, peer.id), rotationUserIds)) {
       return 'Every task in a rotation group must use the same ordered member list.';
     }
+    if (!sameRecurrenceDateAnchor(peer, { start_date: startDate, due_date_offset_days: dueDateOffset })) {
+      return 'Every task in a rotation group must use the same relative start and due schedule.';
+    }
     if (peer.recurrence_rule !== recurrenceRule
         || Number(peer.recurrence_from_completion || 0) !== Number(recurrenceFromCompletion ? 1 : 0)
         || (peer.due_date ?? null) !== (dueDate ?? null)
@@ -669,6 +674,15 @@ function rotationGroupConfigError(d, {
     }
   }
   return null;
+}
+
+function sameRecurrenceDateAnchor(left, right) {
+  const leftOffset = left.due_date_offset_days ?? null;
+  const rightOffset = right.due_date_offset_days ?? null;
+  // Legacy cohorts have always allowed different lead-in Start Dates. Only
+  // relative occurrences introduce a Start Date recurrence anchor to compare.
+  return leftOffset === null && rightOffset === null
+    || leftOffset === rightOffset && (left.start_date ?? null) === (right.start_date ?? null);
 }
 
 function roundRobinConfigError(d, { assignmentMode, isRecurring, recurrenceRule, parentTaskId, rotationUserIds }) {
@@ -1492,17 +1506,17 @@ router.post('/', (req, res) => {
     const templateDefaults = req.body.activity_template_id
       ? db.get().prepare('SELECT * FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
       : null;
+    const { start_date, start_time, due_date, due_time, due_date_offset_days } = resolveActivitySchedule(templateDefaults, req.body);
+    if (templateDefaults?.due_date_offset_days != null && !start_date && req.body.due_date === undefined) {
+      return res.status(400).json({ error: 'Choose a Start Date to resolve this Activity Template\'s Due setting.', code: 400 });
+    }
 
     const {
       title,
       description     = templateDefaults?.description ?? null,
       category        = templateDefaults?.category ?? FALLBACK_CATEGORY,
       priority        = templateDefaults?.priority ?? 'none',
-      start_date      = templateDefaults?.start_date ?? null,
-      start_time      = templateDefaults?.start_time ?? null,
       expiration_policy = templateDefaults?.expiration_policy ?? 'keep_overdue',
-      due_date        = templateDefaults?.due_date ?? null,
-      due_time        = templateDefaults?.due_time ?? null,
       parent_task_id  = null,
       is_optional     = 0,
       is_recurring    = templateDefaults?.recurrence_rule ? 1 : 0,
@@ -1553,6 +1567,7 @@ router.post('/', (req, res) => {
       recurrenceRule: recurrence_rule,
       recurrenceFromCompletion: recurrence_from_completion,
       dueDate: due_date, dueTime: due_time,
+      startDate: start_date, dueDateOffset: due_date_offset_days,
     });
     if (groupError) return res.status(400).json({ error: groupError, code: 400 });
 
@@ -1618,14 +1633,14 @@ router.post('/', (req, res) => {
           (title, description, category, priority, start_date, due_date, due_time,
            assigned_to, created_by, parent_task_id, is_recurring, recurrence_rule,
            recurrence_from_completion, assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
-           points, visibility, countdown, locked, start_time, expiration_policy, is_optional)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           points, visibility, countdown, locked, start_time, expiration_policy, is_optional, due_date_offset_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         title.trim(), description, category, priority,
         start_date, due_date, due_time, firstUid, req.authUserId || req.session.userId, parent_task_id,
         is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
         assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
-        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0
+        points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0, due_date_offset_days
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
@@ -1735,6 +1750,10 @@ router.put('/:id', (req, res) => {
     assertOptionalityEdit(task,is_optional);
     const windowError = validateTaskWindow({start_date,start_time,due_date,due_time,expiration_policy});
     if(windowError)return res.status(400).json({error:windowError,code:400});
+    // Relative occurrence scheduling is an internal snapshot, never a client
+    // lifecycle switch. Concrete date edits preserve their permitted window;
+    // legacy Tasks retain their original recurrence anchor.
+    const dueDateOffset = task.due_date_offset_days == null ? null : calendarDayOffset(start_date, due_date);
     const points = req.body.points !== undefined ? clampPoints(req.body.points) : task.points;
     const visibility = req.body.visibility !== undefined
       ? normalizeVisibility(req.body.visibility, task.visibility)
@@ -1818,6 +1837,7 @@ router.put('/:id', (req, res) => {
       recurrenceRule: recurrence_rule,
       recurrenceFromCompletion: recurrence_from_completion,
       dueDate: due_date, dueTime: due_time,
+      startDate: start_date, dueDateOffset,
     });
     if (groupError) return res.status(400).json({ error: groupError, code: 400 });
     if (task.rotation_group && Number(task.rotation_slot || 0) !== rotationSlot
@@ -1961,13 +1981,13 @@ router.put('/:id', (req, res) => {
           status = ?, start_date = ?, due_date = ?, due_time = ?, assigned_to = ?,
           is_recurring = ?, recurrence_rule = ?, recurrence_from_completion = ?,
           assignment_mode = ?, rotation_index = ?, rotation_group = ?, rotation_slot = ?, rotation_cycle = ?,
-          points = ?, visibility = ?, countdown = ?, locked = ?, start_time = ?, expiration_policy = ?, is_optional = ?
+          points = ?, visibility = ?, countdown = ?, locked = ?, start_time = ?, expiration_policy = ?, is_optional = ?, due_date_offset_days = ?
         WHERE id = ?
       `).run(title.trim(), description, category, priority,
              task.status, start_date, due_date, due_time, firstUid,
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
-             points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, req.params.id);
+             points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, dueDateOffset, req.params.id);
       applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
@@ -2154,8 +2174,8 @@ function isFollowupSubtasksTouched(followup) {
     ) return true;
   }
 
-  const originDueDate = originTaskId
-    ? db.get().prepare('SELECT due_date FROM tasks WHERE id = ?').get(originTaskId)?.due_date
+  const originTask = originTaskId
+    ? db.get().prepare('SELECT start_date,due_date,due_date_offset_days FROM tasks WHERE id = ?').get(originTaskId)
     : null;
 
   for (const sub of currentSubtasks) {
@@ -2177,10 +2197,12 @@ function isFollowupSubtasksTouched(followup) {
       return true;
     }
 
-    const subAnchorDate = originDueDate || origin.due_date;
-    const expectedStart = shiftedStartDate(origin.start_date, subAnchorDate, followup.due_date) ?? origin.start_date;
+    const relativeSchedule = originTask?.due_date_offset_days != null && !!originTask.start_date;
+    const subAnchorDate = (relativeSchedule ? originTask.start_date : originTask?.due_date) || origin.due_date;
+    const followupAnchorDate = relativeSchedule ? followup.start_date : followup.due_date;
+    const expectedStart = shiftedStartDate(origin.start_date, subAnchorDate, followupAnchorDate) ?? origin.start_date;
     const expectedDue = origin.due_date
-      ? (shiftedStartDate(origin.due_date, subAnchorDate, followup.due_date) ?? followup.due_date)
+      ? (shiftedStartDate(origin.due_date, subAnchorDate, followupAnchorDate) ?? followup.due_date)
       : null;
 
     if (sub.start_date !== expectedStart || sub.due_date !== expectedDue) {
@@ -2273,17 +2295,23 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
   // Höchstens eine Folgeinstanz je Erledigung - sonst legt doppeltes Abhaken nach.
   if (recurrenceFollowupOf(task.id)) return;
 
-  // Zwei Verankerungen, die Aufgabe entscheidet (#658): ab Fälligkeit
-  // (Vorgabe, holt übersprungene Vorkommen auf, damit die nächste Instanz
-  // nicht selbst überfällig entsteht) oder ab dem Tag des Abhakens.
+  // Relative template occurrences recur from their own Start Date, then
+  // resolve Due from the snapshotted calendar-day span. NULL deliberately
+  // retains the legacy due-anchored behavior for all pre-existing Tasks.
+  // Completion-relative mode still obtains its next date from completion;
+  // expiration continues to supply no completion-relative anchor.
+  const relativeSchedule = task.due_date_offset_days != null && !!task.start_date;
   const completedOn = todayInHouseholdZone();
-  const nextDate = (task.status === 'expired' || expirationAnchor ? nextDueAfterExpiration : nextDueAfterCompletion)({
-    anchorDate: task.due_date,
+  const nextAnchor = (task.status === 'expired' || expirationAnchor ? nextDueAfterExpiration : nextDueAfterCompletion)({
+    anchorDate: relativeSchedule ? task.start_date : task.due_date,
     rule: task.recurrence_rule,
     completedOn,
     fromCompletion: !!task.recurrence_from_completion,
   });
-  if (!nextDate) return;
+  if (!nextAnchor) return;
+  const nextStartDate = relativeSchedule ? nextAnchor : shiftedStartDate(task.start_date, task.due_date, nextAnchor);
+  const nextDate = relativeSchedule ? addCalendarDays(nextStartDate, task.due_date_offset_days) : nextAnchor;
+  if (!nextDate) throw new TaskStateError('The next occurrence has an invalid date window.', { reason: 'invalid_recurrence_window' });
   const occurrence=registerRecurrenceOccurrence(db.get(),task.id);
   // An early completion-relative action can calculate the very same date as
   // the occurrence being completed. Do not silently strand the series or
@@ -2323,11 +2351,11 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       INSERT INTO tasks (title, description, category, priority, status,
         start_date, due_date, due_time, assigned_to, created_by, is_recurring, recurrence_rule,
         assignment_mode, rotation_index, rotation_group, rotation_slot, rotation_cycle,
-        points, visibility, recurrence_from_completion, countdown, recurrence_origin_id, start_time, expiration_policy)
-      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        points, visibility, recurrence_from_completion, countdown, recurrence_origin_id, start_time, expiration_policy, due_date_offset_days)
+      VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.title, task.description, task.category, task.priority,
-      shiftedStartDate(task.start_date, task.due_date, nextDate),
+      nextStartDate,
       nextDate, task.due_time, nextAssignedTo, task.created_by,
       task.recurrence_rule, task.assignment_mode || 'fixed', nextRotationIndex,
       task.rotation_group || null, Number(task.rotation_slot || 0),
@@ -2343,7 +2371,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       // Erledigung rechnet - der Countdown, der genau davon lebt, dürfte beim
       // ersten Zurücksetzen nicht verschwinden.
       task.countdown ? 1 : 0,
-      task.id, task.start_time, task.expiration_policy || 'keep_overdue'
+      task.id, task.start_time, task.expiration_policy || 'keep_overdue', task.due_date_offset_days ?? null
     );
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
@@ -2352,8 +2380,9 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     copyTaskSkills(db.get(), task.id, newTask.lastInsertRowid);
 
     for (const sub of existingSubtasks) {
-      const subAnchorDate = task.due_date || sub.due_date;
-      const subDueDate = sub.due_date ? (shiftedStartDate(sub.due_date, subAnchorDate, nextDate) ?? nextDate) : null;
+      const subAnchorDate = (relativeSchedule ? task.start_date : task.due_date) || sub.due_date;
+      const subNextAnchor = relativeSchedule ? nextStartDate : nextDate;
+      const subDueDate = sub.due_date ? (shiftedStartDate(sub.due_date, subAnchorDate, subNextAnchor) ?? nextDate) : null;
       const priorSubAssignments = db.get()
         .prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
         .all(sub.id).map((r) => r.user_id);
@@ -2369,7 +2398,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
         VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, 0, NULL, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         sub.title, sub.description, sub.category, sub.priority,
-        shiftedStartDate(sub.start_date, subAnchorDate, nextDate) ?? sub.start_date,
+        shiftedStartDate(sub.start_date, subAnchorDate, subNextAnchor) ?? sub.start_date,
         subDueDate,
         sub.due_time, subAssignedTo, sub.created_by, newTask.lastInsertRowid,
         sub.points, sub.visibility, sub.id, sub.activity_template_checklist_item_id || null, sub.start_time, sub.expiration_policy || 'keep_overdue', sub.is_optional || 0
@@ -2419,6 +2448,7 @@ function spawnRecurrenceFollowupLocked(taskId) {
   if (roster.length < 2) throw new Error('Rotation group has no valid member roster.');
   for (const member of cohort) {
     if (!sameIdOrder(loadRotationUserIds(db.get(), member.id), roster)
+        || !sameRecurrenceDateAnchor(member, cohort[0])
         || member.recurrence_rule !== cohort[0].recurrence_rule
         || Number(member.recurrence_from_completion || 0) !== Number(cohort[0].recurrence_from_completion || 0)
         || (member.due_date ?? null) !== (cohort[0].due_date ?? null)

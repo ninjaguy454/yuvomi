@@ -1,5 +1,7 @@
 # Task feedback and reusable template dates — 2026-09-17
 
+> Scheduling superseded on 2026-09-18: the undeployed absolute template dates and migration 10037 described below were replaced by [relative due offsets](task-relative-scheduling-20260918.md). The expanded-card performance implementation is preserved. This document remains the historical evidence for the earlier candidate.
+
 This local candidate is based on deployed source `4f93b3caefe12f88a648591b59e3c49d46bebaf0`. Scope is expanded-card checkbox feedback and Activity Template Start/Due dates alongside times. No publication or deployment is authorized for this pass. Production was inspected read-only: the image and revision match that SHA, schema is 10036, integrity is OK and foreign-key violations are zero. No real household Tasks were changed for profiling.
 
 ## Checkbox discrepancy and cause

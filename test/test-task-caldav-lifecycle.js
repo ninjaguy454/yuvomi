@@ -46,3 +46,36 @@ test('CalDAV does not silently cascade completion across an unfinished checklist
   assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(child).status,'open');
   assert.equal(d.prepare('SELECT title FROM tasks WHERE id=?').get(id).title,'Original');
 });
+
+test('CalDAV deadline edits refresh an existing relative snapshot in household calendar days across DST',()=>{
+  d.prepare("INSERT OR REPLACE INTO sync_config(key,value) VALUES('household_timezone','America/New_York')").run();
+  const id=fixture('relative-deadline');
+  d.prepare("UPDATE tasks SET start_date='2026-03-06',start_time='15:30',due_date='2026-03-07',due_time='07:30',due_date_offset_days=1 WHERE id=?").run(id);
+  const todo={uid:'relative-deadline',summary:'Updated deadline',description:null,due:'2026-03-10T11:30:00Z'};
+  assert.equal(upsertTask(todo,42,admin),id);
+  assert.equal(upsertTask(todo,42,admin),id);
+  assert.deepEqual(d.prepare('SELECT start_date,start_time,due_date,due_time,due_date_offset_days FROM tasks WHERE id=?').get(id),{
+    start_date:'2026-03-06',start_time:'15:30',due_date:'2026-03-10',due_time:'07:30',due_date_offset_days:4,
+  });
+});
+
+test('CalDAV does not opt legacy or freshly imported Tasks into relative recurrence',()=>{
+  const id=fixture('legacy-deadline');
+  d.prepare("UPDATE tasks SET start_date='2026-03-06',start_time='15:30' WHERE id=?").run(id);
+  upsertTask({uid:'legacy-deadline',summary:'Legacy deadline',description:null,due:'2026-03-10'},42,admin);
+  assert.equal(d.prepare('SELECT due_date_offset_days FROM tasks WHERE id=?').get(id).due_date_offset_days,null);
+  const imported=upsertTask({uid:'new-import',summary:'New import',description:null,due:'2026-03-10'},42,admin);
+  assert.equal(d.prepare('SELECT due_date_offset_days FROM tasks WHERE id=?').get(imported).due_date_offset_days,null);
+});
+
+test('CalDAV clears a relative snapshot when its concrete boundary is missing or impossible',()=>{
+  for(const [index,start,due] of [
+    [0,'2026-03-06',null], [1,'2026-03-06','2026-03-05'],
+    [2,null,'2026-03-10'], [3,'2026-03-06','2026-03-06T12:30:00Z'],
+  ]) {
+    const uid=`invalid-relative-${index}`,id=fixture(uid);
+    d.prepare("UPDATE tasks SET start_date=?,start_time='15:30',due_date_offset_days=4 WHERE id=?").run(start,id);
+    upsertTask({uid,summary:'Changed boundary',description:null,due},42,admin);
+    assert.equal(d.prepare('SELECT due_date_offset_days FROM tasks WHERE id=?').get(id).due_date_offset_days,null);
+  }
+});

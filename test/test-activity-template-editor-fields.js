@@ -15,40 +15,51 @@ const context = vm.createContext({ ...rruleContext.subject, esc, parseTimeInput,
 vm.runInContext(`${plain(read('components/activity-automation.js'))}\nthis.subject={activityTimingFields,activityTimingPayload,activityChecklistPayload,memberOptions};`, context);
 const ui = context.subject;
 function formFixture(overrides = {}) {
-  const values = { start_time: '07:00', due_time: '08:00', 'activity-rrule-freq': 'WEEKLY', 'activity-rrule-interval': '1',
+  const values = { start_time: '07:00', due_time: '08:00', due_date_offset_days: '0', 'activity-rrule-freq': 'WEEKLY', 'activity-rrule-interval': '1',
     'activity-rrule-end': 'never', 'activity-rrule-source': 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', ...overrides };
   return { querySelector(selector) {
     const key = selector.startsWith('#') ? selector.slice(1) : selector.match(/name="([^"]+)"/)?.[1];
-    return key === 'activity-rrule-from-completion' ? { checked: !!values.fromCompletion } : { value: values[key] ?? '' };
+    return key === 'activity-rrule-from-completion' ? { checked: !!values.fromCompletion } : { value: values[key] ?? '', dataset: values.dataset || {} };
   }, querySelectorAll: () => ['MO', 'TU', 'WE', 'TH', 'FR'].map(day => ({ dataset: { day } })) };
 }
 
-test('template dates and times use the shared datepicker in start then due rows', () => {
-  const html = ui.activityTimingFields({ start_date: '2026-09-21', due_date: '2026-09-21', start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 });
+test('template exposes relative days and local times without absolute date controls', () => {
+  const html = ui.activityTimingFields({ due_date_offset_days: 0, start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 });
   assert.match(html, /yuvomi-datepicker type="time"[^>]+name="start_time" value="07:00"/);
   assert.match(html, /name="due_time" value="08:00"/);
   assert.match(html, /activity-rrule-from-completion/);
   assert.equal((html.match(/data-day="(?:MO|TU|WE|TH|FR)" aria-label="[^"]+" aria-pressed="true"/g) || []).length, 5);
-  assert.deepEqual([...html.matchAll(/name="((?:start|due)_(?:date|time))"/g)].map(match => match[1]), ['start_date', 'start_time', 'due_date', 'due_time']);
-  assert.match(html, /name="start_date" value="[^"]+"/);
-  assert.match(ui.activityTimingFields({ start_time: '07:00', due_time: '08:00' }), /name="start_date" value=""/);
+  assert.deepEqual([...html.matchAll(/name="((?:start|due)_(?:date|time))"/g)].map(match => match[1]), ['start_time', 'due_time']);
+  assert.match(html, /value="0" selected>Same day/);
+  assert.match(html, /value="4" >4 days later/);
+  assert.match(ui.activityTimingFields({ due_date_offset_days: 12 }), /value="custom" selected/);
+  assert.match(ui.activityTimingFields({ due_date_offset_days: 12 }), /name="due_date_offset_custom" value="12"/);
 });
 
 test('unchanged template schedule retains weekdays and completion-relative opt-in', () => {
-  assert.deepEqual(result(ui.activityTimingPayload(formFixture())), { values: { start_date: null, due_date: null, start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 } });
+  assert.deepEqual(result(ui.activityTimingPayload(formFixture())), { values: { due_date_offset_days: 0, start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0 } });
   assert.equal(ui.activityTimingPayload(formFixture({ fromCompletion: true })).values.recurrence_from_completion, 1);
   assert.equal(ui.activityTimingPayload(formFixture({ 'activity-rrule-freq': '', fromCompletion: true })).values.recurrence_from_completion, 0);
   assert.equal(ui.activityTimingPayload(formFixture({ start_time: '', due_time: '' })).values.start_time, null);
 });
 
-test('template windows retain multi-day dates and validate complete date/time boundaries', () => {
-  const homework = { start_date: '2026-09-21', start_time: '15:30', due_date: '2026-09-25', due_time: '07:00' };
+test('template offsets support multi-day and custom windows without inferring overnight', () => {
+  const homework = { due_date_offset_days: '4', start_time: '15:30', due_time: '07:30' };
   const values = ui.activityTimingPayload(formFixture(homework)).values;
-  for (const [key, value] of Object.entries(homework)) assert.equal(values[key], value);
-  assert.equal(ui.activityTimingPayload(formFixture({ ...homework, due_date: '2026-09-20' })).field, 'due_date');
-  assert.equal(ui.activityTimingPayload(formFixture({ ...homework, due_date: homework.start_date })).field, 'due_date');
-  assert.equal(ui.activityTimingPayload(formFixture({ start_date: 'bad' })).field, 'start_date');
-  assert.equal(ui.activityTimingPayload(formFixture({ ...homework, due_date: homework.start_date, due_time: homework.start_time })).error, undefined);
+  assert.equal(values.due_date_offset_days, 4); assert.equal(values.start_time, '15:30'); assert.equal(values.due_time, '07:30');
+  const invalid = ui.activityTimingPayload(formFixture({ start_time: '22:00', due_time: '06:00' }));
+  assert.equal(invalid.field, 'due_date_offset_days'); assert.match(invalid.error, /Set Due to 1 day later/);
+  assert.equal(ui.activityTimingPayload(formFixture({ start_time: '22:00', due_time: '06:00', due_date_offset_days: '1' })).values.due_date_offset_days, 1);
+  assert.equal(ui.activityTimingPayload(formFixture({ start_time: '07:00', due_time: '07:00' })).error, undefined);
+  assert.equal(ui.activityTimingPayload(formFixture({ due_date_offset_days: 'custom', due_date_offset_custom: '12' })).values.due_date_offset_days, 12);
+  for (const value of ['', '-1', '1.5', '3651', 'NaN']) assert.equal(ui.activityTimingPayload(formFixture({ due_date_offset_days: 'custom', due_date_offset_custom: value })).field, 'due_date_offset_custom');
+});
+
+test('unchanged unknown intervals remain null until the schedule is explicitly changed', () => {
+  const dataset = { offsetUnset: 'true', initialStartTime: '07:00', initialDueTime: '08:00' };
+  assert.equal(ui.activityTimingPayload(formFixture({ dataset })).values.due_date_offset_days, null);
+  assert.equal(ui.activityTimingPayload(formFixture({ dataset: { ...dataset, offsetChanged: 'true' } })).values.due_date_offset_days, 0);
+  assert.equal(ui.activityTimingPayload(formFixture({ start_time: '', due_time: '', dataset: { offsetUnset: 'true' } })).values.due_date_offset_days, null);
 });
 
 test('template timing validation identifies bad fields while accepting local 12-hour input', () => {

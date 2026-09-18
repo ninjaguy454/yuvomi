@@ -28,6 +28,7 @@ import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor } from '
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
+import { resolveActivityDueDate } from '/utils/activity-schedule.js';
 import { taskFormErrors, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
 import { resolveReminderPreset } from '/utils/reminder-offset.js';
 import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
@@ -974,10 +975,10 @@ function wireTagBadgeFilter(container) {
   });
 }
 
-function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null } = {}) {
+function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null, occurrenceStartDate = null } = {}) {
   const isEdit = !!task;
   const existingTask = task;
-  task = task || createManualTaskDraft({ template: presetActivityTemplate, places: state.places, defaultPoints: state.defaultPoints, presetDates });
+  task = task || createManualTaskDraft({ template: presetActivityTemplate, places: state.places, defaultPoints: state.defaultPoints, presetDates, occurrenceStartDate });
   const presetStartDate = task.start_date;
   const presetDueDate = task.due_date;
 
@@ -1779,6 +1780,21 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
   }
   let selectedId = select.value;
   const template = () => state.activityTemplates.find((entry) => Number(entry.id) === Number(selectedId)) || presetActivityTemplate;
+  const startDate = form.querySelector('#task-start-date');
+  const dueDate = form.querySelector('#task-due-date');
+  let dueFollowsTemplate = template()?.due_date_offset_days != null;
+  const followStartDate = () => {
+    if (!dueFollowsTemplate || taskCreateAttempts.has(form) || form.querySelector('#task-id').value) return;
+    dueDate.value = formatDateInput(resolveActivityDueDate(parseDateInput(startDate.value || ''), template()?.due_date_offset_days) || '');
+    // Notify gates and validation without confusing this derived change with a
+    // deliberate Due Date override.
+    dueDate.dispatchEvent(new CustomEvent('change', { bubbles: true, detail: { templateSchedule: true } }));
+  };
+  startDate?.addEventListener('change', followStartDate);
+  startDate?.addEventListener('input', followStartDate);
+  const overrideDueDate = event => { if (!event.detail?.templateSchedule) dueFollowsTemplate = false; };
+  dueDate?.addEventListener('input', overrideDueDate);
+  dueDate?.addEventListener('change', overrideDueDate);
   const subjectName = () => subject?.selectedOptions?.[0]?.value ? subject.selectedOptions[0].textContent.trim() : '';
   let generatedTitle = title.value;
   let generatedDescription = description.value;
@@ -1859,10 +1875,11 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
     }
     if (!form.isConnected) return;
     const nextTemplate = state.activityTemplates.find((entry) => Number(entry.id) === Number(nextId)) || null;
+    const occurrenceStartDate = nextTemplate ? parseDateInput(startDate?.value || '') || null : null;
     modalTags = normalizeTagList(nextTemplate?.tags);
     const body = panel.querySelector('.modal-panel__body');
     body.replaceChildren();
-    body.insertAdjacentHTML('beforeend', renderModalContent({ users: state.users, presetActivityTemplate: nextTemplate, presetDates }));
+    body.insertAdjacentHTML('beforeend', renderModalContent({ users: state.users, presetActivityTemplate: nextTemplate, presetDates, occurrenceStartDate }));
     mountFooter(panel);
     wireTaskForm(panel, { container, presetActivityTemplate: nextTemplate, presetDates, onChanged });
     refreshDirtySnapshot({ defer: false });

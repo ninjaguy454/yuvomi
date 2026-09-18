@@ -20,12 +20,14 @@ const templates = [
   { id: 13, name: 'Personal preparation', title_template: 'Prepare for {subject}', description: 'Personal supplies', category: 'misc', priority: 'none', points: 0, tags: [],
     assignment_strategy: 'subject_skill', subject_required: 1, location_mode: 'none', skill_ids: [], checklist: [{ title_template: 'Pack for {subject}', skill_ids: [3] }] },
   { id: 14, name: 'Morning routine', title_template: 'Get Ready for the Day', points: 2, assignment_strategy: 'fixed', fixed_user_id: 2,
-    start_date: '2026-09-21', due_date: '2026-09-21',
+    due_date_offset_days: 0,
     allow_assignment_override: 1, start_time: '07:00', due_time: '08:00', expiration_policy: 'expire_incomplete',
     recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', recurrence_from_completion: 0,
     checklist: [{ title_template: 'Get dressed', is_optional: 0, skill_ids: [] }, { title_template: 'Put in earrings', is_optional: 1, skill_ids: [] }] },
   { id: 15, name: 'Get Ready for School', title_template: '{{assignee.first_name}} Get Ready for School', points: 2,
     assignment_strategy: 'subject_skill', subject_required: 1, input_schema: [], checklist: [] },
+  { id: 16, name: 'Weekly homework', title_template: 'Weekly Homework', points: 5, assignment_strategy: 'fixed', fixed_user_id: 2,
+    due_date_offset_days: 4, start_time: '15:30', due_time: '07:30', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO', expiration_policy: 'keep_overdue', checklist: [] },
 ];
 const workflow = { id: 21, name: 'Evening reset', description: 'Two connected Tasks', subject_required: 0, input_schema: [], steps: [] };
 const preferenceValues = new Map(), requests = [];
@@ -446,9 +448,9 @@ test('fixed template defaults, permitted assignee change and recurring times rea
     assert.equal(await page.$eval('#task-fixed-assignment', el => el.hidden), false);
     assert.equal(await value(page, '#task-start-time'), '07:00');
     assert.equal(await value(page, '#task-due-time'), '08:00');
-    assert.match(await value(page, '#task-start-date'), /21/);
-    assert.match(await value(page, '#task-due-date'), /21/);
-    await set(page, '#task-start-date', '2026-09-17'); await set(page, '#task-due-date', '2026-09-17');
+    assert.equal(await value(page, '#task-start-date'), ''); assert.equal(await value(page, '#task-due-date'), '');
+    await set(page, '#task-start-date', '2026-09-17');
+    assert.match(await value(page, '#task-due-date'), /17/);
     await page.click('[data-ms-input="task_assigned"][value="2"]');
     await page.click('[data-ms-input="task_assigned"][value="1"]');
     await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
@@ -482,7 +484,8 @@ test('Save as Template refreshes the existing picker without replacing draft or 
     assert.equal(await page.$eval('[data-ms-input="task_assigned"][value="2"]', el => el.checked), true);
     const template = requests.find(r => r.path === '/automation/admin/activity-templates' && r.method === 'POST').body;
     assert.equal(Number(template.fixed_user_id), 2); assert.equal(template.start_time, '07:00'); assert.equal(template.due_time, '08:00');
-    assert.equal(template.start_date, '2026-09-17'); assert.equal(template.due_date, '2026-09-17');
+    assert.equal(template.due_date_offset_days, 0);
+    assert.equal(Object.hasOwn(template, 'start_date'), false); assert.equal(Object.hasOwn(template, 'due_date'), false);
     await page.focus('#task-submit-btn'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#task-form'));
     assert.deepEqual(requests.find(r => r.path === '/tasks' && r.method === 'POST').body.assigned_to, [2]);
@@ -506,44 +509,72 @@ test('template back to Blank clears template assignment and accepts a fresh manu
   } finally { await page.dispose(); }
 });
 
-for (const width of [1366, 390]) {
-  test(`Activity date/time rows, multi-day save and validation focus work at ${width}px`, async () => {
+for (const width of [1366, 768, 390]) {
+  test(`Activity relative schedule, custom days and validation focus work at ${width}px`, async () => {
     requests.length = 0; preferenceValues.clear();
     const page = await mounted({ width });
     try {
       await set(page, '#task-title', 'Weekly Homework');
       await set(page, '#task-start-date', '2026-09-21'); await set(page, '#task-start-time', '15:30');
-      await set(page, '#task-due-date', '2026-09-25'); await set(page, '#task-due-time', '07:00');
+      await set(page, '#task-due-date', '2026-09-25'); await set(page, '#task-due-time', '07:30');
       await page.click('[data-save-as-template]'); await page.waitForSelector('#automation-activity-form');
+      assert.equal(await page.$('#activity-start-date'), null); assert.equal(await page.$('#activity-due-date'), null);
+      assert.equal(await value(page, '#activity-due-offset'), '4');
       const geometry = await page.evaluate(() => {
         const rect = id => { const r = document.querySelector(id).getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right }; };
-        return ['#activity-start-date', '#activity-start-time', '#activity-due-date', '#activity-due-time'].map(rect);
+        return ['#activity-start-time', '#activity-due-offset', '#activity-due-time'].map(rect);
       });
       if (width > 640) {
-        assert.equal(geometry[0].y, geometry[1].y); assert.equal(geometry[2].y, geometry[3].y);
+        assert.equal(geometry[0].y, geometry[1].y);
         assert.ok(geometry[0].x < geometry[1].x && geometry[2].y > geometry[0].y);
       } else {
         assert.ok(geometry.every((r, i) => !i || r.y > geometry[i - 1].y));
         assert.ok(geometry.every(r => r.x >= 0 && r.right <= width), 'schedule controls stay within the mobile viewport');
       }
-      await set(page, '#activity-due-date', '2026-09-20');
+      await set(page, '#activity-start-time', '22:00'); await set(page, '#activity-due-time', '06:00');
+      await page.select('#activity-due-offset', '0');
       await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
       await page.waitForSelector('[data-activity-error]:not([hidden])');
-      assert.equal(await page.evaluate(() => document.activeElement.closest('yuvomi-datepicker')?.id), 'activity-due-date');
-      assert.match(await page.evaluate(() => window.toasts.at(-1)), /Due date and time/);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'activity-due-offset');
+      assert.match(await page.evaluate(() => window.toasts.at(-1)), /Set Due to 1 day later/);
       assert.equal(requests.filter(r => r.path === '/automation/admin/activity-templates' && r.method === 'POST').length, 0);
-      assert.equal(await value(page, '#activity-start-time'), '15:30');
-      await set(page, '#activity-due-date', '2026-09-25');
+      assert.equal(await value(page, '#activity-start-time'), '22:00');
+      await page.select('#activity-due-offset', 'custom');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'activity-due-offset-custom');
+      await set(page, '#activity-due-offset-custom', '12');
       await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
       await page.waitForFunction(() => !document.querySelector('#automation-activity-form'));
       const payload = requests.find(r => r.path === '/automation/admin/activity-templates' && r.method === 'POST').body;
-      assert.equal(payload.start_date, '2026-09-21'); assert.equal(payload.due_date, '2026-09-25');
-      assert.equal(payload.start_time, '15:30'); assert.equal(payload.due_time, '07:00');
+      assert.equal(payload.due_date_offset_days, 12);
+      assert.equal(Object.hasOwn(payload, 'start_date'), false); assert.equal(Object.hasOwn(payload, 'due_date'), false);
+      assert.equal(payload.start_time, '22:00'); assert.equal(payload.due_time, '06:00');
       assert.match(await value(page, '#task-due-date'), /25/);
       assert.deepEqual(page.fixtureErrors || [], []);
     } finally { await page.dispose(); }
   });
 }
+
+test('relative due follows concrete start until manual override; switching uses the current occurrence start and Blank resets', async () => {
+  requests.length = 0; preferenceValues.clear();
+  preferenceValues.set(1, { tasks_template_switch_warning: false });
+  const page = await mounted();
+  try {
+    await set(page, '#task-start-date', '2026-09-21');
+    await selectTemplate(page, 16, 'Weekly Homework');
+    const dates = () => page.evaluate(async () => { const { parseDateInput } = await import('/i18n.js'); return ['start', 'due'].map(key => parseDateInput(document.querySelector(`#task-${key}-date`).value)); });
+    assert.deepEqual(await dates(), ['2026-09-21', '2026-09-25']);
+    await set(page, '#task-start-date', '2026-11-02');
+    assert.deepEqual(await dates(), ['2026-11-02', '2026-11-06']);
+    await set(page, '#task-due-date', '2026-11-07');
+    await set(page, '#task-start-date', '2026-11-03');
+    assert.deepEqual(await dates(), ['2026-11-03', '2026-11-07'], 'explicit concrete due is retained');
+    await selectTemplate(page, 14, 'Get Ready for the Day');
+    assert.deepEqual(await dates(), ['2026-11-03', '2026-11-03']);
+    await selectTemplate(page, '', '');
+    assert.deepEqual(await dates(), ['', '']);
+    assert.equal(await value(page, '#task-start-time'), ''); assert.equal(await value(page, '#task-due-time'), '');
+  } finally { await page.dispose(); }
+});
 
 test('contextual Assignee resolution follows the selected Eleanor and blocked resolution announces an error before creation', async () => {
   requests.length = 0; createReceipts.clear(); preferenceValues.clear();

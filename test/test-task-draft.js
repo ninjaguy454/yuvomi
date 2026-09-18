@@ -46,8 +46,8 @@ test('Save as Template copies reusable fields and excludes occurrence-only setti
   assert.equal(result.place_id, 2); assert.equal(result.assignment_strategy, 'fixed');
   assert.equal(result.fixed_user_id, 7); assert.equal(result.subject_required, 0);
   assert.equal(result.recurrence_rule, 'FREQ=DAILY');
-  assert.equal(result.due_date, '2026-09-08');
-  for (const key of ['countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
+  assert.equal(result.due_date_offset_days, null, 'one date is insufficient to derive an interval');
+  for (const key of ['start_date', 'due_date', 'countdown', 'documents', 'reminder']) assert.equal(Object.hasOwn(result, key), false);
 });
 test('template conversion retains existing strategy; multiple manual assignees do not become a rotation', () => {
   const draft = { title: 'Prep', assigned_users: [1, 2], location: { kind: 'manual', user_label: 'Temporary' } };
@@ -64,7 +64,9 @@ test('morning template round trip keeps reusable times, anchored weekdays, fixed
     start_time: '07:00', due_time: '08:00', recurrence_rule: 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
     recurrence_from_completion: 0, expiration_policy: 'expire_incomplete',
     subtasks: [{ id: 20, title: 'Get dressed', status: 'done' }, { id: 21, title: 'Put in earrings', is_optional: 1, status: 'done', skill_ids: [4] }] });
-  const draft = createManualTaskDraft({ template: activity });
+  const draft = createManualTaskDraft({ template: activity, occurrenceStartDate: '2026-09-21' });
+  assert.equal(activity.due_date_offset_days, 0);
+  assert.equal(Object.hasOwn(activity, 'start_date'), false); assert.equal(Object.hasOwn(activity, 'due_date'), false);
   assert.equal(draft.assigned_to, 7); assert.equal(draft.points, 2);
   assert.equal(draft.start_time, '07:00'); assert.equal(draft.due_time, '08:00');
   assert.equal(draft.start_date, '2026-09-21'); assert.equal(draft.due_date, '2026-09-21');
@@ -73,12 +75,24 @@ test('morning template round trip keeps reusable times, anchored weekdays, fixed
   assert.deepEqual(draft.subtasks.map(row => [row.id, row.status, row.is_optional]), [[undefined, undefined, 0], [undefined, undefined, 1]]);
 });
 
-test('template dates copy without fabricating missing dates; calendar selections override both boundaries', () => {
-  const template = { start_date: '2026-09-21', due_date: '2026-09-25', start_time: '15:30', due_time: '07:00' };
-  assert.equal(createManualTaskDraft({ template }).due_date, '2026-09-25');
-  const selected = createManualTaskDraft({ template, presetDates: { start_date: null, due_date: '2026-09-29' } });
-  assert.equal(selected.start_date, null); assert.equal(selected.due_date, '2026-09-29');
+test('template relative dates resolve only from a supplied occurrence start, including DST and calendar selection', () => {
+  const template = { due_date_offset_days: 4, start_time: '15:30', due_time: '07:30' };
+  assert.equal(createManualTaskDraft({ template }).due_date, null);
+  const selected = createManualTaskDraft({ template, presetDates: { start_date: '2026-09-21', due_date: '2026-09-22' } });
+  assert.equal(selected.start_date, '2026-09-21'); assert.equal(selected.due_date, '2026-09-25');
+  const following = createManualTaskDraft({ template, occurrenceStartDate: '2026-11-02' });
+  assert.equal(following.due_date, '2026-11-06'); assert.equal(following.start_time, '15:30'); assert.equal(following.due_time, '07:30');
   const timeOnly = createManualTaskDraft({ template: { start_time: '07:00', due_time: '08:00' } });
   assert.equal(timeOnly.start_date, null); assert.equal(timeOnly.due_date, null);
   assert.equal(createManualTaskDraft().start_date, null, 'switch to Blank clears template schedule');
+});
+
+test('Save as Template derives calendar days safely and removes obsolete absolute dates from source templates', () => {
+  const activity = taskDraftToActivity({ title: 'Homework', start_date: '2026-10-30', due_date: '2026-11-03', start_time: '15:30', due_time: '07:30' },
+    { start_date: '2000-01-01', due_date: '2000-01-02', due_date_offset_days: 1 });
+  assert.equal(activity.due_date_offset_days, 4);
+  assert.equal(Object.hasOwn(activity, 'start_date'), false); assert.equal(Object.hasOwn(activity, 'due_date'), false);
+  for (const draft of [{ due_date: '2026-09-25' }, { start_date: '2026-09-21' }, { start_date: 'bad', due_date: '2026-09-25' }, { start_date: '2026-09-25', due_date: '2026-09-21' }]) {
+    assert.equal(taskDraftToActivity({ title: 'Incomplete', ...draft }).due_date_offset_days, null);
+  }
 });

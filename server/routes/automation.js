@@ -41,7 +41,7 @@ import { createLogger } from '../logger.js';
 import { normalizeSkillIds } from '../services/task-skills.js';
 import { normalizeTags } from '../utils/task-tags.js';
 import * as v from '../middleware/validate.js';
-import { taskStartMs, taskDeadlineMs } from '../services/task-window.js';
+import { normalizeActivityDueOffset } from '../../public/utils/activity-schedule.js';
 import {
   claimTask,
   obligationInbox,
@@ -161,16 +161,16 @@ function normalizeActivityInput(d, body, existing = null) {
   if (!['keep_overdue', 'expire_incomplete'].includes(expirationPolicy)) throw new Error('Choose a valid expiration policy.');
   const startTime = body.start_time === undefined ? existing?.start_time ?? null : body.start_time || null;
   const dueTime = body.due_time === undefined ? existing?.due_time ?? null : body.due_time || null;
-  const startDate = body.start_date === undefined ? existing?.start_date ?? null : body.start_date || null;
-  const dueDate = body.due_date === undefined ? existing?.due_date ?? null : body.due_date || null;
+  const dueDateOffsetDays = body.due_date_offset_days === undefined
+    ? existing
+      ? existing.due_date_offset_days ?? (!existing.start_time && !existing.due_time && (startTime || dueTime) ? 0 : null)
+      : (startTime || dueTime ? 0 : null)
+    : normalizeActivityDueOffset(body.due_date_offset_days);
   const recurrenceRule = body.recurrence_rule === undefined ? existing?.recurrence_rule ?? null : body.recurrence_rule || null;
-  const timingErrors = v.collectErrors([v.date(startDate, 'start_date'), v.date(dueDate, 'due_date'), v.time(startTime, 'start_time'), v.time(dueTime, 'due_time'), v.rrule(recurrenceRule, 'recurrence_rule')]);
+  const timingErrors = v.collectErrors([v.time(startTime, 'start_time'), v.time(dueTime, 'due_time'), v.rrule(recurrenceRule, 'recurrence_rule')]);
   if (timingErrors.length) throw new Error(timingErrors.join(' '));
-  if (startDate && dueDate) {
-    const window = { start_date: startDate, start_time: startTime, due_date: dueDate, due_time: dueTime };
-    if (taskStartMs(d, window) > taskDeadlineMs(d, window)) throw new Error('Due date and time must be at or after the start date and time.');
-  } else if (!startDate && !dueDate && startTime && dueTime && startTime >= dueTime) {
-    throw new Error('Due Time must be after Start Time, or choose start and due dates for a window across days.');
+  if ((dueDateOffsetDays ?? 0) === 0 && startTime && dueTime && dueTime < startTime) {
+    throw new Error('Due time is before Start time on the same day. Set Due to 1 day later.');
   }
   const recurrenceFromCompletion = recurrenceRule ? bool(body.recurrence_from_completion, !!existing?.recurrence_from_completion) : 0;
   const tags = body.tags === undefined ? (existing?.tags || []) : body.tags;
@@ -224,7 +224,7 @@ function normalizeActivityInput(d, body, existing = null) {
     priority,
     points: Number(points),
     expirationPolicy,
-    startDate, dueDate, startTime, dueTime, recurrenceRule, recurrenceFromCompletion,
+    dueDateOffsetDays, startTime, dueTime, recurrenceRule, recurrenceFromCompletion,
     tags: normalizeTags(tags),
     assignmentStrategy,
     legacyAssignmentStrategy: ['subject_skill', 'eligible_round_robin', 'fixed'].includes(assignmentStrategy)
@@ -912,7 +912,7 @@ router.get('/activity-options', (_req, res) => {
       priority: activity.priority,
       points: activity.points,
       expiration_policy: activity.expiration_policy,
-      start_date: activity.start_date, due_date: activity.due_date,
+      due_date_offset_days: activity.due_date_offset_days,
       start_time: activity.start_time, due_time: activity.due_time,
       recurrence_rule: activity.recurrence_rule, recurrence_from_completion: activity.recurrence_from_completion,
       is_recurring: activity.recurrence_rule ? 1 : 0,
@@ -983,9 +983,12 @@ router.get('/quick-add', (req, res) => {
 
 router.post('/quick-add/:id/preview', (req, res) => {
   try {
+    const startDate = v.date(req.body.start_date, 'start_date');
+    if (startDate.error) throw new Error(startDate.error);
     const data = previewWorkflow(db.get(), Number(req.params.id), {
       subjectUserId: req.body.subject_user_id ?? null,
       inputs: req.body.inputs ?? {},
+      startDate: startDate.value ?? undefined,
     });
     res.json({ data });
   } catch (err) {
@@ -995,9 +998,12 @@ router.post('/quick-add/:id/preview', (req, res) => {
 
 router.post('/quick-add/:id/create', (req, res) => {
   try {
+    const startDate = v.date(req.body.start_date, 'start_date');
+    if (startDate.error) throw new Error(startDate.error);
     const data = instantiateWorkflow(db.get(), Number(req.params.id), {
       subjectUserId: req.body.subject_user_id ?? null,
       inputs: req.body.inputs ?? {},
+      startDate: startDate.value ?? undefined,
       createdBy: currentUserId(req),
     });
     res.status(201).json({ data });
@@ -1358,8 +1364,8 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
           subject_required, fixed_user_id, supervision_title_template, active, created_by,
           location_mode, place_id, location_variable_id, presence_policy, presence_window,
           assignment_policy, allow_assignment_override, participant_count, rotation_group,
-          priority, points, tags_json, expiration_policy, start_time, due_time, recurrence_rule, recurrence_from_completion, start_date, due_date
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          priority, points, tags_json, expiration_policy, start_time, due_time, recurrence_rule, recurrence_from_completion, due_date_offset_days
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         input.name, input.titleTemplate, input.description, input.category,
         input.legacyAssignmentStrategy, input.subjectRequired, input.fixedUserId,
@@ -1369,7 +1375,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
         input.allowAssignmentOverride, input.participantCount, input.rotationGroup,
         input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy,
         input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion,
-        input.startDate, input.dueDate,
+        input.dueDateOffsetDays,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
@@ -1397,7 +1403,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
                assignment_policy = ?, allow_assignment_override = ?, participant_count = ?, rotation_group = ?,
                priority = ?, points = ?, tags_json = ?, expiration_policy = ?,
                start_time = ?, due_time = ?, recurrence_rule = ?, recurrence_from_completion = ?,
-               start_date = ?, due_date = ?,
+               due_date_offset_days = ?,
                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
          WHERE id = ?
       `).run(
@@ -1407,7 +1413,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.placeId, input.locationVariableId, input.presencePolicy,
         input.presenceWindow, input.assignmentStrategy, input.allowAssignmentOverride,
         input.participantCount, input.rotationGroup, input.priority, input.points, JSON.stringify(input.tags), input.expirationPolicy,
-        input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.startDate, input.dueDate, existing.id,
+        input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.dueDateOffsetDays, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
       saveActivityChecklist(d, existing.id, input.checklist);

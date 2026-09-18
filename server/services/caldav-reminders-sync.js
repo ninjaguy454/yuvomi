@@ -20,6 +20,8 @@ import * as todoOutbound from './caldav-todo-outbound.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from './assignment-responsibilities.js';
 import { assertTaskWindowAction, changeTaskStatus, recordTaskActivity } from './task-lifecycle.js';
 import { reconcileTaskSupervision } from './task-supervision.js';
+import { calendarDayOffset } from './activity-schedule.js';
+import { taskStartMs, taskDeadlineMs } from './task-window.js';
 
 // --------------------------------------------------------
 // Pure Mapping Helpers
@@ -250,7 +252,8 @@ function upsertTaskLocked(todo, accountId, createdBy, objectUrl = null) {
   const { date, time } = splitDue(todo.due, householdTimeZone(db.get()));
 
   const existing = db.get().prepare(
-    `SELECT id, priority, status, due_date, due_time, expiration_policy FROM tasks WHERE external_uid = ? AND external_source = 'caldav' AND external_account_id = ?`
+    `SELECT id, priority, status, start_date, start_time, due_date, due_time, due_date_offset_days, expiration_policy
+       FROM tasks WHERE external_uid = ? AND external_source = 'caldav' AND external_account_id = ?`
   ).get(todo.uid, accountId);
 
   // A provider status refresh is not an authorized lifecycle reopen. Preserve
@@ -279,12 +282,17 @@ function upsertTaskLocked(todo, accountId, createdBy, objectUrl = null) {
       // Unbound Tasks have no policy and retain normal CalDAV behavior.
       assertTaskAssignmentAvailability(db.get(), existing.id, null, { task: { due_date: date, due_time: time } });
     }
+    // Keep an already-relative occurrence's snapshot in sync with its edited
+    // concrete deadline. Imported or legacy Tasks remain in their existing mode.
+    let dueDateOffsetDays = existing.due_date_offset_days == null ? null : calendarDayOffset(existing.start_date, date);
+    if (dueDateOffsetDays != null && taskStartMs(db.get(), existing)
+        > taskDeadlineMs(db.get(), { due_date: date, due_time: time })) dueDateOffsetDays = null;
     db.get().prepare(`
       UPDATE tasks
-      SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, due_time = ?,
+      SET title = ?, description = ?, priority = ?, status = ?, due_date = ?, due_time = ?, due_date_offset_days = ?,
           external_object_url = COALESCE(?, external_object_url)
       WHERE id = ?
-    `).run(todo.summary, todo.description, priority, structured ? existing.status : status, date, time, objectUrl, existing.id);
+    `).run(todo.summary, todo.description, priority, structured ? existing.status : status, date, time, dueDateOffsetDays, objectUrl, existing.id);
     if(structured) {
       reconcileTaskSupervision(db.get(),existing.id,{actorId:createdBy});
       // Provider synchronization already resolves its object version in the

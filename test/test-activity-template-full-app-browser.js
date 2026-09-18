@@ -12,7 +12,7 @@ const repo = fileURLToPath(new URL('..', import.meta.url));
 if (process.env.ACTIVITY_TEMPLATE_BROWSER_CHILD === '1') {
   await fullApplicationAcceptance();
 } else {
-  test('real application preserves template dates through desktop/mobile save, validation, switching and Task creation', { timeout: 120000 }, () => {
+  test('real application resolves relative template scheduling through desktop/mobile save, validation, switching and Task creation', { timeout: 120000 }, () => {
     const temporary = !process.env.ACTIVITY_TEMPLATE_QA_OUTPUT;
     const output = process.env.ACTIVITY_TEMPLATE_QA_OUTPUT || mkdtempSync(path.join(tmpdir(), 'activity-template-browser-'));
     mkdirSync(output, { recursive: true });
@@ -41,7 +41,7 @@ async function fullApplicationAcceptance() {
   const output = process.env.ACTIVITY_TEMPLATE_QA_OUTPUT; process.chdir(output);
   process.env.DB_PATH = path.join(output, `full-app-${Date.now()}.db`);
   delete process.env.DB_ENCRYPTION_KEY;
-  process.env.SESSION_SECRET = 'isolated-template-date-acceptance-only';
+  process.env.SESSION_SECRET = 'isolated-relative-template-acceptance-only';
   process.env.SESSION_SECURE = 'false'; process.env.BACKUP_ENABLED = 'false';
   process.env.NODE_ENV = 'development'; process.env.PORT = '0'; process.env.LOG_LEVEL = 'error';
   const { get } = await import(pathToFileURL(path.join(repo, 'server/db.js')));
@@ -89,35 +89,42 @@ async function fullApplicationAcceptance() {
       assert.equal(await page.evaluate(() => navigator.onLine), true, 'full application QA needs an isolated network interface, not Docker --network none');
       await page.waitForSelector(width < 1024 ? '#fab-new-task' : '#btn-new-task');
       await page.click(width < 1024 ? '#fab-new-task' : '#btn-new-task'); await page.waitForSelector('#task-form');
-      const title = `${width === 1366 ? 'Morning' : 'Homework'} schedule ${width}`;
+      const title = width === 1366 ? 'Get Ready for the Day' : "Eleanor's Weekly Homework";
       const schedule = width === 1366 ? { start_date: '2026-09-21', due_date: '2026-09-21', start_time: '07:00', due_time: '08:00' }
-        : { start_date: '2026-09-21', due_date: '2026-09-25', start_time: '15:30', due_time: '07:00' };
+        : { start_date: '2026-09-21', due_date: '2026-09-25', start_time: '15:30', due_time: '07:30' };
+      const offset = width === 1366 ? 0 : 4;
       await set(page, '#task-title', title);
       for (const [key, value] of Object.entries(schedule)) await set(page, `#task-${key.replaceAll('_', '-')}`, value);
       await page.select('#task-rrule-freq', 'WEEKLY');
       if (width === 1366) for (const day of ['MO', 'TU', 'WE', 'TH', 'FR']) await page.click(`#task-rrule-fields [data-day="${day}"]`);
+      else await page.click('#task-rrule-fields [data-day="MO"]');
       await set(page, '#task-points', width === 1366 ? '2' : '5');
       if (width === 1366) await page.select('#task-expiration-policy', 'expire_incomplete');
       await page.click('[data-ms-input="task_assigned"][value="2"]');
+      await page.evaluate(() => { window.retainedTemplateTaskDraft = document.querySelector('#task-form'); });
       await page.click('[data-save-as-template]'); await page.waitForSelector('#automation-activity-form');
       const fields = await page.evaluate(async () => {
-        const { parseDateInput, parseTimeInput } = await import('/i18n.js');
-        return Object.fromEntries(['start_date', 'start_time', 'due_date', 'due_time'].map(key => {
+        const { parseTimeInput } = await import('/i18n.js');
+        return Object.fromEntries(['start_time', 'due_date_offset_days', 'due_time'].map(key => {
           const value = document.querySelector(`#automation-activity-form [name="${key}"]`).value;
-          return [key, key.endsWith('date') ? parseDateInput(value) : parseTimeInput(value)];
+          return [key, key === 'due_date_offset_days' ? Number(value) : parseTimeInput(value)];
         }));
       });
-      assert.deepEqual(fields, schedule);
+      assert.deepEqual(fields, { start_time: schedule.start_time, due_date_offset_days: offset, due_time: schedule.due_time });
+      assert.equal(await page.$('#activity-start-date'), null); assert.equal(await page.$('#activity-due-date'), null);
       await new Promise(resolve => setTimeout(resolve, 500));
-      await page.$eval('#activity-start-date', el => el.closest('fieldset').scrollIntoView({ block: 'start', behavior: 'instant' }));
+      await page.$eval('#activity-start-time', el => el.closest('fieldset').scrollIntoView({ block: 'start', behavior: 'instant' }));
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       await page.screenshot({ path: path.join(output, `template-schedule-${width}.png`) });
-      await set(page, '#activity-due-date', '2026-09-20');
+      await set(page, '#activity-start-time', '22:00'); await set(page, '#activity-due-time', '06:00');
+      await page.select('#activity-due-offset', '0');
       await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
       await page.waitForSelector('[data-activity-error]:not([hidden])');
-      assert.equal(await page.evaluate(() => document.activeElement.closest('yuvomi-datepicker')?.id), 'activity-due-date');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'activity-due-offset');
+      assert.match(await page.$eval('[data-activity-error]', el => el.textContent), /Set Due to 1 day later/);
       assert.equal(d.prepare('SELECT COUNT(*) n FROM activity_templates WHERE name=?').get(title).n, 0);
-      await set(page, '#activity-due-date', schedule.due_date);
+      await set(page, '#activity-start-time', schedule.start_time); await set(page, '#activity-due-time', schedule.due_time);
+      await page.select('#activity-due-offset', String(offset));
       await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
       await page.waitForFunction(() => !document.querySelector('#automation-activity-form'));
       await page.waitForFunction(() => {
@@ -127,7 +134,10 @@ async function fullApplicationAcceptance() {
       await new Promise(resolve => setTimeout(resolve, 250));
       const template = d.prepare('SELECT * FROM activity_templates WHERE name=?').get(title);
       assert.ok(template);
-      for (const [key, value] of Object.entries(schedule)) assert.equal(template[key], value);
+      assert.equal(template.start_time, schedule.start_time); assert.equal(template.due_time, schedule.due_time);
+      assert.equal(template.due_date_offset_days, offset);
+      assert.equal(Object.hasOwn(template, 'start_date'), false); assert.equal(Object.hasOwn(template, 'due_date'), false);
+      assert.equal(await page.evaluate(() => window.retainedTemplateTaskDraft === document.querySelector('#task-form')), true);
       assert.equal(template.recurrence_from_completion, 0);
       assert.equal(template.expiration_policy, width === 1366 ? 'expire_incomplete' : 'keep_overdue');
       if (width === 1366) assert.equal(template.recurrence_rule, 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR');
@@ -145,8 +155,10 @@ async function fullApplicationAcceptance() {
       for (const [key, value] of Object.entries(schedule)) assert.equal(task[key], value);
       assert.equal(task.recurrence_rule, template.recurrence_rule);
       assert.equal(task.points, width === 1366 ? 2 : 5);
+      assert.equal(task.due_date_offset_days, offset);
+      assert.equal(task.assigned_to, 2);
       assert.deepEqual(errors, []);
-      results.push({ width, title, template: template.id, task: task.id, schedule, recurrence: task.recurrence_rule,
+      results.push({ width, title, template: template.id, task: task.id, schedule, dueOffset: offset, recurrence: task.recurrence_rule,
         validationFocus: true, persisted: true, dropdownRefresh: true, draftPreserved: true });
       await context.close();
     }

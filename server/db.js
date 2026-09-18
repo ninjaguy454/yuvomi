@@ -9025,10 +9025,14 @@ FORK_MIGRATIONS.push({
 
 FORK_MIGRATIONS.push({
   version: 10037,
-  description: 'Activities: optional reusable start and due dates',
+  description: 'Activities: relative due dates from occurrence start dates',
   up: `
-    ALTER TABLE activity_templates ADD COLUMN start_date TEXT;
-    ALTER TABLE activity_templates ADD COLUMN due_date TEXT;
+    ALTER TABLE activity_templates ADD COLUMN due_date_offset_days INTEGER
+      CHECK(due_date_offset_days IS NULL OR (typeof(due_date_offset_days) = 'integer' AND due_date_offset_days >= 0));
+    UPDATE activity_templates SET due_date_offset_days = 0
+      WHERE start_time IS NOT NULL OR due_time IS NOT NULL;
+    ALTER TABLE tasks ADD COLUMN due_date_offset_days INTEGER
+      CHECK(due_date_offset_days IS NULL OR (typeof(due_date_offset_days) = 'integer' AND due_date_offset_days >= 0));
   `,
 });
 

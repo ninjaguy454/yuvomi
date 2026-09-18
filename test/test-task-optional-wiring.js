@@ -170,7 +170,7 @@ for(const terminal of ['done','expired'])test(`disabled template overrides leave
 
 test('invalid reusable timing, optional flags and changing completed parent optionality are rejected',async()=>{
   let result=await call('POST','/automation/admin/activity-templates',{name:'Invalid',assignment_strategy:'fixed',fixed_user_id:eleanor,start_time:'08:00',due_time:'07:00'});
-  assert.equal(result.status,400);assert.match(result.error,/Due Time/);
+  assert.equal(result.status,400);assert.match(result.error,/Due time.*Set Due to 1 day later/);
   result=await call('POST','/tasks',{title:'Bad optional',subtasks:[{title:'Step',is_optional:'sometimes'}]});assert.equal(result.status,400);
   const task=await create({assigned_to:[eleanor],subtasks:[{title:'Required'},{title:'Optional',is_optional:1}]});
   changeTaskStatus(d,task.subtasks[0].id,'done',{actorId:eleanor,requireRevision:false});

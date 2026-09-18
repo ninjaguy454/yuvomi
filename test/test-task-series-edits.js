@@ -432,3 +432,153 @@ for(const invalid of ['duplicate source','support container','helper counterpart
       history:d.prepare('SELECT * FROM task_activity_events ORDER BY id').all()},before);
   });
 }
+
+const taskWindow=task=>({start_date:task.start_date,start_time:task.start_time,due_date:task.due_date,due_time:task.due_time});
+const fridayWindow={start_date:'2026-09-11',start_time:'07:30',due_date:'2026-09-11',due_time:'09:45'};
+const supervisionRows=id=>d.prepare('SELECT * FROM task_supervision_actions WHERE source_task_id=? ORDER BY id').all(id);
+const historyFor=id=>d.prepare('SELECT * FROM task_activity_events WHERE action_task_id=? ORDER BY id').all(id);
+const sourceEvidence=id=>{const source=row(id);return {id:source.id,status:source.status,archived_at:source.archived_at,expired_at:source.expired_at};};
+async function shiftLaundry(fixture,editScope){return edit(fixture.root,{edit_scope:editScope,...fridayWindow,
+  recurrence_rule:'FREQ=WEEKLY;BYDAY=FR',subtasks:editableSteps(await detail(fixture.root))});}
+
+for(const editScope of ['occurrence','future']) {
+  test(`supervision scheduling ${editScope} moves active helper windows and retains partial work through next generation`,async t=>{
+    const fixture=await legacyLaundry(),{root,helper,supervised,delegated}=fixture;
+    await finish(fixture.independent,eleanor);
+    const counterpart=helper.actions.find(action=>action.action_task_id===supervised).counterpart_task_id;
+    assert.equal((await call('PATCH',`/tasks/${counterpart}/status`,{status:'in_progress'},parent)).status,200);
+    assert.equal((await call('POST',`/tasks/${counterpart}/comments`,{comment:'Supervisor has begun this action.'})).status,201);
+    const doc=document(counterpart),statusBefore=row(counterpart).status;
+    const mappingBefore=supervisionRows(root),historyBefore=historyFor(counterpart);
+    const receiptsBefore=d.prepare('SELECT * FROM task_completions ORDER BY id').all();
+    const ledgerBefore=d.prepare('SELECT * FROM reward_ledger ORDER BY id').all();
+    const definitionsBefore=seriesRows(),templateBefore=d.prepare('SELECT * FROM activity_templates WHERE id=?').get(fixture.activity.id);
+    const changed=await shiftLaundry(fixture,editScope);
+    assert.equal(changed.status,200,JSON.stringify(changed));
+    for(const id of [helper.support_task_id,...helper.actions.map(action=>action.counterpart_task_id).filter(Boolean)])
+      assert.deepEqual(taskWindow(row(id)),fridayWindow,`active generated Task ${id} follows the learner occurrence`);
+    assert.equal(row(counterpart).status,statusBefore);assert.equal(row(supervised).status,'in_progress');
+    assert.equal(row(fixture.independent).status,'done');assert.equal(row(root).status,'in_progress');
+    assert.deepEqual(supervisionRows(root),mappingBefore);
+    assert.deepEqual(historyFor(counterpart),historyBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM task_completions ORDER BY id').all(),receiptsBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),ledgerBefore);
+    assert.equal(d.prepare('SELECT comment FROM task_comments WHERE task_id=?').get(counterpart).comment,'Supervisor has begun this action.');
+    assert.ok(d.prepare('SELECT 1 FROM task_documents WHERE task_id=? AND document_id=?').get(counterpart,doc));
+    if(editScope==='occurrence')assert.deepEqual(seriesRows(),definitionsBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM activity_templates WHERE id=?').get(fixture.activity.id),templateBefore);
+    await finish(counterpart,parent);
+    await finish(helper.actions.find(action=>action.action_task_id===delegated).counterpart_task_id,parent);
+    await finish(fixture.remaining,eleanor);
+    const successor=next(root);assert.ok(successor);
+    const expectedDate=editScope==='future'?'2026-09-18':'2026-09-19';
+    assert.equal(successor.start_date,expectedDate);assert.equal(successor.due_date,expectedDate);
+    const successorView=await detail(successor.id);
+    assert.ok(successorView.supervision.support_task_id);
+    for(const id of [successorView.supervision.support_task_id,...successorView.supervision.actions.map(action=>action.counterpart_task_id).filter(Boolean)]) {
+      assert.deepEqual(taskWindow(row(id)),taskWindow(successor),`future generated Task ${id} follows its own occurrence`);
+      assert.equal(row(id).status,'open');
+    }
+    assert.ok(!structuralSubtasks(successorView).some(step=>step.is_supervision_projection));
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM task_recurrence_actions WHERE task_id IN (SELECT counterpart_task_id FROM task_supervision_actions)').get().n,0);
+    assert.deepEqual(d.pragma('foreign_key_check'),[]);
+  });
+
+  for(const historical of ['completed','expired','archived']) {
+    test(`supervision scheduling ${editScope} preserves ${historical} helper evidence while moving active siblings`,async()=>{
+      const fixture=await legacyLaundry(),{root,helper,supervised,delegated}=fixture;
+      const counterpart=helper.actions.find(action=>action.action_task_id===supervised).counterpart_task_id;
+      if(historical==='completed')await finish(counterpart,parent);
+      else {
+        if(historical==='expired')d.prepare("UPDATE tasks SET status='expired',expired_at='2026-09-12T23:59:00Z' WHERE id=?").run(supervised);
+        else d.prepare("UPDATE tasks SET archived_at='2026-09-12T23:59:00Z' WHERE id=?").run(supervised);
+        reconcileTaskSupervision(d,root,{actorId:parent,notify:false});
+      }
+      const evidence={source:sourceEvidence(supervised),helper:row(counterpart),mapping:supervisionRows(root).find(action=>action.action_task_id===supervised),
+        history:historyFor(supervised),helperHistory:historyFor(counterpart)};
+      const changed=await shiftLaundry(fixture,editScope);assert.equal(changed.status,200,JSON.stringify(changed));
+      assert.deepEqual({source:sourceEvidence(supervised),helper:row(counterpart),mapping:supervisionRows(root).find(action=>action.action_task_id===supervised),
+        history:historyFor(supervised),helperHistory:historyFor(counterpart)},evidence);
+      const live=helper.actions.find(action=>action.action_task_id===delegated).counterpart_task_id;
+      assert.deepEqual(taskWindow(row(live)),fridayWindow);
+      assert.deepEqual(taskWindow(row(helper.support_task_id)),fridayWindow);
+      assert.equal(row(live).status,'open');
+    });
+  }
+
+  for(const policy of ['availability replacement','availability unresolved','presence replacement']) {
+    test(`supervision scheduling ${editScope} revalidates ${policy} against the revised window`,async()=>{
+      const fixture=await legacyLaundry(),{root,helper}=fixture;
+      // Legacy source actions contain copied dates. These must not keep
+      // eligibility evaluating Saturday after the occurrence moves to Friday.
+      if(policy!=='availability unresolved')d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=?").run(grace);
+      const home=d.prepare("SELECT id FROM places WHERE type='home' AND active=1 ORDER BY id LIMIT 1").get().id;
+      const away=Number(d.prepare("INSERT INTO places(name,type) VALUES('Work','work')").run().lastInsertRowid);
+      const presence=policy==='presence replacement';
+      d.prepare(`INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source)
+        VALUES(?,?,?,'completion','activity_template')`).run(root,presence?home:null,presence?'must_be_home':'available_before_due');
+      const period=d.prepare(`INSERT INTO availability_periods(user_id,source,state,starts_at,ends_at,place_id,note)
+        VALUES(?,'explicit',?,?,?,?,?)`);
+      for(const id of [parent,grace,eleanor])period.run(id,'available','2026-09-12T00:00:00','2026-09-13T00:00:00',home,'Saturday at home');
+      for(const id of [grace,eleanor])period.run(id,'available','2026-09-11T00:00:00','2026-09-12T00:00:00',home,'Friday at home');
+      period.run(parent,presence?'away':'busy','2026-09-11T00:00:00','2026-09-12T00:00:00',presence?away:home,'Friday work');
+      const before=reconcileTaskSupervision(d,root,{actorId:parent,notify:false});assert.equal(before.supervisor_user_id,parent);
+      await finish(fixture.independent,eleanor);
+      const changed=await shiftLaundry(fixture,editScope);assert.equal(changed.status,200,JSON.stringify(changed));
+      const expected=policy==='availability unresolved'?null:grace;
+      assert.equal(changed.data.supervision.supervisor_user_id,expected);
+      const activeSupervisors=d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'").all(root);
+      assert.deepEqual(activeSupervisors.map(item=>item.user_id),expected?[expected]:[]);
+      for(const action of supervisionRows(root)) {
+        assert.equal(action.supervisor_user_id,expected);
+        assert.equal(row(action.counterpart_task_id).assigned_to,expected);
+        assert.deepEqual(taskWindow(row(action.counterpart_task_id)),fridayWindow);
+      }
+      assert.equal(row(helper.support_task_id).assigned_to,expected);
+      assert.equal(row(fixture.independent).status,'done');assert.equal(row(root).status,'in_progress');
+      assert.equal(changed.data.supervision.state,expected?'assigned':'needed');
+      assert.equal(d.prepare("SELECT COUNT(*) n FROM planning_obligations WHERE task_id=? AND role='supervisor' AND status IN ('pending','accepted')").get(root).n,expected?1:0);
+    });
+  }
+
+  test(`supervision scheduling ${editScope} retains a completed support container until its source action reopens`,async()=>{
+    const fixture=await legacyLaundry(),{root,helper}=fixture;
+    for(const action of helper.actions)await finish(action.counterpart_task_id,parent);
+    assert.equal(row(root).status,'in_progress');assert.equal(row(helper.support_task_id).status,'done');
+    const helperBefore=row(helper.support_task_id),counterpartsBefore=helper.actions.map(action=>row(action.counterpart_task_id));
+    const receiptsBefore=d.prepare('SELECT * FROM task_completions ORDER BY id').all();
+    const changed=await shiftLaundry(fixture,editScope);assert.equal(changed.status,200,JSON.stringify(changed));
+    assert.deepEqual(row(helper.support_task_id),helperBefore);
+    assert.deepEqual(helper.actions.map(action=>row(action.counterpart_task_id)),counterpartsBefore);
+    assert.deepEqual(d.prepare('SELECT * FROM task_completions ORDER BY id').all(),receiptsBefore);
+    const reopened=await call('PATCH',`/tasks/${fixture.supervised}/status`,{status:'open'},parent);
+    assert.equal(reopened.status,200,JSON.stringify(reopened));
+    const reopenedHelper=helper.actions.find(action=>action.action_task_id===fixture.supervised).counterpart_task_id;
+    assert.equal(row(reopenedHelper).status,'open');assert.equal(row(helper.support_task_id).status,'in_progress');
+    assert.deepEqual(taskWindow(row(reopenedHelper)),fridayWindow);
+    assert.deepEqual(taskWindow(row(helper.support_task_id)),fridayWindow);
+    const other=helper.actions.find(action=>action.action_task_id!==fixture.supervised).counterpart_task_id;
+    assert.deepEqual(row(other),counterpartsBefore.find(task=>task.id===other));
+  });
+
+  test(`supervision scheduling ${editScope} keeps an explicit action window aligned with helper eligibility`,async()=>{
+    const fixture=await legacyLaundry(),{root,helper,supervised}=fixture;
+    d.prepare("UPDATE tasks SET start_time='12:00',due_time='14:00' WHERE id=?").run(supervised);
+    d.prepare("UPDATE user_skill_proficiency SET proficiency='normal' WHERE user_id=?").run(grace);
+    d.prepare(`INSERT INTO task_planning_context(task_id,presence_policy,presence_window,source)
+      VALUES(?,'available_before_due','completion','activity_template')`).run(root);
+    d.prepare(`INSERT INTO availability_periods(user_id,source,state,starts_at,ends_at,note)
+      VALUES(?,'explicit','busy','2026-09-11T12:00:00','2026-09-11T14:00:00','Friday afternoon work')`).run(parent);
+    assert.equal(reconcileTaskSupervision(d,root,{actorId:parent,notify:false}).supervisor_user_id,parent);
+    const window={...fridayWindow,due_time:'19:45'};
+    const changed=await edit(root,{edit_scope:editScope,...window,recurrence_rule:'FREQ=WEEKLY;BYDAY=FR',
+      subtasks:editableSteps(await detail(root))});
+    assert.equal(changed.status,200,JSON.stringify(changed));
+    const action=supervisionRows(root).find(item=>item.action_task_id===supervised);
+    assert.equal(changed.data.supervision.supervisor_user_id,grace);
+    assert.equal(action.supervisor_user_id,grace);
+    assert.deepEqual(taskWindow(row(action.counterpart_task_id)),taskWindow(row(supervised)));
+    assert.deepEqual(taskWindow(row(action.counterpart_task_id)),{...fridayWindow,start_time:'12:00',due_time:'14:00'});
+    assert.deepEqual(taskWindow(row(helper.support_task_id)),window);
+  });
+}

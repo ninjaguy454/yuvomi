@@ -12,6 +12,9 @@ import { taskActivitySnapshot, activitySnapshotSkills } from './task-activity-sn
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Request-local presentation data; never serialized as an aggregate of private siblings.
 const skillEligibilityByView = new WeakMap();
+// Reconciliation reuses the windows evaluated in this inspection only. Keep
+// them private: they are not new editable fields or cached eligibility facts.
+const actionWindowsByView = new WeakMap();
 export class TaskSupervisionError extends Error {
   constructor(message, details = {}) { super(message); this.status = 409; this.code = 'supervision_required'; this.details = details; }
 }
@@ -114,7 +117,7 @@ function context(d, source, action) {
     ancestorIds.add(ancestor.id);
     if (ancestor.status === 'expired') expiredTask = ancestor;
   }
-  return { dateKey, learnerId: chain.find(item => item.assigned_to)?.assigned_to || null,
+  return { occurrence, dateKey, learnerId: chain.find(item => item.assigned_to)?.assigned_to || null,
     archived: chain.some(item => item.archived_at), expired: Boolean(expiredTask), expired_at: expiredTask?.expired_at ?? null,
     presence: { policy: pc.presence_policy || 'ignore', targetPlaceId: pc.place_id || null,
     ...activityPresenceWindow(d, { task: occurrence, dateKey, windowMode: pc.presence_window || 'due' }) } };
@@ -155,7 +158,7 @@ export function inspectTaskSupervision(d, taskId) {
   const rows = ordinaryTaskScope(d, sourceId);
   const optionalContextFor = createTaskOptionalContextReader(d, rows);
   const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);
-  const actions = [], skillEligibility = new Map();
+  const actions = [], skillEligibility = new Map(), actionWindows = new Map();
   // This inspection is synchronous and read-only. Sibling actions commonly
   // share the same skills and inherited completion window. Resolve those facts
   // once here; every later inspection (including after a mutation) starts fresh.
@@ -174,7 +177,9 @@ export function inspectTaskSupervision(d, taskId) {
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
-    const { dateKey, presence, learnerId, archived, expired, expired_at } = context(d, source, row);
+    const { occurrence, dateKey, presence, learnerId, archived, expired, expired_at } = context(d, source, row);
+    actionWindows.set(row.id, { start_date: occurrence.start_date, start_time: occurrence.start_time,
+      due_date: occurrence.due_date, due_time: occurrence.due_time });
     const optional=optionalContextFor(row.id);
     if ((expired||optional.closed_parent) && row.status !== 'done') {
       if (prior) actions.push({ ...prior, action_title: row.title, state: 'not_required',
@@ -294,6 +299,7 @@ export function inspectTaskSupervision(d, taskId) {
   const view = { source_task_id: sourceId, source_revision: source.revision, support_task_id: support?.task_id || null,
     ...scope, actions };
   skillEligibilityByView.set(view, skillEligibility);
+  actionWindowsByView.set(view, actionWindows);
   return view;
 }
 
@@ -452,6 +458,8 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
   return d.transaction(() => {
     consolidateNestedSupervision(d,taskSupervisionRootId(d,taskId),actorId);
     let view = inspectTaskSupervision(d, taskId);
+    const actionWindows = actionWindowsByView.get(view);
+    const projectionWindows = new Map();
     const source = task(d, view.source_task_id);
     if (!source) return view;
     // Retained action-scoped API inputs now choose for the entire source Task.
@@ -529,9 +537,8 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       if (counterpartId) {
         d.prepare('UPDATE tasks SET is_optional=? WHERE id=? AND is_optional!=?').run(action.is_optional?1:0,counterpartId,action.is_optional?1:0);
         setProjectionAssignees(d, counterpartId, action.state === 'assigned' ? [action.supervisor_user_id] : []);
-        d.prepare(`UPDATE tasks SET title=@title,start_date=@start,start_time=@startTime,due_date=@due,due_time=@time WHERE id=@id
-          AND (title IS NOT @title OR start_date IS NOT @start OR start_time IS NOT @startTime OR due_date IS NOT @due OR due_time IS NOT @time)`)
-          .run({title:projectionTitle,start:source.start_date,startTime:source.start_time ?? null,due:source.due_date,time:source.due_time,id:counterpartId});
+        if (action.state !== 'not_required' && !action.expired && !action.archived)
+          projectionWindows.set(counterpartId, { ...actionWindows.get(action.action_task_id), title: projectionTitle });
         if (!action.expired || action.archived) syncProjectionArchive(d, counterpartId, action.state === 'not_required');
       }
       // An event is visible through its own action. Keep its explanation local
@@ -586,9 +593,7 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
     }
     if (supportId) {
       setProjectionAssignees(d, supportId, supervisors);
-      d.prepare(`UPDATE tasks SET start_date=@start,start_time=@startTime,due_date=@due,due_time=@time WHERE id=@id
-        AND (start_date IS NOT @start OR start_time IS NOT @startTime OR due_date IS NOT @due OR due_time IS NOT @time)`)
-        .run({start:source.start_date,startTime:source.start_time ?? null,due:source.due_date,time:source.due_time,id:supportId});
+      projectionWindows.set(supportId, source);
       if (source.archived_at || !context(d, source, source).expired && !view.actions.some(action => action.expired)) {
         syncProjectionArchive(d, supportId, source.archived_at || view.actions.every(action => action.state === 'not_required'));
       }
@@ -605,6 +610,18 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
         VALUES(?,?,?,'supervision_synchronized',?)`).run(source.id, update.id, actorId,
           JSON.stringify({ title: projection.title, from_status: projection.status, to_status: update.status }));
       syncWorkflowInstanceForTask(d, update.id, { syncParent: false });
+    }
+    // Synchronize only work that is actionable after status/archive repair.
+    // This also handles explicit reopening in one pass without rewriting the
+    // scheduling window recorded on completed, expired or archived helpers.
+    for (const [id, window] of projectionWindows) {
+      const title = id === supportId ? null : window.title;
+      d.prepare(`UPDATE tasks SET start_date=@start,start_time=@startTime,due_date=@due,due_time=@time,
+        title=COALESCE(@title,title) WHERE id=@id AND status NOT IN ('done','expired') AND archived_at IS NULL
+        AND (start_date IS NOT @start OR start_time IS NOT @startTime OR due_date IS NOT @due OR due_time IS NOT @time
+          OR (@title IS NOT NULL AND title IS NOT @title))`)
+        .run({id,title,start:window.start_date ?? null,startTime:window.start_time ?? null,
+          due:window.due_date ?? null,time:window.due_time ?? null});
     }
     view = inspectTaskSupervision(d, source.id);
     if (changedScope && notify) notifySupervision(d, source, view);

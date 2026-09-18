@@ -2100,7 +2100,10 @@ router.put('/:id', (req, res) => {
           start_date=CASE WHEN start_date IS ? THEN ? ELSE start_date END,
           due_date=CASE WHEN due_date IS ? THEN ? ELSE due_date END,
           due_time=CASE WHEN due_time IS ? THEN ? ELSE due_time END
-          WHERE parent_task_id=? AND archived_at IS NULL`).run(task.start_time,start_time,task.start_date,start_date,task.due_date,due_date,task.due_time,due_time,task.id);
+          WHERE parent_task_id=? AND archived_at IS NULL
+            AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=tasks.id)
+            AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=tasks.id)`)
+          .run(task.start_time,start_time,task.start_date,start_date,task.due_date,due_date,task.due_time,due_time,task.id);
         const dueAt = due_date ? `${due_date}T${due_time || '23:59'}:00` : null;
         // Move the default response deadline with its due time. An earlier,
         // custom, or absent deadline remains an independent choice.

@@ -52,6 +52,7 @@ export async function render(container) {
         </span>
         <h1 class="auth-hero__title">${esc(storedAppName)}</h1>
         <p class="auth-hero__tagline">${esc(t('login.tagline'))}</p>
+        <a href="/device/pair" data-link class="auth-linkish">Pair as household device</a>
       </div>
       <div class="auth-card card card--padded">
         ${!passwordLoginEnabled ? `

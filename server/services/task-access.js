@@ -48,6 +48,38 @@ function readPermissions(d, actor) {
 const ids = value => [...new Set((Array.isArray(value) ? value : value == null || value === '' ? [] : [value]).map(Number))].sort((a, b) => a - b);
 const equal = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 const assignments = (d, task) => task?.id ? ids(d.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(task.id).map(row => row.user_id).concat(task.assigned_to || [])) : ids(task?.assigned_to);
+export const taskDevicePrincipal = actor => actor?.devicePrincipal?.kind === 'device' ? actor.devicePrincipal : actor?.kind === 'device' ? actor : null;
+const deviceAllows = (principal, key) => principal.permissions?.capabilities?.[key] === 'allow';
+/** A shared display has no personal visibility or inherited member identity. */
+export function deviceTaskVisible(d, principal, taskOrId, visited=new Set()) {
+  if (!principal || principal.kind !== 'device' || principal.status==='revoked' || !Number.isSafeInteger(principal.id) || principal.id<1
+    || !['read','write'].includes(principal.permissions?.modules?.tasks) || !deviceAllows(principal, 'tasks.view_household')) return false;
+  let task = d.prepare('SELECT * FROM tasks WHERE id=?').get(Number(taskOrId?.id ?? taskOrId) || 0);
+  if (!task || task.archived_at || task.visibility && task.visibility !== 'all') return false;
+  if(visited.has(task.id))return false;
+  visited.add(task.id);
+  const original=d.prepare('SELECT action_task_id FROM task_supervision_actions WHERE counterpart_task_id=?').get(task.id);
+  if(original && !deviceTaskVisible(d,principal,original.action_task_id,visited))return false;
+  const seen = new Set(), allowed = (principal.scope?.member_ids || []).map(Number);
+  let assigned = assignments(d, task);
+  while (task) {
+    if (seen.has(task.id) || task.archived_at || task.visibility && task.visibility !== 'all') return false;
+    seen.add(task.id);
+    if (!assigned.length) assigned = assignments(d, task);
+    task = task.parent_task_id ? d.prepare('SELECT * FROM tasks WHERE id=?').get(task.parent_task_id) : null;
+  }
+  return !allowed.length || assigned.length > 0 && assigned.every(id => allowed.includes(id))
+    || !assigned.length && deviceAllows(principal,'device_tasks.claim');
+}
+export function deviceTaskCapabilities(d, principal, task) {
+  const view = deviceTaskVisible(d, principal, task), allow = key => deviceAllows(principal, `device_tasks.${key}`);
+  const stored=task?.id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id):task;
+  const locked=stored?.locked || stored?.parent_task_id && d.prepare('SELECT locked FROM tasks WHERE id=?').get(stored.parent_task_id)?.locked;
+  const definition=view&&!locked&&!['done','expired'].includes(stored?.status);
+  return {view, own:false, create:deviceAllows(principal,'tasks.create'), edit:definition&&deviceAllows(principal,'tasks.edit_others'), complete:view && allow('complete'), reopen:view && allow('reopen'),
+    reset:view && allow('reset'), claim:view && allow('claim'), comment:false,
+    ...Object.fromEntries(['delete_archive','change_assignment','reassign','change_priority','change_points','change_category_tags','change_dates','change_required_skills'].map(key=>[key,key==='delete_archive'?false:definition&&deviceAllows(principal,`tasks.${key}`)]))};
+}
 function ownSql(alias, me, projectionGuard = '') {
   return `(${alias}.created_by = ${me} OR ${alias}.assigned_to = ${me} OR EXISTS (SELECT 1 FROM task_assignments tp WHERE tp.task_id = ${alias}.id AND tp.user_id = ${me})
     OR (${alias}.parent_task_id IS NOT NULL AND ${alias}.assigned_to IS NULL AND NOT EXISTS (SELECT 1 FROM task_assignments tx WHERE tx.task_id = ${alias}.id) ${projectionGuard}
@@ -80,6 +112,8 @@ export function taskVisibilityWhere(d, actor, alias = 't', bind = '?') {
 }
 
 export function taskCapabilities(d, actor, sourceTask) {
+  const device = taskDevicePrincipal(actor);
+  if (device) return deviceTaskCapabilities(d, device, sourceTask);
   const scope = projectionFor(d, actor), id = sourceTask?.id == null ? null : Number(sourceTask.id);
   if (scope && id != null && scope.capabilities.has(id)) return {...scope.capabilities.get(id)};
   const me = actorId(actor), p = readPermissions(d, actor), allow = key => p.capabilities[`tasks.${key}`] === 'allow';
@@ -146,6 +180,38 @@ export function assertTaskMutation(d, actor, task, body = {}, { operation = task
   finally { if (previous) readProjections.set(d, previous); }
 }
 function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
+  const device = taskDevicePrincipal(actor);
+  if (device) {
+    const requireKey=key=>{if(!deviceAllows(device,`tasks.${key}`))throw new PermissionError('This display does not permit this Task setting.');};
+    if(!task) {
+      if(!deviceAllows(device,'tasks.create'))throw new PermissionError('This display cannot create Tasks.');
+      for(const [key,fields] of Object.entries(PROTECTED_FIELDS))if(fields.some(field=>nonDefaultCreateValue(field,body[field])))requireKey(key);
+      return;
+    }
+    const c = task && deviceTaskCapabilities(d, device, task);
+    if (!c?.view) throw new PermissionError(task ? 'Task not found.' : 'This display cannot create Tasks.', task ? 404 : 403);
+    if (operation === 'claim' && c.claim) return;
+    if (operation === 'status') {
+      // A checklist checkbox reopens exactly its completed leaf. Reset is a
+      // separate grant for clearing a root/parent or explicitly resetting work.
+      const leafReopen = body.status==='open' && task.status==='done' && task.parent_task_id && body.reset_progress!==true
+        && !d.prepare(`SELECT 1 FROM tasks t WHERE t.parent_task_id=? AND t.archived_at IS NULL
+          AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
+          AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=t.id) LIMIT 1`).get(task.id);
+      const allowed = body.status === 'done' ? c.complete
+        : task.status === 'done' ? c.reopen && (body.status !== 'open' || leafReopen || c.reset)
+          : body.status === 'open' ? c.reset : c.complete;
+      if (allowed) return;
+    }
+    if(operation==='update' && c.edit) {
+      for(const [key,fields] of Object.entries(PROTECTED_FIELDS))if(fields.some(field=>body[field]!==undefined
+        && (field==='assigned_to'?!equal(ids(body[field]),assignments(d,task)):String(body[field]??'')!==String(task[field]??'')))) {
+        requireKey(key);if(key==='change_assignment')requireKey('reassign');
+      }
+      return;
+    }
+    throw new PermissionError('This display does not permit this Task action.');
+  }
   const p = actorPermissions(d, actor);
   const requireKey = key => { if (p.capabilities[`tasks.${key}`] !== 'allow') throw new PermissionError('Your household permissions do not allow this Task action.'); };
   if (!task) {

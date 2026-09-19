@@ -152,6 +152,38 @@ test('personal response begun before Wall entry cannot repopulate its offline ca
   const cached=await(await env.caches.open(env.cacheNames.API_CACHE)).match(req);assert.equal(cached,undefined);
 });
 
+test('paired privacy survives temporary Wall exit and a worker restart without caching personal content',async()=>{
+  const env=loadSw();await env.ready;
+  const request=new MockRequest(apiUrl('/tasks'));
+  await dispatchFetch(env,request).result;
+  await dispatchMessage(env,{type:'PAIRED_DEVICE',enabled:true});
+  await dispatchMessage(env,{type:'WALL_MODE',enabled:false});
+  await dispatchFetch(env,request).result;
+  assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(request),undefined);
+  const restarted=loadSw({cacheStorage:env.caches});await restarted.ready;
+  await dispatchFetch(restarted,request).result;
+  assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(request),undefined);
+});
+
+test('context-bound personal requests cannot read or populate offline cache before the paired flag message arrives',async()=>{
+  const env=loadSw({fetchImpl:async()=>new MockResponse('{"secret":"former-account"}')});
+  const ordinary=new MockRequest(apiUrl('/tasks'));await dispatchFetch(env,ordinary).result;
+  const paired=new MockRequest(apiUrl('/tasks'),{headers:{'X-Auth-Context':'temporary-context'}});
+  env.setFetch(async()=>{throw new Error('offline');});
+  const offline=await dispatchFetch(env,paired).result;assert.equal(offline.status,503);assert.doesNotMatch(JSON.stringify(await offline.json()),/former-account/);
+  env.setFetch(async()=>new MockResponse('{"secret":"temporary-account"}'));
+  await dispatchFetch(env,paired).result;
+  assert.doesNotMatch((await(await env.caches.open(env.cacheNames.API_CACHE)).match(ordinary))._body,/temporary-account/);
+});
+
+test('clearing API cache invalidates responses already in flight before a personal return',async()=>{
+  let release;const env=loadSw({fetchImpl:()=>new Promise(resolve=>{release=resolve;})});
+  const request=new MockRequest(apiUrl('/tasks')),response=dispatchFetch(env,request).result;
+  while(!release)await Promise.resolve();
+  await dispatchMessage(env,{type:'CLEAR_API_CACHE'});release(new MockResponse('{"secret":"late"}'));await response;
+  assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(request),undefined);
+});
+
 test('Wall API lock persists in device storage and explicit exit permits fresh personal caching',async()=>{
   const env=loadSw();await dispatchMessage(env,{type:'WALL_MODE',enabled:true});
   const stored=await(await env.caches.open('yuvomi-device-privacy')).match('/wall-mode');assert.equal(stored.headers.get('x-wall-mode'),'1');

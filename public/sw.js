@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.16`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.17`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -29,12 +29,15 @@ const BYPASS_CACHE  = 'yuvomi-bypass-flag';
 const DEVICE_PRIVACY_CACHE = 'yuvomi-device-privacy';
 const ALL_CACHES    = [SHELL_CACHE, PAGES_CACHE, LOCALES_CACHE, ASSETS_CACHE];
 let wallLocked = null;
+let pairedDevice = null;
 let wallEpoch = 0;
 let wallUpdate = Promise.resolve();
 const wallReady = (async () => {
   try {
     const stored = await (await caches.open(DEVICE_PRIVACY_CACHE)).match('/wall-mode');
     if (wallLocked === null) wallLocked = stored?.headers.get('x-wall-mode') === '1';
+    const paired = await (await caches.open(DEVICE_PRIVACY_CACHE)).match('/paired-device');
+    if (pairedDevice === null) pairedDevice = paired?.headers.get('x-paired-device') === '1';
   } catch { if (wallLocked === null) wallLocked = true; }
 })();
 
@@ -76,6 +79,12 @@ const APP_SHELL = [
   '/utils/task-edit-scope.js',
   '/utils/task-progress.js',
   '/utils/session-lifecycle.js',
+  '/utils/device-context.js',
+  '/utils/device-session.js',
+  '/components/device-dashboard.js',
+  '/components/rotation-bindings.js',
+  '/components/rotation-groups.js',
+  '/styles/device.css',
   '/push.js',
   '/sw-register.js',
   '/utils/html-escape.js',
@@ -288,6 +297,8 @@ const PAGE_MODULES = [
   '/pages/health.js',
   '/pages/settings.js',
   '/pages/login.js',
+  '/pages/device-pair.js',
+  '/settings/pages/admin-devices.js',
   '/pages/recipes.js',
   '/pages/pantry.js',
   '/pages/inventory.js',
@@ -593,19 +604,20 @@ async function networkFirst(request, cacheName) {
 async function networkFirstApi(request) {
   await wallReady;
   const epoch = wallEpoch;
+  const contextBound = !!request.headers?.get('X-Auth-Context');
   try {
     const response = await fetch(request);
     // Defend against a new streaming endpoint entering the finite-response whitelist.
     if (response.headers.get('content-type')?.includes('text/event-stream')) return response;
     // Nur erfolgreiche, gleichoriginäre (basic) Antworten cachen.
-    if (response.ok && response.type === 'basic' && !wallLocked && epoch === wallEpoch) {
+    if (response.ok && response.type === 'basic' && !contextBound && !wallLocked && !pairedDevice && epoch === wallEpoch) {
       try {
         const cache   = await caches.open(API_CACHE);
         const cloned  = response.clone();
         const headers = new Headers(cloned.headers);
         headers.set('x-cached-at', String(Date.now()));
         const body = await cloned.blob();
-        if (wallLocked || epoch !== wallEpoch) return response;
+        if (wallLocked || pairedDevice || epoch !== wallEpoch) return response;
         await cache.put(request, new Response(body, {
           status: cloned.status,
           statusText: cloned.statusText,
@@ -618,7 +630,7 @@ async function networkFirstApi(request) {
     try {
       const cache  = await caches.open(API_CACHE);
       const cached = await cache.match(request);
-      if (cached && !wallLocked && epoch === wallEpoch) return cached;
+      if (cached && !contextBound && !wallLocked && !pairedDevice && epoch === wallEpoch) return cached;
     } catch { /* Storage may be unavailable along with the network. */ }
     return new Response(JSON.stringify({ error: 'offline' }), {
       status: 503,
@@ -687,6 +699,19 @@ function isCacheableApiGet(pathname) {
 // Nachrichten vom Client: API-Cache leeren (Logout/Session-Ende)
 // --------------------------------------------------------
 self.addEventListener('message', (event) => {
+  if (event.data?.type === 'PAIRED_DEVICE' && event.data.enabled === true) {
+    pairedDevice = true;
+    sharedDisplay = true;
+    privacyRevision++;
+    wallEpoch++;
+    event.waitUntil((async () => {
+      await Promise.all([caches.delete(API_CACHE), clearReaderCache()]);
+      const cache = await caches.open(DEVICE_PRIVACY_CACHE);
+      await cache.put('/paired-device', new Response('', { headers: { 'x-paired-device': '1' } }));
+      const notifications = await self.registration.getNotifications?.() || [];
+      for (const notification of notifications) notification.close();
+    })());
+  }
   if (event.data?.type === 'WALL_MODE' && typeof event.data.enabled === 'boolean') {
     wallLocked = event.data.enabled;
     wallEpoch++;
@@ -705,12 +730,19 @@ self.addEventListener('message', (event) => {
     event.waitUntil(wallUpdate);
   }
   if (event.data && event.data.type === 'CLEAR_API_CACHE') {
+    wallEpoch++;
     event.waitUntil(Promise.all([caches.delete(API_CACHE), clearReaderCache()]));
   }
   if (event.data?.type === 'SET_SHARED_DISPLAY' && typeof event.data.enabled === 'boolean') {
-    const enabled = event.data.enabled;
-    sharedDisplay = enabled;
+    const requested = event.data.enabled, revision = ++privacyRevision;
+    // A temporary personal login is still a shared physical display. Keep the
+    // conservative state until persisted pairing state has finished loading.
+    if (requested || pairedDevice !== false) sharedDisplay = true;
     privacyUpdate = privacyUpdate.catch(() => {}).then(async () => {
+      await wallReady;
+      if (revision !== privacyRevision) return;
+      const enabled = requested || pairedDevice !== false;
+      sharedDisplay = enabled;
       try {
         const cache = await caches.open(DEVICE_PRIVACY_CACHE);
         await cache.put('/shared-display', new Response('', { headers: { 'x-shared-display': enabled ? '1' : '0' } }));
@@ -720,7 +752,7 @@ self.addEventListener('message', (event) => {
         if (enabled) await caches.delete(DEVICE_PRIVACY_CACHE).catch(() => {});
       }
       if (enabled) {
-        const notifications = await self.registration.getNotifications();
+        const notifications = await self.registration.getNotifications?.() || [];
         for (const notification of notifications) notification.close();
       }
     });
@@ -735,13 +767,16 @@ self.addEventListener('message', (event) => {
 // browser also unsubscribes when wall mode starts; this covers queued pushes.
 let sharedDisplay = null;
 let privacyUpdate = Promise.resolve();
+let privacyRevision = 0;
 const sharedDisplayReady = (async () => {
   try {
+    await wallReady;
     const cache = await caches.open(DEVICE_PRIVACY_CACHE);
     const stored = await cache.match('/shared-display');
     // An upgrading installation has no flag yet. Only a verified personal
     // session can explicitly allow device delivery; wall state may predate us.
-    if (sharedDisplay === null) sharedDisplay = stored?.headers.get('x-shared-display') !== '0';
+    if (pairedDevice !== false) sharedDisplay = true;
+    else if (sharedDisplay === null) sharedDisplay = stored?.headers.get('x-shared-display') !== '0';
   } catch {
     if (sharedDisplay === null) sharedDisplay = true;
   }
@@ -786,7 +821,7 @@ self.addEventListener('push', (event) => {
     // Showing is asynchronous. A wall/privacy change may have closed the
     // previous notifications before this one became visible.
     if (sharedDisplay) {
-      const notifications = await self.registration.getNotifications();
+      const notifications = await self.registration.getNotifications?.() || [];
       for (const notification of notifications) notification.close();
     }
   })());

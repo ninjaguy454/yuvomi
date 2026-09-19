@@ -1,4 +1,12 @@
 // Einmalige, idempotente Migration aller Legacy-„oikos"-Storage-Keys → „yuvomi".
+// A paired browser always starts concealed until online bootstrap establishes
+// device authority. Cached/restored personal markup must never flash on launch.
+(function () {
+  try {
+    if (localStorage.getItem('vidamia-paired-device') === '1') document.documentElement.style.visibility = 'hidden';
+  } catch (e) { /* server authentication still fails closed */ }
+})();
+
 // Läuft als ALLERERSTES (im <head>, vor jeder Seite/Komponente), damit
 // migrierte Werte (Theme, Locale, Ansichten …) ohne Flackern verfügbar sind.
 // Benennt jeden Key, der mit `oikos-`, `oikos:` oder `oikos.` beginnt, auf das

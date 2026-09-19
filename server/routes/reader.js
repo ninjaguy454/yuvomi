@@ -4,6 +4,7 @@ import { APP_NAME } from '../utils/brand.js';
 import express from 'express';
 import rateLimit from 'express-rate-limit';
 import * as db from '../db.js';
+import {deviceCookie} from '../services/devices.js';
 import { generateToken } from '../middleware/csrf.js';
 import { isPasswordLoginEnabled, setupAuthSession } from '../auth.js';
 import { verifyPassword } from '../utils/password.js';
@@ -25,6 +26,7 @@ const DUMMY_HASH = '$2b$12$invalidhashfortimingprotection000000000000000000000';
 // Reader login remains session-only, but handlers consume the same canonical
 // authenticated-user slot as the rest of Yuvomi.
 router.use((req, res, next) => {
+  if(deviceCookie(req)||req.session?.deviceCredentialId)return res.status(403).set('Cache-Control','private, no-store').send('Use the paired display or temporary personal app view.');
   if (req.session?.wallMode) return res.status(423).type('html').send('<!doctype html><html><body><p>This shared display is locked to Wall Mode.</p><a href="/">Return to Wall Mode</a></body></html>');
   // Login, redirects and validation errors can also contain session-specific
   // state or private drafts. Protect every Reader response before any handler.

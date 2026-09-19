@@ -122,7 +122,7 @@ export function notifyTaskObligations(database, taskId, { eligibleIds = [] } = {
   }
 }
 
-export function notifyTaskClaim(database, taskId, eventId, actorId) {
+export function notifyTaskClaim(database, taskId, eventId, actorId, {sourceDevice=null,targetUserId=null}={}) {
   const task = database.prepare('SELECT title, created_by FROM tasks WHERE id = ?').get(taskId);
   if (!task) return;
   const recipients = new Set([task.created_by, ...database.prepare(`SELECT user_id FROM task_responsibilities
@@ -132,7 +132,9 @@ export function notifyTaskClaim(database, taskId, eventId, actorId) {
     if (Number(userId) === Number(actorId)) continue;
     enqueueNotification(database, {
       userId, sourceKey: eventId ? `obligation-event:${eventId}` : `task:${taskId}:claimed`, category: taskCategory(database, taskId), entityType: 'task', entityId: taskId,
-      title: 'Task claimed', body: `${actor?.display_name || 'A household member'} claimed ${task.title}`,
+      title: 'Task claimed', body: sourceDevice
+        ? `${task.title} was claimed from ${sourceDevice.name} for ${database.prepare('SELECT display_name FROM users WHERE id=?').get(targetUserId)?.display_name || 'the selected member'}`
+        : `${actor?.display_name || 'A household member'} claimed ${task.title}`,
     });
   }
 }

@@ -70,7 +70,7 @@ export function seriesRootOf(d, taskId) {
  * @param {number}      taskId
  * @param {number|null} actingUserId  wer abgehakt hat
  */
-export function recordCompletion(d, taskId, actingUserId) {
+export function recordCompletion(d, taskId, actingUserId, {sourceDevice=null}={}) {
   const task = d.prepare('SELECT id, parent_task_id, recurrence_origin_id FROM tasks WHERE id = ?').get(taskId);
   if (!task || task.parent_task_id) return;
   const occurrence=registerRecurrenceOccurrence(d,taskId);
@@ -86,10 +86,12 @@ export function recordCompletion(d, taskId, actingUserId) {
     ? d.prepare('SELECT series_id FROM task_completions WHERE task_id = ?').get(task.recurrence_origin_id)
     : null;
 
-  d.prepare(`
+  const inserted=d.prepare(`
     INSERT OR IGNORE INTO task_completions (task_id, series_id, user_id)
     VALUES (?, ?, ?)
   `).run(taskId, occurrence?.series_id ?? inherited?.series_id ?? seriesRootOf(d, taskId), actingUserId || null);
+  if(sourceDevice && inserted.changes) d.prepare('UPDATE task_completions SET source_device_id=?,source_device_name=? WHERE task_id=? AND user_id IS NULL AND source_device_id IS NULL')
+    .run(sourceDevice.id,sourceDevice.name,taskId);
 }
 
 /**
@@ -125,10 +127,10 @@ export function revokeCompletion(d, taskId) {
  * einen Sync die falsche Auskunft. Das ist eine eigene Entscheidung, keine
  * Nebenwirkung dieser hier.
  */
-export function syncTaskCompletion(d, taskId, oldStatus, newStatus, actingUserId) {
+export function syncTaskCompletion(d, taskId, oldStatus, newStatus, actingUserId, options={}) {
   const wasDone = oldStatus === 'done';
   const isDone = newStatus === 'done';
-  if (isDone && !wasDone) recordCompletion(d, taskId, actingUserId);
+  if (isDone && !wasDone) recordCompletion(d, taskId, actingUserId, options);
   else if (wasDone && !isDone) revokeCompletion(d, taskId);
 }
 
@@ -146,7 +148,7 @@ const VISIBLE_SQL = visibilityWhere('t', 'task_assignments', 'task_id', '@me');
 /** Spalten, die beide Lesepfade teilen. */
 const SELECT_SQL = `
   SELECT c.id, c.task_id, c.series_id, c.completed_at,
-         c.user_id,
+         c.user_id, c.source_device_id, c.source_device_name,
          u.display_name  AS user_name,
          u.avatar_color  AS user_color,
          u.avatar_data   AS user_avatar,
@@ -244,10 +246,10 @@ export function seriesHistory(d, { me, taskId, limit = 20 }) {
 // events without colliding with completion IDs at the same timestamp.
 const OCCURRENCE_HISTORY_SQL = `WITH occurrence_history AS (
   SELECT id,task_id,series_id,user_id,completed_at,completed_at AS occurred_at,
-    NULL AS expired_at,'completed' AS event_type FROM task_completions
+    NULL AS expired_at,'completed' AS event_type,source_device_id,source_device_name FROM task_completions
   UNION ALL
   SELECT -e.id,e.action_task_id,COALESCE(o.series_id,e.action_task_id),NULL,NULL,
-    json_extract(e.details_json,'$.expired_at'),json_extract(e.details_json,'$.expired_at'),'expired'
+    json_extract(e.details_json,'$.expired_at'),json_extract(e.details_json,'$.expired_at'),'expired',NULL,NULL
   FROM task_activity_events e JOIN tasks et ON et.id=e.action_task_id
   LEFT JOIN task_recurrence_occurrences o ON o.task_id=et.id
   WHERE e.event_type='expired' AND et.parent_task_id IS NULL

@@ -6,7 +6,7 @@ import { authoritativeTaskRecurrence, ensureSeriesDefinition } from './task-seri
 import { syncTaskCompletion } from './task-completions.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { markTodoOutbound } from './caldav-todo-outbound.js';
-import { assertTaskMutation, taskCapabilities } from './task-access.js';
+import { assertTaskMutation, taskCapabilities, taskDevicePrincipal } from './task-access.js';
 import { reconcileTaskSupervision, inspectTaskSupervision, taskSupervisionTransition, supervisionProjectionUpdates, taskSupervisionRootId } from './task-supervision.js';
 import * as v from '../middleware/validate.js';
 import { todayKey } from '../utils/timezone.js';
@@ -103,6 +103,18 @@ export function taskActivity(d, taskId, limit = 60) {
     .map(({details_json, ...row}) => ({...row, details: JSON.parse(details_json)}));
 }
 
+function deviceResponsibilitySnapshot(d, task) {
+  const seen=new Set();
+  while(task && !seen.has(task.id)) {
+    seen.add(task.id);
+    const members=d.prepare(`SELECT u.id,u.display_name FROM users u WHERE u.id=?
+      OR EXISTS(SELECT 1 FROM task_assignments a WHERE a.task_id=? AND a.user_id=u.id) ORDER BY u.id`).all(task.assigned_to,task.id);
+    if(members.length)return members;
+    task=task.parent_task_id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.parent_task_id):null;
+  }
+  return [];
+}
+
 function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false,now=new Date(),optionalReopenScope=null}={}) {
   if (task.status === status) return;
   assertTaskWindowAction(d,task.id,now,{optionalReopenScope});
@@ -110,7 +122,7 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     assertRecurringCompletionStarted(d,task.id,now);
     const dependencies = unresolvedDependencies(d, task.id);
     if (dependencies.length) throw new TaskStateError('Complete required earlier activities first.',
-      {dependencies: dependencies.filter(item => actorId != null && taskCapabilities(d,actorId,item).view)});
+      {dependencies: dependencies.filter(item => effects.authorizationActor != null && taskCapabilities(d,effects.authorizationActor,item).view)});
   }
   if (task.is_recurring && !task.parent_task_id && !recurrenceHooks)
     throw new TaskStateError('Recurring Task actions are temporarily unavailable. Please try again.', {}, 503);
@@ -122,10 +134,11 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
     THEN COALESCE(paid_at,strftime('%Y-%m-%dT%H:%M:%SZ','now')) ELSE NULL END
     WHERE payment_task_id = ?`).run(status, task.id);
   syncTaskRewards(d, task.id, task.status, status, actorId);
-  syncTaskCompletion(d, task.id, task.status, status, actorId);
+  syncTaskCompletion(d, task.id, task.status, status, actorId, {sourceDevice:effects.sourceDevice});
   recordTaskActivity(d, task.id, status === 'done' ? 'completed' : status === 'open' ? 'reset'
     : task.status === 'done' ? 'reopened' : 'started',
   actorId, {from_status:task.status,to_status:status,title:task.title,
+    ...(effects.sourceDevice ? {source_device:effects.sourceDevice,assigned_members:deviceResponsibilitySnapshot(d,task)} : {}),
     ...(status==='done'?{assigned_user_id:task.assigned_to??null,completion_source:effects.bulkCompletion?'bulk':'individual'}:{})});
   if (status === 'done') {
     d.prepare(`UPDATE planning_obligations SET status='fulfilled',
@@ -147,13 +160,15 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
 }
 
 /** Atomic child/parent/projection transition, including recurrence and rewards. */
-export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, authorize=true, requireRevision=authorize,now=null}={}) {
+export function changeTaskStatus(d, taskId, status, {actorId=null, principal=actorId, body={}, authorize=true, requireRevision=authorize,now=null}={}) {
+  const device = taskDevicePrincipal(principal);
+  if (device) actorId = null; // Device IDs must never enter human actor or reward-recipient fields.
   if (!['open','in_progress','done'].includes(status)) throw new TaskStateError('Invalid Task status.',{},400);
   return d.transaction(() => {
     now ??= new Date();
     const requested = d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
     if (!requested) throw new TaskStateError('Task not found.',{},404);
-    if (authorize) assertTaskMutation(d,actorId,requested,{status},{operation:'status'});
+    if (authorize) assertTaskMutation(d,principal,requested,device?{...body,status}:{status},{operation:'status'});
     assertTaskRevision(d,requested,body,{required:requireRevision,requireParent:requireRevision});
     assertTaskWindowAction(d,requested.id,now);
     if(retiredRecurrenceOccurrence(d,requested.id))throw new TaskStateError(
@@ -167,7 +182,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     if(status==='done'&&task.status!=='done') {
       const dependencies=unresolvedDependencies(d,task.id);
       if(dependencies.length)throw new TaskStateError('Complete required earlier activities first.',
-        {dependencies:dependencies.filter(item=>actorId!=null&&taskCapabilities(d,actorId,item).view)});
+        {dependencies:dependencies.filter(item=>principal!=null&&taskCapabilities(d,principal,item).view)});
     }
     const containerActions = (gate.containerActionTaskIds||[])
       .map(id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id)).filter(Boolean);
@@ -188,7 +203,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     // Check authorization before disclosing counts for independently private
     // children in a parent completion/reset confirmation.
     if(authorize)for(const child of status==='done'?incomplete:status==='open'?descendants.filter(row=>row.status!=='open'):[])
-      assertTaskMutation(d,actorId,child,{status},{operation:'status'});
+      assertTaskMutation(d,principal,child,{status},{operation:'status'});
     if (status === 'done' && incomplete.length) {
       const incompleteIds = new Set(incomplete.map(child => child.id));
       const helperPending = inspectTaskSupervision(d, task.id).actions.some(action =>
@@ -204,11 +219,12 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     if (status==='open' && ((task.status==='done'&&!task.parent_task_id)||descendants.some(child=>child.status==='done')) && body.reset_progress!==true)
       throw new TaskStateError('Resetting this Task will clear its subtask progress.',
         {confirmation_required:'reset_progress'});
-    const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0};
+    const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0,
+      authorizationActor:principal,sourceDevice:device ? {id:device.id,name:device.name} : null};
     const targets = status==='done' ? incomplete : status==='open' ? descendants.filter(child=>child.status!=='open') : [];
     // Validate every affected action before writing any progress.
     for (const child of targets) {
-      if (authorize) assertTaskMutation(d,actorId,child,{status},{operation:'status'});
+      if (authorize) assertTaskMutation(d,principal,child,{status},{operation:'status'});
       taskSupervisionTransition(d,child.id,status,actorId);
       if(containerActions.length && status==='done' && actionableSubtasks(d,child.id).some(row=>!row.is_optional&&row.status!=='done'))
         throw new TaskStateError('Complete the original Task’s independent steps before recording supervision of the whole Task.');

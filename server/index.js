@@ -15,6 +15,8 @@ import { createLogger } from './logger.js';
 import * as db from './db.js';
 import { router as authRouter, sessionMiddleware, requireAuth, requireAdmin, isPasswordLoginEnabled } from './auth.js';
 import { csrfMiddleware } from './middleware/csrf.js';
+import {deviceRouter,devicesRouter} from './routes/devices.js';
+import {deviceBoundary} from './services/devices.js';
 import idempotencyMiddleware from './middleware/idempotency.js';
 import { buildOpenApiSpec } from './openapi.js';
 import * as googleCalendar from './services/google-calendar.js';
@@ -162,6 +164,8 @@ app.use((err, req, res, next) => {
 // Sessions
 // --------------------------------------------------------
 app.use(sessionMiddleware);
+// Device context is checked before public/auth/alternate routes.
+app.use((req,res,next)=>deviceBoundary(db.get(),req,res,next));
 
 // --------------------------------------------------------
 // API-Antworten: kein Browser-Caching (Sicherheit + Aktualität)
@@ -243,6 +247,8 @@ app.use('/api/', apiLimiter);
 // API-Routen
 // --------------------------------------------------------
 app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/device', deviceRouter);
+app.use('/api/v1/devices', devicesRouter);
 app.use('/reader', readerRouter);
 
 function buildVersionPayload(includeVersion = false) {

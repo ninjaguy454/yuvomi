@@ -18,11 +18,13 @@
  */
 
 import Database from 'better-sqlite3-multiple-ciphers';
+import {installDeviceWriteLease} from './services/device-write-context.js';
 import { addTaskExpirationSchema } from './services/task-expiration-schema.js';
 import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
 import { TASK_SERIES_SCHEMA_SQL, initializeTaskSeries } from './services/task-series.js';
 import { ROTATION_SCHEMA_SQL, installRotationChangeTriggers } from './services/rotation-schema.js';
 import { SHARED_ROTATION_SCHEMA_SQL, installSharedRotationChangeTriggers } from './services/rotation-shared-schema.js';
+import { addDeviceSchema } from './services/device-schema.js';
 import { rotationVariableSchemaMigration } from './services/rotation-variable-schema.js';
 import path from 'path';
 import fs from 'node:fs/promises';
@@ -186,7 +188,7 @@ function init({ plaintextBackup = true } = {}) {
     encryptPlaintextDatabase({ backup: plaintextBackup });
   }
 
-  db = new Database(DB_PATH);
+  db = installDeviceWriteLease(new Database(DB_PATH));
 
   applyEncryptionKey(db);
 
@@ -9064,6 +9066,13 @@ FORK_MIGRATIONS.push({
   up(database) { database.exec(SHARED_ROTATION_SCHEMA_SQL); installSharedRotationChangeTriggers(database); },
 });
 
+FORK_MIGRATIONS.push({
+  version: 10041,
+  description: 'Household paired device principals and bounded temporary personal sessions',
+  foreignKeysOff: true,
+  up: addDeviceSchema,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [
@@ -9370,7 +9379,7 @@ let _originalDb = null;
  */
 function _setTestDatabase(testDb) {
   if (!_originalDb) _originalDb = db;
-  db = testDb;
+  db = installDeviceWriteLease(testDb);
 }
 
 /**

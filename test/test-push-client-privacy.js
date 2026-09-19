@@ -14,8 +14,8 @@ function deferred() {
 }
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function client({ shared = false, subscribed = true, owned = true, post, get, permission, ready } = {}) {
-  const state = { shared, local: null, calls: [], messages: [], subscribed: 0, unsubscribed: 0 };
+function client({ paired = false, shared = false, subscribed = true, owned = true, post, get, permission, ready } = {}) {
+  const state = { shared, paired, local: null, calls: [], messages: [], subscribed: 0, unsubscribed: 0 };
   const listeners = {};
   function subscription() {
     const sub = {
@@ -41,7 +41,7 @@ function client({ shared = false, subscribed = true, owned = true, post, get, pe
   const Notification = { permission: 'granted', requestPermission: permission || (async () => 'granted') };
   const window = { Notification, PushManager: function () {}, addEventListener: (type, listener) => { (listeners[type] ||= []).push(listener); } };
   const sandbox = { api, window, navigator: { serviceWorker: { ready: ready ? ready.then(() => reg) : Promise.resolve(reg) } }, Notification,
-    isWallModeEnabled: () => state.shared, atob, Uint8Array, console };
+    isWallModeEnabled: () => state.shared, pairedDeviceHint: () => state.paired, atob, Uint8Array, console };
   runInNewContext(`${source}\nglobalThis.clientPush = { initPush, stopPush, pushStatus, enablePush, disablePush, repairPush, resyncSubscription, isPushSubscribed };`, sandbox);
   return { ...sandbox.clientPush, state, async wall(enabled, crossTab = false) {
     state.shared = enabled;
@@ -163,4 +163,16 @@ test('repair waiting for server keys cannot subscribe after wall mode begins', a
   assert.equal(await repairing, false);
   assert.equal(env.state.subscribed, 0);
   assert.equal(env.isPushSubscribed(), false);
+});
+
+test('paired device remains push-private during temporary personal access without legacy Wall mode', async () => {
+  const env = client({ paired: true, shared: false, owned: true });
+  await env.initPush();
+  assert.equal(env.state.local, null);
+  assert.equal(env.isPushSubscribed(), false);
+  assert.equal((await env.enablePush()).subscribed, false);
+  assert.equal(await env.repairPush(), false);
+  assert.ok(!env.state.calls.includes('/push/status'));
+  assert.ok(!env.state.calls.includes('/push/subscribe'));
+  assert.ok(env.state.messages.every(message => message.enabled === true));
 });

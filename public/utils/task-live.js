@@ -1,4 +1,5 @@
 import { auth } from '/api.js';
+import { deviceContext } from './device-context.js';
 
 /** One session-authenticated invalidation stream per tab, shared by list and detail. */
 const subscribers = new Set();
@@ -25,7 +26,7 @@ function connect() {
     retryTimer = setTimeout(() => { notify(); retryTimer = null; connect(); }, 30_000);
     return;
   }
-  stream = new EventSource('/api/v1/tasks/changes');
+  stream = new EventSource(`/api/v1/tasks/changes${deviceContext() ? `?context=${encodeURIComponent(deviceContext())}` : ''}`);
   stream.addEventListener('open', notify);
   // Permission revocation closes an already-authorized stream. A reconnect
   // rejected with 403 will never emit open/change, so refresh on error too.
@@ -67,6 +68,7 @@ export function watchTaskChanges(callback) {
     window.addEventListener('pagehide', suspend);
     window.addEventListener('pageshow', resume);
     window.addEventListener('auth:expired', suspend);
+    window.addEventListener('auth:context-ending', suspend);
     window.addEventListener('task-data-changed', notify);
     connect();
   }
@@ -81,6 +83,7 @@ export function watchTaskChanges(callback) {
     window.removeEventListener('pagehide', suspend);
     window.removeEventListener('pageshow', resume);
     window.removeEventListener('auth:expired', suspend);
+    window.removeEventListener('auth:context-ending', suspend);
     window.removeEventListener('task-data-changed', notify);
   };
 }

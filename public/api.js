@@ -10,6 +10,7 @@ import { setHouseholdSize, clearHouseholdSize } from '/utils/household.js';
 import { forgetLayoutHint } from '/utils/dashboard-layout-hint.js';
 import { broadcastSessionChange } from '/utils/session-lifecycle.js';
 import { setWallModeEnabled } from '/utils/wall-mode.js';
+import { acceptAuthentication, authenticationSnapshot, sameAuthentication, trackContextRequest, pairedDeviceHint } from '/utils/device-context.js';
 
 const API_BASE = '/api/v1';
 
@@ -33,32 +34,49 @@ function getCsrfToken() {
  * @param {RequestInit} options - Fetch-Optionen
  * @returns {Promise<any>} Geparstes JSON oder wirft einen Fehler
  */
-async function apiFetch(path, options = {}, _retried = false) {
+async function apiFetch(path, options = {}, _retried = false, captured = authenticationSnapshot()) {
+  const contextError = () => new ApiError('The authenticated context changed. Please try again from the current view.', 409, { reason: 'auth_context_changed' });
+  if (!sameAuthentication(captured)) throw contextError();
   const url = `${API_BASE}${path}`;
+  // Bootstrap failures render a stable neutral/re-pair screen. Redirecting them
+  // would repeatedly launch a revoked device and never expose that recovery UI.
+  const deviceBootstrapRequest = path === '/device/launch' || path === '/device/context';
 
   const method = options.method ?? 'GET';
   const stateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
   const { headers: optionHeaders = {}, ...fetchOptions } = options;
 
   let response;
+  const controller = new AbortController();
+  const detach = trackContextRequest(controller);
+  const externalAbort = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  options.signal?.addEventListener('abort', externalAbort, { once: true });
   try {
     response = await fetch(url, {
       credentials: 'same-origin',
       cache: 'no-store',
       ...fetchOptions,
+      signal: controller.signal,
       headers: {
         'Content-Type': 'application/json',
         ...(stateChanging ? { 'X-CSRF-Token': getCsrfToken() } : {}),
         ...optionHeaders,
+        ...(captured.context ? { 'X-Auth-Context': captured.context } : {}),
       },
     });
   } catch (err) {
+    if (!sameAuthentication(captured)) throw contextError();
     // Offline/Netzfehler bei state-changing Requests (POST/PUT/PATCH/DELETE):
     // klaren ApiError werfen statt nacktem TypeError, damit die UI eine
     // verständliche „offline"-Meldung zeigen kann (read-only Offline-Modus).
     if (stateChanging) throw new ApiError('offline', 0);
     throw err;
+  } finally {
+    detach();
+    options.signal?.removeEventListener('abort', externalAbort);
   }
+  if (!sameAuthentication(captured)) throw contextError();
 
   if (response.status === 401) {
     // Beim Login-Endpunkt bedeutet 401 "falsche Zugangsdaten", nicht "Session abgelaufen".
@@ -66,7 +84,8 @@ async function apiFetch(path, options = {}, _retried = false) {
     // Für den zweiten Faktor gilt dasselbe: dort heißt 401 "falscher Code" oder
     // "der Wartezustand ist abgelaufen" - beides gehört auf die Anmeldeseite
     // gesagt und nicht in einen Sitzungsabbruch übersetzt (#672).
-    if (path !== '/auth/login' && path !== '/auth/2fa/verify' && path !== '/wall/identify') {
+    if (!deviceBootstrapRequest && path !== '/auth/login' && path !== '/auth/2fa/verify' && path !== '/wall/identify') {
+      if(pairedDeviceHint()) window.dispatchEvent(new CustomEvent('auth:context-rejected', {detail:{reason:'device_context_changed'}}));
       window.dispatchEvent(new CustomEvent('auth:expired'));
       throw new Error('Sitzung abgelaufen.');
     }
@@ -81,29 +100,34 @@ async function apiFetch(path, options = {}, _retried = false) {
     const errorCsrf = response.headers.get('X-CSRF-Token');
     if (errorCsrf) {
       _csrfToken = errorCsrf;
-      return apiFetch(path, options, true);
+      return apiFetch(path, options, true, captured);
     }
     // Fallback: /auth/me aufrufen um Token zu erneuern
-    const meRes = await fetch(`${API_BASE}/auth/me`, { credentials: 'same-origin', cache: 'no-store' });
+    const meRes = await fetch(`${API_BASE}/auth/me`, { credentials: 'same-origin', cache: 'no-store', headers: captured.context ? { 'X-Auth-Context': captured.context } : {} });
+    if (!sameAuthentication(captured)) throw contextError();
     if (meRes.status === 401) {
       window.dispatchEvent(new CustomEvent('auth:expired'));
       throw new Error('Sitzung abgelaufen.');
     }
     const meData = await meRes.json().catch(() => null);
+    if (!sameAuthentication(captured) || (captured.context && meData?.authContext && captured.context !== meData.authContext)) throw contextError();
     if (meData?.csrfToken) _csrfToken = meData.csrfToken;
-    return apiFetch(path, options, true);
+    return apiFetch(path, options, true, captured);
   }
 
   // CSRF-Token aus Response-Header extrahieren (wird bei jeder API-Antwort mitgeliefert)
+  const data = await response.json().catch(() => null);
+  if (!sameAuthentication(captured)) throw contextError();
   const csrfHeader = response.headers.get('X-CSRF-Token');
   if (csrfHeader) _csrfToken = csrfHeader;
-
-  const data = await response.json().catch(() => null);
 
   // Fallback: CSRF-Token aus Response-Body (fuer /auth/me und /auth/login)
   if (data?.csrfToken) _csrfToken = data.csrfToken;
 
   if (!response.ok) {
+    if (!deviceBootstrapRequest && pairedDeviceHint() && ['auth_context_changed', 'device_context_changed', 'temporary_session_expired', 'device_revoked'].includes(data?.reason)) {
+      window.dispatchEvent(new CustomEvent('auth:context-rejected', { detail: data }));
+    }
     if (response.status === 423 && data?.reason === 'wall_mode_locked') {
       setWallModeEnabled(true);
       clearApiCache();
@@ -112,6 +136,8 @@ async function apiFetch(path, options = {}, _retried = false) {
     const message = data?.error || `HTTP ${response.status}`;
     throw new ApiError(message, response.status, data);
   }
+
+  if (/^\/(auth\/(me|login|2fa\/verify)|device\/(context|launch|return|pair\/claim|activity))$/.test(path)) acceptAuthentication(data);
 
   if (stateChanging) notifyCountedMutation(path);
 

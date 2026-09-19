@@ -110,6 +110,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
         <div class="wall-dashboard__clock" data-wall-clock></div><div class="wall-dashboard__controls">
         ${button('Identify yourself','data-wall-identify')}${button('Done','data-wall-forget hidden')}
         ${button('Wall settings','data-wall-settings')}${button('Full screen','data-wall-fullscreen')}${button('Exit Wall Mode','data-wall-exit')}${button('Sign out','data-wall-signout')}
+        <a href="/device/pair" class="btn btn--secondary">Pair as household device</a>
       </div></header><p class="wall-dashboard__connection" role="status" data-wall-connection></p>
       <div class="wall-dashboard__grid" data-wall-grid></div><footer class="wall-dashboard__footer"><span data-wall-updated></span><span data-wall-notifications></span></footer></div>`;
     container.querySelector('[data-wall-identify]').onclick=()=>identify();

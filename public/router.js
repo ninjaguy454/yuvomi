@@ -5,6 +5,8 @@
  */
 
 import { api, auth } from '/api.js';
+import { deviceBootstrap, pairedDeviceHint, concealPersonalContext } from '/utils/device-context.js';
+import { prepareDeviceBoot, installDeviceSession, temporaryLoginPending } from '/utils/device-session.js';
 import { displayAppName } from '/utils/branding.js';
 import { canAccessNavModule, navModuleAccess } from '/permissions.js';
 import { clearApiCache } from '/sw-register.js';
@@ -72,6 +74,8 @@ import {
 // updateBranding) - dort steht noch keine Seite, auf die er sich beziehen könnte.
 // --------------------------------------------------------
 const ROUTES = [
+  { path: '/device', page: '/components/device-dashboard.js', requiresAuth: false, module: null, titleKey: null },
+  { path: '/device/pair', page: '/pages/device-pair.js', requiresAuth: false, module: null, titleKey: null },
   { path: '/login',    page: '/pages/login.js',    requiresAuth: false, module: null,        titleKey: null },
   { path: '/setup',    page: '/pages/setup.js',    requiresAuth: false, module: null,        titleKey: null },
   { path: '/forgot-password', page: '/pages/forgot-password.js', requiresAuth: false, module: null, titleKey: 'forgotPassword.title' },
@@ -725,7 +729,8 @@ function navigationHistoryControls({ showLabels = false, mobile = false } = {}) 
  */
 async function navigate(path, userOrPushState = true, pushState = true) {
   if (_wallPrivacyTransitioning) return;
-  if (isWallModeEnabled() && !['/login', '/setup'].includes(path.split('?')[0])) path = '/';
+  if (deviceBootstrap()?.principal?.kind === 'device' && !['/device/pair', '/login'].includes(path.split('?')[0])) path = '/device';
+  if (isWallModeEnabled() && !['/login', '/setup', '/device/pair'].includes(path.split('?')[0])) path = '/';
   if (isNavigating) return;
   isNavigating = true;
 
@@ -846,7 +851,7 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       }
     }
 
-    if (currentUser && isWallModeEnabled() && basePath !== '/') {
+    if (currentUser && isWallModeEnabled() && !['/', '/device/pair'].includes(basePath)) {
       currentPath = null;
       isNavigating = false;
       return navigate('/');
@@ -4339,6 +4344,10 @@ function enforceWallPrivacyBoundary() {
 function refreshAfterSessionChange() {
   if (sessionReloading) return;
   sessionReloading = true;
+  if (pairedDeviceHint()) {
+    concealPersonalContext();
+    try { sessionStorage.setItem('vidamia-context-resume', '1'); } catch {}
+  }
   forgetSessionState();
   // Remove the former account's content while the new authenticated document loads.
   document.getElementById('app')?.replaceChildren();
@@ -4389,6 +4398,11 @@ window.addEventListener('pageshow', (event) => {
 // Session abgelaufen
 window.addEventListener('auth:expired', () => {
   forgetSessionState();
+  if (pairedDeviceHint()) {
+    concealPersonalContext();
+    window.location.replace('/device');
+    return;
+  }
   if (isNavigating) {
     // navigate('/login') kann nicht sofort aufgerufen werden - wird im finally-Block
     // der laufenden Navigation nachgeholt.
@@ -4689,6 +4703,29 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
     });
 
     await initI18n();
+    installDeviceSession();
+    if (pairedDeviceHint()) {
+      if(location.pathname==='/device/pair'){
+        document.documentElement.style.visibility='';
+        await navigate('/device/pair',false);return;
+      }
+      try {
+        const paired = await prepareDeviceBoot();
+        document.documentElement.style.visibility = '';
+        if(paired?.temporary&&paired.user){await navigate('/',paired.user);return;}
+        if (paired?.principal?.kind === 'device' && !temporaryLoginPending()) {
+          await navigate('/device', false);
+          return;
+        }
+      } catch {
+        const root = document.getElementById('app');
+        root.innerHTML = '<main class="auth-page"><h1>Household display unavailable</h1><p>Connect to Vidamia to restore this device. Personal access is not available offline.</p><button type="button" class="btn btn--primary" data-device-retry>Retry</button><a href="/device/pair">Pair this display again</a></main>';
+        root.querySelector('[data-device-retry]').onclick = () => location.reload();
+        document.getElementById('app-loading')?.remove();
+        document.documentElement.style.visibility = '';
+        return;
+      }
+    }
     try {
       const v = await api.get('/version');
       _setupRequired = v?.setup_required === true;

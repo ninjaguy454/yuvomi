@@ -33,6 +33,10 @@ import { wallSessionAllows, preserveWallSessionLock } from './services/wall-sess
 import { resolvePermissions, buildSessionModuleAccess, clientPermissions } from './permissions.js';
 import { requireAdmin } from './middleware/require-admin.js';
 import * as twoFactor from './services/two-factor.js';
+import { deviceCookie, assertDeviceContext, readDeviceContext, isTemporaryContext, devicePrincipal, deviceContextPayload,
+  validateTemporaryLogin, establishTemporary, returnToDevice, retireBrowserSession } from './services/devices.js';
+import { assertCurrentDeviceRequest, sendDeviceLeaseError } from './services/device-lease.js';
+import { withDeviceWriteLease, withoutDeviceWriteLease } from './services/device-write-context.js';
 
 const log = createLogger('Auth');
 const router = express.Router();
@@ -135,7 +139,9 @@ class BetterSQLiteStore extends session.Store {
   }
 
   set(sid, sess, callback) {
+    return withoutDeviceWriteLease(()=>{
     try {
+      if(db.get().prepare('SELECT 1 FROM device_session_tombstones WHERE sid=?').get(sid)) { callback(null); return; }
       const previous = db.get().prepare('SELECT sess FROM sessions WHERE sid=?').get(sid);
       preserveWallSessionLock(previous ? JSON.parse(previous.sess) : null, sess);
       const ttl = sess.cookie?.maxAge ?? 7 * 24 * 60 * 60 * 1000;
@@ -147,18 +153,22 @@ class BetterSQLiteStore extends session.Store {
     } catch (err) {
       callback(err);
     }
+    });
   }
 
   destroy(sid, callback) {
+    return withoutDeviceWriteLease(()=>{
     try {
       db.get().prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
       callback(null);
     } catch (err) {
       callback(err);
     }
+    });
   }
 
   touch(sid, sess, callback) {
+    return withoutDeviceWriteLease(()=>{
     try {
       const ttl = sess.cookie?.maxAge ?? 7 * 24 * 60 * 60 * 1000;
       const expiredAt = Date.now() + ttl;
@@ -169,6 +179,7 @@ class BetterSQLiteStore extends session.Store {
     } catch (err) {
       callback(err);
     }
+    });
   }
 }
 
@@ -669,6 +680,31 @@ function applyRoleModuleAccess(req) {
  * Schützt alle API-Routen außer /auth/login.
  */
 function requireAuth(req, res, next) {
+  if(deviceCookie(req)||req.session?.deviceCredentialId) {
+    try {
+      const path=String(req.originalUrl||req.url).split('?')[0].replace(/\/+$/,'').toLowerCase();
+      const context=assertDeviceContext(db.get(),req,{allowMissing:path==='/api/v1/auth/me'});
+      if(!context)return res.status(401).json({error:'Pair this display again.',reason:'device_revoked'});
+      res.set('Cache-Control','private, no-store');res.set('X-Auth-Context',context.credential.context_key);
+      req.deviceContext=context;
+      if(isTemporaryContext(req,context)) {
+        // Only this live credential+session+context combination can use personal authority.
+        const user=db.get().prepare('SELECT role FROM users WHERE id=?').get(context.credential.temporary_user_id);
+        if(user?.role!=='admin')return res.status(403).json({error:'Temporary administrator access is unavailable.'});
+        req.authMethod='session';req.authUserId=context.credential.temporary_user_id;req.authRole=user.role;req.authScopes=null;
+        applyRoleModuleAccess(req);
+        // Explicit context-management routes complete their own atomic change;
+        // every other temporary-personal mutation retains its starting lease.
+        if(/^\/api\/v1\/devices?(?:\/|$)/.test(path))return next();
+        return withDeviceWriteLease(()=>assertCurrentDeviceRequest(req),next);
+      }
+      if(!path.startsWith('/api/v1/device/')&&!['/api/v1/auth/me','/api/v1/auth/logout','/api/v1/version'].includes(path))
+        return res.status(403).json({error:'Use temporary personal sign-in for this action.',reason:'device_access_denied'});
+      req.authMethod='device';req.authUserId=null;req.authRole='device';req.authScopes=null;
+      req.devicePrincipal=devicePrincipal(context.device);req.sessionModuleAccess={};
+      return next();
+    } catch(error) { return res.status(error.status||403).json({error:error.message,reason:error.reason}); }
+  }
   const apiToken = authenticateApiToken(req);
   if (apiToken) {
     req.authMethod = 'api_token';
@@ -706,12 +742,18 @@ function requireAuth(req, res, next) {
  * @returns {Promise<void>}
  */
 function setupAuthSession(req, res, user) {
+  const deviceContext=validateTemporaryLogin(db.get(),req,user);
+  const previousSid=req.sessionID;
   return new Promise((resolve, reject) => {
     req.session.regenerate((err) => {
       if (err) return reject(err);
       req.session.userId    = user.id;
       req.session.role      = user.role;
       req.session.csrfToken = generateToken();
+      if(deviceContext) {
+        try {retireBrowserSession(db.get(),previousSid);establishTemporary(db.get(),req,deviceContext,user);}
+        catch(error){delete req.session.userId;delete req.session.role;return reject(error);}
+      }
       res.cookie('csrf-token', req.session.csrfToken, {
         httpOnly: false,
         sameSite: 'lax',
@@ -733,7 +775,10 @@ function setupAuthSession(req, res, user) {
  * @returns {object}
  */
 function loginPayload(req, user) {
+  const context=deviceCookie(req)?readDeviceContext(db.get(),req):null;
+  if(context)delete req.session.deviceLoginHandoff;
   return {
+    ...(context?deviceContextPayload(req,context):{}),
     user: {
       id:           user.id,
       username:     user.username,
@@ -1109,7 +1154,7 @@ router.post('/login', loginLimiter, async (req, res) => {
       res.json(loginPayload(req, user));
     } catch (sessionErr) {
       log.error('Session regeneration failed:', sessionErr);
-      res.status(500).json({ error: 'Internal server error.', code: 500 });
+      res.status(sessionErr.status||500).json({ error: sessionErr.status?sessionErr.message:'Internal server error.', code: sessionErr.status||500 });
     }
   } catch (err) {
     log.error('Login error:', err);
@@ -1494,6 +1539,8 @@ buildInviteRoutes(router);
  * Response: { ok: true }
  */
 router.post('/logout', requireAuth, csrfMiddleware, (req, res) => {
+  // This authorized atomic transition intentionally revokes its own lease.
+  if(req.deviceContext)withoutDeviceWriteLease(()=>returnToDevice(db.get(),req.deviceContext.credential));
   if (req.authMethod === 'api_token') {
     return res.json({ ok: true });
   }
@@ -1544,7 +1591,7 @@ async function beginOidcFlow(req, config, extra = {}) {
   const nonce         = oidcClient.randomNonce();
   const codeVerifier  = oidcClient.randomPKCECodeVerifier();
   const codeChallenge = await oidcClient.calculatePKCECodeChallenge(codeVerifier);
-
+  if(extra.linkUserId)assertCurrentDeviceRequest(req);
   req.session.oidc = { state, nonce, codeVerifier, ...extra };
 
   await new Promise((resolve, reject) =>
@@ -1609,6 +1656,7 @@ router.get('/oidc/link', requireAuth, (req, res) => {
 router.post('/oidc/link/start', requireAuth, csrfMiddleware, async (req, res) => {
   try {
     const config = await getOidcConfig();
+    assertCurrentDeviceRequest(req);
     if (!config) return res.status(404).json({ error: 'OIDC is not configured.', code: 404 });
 
     const user = db.get().prepare('SELECT oidc_sub FROM users WHERE id = ?').get(req.authUserId);
@@ -1618,6 +1666,7 @@ router.post('/oidc/link/start', requireAuth, csrfMiddleware, async (req, res) =>
 
     res.json({ url: await beginOidcFlow(req, config, { linkUserId: req.authUserId }) });
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     log.error('OIDC link start error:', err);
     res.status(500).json({ error: 'OIDC initialization failed.', code: 500 });
   }
@@ -1700,6 +1749,9 @@ router.get('/oidc/callback', async (req, res) => {
         : `/settings/personal/account?oidc_link_error=${result.reason}`);
     }
 
+    // Temporary access cannot provision household members through SSO signup.
+    if(deviceCookie(req) && !db.get().prepare("SELECT id FROM users WHERE oidc_sub=? AND oidc_provider=? AND role='admin'").get(claims.sub,claims.iss))
+      return res.redirect('/login?error=device_administrator_required');
     const user = findOrCreateOidcUser(db.get(), {
       sub:                claims.sub,
       // iss stammt aus dem validierten ID-Token und ist gegen die Discovery-Metadaten
@@ -1738,12 +1790,13 @@ router.get('/oidc/callback', async (req, res) => {
     // der Browser auf der Anmeldeseite und wird dort nach dem Code gefragt.
     if (twoFactor.isEnabled(db.get(), user.id)) {
       req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS };
-      return res.redirect('/login?two_factor=1');
+      if(deviceCookie(req))req.session.deviceLoginHandoff=Date.now();
+      return res.redirect(deviceCookie(req)?'/login?two_factor=1&temporary_handoff=1':'/login?two_factor=1');
     }
 
     await setupAuthSession(req, res, user);
 
-    res.redirect('/');
+    res.redirect(deviceCookie(req)?'/device?temporary_handoff=1':'/');
   } catch (err) {
     log.error('OIDC callback error:', err);
     res.redirect('/login?error=oidc_failed');
@@ -1828,6 +1881,10 @@ router.post('/setup', loginLimiter, async (req, res) => {
  */
 router.get('/me', requireAuth, (req, res) => {
   try {
+    if(req.authMethod==='device') {
+      req.session.csrfToken ||= generateToken();
+      return res.json(deviceContextPayload(req,req.deviceContext));
+    }
     const user = db.get()
       .prepare(`SELECT ${USER_PUBLIC_COLUMNS} FROM users WHERE id = ?`)
       .get(req.authUserId);
@@ -1861,6 +1918,7 @@ router.get('/me', requireAuth, (req, res) => {
     });
 
     res.json({
+      ...(req.deviceContext?deviceContextPayload(req,req.deviceContext):{}),
       user: req.session.wallMode ? {id:user.id,display_name:user.display_name,avatar_color:user.avatar_color,role:user.role,family_role:user.family_role} : publicUser(user),
       permissions: clientPermissions(db.get(), user),
       householdSize: householdSize(db.get()),
@@ -2440,7 +2498,7 @@ router.post('/users', requireAuth, requireAdmin, csrfMiddleware, async (req, res
     if (ssoOnlyError) return res.status(400).json({ error: ssoOnlyError, code: 400 });
 
     const hash = ssoOnly ? OIDC_PASSWORD_SENTINEL : await hashPassword(password);
-
+    assertCurrentDeviceRequest(req);
     const result = db.transaction(() => {
       const created = db.get()
         .prepare(`
@@ -2469,6 +2527,7 @@ router.post('/users', requireAuth, requireAdmin, csrfMiddleware, async (req, res
     if (err.message && err.message.includes('UNIQUE constraint')) {
       return res.status(409).json({ error: 'Username is already taken.', code: 409 });
     }
+    if(sendDeviceLeaseError(res,err))return;
     log.error('User creation error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2573,7 +2632,7 @@ router.patch('/users/:id', requireAuth, requireAdmin, csrfMiddleware, async (req
     const newPasswordHash = (ssoOnly === true && !alreadySsoOnly)
       ? OIDC_PASSWORD_SENTINEL
       : (newPassword ? await hashPassword(newPassword) : null);
-
+    assertCurrentDeviceRequest(req);
     db.transaction(() => {
       db.get().prepare(`
         UPDATE users
@@ -2611,6 +2670,7 @@ router.patch('/users/:id', requireAuth, requireAdmin, csrfMiddleware, async (req
     if (err.message && err.message.includes('UNIQUE constraint')) {
       return res.status(409).json({ error: 'Username is already taken.', code: 409 });
     }
+    if(sendDeviceLeaseError(res,err))return;
     log.error('User update error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -2692,12 +2752,14 @@ router.patch('/me/password', requireAuth, csrfMiddleware, async (req, res) => {
     if (!valid) return res.status(401).json({ error: 'Current password is incorrect.', code: 401 });
 
     const hash = await hashPassword(new_password);
+    assertCurrentDeviceRequest(req);
     db.get().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hash, req.authUserId);
 
     invalidateUserSessions(req.authUserId, req.sessionID);
 
     res.json({ ok: true });
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     log.error('Password change error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }

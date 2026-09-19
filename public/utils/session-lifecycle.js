@@ -13,7 +13,7 @@ export function sessionRevision() { return revision; }
 
 function receive(message) {
   if (!message || message.source === source || typeof message.id !== 'string'
-      || !['login', 'logout'].includes(message.reason) || seen.has(message.id)) return;
+      || !['login', 'logout', 'device'].includes(message.reason) || seen.has(message.id)) return;
   seen.add(message.id);
   if (seen.size > 32) seen.delete(seen.values().next().value);
   revision++;
@@ -42,7 +42,7 @@ export function watchSessionChanges(listener) {
 }
 
 export function broadcastSessionChange(reason) {
-  if (!['login', 'logout'].includes(reason)) return;
+  if (!['login', 'logout', 'device'].includes(reason)) return;
   startListening();
   revision++;
   const message = { source, id: `${source}-${revision}`, reason };

@@ -6,6 +6,8 @@
 
 import express from 'express';
 import * as db from '../db.js';
+import { assertCurrentDeviceRequest, sendDeviceLeaseError } from '../services/device-lease.js';
+import { withoutDeviceWriteLease } from '../services/device-write-context.js';
 import { createLogger } from '../logger.js';
 import { str, collectErrors, id as validateId, MAX_TEXT, MAX_TITLE } from '../middleware/validate.js';
 import { documentVisibleSql } from '../services/document-access.js';
@@ -213,7 +215,7 @@ function sendThumbnail(res, thumb, cacheSeconds) {
   res.setHeader('Content-Type', thumb.mime);
   res.setHeader('Content-Length', String(thumb.buffer.length));
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.setHeader('Cache-Control', `private, max-age=${cacheSeconds}`);
+  res.setHeader('Cache-Control', cacheSeconds===0?'private, no-store':`private, max-age=${cacheSeconds}`);
   res.setHeader('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'");
   res.end(thumb.buffer);
 }
@@ -425,10 +427,12 @@ router.put('/storage/config', async (req, res) => {
       }
     }
 
+    assertCurrentDeviceRequest(req);
     saveStorageConfig(req.body);
     if (selectorProvided) setSelectedUploadBackend(req.body.selected_upload_backend);
     res.json({ data: storageConfigStatus() });
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     log.error('PUT /storage/config error:', err);
     if (sendStorageError(res, err, err.message)) return;
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -723,6 +727,7 @@ router.post('/', async (req, res) => {
       category,
       originalName: vOriginalName.value,
     });
+    assertCurrentDeviceRequest(req);
     const database = db.get();
     const row = database.transaction(() => {
       const folderId = vFolderId.value ?? ensureFolder(folderKey, vFolderName.value, userId(req));
@@ -773,6 +778,7 @@ router.post('/', async (req, res) => {
         );
       }
     }
+    if(sendDeviceLeaseError(res,err))return;
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
 });
@@ -851,8 +857,10 @@ router.get('/:id/thumbnail', async (req, res) => {
     const account = loadDmsAccount(doc.dms_account_id);
     if (!account) return res.status(404).json({ error: 'Linked DMS account is gone.', code: 404 });
     const thumb = await resolveDmsThumbnail(account, doc.storage_key);
-    sendThumbnail(res, thumb, 300);
+    assertCurrentDeviceRequest(req);
+    sendThumbnail(res, thumb, req.deviceContext ? 0 : 300);
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     if (err instanceof ThumbnailUnavailableError) {
       return res.status(415).json({ error: 'Thumbnail not available for this document.', code: 415 });
     }
@@ -867,6 +875,7 @@ router.get('/:id/preview', async (req, res) => {
     const doc = getVisibleDocument(id, req, true);
     if (!doc) return res.status(404).json({ error: 'Document not found.', code: 404 });
     const content = await resolveDocumentContent(doc);
+    assertCurrentDeviceRequest(req);
     const rawMime = effectiveMime(content, doc);
     // Inline-Auslieferung nur für nicht-skriptfähige Typen. Alles andere kann über
     // /download (als attachment) geholt werden.
@@ -877,7 +886,7 @@ router.get('/:id/preview', async (req, res) => {
     res.setHeader('Content-Type', rawMime);
     res.setHeader('Content-Length', String(content.buffer.length));
     res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-    res.setHeader('Cache-Control', doc.storage_backend === 'dms'
+    res.setHeader('Cache-Control', req.deviceContext ? 'private, no-store' : doc.storage_backend === 'dms'
       ? 'private, max-age=60'
       : 'private, max-age=300');
     // Defense-in-Depth: MIME-Sniffing unterbinden und jegliche Skriptausführung im
@@ -894,6 +903,7 @@ router.get('/:id/preview', async (req, res) => {
     }
     res.end(content.buffer);
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     if (err instanceof DmsDocumentUnavailableError) {
       return res.status(404).json({ error: 'Linked DMS account is gone.', code: 404 });
     }
@@ -909,14 +919,17 @@ router.get('/:id/download', async (req, res) => {
     const doc = getVisibleDocument(id, req, true);
     if (!doc) return res.status(404).json({ error: 'Document not found.', code: 404 });
     const content = await resolveDocumentContent(doc);
+    assertCurrentDeviceRequest(req);
     const rawMime = effectiveMime(content, doc);
     const filename = encodeURIComponent((doc.original_name || `${doc.id}`).replace(/[/\\]/g, '_'));
     res.setHeader('Content-Type', rawMime);
     res.setHeader('Content-Length', String(content.buffer.length));
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    if(req.deviceContext)res.setHeader('Cache-Control','private, no-store');
     res.end(content.buffer);
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     if (err instanceof DmsDocumentUnavailableError) {
       return res.status(404).json({ error: 'Linked DMS account is gone.', code: 404 });
     }
@@ -932,10 +945,24 @@ router.delete('/:id', async (req, res) => {
     const existing = getVisibleDocument(id, req, true);
     if (!existing) return res.status(404).json({ error: 'Document not found.', code: 404 });
     if (existing.created_by !== userId(req) && !isAdmin(req)) return res.status(403).json({ error: 'Not authorized.', code: 403 });
+    assertCurrentDeviceRequest(req);
+    const removesStoredContent=['webdav','google_drive'].includes(existing.storage_backend)||
+      (existing.storage_backend==='local'&&Boolean(existing.storage_key));
     await deleteDocumentContent(existing);
-    db.get().prepare('DELETE FROM family_documents WHERE id = ?').run(id);
+    if(removesStoredContent) {
+      // The external deletion was admitted while authority was current and is
+      // already irreversible. Finish only its exact metadata cleanup if a return
+      // occurred meanwhile; do not leave a broken link or touch replacement data.
+      withoutDeviceWriteLease(()=>db.get().prepare(`DELETE FROM family_documents
+        WHERE id=? AND storage_backend IS ? AND storage_key IS ? AND created_at IS ?`)
+        .run(id,existing.storage_backend,existing.storage_key,existing.created_at));
+    } else {
+      assertCurrentDeviceRequest(req);
+      db.get().prepare('DELETE FROM family_documents WHERE id = ?').run(id);
+    }
     res.status(204).end();
   } catch (err) {
+    if(sendDeviceLeaseError(res,err))return;
     log.error('DELETE /:id error:', err);
     if (sendStorageError(res, err, 'Document storage delete failed.')) return;
     res.status(500).json({ error: 'Internal server error.', code: 500 });

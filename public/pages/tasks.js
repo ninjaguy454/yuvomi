@@ -3131,8 +3131,8 @@ function renderHistoryEntry(entry) {
   const expired = entry.event_type === 'expired';
   const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
   // Expiration is automatic; a missing actor is not a removed household member.
-  const name = expired ? '' : entry.user_name || t('tasks.historyUnknownMember');
-  const avatar = expired ? '<i data-lucide="clock" aria-hidden="true"></i>' : renderAvatarStack(
+  const name = expired ? '' : entry.source_device_name ? `From ${entry.source_device_name}` : entry.user_name || t('tasks.historyUnknownMember');
+  const avatar = expired ? '<i data-lucide="clock" aria-hidden="true"></i>' : entry.source_device_name ? '<i data-lucide="monitor" aria-hidden="true"></i>' : renderAvatarStack(
     [{ display_name: name, color: entry.user_color, avatar_data: entry.user_avatar }],
     { size: 32, maxVisible: 1 },
   );

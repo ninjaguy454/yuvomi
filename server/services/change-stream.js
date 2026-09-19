@@ -1,6 +1,7 @@
 /** Reusable payload-free revision stream. The persisted session and current
  * module permissions authorize every event, including after logout/reconnect. */
 import * as db from '../db.js';
+import { deviceRequestStillValid } from './devices.js';
 
 
 export function createChangesStream({table,canRead,deniedMessage}) {
@@ -8,6 +9,7 @@ export function createChangesStream({table,canRead,deniedMessage}) {
   const subscribers = new Set();
   let timer = null;
   function allowed(d,req) {
+    if(!deviceRequestStillValid(d,req))return false;
     // Long-lived requests retain the original Session object after logout. The
     // persisted session, not that snapshot, authorizes every event/heartbeat.
     if (req.authMethod !== 'session' || !req.sessionID) return false;

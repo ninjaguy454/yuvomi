@@ -284,7 +284,7 @@ export function listTaskResponsibilities(d, taskIds) {
   }, {});
 }
 
-export function claimTask(d, taskId, userId) {
+export function claimTask(d, taskId, userId, {actorId=userId,sourceDevice=null}={}) {
   return d.transaction(() => {
     if (d.prepare("SELECT 1 FROM tasks WHERE id=? AND status='expired'").get(taskId)) throw new Error('This Task has expired. Reopen it before changing assignments.');
     const context = d.prepare("SELECT * FROM task_assignment_context WHERE task_id = ? AND strategy = 'open_claimable'").get(taskId);
@@ -329,12 +329,12 @@ export function claimTask(d, taskId, userId) {
     if (open) {
       d.prepare(`UPDATE planning_obligations SET responsible_user_id = ?, responsible_group = NULL, status = 'accepted', responded_at = ${nowSql()}, updated_at = ${nowSql()} WHERE id = ?`)
         .run(member.id, open.id);
-      const eventId = event(d, open.id, 'claimed', userId);
-      notifyTaskClaim(d, taskId, eventId, userId);
+      const eventId = event(d, open.id, 'claimed', actorId, sourceDevice ? {target_user_id:userId,source_device:sourceDevice} : null);
+      notifyTaskClaim(d, taskId, eventId, actorId, {sourceDevice,targetUserId:userId});
     } else {
-      notifyTaskClaim(d, taskId, null, userId);
+      notifyTaskClaim(d, taskId, null, actorId, {sourceDevice,targetUserId:userId});
     }
-    reconcileTaskSupervision(d, taskId, { actorId: userId });
+    reconcileTaskSupervision(d, taskId, { actorId });
     return { task_id: Number(taskId), assigned_to: member, state: 'assigned' };
   })();
 }

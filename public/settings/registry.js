@@ -312,6 +312,11 @@ export const SETTINGS_LEAVES = freezeEntries([
     loader: () => import('/settings/pages/admin-family.js'),
   },
   {
+    id: 'admin-devices', domainId: 'admin', path: '/settings/admin/devices',
+    labelKey: 'settings.pageDevices', descriptionKey: 'settings.pageDevicesDescription',
+    icon: 'monitor', adminOnly: true, loader: () => import('/settings/pages/admin-devices.js'),
+  },
+  {
     id: 'admin-permissions',
     domainId: 'admin',
     path: '/settings/admin/permissions',

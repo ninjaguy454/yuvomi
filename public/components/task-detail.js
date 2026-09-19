@@ -1515,7 +1515,9 @@ function activityNode(task, ctx) {
       const row = document.createElement('p');
       const detail = entry.details || {};
       row.textContent = [labels[entry.event_type] || String(entry.event_type || 'Updated').replaceAll('_', ' '), detail.title,
-        entry.event_type === 'expired' ? null : entry.actor_name, `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
+        entry.event_type === 'expired' ? null : detail.source_device?.name ? `From ${detail.source_device.name}` : entry.actor_name,
+        detail.source_device && detail.assigned_members?.length ? `Assigned to ${detail.assigned_members.map(member=>member.display_name).join(', ')}` : null,
+        `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
       wrap.appendChild(row);
     }
   }).catch(() => { status.textContent = 'Activity could not be loaded.'; });
@@ -2116,7 +2118,7 @@ function seriesHistoryNode(task, ctx = {}) {
       none.className = 'detail-history__empty';
       const terminal = activity?.data?.find(entry => ['completed', 'expired'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
       none.textContent = terminal
-        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.actor_name,
+        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.details?.source_device?.name ? `From ${terminal.details.source_device.name}` : terminal.actor_name,
           terminal.event_type === 'expired' ? 'Task expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
         : 'No completed or expired occurrences currently recorded.';
       list.appendChild(none);
@@ -2133,7 +2135,7 @@ function seriesHistoryNode(task, ctx = {}) {
       who.className = 'detail-history__who';
       who.textContent = entry.event_type === 'expired'
         ? 'Task expired · 0 completion points'
-        : ['Completed', entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
+        : ['Completed', entry.source_device_name ? `From ${entry.source_device_name}` : entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
       row.append(when, who);
       list.appendChild(row);
     }

@@ -1,4 +1,5 @@
 import { api } from '/api.js';
+import { deviceContext } from '/utils/device-context.js';
 import { esc } from '/utils/html.js';
 import { canCapability } from '/permissions.js';
 import { openChildModal } from '/components/modal.js';
@@ -355,7 +356,7 @@ export async function openRotationGroup(groupId,{onChanged}={}) {
   const live={active:()=>!closed,refresh:async()=>{await Promise.all([...views].map(refresh=>refresh()));await onChanged?.();},
     watch(refresh){views.add(refresh);return ()=>{views.delete(refresh);if(!views.size){closed=true;source?.close();}};}};
   if(typeof EventSource!=='undefined') {
-    source=new EventSource('/api/v1/automation/rotation-changes');
+    source=new EventSource(`/api/v1/automation/rotation-changes${deviceContext()?`?context=${encodeURIComponent(deviceContext())}`:''}`);
     source.addEventListener('change',()=>{if(!closed)void live.refresh();});
   }
   try{return await groupDetail(groupId,live);}catch(error){closed=true;source?.close();throw error;}
@@ -391,7 +392,7 @@ export async function renderRotationGroups(body) {
   if(!live.active())return;
   let version=null;
   if(typeof EventSource!=='undefined'){
-    source=new EventSource('/api/v1/automation/rotation-changes');
+    source=new EventSource(`/api/v1/automation/rotation-changes${deviceContext()?`?context=${encodeURIComponent(deviceContext())}`:''}`);
     source.addEventListener('change',event=>{
       let next;try{next=JSON.parse(event.data).version;}catch{return;}
       if(disposed||version===next)return;const initial=version===null;version=next;

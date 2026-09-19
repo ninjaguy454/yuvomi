@@ -171,3 +171,17 @@ test('wall mode enabled while finding a notification destination prevents naviga
   await click;
   assert.deepEqual(env.navigated, []);
 });
+
+test('paired browser cannot lift notification privacy through temporary personal login or worker restart', async () => {
+  const first = worker();
+  await first.dispatch('message', { data: { type: 'PAIRED_DEVICE', enabled: true } });
+  await first.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
+  await push(first);
+  assert.equal(first.shown.length, 0);
+  const restarted = worker(first.caches);
+  await restarted.dispatch('message', { data: { type: 'SET_SHARED_DISPLAY', enabled: false } });
+  await push(restarted);
+  await restarted.dispatch('notificationclick', { notification: { data: { notificationId: 42 }, close() {} } });
+  assert.equal(restarted.shown.length, 0);
+  assert.deepEqual(restarted.navigated, []);
+});

@@ -27,9 +27,7 @@ function generateToken() {
  * CSRF-Middleware für authentifizierte API-Routen.
  * Muss NACH requireAuth eingebunden werden.
  */
-function csrfMiddleware(req, res, next) {
-  if (req.authMethod === 'api_token') return next();
-
+function publishCsrfToken(req, res) {
   // Token generieren falls noch nicht vorhanden (erste Request nach Login)
   if (!req.session.csrfToken) {
     req.session.csrfToken = generateToken();
@@ -46,6 +44,12 @@ function csrfMiddleware(req, res, next) {
   // Token auch als Response-Header senden (zuverlaessiger als Cookie auf iOS-PWA,
   // und bei jedem Request aktuell - nicht nur bei /auth/me und /auth/login)
   res.setHeader('X-CSRF-Token', req.session.csrfToken);
+  return req.session.csrfToken;
+}
+
+function csrfMiddleware(req, res, next) {
+  if (req.authMethod === 'api_token') return next();
+  publishCsrfToken(req, res);
 
   // Safe Methods benötigen keine Validierung
   if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
@@ -79,4 +83,4 @@ function csrfMiddleware(req, res, next) {
   next();
 }
 
-export { csrfMiddleware, generateToken };
+export { csrfMiddleware, generateToken, publishCsrfToken };

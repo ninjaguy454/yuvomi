@@ -13,6 +13,7 @@ import { requireAdmin } from '../auth.js';
 import { createLogger } from '../logger.js';
 import { createLocalBackup, getStatus as getSchedulerStatus, triggerBackup } from '../services/backup-scheduler.js';
 import * as webdavBackup from '../services/backup-webdav.js';
+import { deviceCookie } from '../services/devices.js';
 
 const router = express.Router();
 const log = createLogger('Backup');
@@ -60,6 +61,18 @@ router.get('/database', requireAdmin, async (req, res) => {
 router.post(
   '/restore',
   requireAdmin,
+  (req, res, next) => {
+    // Replacing the entire database also replaces the credentials/sessions
+    // that enforce temporary device access. Require a normal personal browser
+    // before parsing a restore upload or performing any filesystem operation.
+    if (deviceCookie(req) || req.session?.deviceCredentialId || req.deviceContext) {
+      return res.status(403).json({
+        error: 'Restore the database from an ordinary personal browser, not a paired display. Restoring replaces the sessions used to secure temporary access.',
+        reason: 'device_restore_requires_personal_browser',
+      });
+    }
+    next();
+  },
   express.raw({ type: 'application/octet-stream', limit: RESTORE_LIMIT }),
   async (req, res) => {
     let dir = null;

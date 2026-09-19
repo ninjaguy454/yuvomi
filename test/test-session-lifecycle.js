@@ -108,6 +108,7 @@ function routerHarness(response, { online = true } = {}) {
     window: { location: { reload: () => events.push('reload') }, addEventListener: (name, fn) => { listeners[name] = fn; } },
     api: { get: async (path) => { assert.equal(path, '/auth/me'); calls++; return await response(); } },
     watchSessionChanges: (fn) => { onChange = fn; }, sessionRevision: () => revision,
+    pairedDeviceHint: () => false,
     forgetSessionState: () => { context.currentUser = null; events.push('forget'); },
   });
   const start = routerSource.indexOf('let sessionReloading = false;');

@@ -2702,6 +2702,8 @@
         "pageDocumentDms": "Document management",
         "pageDocumentDmsDescription": "Connect external document management (Paperless-ngx or Papra).",
         "pageFamilyRoles": "Family and roles",
+        "pageDevices": "Devices",
+        "pageDevicesDescription": "Pair household displays and configure their permissions, views and temporary personal access.",
         "pageFamilyRolesDescription": "Manage family members, family roles and administrator rights.",
         "pagePermissions": "Roles & permissions",
         "pagePermissionsDescription": "Set module and widget access per role and member.",

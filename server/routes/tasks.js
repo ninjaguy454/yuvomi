@@ -1549,7 +1549,7 @@ router.post('/:id/location/promote', requireAdmin, (req, res) => {
 //         assigned_to?, parent_task_id? }
 // Response: { data: Task }
 // --------------------------------------------------------
-router.post('/', (req, res) => {
+export function createTaskDefinition(req, res) {
   try {
     const bindingRequest = parseTaskActivityBinding(req.body);
     if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
@@ -1695,6 +1695,7 @@ router.post('/', (req, res) => {
     if(windowError)return res.status(400).json({error:windowError,code:400});
     assertTaskMutation(db.get(),req,null,{...req.body,expiration_policy},{operation:'create'});
     const taskId = db.get().transaction(() => {
+      req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
       if(parent_task_id){
         assertTaskWindowAction(db.get(),Number(parent_task_id));
         if(taskWindowAncestors(db.get(),Number(parent_task_id)).some(row=>row.status==='done'))
@@ -1781,7 +1782,7 @@ router.post('/', (req, res) => {
     attachTaskActivityBindings(db.get(), [task]);
     attachTaskLocations(db.get(), [task]);
     attachTags([task]);
-    res.status(201).json({ data: hydrateTask(task,req.authUserId||req.session.userId) });
+    res.status(201).json({ data: req.projectDeviceTask ? req.projectDeviceTask(task) : hydrateTask(task,req.authUserId||req.session.userId) });
     if (syncTarget) pushToCalDAV('Neue Aufgabe');
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
@@ -1791,7 +1792,8 @@ router.post('/', (req, res) => {
     log.error('POST / error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
-});
+}
+router.post('/',createTaskDefinition);
 
 // --------------------------------------------------------
 // PUT /api/v1/tasks/:id
@@ -1801,12 +1803,12 @@ router.post('/', (req, res) => {
 // Response: { data: Task }
 // tags fehlt → bleiben unangetastet; tags: [] → alle entfernt.
 // --------------------------------------------------------
-router.put('/:id', (req, res) => {
+export function updateTaskDefinition(req, res) {
   try {
     const task = db.get().prepare('SELECT * FROM tasks WHERE id = ?').get(req.params.id);
     if (!task) return res.status(404).json({ error: 'Task not found.', code: 404 });
     // 404 statt 403: ob es die Aufgabe gibt, ist selbst schon eine Auskunft.
-    if (!mayAccessTask(task, req.authUserId || req.session.userId)) {
+    if (!mayAccessTask(task, req.devicePrincipal || req.authUserId || req.session.userId)) {
       return res.status(404).json({ error: 'Task not found.', code: 404 });
     }
 
@@ -2111,6 +2113,7 @@ router.put('/:id', (req, res) => {
       if(!current)throw new TaskStateError('Task not found.',{},404);
       assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
       assertTaskMutation(db.get(),req,current,req.body,{operation:'update'});
+      req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
       const series=ensureSeriesDefinition(db.get(),current.id);
       if(editScope==='future')assertSeriesEdit(db.get(),req,current,series,req.body.expected_series_revision);
       const beforeDefinition=series?captureSeriesDefinition(db.get(),current.id):null;
@@ -2240,7 +2243,7 @@ router.put('/:id', (req, res) => {
         pending=operation.pending;undone=operation.undone;
       }
       recordTaskActivity(db.get(),task.id,series ? seriesEdit?.scope==='future'?'series_edited':'occurrence_edited':'edited',
-        req.authUserId||req.session.userId,{title:title.trim(),...(seriesEdit?{series_id:seriesEdit.series_id,
+        req.authUserId||req.session.userId,{title:title.trim(),...(req.devicePrincipal?{source_device:{id:req.devicePrincipal.id,name:req.devicePrincipal.name}}:{}),...(seriesEdit?{series_id:seriesEdit.series_id,
           series_revision:seriesEdit.revision,updated_count:seriesEdit.updated.length,preserved_count:seriesEdit.preserved.length}:{})});
 
       // Nur was die Schreibarbeit unten braucht, liegt in der Transaktion: die
@@ -2274,7 +2277,7 @@ router.put('/:id', (req, res) => {
     addAssignedUsers(updated);
     attachTaskActivityBindings(db.get(), [updated]);
     attachTaskLocations(db.get(), [updated]);
-    res.json({ data: hydrateTask(updated,req.authUserId||req.session.userId),...(seriesEdit?{series_edit:seriesEdit}:{}),...(unchanged?{unchanged:true}:{}),
+    res.json({ data: req.projectDeviceTask ? req.projectDeviceTask(updated) : hydrateTask(updated,req.authUserId||req.session.userId),...(seriesEdit?{series_edit:seriesEdit}:{}),...(unchanged?{unchanged:true}:{}),
       ...(rotationChanges.preserved.length?{rotation_warning:'The current rotation order is preserved. The new configuration applies when future occurrences resolve.'}: {}) });
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
@@ -2286,7 +2289,8 @@ router.put('/:id', (req, res) => {
     log.error('PUT /:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
-});
+}
+router.put('/:id',updateTaskDefinition);
 
 /**
  * Die Folgeinstanz, die beim Erledigen dieser Aufgabe entstanden ist (#650) -
@@ -2574,6 +2578,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       task.countdown ? 1 : 0,
       task.id, task.start_time, task.expiration_policy || 'keep_overdue', task.due_date_offset_days ?? null,task.locked||0
     );
+    if(task.source_device_id||task.source_device_name) db.get().prepare('UPDATE tasks SET source_device_id=?,source_device_name=? WHERE id=?')
+      .run(task.source_device_id??null,task.source_device_name??null,newTask.lastInsertRowid);
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);

@@ -5,6 +5,9 @@
  */
 import { api } from '/api.js';
 import { isWallModeEnabled } from '/utils/wall-mode.js';
+import { pairedDeviceHint } from '/utils/device-context.js';
+
+const isSharedDisplay = () => isWallModeEnabled() || pairedDeviceHint();
 
 let _subscribedCache = false;
 let _privacyListening = false;
@@ -12,13 +15,13 @@ let _generation = 0;
 let _deliveryVerified = false;
 
 function currentOperation(generation) {
-  return generation === _generation && !isWallModeEnabled();
+  return generation === _generation && !isSharedDisplay();
 }
 
 async function syncWorkerPrivacy(registration) {
   if (!('serviceWorker' in navigator)) return;
   const reg = registration || await navigator.serviceWorker.ready;
-  const enabled = isWallModeEnabled() || !_deliveryVerified;
+  const enabled = isSharedDisplay() || !_deliveryVerified;
   (reg.active || navigator.serviceWorker.controller)?.postMessage({ type: 'SET_SHARED_DISPLAY', enabled });
 }
 
@@ -34,14 +37,14 @@ async function syncSharedDisplay() {
   if (!('serviceWorker' in navigator)) return;
   const reg = await navigator.serviceWorker.ready;
   await syncWorkerPrivacy(reg);
-  if (isWallModeEnabled() && 'PushManager' in window) await disablePush();
+  if (isSharedDisplay() && 'PushManager' in window) await disablePush();
 }
 
 function onWallModeChange() {
   invalidateDelivery();
   void syncSharedDisplay().catch(() => {});
 }
-function onWallStorage(event) { if (event.key === 'yuvomi-wall-mode') onWallModeChange(); }
+function onWallStorage(event) { if (['yuvomi-wall-mode','vidamia-paired-device'].includes(event.key)) onWallModeChange(); }
 
 function urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -63,7 +66,7 @@ function isPushSubscribed() {
 
 async function pushStatus() {
   const generation = _generation;
-  if (isWallModeEnabled()) {
+  if (isSharedDisplay()) {
     invalidateDelivery();
     return { supported: pushSupported(), permission: 'Notification' in window ? Notification.permission : 'unsupported', subscribed: false, shared: true };
   }
@@ -75,10 +78,10 @@ async function pushStatus() {
   try {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
-    if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isWallModeEnabled() };
+    if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isSharedDisplay() };
     if (sub) {
       const response = await api.post('/push/status', { endpoint: sub.endpoint });
-      if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isWallModeEnabled() };
+      if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isSharedDisplay() };
       subscribed = response?.data?.subscribed === true;
       // A browser subscription can outlive a signed-in user. Never display another
       // person's notifications or silently transfer their device on session switch.
@@ -87,7 +90,7 @@ async function pushStatus() {
   } catch {
     subscribed = false;
   }
-  if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isWallModeEnabled() };
+  if (!currentOperation(generation)) return { supported: true, subscribed: false, shared: isSharedDisplay() };
   _subscribedCache = subscribed;
   _deliveryVerified = subscribed;
   await syncWorkerPrivacy();
@@ -95,27 +98,27 @@ async function pushStatus() {
 }
 
 async function enablePush() {
-  if (isWallModeEnabled()) return { subscribed: false, shared: true };
+  if (isSharedDisplay()) return { subscribed: false, shared: true };
   if (!pushSupported()) throw new Error('unsupported');
   const generation = invalidateDelivery();
   const permission = await Notification.requestPermission();
-  if (!currentOperation(generation)) return { subscribed: false, shared: isWallModeEnabled() };
+  if (!currentOperation(generation)) return { subscribed: false, shared: isSharedDisplay() };
   if (permission !== 'granted') {
     _subscribedCache = false;
     return { subscribed: false, permission };
   }
   const reg = await navigator.serviceWorker.ready;
-  if (!currentOperation(generation)) return { subscribed: false, shared: isWallModeEnabled() };
+  if (!currentOperation(generation)) return { subscribed: false, shared: isSharedDisplay() };
   const { data } = await api.get('/push/vapid-public-key');
-  if (!currentOperation(generation)) return { subscribed: false, shared: isWallModeEnabled() };
+  if (!currentOperation(generation)) return { subscribed: false, shared: isSharedDisplay() };
   const sub = await reg.pushManager.subscribe({
     userVisibleOnly: true,
     applicationServerKey: urlBase64ToUint8Array(data.key),
   });
-  if (!currentOperation(generation)) { await sub.unsubscribe(); return { subscribed: false, shared: isWallModeEnabled() }; }
+  if (!currentOperation(generation)) { await sub.unsubscribe(); return { subscribed: false, shared: isSharedDisplay() }; }
   try { await api.post('/push/subscribe', sub.toJSON()); }
   catch (error) { await sub.unsubscribe(); throw error; }
-  if (!currentOperation(generation)) { await sub.unsubscribe(); return { subscribed: false, shared: isWallModeEnabled() }; }
+  if (!currentOperation(generation)) { await sub.unsubscribe(); return { subscribed: false, shared: isSharedDisplay() }; }
   _subscribedCache = true;
   _deliveryVerified = true;
   await syncWorkerPrivacy(reg);
@@ -152,7 +155,7 @@ function matchesServerKey(sub, serverKey) {
  * explicit repair action, since a browser can be shared between signed-in users.
  */
 async function resyncSubscription() {
-  if (isWallModeEnabled()) return false;
+  if (isSharedDisplay()) return false;
   if (!pushSupported() || Notification.permission !== 'granted') return false;
   return (await pushStatus()).subscribed;
 }
@@ -164,7 +167,7 @@ async function resyncSubscription() {
  * setzt eine bereits erteilte also voraus.
  */
 async function repairPush() {
-  if (isWallModeEnabled()) return false;
+  if (isSharedDisplay()) return false;
   if (!pushSupported() || Notification.permission !== 'granted') return false;
   const generation = invalidateDelivery();
   const reg = await navigator.serviceWorker.ready;

@@ -30,6 +30,8 @@
 
 import crypto from 'node:crypto';
 import * as db from '../db.js';
+import { assertCapability } from '../permissions.js';
+import { assertWorkflowCachedAccess } from '../services/activity-workflows.js';
 
 const HEADER = 'idempotency-key';
 const MAX_KEY_LENGTH = 255;
@@ -86,6 +88,24 @@ function purgeExpired(conn) {
   ).run(`-${TTL_HOURS} hours`);
 }
 
+function assertCachedRotationCreationAccess(conn, req, body) {
+  if (!/^\/(?:tasks|automation\/admin\/(?:activity|workflow)-templates)\/?$/i.test(req.path)) return;
+  const rows = [body?.data];
+  let view = false, configure = false;
+  while (rows.length) {
+    const row = rows.pop();
+    if (!row || typeof row !== 'object') continue;
+    if (Array.isArray(row)) { rows.push(...row); continue; }
+    const bindings = row.rotation_bindings ?? (row.rotation_bindings_json ? JSON.parse(row.rotation_bindings_json) : []);
+    if (Array.isArray(bindings) && bindings.length) { view = true; configure = true; }
+    if (Array.isArray(row.rotations) && row.rotations.length) view = true;
+    if (Array.isArray(row.subtasks)) rows.push(...row.subtasks);
+    if (Array.isArray(row.tasks)) rows.push(...row.tasks);
+  }
+  if (view) assertCapability(conn, req, 'rotations.view');
+  if (configure) assertCapability(conn, req, 'rotations.configure');
+}
+
 /**
  * Idempotenz-Middleware. Muss NACH requireAuth laufen (`req.authUserId`).
  */
@@ -93,6 +113,14 @@ function idempotencyMiddleware(req, res, next) {
   // Manual point corrections have permanent, transaction-bound provenance and
   // must recheck administrator access on every retry, including after demotion.
   if (/^\/rewards\/(?:adjustments|bonus)\/?$/i.test(req.path)) return next();
+  // Rotation lifecycle operations have revision/occurrence-bound idempotency.
+  // Previews are pure reads. Both must reach their current capability guards.
+  if (/^\/automation\/rotation-(?:tracks|occurrences)\//i.test(req.path)
+    || /^\/automation\/rotation-groups\/[^/]+\/preview\/?$/i.test(req.path)
+    || /^\/automation\/quick-add\/[^/]+\/preview\/?$/i.test(req.path)
+    || /^\/automation\/activity-templates\/[^/]+\/resolve\/?$/i.test(req.path)
+    || /^\/automation\/workflow-instances\/[^/]+\/rotations\//i.test(req.path)
+    || /^\/tasks\/[^/]+\/rotation\/reconcile\/?$/i.test(req.path)) return next();
   const key = req.get(HEADER);
   // `undefined` heisst „kein Header" - ein LEERER Header dagegen ist ein
   // Aufrufer, der Retry-Sicherheit zu haben glaubt und keine bekaeme. Der wird
@@ -115,6 +143,7 @@ function idempotencyMiddleware(req, res, next) {
   let recordId = null;
 
   try {
+    if (/^\/automation\/rotation-groups\/?$/i.test(req.path)) assertCapability(conn, req, 'rotations.manage');
     purgeExpired(conn);
 
     // Der Platzhalter entsteht VOR der Route: ein gleichzeitiger zweiter
@@ -164,13 +193,18 @@ function idempotencyMiddleware(req, res, next) {
           .run(existing.id);
         recordId = existing.id;
       } else {
+        const body = JSON.parse(existing.response_body);
+        assertCachedRotationCreationAccess(conn, req, body);
+        const workflow = /^\/automation\/quick-add\/(\d+)\/create\/?$/i.exec(req.path);
+        if (workflow) assertWorkflowCachedAccess(conn, req, Number(workflow[1]), req.body?.request_key, body?.data);
         res.setHeader('Idempotent-Replayed', 'true');
-        return res.status(existing.status).json(JSON.parse(existing.response_body));
+        return res.status(existing.status).json(body);
       }
     } else {
       recordId = insert.lastInsertRowid;
     }
-  } catch {
+  } catch (error) {
+    if (error.status === 403) return res.status(403).json({ error: error.message, code: 403 });
     // Ein Gedächtnisproblem darf die eigentliche Anfrage nicht abweisen: ohne
     // Idempotenz ist sie das, was sie vor #822 war, mit Fehler ist sie weg.
     return next();

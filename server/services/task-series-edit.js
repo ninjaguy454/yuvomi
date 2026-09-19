@@ -11,10 +11,12 @@ import { applyTaskActivityBinding, clearTaskActivityBinding } from './task-activ
 import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-supervision.js';
 import { assertTaskAssignmentAvailability } from './assignment-responsibilities.js';
 import { setTaskLocation } from './task-locations.js';
+import { bindTaskRotations, assertRotationBindingsChange } from './task-rotation.js';
+import { applyTaskRotationRendering } from './task-rotation-rendering.js';
 
 const ROOT_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy'];
+  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy'];
 const ACTION_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'points','visibility','locked','expiration_policy','is_optional','sort_order'];
 const actorId = actor => typeof actor === 'number' ? actor : actor.authUserId || actor.session?.userId;
@@ -40,7 +42,13 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
         assignment_mode:'fixed',rotation_group:null,rotation_slot:0,countdown:0,due_date_offset_days:null},
       assigned_user_ids:[],tags:[]};
     Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional});
+    if(step.assignedUsers!==undefined)row.assigned_user_ids=[...step.assignedUsers];
     row.skill_ids=[...step.skillIds];return row;
+  });
+  if(after.rotation_rendering)after.rotation_rendering.targets=after.rotation_rendering.targets.filter(target=>{
+    if(target.action_key==='root')return before.task[target.field]===after.task[target.field];
+    const prior=before.subtasks.find(child=>child.action_key===target.action_key),next=after.subtasks.find(child=>child.action_key===target.action_key);
+    return prior&&next&&prior.task[target.field]===next.task[target.field];
   });
   return after;
 }
@@ -59,6 +67,7 @@ export function assertSeriesEdit(d,actor,task,state,expectedRevision) {
  * exception also changes the durable policy, even if the submitted field is
  * unchanged on the selected occurrence. Check both boundaries explicitly. */
 export function assertSeriesDefinitionMutation(d,actor,task,before,after) {
+  assertRotationBindingsChange(d, actor, before.task.rotation_bindings_json, after.task.rotation_bindings_json);
   const previous=normalizeSeriesDefinition(before),next=normalizeSeriesDefinition(after);
   const rootCapabilities=taskCapabilities(d,actor,task);
   const same=(left,right)=>JSON.stringify(left??null)===JSON.stringify(right??null);
@@ -92,7 +101,7 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after) {
   const bindingPolicy=binding=>{
     if(!binding)return null;
     const policy=clone(binding);
-    if(policy.snapshot){delete policy.snapshot.required_skill_ids;delete policy.snapshot.checklist;}
+    if(policy.snapshot){delete policy.snapshot.required_skill_ids;delete policy.snapshot.checklist;delete policy.snapshot.rotation_rendering;}
     return policy;
   };
   if(!same(bindingPolicy(previous.binding),bindingPolicy(next.binding))) {
@@ -145,7 +154,7 @@ function treeState(d,id) {
     SELECT t.id,t.revision,t.status,t.archived_at FROM tasks t JOIN tree ON tree.id=t.id ORDER BY t.id`).all(id);
 }
 
-function preservationReason(d,occurrence,task) {
+export function seriesOccurrencePreservationReason(d,occurrence,task) {
   if(task.archived_at||['done','expired'].includes(task.status))return 'historical';
   if(task.status!=='open')return 'activity';
   if(occurrence.exception_reason)return 'manual_edit';
@@ -168,7 +177,7 @@ function shiftDate(date,oldAnchor,newAnchor) {
 }
 
 function reconcileOccurrence(d,task,definition,window,actor) {
-  const data=definition.data,fields={...data.task,start_date:window.start_date,due_date:window.due_date};
+  const data=definition.data,fields={...data.task,rotation_bindings_json:data.task.rotation_bindings_json||'[]',start_date:window.start_date,due_date:window.due_date};
   const roster=data.rotation_user_ids;
   const assigned=!data.binding&&fields.assignment_mode==='round_robin'&&roster.length
     ? [roster[((task.rotation_index||0)+(fields.rotation_group?fields.rotation_slot||0:0))%roster.length]] : data.assigned_user_ids;
@@ -217,14 +226,18 @@ function reconcileOccurrence(d,task,definition,window,actor) {
     response_deadline=CASE WHEN response_deadline=due_at THEN ? ELSE response_deadline END,
     updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE task_id=? AND status IN ('pending','accepted')`).run(dueAt,dueAt,task.id);
   setTaskLocation(d,task.id,normalizedSeriesLocation(data.location),actorId(actor));
+  const rotations=bindTaskRotations(d,task.id,{actorId:actorId(actor),scope:'future'});
+  if(rotations.preserved?.length)throw new TaskStateError('This future occurrence already has a resolved rotation snapshot.',{reason:'rotation_snapshot'});
+  applyTaskRotationRendering(d,task.id,data.rotation_rendering);
   reconcileTaskSupervision(d,task.id,{actorId:actorId(actor)});
   const resultingAssignee=read(d,task.id).assigned_to;if(resultingAssignee)assertTaskSupervisionAssignee(d,task.id,resultingAssignee);
+  return rotations;
 }
 
 /** Caller owns an IMMEDIATE transaction covering the selected Task, series CAS
  * and all these writes. A future exception rolls back only its own savepoint. */
 export function reconcileSeriesFuture(d,state,{actor,definition=state.definition}={}) {
-  const updated=[],preserved=[];
+  const updated=[],preserved=[],pending_rotations=[];
   let previous={...state.occurrence};
   const selected=read(d,state.occurrence.task_id);
   if(!selected.archived_at&&!['done','expired'].includes(selected.status))
@@ -234,7 +247,7 @@ export function reconcileSeriesFuture(d,state,{actor,definition=state.definition
   for(const occurrence of future) {
     const task=read(d,occurrence.task_id);
     const preserve=reason=>{preserved.push({...(taskCapabilities(d,actor,task).view?{task_id:task.id}:{}),reason});previous=occurrence;};
-    const reason=preservationReason(d,occurrence,task);
+    const reason=seriesOccurrencePreservationReason(d,occurrence,task);
     if(reason){preserve(reason);continue;}
     // Existing completion-relative dates were already materialized from an
     // actual completion. Reuse that occurrence start, never invent a new one.
@@ -249,17 +262,19 @@ export function reconcileSeriesFuture(d,state,{actor,definition=state.definition
       preserve('schedule_conflict');continue;
     }
     try {
-      d.transaction(()=>{
-        reconcileOccurrence(d,task,definition,window,actor);
+      const rotations=d.transaction(()=>{
         d.prepare('UPDATE task_recurrence_occurrences SET occurrence_key=? WHERE task_id=?').run(key,task.id);
+        const rotations=reconcileOccurrence(d,task,definition,window,actor);
         recordOccurrenceDefinition(d,task.id,{definitionId:definition.id,startDate:window.start_date,dueDate:window.due_date,baseline:true});
+        return rotations;
       })();
       updated.push(task.id);
+      if(rotations.pending?.length)pending_rotations.push({task_id:task.id,purposes:rotations.pending});
       previous={...occurrence,planned_start_date:window.start_date,planned_due_date:window.due_date,definition_id:definition.id};
     } catch(error) {
       if(![400,403,409].includes(error.status)&&!['TaskSkillError','TaskSupervisionError','TaskActivityBindingError','TaskAssignmentAvailabilityError'].includes(error.constructor.name))throw error;
-      preserve('eligibility_or_permission');
+      preserve(error.details?.reason==='rotation_snapshot'?'rotation_snapshot':'eligibility_or_permission');
     }
   }
-  return {scope:'future',series_id:state.series_id,revision:state.revision,updated,preserved};
+  return {scope:'future',series_id:state.series_id,revision:state.revision,updated,preserved,pending_rotations};
 }

@@ -6,6 +6,7 @@ import {
 import { householdMembers } from './activity-eligibility.js';
 import { placeWithInheritedAddress } from './presence.js';
 import { householdTimeZone, todayKey, utcToWall } from '../utils/timezone.js';
+import { getRotationGroup, getRotationOccurrence } from './rotation.js';
 
 export const SYSTEM_CONTEXT_VARIABLES = Object.freeze([
   { id: 'context.current_date', key: 'context.current_date', label: 'Current date', type: 'date' },
@@ -55,7 +56,7 @@ export function expandVariableDefinitions(variables, catalog = []) {
   return [...included.values()];
 }
 
-export function hydrateWorkflowDefinitions(d, workflowId, schema, catalog = householdVariableRows(d)) {
+export function hydrateWorkflowDefinitions(d, workflowId, schema, catalog = householdVariableRows(d), contextDefinitions = []) {
   const stored = d.prepare('SELECT id, variable_key, scope, reusable_definition_id FROM workflow_variable_definitions WHERE workflow_template_id = ? ORDER BY id').all(workflowId);
   const byKey = new Map(stored.map(row => [row.variable_key, row]));
   const byId = new Map(catalog.map(row => [Number(row.id), row]));
@@ -73,7 +74,7 @@ export function hydrateWorkflowDefinitions(d, workflowId, schema, catalog = hous
         { expression: normalizeExpression(question.expression) }),
     };
   });
-  return expandVariableDefinitions(variables, catalog);
+  return expandVariableDefinitions(variables, [...catalog, ...contextDefinitions]);
 }
 
 export function templateReferences(...values) {
@@ -105,6 +106,21 @@ function safePlace(d, value, key) {
 
 export function normalizeVariableValue(d, variable, value) {
   const key = variableKey(variable);
+  if (['rotation_group', 'rotation_occurrence'].includes(variable.type)) {
+    const id = ['string', 'number'].includes(typeof value) ? Number(value) : NaN;
+    const row = Number.isSafeInteger(id) && id > 0 ? (variable.type === 'rotation_group' ? getRotationGroup(d, id) : getRotationOccurrence(d, id)) : null;
+    if (!row || (variable.type === 'rotation_group' && !row.active)) throw new Error(`Variable ${key} must select a valid ${variable.type === 'rotation_group' ? 'Rotation Group' : 'Rotation Occurrence'}.`);
+    // Snapshot objects are never accepted from editable input. Historic members
+    // intentionally retain their recorded identity/name if their profile changes.
+    if (variable.type === 'rotation_group') return { id: Number(row.id), name: row.name, description: row.description ?? null };
+    return rotationOccurrenceVariable(row);
+  }
+  if (variable.type === 'household_member_list') {
+    if (!Array.isArray(value) || value.length > 100) throw new Error(`Variable ${key} must select at most 100 household members.`);
+    const members = value.map(id => safeMember(d, id, key));
+    if (new Set(members.map(member => member.id)).size !== members.length) throw new Error(`Variable ${key} cannot repeat a household member.`);
+    return members;
+  }
   if (variable.type === 'household_member') return safeMember(d, value, key);
   if (variable.type === 'location') return safePlace(d, value, key);
   if (variable.type === 'boolean') {
@@ -128,6 +144,19 @@ export function normalizeVariableValue(d, variable, value) {
   return value;
 }
 
+/** Trusted runtime bridge; expressions read this snapshot and cannot advance it. */
+export function rotationOccurrenceVariable(row, subjectUserId = null) {
+  if (row?.id == null) throw new Error('This Rotation occurrence has not been resolved yet.');
+  const member = value => value ? Object.fromEntries(MEMBER_FIELDS.map(field => [field, field === 'id' ? Number(value.id) : value[field] ?? null])) : null;
+  const position = (row.order || []).findIndex(value => Number(value.id) === Number(subjectUserId));
+  return { id: Number(row.id), track_id: Number(row.track_id), order: (row.order || []).map(member), position: position < 0 ? null : position + 1,
+    selected_member: member(row.selected_member), status: row.status, strategy: row.strategy };
+}
+
+export function persistedVariableValue(value) {
+  return Array.isArray(value) ? value.map(member => member.id) : value && typeof value === 'object' ? value.id : value;
+}
+
 export function variableInputSchema(definitions, keys = definitions.map(variableKey)) {
   const byKey = new Map(definitions.map(row => [variableKey(row), row]));
   const wanted = new Set();
@@ -141,7 +170,7 @@ export function variableInputSchema(definitions, keys = definitions.map(variable
   return definitions.filter(row => wanted.has(variableKey(row)) && !variableKey(row).startsWith('context.') && !row.expression && row.kind !== 'value');
 }
 
-export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserId = null, contextValues = {}, now = new Date() } = {}) {
+export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserId = null, contextValues = {}, rotationOccurrences = {}, now = new Date() } = {}) {
   if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) throw new Error('Variable inputs must be an object.');
   const definitions = expressionScope(variables);
   validateVariableDefinitions(definitions);
@@ -171,6 +200,10 @@ export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserI
     if(row && row.kind==='value' && !row.expression && row.default_value==null && !Object.hasOwn(values,key))
       values[key]=normalizeVariableValue(d,row,value);
   }
+  for (const [key, occurrence] of Object.entries(rotationOccurrences)) {
+    const row = byKey.get(key);
+    if (row?.type === 'rotation_occurrence' && row.kind === 'value' && !row.expression && row.default_value == null) values[key] = rotationOccurrenceVariable(occurrence, subjectUserId);
+  }
   for (const row of definitions) {
     if (!needed.has(row.id) || row.expression || Object.hasOwn(values, row.id) || row.default_value == null) continue;
     values[row.id] = normalizeVariableValue(d, row, row.default_value);
@@ -182,7 +215,7 @@ export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserI
   if (subjectUserId != null) values['context.household_member'] = safeMember(d, subjectUserId, 'context.household_member');
   const result = resolveExpressionVariables(definitions, values, { keys: wanted });
   const labels = variableLabels(result.values, result.types);
-  const ids = Object.fromEntries(Object.entries(result.values).map(([key, value]) => [key, value && typeof value === 'object' ? value.id : value]));
+  const ids = Object.fromEntries(Object.entries(result.values).map(([key, value]) => [key, persistedVariableValue(value)]));
   const persisted = Object.fromEntries(Object.entries(ids).filter(([key]) => !key.startsWith('context.')));
   const summary = Object.entries(persisted).map(([key, value]) => ({ key, label: byKey.get(key)?.label ?? key,
     type: result.types[key], value, display_value: labels[key] }));
@@ -196,6 +229,24 @@ export function definitionsForTemplates(d, templates, catalog = householdVariabl
   return { definitions: expandVariableDefinitions(selected, catalog), keys };
 }
 
+/** Consumer-owned text templates may be rendered from an already resolved
+ * occurrence. This never resolves/advances rotation and returns definitions
+ * suitable for copying into the consumer's existing durable snapshot. */
+export function renderRotationVariableTemplates(d, { templates = [], bindings = [], rotations = [], inputs = {}, subjectUserId = null, definitions = null } = {}) {
+  const contextDefinitions = bindings.map(binding => ({ id: binding.purpose_key, label: binding.label || binding.purpose_key,
+    type: 'rotation_occurrence', kind: 'value', default_value: null, rotation_context: true }));
+  const purposeKeys = new Set(contextDefinitions.map(row => row.id));
+  const catalog = [...(definitions ?? householdVariableRows(d)).filter(row => !purposeKeys.has(variableKey(row))), ...contextDefinitions];
+  const wanted = definitionsForTemplates(d, templates, catalog);
+  const known = new Set(wanted.definitions.map(variableKey));
+  const supplied = Object.fromEntries(Object.entries(inputs).filter(([key]) => known.has(key)));
+  const rotationOccurrences = Object.fromEntries(rotations.filter(row => row.occurrence?.id != null).map(row => [row.purpose_key, row.occurrence]));
+  const resolved = resolveVariables(d, wanted.definitions, supplied, { keys: wanted.keys, subjectUserId, rotationOccurrences });
+  return { values: templates.map(value => substituteVariableTemplate(value, resolved.labels)),
+    usesRotation: wanted.definitions.some(row => purposeKeys.has(variableKey(row))),
+    definitions: wanted.definitions.filter(row => !row.rotation_context), inputs: resolved.persisted, labels: resolved.labels };
+}
+
 export function variableLabels(values, types) {
   const labels = {};
   for (const [key, value] of Object.entries(values)) {
@@ -203,6 +254,15 @@ export function variableLabels(values, types) {
     if (type === 'household_member' || type === 'location') {
       labels[key] = value?.[type === 'household_member' ? 'display_name' : 'name'] ?? '';
       for (const field of type === 'household_member' ? MEMBER_FIELDS : PLACE_FIELDS) labels[`${key}.${field}`] = value?.[field] == null ? '' : String(value[field]);
+    } else if (type === 'household_member_list') labels[key] = (value || []).map(member => member.display_name || '').join(' → ');
+    else if (type === 'rotation_group') {
+      labels[key] = value?.name || '';
+      for (const field of ['id', 'name', 'description']) labels[`${key}.${field}`] = String(value?.[field] ?? '');
+    } else if (type === 'rotation_occurrence') {
+      labels[key] = (value?.order || []).map(member => member.display_name || '').join(' → ');
+      labels[`${key}.order`] = labels[key];
+      labels[`${key}.selected_member`] = value?.selected_member?.display_name || '';
+      for (const field of ['id', 'track_id', 'position', 'status', 'strategy']) labels[`${key}.${field}`] = String(value?.[field] ?? '');
     } else labels[key] = type === 'boolean' ? value ? 'Yes' : 'No' : String(value ?? '');
   }
   return labels;

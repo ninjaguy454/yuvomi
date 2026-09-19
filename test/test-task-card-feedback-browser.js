@@ -17,10 +17,12 @@ const { hashPassword } = await import('../server/utils/password.js');
 const { todayKey } = await import('../server/utils/timezone.js');
 const { reconcileTaskSupervision } = await import('../server/services/task-supervision.js');
 const { changeTaskStatus } = await import('../server/services/task-lifecycle.js');
+const { saveRotationGroup } = await import('../server/services/rotation.js');
+const { bindTaskRotations } = await import('../server/services/task-rotation.js');
 // The real lifecycle intentionally requires the Tasks adapter for recurrence.
 await import('../server/routes/tasks.js');
 const db = get();
-let server, browser, otherBrowser, origin, client = 30;
+let server, browser, otherBrowser, origin, client = 30, serverOutput = '';
 const password = 'Isolated-Card-Browser-Only-2026!';
 const createUser = (name, role, family) => Number(db.prepare("INSERT INTO users(username,display_name,first_name,password_hash,role,family_role,onboarding_version) VALUES(?,?,?,'test',?,?,1)").run(name, name, name, role, family).lastInsertRowid);
 const admin = createUser('QA card parent', 'admin', 'parent');
@@ -36,13 +38,12 @@ test.before(async () => {
   server = fork(new URL('./helpers/task-card-full-app-server.mjs', import.meta.url), [], {
     env: { ...process.env, PORT: '0', TASK_CARD_BROWSER_SERVER_CHILD: '1' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
-  let output = '';
-  server.stdout.on('data', data => { output = (output + data).slice(-6000); });
-  server.stderr.on('data', data => { output = (output + data).slice(-6000); });
+  server.stdout.on('data', data => { serverOutput = (serverOutput + data).slice(-6000); });
+  server.stderr.on('data', data => { serverOutput = (serverOutput + data).slice(-6000); });
   origin = await new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error(`Full app did not start: ${output}`)), 60000);
+    const timeout = setTimeout(() => reject(new Error(`Full app did not start: ${serverOutput}`)), 60000);
     server.once('message', message => { clearTimeout(timeout); resolve(message.origin); });
-    server.once('exit', code => { clearTimeout(timeout); reject(new Error(`Full app exited ${code}: ${output}`)); });
+    server.once('exit', code => { clearTimeout(timeout); reject(new Error(`Full app exited ${code}: ${serverOutput}`)); });
   });
   browser = await launch();
 });
@@ -55,12 +56,18 @@ test.after(async () => {
   try { rmdirSync(folder); } catch {}
 });
 
-function fixture({ recurring = false, completed = 0, count = 10 } = {}) {
+function fixture({ recurring = false, completed = 0, count = 10, rotation = false } = {}) {
   const day = todayKey(db);
   const root = Number(db.prepare("INSERT INTO tasks(title,description,created_by,assigned_to,points,start_date,start_time,due_date,due_time,is_recurring,recurrence_rule,expiration_policy) VALUES('QA morning card','Preserve this expanded description.',?,?,2,?,'00:00',?,'23:59',?,?,'expire_incomplete')").run(admin, learner, day, day, Number(recurring), recurring ? 'FREQ=DAILY' : null).lastInsertRowid);
   db.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(root, learner);
   const children = Array.from({ length: count }, (_, index) => Number(db.prepare("INSERT INTO tasks(title,created_by,parent_task_id,start_date,start_time,due_date,due_time,is_optional) VALUES(?,?,?,?,'00:00',?,'23:59',?)").run(`Morning step ${index + 1}`, admin, root, day, day, Number(index === count - 1)).lastInsertRowid));
   reconcileTaskSupervision(db, root, { notify: false });
+  if(rotation) {
+    const group=saveRotationGroup(db,{name:`Card Group ${root}`,member_ids:[learner,admin]},{actorId:admin});
+    const bindings=[{purpose_key:'order',label:'Shared order',group_id:group.id,strategy:'rotating_order',advance_policy:'on_completed'}];
+    db.prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(bindings),root);
+    bindTaskRotations(db,root,{actorId:admin});
+  }
   for (const id of children.slice(0, completed)) changeTaskStatus(db, id, 'done', { actorId: learner, requireRevision: false });
   return { root, children };
 }
@@ -80,11 +87,17 @@ async function open(f, { mobile = false, secondary = false, mode = 'kanban' } = 
   }, { password });
   assert.equal(login, 200);
   await page.evaluate(mode => { localStorage.setItem('yuvomi-tasks-view', mode); }, mode);
-  await page.goto(`${origin}/tasks?view=${mode}`, { waitUntil: 'domcontentloaded' });
+  const documentResponse=await page.goto(`${origin}/tasks?view=${mode}`, { waitUntil: 'domcontentloaded' });
+  assert.equal(documentResponse.status(),200,`Task document failed to load: ${serverOutput}`);
   // A fresh browser installs its first worker; the real router applies that
   // update with an 8-second reload. Exercise the settled, already open app.
   await new Promise(resolve => setTimeout(resolve, 10000));
-  await page.waitForSelector(`article[data-task-id="${f.root}"]`, { timeout: 30000 });
+  try { await page.waitForSelector(`article[data-task-id="${f.root}"]`, { timeout: 30000 }); }
+  catch(error) {
+    console.error('Full-app Task load diagnostic:', await page.evaluate(async()=>({url:location.href,
+      text:document.body.innerText.slice(0,2000),tasks:await fetch('/api/v1/tasks').then(async response=>({status:response.status,body:(await response.text()).slice(0,1500)}))})));
+    throw error;
+  }
   const toggle = `article[data-task-id="${f.root}"] [data-action="toggle-subtasks"]`;
   if (await page.$eval(toggle, element => element.getAttribute('aria-expanded') !== 'true')) await page.locator(toggle).click();
   await page.waitForSelector(selector(f.children[0]), { visible: true });
@@ -119,7 +132,7 @@ async function waitSaved(page, id, done = true) {
 }
 
 test('full app card paints two required intents before HTTP, deduplicates and preserves expansion/focus', async () => {
-  const f = fixture(), { page, context } = await open(f);
+  const f = fixture({rotation:true}), { page, context } = await open(f);
   const requests = [];
   page.on('request', request => requests.push(`${request.method()} ${new URL(request.url()).pathname}`));
   // Page-level DevTools response events omit worker-handled Tasks reads. Observe
@@ -242,7 +255,7 @@ test('full app second independent client converges for card completion and reope
 });
 
 test('full app mobile swipe over a checkbox scrolls without mutation; deliberate tap paints before HTTP', async () => {
-  const f = fixture({ count: 18 }), { page, context } = await open(f, { mobile: true });
+  const f = fixture({ count: 18, rotation:true }), { page, context } = await open(f, { mobile: true });
   try {
     await page.evaluate(() => {
       window.mobileCardEvents = [];

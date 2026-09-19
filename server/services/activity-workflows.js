@@ -9,6 +9,10 @@ import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-
  */
 
 import { todayKey } from '../utils/timezone.js';
+import { createHash } from 'node:crypto';
+import { assertCapability } from '../permissions.js';
+import { configureRotationTrack, findRotationTrack, previewRotation, resolveRotation } from './rotation.js';
+import { bindTaskRotations, taskRotationContexts, parseRotationBindings, settleTaskRotations } from './task-rotation.js';
 import { addCalendarDays, resolveActivitySchedule } from './activity-schedule.js';
 import { placeWithInheritedAddress, activityPresenceWindow } from './presence.js';
 import {
@@ -23,7 +27,7 @@ import { setTags } from '../utils/task-tags.js';
 import { previewTaskActivityBinding } from './task-activity-bindings.js';
 import { taskOptionalContext } from './task-optional.js';
 import {
-  hydrateWorkflowDefinitions, resolveVariables, substituteVariableTemplate,
+  hydrateWorkflowDefinitions, resolveVariables, substituteVariableTemplate, householdVariableRows, renderRotationVariableTemplates,
   templateReferences, expressionScope, expressionDependencies, definitionsForTemplates, variableInputSchema,
 } from './variable-resolution.js';
 
@@ -33,7 +37,8 @@ function parseJson(raw, fallback) {
 }
 
 function workflowInputSchema(d, workflowTemplateId, rawSchema) {
-  return hydrateWorkflowDefinitions(d, workflowTemplateId, parseJson(rawSchema, []));
+  const row = d.prepare('SELECT * FROM workflow_templates WHERE id=?').get(workflowTemplateId);
+  return hydrateWorkflowDefinitions(d, workflowTemplateId, parseJson(rawSchema, []), undefined, rotationBindingVariables(parseRotationBindings(row?.rotation_bindings_json))).filter(row => !row.rotation_context);
 }
 
 export function getActivityTemplate(d, id) {
@@ -42,6 +47,7 @@ export function getActivityTemplate(d, id) {
   row.skills = loadSkillRequirements(d, row.id);
   row.checklist = loadActivityChecklist(d, row.id);
   row.tags = parseJson(row.tags_json, []);
+  row.rotation_bindings = parseRotationBindings(row.rotation_bindings_json);
   return row;
 }
 
@@ -56,12 +62,14 @@ export function listActivityTemplates(d, { activeOnly = false } = {}) {
     skills: loadSkillRequirements(d, row.id),
     checklist: loadActivityChecklist(d, row.id),
     tags: parseJson(row.tags_json, []),
+    rotation_bindings: parseRotationBindings(row.rotation_bindings_json),
   }));
 }
 
 export function getWorkflowTemplate(d, id) {
   const workflow = d.prepare('SELECT * FROM workflow_templates WHERE id = ?').get(id);
   if (!workflow) return null;
+  workflow.rotation_bindings = parseRotationBindings(workflow.rotation_bindings_json);
   workflow.input_schema = workflowInputSchema(d, workflow.id, workflow.input_schema_json);
   delete workflow.input_schema_json;
 
@@ -103,6 +111,7 @@ export function listWorkflowTemplates(d, { quickAddOnly = false, activeOnly = fa
                ORDER BY name COLLATE NOCASE, id`;
   return d.prepare(sql).all().map((row) => ({
     ...row,
+    rotation_bindings: parseRotationBindings(row.rotation_bindings_json),
     input_schema: workflowInputSchema(d, row.id, row.input_schema_json),
     input_schema_json: undefined,
   }));
@@ -112,9 +121,66 @@ function workflowVariableId(question) {
   return question?.id ?? question?.key ?? null;
 }
 
-function resolveWorkflowVariables(d, workflow, inputs, subjectUserId) {
+export function rotationBindingVariables(bindings = []) {
+  return bindings.map(binding => ({ id: binding.purpose_key, label: binding.label || binding.purpose_key,
+    type: 'rotation_occurrence', kind: 'value', default_value: null, rotation_context: true }));
+}
+
+export function assertRotationVariableAccess(d, actor, definitions = []) {
+  if (definitions.some(row => row.type === 'rotation_group')) assertCapability(d, actor, 'rotations.view');
+  if (definitions.some(row => row.type === 'rotation_occurrence' && !row.rotation_context)) assertCapability(d, actor, 'rotations.history');
+}
+
+/** A Workflow also exposes the Rotation purposes owned by its Activity steps. */
+export function assertWorkflowRotationAccess(d, actor, workflow) {
+  assertRotationVariableAccess(d, actor, workflow.input_schema);
+  let hasRotations = !!workflow.rotation_bindings.length;
+  const catalog = [...householdVariableRows(d), ...workflow.input_schema, ...rotationBindingVariables(workflow.rotation_bindings)];
+  for (const step of workflow.steps) {
+    const activity = getActivityTemplate(d, step.activity_template_id);
+    if (!activity) continue;
+    hasRotations ||= !!activity.rotation_bindings.length;
+    assertRotationVariableAccess(d, actor, activityVariableSchema(d, activity, catalog).definitions);
+  }
+  if (hasRotations) assertCapability(d, actor, 'rotations.view');
+  return hasRotations;
+}
+
+function workflowResultRotationCapabilities(d, result) {
+  // The source template may have changed since this request was saved. Its
+  // generated Tasks retain the authoritative ownership and copied purposes.
+  const rows = d.prepare(`SELECT t.rotation_bindings_json,
+      EXISTS(SELECT 1 FROM task_rotation_occurrences r WHERE r.task_id=t.id) AS has_rotation_history
+    FROM tasks t WHERE t.id=? OR t.id IN (SELECT task_id FROM workflow_instance_tasks WHERE workflow_instance_id=?)`)
+    .all(result.parent_task_id, result.id);
+  const purposes = new Set(rows.flatMap(row => parseRotationBindings(row.rotation_bindings_json).map(binding => binding.purpose_key)));
+  const capabilities = new Set();
+  if (result.rotations?.length || purposes.size || rows.some(row => row.has_rotation_history)) capabilities.add('rotations.view');
+  for (const row of result.resolved_variables || []) {
+    if (row.type === 'rotation_group') capabilities.add('rotations.view');
+    if (row.type === 'rotation_occurrence' && !purposes.has(row.key)) capabilities.add('rotations.history');
+  }
+  return [...capabilities];
+}
+
+/** Generic HTTP retries must pass the same current capability boundary as the
+ * durable Workflow retry before returning a previously saved response. */
+export function assertWorkflowCachedAccess(d, actor, workflowId, requestKey, result) {
+  for (const capability of ['workflows.view', 'workflows.run', 'tasks.create']) assertCapability(d, actor, capability);
+  const workflow = getWorkflowTemplate(d, workflowId);
+  if (workflow && assertWorkflowRotationAccess(d, actor, workflow)) assertCapability(d, actor, 'rotations.configure');
+  const needed = new Set(workflowResultRotationCapabilities(d, result));
+  if (requestKey) {
+    const saved = d.prepare('SELECT response_json FROM rotation_workflow_requests WHERE workflow_template_id=? AND actor_user_id=? AND request_key=?')
+      .get(workflowId, typeof actor === 'object' ? actor.authUserId || actor.id || actor.session?.userId : actor, requestKey);
+    for (const capability of JSON.parse(saved?.response_json || '{}').rotation_capabilities || []) needed.add(capability);
+  }
+  for (const capability of needed) assertCapability(d, actor, capability);
+}
+
+function resolveWorkflowVariables(d, workflow, inputs, subjectUserId, rotationOccurrences = {}) {
   if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) throw new Error('Workflow inputs must be an object.');
-  const definitions = workflow.input_schema ?? [];
+  const definitions = [...(workflow.input_schema ?? []), ...rotationBindingVariables(workflow.rotation_bindings)];
   const known = new Set(definitions.map(workflowVariableId));
   for (const key of Object.keys(inputs ?? {})) if (!known.has(key)) throw new Error(`Unknown workflow input: ${key}.`);
   const scope = expressionScope(definitions);
@@ -122,32 +188,42 @@ function resolveWorkflowVariables(d, workflow, inputs, subjectUserId) {
   const templates = [workflow.name, workflow.description];
   for (const step of workflow.steps) {
     const activity = getActivityTemplate(d, step.activity_template_id);
-    templates.push(step.title_override ?? activity?.title_template, step.description_override ?? activity?.description,
-      activity?.supervision_title_template, ...(activity?.checklist ?? []).map(item => item.title_template));
+    const ownPurposes = new Set((activity?.rotation_bindings || []).map(binding => binding.purpose_key).filter(key => !definitions.some(row => workflowVariableId(row) === key)));
+    // Activity-local purposes are rendered in that step's canonical context.
+    // They are not Workflow-global values and cannot select another step's owner.
+    const stepTemplates = [step.title_override ?? activity?.title_template, step.description_override ?? activity?.description,
+      activity?.supervision_title_template, ...(activity?.checklist ?? []).map(item => item.title_template)];
+    for (const template of stepTemplates) for (const reference of templateReferences(template)) {
+      if (!ownPurposes.has(reference.split('.')[0])) templates.push(`{{${reference}}}`);
+    }
     for (const key of [step.subject_variable_id, step.assignment_variable_id, step.assignment_policy_variable_id,
       step.location_mode === 'workflow' ? step.location_variable_id : activity?.location_mode === 'workflow' ? activity.location_variable_id : null]) {
       if (key) keys.add(key);
     }
   }
   for (const reference of templateReferences(templates)) for (const key of expressionDependencies(reference, scope)) keys.add(key);
-  return resolveVariables(d, definitions, inputs, { keys: [...keys], subjectUserId });
+  return resolveVariables(d, definitions, inputs, { keys: [...keys], subjectUserId, rotationOccurrences });
 }
 
 export function activityVariableSchema(d, activity, catalog) {
   const result = definitionsForTemplates(d, [activity.title_template, activity.description, activity.supervision_title_template,
-    ...(activity.checklist ?? []).map(item => item.title_template)], catalog);
+    ...(activity.checklist ?? []).map(item => item.title_template)], [...(catalog || householdVariableRows(d)), ...rotationBindingVariables(activity.rotation_bindings)]);
   return { ...result, input_schema: variableInputSchema(expressionScope(result.definitions), result.keys) };
 }
 
 /** Returns an ordinary editable Task draft; does not create Tasks or advance rotation. */
 export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUserId = null, includeLabels = false,
-  assignmentOverrideUserId = null, task = null } = {}) {
+  assignmentOverrideUserId = null, task = null, actorId = null } = {}) {
   const activity = getActivityTemplate(d, activityId);
   if (!activity?.active) throw new Error('Activity template not found.');
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (subjectUserId != null && !subject) throw new Error('Choose a household member.');
   if (activity.subject_required && !subject) throw Object.assign(new Error('Choose a household member first.'), { code: 'missing_input' });
   const schema = activityVariableSchema(d, activity);
+  if (actorId != null) {
+    assertRotationVariableAccess(d, actorId, schema.definitions);
+    if (activity.rotation_bindings.length) assertCapability(d, actorId, 'rotations.view');
+  }
   const contextValues={};
   // The existing reusable Assignee value denotes this Activity occurrence's
   // resolved performer only when it has no authored expression or fixed value.
@@ -160,7 +236,9 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
       assignmentOverrideUserId,task:occurrence,dateKey:occurrence.due_date||todayKey(d)}).resolution;
     if(resolvedAssignment.primary)contextValues.assignee=resolvedAssignment.primary.id;
   }
-  const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId, contextValues });
+  const rotationOccurrences = Object.fromEntries((activity.rotation_bindings || []).map(binding => [binding.purpose_key,
+    { ...previewRotation(d, binding, { context: task || {} }), id: 0, track_id: 0, status: 'preview' }]));
+  const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId, contextValues, rotationOccurrences });
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
       expiration_policy: activity.expiration_policy ?? 'keep_overdue',
@@ -168,6 +246,7 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
       start_time: activity.start_time ?? null, due_time: activity.due_time ?? null,
       recurrence_rule: activity.recurrence_rule ?? null, recurrence_from_completion: activity.recurrence_from_completion || 0,
       is_recurring: activity.recurrence_rule ? 1 : 0,
+      rotation_bindings: activity.rotation_bindings,
       checklist: activity.checklist.map(item => ({ ...item, title_template: renderActivityChecklistTitle(item, activity, subject, resolved.labels) })),
       inputs: resolved.persisted, resolved_variables: resolved.summary },
     input_schema: schema.input_schema,
@@ -300,7 +379,12 @@ export function previewWorkflow(d, workflowId, {
   if (!workflow || !workflow.active) throw new Error('Workflow template not found.');
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
-  const resolvedVariables = resolveWorkflowVariables(d, workflow, inputs, subjectUserId);
+  const rotations = Object.fromEntries(workflow.rotation_bindings.map(binding => {
+    const track = findRotationTrack(d, { consumer_type: 'workflow', consumer_id: String(workflow.id), purpose_key: binding.purpose_key });
+    const preview = previewRotation(d, { ...binding, ...(track ? { id: track.id, next_membership_id: track.next_membership_id } : {}) }, { context: { dateKey: startDate } });
+    return [binding.purpose_key, { ...preview, id: 0, track_id: track?.id || 0, strategy: binding.strategy, status: 'preview' }];
+  }));
+  const resolvedVariables = resolveWorkflowVariables(d, workflow, inputs, subjectUserId, rotations);
   const runtimeInputs = resolvedVariables.ids;
   const variableLabels = resolvedVariables.labels;
   const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
@@ -336,12 +420,22 @@ export function previewWorkflow(d, workflowId, {
               task: schedule }),
           },
         });
+        const stepVariables = workflow.rotation_bindings.length ? resolveWorkflowVariables(d, workflow, inputs, activitySubject?.id || resolution.primary?.id || subjectUserId, rotations) : resolvedVariables;
+        const ownBindings = activity.rotation_bindings || [];
+        const previewContexts = [...Object.entries(rotations).map(([purpose_key, occurrence]) => ({purpose_key,occurrence})),
+          ...ownBindings.map(binding => {
+            const track = findRotationTrack(d,{consumer_type:'workflow_step',consumer_id:`${workflow.id}:${step.step_key}`,purpose_key:binding.purpose_key});
+            return {purpose_key:binding.purpose_key,occurrence:{...previewRotation(d,{...binding,...(track?{id:track.id,next_membership_id:track.next_membership_id}:{})},{context:schedule}),id:0,track_id:track?.id||0,status:'preview'}};
+          })];
+        const bindings = [...new Map([...workflow.rotation_bindings,...ownBindings].map(binding=>[binding.purpose_key,binding])).values()];
+        const rotationText = bindings.length ? renderRotationVariableTemplates(d,{templates:[step.title_override ?? activity.title_template,step.description_override ?? activity.description],bindings,
+          rotations:previewContexts,inputs:runtimeInputs,subjectUserId:activitySubject?.id || resolution.primary?.id || subjectUserId,definitions:workflow.input_schema}) : null;
         output.push({
           step_key: step.step_key,
           activity_template_id: activity.id,
           activity_name: activity.name,
-          title: stepTitle(activity, activitySubject, step.title_override, variableLabels),
-          description: stepDescription(activity, activitySubject, step.description_override, variableLabels),
+          title: stepTitle(activity, activitySubject, rotationText?.values[0] ?? step.title_override, stepVariables.labels),
+          description: stepDescription(activity, activitySubject, rotationText?.values[1] ?? step.description_override, stepVariables.labels),
           subject: activitySubject,
           assigned_to: resolution.primary,
           supervisor: resolution.supervisor,
@@ -373,6 +467,7 @@ export function previewWorkflow(d, workflowId, {
     subject,
     inputs: resolvedVariables.persisted,
     resolved_variables: resolvedVariables.summary,
+    rotations,
     steps: output,
   };
 }
@@ -431,18 +526,20 @@ function insertTask(d, {
  * second subtask, not a second assignee, so the learner and supervisor each get
  * an explicit piece of work.
  */
-export function instantiateWorkflow(d, workflowId, {
+function instantiateWorkflowTasks(d, workflowId, {
   subjectUserId = null,
   inputs = {},
   createdBy,
   startDate = todayKey(d),
+  rotationOccurrences = {},
+  rotationOccurrenceKey = null,
 } = {}) {
   const workflow = getWorkflowTemplate(d, workflowId);
   if (!workflow || !workflow.active) throw new Error('Workflow template not found.');
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
   if (!createdBy) throw new Error('A creator is required.');
-  const resolvedVariables = resolveWorkflowVariables(d, workflow, inputs, subjectUserId);
+  const resolvedVariables = resolveWorkflowVariables(d, workflow, inputs, subjectUserId, rotationOccurrences);
   const runtimeInputs = resolvedVariables.ids;
   const variableLabels = resolvedVariables.labels;
   const activeSteps = workflow.steps.filter((step) => conditionMatches(step.condition, runtimeInputs));
@@ -468,6 +565,13 @@ export function instantiateWorkflow(d, workflowId, {
     });
     d.prepare('UPDATE workflow_instances SET parent_task_id = ? WHERE id = ?')
       .run(parentTaskId, instanceId);
+    if (workflow.rotation_bindings.length) {
+      d.prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(workflow.rotation_bindings), parentTaskId);
+      bindTaskRotations(d, parentTaskId, {
+      config: workflow.rotation_bindings, actorId: createdBy,
+      consumer: { consumer_type: 'workflow', consumer_id: String(workflow.id) }, occurrenceKey: rotationOccurrenceKey,
+      });
+    }
 
     const generatedByStep = new Map();
     const generated = [];
@@ -526,6 +630,21 @@ export function instantiateWorkflow(d, workflowId, {
         variableLabels,
         createdBy,
       });
+      if (activity.rotation_bindings?.length) {
+        d.prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(activity.rotation_bindings), primaryTaskId);
+        bindTaskRotations(d, primaryTaskId, { config: activity.rotation_bindings, actorId: createdBy,
+          consumer: { consumer_type: 'workflow_step', consumer_id: `${workflow.id}:${step.step_key}` }, occurrenceKey: rotationOccurrenceKey });
+      }
+      const rotationConfig = [...new Map([...workflow.rotation_bindings, ...(activity.rotation_bindings || [])].map(binding => [binding.purpose_key, binding])).values()];
+      if (rotationConfig.length) {
+        const rendered = renderRotationVariableTemplates(d, { templates: [step.title_override ?? activity.title_template, step.description_override ?? activity.description,
+          ...activity.checklist.map(item=>item.title_template)], bindings: rotationConfig, rotations: taskRotationContexts(d,primaryTaskId), inputs:runtimeInputs,
+          subjectUserId: activitySubject?.id || resolution.primary?.id || subjectUserId, definitions:workflow.input_schema });
+        d.prepare('UPDATE tasks SET title=?,description=? WHERE id=?').run(stepTitle(activity,activitySubject,rendered.values[0],variableLabels),
+          stepDescription(activity,activitySubject,rendered.values[1],variableLabels),primaryTaskId);
+        checklistTaskIds.forEach((taskId,index)=>d.prepare('UPDATE tasks SET title=? WHERE id=?').run(
+          renderActivityChecklistTitle({...activity.checklist[index],title_template:rendered.values[index+2]},activity,activitySubject,variableLabels),taskId));
+      }
       const requireChecklistItem = d.prepare(`
         INSERT OR IGNORE INTO workflow_task_dependencies (task_id, depends_on_task_id)
         VALUES (?, ?)
@@ -620,6 +739,7 @@ export function instantiateWorkflow(d, workflowId, {
       subject,
       parent_task_id: parentTaskId,
       tasks: generated,
+      rotations: taskRotationContexts(d, parentTaskId),
     };
   })();
 }
@@ -634,6 +754,45 @@ function requiredWorkflowDependency(d, taskId) {
   // Preserve the dependency of legacy helper rows without granular mappings.
   return !actions.length || actions.some(action=>action.state!=='not_required' && action.status!=='done'
     && !taskOptionalContext(d,action.action_task_id).is_optional);
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
+  if (value && typeof value === 'object') return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  return JSON.stringify(value);
+}
+
+/** An explicit caller retry identity owns one atomic workflow and its rotations. */
+export function instantiateWorkflow(d, workflowId, options = {}) {
+  const workflow = getWorkflowTemplate(d, workflowId);
+  if (!workflow?.active) throw new Error('Workflow template not found.');
+  const hasRotations = assertWorkflowRotationAccess(d, options.createdBy, workflow);
+  if (!hasRotations && !options.requestKey) return instantiateWorkflowTasks(d, workflowId, options);
+  if (hasRotations) assertCapability(d, options.createdBy, 'rotations.configure');
+  const key = String(options.requestKey || '');
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(key)) throw new Error('A stable request key is required to create this rotating Workflow. Refresh the preview and try again.');
+  const inputHash = createHash('sha256').update(stableJson({ inputs: options.inputs || {}, subject: options.subjectUserId ?? null, start: options.startDate || todayKey(d) })).digest('hex');
+  return d.transaction(() => {
+    const previous = d.prepare('SELECT * FROM rotation_workflow_requests WHERE workflow_template_id=? AND actor_user_id=? AND request_key=?').get(workflowId, options.createdBy, key);
+    if (previous) {
+      if (previous.input_hash !== inputHash) throw Object.assign(new Error('This Workflow request was already used with different answers.'), { status: 409 });
+      const saved = JSON.parse(previous.response_json), result = saved.result ?? saved;
+      for (const capability of new Set([...(saved.rotation_capabilities || []), ...workflowResultRotationCapabilities(d, result)]))
+        assertCapability(d, options.createdBy, capability);
+      return result;
+    }
+    const occurrenceKey = `workflow-request:${options.createdBy}:${key}`;
+    const rotationOccurrences = Object.fromEntries(workflow.rotation_bindings.map(binding => {
+      const identity = { consumer_type: 'workflow', consumer_id: String(workflow.id), purpose_key: binding.purpose_key };
+      const previousTrack = findRotationTrack(d, identity);
+      const track = configureRotationTrack(d, { ...binding, ...identity, expected_revision: previousTrack?.revision }, { actorId: options.createdBy, trusted: true });
+      return [binding.purpose_key, resolveRotation(d, track.id, occurrenceKey, { actorId: options.createdBy, context: { dateKey: options.startDate || todayKey(d) } })];
+    }));
+    const result = instantiateWorkflowTasks(d, workflowId, { ...options, rotationOccurrences, rotationOccurrenceKey: occurrenceKey });
+    d.prepare('INSERT INTO rotation_workflow_requests(workflow_template_id,actor_user_id,request_key,input_hash,workflow_instance_id,response_json) VALUES(?,?,?,?,?,?)')
+      .run(workflowId, options.createdBy, key, inputHash, result.id, JSON.stringify({result, rotation_capabilities:workflowResultRotationCapabilities(d, result)}));
+    return result;
+  })();
 }
 
 export function unresolvedDependencies(d, taskId) {
@@ -670,6 +829,7 @@ export function syncWorkflowInstanceForTask(d, taskId, { syncParent = true } = {
   `).run(status, link.workflow_instance_id);
   if (syncParent && link.parent_task_id) {
     d.prepare('UPDATE tasks SET status = ? WHERE id = ?').run(status, link.parent_task_id);
+    if (status === 'done') settleTaskRotations(d, link.parent_task_id, 'completed');
   }
   return { workflowInstanceId: link.workflow_instance_id, status };
 }

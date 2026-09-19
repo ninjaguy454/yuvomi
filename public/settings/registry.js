@@ -489,7 +489,7 @@ export function readStoredSettingsDestination(user, storage = sessionStorage) {
 
 export function settingsLeafAllowed(leaf, user) {
   if (user?.role === 'admin') return true;
-  if (leaf.id === 'modules-automation') return ['skills.manage', 'activities.view', 'workflows.view'].some(canCapability);
+  if (leaf.id === 'modules-automation') return ['skills.manage', 'activities.view', 'workflows.view', 'rotations.view'].some(canCapability);
   if (leaf.domainId === 'personal' && leaf.id !== 'personal-account' && getPermissions().capabilities['settings.personal'] === 'none') return false;
   return !leaf.adminOnly;
 }

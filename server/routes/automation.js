@@ -28,6 +28,9 @@ import {
   instantiateWorkflow,
   activityVariableSchema,
   resolveActivityTemplate,
+  rotationBindingVariables,
+  assertRotationVariableAccess,
+  assertWorkflowRotationAccess,
 } from '../services/activity-workflows.js';
 import {
   SYSTEM_CONTEXT_VARIABLES, householdVariableRows, normalizeExpression,
@@ -35,6 +38,7 @@ import {
   expressionScope, expandVariableDefinitions, hydrateWorkflowDefinitions,
   resolveVariables, variableInputSchema, validateVariableTemplate,
   normalizeVariableValue,
+  persistedVariableValue,
   renameExpressionReference, renameVariableTemplate, templateReferences,
 } from '../services/variable-resolution.js';
 import { createLogger } from '../logger.js';
@@ -42,6 +46,8 @@ import { normalizeSkillIds } from '../services/task-skills.js';
 import { normalizeTags } from '../utils/task-tags.js';
 import * as v from '../middleware/validate.js';
 import { normalizeActivityDueOffset } from '../../public/utils/activity-schedule.js';
+import { normalizeRotationBindings, assertRotationBindingsChange, taskRotationContexts } from '../services/task-rotation.js';
+import { listRotationGroups, finalizeRotation } from '../services/rotation.js';
 import {
   claimTask,
   obligationInbox,
@@ -58,6 +64,7 @@ const VALID_AGE_PROMOTION = new Set([PROFICIENCY.SUPERVISED, PROFICIENCY.NORMAL]
 const VALID_ASSIGNMENT = new Set(ASSIGNMENT_STRATEGIES);
 const VALID_WORKFLOW_INPUT_TYPES = new Set([
   'household_member', 'location', 'boolean', 'choice', 'select', 'text', 'number', 'date', 'time',
+  'rotation_group', 'rotation_occurrence', 'household_member_list',
 ]);
 const VALID_LOCATION_MODES = new Set(['none', 'fixed', 'workflow']);
 const VALID_STEP_LOCATION_MODES = new Set(['inherit', 'none', 'fixed', 'workflow']);
@@ -85,6 +92,12 @@ function bool(value, fallback = false) {
 
 function currentUserId(req) {
   return Number(req.authUserId || req.session?.userId);
+}
+
+function rotationPickerData(d, actor) {
+  return { rotation_groups: hasCapability(d, actor, 'rotations.view') ? listRotationGroups(d) : [],
+    rotation_occurrences: hasCapability(d, actor, 'rotations.history') ? d.prepare(`SELECT o.id,o.occurrence_key,t.label AS purpose_label
+      FROM rotation_occurrences o JOIN rotation_tracks t ON t.id=o.track_id ORDER BY o.id DESC LIMIT 100`).all() : [] };
 }
 
 function skillRowsWithMembers(d) {
@@ -217,6 +230,7 @@ function normalizeActivityInput(d, body, existing = null) {
   });
 
   return {
+    rotationBindings: normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []),
     name,
     titleTemplate,
     description,
@@ -317,7 +331,7 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
     let defaultValue = reusable ? reusable.default_value : question.default_value !== undefined ? question.default_value : existingDefinition?.default_value ?? null;
     if (!reusable && !expression && defaultValue != null && (!existingDefinition || question.default_value !== undefined || type !== existingDefinition.type)) {
       const normalized = normalizeVariableValue(db.get(), { id: variableId, type, options }, defaultValue);
-      defaultValue = normalized && typeof normalized === 'object' ? normalized.id : normalized;
+      defaultValue = persistedVariableValue(normalized);
     }
     return {
       id: variableId,
@@ -339,6 +353,8 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
 }
 
 function normalizeWorkflowConditionValue(d, question, value) {
+  if (['rotation_group', 'rotation_occurrence'].includes(question.type)) return normalizeVariableValue(d, question, value).id;
+  if (question.type === 'household_member_list') throw new Error('Use a calculated Yes/No value to compare a household member order.');
   if (question.type === 'boolean') {
     if (value === true || value === false) return value;
     if (value === 'true') return true;
@@ -418,8 +434,12 @@ function normalizeWorkflowInput(d, body, existing = null) {
   const rawInputSchema = body.input_schema !== undefined
     ? body.input_schema
     : (existing?.input_schema ?? []);
-  const inputSchema = expandVariableDefinitions(normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? []), householdVariableRows(d));
-  const variableScope = expressionScope(inputSchema);
+  const rotationBindings = normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []);
+  const rotationVariables = rotationBindingVariables(rotationBindings);
+  const normalizedSchema = normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? []);
+  if (normalizedSchema.some(row => rotationVariables.some(rotation => rotation.id === row.id))) throw new Error('Rotation purpose keys must be distinct from editable Workflow variable IDs.');
+  const inputSchema = expandVariableDefinitions(normalizedSchema, [...householdVariableRows(d), ...rotationVariables]).filter(row => !row.rotation_context);
+  const variableScope = expressionScope([...inputSchema, ...rotationVariables]);
   validateVariableDefinitions(variableScope);
   const questionsByKey = new Map(inputSchema.map((question) => [question.id, question]));
   validateVariableTemplate(name, variableScope, 'Workflow name');
@@ -481,8 +501,10 @@ function normalizeWorkflowInput(d, body, existing = null) {
     }
     const titleOverride = text(step.title_override, { max: 200 });
     const descriptionOverride = text(step.description_override, { max: 2000 });
-    validateVariableTemplate(titleOverride, variableScope, `Workflow step ${stepKey} title`);
-    validateVariableTemplate(descriptionOverride, variableScope, `Workflow step ${stepKey} description`);
+    const stepActivity = getActivityTemplate(d, activityTemplateId);
+    const stepScope = expressionScope([...variableScope, ...rotationBindingVariables(stepActivity?.rotation_bindings)]);
+    validateVariableTemplate(titleOverride, stepScope, `Workflow step ${stepKey} title`);
+    validateVariableTemplate(descriptionOverride, stepScope, `Workflow step ${stepKey} description`);
     return {
       stepKey,
       activityTemplateId,
@@ -509,16 +531,17 @@ function normalizeWorkflowInput(d, body, existing = null) {
   for (const step of normalizedSteps) {
     const activity = d.prepare(`
       SELECT name, title_template, description, supervision_title_template,
-             location_mode, location_variable_id, place_id, presence_policy
+             location_mode, location_variable_id, place_id, presence_policy, rotation_bindings_json
         FROM activity_templates
        WHERE id = ?
     `).get(step.activityTemplateId);
     if (!activity) throw new Error('A workflow step references an unknown activity template.');
-    validateVariableTemplate(activity.title_template, variableScope, `Activity ${activity.name} title`);
-    validateVariableTemplate(activity.description, variableScope, `Activity ${activity.name} description`);
+    const activityScope = expressionScope([...inputSchema, ...new Map([...rotationVariables, ...rotationBindingVariables(parseJsonSafe(activity.rotation_bindings_json, []))].map(row => [row.id,row])).values()]);
+    validateVariableTemplate(activity.title_template, activityScope, `Activity ${activity.name} title`);
+    validateVariableTemplate(activity.description, activityScope, `Activity ${activity.name} description`);
     validateVariableTemplate(
       activity.supervision_title_template,
-      variableScope,
+      activityScope,
       `Activity ${activity.name} supervision title`,
     );
     const effectiveLocationMode = step.locationMode === 'inherit' ? activity.location_mode : step.locationMode;
@@ -552,6 +575,7 @@ function normalizeWorkflowInput(d, body, existing = null) {
     name,
     description,
     category,
+    rotationBindings,
     quickAddEnabled: bool(body.quick_add_enabled, existing ? !!existing.quick_add_enabled : true),
     subjectRequired: bool(body.subject_required, existing ? !!existing.subject_required : true),
     active: bool(body.active, existing ? !!existing.active : true),
@@ -600,7 +624,7 @@ function normalizeHouseholdVariable(body, existing = null) {
   const expression = normalizeExpression(body.expression !== undefined ? body.expression : parseJsonSafe(existing?.expression_json, null));
   if (!expression && defaultValue != null && (!existing || body.default_value !== undefined || type !== existing.type)) {
     const normalized = normalizeVariableValue(db.get(), { id: key, type, options }, defaultValue);
-    defaultValue = normalized && typeof normalized === 'object' ? normalized.id : normalized;
+    defaultValue = persistedVariableValue(normalized);
   }
   return { key, label, description, type, kind, options, defaultValue, expression, active: bool(body.active, existing ? !!existing.active : true) };
 }
@@ -619,15 +643,17 @@ function validateVariableCatalog(d, catalog) {
       if (byKey.get(key)?.active === 0) throw new Error(`Calculation ${row.label} depends on inactive variable ${key}.`);
     }
   }
-  for (const workflow of d.prepare('SELECT id,input_schema_json FROM workflow_templates').all()) {
-    const local = hydrateWorkflowDefinitions(d, workflow.id, parseJsonSafe(workflow.input_schema_json, []), catalog);
-    const scope = expressionScope(local);
+  for (const workflow of d.prepare('SELECT id,input_schema_json,rotation_bindings_json FROM workflow_templates').all()) {
+    const rotationVariables = rotationBindingVariables(parseJsonSafe(workflow.rotation_bindings_json, []));
+    const local = hydrateWorkflowDefinitions(d, workflow.id, parseJsonSafe(workflow.input_schema_json, []), catalog, rotationVariables);
+    const scope = expressionScope([...local.filter(row => !row.rotation_context), ...rotationVariables]);
     validateVariableDefinitions(scope);
     const types = new Map(local.map(row => [row.id, row.type]));
     for (const step of d.prepare('SELECT * FROM workflow_template_steps WHERE workflow_template_id = ?').all(workflow.id)) {
       const activity = getActivityTemplate(d, step.activity_template_id);
+      const activityScope = expressionScope([...scope, ...rotationBindingVariables(activity?.rotation_bindings)]);
       for (const template of [step.title_override,step.description_override,activity?.title_template,activity?.description,activity?.supervision_title_template,
-        ...(activity?.checklist ?? []).map(item => item.title_template)]) validateVariableTemplate(template, scope);
+        ...(activity?.checklist ?? []).map(item => item.title_template)]) validateVariableTemplate(template, activityScope);
       for (const key of [step.subject_variable_id, step.assignment_variable_id].filter(Boolean)) {
         if (types.get(key) !== 'household_member') throw new Error(`Workflow ${workflow.id} requires ${key} to remain a Household Member variable.`);
       }
@@ -642,6 +668,7 @@ function variableCandidate(input, id) {
 }
 
 function expressionErrorResponse(res, error, extra = {}) {
+  if (error.status === 403 || error.status === 404) return res.status(error.status).json({ error: error.message, code: error.status });
   const missing = error.code === 'missing_input';
   return res.status(missing ? 422 : 400).json({ error: error.message, code: missing ? 422 : 400,
     reason: missing ? 'missing_input' : 'invalid_expression', ...extra });
@@ -657,8 +684,8 @@ function derivedVariableUse(d, key) {
   const calculations = catalog.filter(row => row.expression && expressionDependencies(row.expression.source, scope).includes(key));
   const activities = d.prepare('SELECT id,title_template,description,supervision_title_template FROM activity_templates').all().filter(row => [row.title_template,row.description,row.supervision_title_template].some(value => referencesVariable(value, key)));
   const checklist = d.prepare('SELECT id,title_template FROM activity_template_checklist_items').all().filter(row => referencesVariable(row.title_template, key));
-  const local = d.prepare('SELECT id,input_schema_json FROM workflow_templates').all().filter(row => {
-    const definitions = hydrateWorkflowDefinitions(d, row.id, parseJsonSafe(row.input_schema_json, []), catalog);
+  const local = d.prepare('SELECT id,input_schema_json,rotation_bindings_json FROM workflow_templates').all().filter(row => {
+    const definitions = hydrateWorkflowDefinitions(d, row.id, parseJsonSafe(row.input_schema_json, []), catalog, rotationBindingVariables(parseJsonSafe(row.rotation_bindings_json, [])));
     return definitions.some(variable => variable.expression && expressionDependencies(variable.expression.source, expressionScope(definitions, catalog)).includes(key));
   });
   return calculations.length + activities.length + checklist.length + local.length;
@@ -896,11 +923,13 @@ router.post('/obligations/:id/respond', (req, res) => {
 // Minimal reusable Activity Template catalogue for ordinary Task scheduling.
 // Assignment still resolves server-side; the client only chooses the reusable
 // definition and, when required, its subject.
-router.get('/activity-options', (_req, res) => {
+router.get('/activity-options', (req, res) => {
   try {
     const catalog = householdVariableRows(db.get());
+    const picker = rotationPickerData(db.get(), req);
     const variableFields = activity => {
-      try { return { input_schema: activityVariableSchema(db.get(), activity, catalog).input_schema }; }
+      try { return { input_schema: activityVariableSchema(db.get(), activity, catalog).input_schema.map(row => ({ ...row,
+        ...(row.type === 'rotation_group' ? {module_options:picker.rotation_groups} : row.type === 'rotation_occurrence' ? {module_options:picker.rotation_occurrences} : {}) })) }; }
       catch (error) { return { input_schema: [], variable_error: error.message }; }
     };
     const activities = listActivityTemplates(db.get(), { activeOnly: true }).map((activity) => ({
@@ -927,6 +956,7 @@ router.get('/activity-options', (_req, res) => {
       allow_assignment_override: activity.allow_assignment_override,
       participant_count: activity.participant_count,
       rotation_group: activity.rotation_group,
+      rotation_bindings: activity.rotation_bindings,
       location_variable_id: activity.location_variable_id,
       presence_policy: activity.presence_policy,
       presence_window: activity.presence_window,
@@ -944,6 +974,11 @@ router.get('/activity-options', (_req, res) => {
 
 router.post('/activity-templates/:id/resolve', (req, res) => {
   try {
+    const activity = getActivityTemplate(db.get(), Number(req.params.id));
+    if (activity) {
+      assertRotationVariableAccess(db.get(), req, activityVariableSchema(db.get(), activity).definitions);
+      if (activity.rotation_bindings.length) assertCapability(db.get(), req, 'rotations.view');
+    }
     const assigned=req.body.assigned_to;
     if(assigned!==undefined && (!Array.isArray(assigned)||assigned.length!==1||!Number.isSafeInteger(Number(assigned[0]))||Number(assigned[0])<=0))
       throw new Error('Choose one valid Activity Template assignee.');
@@ -971,6 +1006,7 @@ router.get('/quick-add', (req, res) => {
     }));
     res.json({
       data: templates,
+      ...rotationPickerData(d, req),
       activities: hasCapability(d, req, 'activities.view') ? activities : [],
       members: householdMembers(d),
       places: d.prepare('SELECT * FROM places WHERE active = 1 ORDER BY name COLLATE NOCASE, id').all(),
@@ -981,8 +1017,32 @@ router.get('/quick-add', (req, res) => {
   }
 });
 
+router.get('/workflow-instances/:id/rotations', requireCapability('workflows.view'), requireCapability('rotations.view'), (req, res) => {
+  try {
+    const d = db.get(), row = d.prepare('SELECT parent_task_id FROM workflow_instances WHERE id=?').get(req.params.id);
+    const task = row && d.prepare('SELECT * FROM tasks WHERE id=?').get(row.parent_task_id);
+    if (!task || !taskCapabilities(d, req, task).view) return res.status(404).json({ error: 'Workflow occurrence not found.', code: 404 });
+    res.json({ data: taskRotationContexts(d, task, currentUserId(req)) });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.status || 400 }); }
+});
+
+router.post('/workflow-instances/:id/rotations/:purpose/outcome', requireCapability('workflows.run'), requireCapability('rotations.advance'), (req, res) => {
+  try {
+    const d = db.get(), row = d.prepare('SELECT parent_task_id FROM workflow_instances WHERE id=?').get(req.params.id);
+    const task = row && d.prepare('SELECT * FROM tasks WHERE id=?').get(row.parent_task_id);
+    if (!task) return res.status(404).json({ error: 'Workflow occurrence not found.', code: 404 });
+    assertTaskMutation(d, req, task, {}, { operation: 'status' });
+    const link = taskRotationContexts(d, task).find(context => context.purpose_key === req.params.purpose && context.owner_task_id === task.id);
+    if (!link) return res.status(404).json({ error: 'Workflow rotation purpose not found.', code: 404 });
+    res.json({ data: finalizeRotation(d, link.occurrence.id, { actorId: currentUserId(req), outcome: req.body.outcome,
+      expectedRevision: req.body.expected_revision, manual: req.body.manual === true }) });
+  } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.status || 400 }); }
+});
+
 router.post('/quick-add/:id/preview', (req, res) => {
   try {
+    const workflow = getWorkflowTemplate(db.get(), Number(req.params.id));
+    if (workflow) assertWorkflowRotationAccess(db.get(), req, workflow);
     const startDate = v.date(req.body.start_date, 'start_date');
     if (startDate.error) throw new Error(startDate.error);
     const data = previewWorkflow(db.get(), Number(req.params.id), {
@@ -992,7 +1052,7 @@ router.post('/quick-add/:id/preview', (req, res) => {
     });
     res.json({ data });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
   }
 });
 
@@ -1005,11 +1065,12 @@ router.post('/quick-add/:id/create', (req, res) => {
       inputs: req.body.inputs ?? {},
       startDate: startDate.value ?? undefined,
       createdBy: currentUserId(req),
+      requestKey: req.body.request_key,
     });
     res.status(201).json({ data });
   } catch (err) {
     log.warn('POST /quick-add/:id/create:', err.message);
-    res.status(400).json({ error: err.message, code: 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
   }
 });
 
@@ -1128,6 +1189,7 @@ router.get('/admin/variables', requireAdmin, (req, res) => {
   try {
     const d = db.get();
     res.json({ data: householdVariableRows(d), context: SYSTEM_CONTEXT_VARIABLES, members: householdMembers(d),
+      ...rotationPickerData(d, req),
       places: d.prepare('SELECT * FROM places WHERE active = 1 ORDER BY name COLLATE NOCASE,id').all() });
   } catch (err) {
     res.status(500).json({ error: 'Could not load reusable variables.', code: 500 });
@@ -1348,6 +1410,7 @@ router.get('/admin/activity-templates', requireCapability('activities.view'), (r
     const d = db.get();
     res.json({
       data: listActivityTemplates(d),
+      ...rotationPickerData(d, req),
       skills: d.prepare('SELECT * FROM skills WHERE active = 1 ORDER BY name COLLATE NOCASE').all(),
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
@@ -1364,6 +1427,7 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
   try {
     const d = db.get();
     const input = normalizeActivityInput(d, req.body);
+    assertRotationBindingsChange(d, req, [], input.rotationBindings);
     const id = d.transaction(() => {
       const result = d.prepare(`
         INSERT INTO activity_templates (
@@ -1385,12 +1449,13 @@ router.post('/admin/activity-templates', requireCapability('activities.create'),
         input.dueDateOffsetDays,
       );
       saveActivitySkills(d, result.lastInsertRowid, input.skillIds);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings), result.lastInsertRowid);
       saveActivityChecklist(d, result.lastInsertRowid, input.checklist);
       return Number(result.lastInsertRowid);
     })();
     res.status(201).json({ data: getActivityTemplate(d, id) });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
   }
 });
 
@@ -1400,6 +1465,7 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
     const existing = getActivityTemplate(d, Number(req.params.id));
     if (!existing) return res.status(404).json({ error: 'Activity template not found.', code: 404 });
     const input = normalizeActivityInput(d, req.body, existing);
+    assertRotationBindingsChange(d, req, existing.rotation_bindings, input.rotationBindings);
     d.transaction(() => {
       d.prepare(`
         UPDATE activity_templates
@@ -1423,11 +1489,12 @@ router.put('/admin/activity-templates/:id', requireCapability('activities.edit')
         input.startTime, input.dueTime, input.recurrenceRule, input.recurrenceFromCompletion, input.dueDateOffsetDays, existing.id,
       );
       saveActivitySkills(d, existing.id, input.skillIds);
+      d.prepare('UPDATE activity_templates SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings), existing.id);
       saveActivityChecklist(d, existing.id, input.checklist);
     })();
     res.json({ data: getActivityTemplate(d, existing.id) });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
   }
 });
 
@@ -1452,6 +1519,7 @@ router.get('/admin/workflow-templates', requireCapability('workflows.view'), (re
     const workflows = listWorkflowTemplates(d).map((row) => getWorkflowTemplate(d, row.id));
     res.json({
       data: workflows,
+      ...rotationPickerData(d, req),
       activities: listActivityTemplates(d, { activeOnly: true }),
       members: householdMembers(d),
       categories: d.prepare('SELECT key, name, label_key FROM task_categories ORDER BY sort_order, key').all(),
@@ -1468,6 +1536,7 @@ router.post('/admin/workflow-templates', requireCapability('workflows.create'), 
   try {
     const d = db.get();
     const input = normalizeWorkflowInput(d, req.body);
+    assertRotationBindingsChange(d, req, [], input.rotationBindings);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     for (const step of input.steps) {
       if (!d.prepare('SELECT 1 FROM activity_templates WHERE id = ?').get(step.activityTemplateId)) {
@@ -1489,11 +1558,12 @@ router.post('/admin/workflow-templates', requireCapability('workflows.create'), 
       d.prepare('UPDATE workflow_templates SET input_schema_json = ? WHERE id = ?')
         .run(JSON.stringify(savedInputSchema), result.lastInsertRowid);
       replaceWorkflowSteps(d, result.lastInsertRowid, input.steps);
+      d.prepare('UPDATE workflow_templates SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings), result.lastInsertRowid);
       return Number(result.lastInsertRowid);
     })();
     res.status(201).json({ data: getWorkflowTemplate(d, id) });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
   }
 });
 
@@ -1503,6 +1573,7 @@ router.put('/admin/workflow-templates/:id', requireCapability('workflows.edit'),
     const existing = getWorkflowTemplate(d, Number(req.params.id));
     if (!existing) return res.status(404).json({ error: 'Workflow template not found.', code: 404 });
     const input = normalizeWorkflowInput(d, req.body, existing);
+    assertRotationBindingsChange(d, req, existing.rotation_bindings, input.rotationBindings);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     d.transaction(() => {
       const savedInputSchema = syncWorkflowVariableDefinitions(d, existing.id, input.inputSchema);
@@ -1518,10 +1589,11 @@ router.put('/admin/workflow-templates/:id', requireCapability('workflows.edit'),
         existing.id,
       );
       replaceWorkflowSteps(d, existing.id, input.steps);
+      d.prepare('UPDATE workflow_templates SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(input.rotationBindings), existing.id);
     })();
     res.json({ data: getWorkflowTemplate(d, existing.id) });
   } catch (err) {
-    res.status(400).json({ error: err.message, code: 400 });
+    res.status(err.status || 400).json({ error: err.message, code: err.status || 400 });
   }
 });
 

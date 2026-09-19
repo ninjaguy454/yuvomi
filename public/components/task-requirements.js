@@ -110,7 +110,7 @@ export function bindSkillPicker(root, { onChange = null, onCreateSkill = null } 
   };
 }
 
-function subtaskRow(subtask, skills, template, index, canCreateSkill = false) {
+function subtaskRow(subtask, skills, template, index, canCreateSkill = false, users = []) {
   return `<div class="task-subtask-editor__row" data-task-subtask-row data-subtask-value="${esc(JSON.stringify(subtask))}"${subtask.id ? ` data-subtask-id="${Number(subtask.id)}"` : ''}>
     <div class="task-subtask-editor__main">
       <span class="task-subtask-editor__handle" data-task-subtask-handle role="img" aria-label="Drag to reorder subtask" title="Drag to reorder; use Subtask actions for keyboard controls"><svg width="16" height="20" viewBox="0 0 16 20" fill="currentColor" aria-hidden="true"><circle cx="5" cy="4" r="1.5"/><circle cx="11" cy="4" r="1.5"/><circle cx="5" cy="10" r="1.5"/><circle cx="11" cy="10" r="1.5"/><circle cx="5" cy="16" r="1.5"/><circle cx="11" cy="16" r="1.5"/></svg></span>
@@ -127,39 +127,47 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false) {
         </div>
       </details>
     </div>
+    ${!template && users.length ? `<label class="label" data-task-subtask-assignment hidden>For<select class="input" data-task-subtask-assignee><option value="">Use the parent Activity's responsibility</option>${users.map(user=>`<option value="${Number(user.id)}" ${Number(subtask.assigned_to||subtask.assigned_user_ids?.[0])===Number(user.id)?'selected':''}>${esc(user.display_name)}</option>`).join('')}</select></label>` : ''}
     ${renderSkillPicker({ skills, selectedIds: subtask.skill_ids ?? subtask.skills ?? [], name: 'subtask_skill_ids', canCreateSkill })}
   </div>`;
 }
 
-export function renderSubtaskEditor({ subtasks = [], skills = [], template = false, canCreateSkill = false } = {}) {
+export function renderSubtaskEditor({ subtasks = [], skills = [], template = false, canCreateSkill = false, users = [] } = {}) {
   return `<div class="task-subtask-editor" data-task-subtask-editor>
-    <div class="task-subtask-editor__rows" data-task-subtask-rows>${subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, canCreateSkill)).join('')}</div>
+    <div class="task-subtask-editor__rows" data-task-subtask-rows>${subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, canCreateSkill, users)).join('')}</div>
     <button type="button" class="btn btn--ghost btn--sm" data-task-subtask-add>+ Add subtask</button>
     <span class="sr-only" role="status" aria-live="polite" data-task-subtask-announcement></span>
   </div>`;
 }
 
-export function bindSubtaskEditor(root, { skills = [], template = false, onChange = null, onCreateSkill = null } = {}) {
+export function bindSubtaskEditor(root, { skills = [], template = false, onChange = null, onCreateSkill = null, users = [], assignmentsEnabled = false, canAssign = true } = {}) {
   const editor = componentRoot(root, '[data-task-subtask-editor]');
   if (!editor) throw new Error('Subtask editor is not mounted.');
   const rows = editor.querySelector('[data-task-subtask-rows]');
   const pickers = new Map();
   const originals = new WeakMap();
   let readOnly = false;
-  const getValue = () => [...rows.children].map((row) => ({
-    ...originals.get(row),
+  const getValue = () => [...rows.children].map((row) => {
+    const {assigned_user_ids: oldIds,...original}=originals.get(row)||{};
+    const previous=oldIds||original.assigned_users?.map(user=>user.id)||(original.assigned_to?[original.assigned_to]:[]);
+    const selected=Number(row.querySelector('[data-task-subtask-assignee]')?.value)||null;
+    return ({
+    ...original,
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
-  }));
+    ...(assignmentsEnabled && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: selected===Number(original.assigned_to||previous[0]||0) ? previous : selected?[selected]:[]} : {}),
+  });});
   const changed = () => onChange?.(getValue());
   const refresh = () => {
     [...rows.children].forEach((row, index) => {
       row.querySelector('[data-task-subtask-title]').setAttribute('aria-label', `Subtask ${index + 1}`);
       row.querySelector('[data-task-subtask-title]').disabled = readOnly;
       row.querySelector('[data-task-subtask-optional]').disabled = readOnly;
+      const assignee=row.querySelector('[data-task-subtask-assignee]');
+      if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=readOnly||!canAssign;}
       const menu = row.querySelector('.task-subtask-editor__actions');
       menu.querySelector('summary').setAttribute('aria-label', `Subtask ${index + 1} actions`);
       menu.querySelector('summary').setAttribute('aria-disabled', String(readOnly));
@@ -197,7 +205,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     if (readOnly) { if (event.target.closest('.task-subtask-editor__actions')) event.preventDefault(); return; }
     const add = event.target.closest('[data-task-subtask-add]');
     if (add && editor.contains(add)) {
-      rows.insertAdjacentHTML('beforeend', subtaskRow({}, skills, template, rows.children.length, !!onCreateSkill));
+      rows.insertAdjacentHTML('beforeend', subtaskRow({}, skills, template, rows.children.length, !!onCreateSkill, users));
       bindRow(rows.lastElementChild);
       refresh();
       rows.lastElementChild.querySelector('[data-task-subtask-title]').focus();
@@ -225,7 +233,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     changed();
   };
   const input = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-title]')) changed(); };
-  const change = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-optional]')) changed(); };
+  const change = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-optional], [data-task-subtask-assignee]')) changed(); };
   const keydown = (event) => {
     const menu = event.target.closest('.task-subtask-editor__actions');
     if (event.key === 'Escape' && menu?.open) { event.preventDefault(); event.stopPropagation(); menu.open = false; menu.querySelector('summary').focus(); }
@@ -244,11 +252,12 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       pickers.forEach((picker) => picker.dispose());
       pickers.clear();
       rows.replaceChildren();
-      rows.insertAdjacentHTML('beforeend', subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, !!onCreateSkill)).join(''));
+      rows.insertAdjacentHTML('beforeend', subtasks.map((subtask, index) => subtaskRow(subtask, skills, template, index, !!onCreateSkill, users)).join(''));
       [...rows.children].forEach(bindRow);
       refresh();
     },
     setReadOnly(value) { readOnly = Boolean(value); refresh(); },
+    setAssignmentsEnabled(value) { assignmentsEnabled=Boolean(value);refresh(); },
     dispose() {
       editor.removeEventListener('click', click);
       editor.removeEventListener('input', input);

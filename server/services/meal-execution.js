@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { orderedRotationSelection } from './rotation.js';
 import { notifyTaskAssignments, notifyClaimableTask } from './notification-events.js';
 import {
   createOrRefreshGroceryRun,
@@ -220,8 +221,8 @@ function chooseExecutionRoundRobin(database, rotationKey, eligible) {
   const state = database.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key = ?')
     .get(rotationKey);
   const before = Number(state?.cursor_user_id) || null;
-  const previous = eligible.indexOf(before);
-  const selected = eligible[(previous + 1 + eligible.length) % eligible.length];
+  const selected = orderedRotationSelection({ memberIds: eligible, eligibleIds: eligible,
+    previousMemberId: before, strategy: 'round_robin' }).member_ids[0];
   database.prepare(`
     INSERT INTO assignment_rotation_state (rotation_key, cursor_user_id, occurrence_count, updated_at)
     VALUES (?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))

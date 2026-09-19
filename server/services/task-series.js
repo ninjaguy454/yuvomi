@@ -5,6 +5,7 @@ import { backfillRecurrenceProvenance, registerRecurrenceOccurrence, registerRec
 import { addCalendarDays } from './activity-schedule.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter, parseRRule } from './recurrence.js';
 import { captureTaskActivityBindingDefinition } from './task-activity-snapshot.js';
+import { captureTaskRotationRendering } from './task-rotation-rendering.js';
 
 export const TASK_SERIES_SCHEMA_SQL = `
   CREATE TABLE task_recurrence_series (
@@ -36,8 +37,8 @@ export const TASK_SERIES_SCHEMA_SQL = `
 
 const TASK_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id'];
-const selectedTask = row => Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? null]));
+  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id'];
+const selectedTask = row => Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)]));
 const parseDefinition = row => row ? { ...row, data: JSON.parse(row.definition_json) } : null;
 const occurrenceRow = (d,taskId) => d.prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(taskId) || null;
 
@@ -68,7 +69,15 @@ export function normalizeSeriesDefinition(definition) {
   };
   const binding=definition.binding?structuredClone(definition.binding):null;
   if(binding?.snapshot)delete binding.snapshot.rotation_cursor_user_id;
-  return {...definition,binding,task:normalizeTask(definition.task),subtasks:definition.subtasks.map(({source_task_id,...child})=>({...child,task:normalizeTask(child.task)}))};
+  if(binding?.snapshot)delete binding.snapshot.rotation_rendering;
+  const rendering=definition.rotation_rendering||null;
+  const normalizeRendered=(task,key)=>{
+    const value=normalizeTask(task);
+    for(const target of rendering?.targets||[])if(target.action_key===key)value[target.field]=target.template;
+    return value;
+  };
+  return {...definition,binding,rotation_rendering:rendering?{...rendering,targets:rendering.targets.map(({last_value,...target})=>target)}:null,
+    task:normalizeRendered(definition.task,'root'),subtasks:definition.subtasks.map(({source_task_id,...child})=>({...child,task:normalizeRendered(child.task,child.action_key)}))};
 }
 
 const stableDefinitionValue=value=>Array.isArray(value)?value.map(stableDefinitionValue)
@@ -133,6 +142,7 @@ export function captureSeriesDefinition(d,taskId) {
   return {task:selectedTask(root),...extras(d,taskId),
     rotation_user_ids:d.prepare('SELECT user_id FROM task_rotation_members WHERE task_id=? ORDER BY sort_order').all(taskId).map(row=>row.user_id),
     binding:binding||null,
+    rotation_rendering:captureTaskRotationRendering(d,root,binding,children),
     location:location?Object.fromEntries(Object.entries(location).filter(([key])=>!['task_id','created_at','updated_at','created_by'].includes(key))):null,
     planning:planning||null,
     subtasks:children.map(child=>({action_key:registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`,

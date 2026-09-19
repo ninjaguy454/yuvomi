@@ -28,6 +28,7 @@ import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor } from '
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
+import { renderRotationBindings, bindRotationBindings, renderRotationContext } from '/components/rotation-bindings.js';
 import { resolveActivityDueDate } from '/utils/activity-schedule.js';
 import { taskEditDefinition, taskEditResultMessage } from '/utils/task-edit-scope.js';
 import { taskFormErrors, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
@@ -694,6 +695,7 @@ function renderTaskCard(task, opts = {}) {
       ${renderParticipantStrip(task, participants)}
     </div>` : ''}
 
+    ${renderRotationContext(task.rotations, {compact:true})}
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}
   </article>`;
@@ -1238,7 +1240,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       <p class="task-field-hint">${activityTemplateId && task.recurrence_series_id == null ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
       ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(person.display_name)).join(', ')}</p>` : ''}
       </section>
-      ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
+      ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
+      ${!task.parent_task_id && !task.is_supervision_projection && (canCapability('rotations.configure') || task.rotation_bindings?.length) ? `<section id="task-rotations">${renderRotationBindings(task.rotation_bindings || task.rotation_bindings_json, {skills:state.skills,places:state.places})}</section>` : ''}
       <section class="task-editor__section" aria-labelledby="task-where-heading">
       <h3 id="task-where-heading">Where</h3>
       ${renderTaskLocationFields(task)}
@@ -1924,6 +1927,7 @@ async function saveTaskAsTemplate(form) {
     tags: normalizeTagList([...modalTags, ...form.querySelector('#task-tag-input').value.split(',')]),
     location: readTaskLocation(form), assigned_users: getSelectedUserIds(form, 'task_assigned'),
     skill_ids: controls.skills.getValue(), subtasks: controls.subtasks.getValue().filter((step) => step.title.trim()),
+    rotation_bindings: controls.rotations.getValue(),
   }, source);
   const button = document.querySelector('[data-save-as-template]');
   button.disabled = true;
@@ -2154,8 +2158,13 @@ function wireTaskForm(panel, {
     return skill;
   };
   const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
-  const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
-  taskFormControls.set(form, { skills, subtasks, refreshAssignment, addSkill, originalTask: task ? structuredClone(task) : null });
+  const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, users:state.users,
+    canAssign:task?canTask(task,'change_assignment'):canCapability('tasks.change_assignment'), onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
+  const rotations = bindRotationBindings(form, {skills:state.skills,places:state.places,readOnly:!canCapability('rotations.configure') || !!task && !canTask(task,'edit')});
+  const updateParticipantAssignments=()=>subtasks?.setAssignmentsEnabled(rotations.getValue().length>0);
+  updateParticipantAssignments();
+  form.querySelector('[data-rotation-bindings]')?.addEventListener('input',updateParticipantAssignments);
+  taskFormControls.set(form, { skills, subtasks, rotations, refreshAssignment, addSkill, originalTask: task ? structuredClone(task) : null });
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate, presetDates, container, onChanged, syncReady });
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
@@ -2389,6 +2398,7 @@ function readTaskEditState(form, controls) {
     subtasks: controls.subtasks?.getValue() || [], skill_ids: controls.skills.getValue(),
     assigned_to: getSelectedUserIds(form, 'task_assigned'), assignment_mode: value('task-assignment-mode'),
     rotation_user_ids: getRotationUserIds(form), rotation_group: value('task-rotation-group'), rotation_slot: Number(value('task-rotation-position') || 1) - 1,
+    rotation_bindings: controls.rotations.getValue(),
     activity_template_id: value('task-activity-template'), activity_subject_user_id: value('task-activity-subject-user'),
     activity_inputs: controls.variableValues?.inputs() || {},
     visibility: value('task-visibility'), countdown: checked('task-countdown'), locked: checked('task-locked'), location: readTaskLocation(form),
@@ -2561,6 +2571,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   };
   const controls = taskFormControls.get(form);
   if ((!managedActivity || controls?.originalTask?.recurrence_series_id != null) && controls) body.skill_ids = controls.skills.getValue();
+  if (form.querySelector('[data-rotation-bindings]')) body.rotation_bindings = controls.rotations.getValue();
   // The editor contains source actions only. Archived actions and generated
   // helper projections stay under server reconciliation, not this replace-set.
   if (controls?.subtasks) body.subtasks = controls.subtasks.getValue().filter((step) => step.title.trim()).map((step) => ({ ...step, title: step.title.trim() }));
@@ -2680,6 +2691,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   try {
     const savedTaskId = await saveTaskRecord(form, permittedTaskBody(body, controls?.originalTask));
     window.yuvomi.showToast(taskEditResultMessage(controls?.lastSaveResponse, t(taskId ? 'tasks.savedToast' : 'tasks.createdToast')), 'success');
+    if(controls?.lastSaveResponse?.rotation_warning)window.yuvomi.showToast(controls.lastSaveResponse.rotation_warning,'info');
 
     // Erinnerung speichern oder löschen (Vorbedingungen bereits oben geprüft)
     if (savedTaskId && !controls?.lastSaveResponse?.series_edit?.current_preserved) {

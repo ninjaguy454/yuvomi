@@ -8,8 +8,10 @@ import { t, formatTime, formatTimeInput, parseTimeInput, formatDateInput, parseD
 import { renderRRuleFields, bindRRuleEvents, getRRuleValues } from '/rrule-ui.js';
 import { zonedFields } from '/utils/timezone.js';
 import { esc } from '/utils/html.js';
-import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOptions } from '/components/variable-expression-editor.js';
+import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOptions, renderVariableInput } from '/components/variable-expression-editor.js';
 import { renameExpressionReference } from '/utils/variable-expressions.js';
+import { renderRotationBindings, bindRotationBindings, renderRotationContext } from '/components/rotation-bindings.js';
+import { renderRotationGroups } from '/components/rotation-groups.js';
 
 const h = (value) => esc(String(value ?? ''));
 
@@ -295,7 +297,7 @@ export async function openTaskWorkflows({ onCreated = null, canCreate = false } 
       target.querySelectorAll('[data-quick-template]').forEach((button) => {
         button.addEventListener('click', () => {
           const template = templates.find((row) => Number(row.id) === Number(button.dataset.quickTemplate));
-          if (template) openQuickAddTemplate(template, launcher.members ?? [], launcher.places ?? [], onCreated);
+          if (template) openQuickAddTemplate(template, launcher.members ?? [], launcher.places ?? [], onCreated, { rotationGroups: launcher.rotation_groups || [], rotationOccurrences: launcher.rotation_occurrences || [] });
         });
       });
       target.querySelector('[data-create-task-workflow]')?.addEventListener('click', async (event) => {
@@ -331,10 +333,12 @@ function workflowVariableId(question) {
   return question?.id ?? question?.key ?? '';
 }
 
-function renderRuntimeQuestion(question, members, places) {
+function renderRuntimeQuestion(question, members, places, rotationContext = {}) {
   if (question.expression || question.kind === 'value') return '';
   const key = h(workflowVariableId(question));
   const label = question.label || workflowVariableId(question);
+  if (['rotation_group', 'rotation_occurrence', 'household_member_list'].includes(question.type)) return inputRow(label,
+    renderVariableInput(question, { members, places, ...rotationContext, attribute: 'data-runtime-input' }).replace('data-variable-type=', 'data-type='));
   if (question.type === 'boolean') {
     return inputRow(label, `<select class="input" name="input_${key}" data-runtime-input="${key}" data-type="boolean">
       <option value="false">No</option><option value="true">Yes</option>
@@ -366,13 +370,14 @@ function collectRuntimeInputs(form) {
   form.querySelectorAll('[data-runtime-input]').forEach((field) => {
     const key = field.dataset.runtimeInput;
     if (field.dataset.type === 'boolean') inputs[key] = field.value === 'true';
-    else if (['household_member', 'location', 'number'].includes(field.dataset.type)) inputs[key] = Number(field.value);
+    else if (field.dataset.type === 'household_member_list') inputs[key] = [...field.selectedOptions].map(option => Number(option.value));
+    else if (['household_member', 'location', 'rotation_group', 'rotation_occurrence', 'number'].includes(field.dataset.type)) inputs[key] = Number(field.value);
     else inputs[key] = field.value;
   });
   return inputs;
 }
 
-function openQuickAddTemplate(template, members, places, onCreated) {
+function openQuickAddTemplate(template, members, places, onCreated, rotationContext = {}) {
   const questions = Array.isArray(template.input_schema) ? template.input_schema : [];
   const content = `<form id="quick-add-form">
     ${template.description ? `<p class="form-hint automation-form-intro">${h(template.description)}</p>` : ''}
@@ -380,7 +385,7 @@ function openQuickAddTemplate(template, members, places, onCreated) {
       'Who is this for?',
       `<select class="input" id="quick-add-subject" required>${memberOptions(members)}</select>`,
     ) : ''}
-    ${questions.map((question) => renderRuntimeQuestion(question, members, places)).join('')}
+    ${questions.map((question) => renderRuntimeQuestion(question, members, places, rotationContext)).join('')}
     <div id="quick-add-preview" class="automation-quick-preview"></div>
     ${footer('Preview')}
   </form>`;
@@ -439,8 +444,14 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
   const target = panel.querySelector('#quick-add-preview');
   const form = panel.querySelector('#quick-add-form');
   if (!target || !form) return;
+  const signature = JSON.stringify({ template: template.id, subjectUserId, inputs });
+  if (panel.workflowRequestSignature !== signature) {
+    panel.workflowRequestSignature = signature;
+    panel.workflowRequestKey = globalThis.crypto?.randomUUID?.() || `workflow_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+  }
   replaceHtml(target, `
     ${renderResolvedVariables(preview.resolved_variables || preview.resolved_values)}
+    ${renderRotationContext(Object.entries(preview.rotations || {}).map(([purpose_key, occurrence]) => ({ purpose_key, occurrence })))}
     <div class="automation-preview">
       ${preview.steps.map((step, index) => `
         <div class="automation-preview__step">
@@ -467,6 +478,7 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
       const response = await api.post(`/automation/quick-add/${template.id}/create`, {
         subject_user_id: subjectUserId,
         inputs,
+        request_key: panel.workflowRequestKey,
       });
       toast(`${template.name} created.`);
       await onCreated?.(response.data);
@@ -491,9 +503,10 @@ const AUTOMATION_TABS = [
   ['activities', 'Activities'],
   ['workflows', 'Task Workflows'],
   ['variables', 'Variables'],
+  ['rotations', 'Rotation Groups'],
 ];
 
-function allowedAutomationTabs() { return AUTOMATION_TABS.filter(([key]) => key === 'variables' ? isPermAdmin() : canCapability(({ skills: 'skills.manage', activities: 'activities.view', workflows: 'workflows.view' })[key])); }
+function allowedAutomationTabs() { return AUTOMATION_TABS.filter(([key]) => key === 'variables' ? isPermAdmin() : canCapability(({ skills: 'skills.manage', activities: 'activities.view', workflows: 'workflows.view', rotations: 'rotations.view' })[key])); }
 function validAutomationTab(tab) { const allowed = allowedAutomationTabs(); return allowed.some(([key]) => key === tab) ? tab : allowed[0]?.[0]; }
 
 export async function renderAutomationManager(container, { tab = 'skills', onTabChange = null } = {}) {
@@ -534,11 +547,13 @@ export async function openAutomationManager(tab = 'skills') {
 async function loadManagerTab(panel, tab, manager) {
   const body = panel.querySelector('.automation-manager__body');
   if (!body) return;
+  body.rotationDispose?.();
   try {
     if (tab === 'skills') await renderSkillsManager(body, manager);
     else if (tab === 'activities') await renderActivitiesManager(body, manager);
     else if (tab === 'workflows') await renderWorkflowsManager(body, manager);
     else if (tab === 'variables') await renderVariablesManager(body, manager);
+    else if (tab === 'rotations') await renderRotationGroups(body);
     else if (tab === 'places') await renderPlacesManager(body, manager);
     else if (tab === 'availability') await renderAvailabilityManager(body, manager);
     else await renderTripsManager(body, manager);
@@ -568,6 +583,7 @@ function householdVariableTypeOptions(selected = 'text') {
     ['text', 'Text'], ['number', 'Number'], ['boolean', 'Yes/No'],
     ['choice', 'Choice'], ['date', 'Date'], ['time', 'Time'],
     ['household_member', 'Household member'], ['location', 'Place / location'],
+    ['rotation_group', 'Rotation Group'], ['rotation_occurrence', 'Rotation Occurrence'], ['household_member_list', 'Household member order'],
   ].map(([value, label]) => `<option value="${value}" ${value === selected ? 'selected' : ''}>${label}</option>`).join('');
 }
 
@@ -596,7 +612,7 @@ async function renderVariablesManager(body, manager) {
     <div class="automation-list">${context.map((variable) => `
       <div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(variable.label)}</strong> <code class="automation-variable-token automation-variable-token--inline">{{${h(variable.key)}}}</code><br><small class="form-hint">${h(variable.description)}</small></div></div>`).join('')}</div>`);
 
-  const editorContext = { variables, context, members: response.members || [], places: response.places || [] };
+  const editorContext = { variables, context, members: response.members || [], places: response.places || [], rotationGroups: response.rotation_groups || [], rotationOccurrences: response.rotation_occurrences || [] };
   body.querySelector('#automation-add-variable')?.addEventListener('click', () => openVariableForm(null, manager, { context: editorContext }));
   body.querySelectorAll('[data-edit-variable]').forEach((button) => button.addEventListener('click', () => {
     openVariableForm(variables.find((row) => Number(row.id) === Number(button.dataset.editVariable)), manager, { context: editorContext });
@@ -640,6 +656,7 @@ function openVariableForm(variable = null, manager = null, { context = {}, asChi
       const editor = bindVariableValueEditor(panel.querySelector('[data-variable-value-editor]'), {
         variable: variable || {}, getDefinition: definition, getDefinitions: () => context.variables || [],
         context: context.context || [], members: context.members || [], places: context.places || [],
+        rotationGroups: context.rotationGroups || [], rotationOccurrences: context.rotationOccurrences || [],
       });
       type?.addEventListener('change', () => { options.hidden = type.value !== 'choice'; editor.invalidate(); editor.refresh(); });
       form.querySelector('[name="options"]')?.addEventListener('input', () => editor.refresh());
@@ -1441,6 +1458,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     ${activityTimingFields(activity)}
     ${inputRow('When incomplete at deadline', `<select class="input" name="expiration_policy"><option value="keep_overdue" ${(activity?.expiration_policy || 'keep_overdue') === 'keep_overdue' ? 'selected' : ''}>Keep overdue</option><option value="expire_incomplete" ${activity?.expiration_policy === 'expire_incomplete' ? 'selected' : ''}>Expire incomplete</option></select>`, 'Copied into new Tasks. Expire incomplete uses each Task’s Due Time, or the end of its due date in the household timezone, and awards 0 completion points. Choose a due date when creating the Task. Scheduled repeats continue; Repeat from completion pauses until the expired occurrence is reopened and completed.')}
     ${inputRow('Tags', `<input class="input" name="tags" value="${h(normalizeTagList(activity?.tags).join(', '))}">`, 'Separate tags with commas.')}
+    ${renderRotationBindings(activity?.rotation_bindings || [], context)}
     ${inputRow('Assignment strategy', `<select class="input" name="assignment_strategy" id="automation-assignment-strategy">
       <option value="subject_skill" ${strategy === 'subject_skill' ? 'selected' : ''}>Person or qualified helper, based on proficiency</option>
       <option value="eligible_round_robin" ${strategy === 'eligible_round_robin' ? 'selected' : ''}>Eligible round robin</option>
@@ -1452,7 +1470,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(activity?.subject_required ?? true) ? 'checked' : ''}> Requires a person this activity is for</label>
     <div id="automation-fixed-user" ${strategy === 'fixed' ? '' : 'hidden'}>${inputRow('Fixed assignee', `<select class="input" name="fixed_user_id">${memberOptions(context.members, activity?.fixed_user_id)}</select>`)}</div>
     <div id="automation-participant-count" ${strategy === 'rotating_multi' ? '' : 'hidden'}>${inputRow('People per occurrence', `<input class="input" type="number" name="participant_count" min="1" max="50" value="${Number(activity?.participant_count || 2)}">`, 'The first person owns the task; everyone selected is recorded as a participant.')}</div>
-    <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Rotation group', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Optional. Activities with the same group share one rotation cursor.')}</div>
+    <div id="automation-rotation-group" ${['eligible_round_robin', 'rotating_multi'].includes(strategy) ? '' : 'hidden'}>${inputRow('Legacy assignment rotation key', `<input class="input" name="rotation_group" maxlength="100" value="${h(activity?.rotation_group || '')}">`, 'Compatibility setting for existing shared assignment cursors. Configure reusable ordered membership with Rotation Groups above.')}</div>
     <label class="automation-check-row"><input type="checkbox" name="allow_assignment_override" ${(activity?.allow_assignment_override ?? true) ? 'checked' : ''}> Allow an admin to reassign this activity</label>
     <div data-activity-skills>${renderSkillPicker({ skills: context.skills, selectedIds: selectedSkills, canCreateSkill: canCapability('skills.manage') })}</div>
     ${inputRow('Location', `<select class="input" name="location_mode" id="automation-location-mode"><option value="none" ${locationMode === 'none' ? 'selected' : ''}>No required location</option><option value="fixed" ${locationMode === 'fixed' ? 'selected' : ''}>Fixed Place</option><option value="workflow" ${locationMode === 'workflow' ? 'selected' : ''}>Place chosen by a workflow variable</option></select>`)}
@@ -1480,6 +1498,11 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
         if (dueOffset.value === 'custom') customOffset.focus();
       });
       panel.variableContext = [...context.variables, ...(context.context || [])];
+      const rotationBindings = bindRotationBindings(panel, { ...context, readOnly: !canCapability('rotations.configure') });
+      const refreshRotationVariables = () => { panel.variableContext = [...context.variables, ...(context.context || []),
+        ...rotationBindings.getValue().map(binding => ({ id: binding.purpose_key, label: binding.label, type: 'rotation_occurrence', kind: 'value' }))]; };
+      refreshRotationVariables();
+      panel.querySelector('[data-rotation-bindings]')?.addEventListener('input', refreshRotationVariables);
       wireVariableMentions(panel);
       const createSkill = async () => {
         const skill = await openSkillEditor();
@@ -1552,6 +1575,7 @@ function openActivityForm(activity, context, manager = null, { asChild = false, 
           allow_assignment_override: data.has('allow_assignment_override'),
           participant_count: Number(data.get('participant_count')) || 1,
           rotation_group: data.get('rotation_group') || null,
+          rotation_bindings: rotationBindings.getValue(),
           skill_ids: requiredSkills.getValue(),
           supervision_title_template: data.get('supervision_title_template'),
           location_mode: data.get('location_mode'),
@@ -1760,6 +1784,9 @@ function questionHtml(question = {}, workflowId = null) {
     <select class="input" data-question-type aria-label="Variable type" ${linked ? 'disabled' : ''}>
       <option value="household_member" ${type === 'household_member' ? 'selected' : ''}>Household Member</option>
       <option value="location" ${type === 'location' ? 'selected' : ''}>Place / Location</option>
+      <option value="rotation_group" ${type === 'rotation_group' ? 'selected' : ''}>Rotation Group</option>
+      <option value="rotation_occurrence" ${type === 'rotation_occurrence' ? 'selected' : ''}>Rotation Occurrence</option>
+      <option value="household_member_list" ${type === 'household_member_list' ? 'selected' : ''}>Household member order</option>
       <option value="boolean" ${type === 'boolean' ? 'selected' : ''}>Yes/No</option>
       <option value="choice" ${type === 'choice' ? 'selected' : ''}>Choice</option>
       <option value="text" ${type === 'text' ? 'selected' : ''}>Text</option>
@@ -1779,6 +1806,7 @@ function questionHtml(question = {}, workflowId = null) {
 
 function workflowEditorContext(response) {
   return { activities: response.activities ?? [], members: response.members ?? [],
+    rotationGroups: response.rotation_groups ?? [], rotationOccurrences: response.rotation_occurrences ?? [],
     categories: response.categories ?? [], variables: response.variables ?? [], places: response.places ?? [], context: response.context ?? [] };
 }
 
@@ -1793,6 +1821,8 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, workflow?.category || 'misc')}</select>`)}
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(workflow?.subject_required ?? true) ? 'checked' : ''}> Ask which household member this is for</label>
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${(workflow?.quick_add_enabled ?? true) ? 'checked' : ''}> Show in Task Workflows</label>
+    ${renderRotationBindings(workflow?.rotation_bindings || [], context)}
+    <p class="form-hint">Each Rotation purpose is a calculated Rotation Occurrence value using its purpose key. For example, use rotationPosition(shower_order, context.household_member) in a Number variable.</p>
 
     <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>
     <p class="form-hint automation-manager__hint">New IDs are generated from the variable name (for example, Day of Week becomes day_of_week). Duplicate names receive _2, _3, and so on. Once saved, IDs remain stable when display wording changes.</p>
@@ -1810,6 +1840,10 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
     size: 'xl',
     onSave(panel) {
       panel.variableContext = context.context || [];
+      const rotationBindings = bindRotationBindings(panel, { ...context, readOnly: !canCapability('rotations.configure') });
+      const rotationVariables = () => rotationBindings.getValue().map(binding => ({ id: binding.purpose_key, label: binding.label, type: 'rotation_occurrence', kind: 'value' }));
+      panel.querySelector('[data-rotation-bindings]')?.addEventListener('input', () => { panel.variableContext = [...(context.context || []), ...rotationVariables()]; });
+      panel.variableContext = [...(context.context || []), ...rotationVariables()];
       wireVariableMentions(panel);
       const steps = panel.querySelector('#workflow-steps');
       const questions = panel.querySelector('#workflow-questions');
@@ -1830,13 +1864,14 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
         };
       });
 
-      const allDefinitions = () => [...new Map([...context.variables, ...readQuestionDrafts()].map(item => [item.variable_key || item.id, item])).values()];
+      const allDefinitions = () => [...new Map([...context.variables, ...readQuestionDrafts(), ...rotationVariables()].map(item => [item.variable_key || item.id, item])).values()];
       const bindValueEditors = () => questions.querySelectorAll('[data-workflow-question]').forEach(row => {
         if (valueEditors.has(row)) return;
         const config = JSON.parse(row.dataset.variableConfig || '{}');
         const readOnly = Boolean(row.dataset.reusableDefinitionId);
         const editor = bindVariableValueEditor(row.querySelector('[data-variable-value-editor]'), {
           variable: config, readOnly, members: context.members, places: context.places, context: context.context || [],
+          rotationGroups: context.rotationGroups || [], rotationOccurrences: context.rotationOccurrences || [],
           getDefinitions: allDefinitions,
           getDefinition: () => ({ id: row.dataset.variableId, label: row.querySelector('[data-question-label]').value.trim(), type: row.querySelector('[data-question-type]').value,
             options: row.querySelector('[data-question-options]').value.split(',').map(item => item.trim()).filter(Boolean) }),
@@ -2054,6 +2089,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
           name: data.get('name'), description: data.get('description'), category: data.get('category'),
           subject_required: data.has('subject_required'), quick_add_enabled: data.has('quick_add_enabled'),
           active: true, input_schema: inputSchema, steps: stepPayload,
+          rotation_bindings: rotationBindings.getValue(),
         };
         try {
           const response = workflow

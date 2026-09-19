@@ -32,6 +32,7 @@
  */
 
 import { api } from '/api.js';
+import { renderRotationContext } from '/components/rotation-bindings.js';
 import { t, formatDate, formatTime } from '/i18n.js';
 import { openDetailView, closeDetailView, visibilityRow, assignedRow } from '/components/detail-view.js';
 import { closeModal, promptModal, confirmModal, btnLoading } from '/components/modal.js';
@@ -42,7 +43,7 @@ import { splitKeepingLineEndings } from '/utils/markdown-checklist.js';
 import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
-import { canTask } from '/permissions.js';
+import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, taskRevision } from '/utils/task-state.js';
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
@@ -782,7 +783,7 @@ function taskDetailDefinitionKey(task) {
   const fields = ['title', 'description', 'tags', 'documents', 'priority', 'start_date', 'start_time', 'due_date', 'due_time',
     'expiration_policy', 'expired_at', 'archived_at', 'recurrence_rule', 'recurrence_from_completion', 'is_recurring',
     'category', 'required_skills', 'skill_ids', 'skills', 'skill_eligibility', 'location', 'assigned_to', 'assigned_users', 'assigned_name', 'assigned_color', 'assigned_avatar',
-    'locked', 'visibility', 'countdown', 'action_link', 'permissions'];
+    'locked', 'visibility', 'countdown', 'action_link', 'permissions', 'rotations'];
   return JSON.stringify(Object.fromEntries(Object.entries(task).filter(([key]) => fields.includes(key) || key.startsWith('activity_') && key !== 'activity_assignment_state')));
 }
 
@@ -1540,9 +1541,25 @@ function renderTaskDetail(task, reminders = [], ctx) {
   activity.appendChild(activityNode(task, ctx));
   const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', 'Occurrence history', 'task-detail-history-disclosure') : null;
   if (history) history.appendChild(seriesHistoryNode(task, ctx));
+  const rotations = task.rotations?.length ? document.createElement('section') : null;
+  if (rotations) {
+    rotations.innerHTML = renderRotationContext(task.rotations);
+    if(task.rotations.some(value=>value.pending&&value.owner_task_id===task.id) && canCapability('rotations.configure') && canTask(task,'edit') && !isArchived(task) && !isExpired(task) && task.status!=='done') {
+      const retry=document.createElement('button');retry.type='button';retry.className='btn btn--secondary btn--sm';retry.textContent='Resolve rotation';
+      retry.addEventListener('click',async()=>{
+        retry.disabled=true;
+        try {const result=await api.post(`/tasks/${task.id}/rotation/reconcile`,taskRevision(task));
+          if(result.pending?.length)window.yuvomi?.showToast('This rotation still needs attention. Review its Group and previous occurrence.','info');
+          await ctx.refresh();await ctx.onChanged();}
+        catch(error){window.yuvomi?.showToast(error.message,'danger');}
+        finally{retry.disabled=false;}
+      });rotations.append(retry);
+    }
+  }
   return [
     { node: statusSummaryNode(task, ctx) },
     { label: 'Instructions', node: descriptionNode(task, ctx), multiline: true },
+    { node: rotations },
     { node: tags },
     { node: supervisionNode(task, ctx) },
     { label: t('tasks.subtasksLabel'), node: subtaskListNode(task, ctx) },

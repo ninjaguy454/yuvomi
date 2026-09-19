@@ -12,6 +12,7 @@ import * as v from '../middleware/validate.js';
 import { todayKey } from '../utils/timezone.js';
 import { taskDeadlineMs, taskStartMs, taskExpirationDue, taskWindowAncestors, EXPIRATION_POLICIES } from './task-window.js';
 import { taskOptionalContext } from './task-optional.js';
+import { settleTaskRotations } from './task-rotation.js';
 
 let recurrenceHooks = null;
 // Recurrence keeps its established anchored/group implementation in the Tasks
@@ -131,6 +132,7 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
       WHERE task_id=? AND status IN ('pending','accepted')`).run(task.id);
     d.prepare("UPDATE task_responsibilities SET status='fulfilled' WHERE task_id=? AND status='active'").run(task.id);
     d.prepare("UPDATE task_assignment_context SET state='fulfilled' WHERE task_id=?").run(task.id);
+    settleTaskRotations(d, task.id, 'completed', {actorId});
     recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id));
   } else if (task.status === 'done') {
     // Historical supervisors are not all revived when an occurrence reopens.
@@ -315,6 +317,7 @@ export function expireTask(d, taskId, {now=new Date()}={}) {
     // while the expiration itself remains durable. Startup/timer reconciliation
     // retries this terminal frontier; a missing eligible assignee cannot keep
     // yesterday's Task actionable indefinitely.
+    settleTaskRotations(d,source.id,'skipped');
     let recurrenceError=null;
     try { recurrenceHooks?.spawn(d.prepare('SELECT * FROM tasks WHERE id=?').get(source.id)); }
     catch(error) { recurrenceError=error; }

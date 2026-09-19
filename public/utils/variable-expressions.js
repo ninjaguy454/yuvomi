@@ -5,6 +5,8 @@ export const EXPRESSION_LIMITS = Object.freeze({ source: 4096, nodes: 512, depth
 export const EXPRESSION_PROPERTIES = Object.freeze({
   household_member: Object.freeze({ id: 'number', first_name: 'text', last_name: 'text', display_name: 'text', nickname: 'text' }),
   location: Object.freeze({ id: 'number', name: 'text', parent: 'text', address: 'text' }),
+  rotation_group: Object.freeze({ id: 'number', name: 'text', description: 'text' }),
+  rotation_occurrence: Object.freeze({ id: 'number', track_id: 'number', order: 'household_member_list', selected_member: 'household_member', position: 'number', status: 'text', strategy: 'text' }),
 });
 export const EXPRESSION_FUNCTIONS = Object.freeze([
   { name: 'coalesce', signature: 'coalesce(value, fallback, ...)', description: 'Use the first value that is not blank. Zero and No still count as values.' },
@@ -14,10 +16,17 @@ export const EXPRESSION_FUNCTIONS = Object.freeze([
   { name: 'lower', signature: 'lower(text)', description: 'Change text to lowercase.' },
   { name: 'upper', signature: 'upper(text)', description: 'Change text to uppercase.' },
   { name: 'title', signature: 'title(text)', description: 'Capitalize each word.' },
+  { name: 'rotationOrder', signature: 'rotationOrder(occurrence)', description: 'Read the saved order for this occurrence without advancing the rotation.' },
+  { name: 'rotationSelected', signature: 'rotationSelected(occurrence)', description: 'Read the selected household member.' },
+  { name: 'rotationFirst', signature: 'rotationFirst(occurrence)', description: 'Read the first household member in this occurrence.' },
+  { name: 'rotationLast', signature: 'rotationLast(occurrence)', description: 'Read the last household member in this occurrence.' },
+  { name: 'rotationPosition', signature: 'rotationPosition(occurrence, member)', description: 'Read a member’s one-based position, or blank when they are not participating.' },
+  { name: 'rotationNext', signature: 'rotationNext(occurrence, member)', description: 'Read the next member in this occurrence, wrapping at the end.' },
+  { name: 'rotationPrevious', signature: 'rotationPrevious(occurrence, member)', description: 'Read the previous member in this occurrence, wrapping at the beginning.' },
 ].map(Object.freeze));
 const FUNCTIONS = new Set(EXPRESSION_FUNCTIONS.map(item => item.name));
 const FORBIDDEN = new Set(['__proto__', 'prototype', 'constructor']);
-const TYPES = new Set(['text', 'choice', 'number', 'boolean', 'date', 'time', 'household_member', 'location']);
+const TYPES = new Set(['text', 'choice', 'number', 'boolean', 'date', 'time', 'household_member', 'location', 'rotation_group', 'rotation_occurrence', 'household_member_list']);
 const canonicalType = type => type === 'select' ? 'choice' : type || 'text';
 const comparableType = type => type === 'choice' ? 'text' : type;
 const keyOf = definition => definition.variable_key ?? definition.key ?? definition.id;
@@ -175,6 +184,12 @@ function analyze(ast, definitions, dependencies) {
   const arity = (min, max = min) => {
     if (types.length < min || types.length > max) throw new ExpressionError(`Check the arguments for ${ast.name}(). ${EXPRESSION_FUNCTIONS.find(item => item.name === ast.name).signature}`);
   };
+  if (ast.name.startsWith('rotation')) {
+    const withMember = ['rotationPosition', 'rotationNext', 'rotationPrevious'].includes(ast.name);
+    arity(withMember ? 2 : 1);
+    if (types[0] !== 'rotation_occurrence' || (withMember && types[1] !== 'household_member')) throw new ExpressionError(`${ast.name}() needs a Rotation Occurrence${withMember ? ' and a Household Member' : ''}.`, 'type_mismatch');
+    return ast.name === 'rotationOrder' ? 'household_member_list' : ast.name === 'rotationPosition' ? 'number' : 'household_member';
+  }
   if (ast.name === 'coalesce') { arity(1, 64); return unifiedType(types, 'coalesce()'); }
   if (ast.name === 'if') {
     arity(3);
@@ -221,15 +236,20 @@ function checkedValue(value, type, label) {
   if (type === 'number' && typeof value === 'number' && Number.isFinite(value)) return value;
   if (type === 'boolean' && typeof value === 'boolean') return value;
   if (['text', 'choice', 'date', 'time'].includes(type) && typeof value === 'string' && value.length <= EXPRESSION_LIMITS.output) return value;
+  if (type === 'household_member_list' && Array.isArray(value) && value.length <= 100) {
+    const members = value.map((member, index) => checkedValue(member, 'household_member', `${label}[${index + 1}]`));
+    if (members.some(member => !member) || new Set(members.map(member => member.id)).size !== members.length) throw new ExpressionError(`The member order in “${label}” is invalid.`, 'type_mismatch');
+    return Object.freeze(members);
+  }
   if (own(EXPRESSION_PROPERTIES, type) && typeof value === 'object' && !Array.isArray(value)) {
-    if (typeof value.id !== 'number' || !Number.isSafeInteger(value.id) || value.id <= 0) throw new ExpressionError(`Choose a valid ${type === 'household_member' ? 'household member' : 'Place'} for “${label}”.`, 'type_mismatch');
+    if (typeof value.id !== 'number' || !Number.isSafeInteger(value.id) || value.id < (type === 'rotation_occurrence' ? 0 : 1)) throw new ExpressionError(`Choose a valid ${type.replaceAll('_', ' ')} for “${label}”.`, 'type_mismatch');
     const sanitized = Object.create(null);
     for (const [property, propertyType] of Object.entries(EXPRESSION_PROPERTIES[type])) sanitized[property] = checkedValue(own(value, property) ? value[property] : null, propertyType, `${label}.${property}`);
     return Object.freeze(sanitized);
   }
   throw new ExpressionError(`The value of “${label}” does not match its ${type} type.`, 'type_mismatch');
 }
-const equal = (left, right) => left != null && right != null && typeof left === 'object' && typeof right === 'object' ? left.id === right.id : left === right;
+const equal = (left, right) => Array.isArray(left) && Array.isArray(right) ? left.length === right.length && left.every((member, index) => member.id === right[index]?.id) : left != null && right != null && typeof left === 'object' && typeof right === 'object' ? left.id === right.id : left === right;
 const isBlank = value => value == null || (typeof value === 'string' && value.trim() === '');
 
 export function resolveExpressionVariables(definitions, inputs = {}, { keys } = {}) {
@@ -284,6 +304,17 @@ export function resolveExpressionVariables(definitions, inputs = {}, { keys } = 
       return evaluate(ast.args.at(-1));
     }
     const arguments_ = ast.args.map(evaluate);
+    if (ast.name.startsWith('rotation')) {
+      const occurrence = arguments_[0], order = occurrence?.order || [];
+      if (ast.name === 'rotationOrder') return occurrence ? order : null;
+      if (ast.name === 'rotationSelected') return occurrence?.selected_member ?? null;
+      if (ast.name === 'rotationFirst') return order[0] ?? null;
+      if (ast.name === 'rotationLast') return order.at(-1) ?? null;
+      const index = order.findIndex(member => member.id === arguments_[1]?.id);
+      if (index < 0) return null;
+      if (ast.name === 'rotationPosition') return index + 1;
+      return order[(index + (ast.name === 'rotationNext' ? 1 : -1) + order.length) % order.length];
+    }
     if (arguments_.some(value => typeof value !== 'string')) throw new ExpressionError(`${ast.name}() needs text. Supply a fallback with coalesce() if a name is blank.`, 'missing_input');
     let result;
     if (ast.name === 'concat') result = arguments_.join('');

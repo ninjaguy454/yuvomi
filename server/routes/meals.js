@@ -17,6 +17,7 @@ import { requireCapability } from '../middleware/require-capability.js';
 import { taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
 import { tokenAllows } from '../scopes.js';
 import { evaluatePresence } from '../services/presence.js';
+import { orderedRotationSelection } from '../services/rotation.js';
 import {
   listMealCalendarConflicts,
   reconcileMealCalendarConflicts,
@@ -368,8 +369,8 @@ function selectMealRotation(d, slot, eligible, { commit = false } = {}) {
   if (!eligible.length) return null;
   const key = `meal:${slot.rotation_group || `slot:${slot.id}`}:chooser`;
   const state = d.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key = ?').get(key);
-  const previous = eligible.indexOf(Number(state?.cursor_user_id));
-  const selected = eligible[(previous + 1 + eligible.length) % eligible.length];
+  const selected = orderedRotationSelection({ memberIds: eligible, eligibleIds: eligible,
+    previousMemberId: Number(state?.cursor_user_id) || null, strategy: 'round_robin' }).member_ids[0];
   if (commit) {
     d.prepare(`
       INSERT INTO assignment_rotation_state (rotation_key, cursor_user_id, occurrence_count, updated_at)

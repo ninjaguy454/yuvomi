@@ -8,23 +8,27 @@ const replaceHtml = (element, html) => { element.replaceChildren(); element.inse
 let fieldSequence = 0;
 
 /** Shared typed input for saved values, preview samples and Activity inputs. */
-export function renderVariableInput(variable, { members = [], places = [], value = variable.default_value, optional = false, attribute = 'data-variable-input' } = {}) {
+export function renderVariableInput(variable, { members = [], places = [], rotationGroups = [], rotationOccurrences = [], value = variable.default_value, optional = false, attribute = 'data-variable-input' } = {}) {
   const type = variable.type === 'select' ? 'choice' : variable.type;
   const common = `${attribute}="${h(keyOf(variable))}" data-variable-type="${h(type)}" aria-label="${h(variable.label || keyOf(variable))}"`;
   let options;
   if (type === 'household_member') options = members.map(member => [member.id, member.display_name || member.name]);
   if (type === 'location') options = places.filter(place => place.active !== 0).map(place => [place.id, place.path_label || place.name]);
+  if (type === 'rotation_group') options = (rotationGroups.length ? rotationGroups : variable.module_options || []).filter(group => group.active !== 0).map(group => [group.id, group.name]);
+  if (type === 'rotation_occurrence') options = (rotationOccurrences.length ? rotationOccurrences : variable.module_options || []).map(occurrence => [occurrence.id, occurrence.label || `${occurrence.purpose_label || 'Rotation'} · ${occurrence.occurrence_key || occurrence.id}`]);
+  if (type === 'household_member_list') return `<select class="input" multiple ${common}>${members.map(member => `<option value="${member.id}" ${(value || []).map(Number).includes(Number(member.id)) ? 'selected' : ''}>${h(member.display_name || member.name)}</option>`).join('')}</select>`;
   if (type === 'boolean') options = [[false, 'No'], [true, 'Yes']];
   if (type === 'choice') options = (variable.options || []).map(option => [option, option]);
-  if (options) return `<select class="input" ${common}>${optional || ['household_member', 'location'].includes(type) ? '<option value="">Choose…</option>' : ''}${options.map(([id, label]) => `<option value="${h(id)}" ${String(id) === String(value) ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`;
+  if (options) return `<select class="input" ${common}>${optional || ['household_member', 'location', 'rotation_group', 'rotation_occurrence'].includes(type) ? '<option value="">Choose…</option>' : ''}${options.map(([id, label]) => `<option value="${h(id)}" ${String(id) === String(value) ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`;
   const inputType = ['number', 'date', 'time'].includes(type) ? type : 'text';
   return `<input class="input" type="${inputType}" ${inputType === 'number' ? 'step="any"' : ''} ${common} value="${h(value)}">`;
 }
 
 export function readVariableInput(field) {
+  if (field?.dataset.variableType === 'household_member_list') return [...field.selectedOptions].map(option => Number(option.value));
   if (!field || field.value === '') return null;
   if (field.dataset.variableType === 'boolean') return field.value === 'true';
-  if (['household_member', 'location', 'number'].includes(field.dataset.variableType)) return Number(field.value);
+  if (['household_member', 'location', 'rotation_group', 'rotation_occurrence', 'number'].includes(field.dataset.variableType)) return Number(field.value);
   return field.value;
 }
 
@@ -59,7 +63,7 @@ export function renderVariableValueEditor(variable = {}, { readOnly = false } = 
   </div>`;
 }
 
-export function bindVariableValueEditor(root, { variable = {}, getDefinition, getDefinitions = () => [], members = [], places = [], context = [], readOnly = false, onChange = () => {} } = {}) {
+export function bindVariableValueEditor(root, { variable = {}, getDefinition, getDefinitions = () => [], members = [], places = [], rotationGroups = [], rotationOccurrences = [], context = [], readOnly = false, onChange = () => {} } = {}) {
   const source = root.querySelector('[data-variable-source]');
   const field = root.querySelector('[data-expression-source]');
   const error = root.querySelector('[data-expression-error]');
@@ -110,7 +114,7 @@ export function bindVariableValueEditor(root, { variable = {}, getDefinition, ge
     if (signature !== inputType) {
       const old = root.querySelector('[data-variable-default-control] .input');
       const defaultValue = old ? readVariableInput(old) : variable.default_value;
-      replaceHtml(root.querySelector('[data-variable-default-control]'), renderVariableInput(definition, { members, places, value: defaultValue, optional: true }));
+      replaceHtml(root.querySelector('[data-variable-default-control]'), renderVariableInput(definition, { members, places, rotationGroups, rotationOccurrences, value: defaultValue, optional: true }));
       root.querySelector('[data-variable-default-control] .input').id = defaultArea.querySelector('label').htmlFor;
       inputType = signature;
     }
@@ -129,7 +133,7 @@ export function bindVariableValueEditor(root, { variable = {}, getDefinition, ge
     const needsSubject = key => key === 'context.household_member' || (!seen.has(key) && (seen.add(key), (graph[key] || []).some(needsSubject)));
     const subjectInput = needsSubject(keyOf(getDefinition())) ? `<label class="label">Person this is for<select class="input" data-expression-subject><option value="">Choose…</option>${members.map(member => `<option value="${member.id}" ${Number(previous.subject_user_id) === Number(member.id) ? 'selected' : ''}>${h(member.display_name || member.name)}</option>`).join('')}</select></label>` : '';
     if (!ordinary.length && !subjectInput) { sampleArea.replaceChildren(); return; }
-    replaceHtml(sampleArea, `<details open><summary>Try with these values</summary><div class="variable-expression__samples">${ordinary.map(item => `<label class="label">${h(item.label || keyOf(item))}${renderVariableInput(item, { members, places, value: previous.inputs[keyOf(item)] ?? item.default_value, optional: true })}</label>`).join('')}${subjectInput}</div></details>`);
+    replaceHtml(sampleArea, `<details open><summary>Try with these values</summary><div class="variable-expression__samples">${ordinary.map(item => `<label class="label">${h(item.label || keyOf(item))}${renderVariableInput(item, { members, places, rotationGroups, rotationOccurrences, value: previous.inputs[keyOf(item)] ?? item.default_value, optional: true })}</label>`).join('')}${subjectInput}</div></details>`);
   };
   source?.addEventListener('change', () => { invalidate(); refresh(); onChange(); });
   const changed = event => {

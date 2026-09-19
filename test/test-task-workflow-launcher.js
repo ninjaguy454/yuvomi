@@ -98,7 +98,7 @@ function runtimeHarness({ deferCreate = false } = {}) {
       : Promise.resolve({ data: { run_id: 9 } });
     return new Promise((resolve) => pending.push(resolve));
   } };
-  const renderQuickPreview = load('renderQuickPreview', { api, h: esc, window: {}, renderResolvedVariables: load('renderResolvedVariables', { h: esc }), singlePendingAction: load('singlePendingAction', {}), toast: (value) => toasts.push(value),
+  const renderQuickPreview = load('renderQuickPreview', { api, h: esc, window: {}, renderRotationContext: () => '', renderResolvedVariables: load('renderResolvedVariables', { h: esc }), singlePendingAction: load('singlePendingAction', {}), toast: (value) => toasts.push(value),
     replaceHtml: (_target, html) => { preview.html = html; create = node(); } });
   const open = load('openQuickAddTemplate', { api, h: esc, inputRow: (_label, html) => html,
     footer: () => '', renderRuntimeQuestion: () => '', memberOptions: () => '',
@@ -134,7 +134,8 @@ test('creating previewed Tasks uses the reviewed inputs and restores its parent 
   fixture.pending[0]({ data: { steps: [{ title: 'Library task' }] } });
   await pending;
   await fixture.create().listeners.click();
-  assert.deepEqual(fixture.requests.at(-1), { path: '/automation/quick-add/3/create', body: { subject_user_id: null, inputs: { destination: 'Library' } } });
+  assert.match(fixture.requests.at(-1).body.request_key, /^[A-Za-z0-9_-]{8,128}$/);
+  assert.deepEqual(fixture.requests.at(-1), { path: '/automation/quick-add/3/create', body: { subject_user_id: null, inputs: { destination: 'Library' }, request_key: fixture.panel.workflowRequestKey } });
   assert.deepEqual(fixture.completed, ['child closed', { run_id: 9 }]);
 });
 
@@ -152,6 +153,8 @@ test('pending workflow creation rejects duplicate clicks and permits retry after
   assert.equal(fixture.create().disabled, false);
   const retry = fixture.create().listeners.click();
   assert.equal(fixture.creates.length, 2);
+  const requests = fixture.requests.filter(request => request.path.endsWith('/create'));
+  assert.equal(requests[0].body.request_key, requests[1].body.request_key, 'a network retry retains one durable occurrence identity');
   fixture.creates[1].resolve({ data: { run_id: 9 } });
   await retry;
   assert.deepEqual(fixture.completed, ['child closed', { run_id: 9 }]);

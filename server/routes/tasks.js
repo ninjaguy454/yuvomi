@@ -14,7 +14,7 @@ import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFront
 import { ensureSeriesDefinition, seriesMaterializationPlan, recordOccurrenceDefinition, registerSeriesAction, authoritativeTaskRecurrence,
   seriesMetadata, taskSeriesState, captureSeriesDefinition, appendSeriesDefinition, definitionEqual, seriesDefinitionForGeneration,
   normalizeSeriesSchedule } from '../services/task-series.js';
-import { proposedSeriesDefinition, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture } from '../services/task-series-edit.js';
+import { proposedSeriesDefinition, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
 import { readTaskActivityDefinition, updateTaskActivitySnapshotSkills, captureActivityTemplateDefinition } from '../services/task-activity-snapshot.js';
 import { syncTaskRewards } from '../services/rewards.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask, resolveActivityTemplate } from '../services/activity-workflows.js';
@@ -32,6 +32,9 @@ import {
 } from '../services/task-activity-bindings.js';
 import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../services/task-completions.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
+import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
+import { householdMembers } from '../services/activity-eligibility.js';
+import { initializeTaskRotationRendering, applyTaskRotationRendering } from '../services/task-rotation-rendering.js';
 import { normalizeVisibility, visibilityWhere } from '../services/visibility.js';
 import {
   flushOutbound, markTodoOutbound, queueTodoDeletion,
@@ -144,7 +147,7 @@ router.param('id',(req,res,next,value)=>{
     return res.status(404).json({error:'Task not found.',code:404});
   if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
   const route=req.route.path;
-  if (route==='/:id/supervisor' || route==='/:id/location/promote') return next();
+  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile') return next();
   try {
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
     if (!task) return res.status(404).json({error:'Task not found.',code:404});
@@ -355,7 +358,7 @@ function independentlyAssignedTaskMembers(taskId, userIds, previousUserIds, prim
     || !previous.has(Number(id)) || !derived.has(Number(id)));
 }
 
-function initialSubtasksInput(body) {
+function initialSubtasksInput(body, {allowAssignments=false,preserveProvenance=false}={}) {
   if (body.subtasks === undefined) return undefined;
   if (body.parent_task_id || !Array.isArray(body.subtasks) || body.subtasks.length > 50) {
     throw new TaskSkillError('A new Task can contain at most 50 subtasks.');
@@ -365,7 +368,23 @@ function initialSubtasksInput(body) {
       throw new TaskSkillError('Give each subtask a name of at most 200 characters.');
     }
     if (item.is_optional !== undefined && ![true,false,0,1].includes(item.is_optional)) throw new TaskSkillError('Subtask optional must be true or false.');
-    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids),
+    let assignedUsers;
+    let templateItemId=null;
+    if(item.activity_template_checklist_item_id!=null && !preserveProvenance) {
+      const source=db.get().prepare('SELECT activity_template_id FROM activity_template_checklist_items WHERE id=?').get(item.activity_template_checklist_item_id);
+      if(!source || Number(source.activity_template_id)!==Number(body.activity_template_id))throw new TaskSkillError('Choose a subtask from this Activity Template.');
+      templateItemId=Number(item.activity_template_checklist_item_id);
+    }
+    if(item.assigned_user_ids!==undefined) {
+      if(!allowAssignments)throw new TaskSkillError('Configure a shared Rotation on this Activity before assigning its participant subtasks in this editor.');
+      if(!Array.isArray(item.assigned_user_ids)||item.assigned_user_ids.length>50
+        ||item.assigned_user_ids.some(id=>!Number.isSafeInteger(id)||id<1)
+        ||new Set(item.assigned_user_ids).size!==item.assigned_user_ids.length)throw new TaskSkillError('Choose valid household members for each subtask.');
+      const members=new Set(householdMembers(db.get()).map(member=>member.id));
+      if(item.assigned_user_ids.some(id=>!members.has(id)))throw new TaskSkillError('Choose an existing household member for each subtask.');
+      assignedUsers=[...item.assigned_user_ids];
+    }
+    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids), assignedUsers,templateItemId,
       isOptional: item.is_optional === undefined ? undefined : item.is_optional ? 1 : 0 };
   });
 }
@@ -379,7 +398,7 @@ function assertOptionalityEdit(task, value) {
 function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {}) {
   if(body.subtasks===undefined)return undefined;
   if(task.parent_task_id)throw new TaskSkillError('Edit subtasks on the original Task.');
-  const normalized=initialSubtasksInput(body);
+  const normalized=initialSubtasksInput(body,{preserveProvenance:true,allowAssignments:parseRotationBindings(body.rotation_bindings).length>0 || parseRotationBindings(task.rotation_bindings_json).length>0});
   const existing=ordinaryActivitySubtasks(db.get(),task.id).filter(child=>!child.archived_at);
   const seen=new Set();
   const next=normalized.map((item,index)=>{
@@ -396,10 +415,14 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
       seen.add(id);
       item.isOptional ??= child.is_optional || 0;
       if(!definitionOnly)assertOptionalityEdit(child,item.isOptional);
-      assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds,is_optional:item.isOptional},{operation:'update'});
+      const assignments=item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers};
+      if(!definitionOnly && item.assignedUsers!==undefined && ['done','expired'].includes(child.status)
+        && !sameIdOrder(item.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id)))
+        throw new TaskStateError('Completed subtask assignments are historical. Reopen that action before changing its assignee.');
+      assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds,is_optional:item.isOptional,...assignments},{operation:'update'});
     } else {
       if(task.status==='done'&&!definitionOnly)throw new TaskStateError('Reopen the completed parent Task before adding checklist steps.',{reason:'optional_parent_completed'});
-      assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,skill_ids:item.skillIds,is_optional:item.isOptional},{operation:'create'});
+      assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,skill_ids:item.skillIds,is_optional:item.isOptional,...(item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers})},{operation:'create'});
     }
     return {...item,isOptional:item.isOptional ?? 0,id};
   });
@@ -435,6 +458,12 @@ function applyEditedSubtasks(task, edited, actorId) {
       parent_task_id,created_by,visibility,sort_order,start_time,is_optional) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?)`)
       .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional).lastInsertRowid);
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
+    if(child.assignedUsers!==undefined) {
+      assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,task.due_date||todayInHouseholdZone(),{allowDelegation:true});
+      assertTaskAssignmentAvailability(db.get(),id,child.assignedUsers);
+      db.get().prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(child.assignedUsers[0]??null,id);
+      setAssignments(db.get(),id,child.assignedUsers);
+    }
     if(recurring)registerRecurrenceAction(db.get(),id);
   }
 }
@@ -838,6 +867,7 @@ function loadSubtasks(taskId, me, supervisionViews) {
   return attachTags(rows);
 }
 
+const rotationReadCacheKey = Symbol('taskRotationReadCache');
 export function hydrateTask(task, me, supervisionViews = new Map()) {
   if (!task) return task;
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
@@ -848,6 +878,13 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   if(task.parent_task_id)task.parent_revision=db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision;
   attachTags([task]);attachTaskCapabilities(db.get(),me,[task]);attachTaskSupervision(db.get(),[task],me,supervisionViews);
   Object.assign(task,seriesMetadata(db.get(),task.id));
+  if(!supervisionViews.has(rotationReadCacheKey))supervisionViews.set(rotationReadCacheKey,new Map());
+  const rotationCache = supervisionViews.get(rotationReadCacheKey);
+  for (const row of [task,...task.subtasks]) {
+    row.rotations = taskRotationContexts(db.get(),row,me,rotationCache);
+    row.rotation_bindings = rotationCache.get(`permission:${me}`)===false?[]:parseRotationBindings(row.rotation_bindings_json);
+    row.rotation_bindings_json=undefined;
+  }
   task.permissions.edit_series=!!task.recurrence_series_id&&task.permissions.edit&&task.permissions.change_dates;
   for(const row of [task,...task.subtasks])if(row.supervision) {
     // A shared parent does not expose a separately private child's title.
@@ -1514,6 +1551,7 @@ router.post('/', (req, res) => {
       try {
         activityDraft = resolveActivityTemplate(db.get(), activityBinding.activityTemplateId, {
           inputs: req.body.activity_inputs ?? {}, subjectUserId: activityBinding.subjectUserId, includeLabels: true,
+          actorId:req.authUserId||req.session.userId,
           assignmentOverrideUserId:activityBinding.assignmentOverrideUserId,task:req.body,
         });
       } catch (error) { return res.status(400).json({ error: error.message, code: 400, reason: error.code || 'invalid_input' }); }
@@ -1529,6 +1567,9 @@ router.post('/', (req, res) => {
     const templateDefaults = req.body.activity_template_id
       ? db.get().prepare('SELECT * FROM activity_templates WHERE id = ?').get(req.body.activity_template_id)
       : null;
+    const rotationBindings = normalizeRotationBindings(db.get(), req.body.rotation_bindings ?? templateDefaults?.rotation_bindings_json);
+    assertRotationBindingsChange(db.get(),req,[],rotationBindings);
+    if (req.body.parent_task_id && rotationBindings.length) return res.status(400).json({error:'Configure shared rotations on the parent Activity. Its subtasks inherit the same occurrence.',code:400});
     const { start_date, start_time, due_date, due_time, due_date_offset_days } = resolveActivitySchedule(templateDefaults, req.body);
     if (templateDefaults?.due_date_offset_days != null && !start_date && req.body.due_date === undefined) {
       return res.status(400).json({ error: 'Choose a Start Date to resolve this Activity Template\'s Due setting.', code: 400 });
@@ -1557,7 +1598,7 @@ router.post('/', (req, res) => {
     const visibility = normalizeVisibility(req.body.visibility);
 
     const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
-    const initialSubtasks = initialSubtasksInput(req.body);
+    const initialSubtasks = initialSubtasksInput(req.body,{allowAssignments:rotationBindings.length>0});
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
@@ -1666,6 +1707,7 @@ router.post('/', (req, res) => {
         points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0, due_date_offset_days
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
+      db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(rotationBindings),result.lastInsertRowid);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
       setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
       if (req.body.tags !== undefined) setTags(db.get(), result.lastInsertRowid, req.body.tags);
@@ -1689,6 +1731,14 @@ router.post('/', (req, res) => {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
             result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0).lastInsertRowid);
           setTaskSkills(db.get(), childId, child.skillIds);
+          if(child.templateItemId)db.get().prepare('UPDATE tasks SET activity_template_checklist_item_id=? WHERE id=?').run(child.templateItemId,childId);
+          if(child.assignedUsers!==undefined) {
+            assertTaskMutation(db.get(),req,null,{parent_task_id:Number(result.lastInsertRowid),assigned_to:child.assignedUsers,skill_ids:child.skillIds},{operation:'create'});
+            assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,due_date||todayInHouseholdZone(),{allowDelegation:true});
+            assertTaskAssignmentAvailability(db.get(),childId,child.assignedUsers);
+            db.get().prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(child.assignedUsers[0]??null,childId);
+            setAssignments(db.get(),childId,child.assignedUsers);
+          }
         }
       }
       if (syncTarget) {
@@ -1699,6 +1749,8 @@ router.post('/', (req, res) => {
       if (taskLocation !== undefined) {
         setTaskLocation(db.get(), Number(result.lastInsertRowid), taskLocation, req.authUserId || req.session.userId);
       }
+      bindTaskRotations(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});
+      initializeTaskRotationRendering(db.get(),Number(result.lastInsertRowid),{draft:activityDraft?.data,inputs:req.body.activity_inputs||{}});
       const actual = db.get().prepare('SELECT assigned_to FROM tasks WHERE id=?').get(result.lastInsertRowid);
       if (actual.assigned_to) assertTaskSupervisionAssignee(db.get(),Number(result.lastInsertRowid),actual.assigned_to);
       reconcileTaskSupervision(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});
@@ -1752,6 +1804,13 @@ router.put('/:id', (req, res) => {
 
     const editScope=req.body.edit_scope??'occurrence';
     if(!['occurrence','future'].includes(editScope))return res.status(400).json({error:'Choose where to apply these changes.',code:400});
+    const rotationBindings = req.body.rotation_bindings === undefined ? parseRotationBindings(task.rotation_bindings_json)
+      : normalizeRotationBindings(db.get(),req.body.rotation_bindings);
+    const rotationBindingsJson = JSON.stringify(rotationBindings);
+    const rotationsChanged = rotationBindingsJson !== (task.rotation_bindings_json || '[]');
+    assertRotationBindingsChange(db.get(),req,task.rotation_bindings_json,rotationBindings);
+    if(rotationsChanged && !taskCapabilities(db.get(),req,task).edit) return res.status(403).json({error:'Your household permissions do not allow editing this Activity.',code:403});
+    if (task.parent_task_id && rotationsChanged) return res.status(400).json({error:'Configure shared rotations on the parent Activity. Its subtasks inherit the same occurrence.',code:400});
     const historical=!!task.archived_at||['done','expired'].includes(task.status);
     const historicalSeriesOnly=editScope==='future'&&historical;
     if(!historicalSeriesOnly)assertTaskWindowAction(db.get(),task.id);
@@ -1968,7 +2027,7 @@ router.put('/:id', (req, res) => {
         recurrence_from_completion: recurrence_from_completion ? 1 : 0,
         assignment_mode: assignmentMode,
         rotation_group: rotationGroup, rotation_slot: rotationSlot || 0,
-        countdown: countdown ? 1 : 0, points, visibility,
+        countdown: countdown ? 1 : 0, points, visibility, rotation_bindings_json: rotationBindingsJson,
       };
       let touchesDefinition = Object.keys(wanted).some((k) => !sameFieldValue(wanted[k], task[k]));
 
@@ -2010,11 +2069,12 @@ router.put('/:id', (req, res) => {
     const definitionFields={title:title.trim(),description,category,priority,start_date,start_time,due_date,due_time,
       due_date_offset_days:dueDateOffset,is_recurring:is_recurring?1:0,recurrence_rule,
       recurrence_from_completion:recurrence_from_completion?1:0,assignment_mode:assignmentMode,
-      rotation_group:rotationGroup,rotation_slot:rotationSlot||0,points,visibility,countdown:countdown?1:0,locked,expiration_policy,is_optional:is_optional?1:0};
+      rotation_group:rotationGroup,rotation_slot:rotationSlot||0,rotation_bindings_json:rotationBindingsJson,points,visibility,countdown:countdown?1:0,locked,expiration_policy,is_optional:is_optional?1:0};
     const currentChildren=editedSubtasks?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):null;
     const childrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.length!==currentChildren.length
       ||editedSubtasks.next.some((child,index)=>child.id!==currentChildren[index]?.id||child.title!==currentChildren[index]?.title
         ||child.isOptional!==Number(currentChildren[index]?.is_optional||0)
+        ||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id))
         ||!sameIdOrder(child.skillIds,loadTaskSkillIds(db.get(),child.id))));
     const definitionChanged=Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))
       ||childrenChanged||bindingChanged||!sameIdOrder(skillIds,skillsBefore)
@@ -2037,6 +2097,7 @@ router.put('/:id', (req, res) => {
     let updated;
     let seriesEdit;
     let unchanged=false;
+    let rotationChanges={preserved:[]};
     db.get().transaction(() => {
       const current=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
       if(!current)throw new TaskStateError('Task not found.',{},404);
@@ -2088,6 +2149,7 @@ router.put('/:id', (req, res) => {
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, dueDateOffset, req.params.id);
       applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
+      if(rotationsChanged)db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(rotationBindingsJson,task.id);
       setAssignments(db.get(), task.id, userIds);
       setTaskSkills(db.get(), task.id, skillIds);
       updateTaskActivitySnapshotSkills(db.get(),task.id,skillIds);
@@ -2139,6 +2201,10 @@ router.put('/:id', (req, res) => {
       }
 
       reconcileTaskSupervision(db.get(),task.id,{actorId:req.authUserId||req.session.userId});
+      if(rotationsChanged){
+        rotationChanges=bindTaskRotations(db.get(),task.id,{actorId:req.authUserId||req.session.userId,scope:editScope});
+        applyTaskRotationRendering(db.get(),task.id);
+      }
       if(firstUid && (performersChanged||editedSubtasks||!sameIdOrder(skillIds,skillsBefore)))
         assertTaskSupervisionAssignee(db.get(),task.id,firstUid);
       if(series) {
@@ -2199,7 +2265,8 @@ router.put('/:id', (req, res) => {
     addAssignedUsers(updated);
     attachTaskActivityBindings(db.get(), [updated]);
     attachTaskLocations(db.get(), [updated]);
-    res.json({ data: hydrateTask(updated,req.authUserId||req.session.userId),...(seriesEdit?{series_edit:seriesEdit}:{}),...(unchanged?{unchanged:true}:{}) });
+    res.json({ data: hydrateTask(updated,req.authUserId||req.session.userId),...(seriesEdit?{series_edit:seriesEdit}:{}),...(unchanged?{unchanged:true}:{}),
+      ...(rotationChanges.preserved.length?{rotation_warning:'The current rotation order is preserved. The new configuration applies when future occurrences resolve.'}: {}) });
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
@@ -2499,6 +2566,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       task.id, task.start_time, task.expiration_policy || 'keep_overdue', task.due_date_offset_days ?? null,task.locked||0
     );
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
+    db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
     setRotationMembers(db.get(), newTask.lastInsertRowid, task.assignment_mode === 'round_robin' ? rotationUserIds : []);
     setTags(db.get(), newTask.lastInsertRowid, existingTags);
@@ -2561,6 +2629,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       db.get().prepare('INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source) VALUES(?,?,?,?,?)')
         .run(newTask.lastInsertRowid,planning.place_id,planning.presence_policy,planning.presence_window,planning.source);
     }
+    bindTaskRotations(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by});
+    applyTaskRotationRendering(db.get(),Number(newTask.lastInsertRowid),definition.rotation_rendering);
     reconcileTaskSupervision(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by});
     notifyTaskAssignments(db.get(), Number(newTask.lastInsertRowid));
     recordTaskActivity(db.get(),Number(newTask.lastInsertRowid),'recurrence_generated',task.created_by,
@@ -2599,9 +2669,39 @@ function recurringCohort(task) {
     .sort((left,right)=>left.rotation_slot-right.rotation_slot||left.id-right.id);
 }
 
+/** Resolves already materialized work after its preceding Rotation frontier
+ * settles. Existing snapshots are untouched, even when their Task is a series
+ * exception. This runs only in mutation/reconciliation transactions. */
+function resumePendingSeriesRotations(taskId,{all=false}={}) {
+  const occurrence=registerRecurrenceOccurrence(db.get(),taskId);
+  if(!occurrence)return [];
+  const candidates=db.get().prepare(`SELECT o.* FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
+    WHERE o.series_id=? AND o.state='materialized' AND o.generation>=? AND t.archived_at IS NULL AND t.status NOT IN ('done','expired')
+    AND EXISTS(SELECT 1 FROM json_each(t.rotation_bindings_json) purpose WHERE NOT EXISTS(
+      SELECT 1 FROM task_rotation_occurrences link WHERE link.task_id=t.id AND link.retired_at IS NULL
+      AND link.purpose_key=json_extract(purpose.value,'$.purpose_key'))) ORDER BY o.generation,o.task_id`)
+    .all(occurrence.series_id,all?0:occurrence.generation+1);
+  const resolved=[];
+  for(const candidate of candidates) {
+    const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(candidate.task_id);
+    const pristine=!seriesOccurrencePreservationReason(db.get(),candidate,task);
+    const authoritative=seriesDefinitionForGeneration(db.get(),candidate.series_id,candidate.generation);
+    const exception=authoritative&&!rotationBindingsEqual(task.rotation_bindings_json,authoritative.data.task.rotation_bindings_json);
+    const result=bindTaskRotations(db.get(),task.id,{actorId:task.created_by,onlyMissing:true,scope:exception?'preserved':'materialize'});
+    if(result.resolved?.length) {
+      applyTaskRotationRendering(db.get(),task.id);
+      if(pristine)recordOccurrenceDefinition(db.get(),task.id,{definitionId:candidate.definition_id,exceptionReason:candidate.exception_reason,baseline:true});
+      resolved.push(task.id);
+    }
+  }
+  return resolved;
+}
+
 function spawnRecurrenceFollowupLocked(taskId) {
   const source=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
-  if(!source||!isTerminalRecurrenceOccurrence(source)||!isRecurrenceFrontier(db.get(),source.id))return;
+  if(!source||!isTerminalRecurrenceOccurrence(source))return;
+  resumePendingSeriesRotations(source.id);
+  if(!isRecurrenceFrontier(db.get(),source.id))return;
   const task=recurringCohortMember(source);
   if (!task?.rotation_group) return spawnRecurrenceFollowupSingle(task);
 
@@ -2637,6 +2737,7 @@ function spawnRecurrenceFollowupLocked(taskId) {
  * materialized frontier may advance. Archive alone never moves that frontier. */
 export function reconcileTaskRecurrence(taskId) {
   return db.get().transaction(()=>{
+    const resolved_rotation_task_ids=resumePendingSeriesRotations(Number(taskId),{all:true});
     const before=recurrenceFrontier(db.get(),Number(taskId));
     if(!before)return {frontier_task_id:null,generated_task_ids:[]};
     const prior=new Set(db.get().prepare('SELECT task_id FROM task_recurrence_occurrences').all().map(row=>row.task_id));
@@ -2646,7 +2747,7 @@ export function reconcileTaskRecurrence(taskId) {
         reason:error.details.reason,explanation:error.message};
       throw error;
     }
-    return {frontier_task_id:recurrenceFrontier(db.get(),before.id)?.id||null,
+    return {frontier_task_id:recurrenceFrontier(db.get(),before.id)?.id||null,resolved_rotation_task_ids,
       generated_task_ids:db.get().prepare("SELECT task_id FROM task_recurrence_occurrences WHERE state='materialized'").all().map(row=>row.task_id).filter(id=>!prior.has(id))};
   }).immediate();
 }
@@ -2938,6 +3039,26 @@ router.post('/:id/supervisor',(req,res)=>{
       reconcileTaskSupervision(db.get(),source.id,{actorId:me,supervisorUserId:supervisor});
     })();
     res.json({data:hydrateTask(task,me)});
+  }catch(error){res.status(error.status||400).json({error:error.message,code:error.status||400,...error.details});}
+});
+
+router.post('/:id/rotation/reconcile',(req,res)=>{
+  try {
+    const me=req.authUserId||req.session.userId;
+    const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(req.params.id);
+    if(!task||!mayAccessTask(task,me))return res.status(404).json({error:'Task not found.',code:404});
+    assertCapability(db.get(),req,'rotations.configure');
+    if(!taskCapabilities(db.get(),req,task).edit)return res.status(403).json({error:'Your household permissions do not allow editing this Activity.',code:403});
+    if(task.archived_at||['done','expired'].includes(task.status))return res.status(409).json({error:'Historical rotation evidence is preserved. Resolve a current occurrence instead.',code:409});
+    const result=db.get().transaction(()=>{
+      assertTaskRevision(db.get(),task,req.body,{required:true});
+      const result=bindTaskRotations(db.get(),task.id,{actorId:me});
+      // Use this occurrence's surviving field bindings, so an explicit retry
+      // cannot restore text that was manually detached by an occurrence edit.
+      applyTaskRotationRendering(db.get(),task.id);
+      return result;
+    }).immediate();
+    res.json({data:hydrateTask(task,me),...result});
   }catch(error){res.status(error.status||400).json({error:error.message,code:error.status||400,...error.details});}
 });
 

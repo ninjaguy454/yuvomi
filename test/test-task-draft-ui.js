@@ -66,6 +66,7 @@ app.use('/api/v1', (req, res) => {
   }
   if (req.path === '/tasks/meta/options') return res.json({ users, categories: [{ key: 'misc', label: 'General' }], tags: [], default_points: 3 });
   if (req.path === '/automation/activity-options') return res.json({ data: { activities: templates, skills } });
+  if (req.path === '/automation/rotation-groups') return res.json({ data: [{id:31,name:'Kids',members:users}] });
   if (req.path === '/planning/places') return res.json({ data: places });
   if (req.path === '/planning/place-search/status') return res.json({ data: { configured: false } });
   if (req.path === '/automation/quick-add') return res.json({ data: [workflow], activities: templates, members: users, places });
@@ -759,6 +760,32 @@ test('unchanged recurring Edit Save closes without any mutation or scope dialog'
     await saveEdit(page); await page.waitForFunction(() => !document.querySelector('#task-form'));
     assert.equal(await page.$('#task-edit-scope-form'), null); assert.equal(mutations().length, 0);
   } finally { await page.dispose(); }
+});
+
+for(const width of [1366,390])test(`one shared Rotation purpose enables participant assignment and survives scope Cancel at ${width}px`,async()=>{
+  const page=await mounted({width,editTask:seriesEditFixture()});requests.length=0;
+  try {
+    assert.equal(await page.$eval('[data-task-subtask-assignment]',node=>node.hidden),true);
+    await page.click('[data-rotation-add]');
+    await set(page,'[data-rotation-label]','Shower Order');
+    await page.waitForSelector('[data-rotation-group] option[value="31"]');
+    await page.select('[data-rotation-group]','31');
+    await page.select('[data-rotation-strategy]','rotating_order');
+    await page.select('[data-task-subtask-assignee]','2');
+    assert.equal(await page.$eval('[data-task-subtask-assignment]',node=>node.hidden),false);
+    const key=await value(page,'[data-rotation-key]');
+    await saveEdit(page);await page.waitForSelector('#task-edit-scope-form');
+    await page.click('[data-task-scope-cancel]');await page.waitForFunction(()=>!document.querySelector('#task-edit-scope-form'));
+    assert.equal(await value(page,'[data-rotation-key]'),key);assert.equal(await value(page,'[data-task-subtask-assignee]'),'2');
+    assert.equal(mutations().length,0);
+    await saveEdit(page);await page.waitForSelector('#task-edit-scope-form');
+    await page.click('[name="edit_scope"][value="future"]');await page.click('#task-scope-apply');
+    await page.waitForFunction(()=>!document.querySelector('#task-form'));
+    const write=requests.find(request=>request.method==='PUT'&&request.path==='/tasks/70');
+    assert.equal(write.body.rotation_bindings[0].purpose_key,key);assert.equal(write.body.rotation_bindings[0].group_id,31);
+    assert.equal(write.body.rotation_bindings[0].override_affects_next,true);assert.deepEqual(write.body.subtasks[0].assigned_user_ids,[2]);
+    assert.equal(write.body.edit_scope,'future');assert.deepEqual(page.fixtureErrors||[],[]);
+  }finally{await page.dispose();}
 });
 
 test('nonrecurring and unchanged-span occurrence date edits save without scope', async () => {

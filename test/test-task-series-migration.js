@@ -45,7 +45,7 @@ for(const baseVersion of [10036,10037])test(`encrypted ${baseVersion} migrates i
         {cwd:new URL('..',import.meta.url),encoding:'utf8',timeout:60000,env:{...process.env,LOG_LEVEL:'info',DB_PATH:databasePath,DB_ENCRYPTION_KEY:key,NODE_ENV:'test'}});
       assert.equal(child.status,0,child.stdout+child.stderr);return child.stdout+child.stderr;
     };
-    assert.deepEqual([...boot().matchAll(/Migration (\d+) applied:/g)].map(row=>Number(row[1])),baseVersion===10036?[10037,10038]:[10038]);
+    assert.deepEqual([...boot().matchAll(/Migration (\d+) applied:/g)].map(row=>Number(row[1])),ALL_MIGRATIONS.filter(m=>m.version>baseVersion).map(m=>m.version));
     const migrated=open({readonly:true});
     for(const table of ['tasks','activity_templates','task_comments','task_completions','task_activity_events','reward_ledger']) {
       const columns=Object.keys(snapshots[table][0]||{});

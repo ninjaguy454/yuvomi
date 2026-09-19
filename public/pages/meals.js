@@ -94,6 +94,7 @@ let state = {
   deepLinkFocus:    null,
   desktopOccurrenceDialogKey: null,
   mealPlans:        [],
+  rotationGroups:   [],
   mealPlanContexts: [],
   mealPlanManagerContextId: null,
   grocerySettings: null,
@@ -984,6 +985,8 @@ function participationQuestion(occurrence, personalPolicy = false) {
 
 function renderChooserRepairAction(occurrence) {
   const mealId = Number(occurrence?.meal?.id || occurrence?.id);
+  const pendingRotation = Object.values(occurrence.rotations || {}).some(value => value?.state === 'needs_assignment');
+  if (state.isAdmin && mealId && pendingRotation) return `<div class="meal-chooser-repair"><span><strong>Rotation needs attention</strong><small>Recheck this meal’s Skills, Availability, and Group membership.</small></span><button type="button" class="btn btn--secondary btn--sm" data-action="repair-meal-chooser" data-meal-id="${mealId}" data-occurrence-key="${esc(occurrence.key)}">Recheck rotations</button></div>`;
   if (!state.isAdmin || !mealId || occurrenceSelectionPolicy(occurrence) === 'personal_choice'
       || occurrenceHasActiveChooser(occurrence)) return '';
   return `<div class="meal-chooser-repair">
@@ -1138,6 +1141,7 @@ function renderChoiceOccurrenceDetails(occurrence, model, { includeActingNotice 
   const chosen = summary.foods;
   const title = summary.title;
   return `${includeActingNotice ? renderMealActingForNotice(model, 'meal-acting-banner--dialog') : ''}
+    ${renderMealRotationNotice(occurrence)}
     ${occurrence.unavailable_reason ? `<div class="meal-unavailable"><i data-lucide="calendar-off" class="icon-sm" aria-hidden="true"></i><span>${esc(occurrence.unavailable_reason)}</span></div>` : ''}
     <dl class="meal-role-summary">
       <div><dt>${mealText('meals.chooserResponsibility', "Who's choosing?")}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
@@ -1211,7 +1215,7 @@ function statusOccurrenceOptions(occurrence) {
 
 function renderStatusOccurrenceDetails(occurrence) {
   const options = statusOccurrenceOptions(occurrence);
-  return `<dl class="meal-role-summary">
+  return `${renderMealRotationNotice(occurrence)}<dl class="meal-role-summary">
       <div><dt>${mealText('meals.chooserResponsibility', 'Chooser responsibility')}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
       <div><dt>${mealText('meals.cookingResponsibility', 'Cooking and supervision')}</dt><dd>${renderCookingSummary(occurrence)}</dd></div>
     </dl>
@@ -2089,12 +2093,14 @@ async function openMealMenuEditor(occurrence) {
 }
 
 async function loadMealPlans() {
-  const [response, contextsResponse] = await Promise.all([
+  const [response, contextsResponse, rotationsResponse] = await Promise.all([
     api.get('/meals/plans'),
     api.get('/planning/contexts'),
+    canCapability('rotations.view') ? api.get('/automation/rotation-groups').catch(() => null) : Promise.resolve(null),
   ]);
   const data = response?.data ?? response;
   state.mealPlans = Array.isArray(data) ? data : (data?.plans || []);
+  state.rotationGroups = Array.isArray(rotationsResponse?.data) ? rotationsResponse.data : [];
   const contexts = contextsResponse?.data ?? contextsResponse;
   state.mealPlanContexts = (Array.isArray(contexts) ? contexts : [])
     .filter((context) => context.context_type === 'travel'
@@ -2303,6 +2309,28 @@ function strategyOptions(selected, choices) {
   return choices.map(([value, label]) => `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`).join('');
 }
 
+function renderMealRotationNotice(occurrence) {
+  const roles = Object.entries(occurrence.rotations || {}).filter(([, value]) => value?.state === 'needs_assignment');
+  return roles.map(([role, value]) => `<p class="meal-unavailable" role="status"><span>${esc(role[0].toUpperCase() + role.slice(1))}: ${esc(value.reason || 'Rotation needs an eligible household member.')}</span></p>`).join('');
+}
+
+function mealRotationOptions(selected) {
+  const groups = state.rotationGroups || [];
+  const unavailable = selected && !groups.some(group => Number(group.id) === Number(selected));
+  return `<option value="">All eligible household members (existing rotation)</option>${unavailable
+    ? `<option value="${Number(selected)}" selected>Current Rotation Group (unavailable)</option>` : ''}${groups.map(group =>
+    `<option value="${Number(group.id)}" ${Number(selected) === Number(group.id) ? 'selected' : ''}>${esc(group.name)}</option>`).join('')}`;
+}
+
+function mealRotationEditor(role, rule, visible) {
+  const field = role === 'chooser' ? 'rotation_group' : `${role}_rotation_group`;
+  const attribute = role === 'chooser' ? 'data-plan-round-robin' : `data-plan-${role}-rotation`;
+  return `<label class="label" ${attribute} ${visible ? '' : 'hidden'}><span>Rotation Group</span>
+    <select class="form-input" name="rule_${role}_rotation_group_id" ${canCapability('rotations.configure') ? '' : 'disabled'}>${mealRotationOptions(rule[`${role}_rotation_group_id`])}</select>
+    <input type="hidden" name="rule_${field}" value="${esc(rule[field] || '')}">
+    <small class="form-hint">Each meal role rotates independently. A turn advances when its dated meal is generated.${rule[field] ? ' Existing rotation settings are preserved when no Group is selected.' : ''}</small></label>`;
+}
+
 function renderChooserFallbackRow(selected = null) {
   return `<div class="meal-plan-fallback-row" data-plan-fallback-row>
     <label class="label"><span>${mealText('meals.fixedBackupChooser', 'Fixed backup chooser')}</span><select class="form-input" name="rule_fallback_user_id">${planMemberOptions(selected)}</select></label>
@@ -2363,7 +2391,7 @@ function renderMealPlanRule(rule = {}) {
           <div class="meal-plan-assignment-row">
             <label class="label"><span>${mealText('meals.selectionPolicy', 'Selection policy')}</span><select class="form-input" name="rule_policy"><option value="fixed" ${rule.policy === 'fixed' || !rule.policy ? 'selected' : ''}>${policyLabel('fixed')}</option><option value="round_robin" ${rule.policy === 'round_robin' ? 'selected' : ''}>${policyLabel('round_robin')}</option><option value="personal_choice" ${rule.policy === 'personal_choice' ? 'selected' : ''}>${policyLabel('personal_choice')}</option></select></label>
             <label class="label" data-plan-fixed><span>${mealText('meals.primaryChooser', 'Primary chooser')}</span><select class="form-input" name="rule_fixed_user_id">${planMemberOptions(rule.fixed_user_id)}</select><small class="form-hint">${mealText('meals.primaryChooserHint', 'This person normally chooses the household meal unless they are unavailable or decline.')}</small></label>
-            <label class="label" data-plan-round-robin ${rule.policy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.rotationGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_rotation_group" maxlength="160" value="${esc(rule.rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.rotationGroupOptionalHint', 'Leave blank to rotate through all eligible household members. An empty custom group falls back to that default.')}</small></label>
+            ${mealRotationEditor('chooser', rule, rule.policy === 'round_robin')}
           </div>
           <div class="meal-plan-fallbacks" data-plan-fallbacks ${rule.policy === 'personal_choice' ? 'hidden' : ''}>
             <div><strong>${mealText('meals.fixedBackupOrder', 'Fixed backup order')}</strong><small>${mealText('meals.fixedBackupOrderHint', 'If the chooser cannot decide, Vidamia tries these people in order, then uses the household default failsafe.')}</small></div>
@@ -2376,12 +2404,12 @@ function renderMealPlanRule(rule = {}) {
           <section class="meal-plan-role-assignment" aria-labelledby="meal-plan-cook-${sequence}"><div class="meal-plan-role-assignment__heading"><strong id="meal-plan-cook-${sequence}">${mealText('meals.cookAssignment', 'Cook assignment')}</strong><small>${mealText('meals.cookAssignmentHint', 'Defaults to eligible household members in round-robin order.')}</small></div><div class="meal-plan-assignment-row">
             <label class="label"><span>${mealText('meals.assignmentMethod', 'Assignment method')}</span><select class="form-input" name="rule_cook_strategy">${strategyOptions(cookStrategy, [['none', mealText('meals.strategyNone', 'None')], ['fixed', mealText('meals.fixedMember', 'Fixed member')], ['round_robin', mealText('meals.eligibleRoundRobin', 'Eligible round robin')]])}</select></label>
             <label class="label" data-plan-cook-fixed ${cookStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.cookLabel', 'Cook')}</span><select class="form-input" name="rule_cook_user_id">${planMemberOptions(rule.cook_user_id)}</select></label>
-            <label class="label" data-plan-cook-rotation ${cookStrategy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.roundRobinGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_cook_rotation_group" maxlength="160" value="${esc(rule.cook_rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.roleRotationFallbackHint', 'Leave blank for eligible household members; an empty group falls back to that default.')}</small></label>
+            ${mealRotationEditor('cook', rule, cookStrategy === 'round_robin')}
           </div></section>
           <section class="meal-plan-role-assignment" aria-labelledby="meal-plan-supervisor-${sequence}"><div class="meal-plan-role-assignment__heading"><strong id="meal-plan-supervisor-${sequence}">${mealText('meals.supervisorAssignment', 'Supervisor assignment')}</strong><small>${mealText('meals.supervisorAssignmentHint', 'Leave unassigned unless this meal needs supervision.')}</small></div><div class="meal-plan-assignment-row">
             <label class="label"><span>${mealText('meals.assignmentMethod', 'Assignment method')}</span><select class="form-input" name="rule_supervisor_strategy">${strategyOptions(supervisorStrategy, [['none', mealText('meals.strategyNone', 'None')], ['fixed', mealText('meals.fixedMember', 'Fixed member')], ['round_robin', mealText('meals.eligibleRoundRobin', 'Eligible round robin')]])}</select></label>
             <label class="label" data-plan-supervisor-fixed ${supervisorStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.supervisorLabel', 'Supervisor')}</span><select class="form-input" name="rule_supervisor_user_id">${planMemberOptions(rule.supervisor_user_id)}</select></label>
-            <label class="label" data-plan-supervisor-rotation ${supervisorStrategy === 'round_robin' ? '' : 'hidden'}><span>${mealText('meals.roundRobinGroupOptional', 'Round-robin group (optional)')}</span><input class="form-input" name="rule_supervisor_rotation_group" maxlength="160" value="${esc(rule.supervisor_rotation_group || '')}" placeholder="${mealText('meals.defaultEligibleGroup', 'Default - all eligible members')}"><small class="form-hint">${mealText('meals.roleRotationFallbackHint', 'Leave blank for eligible household members; an empty group falls back to that default.')}</small></label>
+            ${mealRotationEditor('supervisor', rule, supervisorStrategy === 'round_robin')}
           </div></section>
         </div>
         <label class="meal-inline-choice meal-plan-rule__presence"><input type="checkbox" name="rule_presence_required" ${rule.presence_required ? 'checked' : ''}><span>${mealText('meals.presenceRequired', 'Only assign people who are available in this context')}</span></label>
@@ -2441,6 +2469,7 @@ function planRuleFromElement(rule) {
     policy,
     fixed_user_id: policy === 'fixed' ? Number(value('rule_fixed_user_id')) || null : null,
     rotation_group: policy === 'round_robin' ? value('rule_rotation_group').trim() || null : null,
+    chooser_rotation_group_id: policy === 'round_robin' ? Number(value('rule_chooser_rotation_group_id')) || null : null,
     chooser_fallback_user_ids: policy === 'personal_choice' ? [] : fallbackUserIds,
     // Compatibility fields remain populated while older clients and copied
     // databases transition to the ordered chain introduced in schema 10019.
@@ -2449,9 +2478,11 @@ function planRuleFromElement(rule) {
     cook_strategy: cookStrategy,
     cook_user_id: cookStrategy === 'fixed' ? Number(value('rule_cook_user_id')) || null : null,
     cook_rotation_group: cookStrategy === 'round_robin' ? value('rule_cook_rotation_group').trim() || null : null,
+    cook_rotation_group_id: cookStrategy === 'round_robin' ? Number(value('rule_cook_rotation_group_id')) || null : null,
     supervisor_strategy: supervisorStrategy,
     supervisor_user_id: supervisorStrategy === 'fixed' ? Number(value('rule_supervisor_user_id')) || null : null,
     supervisor_rotation_group: supervisorStrategy === 'round_robin' ? value('rule_supervisor_rotation_group').trim() || null : null,
+    supervisor_rotation_group_id: supervisorStrategy === 'round_robin' ? Number(value('rule_supervisor_rotation_group_id')) || null : null,
     participant_ids: rule.querySelector('[name="rule_all_participants"]')?.checked
       ? []
       : [...rule.querySelectorAll('[name="rule_participant"]:checked')].map((input) => Number(input.value)),
@@ -3229,7 +3260,7 @@ async function repairOccurrenceChooser(occurrence, button, panel = null) {
     const result = response?.data ?? response ?? {};
     window.yuvomi?.showToast(
       result.guidance || result.message || mealText('meals.chooserRepaired', 'The next chooser is ready.'),
-      'success',
+      result.status === 'unresolved' ? 'warning' : 'success',
     );
     return true;
   } catch (error) {

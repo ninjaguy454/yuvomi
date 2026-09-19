@@ -24,6 +24,10 @@ export function taskFormErrors(form) {
   if (template?.value && template.selectedOptions?.[0]?.dataset.subjectRequired === '1' && !value('task-activity-subject-user')) {
     add('task-activity-subject-user', 'Choose who this activity is for.');
   }
+  for(const row of form.querySelectorAll('[data-rotation-binding]')) {
+    if(!row.querySelector('[data-rotation-label]')?.value.trim())add('task-rotations','Give each rotation purpose a name.');
+    if(!row.querySelector('[data-rotation-group]')?.value)add('task-rotations','Choose a Rotation Group.');
+  }
   return errors;
 }
 
@@ -34,7 +38,8 @@ export function taskErrorField(message = '') {
   if (/due|deadline|expiration/i.test(message)) return 'task-due-date';
   if (/title/i.test(message)) return 'task-title';
   if (/subtask/i.test(message)) return 'task-subtasks-heading';
-  if (/recurr|rotation/i.test(message)) return 'task-rrule-freq';
+  if (/rotation/i.test(message)) return 'task-rotations';
+  if (/recurr/i.test(message)) return 'task-rrule-freq';
   return null;
 }
 

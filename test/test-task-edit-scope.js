@@ -24,4 +24,5 @@ test('preserved future occurrences get an explicit human-readable save result', 
   assert.match(taskEditResultMessage({ series_edit: { preserved: [{ reason: 'manual_edit' }, { reason: 'schedule_conflict' }, { reason: 'eligibility_or_permission' }] } }, 'Saved'), /3 future occurrences were preserved.*occurrence-specific changes; a scheduling conflict; eligibility or permission restrictions/);
   assert.equal(taskEditResultMessage({}, 'Saved'), 'Saved');
   assert.equal(taskEditResultMessage({ series_edit: { current_preserved: true, preserved: [] } }, 'Saved'), 'Changes applied. This historical occurrence was preserved.');
+  assert.match(taskEditResultMessage({series_edit:{preserved:[{reason:'rotation_snapshot'}],pending_rotations:[{task_id:2}]}},'Saved'),/already resolved rotation snapshot.*1 future occurrence is waiting for rotation resolution/);
 });

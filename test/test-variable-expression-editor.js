@@ -48,7 +48,8 @@ app.use('/api/v1', (req, res) => {
     if (pending) { pending.push(send); return; }
     return send();
   }
-  if (req.path === '/automation/admin/variables' && req.method === 'GET') return res.json({ data: catalog, context, members, places: [] });
+  if (req.path === '/automation/rotation-groups') return res.json({ data: [{id:5,name:'Kids',active:1}] });
+  if (req.path === '/automation/admin/variables' && req.method === 'GET') return res.json({ data: catalog, context, members, places: [], rotationGroups: [{id:5,name:'Kids',active:1}], rotationOccurrences: [{id:8,purpose_label:'Shower Order',occurrence_key:'Night 1'}] });
   if (req.path.startsWith('/automation/admin/variables') && ['POST', 'PUT'].includes(req.method)) {
     const id = Number(req.path.split('/').at(-1)) || 20;
     const saved = { ...req.body, id, variable_key: req.body.variable_key || 'friendly_name' };
@@ -79,6 +80,7 @@ async function pageAt(width = 390, { touch = false } = {}) {
   await page.evaluate(async () => {
     await (await import('/i18n.js')).initI18n(); await (await import('/i18n.js')).setLocale('en');
     window.yuvomi = { user: { id: 7, role: 'admin' }, showToast(message) { window.lastToast = message; } };
+    (await import('/permissions.js')).setPermissions({admin:true,modules:{},widgets:{},capabilities:{}});
     window.automation = await import('/components/activity-expression-fixture.js');
   });
   return { page, errors };
@@ -267,6 +269,39 @@ test('workflow launch only asks for inputs and shows calculated values in the re
     assert.match(await page.$eval('.variable-resolved-values', node => node.textContent), /Friendly name.*Gracie/s);
     assert.deepEqual(requests.at(-1).body.inputs, { member: 7 }); assert.deepEqual(errors, []);
   } finally { await page.close(); }
+});
+
+for (const width of [390, 1366]) test(`Workflow Rotation configuration and typed purpose formulas save at ${width}px`, async () => {
+  const {page,errors}=await pageAt(width,{touch:width===390});
+  try {
+    await page.evaluate(() => window.automation.openWorkflowForm({id:8,name:'Bedtime',rotation_bindings:[{purpose_key:'shower_order',label:'Shower Order',group_id:5,strategy:'rotating_order',advance_policy:'on_completed',advance_on_skip:false,override_affects_next:true}],input_schema:[{id:'first',label:'First member',type:'household_member',expression:{version:1,source:'rotationFirst(shower_order)'}}],steps:[{activity_template_id:1}]},
+      {activities:[{id:1,name:'Bedtime'}],members:[],places:[],categories:[],variables:[],context:[]},null,{asChild:true,onSaved:saved=>window.saved=saved}));
+    await page.waitForSelector('[data-rotation-group]');
+    await page.waitForFunction(()=>document.querySelector('[data-rotation-group] option:checked')?.textContent==='Kids');
+    assert.equal(await page.$eval('[data-question-type]',field=>field.value),'household_member');
+    assert.equal(await page.$eval('[data-expression-source]',field=>field.value),'rotationFirst(shower_order)');
+    await page.click('[type="submit"]');await page.waitForFunction(()=>window.saved);
+    const saved=await page.evaluate(()=>window.saved);
+    assert.equal(saved.rotation_bindings[0].group_id,5);assert.equal(saved.rotation_bindings[0].strategy,'rotating_order');
+    assert.equal(saved.rotation_bindings[0].advance_policy,'on_completed');assert.equal(saved.rotation_bindings[0].advance_on_skip,false);
+    assert.equal(saved.input_schema[0].expression.source,'rotationFirst(shower_order)');
+    assert.deepEqual(errors,[]);
+  }finally{await page.close();}
+});
+
+test('Rotation Group variables use the named Group picker and save its typed identity',async()=>{
+  const {page,errors}=await pageAt();
+  try{
+    await openVariable(page,false);
+    await page.type('[name="label"]','Dinner Group');
+    await page.select('#automation-variable-type','rotation_group');
+    await page.select('[data-variable-source]','value');
+    await page.select('[data-variable-default-control] select','5');
+    assert.match(await page.$eval('[data-variable-default-control]',node=>node.textContent),/Kids/);
+    await page.click('[type="submit"]');await page.waitForFunction(()=>window.saved);
+    assert.equal(await page.evaluate(()=>window.saved.type),'rotation_group');
+    assert.equal(await page.evaluate(()=>window.saved.default_value),5);assert.deepEqual(errors,[]);
+  }finally{await page.close();}
 });
 
 test('Activity Template values resolve through the server and remain independently editable', async () => {

@@ -21,6 +21,8 @@ import Database from 'better-sqlite3-multiple-ciphers';
 import { addTaskExpirationSchema } from './services/task-expiration-schema.js';
 import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
 import { TASK_SERIES_SCHEMA_SQL, initializeTaskSeries } from './services/task-series.js';
+import { ROTATION_SCHEMA_SQL, installRotationChangeTriggers } from './services/rotation-schema.js';
+import { rotationVariableSchemaMigration } from './services/rotation-variable-schema.js';
 import path from 'path';
 import fs from 'node:fs/promises';
 import { mkdirSync, existsSync, renameSync, rmSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs';
@@ -9042,6 +9044,17 @@ FORK_MIGRATIONS.push({
   description: 'Tasks: independent versioned recurring Activity definitions',
   up: TASK_SERIES_SCHEMA_SQL,
   afterUp: initializeTaskSeries,
+});
+
+FORK_MIGRATIONS.push({
+  version: 10039,
+  description: 'Household Automation: reusable Rotation Groups, independent Tracks and occurrence history',
+  foreignKeysOff: true,
+  up(database) {
+    database.exec(ROTATION_SCHEMA_SQL);
+    rotationVariableSchemaMigration(database);
+    installRotationChangeTriggers(database);
+  },
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

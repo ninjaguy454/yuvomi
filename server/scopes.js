@@ -117,10 +117,11 @@ function requiredAccess(method) {
  */
 function moduleForPath(path) {
   const normalized = String(path || '').replace(/^\/+/, '');
+  if (/^automation\/rotation-(?:groups|members|tracks|occurrences|changes)(?:\/|$)/.test(normalized)) return 'family';
   // Keep existing roster ACLs/token scopes when its API moves into Availability.
   if (/^planning\/routines(?:\/|$)/.test(normalized)) return 'schedule';
   if (/^planning\/(?:availability|presence)(?:\/|$)/.test(normalized)) return 'calendar';
-  if (/^automation\/(?:tasks|obligations|activity-options|activity-templates|quick-add)(?:\/|$)/.test(normalized)) return 'tasks';
+  if (/^automation\/(?:tasks|obligations|activity-options|activity-templates|quick-add|workflow-instances)(?:\/|$)/.test(normalized)) return 'tasks';
   const segment = normalized.split('/')[0];
   return PREFIX_TO_MODULE.get(segment) || null;
 }

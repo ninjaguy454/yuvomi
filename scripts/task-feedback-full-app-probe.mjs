@@ -16,6 +16,7 @@ SURFACES: modal,card,kanban. CASES: required-first,required-middle,optional,requ
 HOLD_MS: explicit before-network status transport hold (default 500, use 0 for native HTTP).
 LIGHT=1: no screenshot/DevTools trace during timing; default captures raster+trace evidence.
 FRAMES=1: additionally capture timestamped DevTools screencast raster frames (separate from light timing).
+ROTATION=1: attach an independently owned shared Rotation purpose to each synthetic routine.
 ROUNDS: samples per surface/case (default 1). PUPPETEER_EXECUTABLE_PATH: installed Chromium.
 Run with a disposable, network-isolated runtime containing app dependencies.`);
  process.exit(0);
@@ -34,6 +35,10 @@ const {reconcileTaskSupervision,inspectTaskSupervision}=await appImport('server/
 const {changeTaskStatus}=await appImport('server/services/task-lifecycle.js');
 const {setTaskSkills}=await appImport('server/services/task-skills.js');
 const {todayKey}=await appImport('server/utils/timezone.js');
+const rotation=process.env.ROTATION==='1' ? {
+ ...(await appImport('server/services/rotation.js')),
+ ...(await appImport('server/services/task-rotation.js')),
+} : null;
 const seed=createFeedbackFixtures(d,{reconcileTaskSupervision,inspectTaskSupervision,changeTaskStatus,setTaskSkills,todayKey});
 const password='Synthetic-Feedback-Probe!';d.prepare('UPDATE users SET password_hash=?,onboarding_version=1').run(await hashPassword(password));
 let ready;const originReady=new Promise(r=>ready=r),listen=net.Server.prototype.listen;
@@ -94,6 +99,12 @@ try{
  const surfaces=(process.env.SURFACES||'modal,card').split(',');
  for(const surface of surfaces)for(const kind of cases)for(let round=0;round<Number(process.env.ROUNDS||1);round++){
   const f={...seed.fixture(kind),kind};
+  if(rotation){
+   const group=rotation.saveRotationGroup(d,{name:`QA Rotation ${f.root}`,member_ids:[seed.learner,seed.helper,seed.admin]},{actorId:seed.admin});
+   d.prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify([{purpose_key:'order',label:'Shared routine order',group_id:group.id,strategy:'rotating_order',advance_policy:'on_completed'}]),f.root);
+   rotation.bindTaskRotations(d,f.root,{actorId:seed.admin});
+   f.rotationGroupId=group.id;
+  }
   const {page,selector}=await open(f,surface),name=`${surface}-${kind}-${round}`,prefix=`${out}/${name}`;
   const frames=[],frameAcks=new Set(),frameErrors=[];let cast,stoppingCast=false;
   if(process.env.FRAMES==='1'){
@@ -131,7 +142,7 @@ try{
   assert.equal(canonical.targetStatus,f.status);
   if(kind==='required-final-recurring'){assert.equal(canonical.parentStatus,'done');assert.equal(canonical.parentEarns,1);assert.equal(canonical.successors,1);}
   const pointerWall=evidence.timeOrigin+evidence.events.find(event=>event.name==='pointerdown').t;
-  const result={phase,surface,kind,round,fixture:{root:f.root,target:f.target,actor:f.actor,required:9,optional:1,points:2,recurrence:'weekly weekdays',expiration:'expire_incomplete'},holdMs,summary:summarize(evidence.events,f.status==='done'),canonical,heldObservation:{begin:shotBegin,end:held.t,state:held.state,screenshotCaptured:process.env.LIGHT!=='1'},frames:frames.map(frame=>({...frame,pointerDeltaMs:frame.metadata.timestamp*1000-pointerWall})),traceCosts:costs,...evidence};
+  const result={phase,surface,kind,round,fixture:{root:f.root,target:f.target,actor:f.actor,rotationGroupId:f.rotationGroupId||null,required:9,optional:1,points:2,recurrence:'weekly weekdays',expiration:'expire_incomplete'},holdMs,summary:summarize(evidence.events,f.status==='done'),canonical,heldObservation:{begin:shotBegin,end:held.t,state:held.state,screenshotCaptured:process.env.LIGHT!=='1'},frames:frames.map(frame=>({...frame,pointerDeltaMs:frame.metadata.timestamp*1000-pointerWall})),traceCosts:costs,...evidence};
   results.push(result);writeFileSync(`${prefix}.json`,JSON.stringify(result,null,2));writeFileSync(`${out}/results.json`,JSON.stringify({phase,source:process.env.SOURCE_SHA||'working-tree',note:`rAF occurs before paint; captured raster evidence is not physical display measurement. ${holdMs?`Status transport deliberately held ${holdMs}ms before network send.`:'No artificial transport delay; local test server HTTP timing.'} Native HTTP+SSE otherwise unchanged.`,results},null,2));
   console.log(JSON.stringify({surface,kind,...result.summary,heldCheckPath:held.state.path,heldDone:held.state.done,traceCosts:costs}));assert.equal(result.summary.HTTP,200);await page.close();
  }

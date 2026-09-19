@@ -2,6 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import { notifyMealRequests } from './notification-events.js';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
+import { assertCapability } from '../permissions.js';
+import { configureRotationTrack, findRotationTrack, resolveRotation, finalizeRotation,
+  getRotationGroup, refreshRotationOccurrence, orderedRotationSelection } from './rotation.js';
 import {
   BUILT_IN_SKILL_KEYS,
   eligibleUserIdsForBuiltInSkill,
@@ -348,10 +351,22 @@ function normalizeRule(database, raw, index, current = null) {
   const slotGroupKey = text(raw?.slot_group_key ?? current?.slot_group_key, {
     max: 120, field: 'Slot group key',
   }) || `slot-group:${randomUUID()}`;
+  const rotationGroups = {};
+  for (const role of ['chooser', 'cook', 'supervisor']) {
+    const field = `${role}_rotation_group_id`;
+    const value = Object.hasOwn(raw || {}, field) ? raw[field] : current?.[field];
+    const groupId = integer(value, { field: 'Rotation Group' });
+    if (groupId) {
+      const group = getRotationGroup(database, groupId);
+      if (!group || !group.active) throw mealPlanError('Choose an active Rotation Group.', 400, 'ROTATION_GROUP_UNAVAILABLE');
+    }
+    rotationGroups[field] = groupId;
+  }
   return {
     id: integer(raw?.id ?? current?.id, { field: 'Meal Plan rule' }),
     rule_key: text(raw?.rule_key ?? current?.rule_key, { max: 120, field: 'Rule key' }) || `rule:${randomUUID()}`,
     slot_group_key: slotGroupKey,
+    ...rotationGroups,
     weekday,
     meal_type: mealType,
     custom_label: mealType === 'custom' ? customLabel : null,
@@ -576,6 +591,7 @@ function writeRules(database, planId, rules) {
       meal_plan_id, rule_key, slot_group_key, weekday, meal_type, custom_label, label, policy,
       fixed_user_id, fallback_user_id, chooser_backup_strategy, chooser_fallback_user_ids_json,
       rotation_group,
+      chooser_rotation_group_id, cook_rotation_group_id, supervisor_rotation_group_id,
       presence_required, place_id, earliest_time, preferred_time, latest_time,
       expected_duration_minutes, selection_deadline_minutes, deadline_mode, deadline_weekday,
       deadline_time, reminder_minutes, choice_limit, max_entree_choices, max_side_choices,
@@ -585,13 +601,14 @@ function writeRules(database, planId, rules) {
       generate_supervision, generate_serving, generate_cleanup,
       preparation_duration_minutes, cooking_duration_minutes, cleanup_duration_minutes,
       active, sort_order
-    ) VALUES (${Array.from({ length: 44 }, () => '?').join(', ')})
+    ) VALUES (${Array.from({ length: 47 }, () => '?').join(', ')})
   `);
   const updateRule = database.prepare(`
     UPDATE meal_plan_rules SET
       rule_key = ?, slot_group_key = ?, weekday = ?, meal_type = ?, custom_label = ?, label = ?,
       policy = ?, fixed_user_id = ?, fallback_user_id = ?, chooser_backup_strategy = ?,
-      chooser_fallback_user_ids_json = ?, rotation_group = ?, presence_required = ?,
+      chooser_fallback_user_ids_json = ?, rotation_group = ?,
+      chooser_rotation_group_id = ?, cook_rotation_group_id = ?, supervisor_rotation_group_id = ?, presence_required = ?,
       place_id = ?, earliest_time = ?, preferred_time = ?,
       latest_time = ?, expected_duration_minutes = ?, selection_deadline_minutes = ?,
       deadline_mode = ?, deadline_weekday = ?, deadline_time = ?, reminder_minutes = ?,
@@ -618,6 +635,7 @@ function writeRules(database, planId, rules) {
       rule.rule_key, rule.slot_group_key, rule.weekday, rule.meal_type, rule.custom_label,
       rule.label, rule.policy, rule.fixed_user_id, rule.fallback_user_id,
       rule.chooser_backup_strategy, rule.chooser_fallback_user_ids_json, rule.rotation_group,
+      rule.chooser_rotation_group_id, rule.cook_rotation_group_id, rule.supervisor_rotation_group_id,
       rule.presence_required, rule.place_id, rule.earliest_time, rule.preferred_time,
       rule.latest_time, rule.expected_duration_minutes, rule.selection_deadline_minutes,
       rule.deadline_mode, rule.deadline_weekday, rule.deadline_time,
@@ -735,6 +753,9 @@ export function listMealPlans(database, { includeDeleted = false } = {}) {
 
 export function createMealPlan(database, body, actorId) {
   const normalized = normalizePlan(database, body);
+  if (normalized.rules.some(rule => ['chooser', 'cook', 'supervisor'].some(role => rule[`${role}_rotation_group_id`]))) {
+    assertCapability(database, actorId, 'rotations.configure');
+  }
   let planId;
   database.transaction(() => {
     const info = database.prepare(`
@@ -759,6 +780,10 @@ export function updateMealPlan(database, planId, body, actorId) {
   if (!current) throw mealPlanError('Meal Plan not found.', 404, 'MEAL_PLAN_NOT_FOUND');
   if (current.status === 'deleted') throw mealPlanError('Deleted Meal Plans cannot be edited.', 409, 'MEAL_PLAN_DELETED');
   const normalized = normalizePlan(database, body, current);
+  if ([...normalized.rules, ...current.rules].some(rule =>
+    ['chooser', 'cook', 'supervisor'].some(role => rule[`${role}_rotation_group_id`]))) {
+    assertCapability(database, actorId, 'rotations.configure');
+  }
   database.transaction(() => {
     database.prepare(`
       UPDATE meal_plans SET name = ?, description = ?, status = ?, home_enabled = ?, effective_from = ?, effective_until = ?,
@@ -1199,8 +1224,8 @@ function chooseRoundRobin(database, rotationKey, eligible) {
   if (!eligible.length) return { selected: null, before: null, after: null };
   const state = database.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key = ?').get(rotationKey);
   const before = Number(state?.cursor_user_id) || null;
-  const previous = eligible.indexOf(before);
-  const selected = eligible[(previous + 1 + eligible.length) % eligible.length];
+  const selected = orderedRotationSelection({ memberIds: eligible, eligibleIds: eligible,
+    previousMemberId: before, strategy: 'round_robin' }).member_ids[0];
   database.prepare(`
     INSERT INTO assignment_rotation_state (rotation_key, cursor_user_id, occurrence_count, updated_at)
     VALUES (?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
@@ -1209,6 +1234,65 @@ function chooseRoundRobin(database, rotationKey, eligible) {
       updated_at = excluded.updated_at
   `).run(rotationKey, selected);
   return { selected, before, after: selected };
+}
+
+/** Meal occurrence commitment is the existing advancement boundary. New
+ * explicit Groups have independent Tracks; legacy alias cursors retain their
+ * proven untouched-tail travel reconciliation below. */
+function chooseGroupRotation(database, rule, context, role, eligible, occurrenceKey, dateKey, options) {
+  try { return resolveMealGroupRotation(database, rule, context, role, eligible, occurrenceKey, dateKey, options); }
+  catch (error) {
+    if (!['rotation_pending', 'rotation_group_inactive'].includes(error.code)) throw error;
+    return { selected: null, before: null, after: null,
+      rotationNeedsResolution: error.message, rotationReasonCode: error.code };
+  }
+}
+
+function resolveMealGroupRotation(database, rule, context, role, eligible, occurrenceKey, dateKey, { refreshUnresolved = false, actorId = null } = {}) {
+  const groupId = Number(rule[`${role}_rotation_group_id`]);
+  const split = occurrenceRotationScope(database, rule, context, dateKey);
+  const scope = context ? `context:${context.id}`
+    : (split.splitContextIds.length ? `home-split:${split.splitContextIds.join('.')}` : 'home');
+  const identity = { consumer_type: 'meal_plan',
+    consumer_id: `${rule.meal_plan_id}:${rule.slot_group_key || rule.rule_key || rule.id}:${scope}`,
+    purpose_key: role };
+  const current = findRotationTrack(database, identity);
+  const track = configureRotationTrack(database, { ...identity, group_id: groupId,
+    label: `${rule.label || rule.custom_label || rule.meal_type} · ${role}`,
+    strategy: 'round_robin', advance_policy: 'on_finalized', advance_on_skip: false,
+    expected_revision: current?.revision }, { trusted: true });
+  const group = getRotationGroup(database, groupId);
+  const explanations = Object.fromEntries(group.members.map(member => [member.id, {
+    eligible: eligible.includes(Number(member.id)),
+    reason: eligible.includes(Number(member.id)) ? 'Eligible for this meal role.'
+      : 'Not participating in this planning context, or does not meet this meal role’s skill or availability requirements.',
+  }]));
+  let occurrence = resolveRotation(database, track.id, `${occurrenceKey}:${role}`, {
+    eligibleUserIds: eligible, eligibilityExplanations: explanations,
+    context: { dateKey, meal_plan_id: rule.meal_plan_id, meal_plan_rule_id: rule.id,
+      planning_context_id: context?.id || null, role },
+  });
+  if (!occurrence.order.length && occurrence.status === 'resolved' && refreshUnresolved) {
+    occurrence = refreshRotationOccurrence(database, occurrence.id, {
+      expected_revision: occurrence.revision, actorId, trusted: true,
+      eligibleUserIds: eligible, eligibilityExplanations: explanations,
+    });
+  }
+  if (!occurrence.order.length) return { selected: null, before: null, after: null,
+    rotationOccurrenceId: occurrence.id, rotationNeedsResolution: 'No eligible Group member is available for this meal role.',
+    rotationReasonCode: 'rotation_unavailable' };
+  const finalized = finalizeRotation(database, occurrence.id, {
+    outcome: 'finalized', expectedRevision: occurrence.revision, actorId, trusted: true,
+  });
+  return { selected: Number(finalized.selected_member?.id) || null,
+    before: null, after: null, rotationOccurrenceId: finalized.id };
+}
+
+function mealRotationProvenance(resolution) {
+  if (!resolution?.rotationOccurrenceId && !resolution?.rotationNeedsResolution) return null;
+  return { occurrence_id: resolution.rotationOccurrenceId || null,
+    state: resolution.rotationNeedsResolution ? 'needs_assignment' : 'finalized',
+    reason: resolution.rotationNeedsResolution || null, reason_code: resolution.rotationReasonCode || null };
 }
 
 function deterministicIndex(seed, length) {
@@ -1221,8 +1305,8 @@ function nextEligible(eligible, currentUserId, excluded = []) {
   const denied = new Set(excluded.map(Number));
   const candidates = eligible.filter((userId) => !denied.has(Number(userId)));
   if (!candidates.length) return null;
-  const previous = candidates.indexOf(Number(currentUserId));
-  return candidates[(previous + 1 + candidates.length) % candidates.length];
+  return orderedRotationSelection({ memberIds: candidates, eligibleIds: candidates,
+    previousMemberId: Number(currentUserId) || null }).member_ids[0];
 }
 
 function chooseBackupAssignee(rule, eligible, currentUserId = null, seed = '') {
@@ -1281,7 +1365,7 @@ function roleRotationScope(rule, context, role) {
   };
 }
 
-function chooseOccurrenceRole(database, rule, context, role, eligible, responsibilityEligible) {
+function chooseOccurrenceRole(database, rule, context, role, eligible, responsibilityEligible, occurrenceKey, dateKey) {
   const strategy = rule[`${role}_strategy`] || (rule[`${role}_user_id`] ? 'fixed' : 'none');
   const scope = roleRotationScope(rule, context, role);
   if (strategy === 'none') return { role, strategy, selected: null, before: null, after: null, ...scope };
@@ -1292,7 +1376,9 @@ function chooseOccurrenceRole(database, rule, context, role, eligible, responsib
       before: null, after: null, ...scope,
     };
   }
-  const rotation = chooseRoundRobin(database, scope.scopedRotationKey, eligible);
+  const rotation = rule[`${role}_rotation_group_id`]
+    ? chooseGroupRotation(database, rule, context, role, eligible, occurrenceKey, dateKey)
+    : chooseRoundRobin(database, scope.scopedRotationKey, eligible);
   return { role, strategy, ...rotation, ...scope };
 }
 
@@ -1345,19 +1431,27 @@ function occurrenceCohort(database, rule, context, dateKey) {
   const skillEligible = (systemKey, candidates) => eligibleUserIdsForBuiltInSkill(
     database, systemKey, candidates, { dateKey },
   );
+  const roleGroups = new Map();
+  const roleEligible = (role, systemKey, candidates) => {
+    const groupId = rule[`${role}_rotation_group_id`];
+    if (groupId && !roleGroups.has(groupId)) roleGroups.set(groupId,
+      new Set(getRotationGroup(database, groupId)?.members.map(member => Number(member.id)) || []));
+    const members = groupId ? roleGroups.get(groupId) : null;
+    return skillEligible(systemKey, candidates).filter(userId => !members || members.has(Number(userId)));
+  };
   return {
     allMemberIds,
     pool,
     eligible,
     responsibilityPool,
     responsibilityEligible,
-    chooserEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, eligible),
-    chooserResponsibilityEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, responsibilityEligible),
-    chooserResponsibilitySkillEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, responsibilityPool),
-    cookEligible: skillEligible(BUILT_IN_SKILL_KEYS.COOKING, eligible),
-    cookResponsibilityEligible: skillEligible(BUILT_IN_SKILL_KEYS.COOKING, responsibilityEligible),
-    supervisorEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION, eligible),
-    supervisorResponsibilityEligible: skillEligible(BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION, responsibilityEligible),
+    chooserEligible: roleEligible('chooser', BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, eligible),
+    chooserResponsibilityEligible: roleEligible('chooser', BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, responsibilityEligible),
+    chooserResponsibilitySkillEligible: roleEligible('chooser', BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, responsibilityPool),
+    cookEligible: roleEligible('cook', BUILT_IN_SKILL_KEYS.COOKING, eligible),
+    cookResponsibilityEligible: roleEligible('cook', BUILT_IN_SKILL_KEYS.COOKING, responsibilityEligible),
+    supervisorEligible: roleEligible('supervisor', BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION, eligible),
+    supervisorResponsibilityEligible: roleEligible('supervisor', BUILT_IN_SKILL_KEYS.MEAL_SUPERVISION, responsibilityEligible),
   };
 }
 
@@ -1369,6 +1463,7 @@ function chooseOccurrenceAssignee(
   responsibilityEligible = eligible,
   contextId = null,
   responsibilitySkillEligible = responsibilityEligible,
+  rotationContext = null,
 ) {
   let selected = Number(rule.fixed_user_id) || null;
   let before = null;
@@ -1376,6 +1471,15 @@ function chooseOccurrenceAssignee(
   let policyOverride = null;
   let rotationKeyOverride = null;
   const defaults = resolvedChooserDefaults(database, rule);
+  if (rule.policy === 'round_robin' && rule.chooser_rotation_group_id && !rotationContext) {
+    return { selected: null, before, after, policyOverride, rotationKeyOverride,
+      chooserDefaults: defaults, rotationNeedsResolution: 'Recheck this dated meal’s Rotation Group.' };
+  }
+  if (rule.policy === 'round_robin' && rule.chooser_rotation_group_id && rotationContext) {
+    return { ...chooseGroupRotation(database, rule, rotationContext.context, 'chooser', eligible,
+      rotationContext.occurrenceKey, rotationContext.dateKey),
+      policyOverride, rotationKeyOverride, chooserDefaults: defaults };
+  }
   if (rule.policy === 'round_robin') {
     ({ selected, before, after } = chooseRoundRobin(database, scopedRotationKey, eligible));
   } else if (rule.policy === 'personal_choice') {
@@ -1587,8 +1691,21 @@ function rewindRotationChain(database, rows) {
 }
 
 function reconcilePendingBaseOccurrence(database, existing, rule, dateKey) {
+  // New Rotation snapshots are finalized provenance. Travel may explain a
+  // changed participant pool, but cannot rewind a historical Track outcome.
+  // The legacy untouched-tail compatibility behavior remains below.
   const desired = occurrenceRotationScope(database, rule, null, dateKey);
   if (existing.scoped_rotation_key === desired.scopedRotationKey) return existing;
+  if (rule.chooser_rotation_group_id && database.prepare("SELECT 1 FROM meals WHERE id = ? AND json_extract(provenance_json, '$.rotations.chooser.state') = 'needs_assignment'").get(existing.meal_id)) return existing;
+  if (existing.rotation_occurrence_id) {
+    const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(existing.meal_id);
+    const row = { ...meal, ...existing, date: dateKey };
+    if (!pendingOccurrenceCanBeReconciled(database, row)) return existing;
+    const result = reconcileContextOccurrence(database, row, null, null).assignment;
+    database.prepare('UPDATE meal_occurrence_assignments SET base_rotation_key = ?, scoped_rotation_key = ? WHERE id = ?')
+      .run(desired.baseRotationKey, desired.scopedRotationKey, existing.id);
+    return { ...result, base_rotation_key: desired.baseRotationKey, scoped_rotation_key: desired.scopedRotationKey };
+  }
 
   let rows;
   if (rule.policy === 'round_robin' && existing.cursor_after_user_id != null) {
@@ -1667,6 +1784,7 @@ function reconcilePendingBaseOccurrence(database, existing, rule, dateKey) {
 
 function reconciliationSelection(database, rule, assignment, cohort, context = null) {
   const current = Number(assignment.assigned_user_id) || null;
+  if (rule.chooser_rotation_group_id && database.prepare("SELECT 1 FROM meals WHERE id = ? AND json_extract(provenance_json, '$.rotations.chooser.state') = 'needs_assignment'").get(assignment.meal_id)) return current;
   if (rule.policy === 'personal_choice') return null;
   const defaults = resolvedChooserDefaults(database, rule);
   const currentPending = current && database.prepare(`
@@ -1685,8 +1803,10 @@ function reconciliationSelection(database, rule, assignment, cohort, context = n
     if (current && cohort.chooserEligible.includes(current)) return current;
     if (cohort.chooserEligible.length) {
       const before = Number(assignment.cursor_before_user_id) || null;
-      const previous = cohort.chooserEligible.indexOf(before);
-      return cohort.chooserEligible[(previous + 1 + cohort.chooserEligible.length) % cohort.chooserEligible.length];
+      const groupOrder = rule.chooser_rotation_group_id
+        ? getRotationGroup(database, rule.chooser_rotation_group_id)?.members.map(member => Number(member.id)) : null;
+      return orderedRotationSelection({ memberIds: groupOrder || cohort.chooserEligible,
+        eligibleIds: cohort.chooserEligible, previousMemberId: groupOrder ? current : before }).member_ids[0];
     }
   }
   const fixed = rule.policy === 'fixed' ? (Number(rule.fixed_user_id) || null) : null;
@@ -1753,7 +1873,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
   // cleanup performed by reconcilePlanningContextMealOccurrences; preserving
   // the assignment, menu generation, participants, and portions here keeps a
   // cancelled/completed trip auditable without silently creating new work.
-  if (!['active', 'conflict', 'resolved'].includes(context.status)) {
+  if (context && !['active', 'conflict', 'resolved'].includes(context.status)) {
     return { changed: false, assignment };
   }
   const rule = loadRuleForOccurrence(
@@ -1843,7 +1963,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
       || (strictSharedChoice && obligation.status === 'fulfilled');
     if (!desired && mustSuspend) {
       occurrenceReconciliationEvent(database, obligation.id, 'planning_context_suspended', actorId, {
-        planning_context_id: Number(context.id),
+        planning_context_id: Number(context?.id) || null,
         previous_status: obligation.status,
         previous_responded_at: obligation.responded_at || null,
         responsible_user_id: Number(obligation.responsible_user_id) || null,
@@ -1864,7 +1984,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
            WHERE id = ?
         `).run(suspension.previous_status, suspension.previous_responded_at || null, obligation.id);
         occurrenceReconciliationEvent(database, obligation.id, 'planning_context_restored', actorId, {
-          planning_context_id: Number(context.id),
+          planning_context_id: Number(context?.id) || null,
           restored_status: suspension.previous_status,
           responsible_user_id: Number(obligation.responsible_user_id) || null,
         });
@@ -1927,7 +2047,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
       JSON.stringify({
         meal_plan_id: rule.meal_plan_id,
         meal_plan_rule_id: rule.id,
-        planning_context_id: Number(context.id),
+        planning_context_id: Number(context?.id) || null,
         policy: rule.policy,
         chooser_fallback_user_ids: chooserDefaults.chooser_fallback_user_ids,
         chooser_terminal_strategy: chooserDefaults.chooser_terminal_strategy,
@@ -1936,7 +2056,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
         terminal_rotation_key: terminalChooserRotationKey(
           database,
           rule,
-          context.id,
+          context?.id || null,
           chooserDefaults.chooser_round_robin_user_ids,
         ),
         choice_limit: rule.choice_limit,
@@ -1952,7 +2072,7 @@ function reconcileContextOccurrence(database, assignment, context, actorId) {
         'planning_context_reassigned',
         actorId,
         {
-          planning_context_id: Number(context.id),
+          planning_context_id: Number(context?.id) || null,
           previous_obligation_id: parent?.id || null,
           responsible_user_id: userId,
           requires_fresh_confirmation: true,
@@ -2261,15 +2381,16 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
     cohort.chooserResponsibilityEligible,
     contextId,
     cohort.chooserResponsibilitySkillEligible,
+    { context, occurrenceKey, dateKey },
   );
   const { selected, before, after, policyOverride, chooserDefaults } = selection;
   const assignmentBaseRotationKey = selection.rotationKeyOverride || baseRotationKey;
   const assignmentScopedRotationKey = selection.rotationKeyOverride || scopedRotationKey;
   const cookSelection = chooseOccurrenceRole(
-    database, rule, context, 'cook', cohort.cookEligible, cohort.cookResponsibilityEligible,
+    database, rule, context, 'cook', cohort.cookEligible, cohort.cookResponsibilityEligible, occurrenceKey, dateKey,
   );
   const supervisorSelection = chooseOccurrenceRole(
-    database, rule, context, 'supervisor', cohort.supervisorEligible, cohort.supervisorResponsibilityEligible,
+    database, rule, context, 'supervisor', cohort.supervisorEligible, cohort.supervisorResponsibilityEligible, occurrenceKey, dateKey,
   );
 
   const slotLabel = rule.custom_label || rule.label || rule.meal_type;
@@ -2289,7 +2410,8 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
     context?.context_type === 'travel' ? 'travel' : 'household',
     rule.preferred_time, rule.earliest_time, rule.preferred_time, rule.latest_time,
     rule.expected_duration_minutes, sourceKey,
-    JSON.stringify({ source: 'meal_plan', meal_plan_id: rule.meal_plan_id, revision: rule.current_revision, rule_id: rule.id, planning_context_id: contextId }),
+    JSON.stringify({ source: 'meal_plan', meal_plan_id: rule.meal_plan_id, revision: rule.current_revision, rule_id: rule.id, planning_context_id: contextId,
+      rotations: { chooser: mealRotationProvenance(selection), cook: mealRotationProvenance(cookSelection), supervisor: mealRotationProvenance(supervisorSelection) } }),
     creator, context?.place_id || rule.place_id || null,
     rule.legacy_schedule_slot_id || null, rule.meal_plan_id,
     rule.meal_plan_revision_id || null, rule.id, contextId, policyOverride,
@@ -2299,11 +2421,11 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
     INSERT INTO meal_occurrence_assignments (
       occurrence_key, meal_plan_rule_id, planning_context_id, meal_id, assigned_user_id,
       base_rotation_key, scoped_rotation_key, cursor_before_user_id, cursor_after_user_id,
-      committed, committed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      rotation_occurrence_id, committed, committed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   `).run(
     occurrenceKey, rule.id, contextId, mealId, selected,
-    assignmentBaseRotationKey, assignmentScopedRotationKey, before, after,
+    assignmentBaseRotationKey, assignmentScopedRotationKey, before, after, selection.rotationOccurrenceId || null,
   );
 
   const assignmentId = Number(assignmentInfo.lastInsertRowid);
@@ -2311,14 +2433,14 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
     INSERT INTO meal_occurrence_role_assignments (
       occurrence_assignment_id, role, strategy, assigned_user_id,
       base_rotation_key, scoped_rotation_key, cursor_before_user_id,
-      cursor_after_user_id, committed, committed_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+      cursor_after_user_id, rotation_occurrence_id, committed, committed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
   `);
   for (const roleSelection of [cookSelection, supervisorSelection]) {
     insertRoleAssignment.run(
       assignmentId, roleSelection.role, roleSelection.strategy, roleSelection.selected,
       roleSelection.baseRotationKey, roleSelection.scopedRotationKey,
-      roleSelection.before, roleSelection.after,
+      roleSelection.before, roleSelection.after, roleSelection.rotationOccurrenceId || null,
     );
   }
 
@@ -2717,7 +2839,7 @@ function loadOccurrenceData(database, from, to, contextId = null) {
            meal_place.name AS meal_place_name,
            oa.id AS assignment_id, oa.occurrence_key, oa.assigned_user_id,
            oa.base_rotation_key, oa.scoped_rotation_key, oa.cursor_before_user_id,
-           oa.cursor_after_user_id, oa.committed
+           oa.cursor_after_user_id, oa.rotation_occurrence_id, oa.committed
       FROM meals m
       LEFT JOIN meal_plans p ON p.id = m.meal_plan_id
       LEFT JOIN meal_plan_rules r ON r.id = m.meal_plan_rule_id
@@ -3020,8 +3142,10 @@ function loadOccurrenceData(database, from, to, contextId = null) {
         scoped_rotation_key: meal.scoped_rotation_key,
         cursor_before_user_id: meal.cursor_before_user_id,
         cursor_after_user_id: meal.cursor_after_user_id,
+        rotation_occurrence_id: meal.rotation_occurrence_id || null,
         committed: Boolean(meal.committed),
       } : null,
+      rotations: parseJson(meal.provenance_json, {}).rotations || null,
       occurrence_id: meal.assignment_id || `meal:${meal.id}`,
       occurrence_key: meal.occurrence_key || `meal:${meal.id}`,
       participants,
@@ -3270,7 +3394,7 @@ function fallbackEligibleUsers(database, meal, context) {
       meal.date,
     ).chooserResponsibilityEligible;
   }
-  if (!eligible.length) {
+  if (!eligible.length && !context.rule?.chooser_rotation_group_id) {
     const participating = database.prepare(`
       SELECT DISTINCT user_id FROM meal_participants
        WHERE meal_id = ? AND role = 'participant' AND status = 'participating'
@@ -3366,6 +3490,10 @@ export function advanceMealChooserFallback(database, mealId, {
     const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
     if (!meal) throw mealPlanError('Meal not found.', 404, 'MEAL_NOT_FOUND');
     const context = chooserFallbackContext(database, meal);
+    if (parseJson(meal.provenance_json, {}).rotations?.chooser?.state === 'needs_assignment') {
+      return { status: 'unresolved', changed: false, fallback: null, replacement_obligation_ids: [],
+        reason: 'Recheck the Rotation Group through Repair chooser before assigning this meal.' };
+    }
     const active = database.prepare(`
       SELECT * FROM planning_obligations
        WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser'
@@ -3445,6 +3573,7 @@ export function advanceMealChooserFallback(database, mealId, {
       selected = eligibleUserIdsForBuiltInSkill(
         database, BUILT_IN_SKILL_KEYS.MEAL_CHOOSING, fixedId ? [fixedId] : [], { dateKey: meal.date },
       )[0] || null;
+      if (context.rule?.chooser_rotation_group_id && !eligible.includes(Number(selected))) selected = null;
       forceParticipant = Boolean(selected);
       if (!selected) {
         throw mealPlanError(
@@ -3616,10 +3745,55 @@ export function advanceMealChooserFallback(database, mealId, {
 }
 
 export function repairMealChooser(database, mealId, { actorId = null } = {}) {
-  return advanceMealChooserFallback(database, mealId, {
-    actorId,
-    reason: 'manual_repair',
-  });
+  const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
+  const provenance = parseJson(meal?.provenance_json, {});
+  const pendingRoles = ['chooser', 'cook', 'supervisor'].filter(role => provenance.rotations?.[role]?.state === 'needs_assignment');
+  if (pendingRoles.length) {
+    assertCapability(database, actorId, 'rotations.advance');
+    assertCapability(database, actorId, 'rotations.override');
+    return database.transaction(() => {
+      const assignment = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE meal_id = ?').get(meal.id);
+      const rule = loadRuleForOccurrence(database, meal.meal_plan_rule_id, meal.meal_plan_revision_id);
+      if (!assignment || !rule) throw mealPlanError('This Meal has no Rotation Group binding to recheck.', 409);
+      const context = meal.planning_context_id ? database.prepare('SELECT * FROM planning_contexts WHERE id = ?').get(meal.planning_context_id) : null;
+      const cohort = occurrenceCohort(database, rule, context, meal.date);
+      const rotations = { ...provenance.rotations }, obligationIds = [];
+      let changed = false, chooser = Number(assignment.assigned_user_id) || null;
+      for (const role of pendingRoles) {
+        if (!rule[role + '_rotation_group_id']) continue;
+        const resolution = chooseGroupRotation(database, rule, context, role, cohort[role + 'Eligible'],
+          assignment.occurrence_key, meal.date, { refreshUnresolved: true, actorId });
+        rotations[role] = mealRotationProvenance(resolution);
+        if (!resolution.selected) continue;
+        changed = true;
+        if (role === 'chooser') {
+          chooser = resolution.selected;
+          database.prepare('UPDATE meal_occurrence_assignments SET assigned_user_id = ?, rotation_occurrence_id = ? WHERE id = ?')
+            .run(chooser, resolution.rotationOccurrenceId, assignment.id);
+          writeOccurrenceResponsibilities(database, { mealId: meal.id, occurrenceKey: assignment.occurrence_key,
+            rule, contextId: context?.id || null, dateKey: meal.date, ...cohort, selected: chooser });
+          synchronizeMealMenuGeneration(database, meal.id, { chooserId: chooser, reason: 'chooser_reassigned' });
+          const obligation = database.prepare("SELECT id FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser' AND responsible_user_id = ? ORDER BY id DESC LIMIT 1").get(meal.id, chooser);
+          if (obligation) {
+            obligationIds.push(obligation.id);
+            addChooserObligationEvent(database, obligation.id, 'rotation_resolved', actorId, { rotation_occurrence_id: resolution.rotationOccurrenceId });
+          }
+        } else {
+          database.prepare('UPDATE meal_occurrence_role_assignments SET assigned_user_id = ?, rotation_occurrence_id = ? WHERE occurrence_assignment_id = ? AND role = ?')
+            .run(resolution.selected, resolution.rotationOccurrenceId, assignment.id, role);
+          database.prepare("INSERT INTO meal_participants(meal_id,user_id,role,status,source) VALUES(?,?,?,'participating','schedule') ON CONFLICT(meal_id,user_id,role) DO UPDATE SET status='participating'")
+            .run(meal.id, resolution.selected, role);
+        }
+      }
+      database.prepare('UPDATE meals SET provenance_json = ? WHERE id = ?')
+        .run(JSON.stringify({ ...provenance, rotations }), meal.id);
+      const unresolved = Object.values(rotations).filter(value => value?.state === 'needs_assignment');
+      return { status: unresolved.length ? 'unresolved' : 'assigned', changed,
+        fallback: chooser ? { user_id: chooser } : null, replacement_obligation_ids: obligationIds,
+        guidance: unresolved.length ? unresolved.map(value => value.reason).join(' ') : 'Meal rotations are ready.' };
+    })();
+  }
+  return advanceMealChooserFallback(database, mealId, { actorId, reason: 'manual_repair' });
 }
 
 function mealSelectionPolicy(database, meal) {

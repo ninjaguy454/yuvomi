@@ -12,6 +12,7 @@ import { activitySnapshotSkills } from './task-activity-snapshot.js';
 
 import { todayKey } from '../utils/timezone.js';
 import { evaluatePresence, activityPresenceWindow } from './presence.js';
+import { orderedRotationSelection } from './rotation-order.js';
 
 export const PROFICIENCY = Object.freeze({
   EXCLUDED: 'excluded',
@@ -246,22 +247,9 @@ function chooseRoundRobin(d, activityTemplateId, purpose, eligible, {
      WHERE activity_template_id = ? AND purpose = ?
   `).get(activityTemplateId, purpose);
 
-  let selected = null;
-  if (state?.last_user_id != null) {
-    const previous = order.indexOf(Number(state.last_user_id));
-    if (previous >= 0) {
-      for (let offset = 1; offset <= order.length; offset += 1) {
-        const candidate = eligibleById.get(order[(previous + offset) % order.length]);
-        if (candidate) {
-          selected = candidate;
-          break;
-        }
-      }
-    }
-  }
-  if (!selected) {
-    selected = order.map((id) => eligibleById.get(id)).find(Boolean) ?? eligible[0];
-  }
+  // Compatibility storage is retained; the selection algorithm is shared.
+  const selectedId=orderedRotationSelection({memberIds:order,eligibleIds:[...eligibleById.keys()],previousMemberId:state?.last_user_id}).member_ids[0];
+  const selected=eligibleById.get(selectedId)??null;
 
   if (commit && selected) {
     d.prepare(`
@@ -326,12 +314,8 @@ function chooseRotatingMembers(d, activity, eligible, count, {
   const order = orderedMembers.map((member) => Number(member.id));
   const state = d.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key = ?').get(key);
   const cursor = state?.cursor_user_id ?? activity.rotation_cursor_user_id;
-  const previous = cursor == null ? -1 : order.indexOf(Number(cursor));
-  const selected = [];
-  for (let offset = 1; offset <= order.length && selected.length < Math.min(count, eligible.length); offset += 1) {
-    const member = eligibleById.get(order[(previous + offset + order.length) % order.length]);
-    if (member && !selected.some((row) => Number(row.id) === Number(member.id))) selected.push(member);
-  }
+  const selected=orderedRotationSelection({memberIds:order,eligibleIds:[...eligibleById.keys()],previousMemberId:cursor,strategy:'rotating_order'})
+    .member_ids.slice(0,Math.min(count,eligible.length)).map(id=>eligibleById.get(id));
   if (commit && selected.length) {
     d.prepare(`
       INSERT INTO assignment_rotation_state (rotation_key, cursor_user_id, occurrence_count, updated_at)

@@ -2209,10 +2209,11 @@ router.put('/:id', (req, res) => {
       }
 
       reconcileTaskSupervision(db.get(),task.id,{actorId:req.authUserId||req.session.userId});
-      if(rotationsChanged){
-        rotationChanges=bindTaskRotations(db.get(),task.id,{actorId:req.authUserId||req.session.userId,scope:editScope,previousConfig:task.rotation_bindings_json});
+      const sharedWindowChanged=taskWindowChanged&&parseRotationBindings(rotationBindingsJson).length>0;
+      if(rotationsChanged||sharedWindowChanged){
+        rotationChanges=bindTaskRotations(db.get(),task.id,{actorId:req.authUserId||req.session.userId,scope:editScope,previousConfig:task.rotation_bindings_json,onlyMissing:!rotationsChanged});
       }
-      if(rotationsChanged||performersChanged||editedSubtasks||bindingChanged)refreshTaskRotationRendering(db.get(),task.id);
+      if(rotationsChanged||sharedWindowChanged||performersChanged||editedSubtasks||bindingChanged)refreshTaskRotationRendering(db.get(),task.id);
       if(firstUid && (performersChanged||editedSubtasks||!sameIdOrder(skillIds,skillsBefore)))
         assertTaskSupervisionAssignee(db.get(),task.id,firstUid);
       if(series) {

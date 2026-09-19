@@ -17,6 +17,7 @@ HOLD_MS: explicit before-network status transport hold (default 500, use 0 for n
 LIGHT=1: no screenshot/DevTools trace during timing; default captures raster+trace evidence.
 FRAMES=1: additionally capture timestamped DevTools screencast raster frames (separate from light timing).
 ROTATION=1: attach an independently owned shared Rotation purpose to each synthetic routine.
+ROTATION=shared: attach a Group-managed scheduled Rotation to each synthetic routine.
 ROUNDS: samples per surface/case (default 1). PUPPETEER_EXECUTABLE_PATH: installed Chromium.
 Run with a disposable, network-isolated runtime containing app dependencies.`);
  process.exit(0);
@@ -35,10 +36,11 @@ const {reconcileTaskSupervision,inspectTaskSupervision}=await appImport('server/
 const {changeTaskStatus}=await appImport('server/services/task-lifecycle.js');
 const {setTaskSkills}=await appImport('server/services/task-skills.js');
 const {todayKey}=await appImport('server/utils/timezone.js');
-const rotation=process.env.ROTATION==='1' ? {
+const rotation=['1','shared'].includes(process.env.ROTATION) ? {
  ...(await appImport('server/services/rotation.js')),
  ...(await appImport('server/services/task-rotation.js')),
 } : null;
+const sharedRotation=process.env.ROTATION==='shared'?await appImport('server/services/rotation-shared.js'):null;
 const seed=createFeedbackFixtures(d,{reconcileTaskSupervision,inspectTaskSupervision,changeTaskStatus,setTaskSkills,todayKey});
 const password='Synthetic-Feedback-Probe!';d.prepare('UPDATE users SET password_hash=?,onboarding_version=1').run(await hashPassword(password));
 let ready;const originReady=new Promise(r=>ready=r),listen=net.Server.prototype.listen;
@@ -100,7 +102,9 @@ try{
  for(const surface of surfaces)for(const kind of cases)for(let round=0;round<Number(process.env.ROUNDS||1);round++){
   const f={...seed.fixture(kind),kind};
   if(rotation){
-   const group=rotation.saveRotationGroup(d,{name:`QA Rotation ${f.root}`,member_ids:[seed.learner,seed.helper,seed.admin]},{actorId:seed.admin});
+   const group=sharedRotation?sharedRotation.saveRotationGroupUsage(d,{name:`QA Rotation ${f.root}`,member_ids:[seed.learner,seed.helper,seed.admin],usage_mode:'shared',shared_config:{
+    strategy:'rotating_order',starting_member_id:seed.learner,effective_date:todayKey(d),weekdays:[0,1,2,3,4,5,6],active_time:'00:00',finalize_time:'23:59',finalize_day_offset:0,advance_on_skip:false}}, {actorId:seed.admin}):
+    rotation.saveRotationGroup(d,{name:`QA Rotation ${f.root}`,member_ids:[seed.learner,seed.helper,seed.admin]},{actorId:seed.admin});
    d.prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify([{purpose_key:'order',label:'Shared routine order',group_id:group.id,strategy:'rotating_order',advance_policy:'on_completed'}]),f.root);
    rotation.bindTaskRotations(d,f.root,{actorId:seed.admin});
    f.rotationGroupId=group.id;

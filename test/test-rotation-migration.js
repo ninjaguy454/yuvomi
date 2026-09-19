@@ -35,7 +35,7 @@ function populatedRelationships(d) {
   };
 }
 
-test('encrypted production-shaped 10038 -> 10039 preserves all existing rows, indexes, triggers, foreign keys and restart history',()=>{
+test('encrypted production-shaped 10038 -> 10040 preserves all existing rows, indexes, triggers, foreign keys and restart history',()=>{
   const directory=mkdtempSync(join(tmpdir(),'rotation-10039-')),file=join(directory,'database.db'),key=randomBytes(32).toString('hex');
   const open=(options={})=>{const d=new Database(file,options);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key).toString('hex')}'"`);return d;};
   let d;
@@ -116,7 +116,7 @@ test('encrypted production-shaped 10038 -> 10039 preserves all existing rows, in
     const boot=()=>{const result=spawnSync(process.execPath,['--input-type=module','-e',"const db=await import('./server/db.js');db.init();console.log('SCHEMA',db.currentVersion());db.get().close();"],
       {cwd:new URL('..',import.meta.url),encoding:'utf8',timeout:60000,env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:key,LOG_LEVEL:'info',NODE_ENV:'test'}});
       assert.equal(result.status,0,result.stdout+result.stderr);return result.stdout+result.stderr;};
-    const initial=boot();assert.deepEqual([...initial.matchAll(/Migration (\d+) applied:/g)].map(m=>Number(m[1])),[10039]);
+    const initial=boot();assert.deepEqual([...initial.matchAll(/Migration (\d+) applied:/g)].map(m=>Number(m[1])),[10039,10040]);
     d=open();
     for(const [table,snapshot] of Object.entries(before)){
       const rows=d.prepare(`SELECT ${snapshot.columns.map(c=>`"${c}"`).join(',')} FROM "${table}" ${table==='schema_migrations'?'WHERE version<=10038':''}`).all();
@@ -128,9 +128,9 @@ test('encrypted production-shaped 10038 -> 10039 preserves all existing rows, in
     assert.equal(d.prepare('SELECT seq FROM sqlite_sequence WHERE name=?').get('household_variable_definitions').seq,40);
     for(const table of ['tasks','activity_templates','workflow_templates'])assert.ok(d.prepare(`SELECT rotation_bindings_json FROM ${table}`).all().every(row=>row.rotation_bindings_json==='[]'));
     for(const table of ['rotation_groups','rotation_tracks','rotation_occurrences'])assert.equal(d.prepare(`SELECT count(*) n FROM ${table}`).get().n,0);
-    const afterHistory=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();assert.equal(afterHistory.length,history.length+1);d.close();
+    const afterHistory=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();assert.equal(afterHistory.length,history.length+2);d.close();
     assert.deepEqual([...boot().matchAll(/Migration (\d+) applied:/g)].map(m=>Number(m[1])),[]);
-    d=open({readonly:true});assert.equal(d.prepare('SELECT max(version) v FROM schema_migrations').get().v,10039);assert.deepEqual(d.prepare('SELECT * FROM schema_migrations ORDER BY version').all(),afterHistory);
+    d=open({readonly:true});assert.equal(d.prepare('SELECT max(version) v FROM schema_migrations').get().v,10040);assert.deepEqual(d.prepare('SELECT * FROM schema_migrations ORDER BY version').all(),afterHistory);
     assert.deepEqual(populatedRelationships(d),relationships,'fresh restart preserves the same connected household evidence');
     assert.equal(d.pragma('integrity_check',{simple:true}),'ok');assert.deepEqual(d.pragma('foreign_key_check'),[]);d.close();
   }finally{if(d?.open)d.close();rmSync(directory,{recursive:true,force:true});}

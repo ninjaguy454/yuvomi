@@ -38,8 +38,8 @@ export function variableReferenceOptions(definitions = []) {
     if (!key) return [];
     return [{ id: key, label: variable.label || key, detail: key, token: `{{${key}}}` },
       ...Object.keys(EXPRESSION_PROPERTIES[variable.type] || {}).map(property => ({
-        id: `${key}.${property}`, label: `${variable.label || key} · ${property.replaceAll('_', ' ')}`,
-        detail: `${key}.${property}`, token: `{{${key}.${property}}}`,
+        id: `${key}.${property}`, label: `${variable.label || key} · ${variable.type==='rotation_occurrence'&&property==='position_label'?'This action’s assignee position':property.replaceAll('_', ' ')}`,
+        detail: variable.type==='rotation_occurrence'&&property==='position_label'?'Resolved performer · 1st, 2nd, 3rd…':`${key}.${property}`, token: `{{${key}.${property}}}`,
       }))];
   });
 }

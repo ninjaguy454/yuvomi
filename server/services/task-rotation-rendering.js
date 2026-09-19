@@ -3,11 +3,28 @@
 import { renderRotationVariableTemplates, substituteVariableTemplate } from './variable-resolution.js';
 import { captureActivityTemplateDefinition, taskActivitySnapshot } from './task-activity-snapshot.js';
 import { registerRecurrenceAction } from './task-recurrence-frontier.js';
-import { parseRotationBindings, taskRotationContexts } from './task-rotation.js';
+import { parseRotationBindings, taskRotationContexts, reconcileSharedTaskBindings } from './task-rotation.js';
+import { registerSharedRotationReconciler } from './rotation-shared.js';
+import { recordOccurrenceDefinition } from './task-series.js';
+import { seriesOccurrencePreservationReason } from './task-series-edit.js';
 
 const row=(d,id)=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const same=(left,right)=>String(left??'').trim()===String(right??'').trim();
 const activeTarget=(target,bindings)=>!(target.purpose_keys||[]).some(key=>!bindings.some(binding=>binding.purpose_key===key));
+/** Capture before any derived link/text mutation. The existing series predicate
+ * rejects human edits/progress/evidence, so none can be absorbed into a baseline. */
+function pristineDerivedBaselines(d,taskId,baselines=new Map()) {
+  const occurrences=d.prepare(`WITH RECURSIVE ancestors(id,parent_task_id) AS (
+    SELECT id,parent_task_id FROM tasks WHERE id=? UNION SELECT t.id,t.parent_task_id FROM tasks t JOIN ancestors a ON t.id=a.parent_task_id)
+    SELECT o.* FROM task_recurrence_occurrences o JOIN ancestors a ON a.id=o.task_id`).all(taskId);
+  for(const occurrence of occurrences)if(!baselines.has(occurrence.task_id)
+    &&!seriesOccurrencePreservationReason(d,occurrence,row(d,occurrence.task_id)))baselines.set(occurrence.task_id,occurrence);
+  return baselines;
+}
+function preserveDerivedBaselines(d,baselines) {
+  for(const occurrence of baselines.values())recordOccurrenceDefinition(d,occurrence.task_id,{definitionId:occurrence.definition_id,
+    startDate:occurrence.planned_start_date,dueDate:occurrence.planned_due_date,exceptionReason:occurrence.exception_reason,baseline:true});
+}
 function effectiveBindings(d,task) {
   const bindings=new Map(),seen=new Set();
   while(task&&!seen.has(task.id)) {
@@ -33,7 +50,7 @@ function textTemplate(d,template,activity,subjectUserId) {
 }
 function render(d,task,target,{activity,bindings,rotations,subjectUserId,inputs,definitions}) {
   return renderRotationVariableTemplates(d,{templates:[textTemplate(d,target.template,activity,subjectUserId)],bindings,rotations,
-    subjectUserId,inputs,definitions});
+    subjectUserId:task.assigned_to||subjectUserId,inputs,definitions});
 }
 
 /** Initial template authorship is explicit. Check both the template-item ID
@@ -122,6 +139,7 @@ export function refreshRotationTaskRendering(d,occurrenceId) {
 /** Explicit mutation reconciliation. Descendant Activity snapshots preserve
  * their own authorship, including Workflow step overrides and frozen variables. */
 export function refreshTaskRotationRendering(d,taskId) {
+  const pristine=pristineDerivedBaselines(d,taskId);
   const targets=d.prepare(`WITH RECURSIVE descendants(id) AS (
     SELECT id FROM tasks WHERE id=? UNION ALL SELECT t.id FROM tasks t JOIN descendants p ON t.parent_task_id=p.id
   ) SELECT id FROM descendants`).all(taskId);
@@ -129,4 +147,12 @@ export function refreshTaskRotationRendering(d,taskId) {
   // A directly edited checklist participant may be rendered by its owner.
   const parent=row(d,taskId)?.parent_task_id;
   if(parent)applyTaskRotationRendering(d,parent);
+  preserveDerivedBaselines(d,pristine);
 }
+
+registerSharedRotationReconciler((d,event)=>{
+  const pristine=new Map();
+  const changed=reconcileSharedTaskBindings(d,{...event,onBeforeTask:taskId=>pristineDerivedBaselines(d,taskId,pristine)});
+  for(const taskId of changed)refreshTaskRotationRendering(d,taskId);
+  preserveDerivedBaselines(d,pristine);
+});

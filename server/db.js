@@ -22,6 +22,7 @@ import { addTaskExpirationSchema } from './services/task-expiration-schema.js';
 import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
 import { TASK_SERIES_SCHEMA_SQL, initializeTaskSeries } from './services/task-series.js';
 import { ROTATION_SCHEMA_SQL, installRotationChangeTriggers } from './services/rotation-schema.js';
+import { SHARED_ROTATION_SCHEMA_SQL, installSharedRotationChangeTriggers } from './services/rotation-shared-schema.js';
 import { rotationVariableSchemaMigration } from './services/rotation-variable-schema.js';
 import path from 'path';
 import fs from 'node:fs/promises';
@@ -9055,6 +9056,12 @@ FORK_MIGRATIONS.push({
     rotationVariableSchemaMigration(database);
     installRotationChangeTriggers(database);
   },
+});
+
+FORK_MIGRATIONS.push({
+  version: 10040,
+  description: 'Rotation Groups: optional shared scheduled periods and explicit mode boundaries',
+  up(database) { database.exec(SHARED_ROTATION_SCHEMA_SQL); installSharedRotationChangeTriggers(database); },
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

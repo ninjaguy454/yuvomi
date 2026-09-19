@@ -1,10 +1,19 @@
 import {actorPermissions,hasCapability} from '../permissions.js';
 import {taskCapabilities,withTaskReadProjection} from './task-access.js';
-import {getRotationTrack,getRotationOccurrence} from './rotation.js';
+import {getRotationTrack,getRotationOccurrence,getRotationGroup} from './rotation.js';
 function found(value) {if(!value){const e=new Error('Rotation not found.');e.status=404;throw e;}return value;}
 /** Read-only consumer names follow durable identities, never title/date matching.
  * Rotation access does not grant visibility into an otherwise private Task. */
 export function projectRotationTrack(d,req,track) {
+  // Shared state is deliberately Group-owned. Reading that shared order does
+  // not require access to the private consumers that happen to reference it.
+  if(track.consumer_type==='rotation_group_schedule') {
+    if(!hasCapability(d,req,'rotations.view'))return null;
+    const group=getRotationGroup(d,track.group_id);
+    if(!group)return null;
+    return {...track,consumer_label:group.name,consumer_status:group.active?'active':'inactive',
+      display_label:`${group.name} · Shared across activities`};
+  }
   const identity=String(track.consumer_id),scoped=['task_exception','workflow_step','meal_plan'].includes(track.consumer_type);
   const ownerId=Number(identity.match(scoped?/^([1-9]\d*):/:/^([1-9]\d*)$/)?.[1]);
   const purpose=track.label||track.purpose_key.replaceAll('_',' ');
@@ -70,7 +79,37 @@ export function projectRotationTrack(d,req,track) {
 }
 export function readRotationTrack(d,req,trackId) {return found(projectRotationTrack(d,req,found(getRotationTrack(d,trackId))));}
 export function readRotationOccurrence(d,req,occurrenceId) {
-  const occurrence=found(getRotationOccurrence(d,occurrenceId));readRotationTrack(d,req,occurrence.track_id);return occurrence;
+  const occurrence=found(getRotationOccurrence(d,occurrenceId)),track=readRotationTrack(d,req,occurrence.track_id);
+  return projectRotationOccurrence(occurrence,track);
+}
+
+/** Defense in depth for every shared-history embedding. Consumer context is
+ * never part of a Group-owned snapshot, even if an older adapter supplied it. */
+export function projectRotationOccurrence(occurrence,track) {
+  if(!occurrence||track?.consumer_type!=='rotation_group_schedule')return occurrence;
+  const context=Object.fromEntries(Object.entries(occurrence.context||{}).filter(([key])=>[
+    'dateKey','period_date','nominal_date','active_at','finalize_at','timezone','schedule_revision',
+    'scheduled','recovered',
+  ].includes(key)));
+  return {...occurrence,context,context_json:JSON.stringify(context),consumer_eligibility:null,consumer_eligibility_json:null};
+}
+
+/** Group usage is separate from the intentionally shared state. Each entry
+ * continues to honor its consumer's canonical visibility. No private dates,
+ * subjects or progress are returned as side channels. */
+export function sharedRotationUsage(d,actor,trackId) {
+  return withTaskReadProjection(d,actor,()=>{
+    const tasks=d.prepare(`SELECT DISTINCT t.* FROM task_rotation_occurrences r JOIN tasks t ON t.id=r.task_id
+      WHERE r.track_id=? AND r.retired_at IS NULL ORDER BY t.id`).all(trackId);
+    const result=tasks.filter(task=>taskCapabilities(d,actor,task).view).map(task=>({consumer_type:'task',consumer_id:task.id,
+      consumer_label:task.title,consumer_status:task.archived_at?'archived':['done','expired'].includes(task.status)?'historical':'active'}));
+    if(actorPermissions(d,actor).modules.meals!=='none') {
+      const plans=d.prepare(`SELECT DISTINCT p.id,p.name,p.status FROM meal_plans p JOIN meal_plan_rules r ON r.meal_plan_id=p.id
+        JOIN rotation_tracks t ON t.id=? WHERE r.chooser_rotation_group_id=t.group_id OR r.cook_rotation_group_id=t.group_id OR r.supervisor_rotation_group_id=t.group_id`).all(trackId);
+      result.push(...plans.map(plan=>({consumer_type:'meal_plan',consumer_id:plan.id,consumer_label:plan.name,consumer_status:plan.status})));
+    }
+    return result;
+  });
 }
 
 /** Read-only typed picker: filter complete owning consumers before exposing keys. */

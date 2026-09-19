@@ -152,7 +152,9 @@ export function rotationOccurrenceVariable(row, subjectUserId = null) {
   if (row?.id == null) throw new Error('This Rotation occurrence has not been resolved yet.');
   const member = value => value ? Object.fromEntries(MEMBER_FIELDS.map(field => [field, field === 'id' ? Number(value.id) : value[field] ?? null])) : null;
   const position = (row.order || []).findIndex(value => Number(value.id) === Number(subjectUserId));
+  const ordinal = value => `${value}${value % 100 >= 11 && value % 100 <= 13 ? 'th' : ({1:'st',2:'nd',3:'rd'}[value % 10] || 'th')}`;
   return { id: Number(row.id), track_id: Number(row.track_id), order: (row.order || []).map(member), position: position < 0 ? null : position + 1,
+    position_label: position < 0 ? '' : ordinal(position + 1),
     selected_member: member(row.selected_member), status: row.status, strategy: row.strategy };
 }
 
@@ -265,7 +267,7 @@ export function variableLabels(values, types) {
       labels[key] = (value?.order || []).map(member => member.display_name || '').join(' → ');
       labels[`${key}.order`] = labels[key];
       labels[`${key}.selected_member`] = value?.selected_member?.display_name || '';
-      for (const field of ['id', 'track_id', 'position', 'status', 'strategy']) labels[`${key}.${field}`] = String(value?.[field] ?? '');
+      for (const field of ['id', 'track_id', 'position', 'position_label', 'status', 'strategy']) labels[`${key}.${field}`] = String(value?.[field] ?? '');
     } else labels[key] = type === 'boolean' ? value ? 'Yes' : 'No' : String(value ?? '');
   }
   return labels;

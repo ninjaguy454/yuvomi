@@ -6,7 +6,7 @@ export const EXPRESSION_PROPERTIES = Object.freeze({
   household_member: Object.freeze({ id: 'number', first_name: 'text', last_name: 'text', display_name: 'text', nickname: 'text' }),
   location: Object.freeze({ id: 'number', name: 'text', parent: 'text', address: 'text' }),
   rotation_group: Object.freeze({ id: 'number', name: 'text', description: 'text' }),
-  rotation_occurrence: Object.freeze({ id: 'number', track_id: 'number', order: 'household_member_list', selected_member: 'household_member', position: 'number', status: 'text', strategy: 'text' }),
+  rotation_occurrence: Object.freeze({ id: 'number', track_id: 'number', order: 'household_member_list', selected_member: 'household_member', position: 'number', position_label: 'text', status: 'text', strategy: 'text' }),
 });
 export const EXPRESSION_FUNCTIONS = Object.freeze([
   { name: 'coalesce', signature: 'coalesce(value, fallback, ...)', description: 'Use the first value that is not blank. Zero and No still count as values.' },

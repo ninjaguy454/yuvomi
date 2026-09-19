@@ -47,7 +47,8 @@ import { normalizeTags } from '../utils/task-tags.js';
 import * as v from '../middleware/validate.js';
 import { normalizeActivityDueOffset } from '../../public/utils/activity-schedule.js';
 import { normalizeRotationBindings, assertRotationBindingsChange, taskRotationContexts } from '../services/task-rotation.js';
-import { listRotationGroups, finalizeRotation } from '../services/rotation.js';
+import { listRotationGroups, finalizeRotation, getRotationTrack } from '../services/rotation.js';
+import { rotationGroupUsage } from '../services/rotation-shared.js';
 import { rotationOccurrenceOptions } from '../services/rotation-access.js';
 import { normalizeWorkflowRotationOperations, executeWorkflowRotationOperation } from '../services/workflow-rotation-operations.js';
 import {
@@ -97,7 +98,7 @@ function currentUserId(req) {
 }
 
 function rotationPickerData(d, actor) {
-  return { rotation_groups: hasCapability(d, actor, 'rotations.view') ? listRotationGroups(d) : [],
+  return { rotation_groups: hasCapability(d, actor, 'rotations.view') ? listRotationGroups(d).map(group=>({...group,...rotationGroupUsage(d,group.id)})) : [],
     rotation_occurrences: rotationOccurrenceOptions(d,actor) };
 }
 
@@ -1043,6 +1044,8 @@ router.post('/workflow-instances/:id/rotations/:purpose/outcome', requireCapabil
     assertTaskMutation(d, req, task, {}, { operation: 'status' });
     const link = taskRotationContexts(d, task).find(context => context.purpose_key === req.params.purpose && context.owner_task_id === task.id);
     if (!link) return res.status(404).json({ error: 'Workflow rotation purpose not found.', code: 404 });
+    if(link.occurrence.track_id&&getRotationTrack(d,link.occurrence.track_id)?.consumer_type==='rotation_group_schedule')
+      return res.status(409).json({error:'This shared rotation follows the Group schedule. Manage this evening in Rotation Groups.',code:'rotation_shared_consumer_operation'});
     res.json({ data: finalizeRotation(d, link.occurrence.id, { actorId: currentUserId(req), outcome: req.body.outcome,
       expectedRevision: req.body.expected_revision, manual: req.body.manual === true }) });
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.status || 400 }); }

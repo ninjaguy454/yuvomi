@@ -42,6 +42,10 @@ app.use('/api/v1',async(req,res)=>{
   requests.push({path,body:req.body});const group={...req.body,id:8,active:req.body.active?1:0,revision:1,members:req.body.member_ids.map(id=>clone(members.find(m=>m.id===id)))};
   groups.push(group);broadcast();return res.status(201).json({data:group});
  }
+ if(path==='/automation/rotation-groups/7/usage-preview'){
+  requests.push({path,body:req.body});return res.json({data:{confirmation_token:'preview-revision-3',effective_date:req.body.shared_config?.effective_date||'2026-09-20',
+   proposed_order:clone([members[2],members[0],members[1]]),consumers:[{consumer_type:'task_series',consumer_id:'42',purpose_key:'shower_order',display_label:'Bedtime · Shower Order',current_order:clone(members.slice(0,3))}],exceptions:[{reason:'A completed occurrence keeps its historical snapshot.'}]}});
+ }
  if(path.match(/^\/automation\/rotation-groups\/\d+$/)){
   const group=groups.find(g=>g.id===Number(path.split('/').at(-1)));
   if(req.method==='PUT'){
@@ -79,9 +83,11 @@ app.get('/rotation-groups-fixture.js',(_req,res)=>res.type('text/javascript').se
  import { initI18n,setLocale } from '/i18n.js';
  import { setPermissions } from '/permissions.js';
  import { renderRotationGroups } from '/components/rotation-groups.js';
+ import { renderRotationBindings,bindRotationBindings } from '/components/rotation-bindings.js';
+ import { variableReferenceOptions } from '/components/variable-expression-editor.js';
  await initI18n();await setLocale('en');setPermissions({admin:true});
  window.yuvomi={user:{id:1,role:'admin'},navigate(){},showToast(){},isModuleDisabled(){return false;}};
- window.fixture={renderRotationGroups,setPermissions};window.unhandled=[];
+ window.fixture={renderRotationGroups,setPermissions,variableReferenceOptions,async renderBindings(value,options={}){const body=document.querySelector('#fixture');body.rotationDispose?.();body.innerHTML=renderRotationBindings(value,options);window.bindingEditor=bindRotationBindings(body,options);await window.bindingEditor.ready;}};window.unhandled=[];
  window.addEventListener('unhandledrejection',event=>window.unhandled.push(String(event.reason)));
  await renderRotationGroups(document.querySelector('#fixture'));window.fixtureReady=true;
 `));
@@ -113,9 +119,13 @@ async function order(page){return page.$$eval(`${active} ${list} [data-rotation-
 async function fill(page,selector,value){await page.$eval(selector,(el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));},value);}
 async function drag(page,fromId,toId,touch=false){
  const first=`${active} [data-rotation-member="${fromId}"] .rotation-member-handle`,last=`${active} [data-rotation-member="${toId}"]`;
+ // Settle initial focus and the modal's existing 300 ms keyboard-scroll timer
+ // before positioning a real drag in this longer editor.
+ await wait(380);
  await page.$eval(first,el=>el.scrollIntoView({block:'center'}));await wait(100);
  const a=await page.$eval(first,el=>{const r=el.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};});
  const b=await page.$eval(last,el=>{const r=el.getBoundingClientRect();return{x:r.x+30,y:r.bottom-2};});
+ assert.ok(b.y<page.viewport().height,'drag target must be on screen');
  if(touch){
   const client=await page.createCDPSession();const point=(x,y)=>[{x,y,id:1,radiusX:2,radiusY:2,force:1}];
   await client.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:point(a.x,a.y)});await wait(190);
@@ -302,6 +312,69 @@ test('A second open client receives a saved Group update without closing its det
   assert.equal(await other.evaluate(()=>window.savedDetail===document.querySelector('#shared-modal-overlay .modal-panel')),true);
  }finally{await other.close();}
 }));
+
+for(const width of [1440,390])test(`Shared Group schedule is explicit and saved from the editor at ${width}px`,()=>pageTest(async page=>{
+ await page.click('[data-rotation-create]');await page.waitForSelector(form);await wait(180);
+ await fill(page,`${form} [name=name]`,'Kids Shower Order');for(const id of ['1','2','3'])await page.select('[data-rotation-add-member]',id);
+ await page.select(`${form} [name=usage_mode]`,'shared');assert.equal(await page.$eval('[data-rotation-shared-fields]',el=>el.hidden),false);
+ await page.select(`${form} [name=shared_starting_member]`,'3');await fill(page,`${form} [name=shared_effective_date]`,'2026-09-20');
+ await fill(page,`${form} [name=shared_active_time]`,'18:00');await fill(page,`${form} [name=shared_finalize_time]`,'03:30');
+ await page.select(`${form} [name=shared_finalize_day_offset]`,'1');
+ await page.$eval('[data-rotation-weekday][value="0"]',el=>{el.checked=false;el.dispatchEvent(new Event('change',{bubbles:true}));});
+ assert.match(await page.$eval('[data-rotation-shared-preview]',el=>el.textContent),/Frankie → Grace → Eleanor/);
+ await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ const payload=requests.find(row=>row.path==='/automation/rotation-groups').body;
+ assert.equal(payload.usage_mode,'shared');assert.deepEqual(payload.shared_config.weekdays,[1,2,3,4,5,6]);
+ assert.equal(payload.shared_config.starting_member_id,3);assert.equal(payload.shared_config.active_time,'18:00');assert.equal(payload.shared_config.finalize_time,'03:30');
+ assert.equal(payload.shared_config.finalize_day_offset,1);assert.equal(payload.shared_config.advance_on_skip,false);
+},{width}));
+
+test('Changing usage requires a preview and explicit confirmation; Cancel preserves the complete draft',()=>pageTest(async page=>{
+ await editGroup(page);await wait(180);await fill(page,`${form} [name=description]`,'Preserved draft');await page.select(`${form} [name=usage_mode]`,'shared');
+ await page.select(`${form} [name=shared_starting_member]`,'3');await fill(page,`${form} [name=shared_effective_date]`,'2026-09-20');
+ await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');
+ assert.match(await page.$eval('[data-rotation-usage-confirm]',el=>el.innerText),/Frankie → Grace → Eleanor/);
+ assert.match(await page.$eval('[data-rotation-usage-confirm]',el=>el.innerText),/completed occurrence keeps its historical snapshot/);
+ await page.click(`${active} [data-rotation-cancel]`);await page.waitForFunction(()=>!document.querySelector('[data-rotation-usage-confirm]'));
+ assert.equal(requests.filter(row=>row.path==='/automation/rotation-groups/7').length,0);
+ assert.equal(await page.$eval(`${form} [name=description]`,el=>el.value),'Preserved draft');
+ assert.equal(await page.$eval(`${form} [name=shared_starting_member]`,el=>el.value),'3');
+ await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');await page.click(submit);
+ assert.equal(requests.filter(row=>row.path==='/automation/rotation-groups/7').length,0);
+ await page.click('[name=confirm_usage]');await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ assert.equal(requests.find(row=>row.path==='/automation/rotation-groups/7').body.confirmation_token,'preview-revision-3');
+}));
+
+test('Shared binding inherits configuration and exposes resolved-assignee position without internal IDs',()=>pageTest(async page=>{
+ await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual',workflow_operations:['resolve','finalize','skip']}],{workflowOperations:true}));
+ assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Using shared rotation: Kids/);
+ assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/deliberately joins/);
+ for(const selector of ['strategy','advance','skip','presence','operation-finalize','operation-skip'])assert.equal(await page.$eval(`[data-rotation-${selector}]`,el=>el.disabled),true);
+ const value=await page.evaluate(()=>window.bindingEditor.getValue()[0]);assert.equal(value.strategy,'rotating_order');assert.deepEqual(value.workflow_operations,['resolve']);
+ const references=await page.evaluate(()=>window.fixture.variableReferenceOptions([{id:'shower_order',label:'Shower Order',type:'rotation_occurrence'}]));
+ assert.equal(references.find(row=>row.token==='{{shower_order.position_label}}').label,'Shower Order · This action’s assignee position');
+ await page.select('[data-rotation-period-offset]','-1');assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).period_date_offset_days,-1);
+},{setup:()=>{groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',advance_on_skip:false};}}));
+
+test('Shared to independent conversion requires an explicit effective date and each consumer starting member',()=>pageTest(async page=>{
+ await editGroup(page);await wait(180);await page.select(`${form} [name=usage_mode]`,'independent');
+ assert.equal(await page.$eval('[data-rotation-independent-date]',el=>el.hidden),false);
+ await fill(page,`${form} [name=independent_effective_date]`,'2026-09-21');await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');
+ await page.click('[name=confirm_usage]');await page.click(submit);
+ assert.match(await page.$eval('[data-rotation-usage-confirm] [data-rotation-error]',el=>el.textContent),/starting member for each consumer/);
+ await page.select('[data-rotation-independent-start="0"]','2');await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ const payload=requests.find(row=>row.path==='/automation/rotation-groups/7').body;
+ assert.equal(payload.effective_date,'2026-09-21');assert.equal(payload.usage_mode,'independent');
+ assert.deepEqual(payload.independent_starts,[{consumer_type:'task_series',consumer_id:'42',purpose_key:'shower_order',next_member_id:2}]);
+ assert.equal(requests.filter(row=>row.path.endsWith('/usage-preview')).length,2,'selected explicit states are included in the final preview token');
+},{setup:()=>{groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',starting_member_id:1,effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],active_time:'17:00',finalize_time:'04:00',finalize_day_offset:1};}}));
+
+test('Shared history exposes group-wide override and skip scope without consumer finalization',()=>pageTest(async page=>{
+ await openHistory(page);assert.equal(await page.$('[data-rotation-finalize]'),null);assert.match(await page.$eval('[data-rotation-skip]',el=>el.textContent),/Skip this evening/);
+ await page.click('[data-rotation-override]');await page.waitForSelector('[data-rotation-override-form]');
+ assert.match(await page.$eval('[data-rotation-override-form]',el=>el.innerText),/every Activity using this Group for this evening/);
+ assert.equal(await page.$eval('#shared-modal-title',el=>el.textContent),'Change this evening’s order');
+},{setup:()=>{track.consumer_type='rotation_group';history[0].period_date='2026-09-19';}}));
 
 test('Disposal closes SSE and delayed obsolete renders cannot reopen a stream',()=>pageTest(async page=>{
  assert.equal(streams.size,1);listDelay=120;

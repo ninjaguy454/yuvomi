@@ -36,6 +36,17 @@ function revision(row,expected) {
     fail('This rotation changed elsewhere. Refresh before applying your changes.',409,'rotation_stale');
 }
 function atomic(d,fn) {return d.transaction(fn).immediate();}
+const schemaFeatures=new WeakMap();
+function hasSharedSchema(d) {
+  // Cache schema metadata only, invalidated by SQLite on every DDL change.
+  // No household, permission, eligibility, or temporal decisions are cached.
+  const version=d.pragma('schema_version',{simple:true}),cached=schemaFeatures.get(d);
+  if(cached?.version===version)return cached.shared;
+  const shared=!!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='rotation_occurrence_supersessions'").get();
+  schemaFeatures.set(d,{version,shared});return shared;
+}
+const supersessionProjection=`(SELECT json_object('occurrence_id',s.occurrence_id,'version_id',s.version_id,'actor_user_id',s.actor_user_id,'reason',s.reason,'created_at',s.created_at)
+  FROM rotation_occurrence_supersessions s WHERE s.occurrence_id=o.id) AS supersession_json`;
 function event(d,{groupId=null,trackId=null,occurrenceId=null,actorId=null,type,details={}}) {
   d.prepare('INSERT INTO rotation_events(group_id,track_id,occurrence_id,actor_user_id,event_type,details_json) VALUES(?,?,?,?,?,?)')
     .run(groupId,trackId,occurrenceId,actorId,type,JSON.stringify(details));
@@ -91,6 +102,7 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
       ON CONFLICT(group_id,user_id) DO UPDATE SET active=1,removed_at=NULL,sort_order=excluded.sort_order`).run(groupId,userId,order));
     const saved=getRotationGroup(d,groupId);
     for(const track of d.prepare('SELECT * FROM rotation_tracks WHERE group_id=?').all(groupId)) {
+      if(track.consumer_type==='rotation_group_schedule')continue;
       const next=survivingNext(old?.members||[],track.next_membership_id,saved.members);
       d.prepare(`UPDATE rotation_tracks SET next_membership_id=?,group_revision=?,revision=revision+1,updated_at=${NOW} WHERE id=?`)
         .run(next,saved.revision,track.id);
@@ -120,8 +132,11 @@ export function normalizeRotationConfiguration(d,input={}, {allowMissingReferenc
       include_supervised:flag(e.include_supervised),presence_policy:presence,presence_window:window,place_id:place}};
 }
 function hydrateTrack(row) {return row?{...row,eligibility:JSON.parse(row.eligibility_json)}:null;}
-export function getRotationTrack(d,trackId) {
-  return hydrateTrack(d.prepare('SELECT * FROM rotation_tracks WHERE id=? AND household_key=?').get(id(trackId,'Rotation Track'),HOUSEHOLD));
+export function getRotationTrack(d,trackId,{usageDate}={}) {
+  const withUsage=usageDate&&hasSharedSchema(d);
+  return hydrateTrack(d.prepare(`SELECT t.*${withUsage?`,(SELECT v.usage_mode FROM rotation_group_schedule_versions v JOIN rotation_group_schedules s ON s.id=v.schedule_id
+    WHERE s.group_id=t.group_id AND v.effective_date<=? ORDER BY v.effective_date DESC,v.id DESC LIMIT 1) AS _group_usage_mode`:''}
+    FROM rotation_tracks t WHERE t.id=? AND t.household_key=?`).get(...(withUsage?[usageDate]:[]),id(trackId,'Rotation Track'),HOUSEHOLD));
 }
 export function findRotationTrack(d,{consumer_type,consumer_id,purpose_key}) {
   return hydrateTrack(d.prepare('SELECT * FROM rotation_tracks WHERE household_key=? AND consumer_type=? AND consumer_id=? AND purpose_key=?')
@@ -130,23 +145,51 @@ export function findRotationTrack(d,{consumer_type,consumer_id,purpose_key}) {
 function trackConfig(track) {return {group_id:track.group_id,strategy:track.strategy,advance_policy:track.advance_policy,
   advance_on_skip:!!track.advance_on_skip,override_affects_next:!!track.override_affects_next,
   eligibility_behavior:track.eligibility_behavior,eligibility:track.eligibility};}
-export function configureRotationTrack(d,input,{actorId=null,trusted=false}={}) {
+function groupUsageVersion(d,groupId,dateKey) {
+  if(!hasSharedSchema(d))return null;
+  return d.prepare(`SELECT v.id,v.usage_mode,v.independent_starts_json FROM rotation_group_schedule_versions v JOIN rotation_group_schedules s ON s.id=v.schedule_id
+    WHERE s.group_id=? AND v.effective_date<=? ORDER BY v.effective_date DESC,v.id DESC LIMIT 1`).get(groupId,dateKey);
+}
+export function configureRotationTrack(d,input,{actorId=null,trusted=false,sharedSchedule=false,dateKey=todayKey(d)}={}) {
   if(!trusted)assertCapability(d,actorId,'rotations.configure');
   return atomic(d,()=>{
     const consumerType=text(input.consumer_type,'consumer type',80),consumerId=text(String(input.consumer_id??''),'consumer identity',512),purpose=text(input.purpose_key,'rotation purpose',120);
+    if(consumerType==='rotation_group_schedule'&&!sharedSchedule)fail('Configure shared Rotation through its Group schedule.',409,'rotation_shared_owned');
     if(!/^[a-z][a-z0-9_]*$/.test(consumerType)||!/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(purpose))fail('Use a stable rotation purpose key.');
-    const old=findRotationTrack(d,{consumer_type:consumerType,consumer_id:consumerId,purpose_key:purpose});
+    let old=findRotationTrack(d,{consumer_type:consumerType,consumer_id:consumerId,purpose_key:purpose});
     const config=normalizeRotationConfiguration(d,input,{allowMissingReferences:!!old});
     const label=input.label==null?old?.label??purpose:text(input.label,'rotation label',200);
-    if(old&&JSON.stringify(trackConfig(old))===JSON.stringify(config)&&old.label===label)return old;
+    const unchanged=old&&JSON.stringify(trackConfig(old))===JSON.stringify(config)&&old.label===label;
+    const usage=consumerType==='rotation_group_schedule'?null:groupUsageVersion(d,config.group_id,dateKey);
+    let checkedRevision=false;
+    const existingSeed=old?.group_id===config.group_id&&usage?.usage_mode==='independent'
+      ?JSON.parse(usage.independent_starts_json).find(seed=>seed.consumer_type===consumerType&&String(seed.consumer_id)===consumerId&&seed.purpose_key===purpose):null;
+    if(existingSeed&&!d.prepare('SELECT 1 FROM rotation_group_independent_seeds WHERE version_id=? AND track_id=?').get(usage.id,old.id)) {
+      if(input.expected_revision!==undefined){revision(old,input.expected_revision);checkedRevision=true;}
+      else if(!trusted)fail('Refresh this Rotation before applying its confirmed independent starting position.',409,'rotation_stale');
+      old=correctRotationTrack(d,old.id,{next_member_id:existingSeed.next_member_id,expected_revision:old.revision,
+        actorId,trusted:true,reason:'Confirmed return to independent Rotation'});
+      d.prepare('INSERT INTO rotation_group_independent_seeds(version_id,track_id,next_member_id) VALUES(?,?,?)').run(usage.id,old.id,existingSeed.next_member_id);
+    }
+    if(unchanged)return old;
+    if(usage?.usage_mode==='shared')fail('This Group owns the scheduled Rotation. Consumer-specific strategy and cursor settings cannot replace it.',409,'rotation_shared_owned');
     // Existing persisted references may become unavailable. New configuration
     // still validates strictly; reads/materialization fail closed below.
     normalizeRotationConfiguration(d,input);
-    if(old)revision(old,input.expected_revision);
+    if(old&&!checkedRevision)revision(old,input.expected_revision);
     const group=getRotationGroup(d,config.group_id);
     if(!group.active)fail('Reactivate this Rotation Group before configuring new rotation work.',409,'rotation_group_inactive');
     let trackId=old?.id;
-    const next=old?.group_id===group.id?old.next_membership_id:group.members[0]?.membership_id??null;
+    let next=old?.group_id===group.id?old.next_membership_id:group.members[0]?.membership_id??null;
+    let initialSeed=null;
+    if((!old||old.group_id!==group.id)&&usage?.usage_mode==='independent') {
+      initialSeed=JSON.parse(usage.independent_starts_json).find(seed=>seed.consumer_type===consumerType&&String(seed.consumer_id)===consumerId&&seed.purpose_key===purpose);
+      if(initialSeed) {
+        const member=group.members.find(value=>value.id===initialSeed.next_member_id);
+        if(!member)fail('The confirmed independent starting member is no longer in the Group. Choose a new starting member.',409,'rotation_seed_unavailable');
+        next=member.membership_id;
+      }
+    }
     if(old)d.prepare(`UPDATE rotation_tracks SET group_id=?,strategy=?,advance_policy=?,advance_on_skip=?,override_affects_next=?,
       eligibility_json=?,eligibility_behavior=?,label=?,next_membership_id=?,group_revision=?,revision=revision+1,config_revision=config_revision+1,updated_at=${NOW} WHERE id=?`)
       .run(group.id,config.strategy,config.advance_policy,+config.advance_on_skip,+config.override_affects_next,JSON.stringify(config.eligibility),config.eligibility_behavior,label,next,group.revision,old.id);
@@ -154,7 +197,8 @@ export function configureRotationTrack(d,input,{actorId=null,trusted=false}={}) 
       advance_on_skip,override_affects_next,eligibility_json,eligibility_behavior,next_membership_id,group_revision,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
       .run(consumerType,consumerId,purpose,label,group.id,config.strategy,config.advance_policy,+config.advance_on_skip,+config.override_affects_next,
         JSON.stringify(config.eligibility),config.eligibility_behavior,next,group.revision,actorId).lastInsertRowid);
-    event(d,{groupId:group.id,trackId,actorId,type:old?'track_configured':'track_created',details:{purpose_key:purpose,config}});
+    if(initialSeed)d.prepare('INSERT INTO rotation_group_independent_seeds(version_id,track_id,next_member_id) VALUES(?,?,?)').run(usage.id,trackId,initialSeed.next_member_id);
+    event(d,{groupId:group.id,trackId,actorId,type:old?'track_configured':'track_created',details:{purpose_key:purpose,config,...(initialSeed?{initial_next_member_id:initialSeed.next_member_id,seed_version_id:usage.id}: {})}});
     return getRotationTrack(d,trackId);
   });
 }
@@ -213,31 +257,58 @@ function selectRotationPreview(track,{config,group,current,eligible,skipped,conf
 export function previewRotation(d,trackOrConfig,options={}) {
   const track=typeof trackOrConfig==='number'?getRotationTrack(d,trackOrConfig):trackOrConfig;
   if(!track)fail('Rotation Track not found.',404);
-  return selectRotationPreview(track,prepareRotationPreview(d,track,options));
+  return selectRotationPreview(track,prepareRotationPreview(d,track,options,options.groupSnapshot));
 }
-function occurrenceRow(d,occurrenceId) {return d.prepare(`SELECT o.* FROM rotation_occurrences o JOIN rotation_tracks t ON t.id=o.track_id
+function occurrenceRow(d,occurrenceId) {return d.prepare(`SELECT o.*${hasSharedSchema(d)?`,${supersessionProjection}`:''} FROM rotation_occurrences o JOIN rotation_tracks t ON t.id=o.track_id
   JOIN rotation_groups g ON g.id=o.group_id WHERE o.id=? AND t.household_key=? AND g.household_key=?`).get(id(occurrenceId,'Rotation Occurrence'),HOUSEHOLD,HOUSEHOLD);}
 function hydrateOccurrence(row) {
   if(!row)return null;
+  const {supersession_json,...value}=row;row=value;
   const order=JSON.parse(row.order_json),config=JSON.parse(row.config_json);
   return {...row,config,context:JSON.parse(row.context_json),members:JSON.parse(row.members_json),eligible:JSON.parse(row.eligible_json),
     skipped:JSON.parse(row.skipped_json),order,original_order:JSON.parse(row.original_order_json),member_ids:order.map(m=>m.id),
-    selected_member:row.strategy==='round_robin'?order[0]??null:null,state:order.length?'resolved':'unavailable'};
+    selected_member:row.strategy==='round_robin'?order[0]??null:null,state:order.length?'resolved':'unavailable',
+    ...(supersession_json?{supersession:JSON.parse(supersession_json)}:{})};
 }
 export function getRotationOccurrence(d,occurrenceId) {return hydrateOccurrence(occurrenceRow(d,occurrenceId));}
-export function resolveRotation(d,trackId,occurrenceKey,{context={},eligibleUserIds,eligibilityExplanations,expectedTrackRevision,actorId=null}={}) {
+/** Explicit consumer conversion abandons a provisional decision without
+ * claiming completion, skip, or advancement. Its original snapshot stays intact. */
+export function supersedeRotationOccurrence(d,occurrenceId,{actorId=null,versionId=null,reason='Consumer changed to shared scheduled Rotation',trusted=false}={}) {
+  if(!trusted)assertCapability(d,actorId,'rotations.configure');
   return atomic(d,()=>{
-    const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
+    const occurrence=getRotationOccurrence(d,occurrenceId);if(!occurrence)fail('Rotation Occurrence not found.',404);
+    if(getRotationTrack(d,occurrence.track_id).consumer_type==='rotation_group_schedule')fail('A consumer conversion cannot supersede its Group-owned scheduled period.',409,'rotation_shared_owned');
+    if(occurrence.supersession)return occurrence;
+    if(occurrence.status!=='resolved')return occurrence;
+    if(d.prepare('SELECT 1 FROM task_rotation_occurrences WHERE occurrence_id=? AND retired_at IS NULL LIMIT 1').get(occurrence.id))
+      fail('This Rotation occurrence still has an active consumer.',409,'rotation_still_used');
+    if(d.prepare('SELECT 1 FROM meal_occurrence_role_assignments WHERE rotation_occurrence_id=? LIMIT 1').get(occurrence.id)
+      ||d.prepare('SELECT 1 FROM meal_occurrence_assignments WHERE rotation_occurrence_id=? LIMIT 1').get(occurrence.id))
+      fail('This Rotation occurrence still has Meal assignment evidence.',409,'rotation_still_used');
+    d.prepare('INSERT INTO rotation_occurrence_supersessions(occurrence_id,version_id,actor_user_id,reason) VALUES(?,?,?,?)').run(occurrence.id,versionId,actorId,text(reason,'supersession reason',1000));
+    event(d,{groupId:occurrence.group_id,trackId:occurrence.track_id,occurrenceId:occurrence.id,actorId,type:'superseded',details:{version_id:versionId,reason}});
+    return getRotationOccurrence(d,occurrence.id);
+  });
+}
+export function resolveRotation(d,trackId,occurrenceKey,{context={},eligibleUserIds,eligibilityExplanations,expectedTrackRevision,actorId=null,sharedSchedule=false,groupSnapshot}={}) {
+  return atomic(d,()=>{
+    const dateKey=context.dateKey||context.due_date||context.start_date||todayKey(d);
+    const loaded=getRotationTrack(d,trackId,{usageDate:dateKey});if(!loaded)fail('Rotation Track not found.',404);
+    const {_group_usage_mode:usageMode,...track}=loaded;
+    if(track.consumer_type==='rotation_group_schedule'&&!sharedSchedule)fail('Resolve shared Rotation through its scheduled period.',409,'rotation_shared_owned');
     const key=text(occurrenceKey,'occurrence identity',1000);
     const old=d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? AND occurrence_key=?').get(track.id,key);
     if(old)return hydrateOccurrence(old);
+    if(track.consumer_type!=='rotation_group_schedule'&&usageMode==='shared')
+      fail('This Group resolves through its shared scheduled period.',409,'rotation_shared_owned');
     const group=getRotationGroup(d,track.group_id);
     if(!group.active)fail('This Rotation Group is inactive. Reconfigure the consumer or reactivate the Group.',409,'rotation_group_inactive');
     if(expectedTrackRevision!==undefined)revision(track,expectedTrackRevision);
     const pending=d.prepare(`SELECT id,status,config_json FROM rotation_occurrences WHERE track_id=? AND
-      (status='resolved' OR (status='finalized' AND json_extract(config_json,'$.advance_policy')='on_completed' AND advanced=0)) ORDER BY id LIMIT 1`).get(track.id);
+      (status='resolved' OR (status='finalized' AND json_extract(config_json,'$.advance_policy')='on_completed' AND advanced=0))
+      ${hasSharedSchema(d)?'AND NOT EXISTS(SELECT 1 FROM rotation_occurrence_supersessions s WHERE s.occurrence_id=rotation_occurrences.id)':''} ORDER BY id LIMIT 1`).get(track.id);
     if(pending&&track.strategy!=='fixed_order')fail('Finalize or skip the previous rotation occurrence before resolving the next one.',409,'rotation_pending');
-    const result=selectRotationPreview(track,prepareRotationPreview(d,track,{context,eligibleUserIds,eligibilityExplanations},group));
+    const result=selectRotationPreview(track,prepareRotationPreview(d,track,{context:{...context,dateKey},eligibleUserIds,eligibilityExplanations},groupSnapshot||group));
     const occurrenceId=Number(d.prepare(`INSERT INTO rotation_occurrences(track_id,occurrence_key,group_id,group_revision,track_config_revision,track_correction_revision,
       strategy,config_json,context_json,consumer_eligibility_json,members_json,eligible_json,skipped_json,original_order_json,order_json,next_membership_id)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(track.id,key,result.group_id,result.group_revision,track.config_revision,track.correction_revision,result.strategy,
@@ -252,10 +323,13 @@ export function overrideRotation(d,occurrenceId,{member_ids,expected_revision,ac
   assertCapability(d,actorId,'rotations.override');
   return atomic(d,()=>{
     const old=getRotationOccurrence(d,occurrenceId);if(!old)fail('Rotation Occurrence not found.',404);
+    if(old.supersession)fail('This historical Rotation decision was superseded by a confirmed consumer conversion.',409,'rotation_superseded');
     revision(old,expected_revision);
     if(old.status!=='resolved')fail('Historical rotation results cannot be changed.',409,'rotation_historical');
     if(old.consumer_eligibility_json)fail('Override this selection through its owning consumer so its eligibility rules can be rechecked.',409);
-    const fresh=previewRotation(d,{...old.config,id:old.track_id},{context:old.context});
+    const owner=getRotationTrack(d,old.track_id);
+    const groupSnapshot=owner.consumer_type==='rotation_group_schedule'?{...getRotationGroup(d,old.group_id),members:old.members}:undefined;
+    const fresh=previewRotation(d,{...old.config,id:old.track_id},{context:old.context,groupSnapshot});
     const currentIds=new Set(fresh.eligible.map(member=>member.id));
     const selected=ids(member_ids),eligible=new Map(old.eligible.filter(member=>currentIds.has(member.id)).map(m=>[m.id,m]));
     if(!selected.length||selected.some(n=>!eligible.has(n))||(old.strategy==='round_robin'?selected.length!==1:selected.length!==eligible.size))
@@ -268,11 +342,15 @@ export function overrideRotation(d,occurrenceId,{member_ids,expected_revision,ac
     return getRotationOccurrence(d,old.id);
   });
 }
-export function finalizeRotation(d,occurrenceId,{outcome='finalized',expectedRevision,actorId=null,trusted=false,manual=false}={}) {
+export function finalizeRotation(d,occurrenceId,{outcome='finalized',expectedRevision,actorId=null,trusted=false,manual=false,sharedSchedule=false}={}) {
   if(!trusted)assertCapability(d,actorId,'rotations.advance');
   if(!['finalized','completed','skipped'].includes(outcome))fail('Choose a valid rotation outcome.');
   return atomic(d,()=>{
     const old=getRotationOccurrence(d,occurrenceId);if(!old)fail('Rotation Occurrence not found.',404);
+    if(old.supersession)fail('This historical Rotation decision was superseded by a confirmed consumer conversion.',409,'rotation_superseded');
+    const shared=getRotationTrack(d,old.track_id).consumer_type==='rotation_group_schedule';
+    if(shared&&!sharedSchedule)fail('This Rotation follows the Group schedule; individual consumers cannot finalize it.',409,'rotation_shared_owned');
+    if(shared&&old.status!=='resolved'&&old.status!==outcome)fail('This rotation already has a different final outcome.',409,'rotation_finalized');
     if(old.status===outcome&&(!manual||old.advanced))return old;
     if(old.status==='completed'&&outcome==='finalized'&&!manual)return old;
     if(!trusted||expectedRevision!==undefined)revision(old,expectedRevision);
@@ -288,16 +366,7 @@ export function finalizeRotation(d,occurrenceId,{outcome='finalized',expectedRev
     let reason=old.advance_reason||(!old.order.length?'no_eligible_members':old.strategy==='fixed_order'?'fixed_order':track.group_id!==old.group_id?'group_changed'
       :track.correction_revision!==old.track_correction_revision?'administrative_correction':policyAllows?'advanced':'policy_retained');
     if(mayAdvance) {
-      const current=memberships(d,track.group_id);
-      let wanted=old.next_membership_id;
-      if(config.override_affects_next&&old.overridden_at) {
-        if(old.strategy==='rotating_order'&&old.order.length>1)wanted=old.order[1].membership_id;
-        else {
-          const result=orderedRotationSelection({memberIds:old.members.map(m=>m.membership_id),eligibleIds:old.members.map(m=>m.membership_id),previousMemberId:old.order[0]?.membership_id});
-          wanted=result.member_ids[0]??null;
-        }
-      }
-      const next=survivingNext(old.members,wanted,current);
+      const next=nextRotationMembership(d,old,track);
       d.prepare(`UPDATE rotation_tracks SET next_membership_id=?,advance_count=advance_count+1,revision=revision+1,updated_at=${NOW} WHERE id=?`)
         .run(next,track.id);
       reason='advanced';
@@ -311,10 +380,22 @@ export function finalizeRotation(d,occurrenceId,{outcome='finalized',expectedRev
   });
 }
 export function skipRotation(d,occurrenceId,options={}) {return finalizeRotation(d,occurrenceId,{...options,outcome:'skipped'});}
+/** The same next-position rule is used for a provisional temporal forecast and
+ * authoritative finalization. It never writes or advances a Track. */
+export function nextRotationMembership(d,occurrence,track=getRotationTrack(d,occurrence.track_id)) {
+  let wanted=occurrence.next_membership_id;
+  if(occurrence.config.override_affects_next&&occurrence.overridden_at) {
+    if(occurrence.strategy==='rotating_order'&&occurrence.order.length>1)wanted=occurrence.order[1].membership_id;
+    else wanted=orderedRotationSelection({memberIds:occurrence.members.map(m=>m.membership_id),eligibleIds:occurrence.members.map(m=>m.membership_id),previousMemberId:occurrence.order[0]?.membership_id}).member_ids[0]??null;
+  }
+  const household=track.consumer_type==='rotation_group_schedule'?new Set(householdMembers(d).map(member=>member.id)):null;
+  const current=household?occurrence.members.filter(member=>household.has(member.id)):memberships(d,track.group_id);
+  return survivingNext(occurrence.members,wanted,current);
+}
 export function rotationHistory(d,trackId,{limit=100}={}) {
   const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
   const n=Math.min(200,Math.max(1,Number(limit)||100));
-  return d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? ORDER BY id DESC LIMIT ?').all(track.id,n).map(hydrateOccurrence);
+  return d.prepare(`SELECT o.*${hasSharedSchema(d)?`,${supersessionProjection}`:''} FROM rotation_occurrences o WHERE track_id=? ORDER BY id DESC LIMIT ?`).all(track.id,n).map(hydrateOccurrence);
 }
 export function rotationTrackEvents(d,trackId,{limit=100}={}) {
   const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
@@ -344,8 +425,8 @@ function previewSequence(track,prepared,count) {
   }
   return result;
 }
-export function correctRotationTrack(d,trackId,{next_member_id,expected_revision,reason=null,actorId}={}) {
-  assertCapability(d,actorId,'rotations.correct');
+export function correctRotationTrack(d,trackId,{next_member_id,expected_revision,reason=null,actorId,trusted=false}={}) {
+  if(!trusted)assertCapability(d,actorId,'rotations.correct');
   return atomic(d,()=>{
     const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
     revision(track,expected_revision);
@@ -374,7 +455,8 @@ export function refreshRotationOccurrence(d,occurrenceId,{expected_revision,expe
     // Consumer-specific exclusions cannot be re-evaluated outside their owner.
     if(old.consumer_eligibility_json&&(!trusted||eligibleUserIds===undefined))fail('Recheck this occurrence from its Activity, Workflow or Meal consumer.',409);
     const resolvedContext=trusted&&context?context:old.context;
-    const result=previewRotation(d,track,{context:resolvedContext,eligibleUserIds,eligibilityExplanations});
+    const groupSnapshot=track.consumer_type==='rotation_group_schedule'?{...getRotationGroup(d,old.group_id),members:old.members}:undefined;
+    const result=previewRotation(d,track,{context:resolvedContext,eligibleUserIds,eligibilityExplanations,groupSnapshot});
     d.prepare('UPDATE rotation_occurrences SET members_json=?,eligible_json=?,skipped_json=?,order_json=?,next_membership_id=?,context_json=?,consumer_eligibility_json=?,group_revision=?,revision=revision+1 WHERE id=?')
       .run(JSON.stringify(result.members),JSON.stringify(result.eligible),JSON.stringify(result.skipped),JSON.stringify(result.order),result.next_membership_id,
         JSON.stringify(safeContext(resolvedContext)),eligibleUserIds!==undefined||eligibilityExplanations?JSON.stringify({eligibleUserIds,eligibilityExplanations}):null,result.group_revision,old.id);

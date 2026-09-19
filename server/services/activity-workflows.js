@@ -10,11 +10,12 @@ import { reconcileTaskSupervision, assertTaskSupervisionAssignee } from './task-
 
 import { todayKey } from '../utils/timezone.js';
 import { createHash } from 'node:crypto';
-import { assertCapability } from '../permissions.js';
+import { assertCapability, hasCapability } from '../permissions.js';
 import { configureRotationTrack, findRotationTrack, previewRotation, resolveRotation } from './rotation.js';
+import { sharedGroupConfiguration, previewSharedRotation, resolveSharedRotation, registerSharedRotationUsageCollector } from './rotation-shared.js';
 import { readRotationOccurrence } from './rotation-access.js';
 import { taskCapabilities } from './task-access.js';
-import { bindTaskRotations, taskRotationContexts, parseRotationBindings, settleTaskRotations } from './task-rotation.js';
+import { bindTaskRotations, taskRotationContexts, parseRotationBindings, settleTaskRotations, sharedTaskPeriodDate } from './task-rotation.js';
 import { initializeTaskRotationRendering } from './task-rotation-rendering.js';
 import { addCalendarDays, resolveActivitySchedule } from './activity-schedule.js';
 import { placeWithInheritedAddress, activityPresenceWindow } from './presence.js';
@@ -129,6 +130,34 @@ export function rotationBindingVariables(bindings = []) {
     type: 'rotation_occurrence', kind: 'value', default_value: null, rotation_context: true }));
 }
 
+function consumerRotationPreview(d,binding,context={},identity=null) {
+  const dateKey=sharedTaskPeriodDate(d,{...context,start_date:context.start_date||context.dateKey||context.due_date||todayKey(d)},binding);
+  const shared=sharedGroupConfiguration(d,binding.group_id,dateKey);
+  if(shared)return previewSharedRotation(d,binding.group_id,{dateKey})||{id:0,track_id:shared.track_id||0,status:'preview',strategy:shared.strategy,order:[],member_ids:[],selected_member:null,period_date:dateKey,provisional:true,explanation:'This date is outside the shared Group schedule.'};
+  const track=identity?findRotationTrack(d,identity):null;
+  return {...previewRotation(d,{...binding,...(track?{id:track.id,next_membership_id:track.next_membership_id}:{})},{context}),id:0,track_id:track?.id||0,status:'preview'};
+}
+
+registerSharedRotationUsageCollector((d,groupId,actor)=>{
+  const result=[];
+  for(const workflow of d.prepare('SELECT * FROM workflow_templates WHERE active=1 ORDER BY id').all()) {
+    const bindings=parseRotationBindings(workflow.rotation_bindings_json).filter(binding=>Number(binding.group_id)===Number(groupId));
+    const steps=d.prepare(`SELECT s.step_key,a.rotation_bindings_json,a.name FROM workflow_template_steps s
+      JOIN activity_templates a ON a.id=s.activity_template_id WHERE s.workflow_template_id=?`).all(workflow.id);
+    const consumers=[...bindings.map(binding=>({consumer_type:'workflow',consumer_id:String(workflow.id),binding})),
+      ...steps.flatMap(step=>parseRotationBindings(step.rotation_bindings_json).filter(binding=>Number(binding.group_id)===Number(groupId))
+        .map(binding=>({consumer_type:'workflow_step',consumer_id:`${workflow.id}:${step.step_key}`,binding,step:step.name})))];
+    for(const value of consumers) {
+      const identity={consumer_type:value.consumer_type,consumer_id:value.consumer_id,purpose_key:value.binding.purpose_key};
+      if(!hasCapability(d,actor,'workflows.view')){result.push({restricted:true,key:`${identity.consumer_type}:${identity.consumer_id}:${identity.purpose_key}`});continue;}
+      const track=findRotationTrack(d,identity);
+      result.push({...identity,label:`${workflow.name}${value.step?' · '+value.step:''} · ${value.binding.label||identity.purpose_key}`,
+        revision:workflow.updated_at||0,next_member_id:track?.next_membership_id?d.prepare('SELECT user_id FROM rotation_group_members WHERE id=?').get(track.next_membership_id)?.user_id:null});
+    }
+  }
+  return result;
+});
+
 export function assertRotationVariableAccess(d, actor, definitions = []) {
   if (definitions.some(row => row.type === 'rotation_group')) assertCapability(d, actor, 'rotations.view');
   if (definitions.some(row => row.type === 'rotation_occurrence' && !row.rotation_context)) assertCapability(d, actor, 'rotations.history');
@@ -242,19 +271,19 @@ export function resolveActivityTemplate(d, activityId, { inputs = {}, subjectUse
     if (activity.rotation_bindings.length) assertCapability(d, actorId, 'rotations.view');
   }
   const contextValues={};
+  const occurrence=resolveActivitySchedule(activity,task);
   // The existing reusable Assignee value denotes this Activity occurrence's
   // resolved performer only when it has no authored expression or fixed value.
   // Do not reinterpret arbitrary member variables or overwrite configured data.
   const contextualAssignee=schema.definitions.find(row=>row.id==='assignee' && row.type==='household_member'
     && row.kind==='value' && !row.expression && row.default_value==null);
   if(contextualAssignee) {
-    const occurrence=resolveActivitySchedule(activity,task);
     const resolvedAssignment=previewTaskActivityBinding(d,{activityTemplateId:activity.id,subjectUserId,
       assignmentOverrideUserId,task:occurrence,dateKey:occurrence.due_date||todayKey(d)}).resolution;
     if(resolvedAssignment.primary)contextValues.assignee=resolvedAssignment.primary.id;
   }
   const rotationOccurrences = Object.fromEntries((activity.rotation_bindings || []).map(binding => [binding.purpose_key,
-    { ...previewRotation(d, binding, { context: task || {} }), id: 0, track_id: 0, status: 'preview' }]));
+    consumerRotationPreview(d,binding,occurrence)]));
   const resolved = resolveVariables(d, schema.definitions, inputs, { keys: schema.keys, subjectUserId, contextValues, rotationOccurrences, actor:actorId });
   return {
     data: { title: stepTitle(activity, subject, null, resolved.labels), description: stepDescription(activity, subject, null, resolved.labels),
@@ -398,9 +427,8 @@ export function previewWorkflow(d, workflowId, {
   const subject = subjectUserId == null ? null : userById(d, subjectUserId);
   if (workflow.subject_required && !subject) throw new Error('Choose a household member first.');
   const rotations = Object.fromEntries(workflow.rotation_bindings.map(binding => {
-    const track = findRotationTrack(d, { consumer_type: 'workflow', consumer_id: String(workflow.id), purpose_key: binding.purpose_key });
-    const preview = previewRotation(d, { ...binding, ...(track ? { id: track.id, next_membership_id: track.next_membership_id } : {}) }, { context: { dateKey: startDate } });
-    return [binding.purpose_key, { ...preview, id: 0, track_id: track?.id || 0, strategy: binding.strategy, status: 'preview' }];
+    const preview = consumerRotationPreview(d,binding,{dateKey:startDate},{ consumer_type: 'workflow', consumer_id: String(workflow.id), purpose_key: binding.purpose_key });
+    return [binding.purpose_key, preview];
   }));
   const resolvedVariables = resolveWorkflowVariables(d, workflow, inputs, subjectUserId, rotations, actorId);
   const runtimeInputs = resolvedVariables.ids;
@@ -442,8 +470,7 @@ export function previewWorkflow(d, workflowId, {
         const ownBindings = activity.rotation_bindings || [];
         const previewContexts = [...Object.entries(rotations).map(([purpose_key, occurrence]) => ({purpose_key,occurrence})),
           ...ownBindings.map(binding => {
-            const track = findRotationTrack(d,{consumer_type:'workflow_step',consumer_id:`${workflow.id}:${step.step_key}`,purpose_key:binding.purpose_key});
-            return {purpose_key:binding.purpose_key,occurrence:{...previewRotation(d,{...binding,...(track?{id:track.id,next_membership_id:track.next_membership_id}:{})},{context:schedule}),id:0,track_id:track?.id||0,status:'preview'}};
+            return {purpose_key:binding.purpose_key,occurrence:consumerRotationPreview(d,binding,schedule,{consumer_type:'workflow_step',consumer_id:`${workflow.id}:${step.step_key}`,purpose_key:binding.purpose_key})};
           })];
         const bindings = [...new Map([...workflow.rotation_bindings,...ownBindings].map(binding=>[binding.purpose_key,binding])).values()];
         const rotationText = bindings.length ? renderRotationVariableTemplates(d,{templates:[step.title_override ?? activity.title_template,step.description_override ?? activity.description],bindings,
@@ -805,9 +832,12 @@ export function instantiateWorkflow(d, workflowId, options = {}) {
     }
     const occurrenceKey = `workflow-request:${options.createdBy}:${key}`;
     const rotationOccurrences = Object.fromEntries(workflow.rotation_bindings.map(binding => {
+      const dateKey=sharedTaskPeriodDate(d,{start_date:options.startDate||todayKey(d)},binding);
+      if(sharedGroupConfiguration(d,binding.group_id,dateKey))return [binding.purpose_key,
+        resolveSharedRotation(d,binding.group_id,{dateKey,actorId:options.createdBy})||consumerRotationPreview(d,binding,{dateKey})];
       const identity = { consumer_type: 'workflow', consumer_id: String(workflow.id), purpose_key: binding.purpose_key };
       const previousTrack = findRotationTrack(d, identity);
-      const track = configureRotationTrack(d, { ...binding, ...identity, expected_revision: previousTrack?.revision }, { actorId: options.createdBy, trusted: true });
+      const track = configureRotationTrack(d, { ...binding, ...identity, expected_revision: previousTrack?.revision }, { actorId: options.createdBy, trusted: true, dateKey });
       return [binding.purpose_key, resolveRotation(d, track.id, occurrenceKey, { actorId: options.createdBy, context: { dateKey: options.startDate || todayKey(d) } })];
     }));
     const result = instantiateWorkflowTasks(d, workflowId, { ...options, rotationOccurrences, rotationOccurrenceKey: occurrenceKey });

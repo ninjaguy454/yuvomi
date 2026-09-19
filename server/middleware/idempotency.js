@@ -116,7 +116,7 @@ function idempotencyMiddleware(req, res, next) {
   // Rotation lifecycle operations have revision/occurrence-bound idempotency.
   // Previews are pure reads. Both must reach their current capability guards.
   if (/^\/automation\/rotation-(?:tracks|occurrences)\//i.test(req.path)
-    || /^\/automation\/rotation-groups\/[^/]+\/preview\/?$/i.test(req.path)
+    || /^\/automation\/rotation-groups\/[^/]+\/(?:usage-)?preview\/?$/i.test(req.path)
     || /^\/automation\/quick-add\/[^/]+\/preview\/?$/i.test(req.path)
     || /^\/automation\/activity-templates\/[^/]+\/resolve\/?$/i.test(req.path)
     || /^\/automation\/workflow-instances\/[^/]+\/rotations\//i.test(req.path)

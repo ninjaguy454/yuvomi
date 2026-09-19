@@ -2,9 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { notifyMealRequests } from './notification-events.js';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
-import { assertCapability } from '../permissions.js';
+import { assertCapability, actorPermissions } from '../permissions.js';
 import { configureRotationTrack, findRotationTrack, resolveRotation, finalizeRotation,
-  getRotationGroup, refreshRotationOccurrence, orderedRotationSelection } from './rotation.js';
+  getRotationGroup, refreshRotationOccurrence, orderedRotationSelection, supersedeRotationOccurrence } from './rotation.js';
+import { sharedGroupConfiguration, rotationGroupUsage, rotationGroupUsageVersion, resolveSharedRotation, registerSharedRotationReconciler, registerSharedRotationUsageCollector } from './rotation-shared.js';
 import {
   BUILT_IN_SKILL_KEYS,
   eligibleUserIdsForBuiltInSkill,
@@ -359,6 +360,9 @@ function normalizeRule(database, raw, index, current = null) {
     if (groupId) {
       const group = getRotationGroup(database, groupId);
       if (!group || !group.active) throw mealPlanError('Choose an active Rotation Group.', 400, 'ROTATION_GROUP_UNAVAILABLE');
+      if(rotationGroupUsage(database,groupId).usage_mode==='shared'
+        &&(role==='chooser'?policy:role==='cook'?cookStrategy:supervisorStrategy)!=='round_robin')
+        throw mealPlanError('Choose the Rotation Group assignment option to use this shared Group; a fixed or disabled role cannot override its selection.',400,'ROTATION_SHARED_CONFLICT');
     }
     rotationGroups[field] = groupId;
   }
@@ -1250,6 +1254,19 @@ function chooseGroupRotation(database, rule, context, role, eligible, occurrence
 
 function resolveMealGroupRotation(database, rule, context, role, eligible, occurrenceKey, dateKey, { refreshUnresolved = false, actorId = null } = {}) {
   const groupId = Number(rule[`${role}_rotation_group_id`]);
+  if(sharedGroupConfiguration(database,groupId,dateKey)) {
+    // Shared selection is authoritative. Meal eligibility may reject it, but
+    // cannot filter the common order or consume a second, role-local turn.
+    const occurrence=resolveSharedRotation(database,groupId,{dateKey,actorId})||{id:0,status:'preview',period_date:dateKey,order:[]};
+    const selected=Number(occurrence.selected_member?.id||occurrence.order?.[0]?.id)||null;
+    const pending=!occurrence.id||occurrence.status==='preview';
+    const compatible=selected&&eligible.includes(selected);
+    return {selected:!pending&&compatible?selected:null,before:null,after:null,
+      rotationOccurrenceId:occurrence.id||null,rotationState:occurrence.status,
+      rotationShared:true,rotationGroupId:groupId,rotationPeriodDate:occurrence.period_date||dateKey,
+      ...(pending?{rotationNeedsResolution:'This shared rotation period is not active yet. Its assignment will resolve when the period activates.',rotationReasonCode:'rotation_shared_future'}
+        :!compatible?{rotationNeedsResolution:selected?'The shared rotation selects a member who cannot perform this meal role. Manage the shared order or this meal’s requirements; another member will not be selected automatically.':'The shared rotation has no eligible participants.',rotationReasonCode:'rotation_shared_incompatible'}:{})};
+  }
   const split = occurrenceRotationScope(database, rule, context, dateKey);
   const scope = context ? `context:${context.id}`
     : (split.splitContextIds.length ? `home-split:${split.splitContextIds.join('.')}` : 'home');
@@ -1260,14 +1277,16 @@ function resolveMealGroupRotation(database, rule, context, role, eligible, occur
   const track = configureRotationTrack(database, { ...identity, group_id: groupId,
     label: `${rule.label || rule.custom_label || rule.meal_type} · ${role}`,
     strategy: 'round_robin', advance_policy: 'on_finalized', advance_on_skip: false,
-    expected_revision: current?.revision }, { trusted: true });
+    expected_revision: current?.revision }, { trusted: true, dateKey });
   const group = getRotationGroup(database, groupId);
   const explanations = Object.fromEntries(group.members.map(member => [member.id, {
     eligible: eligible.includes(Number(member.id)),
     reason: eligible.includes(Number(member.id)) ? 'Eligible for this meal role.'
       : 'Not participating in this planning context, or does not meet this meal role’s skill or availability requirements.',
   }]));
-  let occurrence = resolveRotation(database, track.id, `${occurrenceKey}:${role}`, {
+  const usage=rotationGroupUsageVersion(database,groupId,dateKey);
+  const decisionKey=`${occurrenceKey}:${role}${usage?.usage_mode==='independent'?`:usage:${usage.id}`:''}`;
+  let occurrence = resolveRotation(database, track.id, decisionKey, {
     eligibleUserIds: eligible, eligibilityExplanations: explanations,
     context: { dateKey, meal_plan_id: rule.meal_plan_id, meal_plan_rule_id: rule.id,
       planning_context_id: context?.id || null, role },
@@ -1291,7 +1310,8 @@ function resolveMealGroupRotation(database, rule, context, role, eligible, occur
 function mealRotationProvenance(resolution) {
   if (!resolution?.rotationOccurrenceId && !resolution?.rotationNeedsResolution) return null;
   return { occurrence_id: resolution.rotationOccurrenceId || null,
-    state: resolution.rotationNeedsResolution ? 'needs_assignment' : 'finalized',
+    state: resolution.rotationNeedsResolution ? 'needs_assignment' : resolution.rotationState||'finalized',
+    ...(resolution.rotationShared?{shared:true,group_id:resolution.rotationGroupId,period_date:resolution.rotationPeriodDate}:{}),
     reason: resolution.rotationNeedsResolution || null, reason_code: resolution.rotationReasonCode || null };
 }
 
@@ -3490,6 +3510,10 @@ export function advanceMealChooserFallback(database, mealId, {
     const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
     if (!meal) throw mealPlanError('Meal not found.', 404, 'MEAL_NOT_FOUND');
     const context = chooserFallbackContext(database, meal);
+    if(parseJson(meal.provenance_json,{}).rotations?.chooser?.shared) {
+      return {status:'unresolved',changed:false,fallback:null,replacement_obligation_ids:[],
+        reason:'This meal uses a shared Group selection. Manage the shared period or repair its requirements; a local fallback cannot replace the common selection.'};
+    }
     if (parseJson(meal.provenance_json, {}).rotations?.chooser?.state === 'needs_assignment') {
       return { status: 'unresolved', changed: false, fallback: null, replacement_obligation_ids: [],
         reason: 'Recheck the Rotation Group through Repair chooser before assigning this meal.' };
@@ -3744,26 +3768,48 @@ export function advanceMealChooserFallback(database, mealId, {
   })();
 }
 
-export function repairMealChooser(database, mealId, { actorId = null } = {}) {
+export function repairMealChooser(database, mealId, { actorId = null, sharedScheduledReconciliation = false, sharedGroupId=null } = {}) {
   const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
   const provenance = parseJson(meal?.provenance_json, {});
-  const pendingRoles = ['chooser', 'cook', 'supervisor'].filter(role => provenance.rotations?.[role]?.state === 'needs_assignment');
+  const scheduledRule=sharedScheduledReconciliation&&meal
+    ?loadRuleForOccurrence(database,meal.meal_plan_rule_id,meal.meal_plan_revision_id):null;
+  const pendingRoles = ['chooser', 'cook', 'supervisor'].filter(role => sharedScheduledReconciliation
+    ?Number(scheduledRule?.[role+'_rotation_group_id'])===Number(sharedGroupId)
+    :provenance.rotations?.[role]?.state === 'needs_assignment');
   if (pendingRoles.length) {
-    assertCapability(database, actorId, 'rotations.advance');
-    assertCapability(database, actorId, 'rotations.override');
+    if(!sharedScheduledReconciliation) {
+      assertCapability(database, actorId, 'rotations.advance');
+      assertCapability(database, actorId, 'rotations.override');
+    }
     return database.transaction(() => {
       const assignment = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE meal_id = ?').get(meal.id);
-      const rule = loadRuleForOccurrence(database, meal.meal_plan_rule_id, meal.meal_plan_revision_id);
+      const rule = scheduledRule||loadRuleForOccurrence(database, meal.meal_plan_rule_id, meal.meal_plan_revision_id);
       if (!assignment || !rule) throw mealPlanError('This Meal has no Rotation Group binding to recheck.', 409);
       const context = meal.planning_context_id ? database.prepare('SELECT * FROM planning_contexts WHERE id = ?').get(meal.planning_context_id) : null;
       const cohort = occurrenceCohort(database, rule, context, meal.date);
-      const rotations = { ...provenance.rotations }, obligationIds = [];
+      const rotations = { ...provenance.rotations }, obligationIds = [], superseded=[];
       let changed = false, chooser = Number(assignment.assigned_user_id) || null;
       for (const role of pendingRoles) {
         if (!rule[role + '_rotation_group_id']) continue;
+        if(sharedScheduledReconciliation&&Number(rule[role+'_rotation_group_id'])!==Number(sharedGroupId))continue;
         const resolution = chooseGroupRotation(database, rule, context, role, cohort[role + 'Eligible'],
           assignment.occurrence_key, meal.date, { refreshUnresolved: true, actorId });
         rotations[role] = mealRotationProvenance(resolution);
+        const before=role==='chooser'?assignment:database.prepare('SELECT * FROM meal_occurrence_role_assignments WHERE occurrence_assignment_id=? AND role=?').get(assignment.id,role);
+        if(sharedScheduledReconciliation) {
+          if((Number(before?.assigned_user_id)||null)===(resolution.selected||null)
+            &&(Number(before?.rotation_occurrence_id)||null)===(resolution.rotationOccurrenceId||null))continue;
+          if(resolution.rotationShared&&!provenance.rotations?.[role]?.shared&&before?.rotation_occurrence_id)
+            superseded.push({id:before.rotation_occurrence_id,versionId:sharedGroupConfiguration(database,sharedGroupId,meal.date)?.version_id});
+          if(role==='chooser')closeStaleChooserObligations(database,meal.id,actorId,'Shared rotation order changed');
+          database.prepare("DELETE FROM meal_participants WHERE meal_id=? AND role=? AND source='schedule'").run(meal.id,role);
+          if(!resolution.selected) {
+            if(role==='chooser') {
+              chooser=null;database.prepare('UPDATE meal_occurrence_assignments SET assigned_user_id=NULL,rotation_occurrence_id=? WHERE id=?').run(resolution.rotationOccurrenceId||null,assignment.id);
+            } else database.prepare('UPDATE meal_occurrence_role_assignments SET assigned_user_id=NULL,rotation_occurrence_id=? WHERE occurrence_assignment_id=? AND role=?').run(resolution.rotationOccurrenceId||null,assignment.id,role);
+            changed=true;
+          }
+        }
         if (!resolution.selected) continue;
         changed = true;
         if (role === 'chooser') {
@@ -3776,7 +3822,7 @@ export function repairMealChooser(database, mealId, { actorId = null } = {}) {
           const obligation = database.prepare("SELECT id FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser' AND responsible_user_id = ? ORDER BY id DESC LIMIT 1").get(meal.id, chooser);
           if (obligation) {
             obligationIds.push(obligation.id);
-            addChooserObligationEvent(database, obligation.id, 'rotation_resolved', actorId, { rotation_occurrence_id: resolution.rotationOccurrenceId });
+            addChooserObligationEvent(database, obligation.id, sharedScheduledReconciliation?'shared_rotation_reconciled':'rotation_resolved', actorId, { rotation_occurrence_id: resolution.rotationOccurrenceId });
           }
         } else {
           database.prepare('UPDATE meal_occurrence_role_assignments SET assigned_user_id = ?, rotation_occurrence_id = ? WHERE occurrence_assignment_id = ? AND role = ?')
@@ -3787,14 +3833,90 @@ export function repairMealChooser(database, mealId, { actorId = null } = {}) {
       }
       database.prepare('UPDATE meals SET provenance_json = ? WHERE id = ?')
         .run(JSON.stringify({ ...provenance, rotations }), meal.id);
+      for(const previous of superseded)supersedeRotationOccurrence(database,previous.id,{versionId:previous.versionId,actorId,trusted:true,
+        reason:'Meal joined its confirmed Group-managed schedule.'});
       const unresolved = Object.values(rotations).filter(value => value?.state === 'needs_assignment');
       return { status: unresolved.length ? 'unresolved' : 'assigned', changed,
         fallback: chooser ? { user_id: chooser } : null, replacement_obligation_ids: obligationIds,
         guidance: unresolved.length ? unresolved.map(value => value.reason).join(' ') : 'Meal rotations are ready.' };
     })();
   }
+  if(sharedScheduledReconciliation)return {status:'unchanged',changed:false};
   return advanceMealChooserFallback(database, mealId, { actorId, reason: 'manual_repair' });
 }
+
+// Only unstarted scheduled Meals with applicable Group references are eligible.
+// Existing responses, menus, execution, documents of work, and custom edits
+// remain authoritative and are never silently reassigned by the scheduler.
+registerSharedRotationReconciler((database,{groupId,dateKey,occurrence,reason})=>{
+  if(reason==='period_finalized')return;
+  const boundary=dateKey||occurrence?.period_date||occurrence?.context?.dateKey;
+  if(!boundary)return;
+  const forward=['independent_boundary','configuration_changed'].includes(reason);
+  // Conversion is selected from each Meal's pinned rule, including independent
+  // decisions whose older provenance has no shared/group marker. Never infer a
+  // new binding from a later edit of the live Meal Plan rule.
+  const groupReference=forward?`EXISTS(SELECT 1 FROM json_each(COALESCE(
+      (SELECT snapshot.value FROM meal_plan_revisions revision,json_each(revision.snapshot_json,'$.rules') snapshot
+        JOIN meal_plan_rules rule ON rule.id=m.meal_plan_rule_id
+        WHERE revision.id=m.meal_plan_revision_id AND revision.meal_plan_id=rule.meal_plan_id
+          AND (json_extract(snapshot.value,'$.id')=rule.id OR json_extract(snapshot.value,'$.rule_key')=rule.rule_key) LIMIT 1),
+      (SELECT json_object('chooser_rotation_group_id',chooser_rotation_group_id,'cook_rotation_group_id',cook_rotation_group_id,
+        'supervisor_rotation_group_id',supervisor_rotation_group_id) FROM meal_plan_rules WHERE id=m.meal_plan_rule_id))) configuration
+    WHERE configuration.key IN ('chooser_rotation_group_id','cook_rotation_group_id','supervisor_rotation_group_id') AND configuration.value=?)`
+    :`EXISTS(SELECT 1 FROM json_each(m.provenance_json,'$.rotations') r
+      WHERE json_extract(r.value,'$.shared')=1 AND json_extract(r.value,'$.group_id')=?)`;
+  const select=database.prepare(`SELECT m.* FROM meals m WHERE m.date${forward?'>=':'='}? AND m.source='schedule' AND m.id>?
+    AND ${groupReference} ORDER BY m.id LIMIT 100`);
+  const preserved=[];let afterId=0;
+  while(true) {
+    const pending=select.all(boundary,afterId,groupId);if(!pending.length)break;
+    for(const meal of pending) {
+      if(sharedMealCanReconcile(database,meal))repairMealChooser(database,meal.id,{sharedScheduledReconciliation:true,sharedGroupId:groupId});
+      else preserved.push({consumer_type:'meal',consumer_id:meal.id,reason:'This Meal already contains activity; its assignment was preserved.'});
+    }
+    afterId=pending.at(-1).id;
+  }
+  return {preserved};
+});
+
+function sharedMealCanReconcile(database,meal) {
+  if(pendingOccurrenceCanBeReconciled(database,{...meal,meal_id:meal.id}))return true;
+  if(meal.selection_status!=='awaiting_choice'||Number(meal.user_modified)!==0||meal.superseded_by_id||meal.source!=='schedule')return false;
+  // A previous automatic reconciliation is evidence, not household progress.
+  // It may be superseded again, but any response or other operation protects it.
+  return !database.prepare(`SELECT 1 FROM meal_person_decisions WHERE meal_id=? UNION ALL SELECT 1 FROM meal_menu_items WHERE meal_id=?
+    UNION ALL SELECT 1 FROM meal_ingredients WHERE meal_id=? UNION ALL SELECT 1 FROM meal_execution_snapshots WHERE meal_id=?
+    UNION ALL SELECT 1 FROM meal_grocery_item_sources WHERE meal_id=? UNION ALL SELECT 1 FROM meal_participants WHERE meal_id=? AND source!='schedule'
+    UNION ALL SELECT 1 FROM planning_obligations o LEFT JOIN planning_obligation_events e ON e.obligation_id=o.id
+      LEFT JOIN meal_selection_responses r ON r.obligation_id=o.id WHERE o.entity_type='meal' AND o.entity_id=?
+      AND (o.status NOT IN ('pending','superseded') OR r.obligation_id IS NOT NULL
+        OR (e.id IS NOT NULL AND e.event NOT IN ('chooser_repair_superseded','shared_rotation_reconciled'))) LIMIT 1`)
+    .get(meal.id,meal.id,meal.id,meal.id,meal.id,meal.id,meal.id);
+}
+
+registerSharedRotationUsageCollector((database,groupId,actor)=>{
+  const rows=database.prepare(`SELECT r.*,p.name AS plan_name,p.current_revision FROM meal_plan_rules r JOIN meal_plans p ON p.id=r.meal_plan_id
+    WHERE p.status='active' AND (r.chooser_rotation_group_id=? OR r.cook_rotation_group_id=? OR r.supervisor_rotation_group_id=?) ORDER BY p.id,r.id`).all(groupId,groupId,groupId);
+  const visible=actorPermissions(database,actor).modules.meals!=='none',result=[];
+  for(const rule of rows)for(const role of ['chooser','cook','supervisor'])if(Number(rule[`${role}_rotation_group_id`])===Number(groupId)) {
+    const scopes=new Set(['home']);
+    for(const meal of database.prepare('SELECT DISTINCT planning_context_id,date FROM meals WHERE meal_plan_rule_id=?').all(rule.id)) {
+      const split=occurrenceRotationScope(database,rule,null,meal.date);
+      scopes.add(meal.planning_context_id?`context:${meal.planning_context_id}`:split.splitContextIds.length?`home-split:${split.splitContextIds.join('.')}`:'home');
+    }
+    for(const scope of scopes) {
+      const identity={consumer_type:'meal_plan',consumer_id:`${rule.meal_plan_id}:${rule.slot_group_key||rule.rule_key||rule.id}:${scope}`,purpose_key:role};
+      if(!visible){result.push({restricted:true,key:`meal:${identity.consumer_id}:${role}`});continue;}
+      const track=findRotationTrack(database,identity);
+      const protectedMeal=database.prepare('SELECT * FROM meals WHERE meal_plan_rule_id=? AND selection_status!=\'cancelled\' ORDER BY id').all(rule.id).some(meal=>!sharedMealCanReconcile(database,meal));
+      result.push({...identity,label:`${rule.plan_name} · ${rule.label||rule.meal_type} · ${role}`,revision:rule.current_revision,
+        next_member_id:track?.next_membership_id?database.prepare('SELECT user_id FROM rotation_group_members WHERE id=?').get(track.next_membership_id)?.user_id:null,
+        ...(protectedMeal?{exception:'Meals containing responses, menus or execution evidence retain their current assignments.'}:{})});
+    }
+  }
+  return result;
+});
 
 function mealSelectionPolicy(database, meal) {
   return database.prepare(`

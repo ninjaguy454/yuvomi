@@ -2319,7 +2319,17 @@ function mealRotationOptions(selected) {
   const unavailable = selected && !groups.some(group => Number(group.id) === Number(selected));
   return `<option value="">All eligible household members (existing rotation)</option>${unavailable
     ? `<option value="${Number(selected)}" selected>Current Rotation Group (unavailable)</option>` : ''}${groups.map(group =>
-    `<option value="${Number(group.id)}" ${Number(selected) === Number(group.id) ? 'selected' : ''}>${esc(group.name)}</option>`).join('')}`;
+    `<option value="${Number(group.id)}" ${Number(selected) === Number(group.id) ? 'selected' : ''}>${esc(group.name)}${group.usage_mode==='shared'?' · Shared across activities':''}</option>`).join('')}`;
+}
+
+function mealRotationHint(groupId,legacy=false) {
+  const group=(state.rotationGroups||[]).find(value=>Number(value.id)===Number(groupId));
+  if(group?.usage_mode==='shared') {
+    const strategy=group.shared_config?.strategy||group.shared?.strategy;
+    const label={round_robin:'Round Robin',rotating_order:'Rotating Order',fixed_order:'Fixed Order'}[strategy]||'Group-managed order';
+    return `Using shared rotation: ${group.name}. ${label} · The first member in this meal’s scheduled period is selected. Saving intentionally joins this Group’s common order and schedule. Generating Meals does not advance it; future assignments wait for period activation. Manage rotation in Household Automation → Rotation Groups.`;
+  }
+  return `Each meal role rotates independently. A turn advances when its dated meal is generated.${legacy?' Existing rotation settings are preserved when no Group is selected.':''}`;
 }
 
 function mealRotationEditor(role, rule, visible) {
@@ -2328,7 +2338,7 @@ function mealRotationEditor(role, rule, visible) {
   return `<label class="label" ${attribute} ${visible ? '' : 'hidden'}><span>Rotation Group</span>
     <select class="form-input" name="rule_${role}_rotation_group_id" ${canCapability('rotations.configure') ? '' : 'disabled'}>${mealRotationOptions(rule[`${role}_rotation_group_id`])}</select>
     <input type="hidden" name="rule_${field}" value="${esc(rule[field] || '')}">
-    <small class="form-hint">Each meal role rotates independently. A turn advances when its dated meal is generated.${rule[field] ? ' Existing rotation settings are preserved when no Group is selected.' : ''}</small></label>`;
+    <small class="form-hint" data-meal-rotation-hint="${role}">${esc(mealRotationHint(rule[`${role}_rotation_group_id`],!!rule[field]))}</small></label>`;
 }
 
 function renderChooserFallbackRow(selected = null) {
@@ -2591,6 +2601,11 @@ function openMealPlanEditor(plan = null, { readOnly = false } = {}) {
       if (supervisorFixed) supervisorFixed.hidden = supervisorStrategy !== 'fixed';
       const supervisorRotation = rule.querySelector('[data-plan-supervisor-rotation]');
       if (supervisorRotation) supervisorRotation.hidden = supervisorStrategy !== 'round_robin';
+      for(const role of ['chooser','cook','supervisor']) {
+        const selected=rule.querySelector(`[name="rule_${role}_rotation_group_id"]`)?.value;
+        const hint=rule.querySelector(`[data-meal-rotation-hint="${role}"]`);
+        if(hint)hint.textContent=mealRotationHint(selected);
+      }
       const relativeDeadline = rule.querySelector('[data-deadline-relative]');
       if (relativeDeadline) relativeDeadline.hidden = deadlineMode !== 'relative';
       const weeklyDeadline = rule.querySelector('[data-deadline-weekly]');

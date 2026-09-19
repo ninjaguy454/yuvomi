@@ -8,6 +8,15 @@ import { parseRotationBindings, taskRotationContexts } from './task-rotation.js'
 const row=(d,id)=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const same=(left,right)=>String(left??'').trim()===String(right??'').trim();
 const activeTarget=(target,bindings)=>!(target.purpose_keys||[]).some(key=>!bindings.some(binding=>binding.purpose_key===key));
+function effectiveBindings(d,task) {
+  const bindings=new Map(),seen=new Set();
+  while(task&&!seen.has(task.id)) {
+    seen.add(task.id);
+    for(const binding of parseRotationBindings(task.rotation_bindings_json))if(!bindings.has(binding.purpose_key))bindings.set(binding.purpose_key,binding);
+    task=task.parent_task_id?row(d,task.parent_task_id):null;
+  }
+  return [...bindings.values()];
+}
 function snapshot(d,taskId) {
   const binding=d.prepare('SELECT * FROM task_activity_bindings WHERE task_id=?').get(taskId);
   if(!binding)return null;
@@ -29,13 +38,13 @@ function render(d,task,target,{activity,bindings,rotations,subjectUserId,inputs,
 
 /** Initial template authorship is explicit. Check both the template-item ID
  * and the authored draft value before giving a concrete field a live binding. */
-export function initializeTaskRotationRendering(d,taskId,{draft=null,inputs={}}={}) {
-  const task=row(d,taskId),bindings=parseRotationBindings(task?.rotation_bindings_json);
+export function initializeTaskRotationRendering(d,taskId,{draft=null,inputs={},templates={},definitions}={}) {
+  const task=row(d,taskId),bindings=effectiveBindings(d,task);
   if(!bindings.length)return;
   const saved=snapshot(d,taskId);if(!saved)return;
   const rotations=taskRotationContexts(d,task),targets=[];
-  const candidates=[{task,action_key:'root',field:'title',template:saved.activity.title_template,expected:draft?.title},
-    {task,action_key:'root',field:'description',template:saved.activity.description,expected:draft?.description}];
+  const candidates=[{task,action_key:'root',field:'title',template:templates.title??saved.activity.title_template,expected:draft?.title},
+    {task,action_key:'root',field:'description',template:templates.description??saved.activity.description,expected:draft?.description}];
   for(const child of d.prepare(`SELECT * FROM tasks WHERE parent_task_id=? AND activity_template_checklist_item_id IS NOT NULL
     AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=tasks.id)
     AND NOT EXISTS(SELECT 1 FROM task_supervision_actions s WHERE s.counterpart_task_id=tasks.id)`).all(taskId)) {
@@ -47,7 +56,7 @@ export function initializeTaskRotationRendering(d,taskId,{draft=null,inputs={}}=
   for(const candidate of candidates) {
     if(!candidate.template || !String(candidate.template).includes('{{'))continue;
     const subjectUserId=candidate.task.id===taskId?saved.binding.subject_user_id||task.assigned_to:candidate.task.assigned_to||saved.binding.subject_user_id||task.assigned_to;
-    const result=render(d,candidate.task,candidate,{activity:saved.activity,bindings,rotations,subjectUserId,inputs});
+    const result=render(d,candidate.task,candidate,{activity:saved.activity,bindings,rotations,subjectUserId,inputs,definitions});
     if(!result.usesRotation || !same(candidate.task[candidate.field],candidate.expected??result.values[0]))continue;
     const frozenInputs=Object.fromEntries(Object.entries(inputs).filter(([key])=>!bindings.some(binding=>binding.purpose_key===key)
       && !result.definitions.find(definition=>definition.id===key)?.expression));
@@ -74,10 +83,12 @@ export function captureTaskRotationRendering(d,root,binding,children) {
 export function applyTaskRotationRendering(d,taskId,plan) {
   const saved=snapshot(d,taskId);if(!saved)return;
   const ownPlan=plan===undefined;plan??=saved.activity.rotation_rendering;if(!plan)return;
-  const task=row(d,taskId),bindings=parseRotationBindings(task.rotation_bindings_json),rotations=taskRotationContexts(d,task);
+  const task=row(d,taskId),bindings=effectiveBindings(d,task),rotations=taskRotationContexts(d,task);
   if(ownPlan&&(task.archived_at||['done','expired'].includes(task.status)))return;
-  const keyed=new Map([['root',task],...d.prepare(`SELECT t.*,a.action_key FROM task_recurrence_actions a JOIN tasks t ON t.id=a.task_id
-    WHERE a.occurrence_task_id=? AND t.archived_at IS NULL`).all(taskId).map(value=>[value.action_key,value])]);
+  const keyed=new Map([['root',task],...d.prepare(`SELECT t.*,COALESCE(a.action_key,'action:'||t.id) AS action_key FROM tasks t
+    LEFT JOIN task_recurrence_actions a ON a.task_id=t.id
+    WHERE (t.parent_task_id=? OR a.occurrence_task_id=?) AND t.id!=? AND t.archived_at IS NULL`)
+    .all(taskId,taskId,taskId).map(value=>[value.action_key,value])]);
   const next={...structuredClone(plan),targets:[]};
   for(const target of plan.targets||[]) {
     if(!activeTarget(target,bindings))continue;
@@ -105,5 +116,17 @@ export function applyTaskRotationRendering(d,taskId,plan) {
 export function refreshRotationTaskRendering(d,occurrenceId) {
   const owners=d.prepare(`SELECT DISTINCT t.id FROM task_rotation_occurrences link JOIN tasks t ON t.id=link.owner_task_id
     WHERE link.occurrence_id=? AND link.retired_at IS NULL AND t.archived_at IS NULL AND t.status NOT IN ('done','expired')`).all(occurrenceId);
-  for(const owner of owners)applyTaskRotationRendering(d,owner.id);
+  for(const owner of owners)refreshTaskRotationRendering(d,owner.id);
+}
+
+/** Explicit mutation reconciliation. Descendant Activity snapshots preserve
+ * their own authorship, including Workflow step overrides and frozen variables. */
+export function refreshTaskRotationRendering(d,taskId) {
+  const targets=d.prepare(`WITH RECURSIVE descendants(id) AS (
+    SELECT id FROM tasks WHERE id=? UNION ALL SELECT t.id FROM tasks t JOIN descendants p ON t.parent_task_id=p.id
+  ) SELECT id FROM descendants`).all(taskId);
+  for(const target of targets)applyTaskRotationRendering(d,target.id);
+  // A directly edited checklist participant may be rendered by its owner.
+  const parent=row(d,taskId)?.parent_task_id;
+  if(parent)applyTaskRotationRendering(d,parent);
 }

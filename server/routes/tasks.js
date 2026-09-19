@@ -34,7 +34,9 @@ import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../servic
 import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
-import { initializeTaskRotationRendering, applyTaskRotationRendering } from '../services/task-rotation-rendering.js';
+import { initializeTaskRotationRendering, applyTaskRotationRendering, refreshTaskRotationRendering } from '../services/task-rotation-rendering.js';
+import { rotationCompletionEvidence } from '../services/rotation-completion-evidence.js';
+import { workflowRotationOperations } from '../services/workflow-rotation-operations.js';
 import { normalizeVisibility, visibilityWhere } from '../services/visibility.js';
 import {
   flushOutbound, markTodoOutbound, queueTodoDeletion,
@@ -1512,7 +1514,13 @@ router.get('/:id', (req, res) => {
     attachTaskLocations(db.get(), [task]);
     attachTaskActionLinks([task]);
     attachTags([task]);
-    res.json({ data: withTaskReadProjection(db.get(),me,()=>({...task,...hydrateTask(task,me)})) });
+    res.json({ data: withTaskReadProjection(db.get(),me,()=>{
+      const data={...task,...hydrateTask(task,me)},cache=new Map();
+      data.rotations=data.rotations.map(context=>({...context,recorded_completions:context.occurrence.id
+        ?rotationCompletionEvidence(db.get(),context.occurrence.id,{viewer:me,cache}):[]}));
+      if(data.rotations.length)data.workflow_rotation_operations=workflowRotationOperations(db.get(),task,me);
+      return data;
+    }) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /:id error:', err);
@@ -2202,9 +2210,9 @@ router.put('/:id', (req, res) => {
 
       reconcileTaskSupervision(db.get(),task.id,{actorId:req.authUserId||req.session.userId});
       if(rotationsChanged){
-        rotationChanges=bindTaskRotations(db.get(),task.id,{actorId:req.authUserId||req.session.userId,scope:editScope});
-        applyTaskRotationRendering(db.get(),task.id);
+        rotationChanges=bindTaskRotations(db.get(),task.id,{actorId:req.authUserId||req.session.userId,scope:editScope,previousConfig:task.rotation_bindings_json});
       }
+      if(rotationsChanged||performersChanged||editedSubtasks||bindingChanged)refreshTaskRotationRendering(db.get(),task.id);
       if(firstUid && (performersChanged||editedSubtasks||!sameIdOrder(skillIds,skillsBefore)))
         assertTaskSupervisionAssignee(db.get(),task.id,firstUid);
       if(series) {

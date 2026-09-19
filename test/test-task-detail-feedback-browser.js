@@ -15,6 +15,7 @@ app.get('/feedback-test',(_req,res)=>res.send(`<!doctype html><html><head><meta 
 app.use('/api/v1',(req,res)=>{
   fixture.requests.push({path:req.path,method:req.method});
   if(req.method==='PATCH'&&/\/tasks\/\d+\/status$/.test(req.path)){fixture.writes.push({path:req.path,body:req.body,res});return;}
+  if(req.method==='POST'&&req.path.includes('/operations/')){fixture.writes.push({path:req.path,body:req.body,res});return;}
   if(req.path==='/auth/me')return res.json({user:{id:1},permissions:{},csrfToken:'fixture'});
   if(req.path==='/tasks/1'){fixture.reads++;return res.json({data:fixture.task});}
   res.json({data:[]});
@@ -26,11 +27,13 @@ test.before(async()=>{
 });
 test.after(async()=>{await browser?.close();server?.closeAllConnections();await new Promise(resolve=>server?.close(resolve)||resolve());});
 const selector=id=>`[data-subtask-id="${id}"] .detail-subtask__toggle`;
-async function mounted({mobile=false,optional=false,count=8,finalRequired=false}={}){
+async function mounted({mobile=false,optional=false,count=8,finalRequired=false,rotations,workflowOperations}={}){
   fixture={writes:[],reads:0,requests:[],task:{id:1,revision:9,title:'Morning routine',status:'open',assigned_to:1,created_by:1,points:2,documents:[],
     permissions:{complete:true,edit:false,comment:false},subtasks:Array.from({length:count},(_,index)=>({id:index+2,revision:3,parent_revision:9,title:`Routine step ${index+1}`,
       status:'open',points:0,is_optional:optional&&index===0?1:0,skill_ids:[1],skills:[{id:1,name:'Independence'}],permissions:{complete:true}}))}};
   if(finalRequired){fixture.task.status='in_progress';fixture.task.subtasks.slice(0,-1).forEach(child=>child.status='done');}
+  if(rotations)fixture.task.rotations=rotations;
+  if(workflowOperations)fixture.task.workflow_rotation_operations=workflowOperations;
   const page=await browser.newPage();await page.setViewport(mobile?{width:390,height:844,isMobile:true,hasTouch:true}:{width:1024,height:800});
   await page.goto(`${base}/feedback-test`);
   await page.evaluate(async task=>{
@@ -121,6 +124,48 @@ test('pending and acknowledged updates preserve untouched row identity, scroll, 
     acknowledge(write);await settled(page,8);
     assert.deepEqual(await page.evaluate(()=>({row:savedRow===document.querySelector('[data-subtask-id="8"]'),disclosure:savedDisclosure===document.querySelector('[data-subtask-id="8"] details'),open:savedDisclosure.open,scroll:document.querySelector('.modal-panel__body').scrollTop-savedScroll})),{row:true,disclosure:true,open:true,scroll:0});
   }finally{await page.close();}
+});
+
+test('Rotation completion evidence survives lean ACKs and refreshes without rebuilding Task rows or closing history',async()=>{
+  const evidence=[{recorded_at:'2026-09-19T20:00:00Z',unordered:false,events:[{title:'First bedtime action'}]}];
+  const page=await mounted({rotations:[{purpose_key:'shower',label:'Shower Order',position:1,occurrence:{id:4,revision:1,status:'resolved',order:[{id:1,name:'Grace'}]},recorded_completions:evidence}]});
+  try {
+    await page.$eval('[data-rotation-recorded-completions]',el=>{el.open=true});
+    await page.click(selector(2));const write=await writeAt();
+    delete fixture.task.rotations[0].recorded_completions;acknowledge(write);await settled(page,2);
+    assert.equal(await page.$eval('[data-rotation-recorded-completions]',el=>el.open),true);
+    assert.equal(await page.evaluate(()=>initialRows.get('3')===document.querySelector('[data-subtask-id="3"]')),true);
+    fixture.task.rotations[0].recorded_completions=[...evidence,{recorded_at:'2026-09-19T20:01:00Z',unordered:false,events:[{title:'Second bedtime action'}]}];
+    await page.evaluate(()=>window.live[0].listeners.get('change')({data:'{"version":11}'}));
+    await page.waitForFunction(()=>document.querySelector('[data-rotation-recorded-completions]')?.textContent.includes('Second bedtime action'));
+    assert.equal(await page.$eval('[data-rotation-recorded-completions]',el=>el.open),true);
+    assert.equal(await page.evaluate(()=>initialRows.get('3')===document.querySelector('[data-subtask-id="3"]')),true);
+    fixture.task.rotations=[];
+    await page.evaluate(()=>window.live[0].listeners.get('change')({data:'{"version":12}'}));
+    await page.waitForFunction(()=>!document.querySelector('[data-task-rotation-context]'));
+    assert.equal(await page.evaluate(()=>fixtureTask.rotations.length),0,'an authoritative visibility removal discards cached evidence');
+  } finally {await page.close();}
+});
+
+test('authored Rotation buttons use current live revisions and purpose/action identity after DOM reconciliation',async()=>{
+  for(const changedPurpose of [false,true]) {
+    const page=await mounted({rotations:[{purpose_key:'shower',label:'Shower Order',position:1,occurrence:{id:4,revision:1,status:'resolved',order:[{id:1,display_name:'Grace'}]}}],
+      workflowOperations:{instance_id:7,purposes:[{purpose_key:'shower',label:'Shower Order',operations:['finalize']}]}});
+    try {
+      await page.evaluate(()=>{window.initialRotationButton=document.querySelector('[data-workflow-rotation-operation]')});
+      fixture.task.revision=10;fixture.task.rotations[0].occurrence.revision=2;
+      if(changedPurpose) {
+        fixture.task.rotations[0].purpose_key='chores';fixture.task.rotations[0].label='Chores';
+        fixture.task.workflow_rotation_operations.purposes=[{purpose_key:'chores',label:'Chores',operations:['skip']}];
+      }
+      await page.evaluate(()=>window.live[0].listeners.get('change')({data:'{"version":10}'}));
+      await page.waitForFunction(()=>fixtureTask.rotations[0].occurrence.revision===2);
+      assert.equal(await page.evaluate(()=>initialRotationButton===document.querySelector('[data-workflow-rotation-operation]')),true);
+      await page.click('[data-workflow-rotation-operation]');const write=await writeAt();
+      assert.equal(write.path,`/automation/workflow-instances/7/rotations/${changedPurpose?'chores/operations/skip':'shower/operations/finalize'}`);
+      assert.deepEqual(write.body,{expected_revision:10,expected_occurrence_revision:2});write.res.json({data:[]});
+    } finally {await page.close();}
+  }
 });
 
 test('a stale revision rejection removes pending feedback and never dispatches a queued different child',async()=>{

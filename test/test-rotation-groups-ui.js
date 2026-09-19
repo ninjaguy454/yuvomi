@@ -10,7 +10,7 @@ const members=Array.from({length:15},(_,index)=>({id:index+1,membership_id:index
   display_name:['Grace','Eleanor','Frankie','Duane','Alexis','Sage'][index]||`Member ${index+1}`}));
 const styles=[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="[^"]+"\s*\/>/g)].map(([tag])=>tag).join('');
 const app=express();app.use(express.json());
-let groups,track,history,requests,version,server,browser,base,listRequests,listDelay=0,listFails=false,mutationDelay=0;
+let groups,track,history,corrections,requests,version,server,browser,base,listRequests,listDelay=0,listFails=false,mutationDelay=0;
 const streams=new Set();
 const wait=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const clone=value=>structuredClone(value);
@@ -23,7 +23,7 @@ function reset(){
   resolved_at:'2026-09-19T19:00:00Z',order:clone(members.slice(0,3)),original_order:clone(members.slice(0,3)),
   eligible:clone(members.slice(0,3)),member_ids:[1,2,3],skipped:[{...members[5],reason:'Outside this Group'}],
   config:{advance_policy:'per_occurrence',override_affects_next:true},advanced:false,advance_reason:'awaiting_finalization'}];
- requests=[];version=1;listRequests=0;listDelay=0;listFails=false;mutationDelay=0;
+ corrections=[];requests=[];version=1;listRequests=0;listDelay=0;listFails=false;mutationDelay=0;
 }
 function broadcast(){version++;for(const stream of streams)stream.write(`event: change\ndata: ${JSON.stringify({version})}\n\n`);}
 function updateOrder(occ,ids){occ.order=ids.map(id=>clone(members.find(m=>m.id===id)));occ.member_ids=ids;}
@@ -53,10 +53,12 @@ app.use('/api/v1',async(req,res)=>{
   return res.json({data:{...group,tracks:group.id===7?[track]:[]}});
  }
  if(path==='/automation/rotation-tracks/11')return res.json({data:track});
- if(path==='/automation/rotation-tracks/11/history')return res.json({data:history});
+ if(path==='/automation/rotation-tracks/11/history')return res.json({data:history,events:corrections});
  if(path==='/automation/rotation-tracks/11/correct'){
   requests.push({path,body:req.body});if(req.body.expected_revision!==track.revision)return res.status(409).json({error:'Track changed elsewhere.'});
-  track.next_membership_id=members.find(m=>m.id===req.body.next_member_id).membership_id;track.revision++;
+  const previous=members.find(m=>m.membership_id===track.next_membership_id),next=members.find(m=>m.id===req.body.next_member_id);
+  corrections.push({id:31,event_type:'track_corrected',actor_user_id:4,actor_name:'Duane',created_at:'2026-09-19T20:15:00Z',details:{previous_next_member_name:previous.display_name,next_member_name:next.display_name,next_member_id:next.id,reason:req.body.reason}});
+  track.next_membership_id=next.membership_id;track.revision++;
   track.next.order=[...members.slice(req.body.next_member_id-1,3),...members.slice(0,req.body.next_member_id-1)];
   track.previews[0].order=clone(track.next.order);broadcast();return res.json({data:track});
  }
@@ -228,7 +230,17 @@ test('Override and correction carry revisions, preserve parent view and refresh 
  await fill(page,'[data-rotation-correct-form] [name=reason]','Parent correction');await page.click(submit);
  await page.waitForFunction(()=>!document.querySelector('[data-rotation-correct-form]'));assert.deepEqual(requests[1].body,{expected_revision:5,next_member_id:2,reason:'Parent correction'});
  await page.waitForFunction(()=>document.querySelector('[data-rotation-previews] li').textContent.startsWith('Eleanor'));
+ await page.waitForSelector('[data-rotation-correction="31"]');
+ const correction=await page.$eval('[data-rotation-correction="31"]',el=>el.innerText);
+ assert.match(correction,/Next member corrected/);assert.match(correction,/Grace → Eleanor/);assert.match(correction,/Duane/);assert.match(correction,/2026-09-19T20:15:00Z/);assert.match(correction,/Parent correction/);
+ assert.equal(await page.$$eval('[data-rotation-occurrence]',nodes=>nodes.length),1,'corrections stay separate from occurrence outcomes');
 }));
+
+test('An existing empty Group can deactivate without inventing a replacement member',()=>pageTest(async page=>{
+ await editGroup(page);await page.click(`${form} [name=active]`);await page.click(submit);
+ await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ assert.deepEqual(requests[0].body.member_ids,[]);assert.equal(requests[0].body.active,false);
+},{setup:()=>{groups[0].members=[];}}));
 
 test('Unresolved keep-position occurrence can resolve with eligible members; empty eligibility cannot override',()=>pageTest(async page=>{
  await openHistory(page);assert.equal(await page.$('[data-rotation-finalize]'),null);

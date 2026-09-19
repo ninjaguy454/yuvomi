@@ -48,6 +48,8 @@ import * as v from '../middleware/validate.js';
 import { normalizeActivityDueOffset } from '../../public/utils/activity-schedule.js';
 import { normalizeRotationBindings, assertRotationBindingsChange, taskRotationContexts } from '../services/task-rotation.js';
 import { listRotationGroups, finalizeRotation } from '../services/rotation.js';
+import { rotationOccurrenceOptions } from '../services/rotation-access.js';
+import { normalizeWorkflowRotationOperations, executeWorkflowRotationOperation } from '../services/workflow-rotation-operations.js';
 import {
   claimTask,
   obligationInbox,
@@ -96,8 +98,7 @@ function currentUserId(req) {
 
 function rotationPickerData(d, actor) {
   return { rotation_groups: hasCapability(d, actor, 'rotations.view') ? listRotationGroups(d) : [],
-    rotation_occurrences: hasCapability(d, actor, 'rotations.history') ? d.prepare(`SELECT o.id,o.occurrence_key,t.label AS purpose_label
-      FROM rotation_occurrences o JOIN rotation_tracks t ON t.id=o.track_id ORDER BY o.id DESC LIMIT 100`).all() : [] };
+    rotation_occurrences: rotationOccurrenceOptions(d,actor) };
 }
 
 function skillRowsWithMembers(d) {
@@ -272,7 +273,7 @@ function saveActivitySkills(d, activityId, skillIds) {
   skillIds.forEach((skillId, index) => insert.run(activityId, skillId, index));
 }
 
-function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
+function normalizeWorkflowInputSchema(raw, existingQuestions = [], actor) {
   if (!Array.isArray(raw)) throw new Error('input_schema must be an array.');
   if (raw.length > 100) throw new Error('A workflow supports up to 100 variables.');
   const existingByDefinitionId = new Map(
@@ -330,7 +331,7 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
     const expression = reusable ? reusable.expression : normalizeExpression(question.expression !== undefined ? question.expression : existingDefinition?.expression);
     let defaultValue = reusable ? reusable.default_value : question.default_value !== undefined ? question.default_value : existingDefinition?.default_value ?? null;
     if (!reusable && !expression && defaultValue != null && (!existingDefinition || question.default_value !== undefined || type !== existingDefinition.type)) {
-      const normalized = normalizeVariableValue(db.get(), { id: variableId, type, options }, defaultValue);
+      const normalized = normalizeVariableValue(db.get(), { id: variableId, type, options }, defaultValue,{actor});
       defaultValue = persistedVariableValue(normalized);
     }
     return {
@@ -352,8 +353,8 @@ function normalizeWorkflowInputSchema(raw, existingQuestions = []) {
   return questions;
 }
 
-function normalizeWorkflowConditionValue(d, question, value) {
-  if (['rotation_group', 'rotation_occurrence'].includes(question.type)) return normalizeVariableValue(d, question, value).id;
+function normalizeWorkflowConditionValue(d, question, value, actor) {
+  if (['rotation_group', 'rotation_occurrence'].includes(question.type)) return normalizeVariableValue(d, question, value,{actor}).id;
   if (question.type === 'household_member_list') throw new Error('Use a calculated Yes/No value to compare a household member order.');
   if (question.type === 'boolean') {
     if (value === true || value === false) return value;
@@ -400,7 +401,7 @@ function saveActivityChecklist(d, activityId, checklist) {
   });
 }
 
-function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
+function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey, actor) {
   if (condition == null) return null;
   if (!condition || typeof condition !== 'object' || Array.isArray(condition)) {
     throw new Error(`Workflow step ${stepKey} has an invalid condition.`);
@@ -416,27 +417,29 @@ function normalizeWorkflowCondition(d, condition, questionsByKey, stepKey) {
     throw new Error(`Workflow step ${stepKey} condition must use exactly one comparison.`);
   }
   if (hasEquals) {
-    return { variable_id: variableId, equals: normalizeWorkflowConditionValue(d, question, condition.equals) };
+    return { variable_id: variableId, equals: normalizeWorkflowConditionValue(d, question, condition.equals,actor) };
   }
   if (!condition.in.length) {
     throw new Error(`Workflow step ${stepKey} condition cannot have an empty choice list.`);
   }
   return {
     variable_id: variableId,
-    in: [...new Set(condition.in.map((value) => normalizeWorkflowConditionValue(d, question, value)))],
+    in: [...new Set(condition.in.map((value) => normalizeWorkflowConditionValue(d, question, value,actor)))],
   };
 }
 
-function normalizeWorkflowInput(d, body, existing = null) {
+function normalizeWorkflowInput(d, body, existing = null, actor) {
   const name = text(body.name ?? existing?.name, { required: true, max: 120 });
   const description = text(body.description ?? existing?.description, { max: 2000 });
   const category = text(body.category ?? existing?.category ?? 'misc', { required: true, max: 80 });
   const rawInputSchema = body.input_schema !== undefined
     ? body.input_schema
     : (existing?.input_schema ?? []);
-  const rotationBindings = normalizeRotationBindings(d, body.rotation_bindings ?? existing?.rotation_bindings ?? []);
+  const rawRotationBindings=body.rotation_bindings ?? existing?.rotation_bindings ?? [];
+  const rotationBindings = normalizeRotationBindings(d,rawRotationBindings).map(binding=>({...binding,
+    workflow_operations:normalizeWorkflowRotationOperations(rawRotationBindings.find(value=>value.purpose_key===binding.purpose_key)?.workflow_operations)}));
   const rotationVariables = rotationBindingVariables(rotationBindings);
-  const normalizedSchema = normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? []);
+  const normalizedSchema = normalizeWorkflowInputSchema(rawInputSchema, existing?.input_schema ?? [],actor);
   if (normalizedSchema.some(row => rotationVariables.some(rotation => rotation.id === row.id))) throw new Error('Rotation purpose keys must be distinct from editable Workflow variable IDs.');
   const inputSchema = expandVariableDefinitions(normalizedSchema, [...householdVariableRows(d), ...rotationVariables]).filter(row => !row.rotation_context);
   const variableScope = expressionScope([...inputSchema, ...rotationVariables]);
@@ -560,7 +563,7 @@ function normalizeWorkflowInput(d, body, existing = null) {
   const keys = new Set(normalizedSteps.map((step) => step.stepKey));
   const positions = new Map(normalizedSteps.map((step, index) => [step.stepKey, index]));
   for (const step of normalizedSteps) {
-    step.condition = normalizeWorkflowCondition(d, step.condition, questionsByKey, step.stepKey);
+    step.condition = normalizeWorkflowCondition(d, step.condition, questionsByKey, step.stepKey,actor);
   }
   for (const [index, step] of normalizedSteps.entries()) {
     if (step.dependsOn.some((key) => !keys.has(key) || key === step.stepKey)) {
@@ -604,7 +607,7 @@ function availableHouseholdVariableKey(d, label) {
   return candidate;
 }
 
-function normalizeHouseholdVariable(body, existing = null) {
+function normalizeHouseholdVariable(body, existing = null, actor) {
   const key = variableKey(body.variable_key ?? existing?.variable_key);
   const label = text(body.label ?? existing?.label, { required: true, max: 200 });
   const description = text(body.description ?? existing?.description, { max: 1000 });
@@ -623,7 +626,7 @@ function normalizeHouseholdVariable(body, existing = null) {
     : parseJsonSafe(existing?.default_value_json, null);
   const expression = normalizeExpression(body.expression !== undefined ? body.expression : parseJsonSafe(existing?.expression_json, null));
   if (!expression && defaultValue != null && (!existing || body.default_value !== undefined || type !== existing.type)) {
-    const normalized = normalizeVariableValue(db.get(), { id: key, type, options }, defaultValue);
+    const normalized = normalizeVariableValue(db.get(), { id: key, type, options }, defaultValue,{actor});
     defaultValue = persistedVariableValue(normalized);
   }
   return { key, label, description, type, kind, options, defaultValue, expression, active: bool(body.active, existing ? !!existing.active : true) };
@@ -1026,6 +1029,12 @@ router.get('/workflow-instances/:id/rotations', requireCapability('workflows.vie
   } catch (error) { res.status(error.status || 400).json({ error: error.message, code: error.status || 400 }); }
 });
 
+router.post('/workflow-instances/:id/rotations/:purpose/operations/:operation', requireCapability('workflows.run'), (req,res)=>{
+  try {res.json({data:executeWorkflowRotationOperation(db.get(),Number(req.params.id),req.params.purpose,req.params.operation,
+    {actor:req,actorId:currentUserId(req),expectedTaskRevision:req.body.expected_revision,expectedOccurrenceRevision:req.body.expected_occurrence_revision})});}
+  catch(error){res.status(error.status||400).json({error:error.message,code:error.code||error.status||400});}
+});
+
 router.post('/workflow-instances/:id/rotations/:purpose/outcome', requireCapability('workflows.run'), requireCapability('rotations.advance'), (req, res) => {
   try {
     const d = db.get(), row = d.prepare('SELECT parent_task_id FROM workflow_instances WHERE id=?').get(req.params.id);
@@ -1046,6 +1055,7 @@ router.post('/quick-add/:id/preview', (req, res) => {
     const startDate = v.date(req.body.start_date, 'start_date');
     if (startDate.error) throw new Error(startDate.error);
     const data = previewWorkflow(db.get(), Number(req.params.id), {
+      actorId: currentUserId(req),
       subjectUserId: req.body.subject_user_id ?? null,
       inputs: req.body.inputs ?? {},
       startDate: startDate.value ?? undefined,
@@ -1204,14 +1214,14 @@ router.post('/admin/variables/preview', requireAdmin, (req, res) => {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Choose a variable to preview.');
     if (req.body.definitions !== undefined && (!Array.isArray(req.body.definitions) || req.body.definitions.length > 100)) throw new Error('Preview supports up to 100 variable definitions.');
     const input = normalizeHouseholdVariable({ ...raw, label: raw.label || 'Calculation',
-      variable_key: raw.variable_key ?? raw.key ?? (typeof raw.id === 'string' ? raw.id : 'preview_value') });
+      variable_key: raw.variable_key ?? raw.key ?? (typeof raw.id === 'string' ? raw.id : 'preview_value') },null,req);
     const catalog = householdVariableRows(d);
     const candidate = { ...variableCandidate(input, input.key), id: input.key };
     const local = Array.isArray(req.body.definitions) ? req.body.definitions.map(row => ({ ...row, expression: normalizeExpression(row.expression) })) : [];
     const definitions = expressionScope([...local, candidate], catalog);
     validateVariableDefinitions(definitions);
     inputSchema = variableInputSchema(definitions, [input.key]);
-    const resolved = resolveVariables(d, definitions, req.body.inputs ?? {}, { keys: [input.key], subjectUserId: req.body.subject_user_id ?? null });
+    const resolved = resolveVariables(d, definitions, req.body.inputs ?? {}, { keys: [input.key], subjectUserId: req.body.subject_user_id ?? null,actor:req });
     res.json({ data: { value: resolved.values[input.key], display_value: resolved.labels[input.key], resolved_values: resolved.persisted }, input_schema: inputSchema });
   } catch (error) { expressionErrorResponse(res, error, { input_schema: inputSchema }); }
 });
@@ -1222,7 +1232,7 @@ router.post('/admin/variables', requireAdmin, (req, res) => {
     const input = normalizeHouseholdVariable({
       ...req.body,
       variable_key: req.body.variable_key || availableHouseholdVariableKey(d, req.body.label),
-    });
+    },null,req);
     validateVariableCatalog(d, [...householdVariableRows(d), variableCandidate(input, -1)]);
     const result = d.prepare(`
       INSERT INTO household_variable_definitions (
@@ -1247,7 +1257,7 @@ router.put('/admin/variables/:id', requireAdmin, (req, res) => {
     const d = db.get();
     const existing = d.prepare('SELECT * FROM household_variable_definitions WHERE id = ?').get(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Reusable variable not found.', code: 404 });
-    const input = normalizeHouseholdVariable({ ...req.body, variable_key: existing.variable_key }, existing);
+    const input = normalizeHouseholdVariable({ ...req.body, variable_key: existing.variable_key }, existing,req);
     validateVariableCatalog(d, householdVariableRows(d).map(row => Number(row.id) === Number(existing.id) ? variableCandidate(input, existing.id) : row));
     d.prepare(`
       UPDATE household_variable_definitions
@@ -1535,7 +1545,7 @@ router.get('/admin/workflow-templates', requireCapability('workflows.view'), (re
 router.post('/admin/workflow-templates', requireCapability('workflows.create'), (req, res) => {
   try {
     const d = db.get();
-    const input = normalizeWorkflowInput(d, req.body);
+    const input = normalizeWorkflowInput(d, req.body,null,req);
     assertRotationBindingsChange(d, req, [], input.rotationBindings);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     for (const step of input.steps) {
@@ -1572,7 +1582,7 @@ router.put('/admin/workflow-templates/:id', requireCapability('workflows.edit'),
     const d = db.get();
     const existing = getWorkflowTemplate(d, Number(req.params.id));
     if (!existing) return res.status(404).json({ error: 'Workflow template not found.', code: 404 });
-    const input = normalizeWorkflowInput(d, req.body, existing);
+    const input = normalizeWorkflowInput(d, req.body, existing,req);
     assertRotationBindingsChange(d, req, existing.rotation_bindings, input.rotationBindings);
     if (!d.prepare('SELECT 1 FROM task_categories WHERE key = ?').get(input.category)) throw new Error('Unknown task category.');
     d.transaction(() => {

@@ -125,7 +125,8 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
   syncTaskCompletion(d, task.id, task.status, status, actorId);
   recordTaskActivity(d, task.id, status === 'done' ? 'completed' : status === 'open' ? 'reset'
     : task.status === 'done' ? 'reopened' : 'started',
-  actorId, {from_status:task.status,to_status:status,title:task.title});
+  actorId, {from_status:task.status,to_status:status,title:task.title,
+    ...(status==='done'?{assigned_user_id:task.assigned_to??null,completion_source:effects.bulkCompletion?'bulk':'individual'}:{})});
   if (status === 'done') {
     d.prepare(`UPDATE planning_obligations SET status='fulfilled',
       responded_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
@@ -203,7 +204,7 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, body={}, auth
     if (status==='open' && ((task.status==='done'&&!task.parent_task_id)||descendants.some(child=>child.status==='done')) && body.reset_progress!==true)
       throw new TaskStateError('Resetting this Task will clear its subtask progress.',
         {confirmation_required:'reset_progress'});
-    const effects={pending:false,undone:0,changedTaskIds:new Set()};
+    const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0};
     const targets = status==='done' ? incomplete : status==='open' ? descendants.filter(child=>child.status!=='open') : [];
     // Validate every affected action before writing any progress.
     for (const child of targets) {

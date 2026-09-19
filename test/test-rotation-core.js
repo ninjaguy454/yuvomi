@@ -68,6 +68,30 @@ test('skip conservatively retains position unless explicitly configured',withFix
   for(const advance of [false,true]){const t=track(`Skip ${advance}`,{advance_on_skip:advance});const o=resolve(t,'a');finish(o,{outcome:'skipped'});finish(o,{outcome:'skipped'});
     assert.equal(R.getRotationTrack(d,t.id).advance_count,advance?1:0);assert.equal(resolve(t,'b').member_ids[0],kids[advance?1:0]);}
 }));
+
+test('skip, override and correction preserve complete history and exactly one attributed audit event per action',withFixture(({d,admin,kids,track,resolve,finish})=>{
+ const t=track('Auditable actions'),skipped=resolve(t,'skipped');
+ const skippedResult=finish(skipped,{outcome:'skipped'});finish(skippedResult,{outcome:'skipped'});
+ const eventRows=type=>d.prepare('SELECT * FROM rotation_events WHERE track_id=? AND event_type=? ORDER BY id').all(t.id,type);
+ const skipEvents=eventRows('skipped');assert.equal(skipEvents.length,1);assert.equal(skipEvents[0].actor_user_id,admin);assert.ok(!Number.isNaN(Date.parse(skipEvents[0].created_at)));
+ assert.equal(skippedResult.advanced,0);assert.equal(R.getRotationTrack(d,t.id).advance_count,0);
+ const current=resolve(t,'override');assert.deepEqual(current.member_ids,kids);
+ const beforeOriginal=current.original_order_json;
+ const overridden=R.overrideRotation(d,current.id,{member_ids:[kids[2],kids[0],kids[1]],expected_revision:current.revision,actorId:admin});
+ R.overrideRotation(d,current.id,{member_ids:overridden.member_ids,expected_revision:overridden.revision,actorId:admin});
+ assert.equal(overridden.original_order_json,beforeOriginal);assert.equal(overridden.override_actor_id,admin);assert.ok(!Number.isNaN(Date.parse(overridden.overridden_at)));
+ const overrides=eventRows('overridden');assert.equal(overrides.length,1);assert.equal(overrides[0].actor_user_id,admin);assert.ok(!Number.isNaN(Date.parse(overrides[0].created_at)));
+ const overrideDetails=JSON.parse(overrides[0].details_json);assert.deepEqual(overrideDetails.previous_order,current.order);assert.deepEqual(overrideDetails.order,overridden.order);
+ const done=finish(overridden),past=d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? ORDER BY id').all(t.id);
+ const trackNow=R.getRotationTrack(d,t.id),corrected=R.correctRotationTrack(d,t.id,{actorId:admin,expected_revision:trackNow.revision,next_member_id:kids[1],reason:'Household correction'});
+ assert.throws(()=>R.correctRotationTrack(d,t.id,{actorId:admin,expected_revision:trackNow.revision,next_member_id:kids[1]}),error=>error.status===409);
+ const corrections=R.rotationTrackEvents(d,t.id);assert.equal(corrections.length,1);assert.equal(corrections[0].actor_user_id,admin);assert.equal(corrections[0].actor_name,'Parent');assert.ok(!Number.isNaN(Date.parse(corrections[0].created_at)));
+ assert.equal(corrections[0].details.reason,'Household correction');assert.equal(corrections[0].details.next_member_id,kids[1]);assert.equal(corrections[0].details.next_member_name,'Eleanor');
+ assert.equal(corrections[0].details.previous_next_membership_id,trackNow.next_membership_id);
+ assert.deepEqual(d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? ORDER BY id').all(t.id),past);
+ assert.equal(R.getRotationOccurrence(d,done.id).advanced,1);assert.equal(corrected.advance_count,1);
+ assert.deepEqual(resolve(t,'after-correction').member_ids,[kids[1],kids[2],kids[0]]);
+}));
 test('preview, inspect, history and three-step projection are read-only',withFixture(({d,kids,track,resolve})=>{
   const t=track('Preview');resolve(t,'a');const before=changes(d);
   const preview=R.previewRotationSequence(d,t.id);assert.deepEqual(preview.map(p=>p.member_ids[0]),kids);
@@ -210,4 +234,26 @@ test('override/finalize and correction/finalize races cannot lose the authoritat
     if(corrected[0].ok)assert.equal(R.previewRotation(f.d,t.id).member_ids[0],f.kids[2]);
     assert.deepEqual(f.d.pragma('integrity_check'),[{integrity_check:'ok'}]);assert.deepEqual(f.d.pragma('foreign_key_check'),[]);
   }finally{f.d.close();rmSync(dir,{recursive:true,force:true});}
+});
+
+test('independent Tracks resolve and advance concurrently against one Group without sharing state',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'rotation-independent-')),path=join(dir,'database.db'),f=fixture(path);
+ try {
+  f.d.pragma('journal_mode=WAL');const tracks=[f.track('Shower'),f.track('Meal',{strategy:'round_robin'}),f.track('Chore',{strategy:'round_robin'})];
+  const results=await runConcurrent(path,tracks.flatMap(track=>[0,1].map(()=>({type:'resolve',trackId:track.id,key:'same-logical-key',actorId:f.admin}))));
+  assert.ok(results.every(result=>result.ok),JSON.stringify(results));assert.equal(count(f.d,'rotation_occurrences'),3);
+  const occurrences=tracks.map(track=>R.rotationHistory(f.d,track.id)[0]);
+  assert.deepEqual(occurrences[0].member_ids,f.kids);assert.deepEqual(occurrences[1].member_ids,[f.kids[0]]);assert.deepEqual(occurrences[2].member_ids,[f.kids[0]]);
+  const firstFinals=await runConcurrent(path,[0,1].map(()=>({type:'finalize',occurrenceId:occurrences[1].id,expectedRevision:1,actorId:f.admin})));
+  assert.ok(firstFinals.every(result=>result.ok));assert.deepEqual(tracks.map(track=>R.getRotationTrack(f.d,track.id).advance_count),[0,1,0]);
+  const finals=await runConcurrent(path,[0,2].flatMap(index=>[0,1].map(()=>({type:'finalize',occurrenceId:occurrences[index].id,expectedRevision:1,actorId:f.admin}))));
+  assert.ok(finals.every(result=>result.ok),JSON.stringify(finals));assert.deepEqual(tracks.map(track=>R.getRotationTrack(f.d,track.id).advance_count),[1,1,1]);
+  for(const track of tracks) {
+   assert.equal(f.d.prepare("SELECT COUNT(*) n FROM rotation_events WHERE track_id=? AND event_type='resolved'").get(track.id).n,1);
+   assert.equal(f.d.prepare("SELECT COUNT(*) n FROM rotation_events WHERE track_id=? AND event_type='finalized'").get(track.id).n,1);
+   assert.equal(R.previewRotation(f.d,track.id).member_ids[0],f.kids[1]);
+   assert.throws(()=>R.correctRotationTrack(f.d,track.id,{actorId:f.admin,expected_revision:1,next_member_id:f.kids[2]}),error=>error.status===409);
+  }
+  assert.equal(count(f.d,'rotation_occurrences'),3);assert.deepEqual(f.d.pragma('integrity_check'),[{integrity_check:'ok'}]);assert.deepEqual(f.d.pragma('foreign_key_check'),[]);
+ } finally {f.d.close();rmSync(dir,{recursive:true,force:true});}
 });

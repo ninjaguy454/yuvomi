@@ -23,7 +23,8 @@ async function fixture(run) {
  const app=express();app.use(express.json());app.use((req,_res,next)=>{req.authUserId=Number(req.headers['x-user'])||admin;req.session={userId:req.authUserId};next();});app.use('/automation',router);
  const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.once('listening',resolve));
  const get=async(path,user=admin)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}/automation${path}`,{headers:{'x-user':String(user)}});assert.equal(response.status,200);return(await response.json()).data;};
- try{await run({d,admin,child,group,track,task,get});assert.deepEqual(d.pragma('foreign_key_check'),[]);}
+ const denied=async(path,user=child)=>{const response=await fetch(`http://127.0.0.1:${server.address().port}/automation${path}`,{headers:{'x-user':String(user)}});assert.equal(response.status,404);assert.deepEqual(await response.json(),{error:'Rotation not found.',code:404});};
+ try{await run({d,admin,child,group,track,task,get,denied});assert.deepEqual(d.pragma('foreign_key_check'),[]);}
  finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));_setTestDatabase(null);d.close();}
 }
 
@@ -46,11 +47,10 @@ test('Group and Track reads identify the authoritative recurring definition, wit
  const deleted=await get(`/rotation-tracks/${first.id}`);assert.equal(deleted.consumer_status,'previous');assert.equal(deleted.consumer_label,'Previous consumer');
 }));
 
-test('Current and exception Task names require canonical Task visibility; permission changes apply immediately',()=>fixture(async({d,child,track,task,get})=>{
+test('Current and exception Task payloads require canonical Task visibility; permission changes apply immediately',()=>fixture(async({d,child,track,task,get,denied})=>{
  const source=task('Private appointment',{visibility:'assignees'});
  for(const [type,id] of [['task',String(source)],['task_exception',`${source}:stable-signature`]]) {
-  const t=track(type,id);const hidden=await get(`/rotation-tracks/${t.id}`,child);
-  assert.equal(hidden.display_label,'Activity · Shower Order');assert.equal(hidden.consumer_status,'restricted');assert.ok(!JSON.stringify(hidden).includes('Private appointment'));
+  const t=track(type,id);await denied(`/rotation-tracks/${t.id}`);
   d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(child,source);
   assert.equal((await get(`/rotation-tracks/${t.id}`,child)).display_label,'Private appointment · Shower Order');
   d.prepare('UPDATE tasks SET assigned_to=NULL WHERE id=?').run(source);
@@ -58,16 +58,15 @@ test('Current and exception Task names require canonical Task visibility; permis
  const malformed=track('task',`${source}:not-a-task-identity`);assert.equal((await get(`/rotation-tracks/${malformed.id}`)).consumer_status,'previous');
 }));
 
-test('Recurring-series source privacy is enforced before exposing definition snapshot titles',()=>fixture(async({d,child,track,task,get})=>{
+test('Recurring-series source privacy is enforced before exposing definition snapshots',()=>fixture(async({d,track,task,denied})=>{
  const source=task('Private concrete title',{visibility:'private'});
  d.prepare('INSERT INTO task_recurrence_series(series_id) VALUES(?)').run(source);
  d.prepare('INSERT INTO task_recurrence_definitions(series_id,effective_generation,definition_json,source_task_id) VALUES(?,0,?,?)')
   .run(source,JSON.stringify({task:{title:'Private recurring definition'},subtasks:[]}),source);
- const t=track('task_series',source),hidden=await get(`/rotation-tracks/${t.id}`,child);
- assert.equal(hidden.display_label,'Recurring Activity · Shower Order');assert.equal(hidden.consumer_status,'restricted');assert.ok(!JSON.stringify(hidden).includes('Private'));
+ const t=track('task_series',source);await denied(`/rotation-tracks/${t.id}`);
 }));
 
-test('Workflow and step contexts use stable source IDs, retain removed-step history and honor Workflow access',()=>fixture(async({d,child,track,get})=>{
+test('Workflow and step contexts use stable source IDs, retain removed-step history and honor Workflow access',()=>fixture(async({d,child,track,get,denied})=>{
  const workflow=Number(d.prepare("INSERT INTO workflow_templates(name) VALUES('Get Ready for Bed')").run().lastInsertRowid);
  const activity=Number(d.prepare("INSERT INTO activity_templates(name,title_template,category) VALUES('Bedtime checklist','Bedtime checklist','misc')").run().lastInsertRowid);
  d.prepare("INSERT INTO workflow_template_steps(workflow_template_id,activity_template_id,step_key,title_override) VALUES(?,?,'child_1','Eleanor bedtime')").run(workflow,activity);
@@ -78,10 +77,10 @@ test('Workflow and step contexts use stable source IDs, retain removed-step hist
  d.prepare('DELETE FROM workflow_template_steps WHERE workflow_template_id=?').run(workflow);
  const removed=await get(`/rotation-tracks/${step.id}`);assert.equal(removed.consumer_status,'previous');assert.equal(removed.display_label,'Get Ready for Bed · Previous step · Shower Order');
  replaceSubjectPermissions(d,'user',child,{capabilities:{'rotations.view':'allow','workflows.view':'none'}});
- const denied=await get(`/rotation-tracks/${root.id}`,child);assert.equal(denied.consumer_label,'Workflow');assert.equal(denied.consumer_status,'restricted');
+ await denied(`/rotation-tracks/${root.id}`);
 }));
 
-test('Deleted Workflow source uses authorized retained Task evidence, never a private historical title',()=>fixture(async({d,admin,child,track,task,get})=>{
+test('Deleted Workflow source uses authorized retained Task evidence, never private historical payloads',()=>fixture(async({d,admin,child,track,task,get,denied})=>{
  const workflow=Number(d.prepare("INSERT INTO workflow_templates(name) VALUES('Original source')").run().lastInsertRowid);
  const t=track('workflow',workflow),owner=task('Historical bedtime',{visibility:'assignees',assignedTo:child});
  const occurrence=resolveRotation(d,t.id,'shared-night',{actorId:admin,context:{task_id:owner}});
@@ -89,17 +88,17 @@ test('Deleted Workflow source uses authorized retained Task evidence, never a pr
  d.prepare('DELETE FROM workflow_templates WHERE id=?').run(workflow);
  const previous=await get(`/rotation-tracks/${t.id}`,child);assert.equal(previous.display_label,'Historical bedtime · Shower Order');assert.equal(previous.consumer_status,'previous');
  d.prepare('UPDATE tasks SET assigned_to=NULL WHERE id=?').run(owner);
- const denied=await get(`/rotation-tracks/${t.id}`,child);assert.equal(denied.display_label,'Previous consumer · Shower Order');assert.ok(!JSON.stringify(denied).includes('Historical bedtime'));
- assert.equal((await get(`/rotation-tracks/${t.id}/history`,child))[0].id,occurrence.id);
+ await denied(`/rotation-tracks/${t.id}`);await denied(`/rotation-tracks/${t.id}/history`);
+ assert.equal((await get(`/rotation-tracks/${t.id}/history`))[0].id,occurrence.id);
 }));
 
-test('Scoped Meal Tracks show the owning plan and role while preserving archived/deleted context and module privacy',()=>fixture(async({d,child,track,get})=>{
+test('Scoped Meal Tracks show the owning plan and role while preserving archived/deleted context and module privacy',()=>fixture(async({d,child,track,get,denied})=>{
  const plan=Number(d.prepare("INSERT INTO meal_plans(name) VALUES('Weeknight dinners')").run().lastInsertRowid);
  const t=track('meal_plan',`${plan}:dinner-slot:context:4`,'Dinner · Chooser');
  assert.equal((await get(`/rotation-tracks/${t.id}`,child)).display_label,'Weeknight dinners · Dinner · Chooser');
  d.prepare("UPDATE meal_plans SET status='archived' WHERE id=?").run(plan);assert.equal((await get(`/rotation-tracks/${t.id}`,child)).consumer_status,'archived');
  d.prepare("UPDATE meal_plans SET status='deleted' WHERE id=?").run(plan);assert.equal((await get(`/rotation-tracks/${t.id}`,child)).consumer_status,'previous');
  replaceSubjectPermissions(d,'user',child,{modules:{meals:'none'},capabilities:{'rotations.view':'allow'}});
- const denied=await get(`/rotation-tracks/${t.id}`,child);assert.equal(denied.consumer_label,'Meal Planning');assert.ok(!JSON.stringify(denied).includes('Weeknight dinners'));
+ await denied(`/rotation-tracks/${t.id}`);
  d.prepare('DELETE FROM meal_plans WHERE id=?').run(plan);assert.equal((await get(`/rotation-tracks/${t.id}`)).consumer_label,'Previous consumer');
 }));

@@ -90,7 +90,7 @@ async function editGroup(group,onSaved,live) {
     form.addEventListener('submit',async event=>{
       event.preventDefault();if(form.dataset.saving)return;
       if(!form.elements.name.value.trim())return errorAt(panel,new Error('Enter a Rotation Group name.'),form.elements.name);
-      if(!memberIds(list).length)return errorAt(panel,new Error('Add at least one household member.'),select);
+      if(!memberIds(list).length&&(!group||form.elements.active.checked))return errorAt(panel,new Error('Add at least one household member.'),select);
       const payload={name:form.elements.name.value,description:form.elements.description.value,active:form.elements.active.checked,
         member_ids:memberIds(list),...(group?{expected_revision:group.revision}:{})};
       const submit=panel.querySelector('[type=submit]');form.dataset.saving='true';submit.disabled=true;
@@ -174,15 +174,16 @@ async function liveDetail(live,{load,title,render,onAction}) {
 }
 async function trackHistory(trackId,live) {
   return liveDetail(live,{
-    load:async()=>{const [{data:track},{data:history}]=await Promise.all([api.get(`/automation/rotation-tracks/${trackId}`),api.get(`/automation/rotation-tracks/${trackId}/history`)]);return {track,history};},
+    load:async()=>{const [{data:track},{data:history,events=[]}]=await Promise.all([api.get(`/automation/rotation-tracks/${trackId}`),api.get(`/automation/rotation-tracks/${trackId}/history`)]);return {track,history,events};},
     title:({track})=>trackLabel(track),
-    render:({track,history})=>`${errorBox}<div data-rotation-track-detail="${track.id}">
+    render:({track,history,events})=>`${errorBox}<div data-rotation-track-detail="${track.id}">
     ${consumerStatus(track)?`<p class="form-hint" data-rotation-consumer-status>${esc(consumerStatus(track))}</p>`:''}
     <p>${esc(names[track.strategy])} · ${track.advance_count} advances</p>
     <h3>Preview</h3><p class="form-hint">Next results after successive advances. Preview does not change anything.</p>
     <ol data-rotation-previews style="list-style:decimal;padding-left:1.5rem">${track.previews.map(preview=>`<li>${esc(orderText(preview))}</li>`).join('')}</ol>
     ${canCapability('rotations.correct')&&track.strategy!=='fixed_order'?button('correct','Set who is next'):''}
-    <h3>History</h3>${history.length?history.map(occ=>`<section style="border-top:1px solid var(--border-color);padding:1rem 0" data-rotation-occurrence="${occ.id}">
+    <h3>History</h3>${events.length?`<div data-rotation-corrections><h4>Track corrections</h4><p class="form-hint">Administrative changes to future resolutions, separate from occurrence outcomes.</p>${events.map(event=>`<section data-rotation-correction="${event.id}" style="border-top:1px solid var(--border-color);padding:.7rem 0"><strong>Next member corrected</strong><p>${esc(event.details.previous_next_member_name||'Previous next member')} → ${esc(event.details.next_member_name||track.next.members.find(member=>member.id===event.details.next_member_id)?.display_name||'Former household member')}</p><p class="form-hint">${esc(event.actor_name||'Former household member')} · ${esc(event.created_at)}</p>${event.details.reason?`<p>${esc(event.details.reason)}</p>`:''}</section>`).join('')}</div>`:''}
+    ${history.length?history.map(occ=>`<section style="border-top:1px solid var(--border-color);padding:1rem 0" data-rotation-occurrence="${occ.id}">
       <strong>${esc(occ.context.label||occ.context.due_date||occ.resolved_at.slice(0,10))}</strong> · ${esc(names[occ.status])}${!occ.order.length?' · Unresolved':''}
       <p>${esc(orderText(occ))}</p>${occ.overridden_at?`<p class="form-hint">Original plan: ${esc(orderText({order:occ.original_order}))} · Overridden ${esc(occ.overridden_at)}</p>`:''}
       <p class="form-hint">${occ.advanced?'Advanced once':`No advance${occ.advance_reason?': '+occ.advance_reason.replaceAll('_',' '):''}`}</p>

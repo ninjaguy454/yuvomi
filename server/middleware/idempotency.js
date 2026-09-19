@@ -204,7 +204,9 @@ function idempotencyMiddleware(req, res, next) {
       recordId = insert.lastInsertRowid;
     }
   } catch (error) {
-    if (error.status === 403) return res.status(403).json({ error: error.message, code: 403 });
+    // A canonical consumer visibility denial must not fall through and create a
+    // second Workflow merely because its earlier result can no longer be read.
+    if ([403,404].includes(error.status)) return res.status(error.status).json({ error: error.message, code: error.status });
     // Ein Gedächtnisproblem darf die eigentliche Anfrage nicht abweisen: ohne
     // Idempotenz ist sie das, was sie vor #822 war, mit Fehler ist sie weg.
     return next();

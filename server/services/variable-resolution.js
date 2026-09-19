@@ -7,6 +7,8 @@ import { householdMembers } from './activity-eligibility.js';
 import { placeWithInheritedAddress } from './presence.js';
 import { householdTimeZone, todayKey, utcToWall } from '../utils/timezone.js';
 import { getRotationGroup, getRotationOccurrence } from './rotation.js';
+import { readRotationOccurrence } from './rotation-access.js';
+import { assertCapability } from '../permissions.js';
 
 export const SYSTEM_CONTEXT_VARIABLES = Object.freeze([
   { id: 'context.current_date', key: 'context.current_date', label: 'Current date', type: 'date' },
@@ -104,11 +106,12 @@ function safePlace(d, value, key) {
     address: [row.street_address, row.city, row.region, row.postal_code, row.country].filter(Boolean).join(', ') || null };
 }
 
-export function normalizeVariableValue(d, variable, value) {
+export function normalizeVariableValue(d, variable, value, {actor} = {}) {
   const key = variableKey(variable);
   if (['rotation_group', 'rotation_occurrence'].includes(variable.type)) {
     const id = ['string', 'number'].includes(typeof value) ? Number(value) : NaN;
-    const row = Number.isSafeInteger(id) && id > 0 ? (variable.type === 'rotation_group' ? getRotationGroup(d, id) : getRotationOccurrence(d, id)) : null;
+    if(actor!==undefined)assertCapability(d,actor,variable.type==='rotation_group'?'rotations.view':'rotations.history');
+    const row = Number.isSafeInteger(id) && id > 0 ? (variable.type === 'rotation_group' ? getRotationGroup(d, id) : actor===undefined?getRotationOccurrence(d, id):readRotationOccurrence(d,actor,id)) : null;
     if (!row || (variable.type === 'rotation_group' && !row.active)) throw new Error(`Variable ${key} must select a valid ${variable.type === 'rotation_group' ? 'Rotation Group' : 'Rotation Occurrence'}.`);
     // Snapshot objects are never accepted from editable input. Historic members
     // intentionally retain their recorded identity/name if their profile changes.
@@ -170,7 +173,7 @@ export function variableInputSchema(definitions, keys = definitions.map(variable
   return definitions.filter(row => wanted.has(variableKey(row)) && !variableKey(row).startsWith('context.') && !row.expression && row.kind !== 'value');
 }
 
-export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserId = null, contextValues = {}, rotationOccurrences = {}, now = new Date() } = {}) {
+export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserId = null, contextValues = {}, rotationOccurrences = {}, now = new Date(), actor } = {}) {
   if (!inputs || typeof inputs !== 'object' || Array.isArray(inputs)) throw new Error('Variable inputs must be an object.');
   const definitions = expressionScope(variables);
   validateVariableDefinitions(definitions);
@@ -191,14 +194,14 @@ export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserI
     if (!row || key.startsWith('context.')) throw new Error(`Unknown variable input: ${key}.`);
     if (row.expression) continue; // Computed values are never accepted from the client.
     if (row.kind === 'value') continue;
-    values[key] = normalizeVariableValue(d, row, value);
+    values[key] = normalizeVariableValue(d, row, value,{actor});
   }
   // Only a trusted domain resolver supplies these contextual values. Explicit
   // definitions and editable inputs retain their own meaning.
   for (const [key,value] of Object.entries(contextValues)) {
     const row=byKey.get(key);
     if(row && row.kind==='value' && !row.expression && row.default_value==null && !Object.hasOwn(values,key))
-      values[key]=normalizeVariableValue(d,row,value);
+      values[key]=normalizeVariableValue(d,row,value,{actor});
   }
   for (const [key, occurrence] of Object.entries(rotationOccurrences)) {
     const row = byKey.get(key);
@@ -206,7 +209,7 @@ export function resolveVariables(d, variables, inputs = {}, { keys, subjectUserI
   }
   for (const row of definitions) {
     if (!needed.has(row.id) || row.expression || Object.hasOwn(values, row.id) || row.default_value == null) continue;
-    values[row.id] = normalizeVariableValue(d, row, row.default_value);
+    values[row.id] = normalizeVariableValue(d, row, row.default_value,{actor});
   }
   const zone = householdTimeZone(d);
   values['context.current_date'] = todayKey(d, now);

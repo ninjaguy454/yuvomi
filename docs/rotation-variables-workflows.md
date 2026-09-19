@@ -20,10 +20,24 @@ The launcher retains a request key across creation retries. The server transacti
 
 Authorized integrations can inspect `/automation/workflow-instances/:id/rotations` or record a contextual outcome at `/automation/workflow-instances/:id/rotations/:purpose/outcome`. Outcome requests require the existing Workflow and Task permissions plus `rotations.advance`, and carry `expected_revision`. The UI does not require users to create or manipulate Track IDs.
 
+## Authored run operations
+
+The Workflow editor exposes Rotation purposes with Group, strategy and policy, plus **Allow authorized person to finalize** and **Allow authorized person to skip**. Resolve/reuse always happens when the Workflow run starts. Each purpose supplies its existing typed Rotation Occurrence output to Workflow expressions.
+
+Finalize and Skip are explicit actions on the generated Workflow parent's Task Details. They are not automatic stage-completion triggers and do not complete child Tasks. This is the chosen default for the closure pass: the author enables administrative operations; an authorized person invokes them. Existing owner-completion advancement policies continue unchanged. There is no separate operation scheduler or Workflow execution engine.
+
+`POST /automation/workflow-instances/:id/rotations/:purpose/operations/:operation` accepts `resolve`, `finalize` or `skip`, with `expected_revision` for the parent Task and `expected_occurrence_revision` for a mutation of its Rotation snapshot. It requires current Workflow run access, owning Task mutation access, and Rotation configure/advance access as appropriate. Configuration is frozen with the run's existing durable request result; later template edits cannot add actions to a historical run. Historical parent Tasks do not expose these actions.
+
+Resolve/reuse targets only the requested stable purpose. An existing resolution is read-only, including retries with the pre-resolution revision. A new resolution uses the saved Workflow request identity. Finalization/skip use canonical Rotation transactions and at-most-once advancement. Repeating a terminal outcome returns its existing result.
+
 ## Boundaries and validation
 
 Client-supplied snapshot objects are rejected; editable inputs provide IDs only. Workflow resolution/configuration and contextual operations enforce Rotation capabilities. Rotation Occurrence variable inputs additionally require history access. Streams and other clients remain responsible for fetching authorized current representations, not trusting a typed expression as authorization.
 
+Typed occurrence pickers, expression hydration, previews and cached Workflow responses also check the owning consumers' current visibility. A cached successful response is not permission to read Tasks or external Rotation-derived text after access changes. Private contextual Tracks are withheld consistently rather than exposing dates, subjects or raw context behind a hidden label. Group membership remains independently readable when permitted.
+
 `renderRotationVariableTemplates` is a read-only bridge for already resolved consumer contexts. It returns rendered values plus the required expression definitions and input IDs so a recurring series can preserve authored expression provenance without consulting a later edited source Template. It also identifies whether a field actually depends on Rotation; unrelated interpolation retains existing behavior.
 
 Focused evidence: `.qa/rotation-workflow-final-backend.log` (95 checks: 93 passed; two unchanged baseline failures), `.qa/rotation-workflow-browser.log` (18 passed), `.qa/rotation-workflow-new.log` (8 new checks passed). The unchanged baseline failures reproduce in `.qa/rotation-base-cf4b5e2d` from the clean starting commit: a historical supervision-title expectation, and an existing isolated launcher fixture missing `activityTimingFields`. No failed browser launch is counted as a pass.
+
+The later [checklist closure report](rotation-groups-closure-20260919.md) records the direct privacy, authoring, concurrent retry and bound-text regressions and supersedes earlier completeness claims for those paths.

@@ -74,7 +74,7 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
     if(description?.length>2000)fail('Description is limited to 2000 characters.');
     const active=flag(input.active,old?!!old.active:true);
     const memberIds=ids(input.member_ids??old?.members.filter(m=>m.id).map(m=>m.id)??[]);
-    if(!memberIds.length)fail('Add at least one household member.');
+    if(!memberIds.length&&(!old||active))fail('Add at least one household member.');
     if(memberIds.length>100)fail('A Rotation Group supports at most 100 household members.');
     const members=new Set(householdMembers(d).map(m=>m.id));
     if(memberIds.some(n=>!members.has(n)))fail('Choose members who currently belong to this household.');
@@ -99,8 +99,8 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
     return saved;
   });
 }
-export function normalizeRotationConfiguration(d,input={}, {allowMissingReferences=false}={}) {
-  const group=getRotationGroup(d,id(input.group_id,'Rotation Group'));
+export function normalizeRotationConfiguration(d,input={}, {allowMissingReferences=false,group:resolvedGroup}={}) {
+  const group=resolvedGroup||getRotationGroup(d,id(input.group_id,'Rotation Group'));
   if(!group)fail('Choose an existing Rotation Group.');
   const strategy=input.strategy??'round_robin',advance=input.advance_policy??'on_finalized';
   if(!STRATEGIES.includes(strategy))fail('Choose Round Robin, Rotating Order, or Fixed Order.');
@@ -164,10 +164,11 @@ function safeContext(context) {
     if(context[key]!=null&&['string','number'].includes(typeof context[key]))result[key]=context[key];
   return result;
 }
-export function previewRotation(d,trackOrConfig,{context={},eligibleUserIds,eligibilityExplanations={}}={}) {
-  const track=typeof trackOrConfig==='number'?getRotationTrack(d,trackOrConfig):trackOrConfig;
-  if(!track)fail('Rotation Track not found.',404);
-  const config=normalizeRotationConfiguration(d,track,{allowMissingReferences:!!track.id}),group=getRotationGroup(d,config.group_id);
+// Prepared facts live only inside one synchronous operation. They never survive
+// an intervening write or cross a request, and contain no cached authorization.
+function prepareRotationPreview(d,track,{context={},eligibleUserIds,eligibilityExplanations={}}={},resolvedGroup) {
+  const group=resolvedGroup||getRotationGroup(d,id(track.group_id,'Rotation Group'));
+  const config=normalizeRotationConfiguration(d,track,{allowMissingReferences:!!track.id,group});
   const current=new Map(householdMembers(d).map(m=>[m.id,m]));
   const extra=eligibleUserIds===undefined?null:new Set(ids(eligibleUserIds));
   const dateKey=context.dateKey||context.due_date||context.start_date||todayKey(d);
@@ -194,6 +195,9 @@ export function previewRotation(d,trackOrConfig,{context={},eligibleUserIds,elig
     }
     if(reason)skipped.push({...member,reason});else eligible.push(member);
   }
+  return {config,group,current,eligible,skipped,configurationProblem};
+}
+function selectRotationPreview(track,{config,group,current,eligible,skipped,configurationProblem}) {
   // Stable membership identity also preserves the ring when a user leaves the household.
   const next=track.next_membership_id??group.members[0]?.membership_id??null;
   const selection=orderedRotationSelection({memberIds:group.members.map(m=>m.membership_id),eligibleIds:eligible.map(m=>m.membership_id),nextMemberId:next,strategy:config.strategy});
@@ -206,27 +210,34 @@ export function previewRotation(d,trackOrConfig,{context={},eligibleUserIds,elig
     next_membership_id:selection.next_member_id,state:configurationProblem?'needs_configuration':order.length?'resolved':'unavailable',
     explanation:configurationProblem|| (waiting?'Keeping the next member’s position until they are eligible.':order.length?null:!group.active?'Rotation Group is inactive.':'No eligible household member is available.')};
 }
+export function previewRotation(d,trackOrConfig,options={}) {
+  const track=typeof trackOrConfig==='number'?getRotationTrack(d,trackOrConfig):trackOrConfig;
+  if(!track)fail('Rotation Track not found.',404);
+  return selectRotationPreview(track,prepareRotationPreview(d,track,options));
+}
 function occurrenceRow(d,occurrenceId) {return d.prepare(`SELECT o.* FROM rotation_occurrences o JOIN rotation_tracks t ON t.id=o.track_id
   JOIN rotation_groups g ON g.id=o.group_id WHERE o.id=? AND t.household_key=? AND g.household_key=?`).get(id(occurrenceId,'Rotation Occurrence'),HOUSEHOLD,HOUSEHOLD);}
-export function getRotationOccurrence(d,occurrenceId) {
-  const row=occurrenceRow(d,occurrenceId);if(!row)return null;
+function hydrateOccurrence(row) {
+  if(!row)return null;
   const order=JSON.parse(row.order_json),config=JSON.parse(row.config_json);
   return {...row,config,context:JSON.parse(row.context_json),members:JSON.parse(row.members_json),eligible:JSON.parse(row.eligible_json),
     skipped:JSON.parse(row.skipped_json),order,original_order:JSON.parse(row.original_order_json),member_ids:order.map(m=>m.id),
     selected_member:row.strategy==='round_robin'?order[0]??null:null,state:order.length?'resolved':'unavailable'};
 }
+export function getRotationOccurrence(d,occurrenceId) {return hydrateOccurrence(occurrenceRow(d,occurrenceId));}
 export function resolveRotation(d,trackId,occurrenceKey,{context={},eligibleUserIds,eligibilityExplanations,expectedTrackRevision,actorId=null}={}) {
   return atomic(d,()=>{
     const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
     const key=text(occurrenceKey,'occurrence identity',1000);
-    const old=d.prepare('SELECT id FROM rotation_occurrences WHERE track_id=? AND occurrence_key=?').get(track.id,key);
-    if(old)return getRotationOccurrence(d,old.id);
-    if(!getRotationGroup(d,track.group_id).active)fail('This Rotation Group is inactive. Reconfigure the consumer or reactivate the Group.',409,'rotation_group_inactive');
+    const old=d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? AND occurrence_key=?').get(track.id,key);
+    if(old)return hydrateOccurrence(old);
+    const group=getRotationGroup(d,track.group_id);
+    if(!group.active)fail('This Rotation Group is inactive. Reconfigure the consumer or reactivate the Group.',409,'rotation_group_inactive');
     if(expectedTrackRevision!==undefined)revision(track,expectedTrackRevision);
     const pending=d.prepare(`SELECT id,status,config_json FROM rotation_occurrences WHERE track_id=? AND
       (status='resolved' OR (status='finalized' AND json_extract(config_json,'$.advance_policy')='on_completed' AND advanced=0)) ORDER BY id LIMIT 1`).get(track.id);
     if(pending&&track.strategy!=='fixed_order')fail('Finalize or skip the previous rotation occurrence before resolving the next one.',409,'rotation_pending');
-    const result=previewRotation(d,track,{context,eligibleUserIds,eligibilityExplanations});
+    const result=selectRotationPreview(track,prepareRotationPreview(d,track,{context,eligibleUserIds,eligibilityExplanations},group));
     const occurrenceId=Number(d.prepare(`INSERT INTO rotation_occurrences(track_id,occurrence_key,group_id,group_revision,track_config_revision,track_correction_revision,
       strategy,config_json,context_json,consumer_eligibility_json,members_json,eligible_json,skipped_json,original_order_json,order_json,next_membership_id)
       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(track.id,key,result.group_id,result.group_revision,track.config_revision,track.correction_revision,result.strategy,
@@ -303,19 +314,32 @@ export function skipRotation(d,occurrenceId,options={}) {return finalizeRotation
 export function rotationHistory(d,trackId,{limit=100}={}) {
   const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
   const n=Math.min(200,Math.max(1,Number(limit)||100));
-  return d.prepare('SELECT id FROM rotation_occurrences WHERE track_id=? ORDER BY id DESC LIMIT ?').all(track.id,n).map(row=>getRotationOccurrence(d,row.id));
+  return d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? ORDER BY id DESC LIMIT ?').all(track.id,n).map(hydrateOccurrence);
+}
+export function rotationTrackEvents(d,trackId,{limit=100}={}) {
+  const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
+  const n=Math.min(200,Math.max(1,Number(limit)||100));
+  return d.prepare(`SELECT e.id,e.track_id,e.event_type,e.details_json,e.actor_user_id,e.created_at,u.display_name AS actor_name
+    FROM rotation_events e LEFT JOIN users u ON u.id=e.actor_user_id
+    WHERE e.track_id=? AND e.event_type='track_corrected' ORDER BY e.id DESC LIMIT ?`).all(track.id,n)
+    .map(row=>({...row,details:JSON.parse(row.details_json)}));
 }
 export function inspectRotationTrack(d,trackId) {
   const track=getRotationTrack(d,trackId);if(!track)return null;
-  return {...track,next:previewRotation(d,track),previews:previewRotationSequence(d,track.id),latest:rotationHistory(d,track.id,{limit:1})[0]??null};
+  const previews=previewSequence(track,prepareRotationPreview(d,track),3);
+  const latest=hydrateOccurrence(d.prepare('SELECT * FROM rotation_occurrences WHERE track_id=? ORDER BY id DESC LIMIT 1').get(track.id));
+  return {...track,next:previews[0],previews,latest};
 }
 
 /** Hypothetical successive successful/finalized uses; no records or writes. */
 export function previewRotationSequence(d,trackId,{count=3,...options}={}) {
-  let track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
+  const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
+  return previewSequence(track,prepareRotationPreview(d,track,options),count);
+}
+function previewSequence(track,prepared,count) {
   const result=[];
   for(let n=0;n<Math.min(10,Math.max(1,Number(count)||3));n++) {
-    const preview=previewRotation(d,track,options);result.push(preview);
+    const preview=selectRotationPreview(track,prepared);result.push(preview);
     if(preview.order.length&&track.strategy!=='fixed_order')track={...track,next_membership_id:preview.next_membership_id};
   }
   return result;
@@ -325,13 +349,15 @@ export function correctRotationTrack(d,trackId,{next_member_id,expected_revision
   return atomic(d,()=>{
     const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);
     revision(track,expected_revision);
-    const member=memberships(d,track.group_id).find(m=>m.id===id(next_member_id));
+    const members=memberships(d,track.group_id),member=members.find(m=>m.id===id(next_member_id));
     if(!member||!householdMembers(d).some(m=>m.id===member.id))fail('Choose a current member of this Rotation Group.');
     const note=reason==null?null:text(reason,'correction reason',1000);
     d.prepare(`UPDATE rotation_tracks SET next_membership_id=?,correction_revision=correction_revision+1,revision=revision+1,updated_at=${NOW} WHERE id=?`)
       .run(member.membership_id,track.id);
+    const previous=members.find(m=>m.membership_id===track.next_membership_id);
     event(d,{groupId:track.group_id,trackId:track.id,actorId,type:'track_corrected',details:{previous_next_membership_id:track.next_membership_id,
-      next_membership_id:member.membership_id,next_member_id:member.id,reason:note}});
+      previous_next_member_id:previous?.id??null,previous_next_member_name:previous?.display_name??null,
+      next_membership_id:member.membership_id,next_member_id:member.id,next_member_name:member.display_name,reason:note}});
     return getRotationTrack(d,track.id);
   });
 }

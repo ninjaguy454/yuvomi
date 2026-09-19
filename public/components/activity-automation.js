@@ -1821,7 +1821,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, workflow?.category || 'misc')}</select>`)}
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(workflow?.subject_required ?? true) ? 'checked' : ''}> Ask which household member this is for</label>
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${(workflow?.quick_add_enabled ?? true) ? 'checked' : ''}> Show in Task Workflows</label>
-    ${renderRotationBindings(workflow?.rotation_bindings || [], context)}
+    ${renderRotationBindings(workflow?.rotation_bindings || [], {...context,workflowOperations:true})}
     <p class="form-hint">Each Rotation purpose is a calculated Rotation Occurrence value using its purpose key. For example, use rotationPosition(shower_order, context.household_member) in a Number variable.</p>
 
     <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>
@@ -1840,7 +1840,7 @@ function openWorkflowForm(workflow, context, manager = null, { asChild = false, 
     size: 'xl',
     onSave(panel) {
       panel.variableContext = context.context || [];
-      const rotationBindings = bindRotationBindings(panel, { ...context, readOnly: !canCapability('rotations.configure') });
+      const rotationBindings = bindRotationBindings(panel, { ...context, workflowOperations:true, readOnly: !canCapability('rotations.configure') });
       const rotationVariables = () => rotationBindings.getValue().map(binding => ({ id: binding.purpose_key, label: binding.label, type: 'rotation_occurrence', kind: 'value' }));
       panel.querySelector('[data-rotation-bindings]')?.addEventListener('input', () => { panel.variableContext = [...(context.context || []), ...rotationVariables()]; });
       panel.variableContext = [...(context.context || []), ...rotationVariables()];

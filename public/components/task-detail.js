@@ -783,7 +783,7 @@ function taskDetailDefinitionKey(task) {
   const fields = ['title', 'description', 'tags', 'documents', 'priority', 'start_date', 'start_time', 'due_date', 'due_time',
     'expiration_policy', 'expired_at', 'archived_at', 'recurrence_rule', 'recurrence_from_completion', 'is_recurring',
     'category', 'required_skills', 'skill_ids', 'skills', 'skill_eligibility', 'location', 'assigned_to', 'assigned_users', 'assigned_name', 'assigned_color', 'assigned_avatar',
-    'locked', 'visibility', 'countdown', 'action_link', 'permissions', 'rotations'];
+    'locked', 'visibility', 'countdown', 'action_link', 'permissions'];
   return JSON.stringify(Object.fromEntries(Object.entries(task).filter(([key]) => fields.includes(key) || key.startsWith('activity_') && key !== 'activity_assignment_state')));
 }
 
@@ -1534,16 +1534,37 @@ function secondaryMetadataNode(task, ctx) {
   return details;
 }
 
-function renderTaskDetail(task, reminders = [], ctx) {
-  const tags = tagChipsNode(task.tags);
-  if (tags) tags.classList.add('task-detail-tags');
-  const activity = disclosureNode(ctx, 'activity', 'Activity', 'task-detail-activity-disclosure');
-  activity.appendChild(activityNode(task, ctx));
-  const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', 'Occurrence history', 'task-detail-history-disclosure') : null;
-  if (history) history.appendChild(seriesHistoryNode(task, ctx));
+function rotationContextNode(task, ctx) {
   const rotations = task.rotations?.length ? document.createElement('section') : null;
   if (rotations) {
+    rotations.className = 'task-detail-rotations';
     rotations.innerHTML = renderRotationContext(task.rotations);
+    rotations.querySelectorAll('details[data-rotation-recorded-completions]').forEach(details => {
+      const key = details.dataset.disclosureKey;
+      details.open = ctx.disclosures?.get(key) || false;
+      details.addEventListener('toggle', () => { if (details.isConnected) { ctx.disclosures ??= new Map(); ctx.disclosures.set(key, details.open); } });
+    });
+    const workflow=!isArchived(task)&&!isExpired(task)&&task.status!=='done'&&task.workflow_rotation_operations;
+    if(workflow)for(const purpose of workflow.purposes)for(const operation of purpose.operations) {
+      const context=task.rotations.find(value=>value.purpose_key===purpose.purpose_key);
+      if(operation!=='resolve'&&context?.occurrence.status!=='resolved')continue;
+      const button=document.createElement('button');button.type='button';button.className='btn btn--secondary btn--sm';
+      button.dataset.workflowRotationOperation=operation;
+      button.dataset.workflowRotationPurpose=purpose.purpose_key;
+      button.textContent=`${operation==='resolve'?'Resolve / reuse':operation==='skip'?'Skip':'Finalize'} ${purpose.label||purpose.purpose_key}`;
+      button.addEventListener('click',async()=>{
+        // The Rotation section preserves DOM nodes through live reconciliation.
+        // Resolve the action from current attributes/state, not render-time closures.
+        const action=button.dataset.workflowRotationOperation,key=button.dataset.workflowRotationPurpose;
+        const run=task.workflow_rotation_operations,current=task.rotations?.find(value=>value.purpose_key===key);
+        if(!run?.purposes.some(value=>value.purpose_key===key&&value.operations.includes(action)))return;
+        button.disabled=true;
+        try {await api.post(`/automation/workflow-instances/${run.instance_id}/rotations/${encodeURIComponent(key)}/operations/${action}`,
+          {...taskRevision(task),expected_occurrence_revision:current?.occurrence.revision});await ctx.refresh();await ctx.onChanged();}
+        catch(error){window.yuvomi?.showToast(error.message,'danger');}
+        finally{button.disabled=false;}
+      });rotations.append(button);
+    }
     if(task.rotations.some(value=>value.pending&&value.owner_task_id===task.id) && canCapability('rotations.configure') && canTask(task,'edit') && !isArchived(task) && !isExpired(task) && task.status!=='done') {
       const retry=document.createElement('button');retry.type='button';retry.className='btn btn--secondary btn--sm';retry.textContent='Resolve rotation';
       retry.addEventListener('click',async()=>{
@@ -1556,6 +1577,17 @@ function renderTaskDetail(task, reminders = [], ctx) {
       });rotations.append(retry);
     }
   }
+  return rotations;
+}
+
+function renderTaskDetail(task, reminders = [], ctx) {
+  const tags = tagChipsNode(task.tags);
+  if (tags) tags.classList.add('task-detail-tags');
+  const activity = disclosureNode(ctx, 'activity', 'Activity', 'task-detail-activity-disclosure');
+  activity.appendChild(activityNode(task, ctx));
+  const history = task.is_recurring ? disclosureNode(ctx, 'recurrence-history', 'Occurrence history', 'task-detail-history-disclosure') : null;
+  if (history) history.appendChild(seriesHistoryNode(task, ctx));
+  const rotations = rotationContextNode(task, ctx);
   return [
     { node: statusSummaryNode(task, ctx) },
     { label: 'Instructions', node: descriptionNode(task, ctx), multiline: true },
@@ -1876,6 +1908,16 @@ export function openTaskDetail({
     const oldSupervision = JSON.stringify([task.supervision, task.supervision_action]);
     const oldStatus = task.status;
     const oldAssignment = task.activity_assignment_state;
+    const oldRotations = JSON.stringify([task.rotations, task.workflow_rotation_operations, task.status]);
+    if (source === 'ack' && fresh.rotations) {
+      // Mutation acknowledgements omit read-only completion history. Retain only
+      // evidence for still-authorized, identical occurrences until the next GET.
+      fresh = { ...fresh, rotations: fresh.rotations.map(context => {
+        const previous = task.rotations?.find(value => value.purpose_key === context.purpose_key && value.occurrence?.id === context.occurrence?.id);
+        return previous?.recorded_completions && !Object.hasOwn(context, 'recorded_completions')
+          ? { ...context, recorded_completions: previous.recorded_completions } : context;
+      }) };
+    }
     if (!mergeTaskDetailSnapshot(task, fresh, ctx.minimumTaskRevision || 0)) return false;
     ctx.minimumTaskRevision = 0; ctx.refreshRequired = false;
     if (source === 'live') { ctx.liveSnapshotEpoch = (ctx.liveSnapshotEpoch || 0) + 1; ctx.queue?.invalidate(fresh); }
@@ -1887,12 +1929,17 @@ export function openTaskDetail({
     const focus = pane?.contains(document.activeElement) ? document.activeElement?.dataset.focusKey : null;
     rememberTaskDisclosures(pane, ctx);
     const structuralChange = oldKey !== taskDetailDefinitionKey(task)
+      || (!!pane?.querySelector('.task-detail-rotations') !== !!task.rotations?.length)
       || (!!pane?.querySelector('.detail-task-subtasks') !== !!actionableSubtasks(task).length)
       || (!!pane?.querySelector('.task-detail-supervision') !== !!supervisionNodePresent(task));
     if (structuralChange) view.update(renderTaskDetail(task, reminder, ctx));
     else {
       reconcileTaskSubtasks(pane, task, ctx);
       ctx.renderOperationState();
+      if (oldRotations !== JSON.stringify([task.rotations, task.workflow_rotation_operations, task.status])) {
+        const rotations = pane?.querySelector('.task-detail-rotations');
+        if (rotations) patchTaskDetailNode(rotations, rotationContextNode(task, ctx));
+      }
       if (oldSupervision !== JSON.stringify([task.supervision, task.supervision_action])) {
         const supervision = pane?.querySelector('.task-detail-supervision');
         if (supervision) patchTaskDetailNode(supervision, supervisionNode(task, ctx));

@@ -4,7 +4,7 @@ import Database from 'better-sqlite3-multiple-ciphers';
 import express from 'express';
 process.env.DB_PATH=':memory:';process.env.SESSION_SECRET='rotation-security-test-session';process.env.LOG_LEVEL='error';
 const {ALL_MIGRATIONS,_setTestDatabase}=await import('../server/db.js');
-const {saveRotationGroup}=await import('../server/services/rotation.js');
+const {saveRotationGroup,configureRotationTrack,resolveRotation}=await import('../server/services/rotation.js');
 const {instantiateWorkflow}=await import('../server/services/activity-workflows.js');
 const {bindTaskRotations}=await import('../server/services/task-rotation.js');
 const {hydrateTask,default:tasksRouter}=await import('../server/routes/tasks.js');
@@ -61,6 +61,43 @@ test('Workflow retry rechecks revoked Rotation access even after current templat
   f.d.prepare('DELETE FROM tasks WHERE id=? OR parent_task_id=?').run(created.parent_task_id,created.parent_task_id);
   assert.throws(()=>instantiateWorkflow(f.d,f.workflow,options),error=>error.status===403,'deleted Tasks cannot erase the saved response permission boundary');
   assert.equal(f.d.prepare('SELECT count(*) n FROM workflow_instances').get().n,1);
+}));
+
+test('Workflow retry cannot replay text derived from an external Rotation whose owning Task became private',withFixture(async f=>{
+  for(const key of ['workflows.view','workflows.run','tasks.create','tasks.view_own','rotations.view','rotations.history','rotations.configure'])f.capability(key,'allow');
+  f.capability('tasks.view_household','none');
+  const owner=Number(f.d.prepare("INSERT INTO tasks(title,created_by,assigned_to,visibility) VALUES('External sensitive occurrence',?,?,'all')").run(f.admin,f.member).lastInsertRowid);
+  const track=configureRotationTrack(f.d,{consumer_type:'task',consumer_id:String(owner),purpose_key:'external',group_id:f.group.id},{actorId:f.admin});
+  const occurrence=resolveRotation(f.d,track.id,'external-private-after-creation',{actorId:f.admin,context:{task_id:owner}});
+  f.d.prepare("UPDATE activity_templates SET rotation_bindings_json='[]',title_template='Selected {{chosen}}' WHERE id=?").run(f.activity);
+  f.d.prepare('UPDATE workflow_templates SET input_schema_json=? WHERE id=?').run(JSON.stringify([
+    {id:'night',type:'rotation_occurrence',kind:'field'},
+    {id:'chosen',type:'household_member',expression:{version:1,source:'rotationFirst(night)'}}]),f.workflow);
+  const options={createdBy:f.member,inputs:{night:occurrence.id},startDate:'2026-09-19',requestKey:'external_privacy_replay'};
+  await serve(f,async request=>{
+    const body={inputs:options.inputs,start_date:options.startDate,request_key:options.requestKey};
+    const first=await request('POST',`/automation/quick-add/${f.workflow}/create`,body,{'Idempotency-Key':'external-privacy-http'});
+    assert.equal(first.status,201,first.text);assert.ok(first.body.data.resolved_variables.some(value=>value.key==='night'&&value.value===occurrence.id));
+    f.d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(owner);
+    assert.throws(()=>instantiateWorkflow(f.d,f.workflow,options),error=>error.status===404);
+    const repeated=await request('POST',`/automation/quick-add/${f.workflow}/create`,body,{'Idempotency-Key':'external-privacy-http'});
+    assert.equal(repeated.status,404,repeated.text);assert.doesNotMatch(repeated.text,/Selected |external-private-after-creation|resolved_variables/);
+    assert.equal(f.d.prepare('SELECT COUNT(*) n FROM workflow_instances').get().n,1);
+  });
+}));
+
+test('cached Workflow visibility denial does not fall through into duplicate creation',withFixture(async f=>{
+  f.d.prepare("UPDATE activity_templates SET rotation_bindings_json='[]',title_template='Ordinary work' WHERE id=?").run(f.activity);
+  for(const key of ['workflows.view','workflows.run','tasks.create','tasks.view_own'])f.capability(key,'allow');
+  f.capability('tasks.view_household','none');
+  await serve(f,async request=>{
+    const path=`/automation/quick-add/${f.workflow}/create`,headers={'Idempotency-Key':'visibility-no-duplicate'};
+    const first=await request('POST',path,{},headers);assert.equal(first.status,201,first.text);
+    f.capability('tasks.view_own','none');
+    const replay=await request('POST',path,{},headers);assert.equal(replay.status,404,replay.text);
+    assert.equal(f.d.prepare('SELECT COUNT(*) n FROM workflow_instances').get().n,1);
+    assert.doesNotMatch(replay.text,/Ordinary work|parent_task_id|resolved_variables/);
+  });
 }));
 
 test('HTTP idempotency headers cannot replay a Workflow preview or creation after Rotation view is revoked',withFixture(async f=>{

@@ -8,7 +8,7 @@ The Task adapter uses the existing durable recurring-series ID as consumer ident
 
 ## Editing and snapshots
 
-- **This occurrence only** creates an isolated exception Track for a changed purpose. The original link is retained as retired provenance and is settled once when its original owning Activity terminates. The recurring definition remains unchanged.
+- **This occurrence only** compares configuration by stable purpose key and creates an isolated exception Track only for a changed or added purpose. An unchanged purpose keeps its exact Track, binding and snapshot, even when another purpose is removed or reordered. The original changed/removed link is retained as retired provenance and is settled once when its original owning Activity terminates. The recurring definition remains unchanged.
 - **This and future occurrences** changes the durable series configuration. An already-resolved current occurrence keeps its snapshot and the save result explains that preservation. Eligible future definitions use the new configuration without rewriting historical order.
 - An inactive Group or a pending earlier frontier leaves newly materialized Tasks intact with a visible “Rotation needs attention” state. An authorized user can explicitly resolve the current Task after addressing the Group/frontier. Reads never retry, advance or otherwise mutate Rotation state.
 - An untouched materialized future Task accepts updated definitions while its Rotation is pending. Settling its registered predecessor automatically resolves missing future bindings in generation order, using the revised configuration and existing occurrence identity; it does not generate duplicate Tasks or advance again. Explicit recurrence reconciliation can recover the same pending work after interruption. Already-resolved future snapshots whose configuration/window would change are preserved and reported as exceptions. A future Task containing activity retains its concrete configuration; if that differs from the effective series definition, missing Rotation bindings resolve on an isolated exception Track rather than reverting the canonical Track.
@@ -22,8 +22,20 @@ Rotation-dependent title/description authorship is frozen with referenced defini
 
 An authorized occurrence override/recheck rerenders still-bound fields on active owner Tasks in the same database transaction. Historical Tasks and completed/expired child evidence retain their text. Any rendering failure rolls the override back. Rendering never completes Tasks or awards points.
 
+Workflow-generated Activities retain the same field provenance, including step title/description overrides, frozen expression definitions, input identities and checklist titles. A shared owner's override reconciles descendant Activity snapshots. Participant reassignment reconciles current bound fields against the new participant. This uses expression authorship and stable action identity; it does not replace arbitrary numbers in text or reattach manually authored fields.
+
+## Recorded completion evidence
+
+Task Details displays **Recorded completion order** separately from **Planned order** or **Effective planned order**. It reads existing completion Activity events for linked descendant Tasks and checks each Task's current visibility. It is a record of app actions, not proof of the order people performed real-world activities.
+
+New completion events identify individual versus bulk completion and record the assigned member. Bulk records, indistinguishable timestamps and older records without that provenance are explicitly unordered. No historical Activity event is backfilled or rewritten. Planned snapshots never derive from completion timestamps.
+
+Evidence is loaded with Task Details reads, not the checkbox mutation path or list response. An acknowledgement preserves the already-visible evidence only for identical, still-returned occurrences until the authoritative read refreshes it. The Rotation section updates independently, preserving Task rows, scroll, focus and expanded disclosures. A later visibility removal discards the context and cached evidence.
+
 ## Focused validation
 
 `test/test-task-rotation.js` covers four shared nights, independent Tracks, both series scopes, preserved progress, Template independence, manual policy, expiration and finalized-on-completion expiration, inactive Group recovery, stale writes and capabilities, participant assignment, per-person expression rendering, literal detachment, atomic override failure, and side-effect-free/read-redacted projections.
 
 Task editor browser coverage adds desktop and mobile shared purpose/participant configuration and scope Cancel preservation. Existing series generation, edit, race, Optional lifecycle, supervision scheduling/refresh and permission-cache tests remain the regression gates. The checkbox mutation queue and touch/drag arbitration are unchanged; full-app card feedback is validated separately.
+
+See the [checklist closure report](rotation-groups-closure-20260919.md) for the real full-application shared bedtime setup and second-client evidence.

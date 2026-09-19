@@ -2,6 +2,7 @@
  * A parent occurrence owns its purposes; ordinary descendants only read them. */
 import { createHash } from 'node:crypto';
 import { assertCapability, hasCapability } from '../permissions.js';
+import { taskCapabilities } from './task-access.js';
 import { registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { normalizeRotationConfiguration, configureRotationTrack, findRotationTrack,
   resolveRotation, getRotationOccurrence, finalizeRotation } from './rotation.js';
@@ -45,7 +46,7 @@ export function taskRotationContext(d, task) {
 /** Caller has already authorized the consumer write and owns its transaction.
  * Retired links preserve the series' original decision when an occurrence gets
  * a one-off binding. Both are settled once by the owning Task's lifecycle. */
-export function bindTaskRotations(d, taskId, { config, actorId = null, scope = 'materialize', consumer = null, occurrenceKey = null, onlyMissing = false } = {}) {
+export function bindTaskRotations(d, taskId, { config, previousConfig, actorId = null, scope = 'materialize', consumer = null, occurrenceKey = null, onlyMissing = false } = {}) {
   const task = d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
   if (!task) throw invalid('Task not found.');
   const bindings = config === undefined ? parseRotationBindings(task.rotation_bindings_json) : normalizeRotationBindings(d, config);
@@ -62,6 +63,10 @@ export function bindTaskRotations(d, taskId, { config, actorId = null, scope = '
   for (const binding of bindings) {
     const existing = previous.find(link => link.purpose_key === binding.purpose_key);
     if(onlyMissing && existing)continue;
+    // Scope applies to changed purposes, not to every purpose in the editor.
+    // Keep an unchanged binding's identity and historical decision intact.
+    if(existing && scope === 'occurrence' && previousConfig !== undefined
+      && json(parseRotationBindings(previousConfig).find(value=>value.purpose_key===binding.purpose_key))===json(binding))continue;
     const identity = { ...owner, purpose_key: binding.purpose_key };
     let track = findRotationTrack(d, identity);
     const ownSnapshot = existing ? getRotationOccurrence(d, existing.occurrence_id) : null;
@@ -138,12 +143,16 @@ export function taskRotationContexts(d, taskOrId, viewerMemberId = null, cache =
       purpose_key:binding.purpose_key,label:binding.label,owner_task_id:row.id,pending:true,
       occurrence:{id:null,status:'pending',state:'needs_configuration',order:[],member_ids:[],selected_member:null},
       reason:'Rotation needs attention. Check its Group or finish the previous occurrence, then resolve this occurrence.'});
-    const parent = row.parent_task_id ? d.prepare('SELECT * FROM tasks WHERE id=?').get(row.parent_task_id) : null;
-    const inherited = parent ? contexts(parent, visited).filter(item => !own.some(value => value.purpose_key === item.purpose_key)) : [];
+    const parentContexts = row.parent_task_id ? cache.has(row.parent_task_id) ? cache.get(row.parent_task_id)
+      : contexts(d.prepare('SELECT * FROM tasks WHERE id=?').get(row.parent_task_id), visited) : [];
+    const inherited = parentContexts.filter(item => !own.some(value => value.purpose_key === item.purpose_key));
     const result = [...inherited, ...own]; cache.set(row.id, result); return result;
   }
   const memberId = task.assigned_to || viewerMemberId;
-  return contexts(task).map(item => ({ ...item,
-    ...(viewerMemberId != null ? {occurrence:Object.fromEntries(['id','track_id','status','strategy','revision','state','order','member_ids','selected_member','advanced'].map(key=>[key,item.occurrence[key]]))} : {}),
+  // Viewing a descendant does not grant access to the owning private Activity.
+  // Canonical Task projections already provide mutation-invalidated, request-local
+  // capability reuse; never retain permission decisions in the ancestry cache.
+  return contexts(task).filter(item=>viewerMemberId==null||taskCapabilities(d,viewerMemberId,{id:item.owner_task_id||task.id}).view).map(item => ({ ...item,
+    ...(viewerMemberId != null ? {occurrence:Object.fromEntries(['id','track_id','status','strategy','revision','state','order','member_ids','selected_member','advanced','overridden_at'].map(key=>[key,item.occurrence[key]]))} : {}),
     position: item.occurrence.order.find(member => Number(member.id) === Number(memberId))?.position ?? null }));
 }

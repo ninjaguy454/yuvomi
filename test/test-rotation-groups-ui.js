@@ -117,6 +117,42 @@ async function editGroup(page){await openGroup(page);await page.click('[data-rot
 async function openHistory(page){await openGroup(page);await page.click('[data-rotation-history="11"]');await page.waitForSelector('[data-rotation-track-detail]');}
 async function order(page){return page.$$eval(`${active} ${list} [data-rotation-member]`,rows=>rows.map(row=>Number(row.dataset.rotationMember)));}
 async function fill(page,selector,value){await page.$eval(selector,(el,value)=>{el.value=value;el.dispatchEvent(new Event('input',{bubbles:true}));},value);}
+// The shared toggle pattern deliberately clips its native checkbox. Exercise
+// the visible control rather than Puppeteer's click on a hidden 1 px input.
+async function clickSwitch(page,name){
+ const selector=`${active} [name="${name}"]`;
+ const track=await page.$eval(selector,input=>{
+  const label=input.labels?.[0],track=label?.querySelector('.toggle__track');
+  if(!track)return null;track.scrollIntoView({block:'center'});
+  return true;
+ });
+ assert.ok(track,`${name} must expose the established visible toggle control`);
+ const input=await page.$(selector),label=await input.evaluateHandle(el=>el.labels[0]);
+ const control=await label.$('.toggle__track');await control.click();
+ await control.dispose();await label.dispose();await input.dispose();
+}
+async function assertSwitchVisible(page,name){
+ const result=await page.$eval(`${active} [name="${name}"]`,input=>{
+  const label=input.labels?.[0],track=label?.querySelector('.toggle__track');
+  if(!track)return null;
+  const rect=track.getBoundingClientRect(),style=getComputedStyle(track);
+  return{width:rect.width,height:rect.height,display:style.display,visibility:style.visibility,opacity:style.opacity,label:label.innerText.trim(),checked:input.checked};
+ });
+ assert.ok(result,`${name} has a labeled visible track`);
+ assert.ok(result.width>=28&&result.height>=16,`${name} track has usable dimensions`);
+ assert.notEqual(result.display,'none');assert.notEqual(result.visibility,'hidden');assert.notEqual(result.opacity,'0');assert.ok(result.label);
+ return result.checked;
+}
+async function assertFitsViewport(page,scope='#fixture'){
+ const sizes=await page.$eval(scope,el=>({width:el.clientWidth,scrollWidth:el.scrollWidth,documentWidth:document.documentElement.scrollWidth,viewport:innerWidth}));
+ assert.ok(sizes.scrollWidth<=sizes.width+2,`${scope} must not scroll horizontally: ${JSON.stringify(sizes)}`);
+ assert.ok(sizes.documentWidth<=sizes.viewport+2,`page must not scroll horizontally: ${JSON.stringify(sizes)}`);
+}
+async function assertFooterReachable(page){
+ await page.$eval(`${active} .modal-panel__body`,el=>{el.scrollTop=0;});
+ const rect=await page.$eval(submit,el=>{const r=el.getBoundingClientRect();return{top:r.top,bottom:r.bottom,height:r.height,viewport:innerHeight};});
+ assert.ok(rect.top>=0&&rect.bottom<=rect.viewport+1&&rect.height>=32,'save action stays visible while the long form scrolls');
+}
 async function drag(page,fromId,toId,touch=false){
  const first=`${active} [data-rotation-member="${fromId}"] .rotation-member-handle`,last=`${active} [data-rotation-member="${toId}"]`;
  // Settle initial focus and the modal's existing 300 ms keyboard-scroll timer
@@ -168,7 +204,7 @@ test('Edit supports mouse handle drag, keyboard action menu, removal, revision a
  await page.click('[data-rotation-member="3"] summary');await page.click('[data-rotation-member="3"] [data-rotation-up]');assert.deepEqual(await order(page),[3,2,1]);
  await page.click('[data-rotation-member="3"] [data-rotation-remove]');assert.deepEqual(await order(page),[2,1]);
  assert.equal(await page.$eval('[data-rotation-add-member] option[value="3"]',el=>el.disabled),false);
- await fill(page,`${form} [name=name]`,'Kids renamed');await page.click(`${form} [name=active]`);await page.click(submit);
+ await fill(page,`${form} [name=name]`,'Kids renamed');await clickSwitch(page,'active');await page.click(submit);
  await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
  assert.equal(requests[0].body.expected_revision,3);assert.equal(requests[0].body.active,false);assert.deepEqual(requests[0].body.member_ids,[2,1]);
  await page.waitForFunction(()=>document.querySelector('#shared-modal-title').textContent==='Kids renamed');
@@ -198,7 +234,11 @@ test('Used by, three-step preview and open history converge through real SSE wit
  await page.waitForFunction(()=>document.querySelector('[data-rotation-usage="11"]').innerText.includes('Next: Frankie'));
  await page.click('[data-rotation-history="11"]');await page.waitForSelector('[data-rotation-track-detail]');assert.equal(await page.$$eval('[data-rotation-previews] li',els=>els.length),3);
  assert.equal(await page.$eval('#shared-modal-title',el=>el.textContent),'Get Ready for Bed · Shower Order');
+ // Observe the shared modal's delayed initial focus before testing whether
+ // live reconciliation preserves an established explanation-summary focus.
+ await page.waitForFunction(()=>document.activeElement===document.querySelector('#shared-modal-overlay [data-action="close-modal"]'));
  await page.click('[data-rotation-explanation="21"] summary');await page.evaluate(()=>window.savedHistoryPanel=document.querySelector('#shared-modal-overlay .modal-panel'));
+ assert.equal(await page.evaluate(()=>document.activeElement.dataset.rotationExplanationToggle),'21','explanation owns focus before the live update');
  history[0].context.label='Tonight updated';broadcast();
  await page.waitForFunction(()=>document.querySelector('[data-rotation-occurrence="21"]').innerText.includes('Tonight updated'));
  assert.equal(await page.$eval('[data-rotation-explanation="21"]',el=>el.open),true);
@@ -239,7 +279,7 @@ test('Override and correction carry revisions, preserve parent view and refresh 
  await page.click('[data-rotation-correct]');await page.waitForSelector('[data-rotation-correct-form]');await page.select('[data-rotation-correct-form] [name=member]','2');
  await fill(page,'[data-rotation-correct-form] [name=reason]','Parent correction');await page.click(submit);
  await page.waitForFunction(()=>!document.querySelector('[data-rotation-correct-form]'));assert.deepEqual(requests[1].body,{expected_revision:5,next_member_id:2,reason:'Parent correction'});
- await page.waitForFunction(()=>document.querySelector('[data-rotation-previews] li').textContent.startsWith('Eleanor'));
+ await page.waitForFunction(()=>document.querySelector('[data-rotation-previews] li > span:last-child').textContent.startsWith('Eleanor'));
  await page.waitForSelector('[data-rotation-correction="31"]');
  const correction=await page.$eval('[data-rotation-correction="31"]',el=>el.innerText);
  assert.match(correction,/Next member corrected/);assert.match(correction,/Grace → Eleanor/);assert.match(correction,/Duane/);assert.match(correction,/2026-09-19T20:15:00Z/);assert.match(correction,/Parent correction/);
@@ -247,7 +287,7 @@ test('Override and correction carry revisions, preserve parent view and refresh 
 }));
 
 test('An existing empty Group can deactivate without inventing a replacement member',()=>pageTest(async page=>{
- await editGroup(page);await page.click(`${form} [name=active]`);await page.click(submit);
+ await editGroup(page);await clickSwitch(page,'active');await page.click(submit);
  await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
  assert.deepEqual(requests[0].body.member_ids,[]);assert.equal(requests[0].body.active,false);
 },{setup:()=>{groups[0].members=[];}}));
@@ -341,7 +381,7 @@ test('Changing usage requires a preview and explicit confirmation; Cancel preser
  assert.equal(await page.$eval(`${form} [name=shared_starting_member]`,el=>el.value),'3');
  await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');await page.click(submit);
  assert.equal(requests.filter(row=>row.path==='/automation/rotation-groups/7').length,0);
- await page.click('[name=confirm_usage]');await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ await assertSwitchVisible(page,'confirm_usage');await clickSwitch(page,'confirm_usage');await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
  assert.equal(requests.find(row=>row.path==='/automation/rotation-groups/7').body.confirmation_token,'preview-revision-3');
 }));
 
@@ -360,7 +400,7 @@ test('Shared to independent conversion requires an explicit effective date and e
  await editGroup(page);await wait(180);await page.select(`${form} [name=usage_mode]`,'independent');
  assert.equal(await page.$eval('[data-rotation-independent-date]',el=>el.hidden),false);
  await fill(page,`${form} [name=independent_effective_date]`,'2026-09-21');await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');
- await page.click('[name=confirm_usage]');await page.click(submit);
+ await assertSwitchVisible(page,'confirm_usage');await clickSwitch(page,'confirm_usage');await page.click(submit);
  assert.match(await page.$eval('[data-rotation-usage-confirm] [data-rotation-error]',el=>el.textContent),/starting member for each consumer/);
  await page.select('[data-rotation-independent-start="0"]','2');await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
  const payload=requests.find(row=>row.path==='/automation/rotation-groups/7').body;
@@ -383,3 +423,47 @@ test('Disposal closes SSE and delayed obsolete renders cannot reopen a stream',(
  listDelay=0;await page.evaluate(()=>window.fixture.renderRotationGroups(document.querySelector('#fixture')));await wait(100);assert.equal(streams.size,1);
  await page.evaluate(()=>document.querySelector('#fixture').remove());await wait(100);assert.equal(streams.size,0);
 }));
+
+for(const width of [1440,390])for(const theme of ['light','dark'])test(`Rotation controls remain visible and usable in ${theme} mode at ${width}px`,()=>pageTest(async page=>{
+ await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;document.documentElement.dataset.colorTheme='warm';},theme);
+ const screenshot=async suffix=>page.screenshot({path:fileURLToPath(new URL(`../.qa/rotation-groups-20260919/refined-${width}-${theme}-${suffix}.png`,import.meta.url))});
+ await assertFitsViewport(page);await screenshot('list');
+ await openGroup(page);await assertFitsViewport(page,`${active} .modal-panel__body`);
+ assert.match(await page.$eval('[data-rotation-shared-state]',el=>el.innerText),/Shared schedule/);
+ await screenshot('details');
+ await page.click('[data-rotation-edit]');await page.waitForSelector(form);await wait(400);
+ assert.equal(await assertSwitchVisible(page,'active'),true);
+ await clickSwitch(page,'active');assert.equal(await page.$eval(`${form} [name=active]`,input=>input.checked),false);
+ await clickSwitch(page,'active');assert.equal(await page.$eval(`${form} [name=active]`,input=>input.checked),true);
+ const unlabeled=await page.$$eval(`${form} input:not([type=hidden]), ${form} select, ${form} textarea`,fields=>fields.filter(field=>![...field.labels||[]].some(label=>label.textContent.trim())&&!field.getAttribute('aria-label')&&!field.getAttribute('aria-labelledby')).map(field=>field.name||field.outerHTML));
+ assert.deepEqual(unlabeled,[],'every visible editor control has an associated label');
+ await assertFitsViewport(page,`${active} .modal-panel__body`);await assertFooterReachable(page);await screenshot('editor');
+ const sunday='[data-rotation-weekday][value="0"]';
+ const weekdayStyle=()=>page.$eval(sunday,input=>{const span=input.labels[0].querySelector('span'),style=getComputedStyle(span),rect=span.getBoundingClientRect();return{checked:input.checked,background:style.backgroundColor,color:style.color,border:style.borderColor,width:rect.width,height:rect.height};});
+ const selected=await weekdayStyle();assert.equal(selected.checked,true);assert.ok(selected.width>=32&&selected.height>=32,'weekdays have visible touch targets');
+ const luminance=color=>{const channels=color.match(/[\d.]+/g).slice(0,3).map(value=>{const channel=Number(value)/255;return channel<=.04045?channel/12.92:((channel+.055)/1.055)**2.4;});return channels[0]*.2126+channels[1]*.7152+channels[2]*.0722;};
+ const colors=[luminance(selected.color),luminance(selected.background)].sort((a,b)=>a-b);
+ assert.ok((colors[1]+.05)/(colors[0]+.05)>=4.5,'selected weekday text retains readable contrast');
+ await page.$eval(sunday,input=>input.scrollIntoView({block:'center'}));await page.focus(sunday);await page.keyboard.press('Space');
+ const unselected=await weekdayStyle();assert.equal(unselected.checked,false);assert.notDeepEqual([unselected.background,unselected.border],[selected.background,selected.border],'weekday selection must have a visible state change');
+ await page.keyboard.press('Space');assert.equal((await weekdayStyle()).checked,true);
+ await screenshot('weekdays');
+ assert.equal(await assertSwitchVisible(page,'shared_advance_on_skip'),false);await clickSwitch(page,'shared_advance_on_skip');
+ assert.equal(await page.$eval(`${form} [name=shared_advance_on_skip]`,input=>input.checked),true);
+ await page.$eval(`${active} .modal-panel__body`,el=>{el.scrollTop=el.scrollHeight;});await assertFitsViewport(page,`${active} .modal-panel__body`);await screenshot('schedule');
+ if(width===1440&&theme==='light'){
+  await page.select(`${form} [name=shared_strategy]`,'fixed_order');
+  assert.equal(await page.$eval('[data-rotation-starting-field]',el=>el.hidden),true);
+  assert.equal(await page.$eval(`${form} [name=shared_advance_on_skip]`,el=>el.closest('.rotation-switch').hidden),true);
+  assert.equal(await page.$eval('[data-rotation-finalize-label]',el=>el.textContent),'Finalize at');
+  assert.equal(await page.$eval(`${form} [name=shared_advance_on_skip]`,el=>el.checked),true,'hiding inapplicable control preserves its draft value');
+  await page.select(`${form} [name=shared_strategy]`,'rotating_order');
+  assert.equal(await page.$eval('[data-rotation-starting-field]',el=>el.hidden),false);
+  assert.equal(await page.$eval(`${form} [name=shared_advance_on_skip]`,el=>el.closest('.rotation-switch').hidden),false);
+ }
+ assert.equal(requests.length,0,'presentation and local control changes must not mutate rotation state');
+},{width,height:width<768?740:980,setup:()=>{
+ groups[0].name='Kids Shower Order';groups[0].usage_mode='shared';groups[0].usage_effective_date='2026-09-19';
+ groups[0].shared_config={strategy:'rotating_order',starting_member_id:1,effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],active_time:'17:00',finalize_time:'04:00',finalize_day_offset:1,advance_on_skip:false};
+ groups[0].shared={schedule:{timezone:'America/New_York'},current:{...clone(history[0]),period_date:'2026-09-19'},next:{order:clone([members[1],members[2],members[0]])}};
+}}));

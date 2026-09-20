@@ -299,7 +299,7 @@ test('lost create response freezes subject-generated subtasks, preserves assignm
     await page.click('#task-submit-btn');
     await page.waitForFunction(() => document.querySelector('#task-form-error')?.hidden === false && document.querySelector('#task-submit-btn')?.disabled === false);
     assert.equal(createReceipts.size, 1, 'the accepted server-side Task exists despite the missing response');
-    assert.match(await page.$eval('#task-form-error', el => el.textContent), /Finish saving this Task to confirm its subtasks; you can edit them afterward/);
+    assert.match(await page.$eval('#task-form-error', el => el.textContent), /couldn't confirm whether this Task was saved.*draft is preserved.*same request/);
     assert.equal(await page.$eval('[data-task-subtask-title]', (el) => el.disabled), true);
     await page.select('#task-activity-subject-user', '2');
     assert.equal(await value(page, '[data-task-subtask-title]'), 'Pack for Alex', 'subject changes cannot rebuild a possibly-persisted child snapshot');

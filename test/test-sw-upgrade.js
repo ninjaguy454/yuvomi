@@ -140,7 +140,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/wall-mode', new MockResponse('', { headers: { 'X-Wall-Mode': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.20');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.21');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',

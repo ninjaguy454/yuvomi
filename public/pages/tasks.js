@@ -27,7 +27,7 @@ import { renderMarkdownToolbar, wireMarkdownToolbar } from '/utils/markdown-tool
 import { refresh as refreshReminders } from '/reminders.js';
 import { renderUserMultiSelect, getSelectedUserIds, bindUserMultiSelect, renderAvatarStack } from '/components/user-multi-select.js';
 import { renderUserRotationOrder, getRotationUserIds } from '/components/user-rotation-order.js';
-import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor } from '/components/activity-automation.js';
+import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor, wireVariableMentions } from '/components/activity-automation.js';
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
@@ -1911,6 +1911,7 @@ function wireActivityTemplatePrefill(panel, { task = null, presetActivityTemplat
     const occurrenceStartDate = nextTemplate ? parseDateInput(startDate?.value || '') || null : null;
     modalTags = normalizeTagList(nextTemplate?.tags);
     const body = panel.querySelector('.modal-panel__body');
+    controls.disposeMentions?.();
     body.replaceChildren();
     body.insertAdjacentHTML('beforeend', renderModalContent({ users: state.users, presetActivityTemplate: nextTemplate, presetDates, occurrenceStartDate }));
     mountFooter(panel);
@@ -2177,7 +2178,32 @@ function wireTaskForm(panel, {
   const updateParticipantAssignments=()=>subtasks?.setAssignmentsEnabled(rotations.getValue().length>0);
   updateParticipantAssignments();
   form.querySelector('[data-rotation-bindings]')?.addEventListener('input',updateParticipantAssignments);
-  taskFormControls.set(form, { skills, subtasks, rotations, refreshAssignment, addSkill, originalTask: task ? structuredClone(task) : null });
+  // A template draft has canonical action provenance, so its Rotation text can
+  // be resolved atomically when the server materializes those actions.
+  let disposeMentions;
+  if (!task && form.querySelector('#task-activity-template')?.value) {
+    const refreshRotationMentions = () => {
+      form.variableContext = rotations.getValue().map(binding => ({ id: binding.purpose_key,
+        label: binding.label, type: 'rotation_occurrence', kind: 'value' }));
+    };
+    for (const field of form.querySelectorAll('#task-title, #task-description')) {
+      field.dataset.variableMentions = 'task-text';
+      field.setAttribute('aria-autocomplete', 'list');
+      field.setAttribute('aria-expanded', 'false');
+    }
+    // Delegation also covers rows added/reordered after the editor opens.
+    form.addEventListener('focusin', event => {
+      if (event.target.matches('[data-task-subtask-title]')) {
+        event.target.dataset.variableMentions = 'task-text';
+        event.target.setAttribute('aria-autocomplete', 'list');
+        event.target.setAttribute('aria-expanded', 'false');
+      }
+    });
+    refreshRotationMentions();
+    form.querySelector('[data-rotation-bindings]')?.addEventListener('input', refreshRotationMentions);
+    disposeMentions = wireVariableMentions(form);
+  }
+  taskFormControls.set(form, { skills, subtasks, rotations, refreshAssignment, addSkill, disposeMentions, originalTask: task ? structuredClone(task) : null });
   wireActivityTemplatePrefill(panel, { task, presetActivityTemplate, presetDates, container, onChanged, syncReady });
   panel.querySelector('[data-save-as-template]')?.addEventListener('click', () => saveTaskAsTemplate(form));
 
@@ -2607,9 +2633,10 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   const dueTimeRaw = form.due_time?.value || '';
   const dueTime = parseTimeInput(dueTimeRaw);
   const resetSubmit = (msg) => {
-    const recoveringChildren = controls?.subtasks && (taskCreateAttempts.has(form)
-      || (!controls.editBaseline && form.querySelector('#task-id').value));
-    const message = recoveringChildren ? `${msg} Finish saving this Task to confirm its subtasks; you can edit them afterward.` : msg;
+    const unconfirmedCreate = taskCreateAttempts.has(form);
+    const message = unconfirmedCreate
+      ? `${msg} We couldn't confirm whether this Task was saved. Your draft is preserved. Try Create again to safely check the same request.`
+      : msg;
     showTaskFormErrors(form, [{ field: taskErrorField(msg), message }], { title: taskId ? "Task couldn't be saved" : "Task couldn't be created" });
     submitBtn.disabled = false;
     submitBtn.textContent = originalLabel;

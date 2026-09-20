@@ -7,6 +7,7 @@ import { parseRotationBindings, taskRotationContexts, reconcileSharedTaskBinding
 import { registerSharedRotationReconciler } from './rotation-shared.js';
 import { recordOccurrenceDefinition } from './task-series.js';
 import { seriesOccurrencePreservationReason } from './task-series-edit.js';
+import { ExpressionError } from '../../public/utils/variable-expressions.js';
 
 const row=(d,id)=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const same=(left,right)=>String(left??'').trim()===String(right??'').trim();
@@ -48,14 +49,14 @@ function textTemplate(d,template,activity,subjectUserId) {
   const subject=subjectUserId?d.prepare('SELECT display_name FROM users WHERE id=?').get(subjectUserId):null;
   return template==null?null:String(template).replaceAll('{subject}',subject?.display_name||'').replaceAll('{activity}',activity.name||'Activity');
 }
-function render(d,task,target,{activity,bindings,rotations,subjectUserId,inputs,definitions}) {
+function render(d,task,target,{activity,bindings,rotations,subjectUserId,inputs,definitions,actor}) {
   return renderRotationVariableTemplates(d,{templates:[textTemplate(d,target.template,activity,subjectUserId)],bindings,rotations,
-    subjectUserId:task.assigned_to||subjectUserId,inputs,definitions});
+    subjectUserId:task.assigned_to||subjectUserId,inputs,definitions,actor});
 }
 
 /** Initial template authorship is explicit. Check both the template-item ID
  * and the authored draft value before giving a concrete field a live binding. */
-export function initializeTaskRotationRendering(d,taskId,{draft=null,inputs={},templates={},definitions}={}) {
+export function initializeTaskRotationRendering(d,taskId,{draft=null,inputs={},templates={},definitions,authoredFields=new Map(),actor}={}) {
   const task=row(d,taskId),bindings=effectiveBindings(d,task);
   if(!bindings.length)return;
   const saved=snapshot(d,taskId);if(!saved)return;
@@ -70,10 +71,29 @@ export function initializeTaskRotationRendering(d,taskId,{draft=null,inputs={},t
     candidates.push({task:child,action_key:registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`,field:'title',template:item.title_template,
       expected:draft?.checklist?.find(value=>value.id===item.id)?.title_template});
   }
+  // Creation already resolved draft actions to canonical IDs inside its
+  // transaction. Capture newly authored expressions on those exact fields,
+  // independently from the reusable source template's frozen definition.
+  for(const [targetId,fields] of authoredFields)for(const [field,template] of Object.entries(fields)) {
+    if(!['title','description'].includes(field)||!String(template??'').includes('{{'))continue;
+    const concrete=row(d,targetId);
+    if(!concrete||(concrete.id!==taskId&&concrete.parent_task_id!==taskId))
+      throw Object.assign(new Error('Choose an action in this Task for the rotation text.'),{status:400});
+    const candidate={task:concrete,action_key:concrete.id===taskId?'root':registerRecurrenceAction(d,concrete.id)?.action_key||`action:${concrete.id}`,
+      field,template,expected:concrete[field]};
+    const existing=candidates.findIndex(value=>value.task.id===concrete.id&&value.field===field);
+    if(existing<0)candidates.push(candidate);else candidates[existing]=candidate;
+  }
   for(const candidate of candidates) {
     if(!candidate.template || !String(candidate.template).includes('{{'))continue;
     const subjectUserId=candidate.task.id===taskId?saved.binding.subject_user_id||task.assigned_to:candidate.task.assigned_to||saved.binding.subject_user_id||task.assigned_to;
-    const result=render(d,candidate.task,candidate,{activity:saved.activity,bindings,rotations,subjectUserId,inputs,definitions});
+    let result;
+    try {result=render(d,candidate.task,candidate,{activity:saved.activity,bindings,rotations,subjectUserId,inputs,definitions,actor});}
+    catch(error) {
+      if(error instanceof ExpressionError)throw Object.assign(error,{status:400,
+        message:`Check the rotation text for “${candidate.task.title}”: ${error.message}`});
+      throw error;
+    }
     if(!result.usesRotation || !same(candidate.task[candidate.field],candidate.expected??result.values[0]))continue;
     const frozenInputs=Object.fromEntries(Object.entries(inputs).filter(([key])=>!bindings.some(binding=>binding.purpose_key===key)
       && !result.definitions.find(definition=>definition.id===key)?.expression));

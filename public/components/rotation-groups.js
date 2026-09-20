@@ -31,7 +31,7 @@ function scheduleText(config={}) {
 function sharedFields(group) {
   const config=sharedConfig(group);
   return `<section class="rotation-section rotation-shared-editor" data-rotation-shared-fields ${isShared(group)?'':'hidden'} aria-label="Shared rotation schedule">
-    <div class="rotation-section__heading"><h3>Shared rotation schedule</h3><p class="form-hint">Every Activity, Workflow or Meal using this Group joins the same scheduled order.</p></div>
+    <div class="rotation-section__heading"><h3>Shared rotation schedule</h3><p class="form-hint">Set the turns once. Every activity using this Group follows this schedule.</p></div>
     <div class="modal-grid modal-grid--2">
       <label class="form-label">Rotation method<select class="form-input" name="shared_strategy">${['round_robin','rotating_order','fixed_order'].map(value=>`<option value="${value}" ${config.strategy===value?'selected':''}>${names[value]}</option>`).join('')}</select></label>
       <label class="form-label" data-rotation-starting-field>Starting member<select class="form-input" name="shared_starting_member"><option value="">Choose a member</option>${(group?.members||[]).filter(member=>member.id).map(member=>`<option value="${member.id}" ${Number(config.starting_member_id)===member.id?'selected':''}>${esc(member.display_name)}</option>`).join('')}</select></label>
@@ -40,14 +40,14 @@ function sharedFields(group) {
     <div class="rotation-preview"><span class="rotation-eyebrow">Starting preview</span><output data-rotation-shared-preview role="status" aria-live="polite"></output></div>
     <fieldset class="rotation-days"><legend>Scheduled evenings</legend><div class="rotation-weekdays">${weekdays.map((day,index)=>`<label class="rotation-weekday"><input type="checkbox" data-rotation-weekday value="${index}" aria-label="${day}" ${(config.weekdays||[]).includes(index)?'checked':''}><span aria-hidden="true">${day.slice(0,3)}</span></label>`).join('')}</div></fieldset>
     <div class="modal-grid modal-grid--2">
-      <label class="form-label">Effective starting date<input class="form-input" type="date" name="shared_effective_date" value="${esc(config.effective_date)}"></label>
+      <label class="form-label">Start this schedule on<input class="form-input" type="date" name="shared_effective_date" value="${esc(config.effective_date)}"></label>
       <label class="form-label">Evening starts at<input class="form-input" type="time" name="shared_active_time" value="${esc(config.active_time)}"></label>
-      <label class="form-label"><span data-rotation-finalize-label>Finalize and advance at</span><input class="form-input" type="time" name="shared_finalize_time" value="${esc(config.finalize_time)}"></label>
-      <label class="form-label">Finalize on<select class="form-input" name="shared_finalize_day_offset"><option value="0" ${!config.finalize_day_offset?'selected':''}>The same evening</option><option value="1" ${config.finalize_day_offset?'selected':''}>The following day</option></select></label>
+      <label class="form-label"><span data-rotation-finalize-label>Move to the next turn at</span><input class="form-input" type="time" name="shared_finalize_time" value="${esc(config.finalize_time)}"></label>
+      <label class="form-label">On which day?<select class="form-input" name="shared_finalize_day_offset"><option value="0" ${!config.finalize_day_offset?'selected':''}>The same evening</option><option value="1" ${config.finalize_day_offset?'selected':''}>The following day</option></select></label>
     </div>
     <p class="form-hint">Household time zone${group?.shared?.schedule?.timezone?`: ${esc(group.shared.schedule.timezone)}`:''}. An overnight period still belongs to the evening it started.</p>
-    ${toggle('shared_advance_on_skip','Advance when skipped',config.advance_on_skip,'Off keeps the same starting order after an explicitly skipped evening.')}
-    <details class="rotation-explanation"><summary>How scheduled turns work</summary><p>Each evening finalizes once at the time above. Individual Task completion and absence do not change turns. Fixed Order never rotates.</p><p>Future previews may change after a skip or override. Recovered periods record scheduled outcomes, not proof anyone performed an activity.</p></details>
+    ${toggle('shared_advance_on_skip','Move to the next turn when skipped',config.advance_on_skip,'Off keeps the same turn after you skip an evening.')}
+    <details class="rotation-explanation"><summary>How scheduled turns work</summary><p>Turns change once at the time above, even if someone is absent or their Task is unfinished. Fixed Order stays the same.</p><p>Skipping or changing an evening’s order may change future previews. History records the schedule, not proof an activity happened.</p></details>
   </section>`;
 }
 function errorAt(panel, error, field=null, {focus=true}={}) {
@@ -59,9 +59,7 @@ function orderedRows(members) {
   return members.map(member=>`<li data-rotation-member="${member.id}" class="rotation-member">
     <button type="button" class="btn btn--ghost rotation-member-handle" aria-label="Reorder ${esc(member.display_name)}" title="Drag, or use Alt + Up/Down">⠿</button>
     <span class="rotation-member__name">${esc(member.display_name)}</span>
-    <details class="rotation-member__actions"><summary aria-label="Actions for ${esc(member.display_name)}">Actions</summary><div>
-      ${button('up','Move up','ghost')}${button('down','Move down','ghost')}${button('remove','Remove','ghost')}
-    </div></details></li>`).join('');
+    <button type="button" class="btn btn--ghost btn--sm rotation-member__remove" data-rotation-remove aria-label="Remove ${esc(member.display_name)}">Remove</button></li>`).join('');
 }
 /** Shared handle-only pointer interaction and explicit keyboard alternative. */
 function bindOrder(list, changed, { removable=true }={}) {
@@ -80,8 +78,6 @@ function bindOrder(list, changed, { removable=true }={}) {
   };
   list.addEventListener('click',event=>{
     const row=event.target.closest('[data-rotation-member]');if(!row)return;
-    if(event.target.closest('[data-rotation-up]'))move(row,-1);
-    if(event.target.closest('[data-rotation-down]'))move(row,1);
     if(removable&&event.target.closest('[data-rotation-remove]')){
       const next=row.nextElementSibling||row.previousElementSibling;
       row.remove();changed();
@@ -110,15 +106,15 @@ async function editGroup(group,onSaved,live) {
     <section class="rotation-section" aria-label="Group details">
     <label class="form-label">Group name<input class="form-input" name="name" maxlength="120" placeholder="e.g. Kids Shower Order" value="${esc(group?.name||'')}" required></label>
     <label class="form-label">Description <span class="form-label__hint">Optional</span><textarea class="form-input" name="description" maxlength="2000" rows="2" placeholder="What is this group used for?">${esc(group?.description||'')}</textarea></label>
-    ${toggle('active','Active',group?.active!==0,'Inactive Groups keep their history and prevent new resolutions.')}
+    ${toggle('active','Active',group?.active!==0,'Turn off to stop new turns. History stays available.')}
     </section>
     <section class="rotation-section" aria-label="Members">
-    <div class="rotation-section__heading"><h3>Members <span class="rotation-count" data-rotation-member-count>${group?.members.filter(m=>m.id).length||0}</span></h3><p class="form-hint">Add household members in their baseline order.</p></div>
+    <div class="rotation-section__heading"><h3>Members <span class="rotation-count" data-rotation-member-count>${group?.members.filter(m=>m.id).length||0}</span></h3><p class="form-hint">Choose who takes part and their starting order.</p></div>
     <input type="hidden" name="member_order" value="${esc(JSON.stringify(group?.members.map(m=>m.id)||[]))}">
     <ul class="rotation-members" data-rotation-member-list>${orderedRows(group?.members.filter(m=>m.id)||[])}</ul>
     <p class="rotation-empty" data-rotation-members-empty ${group?.members.some(m=>m.id)?'hidden':''}>No members yet. Choose someone below to start the order.</p>
     <label class="form-label">Add member<select class="form-input" data-rotation-add-member><option value="">Choose a household member</option>${members.map(m=>`<option value="${m.id}">${esc(m.display_name)}</option>`).join('')}</select></label>
-    <p class="form-hint">Reorder with the dotted handle, Alt + ↑ / ↓, or the Actions menu.</p>
+    <p class="form-hint">Drag the dotted handle to reorder. Keyboard: focus the handle and press Alt + ↑ / ↓.</p>
     <p class="sr-only" role="status" aria-live="polite" data-rotation-order-status></p>
     </section>
     <section class="rotation-section" aria-label="How turns are used">
@@ -146,8 +142,8 @@ async function editGroup(group,onSaved,live) {
       const config=sharedValue(),pivot=Math.max(0,ids.indexOf(config.starting_member_id)),order=config.strategy==='fixed_order'?ids:[...ids.slice(pivot),...ids.slice(0,pivot)];
       const text=order.map(id=>members.find(member=>member.id===id)?.display_name||'Former household member');
       panel.querySelector('[data-rotation-shared-preview]').textContent=config.strategy==='round_robin'?text[0]||'Add members to preview the first turn.':text.join(' → ')||'Add members to preview the starting order.';
-      panel.querySelector('[data-rotation-method-help]').textContent={round_robin:'One member gets each turn.',rotating_order:'Everyone stays in the order; a different member goes first each evening.',fixed_order:'Everyone stays in the baseline order. The starting member does not change it.'}[config.strategy];
-      panel.querySelector('[data-rotation-finalize-label]').textContent=config.strategy==='fixed_order'?'Finalize at':'Finalize and advance at';
+      panel.querySelector('[data-rotation-method-help]').textContent={round_robin:'Selects one person each turn. To give everyone a position, choose Rotating Order.',rotating_order:'Everyone gets a position; a different person goes first each evening.',fixed_order:'Everyone keeps the same position in the members list.'}[config.strategy];
+      panel.querySelector('[data-rotation-finalize-label]').textContent=config.strategy==='fixed_order'?'Evening ends at':'Move to the next turn at';
       panel.querySelector('[data-rotation-starting-field]').hidden=config.strategy==='fixed_order';
       form.elements.shared_advance_on_skip.closest('.rotation-switch').hidden=config.strategy==='fixed_order';
     };
@@ -179,10 +175,10 @@ async function editGroup(group,onSaved,live) {
       if(mode==='independent'&&isShared(group))payload.effective_date=form.elements.independent_effective_date.value;
       if(mode==='shared') {
         payload.shared_config=sharedValue();
-        for(const [field,message] of [['shared_effective_date','Choose when the shared schedule starts.'],['shared_active_time','Choose when each period becomes active.'],['shared_finalize_time','Choose when each period finalizes.']])if(!form.elements[field].value)return errorAt(panel,new Error(message),form.elements[field]);
+        for(const [field,message] of [['shared_effective_date','Choose when the shared schedule starts.'],['shared_active_time','Choose when each evening starts.'],['shared_finalize_time','Choose when each evening ends.']])if(!form.elements[field].value)return errorAt(panel,new Error(message),form.elements[field]);
         if(!payload.shared_config.weekdays.length)return errorAt(panel,new Error('Choose at least one scheduled evening.'),form.querySelector('[data-rotation-weekday]'));
         if(payload.active&&!payload.shared_config.starting_member_id)return errorAt(panel,new Error('Choose the starting member.'),form.elements.shared_starting_member);
-        if(!payload.shared_config.finalize_day_offset&&payload.shared_config.finalize_time<=payload.shared_config.active_time)return errorAt(panel,new Error('Finalization must be after activation. Choose the following day for an overnight period.'),form.elements.shared_finalize_time);
+        if(!payload.shared_config.finalize_day_offset&&payload.shared_config.finalize_time<=payload.shared_config.active_time)return errorAt(panel,new Error('The evening must end after it starts. Choose the following day for an overnight schedule.'),form.elements.shared_finalize_time);
       }
       const submit=panel.querySelector('[type=submit]');form.dataset.saving='true';submit.disabled=true;
       try{
@@ -247,7 +243,7 @@ async function changeOccurrence(occurrence,onSaved) {
   modal=openChildModal({title:shared?'Change this evening’s order':occurrence.order.length?'Override this occurrence':'Resolve this occurrence',content:`<form class="rotation-editor" data-rotation-override-form>${errorBox}${draftNotice}
     <p>Planned: ${esc(orderText({order:occurrence.original_order}))}</p><p class="form-hint">${shared?'Changes the shared order for every Activity using this Group for this evening.':'Changes this occurrence only.'} ${occurrence.config.override_affects_next?'Future advancement follows this effective planned result.':'Future advancement keeps the original plan.'}</p>
     ${isSingle?`<label class="form-label">Selected member<select class="form-input" name="member">${occurrence.eligible.map(m=>`<option value="${m.id}" ${m.id===occurrence.member_ids[0]?'selected':''}>${esc(m.display_name)}</option>`).join('')}</select></label>`:
-      `<input type="hidden" name="member_order" value="${esc(JSON.stringify(ordered.map(m=>m.id)))}"><p class="form-hint">Drag the dotted handle, use Alt + Up/Down, or use Actions.</p><ul class="rotation-members" data-rotation-member-list>${orderedRows(ordered)}</ul>`}
+      `<input type="hidden" name="member_order" value="${esc(JSON.stringify(ordered.map(m=>m.id)))}"><p class="form-hint">Drag the dotted handle, or focus it and press Alt + Up/Down.</p><ul class="rotation-members" data-rotation-member-list>${orderedRows(ordered)}</ul>`}
     <div class="modal-panel__footer">${button('cancel','Cancel','ghost')}<button class="btn btn--primary" type="submit">Apply override</button></div></form>`,onSave(panel){
       const form=panel.querySelector('form'),list=panel.querySelector('[data-rotation-member-list]');
       if(list)dispose=bindOrder(list,()=>{form.elements.member_order.value=JSON.stringify(memberIds(list));form.dispatchEvent(new Event('input',{bubbles:true}));},{removable:false});
@@ -373,14 +369,14 @@ function sharedState(group) {
     <div class="rotation-section__heading"><h3>Shared schedule</h3><p class="form-hint">${esc(names[config.strategy])} · ${esc(dayText(config.weekdays))}</p></div>
     <dl class="rotation-summary-grid">
       <div><dt>Evening starts</dt><dd>${esc(formatTime(config.active_time))}</dd></div>
-      <div><dt>Finalizes${config.strategy==='fixed_order'?'':' and advances'}</dt><dd>${esc(formatTime(config.finalize_time))}<span>${config.finalize_day_offset?'Following day':'Same evening'}</span></dd></div>
+      <div><dt>${config.strategy==='fixed_order'?'Evening ends':'Moves to next turn'}</dt><dd>${esc(formatTime(config.finalize_time))}<span>${config.finalize_day_offset?'Following day':'Same evening'}</span></dd></div>
       <div><dt>Effective from</dt><dd>${esc(formatDate(config.effective_date))}</dd></div>
       <div><dt>When skipped</dt><dd>${config.strategy==='fixed_order'?'Keeps fixed order':config.advance_on_skip?'Advances to next turn':'Keeps the same turn'}</dd></div>
     </dl>
     <p class="form-hint">Household time zone${group.shared?.schedule?.timezone?`: ${esc(group.shared.schedule.timezone)}`:''}. Individual completion and absence do not advance this rotation.</p>
     <div class="rotation-periods">
       <div class="rotation-preview"><span class="rotation-eyebrow">Current evening${current?` · ${esc(formatDate(current.period_date))}`:''}</span>${current?`${orderList(current.order,'No eligible member')}<span class="rotation-badge">${esc(names[current.status]||current.status)}</span>`:'<p>No active period</p>'}</div>
-      <div class="rotation-preview"><span class="rotation-eyebrow">Next${group.shared?.next?.period_date?` · ${esc(formatDate(group.shared.next.period_date))}`:''}</span>${orderList(group.shared?.next?.order,'No eligible member')}<p class="form-hint">Provisional until activation</p></div>
+      <div class="rotation-preview"><span class="rotation-eyebrow">Next${group.shared?.next?.period_date?` · ${esc(formatDate(group.shared.next.period_date))}`:''}</span>${orderList(group.shared?.next?.order,'No eligible member')}<p class="form-hint">Preview · confirmed when the evening starts</p></div>
     </div>
     <div class="rotation-actions">
       ${current?.status==='resolved'&&canCapability('rotations.override')?button('shared-override','Change this evening’s order'):''}

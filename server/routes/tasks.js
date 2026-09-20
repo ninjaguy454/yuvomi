@@ -1695,6 +1695,7 @@ export function createTaskDefinition(req, res) {
     if(windowError)return res.status(400).json({error:windowError,code:400});
     assertTaskMutation(db.get(),req,null,{...req.body,expiration_policy},{operation:'create'});
     const taskId = db.get().transaction(() => {
+      const authoredRotationFields = new Map();
       req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
       if(parent_task_id){
         assertTaskWindowAction(db.get(),Number(parent_task_id));
@@ -1716,6 +1717,7 @@ export function createTaskDefinition(req, res) {
         points, visibility, countdown ? 1 : 0, req.body.locked ? 1 : 0, start_time, expiration_policy, is_optional ? 1 : 0, due_date_offset_days
       );
       setAssignments(db.get(), result.lastInsertRowid, userIds);
+      authoredRotationFields.set(Number(result.lastInsertRowid),{title,description});
       db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(rotationBindings),result.lastInsertRowid);
       setTaskSkills(db.get(), result.lastInsertRowid, skillIds);
       setRotationMembers(db.get(), result.lastInsertRowid, assignmentMode === 'round_robin' ? rotationUserIds : []);
@@ -1739,6 +1741,7 @@ export function createTaskDefinition(req, res) {
         for (const child of initialSubtasks) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
             result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0).lastInsertRowid);
+          authoredRotationFields.set(childId,{title:child.title});
           setTaskSkills(db.get(), childId, child.skillIds);
           if(child.templateItemId)db.get().prepare('UPDATE tasks SET activity_template_checklist_item_id=? WHERE id=?').run(child.templateItemId,childId);
           if(child.assignedUsers!==undefined) {
@@ -1759,7 +1762,7 @@ export function createTaskDefinition(req, res) {
         setTaskLocation(db.get(), Number(result.lastInsertRowid), taskLocation, req.authUserId || req.session.userId);
       }
       bindTaskRotations(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});
-      initializeTaskRotationRendering(db.get(),Number(result.lastInsertRowid),{draft:activityDraft?.data,inputs:req.body.activity_inputs||{}});
+      initializeTaskRotationRendering(db.get(),Number(result.lastInsertRowid),{draft:activityDraft?.data,inputs:req.body.activity_inputs||{},authoredFields:authoredRotationFields,actor:req.authUserId||req.session.userId});
       const actual = db.get().prepare('SELECT assigned_to FROM tasks WHERE id=?').get(result.lastInsertRowid);
       if (actual.assigned_to) assertTaskSupervisionAssignee(db.get(),Number(result.lastInsertRowid),actual.assigned_to);
       reconcileTaskSupervision(db.get(),Number(result.lastInsertRowid),{actorId:req.authUserId||req.session.userId});

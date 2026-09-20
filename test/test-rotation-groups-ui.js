@@ -199,9 +199,11 @@ test('Group validation alone does not mark a pristine editor dirty',()=>pageTest
  assert.equal(await page.$('.modal-panel'),null);assert.equal(requests.length,0);
 }));
 
-test('Edit supports mouse handle drag, keyboard action menu, removal, revision and deactivation',()=>pageTest(async page=>{
+test('Edit supports mouse handle drag, keyboard reordering, direct removal, revision and deactivation',()=>pageTest(async page=>{
  await editGroup(page);await drag(page,1,3);assert.deepEqual(await order(page),[2,3,1]);
- await page.click('[data-rotation-member="3"] summary');await page.click('[data-rotation-member="3"] [data-rotation-up]');assert.deepEqual(await order(page),[3,2,1]);
+ assert.equal(await page.$('.rotation-member__actions'),null);
+ await page.focus('[data-rotation-member="3"] .rotation-member-handle');await page.keyboard.down('Alt');await page.keyboard.press('ArrowUp');await page.keyboard.up('Alt');assert.deepEqual(await order(page),[3,2,1]);
+ assert.equal(await page.$eval('[data-rotation-member="3"] [data-rotation-remove]',el=>el.getAttribute('aria-label')),'Remove Frankie');
  await page.click('[data-rotation-member="3"] [data-rotation-remove]');assert.deepEqual(await order(page),[2,1]);
  assert.equal(await page.$eval('[data-rotation-add-member] option[value="3"]',el=>el.disabled),false);
  await fill(page,`${form} [name=name]`,'Kids renamed');await clickSwitch(page,'active');await page.click(submit);
@@ -388,13 +390,41 @@ test('Changing usage requires a preview and explicit confirmation; Cancel preser
 test('Shared binding inherits configuration and exposes resolved-assignee position without internal IDs',()=>pageTest(async page=>{
  await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual',workflow_operations:['resolve','finalize','skip']}],{workflowOperations:true}));
  assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Using shared rotation: Kids/);
- assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/deliberately joins/);
+ assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Shares turns with all activities/);
  for(const selector of ['strategy','advance','skip','presence','operation-finalize','operation-skip'])assert.equal(await page.$eval(`[data-rotation-${selector}]`,el=>el.disabled),true);
  const value=await page.evaluate(()=>window.bindingEditor.getValue()[0]);assert.equal(value.strategy,'rotating_order');assert.deepEqual(value.workflow_operations,['resolve']);
  const references=await page.evaluate(()=>window.fixture.variableReferenceOptions([{id:'shower_order',label:'Shower Order',type:'rotation_occurrence'}]));
  assert.equal(references.find(row=>row.token==='{{shower_order.position_label}}').label,'Shower Order · This action’s assignee position');
- await page.select('[data-rotation-period-offset]','-1');assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).period_date_offset_days,-1);
+ await page.click('[data-rotation-text-settings] > summary');await page.select('[data-rotation-period-offset]','-1');assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).period_date_offset_days,-1);
 },{setup:()=>{groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',advance_on_skip:false};}}));
+
+for(const width of [1440,390])test(`Rotation purpose shows one shared summary and hides inherited controls at ${width}px`,()=>pageTest(async page=>{
+ await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual'}]));
+ const visible=selector=>page.$eval(selector,el=>el.checkVisibility({visibilityProperty:true}));
+ assert.equal(await visible('[data-rotation-shared-notice]'),true);
+ for(const selector of ['strategy','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next'])assert.equal(await visible(`[data-rotation-${selector}]`),false,`${selector} must not occupy space for shared settings`);
+ assert.equal(await page.$eval('[data-rotation-text-settings]',el=>el.open),false);
+ assert.equal(await visible('[data-rotation-period-offset]'),false);
+ assert.equal(await page.$$eval('[data-rotation-manage]',els=>els.length),1);
+ assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.innerText),/Round Robin/);
+ assert.match(await page.$eval('[data-rotation-single-selection]',el=>el.textContent),/Selects one person.*Rotating Order/);
+ assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).strategy,'round_robin','UI clarification must not change the shared method');
+ await assertFitsViewport(page);
+ await page.screenshot({path:fileURLToPath(new URL(`../.qa/rotation-groups-20260919/purpose-shared-${width}.png`,import.meta.url)),fullPage:true});
+ await page.select('[data-rotation-group]','8');
+ assert.equal(await visible('[data-rotation-shared-notice]'),false);assert.equal(await visible('[data-rotation-strategy]'),true);
+ assert.equal(await page.$eval('[data-rotation-advance]',el=>el.value),'manual','switching groups preserves the independent draft');
+ await page.click('[data-rotation-independent-settings] .rotation-explanation > summary');
+ const toggles=await page.$$eval('[data-rotation-independent-settings] .rotation-switch',labels=>labels.map(label=>{
+  const track=label.querySelector('.toggle__track'),r=track.getBoundingClientRect();return{width:r.width,height:r.height,labeled:!!label.innerText.trim(),disabled:label.querySelector('input').disabled};
+ }));
+ assert.equal(toggles.length,3);assert.ok(toggles.every(control=>control.width>=28&&control.height>=16&&control.labeled&&!control.disabled),'independent switches need visible, labeled controls');
+ await page.click('[data-rotation-skip] + .toggle__track');
+ assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).advance_on_skip,true);
+ await page.select('[data-rotation-strategy]','rotating_order');assert.match(await page.$eval('[data-rotation-method-help]',el=>el.textContent),/Keeps everyone/);
+ await page.select('[data-rotation-group]','7');assert.equal(await visible('[data-rotation-independent-settings]'),false);
+ assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).advance_on_skip,false,'shared Group remains authoritative');
+},{width,setup:()=>{groups[0].usage_mode='shared';groups[0].shared_config={strategy:'round_robin',advance_on_skip:false};groups.push({...clone(groups[0]),id:8,name:'Independent chores',usage_mode:'independent',shared_config:null});}}));
 
 test('Shared to independent conversion requires an explicit effective date and each consumer starting member',()=>pageTest(async page=>{
  await editGroup(page);await wait(180);await page.select(`${form} [name=usage_mode]`,'independent');
@@ -455,7 +485,7 @@ for(const width of [1440,390])for(const theme of ['light','dark'])test(`Rotation
   await page.select(`${form} [name=shared_strategy]`,'fixed_order');
   assert.equal(await page.$eval('[data-rotation-starting-field]',el=>el.hidden),true);
   assert.equal(await page.$eval(`${form} [name=shared_advance_on_skip]`,el=>el.closest('.rotation-switch').hidden),true);
-  assert.equal(await page.$eval('[data-rotation-finalize-label]',el=>el.textContent),'Finalize at');
+  assert.equal(await page.$eval('[data-rotation-finalize-label]',el=>el.textContent),'Evening ends at');
   assert.equal(await page.$eval(`${form} [name=shared_advance_on_skip]`,el=>el.checked),true,'hiding inapplicable control preserves its draft value');
   await page.select(`${form} [name=shared_strategy]`,'rotating_order');
   assert.equal(await page.$eval('[data-rotation-starting-field]',el=>el.hidden),false);

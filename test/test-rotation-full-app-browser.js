@@ -167,7 +167,8 @@ test('real app: author shared nightly Activity, override and second client, next
     await manager(page,'workflows');await page.waitForSelector('#automation-add-workflow');await click(page,'#automation-add-workflow');await page.waitForSelector('#automation-workflow-form');
     await set(page,'#automation-workflow-form [name=name]','Authored Rotation operations');await click(page,'[data-rotation-add]');
     await set(page,'[data-rotation-label]','Independent order');await set(page,'[data-rotation-key]','independent_order');await page.select('[data-rotation-group]',String(group.id));
-    await click(page,'[data-rotation-operation-finalize]');await click(page,'[data-rotation-operation-skip]');
+    await click(page,'[data-workflow-rotation-operations] > summary');
+    await click(page,'[data-rotation-operation-finalize] + .toggle__track');await click(page,'[data-rotation-operation-skip] + .toggle__track');
     await submit(page,'#automation-workflow-form');
     await until(()=>!!db.prepare("SELECT id FROM workflow_templates WHERE name='Authored Rotation operations'").get(),'Workflow operation authoring failed');
     const authored=db.prepare("SELECT rotation_bindings_json FROM workflow_templates WHERE name='Authored Rotation operations'").get();

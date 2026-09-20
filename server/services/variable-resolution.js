@@ -237,7 +237,7 @@ export function definitionsForTemplates(d, templates, catalog = householdVariabl
 /** Consumer-owned text templates may be rendered from an already resolved
  * occurrence. This never resolves/advances rotation and returns definitions
  * suitable for copying into the consumer's existing durable snapshot. */
-export function renderRotationVariableTemplates(d, { templates = [], bindings = [], rotations = [], inputs = {}, subjectUserId = null, definitions = null } = {}) {
+export function renderRotationVariableTemplates(d, { templates = [], bindings = [], rotations = [], inputs = {}, subjectUserId = null, definitions = null, actor } = {}) {
   const contextDefinitions = bindings.map(binding => ({ id: binding.purpose_key, label: binding.label || binding.purpose_key,
     type: 'rotation_occurrence', kind: 'value', default_value: null, rotation_context: true }));
   const purposeKeys = new Set(contextDefinitions.map(row => row.id));
@@ -246,7 +246,13 @@ export function renderRotationVariableTemplates(d, { templates = [], bindings = 
   const known = new Set(wanted.definitions.map(variableKey));
   const supplied = Object.fromEntries(Object.entries(inputs).filter(([key]) => known.has(key)));
   const rotationOccurrences = Object.fromEntries(rotations.filter(row => row.occurrence?.id != null).map(row => [row.purpose_key, row.occurrence]));
-  const resolved = resolveVariables(d, wanted.definitions, supplied, { keys: wanted.keys, subjectUserId, rotationOccurrences });
+  // Match Activity draft resolution: an unconfigured Assignee value denotes
+  // the canonical performer. Echoed client values never substitute for that
+  // context; configured defaults, expressions and editable fields keep theirs.
+  const contextualAssignee=subjectUserId!=null&&wanted.definitions.some(row=>variableKey(row)==='assignee'
+    &&row.type==='household_member'&&row.kind==='value'&&!row.expression&&row.default_value==null);
+  const resolved = resolveVariables(d, wanted.definitions, supplied, { keys: wanted.keys, subjectUserId, rotationOccurrences,
+    contextValues:contextualAssignee?{assignee:subjectUserId}:{},actor });
   return { values: templates.map(value => substituteVariableTemplate(value, resolved.labels)),
     usesRotation: wanted.definitions.some(row => purposeKeys.has(variableKey(row))),
     definitions: wanted.definitions.filter(row => !row.rotation_context), inputs: resolved.persisted, labels: resolved.labels };

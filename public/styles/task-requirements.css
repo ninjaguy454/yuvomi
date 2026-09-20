@@ -144,3 +144,51 @@
 }
 
 .task-template-error { color: var(--color-danger); border-inline-start: 3px solid currentColor; padding-inline-start: var(--space-3); }
+
+/* Shared expression picker also appears in the normal Task editor. */
+.automation-mention-menu {
+  position: fixed;
+  z-index: 10000;
+  display: grid;
+  max-width: calc(100vw - (2 * var(--space-3)));
+  max-height: 240px;
+  padding: var(--space-1);
+  overflow-y: auto;
+  background: var(--color-surface-raised);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+}
+
+.automation-mention-menu[hidden] {
+  display: none;
+}
+
+.automation-mention-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-1);
+  align-items: center;
+  min-height: var(--target-lg);
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.automation-mention-option small {
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.automation-mention-option:hover,
+.automation-mention-option--active {
+  background: var(--color-surface-hover);
+}
+
+
+.automation-mention-option :is(span, small) { overflow-wrap: anywhere; }

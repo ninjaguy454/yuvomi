@@ -118,10 +118,11 @@ function activeMention(field) {
  * The stored syntax stays backwards-compatible ({subject}/{{variable_id}}),
  * while authors type @ and choose a human-readable variable name.
  */
-function wireVariableMentions(panel) {
+let mentionMenuSequence = 0;
+export function wireVariableMentions(panel) {
   const menu = document.createElement('div');
   menu.className = 'automation-mention-menu';
-  menu.id = 'automation-mention-menu';
+  menu.id = `automation-mention-menu-${++mentionMenuSequence}`;
   menu.setAttribute('role', 'listbox');
   menu.hidden = true;
   // A fixed-position child of .modal-panel is positioned against that panel
@@ -143,13 +144,13 @@ function wireVariableMentions(panel) {
 
   const paint = () => {
     replaceHtml(menu, active.options.map((option, index) => `
-      <button type="button" role="option" id="automation-mention-${index}"
+      <button type="button" role="option" id="${menu.id}-${index}"
               aria-selected="${index === active.index}" data-mention-index="${index}"
               class="automation-mention-option ${index === active.index ? 'automation-mention-option--active' : ''}">
         <span>${h(option.label)}</span>
         <small>${h(option.detail)}</small>
       </button>`).join(''));
-    active.field?.setAttribute('aria-activedescendant', `automation-mention-${active.index}`);
+    active.field?.setAttribute('aria-activedescendant', `${menu.id}-${active.index}`);
   };
 
   const position = () => {
@@ -238,6 +239,7 @@ function wireVariableMentions(panel) {
   panel.addEventListener('scroll', () => {
     if (!menu.hidden) position();
   }, { passive: true, capture: true });
+  return () => { close(); menu.remove(); };
 }
 
 function memberOptions(members, selected = null, emptyLabel = 'Choose…') {

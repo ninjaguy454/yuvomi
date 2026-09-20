@@ -138,6 +138,61 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
   return page;
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+for (const width of [1380, 390]) {
+  test(`Kanban expansion contains recurring and locked labels without blank overflow at ${width}px`, async () => {
+    const height = 900;
+    const page = await mounted('kanban', { width, height, isMobile: width < 640, hasTouch: width < 640 });
+    try {
+      // Include the real absolute-positioned accessibility labels. The reduced
+      // stylesheet fixture otherwise misses this document-overflow regression.
+      const reset = await page.addStyleTag({ url: base + '/styles/reset.css' });
+      await reset.evaluate(node => document.head.prepend(node));
+      fixture.tasks.forEach(task => { task.is_recurring = true; task.locked = true; });
+      for (const [index, status] of ['done', 'expired', 'archived'].entries()) {
+        fixture.tasks.push(taskRow(100 + index, { category: 'group-0', is_recurring: true,
+          status: status === 'archived' ? 'done' : status,
+          archived_at: status === 'archived' ? '2026-09-19T12:00:00Z' : null }));
+      }
+      await refresh(page);
+      const measure = () => page.evaluate(() => {
+        const port = selector => {
+          const node = document.querySelector(selector);
+          return { height: node.getBoundingClientRect().height, client: node.clientHeight, scroll: node.scrollHeight };
+        };
+        return { document: port('html'), page: port('.app-content'), board: port('.task-board'), column: port('.task-board__bucket-scroll') };
+      });
+      await page.evaluate(() => {
+        window.subject.state.expandedSubtasks.clear(); window.subject.state.expandedTasks.clear();
+        window.subject.state.subtasksExpandedByDefault = false;
+        window.subject.renderTaskList(window.taskContainer);
+      });
+      const before = await measure();
+      near(before.document.scroll, height, 'collapsed cards do not leak document overflow');
+      for (let pass = 0; pass < 2; pass++) {
+        for (let id = 1; id <= 10; id++) {
+          await tap(page, `[data-action="toggle-subtasks"][data-id="${id}"]`);
+          await tap(page, `[data-action="toggle-activity-details"][data-id="${id}"]`);
+        }
+        for (const status of ['done', 'expired', 'archived']) {
+          await tap(page, `.task-board__bucket [data-section-status="${status}"]`);
+        }
+        await frames(page);
+        const after = await measure();
+        near(after.document.scroll, height, 'expanding/collapsing cards and status sections stays inside the page');
+        if (width > 640) {
+          assert.ok(after.column.scroll > after.column.client, 'column content remains scrollable');
+          near(after.board.height, before.board.height, 'desktop board footprint stays bounded');
+          near(after.page.scroll, before.page.scroll, 'no blank outer page tail');
+        } else {
+          near(after.column.scroll, after.column.client, 'mobile keeps its page-owned vertical scrolling');
+          if (pass === 0) assert.ok(after.page.scroll > before.page.scroll, 'mobile expands to fit actual checklist content');
+        }
+      }
+      assert.equal(fixture.writes.length, 0, 'view expansion never changes Tasks');
+    } finally { await page.close(); }
+  });
+}
 async function refresh(page) { await page.evaluate(() => window.subject.loadTasks(window.taskContainer)); await frames(page); }
 async function emitLive(page, version) {
   const previous = fixture.reads;

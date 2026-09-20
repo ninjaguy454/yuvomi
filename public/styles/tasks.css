@@ -2851,6 +2851,10 @@
 }
 
 .task-board__bucket-scroll {
+  /* Keep absolute accessibility labels inside this scrollport. Without a
+   * containing block, offscreen recurring/locked labels enlarge the document
+   * even though their cards are clipped by the column. */
+  position: relative;
   min-height: 0;
   padding: var(--space-2);
   overflow-y: auto;

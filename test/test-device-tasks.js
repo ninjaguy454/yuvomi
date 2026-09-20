@@ -173,7 +173,7 @@ test('resolved default points and indirect creation paths cannot bypass device p
   assert.throws(()=>deviceTaskCreate(d,principal,{title:'Rewarded',assigned_to:kids,points:5}),/Task setting/);
   const template=Number(d.prepare("INSERT INTO activity_templates(name,title_template,created_by) VALUES('Reward template','Reward template',?)").run(admin).lastInsertRowid);
   for(const extra of [{activity_template_id:template},{activity_binding:{activity_template_id:template}},{subtasks:[{title:'Extra',points:5}]},
-    {status:'done'},{rotation_bindings:[]},{created_by:admin},{source_device_id:principal.id},{sync_target:{}}])
+    {status:'done'},{rotation_bindings:[{purpose_key:'unauthorized',group_id:1}]},{created_by:admin},{source_device_id:principal.id},{sync_target:{}}])
     assert.throws(()=>deviceTaskCreate(d,principal,{title:'Indirect',assigned_to:[kids[0]],points:0,...extra}),/plain Task/);
   assert.equal(count('tasks'),0);
 });

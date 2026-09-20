@@ -1,5 +1,9 @@
 # Paired household devices
 
+Follow-up: [normal application screens and in-place supervisor approval](paired-device-normal-views-20260919.md)
+supersedes the original device-only presentation and temporary-access-only
+supervision descriptions below. The device identity and security contract remain.
+
 Verified base: `59682354368d87a18594c49cea557d841a4c3921`, branch
 `feature/rotation-groups-20260919`, clean. Production has the same image revision
 and schema 10040; read-only integrity and foreign-key checks pass. This pass is

@@ -11,6 +11,7 @@ const {ALL_MIGRATIONS}=await import('../server/db.js');
 const {initializeTaskSeries}=await import('../server/services/task-series.js');
 const R=await import('../server/services/rotation.js');
 const S=await import('../server/services/rotation-shared.js');
+const {createDevice,deviceHash}=await import('../server/services/devices.js');
 const digest=rows=>createHash('sha256').update(JSON.stringify(rows.map(row=>JSON.stringify(row)).sort())).digest('hex');
 
 function seed(d){
@@ -103,39 +104,51 @@ function snapshot(d){
   sequences:d.prepare('SELECT name,seq FROM sqlite_sequence ORDER BY name').all()};
 }
 function preserved(d,before){
+ const baseline=Math.max(...before.tables.schema_migrations.rows.map(row=>row.version));
  for(const [table,value] of Object.entries(before.tables)){
-  const rows=d.prepare(`SELECT ${value.columns.map(column=>`\"${column}\"`).join(',')} FROM \"${table}\" ${table==='schema_migrations'?'WHERE version<=10040':''}`).all();
+  const rows=d.prepare(`SELECT ${value.columns.map(column=>`\"${column}\"`).join(',')} FROM \"${table}\" ${table==='schema_migrations'?'WHERE version<='+baseline:''}`).all();
   assert.equal(digest(rows),digest(value.rows),`${table}: existing values and relationships preserved`);
  }
  for(const row of before.artifacts)assert.equal(d.prepare('SELECT sql FROM sqlite_master WHERE name=?').get(row.name)?.sql,row.sql,row.name);
  for(const row of before.sequences)assert.equal(d.prepare('SELECT seq FROM sqlite_sequence WHERE name=?').get(row.name)?.seq,row.seq,row.name);
  assert.equal(d.pragma('integrity_check',{simple:true}),'ok');assert.deepEqual(d.pragma('foreign_key_check'),[]);
 }
-test('encrypted populated 10040 -> 10041 preserves sessions, Wall, roles, capabilities, Tasks, supervision, rewards and both Rotation ownership models; no restart replay',()=>{
- assert.equal(Math.max(...ALL_MIGRATIONS.map(m=>m.version)),10041,'only the expected additive migration is in this candidate');
+for(const baseline of [10040,10041])test(`encrypted populated ${baseline} -> 10042 preserves sessions, devices, Wall, roles, capabilities, Tasks, supervision, rewards and both Rotation ownership models; no restart replay`,()=>{
+ assert.equal(Math.max(...ALL_MIGRATIONS.map(m=>m.version)),10042,'only the expected additive migrations are in this candidate');
  const directory=mkdtempSync(join(tmpdir(),'vidamia-device-migration-')),file=join(directory,'database.db'),key=randomBytes(32).toString('hex');let d;
  const open=(options={})=>{const db=new Database(file,options);db.pragma("cipher='sqlcipher'");db.pragma(`key=\"x'${Buffer.from(key).toString('hex')}'\"`);return db;};
  try{
   d=open();d.pragma('foreign_keys=ON');d.exec("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY,description TEXT NOT NULL,applied_at TEXT NOT NULL DEFAULT 'synthetic-preexisting')");
-  for(const m of ALL_MIGRATIONS.filter(m=>m.version<=10040)){if(m.foreignKeysOff)d.pragma('foreign_keys=OFF');d.transaction(()=>{typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);d.prepare('INSERT INTO schema_migrations(version,description) VALUES(?,?)').run(m.version,m.description)})();if(m.foreignKeysOff)d.pragma('foreign_keys=ON');}
+  for(const m of ALL_MIGRATIONS.filter(m=>m.version<=baseline)){if(m.foreignKeysOff)d.pragma('foreign_keys=OFF');d.transaction(()=>{typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);d.prepare('INSERT INTO schema_migrations(version,description) VALUES(?,?)').run(m.version,m.description)})();if(m.foreignKeysOff)d.pragma('foreign_keys=ON');}
   seed(d);
+  if(baseline===10041) {
+   const device=createDevice(d,{name:'Existing Kitchen Wall',scope:{member_ids:[2,3,4]}},1);
+   d.prepare(`INSERT INTO device_credentials(id,device_id,token_hash,context_key,temporary_sid,temporary_user_id,temporary_started_at,temporary_idle_at)
+    VALUES(1,?,?,?,'existing-temporary-session',1,?,?)`).run(device.id,deviceHash('synthetic-existing-credential'),'synthetic-existing-context',Date.now(),Date.now());
+   d.prepare('INSERT INTO sessions(sid,sess,expired_at) VALUES(?,?,?)').run('existing-temporary-session',JSON.stringify({userId:1,role:'admin',deviceCredentialId:1,deviceContext:'synthetic-existing-context'}),9999999999999);
+   d.prepare('UPDATE task_completions SET source_device_id=?,source_device_name=? WHERE task_id=1').run(device.id,device.name);
+   d.prepare('UPDATE tasks SET source_device_id=?,source_device_name=? WHERE id=2').run(device.id,device.name);
+   for(const table of ['household_devices','device_credentials','device_audit_events'])assert.ok(d.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n>0,`${table}: populated 10041 fixture`);
+  }
   for(const table of ['sessions','access_permissions','access_capabilities','task_completions','reward_ledger','reward_participants','task_supervision_actions','task_activity_events','task_documents','meal_occurrence_assignments','user_skill_proficiency','availability_periods','rotation_tracks','rotation_occurrences','rotation_group_periods','task_rotation_periods','task_recurrence_definitions'])assert.ok(d.prepare(`SELECT count(*) n FROM ${table}`).get().n>0,`${table} must be populated before migration`);
   const before=snapshot(d);assert.deepEqual(d.pragma('foreign_key_check'),[]);d.close();
   assert.notEqual(readFileSync(file).subarray(0,16).toString(),'SQLite format 3\u0000');
   const boot=()=>{
    const result=spawnSync(process.execPath,['--input-type=module','-e',"const db=await import('./server/db.js');db.init();console.log('SCHEMA',db.currentVersion());db.get().close();"],{cwd:new URL('..',import.meta.url),encoding:'utf8',timeout:60000,env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:key,LOG_LEVEL:'info',NODE_ENV:'test'}});
-   assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout+result.stderr,/SCHEMA 10041/);
+   assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout+result.stderr,/SCHEMA 10042/);
    return [...(result.stdout+result.stderr).matchAll(/Migration (\d+) applied:/g)].map(match=>Number(match[1]));
   };
-  assert.deepEqual(boot(),[10041]);d=open();preserved(d,before);
+  assert.deepEqual(boot(),baseline===10040?[10041,10042]:[10042]);d=open();preserved(d,before);
   assert.equal(d.pragma('table_info(tasks)').find(column=>column.name==='created_by').notnull,0,'device-created work does not require a fake human creator');
   for(const table of ['tasks','task_completions']){
    for(const column of ['source_device_id','source_device_name'])assert.ok(d.pragma(`table_info(${table})`).some(row=>row.name===column));
-   assert.equal(d.prepare(`SELECT count(*) n FROM ${table} WHERE source_device_id IS NOT NULL OR source_device_name IS NOT NULL`).get().n,0,`${table}: historical human attribution is not relabeled as a device`);
+   assert.equal(d.prepare(`SELECT count(*) n FROM ${table} WHERE source_device_id IS NOT NULL OR source_device_name IS NOT NULL`).get().n,baseline===10041?1:0,`${table}: historical attribution is preserved`);
   }
-  for(const table of ['household_devices','device_pairings','device_credentials'])assert.equal(d.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,`${table}: no browser or member automatically converted`);
+  for(const table of ['household_devices','device_pairings','device_credentials'])assert.equal(d.prepare(`SELECT count(*) n FROM ${table}`).get().n,baseline===10041&&table!=='device_pairings'?1:0,`${table}: no browser or member automatically converted`);
+  assert.equal(d.prepare('SELECT count(*) n FROM device_task_approvals').get().n,0,'migration never authenticates or approves an action');
+  assert.equal(d.prepare('SELECT count(*) n FROM device_task_creation_receipts').get().n,0,'migration does not manufacture Task creation receipts');
   assert.equal(d.prepare('SELECT COUNT(*) n FROM users').get().n,4,'no fake member created');
-  const history=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();assert.equal(history.length,before.tables.schema_migrations.rows.length+1);
+  const history=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();assert.equal(history.length,before.tables.schema_migrations.rows.length+(10042-baseline));
   d.close();assert.deepEqual(boot(),[]);d=open({readonly:true});preserved(d,before);assert.deepEqual(d.prepare('SELECT * FROM schema_migrations ORDER BY version').all(),history);
  }finally{if(d?.open)d.close();rmSync(directory,{recursive:true,force:true});}
 });

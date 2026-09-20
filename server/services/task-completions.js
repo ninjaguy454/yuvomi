@@ -90,7 +90,7 @@ export function recordCompletion(d, taskId, actingUserId, {sourceDevice=null}={}
     INSERT OR IGNORE INTO task_completions (task_id, series_id, user_id)
     VALUES (?, ?, ?)
   `).run(taskId, occurrence?.series_id ?? inherited?.series_id ?? seriesRootOf(d, taskId), actingUserId || null);
-  if(sourceDevice && inserted.changes) d.prepare('UPDATE task_completions SET source_device_id=?,source_device_name=? WHERE task_id=? AND user_id IS NULL AND source_device_id IS NULL')
+  if(sourceDevice && inserted.changes) d.prepare('UPDATE task_completions SET source_device_id=?,source_device_name=? WHERE task_id=? AND source_device_id IS NULL')
     .run(sourceDevice.id,sourceDevice.name,taskId);
 }
 
@@ -258,9 +258,12 @@ SELECT c.*,u.display_name AS user_name,u.avatar_color AS user_color,u.avatar_dat
   t.title,t.category,CASE WHEN c.event_type='expired' THEN 0 ELSE t.points END AS points,t.is_recurring,t.visibility
 FROM occurrence_history c JOIN tasks t ON t.id=c.task_id LEFT JOIN users u ON u.id=c.user_id`;
 
-export function occurrenceFeed(d,{me,limit=50,userId=null,beforeAt=null,beforeId=null,seriesId=null}={}) {
+export function occurrenceFeed(d,{me,limit=50,userId=null,beforeAt=null,beforeId=null,seriesId=null,taskIds=null}={}) {
   const size=Math.min(Math.max(Number(limit)||50,1),200),params={me,size};
   const where=[taskVisibilityWhere(d,me,'t','@me')];
+  // Scope before pagination: neither hasMore nor the cursor may expose an
+  // occurrence outside a caller's already-authorized Task projection.
+  if(taskIds!==null){where.push('c.task_id IN (SELECT value FROM json_each(@taskIds))');params.taskIds=JSON.stringify(taskIds);}
   if(userId!=null) {
     where.push(`(c.user_id=@user OR (c.event_type='expired' AND
       (t.assigned_to=@user OR EXISTS(SELECT 1 FROM task_assignments a WHERE a.task_id=t.id AND a.user_id=@user))))`);

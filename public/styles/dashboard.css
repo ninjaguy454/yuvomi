@@ -4922,3 +4922,8 @@ svg.weather-forecast__icon {
   border-color: var(--color-text-primary);
   box-shadow: var(--shadow-sm);
 }
+.widget--rotations ol {
+  list-style: decimal;
+  margin: var(--space-2) 0 0;
+  padding-inline-start: 1.5rem;
+}

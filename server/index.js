@@ -17,6 +17,7 @@ import { router as authRouter, sessionMiddleware, requireAuth, requireAdmin, isP
 import { csrfMiddleware } from './middleware/csrf.js';
 import {deviceRouter,devicesRouter} from './routes/devices.js';
 import {deviceBoundary} from './services/devices.js';
+import {deviceAppMiddleware} from './services/device-app.js';
 import idempotencyMiddleware from './middleware/idempotency.js';
 import { buildOpenApiSpec } from './openapi.js';
 import * as googleCalendar from './services/google-calendar.js';
@@ -458,6 +459,7 @@ app.use('/api/v1', (req, res, next) => {
   return next();
 });
 app.use('/api/v1', csrfMiddleware);
+app.use('/api/v1', deviceAppMiddleware);
 // Wall proofs must be verified before any cached mutation response is considered.
 // Canonical Task revisions and the durable Rewards ledger supply idempotency.
 app.use('/api/v1/wall', wallRouter);

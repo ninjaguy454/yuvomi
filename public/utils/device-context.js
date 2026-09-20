@@ -11,6 +11,12 @@ export function pairedDeviceHint() {
 }
 export function deviceBootstrap() { return bootstrap; }
 export function deviceContext() { return context; }
+/** A device is an authenticated principal, never a household member. */
+export function isDevicePrincipal() { return bootstrap?.principal?.kind === 'device' && !bootstrap?.temporary; }
+export function deviceLandingPath(payload = bootstrap) {
+  const view = payload?.device?.preferences?.default_view;
+  return view === 'list' || view === 'kanban' ? '/tasks?view=' + view : '/';
+}
 export function authenticationSnapshot() { return { context, epoch }; }
 export function sameAuthentication(snapshot) { return snapshot.epoch === epoch && snapshot.context === context; }
 export function trackContextRequest(controller) { requests.add(controller); return () => requests.delete(controller); }

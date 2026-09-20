@@ -1,5 +1,6 @@
 import { t } from '/i18n.js';
 import { api } from '/api.js';
+import { isDevicePrincipal } from '/utils/device-context.js';
 import { renderSubTabs, setSubTabBadge, scrollActiveSubTabIntoView } from '/utils/sub-tabs.js';
 import { MODULE_ICON, moduleIconEl } from '/nav-icons.js';
 import { todayKey } from '/utils/date.js';
@@ -26,7 +27,7 @@ const TABS = () => [
 
 export function getLastKitchenRoute() {
   try {
-    const stored = sessionStorage.getItem(KITCHEN_STORAGE_KEY);
+    const stored = isDevicePrincipal() ? '/meals' : sessionStorage.getItem(KITCHEN_STORAGE_KEY);
     if (KITCHEN_ROUTES.includes(stored) && !window.yuvomi?.isModuleDisabled(stored.slice(1))) {
       return stored;
     }

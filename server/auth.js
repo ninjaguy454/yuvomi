@@ -37,6 +37,23 @@ import { deviceCookie, assertDeviceContext, readDeviceContext, isTemporaryContex
   validateTemporaryLogin, establishTemporary, returnToDevice, retireBrowserSession } from './services/devices.js';
 import { assertCurrentDeviceRequest, sendDeviceLeaseError } from './services/device-lease.js';
 import { withDeviceWriteLease, withoutDeviceWriteLease } from './services/device-write-context.js';
+import { validateDeviceApproval, completeDeviceApproval } from './services/device-approval.js';
+import { deviceAppRouteSupported } from './services/device-app-paths.js';
+import { deviceMembers } from './services/device-content.js';
+
+// A proof for one displayed Task must never establish a personal session. Bind
+// every async authentication step to its original durable intent, not whatever
+// intent another tab might have installed while authentication was in flight.
+function deviceApprovalProof(req, expectedId = req.body?.approval_id) {
+  if (!req.session?.deviceApprovalIntent && !expectedId) return null;
+  if (!expectedId) throw Object.assign(new Error('Request approval again from the Task.'), {status:409});
+  return validateDeviceApproval(db.get(), req, {expectedId}).row.id;
+}
+function finishDeviceApproval(req, res, user, approvalId) {
+  const result = completeDeviceApproval(db.get(), req, user, {expectedId:approvalId});
+  res.set('Cache-Control','private, no-store');
+  return res.json(result);
+}
 
 const log = createLogger('Auth');
 const router = express.Router();
@@ -698,7 +715,7 @@ function requireAuth(req, res, next) {
         if(/^\/api\/v1\/devices?(?:\/|$)/.test(path))return next();
         return withDeviceWriteLease(()=>assertCurrentDeviceRequest(req),next);
       }
-      if(!path.startsWith('/api/v1/device/')&&!['/api/v1/auth/me','/api/v1/auth/logout','/api/v1/version'].includes(path))
+      if(!path.startsWith('/api/v1/device/')&&!['/api/v1/auth/me','/api/v1/auth/logout','/api/v1/version'].includes(path)&&!deviceAppRouteSupported(req.method,path))
         return res.status(403).json({error:'Use temporary personal sign-in for this action.',reason:'device_access_denied'});
       req.authMethod='device';req.authUserId=null;req.authRole='device';req.authScopes=null;
       req.devicePrincipal=devicePrincipal(context.device);req.sessionModuleAccess={};
@@ -1072,6 +1089,7 @@ function isSplitExpenseGuest(userId, database = null) {
  */
 router.post('/login', loginLimiter, async (req, res) => {
   try {
+    const approvalId = deviceApprovalProof(req);
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -1094,6 +1112,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     const { valid, needsRehash } = await verifyPassword(password, user.password_hash);
+    if (approvalId) deviceApprovalProof(req, approvalId);
     if (!valid) {
       log.warn('Login failed', { ip: req.ip, username, reason: 'invalid_password' });
       return res.status(401).json({ error: 'Invalid credentials.', code: 401 });
@@ -1104,6 +1123,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     if (needsRehash) {
       try {
         const migrated = await hashPassword(password);
+        if (approvalId) deviceApprovalProof(req, approvalId);
         db.get().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(migrated, user.id);
         log.info('Password hash migrated to NFC', { userId: user.id });
       } catch (rehashErr) {
@@ -1142,7 +1162,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     // halb angemeldeten Zustand. Ein neuer Schluessel kann hier nichts
     // aufschliessen, was der alte nicht schon aufgeschlossen haette.
     if (twoFactor.isEnabled(db.get(), user.id)) {
-      req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS };
+      req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS, ...(approvalId ? {approvalId} : {}) };
       return res.json({
         twoFactorRequired: true,
         recoveryAvailable: twoFactor.getStatus(db.get(), user.id).recovery_remaining > 0,
@@ -1150,6 +1170,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     try {
+      if (approvalId) return finishDeviceApproval(req, res, user, approvalId);
       await setupAuthSession(req, res, user);
       res.json(loginPayload(req, user));
     } catch (sessionErr) {
@@ -1158,7 +1179,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
   } catch (err) {
     log.error('Login error:', err);
-    res.status(500).json({ error: 'Internal server error.', code: 500 });
+    res.status(err.status||500).json({ error: err.status?err.message:'Internal server error.', code: err.status||500 });
   }
 });
 
@@ -1592,6 +1613,7 @@ async function beginOidcFlow(req, config, extra = {}) {
   const codeVerifier  = oidcClient.randomPKCECodeVerifier();
   const codeChallenge = await oidcClient.calculatePKCECodeChallenge(codeVerifier);
   if(extra.linkUserId)assertCurrentDeviceRequest(req);
+  if(extra.deviceApprovalId)deviceApprovalProof(req,extra.deviceApprovalId);
   req.session.oidc = { state, nonce, codeVerifier, ...extra };
 
   await new Promise((resolve, reject) =>
@@ -1605,19 +1627,21 @@ async function beginOidcFlow(req, config, extra = {}) {
     nonce,
     code_challenge:        codeChallenge,
     code_challenge_method: 'S256',
+    ...(extra.deviceApprovalId ? {prompt:'login',max_age:'0'} : {}),
   }).href;
 }
 
 router.get('/oidc/start', async (req, res) => {
   try {
+    const approvalId = deviceApprovalProof(req, req.query.approval_id);
     const config = await getOidcConfig();
     if (!config) {
       return res.status(404).json({ error: 'OIDC is not configured.', code: 404 });
     }
-    res.redirect(await beginOidcFlow(req, config));
+    res.redirect(await beginOidcFlow(req, config, approvalId ? {deviceApprovalId:approvalId} : {}));
   } catch (err) {
     log.error('OIDC start error:', err);
-    res.status(500).json({ error: 'OIDC initialization failed.', code: 500 });
+    res.status(err.status||500).json({ error: err.status?err.message:'OIDC initialization failed.', code: err.status||500 });
   }
 });
 
@@ -1702,9 +1726,16 @@ router.delete('/oidc/link', requireAuth, csrfMiddleware, (req, res) => {
  * validierten sub und richtet die Session ein.
  */
 router.get('/oidc/callback', async (req, res) => {
+  const approvalId = req.session.oidc?.deviceApprovalId;
+  const approvalFailure = () => {
+    if (req.session.deviceApprovalIntent?.id === approvalId)
+      req.session.deviceApprovalError = {id:approvalId,message:'Authentication could not be completed. Try again.'};
+    return res.redirect('/device-approval-return.html');
+  };
   try {
+    if (approvalId) deviceApprovalProof(req, approvalId);
     const config = await getOidcConfig();
-    if (!config) return res.redirect('/login?error=oidc_not_configured');
+    if (!config) return approvalId ? approvalFailure() : res.redirect('/login?error=oidc_not_configured');
 
     // Einmalig konsumieren — verhindert Wiederverwendung von state/nonce/verifier
     const stored = req.session.oidc;
@@ -1712,7 +1743,7 @@ router.get('/oidc/callback', async (req, res) => {
 
     if (!stored?.state) {
       log.warn('OIDC callback: kein Session-State (abgelaufen oder nicht initiiert)');
-      return res.redirect('/login?error=oidc_state_mismatch');
+      return approvalId ? approvalFailure() : res.redirect('/login?error=oidc_state_mismatch');
     }
 
     // Aktuelle Callback-URL: Host/Schema aus der registrierten redirect_uri (zuverlässig
@@ -1725,11 +1756,13 @@ router.get('/oidc/callback', async (req, res) => {
       expectedState:    stored.state,
       expectedNonce:    stored.nonce,
       pkceCodeVerifier: stored.codeVerifier,
+      ...(approvalId ? {maxAge:120} : {}),
     });
 
     // Identität aus dem validierten ID-Token; fetchUserInfo erzwingt sub-Abgleich
     const claims   = tokens.claims();
     const userinfo = await oidcClient.fetchUserInfo(config, tokens.access_token, claims.sub);
+    if (approvalId) deviceApprovalProof(req, approvalId);
 
     // Verknüpfungs-Lauf (#832): der Nutzer ist bereits angemeldet und bindet
     // sein OIDC-Konto an genau dieses Konto. Kein Anlegen, kein Zuordnen über
@@ -1749,10 +1782,13 @@ router.get('/oidc/callback', async (req, res) => {
         : `/settings/personal/account?oidc_link_error=${result.reason}`);
     }
 
-    // Temporary access cannot provision household members through SSO signup.
-    if(deviceCookie(req) && !db.get().prepare("SELECT id FROM users WHERE oidc_sub=? AND oidc_provider=? AND role='admin'").get(claims.sub,claims.iss))
+    // Neither device authentication path may provision a new household account.
+    // A single-action approver may be a qualified member; full access is admin-only.
+    const linkedDeviceUser = deviceCookie(req) ? db.get().prepare('SELECT * FROM users WHERE oidc_sub=? AND oidc_provider=?').get(claims.sub,claims.iss) : null;
+    if (approvalId && !linkedDeviceUser) return approvalFailure();
+    if(deviceCookie(req) && !approvalId && linkedDeviceUser?.role !== 'admin')
       return res.redirect('/login?error=device_administrator_required');
-    const user = findOrCreateOidcUser(db.get(), {
+    const user = linkedDeviceUser || findOrCreateOidcUser(db.get(), {
       sub:                claims.sub,
       // iss stammt aus dem validierten ID-Token und ist gegen die Discovery-Metadaten
       // geprüft, also verlässlicher als die konfigurierte OIDC_ISSUER-URL
@@ -1789,16 +1825,22 @@ router.get('/oidc/callback', async (req, res) => {
     // Der Wartezustand ist derselbe wie beim Passwort-Login, deshalb landet
     // der Browser auf der Anmeldeseite und wird dort nach dem Code gefragt.
     if (twoFactor.isEnabled(db.get(), user.id)) {
-      req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS };
+      req.session.pendingTwoFactor = { userId: user.id, expiresAt: Date.now() + TWO_FACTOR_WINDOW_MS, ...(approvalId ? {approvalId} : {}) };
+      if (approvalId) return res.redirect('/device-approval-return.html');
       if(deviceCookie(req))req.session.deviceLoginHandoff=Date.now();
       return res.redirect(deviceCookie(req)?'/login?two_factor=1&temporary_handoff=1':'/login?two_factor=1');
     }
 
+    if (approvalId) {
+      completeDeviceApproval(db.get(), req, user, {expectedId:approvalId});
+      return res.redirect('/device-approval-return.html');
+    }
     await setupAuthSession(req, res, user);
 
     res.redirect(deviceCookie(req)?'/device?temporary_handoff=1':'/');
   } catch (err) {
     log.error('OIDC callback error:', err);
+    if (approvalId) return approvalFailure();
     res.redirect('/login?error=oidc_failed');
   }
 });
@@ -1977,10 +2019,13 @@ function consumePendingTwoFactor(req) {
  */
 router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
   try {
+    const approvalId = deviceApprovalProof(req);
     const pending = consumePendingTwoFactor(req);
     if (!pending) {
       return res.status(401).json({ error: 'No pending sign-in.', code: 401 });
     }
+    if ((pending.approvalId || null) !== approvalId)
+      return res.status(409).json({error:'This approval changed. Authenticate again for this action.'});
 
     const code = String(req.body?.code || '');
     if (code.length > 64) {
@@ -2002,6 +2047,7 @@ router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
     // `regenerate` legt eine neue, leere Session an - der Wartezustand ist
     // danach von selbst fort, und ein vor der Anmeldung untergeschobener
     // Sitzungsschlüssel taugt nichts mehr.
+    if (approvalId) return finishDeviceApproval(req, res, user, approvalId);
     await setupAuthSession(req, res, user);
     log.info('Second factor accepted', { userId: user.id, method: result.method });
 
@@ -2012,7 +2058,7 @@ router.post('/2fa/verify', twoFactorLimiter, async (req, res) => {
     });
   } catch (err) {
     log.error('Second factor error:', err);
-    res.status(500).json({ error: 'Internal server error.', code: 500 });
+    res.status(err.status||500).json({ error: err.status?err.message:'Internal server error.', code: err.status||500 });
   }
 });
 
@@ -2197,6 +2243,7 @@ router.put('/2fa/require', requireAuth, requireAdmin, csrfMiddleware, (req, res)
  * Response: { data: User[] }
  */
 router.get('/users', requireAuth, (req, res) => {
+  if (req.devicePrincipal) return res.json({data:deviceMembers(db.get(),req.devicePrincipal)});
   try {
     // is_worker markiert Konten der Haushaltshilfe (housekeeping_workers),
     // damit die Familien-Verwaltung sie nicht als Familienmitglied labelt

@@ -25,6 +25,7 @@ import { TASK_SERIES_SCHEMA_SQL, initializeTaskSeries } from './services/task-se
 import { ROTATION_SCHEMA_SQL, installRotationChangeTriggers } from './services/rotation-schema.js';
 import { SHARED_ROTATION_SCHEMA_SQL, installSharedRotationChangeTriggers } from './services/rotation-shared-schema.js';
 import { addDeviceSchema } from './services/device-schema.js';
+import { addDeviceApprovalSchema } from './services/device-approval-schema.js';
 import { rotationVariableSchemaMigration } from './services/rotation-variable-schema.js';
 import path from 'path';
 import fs from 'node:fs/promises';
@@ -9071,6 +9072,12 @@ FORK_MIGRATIONS.push({
   description: 'Household paired device principals and bounded temporary personal sessions',
   foreignKeysOff: true,
   up: addDeviceSchema,
+});
+
+FORK_MIGRATIONS.push({
+  version: 10042,
+  description: 'Paired displays: authenticated action approvals and Task creation receipts',
+  up: addDeviceApprovalSchema,
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

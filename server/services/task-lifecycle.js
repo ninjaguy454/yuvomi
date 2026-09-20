@@ -160,7 +160,7 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
 }
 
 /** Atomic child/parent/projection transition, including recurrence and rewards. */
-export function changeTaskStatus(d, taskId, status, {actorId=null, principal=actorId, body={}, authorize=true, requireRevision=authorize,now=null}={}) {
+export function changeTaskStatus(d, taskId, status, {actorId=null, principal=actorId, body={}, authorize=true, requireRevision=authorize,now=null,sourceDevice=null}={}) {
   const device = taskDevicePrincipal(principal);
   if (device) actorId = null; // Device IDs must never enter human actor or reward-recipient fields.
   if (!['open','in_progress','done'].includes(status)) throw new TaskStateError('Invalid Task status.',{},400);
@@ -220,7 +220,9 @@ export function changeTaskStatus(d, taskId, status, {actorId=null, principal=act
       throw new TaskStateError('Resetting this Task will clear its subtask progress.',
         {confirmation_required:'reset_progress'});
     const effects={pending:false,undone:0,changedTaskIds:new Set(),bulkCompletion:status==='done'&&incomplete.length>0,
-      authorizationActor:principal,sourceDevice:device ? {id:device.id,name:device.name} : null};
+      // A one-action authenticated approval retains its human actor and display origin.
+      // This trusted option is never accepted from a Task request body.
+      authorizationActor:principal,sourceDevice:device ? {id:device.id,name:device.name} : sourceDevice};
     const targets = status==='done' ? incomplete : status==='open' ? descendants.filter(child=>child.status!=='open') : [];
     // Validate every affected action before writing any progress.
     for (const child of targets) {

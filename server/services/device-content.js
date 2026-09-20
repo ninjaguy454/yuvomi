@@ -1,10 +1,10 @@
 /** Shared-display readers. No device is represented by, or borrows, a member ID.
  * Every returned object is an allowlisted projection, including Rotation values.
  * Layout choices never authorize data: modules and scope are checked first. */
-import { getUpcomingEvents } from './calendar-events.js';
+import { getUpcomingEvents, expandRecurringEvents, loadEventExceptions } from './calendar-events.js';
 import { publicCalendarEvent, wallMeal, wallShopping } from './wall.js';
 import { normalizeDevicePreferences } from './devices.js';
-import { householdTimeZone, todayKey } from '../utils/timezone.js';
+import { householdTimeZone, todayKey, shiftDateKey } from '../utils/timezone.js';
 import { previewSharedRotation, sharedGroupConfiguration } from './rotation-shared.js';
 
 export const DEVICE_CONTENT_MODULES = Object.freeze(['dashboard','tasks','calendar','meals','shopping','rewards']);
@@ -20,6 +20,58 @@ function validHouseholdMembers(d) {
   return d.prepare(`SELECT u.id,u.display_name,u.avatar_color FROM users u
     WHERE NOT EXISTS(SELECT 1 FROM housekeeping_workers h WHERE h.user_id=u.id)
       AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id) ORDER BY u.display_name,u.id`).all();
+}
+
+export function assertDeviceModule(principal,module) {
+  assertPrincipal(principal);
+  if(!permits(principal,module))throw Object.assign(new Error('This module is not available on this display.'),{status:403});
+}
+export function deviceMembers(d,principal) {
+  assertPrincipal(principal);
+  const ids=principal.scope?.member_ids||[];
+  return validHouseholdMembers(d).filter(member=>!ids.length||ids.includes(member.id));
+}
+export function deviceDateRange(d,query={},maximum=366) {
+  const valid=value=>typeof value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(value)&&Number.isFinite(Date.parse(`${value}T12:00:00Z`))&&new Date(`${value}T12:00:00Z`).toISOString().slice(0,10)===value;
+  const from=query.from||query.start||query.week||todayKey(d),to=query.to||query.end||shiftDateKey(from,6);
+  if(!valid(from)||!valid(to)||to<from||(Date.parse(to)-Date.parse(from))/86400000>maximum)
+    throw Object.assign(new Error('Choose a valid, bounded date range.'),{status:400});
+  return {from,to};
+}
+/** Normal Calendar uses the existing recurrence expansion, but only the shared
+ * projection. External private feeds and a member outside the scope stay out. */
+export function deviceCalendar(d,principal,query={}) {
+  assertDeviceModule(principal,'calendar');
+  const {from,to}=deviceDateRange(d,query),ids=new Set(deviceMembers(d,principal).map(member=>member.id));
+  const rows=d.prepare(`SELECT e.* FROM calendar_events e WHERE e.visibility='all'
+    AND (e.external_source!='ics' OR EXISTS(SELECT 1 FROM ics_subscriptions s WHERE s.id=e.subscription_id AND s.shared=1))
+    AND (e.recurrence_rule IS NOT NULL OR (substr(e.start_datetime,1,10)<=? AND substr(COALESCE(e.end_datetime,e.start_datetime),1,10)>=?))`)
+    .all(to,from).filter(row=>(!row.assigned_to||ids.has(row.assigned_to))&&d.prepare('SELECT user_id FROM event_assignments WHERE event_id=?').all(row.id).every(item=>ids.has(item.user_id)));
+  return expandRecurringEvents(rows,from,to,loadEventExceptions(d,rows.filter(row=>row.recurrence_rule).map(row=>row.id))).map(publicCalendarEvent);
+}
+export function deviceMeals(d,principal,query={}) {
+  assertDeviceModule(principal,'meals');const {from,to}=deviceDateRange(d,query,62);
+  return d.prepare(`SELECT id FROM meals WHERE date BETWEEN ? AND ? AND scope='household'
+    AND parent_meal_id IS NULL AND superseded_by_id IS NULL AND selection_status='selected' ORDER BY date,scheduled_time,meal_type,id`).all(from,to)
+    .map(row=>({...wallMeal(d,row.id),scope:'household',can_decide:false,can_choose:false}));
+}
+export function deviceShopping(d,principal) {
+  assertDeviceModule(principal,'shopping');
+  return d.prepare('SELECT id FROM shopping_lists ORDER BY updated_at DESC,id').all().map(row=>{
+    const list=wallShopping(d,row.id);
+    list.items=d.prepare('SELECT id,list_id,name,quantity,category,is_checked,sort_order FROM shopping_items WHERE list_id=? ORDER BY is_checked,sort_order,id LIMIT 300').all(row.id);
+    const open=list.items.filter(item=>!item.is_checked).length;
+    return {...list,item_count:list.items.length,item_total:list.items.length,item_checked:list.items.length-open,open_count:open};
+  });
+}
+export function deviceRewards(d,principal) {
+  assertDeviceModule(principal,'rewards');const ids=new Set(deviceMembers(d,principal).map(member=>member.id));
+  const balances=principal.scope?.show_points===true?d.prepare(`SELECT u.id,u.display_name,u.avatar_color,COALESCE(SUM(l.delta),0) AS balance FROM users u
+    JOIN reward_participants p ON p.user_id=u.id AND p.enabled=1 LEFT JOIN reward_ledger l ON l.user_id=u.id
+    GROUP BY u.id ORDER BY balance DESC,u.display_name`).all().filter(row=>ids.has(row.id)):[];
+  let rank=0,last=null;balances.forEach((row,index)=>{if(row.balance!==last)rank=index+1;last=row.balance;row.rank=rank;});
+  const catalog=d.prepare('SELECT id,name,cost,icon,description,is_active,sort_order FROM reward_catalog WHERE is_active=1 ORDER BY sort_order,cost,name').all();
+  return {balances,catalog,pendingCount:0,isAdmin:false,me:null,setup:{participantCount:balances.length,catalogCount:catalog.length,pointedTaskCount:0}};
 }
 
 /** Current Group-owned order is intentionally shared, unlike its consuming Tasks.

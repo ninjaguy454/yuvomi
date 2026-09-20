@@ -6,6 +6,7 @@
 
 import { api } from '/api.js';
 import { canCapability } from '/permissions.js';
+import { isDevicePrincipal } from '/utils/device-context.js';
 import { openModal as openSharedModal, closeModal as closeSharedModal, selectModal, confirmModal, confirmOverModal, advancedSection, wireBlurValidation, reportFieldError, refreshDirtySnapshot } from '/components/modal.js';
 import { stagger, scheduleUndoableDelete, wireScrollFade } from '/utils/ux.js';
 import { t, formatDate, formatDayMonth, formatDateInput, parseDateInput, isDateInputValid } from '/i18n.js';
@@ -306,7 +307,7 @@ function parseMealRouteState(defaultWeek) {
   const context = Number(rawContext);
   const primaryMode = params.get('mode') || params.get('view');
   state.currentWeek = getMondayOf(validDate);
-  state.mode = ['status', 'meal-status', 'status-view'].includes(primaryMode) ? 'status' : 'choices';
+  state.mode = isDevicePrincipal() || ['status', 'meal-status', 'status-view'].includes(primaryMode) ? 'status' : 'choices';
   state.viewMode = params.get('layout') === 'timeline' ? 'timeline' : 'week';
   state.selectedMemberId = Number.isFinite(member) && member > 0 ? member : state.currentUserId;
   state.selectedContextId = rawContext === 'home'
@@ -563,11 +564,14 @@ export async function render(container, { user }) {
   renderWeekExperienceHeader();
   renderWeekGrid();
   renderRecipeSidebar();
+  if (isDevicePrincipal()) {
+    for (const selector of ['#meal-view-choices', '#meal-plan-manage', '#meal-prepare-week', '#meal-choice-requests']) container.querySelector(selector)?.setAttribute('hidden', '');
+  }
   wireNav();
   wireRecipeSidebar();
   wireRailToggle();
   syncMealRouteState();
-  if (state.deepLinkFocus === 'meal-plan') {
+  if (!isDevicePrincipal() && state.deepLinkFocus === 'meal-plan') {
     requestAnimationFrame(() => openMealPlanManager());
   }
 
@@ -650,6 +654,7 @@ function selectedMealMember(model = activeWeekModel()) {
 }
 
 function canActForSelectedMember(model = activeWeekModel()) {
+  if (isDevicePrincipal()) return false;
   if (Number(state.selectedMemberId) === Number(state.currentUserId)) return true;
   const member = selectedMealMember(model);
   return Boolean(model.can_act_for || member?.can_act_for);
@@ -865,6 +870,7 @@ function legacyMealForOccurrence(occurrence) {
 }
 
 function renderOccurrenceActions(occurrence) {
+  if (isDevicePrincipal()) return '';
   const meal = legacyMealForOccurrence(occurrence);
   if (!meal?.id) return '';
   const activeConflicts = (meal.calendar_conflicts || []).filter((conflict) => conflict.active);
@@ -1080,6 +1086,7 @@ function renderChoiceForm(occurrence, decision, canAct) {
 }
 
 function canEditOccurrenceMenu(occurrence) {
+  if (isDevicePrincipal()) return false;
   const controls = occurrence.controls || {};
   const explicitControls = Object.keys(controls).length > 0;
   return occurrenceSelectionPolicy(occurrence) !== 'personal_choice'
@@ -1618,7 +1625,7 @@ function renderRecipeSidebar() {
   state.recipes.forEach((recipe) => {
     const card = document.createElement('article');
     card.className = 'recipe-sidebar__card';
-    card.draggable = true;
+    card.draggable = !isDevicePrincipal();
     card.dataset.recipeId = String(recipe.id);
 
     const titleEl = document.createElement('div');
@@ -3185,6 +3192,7 @@ async function changeMealWeek(nextWeek) {
 
 function wireNav() {
   const switchMode = (mode) => {
+    if (isDevicePrincipal() && mode !== 'status') return;
     state.mode = mode;
     state.viewMode = 'week';
     state.expandedOccurrences.clear();

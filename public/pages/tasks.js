@@ -1,3 +1,6 @@
+import { claimTask } from '/components/device-task-claim.js';
+import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
+import { isDevicePrincipal, deviceBootstrap } from '/utils/device-context.js';
 /**
  * Modul: Aufgaben (Tasks)
  * Zweck: Listenansicht mit Filtern, Gruppierung, CRUD-Modal, Subtask-Verwaltung
@@ -86,6 +89,13 @@ function catLabel(key, categories = state.categories) {
 function catSortIndex(key, categories = state.categories) {
   return catSortIndexOf(key, categories);
 }
+
+// Device preferences cannot read or overwrite the administrator's saved Task filters.
+const temporaryTaskViews = new Map();
+const taskViewStorage = {
+  getItem(key) { if(deviceBootstrap()?.temporary) return temporaryTaskViews.get(key) ?? null; return localStorage.getItem(isDevicePrincipal() ? 'device:' + deviceBootstrap().device.id + ':' + key : key); },
+  setItem(key,value) { if(deviceBootstrap()?.temporary) {temporaryTaskViews.set(key,String(value));return;} localStorage.setItem(isDevicePrincipal() ? 'device:' + deviceBootstrap().device.id + ':' + key : key,value); },
+};
 
 const TASK_GROUP_MODES_KEY = 'yuvomi:taskGroupModes';
 const TASK_SORT_STATE_KEY = 'yuvomi:taskSortState';
@@ -304,13 +314,13 @@ function toggleGroup(mode, id) {
   if (state.collapsedGroups.has(key)) state.collapsedGroups.delete(key);
   else state.collapsedGroups.add(key);
   try {
-    localStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...state.collapsedGroups]));
+    taskViewStorage.setItem(COLLAPSED_GROUPS_KEY, JSON.stringify([...state.collapsedGroups]));
   } catch { /* Privatmodus/Quota: der Zustand gilt dann nur fuer diese Sitzung */ }
 }
 
 function loadCollapsedGroups() {
   try {
-    const raw = JSON.parse(localStorage.getItem(COLLAPSED_GROUPS_KEY) ?? '[]');
+    const raw = JSON.parse(taskViewStorage.getItem(COLLAPSED_GROUPS_KEY) ?? '[]');
     state.collapsedGroups = new Set(Array.isArray(raw) ? raw.filter((k) => typeof k === 'string') : []);
   } catch {
     state.collapsedGroups = new Set();
@@ -584,9 +594,11 @@ function renderParticipantStrip(task, participants) {
   </div>`;
 }
 
+function canToggleTask(task) { return canTask(task, isDevicePrincipal() && task?.status === 'done' ? 'reopen' : 'complete'); }
+
 function canToggleCardSubtask(task, subtask) {
   return !isArchived(task) && !isArchived(subtask) && !isExpired(task) && !isExpired(subtask)
-    && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, 'complete')
+    && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, isDevicePrincipal() && subtask.status === 'done' ? 'reopen' : 'complete')
     && subtask.supervision_action?.can_complete !== false;
 }
 
@@ -604,6 +616,7 @@ function renderActivitySubtasks(task, expanded) {
         <svg class="subtask-item__checkbox-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subtask.status === 'done' ? 'm20 6-11 11-5-5' : ''}"></path></svg>
       </button>
       <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_optional ? ' · Optional' : ''}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
+      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--sm" data-action="approve-device-task" data-id="${subtask.id}" aria-label="Supervisor approval: ${esc(subtask.title)}">Supervisor approval</button>` : ''}
       <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(subtask) }))}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
@@ -679,11 +692,11 @@ function renderTaskCard(task, opts = {}) {
         ${names ? `<span class="activity-card__assignee">${esc(names)}</span>` : ''}
       </div>
       <div class="activity-card__controls">
-        <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false ? 'disabled' : ''}
+        <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
           title="${esc(statusLabel)}" aria-label="${esc(isExpired(task) ? 'Expired. Reopen from Task details to resume.' : `${statusLabel}. ${isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`)}">
           <i data-lucide="${isExpired(task) ? 'clock-alert' : 'check'}" class="task-status-btn__check" aria-hidden="true"></i>
         </button>
-        ${board && !isExpired(task) && canTask(task, 'complete') && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
+        ${board && !isExpired(task) && canToggleTask(task) && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
           data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
       </div>
     </div>
@@ -1361,12 +1374,12 @@ function syncActiveGroupMode() {
 
 function persistTaskLayoutState() {
   try {
-    localStorage.setItem(TASK_GROUP_MODES_KEY, JSON.stringify(state.groupModes));
-    localStorage.setItem(TASK_SORT_STATE_KEY, JSON.stringify({
+    taskViewStorage.setItem(TASK_GROUP_MODES_KEY, JSON.stringify(state.groupModes));
+    taskViewStorage.setItem(TASK_SORT_STATE_KEY, JSON.stringify({
       sheet: state.sheetSort,
       buckets: [...state.bucketSorts.entries()],
     }));
-    localStorage.setItem(TASK_PROGRESS_MODE_KEY, state.progressMode);
+    taskViewStorage.setItem(TASK_PROGRESS_MODE_KEY, state.progressMode);
   } catch {}
 }
 
@@ -1378,12 +1391,12 @@ function loadTaskLayoutState() {
   // Wall dashboard presentation remains separate from this Tasks module.
   state.boardScope = deviceTaskBoardScope();
   try {
-    const storedGroups = JSON.parse(localStorage.getItem(TASK_GROUP_MODES_KEY) || '{}');
+    const storedGroups = JSON.parse(taskViewStorage.getItem(TASK_GROUP_MODES_KEY) || '{}');
     for (const key of ['list', 'personal', 'household', 'calendar']) {
       if (groupValues.has(storedGroups[key])) state.groupModes[key] = storedGroups[key];
     }
 
-    const storedSort = JSON.parse(localStorage.getItem(TASK_SORT_STATE_KEY) || '{}');
+    const storedSort = JSON.parse(taskViewStorage.getItem(TASK_SORT_STATE_KEY) || '{}');
     if (sortValues.has(storedSort.sheet?.field) && ['asc', 'desc'].includes(storedSort.sheet?.direction)) {
       state.sheetSort = storedSort.sheet;
     }
@@ -1391,7 +1404,7 @@ function loadTaskLayoutState() {
       typeof key === 'string' && sortValues.has(value?.field) && ['asc', 'desc'].includes(value?.direction)
     ));
 
-    const progressMode = localStorage.getItem(TASK_PROGRESS_MODE_KEY);
+    const progressMode = taskViewStorage.getItem(TASK_PROGRESS_MODE_KEY);
     if (PROGRESS_MODES().some((mode) => mode.value === progressMode)) state.progressMode = progressMode;
   } catch {
     state.bucketSorts = new Map();
@@ -1503,11 +1516,11 @@ function patchCardSubtaskFeedback(list, task, pending, queue) {
       statusButton.title = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired' })[status];
       statusButton.setAttribute('aria-label', `${statusButton.title}. ${status === 'done' ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`);
       statusButton.setAttribute('aria-busy', String(queue.busy));
-      statusButton.disabled = queue.busy || isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
+      statusButton.disabled = queue.busy || isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
     }
     const drag = card.querySelector('[data-task-drag-handle]');
     if (drag) {
-      drag.disabled = queue.busy || isArchived(task) || isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
+      drag.disabled = queue.busy || isArchived(task) || isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
       drag.draggable = !drag.disabled;
     }
     const points = card.querySelector('.activity-card__points');
@@ -2205,7 +2218,13 @@ function applyTaskFormPermissions(panel, task, controls) {
     controls.skills.setReadOnly(true);
     for (const field of panel.querySelectorAll('[data-task-subtask-row] .task-skill-picker input, [data-task-subtask-row] .task-skill-picker button')) field.disabled = true;
   }
-  if (!allowed('edit') && task) controls.subtasks?.setReadOnly(true);
+  if (!allowed('edit') && task || isDevicePrincipal()) controls.subtasks?.setReadOnly(true);
+  if (isDevicePrincipal()) {
+    // Normal editor, explicit existing device capabilities; human-only definition
+    // surfaces never imply authority merely because this form is visible.
+    for (const field of panel.querySelectorAll('#task-status, #task-assignment-mode, #task-activity-template, #task-location-fieldset input, #task-location-fieldset select, #task-location-fieldset textarea, #task-visibility, #task-locked, #task-countdown, #task-sync-target, .reminder-section input, .reminder-section select, .reminder-section button')) field.disabled = true;
+    for (const element of panel.querySelectorAll('[data-doc-attach], .reminder-section')) element.hidden = true;
+  }
   if (task?.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task))) {
     for (const field of panel.querySelectorAll('#task-status, #task-sync-target, .reminder-section input, .reminder-section select, .reminder-section button, [data-doc-attach] input, [data-doc-attach] button')) {
       field.disabled = true;
@@ -2226,6 +2245,10 @@ function applyTaskFormPermissions(panel, task, controls) {
 }
 
 function permittedTaskBody(body, task) {
+  if (isDevicePrincipal()) {
+    const supported = new Set(['title','description','assigned_to','start_date','start_time','due_date','due_time','points','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','expected_revision','expected_parent_revision']);
+    body = Object.fromEntries(Object.entries(body).filter(([key]) => supported.has(key)));
+  }
   if (!task) return body;
   const gates = {
     change_priority: ['priority'], change_points: ['points'], change_category_tags: ['category', 'tags'],
@@ -2468,7 +2491,7 @@ async function saveTaskRecord(form, body) {
     // cannot rule out the earlier commit, so it must not discard the identity.
     if (error.status >= 400 && error.status < 500 && ![408, 409].includes(error.status) && !attempt.ambiguous) {
       taskCreateAttempts.delete(form);
-      taskFormControls.get(form)?.subtasks?.setReadOnly(false);
+      taskFormControls.get(form)?.subtasks?.setReadOnly(isDevicePrincipal());
     } else attempt.ambiguous = true;
     throw error;
   }
@@ -2659,7 +2682,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
       await closeModal({ force: true });
       return;
     }
-    if (controls.originalTask?.recurrence_series_id != null
+    if (!isDevicePrincipal() && controls.originalTask?.recurrence_series_id != null
         && JSON.stringify(edited.definition) !== JSON.stringify(controls.editBaseline.definition)) {
       // Validation precedes this choice; uploads and all mutations follow it.
       submitBtn.disabled = false; submitBtn.textContent = originalLabel;
@@ -2681,7 +2704,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   try {
     const historicalFuture = body.edit_scope === 'future' && (controls?.originalTask?.status === 'done'
       || isExpired(controls?.originalTask) || isArchived(controls?.originalTask));
-    documentIds = !historicalFuture && taskDocuments ? await taskDocuments.commit() : null;
+    documentIds = !isDevicePrincipal() && !historicalFuture && taskDocuments ? await taskDocuments.commit() : null;
   } catch (err) {
     resetSubmit(err.message || t('common.errorGeneric'));
     btnError(submitBtn);
@@ -2694,7 +2717,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     if(controls?.lastSaveResponse?.rotation_warning)window.yuvomi.showToast(controls.lastSaveResponse.rotation_warning,'info');
 
     // Erinnerung speichern oder löschen (Vorbedingungen bereits oben geprüft)
-    if (savedTaskId && !controls?.lastSaveResponse?.series_edit?.current_preserved) {
+    if (!isDevicePrincipal() && savedTaskId && !controls?.lastSaveResponse?.series_edit?.current_preserved) {
       if (wantsReminder) {
         await api.post('/reminders', { entity_type: 'task', entity_id: savedTaskId, remind_at: remindAt });
         refreshReminders();
@@ -2747,7 +2770,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
     await onChanged();
   } catch (err) {
     resetSubmit(err.status === 409 ? `${err.data?.error || err.message} Your draft has been kept. Close and reopen the Task to review current changes before saving again.` : err.message);
-    if (!taskCreateAttempts.has(form)) controls?.subtasks?.setReadOnly(false);
+    if (!taskCreateAttempts.has(form)) controls?.subtasks?.setReadOnly(isDevicePrincipal());
     applyTaskFormPermissions(form, controls?.originalTask, controls);
     btnError(submitBtn);
   }
@@ -2948,7 +2971,7 @@ function wireKanbanDrag(container) {
     const handle = taskDragHandle(e.target, board);
     const card = handle?.closest('.kanban-card[data-task-id]');
     const task = card && taskSnapshot(card.dataset.taskId);
-    if (!task || !canTask(task, 'complete') || task.supervision_action?.can_complete === false) { e.preventDefault(); return; }
+    if (!task || !canToggleTask(task) || task.supervision_action?.can_complete === false) { e.preventDefault(); return; }
     state.dragTaskId = card.dataset.taskId;
     state.dragBucketKey = card.closest('[data-bucket-key]')?.dataset.bucketKey || null;
     card.classList.add('kanban-card--dragging');
@@ -3061,7 +3084,7 @@ function wireKanbanTouch(container) {
   const dispose = bindTaskCardTouchDrag(board, {
     canDrag: card => {
       const task = taskSnapshot(card.dataset.taskId);
-      return !!task && canTask(task, 'complete') && task.supervision_action?.can_complete !== false;
+      return !!task && canToggleTask(task) && task.supervision_action?.can_complete !== false;
     },
     onDragStateChange: active => {
       state.dragTaskId = active ? board.querySelector('.kanban-card--dragging')?.dataset.taskId : null;
@@ -3069,7 +3092,7 @@ function wireKanbanTouch(container) {
     },
     onDrop: async ({ taskId, sourceBucketKey, zone }) => {
       const task = taskSnapshot(taskId);
-      if (!task || !canTask(task, 'complete')) return;
+      if (!task || !canToggleTask(task)) return;
       const targetBucketKey = zone.closest('[data-bucket-key]')?.dataset.bucketKey || null;
       if (sourceBucketKey && targetBucketKey && sourceBucketKey !== targetBucketKey) {
         window.yuvomi.showToast(t('tasks.moveBetweenBucketsHint'), 'default');
@@ -3131,7 +3154,7 @@ function renderHistoryEntry(entry) {
   const expired = entry.event_type === 'expired';
   const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
   // Expiration is automatic; a missing actor is not a removed household member.
-  const name = expired ? '' : entry.source_device_name ? `From ${entry.source_device_name}` : entry.user_name || t('tasks.historyUnknownMember');
+  const name = expired ? '' : entry.source_device_name ? [entry.user_name, `From ${entry.source_device_name}`].filter(Boolean).join(' · ') : entry.user_name || t('tasks.historyUnknownMember');
   const avatar = expired ? '<i data-lucide="clock" aria-hidden="true"></i>' : entry.source_device_name ? '<i data-lucide="monitor" aria-hidden="true"></i>' : renderAvatarStack(
     [{ display_name: name, color: entry.user_color, avatar_data: entry.user_avatar }],
     { size: 32, maxVisible: 1 },
@@ -3962,7 +3985,7 @@ function isAssignedToMe() {
 }
 
 function persistAssignedToMe() {
-  try { localStorage.setItem(ASSIGNED_TO_ME_KEY, isAssignedToMe() ? '1' : '0'); } catch {}
+  try { taskViewStorage.setItem(ASSIGNED_TO_ME_KEY, isAssignedToMe() ? '1' : '0'); } catch {}
 }
 
 /** Ist dieser Tag gerade gefiltert? Schreibweise zählt dabei nicht. */
@@ -4026,7 +4049,7 @@ async function toggleValueFilter(key, value, container) {
 
 function getRecentFilters() {
   try {
-    return JSON.parse(localStorage.getItem(RECENT_FILTERS_KEY) ?? '[]').map(normalizeFilterSet);
+    return JSON.parse(taskViewStorage.getItem(RECENT_FILTERS_KEY) ?? '[]').map(normalizeFilterSet);
   } catch { return []; }
 }
 
@@ -4041,7 +4064,7 @@ function saveRecentFilter(filters) {
   const key = keyOf(set);
   const recent = getRecentFilters().filter((f) => keyOf(f) !== key);
   recent.unshift(set);
-  try { localStorage.setItem(RECENT_FILTERS_KEY, JSON.stringify(recent.slice(0, RECENT_FILTERS_MAX))); } catch {}
+  try { taskViewStorage.setItem(RECENT_FILTERS_KEY, JSON.stringify(recent.slice(0, RECENT_FILTERS_MAX))); } catch {}
 }
 
 const wiredTaskSwipeRows = new WeakSet();
@@ -4065,7 +4088,7 @@ function wireSwipeGestures(container) {
       run: async (row) => {
         const taskId = row.dataset.swipeId;
         const snapshot = taskSnapshot(taskId);
-        if (!snapshot || !canTask(snapshot, 'complete')) { await loadTasks(container); return; }
+        if (!snapshot || !canToggleTask(snapshot)) { await loadTasks(container); return; }
         try {
           const changed = await changeTaskStatus(snapshot, snapshot.status === 'done' ? 'in_progress' : 'done');
           await loadTasks(container);
@@ -4193,7 +4216,7 @@ function wireFilterChips(container) {
   container.querySelector('#filter-clear-all')?.addEventListener('click', async () => {
     state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
     state.showFuture = false;
-    try { localStorage.setItem(SHOW_FUTURE_KEY, '0'); } catch {}
+    try { taskViewStorage.setItem(SHOW_FUTURE_KEY, '0'); } catch {}
     persistAssignedToMe();
     renderFilters(container);
     await loadTasks(container);
@@ -4202,7 +4225,7 @@ function wireFilterChips(container) {
   // "Geplante anzeigen" Toggle
   container.querySelector('#filter-show-future')?.addEventListener('click', async () => {
     state.showFuture = !state.showFuture;
-    try { localStorage.setItem(SHOW_FUTURE_KEY, state.showFuture ? '1' : '0'); } catch {}
+    try { taskViewStorage.setItem(SHOW_FUTURE_KEY, state.showFuture ? '1' : '0'); } catch {}
     renderFilters(container);
     await loadTasks(container);
   });
@@ -4336,7 +4359,7 @@ function activateTaskView(container, value) {
   container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
   state.viewMode = nextMode;
   state.boardScope = deviceTaskBoardScope();
-  localStorage.setItem('yuvomi-tasks-view', state.viewMode);
+  taskViewStorage.setItem('yuvomi-tasks-view', state.viewMode);
   syncActiveGroupMode();
   persistTaskLayoutState();
   renderFilters(container);
@@ -4832,7 +4855,7 @@ function wireBulkActions(container) {
         const status = btn.dataset.status;
         for (const id of taskIds) {
           const task = taskSnapshot(id);
-          if (task && canTask(task, 'complete')) await changeTaskStatus(task, status);
+          if (task && canToggleTask(task)) await changeTaskStatus(task, status);
         }
         window.yuvomi.showToast(t('tasks.bulkStatusChanged'), 'success');
       } else if (action === 'bulk-archive') {
@@ -4963,7 +4986,7 @@ function wireTaskList(container) {
 
     if (action === 'toggle-status') {
       const task = taskSnapshot(id);
-      if (!task || !canTask(task, 'complete')) return;
+      if (!task || !canToggleTask(task)) return;
       target.disabled = true;
       try {
         await changeTaskStatus(task, task.status === 'done' ? 'in_progress' : 'done');
@@ -4975,7 +4998,7 @@ function wireTaskList(container) {
     if (action === 'claim-activity') {
       target.disabled = true;
       try {
-        await api.post(`/automation/tasks/${id}/claim`, taskRevision(taskSnapshot(id)));
+        if (!await claimTask(taskSnapshot(id))) { target.disabled = false; return; }
         window.yuvomi.showToast('Task claimed.', 'success');
         await loadTasks(container);
       } catch (err) {
@@ -4992,6 +5015,25 @@ function wireTaskList(container) {
       if (open) state.collapsedSubtasks.add(taskId);
       else state.expandedSubtasks.add(taskId);
       renderTaskList(container);
+      return;
+    }
+
+    if (action === 'approve-device-task') {
+      const parent = state.tasks.find(task => Number(task.id) === Number(target.closest('article[data-task-id]')?.dataset.taskId));
+      const child = actionableSubtasks(parent).find(task => Number(task.id) === Number(id));
+      if (!canApproveDeviceTask(child)) return;
+      try {
+        const result = await approveDeviceTask(child, parent);
+        if (result && container.isConnected) {
+          taskPageLoaders.get(container)?.invalidate();
+          const fresh = result.data?.parent_task;
+          if (fresh && Number(fresh.revision) >= Number(taskSnapshot(fresh.id)?.revision || 0)) {
+            state.tasks = state.tasks.map(task => Number(task.id) === Number(fresh.id) ? fresh : task);
+            state.tasks = cardSubtaskController(container).reconcile(state.tasks);
+            renderTaskList(container);
+          } else await loadTasks(container);
+        }
+      } catch(error) { window.yuvomi.showToast(error.data?.error || error.message, 'danger'); }
       return;
     }
 
@@ -5314,7 +5356,7 @@ export async function render(container, { user }) {
 
   // „Mir zugewiesen" pro Gerät wiederherstellen (setzt assigned_to auf die eigene ID)
   try {
-    if (state.currentUserId != null && localStorage.getItem(ASSIGNED_TO_ME_KEY) === '1') {
+    if (state.currentUserId != null && taskViewStorage.getItem(ASSIGNED_TO_ME_KEY) === '1') {
       if (!hasFilter('assigned_to', state.currentUserId)) {
         state.filters.assigned_to = [...state.filters.assigned_to, String(state.currentUserId)];
       }
@@ -5323,7 +5365,7 @@ export async function render(container, { user }) {
 
   // View-Mode: URL-Parameter > localStorage > Default 'list'
   const urlView = new URLSearchParams(window.location.search).get('view');
-  const savedView = localStorage.getItem('yuvomi-tasks-view');
+  const savedView = taskViewStorage.getItem('yuvomi-tasks-view');
   const KNOWN_VIEWS = ['list', 'kanban', 'calendar', 'history'];
   state.viewMode = KNOWN_VIEWS.includes(urlView) ? urlView
     : KNOWN_VIEWS.includes(savedView) ? savedView
@@ -5331,7 +5373,7 @@ export async function render(container, { user }) {
   loadTaskLayoutState();
 
   // showFuture aus localStorage wiederherstellen
-  try { state.showFuture = localStorage.getItem(SHOW_FUTURE_KEY) === '1'; } catch {}
+  try { state.showFuture = taskViewStorage.getItem(SHOW_FUTURE_KEY) === '1'; } catch {}
 
   const isKanban = state.viewMode === 'kanban';
   // Was nur die Aufgabenliste betrifft, blendet `syncViewChrome` gleich nach

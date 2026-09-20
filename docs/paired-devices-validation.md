@@ -1,5 +1,9 @@
 # Paired-device validation evidence
 
+This is the original paired-device evidence. See the
+[normal screens and scoped approval follow-up](paired-device-normal-views-20260919.md)
+for the current interface, additive migration 10042, and new focused validation.
+
 This records the locally executed API, projection, database-lease and migration
 checks for the paired-device candidate. It does not constitute production or
 physical-kiosk validation. Final SHA, Task/browser evidence and readiness belong

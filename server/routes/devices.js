@@ -7,7 +7,8 @@ import {generateToken,csrfMiddleware,publishCsrfToken} from '../middleware/csrf.
 import {clientPermissions} from '../permissions.js';
 import {deviceDashboard} from '../services/device-content.js';
 import {deviceTaskList,deviceTaskDetail,deviceTaskStatus,deviceTaskClaim} from '../services/device-tasks.js';
-import {deviceTaskCreate,deviceTaskUpdate} from '../services/device-task-definitions.js';
+import {deviceTaskCreateOnce,deviceTaskUpdate} from '../services/device-task-definitions.js';
+import {beginDeviceApproval,readDeviceApproval,cancelDeviceApproval} from '../services/device-approval.js';
 import {DEVICE_COOKIE,DEVICE_ACTIONS,deviceCookie,deviceError,devicePreset,publicDevice,devicePrincipal,auditDevice,
   updateDevice,revokeDevice,beginPairing,approvePairing,pairingStatus,claimPairing,readDeviceContext,assertDeviceContext,
   deviceContextPayload,isTemporaryContext,beginTemporary,returnToDevice,touchTemporary,retireBrowserSession,deviceRequestStillValid} from '../services/devices.js';
@@ -60,6 +61,11 @@ deviceRouter.post('/launch',guarded(async(req,res)=>{
     (ctx.credential.temporary_sid===req.sessionID || (req.session.pendingTwoFactor && req.session.deviceLoginIntent?.expiresAt>Date.now()))) {
     delete req.session.deviceLoginHandoff;await save(req);return contextResponse(req,res,ctx);
   }
+  if(req.session.deviceApprovalIntent) {
+    d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(ctx.credential.id);
+    delete req.session.deviceApprovalIntent;delete req.session.deviceApprovalError;delete req.session.pendingTwoFactor;delete req.session.oidc;
+    await save(req);
+  }
   if(ctx.credential.temporary_sid||ctx.credential.login_intent_at) {
     returnToDevice(d,ctx.credential);retireBrowserSession(d,req.sessionID);await regenerate(req);
   } else if(req.session?.userId) {retireBrowserSession(d,req.sessionID);await regenerate(req);}
@@ -78,12 +84,24 @@ deviceRouter.post('/return',guarded(async(req,res)=>{
 }));
 deviceRouter.post('/activity',guarded((req,res)=>contextResponse(req,res,touchTemporary(db.get(),req))));
 deviceRouter.use((req,res,next)=>req.devicePrincipal?next():res.status(403).json({error:'Return to the device view for display actions.'}));
+deviceRouter.post('/tasks/:id/approval/begin',rate,guarded(async(req,res)=>{
+  const result=beginDeviceApproval(db.get(),req,Number(req.params.id),req.body);await save(req);res.status(201).json(result);
+}));
+deviceRouter.get('/approval',guarded((req,res)=>res.json(readDeviceApproval(db.get(),req))));
+deviceRouter.post('/approval/cancel',guarded(async(req,res)=>{
+  if(!req.body?.approval_id)throw deviceError('Choose the approval to cancel.');
+  const result=cancelDeviceApproval(db.get(),req,{expectedId:req.body.approval_id});await save(req);res.json(result);
+}));
 deviceRouter.get('/dashboard',guarded((req,res)=>{
   const d=db.get(),p=req.devicePrincipal;
   res.json({data:{...deviceDashboard(d,p),device:publicDevice(req.deviceContext.device)}});
 }));
 deviceRouter.get('/tasks',guarded((req,res)=>res.json({data:deviceTaskList(db.get(),req.devicePrincipal)})));
-deviceRouter.post('/tasks',guarded((req,res)=>res.status(201).json({data:deviceTaskCreate(db.get(),req.devicePrincipal,req.body)})));
+deviceRouter.post('/tasks',guarded((req,res)=>{
+  const result=deviceTaskCreateOnce(db.get(),req.devicePrincipal,req.body,req.get('Idempotency-Key'));
+  if(result.replayed)res.set('Idempotent-Replayed','true');
+  res.status(201).json({data:result.data});
+}));
 deviceRouter.patch('/tasks/:id',guarded((req,res)=>res.json({data:deviceTaskUpdate(db.get(),req.devicePrincipal,Number(req.params.id),req.body)})));
 deviceRouter.get('/tasks/:id',guarded((req,res)=>res.json({data:deviceTaskDetail(db.get(),req.devicePrincipal,Number(req.params.id))})));
 deviceRouter.patch('/tasks/:id/status',guarded((req,res)=>res.json({data:deviceTaskStatus(db.get(),req.devicePrincipal,Number(req.params.id),req.body)})));

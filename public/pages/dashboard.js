@@ -6,7 +6,8 @@
 
 import { api, auth } from '/api.js';
 import { displayAppName } from '/utils/branding.js';
-import { canSeeWidget } from '/permissions.js';
+import { canSeeWidget, canCapability, navModuleAccess } from '/permissions.js';
+import { isDevicePrincipal } from '/utils/device-context.js';
 import { t, formatDate, formatTime, timeSuffix, getLocale, getNumberFormat } from '/i18n.js';
 import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 import { resolveEventColor } from '/utils/event-color.js';
@@ -39,6 +40,7 @@ import { prefersInkText } from '/utils/contrast.js';
 import { openQuickLinksManager } from '/components/quick-links-manager.js';
 import { attachOverlay } from '/utils/overlay-history.js';
 import { mountWallDashboard } from '/components/wall-dashboard.js';
+import { renderRotationContext } from '/components/rotation-bindings.js';
 
 // Hält den AbortController des aktuellen FAB-Listeners - wird bei jedem render() erneuert.
 let _fabController = null;
@@ -294,6 +296,9 @@ const MODULE_FOR_WIDGET = { tasks: 'tasks', calendar: 'calendar', shopping: 'sho
  * nicht sieht. Er wird bei jedem render() zurückgesetzt und nach dem Laden
  * gesetzt - ein Stand von vorhin darf keine Kachel versprechen. */
 let countdownAvailable = false;
+// The shared-order slice is provided only by an authorized dashboard projection.
+// Adding a widget ID must not promise access to another account's private data.
+let rotationsAvailable = false;
 
 function setCountdownAvailability(items) {
   countdownAvailable = Array.isArray(items) && visibleCountdowns(items).length > 0;
@@ -333,6 +338,7 @@ function isWidgetModuleEnabled(id) {
   // beiden Listen, so wie ein abgeschaltetes Modul auch.
   if (id === 'family' && isSoloHousehold()) return false;
   if (id === 'countdown' && !countdownAvailable) return false;
+  if (id === 'rotations' && !rotationsAvailable) return false;
   return true;
 }
 
@@ -360,6 +366,7 @@ function widgetLabel(id) {
     metrics:  () => t('dashboard.metrics'),
     countdown: () => t('dashboard.countdownTitle'),
     quicklinks: () => t('dashboard.quickLinksTitle'),
+    rotations: () => 'Shared rotation order',
   };
   return (map[id] ?? (() => id))();
 }
@@ -371,6 +378,7 @@ function widgetLabel(id) {
  * der vier Dashboard-eigenen Karten (Wetter, Uhr, Kennzahlen, Countdown), die
  * keine Module sind, aber dieselbe Absender-Rolle im Kopf tragen. */
 function widgetIcon(id) {
+  if (id === 'rotations') return 'repeat';
   return MODULE_ICON[id] ?? MODULE_ICON.dashboard;
 }
 
@@ -1763,6 +1771,16 @@ function renderMetricTiles(data, currency, shown = new Set()) {
 // Belohnungen-Widget (Familien-Punktestand)
 // --------------------------------------------------------
 
+function renderRotationsWidget(rotations) {
+  const rows = Array.isArray(rotations) ? rotations : [];
+  return `<div class="widget widget--rotations">
+    ${widgetHeader('rotations', 'Shared rotation order', rows.length, null)}
+    <div class="widget__body">${rows.length
+      ? renderRotationContext(rows.map(row => ({ purpose_key: String(row.id), label: row.name, occurrence: row })))
+      : '<p class="text-muted">No shared rotation is available for this display.</p>'}</div>
+  </div>`;
+}
+
 function renderRewardsWidget(rewards) {
   const standings = Array.isArray(rewards?.standings) ? rewards.standings : [];
   if (!standings.length) {
@@ -2261,7 +2279,7 @@ function renderTodayCockpit(data, cfg = [], editing = false) {
 function renderDashboardOverview(user, editing = false, weather = null, updatedAt = null, scope = {}) {
   // Wer der Vorgabe des Haushalts folgt, hat nichts zurueckzusetzen; wer sie
   // setzen darf, ist Admin (#827).
-  const { followsDefault = true, canPublish = false } = scope;
+  const { followsDefault = true, canPublish = false, canCustomize = true } = scope;
   const dateLabel = mastheadDateLabel();
   const updated = !editing && updatedAt
     ? `<p class="dashboard-overview__updated">${esc(t('dashboard.updatedAt', { time: formatTime(updatedAt) }))}</p>`
@@ -2300,12 +2318,12 @@ function renderDashboardOverview(user, editing = false, weather = null, updatedA
             <button class="btn btn--secondary" id="dashboard-customize-cancel">${t('common.cancel')}</button>
             <button class="btn btn--primary" id="dashboard-customize-save">${t('common.save')}</button>
           </div>` : ''}
-          <button class="dashboard-icon-btn" id="dashboard-customize-btn"
+          ${canCustomize ? `<button class="dashboard-icon-btn" id="dashboard-customize-btn"
                   aria-label="${editing ? t('dashboard.customizeExit') : t('dashboard.customize')}"
                   title="${editing ? t('dashboard.customizeExit') : t('dashboard.customize')}"
                   aria-pressed="${editing ? 'true' : 'false'}">
             <i data-lucide="${editing ? 'x' : 'settings-2'}" aria-hidden="true"></i>
-          </button>
+          </button>` : ''}
           ${updated}
         </div>
       </div>
@@ -2561,6 +2579,7 @@ function renderDashboardLayout(cfg, data, weather, currency, { editing = false, 
     countdown: (size) => renderCountdowns(data.countdowns ?? [], size, data.countdownTotal),
     budget: () => renderBudgetWidget(data.budget ?? {}, currency),
     rewards: () => renderRewardsWidget(data.rewards ?? {}),
+    rotations: () => renderRotationsWidget(data.rotations),
     health: () => renderHealthWidget(data.health ?? {}),
     cycle: () => renderCycleWidget(data.cycle),
     housekeeping: () => renderHousekeepingWidget(data.housekeeping ?? {}, currency),
@@ -2708,7 +2727,7 @@ function renderShoppingLists(lists) {
       <div class="widget__empty">
         <i data-lucide="shopping-cart" class="empty-state__icon" aria-hidden="true"></i>
         <div>${t('dashboard.noShoppingLists')}</div>
-        ${emptyStateCta('/shopping', t('shopping.newListButton'))}
+        ${!isDevicePrincipal() || navModuleAccess('shopping') === 'write' ? emptyStateCta('/shopping', t('shopping.newListButton')) : ''}
       </div>
     </div>`;
   }
@@ -3448,7 +3467,9 @@ const FAB_ACTIONS = () => [
 ];
 
 function renderFab() {
-  const actionsHtml = FAB_ACTIONS().map((a) => `
+  const actions = FAB_ACTIONS().filter(action => !isDevicePrincipal() || (action.route === '/tasks' ? canCapability('tasks.create') : navModuleAccess(action.route.slice(1)) === 'write'));
+  if (!actions.length) return '';
+  const actionsHtml = actions.map((a) => `
     <button type="button" class="fab-action" data-route="${a.route}" tabindex="-1"
             aria-label="${a.label}">
       <span class="fab-action__label">${a.label}</span>
@@ -3752,6 +3773,7 @@ export async function render(container, { user }) {
   // Ein Stand von vorhin darf keine Kachel versprechen: erst nach dem Laden
   // wieder wahr (siehe die Notiz an `countdownAvailable`).
   setCountdownAvailability([]);
+  rotationsAvailable = false;
   let weather      = null;
   let weatherAutoLocate = false;
   let widgetConfig = DEFAULT_WIDGET_CONFIG;
@@ -3769,6 +3791,7 @@ export async function render(container, { user }) {
   // dann gibt es auch nichts zurueckzusetzen (#827).
   let followsDefault = true;
   const canPublish = user?.role === 'admin';
+  const canCustomize = !isDevicePrincipal();
   let isCustomizing = false;
   let currency     = 'EUR';
   let visibleMealTypes = MEAL_ORDER;
@@ -3785,6 +3808,7 @@ export async function render(container, { user }) {
       api.get('/preferences').catch(() => ({ data: {} })),
     ]);
     data         = dashRes;
+    rotationsAvailable = Array.isArray(data?.rotations);
     /* Die Zahlen an den Nav-Zielen und Modulkacheln kommen aus derselben
      * Antwort (#868). Sie hier hereinzureichen spart die zweite Aggregation,
      * die der Shell-Aufbau sonst beim Anmelden anstiess - `layoutHintQuery`
@@ -3822,6 +3846,7 @@ export async function render(container, { user }) {
           filtered.upcomingEvents = filtered.upcomingEvents.map(localizeBirthdayEvent);
         }
         data = filtered;
+        rotationsAvailable = Array.isArray(data?.rotations);
         setCountdownAvailability(data?.countdowns);
       } catch { /* die ungefilterte Antwort steht bereits - lieber mehr als nichts */ }
     }
@@ -3879,6 +3904,7 @@ export async function render(container, { user }) {
       }
       fresh.cycle = data.cycle;
       data = fresh;
+      rotationsAvailable = Array.isArray(data?.rotations);
       setCountdownAvailability(data?.countdowns);
       lastLoadedAt = new Date();
     } catch { /* der alte Stand bleibt stehen, statt die Seite zu leeren */ }
@@ -4224,7 +4250,7 @@ export async function render(container, { user }) {
     const weatherCardShown = cfg.some((w) => w.id === 'weather' && w.visible);
     setHtml(shell, `
       <section class="dashboard-masthead dashboard-masthead--${greetingPeriod()}${mastheadSlim}">
-        ${renderDashboardOverview(user, isCustomizing, weatherCardShown ? null : weather, lastLoadedAt, { followsDefault, canPublish })}
+        ${renderDashboardOverview(user, isCustomizing, weatherCardShown ? null : weather, lastLoadedAt, { followsDefault, canPublish, canCustomize })}
         ${cockpitHtml}
       </section>
       ${renderDashboardLayout(cfg, data, weather, currency, { editing: isCustomizing, visibleMealTypes, glanceHidden: !glanceVisible })}
@@ -4305,6 +4331,7 @@ export async function render(container, { user }) {
       // ein Refresh darf ihn nicht auf „nie geladen" zurückwerfen.
       fresh.cycle = data.cycle;
       data = fresh;
+      rotationsAvailable = Array.isArray(data?.rotations);
       lastLoadedAt = new Date();
       rebuildDashboard(widgetConfig);
     } catch { /* Hintergrund-Refresh: bewusst still */ }
@@ -4314,6 +4341,14 @@ export async function render(container, { user }) {
     if (!document.hidden) refreshDashboardData();
   }, 15 * 60 * 1000);
   _fabController.signal.addEventListener('abort', () => clearInterval(refreshTimerId));
+  // Device invalidations contain versions only. Read the same scoped dashboard
+  // projection; never resolve or advance a rotation from this display refresh.
+  let deviceRefreshTimer;
+  if (isDevicePrincipal()) window.addEventListener('task-data-changed', () => {
+    clearTimeout(deviceRefreshTimer);
+    deviceRefreshTimer = setTimeout(refreshDashboardData, 120);
+  }, { signal: _fabController.signal });
+  _fabController.signal.addEventListener('abort', () => clearTimeout(deviceRefreshTimer));
 
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) return;

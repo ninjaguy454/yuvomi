@@ -237,7 +237,7 @@ const api = {
 const auth = {
   login: async (username, password) => {
     const res = await api.post('/auth/login', { username, password });
-    setPermissions(res?.permissions);
+    setPermissions({ ...res?.permissions, principal_kind: res?.principal?.kind || res?.user?.kind || 'member' });
     setHouseholdSize(res?.householdSize);
     if (res?.user) broadcastSessionChange('login');
     return res;
@@ -246,7 +246,7 @@ const auth = {
   // Wiederherstellungscode sein - welcher es war, sagt die Antwort.
   verifyTwoFactor: async (code) => {
     const res = await api.post('/auth/2fa/verify', { code });
-    setPermissions(res?.permissions);
+    setPermissions({ ...res?.permissions, principal_kind: res?.principal?.kind || res?.user?.kind || 'member' });
     setHouseholdSize(res?.householdSize);
     if (res?.user) broadcastSessionChange('login');
     return res;
@@ -278,7 +278,7 @@ const auth = {
   me: async () => {
     const res = await api.get('/auth/me');
     if (res?.wallMode === true) setWallModeEnabled(true);
-    setPermissions(res?.permissions);
+    setPermissions({ ...res?.permissions, principal_kind: res?.principal?.kind || res?.user?.kind || 'member' });
     // Neben den Rechten die zweite Angabe, die JEDE Seite braucht und die
     // niemand einzeln holen soll: die Haushaltsgroesse (utils/household.js).
     setHouseholdSize(res?.householdSize);

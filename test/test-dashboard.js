@@ -1803,7 +1803,7 @@ test('Widget-Merge: eine fehlende Id landet an ihrer Default-Position, nicht hin
   // abgeleitet waere, koennte nie melden, dass die Liste sich geaendert hat.
   // Zuletzt nachgezogen fuer `quicklinks` (#469).
   const geprueft = widgets.WIDGET_IDS.length;
-  assert(geprueft === 17, `Reichweite: ${geprueft} Ids geprueft, nicht die erwarteten 17`);
+  assert(geprueft === 18, `Reichweite: ${geprueft} Ids geprueft, nicht die erwarteten 18`);
   const falsch = widgets.WIDGET_IDS.filter((id) => {
     const merged = widgets.normalizeDashboardConfig(layoutOhne(id));
     return merged.map((w) => w.id).join(',') !== widgets.WIDGET_IDS.join(',');

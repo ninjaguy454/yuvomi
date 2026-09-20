@@ -136,7 +136,7 @@ function assertPreserved(d,before,baseVersion) {
   assert.deepEqual(d.pragma('foreign_key_check'),[]);
 }
 
-for(const baseVersion of [10038,10039])test(`encrypted populated ${baseVersion} -> 10041 preserves household and Rotation evidence; restart does not replay`,()=>{
+for(const baseVersion of [10038,10039])test(`encrypted populated ${baseVersion} -> 10042 preserves household and Rotation evidence; restart does not replay`,()=>{
   assert.ok(ALL_MIGRATIONS.some(m=>m.version===10040),'shared Rotation migration 10040 must be present');
   const directory=mkdtempSync(join(tmpdir(),`rotation-shared-${baseVersion}-`)),file=join(directory,'database.db'),key=randomBytes(32).toString('hex');
   const open=(options={})=>{const d=new Database(file,options);d.pragma("cipher='sqlcipher'");d.pragma(`key="x'${Buffer.from(key).toString('hex')}'"`);return d;};
@@ -160,16 +160,16 @@ for(const baseVersion of [10038,10039])test(`encrypted populated ${baseVersion} 
       const result=spawnSync(process.execPath,['--input-type=module','-e',"const db=await import('./server/db.js');db.init();console.log('SCHEMA',db.currentVersion());db.get().close();"],
         {cwd:new URL('..',import.meta.url),encoding:'utf8',timeout:60000,env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:key,LOG_LEVEL:'info',NODE_ENV:'test'}});
       assert.equal(result.status,0,result.stdout+result.stderr);
-      assert.match(result.stdout+result.stderr,/SCHEMA 10041/);
+      assert.match(result.stdout+result.stderr,/SCHEMA 10042/);
       return [...(result.stdout+result.stderr).matchAll(/Migration (\d+) applied:/g)].map(match=>Number(match[1]));
     };
-    assert.deepEqual(boot(),baseVersion===10038?[10039,10040,10041]:[10040,10041]);
+    assert.deepEqual(boot(),baseVersion===10038?[10039,10040,10041,10042]:[10040,10041,10042]);
     d=open();assertPreserved(d,before,baseVersion);
     for(const table of ['rotation_group_schedules','rotation_group_schedule_versions','rotation_group_periods','task_rotation_periods','rotation_group_independent_seeds','rotation_occurrence_supersessions']) {
       assert.equal(d.prepare(`SELECT count(*) n FROM ${table}`).get().n,0,`${table}: upgrading must not infer shared ownership from old records`);
     }
     const afterHistory=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();
-    assert.equal(afterHistory.length,before.tables.schema_migrations.rows.length+(baseVersion===10038?3:2));
+    assert.equal(afterHistory.length,before.tables.schema_migrations.rows.length+(baseVersion===10038?4:3));
     if(baseVersion===10039) {
       assert.equal(d.prepare('SELECT count(*) n FROM rotation_occurrences').get().n,3);
       assert.equal(d.prepare('SELECT response_json FROM rotation_workflow_requests').get().response_json,'{"id":1,"occurrence_id":903}');
@@ -177,7 +177,7 @@ for(const baseVersion of [10038,10039])test(`encrypted populated ${baseVersion} 
     }
     d.close();assert.deepEqual(boot(),[]);
     d=open({readonly:true});assertPreserved(d,before,baseVersion);
-    assert.equal(d.prepare('SELECT max(version) v FROM schema_migrations').get().v,10041);
+    assert.equal(d.prepare('SELECT max(version) v FROM schema_migrations').get().v,10042);
     assert.deepEqual(d.prepare('SELECT * FROM schema_migrations ORDER BY version').all(),afterHistory);
   } finally {if(d?.open)d.close();rmSync(directory,{recursive:true,force:true});}
 });

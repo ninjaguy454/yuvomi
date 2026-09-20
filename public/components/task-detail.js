@@ -1,3 +1,6 @@
+import { claimTask } from '/components/device-task-claim.js';
+import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
+import { isDevicePrincipal } from '/utils/device-context.js';
 /**
  * Modul: Aufgaben-Leseansicht (geteilte Komponente)
  * Zweck: Eine Aufgabe ansehen und mit ihr arbeiten - Status weiterschalten,
@@ -637,7 +640,7 @@ function subtaskSupervision(task, subtask) {
 function subtaskPermitted(task, subtask, ctx) {
   const supervision = subtaskSupervision(task, subtask);
   return !ctx.busy && !ctx.refreshRequired && !isArchived(task) && !isExpired(task) && !isExpired(subtask)
-    && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, 'complete')
+    && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, isDevicePrincipal() && subtask.status === 'done' ? 'reopen' : 'complete')
     && !(supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete
       : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
 }
@@ -678,6 +681,13 @@ function subtaskRowNode(task, subtask, ctx) {
     toggle.disabled = !!pending || !!ctx.queue?.blocked || !subtaskPermitted(task, subtask, ctx);
     if (task.status === 'done' && subtask.is_optional) toggle.title = 'Reopen the parent Task before changing optional progress.';
     row.appendChild(toggle);
+    if (canApproveDeviceTask(subtask)) {
+      const approve = document.createElement('button'); approve.type = 'button';
+      approve.className = 'btn btn--secondary btn--sm'; approve.textContent = 'Supervisor approval';
+      approve.dataset.focusKey = 'approve-' + subtask.id; approve.dataset.deviceApproval = String(subtask.id);
+      approve.addEventListener('click', () => ctx.runMutation(approve, () => approveDeviceTask(subtask, task), {subtask, status:'done'}));
+      row.appendChild(approve);
+    }
     const context = subtaskContextNode(subtask, supervision, ctx);
     if (context) row.appendChild(context);
     if (pending) {
@@ -1304,6 +1314,21 @@ function statusSummaryNode(task, ctx) {
   });
   control.append(label, select);
   summary.appendChild(control);
+  if (canApproveDeviceTask(task)) {
+    const approve = document.createElement('button'); approve.type = 'button';
+    approve.className = 'btn btn--secondary btn--sm'; approve.textContent = 'Supervisor approval';
+    approve.dataset.focusKey = 'approve-' + task.id; approve.dataset.deviceApproval = String(task.id);
+    approve.addEventListener('click', () => ctx.runMutation(approve, () => approveDeviceTask(task)));
+    summary.appendChild(approve);
+  }
+  if (isDevicePrincipal()) {
+    for (const option of select.options) {
+      if (option.value === task.status) continue;
+      option.disabled = option.value === 'open' ? !canTask(task,'reset')
+        : task.status === 'done' ? !canTask(task,'reopen') : !canTask(task,'complete');
+    }
+    if (task.status === 'done') select.disabled = !canTask(task,'reopen') && !canTask(task,'reset');
+  }
   const priority = priorityNode(task.priority);
   if (priority) summary.appendChild(priority);
   const metrics = document.createElement('div'); metrics.className = 'task-detail-metrics';
@@ -1515,7 +1540,7 @@ function activityNode(task, ctx) {
       const row = document.createElement('p');
       const detail = entry.details || {};
       row.textContent = [labels[entry.event_type] || String(entry.event_type || 'Updated').replaceAll('_', ' '), detail.title,
-        entry.event_type === 'expired' ? null : detail.source_device?.name ? `From ${detail.source_device.name}` : entry.actor_name,
+        entry.event_type === 'expired' ? null : detail.source_device?.name ? [entry.actor_name, `From ${detail.source_device.name}`].filter(Boolean).join(' · ') : entry.actor_name,
         detail.source_device && detail.assigned_members?.length ? `Assigned to ${detail.assigned_members.map(member=>member.display_name).join(', ')}` : null,
         `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
       wrap.appendChild(row);
@@ -1971,7 +1996,7 @@ export function openTaskDetail({
     }
     const editing = document.querySelector('.detail-view__form');
     if (!editing || editing.hidden) {
-      const title = document.getElementById('shared-modal-title');
+      const title = pane?.closest('.modal-panel')?.querySelector('.modal-panel__title');
       if (title) title.textContent = task.title;
     }
     if (source === 'live') {
@@ -2058,7 +2083,7 @@ export function openTaskDetail({
 async function claimOpenTask(task, button, ctx) {
   const stop = btnLoading(button);
   try {
-    await api.post(`/automation/tasks/${task.id}/claim`, taskRevision(task));
+    if (!await claimTask(task)) { stop(); return; }
     task.activity_assignment_state = 'assigned';
     await closeDetailView({ force: true });
     window.yuvomi.showToast(t('tasks.claimedToast'), 'success');
@@ -2118,7 +2143,7 @@ function seriesHistoryNode(task, ctx = {}) {
       none.className = 'detail-history__empty';
       const terminal = activity?.data?.find(entry => ['completed', 'expired'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
       none.textContent = terminal
-        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.details?.source_device?.name ? `From ${terminal.details.source_device.name}` : terminal.actor_name,
+        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.details?.source_device?.name ? [terminal.actor_name, `From ${terminal.details.source_device.name}`].filter(Boolean).join(' · ') : terminal.actor_name,
           terminal.event_type === 'expired' ? 'Task expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
         : 'No completed or expired occurrences currently recorded.';
       list.appendChild(none);
@@ -2135,7 +2160,7 @@ function seriesHistoryNode(task, ctx = {}) {
       who.className = 'detail-history__who';
       who.textContent = entry.event_type === 'expired'
         ? 'Task expired · 0 completion points'
-        : ['Completed', entry.source_device_name ? `From ${entry.source_device_name}` : entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
+        : ['Completed', entry.source_device_name ? [entry.user_name, `From ${entry.source_device_name}`].filter(Boolean).join(' · ') : entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
       row.append(when, who);
       list.appendChild(row);
     }

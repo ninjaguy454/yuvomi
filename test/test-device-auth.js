@@ -23,6 +23,7 @@ const {csrfMiddleware}=await import('../server/middleware/csrf.js');
 const {createChangesStream}=await import('../server/services/change-stream.js');
 const {default:documentsRouter}=await import('../server/routes/documents.js');
 const {default:tasksRouter}=await import('../server/routes/tasks.js');
+const {deviceAppMiddleware}=await import('../server/services/device-app.js');
 const {setTaskSkills}=await import('../server/services/task-skills.js');
 const {reconcileTaskSupervision}=await import('../server/services/task-supervision.js');
 const d=db.get(),password='device-test-password';
@@ -31,6 +32,7 @@ for(const [id,name,role] of [[1,'parent','admin'],[2,'child','member'],[3,'secon
 const app=express();app.set('trust proxy','loopback');app.use(compression());app.use(express.json());app.use(sessionMiddleware);app.use((req,res,next)=>deviceBoundary(d,req,res,next));
 app.use('/api/v1/device',deviceRouter);app.use('/api/v1/devices',devicesRouter);app.use('/api/v1/auth',authRouter);app.use('/reader',readerRouter);
 app.use('/api/v1',requireAuth,csrfMiddleware);
+app.use('/api/v1',deviceAppMiddleware);
 app.get('/api/v1/tasks/changes',createChangesStream({table:'task_change_clock',canRead:()=>true,deniedMessage:'Sign-in required.'}));
 app.use('/api/v1/tasks',tasksRouter);
 app.use('/api/v1/documents',documentsRouter);
@@ -100,7 +102,7 @@ test('pairing is approved by a real administrator, single use, restricted and ex
  assert.notEqual(display.cookies.get('yuvomi.sid'),oldSession);
  assert.equal((await display.call('POST','/api/v1/device/pair/claim',{confirm_transition:true})).status,409);
  const identity=await ok(display,'POST','/api/v1/device/launch',{});
- assert.equal(identity.body.principal.kind,'device');assert.equal(identity.body.user,undefined);assert.equal(identity.body.permissions.admin,false);
+ assert.equal(identity.body.principal.kind,'device');assert.equal(identity.body.user.kind,'device');assert.equal(identity.body.user.id,null);assert.equal(identity.body.permissions.admin,false);
  assert.equal(identity.body.permissions.capabilities['tasks.create'],'none');assert.equal(identity.body.permissions.capabilities['device_tasks.complete'],'allow');
  assert.equal(d.prepare('SELECT COUNT(*) n FROM users').get().n,3,'no fake member added');
  const stored=credential(display);assert.notEqual(stored.token_hash,display.cookies.get(DEVICE_COOKIE));
@@ -119,7 +121,7 @@ test('unapproved and expired pairing reveal no household data or credential',asy
 
 test('device context rejects direct private and reward-manufacturing paths including cached keys, Reader, MCP and administrator bearer tokens',async()=>{
  const {client:display}=await pair('Boundary display');
- const paths=['tasks','tasks/1/duplicate','automation/tasks','automation/admin/activity-templates','automation/workflow-instances','rewards/adjustments','rewards/bonus','rewards/catalog','rewards/redemptions','permissions','auth/api-tokens','auth/users','documents/1/download','search','dashboard','notifications','automation/rotation-tracks/1','automation/rotation-occurrences/1/history'];
+ const paths=['tasks/1/duplicate','automation/tasks','automation/admin/activity-templates','automation/workflow-instances','rewards/adjustments','rewards/bonus','permissions','auth/api-tokens','documents/1/download','search','notifications','automation/rotation-tracks/1','automation/rotation-occurrences/1/history'];
  for(const path of paths)for(const method of ['GET','POST']){
   const result=await display.call(method,`/api/v1/${path}`,method==='POST'?{points:999,assigned_to:2}:undefined,{headers:{'Idempotency-Key':'repeat-privileged-request'}});
   assert.equal(result.status,403,`${method} ${path}`);assert.ok(!JSON.stringify(result.body).includes('PRIVATE'));
@@ -128,7 +130,8 @@ test('device context rejects direct private and reward-manufacturing paths inclu
  const raw='yuvomi_device_test_admin_token';d.prepare('INSERT INTO api_tokens(name,token_hash,token_prefix,created_by,subject_user_id) VALUES(?,?,?,?,?)').run('Boundary fixture token',crypto.createHash('sha256').update(raw).digest('hex'),'yuvomi_test',1,1);
  for(const headers of [{Authorization:`Bearer ${raw}`},{'X-API-Key':raw},{'api-key':raw}])assert.equal((await display.call('POST','/api/v1/tasks',{title:'Rejected',points:999},{headers})).status,403);
  const mixed=new Client(display);mixed.cookies.set('yuvomi.sid',otherSession.cookies.get('yuvomi.sid'));
- assert.equal((await mixed.call('GET','/api/v1/dashboard')).status,403,'ambient personal cookie is not device authority');
+ const shared=await ok(mixed,'GET','/api/v1/dashboard');assert.ok(!JSON.stringify(shared.body).includes('PRIVATE'),'ambient personal cookie is not device authority');
+ assert.equal(shared.body.actor,undefined);
  assert.equal((await ok(mixed,'GET','/api/v1/auth/me')).body.principal.kind,'device');
  assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password})).status,403,'real login still requires explicit temporary intent');
 });
@@ -217,15 +220,17 @@ test('device configuration reduction invalidates already-open contexts and revoc
  assert.equal((await ok(otherSession,'GET','/api/v1/auth/me')).body.user.id,1);
 });
 
+let secondFactorRecovery=[];
 test('temporary authentication retains the existing second-factor verification flow',async()=>{
  const human=new Client();await login(human,'second-factor-parent');
  const setup=await ok(human,'POST','/api/v1/auth/2fa/setup',{});
  const secret=setup.body.secret??setup.body.data?.secret;assert.ok(secret,'the real setup flow provides the enrolled secret');
  const enabled=await ok(human,'POST','/api/v1/auth/2fa/enable',{code:generateCode(secret)});
  const recovery=enabled.body.recovery_codes??enabled.body.data?.recovery_codes;assert.ok(recovery?.length);
+ secondFactorRecovery=recovery;
  const {client:display}=await pair('Second-factor display');await ok(display,'POST','/api/v1/device/temporary/begin',{});
  const pending=await login(display,'second-factor-parent');assert.equal(pending.body.twoFactorRequired,true);assert.equal(credential(display).temporary_sid,null);
- assert.equal((await display.call('GET','/api/v1/dashboard')).status,403);
+ assert.ok(!JSON.stringify((await ok(display,'GET','/api/v1/dashboard')).body).includes('PRIVATE'),'second factor does not establish personal authority');
  assert.equal((await display.call('POST','/api/v1/auth/2fa/verify',{code:'000000'})).status,401);
  const signed=await ok(display,'POST','/api/v1/auth/2fa/verify',{code:recovery[0]});assert.equal(signed.body.user.id,3);assert.ok(signed.body.temporary);
  await ok(display,'POST','/api/v1/device/return',{});assert.equal((await ok(display,'GET','/api/v1/auth/me')).body.principal.kind,'device');
@@ -352,4 +357,111 @@ test('an external document deletion already admitted before return finishes only
   await assert.rejects(fs.stat(target),{code:'ENOENT'});
   assert.equal((await display.call('DELETE',`/api/v1/documents/${other}`)).status,403);
  }finally{release();fs.unlink=original;if(oldPath===undefined)delete process.env.DOCUMENT_STORAGE_LOCAL_PATH;else process.env.DOCUMENT_STORAGE_LOCAL_PATH=oldPath;await fs.rm(folder,{recursive:true,force:true});}
+});
+
+function approvalFixture(supervisor=1) {
+ const root=Number(d.prepare("INSERT INTO tasks(title,created_by,assigned_to,points,visibility) VALUES('HTTP approval routine',1,2,2,'all')").run().lastInsertRowid);
+ const step=Number(d.prepare("INSERT INTO tasks(title,created_by,parent_task_id,visibility) VALUES('HTTP approved learner step',1,?,'all')").run(root).lastInsertRowid);
+ d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,2)').run(root);
+ d.prepare('INSERT INTO reward_participants(user_id,enabled) VALUES(2,1) ON CONFLICT(user_id) DO UPDATE SET enabled=1').run();
+ const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES(?,0,'normal',1)").run(`Approval ${step}`).lastInsertRowid);
+ for(const member of [1,2,3])d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,?,'manual',1)")
+  .run(member,skill,member===2?'supervised':member===supervisor?'normal':'excluded');
+ setTaskSkills(d,step,[skill]);reconcileTaskSupervision(d,root);return {root,step};
+}
+function approvalRevisions(id) {
+ const task=d.prepare('SELECT revision,parent_task_id FROM tasks WHERE id=?').get(id);
+ return {expected_revision:task.revision,...(task.parent_task_id?{expected_parent_revision:d.prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id).revision}:{})};
+}
+async function beginApproval(display,step) {
+ return (await ok(display,'POST',`/api/v1/device/tasks/${step}/approval/begin`,approvalRevisions(step),201)).body.approval.id;
+}
+
+test('ordinary application routes retain device content scope and never use an ambient personal session',async()=>{
+ const {client:display,id}=await pair('Normal application display');
+ const row=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id);
+ await ok(administrator,'PATCH',`/api/v1/devices/${id}`,{revision:row.revision,scope:{member_ids:[2]}});
+ await ok(display,'GET','/api/v1/device/context');
+ for(const endpoint of ['dashboard','tasks','rewards/catalog','rewards/redemptions','auth/users']) {
+  const result=await ok(display,'GET',`/api/v1/${endpoint}`);assert.ok(!JSON.stringify(result.body).includes('PRIVATE'));
+ }
+ const members=(await ok(display,'GET','/api/v1/auth/users')).body.data;
+ assert.deepEqual(members.map(member=>member.id),[2]);assert.ok(members.every(member=>!('username' in member)&&!('email' in member)&&!('role' in member)));
+ for(const endpoint of ['tasks','rewards/catalog','rewards/redemptions','auth/users'])
+  assert.equal((await display.call('POST',`/api/v1/${endpoint}`,{points:100,assigned_to:2})).status,403,endpoint);
+});
+
+test('in-place password approval executes exactly one protected action while the browser remains a device',async()=>{
+ const {client:display}=await pair('Approval Wall'),{root,step}=approvalFixture();const context=display.context;
+ const projection=(await ok(display,'GET',`/api/v1/tasks/${step}`)).body.data;
+ assert.equal(projection.permissions.supervisor_approval,true);assert.equal(projection.permissions.complete,false);
+ const approval_id=await beginApproval(display,step);
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password})).status,409,'missing action proof must not sign in');
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password:'incorrect',approval_id})).status,401);
+ const done=await ok(display,'POST','/api/v1/auth/login',{username:'parent',password,approval_id});
+ assert.equal(done.body.approval.approved,true);assert.equal(done.body.data.status,'done');assert.equal(done.body.user,undefined);assert.equal(done.body.permissions,undefined);
+ assert.equal(display.context,context);assert.equal(credential(display).temporary_sid,null);
+ const me=(await ok(display,'GET','/api/v1/auth/me')).body;assert.equal(me.principal.kind,'device');assert.equal(me.user.id,null);
+ assert.equal((await display.call('POST','/api/v1/tasks',{title:'Unauthorized reward',points:99,assigned_to:2})).status,403);
+ assert.deepEqual(d.prepare('SELECT user_id,delta,created_by FROM reward_ledger WHERE task_id=?').all(root),[{user_id:2,delta:2,created_by:1}]);
+ const receipt=await ok(display,'GET','/api/v1/device/approval');assert.equal(receipt.body.approval.id,approval_id);assert.equal(receipt.body.data.status,'done');
+ assert.equal(d.prepare("SELECT COUNT(*) n FROM device_audit_events WHERE device_id=? AND event_type='task_approved'").get(credential(display).device_id).n,1);
+ assert.equal((await ok(otherSession,'GET','/api/v1/auth/me')).body.user.id,1);
+});
+
+test('in-place approval requires the assigned qualified person and preserves proof-bound second factor',async()=>{
+ const {client:display}=await pair('Second-factor Approval Wall'),{root,step}=approvalFixture(3);
+ const approval_id=await beginApproval(display,step);
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password,approval_id})).status,403);
+ const pending=await ok(display,'POST','/api/v1/auth/login',{username:'second-factor-parent',password,approval_id});assert.equal(pending.body.twoFactorRequired,true);
+ const status=await ok(display,'GET','/api/v1/device/approval');assert.equal(status.body.approval.twoFactorRequired,true);assert.equal(status.body.data,undefined);
+ assert.equal(credential(display).temporary_sid,null);assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(step).status,'open');
+ assert.equal((await display.call('POST','/api/v1/auth/2fa/verify',{code:secondFactorRecovery[1]})).status,409);
+ assert.equal((await display.call('POST','/api/v1/auth/2fa/verify',{code:'000000',approval_id})).status,401);
+ const done=await ok(display,'POST','/api/v1/auth/2fa/verify',{code:secondFactorRecovery[1],approval_id});assert.equal(done.body.approval.approved,true);
+ assert.equal(credential(display).temporary_sid,null);assert.equal((await ok(display,'GET','/api/v1/auth/me')).body.principal.kind,'device');
+ assert.deepEqual(d.prepare('SELECT user_id,delta,created_by FROM reward_ledger WHERE task_id=?').all(root),[{user_id:2,delta:2,created_by:3}]);
+});
+
+test('approval cancel, stale revisions, changed proof and revocation never create personal authority or progress',async()=>{
+ const {client:display,id}=await pair('Approval rejection Wall'),{step}=approvalFixture();
+ const first=await beginApproval(display,step);await ok(display,'POST','/api/v1/device/approval/cancel',{approval_id:first});
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password,approval_id:first})).status,403);
+ const second=await beginApproval(display,step),third=await beginApproval(display,step);assert.notEqual(second,third);
+ assert.equal((await display.call('POST','/api/v1/device/approval/cancel',{})).status,400);
+ await ok(display,'POST','/api/v1/device/approval/cancel',{approval_id:second});
+ assert.equal((await ok(display,'GET','/api/v1/device/approval')).body.approval.id,third,'late modal close preserves current proof');
+ assert.equal(d.prepare('SELECT status FROM device_task_approvals WHERE id=?').get(third).status,'pending');
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password,approval_id:second})).status,409);
+ d.prepare("UPDATE tasks SET title='Changed after approval prompt' WHERE id=?").run(step);
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password,approval_id:third})).status,409);
+ assert.equal(credential(display).temporary_sid,null);assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(step).status,'open');
+ const fourth=await beginApproval(display,step);const revision=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision;
+ await ok(administrator,'POST',`/api/v1/devices/${id}/revoke`,{revision});
+ assert.equal((await display.call('POST','/api/v1/auth/login',{username:'parent',password,approval_id:fourth})).status,401);
+ assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(step).status,'open');
+});
+
+test('a password proof held during verification cannot transfer to a superseding action or create a personal session',async()=>{
+ const {client:display}=await pair('Held authentication Wall'),a=approvalFixture(),b=approvalFixture();
+ const approval_id=await beginApproval(display,a.step);let entered,release;
+ const enteredPromise=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);const original=bcrypt.compare;
+ bcrypt.compare=async(...args)=>{entered();await gate;return original(...args);};
+ try {
+  const pending=display.call('POST','/api/v1/auth/login',{username:'parent',password,approval_id});await enteredPromise;
+  const next=await beginApproval(display,b.step);release();const result=await pending;assert.equal(result.status,409);
+  assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(a.step).status,'open');assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(b.step).status,'open');
+  assert.equal(credential(display).temporary_sid,null);
+  // A stale express-session save may restore an old in-memory hint; durable proof supersession still rejects it.
+  assert.equal(d.prepare('SELECT status FROM device_task_approvals WHERE id=?').get(approval_id).status,'cancelled');
+  assert.equal(d.prepare('SELECT status FROM device_task_approvals WHERE id=?').get(next).status,'pending');
+ } finally {release();bcrypt.compare=original;}
+});
+
+test('full temporary personal sign-in remains an explicit separate choice and invalidates an outstanding approval',async()=>{
+ const {client:display}=await pair('Separate full sign-in'),{step}=approvalFixture();const approval_id=await beginApproval(display,step);
+ await ok(display,'POST','/api/v1/device/temporary/begin',{});const personal=await login(display);assert.equal(personal.body.user.id,1);assert.ok(personal.body.temporary);
+ assert.equal(d.prepare('SELECT status FROM device_task_approvals WHERE id=?').get(approval_id).status,'cancelled');
+ assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(step).status,'open');
+ await ok(display,'POST','/api/v1/device/return',{});assert.equal((await ok(display,'GET','/api/v1/auth/me')).body.principal.kind,'device');
 });

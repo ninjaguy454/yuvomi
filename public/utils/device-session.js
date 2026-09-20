@@ -1,10 +1,11 @@
 import { api } from '/api.js';
-import { deviceBootstrap, pairedDeviceHint, concealPersonalContext, acceptAuthentication, deviceContext } from './device-context.js';
+import { deviceBootstrap, pairedDeviceHint, concealPersonalContext, acceptAuthentication, deviceContext, isDevicePrincipal } from './device-context.js';
 import { broadcastSessionChange } from './session-lifecycle.js';
 import { clearApiCache } from '/sw-register.js';
 import { esc } from './html.js';
+import { setPermissions } from '/permissions.js';
 
-let timer, heartbeat = 0, leaving = false, installed = false;
+let timer, heartbeat = 0, leaving = false, installed = false, bannerObserver, stopDeviceChanges, bannerSignature;
 const LOGIN_INTENT = 'vidamia-temporary-login';
 export function temporaryLoginPending() { try { return sessionStorage.getItem(LOGIN_INTENT) === '1'; } catch { return false; } }
 export async function beginTemporarySignIn() {
@@ -44,6 +45,7 @@ export async function prepareDeviceBoot() {
     : await api.post('/device/launch', { temporary_handoff: handoff });
   try { if(result.temporaryLoginPending) sessionStorage.setItem(LOGIN_INTENT,'1'); else sessionStorage.removeItem(LOGIN_INTENT); } catch {}
   acceptAuthentication(result);
+  setPermissions({ ...result.permissions, principal_kind: result.principal?.kind || result.user?.kind || 'member' });
   try { localStorage.removeItem('yuvomi-wall-mode'); } catch {}
   return result;
 }
@@ -54,9 +56,30 @@ export function installDeviceSession() {
   if(pairedDeviceHint()){const css=document.createElement('link');css.rel='stylesheet';css.href='/styles/device.css';document.head.append(css);}
   const update = () => {
     const data = deviceBootstrap();
+    const signature = JSON.stringify([data?.authContext, data?.device?.revision, data?.device?.name, data?.temporary]);
+    if (signature === bannerSignature && document.querySelector('[data-device-access], [data-temporary-access]')) return;
+    bannerSignature = signature;
     clearTimeout(timer);
     document.querySelector('[data-temporary-access]')?.remove();
-    if (!data?.temporary) return;
+    document.querySelector('[data-device-access]')?.remove();
+    bannerObserver?.disconnect();
+    document.documentElement.style.removeProperty('--auth-banner-height');
+    document.documentElement.toggleAttribute('data-device-principal', isDevicePrincipal());
+    document.documentElement.toggleAttribute('data-paired-context', !!data?.device);
+    if (!data?.temporary && !isDevicePrincipal()) return;
+    if (isDevicePrincipal()) {
+      const banner = document.createElement('aside');
+      banner.dataset.deviceAccess = '';
+      banner.className = 'device-access-banner';
+      banner.setAttribute('aria-label', 'Paired household device');
+      banner.innerHTML = '<div><strong>' + esc(data.device?.name || data.user?.display_name || 'Household display') + '</strong><span>Shared display · device permissions apply</span></div><button type="button" class="btn btn--secondary" data-device-login>Sign in temporarily</button>';
+      banner.querySelector('button').onclick = () => beginTemporarySignIn().catch(error => window.yuvomi?.showToast(error.message, 'danger'));
+      document.body.prepend(banner);
+      sizeBanner(banner);
+      if (!stopDeviceChanges) stopDeviceChanges = deviceChanges(() => window.dispatchEvent(new CustomEvent('task-data-changed')));
+      return;
+    }
+    stopDeviceChanges?.(); stopDeviceChanges = null;
     try { sessionStorage.removeItem(LOGIN_INTENT); } catch {}
     const banner = document.createElement('aside');
     banner.dataset.temporaryAccess = '';
@@ -65,9 +88,15 @@ export function installDeviceSession() {
     banner.innerHTML = `<strong>Signed in as ${esc(data.user?.display_name || data.user?.username || 'administrator')}</strong><button type="button" class="btn btn--secondary">Return to ${esc(data.device?.name || 'household display')}</button>`;
     banner.querySelector('button').onclick = returnToDevice;
     document.body.prepend(banner);
+    sizeBanner(banner);
     const expiry = Math.min(new Date(data.temporary.idleExpiresAt).getTime(), new Date(data.temporary.expiresAt).getTime());
     timer = setTimeout(returnToDevice, Math.max(0, expiry - Date.now()));
   };
+  function sizeBanner(banner) {
+    const size = () => document.documentElement.style.setProperty('--auth-banner-height', banner.getBoundingClientRect().height + 'px');
+    size();
+    if (typeof ResizeObserver === 'function') { bannerObserver = new ResizeObserver(size); bannerObserver.observe(banner); }
+  }
   window.addEventListener('vidamia:auth-context', update);
   window.addEventListener('auth:context-rejected', () => { if (pairedDeviceHint()) void returnToDevice(); });
   const activity = () => {

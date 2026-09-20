@@ -40,6 +40,7 @@ export function setPermissions(payload) {
   if (payload && typeof payload === 'object') {
     _perms = {
       admin: payload.admin === true,
+      principal_kind: payload.principal_kind || 'member',
       modules: payload.modules && typeof payload.modules === 'object' ? payload.modules : {},
       widgets: payload.widgets && typeof payload.widgets === 'object' ? payload.widgets : {},
       capabilities: payload.capabilities && typeof payload.capabilities === 'object' ? payload.capabilities : {},
@@ -63,21 +64,22 @@ export function isPermAdmin() {
 /** Effektiver Zugriff auf ein Permissions-Modul: 'none' | 'read' | 'write'. */
 export function moduleAccess(moduleKey) {
   if (_perms.admin) return 'write';
-  return _perms.modules?.[moduleKey] ?? 'write';
+  return _perms.modules?.[moduleKey] ?? (_perms.principal_kind === 'device' ? 'none' : 'write');
 }
 
 /** Darf ein Navigations-Modul (nav id) überhaupt geöffnet werden? */
 export function canAccessNavModule(navModule) {
   if (_perms.admin) return true;
+  if (_perms.principal_kind === 'device' && ['recipes', 'birthdays'].includes(navModule)) return false;
   const key = NAV_TO_MODULE[navModule];
-  if (!key) return true; // nicht gated
-  return (_perms.modules?.[key] ?? 'write') !== 'none';
+  if (!key) return _perms.principal_kind !== 'device'; // unknown device surfaces fail closed
+  return moduleAccess(key) !== 'none';
 }
 
 /** Effektiver Zugriff für ein Navigations-Modul (write, wenn nicht gated). */
 export function navModuleAccess(navModule) {
   const key = NAV_TO_MODULE[navModule];
-  if (!key) return 'write';
+  if (!key) return _perms.principal_kind === 'device' ? 'none' : 'write';
   return moduleAccess(key);
 }
 
@@ -89,7 +91,7 @@ export function isNavModuleReadOnly(navModule) {
 /** Darf ein Dashboard-Widget angezeigt werden? */
 export function canSeeWidget(widgetId) {
   if (_perms.admin) return true;
-  return (_perms.widgets?.[widgetId] ?? 'allow') !== 'none';
+  return (_perms.widgets?.[widgetId] ?? (_perms.principal_kind === 'device' ? 'none' : 'allow')) !== 'none';
 }
 
 /** Server-supplied capabilities; sensitive or unknown capabilities fail closed. */

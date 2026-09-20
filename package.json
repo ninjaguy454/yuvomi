@@ -354,8 +354,8 @@
     "test:rotations-full-app": "node --test --test-concurrency=1 test/test-rotation-full-app-browser.js test/test-rotation-shared-full-app-browser.js",
     "test:rotations-browser": "node --test --test-concurrency=1 test/test-rotation-groups-ui.js test/test-rotation-meals-ui.js",
     "test:task-expiration": "node --loader ./test/test-browser-loader.mjs --experimental-sqlite --test --test-concurrency=2 test/test-task-expiration.js test/test-task-expiration-recurrence.js test/test-task-expiration-races.js test/test-task-expiration-write-races.js test/test-task-expiration-consumers.js test/test-task-expiration-reopen-security.js test/test-task-expiration-ui.js",
-    "test:devices": "node --test --test-concurrency=2 test/test-device-auth.js test/test-device-adversarial.js test/test-device-content.js test/test-device-tasks.js test/test-device-write-context.js test/test-device-client-context.js test/test-device-migration.js",
-    "test:devices-browser": "node --test --test-concurrency=1 test/test-devices-full-app-browser.js"
+    "test:devices": "node --test --test-concurrency=2 test/test-device-auth.js test/test-device-adversarial.js test/test-device-content.js test/test-device-tasks.js test/test-device-write-context.js test/test-device-client-context.js test/test-device-migration.js test/test-device-app.js test/test-device-approval.js test/test-device-approval-oidc.js test/test-device-normal-views.js",
+    "test:devices-browser": "node --test --test-concurrency=1 test/test-devices-full-app-browser.js test/test-device-approval-browser.js test/test-device-editor-browser.js"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

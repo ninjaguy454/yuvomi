@@ -5,8 +5,8 @@
  */
 
 import { api, auth } from '/api.js';
-import { deviceBootstrap, pairedDeviceHint, concealPersonalContext } from '/utils/device-context.js';
-import { prepareDeviceBoot, installDeviceSession, temporaryLoginPending } from '/utils/device-session.js';
+import { deviceBootstrap, pairedDeviceHint, concealPersonalContext, isDevicePrincipal, deviceLandingPath } from '/utils/device-context.js';
+import { prepareDeviceBoot, installDeviceSession, temporaryLoginPending, beginTemporarySignIn, returnToDevice } from '/utils/device-session.js';
 import { displayAppName } from '/utils/branding.js';
 import { canAccessNavModule, navModuleAccess } from '/permissions.js';
 import { clearApiCache } from '/sw-register.js';
@@ -74,7 +74,6 @@ import {
 // updateBranding) - dort steht noch keine Seite, auf die er sich beziehen könnte.
 // --------------------------------------------------------
 const ROUTES = [
-  { path: '/device', page: '/components/device-dashboard.js', requiresAuth: false, module: null, titleKey: null },
   { path: '/device/pair', page: '/pages/device-pair.js', requiresAuth: false, module: null, titleKey: null },
   { path: '/login',    page: '/pages/login.js',    requiresAuth: false, module: null,        titleKey: null },
   { path: '/setup',    page: '/pages/setup.js',    requiresAuth: false, module: null,        titleKey: null },
@@ -729,7 +728,7 @@ function navigationHistoryControls({ showLabels = false, mobile = false } = {}) 
  */
 async function navigate(path, userOrPushState = true, pushState = true) {
   if (_wallPrivacyTransitioning) return;
-  if (deviceBootstrap()?.principal?.kind === 'device' && !['/device/pair', '/login'].includes(path.split('?')[0])) path = '/device';
+  if (path.split('?')[0] === '/device') path = deviceLandingPath();
   if (isWallModeEnabled() && !['/login', '/setup', '/device/pair'].includes(path.split('?')[0])) path = '/';
   if (isNavigating) return;
   isNavigating = true;
@@ -748,7 +747,7 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       startThirdPartyModulePolling();
       // currentUser kann während des await oben auf null gesetzt worden sein
       // (auth:expired bei 401 von /preferences), daher Guard gegen null.
-      if (currentUser && currentUser.access_scope !== 'split_guest') {
+      if (currentUser && currentUser.kind !== 'device' && currentUser.access_scope !== 'split_guest') {
         loadReminderStyles();
         initReminders();
         initPush();
@@ -834,7 +833,7 @@ async function navigate(path, userOrPushState = true, pushState = true) {
         startThirdPartyModulePolling();
         // currentUser kann während des await oben auf null gesetzt worden sein
         // (auth:expired bei 401 von /preferences), daher Guard gegen null.
-        if (currentUser && currentUser.access_scope !== 'split_guest') {
+        if (currentUser && currentUser.kind !== 'device' && currentUser.access_scope !== 'split_guest') {
           loadReminderStyles();
           initReminders();
           initPush();
@@ -985,11 +984,16 @@ async function navigate(path, userOrPushState = true, pushState = true) {
 async function syncPreferencesOnce() {
   if (_preferencesLoaded) return;
   _preferencesLoaded = true;
-  const requestedUserId = currentUser?.id;
+  const requestedUser = currentUser;
   const requestedAppearanceRevision = appearanceRevision();
   try {
     const res = await api.get('/preferences');
-    if (!currentUser || currentUser.id !== requestedUserId) return;
+    if (!currentUser || currentUser !== requestedUser) return;
+    if (currentUser.kind === 'device') {
+      const theme = res?.data?.theme;
+      if (theme === 'dark' || theme === 'light') document.documentElement.setAttribute('data-theme', theme);
+      else document.documentElement.removeAttribute('data-theme');
+    }
     // Logout and a newer personal choice invalidate an older appearance read.
     if (appearanceRevision() === requestedAppearanceRevision) applyAppearancePreferences(res?.data ?? {});
     const dateFormat = res?.data?.date_format;
@@ -1048,6 +1052,7 @@ async function syncPreferencesOnce() {
 }
 
 async function syncThirdPartyModules() {
+  if (isDevicePrincipal()) { _thirdPartyModules = []; return; }
   try {
     const res = await api.get('/modules');
     _thirdPartyModules = Array.isArray(res?.data) ? res.data : [];
@@ -1067,7 +1072,7 @@ function moduleSnapshot() {
 }
 
 function startThirdPartyModulePolling() {
-  if (_moduleRefreshTimer || currentUser?.access_scope === 'split_guest') return;
+  if (_moduleRefreshTimer || currentUser?.kind === 'device' || currentUser?.access_scope === 'split_guest') return;
   _moduleRefreshTimer = setInterval(async () => {
     const before = moduleSnapshot();
     await syncThirdPartyModules();
@@ -1132,6 +1137,8 @@ function refreshThemeColorForTheme() {
 // die lokale Session auch bei Netzfehler, damit man nie „eingeloggt festhängt"
 // (siehe clearSession/#478). Danger-Confirm schützt vor versehentlichem Klick.
 async function confirmAndLogout() {
+  if (isDevicePrincipal()) return beginTemporarySignIn();
+  if (deviceBootstrap()?.temporary) return returnToDevice();
   // Kein danger/Rot: Abmelden ist reversibel (wieder einloggen), nicht
   // destruktiv — Rot bleibt echten Löschaktionen vorbehalten. Der Confirm-
   // Schritt selbst ist die Absicherung gegen den Fehlklick.
@@ -1202,7 +1209,7 @@ let _notificationHeaderButton = null;
 /** Move the one inbox control with the current module's header, including soft renders. */
 function adoptNotificationHeader() {
   const main = document.getElementById('main-content');
-  if (!main || !currentUser || currentUser.access_scope === 'split_guest' || isWallModeEnabled()) {
+  if (!main || !currentUser || currentUser.kind === 'device' || currentUser.access_scope === 'split_guest' || isWallModeEnabled()) {
     _notificationHeaderButton?.remove();
     return;
   }
@@ -1586,7 +1593,7 @@ function buildMoreSheetBody() {
    * Es bleibt das LETZTE Ziel der Reihe, und das ist kein Zufall: es ist die
    * terminale Aktion, sie steht am Ende der Leserichtung, und der
    * Bestaetigungsdialog bleibt davor. */
-  system.appendChild(moreActionEl({
+  if (!isDevicePrincipal()) system.appendChild(moreActionEl({
     labelKey: 'settings.logout',
     icon: 'log-out',
     className: 'more-item--logout',
@@ -1978,7 +1985,7 @@ function renderAppShell(container) {
   });
   sidebarSearch.setAttribute('aria-keyshortcuts', '/');
   sidebarSearch.setAttribute('title', `${t('nav.search')} (/)`);
-  sidebar.appendChild(sidebarSearch);
+  if (!isDevicePrincipal()) sidebar.appendChild(sidebarSearch);
 
   sidebar.appendChild(sidebarItems);
 
@@ -2007,12 +2014,12 @@ function renderAppShell(container) {
     // Abmelden als terminale Aktion: bricht in eine eigene, volle Zeile unter
     // Hilfe/Änderungen (CSS: flex-wrap + border-top). Monochrom wie die
     // Geschwister — Danger-Rot erscheint erst im Confirm.
-    sidebarActionEl({
+    ...(!isDevicePrincipal() ? [sidebarActionEl({
       labelKey: 'settings.logout',
       icon: 'log-out',
       className: 'nav-item--logout',
       onClick: () => confirmAndLogout(),
-    }),
+    })] : []),
   );
   sidebar.appendChild(sidebarFooter);
 
@@ -2075,7 +2082,7 @@ function renderAppShell(container) {
     moreSearchPlaceholder.textContent = t('search.placeholder');
     moreSearchBar.appendChild(moreSearchIcon);
     moreSearchBar.appendChild(moreSearchPlaceholder);
-    moreSheet.appendChild(moreSearchBar);
+    if (!isDevicePrincipal()) moreSheet.appendChild(moreSearchBar);
 
     // Hinweis + App-Launcher-Grid + System-Cluster. Geteilte Logik mit
     // rebuildNavigation() (Sprachwechsel / Modul-Toggle) — sonst driften die
@@ -3142,6 +3149,7 @@ function initSearch(container) {
   let searchOverlayToken = null;
 
   function openSearch() {
+    if (isDevicePrincipal()) return;
     if (window._closeMoreSheet) window._closeMoreSheet({ restoreFocus: false });
     lastFocusedBeforeSearch = document.activeElement;
     if (searchOverlayToken === null) searchOverlayToken = pushOverlay(() => closeSearch());
@@ -3335,7 +3343,7 @@ function renderSearchResults(container, data, onClose) {
 // navModuleAccess liefert 'write' für nicht-gateable Module (Dashboard, Settings,
 // Third-Party), sodass diese nie fälschlich als read-only markiert werden.
 function applyModuleReadonly(moduleName, pageWrapper) {
-  const readOnly = navModuleAccess(moduleName) === 'read';
+  const readOnly = navModuleAccess(moduleName) === 'read' && !(isDevicePrincipal() && moduleName === 'tasks');
   document.documentElement.toggleAttribute('data-module-readonly', readOnly);
   if (!readOnly || !pageWrapper || pageWrapper.querySelector('.module-readonly-banner')) return;
   const banner = document.createElement('div');
@@ -4714,7 +4722,7 @@ if (/iPhone|iPad|iPod/.test(navigator.userAgent)) {
         document.documentElement.style.visibility = '';
         if(paired?.temporary&&paired.user){await navigate('/',paired.user);return;}
         if (paired?.principal?.kind === 'device' && !temporaryLoginPending()) {
-          await navigate('/device', false);
+          await navigate(deviceLandingPath(paired), paired.user);
           return;
         }
       } catch {

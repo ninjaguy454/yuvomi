@@ -2,6 +2,8 @@
 import crypto from 'node:crypto';
 import { PERMISSION_CAPABILITIES, PERMISSION_MODULES, PERMISSION_WIDGETS } from '../permissions.js';
 import { normalizeWallConfig, wallConfig, householdMember } from './wall.js';
+import { deviceAppRouteSupported } from './device-app-paths.js';
+import { validateDeviceApproval } from './device-approval.js';
 
 export const DEVICE_COOKIE = 'vidamia.device';
 export const DEVICE_ACTIONS = ['complete','reopen','reset','claim'];
@@ -187,12 +189,17 @@ export function deviceContextPayload(req,context) {
   const temporary=credential.temporary_sid===req.sessionID&&credential.temporary_user_id===req.session?.userId;
   return {device:publicDevice(device),authContext:credential.context_key,
     ...(temporary?{temporary:{idleExpiresAt:credential.temporary_idle_at+device.idle_seconds*1000,expiresAt:credential.temporary_started_at+device.maximum_seconds*1000}}:
-      {principal:{kind:'device',id:device.id,name:device.name},permissions:JSON.parse(device.permissions_json)}),
+      {principal:{kind:'device',id:device.id,name:device.name},
+        user:{id:null,kind:'device',role:'device',access_scope:'family',display_name:device.name,onboarding_pending:false},
+        permissions:{...JSON.parse(device.permissions_json),principal_kind:'device',widgets:{...JSON.parse(device.permissions_json).widgets,
+          rotations:JSON.parse(device.permissions_json).capabilities?.['rotations.view']==='allow'?'allow':'none'}}}),
     temporaryLoginPending:!!credential.login_intent_at,csrfToken:req.session?.csrfToken};
 }
 export function beginTemporary(d,req,now=Date.now()) {
   const context=assertDeviceContext(d,req,{now});if(!context)throw deviceError('Pair this display first.',403);
   if(context.credential.temporary_sid)throw deviceError('Return to the device before signing in again.',409);
+  d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(context.credential.id);
+  delete req.session.deviceApprovalIntent;delete req.session.pendingTwoFactor;delete req.session.oidc;
   d.prepare('UPDATE device_credentials SET login_intent_at=? WHERE id=?').run(now,context.credential.id);
   req.session.deviceLoginIntent={credentialId:context.credential.id,context:context.credential.context_key,expiresAt:now+5*60_000};
 }
@@ -215,6 +222,7 @@ export function establishTemporary(d,req,context,user,now=Date.now()) {
 }
 export function returnToDevice(d,credential,event='temporary_return') {
   return d.transaction(()=>{
+    d.prepare("UPDATE device_task_approvals SET status='cancelled' WHERE credential_id=? AND status='pending'").run(credential.id);
     if(credential.temporary_sid)retireBrowserSession(d,credential.temporary_sid);
     const changed=d.prepare('UPDATE device_credentials SET context_key=?,temporary_sid=NULL,temporary_user_id=NULL,temporary_started_at=NULL,temporary_idle_at=NULL,login_intent_at=NULL WHERE id=? AND context_key=?')
       .run(random(),credential.id,credential.context_key);
@@ -256,8 +264,12 @@ export function deviceBoundary(d,req,res,next) {
     }
     const ctx=assertDeviceContext(d,req,{allowMissing:bootstrap||login});
     if(!ctx)return res.status(401).json({error:'Pair this display again.',reason:'device_revoked'});
-    if(login&&!req.session?.deviceLoginIntent)return res.status(403).json({error:'Choose Sign in temporarily first.',reason:'device_login_required'});
+    if(login&&!req.session?.deviceLoginIntent) {
+      if(!req.session?.deviceApprovalIntent)return res.status(403).json({error:'Choose supervisor approval or temporary sign-in first.',reason:'device_login_required'});
+      validateDeviceApproval(d,req,{expectedId:req.body?.approval_id||req.query?.approval_id||req.session?.oidc?.deviceApprovalId});
+    }
     if(bootstrap||login||path==='/api/v1/auth/logout'||isTemporaryContext(req,ctx))return next();
+    if(deviceAppRouteSupported(req.method,path))return next();
     return res.status(403).json({error:'Use temporary personal sign-in for this action.',reason:'device_access_denied'});
   } catch(error){res.status(error.status||403).json({error:error.message,reason:error.reason});}
 }

@@ -47,6 +47,25 @@ test('card intents paint before HTTP, serialize siblings and invalidate stale li
   assert.equal(f.tasks[0].status, 'done'); assert.equal(f.refreshes, 1); assert.equal(f.invalidations, 4);
 });
 
+test('full detail acknowledgement cannot expose a scheduled child; a boundary read can', async () => {
+  const initial = sample();
+  initial.subtasks = [initial.subtasks[0]];
+  Object.assign(initial, { scheduled_action_count: 2, scheduled_subtask_total: 1, scheduled_subtask_done: 0,
+    scheduled_optional_subtask_total: 1, scheduled_optional_subtask_done: 0 });
+  const f = fixture(initial);
+  f.enqueue(11);
+  assert.equal(f.paints.at(-1).pending.get(11).status, 'done', 'feedback precedes acknowledgement');
+  const full = f.acknowledge(0, { subtasks: sample().subtasks });
+  await settle();
+  assert.deepEqual(f.tasks[0].subtasks.map(child => child.id), [11]);
+  assert.equal(f.tasks[0].subtasks[0].status, 'done');
+  assert.equal(f.tasks[0].scheduled_subtask_total, 1);
+  const activated = { ...full, scheduled_action_count: 0, scheduled_subtask_total: 0, scheduled_optional_subtask_total: 0 };
+  f.read([activated]);
+  assert.deepEqual(f.tasks[0].subtasks.map(child => child.id), [11, 12, 13]);
+  f.controller.dispose();
+});
+
 test('duplicate/opposite taps on a pending card step do not dispatch twice', async () => {
   const f = fixture(); f.enqueue(11);
   assert.equal(f.enqueue(11), false); assert.equal(f.enqueue(11, 'in_progress'), false);

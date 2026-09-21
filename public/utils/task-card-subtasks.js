@@ -28,6 +28,15 @@ export function createTaskCardSubtasks({ children, canComplete, send, invalidate
       },
       accept: fresh => {
         if (Number(fresh.revision) < Number(record.task.revision)) return false;
+        // Mutation acknowledgements contain the full detail tree, including
+        // planned actions. Retain this board's scheduled projection until the
+        // canonical list refresh supplies its new visibility boundary.
+        if (Number(record.task.scheduled_action_count || 0) || Number(record.task.scheduled_subtask_total || 0) || Number(record.task.scheduled_optional_subtask_total || 0)) {
+          const visible = new Set((record.task.subtasks || []).map(child => Number(child.id)));
+          fresh = { ...fresh, subtasks: (fresh.subtasks || []).filter(child => visible.has(Number(child.id))), scheduled_action_count: record.task.scheduled_action_count,
+            scheduled_completed_action_count: record.task.scheduled_completed_action_count,
+            ...Object.fromEntries(Object.entries(record.task).filter(([key]) => key.startsWith('scheduled_subtask_') || key.startsWith('scheduled_optional_subtask_'))) };
+        }
         // A live read can change eligibility without incrementing the Task.
         // Its newer permissions must survive an equal-revision HTTP echo.
         if (!(record.liveEpoch > record.sentEpoch && fresh.revision === record.task.revision)) record.task = fresh;

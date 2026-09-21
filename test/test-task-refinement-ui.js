@@ -14,6 +14,15 @@ function stateHarness() {
   return { ...context.subject, writes };
 }
 
+test('bulk confirmation includes required work omitted only by its future start window', () => {
+  const { taskStatusConfirmation } = stateHarness();
+  const task = { status: 'in_progress', subtasks: [{ id: 1, status: 'done' }], scheduled_subtask_total: 1, scheduled_subtask_done: 0 };
+  assert.equal(taskStatusConfirmation(task, 'done').flag, 'complete_remaining');
+  assert.equal(taskStatusConfirmation({ ...task, subtasks: [], scheduled_subtask_done: 1 }, 'open').flag, 'reset_progress');
+  assert.equal(taskStatusConfirmation({ status: 'in_progress', subtasks: [], scheduled_subtask_total: 0, scheduled_completed_action_count: 1 }, 'open').flag, 'reset_progress');
+  assert.equal(taskStatusConfirmation({ status: 'open', subtasks: [], scheduled_optional_subtask_total: 1 }, 'done'), null);
+});
+
 test('progress excludes archived/support children while the supervision view counts its own projections', () => {
   const { actionableSubtasks } = stateHarness();
   const task = { subtasks: [{ id: 1 }, { id: 2, archived_at: '2050-01-01' }, { id: 3, is_supervision_projection: true }, { id: 4, is_support_task: true }] };

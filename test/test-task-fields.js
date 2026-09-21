@@ -61,6 +61,17 @@ test('subtask completion keeps count and point progress together', () => {
   });
 });
 
+test('scheduled hidden actions remain in progress totals without exposing their text', () => {
+  const task = { status: 'in_progress', points: 2, scheduled_action_count: 3,
+    scheduled_subtask_total: 2, scheduled_subtask_done: 1, scheduled_subtask_points: 5,
+    scheduled_subtask_earned_points: 2, scheduled_optional_subtask_total: 1, scheduled_optional_subtask_done: 0,
+    subtasks: [{ id: 1, status: 'done', points: 1 }] };
+  assert.deepEqual(completionCounts(task), { done: 2, total: 3, earnedPoints: 3, totalPoints: 6,
+    optionalTotal: 1, optionalDone: 0 });
+  assert.deepEqual(completionCounts({ ...task, subtasks: [] }), { done: 1, total: 2, earnedPoints: 2, totalPoints: 5,
+    optionalTotal: 1, optionalDone: 0 });
+});
+
 test('nine required morning actions show complete without counting unfinished optional earrings', () => {
   const task = { points: 2, subtasks: [...Array.from({ length: 9 }, (_, id) => ({ id, status: 'done', is_optional: 0 })),
     { id: 10, title: 'Put in earrings', status: 'open', is_optional: 1 }] };

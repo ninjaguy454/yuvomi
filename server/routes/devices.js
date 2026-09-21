@@ -96,7 +96,7 @@ deviceRouter.get('/dashboard',guarded((req,res)=>{
   const d=db.get(),p=req.devicePrincipal;
   res.json({data:{...deviceDashboard(d,p),device:publicDevice(req.deviceContext.device)}});
 }));
-deviceRouter.get('/tasks',guarded((req,res)=>res.json({data:deviceTaskList(db.get(),req.devicePrincipal)})));
+deviceRouter.get('/tasks',guarded((req,res)=>res.json(deviceTaskList(db.get(),req.devicePrincipal,{withVisibility:true}))));
 deviceRouter.post('/tasks',guarded((req,res)=>{
   const result=deviceTaskCreateOnce(db.get(),req.devicePrincipal,req.body,req.get('Idempotency-Key'));
   if(result.replayed)res.set('Idempotent-Replayed','true');

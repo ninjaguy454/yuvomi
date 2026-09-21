@@ -217,14 +217,19 @@ export function completionCounts(task) {
   const actions = actionableSubtasks(task);
   const subtasks = actions.filter(child => !child.is_optional);
   const optional = actions.filter(child => !!child.is_optional);
-  if (actions.length || structuralSubtasks(task).length) {
+  // Scheduled actions are omitted from the normal board, but remain required
+  // work. Keep their authorized aggregate progress in the denominator.
+  const scheduledTotal = Number(task?.scheduled_subtask_total || 0);
+  const scheduledOptional = Number(task?.scheduled_optional_subtask_total || 0);
+  if (actions.length || structuralSubtasks(task).length || scheduledTotal || scheduledOptional) {
     return {
-      ...(optional.length ? { optionalTotal: optional.length, optionalDone: optional.filter(child => child.status === 'done').length } : {}),
-      done: subtasks.filter((subtask) => subtask.status === 'done').length,
-      total: subtasks.length,
+      ...(optional.length || scheduledOptional ? { optionalTotal: optional.length + scheduledOptional,
+        optionalDone: optional.filter(child => child.status === 'done').length + Number(task?.scheduled_optional_subtask_done || 0) } : {}),
+      done: subtasks.filter((subtask) => subtask.status === 'done').length + Number(task?.scheduled_subtask_done || 0),
+      total: subtasks.length + scheduledTotal,
       earnedPoints: subtasks.filter((subtask) => subtask.status === 'done')
-        .reduce((sum, subtask) => sum + Number(subtask.points || 0), 0),
-      totalPoints: subtasks.reduce((sum, subtask) => sum + Number(subtask.points || 0), 0),
+        .reduce((sum, subtask) => sum + Number(subtask.points || 0), Number(task?.scheduled_subtask_earned_points || 0)),
+      totalPoints: subtasks.reduce((sum, subtask) => sum + Number(subtask.points || 0), Number(task?.scheduled_subtask_points || 0)),
     };
   }
   return {

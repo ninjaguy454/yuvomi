@@ -27,14 +27,17 @@ export function taskStatusConfirmation(task, status) {
   const completesHelperWork = pendingDelegated.length > 0
     && pendingDelegated.every((child) => supervisionOf(child)?.can_complete === true && child.permissions?.complete !== false);
   const children = (completesHelperWork ? structural : actionableSubtasks(task)).filter(child => !child.is_optional);
-  if (status === 'done' && children.some((child) => child.status !== 'done')) {
+  if (status === 'done' && (children.some((child) => child.status !== 'done')
+    || Number(task.scheduled_subtask_total || 0) > Number(task.scheduled_subtask_done || 0))) {
     return { flag: 'complete_remaining', message: 'Complete this Task and its remaining subtasks?',
       detail: completesHelperWork
         ? 'Remaining subtasks, including direct helper responsibilities, will also be marked complete. Required supervision still applies.'
         : 'The remaining required subtasks will also be marked complete. Optional subtasks stay as they are. Required supervision still applies.',
       confirmLabel: 'Complete Task' };
   }
-  if (status === 'open' && (task.status === 'done' || structural.some((child) => child.status === 'done'))) {
+  if (status === 'open' && (task.status === 'done' || structural.some((child) => child.status === 'done')
+    || Number(task.scheduled_completed_action_count || 0) > 0
+    || Number(task.scheduled_subtask_done || 0) > 0 || Number(task.scheduled_optional_subtask_done || 0) > 0)) {
     return { flag: 'reset_progress', message: 'Resetting this Task will clear its subtask progress.',
       detail: `${delegated.some((child) => child.status === 'done') ? 'Completed helper actions will also be reset. ' : ''}Completion history is retained. Cancel keeps the current progress.`,
       confirmLabel: 'Reset Task', danger: true };

@@ -9,8 +9,8 @@ export function taskDeadlineMs(d, task) {
   const local = task.due_time ? `${task.due_date}T${task.due_time}` : `${shiftDateKey(task.due_date, 1)}T00:00`;
   return availabilityInstantMs(local, householdTimeZone(d));
 }
-export function taskStartMs(d, task) {
-  return task?.start_date ? availabilityInstantMs(`${task.start_date}T${task.start_time || '00:00'}`, householdTimeZone(d)) : null;
+export function taskStartMs(d, task, timeZone = householdTimeZone(d)) {
+  return task?.start_date ? availabilityInstantMs(`${task.start_date}T${task.start_time || '00:00'}`, timeZone) : null;
 }
 export function taskExpirationDue(d, task, now = new Date()) {
   const deadline = taskDeadlineMs(d, task);

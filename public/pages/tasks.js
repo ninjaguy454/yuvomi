@@ -11,7 +11,7 @@ import { api } from '/api.js';
 import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
 import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
-import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
+import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh } from '/utils/task-live.js';
 import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
 import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { createTaskCardSubtasks, taskCardPendingProjection } from '/utils/task-card-subtasks.js';
@@ -1463,6 +1463,15 @@ function taskQuery() {
 }
 
 const taskPageLoaders = new WeakMap();
+const taskStartRefreshers = new WeakMap();
+function updateTaskStartRefresh(container, visibility) {
+  let refresher = taskStartRefreshers.get(container);
+  if (!refresher) {
+    refresher = createTaskStartRefresh(() => loadTasks(container));
+    taskStartRefreshers.set(container, refresher);
+  }
+  refresher.update(visibility);
+}
 const taskCardSubtasks = new WeakMap();
 const taskCardPendingFocus = new WeakMap();
 function taskSnapshot(id) {
@@ -1582,6 +1591,7 @@ async function loadTasks(container) {
   if (!loader) {
     loader = latestTaskLoader(() => Promise.all([api.get(`/tasks${taskQuery()}`), api.get('/automation/obligations').catch(() => ({ data: [] }))]), ([data, obligations]) => {
       if (!container.isConnected) return;
+      updateTaskStartRefresh(container, data.visibility);
       state.tasks = taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(data.data ?? []) ?? data.data ?? [];
       state.assignmentRequests = obligations.data ?? [];
       applyTaskPagePermissions(container);
@@ -1592,6 +1602,7 @@ async function loadTasks(container) {
   try { return await loader.load(); }
   catch (error) {
     if (error.status === 403 && container.isConnected) {
+      updateTaskStartRefresh(container, null);
       taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile([]);
       state.tasks = []; state.assignmentRequests = [];
       renderTaskList(container);
@@ -5569,6 +5580,7 @@ export async function render(container, { user }) {
     ]);
     state.loadError = null;
     state.tasks = tasksData.data ?? [];
+    updateTaskStartRefresh(container, tasksData.visibility);
     state.users = metaData.users ?? [];
     state.categories = metaData.categories ?? [];
     state.allTags = metaData.tags ?? [];
@@ -5652,6 +5664,8 @@ export async function render(container, { user }) {
   }
   return () => {
     stopLive();
+    taskStartRefreshers.get(container)?.dispose();
+    taskStartRefreshers.delete(container);
     const taskList = container.querySelector('#task-list');
     taskCardSubtasks.get(taskList)?.dispose();
     taskCardSubtasks.delete(taskList);

@@ -115,7 +115,7 @@ export function deviceAppMiddleware(req,res,next) {
     if(path==='/module-counts')return res.json({tasks:0,calendar:0,meals:0,shopping:0,rewards:0});
     if(path==='/tasks'||path.startsWith('/tasks/')) {
       requireTaskRead(p);
-      if(path==='/tasks'&&method==='GET')return res.json({data:deviceTaskList(d,p,{query})});
+      if(path==='/tasks'&&method==='GET')return res.json(deviceTaskList(d,p,{query,withVisibility:true}));
       if(path==='/tasks'&&method==='POST'){
         const result=deviceTaskCreateOnce(d,p,req.body,req.get('Idempotency-Key'));
         if(result.replayed)res.set('Idempotent-Replayed','true');

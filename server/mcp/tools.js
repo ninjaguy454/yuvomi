@@ -26,8 +26,7 @@ import { readFileSync } from 'node:fs';
 import { buildOpenApiSpec } from '../openapi.js';
 import { tokenAllows } from '../scopes.js';
 import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
-import { toLocalDateKey } from '../../public/utils/date.js';
-import { taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
+import { taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
 import { visibilityWhere } from '../services/visibility.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
 import { loadTagsFor, normalizeTags, setTags, tagKey } from '../utils/task-tags.js';
@@ -49,10 +48,11 @@ class ToolError extends Error {}
 
 function listTasks(db, actorId, args) {
   const includeSupervision = !!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_activity_support_tasks'").get();
+  const startScope = args.include_future ? '1=1' : taskStartProjection(db).where('t');
   let sql = `
     SELECT t.id, t.title, t.status, t.priority, t.category, t.due_date, t.due_time
     FROM tasks t
-    WHERE ${taskScopeWhere('t', { includeFuture: !!args.include_future, bind: '@today', includeSupervision })}
+    WHERE ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${startScope}
       -- Sichtbarkeit (#474): kein Zugriff auf private/eingeschränkte Aufgaben
       -- anderer. Stand hier bisher nicht, obwohl die Termin-Abfrage sie führt -
       -- ein MCP-Token sah damit jede private Aufgabe des Haushalts, und mit den
@@ -63,7 +63,6 @@ function listTasks(db, actorId, args) {
   // Automatisierung, die andere Aufgaben sieht als das UI, ist der Grund, aus
   // dem hier schon einmal die Sichtbarkeit nachgezogen werden musste.
   const params = { me: actorId };
-  if (taskScopeNeedsToday({ includeFuture: !!args.include_future })) params.today = toLocalDateKey();
   // Das Archiv ist seit #688 eine eigene Achse (tasks.archived_at), kein
   // Statuswert mehr. `status: 'archived'` bleibt als Eingabe erlaubt und meint
   // unverändert „zeig mir die Ablage" - nur wird jetzt die Ablage gefragt und
@@ -517,7 +516,7 @@ const CORE_TOOLS = [
       type: 'object',
       properties: {
         status: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'archived'], description: 'Filter by task status. Expired occurrences are historical and excluded by default. "archived" is the separate archive: it lists filed-away tasks with whatever status they carry.' },
-        include_future: { type: 'boolean', description: 'Include tasks that only start at a later date. Left out by default, matching the app: a task with a start date next week is not up yet.' },
+        include_future: { type: 'boolean', description: 'Include tasks before their household-local start date and time. Left out by default, matching the normal app board. Missing Start Time means midnight.' },
         tag: {
           type: 'array',
           items: { type: 'string' },

@@ -1,3 +1,7 @@
+import { taskStartMs } from './task-window.js';
+import { householdTimeZone } from '../utils/timezone.js';
+import { actionableSubtasks } from '../../public/utils/task-progress.js';
+
 /**
  * Modul: Aufgaben-Auswahl (geteilte Abfrage-Logik)
  * Zweck: Welche Aufgaben überhaupt in eine Liste gehören - zentral, damit
@@ -52,6 +56,9 @@
  *                                         '?' (positional) oder benannt wie '@today'
  * @returns {string} SQL-Fragment (ohne führendes AND), nie leer
  */
+// This legacy fragment supplies structural scope and an optional coarse day
+// boundary. Operational board callers opt out of that day check and apply
+// taskStartProjection, including household-local times and source ancestry.
 export function taskScopeWhere(alias, { includeFuture = false, includeSubtasks = false, includeSupervision = false, bind = '?' } = {}) {
   const parts = [];
 
@@ -81,6 +88,78 @@ export function taskScopeWhere(alias, { includeFuture = false, includeSubtasks =
  */
 export function taskScopeNeedsToday({ includeFuture = false } = {}) {
   return !includeFuture;
+}
+
+/** A read-only, request-local scheduling projection. The graph includes the
+ * structural ancestors and canonical learner sources of generated helper work.
+ * Resolve wall times once per distinct window using the lifecycle's DST policy;
+ * lexical wall-clock comparisons would hide work again during a DST overlap.
+ * Callers still enforce privacy independently, before returning rows/metadata. */
+export function taskStartProjection(d, { now = new Date(), tasks = null } = {}) {
+  const serverNow = Number(now), timeZone = householdTimeZone(d);
+  const tables = new Set(d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('task_activity_support_tasks','task_supervision_actions')").all().map(row=>row.name));
+  const columns = new Set(d.prepare('PRAGMA table_info(tasks)').all().map(row=>row.name));
+  const links = ['SELECT id AS child_id,parent_task_id AS parent_id FROM tasks WHERE parent_task_id IS NOT NULL'];
+  if (tables.has('task_activity_support_tasks')) links.push('SELECT task_id,source_task_id FROM task_activity_support_tasks');
+  if (tables.has('task_supervision_actions')) links.push('SELECT action_task_id,source_task_id FROM task_supervision_actions',
+    'SELECT counterpart_task_id,source_task_id FROM task_supervision_actions WHERE counterpart_task_id IS NOT NULL',
+    'SELECT counterpart_task_id,action_task_id FROM task_supervision_actions WHERE counterpart_task_id IS NOT NULL');
+  const seeds = tasks == null ? 'SELECT id FROM tasks' : 'SELECT CAST(value AS INTEGER) FROM json_each(?)';
+  const graph = d.prepare(`WITH RECURSIVE edges(child_id,parent_id) AS (${links.join(' UNION ')}),
+    descendants(id) AS (${seeds} UNION SELECT t.id FROM tasks t JOIN descendants s ON t.parent_task_id=s.id),
+    scope(id) AS (SELECT id FROM descendants UNION SELECT e.parent_id FROM edges e JOIN scope s ON e.child_id=s.id)
+    SELECT t.id,t.start_date,${columns.has('start_time') ? 't.start_time' : 'NULL AS start_time'},
+      (SELECT json_group_array(parent_id) FROM edges WHERE child_id=t.id) AS parents
+    FROM tasks t JOIN scope s ON t.id=s.id`).all(...(tasks == null ? [] : [JSON.stringify(tasks.map(row=>Number(row.id ?? row)))]));
+  const nodes = new Map(graph.map(row=>[row.id,{...row,parents:JSON.parse(row.parents)}])), instants = new Map(), effective = new Map();
+  function start(id, seen = new Set()) {
+    id = Number(id);
+    if (effective.has(id)) return effective.get(id);
+    const row = nodes.get(id);
+    if (!row || seen.has(id)) return null;
+    const visiting = new Set(seen); visiting.add(id);
+    const key = `${row.start_date || ''}T${row.start_time || ''}`;
+    if (!instants.has(key)) instants.set(key,taskStartMs(d,row,timeZone));
+    let value = instants.get(key);
+    for (const parent of row.parents) {
+      const inherited = start(parent,visiting);
+      if (inherited != null) value = value == null ? inherited : Math.max(value,inherited);
+    }
+    effective.set(id,value); return value;
+  }
+  const visible = row => (start(row?.id ?? row) ?? -Infinity) <= serverNow;
+  function metadata(rows, { includeFuture = false } = {}) {
+    let next = null;
+    const visit = row => {
+      if (row.archived_at) return;
+      const at = start(row.id);
+      if (at > serverNow) next = next == null ? at : Math.min(next,at);
+      for (const child of row.subtasks || []) visit(child);
+    };
+    if (!includeFuture) for (const row of rows) visit(row);
+    return {server_now:serverNow,next_start_at:next};
+  }
+  function project(row) {
+    if (!visible(row)) return null;
+    const children = row.subtasks || [], hidden = children.filter(child=>!visible(child));
+    const actionable = actionableSubtasks({...row,subtasks:hidden});
+    const required = actionable.filter(child=>!child.is_optional);
+    const optional = actionable.filter(child=>child.is_optional);
+    return {...row,subtasks:children.filter(visible).map(project),
+      scheduled_action_count:hidden.length,
+      scheduled_completed_action_count:hidden.filter(child=>child.status==='done').length,
+      scheduled_subtask_total:required.length,scheduled_subtask_done:required.filter(child=>child.status==='done').length,
+      scheduled_subtask_points:required.reduce((sum,child)=>sum+(Number(child.points)||0),0),
+      scheduled_subtask_earned_points:required.filter(child=>child.status==='done').reduce((sum,child)=>sum+(Number(child.points)||0),0),
+      scheduled_optional_subtask_total:optional.length,scheduled_optional_subtask_done:optional.filter(child=>child.status==='done').length};
+  }
+  // Internal IDs only. Useful where SQL aggregates/limits must use precisely
+  // the same projection before counting, without registering global SQL state.
+  function where(alias = 't') {
+    const hidden = graph.filter(row=>!visible(row)).map(row=>row.id);
+    return hidden.length ? `${alias}.id NOT IN (SELECT CAST(value AS INTEGER) FROM json_each('${JSON.stringify(hidden)}'))` : '1=1';
+  }
+  return {visible,project,metadata,where,start};
 }
 
 /**

@@ -31,7 +31,7 @@ import {
   previewTaskActivityBinding,
 } from '../services/task-activity-bindings.js';
 import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../services/task-completions.js';
-import { normalizeCategoryFilter, taskCategoryWhere, taskScopeNeedsToday, taskScopeWhere } from '../services/task-scope.js';
+import { normalizeCategoryFilter, taskCategoryWhere, taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import { initializeTaskRotationRendering, applyTaskRotationRendering, refreshTaskRotationRendering } from '../services/task-rotation-rendering.js';
@@ -42,7 +42,6 @@ import {
   flushOutbound, markTodoOutbound, queueTodoDeletion,
 } from '../services/caldav-todo-outbound.js';
 import { uniqueKey } from '../utils/category-slug.js';
-import { toLocalDateKey } from '../../public/utils/date.js';
 import { parseSyncTargetValue } from '../../public/utils/sync-target.js';
 import { mentionedUserIds } from '../../public/utils/mentions.js';
 import { toggleChecklistLine } from '../../public/utils/markdown-checklist.js';
@@ -1364,14 +1363,12 @@ router.get('/', (req, res) => {
                   ORDER BY s.created_at ASC) s) AS subtasks
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
-      WHERE ${taskScopeWhere('t', { includeFuture: !!include_future, includeSupervision:true })}
+      WHERE ${taskScopeWhere('t', { includeFuture: true, includeSupervision:true })}
     `;
     const params = [];
 
-    // DER TAGESSCHLÜSSEL MUSS ALS ERSTER PARAMETER STEHEN: das Scope-Fragment
-    // sitzt am Anfang der WHERE-Klausel, also vor jedem Filter unten. Die
-    // SELECT-Klausel bindet ihre sechs `me` erst am Ende per unshift davor.
-    if (taskScopeNeedsToday({ includeFuture: !!include_future })) params.push(toLocalDateKey());
+    // Scheduled visibility is applied below using household-local instants and
+    // source/ancestor windows. Keep future candidates for authorized wakeup metadata.
 
     // Status, Priorität und Person nehmen mehrere Werte entgegen und verknüpfen
     // sie ODER (#671). Anders als bei den Tags unten ist das keine Geschmacks-
@@ -1469,12 +1466,16 @@ router.get('/', (req, res) => {
         t.created_at DESC
     `;
 
-    const rows = db.get().prepare(sql).all(...params).map(task => ({ ...task, subtasks: JSON.parse(task.subtasks || '[]') })).map(addAssignedUsers);
+    const candidates = db.get().prepare(sql).all(...params).map(task => ({ ...task, subtasks: JSON.parse(task.subtasks || '[]') })).map(addAssignedUsers);
+    const startProjection = taskStartProjection(db.get(),{tasks:candidates});
+    const rows = include_future ? candidates : candidates.filter(startProjection.visible);
     attachTaskActivityBindings(db.get(), rows);
     attachTaskLocations(db.get(), rows);
     attachTaskActionLinks(rows);
     const supervisionViews=new Map(); // One synchronous, read-only response.
-    res.json({ data: withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me)) });
+    const hydrated = withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me));
+    res.json({ data: include_future ? hydrated : hydrated.map(startProjection.project),
+      visibility:startProjection.metadata([...candidates,...hydrated],{includeFuture:!!include_future}) });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET / error:', err);

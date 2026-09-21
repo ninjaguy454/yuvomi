@@ -6,8 +6,7 @@ import { taskOptionalContext } from './task-optional.js';
 import { taskRotationContexts } from './task-rotation.js';
 import { claimTask } from './assignment-responsibilities.js';
 import { flushOutbound } from './caldav-todo-outbound.js';
-import { taskScopeWhere } from './task-scope.js';
-import { todayKey } from '../utils/timezone.js';
+import { taskScopeWhere, taskStartProjection } from './task-scope.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
@@ -88,22 +87,26 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
         selected_member:context.occurrence.selected_member?member(context.occurrence.selected_member):null}})) : [];
   return out;
 }
-export function deviceTaskList(d,principal,{query=null}={}) {
+export function deviceTaskList(d,principal,{query=null,withVisibility=false}={}) {
   const cache=new Map();
   const values=value=>(value==null?[]:[value].flat()).filter(value=>typeof value==='string'&&value!=='').slice(0,50);
   const statuses=values(query?.status),priorities=values(query?.priority),assigned=values(query?.assigned_to).map(Number),categories=values(query?.category),tags=values(query?.tag).map(value=>value.toLocaleLowerCase());
-  const includeFuture=query?.include_future==='1',binds=includeFuture?[]:[todayKey(d)];
+  const includeFuture=query?.include_future==='1';
   // Use the same ordinary list scope as the human board. Visibility is checked
   // before projection; query filters can only narrow device authorization.
-  return d.prepare(`SELECT t.* FROM tasks t WHERE ${taskScopeWhere('t',{includeFuture,includeSupervision:true})}
-    AND t.archived_at IS NULL ORDER BY t.status='done',t.due_date IS NULL,t.due_date,t.due_time,t.id`).all(...binds)
+  const candidates = d.prepare(`SELECT t.* FROM tasks t WHERE ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})}
+    AND t.archived_at IS NULL ORDER BY t.status='done',t.due_date IS NULL,t.due_date,t.due_time,t.id`).all()
     .filter(row=>deviceTaskVisible(d,principal,row) && (query
       ? (!statuses.length?row.status!=='expired':statuses.includes(row.status))
       : !['done','expired'].includes(row.status)))
     .filter(row=>(!priorities.length||priorities.includes(row.priority))&&(!categories.length||categories.includes(row.category))
       &&(!assigned.length||assignees(d,row).some(member=>assigned.includes(member.id)))
       && (!tags.length||tags.every(tag=>d.prepare('SELECT 1 FROM task_tags WHERE task_id=? AND LOWER(tag)=?').get(row.id,tag))))
-    .slice(0,500).map(row=>project(d,principal,row,cache));
+    ;
+  const startProjection=taskStartProjection(d,{tasks:candidates});
+  const projected=(includeFuture?candidates:candidates.filter(startProjection.visible)).slice(0,500).map(row=>project(d,principal,row,cache));
+  const data=includeFuture?projected:projected.map(startProjection.project);
+  return withVisibility?{data,visibility:startProjection.metadata([...candidates,...projected],{includeFuture})}:data;
 }
 export function deviceTaskDetail(d,principal,id) {return project(d,principal,requireTask(d,principal,id));}
 export function deviceTaskStatus(d,principal,id,body={}) {

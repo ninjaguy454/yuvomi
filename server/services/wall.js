@@ -3,7 +3,7 @@ import crypto from 'node:crypto';
 import { resolvePermissions } from '../permissions.js';
 import { taskCapabilities, taskVisibilityWhere } from './task-access.js';
 import { getUpcomingEvents } from './calendar-events.js';
-import { taskScopeWhere } from './task-scope.js';
+import { taskScopeWhere, taskStartProjection } from './task-scope.js';
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
 import { evaluateAvailability, isPlaceWithin } from './presence.js';
 import { listNotificationInbox } from './notification-inbox.js';
@@ -134,11 +134,12 @@ export function wallDashboard(d,hostId,hydrateTask) {
   const result={config,canConfigure:p.admin,today,timezone:householdTimeZone(d),users,
     urgentTasks:[],upcomingEvents:[],todayMeals:[],shoppingLists:[],pinnedNotes:[],points:[],rewardCatalog:[],presence:[],notification:{mode:config.privacy.notifications}};
   if(allows('tasks')) {
+    const starts=taskStartProjection(d);
     const rows=d.prepare(`SELECT t.* FROM tasks t WHERE t.status NOT IN ('done','expired') AND t.archived_at IS NULL
-      AND ${taskScopeWhere('t',{bind:'@today',includeSupervision:true})}
+      AND ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})} AND ${starts.where('t')}
       AND ${taskVisibilityWhere(d,hostId,'t','@me')} AND ${taskVisibilityWhere(d,null,'t','0')}
       ORDER BY t.due_date IS NULL,t.due_date,t.due_time,t.id LIMIT 24`).all({today,me:hostId});
-    result.urgentTasks=rows.filter(row=>wallTaskVisible(d,row.id,hostId)).map(row=>publicTaskProjection(d,hydrateTask(row,hostId),hostId));
+    result.urgentTasks=rows.filter(row=>wallTaskVisible(d,row.id,hostId)).map(row=>starts.project(publicTaskProjection(d,hydrateTask(row,hostId),hostId)));
   }
   if(allows('calendar'))result.upcomingEvents=getUpcomingEvents(d,{userId:null,fromToday:true,limit:20,includeBirthdays:false}).map(publicCalendarEvent);
   if(allows('meals'))result.todayMeals=d.prepare("SELECT id FROM meals WHERE date=? AND scope='household' AND parent_meal_id IS NULL AND superseded_by_id IS NULL AND selection_status='selected' ORDER BY scheduled_time,meal_type LIMIT 12").all(today).map(row=>wallMeal(d,row.id));

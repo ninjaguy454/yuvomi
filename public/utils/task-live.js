@@ -106,3 +106,44 @@ export function latestTaskLoader(read, accept) {
     dispose() { disposed = true; generation++; },
   };
 }
+
+/** Re-read a board when its next authorized Task starts. The server supplies
+ * both instants: client timezone/clock settings never decide visibility. */
+export function createTaskStartRefresh(refresh) {
+  let timer = null, stopped = false, authEnded = false, paused = false, generation = 0;
+  const clear = () => { generation++; clearTimeout(timer); timer = null; };
+  const active = () => !stopped && !authEnded && !paused && !document.hidden && navigator.onLine !== false;
+  const schedule = delay => {
+    if (!active()) return;
+    const current = generation;
+    timer = setTimeout(async () => {
+      if (!active() || current !== generation) return;
+      timer = null;
+      try { await refresh(); }
+      catch { if (active() && current === generation) schedule(30_000); }
+    }, Math.max(100, Math.min(2_147_483_647, delay)));
+  };
+  const suspend = () => { paused = true; clear(); };
+  // watchTaskChanges already refreshes on resume; its fresh response rearms us.
+  const resume = () => { paused = false; if (document.hidden || navigator.onLine === false) suspend(); };
+  const endAuth = () => { authEnded = true; clear(); };
+  const visibility = () => { if (document.hidden) suspend(); else resume(); };
+  document.addEventListener('visibilitychange', visibility);
+  for (const name of ['pagehide', 'offline']) window.addEventListener(name, suspend);
+  for (const name of ['pageshow', 'online']) window.addEventListener(name, resume);
+  for (const name of ['auth:expired', 'auth:context-ending']) window.addEventListener(name, endAuth);
+  return {
+    update(value) {
+      clear();
+      if (!Number.isFinite(value?.server_now) || !Number.isFinite(value?.next_start_at)) return;
+      schedule(value.next_start_at - value.server_now);
+    },
+    dispose() {
+      stopped = true; clear();
+      document.removeEventListener('visibilitychange', visibility);
+      for (const name of ['pagehide', 'offline']) window.removeEventListener(name, suspend);
+      for (const name of ['pageshow', 'online']) window.removeEventListener(name, resume);
+      for (const name of ['auth:expired', 'auth:context-ending']) window.removeEventListener(name, endAuth);
+    },
+  };
+}

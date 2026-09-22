@@ -31,7 +31,7 @@ import { openTaskWorkflows, openActivityTemplateEditor, openSkillEditor, wireVar
 import { bindActivityVariableInputs } from '/components/variable-expression-editor.js';
 import { renderSkillPicker, bindSkillPicker, renderSubtaskEditor, bindSubtaskEditor } from '/components/task-requirements.js';
 import { createManualTaskDraft, taskDraftSnapshot, taskDraftToActivity } from '/utils/task-draft.js';
-import { renderRotationBindings, bindRotationBindings, renderRotationContext } from '/components/rotation-bindings.js';
+import { renderRotationBindings, bindRotationBindings } from '/components/rotation-bindings.js';
 import { resolveActivityDueDate } from '/utils/activity-schedule.js';
 import { taskEditDefinition, taskEditResultMessage } from '/utils/task-edit-scope.js';
 import { taskFormErrors, taskErrorField, showTaskFormErrors } from '/utils/task-form-validation.js';
@@ -708,7 +708,6 @@ function renderTaskCard(task, opts = {}) {
       ${renderParticipantStrip(task, participants)}
     </div>` : ''}
 
-    ${renderRotationContext(task.rotations, {compact:true})}
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}
   </article>`;

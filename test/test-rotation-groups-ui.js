@@ -369,7 +369,80 @@ for(const width of [1440,390])test(`Shared Group schedule is explicit and saved 
  assert.equal(payload.usage_mode,'shared');assert.deepEqual(payload.shared_config.weekdays,[1,2,3,4,5,6]);
  assert.equal(payload.shared_config.starting_member_id,3);assert.equal(payload.shared_config.active_time,'18:00');assert.equal(payload.shared_config.finalize_time,'03:30');
  assert.equal(payload.shared_config.finalize_day_offset,1);assert.equal(payload.shared_config.advance_on_skip,false);
+ assert.equal(payload.shared_config.direction,'first_to_last','existing rotation direction remains the default');
 },{width}));
+
+for(const width of [1440,390])test(`Shared Group rotation direction previews positions and survives editing at ${width}px`,()=>pageTest(async page=>{
+ await openGroup(page);
+ assert.match(await page.$eval('[data-rotation-shared-state]',el=>el.innerText),/Rotation direction\s+Last moves to first/);
+ await page.click('[data-rotation-edit]');await page.waitForSelector(form);await wait(180);
+ const direction=`${form} [name=shared_direction]`;
+ assert.equal(await page.$eval(direction,el=>el.value),'last_to_first');
+ assert.equal(await page.$eval('[data-rotation-direction-field]',el=>el.hidden),false);
+ assert.match(await page.$eval('[data-rotation-direction-preview]',el=>el.textContent),/With 3 members.*1 → 2 → 3 → 1/);
+ await page.select(direction,'first_to_last');
+ assert.match(await page.$eval('[data-rotation-direction-preview]',el=>el.textContent),/1 → 3 → 2 → 1/);
+ await page.select(direction,'last_to_first');
+ for(const strategy of ['round_robin','fixed_order']){
+  await page.select(`${form} [name=shared_strategy]`,strategy);
+  assert.equal(await page.$eval('[data-rotation-direction-field]',el=>el.hidden),true);
+  assert.equal(await page.$eval(direction,el=>el.value),'last_to_first');
+ }
+ await page.select(`${form} [name=shared_strategy]`,'rotating_order');
+ assert.equal(await page.$eval('[data-rotation-direction-field]',el=>el.hidden),false);
+ assert.equal(await page.$eval('[data-rotation-shared-preview]',el=>el.textContent),'Grace → Eleanor → Frankie','direction changes future movement, not the starting order');
+ await fill(page,`${form} [name=description]`,'Direction preserved');
+ await page.$eval(direction,el=>el.scrollIntoView({block:'center'}));await assertFitsViewport(page,`${active} .modal-panel__body`);
+ await page.screenshot({path:fileURLToPath(new URL(`../.qa/rotation-groups-20260919/direction-editor-${width}.png`,import.meta.url))});
+ await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ assert.equal(requests.find(row=>row.path==='/automation/rotation-groups/7').body.shared_config.direction,'last_to_first');
+ assert.equal(requests.some(row=>row.path.endsWith('/usage-preview')),false,'an unchanged direction must not cause a schedule change confirmation');
+ await page.waitForSelector('[data-rotation-edit]');await page.click('[data-rotation-edit]');await page.waitForSelector(form);
+ assert.equal(await page.$eval(direction,el=>el.value),'last_to_first','saved direction is restored when reopening');
+},{width,setup:()=>{
+ groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',direction:'last_to_first',starting_member_id:1,effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],active_time:'17:00',finalize_time:'04:00',finalize_day_offset:1,advance_on_skip:false};
+}}));
+
+test('A shared direction change is included in the schedule preview and confirmed save',()=>pageTest(async page=>{
+ await editGroup(page);await wait(180);await page.select(`${form} [name=shared_direction]`,'last_to_first');
+ await page.click(submit);await page.waitForSelector('[data-rotation-usage-confirm]');
+ assert.equal(requests.find(row=>row.path.endsWith('/usage-preview')).body.shared_config.direction,'last_to_first');
+ assert.match(await page.$eval('[data-rotation-usage-confirm]',el=>el.textContent),/Rotation direction: Last moves to first/);
+ await clickSwitch(page,'confirm_usage');await page.click(submit);await page.waitForFunction(()=>!document.querySelector('[data-rotation-group-form]'));
+ assert.equal(requests.find(row=>row.path==='/automation/rotation-groups/7').body.shared_config.direction,'last_to_first');
+},{setup:()=>{
+ groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',starting_member_id:1,effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],active_time:'17:00',finalize_time:'04:00',finalize_day_offset:1,advance_on_skip:false};
+}}));
+
+for(const width of [1440,390])test(`Independent rotation direction preserves drafts and follows shared Group authority at ${width}px`,()=>pageTest(async page=>{
+ await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:8,strategy:'rotating_order'}]));
+ assert.equal(await page.$eval('[data-rotation-direction]',el=>el.value),'first_to_last');
+ assert.match(await page.$eval('[data-rotation-direction-preview]',el=>el.textContent),/1 → 3 → 2 → 1/);
+ await page.select('[data-rotation-direction]','last_to_first');
+ assert.match(await page.$eval('[data-rotation-direction-preview]',el=>el.textContent),/1 → 2 → 3 → 1/);
+ for(const strategy of ['round_robin','fixed_order']){
+  await page.select('[data-rotation-strategy]',strategy);
+  assert.equal(await page.$eval('[data-rotation-direction-field]',el=>el.hidden),true);
+ }
+ await page.select('[data-rotation-strategy]','rotating_order');
+ assert.equal(await page.$eval('[data-rotation-direction-field]',el=>el.hidden),false);
+ assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).direction,'last_to_first');
+ await page.evaluate(()=>{const value=window.bindingEditor.getValue();return window.fixture.renderBindings(value);});
+ assert.equal(await page.$eval('[data-rotation-direction]',el=>el.value),'last_to_first','reopening the consumer preserves its direction');
+ await page.select('[data-rotation-group]','7');
+ assert.equal(await page.$eval('[data-rotation-direction-field]',el=>el.hidden),true);
+ assert.equal(await page.$eval('[data-rotation-direction]',el=>el.disabled),true);
+ assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).direction,'first_to_last','the shared Group overrides a conflicting local draft');
+ assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/First moves to last/);
+ await page.select('[data-rotation-group]','8');
+ assert.equal(await page.$eval('[data-rotation-direction]',el=>el.value),'last_to_first','returning to independent restores the local draft');
+ await page.evaluate(()=>window.bindingEditor.setReadOnly(true));
+ assert.equal(await page.$eval('[data-rotation-direction]',el=>el.disabled),true);
+ await assertFitsViewport(page);
+},{width,setup:()=>{
+ groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order'};
+ groups.push({...clone(groups[0]),id:8,name:'Independent chores',usage_mode:'independent',shared_config:null});
+}}));
 
 test('Changing usage requires a preview and explicit confirmation; Cancel preserves the complete draft',()=>pageTest(async page=>{
  await editGroup(page);await wait(180);await fill(page,`${form} [name=description]`,'Preserved draft');await page.select(`${form} [name=usage_mode]`,'shared');
@@ -391,12 +464,13 @@ test('Shared binding inherits configuration and exposes resolved-assignee positi
  await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual',workflow_operations:['resolve','finalize','skip']}],{workflowOperations:true}));
  assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Using shared rotation: Kids/);
  assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Shares turns with all activities/);
- for(const selector of ['strategy','advance','skip','presence','operation-finalize','operation-skip'])assert.equal(await page.$eval(`[data-rotation-${selector}]`,el=>el.disabled),true);
+ for(const selector of ['strategy','direction','advance','skip','presence','operation-finalize','operation-skip'])assert.equal(await page.$eval(`[data-rotation-${selector}]`,el=>el.disabled),true);
  const value=await page.evaluate(()=>window.bindingEditor.getValue()[0]);assert.equal(value.strategy,'rotating_order');assert.deepEqual(value.workflow_operations,['resolve']);
+ assert.equal(value.direction,'last_to_first');assert.match(await page.$eval('[data-rotation-shared-notice]',el=>el.textContent),/Last moves to first/);
  const references=await page.evaluate(()=>window.fixture.variableReferenceOptions([{id:'shower_order',label:'Shower Order',type:'rotation_occurrence'}]));
  assert.equal(references.find(row=>row.token==='{{shower_order.position_label}}').label,'Shower Order · This action’s assignee position');
  await page.click('[data-rotation-text-settings] > summary');await page.select('[data-rotation-period-offset]','-1');assert.equal((await page.evaluate(()=>window.bindingEditor.getValue()[0])).period_date_offset_days,-1);
-},{setup:()=>{groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',advance_on_skip:false};}}));
+},{setup:()=>{groups[0].usage_mode='shared';groups[0].shared_config={strategy:'rotating_order',direction:'last_to_first',advance_on_skip:false};}}));
 
 for(const width of [1440,390])test(`Rotation purpose shows one shared summary and hides inherited controls at ${width}px`,()=>pageTest(async page=>{
  await page.evaluate(()=>window.fixture.renderBindings([{purpose_key:'shower_order',label:'Shower Order',group_id:7,strategy:'round_robin',advance_policy:'manual'}]));

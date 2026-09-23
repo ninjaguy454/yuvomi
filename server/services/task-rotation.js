@@ -13,7 +13,9 @@ const invalid = message => Object.assign(new Error(message), { status: 400 });
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object'
   ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const json = value => JSON.stringify(stable(value));
-export const rotationBindingsEqual=(left,right)=>json(parseRotationBindings(left))===json(parseRotationBindings(right));
+const comparableBinding=binding=>binding?{...binding,direction:binding.direction??'first_to_last'}:binding;
+const comparableBindings=value=>parseRotationBindings(value).map(comparableBinding);
+export const rotationBindingsEqual=(left,right)=>json(comparableBindings(left))===json(comparableBindings(right));
 export function parseRotationBindings(value) {
   const parsed = typeof value === 'string' ? JSON.parse(value) : value ?? [];
   if (!Array.isArray(parsed)) throw invalid('Rotation purposes must be a list.');
@@ -30,7 +32,7 @@ export function normalizeRotationBindings(d, input) {
     keys.add(purpose_key);
     const normalized = normalizeRotationConfiguration(d, value);
     return { purpose_key, label: String(value.label || purpose_key).trim().slice(0, 120),
-      group_id: normalized.group_id, strategy: normalized.strategy, advance_policy: normalized.advance_policy,
+      group_id: normalized.group_id, strategy: normalized.strategy, direction: normalized.direction, advance_policy: normalized.advance_policy,
       advance_on_skip: !!normalized.advance_on_skip, override_affects_next: !!normalized.override_affects_next,
       eligibility_behavior: normalized.eligibility_behavior,
       eligibility: normalized.eligibility,
@@ -81,7 +83,7 @@ function bindSharedTaskPurpose(d,task,binding,existing,{actorId,now,consumer}={}
   return {purpose_key:binding.purpose_key,occurrence_id:occurrence.id||null,period_date:dateKey,shared:true,...(!occurrence.id?{reason:'Shared rotation is provisional until its scheduled period activates.'}:{})};
 }
 export function assertRotationBindingsChange(d, actor, before, after) {
-  if (json(parseRotationBindings(before)) !== json(parseRotationBindings(after))) assertCapability(d, actor, 'rotations.configure');
+  if (!rotationBindingsEqual(before,after)) assertCapability(d, actor, 'rotations.configure');
 }
 export function taskRotationContext(d, task) {
   const planning = d.prepare('SELECT place_id FROM task_planning_context WHERE task_id=?').get(task.id);
@@ -113,7 +115,9 @@ export function bindTaskRotations(d, taskId, { config, previousConfig, actorId =
     let existing = previous.find(link => link.purpose_key === binding.purpose_key);
     const periodReference=d.prepare('SELECT * FROM task_rotation_periods WHERE task_id=? AND purpose_key=? AND retired_at IS NULL').get(task.id,binding.purpose_key);
     let identityOwner=periodReference?.consumer_type?{consumer_type:periodReference.consumer_type,consumer_id:periodReference.consumer_id}:owner;
-    if(scope==='occurrence'&&previousConfig!==undefined&&json(parseRotationBindings(previousConfig).find(value=>value.purpose_key===binding.purpose_key))!==json(binding))
+    const previousBinding=previousConfig===undefined?undefined:parseRotationBindings(previousConfig).find(value=>value.purpose_key===binding.purpose_key);
+    const unchangedBinding=json(comparableBinding(previousBinding))===json(comparableBinding(binding));
+    if(scope==='occurrence'&&previousConfig!==undefined&&!unchangedBinding)
       identityOwner={consumer_type:'task_exception',consumer_id:`${task.id}:${createHash('sha256').update(json(binding)).digest('hex').slice(0,24)}`};
     const shared=bindSharedTaskPurpose(d,task,binding,existing,{actorId,now,consumer:identityOwner});
     if(shared){(shared.occurrence_id?resolved:pending).push(shared);continue;}
@@ -123,7 +127,7 @@ export function bindTaskRotations(d, taskId, { config, previousConfig, actorId =
     // Scope applies to changed purposes, not to every purpose in the editor.
     // Keep an unchanged binding's identity and historical decision intact.
     if(existing && scope === 'occurrence' && previousConfig !== undefined
-      && json(parseRotationBindings(previousConfig).find(value=>value.purpose_key===binding.purpose_key))===json(binding))continue;
+      && unchangedBinding)continue;
     const identity = { ...identityOwner, purpose_key: binding.purpose_key };
     let track = findRotationTrack(d, identity);
     const ownSnapshot = existing ? getRotationOccurrence(d, existing.occurrence_id) : null;
@@ -144,7 +148,7 @@ export function bindTaskRotations(d, taskId, { config, previousConfig, actorId =
       // Reconfiguration governs subsequent resolution, never silently edits it.
       const configuration=normalizeRotationConfiguration(d,binding,{allowMissingReferences:true});
       const context=taskRotationContext(d,task);
-      if(json(configuration)!==json(ownSnapshot.config) || Object.keys(context).some(key=>(context[key]??null)!==(ownSnapshot.context[key]??null)))
+      if(json(configuration)!==json(comparableBinding(ownSnapshot.config)) || Object.keys(context).some(key=>(context[key]??null)!==(ownSnapshot.context[key]??null)))
         preserved.push({ purpose_key: binding.purpose_key, occurrence_id: ownSnapshot.id });
       continue;
     }

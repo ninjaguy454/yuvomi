@@ -9080,6 +9080,13 @@ FORK_MIGRATIONS.push({
   up: addDeviceApprovalSchema,
 });
 
+FORK_MIGRATIONS.push({
+  version: 10043,
+  description: 'Rotation Groups: configurable Rotating Order direction with existing behavior preserved',
+  up: `ALTER TABLE rotation_tracks ADD COLUMN direction TEXT NOT NULL DEFAULT 'first_to_last'
+    CHECK(direction IN ('first_to_last','last_to_first'));`,
+});
+
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

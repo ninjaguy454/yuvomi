@@ -22,7 +22,7 @@ function versionRow(d,schedule,dateKey=null) {
   return schedule?d.prepare(`SELECT * FROM rotation_group_schedule_versions WHERE schedule_id=? ${dateKey?'AND effective_date<=?':''}
     ORDER BY ${dateKey?'effective_date DESC,':''}id DESC LIMIT 1`).get(...(dateKey?[schedule.id,dateKey]:[schedule.id])):null;
 }
-function configOf(version) {return version?{...JSON.parse(version.config_json),effective_date:version.effective_date,timezone:version.timezone}:null;}
+function configOf(version) {return version?{...(version.usage_mode==='shared'?{direction:'first_to_last'}:{}),...JSON.parse(version.config_json),effective_date:version.effective_date,timezone:version.timezone}:null;}
 export function registerSharedRotationReconciler(fn) {callbacks.add(fn);return()=>callbacks.delete(fn);}
 export function registerSharedRotationUsageCollector(fn) {usageCollectors.add(fn);return()=>usageCollectors.delete(fn);}
 export function notifySharedRotationReconciliation(d,{groupId,dateKey,periodDate=dateKey,occurrence=null,reason,now=new Date()}={}) {
@@ -232,7 +232,9 @@ function normalizedInput(d,input,old,now) {
     if(offset&&finalize_time>active_time)fail('A shared Rotation window cannot exceed one calendar day. Choose a finalization time at or before the next active time.');
     const starting_member_id=Number(raw.starting_member_id??members[0]);
     if(input.active!==false&&!members.includes(starting_member_id))fail('Choose a starting member in this Rotation Group.');
-    config={strategy:raw.strategy??'rotating_order',starting_member_id,effective_date:effective,weekdays,active_time,finalize_time,finalize_day_offset:offset,
+    const direction=raw.direction??'first_to_last';
+    if(!['first_to_last','last_to_first'].includes(direction))fail('Choose First to last or Last to first for the rotation direction.');
+    config={strategy:raw.strategy??'rotating_order',direction,starting_member_id,effective_date:effective,weekdays,active_time,finalize_time,finalize_day_offset:offset,
       advance_on_skip:raw.advance_on_skip??false,override_affects_next:raw.override_affects_next??true,
       eligibility:raw.eligibility??{},eligibility_behavior:raw.eligibility_behavior??'skip_unavailable'};
   }
@@ -278,7 +280,7 @@ function proposal(d,groupId,input,actor,now) {
   const refs=d.prepare('SELECT t.id,t.revision FROM tasks t WHERE EXISTS(SELECT 1 FROM task_rotation_occurrences r WHERE r.task_id=t.id AND r.track_id IN(SELECT id FROM rotation_tracks WHERE group_id=?)) ORDER BY t.id').all(groupId);
   const token=createHash('sha256').update(json({group_revision:group.revision,schedule,tracks:d.prepare('SELECT id,revision FROM rotation_tracks WHERE group_id=? ORDER BY id').all(groupId),refs,usage,normalized})).digest('hex');
   const members=normalized.member_ids.map(id=>group.members.find(member=>member.id===id)||{id,display_name:d.prepare('SELECT display_name FROM users WHERE id=?').get(id)?.display_name});
-  const selected=orderedRotationSelection({memberIds:members.map(member=>member.id),nextMemberId:normalized.shared_config.starting_member_id,strategy:normalized.shared_config.strategy||'rotating_order'});
+  const selected=orderedRotationSelection({memberIds:members.map(member=>member.id),nextMemberId:normalized.shared_config.starting_member_id,strategy:normalized.shared_config.strategy||'rotating_order',direction:normalized.shared_config.direction});
   const ordered=selected.member_ids.map((id,i)=>({...members.find(member=>member.id===id),position:i+1}));
   return {normalized,usage,group,confirmation_token:token,effective_date:normalized.effective_date,
     proposed_order:normalized.shared_config.strategy==='round_robin'?ordered.slice(0,1):ordered,consumers:usage.visible,

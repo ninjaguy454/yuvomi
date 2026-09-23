@@ -8,6 +8,7 @@ export {orderedRotationSelection} from './rotation-order.js';
 const NOW = "strftime('%Y-%m-%dT%H:%M:%fZ','now')";
 const HOUSEHOLD = 'household';
 const STRATEGIES = ['round_robin','rotating_order','fixed_order'];
+const DIRECTIONS = ['first_to_last','last_to_first'];
 const POLICIES = ['manual','on_finalized','on_completed'];
 const PRESENCE = ['ignore','must_be_home','must_be_at_location','must_be_away','available_before_due'];
 export class RotationError extends Error {
@@ -64,12 +65,12 @@ export function listRotationGroups(d,{includeInactive=false}={}) {
   return d.prepare(`SELECT id FROM rotation_groups WHERE household_key=? ${includeInactive?'':'AND active=1'} ORDER BY name COLLATE NOCASE,id`)
     .all(HOUSEHOLD).map(row=>getRotationGroup(d,row.id));
 }
-function survivingNext(previous, wanted, current) {
+function survivingNext(previous, wanted, current, reverse=false) {
   const available=new Set(current.map(m=>m.membership_id));
   if(available.has(wanted))return wanted;
   const index=previous.findIndex(m=>m.membership_id===wanted);
   if(index>=0)for(let offset=1;offset<=previous.length;offset++) {
-    const candidate=previous[(index+offset)%previous.length].membership_id;
+    const candidate=previous[(index+(reverse?-offset:offset)+previous.length)%previous.length].membership_id;
     if(available.has(candidate))return candidate;
   }
   return current[0]?.membership_id??null;
@@ -103,7 +104,7 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
     const saved=getRotationGroup(d,groupId);
     for(const track of d.prepare('SELECT * FROM rotation_tracks WHERE group_id=?').all(groupId)) {
       if(track.consumer_type==='rotation_group_schedule')continue;
-      const next=survivingNext(old?.members||[],track.next_membership_id,saved.members);
+      const next=survivingNext(old?.members||[],track.next_membership_id,saved.members,track.strategy==='rotating_order'&&track.direction==='last_to_first');
       d.prepare(`UPDATE rotation_tracks SET next_membership_id=?,group_revision=?,revision=revision+1,updated_at=${NOW} WHERE id=?`)
         .run(next,saved.revision,track.id);
     }
@@ -114,8 +115,9 @@ export function saveRotationGroup(d,input,{id:groupId=null,actorId,expectedRevis
 export function normalizeRotationConfiguration(d,input={}, {allowMissingReferences=false,group:resolvedGroup}={}) {
   const group=resolvedGroup||getRotationGroup(d,id(input.group_id,'Rotation Group'));
   if(!group)fail('Choose an existing Rotation Group.');
-  const strategy=input.strategy??'round_robin',advance=input.advance_policy??'on_finalized';
+  const strategy=input.strategy??'round_robin',advance=input.advance_policy??'on_finalized',direction=input.direction??'first_to_last';
   if(!STRATEGIES.includes(strategy))fail('Choose Round Robin, Rotating Order, or Fixed Order.');
+  if(!DIRECTIONS.includes(direction))fail('Choose First to last or Last to first for the rotation direction.');
   if(!POLICIES.includes(advance))fail('Choose when this rotation should advance.');
   const behavior=input.eligibility_behavior??'skip_unavailable';
   if(!['keep_position','skip_unavailable'].includes(behavior))fail('Choose how temporary unavailability affects this rotation.');
@@ -127,7 +129,7 @@ export function normalizeRotationConfiguration(d,input={}, {allowMissingReferenc
   if(!PRESENCE.includes(presence)||!['start','due','completion'].includes(window))fail('Choose valid Availability / Presence settings.');
   const place=e.place_id==null?null:id(e.place_id,'Place');
   if(!allowMissingReferences&&place&&!d.prepare('SELECT 1 FROM places WHERE id=?').get(place))fail('Choose an existing Place.');
-  return {group_id:group.id,strategy,advance_policy:advance,advance_on_skip:flag(input.advance_on_skip),
+  return {group_id:group.id,strategy,direction,advance_policy:advance,advance_on_skip:flag(input.advance_on_skip),
     override_affects_next:flag(input.override_affects_next,true),eligibility_behavior:behavior,eligibility:{skill_ids:skillIds,
       include_supervised:flag(e.include_supervised),presence_policy:presence,presence_window:window,place_id:place}};
 }
@@ -142,7 +144,7 @@ export function findRotationTrack(d,{consumer_type,consumer_id,purpose_key}) {
   return hydrateTrack(d.prepare('SELECT * FROM rotation_tracks WHERE household_key=? AND consumer_type=? AND consumer_id=? AND purpose_key=?')
     .get(HOUSEHOLD,consumer_type,String(consumer_id),purpose_key));
 }
-function trackConfig(track) {return {group_id:track.group_id,strategy:track.strategy,advance_policy:track.advance_policy,
+function trackConfig(track) {return {group_id:track.group_id,strategy:track.strategy,direction:track.direction??'first_to_last',advance_policy:track.advance_policy,
   advance_on_skip:!!track.advance_on_skip,override_affects_next:!!track.override_affects_next,
   eligibility_behavior:track.eligibility_behavior,eligibility:track.eligibility};}
 function groupUsageVersion(d,groupId,dateKey) {
@@ -190,12 +192,12 @@ export function configureRotationTrack(d,input,{actorId=null,trusted=false,share
         next=member.membership_id;
       }
     }
-    if(old)d.prepare(`UPDATE rotation_tracks SET group_id=?,strategy=?,advance_policy=?,advance_on_skip=?,override_affects_next=?,
+    if(old)d.prepare(`UPDATE rotation_tracks SET group_id=?,strategy=?,direction=?,advance_policy=?,advance_on_skip=?,override_affects_next=?,
       eligibility_json=?,eligibility_behavior=?,label=?,next_membership_id=?,group_revision=?,revision=revision+1,config_revision=config_revision+1,updated_at=${NOW} WHERE id=?`)
-      .run(group.id,config.strategy,config.advance_policy,+config.advance_on_skip,+config.override_affects_next,JSON.stringify(config.eligibility),config.eligibility_behavior,label,next,group.revision,old.id);
-    else trackId=Number(d.prepare(`INSERT INTO rotation_tracks(consumer_type,consumer_id,purpose_key,label,group_id,strategy,advance_policy,
-      advance_on_skip,override_affects_next,eligibility_json,eligibility_behavior,next_membership_id,group_revision,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
-      .run(consumerType,consumerId,purpose,label,group.id,config.strategy,config.advance_policy,+config.advance_on_skip,+config.override_affects_next,
+      .run(group.id,config.strategy,config.direction,config.advance_policy,+config.advance_on_skip,+config.override_affects_next,JSON.stringify(config.eligibility),config.eligibility_behavior,label,next,group.revision,old.id);
+    else trackId=Number(d.prepare(`INSERT INTO rotation_tracks(consumer_type,consumer_id,purpose_key,label,group_id,strategy,direction,advance_policy,
+      advance_on_skip,override_affects_next,eligibility_json,eligibility_behavior,next_membership_id,group_revision,created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`)
+      .run(consumerType,consumerId,purpose,label,group.id,config.strategy,config.direction,config.advance_policy,+config.advance_on_skip,+config.override_affects_next,
         JSON.stringify(config.eligibility),config.eligibility_behavior,next,group.revision,actorId).lastInsertRowid);
     if(initialSeed)d.prepare('INSERT INTO rotation_group_independent_seeds(version_id,track_id,next_member_id) VALUES(?,?,?)').run(usage.id,trackId,initialSeed.next_member_id);
     event(d,{groupId:group.id,trackId,actorId,type:old?'track_configured':'track_created',details:{purpose_key:purpose,config,...(initialSeed?{initial_next_member_id:initialSeed.next_member_id,seed_version_id:usage.id}: {})}});
@@ -244,7 +246,7 @@ function prepareRotationPreview(d,track,{context={},eligibleUserIds,eligibilityE
 function selectRotationPreview(track,{config,group,current,eligible,skipped,configurationProblem}) {
   // Stable membership identity also preserves the ring when a user leaves the household.
   const next=track.next_membership_id??group.members[0]?.membership_id??null;
-  const selection=orderedRotationSelection({memberIds:group.members.map(m=>m.membership_id),eligibleIds:eligible.map(m=>m.membership_id),nextMemberId:next,strategy:config.strategy});
+  const selection=orderedRotationSelection({memberIds:group.members.map(m=>m.membership_id),eligibleIds:eligible.map(m=>m.membership_id),nextMemberId:next,strategy:config.strategy,direction:config.direction});
   const nextMember=group.members.find(m=>m.membership_id===next);
   const waiting=config.eligibility_behavior==='keep_position'&&config.strategy!=='fixed_order'&&current.has(nextMember?.id)&&!eligible.some(m=>m.membership_id===next);
   if(waiting)selection.member_ids=[];
@@ -385,12 +387,13 @@ export function skipRotation(d,occurrenceId,options={}) {return finalizeRotation
 export function nextRotationMembership(d,occurrence,track=getRotationTrack(d,occurrence.track_id)) {
   let wanted=occurrence.next_membership_id;
   if(occurrence.config.override_affects_next&&occurrence.overridden_at) {
-    if(occurrence.strategy==='rotating_order'&&occurrence.order.length>1)wanted=occurrence.order[1].membership_id;
+    if(occurrence.strategy==='rotating_order'&&occurrence.config.direction==='last_to_first'&&occurrence.order.length)wanted=occurrence.order.at(-1).membership_id;
+    else if(occurrence.strategy==='rotating_order'&&occurrence.order.length>1)wanted=occurrence.order[1].membership_id;
     else wanted=orderedRotationSelection({memberIds:occurrence.members.map(m=>m.membership_id),eligibleIds:occurrence.members.map(m=>m.membership_id),previousMemberId:occurrence.order[0]?.membership_id}).member_ids[0]??null;
   }
   const household=track.consumer_type==='rotation_group_schedule'?new Set(householdMembers(d).map(member=>member.id)):null;
   const current=household?occurrence.members.filter(member=>household.has(member.id)):memberships(d,track.group_id);
-  return survivingNext(occurrence.members,wanted,current);
+  return survivingNext(occurrence.members,wanted,current,occurrence.strategy==='rotating_order'&&occurrence.config.direction==='last_to_first');
 }
 export function rotationHistory(d,trackId,{limit=100}={}) {
   const track=getRotationTrack(d,trackId);if(!track)fail('Rotation Track not found.',404);

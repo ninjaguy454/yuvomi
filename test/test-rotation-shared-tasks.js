@@ -82,12 +82,11 @@ async function fromTemplate(template,kid,date='2026-09-19') {
   assert.equal(result.status,201,JSON.stringify(result));return row(result.data.id);
 }
 
-test('four scheduled evenings share one snapshot across independent recurring series; absence and child completion cannot advance it',async t=>{
+async function verifyFourEvenings(t, expected) {
   const template=await expressionTemplate(),series=new Map();
   for(const kid of [frankie,grace,eleanor])series.set(kid,await fromTemplate(template,kid));
   assert.equal(new Set([...series.values()].map(task=>taskSeriesState(d,task.id).occurrence.series_id)).size,3);
   assert.ok([...series.values()].every(task=>task.parent_task_id===null));
-  const expected=[[grace,eleanor,frankie],[eleanor,frankie,grace],[frankie,grace,eleanor],[grace,eleanor,frankie]];
   for(let night=0;night<4;night++) {
     const date=`2026-09-${19+night}`;t.mock.timers.setTime(Date.parse(`${date}T23:00:00Z`));tick(`${date}T23:00:00Z`);
     const present=night===1?[frankie,grace]:[eleanor,grace,frankie];
@@ -110,6 +109,22 @@ test('four scheduled evenings share one snapshot across independent recurring se
   assert.equal(d.prepare('SELECT count(*) n FROM rotation_group_periods').get().n,4);
   assert.equal(d.prepare("SELECT count(*) n FROM rotation_events WHERE event_type='finalized' AND track_id=?").get(sharedTrack().id).n,4);
   assert.deepEqual(d.pragma('foreign_key_check'),[]);
+}
+
+test('four scheduled evenings share one snapshot across independent recurring series; absence and child completion cannot advance it',async t=>{
+  await verifyFourEvenings(t,[[grace,eleanor,frankie],[eleanor,frankie,grace],[frankie,grace,eleanor],[grace,eleanor,frankie]]);
+});
+
+test('last moves to first gives independent bedtime assignees positions 1, 2, 3, 1 through real Task creation and recurrence',async t=>{
+  group=S.saveRotationGroupUsage(d,{name:'Kids reverse shower order',member_ids:[grace,eleanor,frankie],usage_mode:'shared',
+    shared_config:{...group.shared_config,strategy:'rotating_order',direction:'last_to_first',starting_member_id:grace,
+      effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],active_time:'18:00',finalize_time:'02:00',finalize_day_offset:1,advance_on_skip:false}},
+    {actorId:admin});
+  await verifyFourEvenings(t,[[grace,eleanor,frankie],[frankie,grace,eleanor],[eleanor,frankie,grace],[grace,eleanor,frankie]]);
+  assert.equal(sharedTrack().direction,'last_to_first');
+  const snapshots=d.prepare('SELECT config_json FROM rotation_occurrences WHERE track_id=? ORDER BY id').all(sharedTrack().id);
+  assert.equal(snapshots.length,4);
+  assert.ok(snapshots.every(snapshot=>JSON.parse(snapshot.config_json).direction==='last_to_first'));
 });
 
 test('early generation remains provisional; skipping tonight preserves the next order without consuming future turns',async t=>{

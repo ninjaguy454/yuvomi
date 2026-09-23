@@ -19,6 +19,15 @@ test('definition changes include checklist structure, optionality, skills and re
     assert.equal(hasTaskDefinitionChanges(task, { ...task, ...edit }), true, JSON.stringify(edit));
   }
 });
+
+test('existing Rotation bindings keep no-change behavior; changing direction is a reusable definition edit', () => {
+  const binding={purpose_key:'shower_order',group_id:7,strategy:'rotating_order'};
+  const before={...task,rotation_bindings:[binding]};
+  assert.equal(hasTaskDefinitionChanges(before,{...before,rotation_bindings:[{...binding,direction:'first_to_last'}]}),false);
+  assert.equal(hasTaskDefinitionChanges(before,{...before,rotation_bindings:[{...binding,direction:'last_to_first'}]}),true);
+  assert.equal(hasTaskDefinitionChanges({...before,rotation_bindings:[{direction:'last_to_first',...binding}]},
+    {...before,rotation_bindings:[{...binding,direction:'last_to_first'}]}),false);
+});
 test('preserved future occurrences get an explicit human-readable save result', () => {
   assert.equal(taskEditResultMessage({ series_edit: { preserved: [80] } }, 'Saved'), 'Changes applied. 1 future occurrence was preserved because it could not be safely updated.');
   assert.match(taskEditResultMessage({ series_edit: { preserved: [{ reason: 'manual_edit' }, { reason: 'schedule_conflict' }, { reason: 'eligibility_or_permission' }] } }, 'Saved'), /3 future occurrences were preserved.*occurrence-specific changes; a scheduling conflict; eligibility or permission restrictions/);

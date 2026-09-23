@@ -37,6 +37,30 @@ function workflow(){
 function plan(){return createMealPlan(d,{name:'Dinner',rules:[{weekdays:[0,1,2,3,4,5,6],meal_type:'dinner',policy:'round_robin',chooser_rotation_group_id:group.id,participant_ids:kids,cook_strategy:'none',supervisor_strategy:'none'}]},admin);}
 const generate=date=>materializeMealPlanOccurrences(d,{from:date,to:date,actorId:admin});
 
+test('shared reverse direction is authoritative for Workflow text and Meal choice across scheduled evenings',t=>{
+ group=S.saveRotationGroupUsage(d,{name:'Reverse shared order',member_ids:kids,usage_mode:'shared',shared_config:{
+  strategy:'rotating_order',direction:'last_to_first',starting_member_id:kids[0],effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],
+  active_time:'18:00',finalize_time:'02:00',finalize_day_offset:1,advance_on_skip:false}},{actorId:admin});
+ const first=S.resolveSharedRotation(d,group.id,{dateKey:'2026-09-19',actorId:admin});
+ const workflowId=workflow();plan();generate('2026-09-19');
+ assert.equal(d.prepare('SELECT assigned_user_id FROM meal_occurrence_assignments').get().assigned_user_id,kids[0]);
+ t.mock.timers.setTime(Date.parse('2026-09-20T23:00:00Z'));
+ assert.equal(S.reconcileSharedRotationPeriods(d,{groupId:group.id,now:new Date()}).failed,0);
+ const second=S.resolveSharedRotation(d,group.id,{dateKey:'2026-09-20',actorId:admin});
+ assert.deepEqual(second.member_ids,[kids[2],kids[0],kids[1]]);
+ const options={createdBy:admin,startDate:'2026-09-20',requestKey:'reverse_shared_workflow'};
+ const run=instantiateWorkflow(d,workflowId,options);
+ assert.equal(run.rotations[0].occurrence.id,second.id);
+ assert.deepEqual(run.tasks.map(task=>d.prepare('SELECT title FROM tasks WHERE id=?').get(task.task_id).title),['Bed 2nd','Bed 3rd','Bed 1st']);
+ assert.deepEqual(instantiateWorkflow(d,workflowId,options),run);
+ generate('2026-09-20');
+ const assignment=d.prepare('SELECT * FROM meal_occurrence_assignments WHERE rotation_occurrence_id=?').get(second.id);
+ assert.equal(assignment.assigned_user_id,kids[2]);
+ assert.equal(R.getRotationTrack(d,first.track_id).advance_count,1);
+ assert.equal(R.getRotationTrack(d,first.track_id).direction,'last_to_first');
+ assert.equal(d.prepare("SELECT count(*) n FROM rotation_tracks WHERE consumer_type IN ('workflow','meal_plan')").get().n,0);
+});
+
 test('shared Workflow resolution and retries reuse the Group period; authored consumer finalize/skip cannot advance it',()=>{
  const id=workflow(),before=d.prepare('SELECT count(*) n FROM rotation_occurrences').get().n;
  const preview=previewWorkflow(d,id,{startDate:'2026-09-19',actorId:admin});

@@ -6,6 +6,8 @@ const bindings = value => typeof value === 'string' ? JSON.parse(value) : value 
 const options = (values, selected) => values.map(([value, label]) => `<option value="${esc(value)}" ${String(selected) === String(value) ? 'selected' : ''}>${esc(label)}</option>`).join('');
 const toggle = (key, label, checked) => `<label class="rotation-switch"><span class="rotation-switch__copy"><strong>${esc(label)}</strong></span><span class="toggle"><input type="checkbox" data-rotation-${key} ${checked ? 'checked' : ''}><span class="toggle__track" aria-hidden="true"></span></span></label>`;
 const methodHelp = { round_robin: 'Selects one person each turn. For everyone’s position in a shared order, use Rotating Order.', rotating_order: 'Keeps everyone in the order and changes who goes first.', fixed_order: 'Keeps everyone in the same order.' };
+const directions = { first_to_last: 'First moves to last', last_to_first: 'Last moves to first' };
+const directionExample = direction => `With 3 members, a person’s positions: ${direction==='last_to_first'?'1 → 2 → 3 → 1':'1 → 3 → 2 → 1'}.`;
 function row(binding, groups = [], { skills = [], places = [], workflowOperations = false } = {}) {
   const eligibility = binding.eligibility || {};
   const groupOptions = [[ '', 'Choose a Rotation Group' ], ...groups.map(group => [group.id, group.name])];
@@ -22,6 +24,10 @@ function row(binding, groups = [], { skills = [], places = [], workflowOperation
         <label class="form-label">Move to the next turn<select class="form-input" data-rotation-advance>${options([['on_finalized','After occurrence ends'],['on_completed','After successful completion'],['manual','Manually']], binding.advance_policy || 'on_finalized')}</select></label>
       </div>
       <p class="form-hint" data-rotation-method-help>${methodHelp[binding.strategy || 'rotating_order']}</p>
+      <div data-rotation-direction-field ${(binding.strategy||'rotating_order')==='rotating_order'?'':'hidden'}>
+        <label class="form-label">Rotation direction<select class="form-input" data-rotation-direction>${options(Object.entries(directions),binding.direction||'first_to_last')}</select></label>
+        <p class="form-hint" data-rotation-direction-preview role="status">${directionExample(binding.direction)}</p>
+      </div>
       <details class="rotation-explanation"><summary>Availability and exceptions</summary><div class="rotation-section">
         ${toggle('skip','Move to the next turn when skipped',binding.advance_on_skip)}
         <label class="form-label">When someone is unavailable<select class="form-input" data-rotation-eligibility-behavior>${options([['skip_unavailable','Skip unavailable members'],['keep_position','Keep their position']],binding.eligibility_behavior || 'skip_unavailable')}</select></label>
@@ -65,13 +71,15 @@ export function bindRotationBindings(container, { skills = [], places = [], read
       const group=sharedGroup(element),notice=element.querySelector('[data-rotation-shared-notice]');
       notice.hidden=!group;element.querySelector('[data-rotation-period-field]').hidden=!group;
       element.querySelector('[data-rotation-independent-settings]').hidden=!!group;
-      for(const key of ['strategy','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next']) {
+      for(const key of ['strategy','direction','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next']) {
         const label=element.querySelector(`[data-rotation-${key}]`)?.closest('label');if(label)label.hidden=!!group;
       }
+      element.querySelector('[data-rotation-direction-field]').hidden=!!group||element.querySelector('[data-rotation-strategy]').value!=='rotating_order';
+      element.querySelector('[data-rotation-direction-preview]').textContent=directionExample(element.querySelector('[data-rotation-direction]').value);
       if(!group)continue;
       const config=group.shared_config||{},method={round_robin:'Round Robin',rotating_order:'Rotating Order',fixed_order:'Fixed Order'}[config.strategy]||'Shared rotation';
-      notice.innerHTML=`<div class="rotation-heading"><div><strong>Using shared rotation: ${esc(group.name)}</strong><p class="form-hint">${esc(method)} · Scheduled by the Group</p></div>${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-rotation-manage>Manage rotation</button>':''}</div><p class="form-hint">Shares turns with all activities using this Group.</p>${config.strategy==='round_robin'?`<p class="form-hint" data-rotation-single-selection>${methodHelp.round_robin}</p>`:''}`;
-      for(const key of ['strategy','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next','operation-finalize','operation-skip']) {
+      notice.innerHTML=`<div class="rotation-heading"><div><strong>Using shared rotation: ${esc(group.name)}</strong><p class="form-hint">${esc(method)}${config.strategy==='rotating_order'?` · ${esc(directions[config.direction||'first_to_last'])}`:''} · Scheduled by the Group</p></div>${canCapability('rotations.manage')?'<button type="button" class="btn btn--secondary btn--sm" data-rotation-manage>Manage rotation</button>':''}</div><p class="form-hint">Shares turns with all activities using this Group.</p>${config.strategy==='round_robin'?`<p class="form-hint" data-rotation-single-selection>${methodHelp.round_robin}</p>`:''}`;
+      for(const key of ['strategy','direction','advance','skip','eligibility-behavior','skills','supervised','presence','window','place','override-next','operation-finalize','operation-skip']) {
         const control=element.querySelector(`[data-rotation-${key}]`);if(control)control.disabled=true;
       }
       element.querySelector('[data-workflow-rotation-operations]')?.setAttribute('hidden','');
@@ -94,7 +102,8 @@ export function bindRotationBindings(container, { skills = [], places = [], read
   });
   root.addEventListener('change',event=>{
     if(event.target.matches('[data-rotation-group]')){lock();changed();}
-    if(event.target.matches('[data-rotation-strategy]'))event.target.closest('[data-rotation-binding]').querySelector('[data-rotation-method-help]').textContent=methodHelp[event.target.value];
+    if(event.target.matches('[data-rotation-strategy]')){event.target.closest('[data-rotation-binding]').querySelector('[data-rotation-method-help]').textContent=methodHelp[event.target.value];lock();}
+    if(event.target.matches('[data-rotation-direction]'))event.target.closest('[data-rotation-binding]').querySelector('[data-rotation-direction-preview]').textContent=directionExample(event.target.value);
   });
   lock();
   const loadGroups=()=>api.get('/automation/rotation-groups').then(result => {
@@ -122,11 +131,11 @@ export function bindRotationBindings(container, { skills = [], places = [], read
         const group=sharedGroup(element),shared=group?.shared_config;
         const result={ purpose_key: value('key').trim(), label: value('label').trim(), group_id: Number(value('group')),
           ...(workflowOperations?{workflow_operations:['resolve',...['finalize','skip'].filter(operation=>checked(`operation-${operation}`))]}:{}),
-          strategy: value('strategy'), advance_policy: value('advance'), advance_on_skip: checked('skip'), override_affects_next: checked('override-next'),
+          strategy: value('strategy'), direction: value('direction'), advance_policy: value('advance'), advance_on_skip: checked('skip'), override_affects_next: checked('override-next'),
           eligibility_behavior: value('eligibility-behavior'),
           eligibility: { skill_ids: [...element.querySelector('[data-rotation-skills]').selectedOptions].map(option => Number(option.value)),
             include_supervised: checked('supervised'), presence_policy: value('presence'), presence_window: value('window'), place_id: Number(value('place')) || null } };
-        if(group)Object.assign(result,{strategy:shared?.strategy||'rotating_order',advance_policy:'on_finalized',advance_on_skip:!!shared?.advance_on_skip,
+        if(group)Object.assign(result,{strategy:shared?.strategy||'rotating_order',direction:shared?.direction||'first_to_last',advance_policy:'on_finalized',advance_on_skip:!!shared?.advance_on_skip,
           override_affects_next:shared?.override_affects_next!==false,eligibility_behavior:shared?.eligibility_behavior||'keep_position',eligibility:shared?.eligibility||{},period_date_offset_days:Number(value('period-offset'))||0,
           ...(workflowOperations?{workflow_operations:['resolve']}:{})});
         return result;

@@ -82,6 +82,33 @@ function materializeAhead(sourceId){
   return id;
 }
 
+test('editing a legacy binding with the explicit default retains its existing purpose, Track and occurrence',async()=>{
+  const task=await create(),link=ownerLink(task.id);
+  const legacy=JSON.parse(row(task.id).rotation_bindings_json).map(({direction,...value})=>value);
+  d.prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(JSON.stringify(legacy),task.id);
+  const result=await edit(task.id,{title:'Bedtime with a clearer title',rotation_bindings:[binding({direction:'first_to_last'})]},'occurrence');
+  assert.equal(result.status,200,JSON.stringify(result));
+  assert.equal(ownerLink(task.id).track_id,link.track_id);
+  assert.equal(ownerLink(task.id).occurrence_id,link.occurrence_id);
+  assert.equal(d.prepare('SELECT count(*) n FROM rotation_tracks').get().n,1);
+});
+
+test('independent recurring Activity retains its chosen direction when generating its successor',async()=>{
+  const task=await create({rotation_bindings:[binding({direction:'last_to_first'})]});
+  const link=ownerLink(task.id),original=getRotationOccurrence(d,link.occurrence_id);
+  assert.deepEqual(original.member_ids,[grace,eleanor,frankie]);
+  assert.equal(original.config.direction,'last_to_first');
+  assert.equal(JSON.parse(row(task.id).rotation_bindings_json)[0].direction,'last_to_first');
+  await finish(task.id);
+  const successor=next(task.id);assert.ok(successor);
+  assert.equal(JSON.parse(successor.rotation_bindings_json)[0].direction,'last_to_first');
+  const following=getRotationOccurrence(d,ownerLink(successor.id).occurrence_id);
+  assert.deepEqual(following.member_ids,[frankie,grace,eleanor]);
+  assert.equal(following.track_id,link.track_id);
+  assert.equal(getRotationTrack(d,link.track_id).advance_count,1);
+  assert.deepEqual(getRotationOccurrence(d,original.id).member_ids,[grace,eleanor,frankie]);
+});
+
 test('one parent recurrence shares one nightly order across three children and advances exactly once over four nights',async t=>{
   let task=await create();const expected=[[grace,eleanor,frankie],[eleanor,frankie,grace],[frankie,grace,eleanor],[grace,eleanor,frankie]];
   const trackId=ownerLink(task.id).track_id;

@@ -16,7 +16,8 @@ export function taskEditDefinition(value) {
     skill_ids: ids(value.skill_ids), assigned_to: ids(value.assigned_to),
     assignment_mode: value.assignment_mode || 'fixed', rotation_user_ids: (value.rotation_user_ids || []).map(Number),
     rotation_group: text(value.rotation_group), rotation_slot: Number(value.rotation_slot) || 0,
-    rotation_bindings:value.rotation_bindings||[],
+    rotation_bindings:(value.rotation_bindings||[]).map(({direction,...binding}) =>
+      !direction || direction === 'first_to_last' ? binding : {...binding,direction}),
     activity_template_id: Number(value.activity_template_id) || null,
     activity_subject_user_id: Number(value.activity_subject_user_id) || null,
     activity_inputs: value.activity_inputs || {},

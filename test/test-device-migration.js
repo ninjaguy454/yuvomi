@@ -88,14 +88,24 @@ function seed(d){
    VALUES(901,'supervisor','fixed',1,1,'2026-09-19T20:00:00Z');`);
  initializeTaskSeries(d);
  const independent=R.saveRotationGroup(d,{name:'Independent Kids',member_ids:[2,3,4]},{actorId:1});
- const track=R.configureRotationTrack(d,{group_id:independent.id,consumer_type:'task',consumer_id:'1',purpose_key:'order',strategy:'rotating_order',advance_policy:'on_finalized'},{actorId:1});
+ // Seed the historical Track shape directly: today's writer requires columns
+ // that deliberately do not exist in this pre-upgrade fixture.
+ const seedTrack=(group,type,consumer,purpose)=>{
+  const id=Number(d.prepare(`INSERT INTO rotation_tracks(group_id,consumer_type,consumer_id,purpose_key,strategy,advance_policy,next_membership_id,group_revision,created_by)
+   VALUES(?,?,?,?,'rotating_order','on_finalized',?,?,1)`).run(group.id,type,String(consumer),purpose,group.members[0].membership_id,group.revision).lastInsertRowid);
+  return R.getRotationTrack(d,id);
+ };
+ const track=seedTrack(independent,'task','1','order');
  const historical=R.resolveRotation(d,track.id,'historical-owner',{actorId:1,context:{task_id:1}});
  R.finalizeRotation(d,historical.id,{actorId:1,expectedRevision:historical.revision});
  d.prepare('INSERT INTO task_rotation_occurrences(task_id,purpose_key,track_id,occurrence_id,owner_task_id) VALUES(1,?,?,?,1)').run('order',track.id,historical.id);
  const shared=S.saveRotationGroupUsage(d,{name:'Shared Kids',member_ids:[2,3,4],usage_mode:'shared',shared_config:{strategy:'rotating_order',starting_member_id:2,effective_date:'2026-09-19',weekdays:[0,1,2,3,4,5,6],active_time:'20:00',finalize_time:'22:00',finalize_day_offset:0,advance_on_skip:false,eligibility:{}}},{actorId:1,now:new Date('2026-09-19T19:00:00Z')});
+ const sharedTrack=seedTrack(shared,'rotation_group_schedule',shared.id,'shared');
+ d.prepare(`UPDATE rotation_group_schedules SET track_id=?,applied_version_id=(SELECT max(v.id) FROM rotation_group_schedule_versions v WHERE v.schedule_id=rotation_group_schedules.id) WHERE group_id=?`).run(sharedTrack.id,shared.id);
  const active=S.resolveSharedRotation(d,shared.id,{dateKey:'2026-09-19',now:new Date('2026-09-20T01:00:00Z')});
  d.prepare('INSERT INTO task_rotation_periods(task_id,purpose_key,group_id,period_date,occurrence_id) VALUES(2,?,?,?,?)').run('shared',shared.id,'2026-09-19',active.id);
  d.prepare('INSERT INTO household_variable_definitions(variable_key,label,type,kind,default_value_json) VALUES(?,?,?,?,?)').run('order','Shared order','rotation_occurrence','value',String(active.id));
+ d.exec("UPDATE rotation_occurrences SET config_json=json_remove(config_json,'$.direction'); UPDATE rotation_group_schedule_versions SET config_json=json_remove(config_json,'$.direction')");
 }
 function snapshot(d){
  const names=d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
@@ -113,8 +123,8 @@ function preserved(d,before){
  for(const row of before.sequences)assert.equal(d.prepare('SELECT seq FROM sqlite_sequence WHERE name=?').get(row.name)?.seq,row.seq,row.name);
  assert.equal(d.pragma('integrity_check',{simple:true}),'ok');assert.deepEqual(d.pragma('foreign_key_check'),[]);
 }
-for(const baseline of [10040,10041])test(`encrypted populated ${baseline} -> 10042 preserves sessions, devices, Wall, roles, capabilities, Tasks, supervision, rewards and both Rotation ownership models; no restart replay`,()=>{
- assert.equal(Math.max(...ALL_MIGRATIONS.map(m=>m.version)),10042,'only the expected additive migrations are in this candidate');
+for(const baseline of [10040,10041])test(`encrypted populated ${baseline} -> 10043 preserves sessions, devices, Wall, roles, capabilities, Tasks, supervision, rewards and both Rotation ownership models; no restart replay`,()=>{
+ assert.equal(Math.max(...ALL_MIGRATIONS.map(m=>m.version)),10043,'only the expected additive migrations are in this candidate');
  const directory=mkdtempSync(join(tmpdir(),'vidamia-device-migration-')),file=join(directory,'database.db'),key=randomBytes(32).toString('hex');let d;
  const open=(options={})=>{const db=new Database(file,options);db.pragma("cipher='sqlcipher'");db.pragma(`key=\"x'${Buffer.from(key).toString('hex')}'\"`);return db;};
  try{
@@ -135,10 +145,10 @@ for(const baseline of [10040,10041])test(`encrypted populated ${baseline} -> 100
   assert.notEqual(readFileSync(file).subarray(0,16).toString(),'SQLite format 3\u0000');
   const boot=()=>{
    const result=spawnSync(process.execPath,['--input-type=module','-e',"const db=await import('./server/db.js');db.init();console.log('SCHEMA',db.currentVersion());db.get().close();"],{cwd:new URL('..',import.meta.url),encoding:'utf8',timeout:60000,env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:key,LOG_LEVEL:'info',NODE_ENV:'test'}});
-   assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout+result.stderr,/SCHEMA 10042/);
+   assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout+result.stderr,/SCHEMA 10043/);
    return [...(result.stdout+result.stderr).matchAll(/Migration (\d+) applied:/g)].map(match=>Number(match[1]));
   };
-  assert.deepEqual(boot(),baseline===10040?[10041,10042]:[10042]);d=open();preserved(d,before);
+  assert.deepEqual(boot(),baseline===10040?[10041,10042,10043]:[10042,10043]);d=open();preserved(d,before);
   assert.equal(d.pragma('table_info(tasks)').find(column=>column.name==='created_by').notnull,0,'device-created work does not require a fake human creator');
   for(const table of ['tasks','task_completions']){
    for(const column of ['source_device_id','source_device_name'])assert.ok(d.pragma(`table_info(${table})`).some(row=>row.name===column));
@@ -148,7 +158,7 @@ for(const baseline of [10040,10041])test(`encrypted populated ${baseline} -> 100
   assert.equal(d.prepare('SELECT count(*) n FROM device_task_approvals').get().n,0,'migration never authenticates or approves an action');
   assert.equal(d.prepare('SELECT count(*) n FROM device_task_creation_receipts').get().n,0,'migration does not manufacture Task creation receipts');
   assert.equal(d.prepare('SELECT COUNT(*) n FROM users').get().n,4,'no fake member created');
-  const history=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();assert.equal(history.length,before.tables.schema_migrations.rows.length+(10042-baseline));
+  const history=d.prepare('SELECT * FROM schema_migrations ORDER BY version').all();assert.equal(history.length,before.tables.schema_migrations.rows.length+(10043-baseline));
   d.close();assert.deepEqual(boot(),[]);d=open({readonly:true});preserved(d,before);assert.deepEqual(d.prepare('SELECT * FROM schema_migrations ORDER BY version').all(),history);
  }finally{if(d?.open)d.close();rmSync(directory,{recursive:true,force:true});}
 });

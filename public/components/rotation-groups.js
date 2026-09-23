@@ -9,6 +9,9 @@ import { formatDate, formatTime } from '/i18n.js';
 
 const names = { round_robin: 'Round Robin', rotating_order: 'Rotating Order', fixed_order: 'Fixed Order',
   preview: 'Provisional', resolved: 'Planned', finalized: 'Finalized', completed: 'Completed', skipped: 'Skipped' };
+const directions = { first_to_last: 'First moves to last', last_to_first: 'Last moves to first' };
+const directionExample = direction => `With 3 members, a person’s positions: ${direction==='last_to_first'?'1 → 2 → 3 → 1':'1 → 3 → 2 → 1'}.`;
+const methodText = config => `${names[config.strategy]}${config.strategy==='rotating_order'?` · ${directions[config.direction||'first_to_last']}`:''}`;
 const orderText = occurrence => occurrence?.order?.map(member => member.display_name).join(' → ') || 'No eligible member';
 const trackLabel = track => track.display_label || track.label || track.purpose_key.replaceAll('_',' ');
 const consumerStatus = track => ({previous:'Previous consumer · History retained',archived:'Archived consumer',inactive:'Inactive consumer',restricted:'Consumer details restricted'}[track.consumer_status]||'');
@@ -22,7 +25,7 @@ const dayText = days => days?.length===7?'Every day':(days||[]).map(day=>weekday
 const orderList = (members=[], empty='No members yet') => members.length?`<ol class="rotation-order">${members.map(member=>`<li><span>${esc(member.display_name)}</span></li>`).join('')}</ol>`:`<p class="form-hint">${esc(empty)}</p>`;
 const toggle = (name, label, checked, hint='') => `<label class="rotation-switch"><span class="rotation-switch__copy"><strong>${esc(label)}</strong>${hint?`<span class="form-hint">${esc(hint)}</span>`:''}</span><span class="toggle"><input name="${name}" type="checkbox" ${checked?'checked':''} aria-label="${esc(label)}"><span class="toggle__track" aria-hidden="true"></span></span></label>`;
 const localDate = () => { const now=zonedFields(new Date());return `${now.year}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')}`; };
-const sharedConfig = group => { const value={ strategy:'rotating_order',starting_member_id:group?.members?.[0]?.id||null,
+const sharedConfig = group => { const value={ strategy:'rotating_order',direction:'first_to_last',starting_member_id:group?.members?.[0]?.id||null,
   effective_date:group?.household_today||localDate(),weekdays:[0,1,2,3,4,5,6],active_time:'17:00',finalize_time:'04:00',
   finalize_day_offset:1,advance_on_skip:false,eligibility:{},...(group?.shared_config||{}),...(group?.shared_config?.schedule||{}) };delete value.schedule;return value;};
 function scheduleText(config={}) {
@@ -37,6 +40,10 @@ function sharedFields(group) {
       <label class="form-label" data-rotation-starting-field>Starting member<select class="form-input" name="shared_starting_member"><option value="">Choose a member</option>${(group?.members||[]).filter(member=>member.id).map(member=>`<option value="${member.id}" ${Number(config.starting_member_id)===member.id?'selected':''}>${esc(member.display_name)}</option>`).join('')}</select></label>
     </div>
     <p class="form-hint" data-rotation-method-help></p>
+    <div data-rotation-direction-field ${config.strategy==='rotating_order'?'':'hidden'}>
+      <label class="form-label">Rotation direction<select class="form-input" name="shared_direction">${Object.entries(directions).map(([value,label])=>`<option value="${value}" ${config.direction===value?'selected':''}>${label}</option>`).join('')}</select></label>
+      <p class="form-hint" data-rotation-direction-preview role="status">${directionExample(config.direction)}</p>
+    </div>
     <div class="rotation-preview"><span class="rotation-eyebrow">Starting preview</span><output data-rotation-shared-preview role="status" aria-live="polite"></output></div>
     <fieldset class="rotation-days"><legend>Scheduled evenings</legend><div class="rotation-weekdays">${weekdays.map((day,index)=>`<label class="rotation-weekday"><input type="checkbox" data-rotation-weekday value="${index}" aria-label="${day}" ${(config.weekdays||[]).includes(index)?'checked':''}><span aria-hidden="true">${day.slice(0,3)}</span></label>`).join('')}</div></fieldset>
     <div class="modal-grid modal-grid--2">
@@ -127,7 +134,7 @@ async function editGroup(group,onSaved,live) {
     <div class="modal-panel__footer">${button('cancel','Cancel','ghost')}<button class="btn btn--primary" type="submit">${group?'Save Group':'Create Group'}</button></div>
   </form>`,onSave(panel){
     const form=panel.querySelector('form'),list=panel.querySelector('[data-rotation-member-list]'),select=panel.querySelector('[data-rotation-add-member]');
-    const sharedValue=()=>({ ...sharedConfig(group),strategy:form.elements.shared_strategy.value,
+    const sharedValue=()=>({ ...sharedConfig(group),strategy:form.elements.shared_strategy.value,direction:form.elements.shared_direction.value,
       starting_member_id:Number(form.elements.shared_starting_member.value)||null,effective_date:form.elements.shared_effective_date.value,
       weekdays:[...form.querySelectorAll('[data-rotation-weekday]:checked')].map(input=>Number(input.value)),
       active_time:form.elements.shared_active_time.value,finalize_time:form.elements.shared_finalize_time.value,
@@ -145,6 +152,8 @@ async function editGroup(group,onSaved,live) {
       panel.querySelector('[data-rotation-method-help]').textContent={round_robin:'Selects one person each turn. To give everyone a position, choose Rotating Order.',rotating_order:'Everyone gets a position; a different person goes first each evening.',fixed_order:'Everyone keeps the same position in the members list.'}[config.strategy];
       panel.querySelector('[data-rotation-finalize-label]').textContent=config.strategy==='fixed_order'?'Evening ends at':'Move to the next turn at';
       panel.querySelector('[data-rotation-starting-field]').hidden=config.strategy==='fixed_order';
+      panel.querySelector('[data-rotation-direction-field]').hidden=config.strategy!=='rotating_order';
+      panel.querySelector('[data-rotation-direction-preview]').textContent=directionExample(config.direction);
       form.elements.shared_advance_on_skip.closest('.rotation-switch').hidden=config.strategy==='fixed_order';
     };
     const sync=()=>{
@@ -202,6 +211,7 @@ async function confirmUsageChange(group,payload,members) {
       <p>${reverse?'Each consumer will keep its own turns after this change. Choose its future starting member explicitly.':'All activities selecting this Group will join its shared schedule. Existing independent histories stay preserved.'}</p>
       <p><strong>Effective date:</strong> ${esc(preview.effective_date||payload.shared_config?.effective_date||'Next eligible occurrence')}</p>
       ${preview.proposed_order?`<p><strong>Proposed shared order:</strong> ${esc(orderText({order:preview.proposed_order}))}</p>`:''}
+      ${!reverse&&payload.shared_config?.strategy==='rotating_order'?`<p><strong>Rotation direction:</strong> ${esc(directions[payload.shared_config.direction||'first_to_last'])}</p>`:''}
       <h3>Existing consumers</h3>${consumers.length?consumers.map((consumer,index)=>`<section class="rotation-history-item"><strong>${esc(consumer.display_label||consumer.label||consumer.purpose_key||'Restricted consumer')}</strong>
         <p>${esc(consumer.current_order?.map(member=>member.display_name).join(' → ')||(consumer.next_member_id?`Next: ${members.find(member=>member.id===consumer.next_member_id)?.display_name||'Former household member'}`:orderText(consumer.next||consumer.current)))}</p>
         ${reverse?`<label class="form-label">Future starting member<select class="form-input" data-rotation-independent-start="${index}" required><option value="">Choose explicitly</option>${members.filter(member=>payload.member_ids.includes(member.id)).map(member=>`<option value="${member.id}">${esc(member.display_name)}</option>`).join('')}</select></label>`:''}</section>`).join(''):'<p>No current consumer bindings.</p>'}
@@ -313,7 +323,7 @@ async function trackHistory(trackId,live) {
     title:({track})=>trackLabel(track),
     render:({track,history,events})=>`${errorBox}<div class="rotation-detail" data-rotation-track-detail="${track.id}">
     ${consumerStatus(track)?`<p class="form-hint" data-rotation-consumer-status>${esc(consumerStatus(track))}</p>`:''}
-    <p class="rotation-badges"><span class="rotation-badge">${esc(names[track.strategy])}</span><span class="rotation-badge">${track.advance_count} advances</span></p>
+    <p class="rotation-badges"><span class="rotation-badge">${esc(methodText(track))}</span><span class="rotation-badge">${track.advance_count} advances</span></p>
     <section class="rotation-section"><div class="rotation-section__heading"><h3>Preview</h3><p class="form-hint">Next results after successive advances. Preview does not change anything.</p></div>
     <ol class="rotation-previews" data-rotation-previews>${track.previews.map((preview,index)=>`<li><span class="rotation-eyebrow">${index?'Then':'Next'}</span><span>${esc(orderText(preview))}</span></li>`).join('')}</ol>
     ${canCapability('rotations.correct')&&track.strategy!=='fixed_order'?button('correct',track.consumer_type==='rotation_group_schedule'?'Set the next order':'Set who is next'):''}
@@ -350,7 +360,7 @@ async function groupDetail(groupId,live) {
       <section class="rotation-section"><div class="rotation-section__heading"><h3>Used by</h3><p class="form-hint">Activities and other routines using this group.</p></div>
       ${group.tracks.length?group.tracks.map(track=>`<section class="rotation-usage" data-rotation-usage="${track.id}"><div><strong>${esc(trackLabel(track))}</strong>
         ${consumerStatus(track)?`<p class="form-hint" data-rotation-consumer-status>${esc(consumerStatus(track))}</p>`:''}
-        <p class="form-hint">${esc(names[track.strategy])} · Next: ${esc(orderText(track.next))}</p></div>
+        <p class="form-hint">${esc(methodText(track))} · Next: ${esc(orderText(track.next))}</p></div>
         ${canCapability('rotations.history')?`<button type="button" class="btn btn--secondary btn--sm" data-rotation-history="${track.id}">History and controls</button>`:''}</section>`).join(''):'<p class="rotation-empty">Not used yet. Choose this group in an Activity, Workflow or Meal Plan to get started.</p>'}</section></div>`,
     onAction:async(action,group,reload)=>{
       if(action.hasAttribute('data-rotation-edit'))return editGroup(group,reload,live);
@@ -372,6 +382,7 @@ function sharedState(group) {
       <div><dt>${config.strategy==='fixed_order'?'Evening ends':'Moves to next turn'}</dt><dd>${esc(formatTime(config.finalize_time))}<span>${config.finalize_day_offset?'Following day':'Same evening'}</span></dd></div>
       <div><dt>Effective from</dt><dd>${esc(formatDate(config.effective_date))}</dd></div>
       <div><dt>When skipped</dt><dd>${config.strategy==='fixed_order'?'Keeps fixed order':config.advance_on_skip?'Advances to next turn':'Keeps the same turn'}</dd></div>
+      ${config.strategy==='rotating_order'?`<div><dt>Rotation direction</dt><dd>${esc(directions[config.direction])}</dd></div>`:''}
     </dl>
     <p class="form-hint">Household time zone${group.shared?.schedule?.timezone?`: ${esc(group.shared.schedule.timezone)}`:''}. Individual completion and absence do not advance this rotation.</p>
     <div class="rotation-periods">
@@ -414,7 +425,7 @@ export async function renderRotationGroups(body) {
           <span class="rotation-group-card__heading"><strong>${esc(group.name)}</strong><span class="rotation-badges"><span class="rotation-badge rotation-badge--mode">${modeLabel(group)}</span>${group.active?'':'<span class="rotation-badge">Inactive</span>'}</span><span class="rotation-group-card__chevron" aria-hidden="true">›</span></span>
           ${group.description?`<span class="rotation-group-card__description">${esc(group.description)}</span>`:''}
           <span class="rotation-group-card__members">${group.members.length?group.members.map((m,index)=>`<span class="rotation-member-chip"><span aria-hidden="true">${index+1}</span>${esc(m.display_name)}</span>`).join(''):'No current members'}</span>
-          <span class="form-hint">${isShared(group)&&group.shared_config?`${esc(names[group.shared_config.strategy])} · ${esc(scheduleText(sharedConfig(group)))}`:`${group.members.length} member${group.members.length===1?'':'s'}`}${group.usage_effective_date?` · Effective from ${esc(formatDate(group.usage_effective_date))}`:''}</span></button>`).join(''):'<div class="rotation-empty"><strong>No Rotation Groups yet</strong><p>Create a group to organize household turns for activities, meals, and more.</p></div>'}</div></div>`;
+          <span class="form-hint">${isShared(group)&&group.shared_config?`${esc(methodText(group.shared_config))} · ${esc(scheduleText(sharedConfig(group)))}`:`${group.members.length} member${group.members.length===1?'':'s'}`}${group.usage_effective_date?` · Effective from ${esc(formatDate(group.usage_effective_date))}`:''}</span></button>`).join(''):'<div class="rotation-empty"><strong>No Rotation Groups yet</strong><p>Create a group to organize household turns for activities, meals, and more.</p></div>'}</div></div>`;
       body.querySelector('[data-rotation-create]')?.addEventListener('click',async event=>{
         const control=event.currentTarget;control.disabled=true;
         try{await editGroup(null,live.refresh,live);}catch(error){if(!disposed)errorAt(body,error);}finally{control.disabled=false;}

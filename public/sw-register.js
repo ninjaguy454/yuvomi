@@ -21,10 +21,9 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (refreshing) return;
     refreshing = true;
-    // Kurz warten damit der neue SW vollstaendig aktiviert ist und
-    // clients.claim() abgeschlossen hat, bevor die Seite neu laedt.
-    // Auf iOS-Standalone verhindert das den "leere Seite"-Bug.
-    setTimeout(() => window.location.reload(), 200);
+    // Installing a new shell is not permission to discard the user's draft.
+    // The router offers an explicit refresh and keeps its stale-module guard.
+    window.dispatchEvent(new CustomEvent('app:update-available'));
   });
 
   const refreshSw = () => {

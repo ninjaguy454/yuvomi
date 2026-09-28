@@ -383,10 +383,10 @@ test('failed Cooking Map install cannot overwrite deployed refinement.2 after it
   assert.deepEqual(env.signals.messages, []);
 });
 
-test('controller change reloads once without requiring a hard reload', async () => {
+test('controller change offers one update without discarding the current view', async () => {
   const windowListeners = {};
   const workerListeners = {};
-  const signals = { registrations: [], updates: 0, reloads: 0, delay: null };
+  const signals = { registrations: [], updates: 0, reloads: 0, delay: null, notices: [] };
   const registration = { update() { signals.updates += 1; return Promise.resolve(); } };
   const serviceWorker = {
     register(path, options) { signals.registrations.push([path, options]); return Promise.resolve(registration); },
@@ -398,9 +398,11 @@ test('controller change reloads once without requiring a hard reload', async () 
     navigator: { serviceWorker },
     window: {
       addEventListener(type, callback) { windowListeners[type] = callback; },
+      dispatchEvent(event) { signals.notices.push(event.type); },
       location: { reload() { signals.reloads += 1; } },
     },
     document: { visibilityState: 'hidden', addEventListener() {} },
+    CustomEvent: class { constructor(type) { this.type = type; } },
     setTimeout(callback, delay) { signals.delay = delay; callback(); },
     console,
   };
@@ -415,8 +417,9 @@ test('controller change reloads once without requiring a hard reload', async () 
 
   workerListeners.controllerchange();
   workerListeners.controllerchange();
-  assert.equal(signals.delay, 200);
-  assert.equal(signals.reloads, 1, 'duplicate controller changes must not cause a reload loop');
+  assert.equal(signals.delay, null);
+  assert.equal(signals.reloads, 0, 'updates must not discard drafts or pending writes');
+  assert.deepEqual(signals.notices, ['app:update-available']);
 });
 
 test('activation remains alive until claim and update notification finish', async () => {

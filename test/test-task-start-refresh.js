@@ -170,7 +170,8 @@ test('latest loader accepts only current response metadata before arming the nex
   const loader = h.latestTaskLoader(() => ++reads === 1 ? earlier.promise : later.promise,
     response => h.controller.update(response.visibility));
   const first = loader.load(), second = loader.load();
-  later.resolve({ visibility: deadline(6000) }); assert.equal(await second, true);
-  earlier.resolve({ visibility: deadline(1000) }); assert.equal(await first, false);
+  earlier.resolve({ visibility: deadline(1000) });
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+  later.resolve({ visibility: deadline(6000) }); assert.equal(await second, true); await first;
   assert.equal(h.one()[1].ms, 6000); loader.dispose(); h.controller.dispose();
 });

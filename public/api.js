@@ -34,7 +34,7 @@ function getCsrfToken() {
  * @param {RequestInit} options - Fetch-Optionen
  * @returns {Promise<any>} Geparstes JSON oder wirft einen Fehler
  */
-async function apiFetch(path, options = {}, _retried = false, captured = authenticationSnapshot()) {
+async function apiFetch(path, options = {}, _retried = false, captured = authenticationSnapshot(), acceptContext = true) {
   const contextError = () => new ApiError('The authenticated context changed. Please try again from the current view.', 409, { reason: 'auth_context_changed' });
   if (!sameAuthentication(captured)) throw contextError();
   const url = `${API_BASE}${path}`;
@@ -42,11 +42,11 @@ async function apiFetch(path, options = {}, _retried = false, captured = authent
   // would repeatedly launch a revoked device and never expose that recovery UI.
   const deviceBootstrapRequest = path === '/device/launch' || path === '/device/context';
 
-  const method = options.method ?? 'GET';
+  const method = (options.method ?? 'GET').toUpperCase();
   const stateChanging = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
-  const { headers: optionHeaders = {}, ...fetchOptions } = options;
+  const { headers: optionHeaders = {}, requireFresh = false, ...fetchOptions } = options;
 
-  let response;
+  let response, data = null, invalidBody = false;
   const controller = new AbortController();
   const detach = trackContextRequest(controller);
   const externalAbort = () => controller.abort();
@@ -65,18 +65,23 @@ async function apiFetch(path, options = {}, _retried = false, captured = authent
         ...(captured.context ? { 'X-Auth-Context': captured.context } : {}),
       },
     });
+    if (response.status !== 204 && response.status !== 205 && method !== 'HEAD') {
+      try { data = await response.json(); }
+      catch (error) { if (controller.signal.aborted && !stateChanging) throw error; invalidBody = true; }
+    }
   } catch (err) {
     if (!sameAuthentication(captured)) throw contextError();
-    // Offline/Netzfehler bei state-changing Requests (POST/PUT/PATCH/DELETE):
-    // klaren ApiError werfen statt nacktem TypeError, damit die UI eine
-    // verständliche „offline"-Meldung zeigen kann (read-only Offline-Modus).
-    if (stateChanging) throw new ApiError('offline', 0);
-    throw err;
+    if (err.name === 'AbortError' && !stateChanging) throw err;
+    // A dropped response does not prove a write failed. Never replay it here:
+    // callers reconcile using their canonical read/idempotency contract.
+    throw new ApiError(stateChanging ? 'Connection interrupted. The result is not yet known.' : 'Unable to reach Vidamia. Reconnecting…', 0,
+      { reason: 'network_unavailable' }, { transient: true, outcome: stateChanging ? 'unknown' : 'unavailable' });
   } finally {
     detach();
     options.signal?.removeEventListener('abort', externalAbort);
   }
   if (!sameAuthentication(captured)) throw contextError();
+  if (!acceptContext && captured.context && data?.authContext && captured.context !== data.authContext) throw contextError();
 
   if (response.status === 401) {
     // Beim Login-Endpunkt bedeutet 401 "falsche Zugangsdaten", nicht "Session abgelaufen".
@@ -87,14 +92,17 @@ async function apiFetch(path, options = {}, _retried = false, captured = authent
     if (!deviceBootstrapRequest && path !== '/auth/login' && path !== '/auth/2fa/verify' && path !== '/wall/identify') {
       if(pairedDeviceHint()) window.dispatchEvent(new CustomEvent('auth:context-rejected', {detail:{reason:'device_context_changed'}}));
       window.dispatchEvent(new CustomEvent('auth:expired'));
-      throw new Error('Sitzung abgelaufen.');
+      throw new ApiError('Sitzung abgelaufen.', 401, data, { outcome: 'rejected' });
     }
     // Für beide: fall-through zum generischen !response.ok-Handler unten.
   }
 
   // CSRF-Token-Desync (haeufig nach iOS-PWA-Resume): einmal GET /auth/me
   // ausfuehren um den CSRF-Token zu erneuern, dann den Request wiederholen.
-  if (response.status === 403 && stateChanging && !_retried) {
+  // Permission and lifecycle denials also carry X-CSRF-Token. Only the
+  // canonical CSRF rejection proves the mutation never reached its handler.
+  const csrfRejected = data?.reason === 'invalid_csrf_token' || /^Invalid CSRF token\.?$/i.test(data?.error || '');
+  if (response.status === 403 && csrfRejected && stateChanging && !_retried) {
     // Token aus der 403-Antwort selbst extrahieren (Server liefert den
     // korrekten Token im Header mit, auch bei Fehlschlag)
     const errorCsrf = response.headers.get('X-CSRF-Token');
@@ -103,20 +111,13 @@ async function apiFetch(path, options = {}, _retried = false, captured = authent
       return apiFetch(path, options, true, captured);
     }
     // Fallback: /auth/me aufrufen um Token zu erneuern
-    const meRes = await fetch(`${API_BASE}/auth/me`, { credentials: 'same-origin', cache: 'no-store', headers: captured.context ? { 'X-Auth-Context': captured.context } : {} });
-    if (!sameAuthentication(captured)) throw contextError();
-    if (meRes.status === 401) {
-      window.dispatchEvent(new CustomEvent('auth:expired'));
-      throw new Error('Sitzung abgelaufen.');
-    }
-    const meData = await meRes.json().catch(() => null);
+    const meData = await apiFetch('/auth/me', {}, true, captured, false);
     if (!sameAuthentication(captured) || (captured.context && meData?.authContext && captured.context !== meData.authContext)) throw contextError();
     if (meData?.csrfToken) _csrfToken = meData.csrfToken;
     return apiFetch(path, options, true, captured);
   }
 
   // CSRF-Token aus Response-Header extrahieren (wird bei jeder API-Antwort mitgeliefert)
-  const data = await response.json().catch(() => null);
   if (!sameAuthentication(captured)) throw contextError();
   const csrfHeader = response.headers.get('X-CSRF-Token');
   if (csrfHeader) _csrfToken = csrfHeader;
@@ -133,11 +134,21 @@ async function apiFetch(path, options = {}, _retried = false, captured = authent
       clearApiCache();
       window.dispatchEvent(new CustomEvent('yuvomi:wall-lock'));
     }
-    const message = data?.error || `HTTP ${response.status}`;
-    throw new ApiError(message, response.status, data);
+    const transient = response.status === 408 || response.status >= 500;
+    const message = data?.error || (transient ? 'Vidamia is temporarily unavailable. Please wait for the connection to recover.' : `HTTP ${response.status}`);
+    const retry = response.headers.get('Retry-After');
+    const retryAfterMs = retry ? Math.max(0, Math.min(300_000, /^\d+(?:\.\d+)?$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now())) : null;
+    throw new ApiError(message, response.status, data, { transient, outcome: stateChanging && transient ? 'unknown' : 'rejected', retryAfterMs: Number.isFinite(retryAfterMs) ? retryAfterMs : null });
   }
 
-  if (/^\/(auth\/(me|login|2fa\/verify)|device\/(context|launch|return|pair\/claim|activity))$/.test(path)) acceptAuthentication(data);
+  if (invalidBody) throw new ApiError('The response was interrupted. The result could not be confirmed.', response.status,
+    { reason: 'invalid_response' }, { transient: true, outcome: stateChanging ? 'unknown' : 'unavailable' });
+  // Older installed service workers may serve a read-only offline snapshot
+  // despite fetch's no-store flag. It cannot confirm an uncertain mutation.
+  if (requireFresh && response.headers.get('x-cached-at')) throw new ApiError('Waiting for a current server response to confirm this change.', 503,
+    { reason: 'stale_response' }, { transient: true, outcome: 'unavailable' });
+
+  if (acceptContext && /^\/(auth\/(me|login|2fa\/verify)|device\/(context|launch|return|pair\/claim|activity))$/.test(path)) acceptAuthentication(data);
 
   if (stateChanging) notifyCountedMutation(path);
 
@@ -177,11 +188,14 @@ function notifyCountedMutation(path) {
  * Strukturierter API-Fehler mit HTTP-Status-Code.
  */
 class ApiError extends Error {
-  constructor(message, status, data = null) {
+  constructor(message, status, data = null, details = {}) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.data = data;
+    this.transient = details.transient ?? false;
+    this.outcome = details.outcome ?? 'rejected';
+    this.retryAfterMs = details.retryAfterMs ?? null;
   }
 }
 

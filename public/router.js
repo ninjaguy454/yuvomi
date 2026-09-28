@@ -838,13 +838,20 @@ async function navigate(path, userOrPushState = true, pushState = true) {
           initReminders();
           initPush();
         }
-      } catch {
+      } catch (error) {
         currentPath = null; // Reset damit navigate('/login') nicht geblockt wird
         isNavigating = false;
         // _pendingLoginRedirect leeren: der catch ruft navigate('/login') direkt auf,
         // der finally soll keinen zweiten Aufruf starten (würde isNavigating=true setzen,
         // während die Login-Seite rendert, und so post-login navigate blockieren).
         _pendingLoginRedirect = false;
+        if (error?.status !== 401) {
+          // A failed session read does not establish that the session expired.
+          // Nothing authenticated has loaded yet: keep a neutral retry screen.
+          document.getElementById('app-loading')?.remove();
+          renderError(document.getElementById('app'), error);
+          return;
+        }
         navigate(_setupRequired ? '/setup' : '/login');
         return;
       }
@@ -4194,9 +4201,11 @@ function showToast(message, type = 'default', duration = 3000, onUndo = null) {
 // --------------------------------------------------------
 
 function friendlyError(err) {
+  if (err?.outcome === 'unknown') return 'Confirmation was interrupted. The change may have been saved. Check its current state before trying again.';
+  if (err?.status === 429) return 'Too many requests. Please wait a moment before trying again.';
   // Offline-Mutation (ApiError status 0): spezifische Meldung — auch wenn
   // navigator.onLine fälschlich true meldet (Netz weg, aber kein offline-Event).
-  if (err?.status === 0) return t('common.errorOfflineMutation');
+  if (err?.status === 0) return err?.transient ? 'Unable to reach Vidamia. Please try again when the connection returns.' : t('common.errorOfflineMutation');
   if (!navigator.onLine) return t('common.errorOffline');
   const status = err?.status ?? err?.response?.status;
   if (status === 403) return t('common.errorForbidden');
@@ -4247,7 +4256,15 @@ window.addEventListener('unhandledrejection', (e) => {
   e.preventDefault(); // Konsolenfehler unterdrücken (bereits geloggt)
 });
 
-// SW-Update: neue Version im Hintergrund installiert → Toast anzeigen
+// An update must not discard an open draft or an uncertain write. The existing
+// stale-module guard still reloads on later navigation; this notice is optional.
+function offerApplicationUpdate() {
+  if (shellStale) return;
+  shellStale = true;
+  showToast('An update is ready. Finish your current work, then refresh.', 'default', 15000,
+    { label: t('common.reload'), onClick: () => location.reload() });
+}
+window.addEventListener('app:update-available', offerApplicationUpdate);
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('message', (e) => {
     if (e.data?.type === 'SW_UPDATED') {
@@ -4256,9 +4273,7 @@ if ('serviceWorker' in navigator) {
       // frische Module lädt - wirkungslos: geleert wurde nur die eigene Map,
       // während die Modul-Map des Dokuments die alten Abhängigkeiten weiter
       // auflöst. Genau daraus entstand der Mischzustand aus #616.
-      shellStale = true;
-      showToast(t('common.updateAvailable'), 'default', 8000);
-      setTimeout(() => location.reload(), 8000);
+      offerApplicationUpdate();
     }
   });
 }

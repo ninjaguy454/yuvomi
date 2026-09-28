@@ -694,7 +694,7 @@ function subtaskRowNode(task, subtask, ctx) {
       const saving = document.createElement('span');
       saving.className = 'detail-subtask__pending';
       saving.setAttribute('role', 'status');
-      saving.textContent = 'Saving…';
+      saving.textContent = pending.uncertain ? 'Checking status…' : 'Saving…';
       row.appendChild(saving);
     }
     toggle.addEventListener('click', async () => {
@@ -773,8 +773,9 @@ function updateTaskOperationState(pane, task, ctx) {
     let saving = row.querySelector('.detail-subtask__pending');
     if (pending && !saving) {
       saving = document.createElement('span'); saving.className = 'detail-subtask__pending';
-      saving.setAttribute('role', 'status'); saving.textContent = 'Saving…'; row.appendChild(saving);
+      saving.setAttribute('role', 'status'); row.appendChild(saving);
     } else if (!pending) saving?.remove();
+    if (pending && saving) saving.textContent = pending.uncertain ? 'Checking status…' : 'Saving…';
   }
   for (const id of ['detail-view-edit', 'task-detail-delete', 'task-detail-archive', 'task-detail-claim']) {
     const control = document.getElementById(id);
@@ -1357,6 +1358,14 @@ function statusSummaryNode(task, ctx) {
     saved.setAttribute('role', 'status');
     saved.textContent = 'Step saved · refreshing Task details';
     summary.appendChild(saved);
+  }
+  if ([...(ctx.pendingSubtasks?.values() || [])].some(intent => intent.uncertain)) {
+    const check = document.createElement('button'); check.type = 'button'; check.className = 'btn btn--ghost btn--sm';
+    check.textContent = 'Check unconfirmed status';
+    check.dataset.focusKey = 'check-unconfirmed-status';
+    check.addEventListener('click', async () => { check.disabled = true;
+      try { await ctx.refresh(); } catch { /* keep the unconfirmed state until a successful read */ } finally { check.disabled = false; } });
+    summary.appendChild(check);
   }
   const waiting = helperWaitingLabel(task, ctx.currentUserId);
   if (waiting) {
@@ -2030,7 +2039,7 @@ export function openTaskDetail({
       ctx.sentLiveEpoch = ctx.liveSnapshotEpoch || 0;
       ctx.loader?.invalidate();
       const result = await changeTaskStatus(child, status);
-      if (!result) throw new Error('This step was not changed.');
+      if (!result) throw Object.assign(new Error('This step was not changed.'), { outcome: 'rejected' });
       ctx.savedChildChange = true;
       ctx.loader?.invalidate();
       const fresh = taskStatusResponseSnapshot(task, result);
@@ -2038,7 +2047,7 @@ export function openTaskDetail({
       const minimum = Number(result.data?.parent_revision || 0);
       ctx.minimumTaskRevision = Math.max(ctx.minimumTaskRevision || 0, minimum);
       try {
-        const response = await api.get(`/tasks/${task.id}`);
+        const response = await api.get(`/tasks/${task.id}`, { requireFresh: true });
         if (Number(response.data?.revision || 0) >= minimum) return response.data;
       } catch { /* The child may already be committed; never retry the write. */ }
       mergeAcknowledgedSubtask(task, result.data);
@@ -2047,13 +2056,16 @@ export function openTaskDetail({
     },
     accept: fresh => ctx.acceptSnapshot(fresh, 'ack'),
     onPending: pending => { ctx.pendingSubtasks = pending; ctx.renderOperationState(); },
+    onUncertain: () => ctx.loader?.invalidate(),
     onError: error => {
       if (ctx.queueErrorRefresh) return;
-      window.yuvomi?.showToast(error.data?.error || error.message, 'danger');
+      const unknown = error.outcome === 'unknown' || error.outcome !== 'rejected' && (!Number.isInteger(error.status) || error.status >= 500);
+      window.yuvomi?.showToast(unknown ? 'This step may have saved. Checking its current status; it will not be sent again.'
+        : (error.data?.error || error.message), unknown ? 'warning' : 'danger');
       // One rejected request can cancel several queued intents. Report the
       // reason once and share one canonical refresh rather than one per step.
       ctx.queueErrorRefresh = Promise.resolve().then(() => {
-        if (!ctx.refreshRequired) return ctx.refresh();
+        return ctx.refresh();
       }).catch(() => {}).finally(() => { ctx.queueErrorRefresh = null; });
     },
     onDrain: () => {
@@ -2070,7 +2082,7 @@ export function openTaskDetail({
       }
     },
   });
-  ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`), response => ctx.acceptSnapshot(response.data));
+  ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`, { requireFresh: true }), response => ctx.acceptSnapshot(response.data));
   ctx.stopLive = watchTaskChanges(() => { void ctx.refresh().catch((error) => {
     if ([403, 404].includes(error.status) && view.isOpen()) {
       ctx.closed = true; ctx.queue?.dispose(); ctx.loader?.dispose(); ctx.stopLive?.();

@@ -15,6 +15,7 @@ import { createLogger } from './logger.js';
 import * as db from './db.js';
 import { router as authRouter, sessionMiddleware, requireAuth, requireAdmin, isPasswordLoginEnabled } from './auth.js';
 import { csrfMiddleware } from './middleware/csrf.js';
+import { requestDiagnostics } from './middleware/request-diagnostics.js';
 import {deviceRouter,devicesRouter} from './routes/devices.js';
 import {deviceBoundary} from './services/devices.js';
 import {deviceAppMiddleware} from './services/device-app.js';
@@ -143,6 +144,7 @@ app.set('trust proxy', _trustProxy);
 // Kompression (gzip/deflate)
 // --------------------------------------------------------
 app.use(compression());
+app.use(requestDiagnostics());
 
 // --------------------------------------------------------
 // Request-Parsing

@@ -118,20 +118,48 @@ export function installDeviceSession() {
 }
 
 export function deviceChanges(callback) {
-  let stream, stopped = false;
-  const connect = () => {
-    stream?.close();
-    if (stopped || document.hidden || navigator.onLine === false || !deviceContext()) return;
-    stream = new EventSource(`/api/v1/device/changes?context=${encodeURIComponent(deviceContext())}`);
-    stream.addEventListener('change', callback);
-    stream.addEventListener('context', () => { void returnToDevice(); });
-    stream.addEventListener('message', callback);
-    stream.addEventListener('error', callback);
+  let stream, stopped = false, retryTimer, attempt = 0;
+  const active = () => !stopped && !document.hidden && navigator.onLine !== false && deviceContext();
+  const retry = () => {
+    if (!active() || retryTimer) return;
+    const delay = Math.min(30_000, 1000 * 2 ** Math.min(attempt++, 5)) * (0.8 + Math.random() * 0.4);
+    retryTimer = setTimeout(() => { retryTimer = null; connect(); }, delay);
   };
-  const end = () => stream?.close();
-  window.addEventListener('auth:context-ending', end);
+  const connect = () => {
+    if (!active()) { end(); return; }
+    if (stream || retryTimer || typeof EventSource !== 'function') return;
+    const source = new EventSource(`/api/v1/device/changes?context=${encodeURIComponent(deviceContext())}`);
+    stream = source;
+    const change = () => { if (stream === source && active()) callback(); };
+    source.addEventListener('open', () => { if (stream === source) { attempt = 0; change(); } });
+    source.addEventListener('change', change);
+    source.addEventListener('context', () => { if (stream === source && active()) void returnToDevice(); });
+    source.addEventListener('message', change);
+    source.addEventListener('error', () => {
+      if (stream !== source || !active()) return;
+      source.close(); stream = null;
+      // Probe the device context, not every Task view. A 502 must not fan out
+      // full-board reloads; real revocation still uses canonical API handling.
+      void api.get('/device/context').then(() => { if (active()) callback(); }).catch(error => {
+        if (active() && (error.status === 401 || ['device_revoked', 'device_context_changed', 'temporary_session_expired'].includes(error.data?.reason))) void returnToDevice();
+      });
+      retry();
+    });
+  };
+  const end = () => { stream?.close(); stream = null; clearTimeout(retryTimer); retryTimer = null; };
+  const endAuth = () => { stopped = true; end(); };
+  window.addEventListener('auth:context-ending', endAuth);
+  window.addEventListener('auth:expired', endAuth);
+  window.addEventListener('offline', end);
+  window.addEventListener('pagehide', end);
+  window.addEventListener('pageshow', connect);
   document.addEventListener('visibilitychange', connect);
   window.addEventListener('online', connect);
   connect();
-  return () => { stopped = true; end(); window.removeEventListener('auth:context-ending', end); document.removeEventListener('visibilitychange', connect); window.removeEventListener('online', connect); };
+  return () => {
+    stopped = true; end();
+    window.removeEventListener('auth:context-ending', endAuth); window.removeEventListener('auth:expired', endAuth);
+    window.removeEventListener('offline', end); window.removeEventListener('pagehide', end); window.removeEventListener('pageshow', connect);
+    document.removeEventListener('visibilitychange', connect); window.removeEventListener('online', connect);
+  };
 }

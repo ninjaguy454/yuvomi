@@ -234,3 +234,26 @@ test('touch scrolling begun over a subtask does not activate a completion',async
     await client.detach();
   }finally{await page.close();}
 });
+
+test('unknown response stays blocked after an unchanged read; Check status only reads and preserves keyboard focus',async()=>{
+  const page=await mounted();try{
+    await page.click(selector(2));const first=await writeAt();
+    first.res.status(502).type('text').send('Bad Gateway');
+    await page.waitForSelector('[data-focus-key="check-unconfirmed-status"]');
+    await page.waitForFunction(()=>document.querySelector('[data-subtask-id="2"] .detail-subtask__toggle')?.getAttribute('aria-pressed')==='false');
+    assert.equal(await page.$eval(selector(2),button=>button.disabled),true);
+    const before=fixture.reads;
+    await page.focus('[data-focus-key="check-unconfirmed-status"]');await page.keyboard.press('Enter');
+    await page.waitForFunction(expected=>window.fixtureTask.revision===expected,{},fixture.task.revision);
+    for(let i=0;i<40&&fixture.reads===before;i++)await new Promise(resolve=>setTimeout(resolve,10));
+    assert.ok(fixture.reads>before);assert.equal(fixture.writes.length,1);
+    assert.equal(await page.evaluate(()=>document.activeElement?.dataset.focusKey),'check-unconfirmed-status');
+    assert.equal(await page.$eval(selector(2),button=>button.disabled),true);
+    fixture.task.revision++;fixture.task.subtasks[0].revision++;fixture.task.subtasks[0].status='done';
+    await page.waitForFunction(()=>!document.querySelector('[data-focus-key="check-unconfirmed-status"]')?.disabled);
+    await page.focus('[data-focus-key="check-unconfirmed-status"]');
+    await page.keyboard.press('Enter');await settled(page,2);
+    assert.equal(await page.$eval(selector(2),button=>button.getAttribute('aria-pressed')),'true');
+    assert.equal(fixture.writes.length,1);assert.equal(await page.$('[data-focus-key="check-unconfirmed-status"]'),null);
+  }catch(error){console.error('Unknown detail readback diagnostic',fixture.requests,await page.evaluate(()=>({text:document.body.innerText,toasts:window.toasts,revision:window.fixtureTask?.revision,focus:document.activeElement?.outerHTML})));throw error;}finally{await page.close();}
+});

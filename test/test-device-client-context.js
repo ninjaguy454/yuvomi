@@ -32,12 +32,14 @@ test('a queued device request remains bound to its original context and late pri
 test('CSRF retry keeps the old context and refuses a response changing principal',async()=>{
   const requests=[];const app=harness(async(url,options)=>{
     requests.push({url,options});
-    return requests.length===1?response({error:'csrf'},403):response({authContext:'changed-context',csrfToken:'new'});
+    return requests.length===1?response({error:'Invalid CSRF token.'},403):response({authContext:'changed-context',csrfToken:'new'});
   });
   app.run("acceptAuthentication({authContext:'device-one',principal:{kind:'device'},device:{}})");
   await assert.rejects(app.run("api.patch('/device/tasks/7/status',{status:'done'})"),error=>error.data.reason==='auth_context_changed');
   assert.equal(requests.length,2,'no mutation retry with new privilege');
   assert.ok(requests.every(request=>request.options.headers['X-Auth-Context']==='device-one'));
+  assert.equal(app.run('deviceContext()'),'device-one','a CSRF probe cannot adopt a different principal');
+  assert.equal(app.run('_csrfToken'),'','a different principal token is not published');
 });
 test('a context change while body parsing is pending suppresses response and token publication',async()=>{
   let release;const pending=new Promise(resolve=>release=resolve);

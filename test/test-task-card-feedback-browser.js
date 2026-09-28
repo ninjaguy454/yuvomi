@@ -310,3 +310,43 @@ test('full app mobile swipe over a checkbox scrolls without mutation; deliberate
   } catch (error) { console.error('Mobile card events:', await page.evaluate(() => window.mobileCardEvents)); throw error; }
   finally { await context.close(); }
 });
+
+for (const mode of ['list', 'kanban']) test(`full app ${mode} preserves state across upstream failure and reads back a committed write with a lost acknowledgement`, async () => {
+  const f = fixture(), { page, context } = await open(f, { mode });
+  try {
+    await page.evaluate(({ id, root }) => {
+      const original = window.fetch.bind(window);
+      window.reliability = { outage: true, writes: 0, reads: 0, card: document.querySelector(`article[data-task-id="${root}"]`), row: document.querySelector(`[data-subtask-id="${id}"]`) };
+      window.fetch = async (...args) => {
+        const input = args[0], method = args[1]?.method || input?.method || 'GET';
+        const path = new URL(typeof input === 'string' ? input : input.url, location.origin).pathname;
+        if (method === 'PATCH' && path === `/api/v1/tasks/${id}/status`) {
+          window.reliability.writes++;
+          const response = await original(...args);
+          if (response.status === 200) return new Response('Bad Gateway', { status: 502, headers: { 'Content-Type': 'text/plain' } });
+          return response;
+        }
+        if (method === 'GET' && (path === '/api/v1/tasks' || path === `/api/v1/tasks/${root}`)) {
+          window.reliability.reads++;
+          if (window.reliability.outage) return new Response('Bad Gateway', { status: 502 });
+        }
+        return original(...args);
+      };
+    }, { id: f.children[0], root: f.root });
+    await page.click(selector(f.children[0]));
+    await page.waitForFunction(id => document.querySelector(`[data-subtask-id="${id}"]`)?.textContent.includes('Not confirmed'), {}, f.children[0]);
+    assert.equal(row(f.children[0]).status, 'done', 'actual backend committed before the response was interrupted');
+    const pending = await state(page, f.children[0]); assert.equal(pending.done && pending.busy, true);
+    assert.equal(await page.evaluate(() => window.reliability.writes), 1);
+    assert.equal(await page.evaluate(() => window.reliability.card.isConnected && window.reliability.row.isConnected), true);
+    await page.waitForFunction(() => document.querySelector('[data-task-connection-status]')?.hidden === false);
+    const before = await page.evaluate(() => ({ x: scrollX, y: scrollY }));
+    await page.evaluate(() => { window.reliability.outage = false; window.dispatchEvent(new Event('task-data-changed')); });
+    await waitSaved(page, f.children[0]);
+    assert.equal(await page.evaluate(() => window.reliability.writes), 1, 'uncertain mutations must never be retried');
+    assert.equal(await page.evaluate(id => window.reliability.row === document.querySelector(`[data-subtask-id="${id}"]`), f.children[0]), true);
+    assert.deepEqual(await page.evaluate(() => ({ x: scrollX, y: scrollY })), before);
+    await page.waitForFunction(() => document.querySelector('[data-task-connection-status]')?.hidden === true);
+    assert.equal(db.prepare("SELECT COUNT(*) n FROM task_activity_events WHERE action_task_id=? AND event_type='completed'").get(f.children[0]).n, 1);
+  } finally { await context.close(); }
+});

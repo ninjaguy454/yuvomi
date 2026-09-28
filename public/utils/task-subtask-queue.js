@@ -4,8 +4,8 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
   const entries = new Map();
   let active = null, disposed = false, blocked = false, token = 0;
   let externalRevision = 0, drainNeeded = false;
-  const failure = (message, reason = 'queue_changed') => Object.assign(new Error(message), { reason });
-  const projection = () => new Map([...entries].map(([id, item]) => [id, { id, status: item.status, token: item.token }]));
+  const failure = (message, reason = 'queue_changed') => Object.assign(new Error(message), { reason, outcome: reason === 'queue_ack_missing' ? 'unknown' : 'rejected' });
+  const projection = () => new Map([...entries].map(([id, item]) => [id, { id, status: item.readbackStatus || item.status, token: item.token, ...(item.uncertain ? { uncertain: true } : {}) }]));
   const publish = () => { if (!disposed) onPending(projection()); };
   const report = (error, item, queued = true) => {
     if (!disposed) onError(error, { id: item.id, status: item.status, queued });
@@ -26,13 +26,13 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
     const allowed = canDispatch(child, item.status, task);
     return allowed === true ? null : failure(typeof allowed === 'string' ? allowed : 'You can no longer change this queued step.');
   }
-  function cancelQueued(error) {
+  function cancelQueued(error, notify = true) {
     for (const item of [...entries.values()]) {
       if (item === active) continue;
-      entries.delete(item.id); report(error, item);
+      entries.delete(item.id); if (notify) report(error, item);
     }
   }
-  const uncertain = error => !Number.isInteger(error?.status) || error.status >= 500;
+  const uncertain = error => error?.outcome === 'unknown' || error?.outcome !== 'rejected' && (!Number.isInteger(error?.status) || error.status >= 500);
   async function pump() {
     if (disposed || active || blocked || !entries.size) return;
     const item = entries.values().next().value;
@@ -67,15 +67,17 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
     } catch (error) {
       if (disposed) return;
       blocked = true;
-      // Clear before callbacks: a callback can synchronously install a fresh
-      // snapshot through invalidate(), which is the only way to lift this gate.
-      entries.delete(item.id); cancelQueued(error); publish();
-      if (uncertain(error)) onUncertain(error);
+      // An interrupted response can follow a committed write. Preserve its
+      // provisional feedback until a new canonical read, never resend it.
+      item.uncertain = uncertain(error);
+      if (!item.uncertain) entries.delete(item.id);
+      cancelQueued(error, false); publish();
+      if (item.uncertain) onUncertain(error);
       report(error, item, false);
     } finally {
       if (active === item) active = null;
       if (!disposed) {
-        if (entries.get(item.id) === item) entries.delete(item.id);
+        if (entries.get(item.id) === item && !item.uncertain) entries.delete(item.id);
         publish(); drain();
         if (!blocked) void pump();
       }
@@ -98,6 +100,16 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       if (disposed || !fresh || Number(fresh.id) !== Number(getTask()?.id) || !Number.isSafeInteger(fresh.revision)) return;
       externalRevision = Math.max(externalRevision, fresh.revision);
       blocked = false;
+      for (const item of [...entries.values()]) if (item.uncertain) {
+        const child = getChild(item.id);
+        // An unchanged read can precede the original request finishing. It
+        // cannot prove rejection. A newer revision resolves the CAS attempt;
+        // otherwise show canonical progress while keeping its result unknown.
+        if (!child || fresh.revision > item.parentRevision || child.revision > item.childRevision
+          || child.status === item.status || fresh.archived_at || fresh.status === 'expired'
+          || canDispatch(child, item.status, getTask()) !== true) entries.delete(item.id);
+        else { item.readbackStatus = child.status; blocked = true; }
+      }
       if (active) {
         const child = getChild(active.id);
         // A newer reset, expiration or permission change outranks the visual
@@ -110,7 +122,7 @@ export function createSubtaskQueue({ getTask, getChild, canDispatch = () => true
       // During a request this may be its own SSE echo. The ACK revision will
       // distinguish that echo from a newer competing mutation before rebasing.
       for (const item of [...entries.values()]) {
-        if (item === active) continue;
+        if (item === active || item.uncertain) continue;
         const invalid = gate(item, { checkParent: !active });
         if (invalid) { entries.delete(item.id); report(invalid, item); }
       }

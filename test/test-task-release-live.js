@@ -69,7 +69,10 @@ function harness() {
     constructor() { Object.assign(this, events()); this.readyState = 1; streams.push(this); }
     close() { this.closed = true; this.readyState = 2; }
   }
-  const context = vm.createContext({ document, window, navigator, EventSource: Source, auth: { me: async () => { reads++; } }, setTimeout(fn, ms) { timers.set(++seq, { fn, ms }); return seq; }, clearTimeout(id) { timers.delete(id); } });
+  window.dispatchEvent = event => window.emit(event.type, event);
+  const context = vm.createContext({ document, window, navigator, EventSource: Source, deviceContext: () => null,
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
+    auth: { me: async () => { reads++; } }, setTimeout(fn, ms) { timers.set(++seq, { fn, ms }); return seq; }, clearTimeout(id) { timers.delete(id); } });
   vm.runInContext(`${source}\nthis.subject={watchTaskChanges};`, context);
   return { ...context.subject, document, window, navigator, streams, timers, reads: () => reads, async flush(ms = 80) { const pending = [...timers.entries()].filter(([, x]) => x.ms <= ms); for (const [id, x] of pending) { timers.delete(id); await x.fn(); } } };
 }

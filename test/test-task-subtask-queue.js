@@ -105,9 +105,16 @@ for (const status of [403, 409, 500, undefined]) test(`request failure ${status 
   const f = fixture(); f.queue.enqueue(11, 'done'); f.queue.enqueue(12, 'done');
   const error = Object.assign(new Error('Rejected or uncertain'), status ? { status } : {});
   f.calls[0].reject(error); await settle();
-  assert.equal(f.calls.length, 1); assert.equal(f.queue.pending.size, 0); assert.equal(f.queue.blocked, true);
+  assert.equal(f.calls.length, 1); assert.equal(f.queue.pending.size, !status || status >= 500 ? 1 : 0); assert.equal(f.queue.blocked, true);
+  if (!status || status >= 500) assert.equal(f.queue.pending.get(11).uncertain, true);
   assert.equal(f.queue.enqueue(13, 'done'), false); assert.equal(f.uncertain.length, !status || status >= 500 ? 1 : 0);
-  f.external(structuredClone(f.task)); assert.equal(f.queue.blocked, false); assert.equal(f.queue.busy, false);
+  f.external(structuredClone(f.task));
+  if (!status || status >= 500) {
+    assert.equal(f.queue.blocked, true, 'unchanged state cannot rule out the original request still running');
+    assert.equal(f.queue.pending.get(11).status, 'open', 'unknown must not look permanently complete');
+    f.external(f.snapshot(11));
+  }
+  assert.equal(f.queue.blocked, false); assert.equal(f.queue.busy, false);
   assert.equal(f.queue.enqueue(13, 'done'), true); f.queue.dispose();
 });
 

@@ -11,7 +11,7 @@ import { api } from '/api.js';
 import { canTask, canCapability } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, taskRevision, taskStatusConfirmation } from '/utils/task-state.js';
 import { structuralSubtasks, helperWaitingLabel } from '/utils/task-progress.js';
-import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh } from '/utils/task-live.js';
+import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh, taskConnectionState } from '/utils/task-live.js';
 import { reconcileTaskMarkup, captureTaskViewport } from '/utils/task-view-state.js';
 import { bindTaskCardSelection } from '/utils/task-card-selection.js';
 import { createTaskCardSubtasks, taskCardPendingProjection } from '/utils/task-card-subtasks.js';
@@ -1479,7 +1479,7 @@ function taskSnapshot(id) {
 
 // Only operational nodes change before acknowledgement. Keep the existing card,
 // scrollports, expansion controls and metadata in place while siblings queue.
-function patchCardSubtaskFeedback(list, task, pending, queue) {
+function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}) {
   const projected = taskCardPendingProjection(task, pending, actionableSubtasks);
   const progress = completionCounts(projected);
   for (const card of list.querySelectorAll(`article[data-task-id="${task.id}"]`)) {
@@ -1497,6 +1497,17 @@ function patchCardSubtaskFeedback(list, task, pending, queue) {
       button.dataset.status = child.status;
       button.disabled = !!intent || queue.blocked || !canToggleCardSubtask(task, child);
       button.querySelector('svg path')?.setAttribute('d', done ? 'm20 6-11 11-5-5' : '');
+      let saving = row.querySelector('.subtask-item__pending');
+      if (intent?.uncertain && !saving) {
+        saving = document.createElement('span'); saving.className = 'subtask-item__pending text-muted text-sm';
+        saving.setAttribute('role', 'status'); saving.textContent = 'Not confirmed. ';
+        const check = document.createElement('button'); check.type = 'button'; check.className = 'btn btn--ghost btn--sm'; check.textContent = 'Check status';
+        check.dataset.focusKey = `check-subtask-${child.id}`;
+        check.setAttribute('aria-label', `Check unconfirmed status: ${child.title}`);
+        check.addEventListener('click', async event => { event.stopPropagation(); check.disabled = true;
+          try { await recheck(); } catch { /* connection notice retains the read failure */ } finally { check.disabled = false; } });
+        saving.appendChild(check); row.appendChild(saving);
+      } else if (!intent?.uncertain) saving?.remove();
       const points = row.querySelector('.subtask-item__points');
       if (points) points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(child) });
     }
@@ -1551,19 +1562,23 @@ function cardSubtaskController(container) {
       invalidateReads: () => taskPageLoaders.get(container)?.invalidate(),
       send: async (child, status, parent) => {
         const result = await changeTaskStatus(child, status);
-        if (!result) throw new Error('This step was not changed.');
+        if (!result) throw Object.assign(new Error('This step was not changed.'), { outcome: 'rejected' });
         const fresh = [result.data, result.data?.parent_task, result.data?.projection_parent_task]
           .find(row => Number(row?.id) === Number(parent.id) && Number.isSafeInteger(row?.revision));
         if (fresh) return fresh;
         // A compatible response may lack its parent projection. The write may
         // already be committed: read once, never retry that status mutation.
-        const response = await api.get(`/tasks/${parent.id}`);
+        const response = await api.get(`/tasks/${parent.id}`, { requireFresh: true });
         if (Number(response.data?.revision) >= Number(result.data?.parent_revision || parent.revision)) return response.data;
         throw new Error('This step was saved, but the current Task could not be refreshed.');
       },
       onCanonical: fresh => { state.tasks = state.tasks.map(task => Number(task.id) === Number(fresh.id) ? fresh : task); },
-      onPending: (task, pending, queue) => { if (list.isConnected) patchCardSubtaskFeedback(list, task, pending, queue); },
-      onError: error => window.yuvomi.showToast(error.data?.error || error.message, 'danger'),
+      onPending: (task, pending, queue) => { if (list.isConnected) patchCardSubtaskFeedback(list, task, pending, queue, () => loadTasks(container)); },
+      onError: error => {
+        const unknown = error.outcome === 'unknown' || error.outcome !== 'rejected' && (!Number.isInteger(error.status) || error.status >= 500);
+        window.yuvomi.showToast(unknown ? 'This step may have saved. Checking its current status; it will not be sent again.'
+          : (error.data?.error || error.message), unknown ? 'warning' : 'danger');
+      },
       refresh: () => loadTasks(container),
     });
     taskCardSubtasks.set(list, controller);
@@ -1588,8 +1603,10 @@ async function loadTasks(container) {
   persistAssignedToMe();
   let loader = taskPageLoaders.get(container);
   if (!loader) {
-    loader = latestTaskLoader(() => Promise.all([api.get(`/tasks${taskQuery()}`), api.get('/automation/obligations').catch(() => ({ data: [] }))]), ([data, obligations]) => {
+    loader = latestTaskLoader(() => Promise.all([api.get(`/tasks${taskQuery()}`, { requireFresh: true }), api.get('/automation/obligations').catch(error => ({ data: error.status === 403 ? [] : state.assignmentRequests }))]), ([data, obligations]) => {
       if (!container.isConnected) return;
+      state.loadError = null;
+      updateTaskConnectionNotice(container, false);
       updateTaskStartRefresh(container, data.visibility);
       state.tasks = taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile(data.data ?? []) ?? data.data ?? [];
       state.assignmentRequests = obligations.data ?? [];
@@ -1600,6 +1617,7 @@ async function loadTasks(container) {
   }
   try { return await loader.load(); }
   catch (error) {
+    if (error.transient || !Number.isInteger(error.status) || error.status >= 500 || error.status === 429) updateTaskConnectionNotice(container, true);
     if (error.status === 403 && container.isConnected) {
       updateTaskStartRefresh(container, null);
       taskCardSubtasks.get(container.querySelector('#task-list'))?.reconcile([]);
@@ -1609,6 +1627,37 @@ async function loadTasks(container) {
     }
     throw error;
   }
+}
+
+const taskConnectionNotices = new WeakMap();
+function updateTaskConnectionNotice(container, failed) {
+  const status = taskConnectionNotices.get(container);
+  if (!status) return;
+  if (failed != null) status.failed = failed;
+  const notice = container.querySelector('[data-task-connection-status]');
+  if (!notice) return;
+  const current = taskConnectionState();
+  notice.hidden = status.ended || !status.failed && current === 'connected';
+  notice.textContent = current === 'offline'
+    ? 'Offline. Showing the last loaded Tasks; changes need a connection.'
+    : 'Reconnecting. Showing the last loaded Tasks; some updates may be delayed.';
+}
+
+function watchTaskConnectionNotice(container) {
+  const status = { failed: false, ended: false };
+  taskConnectionNotices.set(container, status);
+  const paint = () => updateTaskConnectionNotice(container);
+  const end = () => { status.ended = true; paint(); };
+  window.addEventListener('task-connection-state', paint);
+  window.addEventListener('auth:expired', end);
+  window.addEventListener('auth:context-ending', end);
+  paint();
+  return () => {
+    window.removeEventListener('task-connection-state', paint);
+    window.removeEventListener('auth:expired', end);
+    window.removeEventListener('auth:context-ending', end);
+    taskConnectionNotices.delete(container);
+  };
 }
 
 /**
@@ -3810,7 +3859,9 @@ function renderTaskList(container) {
         description: t('common.loadErrorDescription'),
         error: state.loadError,
         retryLabel: t('common.retry'),
-        onRetry: () => render(container, { user: state.user }),
+        onRetry: () => loadTasks(container).catch(error => {
+          state.loadError = error; renderTaskList(container);
+        }),
       });
     }
     return;
@@ -5502,6 +5553,7 @@ export async function render(container, { user }) {
       </div>
 
       <div class="tasks-body">
+        <p class="task-connection-notice" data-task-connection-status role="status" aria-live="polite" hidden></p>
         <div class="filter-panel task-control-popover" id="filter-panel" popover="auto"></div>
         <div class="task-control-popover" id="task-sort-panel" popover="auto"></div>
         <div class="task-control-popover" id="task-group-panel" popover="auto"></div>
@@ -5561,6 +5613,8 @@ export async function render(container, { user }) {
   if (window.lucide) window.lucide.createIcons({ el: container });
 
   applyTaskPagePermissions(container);
+
+  const stopConnectionNotice = watchTaskConnectionNotice(container);
 
   // Daten laden (Filter-State aus vorheriger Session berücksichtigen)
   try {
@@ -5662,6 +5716,7 @@ export async function render(container, { user }) {
     } catch { /* Task existiert nicht oder kein Zugriff */ }
   }
   return () => {
+    stopConnectionNotice();
     stopLive();
     taskStartRefreshers.get(container)?.dispose();
     taskStartRefreshers.delete(container);

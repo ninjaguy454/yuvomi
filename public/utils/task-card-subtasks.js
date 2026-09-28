@@ -4,7 +4,7 @@ import { createSubtaskQueue } from './task-subtask-queue.js';
 export function createTaskCardSubtasks({ children, canComplete, send, invalidateReads = () => {},
   onCanonical = () => {}, onPending = () => {}, onError = () => {}, refresh = () => {} }) {
   const records = new Map();
-  let disposed = false;
+  let disposed = false, notifiedFailure = false;
   function requestRefresh(record) {
     if (!record.refreshing && !disposed) {
       record.refreshing = Promise.resolve().then(refresh).catch(() => {}).finally(() => { record.refreshing = null; });
@@ -47,8 +47,9 @@ export function createTaskCardSubtasks({ children, canComplete, send, invalidate
         record.pending = pending;
         onPending(record.task, pending, record.queue);
       },
+      onUncertain: () => invalidateReads(),
       onError: error => {
-        if (!record.refreshing) onError(error);
+        if (!record.refreshing && !notifiedFailure) { notifiedFailure = true; onError(error); }
         requestRefresh(record);
       },
       onDrain: () => {
@@ -64,6 +65,7 @@ export function createTaskCardSubtasks({ children, canComplete, send, invalidate
     },
     /** Called only for authoritative list reads, before rendering their markup. */
     reconcile(tasks) {
+      notifiedFailure = false;
       const present = new Set(tasks.map(task => Number(task.id)));
       for (const [id, record] of records) if (!present.has(id)) { record.queue.dispose(); records.delete(id); }
       return tasks.map(fresh => {

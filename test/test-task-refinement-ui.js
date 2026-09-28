@@ -180,6 +180,7 @@ function liveHarness() {
   const events = () => ({ listeners: new Map(), addEventListener(name, fn) { this.listeners.set(name, fn); }, removeEventListener(name) { this.listeners.delete(name); } });
   const document = { ...events(), hidden: false };
   const window = events();
+  window.dispatchEvent = event => window.listeners.get(event.type)?.(event);
   const streams = [];
   class Source {
     constructor(url) { this.url = url; this.listeners = new Map(); streams.push(this); }
@@ -188,7 +189,8 @@ function liveHarness() {
     close() { this.closed = true; }
   }
   let authReads = 0;
-  const context = vm.createContext({ document, window, navigator: { onLine: true }, EventSource: Source,
+  const context = vm.createContext({ document, window, navigator: { onLine: true }, EventSource: Source, deviceContext: () => null,
+    CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
     auth: { me: async () => { authReads++; } },
     setTimeout(fn, delay) { timers.set(++seq, { fn, delay }); return seq; }, clearTimeout(id) { timers.delete(id); } });
   vm.runInContext(`${plain(read('utils/task-live.js'))}\nthis.subject={watchTaskChanges,latestTaskLoader}`, context);
@@ -196,14 +198,14 @@ function liveHarness() {
     async flush() { const pending = [...timers.values()]; timers.clear(); for (const timer of pending) await timer.fn(); } };
 }
 
-test('new assignment invalidation refreshes already open list/detail through one connection and rechecks permissions', async () => {
+test('new assignment invalidation refreshes canonical list/detail through one connection without redundant auth reads', async () => {
   const h = liveHarness(); let list = 0, detail = 0;
   const stopList = h.watchTaskChanges(() => list++);
   const stopDetail = h.watchTaskChanges(() => detail++);
   assert.equal(h.streams.length, 1);
   assert.equal(h.streams[0].url, '/api/v1/tasks/changes');
   h.streams[0].emit('change', { version: 2 }); await h.flush();
-  assert.equal(list, 1); assert.equal(detail, 1); assert.equal(h.authReads(), 1);
+  assert.equal(list, 1); assert.equal(detail, 1); assert.equal(h.authReads(), 0);
   h.streams[0].emit('change', { version: 2 }); await h.flush();
   assert.equal(list, 1, 'duplicate version cannot reload a draft');
   stopList(); assert.equal(h.streams[0].closed, undefined);
@@ -228,12 +230,14 @@ test('disposing the final subscriber cancels a queued invalidation', async () =>
   assert.equal(reads, 0);
 });
 
-test('out-of-order Task GETs cannot restore older assignment/status/progress', async () => {
+test('coalesced Task GETs cannot restore older assignment/status/progress', async () => {
   const h = liveHarness(); const pending = [], accepted = [];
   const loader = h.latestTaskLoader(() => new Promise(resolve => pending.push(resolve)), data => accepted.push(data));
   const first = loader.load(); const second = loader.load();
-  pending[1]({ revision: 8, status: 'done' }); await second;
-  pending[0]({ revision: 7, status: 'open' }); assert.equal(await first, false);
+  assert.equal(pending.length, 1);
+  pending[0]({ revision: 7, status: 'open' });
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+  pending[1]({ revision: 8, status: 'done' }); await second; await first;
   assert.deepEqual(accepted, [{ revision: 8, status: 'done' }]);
 });
 
@@ -261,6 +265,7 @@ function detailHarness(overrides = {}) {
   const context = vm.createContext({ document: { createElement: tag => new Element(tag) }, HTMLElement: Element, window: {},
     canTask: (task, key) => task?.permissions?.[key] === true, isArchived: task => !!task.archived_at,
     isExpired: task => task?.status === 'expired',
+    isDevicePrincipal: () => false, canApproveDeviceTask: () => false,
     t: key => key, actionableSubtasks: stateHarness().actionableSubtasks, ...overrides });
   vm.runInContext(`${plain(read('components/task-detail.js'))}\nthis.subject={subtaskListNode,progressNode,supervisionNode,commentsNode,seriesHistoryNode,runTaskDetailMutation,taskStatusResponseSnapshot,mergeTaskDetailSnapshot}`, context);
   return context.subject;

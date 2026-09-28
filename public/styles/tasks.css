@@ -3449,3 +3449,13 @@
 }
 .task-edit-scope__option input { flex: 0 0 auto; margin-top: 0.25em; }
 .task-edit-scope__option:has(input:disabled) { opacity: 0.6; cursor: default; }
+/* One persistent connection message; keep the authorized board underneath. */
+.task-connection-notice {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-secondary);
+  font-size: var(--text-sm);
+}

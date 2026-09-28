@@ -35,7 +35,7 @@ Added bounded request diagnostics: request correlation ID, module bucket, method
 
 This can help distinguish future application errors, rate limits, slow responses and interrupted connections. A proxy failure before the request reaches Vidamia will still require proxy/forwarding evidence. The application middleware does not establish prevention of a WSL forwarding recurrence.
 
-Background review found expiration and shared Rotation processing already bounded (500 and 100 items per tick respectively), with synchronous work not overlapping within one process. No measured backend algorithm bottleneck justified a lifecycle or scheduler rewrite. Recipe sync overlap was a source-level possibility without incident evidence; no speculative changes were made.
+Background review found expiration and shared Rotation processing already bounded (500 and 100 items per tick respectively), with synchronous work not overlapping within one process. The initial synthetic investigation did not expose the populated-database bottleneck documented below. Recipe sync overlap was a source-level possibility without incident evidence; no speculative changes were made.
 
 ## Focused validation
 
@@ -62,15 +62,33 @@ The final concurrent run lasted **603.013 seconds** and passed. All 653 copied `
 
 | Measurement, final concurrent run | Personal List | Personal Kanban | Paired display |
 | --- | ---: | ---: | ---: |
-| HTTP acknowledgement median | 198.6 ms | 198.8 ms | 200.7 ms |
-| Task-list read median | 281 ms | 218 ms | 290 ms |
+| HTTP response-header acknowledgement median | 198.6 ms | 198.8 ms | 200.7 ms |
+| Task-list response-header median | 281 ms | 218 ms | 290 ms |
 | Second-animation-frame DOM feedback median | 25.7 ms | 24.9 ms | 25.6 ms |
 
-HTTP acknowledgement p95 was about 250 ms; DOM feedback p95 about 34 ms. These are local synthetic-browser measurements, not physical paint or external WAN latency, and no before/after backend speedup is claimed. The recorded RSS samples are the test runner, not server leak evidence.
+HTTP response-header acknowledgement p95 was about 250 ms; DOM feedback p95 about 34 ms. These measurements do not include full response-body parsing. They are local synthetic-browser observations, not physical paint or external WAN latency. The recorded RSS samples are the test runner, not server leak evidence.
 
 Eleven waves launched writes from all three clients before awaiting acknowledgements. The run completed 36 ordinary steps plus a legitimately authorized supervised action. Each routine received its two points once; recurrence generated one successor; expiration created one event and zero points; the shared scheduled period finalized/advanced once; duplicate completion Activity events were zero. Integrity passed with zero foreign-key violations. Device attempts on protected learner/helper/bulk work were rejected. An unsaved draft survived another client's live mutation; genuine session expiry removed personal content. Separate card browser cases directly asserted second-client convergence, focus/scroll/expansion and held-response optimistic feedback. Rotation coverage here is the initial permitted shared widget plus the canonical scheduled cutoff, not a new end-to-end assertion of every Rotation-bound title refreshing.
 
 Two final direct UI tests additionally verify that local, definitely rejected intents show their actual reason rather than an unknown-write warning (11/11 reliability-file checks including the prior nine). No runtime changed after the long run's copied source was captured.
+
+## Populated-database stall found during production acceptance
+
+The first client/diagnostics release, `64a48596881d64fd93d66d657e28ac216145d51c`, was published and started at 08:04 EDT. Initial health checks passed. Acceptance then stopped when container health exceeded six seconds. No production QA mutations were attempted. The new redacted diagnostics recorded Task reads lasting 5–12 seconds, with automation requests queued behind them. At 08:08 EDT, Windows localhost, LAN and HTTPS all exceeded six seconds during a slow Task read. This was an application stall, not evidence of localhost-only forwarding failure. The container recovered without restarting.
+
+A network-isolated, encrypted copy of the supported production backup reproduced the cause: 88 parent Tasks drawn from 965 stored Tasks required 24,487 SQL executions and 17.17 seconds. SQL consumed 15.91 seconds and event-loop delay reached 17.03 seconds. The exact prior production image (`83705e82`) reproduced the same 24,487 calls in 17.30 seconds, establishing that this defect preceded the first reliability release. The automation inbox took only 49–73 ms alone. Three supervision sweeps on a disposable copy took 50/27/24 ms, changed zero rows, and left the Task live clock unchanged; those sweeps were not demonstrated to cause the periodic requests.
+
+The same encrypted data on container-local storage took 1.25 seconds. A consistent read snapshot on the existing Windows bind mount removed repeated filesystem read-lock acquisition. The fix adds an explicitly owned, synchronous deferred read snapshot for personal and paired-device Task-list projection. It finishes before response serialization. Existing capability reuse remains confined to one actor and request; caller-owned mutation transactions retain their original no-cache behavior. Any intervening write, including a subsequently rolled-back write, permanently disables reuse for that snapshot. No filesystem relocation, database configuration change, schema change, or authorization bypass is involved.
+
+With the snapshot, the instrumented personal list took 901–915 ms, the future-inclusive list 938–1,001 ms (previously 20.16 seconds), and the three-root active filter 37–61 ms (previously 702 ms). SQL execution counts remain essentially unchanged for personal lists: the gain is amortized locking, not eliminated validation. Full fixed-clock payload hashes match the prior projection, including permission fields, private-content filtering, progress, generated text and device responses. Only the wall-clock `visibility.server_now` field is normalized for comparison.
+
+The paired normal board additionally repeated the same supervision inspection for each descendant. Its original projection took 49.24 seconds with 53,904 SQL executions on the encrypted Windows mount. A snapshot alone brought it to 1,816 ms; reusing its canonical root inspection only within the response reduced it further to 675 ms and 23,967 SQL executions. The smaller legacy device projection fell from 2,640 to 1,294 executions and 2,386 ms without a snapshot to 37 ms with both corrections. All six full-response golden comparisons remain equal. Action-time supervision and authorization still reread current state.
+
+Focused follow-up validation: 192 affected backend tests passed before the final device inspection reuse; the final 26-test cache/device gate then passed, including a direct one-inspection-per-root assertion and fresh skill state on the next response. A real worker committed a canonical Task completion while another connection held a WAL read snapshot; that snapshot stayed consistent, the next request observed the completion and permission reduction, exactly one completion event existed, and integrity/foreign keys passed. An additional privacy/route gate passed 38 tests with one preexisting mock-browser `deviceContext` fixture failure; the unchanged test passed with an ignored fixture adapter. These overlapping counts are not a combined unique total. The first worker-test run used the wrong history table name; correcting that assertion, rather than removing it, produced the passing result.
+
+Two simultaneous personal reads plus a paired normal-board read on the final runtime all returned 200 in 1.65/2.40/2.41 seconds including queuing and full-body processing. A separate worker issued six health probes: no failures, maximum 821 ms. This is genuinely overlapping request traffic, not sequential requests labeled as concurrency. The final runtime receives an actual-backend card smoke; the unchanged client recovery behavior retains the completed ten-minute soak evidence above. Exact runtime hashes, six-route comparison and concurrency results are in `.qa/reliability-20260928/populated-final-summary.json`.
+
+These measured full-response durations are distinct from the response-header measurements in the earlier synthetic soak. The application still performs synchronous projection work; this repair does not claim that every populated household request meets a 200 ms target or that an uncaptured morning proxy failure has been conclusively explained.
 
 ## Release contract
 

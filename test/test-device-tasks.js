@@ -59,6 +59,27 @@ test('three children complete separate routines without human impersonation, awa
   assert.deepEqual(d.pragma('foreign_key_check'),[]);
 });
 
+test('a device list inspects each supervision scope once and a later response observes changed skills',()=>{
+  const root=seed('Routine'),steps=Array.from({length:8},(_,i)=>seed(`Step ${i}`,null,root));
+  const skill=Number(d.prepare("INSERT INTO skills(name,minimum_age,age_promotion,created_by) VALUES('Careful step',0,'normal',?)").run(admin).lastInsertRowid);
+  setTaskSkills(d,steps[0],[skill]);
+  const prepare=d.prepare.bind(d);let inspections=0;
+  d.prepare=(sql,...args)=>{if(sql.includes('WITH RECURSIVE scope(id) AS')&&sql.includes('task_supervision_actions a'))inspections++;return prepare(sql,...args);};
+  const before=d.prepare('SELECT total_changes() n').get().n;
+  try {
+    const first=deviceTaskList(d,principal,{query:{}});
+    assert.equal(inspections,1,'parent and all checklist rows reuse one read-only supervision inspection');
+    assert.equal(first[0].subtasks.find(row=>row.id===steps[0]).permissions.complete,true);
+    assert.equal(d.prepare('SELECT total_changes() n').get().n,before);
+    d.prepare("INSERT INTO user_skill_proficiency(user_id,skill_id,proficiency,source,updated_by) VALUES(?,?,'supervised','manual',?)").run(kids[0],skill,admin);
+    const second=deviceTaskList(d,principal,{query:{}});
+    assert.equal(inspections,2,'a later response must inspect current proficiency again');
+    assert.equal(second[0].subtasks.find(row=>row.id===steps[0]).permissions.complete,false);
+    assert.equal(second[0].subtasks.find(row=>row.id===steps[0]).approval_required,true);
+    assert.equal(first[0].subtasks.find(row=>row.id===steps[0]).permissions.complete,true,'the earlier payload stays unchanged');
+  }finally{d.prepare=prepare;}
+});
+
 test('creation and structural edits fail closed; stale revisions reject, reopen and reset are independent opt-ins',()=>{
   const id=seed('Permitted',kids[0],null,2),before=revisions(id);
   for(const body of [{points:100},{title:'rewarded'},{activity_template_id:1},{assigned_to:kids}])assert.throws(()=>assertTaskMutation(d,principal,null,body,{operation:'create'}),/cannot create/);

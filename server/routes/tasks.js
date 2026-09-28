@@ -66,7 +66,7 @@ import * as v from '../middleware/validate.js';
 import { TaskSkillError, normalizeSkillIds, loadTaskSkillIds, setTaskSkills, copyTaskSkills,
   attachTaskSkills, assertTaskSkillAssignments, qualifiedTaskAssignees } from '../services/task-skills.js';
 import { assertTaskAssignmentAvailability, TaskAssignmentAvailabilityError } from '../services/assignment-responsibilities.js';
-import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection } from '../services/task-access.js';
+import { assertTaskMutation, attachTaskCapabilities, taskCapabilities, taskVisibilityWhere, taskSupervisionManagementAllowed, withTaskReadProjection, withTaskReadSnapshot } from '../services/task-access.js';
 import { assertTaskRevision, changeTaskStatus, reopenExpiredTask, assertTaskWindowAction, configureTaskRecurrence, recordTaskActivity, taskActivity, TaskStateError } from '../services/task-lifecycle.js';
 import { attachTaskSupervision, reconcileTaskSupervision, assertTaskSupervisionAssignee, deleteTaskSupervisionProjections, taskSupervisionRootId } from '../services/task-supervision.js';
 import { EXPIRATION_POLICIES, taskDeadlineMs, taskStartMs, taskWindowAncestors } from '../services/task-window.js';
@@ -1319,6 +1319,7 @@ router.delete('/categories/:key', (req, res) => {
 router.get('/', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;
+    const payload = withTaskReadSnapshot(db.get(),me,()=>{
     const { status, priority, assigned_to, category, tag, include_future, archived } = req.query;
 
     let sql = `
@@ -1474,8 +1475,10 @@ router.get('/', (req, res) => {
     attachTaskActionLinks(rows);
     const supervisionViews=new Map(); // One synchronous, read-only response.
     const hydrated = withTaskReadProjection(db.get(),me,()=>attachDocumentCounts(rows.map(row=>hydrateTask(row,me,supervisionViews)),me));
-    res.json({ data: include_future ? hydrated : hydrated.map(startProjection.project),
-      visibility:startProjection.metadata([...candidates,...hydrated],{includeFuture:!!include_future}) });
+    return { data: include_future ? hydrated : hydrated.map(startProjection.project),
+      visibility:startProjection.metadata([...candidates,...hydrated],{includeFuture:!!include_future}) };
+    });
+    res.json(payload);
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET / error:', err);

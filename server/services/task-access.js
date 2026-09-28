@@ -6,6 +6,28 @@ import { taskOptionalContext } from './task-optional.js';
 // Only synchronous response hydration opts into this scope. It never survives
 // a request, contains no lifecycle decisions, and is suspended for mutations.
 const readProjections = new WeakMap();
+const readSnapshots = new WeakMap();
+
+/** A synchronous list projection shares one SQLite read snapshot. On an
+ * encrypted Windows bind mount, thousands of separate reads otherwise repeat
+ * filesystem lock acquisition. No lock survives response construction. */
+export function withTaskReadSnapshot(d, actor, read) {
+  // A caller-owned transaction may contain mutations/savepoints. Do not mark
+  // it as read-only or change the existing no-cache rule for those callers.
+  if (d.inTransaction) return withTaskReadProjection(d, actor, read);
+  return d.transaction(() => {
+    const owner = { changes:d.prepare('SELECT total_changes() AS count').get().count, invalid:false };
+    const previous = readProjections.get(d);
+    readProjections.delete(d);
+    readSnapshots.set(d,owner);
+    try { return withTaskReadProjection(d,actor,read); }
+    finally {
+      readSnapshots.delete(d);
+      if(previous)readProjections.set(d,previous);
+    }
+  }).deferred();
+}
+
 export function withTaskReadProjection(d, actor, read) {
   const previous = readProjections.get(d), me = actorId(actor);
   const scope = previous?.actorId === me ? previous : {actorId:me, capabilities:new Map(), tables:new Map(),
@@ -25,10 +47,14 @@ function currentReadProjection(d) {
   const scope = readProjections.get(d);
   // Never cache reads from an open transaction: rollback/savepoint rollback
   // can undo a write without advancing total_changes() a second time.
-  if (!scope || d.inTransaction) return null;
+  const snapshot = readSnapshots.get(d);
+  if (!scope || d.inTransaction && !snapshot || snapshot?.invalid) return null;
   // Callers are read-only. This inexpensive connection-local guard also makes
   // future accidental writes (even rolled-back ones) invalidate every snapshot.
   const changes = scope.changesStatement.get().count;
+  // Unexpected writes (even later rolled back) permanently end reuse for an
+  // owned snapshot; a savepoint rollback must not revive temporary decisions.
+  if (snapshot && changes !== snapshot.changes) { snapshot.invalid=true; return null; }
   if (changes !== scope.changes) {
     scope.capabilities.clear(); scope.tables.clear(); scope.permissions = null; scope.changes = changes;
   }

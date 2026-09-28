@@ -1,7 +1,7 @@
 /** A device adapter over the canonical Task lifecycle, never a member impersonation. */
-import { deviceTaskVisible, deviceTaskCapabilities, assertTaskMutation } from './task-access.js';
+import { deviceTaskVisible, deviceTaskCapabilities, assertTaskMutation, withTaskReadSnapshot } from './task-access.js';
 import { actionableSubtasks, assertTaskRevision, changeTaskStatus, recordTaskActivity } from './task-lifecycle.js';
-import { inspectTaskSupervision, reconcileTaskSupervision } from './task-supervision.js';
+import { inspectTaskSupervision, reconcileTaskSupervision, taskSupervisionRootId } from './task-supervision.js';
 import { taskOptionalContext } from './task-optional.js';
 import { taskRotationContexts } from './task-rotation.js';
 import { claimTask } from './assignment-responsibilities.js';
@@ -44,7 +44,11 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
   out.effective_assignee_name=out.assigned_name;
   out.parent_revision=row.parent_task_id?d.prepare('SELECT revision FROM tasks WHERE id=?').get(row.parent_task_id)?.revision:null;
   out.permissions=deviceTaskCapabilities(d,principal,row);
-  const supervision=inspectTaskSupervision(d,row.id), blocked=protectedAction(d,row,supervision), optional=taskOptionalContext(d,row.id).closed_parent;
+  // Descendant checkboxes share one canonical supervision scope. This Map is
+  // discarded with the synchronous projection; action-time checks stay fresh.
+  const supervisionKey=`device-supervision:${taskSupervisionRootId(d,row.id)}`;
+  if(!cache.has(supervisionKey))cache.set(supervisionKey,inspectTaskSupervision(d,row.id));
+  const supervision=cache.get(supervisionKey), blocked=protectedAction(d,row,supervision), optional=taskOptionalContext(d,row.id).closed_parent;
   const action=supervision.actions.find(action=>action.action_task_id===row.id||action.counterpart_task_id===row.id);
   if(action)out.supervision_action={...pick(action,['execution_mode','state','completed']),can_complete:!blocked};
   out.is_supervision_projection=supervision.support_task_id===row.id||action?.counterpart_task_id===row.id;
@@ -88,6 +92,9 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
   return out;
 }
 export function deviceTaskList(d,principal,{query=null,withVisibility=false}={}) {
+  // The snapshot has no human actor. Every row still passes device visibility
+  // and capability checks; pairing never lends a member's permissions.
+  return withTaskReadSnapshot(d,null,()=>{
   const cache=new Map();
   const values=value=>(value==null?[]:[value].flat()).filter(value=>typeof value==='string'&&value!=='').slice(0,50);
   const statuses=values(query?.status),priorities=values(query?.priority),assigned=values(query?.assigned_to).map(Number),categories=values(query?.category),tags=values(query?.tag).map(value=>value.toLocaleLowerCase());
@@ -107,6 +114,7 @@ export function deviceTaskList(d,principal,{query=null,withVisibility=false}={})
   const projected=(includeFuture?candidates:candidates.filter(startProjection.visible)).slice(0,500).map(row=>project(d,principal,row,cache));
   const data=includeFuture?projected:projected.map(startProjection.project);
   return withVisibility?{data,visibility:startProjection.metadata([...candidates,...projected],{includeFuture})}:data;
+  });
 }
 export function deviceTaskDetail(d,principal,id) {return project(d,principal,requireTask(d,principal,id));}
 export function deviceTaskStatus(d,principal,id,body={}) {

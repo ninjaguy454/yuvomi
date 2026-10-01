@@ -38,7 +38,11 @@ export function cycleTimingLocal(rule,start,cadence) {
   validateCycleDate(start);validateCycleTiming(rule,cadence);
   return {date:cadence==='monthly'?monthDate(start,rule.month_offset,rule.day):shiftDateKey(start,rule.day_offset),time:rule.time};
 }
-/** Pure preview. UTC strings use the same gap-forward/fold-earlier policy as Tasks. */
+/** Pure preview. UTC strings use the same gap-forward/fold-earlier policy as Tasks.
+ * Every resolved period must retain chronology, including inherited settings
+ * after timezone-rule changes. Scheduler callers must surface this failure and
+ * block that period instead of generating/publishing with unsafe instants.
+ */
 export function cycleInstants(settings,start) {
   if(!isValidTimeZone(settings.timezone)) throw new TypeError('Invalid cycle timezone.');
   validateCycleDate(settings.first_period_start);
@@ -49,6 +53,11 @@ export function cycleInstants(settings,start) {
     const ms=availabilityInstantMs(`${local.date}T${local.time}`,settings.timezone);
     if(!Number.isFinite(ms)) throw new TypeError('Invalid cycle scheduled instant.');
     result[key]=new Date(ms).toISOString();
+  }
+  if(result.creation>result.response || result.response>result.confirmation || result.confirmation>result.shopping) {
+    const error=new TypeError(`Cycle timings for ${start} must follow creation, response, confirmation, shopping order after timezone resolution.`);
+    error.code='CYCLE_TIMING_ORDER';error.status=400;error.period_start=start;
+    throw error;
   }
   return result;
 }

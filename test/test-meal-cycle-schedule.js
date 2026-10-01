@@ -169,3 +169,45 @@ test('correction links retain the original submitted obligation and one occurren
   assert.throws(()=>d.exec("INSERT INTO meal_cycle_results(cycle_id,kind,request_key,input_fingerprint,input_json,output_json,actor_id,reason) VALUES(1,'finalization','x','hash','{}','invalid',1,'x')"));
   d.close();
 });
+test('every period preview rejects chronology reversed by a DST gap, including inherited scheduler settings',()=>{
+  const s=validCycleSettings({cadence:'daily',first_period_start:'2026-03-28',
+    creation:{day_offset:0,time:'02:50'},response:{day_offset:0,time:'03:10'},
+    confirmation:{day_offset:0,time:'03:20'},shopping:{day_offset:0,time:'04:00'}});
+  assert.equal(cycleInstants(s,'2026-03-28').creation,'2026-03-28T01:50:00.000Z');
+  assert.throws(()=>cycleInstants(s,'2026-03-29'),{code:'CYCLE_TIMING_ORDER'});
+  assert.throws(()=>dueCyclePeriods(s,'2026-03-29T04:00:00Z'),{code:'CYCLE_TIMING_ORDER'});
+  for(const patch of [{response:{day_offset:0,time:'04:30'}},{shopping:{day_offset:0,time:'03:15'}}])
+    assert.throws(()=>cycleInstants({...s,...patch},'2026-03-28'),{code:'CYCLE_TIMING_ORDER'});
+});
+for(const [cadence,anchor] of [['daily','2026-03-28'],['weekly','2026-03-22'],['fortnightly','2026-03-15']]) {
+  test(`${cadence} settings preview future DST periods before accepting an otherwise ordered anchor`,()=>{
+    const d=cycleFixture();
+    const s=validCycleSettings({cadence,first_period_start:anchor,
+      creation:{day_offset:0,time:'02:50'},response:{day_offset:0,time:'03:10'},
+      confirmation:{day_offset:0,time:'03:20'},shopping:{day_offset:0,time:'04:00'}});
+    assert.throws(()=>save(d,s),{code:'CYCLE_TIMING_ORDER'});
+    assert.equal(d.prepare('SELECT COUNT(*) AS n FROM meal_cycle_settings').get().n,0);
+    assert.equal(d.prepare('SELECT COUNT(*) AS n FROM meal_cycle_requests').get().n,0);
+    d.close();
+  });
+}
+test('administrator can pause without repairing a coordinator whose capability was later revoked',()=>{
+  const d=cycleFixture();
+  const before=save(d,validCycleSettings({coordinator_id:2}));
+  d.exec("INSERT INTO access_capabilities VALUES('user','2','tasks.create','none')");
+  const paused=save(d,{enabled:false},1,'pause');
+  assert.deepEqual(paused,{...before,revision:2,enabled:false});
+  assert.deepEqual(dueCyclePeriods(paused,'2026-10-09T08:00:00Z'),[]);
+  assert.throws(()=>save(d,{enabled:true},2,'resume'),/coordinator/i);
+  assert.throws(()=>save(d,{enabled:false,creation:{day_offset:0,time:'99:00'}},2,'invalid-edit'));
+  d.close();
+});
+test('administrator can pause retained settings after household timezone changes, while new invalid fields remain rejected',()=>{
+  const d=cycleFixture(),before=save(d,validCycleSettings());
+  d.exec("UPDATE sync_config SET value='America/New_York' WHERE key='household_timezone'");
+  const paused=save(d,{enabled:false},1,'pause');
+  assert.deepEqual(paused,{...before,revision:2,enabled:false});
+  assert.throws(()=>save(d,{enabled:false,timezone:'Mars/Unknown'},2,'invalid-zone'),/timezone/i);
+  assert.throws(()=>save(d,{enabled:true},2,'resume'),/timezone/i);
+  d.close();
+});

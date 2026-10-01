@@ -54,13 +54,13 @@ function validate(d,s) {
   }
   if(s.timezone && s.cadence && s.first_period_start && TIMINGS.every(key=>s[key])) {
     let start=s.first_period_start;
-    // Numbered monthly days can invert after clamping or a leap-year change.
-    // Four consecutive years exercise every month length before activation.
-    const count=s.cadence==='monthly'?48:1;
+    // Preview four calendar years of anchored periods, including daily/weekly
+    // and fortnightly DST transitions. Existing immutable ICU formatter caches
+    // are reused; resolved instants are never cached across settings or tz changes.
+    // Runtime cycleInstants still validates every later period independently.
+    const count={daily:1462,weekly:210,fortnightly:106,monthly:48}[s.cadence];
     for(let n=0;n<count;n++) {
       const t=cycleInstants(s,start);
-      if(t.creation>t.response || t.response>t.confirmation || t.confirmation>t.shopping)
-        error('Cycle timings must follow creation, response, confirmation, shopping order.');
       // Settings have no occurrence context. Same-date times can precede an
       // evening meal; ensure/finalization must check the actual first meal.
       if(cycleTimingDate(s.response,start,s.cadence)>start || cycleTimingDate(s.confirmation,start,s.cadence)>start)
@@ -89,7 +89,12 @@ export function saveCycleSettings(d,input,{actorId,expectedRevision,requestKey}=
     const previous=getCycleSettings(d);
     if(previous.revision!==expectedRevision) error('Settings revision conflict.',409);
     const settings=Object.fromEntries(FIELDS.map(key=>[key,Object.hasOwn(input,key)?input[key]:previous[key]]));
-    validate(d,settings);
+    // A pause must remain available when an existing coordinator is no longer
+    // eligible or the household timezone changed. Only the exact pause patch
+    // preserves retained configuration without revalidating activation; edits
+    // and resuming still pass the full settings contract above.
+    const pauseOnly=input.enabled===false&&Object.keys(input).length===1;
+    if(!pauseOnly) validate(d,settings);
     const result={...settings,revision:previous.revision+1};
     d.prepare(`INSERT INTO meal_cycle_settings(household_key,revision,enabled,settings_json,updated_by) VALUES('household',?,?,?,?)
       ON CONFLICT(household_key) DO UPDATE SET revision=excluded.revision,enabled=excluded.enabled,settings_json=excluded.settings_json,

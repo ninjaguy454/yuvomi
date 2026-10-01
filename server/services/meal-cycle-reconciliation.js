@@ -10,6 +10,7 @@ import {availabilityInstantMs} from './presence.js';
 import {utcToWall} from '../utils/timezone.js';
 import {actorPermissions} from '../permissions.js';
 import {ensureMealExecution,previewMealExecution} from './meal-execution.js';
+import {stageFinalizedCycleRecovery,resolveRevertedCycleChanges} from './meal-cycle-adjustments.js';
 const digest=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 function fail(message,status=409,code='MEAL_CYCLE_CONFLICT') {throw Object.assign(new Error(message),{status,code});}
 const sourceNames=new Set(['availability','membership','permissions','meal','recipe','rotation','context','source_changed']);
@@ -54,13 +55,19 @@ export function reconcileCycle(d,cycleId,{now=new Date().toISOString()}={}) {
     const submitted=c.state==='open'?d.prepare("SELECT beneficiary_id FROM meal_cycle_task_links WHERE cycle_id=? AND purpose IN ('personal','correction') AND state='active' AND submission_revision IS NOT NULL").all(c.id):[];
     const currentModel=submitted.length?occurrences(d,c,now):[];
     const invalidSubmission=submitted.some(link=>cyclePersonRequirements(d,currentModel,link.beneficiary_id).some(r=>!r.complete));
-    if(sourceFingerprint===c.source_fingerprint&&permissions===c.permission_fingerprint&&!invalidSubmission)return {cycle_id:c.id,revision:c.revision,changed:false};
+    if(sourceFingerprint===c.source_fingerprint&&permissions===c.permission_fingerprint&&!invalidSubmission){
+      if(c.state==='finalized')resolveRevertedCycleChanges(d,c,{now});
+      return {cycle_id:c.id,revision:d.prepare('SELECT revision FROM meal_cycles WHERE id=?').get(c.id).revision,changed:false};
+    }
     if(c.state==='finalized') {
       const sourceRevision=Math.max(c.source_revision,d.prepare('SELECT COALESCE(MAX(source_revision),0) n FROM meal_cycle_source_changes WHERE cycle_id=?').get(c.id).n)+1;
       const inserted=d.prepare('INSERT OR IGNORE INTO meal_cycle_source_changes(cycle_id,fingerprint,previous_fingerprint,source_revision,created_at) VALUES(?,?,?,?,?)').run(c.id,fingerprint,digest({source:c.source_fingerprint,permissions:c.permission_fingerprint}),sourceRevision,now);
       const change=d.prepare('SELECT id FROM meal_cycle_source_changes WHERE cycle_id=? AND fingerprint=?').get(c.id,fingerprint);
       if(inserted.changes)d.prepare("UPDATE meal_cycles SET attempt_status='review_required',blockers_json=? WHERE id=?").run(JSON.stringify([{code:'FINALIZED_SOURCE_CHANGE',source_change_id:change.id,message:'Review changed meal sources before applying an adjustment.'}]),c.id);
-      return {cycle_id:c.id,revision:c.revision,changed:!!inserted.changes,staged:true,source_change_id:change.id};
+      let proposal=null,recoveryError=null;
+      try {proposal=d.transaction(()=>stageFinalizedCycleRecovery(d,c.id,{now}))();}
+      catch(error){recoveryError={code:error.code||'CYCLE_ADJUSTMENT_RECOVERY_REQUIRED',message:error.message};d.prepare("UPDATE meal_cycles SET attempt_status='review_required',blockers_json=? WHERE id=?").run(JSON.stringify([{code:'FINALIZED_SOURCE_CHANGE',source_change_id:change.id,message:'Review changed meal sources before applying an adjustment.'},recoveryError]),c.id);}
+      return {cycle_id:c.id,revision:d.prepare('SELECT revision FROM meal_cycles WHERE id=?').get(c.id).revision,changed:!!inserted.changes,staged:true,source_change_id:change.id,proposal_id:proposal?.proposal_id??null,blockers:recoveryError?[recoveryError]:[]};
     }
     const settings=JSON.parse(c.settings_json),today=utcToWall(now,c.timezone).date;
     const blockers=[];let authorized=true;

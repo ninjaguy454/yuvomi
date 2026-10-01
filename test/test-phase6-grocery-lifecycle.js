@@ -604,3 +604,19 @@ test('refreshing a draft releases a Meal only after its source demand is removed
   assert.equal(legacy.body.data.transferred, 1);
   assert.equal(database.prepare('SELECT quantity FROM shopping_items WHERE added_from_meal = ?').get(mealId).quantity, '2 pcs');
 });
+
+test('old grocery output lookup reaches Pantry once and retained reconciled notes edits succeed',async()=>{
+ const {mealId}=seedRecipeMeal({date:'2035-06-01',title:'Old run purchase',quantity:'2 kg',ingredient:'Old run rice'});
+ const created=await call('POST','/'+listId+'/grocery-runs',{from:'2035-06-01',to:'2035-06-01',logical_key:'old-history-test'});
+ assert.equal(created.status,201);const runId=created.body.data.id;
+ await call('POST',`/grocery-runs/${runId}/finalize`,{});await call('POST',`/grocery-runs/${runId}/add-to-shopping`,{});
+ const item=database.prepare('SELECT * FROM meal_grocery_items WHERE grocery_run_id=?').get(runId);
+ for(let i=0;i<26;i++)database.prepare("INSERT INTO meal_grocery_runs(logical_key,shopping_list_id,start_date,end_date,source_fingerprint) VALUES(?,?,'2035-06-02','2035-06-02','synthetic')").run(`newer-than-old-${i}`,listId);
+ const lookup=await call('GET',`/grocery-outputs?item_ids=${item.shopping_item_id}`);assert.equal(lookup.status,200);assert.deepEqual(lookup.body.data,[{grocery_item_id:item.id,run_id:runId,shopping_item_id:item.shopping_item_id}]);
+ assert.equal((await call('PATCH',`/items/${item.shopping_item_id}`,{is_checked:true})).status,200);
+ const body={grocery_run_id:runId,items:[{grocery_item_id:item.id,quantity:2,unit:'kg'}]};
+ assert.equal((await callApi('POST','/pantry/reconcile-grocery-run',body)).status,200);assert.equal((await callApi('POST','/pantry/reconcile-grocery-run',body)).status,200);
+ assert.equal(database.prepare('SELECT count(*) n FROM pantry_movements WHERE logical_key=?').get(`grocery:${runId}:item:${item.id}:purchase`).n,1);
+ assert.equal((await call('PATCH',`/items/${item.shopping_item_id}`,{notes:'Keep receipt',name:'Old run rice renamed'})).status,200);
+ assert.equal(database.prepare('SELECT notes FROM shopping_items WHERE id=?').get(item.shopping_item_id).notes,'Keep receipt');
+});

@@ -1340,17 +1340,11 @@ async function openPantryTransfer(container) {
   // items continue to use the original import path.
   const groceryByShoppingItem = new Map();
   try {
-    const runsResponse = await api.get(`/shopping/grocery-runs?list_id=${state.activeListId}&limit=25`);
-    const candidateRuns = (runsResponse.data || []).filter((run) => ['added_to_shopping', 'purchased', 'reconciled'].includes(run.status));
-    const details = await Promise.all(candidateRuns.map((run) => api.get(`/shopping/grocery-runs/${run.id}`)));
-    for (const response of details) {
-      for (const item of response.data?.items || []) {
-        if (item.shopping_item_id) groceryByShoppingItem.set(Number(item.shopping_item_id), { runId: Number(response.data.id), groceryItemId: Number(item.id) });
-      }
-    }
-  } catch {
-    // Degrade to the legacy Shopping-to-Pantry transfer. Pantry storage must
-    // remain available even if grocery-run history cannot be loaded.
+    const response = await api.get(`/shopping/grocery-outputs?item_ids=${checked.map(item=>item.id).join(',')}`);
+    for (const item of response.data || []) groceryByShoppingItem.set(Number(item.shopping_item_id), {runId:Number(item.run_id),groceryItemId:Number(item.grocery_item_id)});
+  } catch (err) {
+    window.yuvomi.showToast(err.data?.error ?? t('common.errorGeneric'), 'danger');
+    return;
   }
 
   const { PANTRY_UNITS } = await import('/utils/pantry-units.js');

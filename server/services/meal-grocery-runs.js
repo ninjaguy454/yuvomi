@@ -1,6 +1,6 @@
 import {assertCycleMealWrite} from './meal-cycle-guards.js';
 import { createHash } from 'node:crypto';
-import { aggregateMealIngredients, parseQuantity } from './shopping-import.js';
+import { aggregateMealIngredients, parseQuantity, groceryCoverage } from './shopping-import.js';
 import { scaleIngredientQuantity, mealDishPortionSummary } from './meal-dishes.js';
 import { getGrocerySettings } from './meal-grocery-settings.js';
 import { notifyGroceryPublished } from './notification-events.js';
@@ -177,7 +177,9 @@ export function loadSourceIngredients(database, from, to, mealIds = null) {
     if (mealIds !== null && !mealIds.includes(meal.id)) continue;
     const dishes = mealDishPortionSummary(database, meal.id).dishes.filter((dish) => dish.meal_id === meal.id);
     for (const dish of dishes) {
-      const ingredients = dish.primary ? baseRows.filter((row) => row.meal_id === meal.id)
+      if(dish.cook_portions<=0)continue;
+      const explicitAutomatic=dish.primary&&!meal.ingredients_manual_override&&dish.recipe_id&&database.prepare('SELECT yield_portions FROM recipes WHERE id=?').get(dish.recipe_id)?.yield_portions!=null;
+      const ingredients = dish.primary&&!explicitAutomatic ? baseRows.filter((row) => row.meal_id === meal.id)
         : database.prepare(`SELECT 'recipe_ingredient' AS source_kind, ri.id AS recipe_ingredient_id,
             NULL AS meal_ingredient_id, r.id AS recipe_id, r.title AS recipe_title,
             r.yield_portions AS recipe_yield_portions, ri.name, ri.quantity, ri.category
@@ -187,8 +189,8 @@ export function loadSourceIngredients(database, from, to, mealIds = null) {
         const row = { ...ingredient, meal_id: meal.id, meal_date: meal.date, meal_title: meal.title,
           menu_item_id: dish.primary ? null : dish.menu_item_id,
           planned_portions: dish.planned_portions, cook_portions: dish.cook_portions };
-        // Existing materialized quantities are already a Meal snapshot. An unset
-        // yield keeps the legacy fallback batch; an explicit yield scales it.
+        // Explicit automatic yields follow the current recipe basis in pure demand.
+        // Manual overrides and unspecified-yield materialized legacy batches stay intact.
         if (row.source_kind === 'recipe_ingredient' && row.recipe_yield_portions != null) {
           row.quantity = scaleIngredientQuantity(row.quantity, dish.cook_portions / Number(row.recipe_yield_portions),
             { precision: 6, roundUp: true });
@@ -320,7 +322,7 @@ function loadGroceryRun(database, runId) {
   return run;
 }
 
-function createOrRefreshGroceryRun(database, { listId, from, to, userId, logicalKey, mealIds = null, deferNotifications = false }) {
+function createOrRefreshGroceryRun(database, { listId, from, to, userId, logicalKey, mealIds = null, deferNotifications = false, attributionRunIds = null, excludedAttributionMealIds = [] }) {
   const list = database.prepare('SELECT id FROM shopping_lists WHERE id = ?').get(listId);
   if (!list) throw serviceError('Shopping list not found.', 404, 'SHOPPING_LIST_NOT_FOUND');
 
@@ -355,20 +357,24 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
         : baseKey;
     if (run?.status !== 'draft') run = null;
     const existed = Boolean(run);
-    const historical = family.filter((row) => row.id !== run?.id && database.prepare(`
+    const attributionFamily = attributionRunIds === null ? family : [...family, ...attributionRunIds.filter(id=>!family.some(r=>r.id===id)).map(id=>database.prepare('SELECT * FROM meal_grocery_runs WHERE id=?').get(id))];
+    const historical = attributionFamily.filter((row) => row.id !== run?.id && database.prepare(`
       SELECT 1 FROM meal_grocery_items WHERE grocery_run_id = ? AND published_at IS NOT NULL LIMIT 1
     `).get(row.id));
     let prepared = aggregated;
     if (historical.length) {
       const placeholders = historical.map(() => '?').join(',');
       const previous = database.prepare(`
-        SELECT logical_key, planned_quantity
-        FROM meal_grocery_items
-        WHERE grocery_run_id IN (${placeholders})
+        SELECT i.*, COALESCE(s.credited_quantity,i.planned_quantity) AS amended_quantity
+        FROM meal_grocery_items i LEFT JOIN meal_grocery_output_state s ON s.grocery_item_id=i.id
+        WHERE i.grocery_run_id IN (${placeholders}) AND COALESCE(s.active,1)=1
       `).all(...historical.map((row) => row.id));
       const previousByDemand = new Map();
       const previousRawByDemand = new Map();
-      for (const row of previous) {
+      for (const historicalRow of previous) {
+        const coverage=groceryCoverage(historicalRow,historicalRow.amended_quantity),share=sourceOwnershipShare(database,historicalRow,excludedAttributionMealIds);
+        const row={...historicalRow,planned_quantity:coverage==null?null:coverage*share};
+        if(share===0)continue;
         const demandKey = baseDemandKey(row.logical_key);
         if (row.planned_quantity == null) {
           previousRawByDemand.set(demandKey, (previousRawByDemand.get(demandKey) || 0) + 1);
@@ -510,6 +516,7 @@ function publishGroceryRun(database, runId, {deferNotifications = false} = {}) {
         mealIds.length === 1 ? mealIds[0] : null,
       );
       linkOutput.run(info.lastInsertRowid, item.id);
+      database.prepare('INSERT INTO meal_grocery_output_state(grocery_item_id,credited_quantity,shopping_json) VALUES(?,?,?)').run(item.id,item.planned_quantity,JSON.stringify(database.prepare('SELECT * FROM shopping_items WHERE id=?').get(info.lastInsertRowid)));
       for (const source of item.sources) {
         if (source.meal_ingredient_id) markIngredient.run(source.meal_ingredient_id);
       }
@@ -576,6 +583,7 @@ function refreshPurchasedRunState(database, runId) {
 function syncPurchasesFromShopping(database, runId) {
   const run = loadGroceryRun(database, runId);
   if (!run) throw serviceError('Grocery run not found.', 404, 'GROCERY_RUN_NOT_FOUND');
+  if (run.status === 'reconciled') return run;
   if (!['added_to_shopping', 'purchased'].includes(run.status)) {
     throw serviceError('The grocery run has not been added to Shopping.', 409, 'GROCERY_RUN_NOT_PUBLISHED');
   }
@@ -583,7 +591,7 @@ function syncPurchasesFromShopping(database, runId) {
     const update = database.prepare(`
       UPDATE meal_grocery_items
       SET purchase_status = 'purchased',
-          purchased_quantity = COALESCE(planned_quantity, purchased_quantity),
+          purchased_quantity = COALESCE((SELECT credited_quantity FROM meal_grocery_output_state WHERE grocery_item_id=meal_grocery_items.id), planned_quantity, purchased_quantity),
           remaining_quantity = CASE WHEN planned_quantity IS NULL THEN remaining_quantity ELSE 0 END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
@@ -609,6 +617,78 @@ function listGroceryRuns(database, { listId, limit = 50 } = {}) {
   return database.prepare(`
     SELECT * FROM meal_grocery_runs ORDER BY created_at DESC, id DESC LIMIT ?
   `).all(safeLimit);
+}
+
+/** Exact provenance lookup; history pagination must never decide Pantry ownership. */
+export function groceryOutputsForShoppingItems(database, ids) {
+  if(!Array.isArray(ids)||ids.length>1000||ids.some(id=>!Number.isSafeInteger(id)||id<1))throw serviceError('Invalid Shopping item identities.');
+  if(!ids.length)return [];
+  return database.prepare(`SELECT id AS grocery_item_id,grocery_run_id AS run_id,shopping_item_id FROM meal_grocery_items WHERE shopping_item_id IN (${ids.map(()=>'?').join(',')}) ORDER BY id`).all(...ids);
+}
+
+function sourceOwnershipShare(d,item,excluded=[]){
+  const scope=d.prepare('SELECT meal_ids_json FROM meal_grocery_runs WHERE id=?').get(item.grocery_run_id)?.meal_ids_json;
+  if(scope==null)return 1;
+  const ids=new Set(JSON.parse(scope).filter(id=>!excluded.includes(id))),sources=d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(item.id);
+  if(sources.every(s=>ids.has(s.meal_id)))return 1;
+  const parsed=sources.map(s=>({...s,amount:parseQuantity(s.quantity_snapshot)}));
+  if(parsed.some(s=>!s.amount||s.amount.unit!==(item.unit||'')||s.amount.amount<0))return 0;
+  const total=parsed.reduce((n,s)=>n+s.amount.amount,0),owned=parsed.filter(s=>ids.has(s.meal_id)).reduce((n,s)=>n+s.amount.amount,0);
+  return total>0?owned/total:0;
+}
+function outputProtection(d,item) {
+  const shopping=item.shopping_item_id?d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id):null;
+  const state=d.prepare('SELECT * FROM meal_grocery_output_state WHERE grocery_item_id=?').get(item.id);
+  if(!state)return {reason:'unverified_legacy_output',shopping,state};
+  if(!shopping)return {reason:'removed_shopping_row',shopping,state};
+  if(sourceOwnershipShare(d,item)!==1)return {reason:'mixed_ownership',shopping,state};
+  if(item.purchase_status!=='pending'||item.purchased_quantity>0||shopping.is_checked||item.reconciled_at)return {reason:'purchased_or_reconciled',shopping,state};
+  if(d.prepare('SELECT count(*) n FROM meal_grocery_items WHERE shopping_item_id=?').get(shopping.id).n!==1)return {reason:'mixed_ownership',shopping,state};
+  if(JSON.stringify(shopping)!==state.shopping_json)return {reason:'manually_edited',shopping,state};
+  return {reason:null,shopping,state};
+}
+/** Internal reviewed-delta path. Historical item/source quantities remain immutable;
+ * only separately recorded outstanding attribution and untouched Shopping change. */
+export function reconcileReviewedGroceries(d,c,partitions,{actorId,revision,apply=false,preserveMealIds=[]}={}) {
+  const preserved=[],reductions=[],grocery_runs=[];
+  const modes=normalizedGroupingMode(getGrocerySettings(d).grouping_mode);
+  const existing=d.prepare("SELECT * FROM meal_grocery_runs WHERE instr(logical_key,?)=1 ORDER BY id").all(`meal-cycle:${c.id}:`);
+  const contexts=new Map(partitions.map(p=>[p.context_id||'home',p]));
+  for(const run of existing) {
+    const context=String(run.logical_key).match(/:context:([^:]+)/)?.[1]||'home';
+    if(!contexts.has(context==='home'?'home':Number(context)))contexts.set(context==='home'?'home':Number(context),{context_id:context==='home'?null:Number(context),shopping_list_id:run.shopping_list_id,source_meal_ids:[],track_groceries:false});
+  }
+  for(const [context,p] of contexts) {
+    const prefix=`meal-cycle:${c.id}:list:${p.shopping_list_id}:context:${context}`;
+    const runs=existing.filter(r=>r.logical_key===prefix||r.logical_key.startsWith(`${prefix}:`));
+    const desired=aggregateWithSources(p.track_groceries?loadSourceIngredients(d,c.period_start,c.period_end,p.source_meal_ids):[],modes);
+    const wanted=new Map();for(const row of desired)wanted.set(row.demand_key,(wanted.get(row.demand_key)||0)+(row.planned_quantity??1));
+    const items=runs.flatMap(r=>loadGroceryRun(d,r.id).items).filter(i=>i.published_at);
+    const totals=new Map();
+    for(const item of items) {const s=d.prepare('SELECT * FROM meal_grocery_output_state WHERE grocery_item_id=?').get(item.id);if(s?.active===0)continue;const key=baseDemandKey(item.logical_key);totals.set(key,(totals.get(key)||0)+(groceryCoverage(item,s?.credited_quantity??item.planned_quantity)??1)*sourceOwnershipShare(d,item,preserveMealIds));}
+    for(const item of [...items].reverse()) {
+      if(item.sources.some(s=>preserveMealIds.includes(s.meal_id))){preserved.push({grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,reason:'begun_meal_history'});continue;}
+      const key=baseDemandKey(item.logical_key),excess=(totals.get(key)||0)-(wanted.get(key)||0);
+      if(excess<=1e-9)continue;
+      const protection=outputProtection(d,item),state=protection.state;if(state?.active===0)continue;
+      if(protection.reason){preserved.push({grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,reason:protection.reason});continue;}
+      const credit=state.credited_quantity??item.planned_quantity??1,amount=Math.min(excess,credit),next=credit-amount;
+      reductions.push({grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,previous:credit,outstanding:next});totals.set(key,totals.get(key)-amount);
+      if(apply) {
+        if(next===0)d.prepare('DELETE FROM shopping_items WHERE id=?').run(item.shopping_item_id);
+        else d.prepare('UPDATE shopping_items SET quantity=? WHERE id=?').run(`${Number(next.toFixed(6))}${item.unit?` ${item.unit}`:''}`,item.shopping_item_id);
+        const shopping=next?d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id):null;
+        d.prepare('UPDATE meal_grocery_output_state SET credited_quantity=?,active=?,shopping_json=? WHERE grocery_item_id=?').run(item.planned_quantity==null?null:next,next?1:0,JSON.stringify(shopping),item.id);
+        d.prepare('UPDATE meal_grocery_items SET remaining_quantity=? WHERE id=?').run(item.planned_quantity==null?null:next,item.id);
+      }
+    }
+    if(apply&&desired.length) {
+      const run=createOrRefreshGroceryRun(d,{listId:p.shopping_list_id,from:c.period_start,to:c.period_end,userId:actorId,logicalKey:`${prefix}:adjustment:${revision}`,mealIds:p.source_meal_ids,attributionRunIds:runs.map(x=>x.id),excludedAttributionMealIds:preserveMealIds}).run;
+      finalizeGroceryRun(d,run.id);publishGroceryRun(d,run.id);
+      grocery_runs.push({run_id:run.id,shopping_list_id:p.shopping_list_id,context_id:p.context_id,meal_ids:p.source_meal_ids});
+    }
+  }
+  return {preserved,reductions,grocery_runs};
 }
 
 export {

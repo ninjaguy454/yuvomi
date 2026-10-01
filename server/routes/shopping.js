@@ -21,6 +21,7 @@ import {
   publishGroceryRun,
   syncPurchasesFromShopping,
   updatePurchase,
+  groceryOutputsForShoppingItems,
 } from '../services/meal-grocery-runs.js';
 import { loadItemTagsFor } from '../utils/task-tags.js';
 import {
@@ -353,6 +354,10 @@ router.get('/grocery-runs', (req, res) => {
   }
 });
 
+router.get('/grocery-outputs', (req, res) => {
+  try {res.json({data:groceryOutputsForShoppingItems(db.get(),String(req.query.item_ids||'').split(',').filter(Boolean).map(Number))});}
+  catch(err){res.status(err.status||500).json({error:err.status?err.message:'Internal server error.',code:err.code||500});}
+});
 router.get('/grocery-runs/:runId', (req, res) => {
   try {
     const run = loadGroceryRun(db.get(), Number(req.params.runId));
@@ -491,7 +496,7 @@ router.patch('/items/:itemId', (req, res) => {
     // Phase 6 grocery outputs advance automatically as the household checks
     // them off in the ordinary Shopping UI. The run keeps the historical
     // purchase even if checked rows are later cleared from the list.
-    if (updated.is_checked) {
+    if (updated.is_checked && !item.is_checked) {
       const output = db.get().prepare(`
         SELECT grocery_run_id FROM meal_grocery_items WHERE shopping_item_id = ?
       `).get(updated.id);

@@ -11,6 +11,7 @@ import {createOrRefreshGroceryRun,finalizeGroceryRun,publishGroceryRun} from './
 import {changeTaskStatus} from './task-lifecycle.js';
 import {taskCapabilities} from './task-access.js';
 import {utcToWall} from '../utils/timezone.js';
+import {captureCycleEffective} from './meal-cycle-snapshot.js';
 
 function fail(message,code='MEAL_CYCLE_CONFLICT',status=409,blockers) {const e=new Error(message);Object.assign(e,{code,status,blockers});throw e;}
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -124,6 +125,7 @@ export function finalizeCycle(d,cycleId,options={}) {
       const r=reviewCycleReadiness(d,c.id,{actorId,now});
       if(trigger==='automatic'&&r.occurrences.some(x=>x.governed_at&&x.governed_at<=now&&x.governed_at>=c.creation_at))r.blockers.push({code:'MANUAL_REVIEW_REQUIRED',message:'The first governed meal has begun; confirm after manual review.'});
       if(r.blockers.length)fail(`Cycle is not ready: ${r.blockers.map(x=>x.message).join(' ')}`,'CYCLE_NOT_READY',409,r.blockers);
+      const effective=captureCycleEffective(d,c.id,{actorId,now});
       const grocery_runs=[],execution_task_ids=[];
       withCycleMealWrite(d,c.id,()=>{
         for(const p of r.partitions.filter(x=>x.track_groceries&&x.source_meal_ids.length)) {
@@ -139,7 +141,7 @@ export function finalizeCycle(d,cycleId,options={}) {
       d.prepare('UPDATE meal_cycles SET permission_fingerprint=? WHERE id=?').run(cyclePermissionFingerprint(d,c.id),c.id);
       const task=d.prepare("SELECT t.* FROM tasks t JOIN meal_cycle_task_links l ON l.task_id=t.id WHERE l.cycle_id=? AND l.purpose='review' AND l.state='active'").get(c.id);
       if(task)changeTaskStatus(d,task.id,'done',{actorId,body:{expected_revision:task.revision},now});
-      d.prepare("INSERT INTO meal_cycle_results(cycle_id,kind,request_key,input_fingerprint,source_revision,input_json,output_json,actor_id,reason) VALUES(?,'finalization',?,?,?,?,?,?,?)").run(c.id,requestKey,r.fingerprint,c.source_revision,JSON.stringify({revision:c.revision,partitions:r.partitions}),JSON.stringify(result),actorId,trigger);
+      d.prepare("INSERT INTO meal_cycle_results(cycle_id,kind,request_key,input_fingerprint,source_revision,input_json,output_json,actor_id,reason) VALUES(?,'finalization',?,?,?,?,?,?,?)").run(c.id,requestKey,r.fingerprint,c.source_revision,JSON.stringify({revision:c.revision,partitions:r.partitions,effective}),JSON.stringify(result),actorId,trigger);
       return result;
     });
   }).immediate();

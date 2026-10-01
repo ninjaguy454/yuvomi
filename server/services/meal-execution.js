@@ -1,5 +1,5 @@
 import {assertCycleMealWrite,cycleForMeal} from './meal-cycle-guards.js';
-import {mealDishPortionSummary} from './meal-dishes.js';
+import {mealDishPortionSummary,recipeIngredientsForPortions} from './meal-dishes.js';
 import {actorPermissions} from '../permissions.js';
 import {taskCapabilities} from './task-access.js';
 import { createHash } from 'node:crypto';
@@ -85,7 +85,11 @@ function loadMeal(database, mealId) {
   meal.ingredients = database.prepare(`
     SELECT id, name, quantity, category FROM meal_ingredients WHERE meal_id = ? ORDER BY id
   `).all(meal.id);
-  if (!meal.ingredients.length && meal.recipe_id) {
+  if(meal.recipe_id&&!meal.ingredients_manual_override&&database.prepare('SELECT yield_portions FROM recipes WHERE id=?').get(meal.recipe_id)?.yield_portions!=null){
+    const dish=mealDishPortionSummary(database,meal.id).dishes.find(x=>x.meal_id===meal.id&&x.primary);
+    meal.ingredients=recipeIngredientsForPortions(database,meal.recipe_id,dish?.cook_portions??meal.portions);
+  }
+  if (!meal.ingredients.length && meal.recipe_id && !meal.ingredients_manual_override) {
     meal.ingredients = database.prepare(`
       SELECT id, name, quantity, category FROM recipe_ingredients WHERE recipe_id = ? ORDER BY id
     `).all(meal.recipe_id);

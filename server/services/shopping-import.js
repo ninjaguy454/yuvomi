@@ -58,4 +58,12 @@ function aggregateMealIngredients(ingredients = [], quantityFormat = {}) {
   }));
 }
 
-export { aggregateMealIngredients, parseQuantity };
+/** Published demand is not a receipt. Completed and partial purchases supply
+ * their real received quantity plus any explicitly outstanding remainder. */
+function groceryCoverage(item, amendedQuantity = item.planned_quantity) {
+  if (item.planned_quantity == null) return null;
+  if (item.purchase_status === 'purchased') return Math.max(Number(item.purchased_quantity)||0,Number(item.reconciled_quantity)||0);
+  if (item.purchase_status === 'partial') return Math.max(Number(item.purchased_quantity)||0,Number(item.reconciled_quantity)||0)+(Number(item.remaining_quantity)||0);
+  return Number(amendedQuantity)||0;
+}
+export { aggregateMealIngredients, parseQuantity, groceryCoverage };

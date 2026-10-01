@@ -6,8 +6,8 @@ import {cycleInstants,validateCycleDate} from './meal-cycle-schedule.js';
 import {availabilityInstantMs} from './presence.js';
 import {materializeRecurringMealOccurrences} from './meal-recurrence.js';
 import {utcToWall} from '../utils/timezone.js';
-import {buildMealWeekModel,materializeMealPlanOccurrences,synchronizeMealMenuGeneration,saveMealDecision,publishCycleSharedMain,cycleOccurrenceInputs,reconcileCycleAttendance,reconcileCycleOccurrence} from './meal-plans.js';
-import {withCycleMealWrite} from './meal-cycle-guards.js';
+import {buildMealWeekModel,materializeMealPlanOccurrences,synchronizeMealMenuGeneration,saveMealDecision,publishCycleSharedMain,replaceCycleMealIngredients,cycleOccurrenceInputs,reconcileCycleAttendance,reconcileCycleOccurrence} from './meal-plans.js';
+import {withCycleMealWrite,hasCycleMealWrite} from './meal-cycle-guards.js';
 import {changeTaskStatus,registerTaskTransitionGuard} from './task-lifecycle.js';
 
 function fail(message,status=409,code='MEAL_CYCLE_CONFLICT') {const e=new Error(message);e.status=status;e.code=code;throw e;}
@@ -233,11 +233,10 @@ function ensureCurrentSources(d,c) {
 function finishMutation(d,c) {
   d.prepare('UPDATE meal_cycles SET revision=revision+1,source_revision=source_revision+1,source_fingerprint=? WHERE id=?').run(cycleSourceFingerprint(d,c.id),c.id);
 }
-export function saveCyclePerson(d,cycleId,{actorId,beneficiaryId=actorId,expectedRevision,requestKey,changes}={}) {
-  return d.transaction(()=>{
-    const p=authorize(d,actorId,beneficiaryId,true),c=load(d,cycleId);
-    return request(d,`cycle:${c.id}`,'person.save',requestKey,actorId,expectedRevision,{beneficiaryId,changes},()=>{
-      assertOpen(c,expectedRevision);ensureCurrentSources(d,c);
+/** Internal canonical writer shared by Save and reviewed adjustments. No HTTP adapter. */
+export function writeCyclePersonChanges(d,c,{actorId,beneficiaryId=actorId,changes}) {
+      if(!hasCycleMealWrite(d,c.id))fail('Canonical cycle changes require the internal write scope.',403);
+      const p=authorize(d,actorId,beneficiaryId,true);
       if(!Array.isArray(changes)||!changes.length||changes.length>200)fail('Provide an ordered nonempty changes array.',400);
       withCycleMealWrite(d,c.id,()=>{
         for(const change of changes) {
@@ -247,6 +246,9 @@ export function saveCyclePerson(d,cycleId,{actorId,beneficiaryId=actorId,expecte
           if(change.kind==='main') {
             if(Object.keys(change).some(k=>!['meal_id','kind','title','recipe_id'].includes(k)))fail('Invalid shared-main change.',400);
             publishCycleSharedMain(d,change.meal_id,change,{actorId,beneficiaryId,isAdmin:p.admin});
+          } else if(change.kind==='ingredients') {
+            if(Object.keys(change).some(k=>!['meal_id','kind','ingredients'].includes(k)))fail('Invalid ingredient change.',400);
+            replaceCycleMealIngredients(d,change.meal_id,change.ingredients,{actorId,beneficiaryId,isAdmin:p.admin});
           } else if(change.kind==='decision') {
             if(Object.keys(change).some(k=>!['meal_id','kind','decision'].includes(k))||!change.decision||typeof change.decision!=='object'||Array.isArray(change.decision))fail('Invalid personal decision.',400);
             if(['beneficiary_user_id','beneficiaryId','actorId','cycleId'].some(k=>Object.hasOwn(change.decision,k)))fail('Decision beneficiary comes from the authorized cycle operation.',400);
@@ -257,6 +259,13 @@ export function saveCyclePerson(d,cycleId,{actorId,beneficiaryId=actorId,expecte
         // Restore effective parent/child status before accepting this fingerprint.
         for(const mealId of new Set(changes.map(change=>change.meal_id)))reconcileCycleAttendance(d,mealId);
       });
+}
+export function saveCyclePerson(d,cycleId,{actorId,beneficiaryId=actorId,expectedRevision,requestKey,changes}={}) {
+  return d.transaction(()=>{
+    const p=authorize(d,actorId,beneficiaryId,true),c=load(d,cycleId);
+    return request(d,`cycle:${c.id}`,'person.save',requestKey,actorId,expectedRevision,{beneficiaryId,changes},()=>{
+      assertOpen(c,expectedRevision);ensureCurrentSources(d,c);
+      withCycleMealWrite(d,c.id,()=>writeCyclePersonChanges(d,c,{actorId,beneficiaryId,changes}));
       finishMutation(d,c);return projection(d,load(d,c.id),actorId,beneficiaryId,p);
     });
   }).immediate();

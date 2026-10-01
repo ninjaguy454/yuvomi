@@ -2319,7 +2319,7 @@ function activeContexts(database, from, to, contextId = null) {
   return rows;
 }
 
-function insertOccurrence(database, rule, context, dateKey, actorId) {
+function insertOccurrence(database, rule, context, dateKey, actorId, newOnly=false) {
   const contextId = context?.id || null;
   const contextScope = contextId ? `context:${contextId}` : 'base';
   const skipped = database.prepare(`
@@ -2330,6 +2330,7 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
   const stableRuleKey = rule.rule_key || `rule:${rule.id}`;
   const occurrenceKey = `meal-plan:${rule.meal_plan_id}:${stableRuleKey}:${dateKey}:context:${contextId || 'base'}`;
   const existing = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE occurrence_key = ?').get(occurrenceKey);
+  if(newOnly&&existing)return {created:0,assignment:existing};
   if(existing && cycleForMeal(database,existing.meal_id))return {created:0,assignment:existing};
   const { baseRotationKey, scopedRotationKey } = occurrenceRotationScope(database, rule, context, dateKey);
   if (existing) {
@@ -2357,6 +2358,7 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
        ORDER BY id LIMIT 1
     `).get(Number(rule.legacy_schedule_slot_id), dateKey);
     if (legacyMeal) {
+      if(newOnly)return {created:0,assignment:null};
       database.prepare(`
         UPDATE meals
            SET meal_plan_id = COALESCE(meal_plan_id, ?),
@@ -2493,13 +2495,13 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
   return { created: 1, assignment: { id: assignmentId, occurrence_key: occurrenceKey, meal_id: mealId, assigned_user_id: selected } };
 }
 
-export function materializeMealPlanOccurrences(database, { from, to, contextId = null, actorId = null, mealTypes=null } = {}) {
+export function materializeMealPlanOccurrences(database, { from, to, contextId = null, actorId = null, mealTypes=null, newOnly=false } = {}) {
   assertDate(from, 'Start date');
   assertDate(to, 'End date');
   if (to < from) throw mealPlanError('End date must not precede start date.');
   // Slots created after migration 10015 are lazily promoted into the canonical
   // named-plan engine before any occurrence can consume a legacy global cursor.
-  syncLegacyMealSchedulePlans(database, { actorId });
+  if(!newOnly)syncLegacyMealSchedulePlans(database, { actorId });
   const contexts = activeContexts(database, from, to, contextId);
   let created = 0;
   const assignments = [];
@@ -2509,7 +2511,7 @@ export function materializeMealPlanOccurrences(database, { from, to, contextId =
         for (const rule of occurrenceRules(database, null, dateKey)) {
           if(mealTypes&&!mealTypes.includes(rule.meal_type))continue;
           if (Number(rule.weekday) !== mealWeekday(dateKey)) continue;
-          const result = insertOccurrence(database, rule, null, dateKey, actorId);
+          const result = insertOccurrence(database, rule, null, dateKey, actorId, newOnly);
           created += result.created;
           if (result.assignment) assignments.push(result.assignment);
         }
@@ -2520,7 +2522,7 @@ export function materializeMealPlanOccurrences(database, { from, to, contextId =
           if(mealTypes&&!mealTypes.includes(rule.meal_type))continue;
           if (Number(rule.weekday) !== mealWeekday(dateKey)) continue;
           if (!contextCoversRule(context, dateKey, rule)) continue;
-          const result = insertOccurrence(database, rule, context, dateKey, actorId);
+          const result = insertOccurrence(database, rule, context, dateKey, actorId, newOnly);
           created += result.created;
           if (result.assignment) assignments.push(result.assignment);
         }
@@ -3070,9 +3072,10 @@ function loadOccurrenceData(database, from, to, contextId = null, {readOnly=fals
           : chooserObligations.some((row) => ['declined', 'timed_out'].includes(row.status)) ? 'needs_fallback'
             : 'pending');
     const decisions = rawDecisions.map((decision) => {
-      const releasedSharedSelection = decision.menu_items.some((item) => (
-        Number(item.menu_generation || 1) !== publishedGeneration
-      ));
+      const currentSharedItems = decision.menu_items.filter(item=>Number(item.menu_generation||1)===publishedGeneration);
+      // Old released selections are retained audit history. A new explicit
+      // selection in the published generation makes the response current again.
+      const releasedSharedSelection = decision.menu_items.length>0 && currentSharedItems.length===0;
       const staleSharedChoice = strictSharedChoice
         && (!sharedChoiceActive || releasedSharedSelection)
         && decision.choice_kind === 'household';
@@ -3093,6 +3096,7 @@ function loadOccurrenceData(database, from, to, contextId = null, {readOnly=fals
         is_current_choice: false,
       } : {
         ...decision,
+        ...(strictSharedChoice&&decision.choice_kind==='household'?{menu_items:currentSharedItems,historical_menu_items:decision.menu_items.filter(item=>Number(item.menu_generation||1)!==publishedGeneration)}:{}),
         is_current_choice: !(decision.choice_kind === 'backup' && decision.legacy_backup_choice),
       };
     });
@@ -4762,6 +4766,20 @@ export function reconcileCycleAttendance(database,mealId,{initial=false}={}) {
     if(saved?.selected_meal_id)database.prepare("UPDATE meal_participants SET status=? WHERE meal_id=? AND user_id=? AND role='participant' AND status!=?").run(status,saved.selected_meal_id,person.user_id,status);
   }
   return inputs;
+}
+
+/** Canonical explicit ingredient override, including intentional empty demand. */
+export function replaceCycleMealIngredients(database,mealId,ingredients,{actorId,beneficiaryId,isAdmin=false}={}) {
+  assertCycleMealWrite(database,mealId);
+  assertCanManageMenu(database,mealId,actorId,isAdmin,beneficiaryId);
+  if(!Array.isArray(ingredients)||ingredients.length>500)throw mealPlanError('Provide an ingredient array with at most 500 entries.');
+  const rows=ingredients.map(row=>{
+    if(!row||Object.keys(row).some(k=>!['name','quantity','category'].includes(k)))throw mealPlanError('Invalid ingredient.');
+    return {name:text(row.name,{required:true,max:300,field:'Ingredient'}),quantity:text(row.quantity,{max:100,field:'Quantity'}),category:text(row.category,{max:100,field:'Category'})||'Sonstiges'};
+  });
+  database.prepare('DELETE FROM meal_ingredients WHERE meal_id=?').run(mealId);
+  for(const row of rows)database.prepare('INSERT INTO meal_ingredients(meal_id,name,quantity,category) VALUES(?,?,?,?)').run(mealId,row.name,row.quantity,row.category);
+  database.prepare('UPDATE meals SET ingredients_manual_override=1 WHERE id=?').run(mealId);
 }
 
 /** Trusted cycle scope only. Saved decisions and immutable rotation occurrences

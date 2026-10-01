@@ -1,5 +1,22 @@
 # Test-Suiten
 
+Kitchen meal-cycle coverage: `test:meal-cycle-schedule`, `test:meal-cycles`,
+`test:meal-cycle-finalization`, `test:meal-cycle-scheduler`,
+`test:meal-cycle-reconciliation`, `test:meal-cycle-adjustments`,
+`test:meal-cycle-routes`, `test:meal-cycle-review-regressions`,
+`test:meal-cycle-ui` and `test:meal-cycle-integration` are registered in
+`suite:3` and reachable from `npm test`. The integration fixture contains a
+synthetic seven-day week with all 21 breakfast/lunch/dinner occurrences.
+`test:meal-cycle-browser` (component coverage) and
+`test:meal-cycle-full-app-browser` (actual authentication, routes and UI)
+are registered only in `test:document-guards`. The full-app test suppresses
+background startup jobs, registers the canonical Task lifecycle hook, and
+uses disposable credentials and an in-memory database. Twenty repetitive
+slots use canonical saved answers; the representative meal uses real UI
+controls. Viewports 1440 and 390 are browser tests, not physical-phone or
+supervised-child testing. Run browser suites using the installed sandboxed
+browser and the approved loopback/outbound-blocking test preloads.
+
 Vollständige, annotierte Liste aller `npm run test:*`-Suiten - welche Suite deckt welche Invariante ab.
 
 Testinfrastruktur: In-Memory-SQLite (`--experimental-sqlite`), Node >= 22. Kein laufender Server nötig - Tests importieren die Route-Handler direkt.

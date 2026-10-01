@@ -3,7 +3,7 @@ import * as plans from '../server/services/meal-plans.js';
 import * as grocery from '../server/services/meal-grocery-runs.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {fixture,ensure,review,main,decision,submitAll,cycles} from './meal-cycle-finalization-fixture.js';
+import {fixture,ensure,review,main,decision,submitAll,cycles,saveCycleSettings} from './meal-cycle-finalization-fixture.js';
 import {mealDishPortionSummary} from '../server/services/meal-dishes.js';
 import {runMealCycleScheduler} from '../server/services/meal-cycle-scheduler.js';
 import {changeTaskStatus} from '../server/services/task-lifecycle.js';
@@ -31,6 +31,37 @@ test('away removes personal child demand, return restores saved choice and legac
  const before=d.prepare('SELECT * FROM meal_person_decisions WHERE beneficiary_user_id=3').get();const child=before.selected_meal_id;assert.ok(child);const a=away(d);reconcile(d,c.cycle_id);
  assert.equal(mealDishPortionSummary(d,child).planned,0);assert.deepEqual(d.prepare('SELECT * FROM meal_person_decisions WHERE id=?').get(before.id),before);
  d.prepare('DELETE FROM availability_periods WHERE id=?').run(a);reconcile(d,c.cycle_id);assert.equal(mealDishPortionSummary(d,child).planned,1.37);
+ }finally{d.close();}
+});
+
+test('R1 canonical Save by an absent fulfilled chooser preserves zero effective demand and saved legacy choice',()=>{
+ const d=fixture();try {const c=ensure(d);main(d,c.cycle_id);decision(d,c.cycle_id,2);away(d,2);reconcile(d,c.cycle_id);
+ decision(d,c.cycle_id,2,{choice_kind:'backup',menu_item_ids:[],selected_meal_title:'Soup',portion_amount:1.37},'away-save');
+ const saved=d.prepare('SELECT * FROM meal_person_decisions WHERE beneficiary_user_id=2').get();assert.equal(saved.portion_amount,1.37);
+ const check=()=>{const r=review(d,c.cycle_id,2);assert.equal(r.occurrences[0].shared_choice_active,true);assert.equal(r.personal.requirements.find(x=>x.kind==='decision').contribution,0);assert.equal(mealDishPortionSummary(d,saved.selected_meal_id).planned,0);};
+ check();assert.equal(reconcile(d,c.cycle_id).changed,false);check();assert.deepEqual(d.prepare('SELECT * FROM meal_person_decisions WHERE id=?').get(saved.id),saved);
+ d.exec('DELETE FROM availability_periods');reconcile(d,c.cycle_id);assert.equal(mealDishPortionSummary(d,saved.selected_meal_id).planned,1.37);assert.deepEqual(d.prepare('SELECT * FROM meal_person_decisions WHERE id=?').get(saved.id),saved);
+ }finally{d.close();}
+});
+
+for(const table of ['split_expense_guest_users','housekeeping_workers'])test(`R2 ${table} restoration retains completed lineage and never rewards again`,()=>{
+ const d=fixture();try {const c=ensure(d);main(d,c.cycle_id);for(const p of [1,2,3])decision(d,c.cycle_id,p);const old=review(d,c.cycle_id,3).personal.task_id;
+ d.exec('INSERT INTO reward_participants(user_id,enabled) VALUES(3,1)');d.prepare('UPDATE tasks SET points=7 WHERE id=?').run(old);submitAll(d,c.cycle_id);
+ const ledger=d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),completion=d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(old);assert.equal(ledger.reduce((sum,x)=>sum+x.delta,0),7);
+ d.exec(`INSERT INTO ${table}(user_id) VALUES(3)`);reconcile(d,c.cycle_id);d.exec(`DELETE FROM ${table} WHERE user_id=3`);reconcile(d,c.cycle_id);
+ const r=review(d,c.cycle_id,3),link=d.prepare('SELECT * FROM meal_cycle_task_links WHERE task_id=?').get(r.personal.task_id),original=d.prepare('SELECT * FROM meal_cycle_task_links WHERE task_id=?').get(old);
+ assert.equal(link.purpose,'correction');assert.equal(link.supersedes_link_id,original.id);assert.equal(original.state,'superseded');
+ d.prepare('UPDATE tasks SET points=100 WHERE id=?').run(link.task_id);const input={actorId:3,expectedRevision:r.revision,requestKey:'returned-submit'};cycles.submitCyclePerson(d,c.cycle_id,input);cycles.submitCyclePerson(d,c.cycle_id,input);
+ assert.deepEqual(d.prepare('SELECT * FROM reward_ledger ORDER BY id').all(),ledger);assert.deepEqual(d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(old),completion);assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(old).status,'done');assert.equal(d.prepare('SELECT count(*) n FROM task_completions WHERE task_id=?').get(link.task_id).n,1);assert.equal(reconcile(d,c.cycle_id).changed,false);
+ }finally{d.close();}
+});
+
+for(const [timezone,instant,included] of [['America/Los_Angeles','2034-03-07T01:00:00Z',true],['Asia/Tokyo','2034-03-06T16:00:00Z',false]])test(`R3 sweep uses stored ${timezone} final date instead of UTC or current settings`,()=>{
+ const d=fixture();try {
+ d.prepare("UPDATE sync_config SET value=? WHERE key='household_timezone'").run(timezone);saveCycleSettings(d,{timezone,cadence:'daily'},{actorId:1,expectedRevision:1,requestKey:'local-timezone'});const c=ensure(d,{expectedSettingsRevision:2});main(d,c.cycle_id);away(d,3);
+ d.exec("UPDATE sync_config SET value='UTC' WHERE key='household_timezone'");saveCycleSettings(d,{timezone:'UTC'},{actorId:1,expectedRevision:2,requestKey:'changed-timezone'});
+ const results=service.drainCycleReconciliation(d,{now:instant});assert.equal(results.some(x=>x.cycle_id===c.cycle_id),included);
+ assert.equal(d.prepare("SELECT status FROM meal_participants WHERE user_id=3 AND role='participant'").get().status,included?'away':'participating');
  }finally{d.close();}
 });
 test('deliberate opt-out survives absence and return; valid shared main survives chooser travel',()=>{

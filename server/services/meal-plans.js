@@ -4747,11 +4747,10 @@ export function cycleOccurrenceInputs(database, mealId) {
     shared,execution_eligibility:executionEligibility,chooser:valid(cohort?.chooserResponsibilityEligible),cook:valid(cohort?.cookResponsibilityEligible),supervisor:valid(cohort?.supervisorResponsibilityEligible)};
 }
 
-/** Trusted cycle scope only. Saved decisions and immutable rotation occurrences
- * remain unchanged; corrections carry their own provenance and consume no turn. */
-export function reconcileCycleOccurrence(database,mealId,{cycleId,sourceRevision,now,initial=false}) {
+/** Keep effective diners separate from saved answers, including canonical Save. */
+export function reconcileCycleAttendance(database,mealId,{initial=false}={}) {
   assertCycleMealWrite(database,mealId);
-  const meal=database.prepare('SELECT * FROM meals WHERE id=?').get(mealId),inputs=cycleOccurrenceInputs(database,mealId);
+  const inputs=cycleOccurrenceInputs(database,mealId);
   const decision=database.prepare('SELECT * FROM meal_person_decisions WHERE meal_id=? AND beneficiary_user_id=?');
   for(const person of inputs.attendance) {
     if(initial&&!person.member)continue; // Adoption preserves external historical rows verbatim.
@@ -4762,6 +4761,14 @@ export function reconcileCycleOccurrence(database,mealId,{cycleId,sourceRevision
     else if(old&&old.status!==status)database.prepare("UPDATE meal_participants SET status=? WHERE meal_id=? AND user_id=? AND role='participant'").run(status,mealId,person.user_id);
     if(saved?.selected_meal_id)database.prepare("UPDATE meal_participants SET status=? WHERE meal_id=? AND user_id=? AND role='participant' AND status!=?").run(status,saved.selected_meal_id,person.user_id,status);
   }
+  return inputs;
+}
+
+/** Trusted cycle scope only. Saved decisions and immutable rotation occurrences
+ * remain unchanged; corrections carry their own provenance and consume no turn. */
+export function reconcileCycleOccurrence(database,mealId,{cycleId,sourceRevision,now,initial=false}) {
+  const inputs=reconcileCycleAttendance(database,mealId,{initial});
+  const meal=database.prepare('SELECT * FROM meals WHERE id=?').get(mealId);
   const assignment=database.prepare('SELECT * FROM meal_occurrence_assignments WHERE meal_id=?').get(mealId);
   if(!assignment||!inputs.rule)return inputs;
   const provenance=parseJson(meal.provenance_json,{}),rotations={...provenance.rotations};

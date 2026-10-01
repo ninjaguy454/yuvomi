@@ -85,16 +85,19 @@ export function reconcileCycle(d,cycleId,{now=new Date().toISOString()}={}) {
         }
       }
     });
-    const model=occurrences(d,c,now),links=d.prepare("SELECT * FROM meal_cycle_task_links WHERE cycle_id=? AND purpose IN ('personal','correction') AND state='active'").all(c.id);
+    const model=occurrences(d,c,now),links=d.prepare("SELECT * FROM meal_cycle_task_links WHERE cycle_id=? AND purpose IN ('personal','correction') ORDER BY id").all(c.id);
     const people=[...new Set([...model.flatMap(m=>m.participants.map(x=>x.user_id)),...links.map(x=>x.beneficiary_id)])];
     for(const person of people) {
-      const required=cyclePersonRequirements(d,model,person),link=links.find(x=>x.beneficiary_id===person);
+      const required=cyclePersonRequirements(d,model,person),link=links.find(x=>x.beneficiary_id===person&&x.state==='active');
       if(!isHouseholdMember(person,{db:d})||!required.length) {if(link)supersede(d,link,now);continue;}
       if(link?.submission_revision!=null&&required.some(x=>!x.complete)) {
         if(!authorized)continue;
         supersede(d,link,now);createCyclePlanningTask(d,c,'correction',person,required,{obligationKey:`source:${c.source_revision+1}`,supersedesLinkId:link.id});
       } else if(link)d.prepare('UPDATE meal_cycle_task_links SET obligations_json=? WHERE id=?').run(JSON.stringify(required),link.id);
-      else if(authorized)createCyclePlanningTask(d,c,'personal',person,required,{obligationKey:`source:${c.source_revision+1}`});
+      else if(authorized) {
+        const previous=links.findLast(x=>x.beneficiary_id===person);
+        createCyclePlanningTask(d,c,previous?'correction':'personal',person,required,{obligationKey:`source:${c.source_revision+1}`,supersedesLinkId:previous?.id??null});
+      }
     }
     d.prepare('UPDATE meal_cycles SET revision=revision+1,source_revision=source_revision+1,source_fingerprint=?,permission_fingerprint=?,blockers_json=?,attempt_status=? WHERE id=? AND revision=?').run(cycleSourceFingerprint(d,c.id),cyclePermissionFingerprint(d,c.id),JSON.stringify(blockers),blockers.length?'blocked':'pending',c.id,c.revision);
     return {cycle_id:c.id,revision:c.revision+1,changed:true,blockers};
@@ -135,9 +138,9 @@ export function recoverCycleAssignments(d,cycleId,{actorId,expectedRevision,requ
 export function drainCycleReconciliation(d,{now=new Date().toISOString()}={}) {
   const results=[];
   // Fingerprint sweep also recovers an interrupted worker or a missed legacy hook.
-  const today=utcToWall(now,'UTC').date;
-  for(const c of d.prepare('SELECT id FROM meal_cycles WHERE period_end>=? ORDER BY id').all(today)) {
+  for(const c of d.prepare('SELECT id,period_end,timezone FROM meal_cycles ORDER BY id').all()) {
     try {
+      if(c.period_end<utcToWall(now,c.timezone).date)continue;
       d.transaction(()=>{
         results.push(reconcileCycle(d,c.id,{now}));
         d.prepare("UPDATE meal_cycle_events SET status='processed',processed_at=?,error=NULL WHERE cycle_id=? AND status IN ('pending','processing','failed')").run(now,c.id);

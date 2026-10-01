@@ -6,7 +6,7 @@ import {cycleInstants,validateCycleDate} from './meal-cycle-schedule.js';
 import {availabilityInstantMs} from './presence.js';
 import {materializeRecurringMealOccurrences} from './meal-recurrence.js';
 import {utcToWall} from '../utils/timezone.js';
-import {buildMealWeekModel,materializeMealPlanOccurrences,synchronizeMealMenuGeneration,saveMealDecision,publishCycleSharedMain,cycleOccurrenceInputs,reconcileCycleOccurrence} from './meal-plans.js';
+import {buildMealWeekModel,materializeMealPlanOccurrences,synchronizeMealMenuGeneration,saveMealDecision,publishCycleSharedMain,cycleOccurrenceInputs,reconcileCycleAttendance,reconcileCycleOccurrence} from './meal-plans.js';
 import {withCycleMealWrite} from './meal-cycle-guards.js';
 import {changeTaskStatus,registerTaskTransitionGuard} from './task-lifecycle.js';
 
@@ -253,6 +253,9 @@ export function saveCyclePerson(d,cycleId,{actorId,beneficiaryId=actorId,expecte
             saveMealDecision(d,change.meal_id,{...change.decision,beneficiary_user_id:beneficiaryId},{actorId,isAdmin:p.admin});
           } else fail('Unknown cycle change kind.',400);
         }
+        // A retained chooser duty grants authority to answer, not attendance.
+        // Restore effective parent/child status before accepting this fingerprint.
+        for(const mealId of new Set(changes.map(change=>change.meal_id)))reconcileCycleAttendance(d,mealId);
       });
       finishMutation(d,c);return projection(d,load(d,c.id),actorId,beneficiaryId,p);
     });

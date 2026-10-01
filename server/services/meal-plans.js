@@ -1766,6 +1766,15 @@ function reconcilePendingBaseOccurrence(database, existing, rule, dateKey) {
       null,
       cohort.chooserResponsibilitySkillEligible,
     );
+    // Rebuild current responsibilities from the already committed role
+    // selections. Travel changes eligibility, not the cook/supervisor turn.
+    const delegatedRows = database.prepare(`
+      SELECT role, assigned_user_id FROM meal_occurrence_role_assignments
+       WHERE occurrence_assignment_id = ? AND committed = 1
+    `).all(row.id);
+    const delegatedByRole = new Map(delegatedRows.map((delegated) => [
+      delegated.role, { selected: Number(delegated.assigned_user_id) || null },
+    ]));
     database.prepare("DELETE FROM meal_participants WHERE meal_id = ? AND source = 'schedule'").run(row.meal_id);
     database.prepare("DELETE FROM planning_obligations WHERE entity_type = 'meal' AND entity_id = ?").run(row.meal_id);
     writeOccurrenceResponsibilities(database, {
@@ -1778,6 +1787,8 @@ function reconcilePendingBaseOccurrence(database, existing, rule, dateKey) {
       chooserResponsibilitySkillEligible: cohort.chooserResponsibilitySkillEligible,
       cookResponsibilityEligible: cohort.cookResponsibilityEligible,
       supervisorResponsibilityEligible: cohort.supervisorResponsibilityEligible,
+      cookSelection: delegatedByRole.get('cook'),
+      supervisorSelection: delegatedByRole.get('supervisor'),
       selected: selection.selected,
       policyOverride: selection.policyOverride,
       chooserDefaults: selection.chooserDefaults,

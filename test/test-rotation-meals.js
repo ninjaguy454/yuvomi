@@ -7,6 +7,7 @@ process.env.LOG_LEVEL = 'error';
 const { ALL_MIGRATIONS, _setTestDatabase } = await import('../server/db.js');
 const { saveRotationGroup, configureRotationTrack, resolveRotation, finalizeRotation, getRotationTrack, getRotationOccurrence, refreshRotationOccurrence } = await import('../server/services/rotation.js');
 const { createMealPlan, updateMealPlan, getMealPlan, materializeMealPlanOccurrences, repairMealChooser, advanceMealChooserFallback } = await import('../server/services/meal-plans.js');
+const { ensureMealExecution } = await import('../server/services/meal-execution.js');
 let d, admin, grace, eleanor, frankie, group;
 test.beforeEach(() => {
  d = new Database(':memory:');
@@ -28,6 +29,81 @@ function plan(extra = {}) {
 }
 function generate(from='2026-09-21',to=from){return materializeMealPlanOccurrences(d,{from,to,actorId:admin});}
 function assignments(){return d.prepare('SELECT oa.*,m.date FROM meal_occurrence_assignments oa JOIN meals m ON m.id=oa.meal_id ORDER BY m.date,oa.id').all();}
+
+for (const chooserPolicy of ['fixed', 'round_robin']) test(`late travel preserves eligible cook and supervisor for a legacy ${chooserPolicy} chooser`, () => {
+ const p=plan({policy:chooserPolicy,fixed_user_id:grace,chooser_rotation_group_id:null,
+  cook_strategy:'round_robin',supervisor_strategy:'round_robin'});
+ generate();
+ const meal=d.prepare('SELECT * FROM meals WHERE planning_context_id IS NULL').get();
+ const roles=()=>d.prepare("SELECT user_id,role,status FROM meal_participants WHERE meal_id=? AND role IN('cook','supervisor') ORDER BY role").all(meal.id);
+ const before=roles(); assert.equal(before.length,2);
+ const ledgerBefore=d.prepare('SELECT * FROM meal_occurrence_role_assignments WHERE occurrence_assignment_id=? ORDER BY role').all(assignments()[0].id);
+ const trip=Number(d.prepare("INSERT INTO planning_contexts(context_key,name,context_type,starts_at,ends_at,created_by) VALUES('assignment-regression','Trip','travel','2026-09-21T00:00:00','2026-09-22T00:00:00',?)").run(admin).lastInsertRowid);
+ d.prepare('INSERT INTO planning_context_members(planning_context_id,user_id,added_by) VALUES(?,?,?)').run(trip,frankie,admin);
+ d.prepare('INSERT INTO planning_context_meal_plans(planning_context_id,meal_plan_id,created_by) VALUES(?,?,?)').run(trip,p.id,admin);
+ generate();
+ assert.deepEqual(roles(),before,'another diner traveling must not remove the still-eligible home roles');
+ assert.deepEqual(d.prepare('SELECT * FROM meal_occurrence_role_assignments WHERE occurrence_assignment_id=? ORDER BY role').all(assignments()[0].id),ledgerBefore,'role allocation history is not rerun or rewritten');
+ generate(); assert.deepEqual(roles(),before,'repeated materialization preserves the same roles');
+});
+
+for (const strategy of [null, 'cook']) test(`an unresolved cook Group blocks new ${strategy || 'legacy'} cook-bound Tasks until rechecked`, () => {
+ const limited=saveRotationGroup(d,{name:'Only Frankie',member_ids:[frankie]},{actorId:admin});
+ plan({policy:'fixed',fixed_user_id:grace,chooser_rotation_group_id:null,participant_ids:[grace,eleanor],
+  cook_strategy:'round_robin',cook_rotation_group_id:limited.id,generate_preparation:true,generate_cooking:true,
+  execution_assignment_strategies:strategy ? {preparation:strategy,cooking:strategy} : {}});
+ generate();
+ const meal=d.prepare('SELECT * FROM meals').get();
+ assert.equal(JSON.parse(meal.provenance_json).rotations.cook.state,'needs_assignment');
+ d.prepare("UPDATE meals SET title='Dinner',selection_status='selected' WHERE id=?").run(meal.id);
+ d.prepare('UPDATE meal_execution_settings SET enabled=1 WHERE id=1').run();
+ for (let attempt=0;attempt<2;attempt++) {
+  assert.throws(()=>ensureMealExecution(d,meal.id,admin),{status:409,code:'MEAL_COOK_ROTATION_UNRESOLVED'});
+ }
+ assert.equal(d.prepare('SELECT COUNT(*) n FROM meal_execution_tasks').get().n,0,'blocked preparation has no partial task outputs');
+ assert.equal(d.prepare('SELECT COUNT(*) n FROM meal_execution_snapshots').get().n,0,'blocked preparation does not freeze an empty assignment');
+ saveRotationGroup(d,{name:'Only Eleanor',member_ids:[eleanor]},{id:limited.id,actorId:admin,expectedRevision:limited.revision});
+ assert.equal(repairMealChooser(d,meal.id,{actorId:admin}).status,'assigned');
+ const execution=ensureMealExecution(d,meal.id,admin);
+ for(const role of ['preparation','cooking']) assert.equal(execution.tasks.find(row=>row.role===role).assigned_to,eleanor);
+ assert.deepEqual(ensureMealExecution(d,meal.id,admin).tasks.map(row=>row.task_id),execution.tasks.map(row=>row.task_id),'retry keeps the same Tasks');
+});
+
+test('an unresolved cook Group preserves explicitly independent execution assignments', () => {
+ const limited=saveRotationGroup(d,{name:'Only Frankie',member_ids:[frankie]},{actorId:admin});
+ plan({policy:'fixed',fixed_user_id:grace,chooser_rotation_group_id:null,participant_ids:[grace,eleanor],
+  cook_strategy:'round_robin',cook_rotation_group_id:limited.id,supervisor_strategy:'fixed',supervisor_user_id:eleanor,
+  generate_preparation:true,generate_cooking:true,execution_assignment_strategies:{preparation:'open_claimable',cooking:'supervisor'}});
+ generate();const meal=d.prepare('SELECT * FROM meals').get();
+ d.prepare("UPDATE meals SET title='Dinner',selection_status='selected' WHERE id=?").run(meal.id);
+ d.prepare('UPDATE meal_execution_settings SET enabled=1 WHERE id=1').run();
+ const execution=ensureMealExecution(d,meal.id,admin);
+ assert.equal(execution.tasks.find(row=>row.role==='cooking').assigned_to,eleanor);
+ assert.equal(execution.tasks.find(row=>row.role==='preparation').assignment_strategy_snapshot,'open_claimable');
+});
+
+test('Prepare this week reports the unresolved cook action instead of a generic server error', async () => {
+ const limited=saveRotationGroup(d,{name:'Only Frankie',member_ids:[frankie]},{actorId:admin});
+ plan({policy:'fixed',fixed_user_id:grace,chooser_rotation_group_id:null,participant_ids:[grace,eleanor],
+  cook_strategy:'round_robin',cook_rotation_group_id:limited.id,generate_cooking:true});
+ generate();
+ d.prepare("UPDATE meals SET title='Dinner',selection_status='selected'").run();
+ d.prepare('UPDATE meal_execution_settings SET enabled=1 WHERE id=1').run();
+ const {default:express}=await import('express');
+ const {default:router}=await import('../server/routes/meals.js');
+ const app=express();app.use(express.json());
+ app.use((req,_res,next)=>{req.authUserId=admin;req.authRole='admin';req.session={userId:admin,role:'admin'};next();});
+ app.use(router);
+ const server=app.listen(0,'127.0.0.1');await new Promise(resolve=>server.on('listening',resolve));
+ try {
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/planning/materialize`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({week:'2026-09-21'})});
+  const body=await response.json();
+  assert.equal(response.status,409,JSON.stringify(body));
+  assert.equal(body.code,'MEAL_COOK_ROTATION_UNRESOLVED');
+  assert.match(body.error,/Recheck rotations/);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM meal_execution_tasks').get().n,0);
+ } finally { await new Promise(resolve=>server.close(resolve)); }
+});
 
 test('Meal Chooser and Shower Order share membership while each keeps an independent Track',()=>{
  const shower=configureRotationTrack(d,{consumer_type:'activity_series',consumer_id:'bedtime',purpose_key:'shower_order',label:'Shower Order',group_id:group.id,strategy:'rotating_order',advance_policy:'on_finalized'},{actorId:admin});

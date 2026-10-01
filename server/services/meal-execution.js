@@ -425,6 +425,26 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
     throw serviceError('Choose the meal before creating its execution Tasks.', 409, 'MEAL_NOT_EXECUTABLE');
   }
   const executionPolicy = resolvedExecutionPolicy(meal, settings);
+  let rotations = null;
+  try { rotations = JSON.parse(meal.provenance_json || '{}').rotations; } catch { /* legacy Meal */ }
+  if (rotations?.cook?.state === 'needs_assignment') {
+    const existingRoles = new Set(database.prepare(
+      'SELECT role FROM meal_execution_tasks WHERE meal_id = ?',
+    ).all(meal.id).map((row) => row.role));
+    const needsCook = ROLE_ORDER.some((role) => {
+      const strategy = executionPolicy.execution_assignment_strategies?.[role];
+      return bool(executionPolicy[`generate_${role}`]) && !existingRoles.has(role)
+        && (strategy === 'cook' || (!strategy && ['preparation', 'cooking'].includes(role)));
+    });
+    // Resolve the Meal's cook first; otherwise the legacy diner fallback can
+    // bypass its Group. Do not capture null in an output that later retries
+    // would preserve. Explicit independent strategies and existing history keep
+    // their established behavior.
+    if (needsCook) throw serviceError(
+      'Resolve this Meal\'s cook Rotation before generating cook-assigned Tasks. Use Recheck rotations after updating eligibility.',
+      409, 'MEAL_COOK_ROTATION_UNRESOLVED',
+    );
+  }
   const payload = snapshotPayload(meal, executionPolicy);
   const payloadJson = JSON.stringify(payload);
   const fingerprint = hash(payloadJson);

@@ -1468,6 +1468,9 @@ router.post('/planning/materialize', (req, res) => {
     res.json({ data: { created, weekStart: from, weekEnd: to, execution: visibleMealExecutionRange(req, execution) } });
   } catch (err) {
     log.error('POST /planning/materialize', err);
+    if (err.code === 'MEAL_COOK_ROTATION_UNRESOLVED') {
+      return res.status(409).json({ error: err.message, code: err.code });
+    }
     res.status(500).json({ error: 'Could not prepare the meal plan.', code: 500 });
   }
 });

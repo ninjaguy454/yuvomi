@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { assertCycleMealWrite, cycleForMeal, hasCycleMealWrite } from './meal-cycle-guards.js';
 import { notifyMealRequests } from './notification-events.js';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
@@ -1899,6 +1900,7 @@ function latestContextSuspension(database, obligationId) {
 }
 
 function reconcileContextOccurrence(database, assignment, context, actorId) {
+  if(cycleForMeal(database,assignment.meal_id))return {changed:false,assignment};
   // Closed planning contexts are durable history, not another opportunity to
   // run chooser fallback. Their open requests are superseded by the context
   // cleanup performed by reconcilePlanningContextMealOccurrences; preserving
@@ -2326,6 +2328,7 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
   const stableRuleKey = rule.rule_key || `rule:${rule.id}`;
   const occurrenceKey = `meal-plan:${rule.meal_plan_id}:${stableRuleKey}:${dateKey}:context:${contextId || 'base'}`;
   const existing = database.prepare('SELECT * FROM meal_occurrence_assignments WHERE occurrence_key = ?').get(occurrenceKey);
+  if(existing && cycleForMeal(database,existing.meal_id))return {created:0,assignment:existing};
   const { baseRotationKey, scopedRotationKey } = occurrenceRotationScope(database, rule, context, dateKey);
   if (existing) {
     return {
@@ -2488,7 +2491,7 @@ function insertOccurrence(database, rule, context, dateKey, actorId) {
   return { created: 1, assignment: { id: assignmentId, occurrence_key: occurrenceKey, meal_id: mealId, assigned_user_id: selected } };
 }
 
-export function materializeMealPlanOccurrences(database, { from, to, contextId = null, actorId = null } = {}) {
+export function materializeMealPlanOccurrences(database, { from, to, contextId = null, actorId = null, mealTypes=null } = {}) {
   assertDate(from, 'Start date');
   assertDate(to, 'End date');
   if (to < from) throw mealPlanError('End date must not precede start date.');
@@ -2502,6 +2505,7 @@ export function materializeMealPlanOccurrences(database, { from, to, contextId =
     for (let dateKey = from; dateKey <= to; dateKey = addDays(dateKey, 1)) {
       if (!contextId) {
         for (const rule of occurrenceRules(database, null, dateKey)) {
+          if(mealTypes&&!mealTypes.includes(rule.meal_type))continue;
           if (Number(rule.weekday) !== mealWeekday(dateKey)) continue;
           const result = insertOccurrence(database, rule, null, dateKey, actorId);
           created += result.created;
@@ -2511,6 +2515,7 @@ export function materializeMealPlanOccurrences(database, { from, to, contextId =
       for (const rawContext of contexts) {
         const context = { ...rawContext };
         for (const rule of occurrenceRules(database, context, dateKey)) {
+          if(mealTypes&&!mealTypes.includes(rule.meal_type))continue;
           if (Number(rule.weekday) !== mealWeekday(dateKey)) continue;
           if (!contextCoversRule(context, dateKey, rule)) continue;
           const result = insertOccurrence(database, rule, context, dateKey, actorId);
@@ -2678,6 +2683,11 @@ export function synchronizeMealMenuGeneration(database, mealId, {
   reason = 'chooser_reassigned',
 } = {}) {
   const numericMealId = Number(mealId);
+  const cycle=cycleForMeal(database,numericMealId);
+  if(cycle&&!hasCycleMealWrite(database,cycle.id)) {
+    const current=database.prepare('SELECT * FROM meal_menu_generations WHERE meal_id=? ORDER BY generation DESC LIMIT 1').get(numericMealId);
+    return {changed:false,released:false,generation:Number(current?.generation)||1,current};
+  }
   const policy = mealMenuPolicy(database, numericMealId);
   const strict = ['fixed', 'round_robin'].includes(policy);
   const canonical = chooserId === undefined
@@ -2857,7 +2867,7 @@ function presentMenuItem(item) {
   };
 }
 
-function loadOccurrenceData(database, from, to, contextId = null) {
+function loadOccurrenceData(database, from, to, contextId = null, {readOnly=false}={}) {
   let meals = database.prepare(`
     SELECT m.*, p.name AS meal_plan_name, p.status AS meal_plan_status,
            r.rule_key, r.label AS rule_label, r.policy, r.choice_limit, r.presence_required,
@@ -2885,7 +2895,7 @@ function loadOccurrenceData(database, from, to, contextId = null) {
        CASE m.meal_type WHEN 'breakfast' THEN 0 WHEN 'lunch' THEN 1 WHEN 'dinner' THEN 2 ELSE 3 END,
        COALESCE(pc.name, ''), m.id
   `).all(from, to, ...(contextId == null ? [] : [Number(contextId)]));
-  for (const meal of meals) synchronizeMealMenuGeneration(database, meal.id);
+  if(!readOnly)for (const meal of meals) synchronizeMealMenuGeneration(database, meal.id);
   // Synchronization can advance the generation and set the occurrence back to
   // awaiting choice, so refresh the persisted Meal columns before projecting.
   meals = meals.map((meal) => ({
@@ -3024,9 +3034,12 @@ function loadOccurrenceData(database, from, to, contextId = null) {
     const chooserObligations = obligationRows.filter((row) => Number(row.meal_id) === Number(meal.id));
     const strictSharedChoice = ['fixed', 'round_robin'].includes(occurrencePolicy);
     const assignedChooserId = Number(meal.assigned_user_id) || null;
+    const owningCycle=cycleForMeal(database,meal.id);
     const choosers = participants.filter((person) => (
       person.is_chooser
-      && (!strictSharedChoice || person.status === 'participating')
+      && (!strictSharedChoice || (owningCycle
+        ? roles.some(row=>row.user_id===person.user_id&&row.role==='chooser'&&row.status==='participating')
+        : person.status === 'participating'))
       && (!strictSharedChoice || !meal.assignment_id || Number(person.user_id) === assignedChooserId)
     ));
     const currentObligations = choosers.map((chooser) => chooserObligations
@@ -3041,7 +3054,7 @@ function loadOccurrenceData(database, from, to, contextId = null) {
       .map((row) => row.response_deadline)
       .filter(Boolean)
       .sort()[0] || null;
-    const menuLocked = strictSharedChoice
+    const menuLocked = owningCycle ? owningCycle.state==='finalized' : strictSharedChoice
       && currentObligations.some((row) => Boolean(row.closeout_reached));
     const chooserStatuses = currentObligations.map((row) => row.status);
     const chooserStatus = strictSharedChoice
@@ -3242,7 +3255,7 @@ function withPersonalState(occurrence, memberId, canActFor) {
 }
 
 export function buildMealWeekModel(database, {
-  from, to, memberId, actorId, isAdmin = false, contextId = null,
+  from, to, memberId, actorId, isAdmin = false, contextId = null, readOnly=false,
 } = {}) {
   assertDate(from, 'Start date');
   assertDate(to, 'End date');
@@ -3254,7 +3267,7 @@ export function buildMealWeekModel(database, {
   const selectedId = Number(memberId || actorId);
   const selectedMember = members.find((row) => Number(row.id) === selectedId);
   if (!selectedMember) throw mealPlanError('Household member not found.', 404, 'HOUSEHOLD_MEMBER_NOT_FOUND');
-  const occurrences = loadOccurrenceData(database, from, to, contextId)
+  const occurrences = loadOccurrenceData(database, from, to, contextId, {readOnly})
     .map((row) => withPersonalState(row, selectedId, selectedMember.can_act_for));
   return {
     start: from,
@@ -3517,6 +3530,7 @@ export function advanceMealChooserFallback(database, mealId, {
   actorId = null,
   reason = 'chooser_repair',
 } = {}) {
+  assertCycleMealWrite(database,mealId);
   return database.transaction(() => {
     const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
     if (!meal) throw mealPlanError('Meal not found.', 404, 'MEAL_NOT_FOUND');
@@ -3780,6 +3794,7 @@ export function advanceMealChooserFallback(database, mealId, {
 }
 
 export function repairMealChooser(database, mealId, { actorId = null, sharedScheduledReconciliation = false, sharedGroupId=null } = {}) {
+  assertCycleMealWrite(database,mealId);
   const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
   const provenance = parseJson(meal?.provenance_json, {});
   const scheduledRule=sharedScheduledReconciliation&&meal
@@ -4176,6 +4191,7 @@ function normalizeDecision(database, meal, body, current = null, {
 export function saveMealDecision(database, mealId, body, {
   actorId, isAdmin = false, deviceKey = null,
 } = {}) {
+  const owningCycle=assertCycleMealWrite(database,mealId);
   synchronizeMealMenuGeneration(database, mealId);
   const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
   if (!meal) throw mealPlanError('Meal not found.', 404, 'MEAL_NOT_FOUND');
@@ -4229,7 +4245,7 @@ export function saveMealDecision(database, mealId, body, {
     SELECT 1 FROM meal_participants
      WHERE meal_id = ? AND user_id = ? AND role = 'chooser' AND status = 'participating'
   `).get(meal.id, beneficiaryId));
-  const isChooser = hasChooserRole && (
+  const isChooser = (!owningCycle || policy==='personal_choice') && hasChooserRole && (
     policy === 'personal_choice'
     || !occurrenceAssignment
     || Number(occurrenceAssignment.assigned_user_id) === beneficiaryId
@@ -4498,37 +4514,7 @@ export function saveMealDecision(database, mealId, body, {
         `).get(meal.id, Number(meal.current_menu_generation) || 1, ...normalized.menu_item_ids)
       : null;
     if (isChooser && policy !== 'personal_choice' && sharedEntree) {
-      database.prepare(`
-        UPDATE meals SET title = ?, recipe_id = ?, selection_status = 'selected',
-          updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
-      `).run(sharedEntree.title, sharedEntree.recipe_id || null, meal.id);
-      const obligations = database.prepare(`
-        SELECT id FROM planning_obligations
-         WHERE entity_type = 'meal' AND entity_id = ? AND role = 'chooser'
-           AND responsible_user_id = ? AND status IN ('pending', 'accepted')
-      `).all(meal.id, beneficiaryId);
-      for (const obligation of obligations) {
-        database.prepare(`
-          UPDATE planning_obligations SET status = 'fulfilled',
-            responded_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now') WHERE id = ?
-        `).run(obligation.id);
-        database.prepare(`
-          INSERT INTO planning_obligation_events (obligation_id, event, actor_user_id, details_json)
-          VALUES (?, 'meal_selected', ?, ?)
-        `).run(obligation.id, actorId || null, JSON.stringify({ menu_item_id: sharedEntree.id, decision_id: decisionId }));
-      }
-      chooserResult = {
-        status: 'fulfilled',
-        menu_item_id: sharedEntree.id,
-        obligation_ids: obligations.map((row) => Number(row.id)),
-      };
-      fulfillMealMenuGeneration(
-        database,
-        meal.id,
-        beneficiaryId,
-        obligations.map((row) => Number(row.id)),
-      );
+      chooserResult=publishSharedSelection(database,meal.id,sharedEntree,{beneficiaryId,actorId,decisionId});
     } else if (isChooser && policy === 'personal_choice' && normalized.confirmed
       && (normalized.participation !== 'participating' || normalized.selected_meal_id)) {
       const obligations = database.prepare(`
@@ -4713,7 +4699,42 @@ function editableMenuItemAlias(database, mealId, generation, itemId) {
   ) || null;
 }
 
+function publishSharedSelection(database,mealId,entree,{beneficiaryId,actorId,decisionId=null}) {
+  database.prepare(`UPDATE meals SET title=?,recipe_id=?,selection_status='selected',updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`).run(entree.title,entree.recipe_id||null,mealId);
+  const obligations=database.prepare(`SELECT id FROM planning_obligations WHERE entity_type='meal' AND entity_id=? AND role='chooser' AND responsible_user_id=? AND status IN ('pending','accepted')`).all(mealId,beneficiaryId);
+  for(const obligation of obligations) {
+    database.prepare(`UPDATE planning_obligations SET status='fulfilled',responded_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`).run(obligation.id);
+    database.prepare(`INSERT INTO planning_obligation_events(obligation_id,event,actor_user_id,details_json) VALUES(?,'meal_selected',?,?)`).run(obligation.id,actorId||null,JSON.stringify({menu_item_id:entree.id,decision_id:decisionId}));
+  }
+  fulfillMealMenuGeneration(database,mealId,beneficiaryId,obligations.map(x=>x.id));
+  return {status:'fulfilled',menu_item_id:entree.id,obligation_ids:obligations.map(x=>x.id)};
+}
+
+/** Publish the shared duty independently of any diner answer, in a cycle scope. */
+export function publishCycleSharedMain(database,mealId,body,{actorId,beneficiaryId,isAdmin=false}={}) {
+  const cycle=assertCycleMealWrite(database,mealId);
+  if(!cycle)throw mealPlanError('A cycle-owned meal is required.');
+  return database.transaction(()=>{
+    const authorization=assertCanManageMenu(database,mealId,actorId,isAdmin,beneficiaryId);
+    const before=database.prepare('SELECT * FROM meals WHERE id=?').get(mealId);
+    const title=text(body.title,{required:true,max:300,field:'Shared main'});
+    const recipeId=integer(body.recipe_id,{min:1,field:'Recipe'});
+    if(recipeId&&!database.prepare('SELECT 1 FROM recipes WHERE id=?').get(recipeId))throw mealPlanError('Recipe not found.',404);
+    const entree=database.prepare("SELECT * FROM meal_menu_items WHERE meal_id=? AND menu_generation=? AND item_type='entree' ORDER BY position,id LIMIT 1").get(mealId,authorization.generation);
+    let itemId=entree?.id;
+    if(entree)database.prepare('UPDATE meal_menu_items SET title=?,recipe_id=? WHERE id=?').run(title,recipeId,itemId);
+    else itemId=Number(database.prepare(`INSERT INTO meal_menu_items(meal_id,menu_generation,item_type,position,generation_position,title,recipe_id,created_by) VALUES(?,?,'entree',?,0,?,?,?)`).run(mealId,authorization.generation,nextPhysicalMenuPosition(database,mealId,'entree'),title,recipeId,actorId).lastInsertRowid);
+    const selected=database.prepare('SELECT * FROM meal_menu_items WHERE id=?').get(itemId);
+    const result=publishSharedSelection(database,mealId,selected,{beneficiaryId:authorization.beneficiaryId,actorId});
+    recordMenuEvent(database,mealId,'replaced',{itemId,beneficiaryId:authorization.beneficiaryId,actorId,before:entree,after:selected});
+    syncAutoPortions(database,mealId);
+    if(Number(before.recipe_id||0)!==Number(recipeId||0))syncRecipeMealIngredients(database,mealId,database.prepare('SELECT portions FROM meals WHERE id=?').get(mealId).portions);
+    return result;
+  })();
+}
+
 function assertCanManageMenu(database, mealId, actorId, isAdmin, requestedBeneficiaryId = null) {
+  const owningCycle=assertCycleMealWrite(database,mealId);
   synchronizeMealMenuGeneration(database, mealId);
   const meal = database.prepare('SELECT * FROM meals WHERE id = ?').get(Number(mealId));
   const policy = mealSelectionPolicy(database, meal);
@@ -4778,7 +4799,7 @@ function assertCanManageMenu(database, mealId, actorId, isAdmin, requestedBenefi
     );
   }
   const obligation = chooserObligationForGeneration(database, mealId, beneficiaryId);
-  if (obligation?.closeout_reached) {
+  if (!owningCycle && obligation?.closeout_reached) {
     throw mealPlanError(
       'The Meal selection deadline has passed; the shared menu is closed.',
       409,

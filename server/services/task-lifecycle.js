@@ -15,6 +15,9 @@ import { taskOptionalContext } from './task-optional.js';
 import { settleTaskRotations } from './task-rotation.js';
 
 let recurrenceHooks = null;
+const transitionGuards=new Map();
+/** Domain guards run for every real transition, including bulk/parent projections. */
+export function registerTaskTransitionGuard(name,guard) { transitionGuards.set(name,guard); }
 // Recurrence keeps its established anchored/group implementation in the Tasks
 // adapter. No writer may silently complete a series without that adapter.
 export function configureTaskRecurrence(hooks) { recurrenceHooks = hooks; }
@@ -117,6 +120,7 @@ function deviceResponsibilitySnapshot(d, task) {
 
 function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false,now=new Date(),optionalReopenScope=null}={}) {
   if (task.status === status) return;
+  for(const guard of transitionGuards.values())guard(d,task,status,{actorId,principal:effects.authorizationActor});
   assertTaskWindowAction(d,task.id,now,{optionalReopenScope});
   if (status === 'done') {
     assertRecurringCompletionStarted(d,task.id,now);

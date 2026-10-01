@@ -5,12 +5,14 @@
  */
 
 import { createLogger } from '../logger.js';
+import { ensureCycle,reviewCycle,saveCyclePerson,submitCyclePerson,registerMealCycleTaskLifecycle } from '../services/meal-cycles.js';
+import { assertCycleMealWrite,cycleForMeal } from '../services/meal-cycle-guards.js';
 import express from 'express';
 import { notifyMealRequests } from '../services/notification-events.js';
 import { assertLegacyMealImportAllowed } from '../services/meal-grocery-runs.js';
 import * as db from '../db.js';
 import { str, oneOf, date, num, collectErrors, MAX_TITLE, MAX_TEXT, MAX_SHORT, DATE_RE } from '../middleware/validate.js';
-import { addDays, mealWeekday, datesForTemplateInRange } from '../services/meal-recurrence.js';
+import { addDays, mealWeekday, datesForTemplateInRange, materializeRecurringMealOccurrences } from '../services/meal-recurrence.js';
 import { todayKey } from '../utils/timezone.js';
 import { requireAdmin } from '../auth.js';
 import { requireCapability } from '../middleware/require-capability.js';
@@ -78,6 +80,44 @@ import {
 const log = createLogger('Meals');
 
 const router  = express.Router();
+registerMealCycleTaskLifecycle();
+
+router.post('/cycles/ensure',(req,res)=>{
+  try {res.json({data:ensureCycle(db.get(),{start:req.body?.start,actorId:req.authUserId||req.session?.userId,requestKey:req.body?.request_key,expectedSettingsRevision:req.body?.expected_settings_revision})});}
+  catch(error){mealDomainError(res,error);}
+});
+router.get('/cycles/:cycleId',(req,res)=>{
+  try {const actorId=req.authUserId||req.session?.userId;res.json({data:reviewCycle(db.get(),Number(req.params.cycleId),{actorId,beneficiaryId:req.query.beneficiary_id==null?actorId:Number(req.query.beneficiary_id)})});}
+  catch(error){mealDomainError(res,error);}
+});
+for(const [action,service] of [['save',saveCyclePerson],['submit',submitCyclePerson]])router.post(`/cycles/:cycleId/${action}`,(req,res)=>{
+  try {const actorId=req.authUserId||req.session?.userId;res.json({data:service(db.get(),Number(req.params.cycleId),{actorId,beneficiaryId:req.body?.beneficiary_id==null?actorId:Number(req.body.beneficiary_id),expectedRevision:req.body?.expected_revision,requestKey:req.body?.request_key,changes:req.body?.changes})});}
+  catch(error){mealDomainError(res,error);}
+});
+// Compatibility mutation routes must not bypass cycle revisions or confirmation.
+router.use((req,res,next)=>{
+  if(!['POST','PUT','PATCH','DELETE'].includes(req.method))return next();
+  const d=db.get();
+  try {
+    const direct=req.path.match(/^\/(\d+)(?:\/|$)/),ingredient=req.path.match(/^\/ingredients\/(\d+)/),obligation=req.path.match(/^\/selection-requests\/(\d+)\/respond/);
+    let mealId=direct?Number(direct[1]):ingredient?d.prepare('SELECT meal_id FROM meal_ingredients WHERE id=?').get(Number(ingredient[1]))?.meal_id:obligation?d.prepare("SELECT entity_id FROM planning_obligations WHERE id=? AND entity_type='meal'").get(Number(obligation[1]))?.entity_id:null;
+    if(mealId)assertCycleMealWrite(d,mealId);
+    if(direct&&['series','future'].includes(req.query.scope)) {
+      const meal=d.prepare('SELECT recurrence_template_id,date FROM meals WHERE id=?').get(Number(direct[1]));
+      if(meal?.recurrence_template_id)for(const sibling of d.prepare('SELECT id FROM meals WHERE recurrence_template_id=? AND (?!=\'future\' OR date>=?)').all(meal.recurrence_template_id,req.query.scope,meal.date))assertCycleMealWrite(d,sibling.id);
+    }
+    const conflict=req.path.match(/^\/conflicts\/(\d+)\/resolve/);
+    if(conflict) {const row=d.prepare('SELECT meal_id FROM meal_calendar_conflicts WHERE id=?').get(Number(conflict[1]));if(row)assertCycleMealWrite(d,row.meal_id);}
+    if(['/execution/prepare','/apply-plan','/week-to-shopping-list','/'].includes(req.path)) {
+      const from=req.body?.from||req.body?.date||req.body?.week||req.query?.week,to=req.body?.to||req.body?.date||(from?addDays(from,6):null);
+      if(from&&to) {
+        const owned=d.prepare('SELECT cm.meal_id FROM meal_cycle_memberships cm JOIN meals m ON m.id=cm.meal_id WHERE m.date BETWEEN ? AND ? LIMIT 1').get(from,to);
+        if(owned)assertCycleMealWrite(d,owned.meal_id);
+      }
+    }
+    next();
+  } catch(error){mealDomainError(res,error);}
+});
 
 const VALID_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack', 'custom'];
 const VALID_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6]; // 0 = Monday, 6 = Sunday
@@ -585,6 +625,7 @@ function respondToMealSelection(obligationId, body, actorId, { timeout = false }
        WHERE o.id = ? AND o.entity_type = 'meal' AND o.role = 'chooser'
     `).get(obligationId);
     if (!obligation) throw new Error('Meal-selection request not found.');
+    assertCycleMealWrite(d,obligation.entity_id);
     if (!['pending', 'accepted'].includes(obligation.status)) throw new Error('This meal-selection request is already closed.');
     if (!timeout && Number(obligation.responsible_user_id) !== Number(actorId)) {
       throw new Error('This meal-selection request belongs to another household member.');
@@ -814,66 +855,7 @@ function createMealRecord(assignment, actorId) {
   return loadMealWithIngredients(result.lastInsertRowid);
 }
 
-function materializeRecurringMeals(from, to) {
-  const templates = db.get().prepare(`
-    SELECT *
-    FROM meal_recurrence_templates
-    WHERE start_date <= ?
-      AND (end_date IS NULL OR end_date >= ?)
-    ORDER BY id ASC
-  `).all(to, from);
-
-  if (!templates.length) return;
-
-  const createMeals = db.get().transaction(() => {
-    const hasException = db.get().prepare(`
-      SELECT 1
-      FROM meal_recurrence_exceptions
-      WHERE template_id = ? AND date = ?
-    `);
-    const hasMeal = db.get().prepare(`
-      SELECT 1
-      FROM meals
-      WHERE recurrence_template_id = ? AND date = ?
-    `);
-    const templateIngredients = db.get().prepare(`
-      SELECT name, quantity, category
-      FROM meal_recurrence_ingredients
-      WHERE template_id = ?
-      ORDER BY id ASC
-    `);
-    const insertMeal = db.get().prepare(`
-      INSERT INTO meals (
-        date, meal_type, custom_label, title, notes, recipe_url, recipe_id, recurrence_template_id,
-        created_by, source, source_key, provenance_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'recurrence', ?, ?)
-    `);
-
-    for (const template of templates) {
-      if (!VALID_WEEKDAYS.includes(template.weekday)) continue;
-      const ingredients = templateIngredients.all(template.id);
-      for (const date of datesForTemplateInRange(template, from, to)) {
-        if (hasException.get(template.id, date) || hasMeal.get(template.id, date)) continue;
-        const result = insertMeal.run(
-          date,
-          template.meal_type,
-          template.meal_type === 'custom' ? template.custom_label : null,
-          template.title,
-          template.notes,
-          template.recipe_url,
-          template.recipe_id,
-          template.id,
-          template.created_by,
-          `legacy-recurrence:${template.id}:${date}`,
-          JSON.stringify({ source: 'recurrence', template_id: template.id }),
-        );
-        insertMealIngredients(result.lastInsertRowid, ingredients);
-      }
-    }
-  });
-
-  createMeals();
-}
+function materializeRecurringMeals(from,to) { return materializeRecurringMealOccurrences(db.get(),{from,to}); }
 
 // --------------------------------------------------------
 // Routen - Mahlzeiten-Vorschläge (vor dynamischen Routen!)
@@ -1520,6 +1502,7 @@ router.post('/selection-requests/process-timeouts', requireAdmin, (req, res) => 
     const due = d.prepare(`
       SELECT id FROM planning_obligations
        WHERE entity_type = 'meal' AND role = 'chooser' AND status IN ('pending', 'accepted')
+         AND NOT EXISTS(SELECT 1 FROM meal_cycle_memberships cm WHERE cm.meal_id=planning_obligations.entity_id)
          AND response_deadline IS NOT NULL
          AND response_deadline <= strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
        ORDER BY id

@@ -1,3 +1,4 @@
+import {addMealCycleFinalizationSchema} from './services/meal-cycle-finalization-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9093,6 +9094,8 @@ FORK_MIGRATIONS.push({
   description: 'Kitchen: durable planning cycles, settings, requests and immutable results',
   up: addMealCycleSchema,
 });
+
+FORK_MIGRATIONS.push({version:10045, description:'Kitchen: exact grocery scope and reviewed gap acknowledgments', up:addMealCycleFinalizationSchema});
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 

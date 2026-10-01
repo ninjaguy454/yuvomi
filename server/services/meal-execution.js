@@ -1,3 +1,5 @@
+import {assertCycleMealWrite,cycleForMeal} from './meal-cycle-guards.js';
+import {mealDishPortionSummary} from './meal-dishes.js';
 import { createHash } from 'node:crypto';
 import { orderedRotationSelection } from './rotation.js';
 import { notifyTaskAssignments, notifyClaimableTask } from './notification-events.js';
@@ -216,14 +218,14 @@ function participantAssignment(meal, userId) {
     || { user_id: Number(userId), display_name: null };
 }
 
-function chooseExecutionRoundRobin(database, rotationKey, eligible) {
+function chooseExecutionRoundRobin(database, rotationKey, eligible, readOnly = false) {
   if (!eligible.length) return { selected: null, before: null, after: null };
   const state = database.prepare('SELECT cursor_user_id FROM assignment_rotation_state WHERE rotation_key = ?')
     .get(rotationKey);
   const before = Number(state?.cursor_user_id) || null;
   const selected = orderedRotationSelection({ memberIds: eligible, eligibleIds: eligible,
     previousMemberId: before, strategy: 'round_robin' }).member_ids[0];
-  database.prepare(`
+  if (!readOnly) database.prepare(`
     INSERT INTO assignment_rotation_state (rotation_key, cursor_user_id, occurrence_count, updated_at)
     VALUES (?, ?, 1, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
     ON CONFLICT(rotation_key) DO UPDATE SET
@@ -234,24 +236,23 @@ function chooseExecutionRoundRobin(database, rotationKey, eligible) {
   return { selected, before, after: selected };
 }
 
-function resolveExecutionAssignment(database, meal, role, policy, output = null, task = null) {
+function resolveExecutionAssignment(database, meal, role, policy, output = null, task = null, readOnly = false) {
   const eligibleIds = eligibleUserIdsForBuiltInSkill(
     database,
     ROLE_SKILLS[role],
     participatingUsers(meal),
     { dateKey: meal.date },
   );
-  if (output) {
+  if (output && (output.assignment_strategy_snapshot === 'open_claimable' || eligibleIds.includes(Number(output.assigned_user_id_snapshot)))) {
     const snapshotStrategy = output.assignment_strategy_snapshot || 'legacy';
     const selected = snapshotStrategy === 'open_claimable'
       ? (Number(task?.assigned_to) || Number(output.assigned_user_id_snapshot) || null)
       : (Number(output.assigned_user_id_snapshot) || null);
-    let snapshotEligible = eligibleIds;
-    try { snapshotEligible = JSON.parse(output.eligible_user_ids_json || '[]'); } catch { /* use current pool */ }
+    // Eligibility is always current, even for captured assignments.
     return {
       strategy: snapshotStrategy,
       assignment: participantAssignment(meal, selected),
-      eligibleIds: snapshotEligible,
+      eligibleIds,
       rotationKey: output.assignment_rotation_key || null,
       before: Number(output.cursor_before_user_id) || null,
       after: Number(output.cursor_after_user_id) || null,
@@ -271,7 +272,7 @@ function resolveExecutionAssignment(database, meal, role, policy, output = null,
   if (configured === 'eligible_round_robin') {
     const ruleScope = meal.meal_plan_rule_key || `meal:${meal.id}`;
     const rotationKey = `meal-execution:${ruleScope}:task:${role}`;
-    const rotation = chooseExecutionRoundRobin(database, rotationKey, eligibleIds);
+    const rotation = chooseExecutionRoundRobin(database, rotationKey, eligibleIds, readOnly);
     return {
       strategy: configured,
       assignment: participantAssignment(meal, rotation.selected),
@@ -318,6 +319,39 @@ function resolvedExecutionPolicy(meal, globalSettings) {
     ...(meal.execution_rule.execution_assignment_strategies || {}),
   };
   return policy;
+}
+
+function effectiveExecutionPolicy(database, meal, settings) {
+  const policy = resolvedExecutionPolicy(meal,settings);
+  if (cycleForMeal(database,meal.id)) for (const role of ROLE_ORDER) {
+    policy[`generate_${role}`] = bool(settings[`generate_${role}`]) && bool(policy[`generate_${role}`]) ? 1 : 0;
+  }
+  return policy;
+}
+function executionFrozen(execution) {
+  return Boolean(execution && (execution.frozen_at || execution.tasks.some(x=>
+    !x.task_id || !x.task_status || x.archived_at || ['done','in_progress','expired'].includes(x.task_status))));
+}
+/** Pure assignment preview: selection uses the same resolver without advancing rotations. */
+export function previewMealExecution(database,mealId) {
+  const meal=loadMeal(database,mealId);
+  if (!meal) throw serviceError('Meal not found.',404);
+  const settings=getSettings(database), policy=effectiveExecutionPolicy(database,meal,settings);
+  const execution=loadExecution(database,mealId), frozen=executionFrozen(execution);
+  const demand=mealDishPortionSummary(database,mealId).dishes.filter(x=>x.meal_id===mealId && x.cook_portions>0);
+  const enabled=bool(settings?.enabled) && demand.length>0;
+  const roles=ROLE_ORDER.map(role=>{
+    const output=execution?.tasks.find(x=>x.role===role);
+    if (!enabled || !bool(policy[`generate_${role}`])) return {role,required:false,status:'disabled',output_task_id:output?.task_id??null};
+    const resolution=resolveExecutionAssignment(database,meal,role,policy,output,output?{assigned_to:output.assigned_to}:null,true);
+    const optionalSupervisor=role==='supervision' && !policy.execution_assignment_strategies?.supervision && !meal.participants.some(x=>x.role==='supervisor');
+    const required=!optionalSupervisor;
+    const invalidClaim=resolution.strategy==='open_claimable'&&output?.assigned_to&&!resolution.eligibleIds.includes(Number(output.assigned_to));
+    const ready=!invalidClaim&&(Boolean(resolution.assignment) || (resolution.strategy==='open_claimable' && resolution.eligibleIds.length>0));
+    return {role,required,strategy:resolution.strategy,planned_assignee_id:resolution.assignment?.user_id??null,
+      eligible_ids:resolution.eligibleIds,output_task_id:output?.task_id??null,output_assignee_id:output?.assigned_to??null,status:!required?'not_required':ready?'ready':'missing'};
+  });
+  return {meal_id:mealId,enabled:bool(settings?.enabled),has_demand:demand.length>0,frozen,roles};
 }
 
 function taskDescription(meal, role) {
@@ -416,6 +450,7 @@ function refreshExecutionStatus(database, mealId) {
 }
 
 function ensureMealExecution(database, mealId, actorId, settings = getSettings(database)) {
+  const owned = assertCycleMealWrite(database, mealId);
   const meal = loadMeal(database, mealId);
   if (!meal) throw serviceError('Meal not found.', 404, 'MEAL_NOT_FOUND');
   if (!settings || !bool(settings.enabled)) {
@@ -424,7 +459,10 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
   if (meal.scope === 'skipped' || meal.selection_status !== 'selected') {
     throw serviceError('Choose the meal before creating its execution Tasks.', 409, 'MEAL_NOT_EXECUTABLE');
   }
-  const executionPolicy = resolvedExecutionPolicy(meal, settings);
+  const executionPolicy = effectiveExecutionPolicy(database, meal, settings);
+  const existing = loadExecution(database,mealId);
+  if (executionFrozen(existing)) return refreshExecutionStatus(database,mealId);
+  if (owned && !mealDishPortionSummary(database,mealId).dishes.some(x=>x.meal_id===mealId && x.cook_portions>0)) return null;
   let rotations = null;
   try { rotations = JSON.parse(meal.provenance_json || '{}').rotations; } catch { /* legacy Meal */ }
   if (rotations?.cook?.state === 'needs_assignment') {
@@ -453,6 +491,7 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
   database.transaction(() => {
     let snapshot = database.prepare('SELECT * FROM meal_execution_snapshots WHERE logical_key = ?').get(logicalKey);
     const execution = snapshot ? loadExecution(database, meal.id) : null;
+    if (executionFrozen(execution)) return;
     const frozen = Boolean(snapshot?.frozen_at || execution?.tasks?.some((row) => row.task_status === 'done'));
     if (!snapshot) {
       const info = database.prepare(`
@@ -564,6 +603,7 @@ function prepareMealExecutionRange(database, { from, to, actorId, listId = null,
       AND superseded_by_id IS NULL
     ORDER BY date, COALESCE(scheduled_time, preferred_time), id
   `).all(from, to);
+  for (const meal of meals) assertCycleMealWrite(database,meal.id);
   const executions = [];
   for (const meal of meals) executions.push(ensureMealExecution(database, meal.id, actorId, settings));
 

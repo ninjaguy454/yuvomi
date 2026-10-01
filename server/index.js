@@ -1,3 +1,4 @@
+import {startMealCycleScheduler} from './services/meal-cycle-scheduler.js';
 /**
  * Modul: Server Entry Point
  * Zweck: Express-App initialisieren, Middleware einbinden, Routen registrieren
@@ -627,6 +628,7 @@ app.listen(PORT, () => {
   startSplitExpenseScheduler();
   startTaskExpiration();
   startSharedRotationScheduler();
+  startMealCycleScheduler();
   startPushScheduler();
   startMedicationScheduler();
   startRecipeProviderScheduler();

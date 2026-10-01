@@ -1,3 +1,4 @@
+import {assertCycleMealWrite} from './meal-cycle-guards.js';
 import { createHash } from 'node:crypto';
 import { aggregateMealIngredients, parseQuantity } from './shopping-import.js';
 import { scaleIngredientQuantity, mealDishPortionSummary } from './meal-dishes.js';
@@ -6,6 +7,21 @@ import { notifyGroceryPublished } from './notification-events.js';
 
 const RUN_STATES = ['draft', 'finalized', 'added_to_shopping', 'purchased', 'reconciled'];
 
+function validateGroceryScope(database, from, to, mealIds) {
+  if (mealIds !== null && (!Array.isArray(mealIds) || mealIds.some(id => !Number.isSafeInteger(id) || id < 1))) {
+    throw serviceError('mealIds must be an explicit array of meal IDs.');
+  }
+  const ids = mealIds === null
+    ? database.prepare('SELECT id FROM meals WHERE date BETWEEN ? AND ?').all(from,to).map(x=>x.id)
+    : [...new Set(mealIds)].sort((a,b)=>a-b);
+  for (const id of ids) {
+    const meal = database.prepare('SELECT date FROM meals WHERE id=?').get(id);
+    if (!meal || meal.date < from || meal.date > to) throw serviceError('Grocery scope contains an unavailable or out-of-period meal.');
+    assertCycleMealWrite(database,id);
+  }
+  return mealIds === null ? null : ids;
+}
+
 // Once a Meal has source demand in a grocery run, even an unpublished draft,
 // changes belong to that run. Refreshing a draft removes obsolete source rows.
 // Legacy importers cannot safely manufacture new, unlinked copies of that
@@ -13,6 +29,7 @@ const RUN_STATES = ['draft', 'finalized', 'added_to_shopping', 'purchased', 'rec
 export function assertLegacyMealImportAllowed(database, mealIds) {
   const ids = [...new Set(mealIds.map(Number).filter((id) => Number.isSafeInteger(id) && id > 0))];
   if (!ids.length) return;
+  for (const id of ids) assertCycleMealWrite(database,id);
   const multipleDishes = ids.some((id) => {
     const summary = mealDishPortionSummary(database, id);
     return summary.dishes.length !== 1 || summary.dishes.some((dish) => !dish.primary || dish.meal_id !== id);
@@ -88,7 +105,7 @@ function baseDemandKey(logicalKey) {
     : String(logicalKey || '');
 }
 
-function loadSourceIngredients(database, from, to) {
+export function loadSourceIngredients(database, from, to, mealIds = null) {
   const baseRows = database.prepare(`
     SELECT
       'meal_ingredient' AS source_kind,
@@ -145,6 +162,7 @@ function loadSourceIngredients(database, from, to) {
          WHERE pcgs.planning_context_id = m.planning_context_id
            AND pcgs.track_groceries = 0
       )
+      AND m.ingredients_manual_override = 0
       AND NOT EXISTS (SELECT 1 FROM meal_ingredients mi WHERE mi.meal_id = m.id)
 
     ORDER BY meal_date ASC, meal_id ASC, source_kind ASC, meal_ingredient_id ASC, recipe_ingredient_id ASC
@@ -156,6 +174,7 @@ function loadSourceIngredients(database, from, to) {
     ORDER BY m.date, m.id`).all(from, to);
   const rows = [];
   for (const meal of meals) {
+    if (mealIds !== null && !mealIds.includes(meal.id)) continue;
     const dishes = mealDishPortionSummary(database, meal.id).dishes.filter((dish) => dish.meal_id === meal.id);
     for (const dish of dishes) {
       const ingredients = dish.primary ? baseRows.filter((row) => row.meal_id === meal.id)
@@ -193,7 +212,7 @@ function sourceFingerprint(sourceRows, groupingMode) {
 
 function assertUnpublishedRunCurrent(database, run) {
   if (!['draft', 'finalized'].includes(run.status)) return;
-  const current = sourceFingerprint(loadSourceIngredients(database, run.start_date, run.end_date),
+  const current = sourceFingerprint(loadSourceIngredients(database, run.start_date, run.end_date, run.meal_ids_json == null ? null : JSON.parse(run.meal_ids_json)),
     normalizedGroupingMode(getGrocerySettings(database).grouping_mode));
   const baseKey = String(run.logical_key).replace(/:revision:\d+$/, '');
   const newer = database.prepare(`SELECT 1 FROM meal_grocery_runs WHERE id > ?
@@ -301,14 +320,16 @@ function loadGroceryRun(database, runId) {
   return run;
 }
 
-function createOrRefreshGroceryRun(database, { listId, from, to, userId, logicalKey }) {
+function createOrRefreshGroceryRun(database, { listId, from, to, userId, logicalKey, mealIds = null, deferNotifications = false }) {
   const list = database.prepare('SELECT id FROM shopping_lists WHERE id = ?').get(listId);
   if (!list) throw serviceError('Shopping list not found.', 404, 'SHOPPING_LIST_NOT_FOUND');
 
   const baseKey = String(logicalKey || defaultLogicalKey(listId, from, to)).trim();
   if (!baseKey || baseKey.length > 200) throw serviceError('logical_key must be between 1 and 200 characters.');
   const groupingMode = normalizedGroupingMode(getGrocerySettings(database).grouping_mode);
-  const sourceRows = loadSourceIngredients(database, from, to);
+  mealIds = validateGroceryScope(database, from, to, mealIds);
+  const sourceRows = loadSourceIngredients(database, from, to, mealIds);
+  const scopeJson = mealIds === null ? null : JSON.stringify(mealIds);
   const aggregated = aggregateWithSources(sourceRows, groupingMode);
   const fingerprint = sourceFingerprint(sourceRows, groupingMode);
 
@@ -320,7 +341,7 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
     `).all(baseKey, baseKey);
     let run = family[0] || null;
     for (const related of family) {
-      if (related.shopping_list_id !== Number(listId) || related.start_date !== from || related.end_date !== to) {
+      if (related.shopping_list_id !== Number(listId) || related.start_date !== from || related.end_date !== to || (related.meal_ids_json ?? null) !== scopeJson) {
         throw serviceError('logical_key already belongs to a different grocery run.', 409, 'GROCERY_RUN_KEY_CONFLICT');
       }
     }
@@ -388,9 +409,9 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
       const revision = family.length ? Math.max(...family.map((row) => Number(row.revision) || 1)) + 1 : 1;
       const info = database.prepare(`
         INSERT INTO meal_grocery_runs (
-          logical_key, shopping_list_id, start_date, end_date, source_fingerprint, revision, created_by
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(key, listId, from, to, fingerprint, revision, userId || null);
+          logical_key, shopping_list_id, start_date, end_date, source_fingerprint, revision, created_by, meal_ids_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(key, listId, from, to, fingerprint, revision, userId || null, scopeJson);
       run = database.prepare('SELECT * FROM meal_grocery_runs WHERE id = ?').get(info.lastInsertRowid);
     } else {
       database.prepare(`
@@ -439,6 +460,7 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
 function finalizeGroceryRun(database, runId) {
   const run = loadGroceryRun(database, runId);
   if (!run) throw serviceError('Grocery run not found.', 404, 'GROCERY_RUN_NOT_FOUND');
+  validateGroceryScope(database, run.start_date, run.end_date, run.meal_ids_json == null ? null : JSON.parse(run.meal_ids_json));
   if (run.status !== 'draft') return run;
   assertUnpublishedRunCurrent(database, run);
   database.prepare(`
@@ -450,9 +472,10 @@ function finalizeGroceryRun(database, runId) {
   return loadGroceryRun(database, runId);
 }
 
-function publishGroceryRun(database, runId) {
+function publishGroceryRun(database, runId, {deferNotifications = false} = {}) {
   const initial = loadGroceryRun(database, runId);
   if (!initial) throw serviceError('Grocery run not found.', 404, 'GROCERY_RUN_NOT_FOUND');
+  validateGroceryScope(database, initial.start_date, initial.end_date, initial.meal_ids_json == null ? null : JSON.parse(initial.meal_ids_json));
   if (initial.status === 'draft') {
     throw serviceError('Finalize the grocery run before adding it to Shopping.', 409, 'GROCERY_RUN_NOT_FINALIZED');
   }
@@ -499,7 +522,7 @@ function publishGroceryRun(database, runId) {
           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ', 'now')
       WHERE id = ?
     `).run(runId);
-    notifyGroceryPublished(database, runId);
+    if (!deferNotifications) notifyGroceryPublished(database, runId);
     return ids;
   })();
   return { run: loadGroceryRun(database, runId), added_ids: addedIds };

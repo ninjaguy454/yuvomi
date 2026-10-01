@@ -97,6 +97,8 @@ export function cycleSourceFingerprint(d,cycleId) {
   const recipeMarks=recipes.length?recipes.map(()=>'?').join(','):'NULL';
   data.recipes=d.prepare(`SELECT id,title,yield_portions FROM recipes WHERE id IN (${recipeMarks}) ORDER BY id`).all(...recipes);
   data.recipe_ingredients=d.prepare(`SELECT * FROM recipe_ingredients WHERE recipe_id IN (${recipeMarks}) ORDER BY id`).all(...recipes);
+  data.execution_settings=d.prepare('SELECT * FROM meal_execution_settings ORDER BY id').all();
+  data.grocery_settings=d.prepare('SELECT * FROM meal_grocery_settings ORDER BY id').all();
   data.household=d.prepare('SELECT id,role,family_role FROM users ORDER BY id').all();
   data.guests=d.prepare('SELECT user_id FROM split_expense_guest_users ORDER BY user_id').all();
   data.workers=d.prepare('SELECT user_id FROM housekeeping_workers ORDER BY user_id').all();
@@ -121,11 +123,10 @@ function requirements(d,occurrences,beneficiaryId) {
   }
   return list;
 }
-function projection(d,c,actorId,beneficiaryId,permissions) {
+function projection(d,c,actorId,beneficiaryId,permissions,now=new Date().toISOString()) {
   const settings=JSON.parse(c.settings_json),fingerprint=cycleSourceFingerprint(d,c.id);
   const owned=new Set(d.prepare('SELECT meal_id FROM meal_cycle_memberships WHERE cycle_id=?').all(c.id).map(x=>x.meal_id));
   const model=buildMealWeekModel(d,{from:c.period_start,to:c.period_end,actorId,memberId:beneficiaryId,isAdmin:permissions.admin,readOnly:true});
-  const now=new Date().toISOString();
   const occurrences=model.occurrences.filter(x=>owned.has(x.id)).map(m=>{
     const at=mealInstant(c,m),adopted=at?at<=c.created_at:m.date<utcToWall(c.created_at,c.timezone).date;
     return {...m,governed_at:at,adopted_history:adopted,begun:Boolean(at&&at<=now),controls:{...m.controls,choose_backup:m.can_act_for&&m.applicable&&m.rule?.policy!=='personal_choice'}};
@@ -160,12 +161,12 @@ function projection(d,c,actorId,beneficiaryId,permissions) {
   return {cycle:c,cycle_id:c.id,revision:c.revision,fingerprint,settings,occurrences,exclusions,personal:{beneficiary_id:beneficiaryId,requirements:personalRequirements,submitted:personalTask?.submission_revision!=null,submission_revision:personalTask?.submission_revision??null,needs_correction:Boolean(personalTask?.submission_revision&&personalRequirements.some(x=>!x.complete)),task_id:personalTask?.task_id??null},blockers,tasks,destinations};
 }
 /** Coherent synchronous read transaction; no materialization, Task or dish writes. */
-export function reviewCycle(d,cycleId,{actorId,beneficiaryId=actorId}={}) {
-  return d.transaction(()=>{const p=authorize(d,actorId,beneficiaryId);return projection(d,load(d,cycleId),actorId,beneficiaryId,p);})();
+export function reviewCycle(d,cycleId,{actorId,beneficiaryId=actorId,now=new Date().toISOString()}={}) {
+  return d.transaction(()=>{const p=authorize(d,actorId,beneficiaryId);return projection(d,load(d,cycleId),actorId,beneficiaryId,p,now);})();
 }
-function createTask(d,c,purpose,beneficiaryId,obligations) {
-  const settings=JSON.parse(c.settings_json),at={personal:c.response_at,review:c.confirmation_at,shopping:c.shopping_at}[purpose];
-  const due=utcToWall(at,c.timezone),title={personal:'Choose your meals',review:'Review household meals',shopping:'Shop for household meals'}[purpose];
+export function createCyclePlanningTask(d,c,purpose,beneficiaryId,obligations) {
+  const settings=JSON.parse(c.settings_json),at={personal:c.response_at,review:c.confirmation_at,shopping:c.shopping_at,automatic_followup:c.confirmation_at}[purpose];
+  const due=utcToWall(at,c.timezone),title={personal:'Choose your meals',review:'Review household meals',shopping:'Shop for household meals',automatic_followup:'Resolve blocked Kitchen confirmation'}[purpose];
   const taskId=Number(d.prepare(`INSERT INTO tasks(title,description,category,status,due_date,due_time,assigned_to,created_by,is_recurring,assignment_mode,points,visibility,expiration_policy)
     VALUES(?,?,'household','open',?,?,?,?,0,'fixed',0,'all','keep_overdue')`).run(title,`Kitchen ${c.period_start} to ${c.period_end}`,due.date,due.time.slice(0,5),beneficiaryId,settings.coordinator_id).lastInsertRowid);
   d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(taskId,beneficiaryId);
@@ -177,35 +178,41 @@ function createTask(d,c,purpose,beneficiaryId,obligations) {
     VALUES(?,'meal_cycle','Open Kitchen','/meals',?,'meal_cycle',?)`).run(taskId,JSON.stringify({cycle:c.id,beneficiary:beneficiaryId,purpose}),c.id);
   d.prepare(`INSERT INTO meal_cycle_task_links(cycle_id,purpose,beneficiary_id,task_id,obligations_json) VALUES(?,?,?,?,?)`).run(c.id,purpose,beneficiaryId,taskId,JSON.stringify(obligations));
 }
-export function ensureCycle(d,{start,actorId,requestKey,expectedSettingsRevision}={}) {
+export function ensureCycle(d,{start,actorId,requestKey,expectedSettingsRevision,now=new Date().toISOString()}={}) {
   return d.transaction(()=>{
     const p=authorize(d,actorId,actorId,true),settings=getCycleSettings(d);
     if(!p.admin&&actorId!==settings.coordinator_id)fail('Coordinator permission is required to create a cycle.',403);
     return request(d,'cycles:household','cycle.ensure',requestKey,actorId,expectedSettingsRevision,{start},()=>{
       const existing=d.prepare('SELECT * FROM meal_cycles WHERE period_start=?').get(start);
-      if(existing)return projection(d,existing,actorId,actorId,p);
+      if(existing)return projection(d,existing,actorId,actorId,p,now);
       if(!settings.enabled)fail('Kitchen cycle generation is disabled.');
       if(settings.revision!==expectedSettingsRevision)fail('Cycle settings revision conflict.');
       assertTaskActors(d,settings);
       assertAnchored(settings,start);const t=cycleInstants(settings,start);
       if(d.prepare('SELECT id FROM meal_cycles WHERE period_start<=? AND period_end>=?').get(t.period.end,start))fail('Cycle coverage overlaps an existing owned period.');
-      const today=utcToWall(new Date().toISOString(),settings.timezone).date;
+      const today=utcToWall(now,settings.timezone).date;
       if(t.period.end<today)fail('Historical periods cannot create planning Tasks.');
       materializeRecurringMealOccurrences(d,{from:start<today?today:start,to:t.period.end,mealTypes:['breakfast','lunch','dinner']});
       materializeMealPlanOccurrences(d,{from:start<today?today:start,to:t.period.end,actorId,mealTypes:['breakfast','lunch','dinner']});
       const meals=d.prepare("SELECT * FROM meals WHERE date BETWEEN ? AND ? AND parent_meal_id IS NULL AND superseded_by_id IS NULL AND meal_type IN ('breakfast','lunch','dinner') AND (meal_plan_rule_id IS NOT NULL OR scope IN ('household','travel')) ORDER BY id").all(start,t.period.end);
+      for(const meal of meals) {
+        if(d.prepare('SELECT 1 FROM meal_grocery_item_sources WHERE meal_id=? OR meal_id IN (SELECT id FROM meals WHERE parent_meal_id=?) LIMIT 1').get(meal.id,meal.id))fail('Existing grocery ownership needs review. Keep this period in its existing Shopping flow and activate a future cycle.',409,'CYCLE_ADOPTION_GROCERY_CONFLICT');
+        if(d.prepare(`SELECT 1 FROM meal_execution_snapshots s LEFT JOIN meal_execution_tasks o ON o.meal_snapshot_id=s.id LEFT JOIN tasks t ON t.id=o.task_id
+          WHERE (s.meal_id=? OR s.meal_id IN (SELECT id FROM meals WHERE parent_meal_id=?))
+          AND (s.frozen_at IS NOT NULL OR t.status IN ('in_progress','done','expired') OR (o.id IS NOT NULL AND (t.id IS NULL OR t.archived_at IS NOT NULL))) LIMIT 1`).get(meal.id,meal.id))fail('Started execution history needs review. Keep this period in its existing flow and activate a future cycle.',409,'CYCLE_ADOPTION_EXECUTION_CONFLICT');
+      }
       for(const meal of meals)synchronizeMealMenuGeneration(d,meal.id);
-      const id=Number(d.prepare(`INSERT INTO meal_cycles(period_start,period_end,timezone,settings_json,settings_revision,finalization_mode,creation_at,response_at,confirmation_at,shopping_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?)`).run(start,t.period.end,settings.timezone,JSON.stringify(settings),settings.revision,settings.finalization_mode,t.creation,t.response,t.confirmation,t.shopping).lastInsertRowid);
+      const id=Number(d.prepare(`INSERT INTO meal_cycles(period_start,period_end,timezone,settings_json,settings_revision,finalization_mode,creation_at,response_at,confirmation_at,shopping_at,created_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)`).run(start,t.period.end,settings.timezone,JSON.stringify(settings),settings.revision,settings.finalization_mode,t.creation,t.response,t.confirmation,t.shopping,now).lastInsertRowid);
       for(const meal of meals)d.prepare('INSERT INTO meal_cycle_memberships(cycle_id,meal_id) VALUES(?,?)').run(id,meal.id);
-      const c=load(d,id),r=projection(d,c,actorId,actorId,p);
+      const c=load(d,id),r=projection(d,c,actorId,actorId,p,now);
       const people=[...new Set(r.occurrences.flatMap(m=>m.participants.map(x=>x.user_id)))];
-      for(const person of people) {const required=requirements(d,r.occurrences,person);if(required.some(x=>x.status!=='away'))createTask(d,c,'personal',person,required);}
+      for(const person of people) {const required=requirements(d,r.occurrences,person);if(required.some(x=>x.status!=='away'))createCyclePlanningTask(d,c,'personal',person,required);}
       if(r.occurrences.some(m=>!m.adopted_history&&!m.begun)) {
-        createTask(d,c,'review',settings.coordinator_id,[]);createTask(d,c,'shopping',settings.shopping_assignee_id,[]);
+        createCyclePlanningTask(d,c,'review',settings.coordinator_id,[]);createCyclePlanningTask(d,c,'shopping',settings.shopping_assignee_id,[]);
       }
       d.prepare('UPDATE meal_cycles SET source_fingerprint=?,source_revision=1 WHERE id=?').run(cycleSourceFingerprint(d,id),id);
-      return projection(d,load(d,id),actorId,actorId,p);
+      return projection(d,load(d,id),actorId,actorId,p,now);
     });
   }).immediate();
 }

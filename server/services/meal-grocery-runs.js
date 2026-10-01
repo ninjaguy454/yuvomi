@@ -675,7 +675,8 @@ function reviewedOutputCoverage(d,item){
       return {...result,coverage:Math.min(coverage,actual.amount)};
     }
   }
-  if(state&&!shopping)return {...result,coverage:0};
+  // A removed Shopping row is protected intent, not permission to republish it.
+  // Keep its coverage unknown so reviewed publication defers matching additions.
   return {...result,coverage:null,uncertain:true};
 }
 /** Internal reviewed-delta path. Historical item/source quantities remain immutable;

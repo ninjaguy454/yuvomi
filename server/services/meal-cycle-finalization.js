@@ -74,7 +74,7 @@ function scopeAndGaps(d,r) {
 export function reviewCycleReadiness(d,cycleId,{actorId,now=new Date().toISOString()}={}) {
   return d.transaction(()=>{
     const r=reviewCycle(d,cycleId,{actorId,now}),scope=scopeAndGaps(d,r);
-    const executions=scope.ids.map(id=>previewMealExecution(d,id));
+    const executions=scope.ids.map(id=>previewMealExecution(d,id,{actorId}));
     const blockers=r.blockers.filter(b=>b.code!=='MANUAL_REVIEW_REQUIRED');
     try {authorizeCycleCoordinator(d,r.cycle,actorId);} catch(error) {blockers.push({code:error.code,message:error.message});}
     const reviewLink=r.tasks.find(x=>x.purpose==='review'&&x.state==='active');
@@ -86,6 +86,7 @@ export function reviewCycleReadiness(d,cycleId,{actorId,now=new Date().toISOStri
     }
     for(const gap of scope.gaps)if(!gap.acknowledged)blockers.push({code:'INGREDIENT_REVIEW_REQUIRED',meal_id:gap.meal_id,message:'Review and acknowledge missing ingredients or explicit portions with no diner demand.'});
     for(const ex of executions) {
+      for(const blocker of ex.blockers)blockers.push({...blocker,meal_id:ex.meal_id});
       if(ex.frozen)blockers.push({code:'EXECUTION_HISTORY_REVIEW_REQUIRED',meal_id:ex.meal_id,message:'Existing frozen or started execution history needs reviewed adoption.'});
       for(const role of ex.roles)if(role.required&&role.status==='missing')blockers.push({code:'EXECUTION_ASSIGNEE_REQUIRED',meal_id:ex.meal_id,role:role.role,message:'Assign an eligible person or explicitly configure a claimable role.'});
     }

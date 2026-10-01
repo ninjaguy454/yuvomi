@@ -9,6 +9,8 @@ import {createOrRefreshGroceryRun,finalizeGroceryRun,publishGroceryRun} from '..
 import {ensureMealExecution} from '../server/services/meal-execution.js';
 import {createMealPlan,attachMealPlanToContext} from '../server/services/meal-plans.js';
 import {savePlanningContext} from '../server/services/planning-contexts.js';
+import {taskCapabilities} from '../server/services/task-access.js';
+import {withCycleMealWrite} from '../server/services/meal-cycle-guards.js';
 const api=await import('../server/services/meal-cycle-finalization.js').catch(e=>e.code==='ERR_MODULE_NOT_FOUND'?{}:Promise.reject(e));
 const now='2034-03-04T19:00:00.000Z';
 function ready(overrides={}) {const d=fixture(overrides),id=ensure(d).cycle_id;main(d,id);for(const p of [1,2,3])decision(d,id,p);submitAll(d,id);return {d,id};}
@@ -172,4 +174,79 @@ for(const track of [true,false])test(`Home/trip scopes publish each active perso
   const result=api.finalizeCycle(d,id,options(d,id));assert.equal(result.grocery_runs.length,track?2:1);
   const sources=d.prepare('SELECT source_key,meal_id FROM meal_grocery_item_sources').all();assert.equal(new Set(sources.map(x=>x.source_key)).size,sources.length);assert.equal(sources.length,track?3:2);
   const trip=review(d,id).occurrences.find(x=>x.planning_context_id===context.id);assert.equal(sources.some(x=>x.meal_id===trip.id),track);d.close();
+});
+
+for(const denial of ['module','completion'])test(`execution recipients need current ${denial} permission across all five required roles`,()=>{
+  const roles=['preparation','cooking','supervision','serving','cleanup'];
+  const {d,id}=executionReady(Object.fromEntries(roles.map(role=>[role,'cook'])),true);
+  d.exec("UPDATE meal_participants SET user_id=2 WHERE role='cook'");reseal(d,id);acknowledge(d,id);
+  assert.equal(api.reviewCycleReadiness(d,id,{actorId:1,now}).ready,true);
+  if(denial==='module')d.exec("INSERT INTO access_permissions(subject_type,subject_id,resource_type,resource_key,access) VALUES('user','2','module','tasks','none')");
+  else d.exec("INSERT INTO access_capabilities(subject_type,subject_id,capability_key,access) VALUES('user','2','tasks.complete_own','none')");
+  const before=d.prepare('SELECT total_changes() n').get().n,r=api.reviewCycleReadiness(d,id,{actorId:1,now});
+  assert.equal(d.prepare('SELECT total_changes() n').get().n,before);
+  assert.deepEqual(r.blockers.filter(x=>x.code==='EXECUTION_ASSIGNEE_REQUIRED').map(x=>x.role),roles);
+  assert.throws(()=>api.finalizeCycle(d,id,options(d,id)),/eligible|ready/i);
+  assert.equal(d.prepare('SELECT count(*) n FROM meal_execution_tasks').get().n,0);assert.equal(d.prepare('SELECT count(*) n FROM meal_cycle_results').get().n,0);
+  d.exec(denial==='module'?"DELETE FROM access_permissions WHERE subject_id='2'":"DELETE FROM access_capabilities WHERE subject_id='2'");
+  const result=api.finalizeCycle(d,id,options(d,id));assert.equal(result.execution_task_ids.length,5);
+  for(const taskId of result.execution_task_ids)assert.equal(taskCapabilities(d,2,d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId)).complete,true);d.close();
+});
+for(const deniedCapability of ['tasks.claim','tasks.complete_own'])test(`unclaimed output excludes sole skill-qualified recipient denied ${deniedCapability}`,()=>{
+  const {d,id}=executionReady({cooking:'open_claimable'});
+  d.exec("UPDATE user_skill_proficiency SET proficiency='excluded' WHERE user_id IN (1,3) AND skill_id=(SELECT id FROM skills WHERE system_key='cooking')");reseal(d,id);acknowledge(d,id);
+  d.prepare("INSERT INTO access_capabilities(subject_type,subject_id,capability_key,access) VALUES('user','2',?,'none')").run(deniedCapability);
+  const before=d.prepare('SELECT total_changes() n').get().n,r=api.reviewCycleReadiness(d,id,{actorId:1,now});assert.equal(d.prepare('SELECT total_changes() n').get().n,before);
+  assert.ok(r.blockers.some(x=>x.code==='EXECUTION_ASSIGNEE_REQUIRED'));assert.throws(()=>api.finalizeCycle(d,id,options(d,id)),/eligible|ready/i);
+  assert.equal(d.prepare('SELECT count(*) n FROM task_claim_eligibility').get().n,0);
+  d.exec("DELETE FROM access_capabilities WHERE subject_id='2'");const result=api.finalizeCycle(d,id,options(d,id));const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(result.execution_task_ids[0]);
+  assert.deepEqual(d.prepare('SELECT user_id FROM task_claim_eligibility WHERE task_id=?').all(task.id),[{user_id:2}]);assert.equal(taskCapabilities(d,2,task).claim,true);
+  assert.equal(taskCapabilities(d,2,{visibility:'all',assigned_to:2,created_by:1}).complete,true);d.close();
+});
+for(const strategy of ['eligible_round_robin','open_claimable'])test(`${strategy} retains permitted alternatives without requiring coordinator capabilities`,()=>{
+  const {d,id}=executionReady({cooking:strategy});acknowledge(d,id);
+  d.exec("INSERT INTO access_permissions(subject_type,subject_id,resource_type,resource_key,access) VALUES('user','2','module','tasks','read'); INSERT INTO access_capabilities(subject_type,subject_id,capability_key,access) VALUES('user','3','tasks.create','none'),('user','3','tasks.edit_others','none'),('user','3','tasks.change_assignment','none'),('user','3','tasks.change_dates','none')");
+  const r=api.reviewCycleReadiness(d,id,{actorId:1,now}),role=r.executions[0].roles.find(x=>x.role==='cooking');assert.equal(r.ready,true);assert.deepEqual(role.eligible_ids,[1,3]);
+  const result=api.finalizeCycle(d,id,options(d,id)),task=d.prepare('SELECT * FROM tasks WHERE id=?').get(result.execution_task_ids[0]);
+  if(strategy==='open_claimable')assert.deepEqual(d.prepare('SELECT user_id FROM task_claim_eligibility WHERE task_id=? ORDER BY user_id').all(task.id),[{user_id:1},{user_id:3}]);
+  else assert.notEqual(task.assigned_to,2);d.close();
+});
+for(const strategy of [null,'cook'])test(`unresolved cook prerequisite is pure and actionable for ${strategy||'legacy'} strategy`,()=>{
+  const {d,id}=executionReady(strategy?{cooking:strategy}:{});d.exec("DELETE FROM meal_participants WHERE role='cook'");
+  d.prepare('UPDATE meals SET provenance_json=?').run(JSON.stringify({rotations:{cook:{state:'needs_assignment'}}}));reseal(d,id);acknowledge(d,id);
+  const before=d.prepare('SELECT total_changes() n').get().n,r=api.reviewCycleReadiness(d,id,{actorId:1,now});assert.equal(d.prepare('SELECT total_changes() n').get().n,before);
+  assert.ok(r.blockers.some(x=>x.code==='MEAL_COOK_ROTATION_UNRESOLVED'));assert.equal(r.ready,false);
+  assert.throws(()=>api.finalizeCycle(d,id,options(d,id)),error=>error.blockers?.some(x=>x.code==='MEAL_COOK_ROTATION_UNRESOLVED'));
+  assert.equal(d.prepare('SELECT count(*) n FROM meal_grocery_runs').get().n,0);
+  d.prepare('UPDATE meals SET provenance_json=?').run(JSON.stringify({rotations:{cook:{state:'assigned'}}}));d.prepare("INSERT INTO meal_participants(meal_id,user_id,role,status) VALUES(?,2,'cook','participating')").run(review(d,id).occurrences[0].id);reseal(d,id);
+  assert.equal(api.reviewCycleReadiness(d,id,{actorId:1,now}).ready,true);assert.equal(api.finalizeCycle(d,id,options(d,id)).execution_task_ids.length,1);d.close();
+});
+test('unresolved cook does not block independent strategies, disabled roles or captured output history',()=>{
+  for(const scenario of ['independent','disabled','captured']) {
+    const {d,id}=executionReady(scenario==='independent'?{cooking:'eligible_round_robin'}:{}),mealId=review(d,id).occurrences[0].id;
+    if(scenario==='disabled')d.exec('UPDATE meal_execution_settings SET generate_cooking=0');
+    if(scenario==='captured')withCycleMealWrite(d,id,()=>ensureMealExecution(d,mealId,1));
+    d.prepare('UPDATE meals SET provenance_json=?').run(JSON.stringify({rotations:{cook:{state:'needs_assignment'}}}));reseal(d,id);acknowledge(d,id);
+    const r=api.reviewCycleReadiness(d,id,{actorId:1,now});assert.ok(!r.blockers.some(x=>x.code==='MEAL_COOK_ROTATION_UNRESOLVED'));assert.equal(r.ready,true);
+    const result=api.finalizeCycle(d,id,options(d,id));assert.equal(result.execution_task_ids.length,scenario==='disabled'?0:1);d.close();
+  }
+});
+test('recipient revocation never rewrites started or completed execution history',()=>{
+  for(const status of ['in_progress','done']) {
+    const {d,id}=executionReady({cooking:'cook'}),mealId=review(d,id).occurrences[0].id;
+    d.exec("UPDATE meal_participants SET user_id=2 WHERE role='cook'");reseal(d,id);
+    const first=withCycleMealWrite(d,id,()=>ensureMealExecution(d,mealId,1)),taskId=first.tasks[0].task_id;
+    d.prepare('UPDATE tasks SET status=? WHERE id=?').run(status,taskId);
+    d.exec("INSERT INTO access_permissions(subject_type,subject_id,resource_type,resource_key,access) VALUES('user','2','module','tasks','none')");
+    const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId),outputs=d.prepare('SELECT * FROM meal_execution_tasks WHERE meal_id=?').all(mealId);
+    withCycleMealWrite(d,id,()=>ensureMealExecution(d,mealId,1));
+    assert.deepEqual(d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId),task);assert.deepEqual(d.prepare('SELECT * FROM meal_execution_tasks WHERE meal_id=?').all(mealId),outputs);d.close();
+  }
+});
+test('an already-claimed output requires completion but no longer requires permission to claim',()=>{
+  const {d,id}=executionReady({cooking:'open_claimable'}),mealId=review(d,id).occurrences[0].id;
+  const first=withCycleMealWrite(d,id,()=>ensureMealExecution(d,mealId,1)),taskId=first.tasks[0].task_id;
+  d.prepare('UPDATE tasks SET assigned_to=2 WHERE id=?').run(taskId);d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,2)').run(taskId);
+  d.exec("INSERT INTO access_capabilities(subject_type,subject_id,capability_key,access) VALUES('user','2','tasks.claim','none')");acknowledge(d,id);
+  assert.equal(api.reviewCycleReadiness(d,id,{actorId:1,now}).ready,true);const result=api.finalizeCycle(d,id,options(d,id));assert.deepEqual(result.execution_task_ids,[taskId]);assert.equal(d.prepare('SELECT assigned_to FROM tasks WHERE id=?').get(taskId).assigned_to,2);d.close();
 });

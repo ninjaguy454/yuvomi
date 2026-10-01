@@ -1,5 +1,7 @@
 import {assertCycleMealWrite,cycleForMeal} from './meal-cycle-guards.js';
 import {mealDishPortionSummary} from './meal-dishes.js';
+import {actorPermissions} from '../permissions.js';
+import {taskCapabilities} from './task-access.js';
 import { createHash } from 'node:crypto';
 import { orderedRotationSelection } from './rotation.js';
 import { notifyTaskAssignments, notifyClaimableTask } from './notification-events.js';
@@ -236,13 +238,29 @@ function chooseExecutionRoundRobin(database, rotationKey, eligible, readOnly = f
   return { selected, before, after: selected };
 }
 
-function resolveExecutionAssignment(database, meal, role, policy, output = null, task = null, readOnly = false) {
+/** A generated assignee needs Task write/view/completion; an unclaimed candidate
+ * additionally needs visibility and claim permission before they become owner.
+ * Draft capability checks are pure and use the canonical Task permission rules. */
+function executionRecipientEligible(database,userId,{claimable=false,creatorId=null,visibility='all'}={}) {
+  if(actorPermissions(database,userId).modules.tasks!=='write')return false;
+  const definition={visibility,created_by:creatorId};
+  if(!taskCapabilities(database,userId,{...definition,assigned_to:userId}).complete)return false;
+  return !claimable||taskCapabilities(database,userId,{...definition,assigned_to:null}).claim;
+}
+
+function resolveExecutionAssignment(database, meal, role, policy, output = null, task = null, readOnly = false, actorId = meal.created_by) {
+  const strategy=output?.assignment_strategy_snapshot||policy.execution_assignment_strategies?.[role];
+  const claimedId=strategy==='open_claimable'?(Number(task?.assigned_to)||Number(output?.assigned_user_id_snapshot)||null):null;
   const eligibleIds = eligibleUserIdsForBuiltInSkill(
     database,
     ROLE_SKILLS[role],
     participatingUsers(meal),
     { dateKey: meal.date },
-  );
+  ).filter(userId=>executionRecipientEligible(database,userId,{
+    claimable:strategy==='open_claimable'&&!claimedId,
+    creatorId:task?.created_by??output?.task_created_by??actorId,
+    visibility:task?.visibility??output?.task_visibility??'all',
+  }));
   if (output && (output.assignment_strategy_snapshot === 'open_claimable' || eligibleIds.includes(Number(output.assigned_user_id_snapshot)))) {
     const snapshotStrategy = output.assignment_strategy_snapshot || 'legacy';
     const selected = snapshotStrategy === 'open_claimable'
@@ -332,8 +350,23 @@ function executionFrozen(execution) {
   return Boolean(execution && (execution.frozen_at || execution.tasks.some(x=>
     !x.task_id || !x.task_status || x.archived_at || ['done','in_progress','expired'].includes(x.task_status))));
 }
+/** Shared pure prerequisites; captured outputs retain their original history. */
+function executionPrerequisiteBlockers(database,meal,policy,{frozen=false}={}) {
+  if(!bool(policy.enabled)||frozen)return [];
+  let rotations=null;
+  try {rotations=JSON.parse(meal.provenance_json||'{}').rotations;} catch { /* legacy Meal */ }
+  if(rotations?.cook?.state!=='needs_assignment')return [];
+  const existingRoles=new Set(database.prepare('SELECT role FROM meal_execution_tasks WHERE meal_id=?').all(meal.id).map(row=>row.role));
+  const roles=ROLE_ORDER.filter(role=>{
+    const strategy=policy.execution_assignment_strategies?.[role];
+    return bool(policy[`generate_${role}`])&&!existingRoles.has(role)
+      &&(strategy==='cook'||(!strategy&&['preparation','cooking'].includes(role)));
+  });
+  return roles.length?[{code:'MEAL_COOK_ROTATION_UNRESOLVED',roles,
+    message:"Resolve this Meal's cook Rotation before generating cook-assigned Tasks. Use Recheck rotations after updating eligibility."}]:[];
+}
 /** Pure assignment preview: selection uses the same resolver without advancing rotations. */
-export function previewMealExecution(database,mealId) {
+export function previewMealExecution(database,mealId,{actorId=null}={}) {
   const meal=loadMeal(database,mealId);
   if (!meal) throw serviceError('Meal not found.',404);
   const settings=getSettings(database), policy=effectiveExecutionPolicy(database,meal,settings);
@@ -343,7 +376,7 @@ export function previewMealExecution(database,mealId) {
   const roles=ROLE_ORDER.map(role=>{
     const output=execution?.tasks.find(x=>x.role===role);
     if (!enabled || !bool(policy[`generate_${role}`])) return {role,required:false,status:'disabled',output_task_id:output?.task_id??null};
-    const resolution=resolveExecutionAssignment(database,meal,role,policy,output,output?{assigned_to:output.assigned_to}:null,true);
+    const resolution=resolveExecutionAssignment(database,meal,role,policy,output,output?{assigned_to:output.assigned_to}:null,true,actorId||meal.created_by);
     const optionalSupervisor=role==='supervision' && !policy.execution_assignment_strategies?.supervision && !meal.participants.some(x=>x.role==='supervisor');
     const required=!optionalSupervisor;
     const invalidClaim=resolution.strategy==='open_claimable'&&output?.assigned_to&&!resolution.eligibleIds.includes(Number(output.assigned_to));
@@ -351,7 +384,8 @@ export function previewMealExecution(database,mealId) {
     return {role,required,strategy:resolution.strategy,planned_assignee_id:resolution.assignment?.user_id??null,
       eligible_ids:resolution.eligibleIds,output_task_id:output?.task_id??null,output_assignee_id:output?.assigned_to??null,status:!required?'not_required':ready?'ready':'missing'};
   });
-  return {meal_id:mealId,enabled:bool(settings?.enabled),has_demand:demand.length>0,frozen,roles};
+  const blockers=enabled?executionPrerequisiteBlockers(database,meal,policy,{frozen}):[];
+  return {meal_id:mealId,enabled:bool(settings?.enabled),has_demand:demand.length>0,frozen,roles,blockers};
 }
 
 function taskDescription(meal, role) {
@@ -409,6 +443,7 @@ function loadExecution(database, mealId) {
   snapshot.snapshot = JSON.parse(snapshot.snapshot_json);
   snapshot.tasks = database.prepare(`
     SELECT met.*, t.status AS task_status, t.archived_at, t.assigned_to,
+           t.created_by AS task_created_by, t.visibility AS task_visibility,
            u.display_name AS assigned_name
     FROM meal_execution_tasks met
     LEFT JOIN tasks t ON t.id = met.task_id
@@ -463,26 +498,8 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
   const existing = loadExecution(database,mealId);
   if (executionFrozen(existing)) return refreshExecutionStatus(database,mealId);
   if (owned && !mealDishPortionSummary(database,mealId).dishes.some(x=>x.meal_id===mealId && x.cook_portions>0)) return null;
-  let rotations = null;
-  try { rotations = JSON.parse(meal.provenance_json || '{}').rotations; } catch { /* legacy Meal */ }
-  if (rotations?.cook?.state === 'needs_assignment') {
-    const existingRoles = new Set(database.prepare(
-      'SELECT role FROM meal_execution_tasks WHERE meal_id = ?',
-    ).all(meal.id).map((row) => row.role));
-    const needsCook = ROLE_ORDER.some((role) => {
-      const strategy = executionPolicy.execution_assignment_strategies?.[role];
-      return bool(executionPolicy[`generate_${role}`]) && !existingRoles.has(role)
-        && (strategy === 'cook' || (!strategy && ['preparation', 'cooking'].includes(role)));
-    });
-    // Resolve the Meal's cook first; otherwise the legacy diner fallback can
-    // bypass its Group. Do not capture null in an output that later retries
-    // would preserve. Explicit independent strategies and existing history keep
-    // their established behavior.
-    if (needsCook) throw serviceError(
-      'Resolve this Meal\'s cook Rotation before generating cook-assigned Tasks. Use Recheck rotations after updating eligibility.',
-      409, 'MEAL_COOK_ROTATION_UNRESOLVED',
-    );
-  }
+  const prerequisites=executionPrerequisiteBlockers(database,meal,executionPolicy);
+  if(prerequisites.length)throw serviceError(prerequisites[0].message,409,prerequisites[0].code);
   const payload = snapshotPayload(meal, executionPolicy);
   const payloadJson = JSON.stringify(payload);
   const fingerprint = hash(payloadJson);
@@ -543,10 +560,10 @@ function ensureMealExecution(database, mealId, actorId, settings = getSettings(d
       const timing = roleTiming(meal, executionPolicy, role);
       let output = findOutput.get(outputKey);
       const existingTask = output?.task_id
-        ? database.prepare('SELECT status, archived_at, assigned_to FROM tasks WHERE id = ?').get(output.task_id)
+        ? database.prepare('SELECT status, archived_at, assigned_to, created_by, visibility FROM tasks WHERE id = ?').get(output.task_id)
         : null;
       const resolution = resolveExecutionAssignment(
-        database, meal, role, executionPolicy, output, existingTask,
+        database, meal, role, executionPolicy, output, existingTask, false, actorId||meal.created_by,
       );
       const assignment = resolution.assignment;
       if (!roleEnabled(executionPolicy, role, resolution)) continue;

@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {actorPermissions} from '../permissions.js';
 import {isHouseholdMember} from './member-email.js';
-import {reviewCycle,cycleSourceFingerprint,registerMealCycleTaskLifecycle} from './meal-cycles.js';
+import {reviewCycle,cycleSourceFingerprint,cyclePermissionFingerprint,registerMealCycleTaskLifecycle} from './meal-cycles.js';
 import {getCycleSettings} from './meal-cycle-settings.js';
 import {cycleInstants} from './meal-cycle-schedule.js';
 import {withCycleMealWrite} from './meal-cycle-guards.js';
@@ -81,7 +81,7 @@ export function reviewCycleReadiness(d,cycleId,{actorId,now=new Date().toISOStri
     const reviewTask=reviewLink?d.prepare('SELECT * FROM tasks WHERE id=?').get(reviewLink.task_id):null;
     if(reviewTask&&!taskCapabilities(d,actorId,reviewTask).complete)blockers.push({code:'REVIEW_TASK_PERMISSION_REQUIRED',message:'Current Task permission does not allow completing the household review.'});
     if(reviewLink&&!isHouseholdMember(reviewLink.beneficiary_id,{db:d}))blockers.push({code:'REVIEW_COORDINATOR_REASSIGN_REQUIRED',message:'The recorded review coordinator is no longer a household member; review assignment recovery is required.'});
-    for(const link of r.tasks.filter(x=>x.purpose==='personal'&&x.state==='active'&&x.submission_revision==null)) {
+    for(const link of r.tasks.filter(x=>['personal','correction'].includes(x.purpose)&&x.state==='active'&&x.submission_revision==null)) {
       blockers.push({code:'PERSONAL_SUBMISSION_REQUIRED',beneficiary_id:link.beneficiary_id,message:'Submit your choices or acknowledge no applicable meals before household confirmation.'});
     }
     for(const gap of scope.gaps)if(!gap.acknowledged)blockers.push({code:'INGREDIENT_REVIEW_REQUIRED',meal_id:gap.meal_id,message:'Review and acknowledge missing ingredients or explicit portions with no diner demand.'});
@@ -136,6 +136,7 @@ export function finalizeCycle(d,cycleId,options={}) {
       });
       const revision=c.revision+1,result={cycle_id:c.id,revision,grocery_runs,execution_task_ids:[...new Set(execution_task_ids)]};
       d.prepare("UPDATE meal_cycles SET state='finalized',revision=?,finalized_revision=?,finalized_at=?,attempt_status='finalized',last_attempt_at=?,blockers_json='[]',source_fingerprint=? WHERE id=?").run(revision,revision,now,now,cycleSourceFingerprint(d,c.id),c.id);
+      d.prepare('UPDATE meal_cycles SET permission_fingerprint=? WHERE id=?').run(cyclePermissionFingerprint(d,c.id),c.id);
       const task=d.prepare("SELECT t.* FROM tasks t JOIN meal_cycle_task_links l ON l.task_id=t.id WHERE l.cycle_id=? AND l.purpose='review' AND l.state='active'").get(c.id);
       if(task)changeTaskStatus(d,task.id,'done',{actorId,body:{expected_revision:task.revision},now});
       d.prepare("INSERT INTO meal_cycle_results(cycle_id,kind,request_key,input_fingerprint,source_revision,input_json,output_json,actor_id,reason) VALUES(?,'finalization',?,?,?,?,?,?,?)").run(c.id,requestKey,r.fingerprint,c.source_revision,JSON.stringify({revision:c.revision,partitions:r.partitions}),JSON.stringify(result),actorId,trigger);

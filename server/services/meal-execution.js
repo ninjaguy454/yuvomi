@@ -241,7 +241,7 @@ function chooseExecutionRoundRobin(database, rotationKey, eligible, readOnly = f
 /** A generated assignee needs Task write/view/completion; an unclaimed candidate
  * additionally needs visibility and claim permission before they become owner.
  * Draft capability checks are pure and use the canonical Task permission rules. */
-function executionRecipientEligible(database,userId,{claimable=false,creatorId=null,visibility='all'}={}) {
+export function executionRecipientEligible(database,userId,{claimable=false,creatorId=null,visibility='all'}={}) {
   if(actorPermissions(database,userId).modules.tasks!=='write')return false;
   const definition={visibility,created_by:creatorId};
   if(!taskCapabilities(database,userId,{...definition,assigned_to:userId}).complete)return false;
@@ -261,7 +261,9 @@ function resolveExecutionAssignment(database, meal, role, policy, output = null,
     creatorId:task?.created_by??output?.task_created_by??actorId,
     visibility:task?.visibility??output?.task_visibility??'all',
   }));
-  if (output && (output.assignment_strategy_snapshot === 'open_claimable' || eligibleIds.includes(Number(output.assigned_user_id_snapshot)))) {
+  const boundRole=['cook','chooser','supervisor'].includes(strategy)?strategy:null;
+  const currentRoleId=boundRole?meal.participants.find(row=>row.role===boundRole&&row.status==='participating'&&eligibleIds.includes(Number(row.user_id)))?.user_id:null;
+  if (output && (output.assignment_strategy_snapshot === 'open_claimable' || (eligibleIds.includes(Number(output.assigned_user_id_snapshot))&&(!boundRole||Number(currentRoleId)===Number(output.assigned_user_id_snapshot))))) {
     const snapshotStrategy = output.assignment_strategy_snapshot || 'legacy';
     const selected = snapshotStrategy === 'open_claimable'
       ? (Number(task?.assigned_to) || Number(output.assigned_user_id_snapshot) || null)
@@ -290,7 +292,8 @@ function resolveExecutionAssignment(database, meal, role, policy, output = null,
   if (configured === 'eligible_round_robin') {
     const ruleScope = meal.meal_plan_rule_key || `meal:${meal.id}`;
     const rotationKey = `meal-execution:${ruleScope}:task:${role}`;
-    const rotation = chooseExecutionRoundRobin(database, rotationKey, eligibleIds, readOnly);
+    // Replacing an untouched captured output is a correction, not a new turn.
+    const rotation = chooseExecutionRoundRobin(database, rotationKey, eligibleIds, readOnly||!!output);
     return {
       strategy: configured,
       assignment: participantAssignment(meal, rotation.selected),

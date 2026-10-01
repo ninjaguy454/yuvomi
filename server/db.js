@@ -1,4 +1,5 @@
 import {addMealCycleFinalizationSchema} from './services/meal-cycle-finalization-schema.js';
+import {addMealCycleReconciliationSchema} from './services/meal-cycle-reconciliation-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9096,6 +9097,8 @@ FORK_MIGRATIONS.push({
 });
 
 FORK_MIGRATIONS.push({version:10045, description:'Kitchen: exact grocery scope and reviewed gap acknowledgments', up:addMealCycleFinalizationSchema});
+
+FORK_MIGRATIONS.push({version:10046, description:'Kitchen: durable targeted source reconciliation', up:addMealCycleReconciliationSchema});
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 

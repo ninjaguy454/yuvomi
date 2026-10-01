@@ -4,6 +4,7 @@ import {getCycleSettings} from './meal-cycle-settings.js';
 import {dueCyclePeriods} from './meal-cycle-schedule.js';
 import {ensureCycle,createCyclePlanningTask,registerMealCycleTaskLifecycle} from './meal-cycles.js';
 import {finalizeCycle,withAutomaticCycleInvocation,authorizeCycleCoordinator} from './meal-cycle-finalization.js';
+import {drainCycleReconciliation} from './meal-cycle-reconciliation.js';
 const log=createLogger('MealCycles');
 
 /** Read-only setup/generation errors, including errors before a cycle can exist. */
@@ -31,6 +32,7 @@ function blocked(d,c,error,now) {
 export function runMealCycleScheduler(d,{now=new Date().toISOString()}={}) {
   now=new Date(now).toISOString();registerMealCycleTaskLifecycle();
   const settings=getCycleSettings(d),result={created:[],finalized:[],blocked:[],generation_errors:[]};
+  drainCycleReconciliation(d,{now});
   if(!settings.enabled)return result;
   let periods=[];
   try {periods=dueCyclePeriods(settings,now);} catch(error) {

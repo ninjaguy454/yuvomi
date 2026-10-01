@@ -18,6 +18,19 @@ let recurrenceHooks = null;
 const transitionGuards=new Map();
 /** Domain guards run for every real transition, including bulk/parent projections. */
 export function registerTaskTransitionGuard(name,guard) { transitionGuards.set(name,guard); }
+/** Internal domain cancellation: only a durably superseded Kitchen link may
+ * invoke it. Completed work and its reward/completion ledgers remain intact. */
+export function archiveSupersededCycleTask(d,taskId,{now=new Date().toISOString()}={}) {
+  const link=d.prepare("SELECT 1 FROM meal_cycle_task_links WHERE task_id=? AND state='superseded'").get(taskId);
+  if(!link)throw new TaskStateError('Only superseded Kitchen work can be cancelled here.');
+  const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  if(!task||task.status==='done'||task.archived_at)return;
+  d.prepare('UPDATE tasks SET archived_at=?,revision=revision+1 WHERE id=?').run(now,taskId);
+  d.prepare("UPDATE planning_obligations SET status='cancelled',updated_at=? WHERE task_id=? AND status IN ('pending','accepted')").run(now,taskId);
+  d.prepare("UPDATE task_responsibilities SET status='cancelled' WHERE task_id=? AND status='active'").run(taskId);
+  d.prepare("UPDATE task_assignment_context SET state='cancelled' WHERE task_id=? AND state!='fulfilled'").run(taskId);
+  recordTaskActivity(d,taskId,'archived',null,{reason:'Kitchen obligation superseded',from_status:task.status,points_awarded:0});
+}
 // Recurrence keeps its established anchored/group implementation in the Tasks
 // adapter. No writer may silently complete a series without that adapter.
 export function configureTaskRecurrence(hooks) { recurrenceHooks = hooks; }

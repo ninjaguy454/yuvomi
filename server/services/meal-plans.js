@@ -3,10 +3,12 @@ import { assertCycleMealWrite, cycleForMeal, hasCycleMealWrite } from './meal-cy
 import { notifyMealRequests } from './notification-events.js';
 import { addDays, mealWeekday } from './meal-recurrence.js';
 import { evaluatePresence } from './presence.js';
+import { isHouseholdMember } from './member-email.js';
+import { executionRecipientEligible } from './meal-execution.js';
 import { assertCapability, actorPermissions } from '../permissions.js';
 import { configureRotationTrack, findRotationTrack, resolveRotation, finalizeRotation,
   getRotationGroup, refreshRotationOccurrence, orderedRotationSelection, supersedeRotationOccurrence } from './rotation.js';
-import { sharedGroupConfiguration, rotationGroupUsage, rotationGroupUsageVersion, resolveSharedRotation, registerSharedRotationReconciler, registerSharedRotationUsageCollector } from './rotation-shared.js';
+import { sharedGroupConfiguration, rotationGroupUsage, rotationGroupUsageVersion, resolveSharedRotation, previewSharedRotation, registerSharedRotationReconciler, registerSharedRotationUsageCollector } from './rotation-shared.js';
 import {
   BUILT_IN_SKILL_KEYS,
   eligibleUserIdsForBuiltInSkill,
@@ -3898,7 +3900,7 @@ registerSharedRotationReconciler((database,{groupId,dateKey,occurrence,reason})=
   while(true) {
     const pending=select.all(boundary,afterId,groupId);if(!pending.length)break;
     for(const meal of pending) {
-      if(sharedMealCanReconcile(database,meal))repairMealChooser(database,meal.id,{sharedScheduledReconciliation:true,sharedGroupId:groupId});
+      if(!cycleForMeal(database,meal.id)&&sharedMealCanReconcile(database,meal))repairMealChooser(database,meal.id,{sharedScheduledReconciliation:true,sharedGroupId:groupId});
       else preserved.push({consumer_type:'meal',consumer_id:meal.id,reason:'This Meal already contains activity; its assignment was preserved.'});
     }
     afterId=pending.at(-1).id;
@@ -4708,6 +4710,94 @@ function publishSharedSelection(database,mealId,entree,{beneficiaryId,actorId,de
   }
   fulfillMealMenuGeneration(database,mealId,beneficiaryId,obligations.map(x=>x.id));
   return {status:'fulfilled',menu_item_id:entree.id,obligation_ids:obligations.map(x=>x.id)};
+}
+
+/** Internal canonical projection without selecting or impersonating a viewer. */
+export function cycleOccurrenceModel(database,{from,to}) {
+  return loadOccurrenceData(database,from,to,null,{readOnly:true});
+}
+
+/** Pure dated inputs shared by cycle fingerprints and reconciliation. No source
+ * titles, private calendar metadata or ordinary rotation advancement escapes. */
+export function cycleOccurrenceInputs(database, mealId) {
+  const meal=database.prepare('SELECT * FROM meals WHERE id=?').get(mealId);
+  const saved=database.prepare('SELECT DISTINCT user_id FROM meal_participants WHERE meal_id=? ORDER BY user_id').all(mealId).map(x=>x.user_id);
+  const rule=loadRuleForOccurrence(database,meal.meal_plan_rule_id,meal.meal_plan_revision_id);
+  const effectiveRule={...(rule||meal),presence_required:1};
+  const context=meal.planning_context_id?database.prepare('SELECT * FROM planning_contexts WHERE id=?').get(meal.planning_context_id):null;
+  const cohort=rule?occurrenceCohort(database,effectiveRule,context,meal.date):null;
+  const travelers=travelersAt(database,meal.date,effectiveRule);
+  const scoped=context?new Set(contextMembers(database,context.id,meal.date,effectiveRule)):null;
+  const people=[...new Set([...saved,...(cohort?.pool||[])])].sort((a,b)=>a-b);
+  const attendance=people.map(userId=>({user_id:userId,member:isHouseholdMember(userId,{db:database}),
+    present:isHouseholdMember(userId,{db:database}) && (scoped?scoped.has(userId):!travelers.has(userId))
+      && eligibleForPresence(database,effectiveRule,context,meal.date,userId)}));
+  const valid=ids=>(ids||[]).filter(id=>isHouseholdMember(id,{db:database}));
+  const executionEligibility=Object.fromEntries(Object.values(BUILT_IN_SKILL_KEYS).map(key=>[key,
+    eligibleUserIdsForBuiltInSkill(database,key,attendance.filter(p=>p.present).map(p=>p.user_id),{dateKey:meal.date})]));
+  const shared=Object.fromEntries(['chooser','cook','supervisor'].flatMap(role=>{
+    const group=rule?.[`${role}_rotation_group_id`];
+    if(!group||!sharedGroupConfiguration(database,group,meal.date))return [];
+    const selection=previewSharedRotation(database,group,{dateKey:meal.date});
+    return [[role,{occurrence_id:selection?.id||null,selected_user_id:selection?.id?(selection.selected_member?.id||selection.order?.[0]?.id||null):null}]];
+  }));
+  return {attendance,rule:rule?{id:rule.id,policy:rule.policy,fixed_user_id:rule.fixed_user_id,
+    chooser_fallback_user_ids:resolvedChooserDefaults(database,rule).chooser_fallback_user_ids,
+    ...Object.fromEntries(['chooser','cook','supervisor'].map(role=>[`${role}_rotation_group_id`,rule[`${role}_rotation_group_id`]]))}:null,
+    shared,execution_eligibility:executionEligibility,chooser:valid(cohort?.chooserResponsibilityEligible),cook:valid(cohort?.cookResponsibilityEligible),supervisor:valid(cohort?.supervisorResponsibilityEligible)};
+}
+
+/** Trusted cycle scope only. Saved decisions and immutable rotation occurrences
+ * remain unchanged; corrections carry their own provenance and consume no turn. */
+export function reconcileCycleOccurrence(database,mealId,{cycleId,sourceRevision,now,initial=false}) {
+  assertCycleMealWrite(database,mealId);
+  const meal=database.prepare('SELECT * FROM meals WHERE id=?').get(mealId),inputs=cycleOccurrenceInputs(database,mealId);
+  const decision=database.prepare('SELECT * FROM meal_person_decisions WHERE meal_id=? AND beneficiary_user_id=?');
+  for(const person of inputs.attendance) {
+    if(initial&&!person.member)continue; // Adoption preserves external historical rows verbatim.
+    const saved=decision.get(mealId,person.user_id);
+    const status=!person.present?'away':saved?.participation==='not_participating'?'not_participating':saved?.participation==='away'?'away':'participating';
+    const old=database.prepare("SELECT status FROM meal_participants WHERE meal_id=? AND user_id=? AND role='participant'").get(mealId,person.user_id);
+    if(!old&&person.member)database.prepare("INSERT INTO meal_participants(meal_id,user_id,role,status,source) VALUES(?,?,'participant',?,'schedule')").run(mealId,person.user_id,status);
+    else if(old&&old.status!==status)database.prepare("UPDATE meal_participants SET status=? WHERE meal_id=? AND user_id=? AND role='participant'").run(status,mealId,person.user_id);
+    if(saved?.selected_meal_id)database.prepare("UPDATE meal_participants SET status=? WHERE meal_id=? AND user_id=? AND role='participant' AND status!=?").run(status,saved.selected_meal_id,person.user_id,status);
+  }
+  const assignment=database.prepare('SELECT * FROM meal_occurrence_assignments WHERE meal_id=?').get(mealId);
+  if(!assignment||!inputs.rule)return inputs;
+  const provenance=parseJson(meal.provenance_json,{}),rotations={...provenance.rotations};
+  let changed=false;
+  for(const role of ['chooser','cook','supervisor']) {
+    if(role==='chooser'&&(inputs.rule.policy==='personal_choice'||database.prepare("SELECT 1 FROM meal_menu_generations WHERE meal_id=? AND status='fulfilled'").get(mealId)))continue;
+    const row=role==='chooser'?assignment:database.prepare('SELECT * FROM meal_occurrence_role_assignments WHERE occurrence_assignment_id=? AND role=?').get(assignment.id,role);
+    if(!row)continue;
+    if(role!=='chooser'&&row.strategy==='none')continue;
+    const old=row.assigned_user_id,eligible=inputs[role].filter(id=>role==='chooser'||executionRecipientEligible(database,id,{creatorId:meal.created_by}));
+    const sharedSelection=inputs.shared[role];
+    if(old&&eligible.includes(old)&&(!sharedSelection||sharedSelection.selected_user_id===old))continue;
+    const group=inputs.rule[`${role}_rotation_group_id`];
+    // Shared rotation selection remains authoritative even when unavailable.
+    const shared=group&&sharedGroupConfiguration(database,group,meal.date);
+    const selected=shared?(eligible.includes(sharedSelection?.selected_user_id)?sharedSelection.selected_user_id:null):(role==='chooser'?[inputs.rule.fixed_user_id,...inputs.rule.chooser_fallback_user_ids,...eligible]:eligible).find(id=>eligible.includes(id))||null;
+    if(old===selected)continue;
+    changed=true;
+    database.prepare(`INSERT INTO meal_cycle_role_corrections(cycle_id,meal_id,role,previous_user_id,assigned_user_id,source_revision,reason,created_at) VALUES(?,?,?,?,?,?,?,?)`).run(cycleId,mealId,role,old,selected,sourceRevision,'eligibility_changed',now);
+    database.prepare('UPDATE meal_participants SET status=\'away\' WHERE meal_id=? AND role=?').run(mealId,role);
+    if(selected)database.prepare("INSERT INTO meal_participants(meal_id,user_id,role,status,source) VALUES(?,?,?,'participating','schedule') ON CONFLICT(meal_id,user_id,role) DO UPDATE SET status='participating'").run(mealId,selected,role);
+    if(role==='chooser') {
+      database.prepare('UPDATE meal_occurrence_assignments SET assigned_user_id=? WHERE id=?').run(selected,assignment.id);
+      closeStaleChooserObligations(database,mealId,null,'Cycle eligibility correction');
+      if(selected) {
+        const rule=loadRuleForOccurrence(database,meal.meal_plan_rule_id,meal.meal_plan_revision_id);
+        const context=meal.planning_context_id?database.prepare('SELECT * FROM planning_contexts WHERE id=?').get(meal.planning_context_id):null;
+        writeOccurrenceResponsibilities(database,{mealId,occurrenceKey:`cycle:${cycleId}:correction:${sourceRevision}:${mealId}`,rule,contextId:context?.id||null,dateKey:meal.date,...occurrenceCohort(database,{...rule,presence_required:1},context,meal.date),selected});
+        synchronizeMealMenuGeneration(database,mealId,{chooserId:selected,reason:'chooser_reassigned'});
+      }
+    } else database.prepare('UPDATE meal_occurrence_role_assignments SET assigned_user_id=? WHERE id=?').run(selected,row.id);
+    rotations[role]={...rotations[role],state:selected?'corrected':'needs_assignment',correction_source_revision:sourceRevision,
+      reason:selected?null:'No eligible member is available for this meal role.',reason_code:selected?null:'cycle_role_unavailable'};
+  }
+  if(changed)database.prepare('UPDATE meals SET provenance_json=? WHERE id=?').run(JSON.stringify({...provenance,rotations}),mealId);
+  return inputs;
 }
 
 /** Publish the shared duty independently of any diner answer, in a cycle scope. */

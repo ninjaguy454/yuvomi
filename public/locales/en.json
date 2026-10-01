@@ -5108,6 +5108,9 @@
         "sharedDevice": "Personal notifications are off on this shared display. Leave wall mode and explicitly enable device notifications in your own account to receive them here."
     },
     "kitchenCycle": {
+        "retainedPickTitle": "A shared pick needs your attention",
+        "retainedPickHelp": "Your shared-meal assignment or access changed. These unsaved picks are retained and cannot be saved. Discard the retained picks to continue. Your other drafts stay.",
+        "discardRetainedPick": "Discard retained pick",
         "dayTitle": "A day in your household",
         "dayLead": "See what you're joining, what happens elsewhere, and who's responsible.",
         "reviewWeekTitle": "Review all meals this week",

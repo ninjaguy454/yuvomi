@@ -25,6 +25,17 @@ const pickerDraft=(state,id)=>state.forms.pickerDrafts?.[id];
 const hasPickerChanges=state=>Object.values(state.forms.pickerDrafts||{}).some(x=>x.touched);
 function chosenMain(m,model){const requirement=model.personal.requirements.find(x=>x.meal_id===m.id&&x.kind==='main');return requirement?Boolean(requirement.complete):Boolean(m.shared_choice_active);}
 function ownTurns(model,adjustment){return (adjustment?.occurrences||model.occurrences).filter(m=>model.personal.requirements.some(x=>x.meal_id===m.id&&x.kind==='main')||Boolean(adjustment&&m.choosers?.some(x=>x.user_id===model.personal.beneficiary_id)));}
+function editableTurns(model,adjustment){return ownTurns(model,adjustment).filter(m=>model.permissions.write&&!m.begun&&!m.adopted_history);}
+function unavailableMainDrafts(model,state,adjustment){
+  const editable=new Set(editableTurns(model,adjustment).map(m=>m.id)),main=new Map(state.changes().filter(c=>c.kind==='main').map(c=>[c.meal_id,c]));
+  for(const [id,draft] of Object.entries(state.forms.pickerDrafts||{}))if(draft.touched)main.set(Number(id),{meal_id:Number(id),...draft});
+  return [...main.values()].filter(draft=>!editable.has(draft.meal_id));
+}
+function restoreMainDraft(state,id,main){if(main)state.edit(id,main);else state.remove(id,'main');}
+function unavailablePicks(model,state,adjustment){
+  const unavailable=unavailableMainDrafts(model,state,adjustment);if(!unavailable.length)return '';
+  return `<section class="cycle-card" data-unavailable-picks><h2 tabindex="-1">${text('retainedPickTitle')}</h2><p>${text('retainedPickHelp')}</p>${unavailable.map(draft=>`<div class="cycle-turn"><strong>${esc(draft.title||text('needsMain'))}</strong><button type="button" class="btn btn--secondary" data-discard-pick="${draft.meal_id}"${state.busy||state.pending?' disabled':''}>${text('discardRetainedPick')}</button></div>`).join('')}</section>`;
+}
 function selectedDay(model,state){const days=cycleDays(model.cycle);return days.includes(state.forms.selectedDay)?state.forms.selectedDay:days[0];}
 function canChoose(m,model,state){return model.permissions.write&&!m.begun&&!m.adopted_history&&!state.pending;}
 function dayNavigation(model,state){return `<nav class="cycle-day-strip" aria-label="${text('dayNavigation')}">${cycleDays(model.cycle).map(date=>`<button type="button" data-cycle-day="${date}" aria-pressed="${date===selectedDay(model,state)}"><span>${esc(dayName(date,'short'))}</span><strong>${Number(date.slice(-2))}</strong></button>`).join('')}</nav>`;}
@@ -113,12 +124,14 @@ export async function render(container,{user}){
   function draw(){
     if(!alive())return;
     if(!model){container.innerHTML=`<section class="meal-cycle"><h1>${text('title')}</h1>${error?`<p role="alert" tabindex="-1">${esc(error)}</p>`:`<p>${text('loading')}</p>`}${button('reload',text('refresh'))}</section>`;container.querySelector('[data-action="reload"]')?.addEventListener('click',refresh);return;}
-    const finalized=model.cycle.state==='finalized',dirty=state.changes().length>0||hasPickerChanges(state),locked=state.busy||Boolean(state.pending),review=model.permissions.review;
+    const closedPicker=Boolean(state.forms.pickerMealId&&!editableTurns(model,adjustment).some(m=>m.id===Number(state.forms.pickerMealId))),focusUnavailable=closedPicker||Boolean(document.activeElement?.closest('[data-unavailable-picks]'));
+    if(closedPicker)state.forms.pickerMealId=null;
+    const finalized=model.cycle.state==='finalized',dirty=state.changes().length>0||hasPickerChanges(state),locked=state.busy||Boolean(state.pending),unavailable=unavailableMainDrafts(model,state,adjustment).length>0,review=model.permissions.review;
     const nav=`<nav class="cycle-phases" aria-label="${text('phases')}">${[['choices','myChoices'],...(review?[['review','householdReview']]:[]),['shopping','shoppingTasks']].map(([p,label])=>`<button class="btn btn--${p===phase?'primary':'secondary'}" data-phase="${p}" aria-current="${p===phase?'step':'false'}">${text(label)}</button>`).join('')}</nav>`;
     container.innerHTML=`<div class="meal-cycle"><header><p class="cycle-eyebrow">${esc(dateLabel(model.cycle.period_start))} – ${esc(dateLabel(model.cycle.period_end))} · ${text('threeMeals')}</p><h1>${text(phase==='review'?'reviewWeekTitle':'dayTitle')}</h1><p class="cycle-lead">${text(phase==='review'?'reviewWeekLead':'dayLead')}</p><p class="cycle-status">${esc(model.cycle.timezone)} · ${esc(finalized?text('confirmed'):model.automation?.automatic_confirmation_paused?text('automaticPaused'):model.cycle.finalization_mode==='automatic'?text(model.cycle.attempt_status==='blocked'?'autoBlocked':'automatic'):text('waiting'))}</p><details class="cycle-deadlines"><summary>${text('datesAndSettings')}</summary><p>${text('responseBy')}: ${esc(instant(model.cycle.response_at,model.cycle.timezone))} · ${text('reviewAt')}: ${esc(instant(model.cycle.confirmation_at,model.cycle.timezone))} · ${text('shoppingAt')}: ${esc(instant(model.cycle.shopping_at,model.cycle.timezone))}</p>${link('/meals?legacy=1',text('legacyMeals'))} ${link('/settings/modules/kitchen',text('settings'))}</details></header>${person!==user.id?`<p class="cycle-card">${text('actingFor')}: ${esc(model.personal.beneficiary_name||person)}</p>`:''}${nav}
       ${error?`<p class="cycle-error" role="alert" tabindex="-1">${esc(error)}</p>${button('reload',text('refresh'))}`:''}${notice?`<p role="status">${esc(notice)}</p>`:''}${state.pending?`<p>${text('unknown')}</p>${button('retry',text('retry'),state.busy)}`:''}
       ${model.adjustments.length?`<aside><h2>${text('adjustments')}</h2>${model.adjustments.map(p=>`<button class="btn btn--secondary" data-proposal="${p.id}">${text('reviewAdjustment')} ${p.id}</button>`).join('')}${proposalId?button('close-proposal',text('back')):''}</aside>`:''}
-      ${phase==='choices'?`${state.forms.pickerMealId?sharedPicker(model,state,recipes,adjustment):`${chooserBanner(model,state,adjustment)}${dayNavigation(model,state)}${renderCycleCards(model,state,recipes,adjustment)}`}<div class="cycle-actions cycle-choice-actions" data-choice-actions><p role="status">${esc(dirty?text('unsavedChoices'):model.personal.submitted?text('submittedEditable'):text('saveThenSubmit'))}</p>${button('save',text(finalized?'previewAdjustment':'save'),locked||!dirty||!model.permissions.write)}${button('submit',text('submit'),locked||dirty||!model.permissions.submit||(finalized&&!proposalId))}</div>`:''}
+      ${phase==='choices'?`${unavailablePicks(model,state,adjustment)}${state.forms.pickerMealId?sharedPicker(model,state,recipes,adjustment):`${chooserBanner(model,state,adjustment)}${dayNavigation(model,state)}${renderCycleCards(model,state,recipes,adjustment)}`}<div class="cycle-actions cycle-choice-actions" data-choice-actions><p role="status">${esc(dirty?text('unsavedChoices'):model.personal.submitted?text('submittedEditable'):text('saveThenSubmit'))}</p>${button('save',text(finalized?'previewAdjustment':'save'),locked||unavailable||!dirty||!model.permissions.write)}${button('submit',text('submit'),locked||unavailable||dirty||!model.permissions.submit||(finalized&&!proposalId))}</div>`:''}
       ${phase==='review'&&review?`<h2>${text('householdReview')}</h2>${blockers(adjustment?.blockers||model.blockers)}${model.execution_settings?`<p>${text('cookingAutomation')}: ${text(model.execution_settings.enabled?'on':'off')}</p>`:''}
       <div class="cycle-review-meals">${reviewMeals(model,adjustment,selectedDay(model,state))}</div>
       ${model.destinations.map(p=>`<p>${esc(p.name)} → ${p.track_groceries?esc(p.shopping_list_name):text('noGroceries')}</p>`).join('')}      ${(adjustment?.warnings||model.warnings||[]).map(w=>`<p>${esc(w.message)}</p>`).join('')}
@@ -128,23 +141,24 @@ export async function render(container,{user}){
       ${model.permissions.admin&&!finalized?`<details><summary>${text('recoverAssignments')}</summary><p>${text('recoveryHint')}</p>${memberSelect('recover_coordinator','coordinator',model.members,model.settings.coordinator_id)}${memberSelect('recover_shopper','shopper',model.members,model.settings.shopping_assignee_id)}${button('recover',text('save'),locked)}</details>`:''}`:''}
       ${phase==='shopping'?`<h2>${text('shoppingTasks')}</h2><p>${text('shoppingDistinct')}</p>${finalized?outputSummary(model,lastResult||model.result):`<p>${text('waiting')}</p>`}<div class="cycle-actions">${model.tasks.filter(x=>['shopping','personal','correction'].includes(x.purpose)).map(x=>link(`/tasks?open=${x.task_id}&cycle_return=${id}&beneficiary=${person}`,text(x.purpose==='shopping'?'shoppingTask':'planningTask'))).join('')}</div>`:''}
     </div>`;
-    renderKitchenTabsBar(container,'/meals');wire();
+    renderKitchenTabsBar(container,'/meals');wire();if(focusUnavailable&&phase==='choices')(container.querySelector('[data-unavailable-picks] h2')||container.querySelector('[data-cycle-day][aria-pressed="true"]'))?.focus({preventScroll:true});
   }
   function wire(){
+    container.querySelectorAll('[data-discard-pick]').forEach(b=>b.addEventListener('click',()=>{if(locked())return;const id=Number(b.dataset.discardPick);if(!unavailableMainDrafts(model,state,adjustment).some(d=>d.meal_id===id))return;restoreMainDraft(state,id,null);delete state.forms.pickerDrafts?.[id];if(state.forms.pickerBefore?.id===id)delete state.forms.pickerBefore;draw();(container.querySelector('[data-unavailable-picks] h2')||container.querySelector('[data-cycle-day][aria-pressed="true"]'))?.focus({preventScroll:true});}));
     const scheduleForm=container.querySelector('[data-reschedule]');if(scheduleForm){for(const [name,value] of Object.entries(state.forms.reschedule||{})){const field=scheduleForm.elements.namedItem(name);if(field){if(field.type==='checkbox')field.checked=value;else field.value=value;}}scheduleForm.addEventListener('input',()=>{state.forms.reschedule=Object.fromEntries(Array.from(scheduleForm.elements).filter(e=>e.name).map(e=>[e.name,e.type==='checkbox'?e.checked:e.value]));rescheduleReviewed=null;});}
     container.querySelectorAll('[data-phase]').forEach(b=>b.addEventListener('click',()=>{phase=b.dataset.phase;draw();}));
     container.querySelectorAll('[data-cycle-day]').forEach(b=>b.addEventListener('click',()=>{state.forms.selectedDay=b.dataset.cycleDay;draw();container.querySelector(`[data-cycle-day="${state.forms.selectedDay}"]`)?.focus({preventScroll:true});}));
     container.querySelectorAll('[data-pick-meal]').forEach(b=>b.addEventListener('click',()=>{
       const m=ownTurns(model,adjustment).find(x=>x.id===Number(b.dataset.pickMeal));if(!m||!canChoose(m,model,state))return;
       state.forms.pickerDrafts||={};const existing=pickerDraft(state,m.id),change=state.changes().find(x=>x.meal_id===m.id&&x.kind==='main');
-      state.forms.pickerBefore={id:m.id,value:existing?structuredClone(existing):null};
+      state.forms.pickerBefore={id:m.id,value:existing?structuredClone(existing):null,main:change?structuredClone(change):null};
       state.forms.pickerDrafts[m.id]||={title:change?.title??m.title??'',recipe_id:change&&Object.hasOwn(change,'recipe_id')?change.recipe_id:m.recipe_id??null,touched:Boolean(change)};
       state.forms.pickerMealId=m.id;state.forms.selectedDay=m.date;draw();const heading=container.querySelector('[data-shared-picker] h2');heading?.setAttribute('tabindex','-1');heading?.focus();
     }));
     const picker=container.querySelector('[data-shared-picker]');if(picker){
       if(locked())picker.querySelectorAll('input,select').forEach(e=>e.disabled=true);
       picker.querySelectorAll('[data-pick-recipe]').forEach(b=>b.addEventListener('click',()=>{if(locked())return;const recipe=recipes.find(r=>Number(r.id)===Number(b.dataset.pickRecipe));if(!recipe)return;Object.assign(pickerDraft(state,Number(picker.dataset.meal)),{title:recipe.title,recipe_id:recipe.id,touched:true});draw();container.querySelector(`[data-pick-recipe="${recipe.id}"]`)?.focus({preventScroll:true});}));
-      picker.addEventListener('input',event=>{if(locked())return;const draft=pickerDraft(state,Number(picker.dataset.meal));if(event.target.name==='main_recipe'){const recipe=recipes.find(r=>Number(r.id)===Number(event.target.value)),input=picker.querySelector('[name="main_title"]');input.value=recipe?.title||'';input.readOnly=Boolean(recipe);draft.recipe_id=recipe?.id??null;}draft.title=picker.querySelector('[name="main_title"]').value;draft.touched=true;picker.querySelector('[data-picker-status]').textContent=text('unsavedPick');picker.querySelectorAll('[data-pick-recipe]').forEach(b=>{const selected=Number(draft.recipe_id)===Number(b.dataset.pickRecipe);b.setAttribute('aria-pressed',String(selected));b.querySelector('small').textContent=text(selected?'selectedPick':'pickThis');});container.querySelector('[data-action="save"]').disabled=false;container.querySelector('[data-action="submit"]').disabled=true;container.querySelector('[data-choice-actions] [role="status"]').textContent=text('unsavedChoices');});
+      picker.addEventListener('input',event=>{if(locked())return;const draft=pickerDraft(state,Number(picker.dataset.meal));if(event.target.name==='main_recipe'){const recipe=recipes.find(r=>Number(r.id)===Number(event.target.value)),input=picker.querySelector('[name="main_title"]');input.value=recipe?.title||'';input.readOnly=Boolean(recipe);draft.recipe_id=recipe?.id??null;}draft.title=picker.querySelector('[name="main_title"]').value;draft.touched=true;picker.querySelector('[data-picker-status]').textContent=text('unsavedPick');picker.querySelectorAll('[data-pick-recipe]').forEach(b=>{const selected=Number(draft.recipe_id)===Number(b.dataset.pickRecipe);b.setAttribute('aria-pressed',String(selected));b.querySelector('small').textContent=text(selected?'selectedPick':'pickThis');});container.querySelector('[data-action="save"]').disabled=unavailableMainDrafts(model,state,adjustment).length>0;container.querySelector('[data-action="submit"]').disabled=true;container.querySelector('[data-choice-actions] [role="status"]').textContent=text('unsavedChoices');});
       picker.querySelectorAll('.cycle-recipe-picture img').forEach(img=>{const placeholder=img.previousElementSibling;img.addEventListener('load',()=>placeholder.hidden=true,{once:true});img.addEventListener('error',()=>{img.remove();placeholder.hidden=false;},{once:true});});
     }
     container.querySelectorAll('[data-proposal]').forEach(b=>b.addEventListener('click',()=>{if(state.changes().length){showError(new Error(text('saveFirst')));return;}proposalId=Number(b.dataset.proposal);phase=model.permissions.review?'review':'choices';refresh();}));
@@ -157,7 +171,7 @@ export async function render(container,{user}){
             const remove=card.querySelector(`[name="side_remove_${s.id}"]`)?.checked,title=card.querySelector(`[name="side_title_${s.id}"]`)?.value;
             return remove?[{operation:'remove',id:s.id}]:title!==s.title?[{operation:'edit',id:s.id,title,recipe_id:null}]:[];
           });const added=card.querySelector('[name="side_add"]').value.trim();if(added)operations.push({operation:'add',title:added,recipe_id:null});
-          if(operations.length)state.edit(mealId,{kind:'sides',operations});else state.remove(mealId,'sides');container.querySelector('[data-action="save"]').disabled=false;container.querySelector('[data-action="submit"]').disabled=true;return;
+          if(operations.length)state.edit(mealId,{kind:'sides',operations});else state.remove(mealId,'sides');container.querySelector('[data-action="save"]').disabled=unavailableMainDrafts(model,state,adjustment).length>0;container.querySelector('[data-action="submit"]').disabled=true;return;
         }
         const main=event.target.closest('[data-main]'),kind=main?'main':'alternative';
         if(event.target.name===`${kind}_recipe`){const r=recipes.find(x=>x.id===Number(event.target.value)),input=card.querySelector(`[name="${kind}_title"]`);input.value=r?.title||'';input.readOnly=Boolean(r);}
@@ -174,7 +188,7 @@ export async function render(container,{user}){
           }else decision.menu_item_ids=[];
           state.edit(mealId,{kind:'decision',decision});
         }
-        container.querySelector('[data-action="save"]').disabled=false;container.querySelector('[data-action="submit"]').disabled=true;
+        container.querySelector('[data-action="save"]').disabled=unavailableMainDrafts(model,state,adjustment).length>0;container.querySelector('[data-action="submit"]').disabled=true;
       });
     });
     container.querySelectorAll('[data-action]').forEach(b=>b.addEventListener('click',()=>action(b.dataset.action).catch(showError)));
@@ -185,7 +199,7 @@ export async function render(container,{user}){
     if(name==='reload')return refresh();
     if(name==='back-from-pick'||name==='close-picker'){
       if(name==='close-picker'&&locked())return;const id=state.forms.pickerMealId;
-      if(name==='close-picker'){const before=state.forms.pickerBefore;if(before?.id===id&&before.value)state.forms.pickerDrafts[id]=before.value;else delete state.forms.pickerDrafts[id];}
+      if(name==='close-picker'){const before=state.forms.pickerBefore;restoreMainDraft(state,Number(id),before?.id===id?before.main:null);if(before?.id===id&&before.value)state.forms.pickerDrafts[id]=before.value;else delete state.forms.pickerDrafts[id];}
       state.forms.pickerMealId=null;draw();container.querySelector(`[data-meal="${id}"] [data-pick-meal]`)?.focus();return;
     }
     if(name==='close-proposal'){if(state.changes().length)throw new Error(text('saveFirst'));proposalId=null;adjustment=null;return draw();}
@@ -197,6 +211,7 @@ export async function render(container,{user}){
     if(locked())return;
     const invoke=(operation,send,extra)=>{retry=()=>operate(operation,send,extra);return retry();};
     if(name==='save'){
+      if(unavailableMainDrafts(model,state,adjustment).length)throw new Error(text('retainedPickHelp'));
       for(const [mealId,draft] of Object.entries(state.forms.pickerDrafts||{}))if(draft.touched)state.edit(Number(mealId),{kind:'main',title:draft.title,recipe_id:draft.recipe_id});
       const changes=state.changes(),finalized=model.cycle.state==='finalized';
       for(const change of changes){if(change.kind!=='decision'||change.decision.choice_kind!=='household'||change.decision.participation!=='participating'||change.decision.select_shared_main)continue;

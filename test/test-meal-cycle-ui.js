@@ -24,13 +24,19 @@ test('weekly setup offers named weekdays and family rhythm without guessing time
   const wednesday=settings.familyWeeklyPreset('2034-03-08');assert.equal(wednesday.response.day_offset,-5);assert.equal(wednesday.confirmation.day_offset,-4);assert.equal(wednesday.shopping.day_offset,-3);
   assert.match(settings.renderScheduleFields({...wednesday,cadence:'fortnightly',response:{day_offset:-12,time:'18:00'}}),/value="-12" selected/);
 });
-test('family cards cover every date and slot, separate shared/main answer and preserve exact dropdown',async()=>{
+test('selected day separates shared chooser and own plate while preserving exact dropdown',async()=>{
   const page=await import('../public/pages/meal-cycle.js');const state=ui.createCycleDraft();
   const model={cycle:{period_start:'2034-03-06',period_end:'2034-03-12'},permissions:{write:true},personal:{beneficiary_id:2,requirements:[{meal_id:1,kind:'main'},{meal_id:1,kind:'decision'}]},occurrences:[{id:1,date:'2034-03-06',meal_type:'dinner',title:'Rice',menu_items:[],my_decision:{portion_amount:1.1}}]};
-  const html=page.renderCycleCards(model,state);assert.equal((html.match(/class="cycle-day"/g)||[]).length,7);assert.equal((html.match(/class="cycle-slot"/g)||[]).length,21);assert.equal((html.match(/<option value="[0-5]\.[0-9]{2}"/g)||[]).length,20);assert.match(html,/data-main/);assert.match(html,/data-decision/);assert.match(html,/1.10/);
+  const html=page.renderCycleCards(model,state);assert.equal(page.cycleDays(model.cycle).length,7);assert.equal((html.match(/class="cycle-day"/g)||[]).length,1);assert.equal((html.match(/class="cycle-slot"/g)||[]).length,3);assert.equal((html.match(/<option value="[0-5]\.[0-9]{2}"/g)||[]).length,20);assert.match(html,/data-pick-meal="1"/);assert.match(html,/data-decision/);assert.match(html,/1.10/);
   state.edit(1,{kind:'sides',operations:[{operation:'add',title:'Peas',recipe_id:null}]});assert.match(page.renderCycleCards(model,state),/name="side_add"[^>]*value="Peas"/);
 });
 test('cycle instants honor snapshot timezone independently of global display preference',async()=>{
   const zone=await import('../public/utils/timezone.js');zone.setDisplayTimeZone('America/Los_Angeles');
   assert.equal(typeof ui.cycleWallTime,'function');assert.equal(ui.cycleWallTime('2034-03-03T23:30:00Z','Europe/Berlin'),'2034-03-04T00:30:00');assert.equal(zone.displayTimeZone(),'America/Los_Angeles');zone.setDisplayTimeZone(null);
+});
+
+test('member day view is bounded while day identities cover the whole cycle',async()=>{
+  const page=await import('../public/pages/meal-cycle.js'),state=ui.createCycleDraft();
+  const model={cycle:{period_start:'2034-03-06',period_end:'2034-03-12'},permissions:{write:true},personal:{beneficiary_id:2,requirements:[]},occurrences:[]};
+  state.forms.selectedDay='2034-03-08';const html=page.renderCycleCards(model,state);assert.equal((html.match(/class="cycle-day"/g)||[]).length,1);assert.equal((html.match(/class="cycle-slot"/g)||[]).length,3);assert.equal(page.cycleDays(model.cycle).length,7);
 });

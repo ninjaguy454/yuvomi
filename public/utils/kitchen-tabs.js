@@ -1,7 +1,7 @@
 import { t } from '/i18n.js';
 import { api } from '/api.js';
 import { isDevicePrincipal } from '/utils/device-context.js';
-import { renderSubTabs, setSubTabBadge, scrollActiveSubTabIntoView } from '/utils/sub-tabs.js';
+import { renderSubTabs, setSubTabBadge } from '/utils/sub-tabs.js';
 import { MODULE_ICON, moduleIconEl } from '/nav-icons.js';
 import { todayKey } from '/utils/date.js';
 import { KITCHEN_MODULES as KITCHEN_MODULES_SOURCE } from '/utils/module-accent.js';
@@ -127,7 +127,15 @@ async function loadBadges() {
     // Die Zahlen machen die Leiste breiter (je 22px gemessen). Bei 320px läuft sie
     // damit über, und der aktive Tab - beim Rendern korrekt eingescrollt - konnte
     // danach teilweise außerhalb liegen.
-    scrollActiveSubTabIntoView(_bar);
+    // Badge updates may arrive while someone is reading far down the page.
+    // Scroll only this horizontal rail: scrollIntoView also moves sticky
+    // ancestors vertically in Chrome, pulling the meal review out of place.
+    const active = _bar.querySelector('.sub-tab--active');
+    if (active) {
+      const rail = _bar.getBoundingClientRect(), tab = active.getBoundingClientRect();
+      const left = tab.left < rail.left ? tab.left - rail.left : tab.right > rail.right ? tab.right - rail.right : 0;
+      if (left) _bar.scrollBy({ left, behavior: 'instant' });
+    }
   } catch {
     // Ein fehlender Zustand ist kein Fehler, den der Nutzer sehen muss: die Leiste
     // navigiert weiter, sie erzählt nur weniger. Genau wie vor diesem Zusatz.

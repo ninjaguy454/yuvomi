@@ -196,6 +196,20 @@ for(const foreignQuantity of ['1 kg','handful'])test(`R3 ambiguous shared manual
  const r=apply(d,id,p);assert.equal(r.requires_manual_review,true);assert.deepEqual(quantities(d),['2 kg']);assert.deepEqual(d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id),before);assert.deepEqual(d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(item.id),sources);d.close();
 });
 
+for(const foreignQuantity of ['handful','1 litre'])for(const purchased of [false,true])for(const growth of [false,true])test(`unknown shared ownership (${foreignQuantity}, ${purchased?'purchased':'outstanding'}, ${growth?'growth':'unchanged'}) defers additions and exact retries`,()=>{
+ const {d,id,m,result}=ready();try{
+  const item=loadGroceryRun(d,result.grocery_runs[0].run_id).items[0];
+  d.exec("INSERT INTO meals(id,date,meal_type,title,created_by) VALUES(501,'2034-03-06','dinner','Outside cycle',1)");
+  d.prepare("INSERT INTO meal_grocery_item_sources(grocery_item_id,source_key,source_kind,meal_id,meal_date_snapshot,meal_title_snapshot,ingredient_name_snapshot,quantity_snapshot,category_snapshot) VALUES(?,'foreign','meal_ingredient',501,'2034-03-06','Outside cycle','Rice',?,'Sonstiges')").run(item.id,foreignQuantity);
+  if(purchased)updatePurchase(d,item.grocery_run_id,item.id,{purchasedQuantity:5,remainingQuantity:0,purchaseStatus:'purchased'});
+  const original=d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id),sources=d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=? ORDER BY id').all(item.id),history=d.prepare('SELECT * FROM meal_grocery_items WHERE id=?').get(item.id);
+  const p=growth?propose(d,id,m,4,'shared-growth'):api.proposeCycleAdjustment(d,id,{...options(d,id,'shared-unchanged',1),changes:[]});
+  const conflict=p.preserved.find(x=>x.grocery_item_id===item.id);assert.equal(conflict.reason,'mixed_ownership');assert.equal(conflict.coverage_status,'unverified');assert.equal(conflict.coverage_quantity,null);assert.equal(conflict.additions_deferred,true);
+  const o={...options(d,id,'shared-apply',1),proposalId:p.proposal_id},r=api.applyCycleAdjustment(d,id,o);assert.deepEqual(api.applyCycleAdjustment(d,id,o),r);
+  assert.equal(r.requires_manual_review,true);assert.deepEqual(quantities(d),['5 kg']);assert.deepEqual(d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id),original);assert.deepEqual(d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=? ORDER BY id').all(item.id),sources);assert.deepEqual(d.prepare('SELECT * FROM meal_grocery_items WHERE id=?').get(item.id),history);
+ }finally{d.close();}
+});
+
 for(const growth of [false,true])test(`R4 deleted Shopping output stays removed for ${growth?'growth':'unchanged'} demand and retries`,()=>{
  const {d,id,m,result}=ready(),item=loadGroceryRun(d,result.grocery_runs[0].run_id).items[0];
  d.prepare('DELETE FROM shopping_items WHERE id=?').run(item.shopping_item_id);

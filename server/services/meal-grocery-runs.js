@@ -375,9 +375,9 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
       for (const historicalRow of previous) {
         const reviewed=attributionRunIds===null?null:reviewedOutputCoverage(database,historicalRow);
         const coverage=reviewed?reviewed.coverage:groceryCoverage(historicalRow,historicalRow.amended_quantity),share=sourceOwnershipShare(database,historicalRow,excludedAttributionMealIds);
-        const row={...historicalRow,planned_quantity:coverage==null?null:coverage*share};
+        const row={...historicalRow,planned_quantity:coverage==null||share==null?null:coverage*share};
         const demandKey = baseDemandKey(row.logical_key);
-        if(reviewed?.uncertain){
+        if(reviewed&&(reviewed.uncertain||share==null)){
           const sources=database.prepare('SELECT meal_id FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(row.id);
           if(!sources.length||!sources.every(s=>excludedAttributionMealIds.includes(s.meal_id)))uncertainDemand.add(demandKey);
           continue;
@@ -641,8 +641,9 @@ function sourceOwnershipShare(d,item,excluded=[]){
   if(scope==null)return 1;
   const ids=new Set(JSON.parse(scope).filter(id=>!excluded.includes(id))),sources=d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(item.id);
   if(sources.every(s=>ids.has(s.meal_id)))return 1;
+  if(sources.every(s=>!ids.has(s.meal_id)))return 0;
   const parsed=sources.map(s=>({...s,amount:parseQuantity(s.quantity_snapshot)}));
-  if(parsed.some(s=>!s.amount||s.amount.unit!==(item.unit||'')||s.amount.amount<0))return 0;
+  if(parsed.some(s=>!s.amount||s.amount.unit!==(item.unit||'')||s.amount.amount<0))return null;
   const total=parsed.reduce((n,s)=>n+s.amount.amount,0),owned=parsed.filter(s=>ids.has(s.meal_id)).reduce((n,s)=>n+s.amount.amount,0);
   return total>0?owned/total:0;
 }
@@ -662,6 +663,9 @@ function reviewedOutputCoverage(d,item){
   const historical=state?.credited_quantity??item.planned_quantity;
   const coverage=groceryCoverage(item,historical);
   const result={...protection,coverage,uncertain:false,historical_quantity:historical,actual_quantity:shopping?.quantity??null};
+  // An unchanged display or a real purchase cannot quantify an unknown owned
+  // share. Preserve history and defer additions before either early return.
+  if(sourceOwnershipShare(d,item)==null)return {...result,coverage:null,uncertain:true};
   // Receipts have explicit quantities independent of a Shopping display edit.
   if(item.purchase_status==='purchased'||item.purchase_status==='partial'||item.reconciled_at)return result;
   if(state&&shopping){

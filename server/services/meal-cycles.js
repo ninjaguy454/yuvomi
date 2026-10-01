@@ -105,7 +105,8 @@ export function cycleSourceFingerprint(d,cycleId) {
   for(const [table,columns] of Object.entries(sourceColumns))if(available.has(table))data[table]=d.prepare(`SELECT ${columns} FROM ${table} ORDER BY rowid`).all();
   return hash(data);
 }
-function requirements(occurrences,beneficiaryId) {
+function requirements(d,occurrences,beneficiaryId) {
+  if(!isHouseholdMember(beneficiaryId,{db:d}))return [];
   const list=[];
   for(const m of occurrences) {
     if(m.adopted_history||m.begun)continue;
@@ -132,10 +133,11 @@ function projection(d,c,actorId,beneficiaryId,permissions) {
   const tasks=d.prepare(`SELECT l.*,t.status,t.assigned_to,t.revision AS task_revision,a.path,a.params_json
     FROM meal_cycle_task_links l JOIN tasks t ON t.id=l.task_id LEFT JOIN task_action_links a ON a.task_id=t.id
     WHERE l.cycle_id=? ORDER BY l.id`).all(c.id).map(x=>({...x,obligations:JSON.parse(x.obligations_json),action_params:JSON.parse(x.params_json||'{}')}));
-  const personalRequirements=requirements(occurrences,beneficiaryId),personalTask=tasks.find(x=>x.purpose==='personal'&&x.beneficiary_id===beneficiaryId&&x.state==='active');
+  const personalRequirements=requirements(d,occurrences,beneficiaryId),personalTask=tasks.find(x=>x.purpose==='personal'&&x.beneficiary_id===beneficiaryId&&x.state==='active');
   const blockers=[];
   const governed=occurrences.filter(m=>!m.adopted_history);
   for(const m of governed) {
+    if(!m.begun)for(const person of m.participants)if(!isHouseholdMember(person.user_id,{db:d}))blockers.push({code:'CYCLE_PARTICIPANT_INELIGIBLE',meal_id:m.id,beneficiary_id:person.user_id,message:'Review and reconcile this meal assignment: this saved participant is no longer a household member.'});
     if(!m.participants.some(p=>p.roles.includes('participant')))blockers.push({code:'ADOPTION_REVIEW_REQUIRED',meal_id:m.id,message:'Review the diners for this adopted household meal before confirming.'});
     if(!m.governed_at)blockers.push({code:'MEAL_TIME_REQUIRED',meal_id:m.id,message:'Set a meal time so Kitchen can check the automatic confirmation cutoff.'});
     else if(c.response_at>=m.governed_at||c.confirmation_at>=m.governed_at)blockers.push({code:'CYCLE_DEADLINE_AFTER_MEAL',meal_id:m.id,message:'Move response and confirmation before the first governed meal.'});
@@ -145,7 +147,7 @@ function projection(d,c,actorId,beneficiaryId,permissions) {
   if(c.finalization_mode==='automatic'&&governed.some(m=>m.begun))blockers.push({code:'MANUAL_REVIEW_REQUIRED',message:'A governed meal has begun; review this period manually.'});
   if(c.source_fingerprint&&c.source_fingerprint!==fingerprint)blockers.push({code:'CYCLE_SOURCE_CHANGED',message:'Meal sources changed; reconcile this cycle before confirming.',stored_fingerprint:c.source_fingerprint});
   const people=[...new Set(occurrences.flatMap(m=>m.participants.map(p=>p.user_id)))];
-  for(const person of people)for(const r of requirements(occurrences,person).filter(x=>!x.complete))blockers.push({code:r.kind==='main'?'MAIN_REQUIRED':'RESPONSE_REQUIRED',beneficiary_id:person,...r,message:r.reason});
+  for(const person of people)for(const r of requirements(d,occurrences,person).filter(x=>!x.complete))blockers.push({code:r.kind==='main'?'MAIN_REQUIRED':'RESPONSE_REQUIRED',beneficiary_id:person,...r,message:r.reason});
   const destinations=[...new Set(occurrences.map(m=>m.planning_context_id||null))].map(contextId=>{
     const context=contextId?model.contexts.find(x=>x.id===contextId):null;
     const grocery=contextId?d.prepare('SELECT * FROM planning_context_grocery_settings WHERE planning_context_id=?').get(contextId):null;
@@ -198,7 +200,7 @@ export function ensureCycle(d,{start,actorId,requestKey,expectedSettingsRevision
       for(const meal of meals)d.prepare('INSERT INTO meal_cycle_memberships(cycle_id,meal_id) VALUES(?,?)').run(id,meal.id);
       const c=load(d,id),r=projection(d,c,actorId,actorId,p);
       const people=[...new Set(r.occurrences.flatMap(m=>m.participants.map(x=>x.user_id)))];
-      for(const person of people) {const required=requirements(r.occurrences,person);if(required.some(x=>x.status!=='away'))createTask(d,c,'personal',person,required);}
+      for(const person of people) {const required=requirements(d,r.occurrences,person);if(required.some(x=>x.status!=='away'))createTask(d,c,'personal',person,required);}
       if(r.occurrences.some(m=>!m.adopted_history&&!m.begun)) {
         createTask(d,c,'review',settings.coordinator_id,[]);createTask(d,c,'shopping',settings.shopping_assignee_id,[]);
       }

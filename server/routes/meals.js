@@ -108,7 +108,7 @@ router.use((req,res,next)=>{
     }
     const conflict=req.path.match(/^\/conflicts\/(\d+)\/resolve/);
     if(conflict) {const row=d.prepare('SELECT meal_id FROM meal_calendar_conflicts WHERE id=?').get(Number(conflict[1]));if(row)assertCycleMealWrite(d,row.meal_id);}
-    if(['/execution/prepare','/apply-plan','/week-to-shopping-list','/'].includes(req.path)) {
+    if(['/execution/prepare','/week-to-shopping-list'].includes(req.path)) {
       const from=req.body?.from||req.body?.date||req.body?.week||req.query?.week,to=req.body?.to||req.body?.date||(from?addDays(from,6):null);
       if(from&&to) {
         const owned=d.prepare('SELECT cm.meal_id FROM meal_cycle_memberships cm JOIN meals m ON m.id=cm.meal_id WHERE m.date BETWEEN ? AND ? LIMIT 1').get(from,to);
@@ -118,6 +118,15 @@ router.use((req,res,next)=>{
     next();
   } catch(error){mealDomainError(res,error);}
 });
+
+// New excluded legacy meals do not alter a cycle's owned inputs. Guided
+// household/travel creation on an owned date/context must use cycle review.
+function assertCycleMealCreation(database,{date,meal_type,scope='household',planning_context_id=null}) {
+  if(!['breakfast','lunch','dinner'].includes(meal_type)||!['household','travel'].includes(scope))return;
+  const owned=database.prepare(`SELECT cm.meal_id FROM meal_cycle_memberships cm JOIN meals m ON m.id=cm.meal_id
+    WHERE m.date=? AND m.planning_context_id IS ? LIMIT 1`).get(date,planning_context_id);
+  if(owned)assertCycleMealWrite(database,owned.meal_id);
+}
 
 const VALID_MEAL_TYPES = ['breakfast', 'lunch', 'dinner', 'snack', 'custom'];
 const VALID_WEEKDAYS = [0, 1, 2, 3, 4, 5, 6]; // 0 = Monday, 6 = Sunday
@@ -1783,6 +1792,7 @@ router.post('/', (req, res) => {
     catch (error) { return res.status(400).json({ error: error.message, code: 400 }); }
 
     const meal = db.transaction(() => {
+      assertCycleMealCreation(db.get(),{date:vDate.value,meal_type:vType.value,scope:vScope.value,planning_context_id:planningContextId});
       const cleanIngredients = sanitizedIngredients(ingredients);
       let recurrenceTemplateId = null;
 
@@ -1922,6 +1932,7 @@ router.post('/apply-plan', (req, res) => {
 
     const created = db.transaction(() => {
       const actorId = req.authUserId || req.session.userId;
+      for(const assignment of prepared)assertCycleMealCreation(db.get(),assignment);
       if (replaceExisting) {
         const slots = [...new Set(prepared.map((assignment) => (
           `${assignment.date}\u0000${assignment.meal_type}\u0000${assignment.planning_context_id ?? 'home'}`
@@ -1944,7 +1955,10 @@ router.post('/apply-plan', (req, res) => {
           const existingMeals = contextId == null
             ? selectHomeMeals.all(slotDate, slotType)
             : selectContextMeals.all(slotDate, slotType, contextId);
-          for (const meal of existingMeals) deleteMealOccurrence(meal, actorId);
+          for (const meal of existingMeals) {
+            assertCycleMealWrite(db.get(),meal.id);
+            deleteMealOccurrence(meal, actorId);
+          }
         }
       }
 

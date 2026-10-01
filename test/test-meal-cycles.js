@@ -210,3 +210,40 @@ test('ensure revalidates the shopping assignee before generating linked work',()
   const d=fixture({shopping_assignee_id:3});d.exec("INSERT INTO access_permissions(subject_type,subject_id,resource_type,resource_key,access) VALUES('user','3','module','shopping','none')");
   assert.throws(()=>ensure(d),/shopping|permission/i);assert.equal(d.prepare('SELECT COUNT(*) n FROM meal_cycles').get().n,0);d.close();
 });
+for(const externalTable of ['split_expense_guest_users','housekeeping_workers'])test(`adoption preserves ${externalTable} participant history without new personal work`,()=>{
+  const d=fixture();plans.materializeMealPlanOccurrences(d,{from:'2034-03-06',to:'2034-03-12',actorId:1});
+  const before=d.prepare('SELECT * FROM meal_participants WHERE user_id=3 ORDER BY meal_id,role').all();assert.ok(before.length);
+  d.prepare(`INSERT INTO ${externalTable}(user_id) VALUES(3)`).run();const a=ensure(d);
+  assert.ok(!a.tasks.some(t=>t.purpose==='personal'&&t.beneficiary_id===3),'external participants must not receive personal Tasks');
+  assert.ok(!a.blockers.some(b=>['MAIN_REQUIRED','RESPONSE_REQUIRED'].includes(b.code)&&b.beneficiary_id===3),'external identity must not have an unfulfillable household response requirement');
+  assert.ok(a.blockers.some(b=>b.code==='CYCLE_PARTICIPANT_INELIGIBLE'&&b.beneficiary_id===3&&b.meal_id===before[0].meal_id&&/review|reconcil/i.test(b.message)));
+  assert.deepEqual(d.prepare('SELECT * FROM meal_participants WHERE user_id=3 ORDER BY meal_id,role').all(),before);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM tasks WHERE assigned_to=3').get().n,0);
+  const count=d.prepare('SELECT total_changes() n').get().n;const r=review(d,a.cycle.id);assert.ok(r.blockers.some(b=>b.code==='CYCLE_PARTICIPANT_INELIGIBLE'&&b.beneficiary_id===3));assert.equal(d.prepare('SELECT total_changes() n').get().n,count);d.close();
+});
+for(const fields of [
+  {meal_type:'snack',title:'Fruit'},
+  {meal_type:'custom',custom_label:'Tea',title:'Tea time'},
+  {meal_type:'lunch',scope:'personal',title:'Personal lunch'},
+  {meal_type:'dinner',scope:'household',title:'Protected dinner'},
+])test(`legacy ${fields.scope||fields.meal_type} creation respects exclusions on a governed date`,async()=>{
+  const d=fixture();const a=ensure(d);_setTestDatabase(d);const app=express();app.use(express.json());app.use((req,res,next)=>{req.authUserId=1;req.authRole='admin';req.session={userId:1,role:'admin'};next();});app.use(router);
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  try {
+    const res=await fetch(`http://127.0.0.1:${server.address().port}/`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({date:'2034-03-06',...fields})});const body=await res.json();
+    if(fields.scope==='household') {assert.equal(res.status,409);assert.equal(body.code,'MEAL_CYCLE_WRITE_REQUIRED');}
+    else {assert.equal(res.status,201,JSON.stringify(body));assert.equal(d.prepare('SELECT COUNT(*) n FROM meal_cycle_memberships WHERE meal_id=?').get(body.data.id).n,0);assert.ok(review(d,a.cycle.id).exclusions.some(x=>x.meal_id===body.data.id));}
+    assert.equal(review(d,a.cycle.id).fingerprint,a.fingerprint,'excluded creation or rejected write cannot alter owned canonical inputs');
+  } finally {await new Promise(r=>server.close(r));d.close();}
+});
+for(const mealType of ['snack','dinner'])test(`batch legacy ${mealType} creation checks prepared assignments rather than unrelated range overlap`,async()=>{
+  const d=fixture();const a=ensure(d);_setTestDatabase(d);const app=express();app.use(express.json());app.use((req,res,next)=>{req.authUserId=1;req.authRole='admin';req.session={userId:1,role:'admin'};next();});app.use(router);
+  const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
+  try {
+    const before=d.prepare('SELECT * FROM meals WHERE id=?').get(a.occurrences[0].id);
+    const payload={replace_existing:true,assignments:[{date:'2034-03-06',meal_type:mealType,title:'Batch meal'}]};
+    if(mealType==='snack')Object.assign(payload,{from:'2034-03-06',to:'2034-03-06'});
+    const res=await fetch(`http://127.0.0.1:${server.address().port}/apply-plan`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const body=await res.json();
+    assert.equal(res.status,mealType==='snack'?201:409,JSON.stringify(body));assert.deepEqual(d.prepare('SELECT * FROM meals WHERE id=?').get(before.id),before);
+  } finally {await new Promise(r=>server.close(r));d.close();}
+});

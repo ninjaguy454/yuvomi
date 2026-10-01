@@ -26,6 +26,7 @@ import { ROTATION_SCHEMA_SQL, installRotationChangeTriggers } from './services/r
 import { SHARED_ROTATION_SCHEMA_SQL, installSharedRotationChangeTriggers } from './services/rotation-shared-schema.js';
 import { addDeviceSchema } from './services/device-schema.js';
 import { addDeviceApprovalSchema } from './services/device-approval-schema.js';
+import { addMealCycleSchema } from './services/meal-cycle-schema.js';
 import { rotationVariableSchemaMigration } from './services/rotation-variable-schema.js';
 import path from 'path';
 import fs from 'node:fs/promises';
@@ -9085,6 +9086,12 @@ FORK_MIGRATIONS.push({
   description: 'Rotation Groups: configurable Rotating Order direction with existing behavior preserved',
   up: `ALTER TABLE rotation_tracks ADD COLUMN direction TEXT NOT NULL DEFAULT 'first_to_last'
     CHECK(direction IN ('first_to_last','last_to_first'));`,
+});
+
+FORK_MIGRATIONS.push({
+  version: 10044,
+  description: 'Kitchen: durable planning cycles, settings, requests and immutable results',
+  up: addMealCycleSchema,
 });
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

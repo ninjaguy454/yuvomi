@@ -24,6 +24,7 @@ function cyclePaths(prefix){
   add('/preview','post','Validate and preview settings without writes',{settings},['settings']);
   add('/ensure','post','Explicitly create or adopt an anchored period',{start:{type:'string',format:'date'}},['start'],true);
   add('/{cycleId}','get','Read own planning view or authorized household review');
+  paths[prefix+'/{cycleId}'].get.description+=' The automation object exposes current generation_enabled and automatic_confirmation_paused independently of the immutable cycle snapshot. Personal occurrences omit other people\'s decisions and demand totals, including nested role/dish fields; shared menu metadata remains available.';
   add('/{cycleId}/save','post','Save visible personal draft without completing its Task',{beneficiary_id:integer,changes},['changes'],true);
   add('/{cycleId}/submit','post','Submit saved choices and complete the active personal Task',{beneficiary_id:integer},[],true);
   add('/{cycleId}/confirm','post','Confirm current household inputs and publish outputs',{},[],true);
@@ -32,6 +33,7 @@ function cyclePaths(prefix){
   add('/{cycleId}/reschedule','post','Explicitly reschedule an open period',{schedule,confirm_due_now:{type:'boolean'}},['schedule'],true);
   add('/{cycleId}/recover','post','Administrator recovery of invalid open-period assignments',{coordinator_id:integer,shopping_assignee_id:integer},['coordinator_id','shopping_assignee_id'],true);
   add('/{cycleId}/adjustments/{proposalId}','get','Read a permitted stored adjustment preview and fresh staleness');
+  paths[prefix+'/{cycleId}/adjustments/{proposalId}'].get.description+=' Authorized household reviewers receive confirmed before and proposed occurrences. Only household reviewers with Shopping read receive grocery_changes: stored ingredient-demand comparisons with name, context_id/context_name, change (added/removed/changed), and before/after arrays of quantity strings or null for unknown amounts. These are requirements, not published additions. Reviewed reductions expose previous/outstanding quantities separately; preserved/deferred conflicts remain separate. Ordinary personal proposal projections do not include household comparisons.';
   add('/{cycleId}/adjustments/preview','post','Stage a reviewed adjustment; existing accepted outputs stay unchanged',{beneficiary_id:integer,changes,base_proposal_id:integer,acknowledge_meal_ids:{type:'array',items:integer}},['changes'],true);
   for(const action of ['apply','cancel','submit'])add(`/{cycleId}/adjustments/${action}`,'post',`${action} a stored adjustment`,{proposal_id:integer,...(action==='submit'?{beneficiary_id:integer}:{})},['proposal_id'],true);
   return paths;

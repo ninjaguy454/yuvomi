@@ -14,6 +14,7 @@ import {listMealCycleGenerationFailures} from '../services/meal-cycle-scheduler.
 import {getSettings as getExecutionSettings,previewMealExecution} from '../services/meal-execution.js';
 import {buildMealWeekModel} from '../services/meal-plans.js';
 import {evaluatePresence} from '../services/presence.js';
+import {ingredientDemandChanges} from '../services/meal-cycle-review.js';
 
 const router=express.Router();
 const fail=(message,status=400)=>{throw Object.assign(new Error(message),{status});};
@@ -33,11 +34,20 @@ function reviewer(req,c){return actorPermissions(db.get(),req.authUserId).admin|
 function taskVisible(req,id){return Boolean(id&&permitted(req,'tasks')&&taskCapabilities(db.get(),req,{id}).view);}
 function safeSettings(req,s){return pick(s,['revision','enabled','timezone','cadence','first_period_start','creation','response','confirmation','shopping','finalization_mode','coordinator_id',...(permitted(req,'shopping')?['shopping_list_id','shopping_assignee_id']:[])]);}
 function occurrence(req,m,coordinating,person){
-  const out=pick(m,['id','date','meal_type','title','recipe_id','planning_context_id','context','rule','menu_items','shared_choice_active','selection_status','chooser_status','controls','applicable','can_act_for','my_decision','choosers','cooks','supervisors','governed_at','adopted_history','begun','portions','planned_portions','cook_portions','portion_summary','dish_portions','recipe_yield_portions']);
-  out.my_decision=m.decisions?.find(x=>x.beneficiary_user_id===person)||m.my_decision||null;
-  out.participants=coordinating?m.participants:(m.participants||[]).filter(x=>x.user_id===person);
-  if(coordinating)out.decisions=m.decisions;
-  out.recipe_bases=[...new Set([m.recipe_id,...(m.dish_portions||[]).map(x=>x.recipe_id)].filter(Boolean))].map(id=>db.get().prepare('SELECT id,title,yield_portions,serving_basis_amount,serving_basis_unit,serving_basis_label FROM recipes WHERE id=?').get(id)).filter(Boolean);
+  const out=pick(m,['id','date','meal_type','title','recipe_id','planning_context_id','shared_choice_active','selection_status','chooser_status','applicable','can_act_for','governed_at','adopted_history','begun','recipe_yield_portions']);
+  const menu=item=>pick(item,['id','meal_id','item_type','title','recipe_id','menu_generation','generation_position','position']);
+  const role=p=>pick(p,['user_id','display_name','roles','is_chooser','is_cook','is_supervisor']);
+  out.context=m.context?pick(m.context,['id','context_key','name','context_type','place_id']):null;
+  out.rule=m.rule?pick(m.rule,['id','policy','max_entree_choices','max_side_choices','preferred_time']):null;
+  out.menu_items=(m.menu_items||[]).filter(item=>['entree','side'].includes(item.item_type)).map(menu);
+  const own=m.decisions?.find(x=>x.beneficiary_user_id===person)||(m.my_decision?.beneficiary_user_id===person?m.my_decision:null);
+  out.my_decision=own?{...pick(own,['id','beneficiary_user_id','participation','choice_kind','confirmed','portion_amount','selected_recipe_id','selected_meal_title','selected_meal_id','menu_item_ids','selected_menu_item_ids']),menu_items:(own.menu_items||[]).map(menu)}:null;
+  for(const key of ['choosers','cooks','supervisors'])out[key]=(m[key]||[]).map(role);
+  out.participants=(m.participants||[]).filter(p=>coordinating||p.user_id===person).map(p=>({...role(p),status:p.status,decision:coordinating?p.decision:out.my_decision}));
+  if(coordinating)Object.assign(out,pick(m,['decisions','portions','planned_portions','cook_portions','portion_summary','dish_portions']));
+  else out.dish_portions=(m.dish_portions||[]).filter(d=>d.kind!=='individual'||d.beneficiary_user_ids?.includes(person)).map(d=>d.kind==='individual'?pick(d,['meal_id','menu_item_id','recipe_id','title','kind','primary','planned_portions','cook_portions','beneficiary_user_ids']):pick(d,['meal_id','menu_item_id','recipe_id','title','kind','primary']));
+  // Derived metadata is built only after the authorized shared/personal view exists.
+  out.recipe_bases=[...new Set([out.recipe_id,out.my_decision?.selected_recipe_id,...out.menu_items.map(x=>x.recipe_id),...(out.dish_portions||[]).map(x=>x.recipe_id)].filter(Boolean))].map(id=>db.get().prepare('SELECT id,title,yield_portions,serving_basis_amount,serving_basis_unit,serving_basis_label FROM recipes WHERE id=?').get(id)).filter(Boolean);
   out.participants=out.participants.map(p=>{
     let reason=null;
     if(permitted(req,'calendar'))try{reason=evaluatePresence(db.get(),{userId:p.user_id,startAt:`${m.date}T${m.preferred_time||'00:00'}:00`,endAt:`${m.date}T${m.preferred_time||'23:59'}:00`,targetPlaceId:m.context?.place_id||null,policy:'available_before_due'}).reason;}catch{/* The existing participation status remains authoritative. */}
@@ -56,20 +66,22 @@ function preservedRows(req,rows){return (rows||[]).filter(x=>!(x.task_id||x.task
   if(permitted(req,'tasks')){out.task_ids=(x.task_ids||[]).filter(id=>taskVisible(req,id));if(taskVisible(req,x.task_id))out.task_id=x.task_id;}
   return out;
 });}
-function output(req,result){return {...pick(result,['cycle_id','revision','proposal_id','status','requires_manual_review']),grocery_runs:permitted(req,'shopping')?(result.grocery_runs||[]).map(x=>pick(x,['run_id','shopping_list_id','context_id','meal_ids'])):[],execution_task_ids:(result.execution_task_ids||[]).filter(id=>taskVisible(req,id)),preserved:preservedRows(req,result.preserved),reductions:permitted(req,'shopping')?result.reductions||[]:[]};}
+function output(req,result,householdReview=true){return {...pick(result,['cycle_id','revision','proposal_id','status','requires_manual_review']),grocery_runs:permitted(req,'shopping')?(result.grocery_runs||[]).map(x=>pick(x,['run_id','shopping_list_id','context_id','meal_ids'])):[],execution_task_ids:(result.execution_task_ids||[]).filter(id=>taskVisible(req,id)),preserved:preservedRows(req,result.preserved),reductions:householdReview&&permitted(req,'shopping')?(result.reductions||[]).map(row=>({...pick(row,['grocery_item_id','shopping_item_id','previous','outstanding']),...pick(Number.isSafeInteger(row.grocery_item_id)?db.get().prepare('SELECT name,unit FROM meal_grocery_items WHERE id=?').get(row.grocery_item_id):null,['name','unit'])})):[]};}
 function proposalAllowed(req,c,p){return reviewer(req,c)||p.actor_id===req.authUserId||JSON.parse(p.batches_json).some(b=>b.beneficiaryId===req.authUserId)||Boolean(db.get().prepare("SELECT 1 FROM meal_cycle_task_links WHERE cycle_id=? AND beneficiary_id=? AND state='active' AND obligation_key LIKE 'adjustment:response:%'").get(c.id,req.authUserId));}
 function proposal(req,c,id,person=req.authUserId){
   const p=db.get().prepare('SELECT * FROM meal_cycle_adjustments WHERE cycle_id=? AND id=?').get(c.id,positive(id));if(!p)fail('Adjustment not found.',404);if(!proposalAllowed(req,c,p))fail('This adjustment is not assigned to you.',403);
   const r=reviewCycleAdjustment(db.get(),c.id,{actorId:req.authUserId,proposalId:p.id}),full=reviewer(req,c);
   const view={...pick(r,['cycle_id','revision','proposal_id','status','proposer_id','stale','evaluated_at','ready']),blockers:(r.blockers||[]).filter(b=>full||b.beneficiary_id===person).map(b=>pick(b,['code','meal_id','beneficiary_id','message','role'])),occurrences:(r.desired?.occurrences||[]).filter(m=>full||m.participants?.some(x=>x.user_id===person)).map(m=>occurrence(req,m,full,person))};
   if(full)Object.assign(view,{before:(r.baseline?.effective?.occurrences||[]).map(m=>occurrence(req,m,true,person)),gaps:r.gaps||[],warnings:r.warnings||[],executions:executionRows(req,r.executions),...output(req,r)});
+  if(full&&permitted(req,'shopping'))view.grocery_changes=ingredientDemandChanges(r.baseline?.effective,r.desired);
   return view;
 }
 function projection(req,r){
-  const c=r.cycle,full=reviewer(req,c),person=r.personal.beneficiary_id;
+  const c=r.cycle,full=reviewer(req,c),person=r.personal.beneficiary_id,currentSettings=getCycleSettings(db.get());
   const review=full&&c.state==='open'?reviewCycleReadiness(db.get(),c.id,{actorId:req.authUserId}):r;
   const tasks=taskRows(req,review.tasks).filter(x=>full||x.beneficiary_id===person||x.purpose==='shopping');
   const out={cycle:pick(c,['id','period_start','period_end','timezone','state','revision','finalization_mode','creation_at','response_at','confirmation_at','shopping_at','finalized_at','attempt_status']),cycle_id:c.id,revision:r.revision,
+    automation:{generation_enabled:currentSettings.enabled,automatic_confirmation_paused:c.state==='open'&&c.finalization_mode==='automatic'&&!currentSettings.enabled},
     permissions:{review:full,admin:actorPermissions(db.get(),req.authUserId).admin,write:permitted(req,'meals','write'),tasks:permitted(req,'tasks'),shopping:permitted(req,'shopping'),submit:permitted(req,'tasks','write')&&permitted(req,'meals','write')},
     personal:{...r.personal,...(!tasks.some(x=>x.task_id===r.personal.task_id)?{submitted:null,submission_revision:null,needs_correction:null}:{}),beneficiary_name:db.get().prepare('SELECT display_name FROM users WHERE id=?').get(person)?.display_name||'',task_id:tasks.some(x=>x.task_id===r.personal.task_id)?r.personal.task_id:null},
     occurrences:r.occurrences.map(m=>occurrence(req,m,full,person)),tasks,
@@ -79,7 +91,7 @@ function projection(req,r){
   };
   if(full){out.settings=safeSettings(req,r.settings);out.ready=review.ready===true;out.gaps=review.gaps||[];out.warnings=review.warnings||[];out.executions=executionRows(req,review.executions||r.occurrences.map(m=>previewMealExecution(db.get(),m.id,{actorId:req.authUserId})));out.exclusions=r.exclusions;out.execution_settings=permitted(req,'tasks')?pick(getExecutionSettings(db.get()),['enabled','generate_preparation','generate_cooking','generate_supervision','generate_serving','generate_cleanup']):null;out.blockers.push(...JSON.parse(c.blockers_json||'[]').filter(b=>['ADJUSTMENT_PRESERVED_OUTPUT','FINALIZED_SOURCE_CHANGE'].includes(b.code)).map(b=>pick(b,['code','message','meal_id'])));out.members=db.get().prepare('SELECT id,display_name FROM users ORDER BY display_name').all().filter(u=>isHouseholdMember(u.id,{db:db.get()}));}
   const accepted=db.get().prepare("SELECT output_json FROM meal_cycle_results WHERE cycle_id=? AND kind IN ('finalization','adjustment') ORDER BY id DESC LIMIT 1").get(c.id);
-  if(accepted)out.result=output(req,JSON.parse(accepted.output_json));
+  if(accepted)out.result=output(req,JSON.parse(accepted.output_json),full);
   return out;
 }
 const handle=fn=>(req,res)=>{try{res.set('Cache-Control','no-store');res.json({data:db.get().transaction(()=>fn(req))()});}catch(error){res.status(error.status||(error instanceof TypeError?400:500)).json({error:error.status||error instanceof TypeError?error.message:'Kitchen could not finish this operation.',code:error.code||'KITCHEN_REQUEST'});}};

@@ -5281,6 +5281,16 @@
         "ingredientHint": "One ingredient per line: name | quantity. Leave empty only when you intend no automatic ingredients.",
         "pauseFuture": "Pause future generation",
         "fullImpact": "Review quantities, people and existing work before applying.",
-        "notCreated": "No Task created yet"
+        "notCreated": "No Task created yet",
+        "cookingPortions": "Cooking portions",
+        "automaticPaused": "Automatic confirmation is paused. You can still review this period manually and open existing outputs.",
+        "ingredientDemand": "Ingredient demand changes",
+        "demandComparisonHint": "Confirmed and proposed ingredient requirements. These are needed amounts, not additional Shopping items; purchases and preserved coverage can change the output.",
+        "shoppingReductions": "Reviewed Shopping reductions",
+        "amountUnknown": "Unknown amount",
+        "noneNeeded": "None",
+        "addedDemand": "New demand",
+        "removedDemand": "Removed demand",
+        "changedDemand": "Changed demand"
     }
 }

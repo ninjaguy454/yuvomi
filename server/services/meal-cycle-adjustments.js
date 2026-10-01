@@ -143,11 +143,20 @@ export function reviewCycleAdjustment(d,cycleId,{actorId,proposalId}={}){
 function retireAdjustmentFollowups(d,c,now){for(const l of d.prepare("SELECT * FROM meal_cycle_task_links WHERE cycle_id=? AND obligation_key LIKE 'adjustment:%' AND state='active'").all(c.id)){d.prepare("UPDATE meal_cycle_task_links SET state='superseded' WHERE id=?").run(l.id);archiveSupersededCycleTask(d,l.task_id,{now});}}
 /** Internal recovery for externally reverted sources; preserve immutable proposal audit. */
 export function resolveRevertedCycleChanges(d,c,{now}){
- d.prepare("UPDATE meal_cycle_source_changes SET status='superseded' WHERE cycle_id=? AND status='pending'").run(c.id);
- const changed=d.prepare("UPDATE meal_cycle_adjustments SET status='superseded' WHERE cycle_id=? AND status='pending' AND source_change_id IS NOT NULL").run(c.id).changes;
- if(changed&&!d.prepare("SELECT 1 FROM meal_cycle_adjustments WHERE cycle_id=? AND status='pending'").get(c.id)){
-  d.prepare("UPDATE meal_cycles SET revision=revision+1,pending_adjustment_id=NULL,attempt_status='finalized',blockers_json='[]' WHERE id=?").run(c.id);retireAdjustmentFollowups(d,c,now);
- }
+ return d.transaction(()=>{
+  const signals=d.prepare("UPDATE meal_cycle_source_changes SET status='superseded' WHERE cycle_id=? AND status='pending'").run(c.id).changes;
+  const changed=d.prepare("UPDATE meal_cycle_adjustments SET status='superseded' WHERE cycle_id=? AND status='pending' AND source_change_id IS NOT NULL").run(c.id).changes;
+  const candidates=d.prepare("SELECT * FROM meal_cycle_adjustments WHERE cycle_id=? AND status='pending' ORDER BY id DESC").all(c.id);
+  const source=cycleSourceFingerprint(d,c.id),permission=cyclePermissionFingerprint(d,c.id),protectedOutput=cycleProtectedFingerprint(d,c.id);
+  const next=candidates.find(p=>p.source_fingerprint===source&&p.permission_fingerprint===permission&&p.protected_fingerprint===protectedOutput&&!timeStale(p,now))??candidates[0];
+  if(!signals&&!changed&&(c.pending_adjustment_id??null)===(next?.id??null))return;
+  // Reverting inputs cannot resolve accepted Shopping/cooking discrepancies.
+  const accepted=d.prepare("SELECT output_json FROM meal_cycle_results WHERE cycle_id=? AND kind IN ('finalization','adjustment') ORDER BY id DESC LIMIT 1").get(c.id);
+  const blockers=(accepted?JSON.parse(accepted.output_json).preserved||[]:[]).map(conflict=>({code:'ADJUSTMENT_PRESERVED_OUTPUT',message:'Review the preserved Shopping or cooking output; no purchase or completed work was reversed.',...conflict}));
+  d.prepare('UPDATE meal_cycles SET revision=revision+1,pending_adjustment_id=?,attempt_status=?,blockers_json=? WHERE id=?').run(next?.id??null,next||blockers.length?'review_required':'finalized',JSON.stringify(blockers),c.id);
+  if(next)refreshAdjustmentFollowups(d,load(d,c.id),{...JSON.parse(next.preview_json),proposal_id:next.id},{now});
+  else retireAdjustmentFollowups(d,c,now);
+ })();
 }
 function refreshAdjustmentFollowups(d,c,preview,{now}){
  const settings=JSON.parse(c.settings_json);try{authorizeCycleCoordinator(d,c,settings.coordinator_id);}catch{return;}

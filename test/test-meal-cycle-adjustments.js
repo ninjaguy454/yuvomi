@@ -141,3 +141,57 @@ test('zero-demand cooking work is explicitly preserved for review while unchecke
  for(const person of [1,2,3])p=api.proposeCycleAdjustment(d,id,{...options(d,id,`skip-${person}`,person),baseProposalId:p?.proposal_id,changes:[{meal_id:m,kind:'decision',decision:{participation:'not_participating'}}]});
  const result=apply(d,id,p);assert.deepEqual(quantities(d),[]);assert.ok(result.preserved.some(x=>x.reason==='no_current_demand_execution'&&x.task_links.length));assert.equal(result.requires_manual_review,true);assert.equal(d.prepare('SELECT attempt_status FROM meal_cycles WHERE id=?').get(id).attempt_status,'review_required');assert.deepEqual(d.prepare('SELECT t.* FROM tasks t JOIN meal_execution_tasks e ON e.task_id=t.id').all(),outputs);d.close();
 });
+
+test('R1 source reversion retains accepted unresolved cooking conflicts and is idempotent',()=>{
+ const {d,id,m}=ready({execution:true});let p=null;
+ for(const person of [1,2,3])p=api.proposeCycleAdjustment(d,id,{...options(d,id,`r1-skip-${person}`,person),baseProposalId:p?.proposal_id,changes:[{meal_id:m,kind:'decision',decision:{participation:'not_participating'}}]});
+ apply(d,id,p);const before=d.prepare('SELECT blockers_json FROM meal_cycles WHERE id=?').get(id).blockers_json;
+ const tasks=d.prepare('SELECT t.* FROM tasks t JOIN meal_execution_tasks e ON e.task_id=t.id').all();
+ d.exec('UPDATE recipes SET yield_portions=2 WHERE id=90');reconcileCycle(d,id,{now});
+ d.exec('UPDATE recipes SET yield_portions=1 WHERE id=90');reconcileCycle(d,id,{now});
+ const cycle=d.prepare('SELECT * FROM meal_cycles WHERE id=?').get(id);assert.equal(cycle.attempt_status,'review_required');assert.equal(cycle.blockers_json,before);
+ assert.ok(JSON.parse(before).some(x=>x.reason==='no_current_demand_execution'&&x.task_links.length));
+ reconcileCycle(d,id,{now});assert.deepEqual(d.prepare('SELECT * FROM meal_cycles WHERE id=?').get(id),cycle);assert.deepEqual(d.prepare('SELECT t.* FROM tasks t JOIN meal_execution_tasks e ON e.task_id=t.id').all(),tasks);d.close();
+});
+
+test('R2 source reversion atomically restores surviving authored proposal and every active action link',()=>{
+ const {d,id,m}=ready();const own=propose(d,id,m,1);
+ d.exec('UPDATE recipes SET yield_portions=2 WHERE id=90');const source=reconcileCycle(d,id,{now});assert.notEqual(source.proposal_id,own.proposal_id);
+ d.exec('UPDATE recipes SET yield_portions=1 WHERE id=90');reconcileCycle(d,id,{now});
+ const current=api.reviewCycleAdjustment(d,id,{actorId:1});assert.equal(current.proposal_id,own.proposal_id);assert.equal(current.status,'pending');assert.equal(current.stale,false);
+ const links=()=>d.prepare("SELECT a.* FROM task_action_links a JOIN meal_cycle_task_links l ON l.task_id=a.task_id WHERE l.cycle_id=? AND l.state='active' AND l.obligation_key LIKE 'adjustment:%'").all(id);
+ assert.ok(links().length);assert.ok(links().every(x=>JSON.parse(x.params_json).proposal===own.proposal_id));
+ const before=links(),revision=review(d,id).revision,count=d.prepare('SELECT count(*) n FROM tasks').get().n;
+ reconcileCycle(d,id,{now});assert.equal(review(d,id).revision,revision);assert.deepEqual(links(),before);assert.equal(d.prepare('SELECT count(*) n FROM tasks').get().n,count);
+ apply(d,id,own,'r2-apply');assert.deepEqual(quantities(d),['3 kg']);d.close();
+});
+
+test('R3 manual shortfall is protected and only verified sole-source same-unit coverage offsets growth',()=>{
+ for(const quantity of ['2 kg','2 bags','some']){const {d,id,m,result}=ready(),item=loadGroceryRun(d,result.grocery_runs[0].run_id).items[0];
+  d.prepare('UPDATE shopping_items SET quantity=? WHERE id=?').run(quantity,item.shopping_item_id);const before=d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id);
+  const p=propose(d,id,m,4);assert.ok(p.preserved.some(x=>x.grocery_item_id===item.id&&x.reason==='manually_edited'));
+  const r=apply(d,id,p);assert.equal(r.requires_manual_review,true);assert.equal(d.prepare('SELECT attempt_status FROM meal_cycles WHERE id=?').get(id).attempt_status,'review_required');assert.deepEqual(d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id),before);
+  const conflict=r.preserved.find(x=>x.grocery_item_id===item.id);assert.equal(conflict.historical_quantity,5);assert.equal(conflict.actual_quantity,quantity);
+  if(quantity==='2 kg'){assert.equal(conflict.coverage_quantity,2);assert.equal(conflict.coverage_status,'verified');assert.deepEqual(quantities(d),['2 kg','4 kg']);}
+  else {assert.equal(conflict.coverage_status,'unverified');assert.equal(conflict.coverage_quantity,null);assert.equal(conflict.additions_deferred,true);assert.equal(conflict.demand_quantity,6);assert.deepEqual(conflict.meal_ids,[m]);assert.ok(conflict.shopping_link.startsWith('/shopping?list='));assert.deepEqual(quantities(d),[quantity]);}
+  assert.equal(d.prepare('SELECT credited_quantity FROM meal_grocery_output_state WHERE grocery_item_id=?').get(item.id).credited_quantity,5);d.close();
+ }
+});
+
+test('R1 source reversion also retains accepted manual Shopping discrepancies',()=>{
+ const {d,id,m,result}=ready(),item=loadGroceryRun(d,result.grocery_runs[0].run_id).items[0];
+ d.prepare("UPDATE shopping_items SET quantity='2 bags' WHERE id=?").run(item.shopping_item_id);apply(d,id,propose(d,id,m,4));
+ const before=d.prepare('SELECT blockers_json FROM meal_cycles WHERE id=?').get(id).blockers_json;
+ d.exec('UPDATE recipes SET yield_portions=2 WHERE id=90');reconcileCycle(d,id,{now});d.exec('UPDATE recipes SET yield_portions=1 WHERE id=90');reconcileCycle(d,id,{now});
+ const c=d.prepare('SELECT * FROM meal_cycles WHERE id=?').get(id);assert.equal(c.attempt_status,'review_required');assert.equal(c.blockers_json,before);d.close();
+});
+
+for(const foreignQuantity of ['1 kg','handful'])test(`R3 ambiguous shared manual coverage (${foreignQuantity}) defers additions without claiming foreign quantities`,()=>{
+ const {d,id,m,result}=ready(),item=loadGroceryRun(d,result.grocery_runs[0].run_id).items[0];
+ d.exec("INSERT INTO meals(id,date,meal_type,title,created_by) VALUES(501,'2034-03-06','dinner','Outside cycle',1)");
+ d.prepare("INSERT INTO meal_grocery_item_sources(grocery_item_id,source_key,source_kind,meal_id,meal_date_snapshot,meal_title_snapshot,ingredient_name_snapshot,quantity_snapshot,category_snapshot) VALUES(?,'foreign','meal_ingredient',501,'2034-03-06','Outside cycle','Rice',?,'Sonstiges')").run(item.id,foreignQuantity);
+ d.prepare("UPDATE shopping_items SET quantity='2 kg' WHERE id=?").run(item.shopping_item_id);
+ const before=d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id),sources=d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(item.id);
+ const p=propose(d,id,m,4),conflict=p.preserved.find(x=>x.grocery_item_id===item.id);assert.equal(conflict.reason,'mixed_ownership');assert.equal(conflict.coverage_status,'unverified');assert.equal(conflict.additions_deferred,true);
+ const r=apply(d,id,p);assert.equal(r.requires_manual_review,true);assert.deepEqual(quantities(d),['2 kg']);assert.deepEqual(d.prepare('SELECT * FROM shopping_items WHERE id=?').get(item.shopping_item_id),before);assert.deepEqual(d.prepare('SELECT * FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(item.id),sources);d.close();
+});

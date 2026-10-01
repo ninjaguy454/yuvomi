@@ -371,11 +371,18 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
       `).all(...historical.map((row) => row.id));
       const previousByDemand = new Map();
       const previousRawByDemand = new Map();
+      const uncertainDemand = new Set();
       for (const historicalRow of previous) {
-        const coverage=groceryCoverage(historicalRow,historicalRow.amended_quantity),share=sourceOwnershipShare(database,historicalRow,excludedAttributionMealIds);
+        const reviewed=attributionRunIds===null?null:reviewedOutputCoverage(database,historicalRow);
+        const coverage=reviewed?reviewed.coverage:groceryCoverage(historicalRow,historicalRow.amended_quantity),share=sourceOwnershipShare(database,historicalRow,excludedAttributionMealIds);
         const row={...historicalRow,planned_quantity:coverage==null?null:coverage*share};
-        if(share===0)continue;
         const demandKey = baseDemandKey(row.logical_key);
+        if(reviewed?.uncertain){
+          const sources=database.prepare('SELECT meal_id FROM meal_grocery_item_sources WHERE grocery_item_id=?').all(row.id);
+          if(!sources.length||!sources.every(s=>excludedAttributionMealIds.includes(s.meal_id)))uncertainDemand.add(demandKey);
+          continue;
+        }
+        if(share===0)continue;
         if (row.planned_quantity == null) {
           previousRawByDemand.set(demandKey, (previousRawByDemand.get(demandKey) || 0) + 1);
         } else {
@@ -387,6 +394,9 @@ function createOrRefreshGroceryRun(database, { listId, from, to, userId, logical
       }
       prepared = aggregated.flatMap((item) => {
         const demandKey = item.demand_key || baseDemandKey(item.logical_key);
+        // Review must resolve ambiguous manual/shared coverage before adding
+        // more of that demand. Never silently certify historical attribution.
+        if(uncertainDemand.has(demandKey))return [];
         if (item.planned_quantity == null) {
           const previousCount = previousRawByDemand.get(demandKey) || 0;
           if (previousCount <= 0) return [item];
@@ -647,6 +657,27 @@ function outputProtection(d,item) {
   if(JSON.stringify(shopping)!==state.shopping_json)return {reason:'manually_edited',shopping,state};
   return {reason:null,shopping,state};
 }
+function reviewedOutputCoverage(d,item){
+  const protection=outputProtection(d,item),{shopping,state}=protection;
+  const historical=state?.credited_quantity??item.planned_quantity;
+  const coverage=groceryCoverage(item,historical);
+  const result={...protection,coverage,uncertain:false,historical_quantity:historical,actual_quantity:shopping?.quantity??null};
+  // Receipts have explicit quantities independent of a Shopping display edit.
+  if(item.purchase_status==='purchased'||item.purchase_status==='partial'||item.reconciled_at)return result;
+  if(state&&shopping){
+    const original=JSON.parse(state.shopping_json),identity=['name','category','list_id','added_from_meal'];
+    const sameIdentity=original&&identity.every(key=>shopping[key]===original[key]);
+    if(sameIdentity&&shopping.quantity===original.quantity)return result;
+    const actual=parseQuantity(shopping.quantity);
+    const soleSource=d.prepare('SELECT count(*) n FROM meal_grocery_item_sources WHERE grocery_item_id=?').get(item.id).n===1;
+    const soleOutput=d.prepare('SELECT count(*) n FROM meal_grocery_items WHERE shopping_item_id=?').get(shopping.id).n===1;
+    if(sameIdentity&&soleSource&&soleOutput&&sourceOwnershipShare(d,item)===1&&!shopping.is_checked&&coverage!=null&&actual&&actual.unit===(item.unit||'')&&actual.amount>=0){
+      return {...result,coverage:Math.min(coverage,actual.amount)};
+    }
+  }
+  if(state&&!shopping)return {...result,coverage:0};
+  return {...result,coverage:null,uncertain:true};
+}
 /** Internal reviewed-delta path. Historical item/source quantities remain immutable;
  * only separately recorded outstanding attribution and untouched Shopping change. */
 export function reconcileReviewedGroceries(d,c,partitions,{actorId,revision,apply=false,preserveMealIds=[]}={}) {
@@ -665,13 +696,23 @@ export function reconcileReviewedGroceries(d,c,partitions,{actorId,revision,appl
     const wanted=new Map();for(const row of desired)wanted.set(row.demand_key,(wanted.get(row.demand_key)||0)+(row.planned_quantity??1));
     const items=runs.flatMap(r=>loadGroceryRun(d,r.id).items).filter(i=>i.published_at);
     const totals=new Map();
-    for(const item of items) {const s=d.prepare('SELECT * FROM meal_grocery_output_state WHERE grocery_item_id=?').get(item.id);if(s?.active===0)continue;const key=baseDemandKey(item.logical_key);totals.set(key,(totals.get(key)||0)+(groceryCoverage(item,s?.credited_quantity??item.planned_quantity)??1)*sourceOwnershipShare(d,item,preserveMealIds));}
+    const coverageByItem=new Map(items.map(item=>[item.id,reviewedOutputCoverage(d,item)]));
+    for(const item of items) {const output=coverageByItem.get(item.id);if(output.state?.active===0||output.uncertain)continue;const key=baseDemandKey(item.logical_key);totals.set(key,(totals.get(key)||0)+(output.coverage??1)*sourceOwnershipShare(d,item,preserveMealIds));}
     for(const item of [...items].reverse()) {
+      const protection=coverageByItem.get(item.id),state=protection.state;if(state?.active===0)continue;
       if(item.sources.some(s=>preserveMealIds.includes(s.meal_id))){preserved.push({grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,reason:'begun_meal_history'});continue;}
+      if(protection.reason){
+        preserved.push({
+          grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,reason:protection.reason,
+          meal_ids:[...new Set(item.sources.map(s=>s.meal_id))],shopping_link:`/shopping?list=${p.shopping_list_id}`,
+          historical_quantity:protection.historical_quantity,actual_quantity:protection.actual_quantity,
+          coverage_quantity:protection.coverage,coverage_status:protection.uncertain?'unverified':'verified',
+          demand_quantity:wanted.get(baseDemandKey(item.logical_key))||0,unit:item.unit,
+          additions_deferred:protection.uncertain,
+        });continue;
+      }
       const key=baseDemandKey(item.logical_key),excess=(totals.get(key)||0)-(wanted.get(key)||0);
       if(excess<=1e-9)continue;
-      const protection=outputProtection(d,item),state=protection.state;if(state?.active===0)continue;
-      if(protection.reason){preserved.push({grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,reason:protection.reason});continue;}
       const credit=state.credited_quantity??item.planned_quantity??1,amount=Math.min(excess,credit),next=credit-amount;
       reductions.push({grocery_item_id:item.id,shopping_item_id:item.shopping_item_id,previous:credit,outstanding:next});totals.set(key,totals.get(key)-amount);
       if(apply) {

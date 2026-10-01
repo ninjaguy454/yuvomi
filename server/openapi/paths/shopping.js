@@ -2,6 +2,7 @@ import { op, jsonBody, idParam } from '../helpers.js';
 
 export function shoppingPaths() {
   return {
+    '/api/v1/shopping/grocery-outputs': { get: op({summary:'Resolve exact Shopping item grocery provenance before Pantry transfer',tag:'Shopping',params:[{name:'item_ids',in:'query',required:true,schema:{type:'string'},description:'Comma-separated positive Shopping item IDs.'}],description:'Requires current Shopping read access. Returns only provenance for the requested items; lookup failure must stop Pantry transfer.'}) },
     '/api/v1/shopping': {
       get: op({ summary: 'List shopping lists alphabetically', tag: 'Shopping', description: 'Returns Shopping lists ordered by name, which is also the Meal Plan grocery-default fallback order when no explicit default is configured.' }),
       post: op({ summary: 'Create shopping list', tag: 'Shopping', stateChanging: true, requestBody: jsonBody(null, 'Body: { name }. Meal Plan grocery settings can alternatively create and select a list atomically with `new_shopping_list_name`.') }),

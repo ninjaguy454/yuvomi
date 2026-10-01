@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.25`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.26`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -107,6 +107,7 @@ const APP_SHELL = [
   '/styles/sub-tabs.css',
   '/styles/page-search.css',
   '/styles/kitchen-tabs.css',
+  '/styles/meal-cycle.css',
   '/styles/list-row.css',
   '/styles/panel.css',
   '/styles/user-multi-select.css',
@@ -197,6 +198,8 @@ const APP_SHELL = [
   '/utils/markdown-checklist.js',
   '/utils/markdown-toolbar.js',
   '/utils/meal-week-model.js',
+  '/utils/meal-cycle-portions.js',
+  '/utils/meal-cycle-state.js',
   '/utils/mentions.js',
   '/utils/module-accent.js',
   '/utils/metric-card.js',
@@ -289,6 +292,7 @@ const PAGE_MODULES = [
   '/pages/tasks.js',
   '/pages/shopping.js',
   '/pages/meals.js',
+  '/pages/meal-cycle.js',
   '/pages/calendar.js',
   '/pages/schedule.js',
   '/pages/notes.js',
@@ -349,6 +353,7 @@ const PAGE_MODULES = [
   '/settings/pages/modules-active.js',
   '/settings/pages/modules-navigation.js',
   '/settings/pages/modules-kitchen.js',
+  '/settings/pages/kitchen-cycle.js',
   '/settings/pages/modules-calendar.js',
   '/settings/pages/modules-options.js',
   '/settings/pages/modules-rewards.js',

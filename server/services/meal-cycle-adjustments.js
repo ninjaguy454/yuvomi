@@ -39,14 +39,7 @@ export function cycleProtectedFingerprint(d,id){
 function prospective(d,c,batches,{actorId,now}){
  return withCycleMealWrite(d,c.id,()=>{
   for(const m of reviewCycle(d,c.id,{actorId,now}).occurrences.filter(m=>!m.begun&&!m.adopted_history))reconcileCycleOccurrence(d,m.id,{cycleId:c.id,sourceRevision:c.source_revision+1,now});
-  for(const batch of batches)if(batch.changes.length)writeCyclePersonChanges(d,c,{...batch,changes:batch.changes.map(change=>{
-   if(change.kind!=='decision'||!change.decision?.select_shared_main)return change;
-   const {select_shared_main,...decision}=change.decision;
-   if(select_shared_main!==true||Object.hasOwn(decision,'menu_item_ids'))fail('Select one shared main explicitly; do not combine selection formats.','CYCLE_REQUEST',400);
-   const items=d.prepare("SELECT i.id FROM meal_menu_items i JOIN meals m ON m.id=i.meal_id WHERE i.meal_id=? AND i.item_type='entree' AND i.menu_generation=m.current_menu_generation AND i.recipe_id IS m.recipe_id AND i.title=m.title ORDER BY i.id").all(change.meal_id);
-   if(items.length!==1)fail('Exactly one shared main must be available.','HOUSEHOLD_ENTREE_REQUIRED');
-   return {...change,decision:{...decision,menu_item_ids:items.map(x=>x.id)}};
-  })});
+  for(const batch of batches)if(batch.changes.length)writeCyclePersonChanges(d,c,batch);
   const r=reviewCycle(d,c.id,{actorId,now});
   for(const id of new Set(r.destinations.flatMap(p=>p.source_meal_ids))){
    const meal=d.prepare('SELECT m.*,r.yield_portions FROM meals m LEFT JOIN recipes r ON r.id=m.recipe_id WHERE m.id=?').get(id);
@@ -134,7 +127,7 @@ export function cancelCycleAdjustment(d,cycleId,o={}){
 /** Pure internal read; transport must filter household/member fields before returning. */
 export function reviewCycleAdjustment(d,cycleId,{actorId,proposalId}={}){
  return d.transaction(()=>{
- member(d,actorId);const c=load(d,cycleId),p=d.prepare('SELECT * FROM meal_cycle_adjustments WHERE id=? AND cycle_id=?').get(proposalId??c.pending_adjustment_id,c.id);if(!p)return null;
+ const permissions=actorPermissions(d,actorId);if(!isHouseholdMember(actorId,{db:d})||!['read','write'].includes(permissions.modules.meals))fail('Kitchen read access is required.','CYCLE_PERMISSION',403);const c=load(d,cycleId),p=d.prepare('SELECT * FROM meal_cycle_adjustments WHERE id=? AND cycle_id=?').get(proposalId??c.pending_adjustment_id,c.id);if(!p)return null;
  const preview=JSON.parse(p.preview_json),blockers=[...preview.blockers.filter(b=>b.code!=='ADJUSTMENT_SUBMISSION_REQUIRED'),...submissionBlockers(d,c,preview.desired)];
  return {cycle_id:c.id,revision:c.revision,proposal_id:p.id,proposer_id:p.actor_id,source_change_id:p.source_change_id,status:p.status,stale:timeStale(p,new Date().toISOString())||p.source_fingerprint!==cycleSourceFingerprint(d,c.id)||p.permission_fingerprint!==cyclePermissionFingerprint(d,c.id)||p.protected_fingerprint!==cycleProtectedFingerprint(d,c.id),...preview,blockers,ready:blockers.length===0,pending_occurrences:d.prepare('SELECT meal_id,accepted_revision FROM meal_cycle_pending_occurrences WHERE cycle_id=? ORDER BY meal_id').all(c.id)};
  })();

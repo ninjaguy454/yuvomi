@@ -5,7 +5,8 @@
  */
 
 import { createLogger } from '../logger.js';
-import { ensureCycle,reviewCycle,saveCyclePerson,submitCyclePerson,registerMealCycleTaskLifecycle } from '../services/meal-cycles.js';
+import mealCycleRouter from './meal-cycles.js';
+import { registerMealCycleTaskLifecycle } from '../services/meal-cycles.js';
 import { assertCycleMealWrite,cycleForMeal } from '../services/meal-cycle-guards.js';
 import express from 'express';
 import { notifyMealRequests } from '../services/notification-events.js';
@@ -82,18 +83,7 @@ const log = createLogger('Meals');
 const router  = express.Router();
 registerMealCycleTaskLifecycle();
 
-router.post('/cycles/ensure',(req,res)=>{
-  try {res.json({data:ensureCycle(db.get(),{start:req.body?.start,actorId:req.authUserId||req.session?.userId,requestKey:req.body?.request_key,expectedSettingsRevision:req.body?.expected_settings_revision})});}
-  catch(error){mealDomainError(res,error);}
-});
-router.get('/cycles/:cycleId',(req,res)=>{
-  try {const actorId=req.authUserId||req.session?.userId;res.json({data:reviewCycle(db.get(),Number(req.params.cycleId),{actorId,beneficiaryId:req.query.beneficiary_id==null?actorId:Number(req.query.beneficiary_id)})});}
-  catch(error){mealDomainError(res,error);}
-});
-for(const [action,service] of [['save',saveCyclePerson],['submit',submitCyclePerson]])router.post(`/cycles/:cycleId/${action}`,(req,res)=>{
-  try {const actorId=req.authUserId||req.session?.userId;res.json({data:service(db.get(),Number(req.params.cycleId),{actorId,beneficiaryId:req.body?.beneficiary_id==null?actorId:Number(req.body.beneficiary_id),expectedRevision:req.body?.expected_revision,requestKey:req.body?.request_key,changes:req.body?.changes})});}
-  catch(error){mealDomainError(res,error);}
-});
+router.use('/cycles',mealCycleRouter);
 // Compatibility mutation routes must not bypass cycle revisions or confirmation.
 router.use((req,res,next)=>{
   if(!['POST','PUT','PATCH','DELETE'].includes(req.method))return next();

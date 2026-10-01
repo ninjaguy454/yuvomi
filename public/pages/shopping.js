@@ -1,3 +1,4 @@
+import {renderCycleReturn} from '/utils/meal-cycle-state.js';
 /**
  * Modul: Einkaufslisten (Shopping)
  * Zweck: Multi-Listen-Tabs, Artikel mit Kategorie-Gruppierung, Quick-Add mit Autocomplete
@@ -2138,6 +2139,7 @@ export async function render(container, { user }) {
   `);
 
   renderKitchenTabsBar(container, '/shopping');
+  renderCycleReturn(container,t('kitchenCycle.returnCycle'));
   renderTabs(container);
   wireTabBar(container);
   renderListContent(container);

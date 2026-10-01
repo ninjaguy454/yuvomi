@@ -6,7 +6,7 @@ import {cycleInstants,validateCycleDate} from './meal-cycle-schedule.js';
 import {availabilityInstantMs} from './presence.js';
 import {materializeRecurringMealOccurrences} from './meal-recurrence.js';
 import {utcToWall} from '../utils/timezone.js';
-import {buildMealWeekModel,materializeMealPlanOccurrences,synchronizeMealMenuGeneration,saveMealDecision,publishCycleSharedMain,replaceCycleMealIngredients,cycleOccurrenceInputs,reconcileCycleAttendance,reconcileCycleOccurrence} from './meal-plans.js';
+import {buildMealWeekModel,materializeMealPlanOccurrences,synchronizeMealMenuGeneration,saveMealDecision,publishCycleSharedMain,replaceCycleMealIngredients,cycleOccurrenceInputs,reconcileCycleAttendance,reconcileCycleOccurrence,createMealMenuItem,updateMealMenuItem,deleteMealMenuItem} from './meal-plans.js';
 import {withCycleMealWrite,hasCycleMealWrite} from './meal-cycle-guards.js';
 import {changeTaskStatus,registerTaskTransitionGuard} from './task-lifecycle.js';
 
@@ -55,7 +55,7 @@ function assertTaskActors(d,settings) {
   if(['meals','tasks','shopping'].some(key=>coordinator.modules[key]!=='write')||['tasks.create','tasks.edit_others','tasks.change_assignment','tasks.change_dates'].some(key=>coordinator.capabilities[key]!=='allow'))fail('Coordinator lacks current Kitchen, Tasks or Shopping permission.',403);
   if(!isHouseholdMember(settings.shopping_assignee_id,{db:d}))fail('Shopping assignee household permission is required.',403);
   const shopper=actorPermissions(d,settings.shopping_assignee_id);
-  if(shopper.modules.tasks!=='write'||shopper.modules.shopping!=='write'||shopper.capabilities['tasks.complete_own']!=='allow')fail('Shopping assignee lacks current Tasks or Shopping permission.',403);
+  if(!['read','write'].includes(shopper.modules.meals)||shopper.modules.tasks!=='write'||shopper.modules.shopping!=='write'||shopper.capabilities['tasks.complete_own']!=='allow')fail('Shopping assignee needs Kitchen read access and current Tasks and Shopping permissions.',403);
 }
 function mealInstant(c,m) {
   const time=m.scheduled_time||m.preferred_time||m.latest_time||m.earliest_time;
@@ -246,13 +246,53 @@ export function writeCyclePersonChanges(d,c,{actorId,beneficiaryId=actorId,chang
           if(change.kind==='main') {
             if(Object.keys(change).some(k=>!['meal_id','kind','title','recipe_id'].includes(k)))fail('Invalid shared-main change.',400);
             publishCycleSharedMain(d,change.meal_id,change,{actorId,beneficiaryId,isAdmin:p.admin});
+          } else if(change.kind==='sides') {
+            if(Object.keys(change).some(k=>!['meal_id','kind','operations'].includes(k))||!Array.isArray(change.operations)||!change.operations.length||change.operations.length>50)fail('Provide bounded side changes.',400);
+            for(const operation of change.operations) {
+              if(!operation||Object.keys(operation).some(k=>!['operation','id','title','recipe_id'].includes(k))||!['add','edit','remove'].includes(operation.operation))fail('Invalid side operation.',400);
+              const options={isAdmin:p.admin,beneficiaryId};
+              if(operation.operation==='add') {
+                if(operation.id!=null)fail('A new side cannot specify an existing identity.',400);
+                createMealMenuItem(d,change.meal_id,{item_type:'side',title:operation.title,recipe_id:operation.recipe_id},actorId,options);
+              } else {
+                if(!Number.isSafeInteger(operation.id)||!d.prepare("SELECT 1 FROM meal_menu_items i JOIN meals m ON m.id=i.meal_id WHERE i.id=? AND i.meal_id=? AND i.item_type='side' AND (i.menu_generation=m.current_menu_generation OR i.menu_generation=(SELECT max(generation) FROM meal_menu_generations WHERE meal_id=m.id AND status='fulfilled'))").get(operation.id,change.meal_id))fail('Choose an existing current side from this meal.',400);
+                if(operation.operation==='remove')deleteMealMenuItem(d,change.meal_id,operation.id,actorId,options);
+                else updateMealMenuItem(d,change.meal_id,operation.id,{item_type:'side',title:operation.title,recipe_id:operation.recipe_id},actorId,options);
+              }
+            }
+            // Menu editors stage the current chooser generation. Publish it with
+            // the unchanged primary main so new sides become usable meal choices.
+            if(meal.title)publishCycleSharedMain(d,change.meal_id,{title:meal.title,recipe_id:meal.recipe_id},{actorId,beneficiaryId,isAdmin:p.admin});
           } else if(change.kind==='ingredients') {
             if(Object.keys(change).some(k=>!['meal_id','kind','ingredients'].includes(k)))fail('Invalid ingredient change.',400);
             replaceCycleMealIngredients(d,change.meal_id,change.ingredients,{actorId,beneficiaryId,isAdmin:p.admin});
           } else if(change.kind==='decision') {
             if(Object.keys(change).some(k=>!['meal_id','kind','decision'].includes(k))||!change.decision||typeof change.decision!=='object'||Array.isArray(change.decision))fail('Invalid personal decision.',400);
             if(['beneficiary_user_id','beneficiaryId','actorId','cycleId'].some(k=>Object.hasOwn(change.decision,k)))fail('Decision beneficiary comes from the authorized cycle operation.',400);
-            saveMealDecision(d,change.meal_id,{...change.decision,beneficiary_user_id:beneficiaryId},{actorId,isAdmin:p.admin});
+            let decision=change.decision;
+            if(Object.hasOwn(decision,'select_shared_main')) {
+              const {select_shared_main,select_side_ids,...rest}=decision;
+              if(select_shared_main!==true||Object.hasOwn(rest,'menu_item_ids'))fail('Select the shared main without combining selection formats.',400);
+              if(select_side_ids!==undefined&&(!Array.isArray(select_side_ids)||select_side_ids.length>50||select_side_ids.some(id=>!Number.isSafeInteger(id))))fail('Select existing side identities explicitly.',400);
+              const items=d.prepare("SELECT i.id FROM meal_menu_items i JOIN meals m ON m.id=i.meal_id WHERE i.meal_id=? AND i.item_type='entree' AND i.menu_generation=m.current_menu_generation AND i.recipe_id IS m.recipe_id AND i.title=m.title ORDER BY i.id").all(change.meal_id);
+              if(items.length!==1)fail('Exactly one shared main must be available.');
+              // Retain only this beneficiary's latest selected sides. Released older
+              // generations remain history; invalid latest sides need explicit input.
+              const selections=d.prepare('SELECT i.id,i.item_type,i.menu_generation,i.title,i.recipe_id,i.generation_position,i.position FROM meal_person_menu_selections s JOIN meal_person_decisions p ON p.id=s.decision_id JOIN meal_menu_items i ON i.id=s.menu_item_id WHERE p.meal_id=? AND p.beneficiary_user_id=? AND s.selected=1').all(change.meal_id,beneficiaryId);
+              const latest=Math.max(0,...selections.map(x=>x.menu_generation)),generation=d.prepare('SELECT current_menu_generation FROM meals WHERE id=?').get(change.meal_id).current_menu_generation;
+              const sides=select_side_ids===undefined?selections.filter(x=>x.item_type==='side'&&x.menu_generation===latest):[...new Set(select_side_ids)].map(id=>{
+                const side=d.prepare("SELECT * FROM meal_menu_items WHERE id=? AND meal_id=? AND item_type='side'").get(id,change.meal_id);if(!side)fail('Selected side does not belong to this meal.',400);return side;
+              });
+              const currentSides=sides.map(side=>{
+                if(side.menu_generation===generation)return side.id;
+                const matches=d.prepare("SELECT id FROM meal_menu_items WHERE meal_id=? AND menu_generation=? AND item_type='side' AND COALESCE(generation_position,position)=? AND title=? AND recipe_id IS ?").all(change.meal_id,generation,side.generation_position??side.position,side.title,side.recipe_id);
+                if(matches.length!==1)fail('A previously selected side changed. Choose the current main and sides explicitly.');
+                return matches[0].id;
+              });
+              decision={...rest,menu_item_ids:[...items.map(x=>x.id),...currentSides]};
+            }
+            else if(Object.hasOwn(decision,'select_side_ids'))fail('Explicit side identities require the shared-main selector.',400);
+            saveMealDecision(d,change.meal_id,{...decision,beneficiary_user_id:beneficiaryId},{actorId,isAdmin:p.admin});
           } else fail('Unknown cycle change kind.',400);
         }
         // A retained chooser duty grants authority to answer, not attendance.

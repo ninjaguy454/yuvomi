@@ -122,6 +122,7 @@ function moduleForPath(path) {
   if (/^planning\/routines(?:\/|$)/.test(normalized)) return 'schedule';
   if (/^planning\/(?:availability|presence)(?:\/|$)/.test(normalized)) return 'calendar';
   if (/^automation\/(?:tasks|obligations|activity-options|activity-templates|quick-add|workflow-instances)(?:\/|$)/.test(normalized)) return 'tasks';
+  if (/^kitchen\/cycles(?:\/|$)/.test(normalized)) return 'meals';
   const segment = normalized.split('/')[0];
   return PREFIX_TO_MODULE.get(segment) || null;
 }

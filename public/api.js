@@ -401,4 +401,31 @@ const recipeProviders = {
   getStatus: () => api.get('/recipe-providers/status'),
 };
 
-export { api, auth, email, notifications, recipeProviders, ApiError };
+const cyclePath='/kitchen/cycles';
+const cycleId=id=>{if(!Number.isSafeInteger(Number(id))||Number(id)<1)throw new TypeError('Invalid cycle identity.');return Number(id);};
+const cycleRead=path=>api.get(path,{cache:'no-store',requireFresh:true});
+const cycleWrite=(path,input,fields,method='post')=>{
+  if(!input||Object.keys(input).some(k=>!fields.includes(k)))throw new TypeError('Unexpected Kitchen operation input.');
+  return api[method](path,input);
+};
+const identity=['expected_revision','request_key'];
+const mealCycles={
+  settings:()=>cycleRead(`${cyclePath}/settings`),list:()=>cycleRead(cyclePath),
+  preview:settings=>cycleWrite(`${cyclePath}/preview`,{settings},['settings']),
+  saveSettings:input=>cycleWrite(`${cyclePath}/settings`,input,[...identity,'settings'],'put'),
+  ensure:input=>cycleWrite(`${cyclePath}/ensure`,input,[...identity,'start']),
+  read:(id,person)=>cycleRead(`${cyclePath}/${cycleId(id)}${person?`?beneficiary_id=${cycleId(person)}`:''}`),
+  save:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/save`,input,[...identity,'beneficiary_id','changes']),
+  submit:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/submit`,input,[...identity,'beneficiary_id']),
+  confirm:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/confirm`,input,identity),
+  acknowledge:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/acknowledge`,input,[...identity,'meal_ids']),
+  reschedulePreview:(id,schedule)=>cycleWrite(`${cyclePath}/${cycleId(id)}/reschedule-preview`,{schedule},['schedule']),
+  reschedule:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/reschedule`,input,[...identity,'schedule','confirm_due_now']),
+  recover:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/recover`,input,[...identity,'coordinator_id','shopping_assignee_id']),
+  adjustment:(id,proposal,person)=>cycleRead(`${cyclePath}/${cycleId(id)}/adjustments/${cycleId(proposal)}${person?`?beneficiary_id=${cycleId(person)}`:''}`),
+  previewAdjustment:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/adjustments/preview`,input,[...identity,'beneficiary_id','changes','base_proposal_id','acknowledge_meal_ids']),
+  applyAdjustment:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/adjustments/apply`,input,[...identity,'proposal_id']),
+  cancelAdjustment:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/adjustments/cancel`,input,[...identity,'proposal_id']),
+  submitAdjustment:(id,input)=>cycleWrite(`${cyclePath}/${cycleId(id)}/adjustments/submit`,input,[...identity,'proposal_id','beneficiary_id']),
+};
+export { api, auth, email, notifications, recipeProviders, mealCycles, ApiError };

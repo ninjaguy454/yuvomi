@@ -27,7 +27,7 @@ export function authorizeCycleCoordinator(d,c,actorId) {
   const p=actorPermissions(d,actorId),settings=JSON.parse(c.settings_json);
   if((!p.admin&&actorId!==settings.coordinator_id)||['meals','tasks','shopping'].some(k=>p.modules[k]!=='write')||['tasks.create','tasks.edit_others','tasks.change_assignment','tasks.change_dates'].some(k=>p.capabilities[k]!=='allow'))fail('Coordinator needs current Kitchen, Shopping and Task permission.','CYCLE_PERMISSION',403);
   const shopper=actorPermissions(d,settings.shopping_assignee_id);
-  if(!isHouseholdMember(settings.shopping_assignee_id,{db:d})||shopper.modules.tasks!=='write'||shopper.modules.shopping!=='write'||shopper.capabilities['tasks.complete_own']!=='allow')fail('Shopping assignee lacks current Tasks or Shopping permission.','CYCLE_PERMISSION',403);
+  if(!isHouseholdMember(settings.shopping_assignee_id,{db:d})||!['read','write'].includes(shopper.modules.meals)||shopper.modules.tasks!=='write'||shopper.modules.shopping!=='write'||shopper.capabilities['tasks.complete_own']!=='allow')fail('Shopping assignee needs Kitchen read access and current Tasks and Shopping permissions.','CYCLE_PERMISSION',403);
   return settings;
 }
 function load(d,id) {const c=d.prepare('SELECT * FROM meal_cycles WHERE id=?').get(Number(id));if(!c)fail('Cycle not found.','CYCLE_NOT_FOUND',404);return c;}

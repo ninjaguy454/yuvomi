@@ -1,4 +1,5 @@
 import { recipeProviders } from '/api.js';
+import { render as renderKitchenCycle } from '/settings/pages/kitchen-cycle.js';
 import { formatDate, formatTime, t } from '/i18n.js';
 import { closeModal, confirmModal, openModal } from '/components/modal.js';
 import {
@@ -404,5 +405,8 @@ export async function render(container, { user }) {
   renderPage(container, preferences);
   bindEvents(container);
   bindProviderAddButton(container);
+  const cycleContainer=document.createElement('div');
+  container.prepend(cycleContainer);
+  await renderKitchenCycle(cycleContainer,{user});
   await loadProviderAccounts(container);
 }

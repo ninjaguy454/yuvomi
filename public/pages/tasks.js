@@ -1,3 +1,4 @@
+import {renderCycleReturn} from '/utils/meal-cycle-state.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
 import { isDevicePrincipal, deviceBootstrap } from '/utils/device-context.js';
@@ -5612,6 +5613,7 @@ export async function render(container, { user }) {
 
   if (window.lucide) window.lucide.createIcons({ el: container });
 
+  renderCycleReturn(container,t('kitchenCycle.returnCycle'));
   applyTaskPagePermissions(container);
 
   const stopConnectionNotice = watchTaskConnectionNotice(container);

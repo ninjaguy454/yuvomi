@@ -49,8 +49,8 @@ function validate(d,s) {
   }
   if(s.shopping_assignee_id!=null) {
     const permissions=actorPermissions(d,s.shopping_assignee_id);
-    if(permissions.modules.shopping!=='write'||permissions.modules.tasks!=='write'||permissions.capabilities['tasks.complete_own']!=='allow')
-      error('Shopping assignee lacks required Shopping or Task permissions.',403);
+    if(!['read','write'].includes(permissions.modules.meals)||permissions.modules.shopping!=='write'||permissions.modules.tasks!=='write'||permissions.capabilities['tasks.complete_own']!=='allow')
+      error('Shopping assignee needs Kitchen read access to open the planning Task, plus Shopping and Task permissions.',403);
   }
   if(s.timezone && s.cadence && s.first_period_start && TIMINGS.every(key=>s[key])) {
     let start=s.first_period_start;
@@ -68,6 +68,14 @@ function validate(d,s) {
       start=t.period.next_start;
     }
   }
+}
+/** Validate exactly the same future settings as Save, without writes or receipts. */
+export function previewCycleSettings(d,input={}) {
+  if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(key=>!FIELDS.includes(key)||input[key]===undefined)) error('Invalid cycle settings input.');
+  const settings={...getCycleSettings(d),...input};
+  validate(d,settings);
+  const complete=settings.cadence&&settings.first_period_start&&TIMINGS.every(key=>settings[key]);
+  return {settings,schedule:complete?cycleInstants(settings,settings.first_period_start):null};
 }
 /** Future settings only. Request identity binds actor + exact patch + expected revision.
  * Existing cycles retain their stored settings and instants; rescheduling is separate.

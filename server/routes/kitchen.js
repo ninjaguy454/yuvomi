@@ -35,6 +35,7 @@
  */
 
 import express from 'express';
+import mealCycleRouter from './meal-cycles.js';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
 import { deniedModules } from '../permissions.js';
@@ -42,6 +43,7 @@ import { todayKey } from '../utils/timezone.js';
 
 const log = createLogger('Kitchen');
 const router = express.Router();
+router.use('/cycles',mealCycleRouter);
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

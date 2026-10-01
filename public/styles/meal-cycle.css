@@ -1,0 +1,15 @@
+.meal-cycle { max-width: 72rem; margin-inline: auto; padding: var(--space-4, 1rem); }
+.meal-cycle h1 { font-size: var(--font-size-xl, 1.5rem); }
+.meal-cycle label { display: grid; gap: .4rem; margin-block: .75rem; }
+.meal-cycle input, .meal-cycle select, .meal-cycle button, .meal-cycle a.btn { min-height: 44px; max-width: 100%; }
+.meal-cycle fieldset { min-width: 0; border: 1px solid var(--border-color, #8886); border-radius: .75rem; padding: 1rem; }
+.meal-cycle summary { cursor: pointer; padding-block: .8rem; min-height: 44px; }
+.cycle-phases, .cycle-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin-block: 1rem; }
+.cycle-day { margin-block: 1.5rem; border-top: 1px solid var(--border-color, #8886); }
+.cycle-slot { margin-block: 1rem; }
+.cycle-card { background: var(--surface-color, var(--bg-secondary, #8881)); border: 1px solid var(--border-color, #8886); border-radius: 1rem; padding: 1rem; margin-block: .75rem; overflow-wrap: anywhere; }
+.meal-cycle .cycle-check { display: flex; align-items: center; gap: .75rem; }
+.cycle-error, .cycle-blockers { border-inline-start: 4px solid var(--color-danger, #ba3333); padding: 1rem; }
+.cycle-schedule { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+.meal-cycle :focus-visible { outline: 3px solid var(--color-primary, #4877bb); outline-offset: 3px; }
+@media (max-width: 700px) { .cycle-schedule { grid-template-columns: 1fr; } .cycle-phases > *, .cycle-actions > * { flex: 1 1 100%; } .meal-cycle { padding: .75rem; } }

@@ -462,6 +462,12 @@ function stableMealDeviceKey() {
 // --------------------------------------------------------
 
 export async function render(container, { user }) {
+  const cycleQuery=new URLSearchParams(window.location.search);
+  if(cycleQuery.has('cycle'))return (await import('/pages/meal-cycle.js')).render(container,{user});
+  if(!isDevicePrincipal()&&!cycleQuery.has('legacy')&&!cycleQuery.has('focus')&&!cycleQuery.has('open')) {
+    try {if(await (await import('/pages/meal-cycle.js')).renderCycleLanding(container,{user}))return;}
+    catch { /* Retain the established permitted Meals view when cycles are unavailable. */ }
+  }
   _container = container;
   state.isAdmin = user?.role === 'admin';
   state.currentUserId = Number(user?.id) || null;

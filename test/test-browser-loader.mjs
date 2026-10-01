@@ -18,6 +18,7 @@ const STUBS = {
       patch: async () => ({ data: null }),
       delete: async () => ({ data: null }),
     };
+    export const mealCycles = {};
     export const auth = {
       me: async () => ({ user: null }),
       getUsers: async () => ({ data: [] }),

@@ -462,10 +462,11 @@ function stableMealDeviceKey() {
 // --------------------------------------------------------
 
 export async function render(container, { user }) {
+  let cycleSetupEntry = '';
   const cycleQuery=new URLSearchParams(window.location.search);
   if(cycleQuery.has('cycle'))return (await import('/pages/meal-cycle.js')).render(container,{user});
   if(!isDevicePrincipal()&&!cycleQuery.has('legacy')&&!cycleQuery.has('focus')&&!cycleQuery.has('open')) {
-    try {if(await (await import('/pages/meal-cycle.js')).renderCycleLanding(container,{user}))return;}
+    try {const cyclePage=await import('/pages/meal-cycle.js');if(await cyclePage.renderCycleLanding(container,{user,onUnconfigured:settings=>{cycleSetupEntry=cyclePage.mealPlanningSetupEntry(settings);}}))return;}
     catch { /* Retain the established permitted Meals view when cycles are unavailable. */ }
   }
   _container = container;
@@ -561,7 +562,7 @@ export async function render(container, { user }) {
   `);
 
   if (window.lucide) lucide.createIcons({ el: container });
-  renderKitchenTabsBar(container, '/meals');
+  renderKitchenTabsBar(container, '/meals', { setupEntry: cycleSetupEntry });
 
   await Promise.all([
     loadWeek(state.currentWeek), loadLists(), loadPreferences(), loadCategories(),

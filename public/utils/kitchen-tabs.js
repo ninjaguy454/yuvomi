@@ -1,6 +1,7 @@
 import { t } from '/i18n.js';
 import { api } from '/api.js';
 import { isDevicePrincipal } from '/utils/device-context.js';
+import { isPermAdmin } from '/permissions.js';
 import { renderSubTabs, setSubTabBadge } from '/utils/sub-tabs.js';
 import { MODULE_ICON, moduleIconEl } from '/nav-icons.js';
 import { todayKey } from '/utils/date.js';
@@ -155,7 +156,7 @@ export function refreshKitchenBadges() {
   _refreshTimer = setTimeout(loadBadges, 200);
 }
 
-export function renderKitchenTabsBar(container, activeRoute) {
+export function renderKitchenTabsBar(container, activeRoute, { setupEntry = '' } = {}) {
   container.classList.add('has-kitchen-tabs');
   _activeRoute = activeRoute;
 
@@ -181,6 +182,20 @@ export function renderKitchenTabsBar(container, activeRoute) {
     insertPosition: 'afterbegin',
     onChange: (route) => window.yuvomi?.navigate(route),
   });
+
+  if (isPermAdmin() && !isDevicePrincipal()) {
+    const access = document.createElement('div');
+    access.className = 'kitchen-planning-access';
+    const settings = document.createElement('a');
+    settings.href = '/settings/modules/kitchen';
+    settings.className = 'kitchen-planning-access__link';
+    settings.dataset.nav = '';
+    settings.dataset.mealPlanningSettings = '';
+    settings.textContent = t('kitchenCycle.planningSettings');
+    access.appendChild(settings);
+    if (setupEntry) access.insertAdjacentHTML('beforeend', setupEntry);
+    _bar.insertAdjacentElement('afterend', access);
+  }
 
   refreshKitchenBadges();
   return _bar;

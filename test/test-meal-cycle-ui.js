@@ -24,6 +24,14 @@ test('weekly setup offers named weekdays and family rhythm without guessing time
   const wednesday=settings.familyWeeklyPreset('2034-03-08');assert.equal(wednesday.response.day_offset,-5);assert.equal(wednesday.confirmation.day_offset,-4);assert.equal(wednesday.shopping.day_offset,-3);
   assert.match(settings.renderScheduleFields({...wednesday,cadence:'fortnightly',response:{day_offset:-12,time:'18:00'}}),/value="-12" selected/);
 });
+test('setup CTA follows complete canonical configuration and personal admin authority',async()=>{
+  const {mealPlanningSetupEntry}=await import('../public/pages/meal-cycle.js');
+  assert.match(mealPlanningSetupEntry({admin:true,enabled:false,revision:0}),/data-meal-planning-setup/);
+  assert.equal(mealPlanningSetupEntry({admin:false,enabled:false,revision:0}),'');
+  assert.match(mealPlanningSetupEntry({admin:true,enabled:false,revision:1,first_period_start:'2034-03-06'}),/data-meal-planning-setup/);
+  const complete={admin:true,enabled:false,cadence:'weekly',first_period_start:'2034-03-06',coordinator_id:1,shopping_assignee_id:2,shopping_list_id:1,creation:{time:'09:00'},response:{time:'20:00'},confirmation:{time:'20:00'},shopping:{time:'10:00'}};
+  assert.equal(mealPlanningSetupEntry(complete),'');assert.equal(mealPlanningSetupEntry({...complete,enabled:true}),'');
+});
 test('selected day separates shared chooser and own plate while preserving exact dropdown',async()=>{
   const page=await import('../public/pages/meal-cycle.js');const state=ui.createCycleDraft();
   const model={cycle:{period_start:'2034-03-06',period_end:'2034-03-12'},permissions:{write:true},personal:{beneficiary_id:2,requirements:[{meal_id:1,kind:'main'},{meal_id:1,kind:'decision'}]},occurrences:[{id:1,date:'2034-03-06',meal_type:'dinner',title:'Rice',menu_items:[],my_decision:{portion_amount:1.1}}]};

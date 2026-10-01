@@ -1326,6 +1326,29 @@
   position: relative;
 }
 
+/* Planning is a Settings form: keep its surfaces and controls on the same
+   theme tokens as the surrounding shell, independently of the meal chooser. */
+.meal-cycle-settings {
+  background: var(--color-surface-raised);
+  color: var(--color-text-primary);
+  padding: var(--space-4);
+  border-radius: var(--radius-lg);
+  line-height: var(--line-height-base);
+}
+.meal-cycle-settings label { display: grid; gap: var(--space-2); margin-block: var(--space-3); }
+.meal-cycle-settings .btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.meal-cycle-settings .cycle-check { display: flex; align-items: center; gap: var(--space-3); }
+.meal-cycle-settings fieldset { min-width: 0; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); }
+.meal-cycle-settings .cycle-card { background: var(--color-surface-raised); border-color: var(--color-border); }
+.meal-cycle-settings [data-cycle-error] { color: var(--color-danger-ink); background: var(--color-danger-light); padding: var(--space-3); border-radius: var(--radius-sm); }
+.meal-cycle-settings [data-cycle-status] { color: var(--color-success-ink); }
+.meal-cycle-settings :focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
+.meal-cycle-settings input[type="date"], .meal-cycle-settings input[type="time"] { color-scheme: light; }
+[data-theme="dark"] .meal-cycle-settings input[type="date"], [data-theme="dark"] .meal-cycle-settings input[type="time"] { color-scheme: dark; }
+@media screen and (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .meal-cycle-settings input[type="date"], :root:not([data-theme="light"]) .meal-cycle-settings input[type="time"] { color-scheme: dark; }
+}
+
 @media (min-width: 1024px) {
   .settings-card {
     padding: var(--space-5);

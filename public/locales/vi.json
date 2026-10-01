@@ -5258,6 +5258,8 @@
         "choose": "Choose…",
         "adminSetup": "A household administrator sets up the planning routine.",
         "setupTitle": "Plan together, then shop",
+        "planningSettings": "Meal planning settings",
+        "setUp": "Set up meal planning",
         "setupHint": "Set the usual routine, then preview real dates before explicitly enabling planning Tasks. Changes here affect future periods.",
         "timezone": "Household timezone",
         "advanced": "Advanced routine settings",

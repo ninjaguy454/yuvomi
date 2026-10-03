@@ -2683,12 +2683,38 @@
 .activity-card .subtask-list {
   padding: 0 var(--space-3) var(--space-2);
   border-top: 0;
+  container-type: inline-size;
 }
 
 .activity-card .subtask-item {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto auto;
+  grid-template-columns: 44px minmax(0, 1fr);
   gap: var(--space-1) var(--space-2);
+}
+
+/* Card width, not viewport width: family board columns are narrow even on a
+ * wall display. Give the label its own reading line before wrapping metadata. */
+.activity-card .subtask-item__metadata {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.activity-card .subtask-item__approval {
+  min-height: 44px;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.activity-card .subtask-item__pending { grid-column: 2 / -1; }
+
+@container (min-width: 36rem) {
+  .activity-card .subtask-item { grid-template-columns: 44px minmax(0, 1fr) auto; }
+  .activity-card .subtask-item__metadata { grid-column: 3; grid-row: 1; justify-content: flex-end; }
 }
 
 .activity-card .subtask-item__checkbox {

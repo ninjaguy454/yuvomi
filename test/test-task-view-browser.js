@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import puppeteer from 'puppeteer';
@@ -30,6 +30,12 @@ function visibleRows(query) {
     && (!assigned.length || assigned.includes(String(row.assigned_to))));
 }
 app.use('/api/v1', (req, res) => {
+  if (/^\/device\/tasks\/\d+\/approval\/begin$/.test(req.path)) {
+    fixture.approvals.push({ path: req.path, body: copy(req.body) });
+    return res.json({ approval: { id: 'layout-approval' } });
+  }
+  if (req.path === '/device/approval/cancel') return res.json({ ok: true });
+  if (req.path === '/auth/oidc/config') return res.json({ enabled: false });
   if (req.path === '/auth/me') return res.json({ user: { id: 1, role: 'admin' }, permissions: { admin: true }, csrfToken: 'fixture' });
   if (req.path === '/tasks/meta/options') return res.json({ users: [{ id: 1, display_name: 'Creator' }, { id: 2, display_name: 'Eleanor' }],
     categories: fixture.categories, tags: [], default_points: 0 });
@@ -58,6 +64,7 @@ app.use('/api/v1', (req, res) => {
     const task = parent?.id === id ? parent : parent?.subtasks.find(row => row.id === id);
     if (!task) return res.status(404).json({ error: 'Task unavailable' });
     fixture.writes.push({ id, body: copy(req.body) });
+    if (fixture.uncertainStatus) return res.status(503).json({ error: 'Connection interrupted; completion is unconfirmed.' });
     if (fixture.rejectStatus) return res.status(409).json({ error: 'This Task changed on another device. Refresh and try again.' });
     task.status = req.body.status;
     task.revision++;
@@ -98,7 +105,7 @@ test.before(async () => {
 test.after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve) || resolve()); });
 
 async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
-  fixture = { tasks: Array.from({ length: 60 }, (_, index) => taskRow(index + 1)), reads: 0, writes: [], held: [], holdNext: false,
+  fixture = { tasks: Array.from({ length: 60 }, (_, index) => taskRow(index + 1)), reads: 0, writes: [], approvals: [], held: [], holdNext: false,
     categories: Array.from({ length: 6 }, (_, index) => ({ key: `group-${index}`, name: `Group ${index + 1}`, sort_order: index })),
     holdHistory: false, heldHistory: [], history: Array.from({ length: 80 }, (_, index) => ({ id: 80 - index,
       task_id: 1, title: `Finished action ${80 - index}`, user_name: 'Eleanor', user_id: 2,
@@ -138,6 +145,90 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
   return page;
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+// Regression: the approval action must not consume the title's reading width,
+// whether the containing card is narrow on a phone or on the family wall board.
+for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [320, 360, 390, 1100] : [1024, 1920])) for (const theme of ['light', 'dark']) {
+  test(`approval layout ${mode} ${width}px ${theme}: readable steps and reachable actions`, async () => {
+    const page = await mounted(mode, { width, height: 950, isMobile: width < 640, hasTouch: width < 640 });
+    try {
+      // Match the actual app's shared CSS cascade, including button sizing.
+      const styles = [...readFileSync(new URL('../public/index.html', import.meta.url), 'utf8')
+        .matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(match => match[1]);
+      await page.evaluate(urls => {
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(node => node.remove());
+        for (const href of [...urls, '/styles/tasks.css']) {
+          const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = href; document.head.append(link);
+        }
+      }, styles);
+      await page.waitForFunction(() => [...document.querySelectorAll('link[rel="stylesheet"]')].every(link => link.sheet));
+      const names = ['Alexandria Montgomery-Wellington', 'Christopher Verylongfamilyname', 'Eleanor'];
+      fixture.tasks = names.map((name, index) => taskRow(index + 1, {
+        title: 'Laundry', assigned_to: index + 2, assigned_name: name,
+        assigned_users: [{ id: index + 2, display_name: name }],
+        subtasks: ['Sort laundry', 'Fold laundry and return all clothes to the upstairs wardrobe', 'SupercalifragilisticexpialidociousLaundryLabelWithoutSpaces'].map((title, step) => ({
+          id: (index + 1) * 100 + step + 1, parent_task_id: index + 1, parent_revision: 1, revision: 3,
+          title, status: 'open', points: step ? 125 : 0,
+          assigned_users: names.map((display_name, person) => ({ id: person + 2, display_name })),
+          permissions: { view: true, complete: step === 2, supervisor_approval: step !== 2 },
+        })),
+      }));
+      await page.evaluate(async ({ theme, mode }) => {
+        document.documentElement.dataset.theme = theme;
+        localStorage.setItem('yuvomi-wall-mode', mode === 'kanban' ? '1' : '0');
+        (await import('/utils/device-context.js')).acceptAuthentication({ authContext: 'layout-device', principal: { kind: 'device' }, device: { id: 5, preferences: {} } });
+        window.subject.state.groupModes.household = 'assignee';
+      }, { theme, mode });
+      await refresh(page);
+      await frames(page);
+      const rows = await page.$$eval('.task-card[data-task-id="1"] .subtask-item', nodes => nodes.map(row => {
+        const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
+        const title = row.querySelector('.subtask-item__title');
+        return { row: rect(row), title: rect(title), text: title.textContent,
+          children: [...row.querySelectorAll(':scope > button, :scope > span, .subtask-item__metadata > *')].map(rect),
+          approval: row.querySelector('[data-action="approve-device-task"]') ? rect(row.querySelector('[data-action="approve-device-task"]')) : null,
+          clipped: title.scrollWidth > title.clientWidth + 1 || title.scrollHeight > title.clientHeight + 1 };
+      }));
+      if (process.env.TASK_LAYOUT_EVIDENCE) {
+        mkdirSync(process.env.TASK_LAYOUT_EVIDENCE, { recursive: true });
+        await page.screenshot({ path: `${process.env.TASK_LAYOUT_EVIDENCE}/${mode}-${width}-${theme}.png`, fullPage: true });
+      }
+      assert.equal(rows.length, 3);
+      for (const row of rows) {
+        assert.ok(row.title.width >= Math.min(140, row.row.width * .55), `useful title width: ${JSON.stringify(row)}`);
+        assert.equal(row.clipped, false, 'complete step label remains readable');
+        for (const child of row.children) {
+          assert.ok(child.x >= row.row.x - 1 && child.right <= row.row.right + 1, `content stays inside card: ${JSON.stringify(row)}`);
+        }
+        if (row.approval) assert.ok(row.approval.width >= 44 && row.approval.height >= 44, 'approval has a 44px touch target');
+      }
+      assert.ok(rows[0].title.height <= 48, 'short label does not become a vertical stack');
+      assert.equal(rows[2].approval, null, 'ordinary step keeps its existing permission behavior');
+      const approval = '.task-card[data-task-id="1"] [data-action="approve-device-task"][data-id="101"]';
+      await page.focus(approval);
+      assert.equal(await page.$eval(approval, node => node === document.activeElement), true);
+      if (width < 640) await page.tap(approval); else await page.keyboard.press('Enter');
+      await page.waitForSelector('#device-task-approval');
+      await page.waitForFunction(() => !document.querySelector('[data-approval-submit]').disabled);
+      assert.deepEqual(fixture.approvals, [{ path: '/device/tasks/101/approval/begin', body: { status: 'done', expected_revision: 3, expected_parent_revision: 1 } }]);
+      assert.equal(fixture.writes.length, 0, 'opening approval cannot complete a step');
+      await page.click('[data-approval-cancel]');
+      await page.waitForFunction(() => !document.querySelector('#device-task-approval'));
+      assert.equal(await page.evaluate(async () => (await import('/utils/device-context.js')).isDevicePrincipal()), true);
+      // A failed ordinary completion appends a recovery control to the same
+      // row. It also needs reading width after metadata moves to its own line.
+      fixture.uncertainStatus = true; fixture.holdNext = true;
+      await page.click('.task-card[data-task-id="1"] [data-action="toggle-subtask"][data-id="103"]');
+      await page.waitForSelector('.task-card[data-task-id="1"] .subtask-item__pending');
+      const pending = await page.$eval('.task-card[data-task-id="1"] .subtask-item__pending', node => {
+        const box = node.getBoundingClientRect(), row = node.closest('.subtask-item').getBoundingClientRect();
+        return { width: box.width, right: box.right, rowRight: row.right, text: node.textContent };
+      });
+      assert.ok(pending.width >= 140 && pending.right <= pending.rowRight + 1, `readable recovery feedback: ${JSON.stringify(pending)}`);
+      assert.match(pending.text, /Not confirmed.*Check status/);
+    } finally { await page.close(); }
+  });
+}
 
 for (const width of [1380, 390]) {
   test(`Kanban expansion contains recurring and locked labels without blank overflow at ${width}px`, async () => {

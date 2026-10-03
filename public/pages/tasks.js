@@ -617,10 +617,12 @@ function renderActivitySubtasks(task, expanded) {
         <svg class="subtask-item__checkbox-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subtask.status === 'done' ? 'm20 6-11 11-5-5' : ''}"></path></svg>
       </button>
       <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_optional ? ' · Optional' : ''}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
-      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--sm" data-action="approve-device-task" data-id="${subtask.id}" aria-label="Supervisor approval: ${esc(subtask.title)}">Supervisor approval</button>` : ''}
+      <div class="subtask-item__metadata">
+      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--sm subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="Supervisor approval: ${esc(subtask.title)}">Supervisor approval</button>` : ''}
       <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(subtask) }))}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
+      </div>
     </div>`;
   }).join('');
   return `<div class="activity-card__subtasks">

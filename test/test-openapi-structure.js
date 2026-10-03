@@ -19,6 +19,14 @@ const moduleFiles = readdirSync(pathsDir)
   .filter((f) => f.endsWith('.js') && f !== 'index.js')
   .sort();
 
+test('Task acceptance documents operation-scoped retries without duplicate or cached-response header promises',()=>{
+  const operation=buildOpenApiSpec({},'acceptance').paths['/api/v1/tasks/{id}/accept'].post;
+  const headers=operation.parameters.filter(p=>p.name==='Idempotency-Key');
+  assert.equal(headers.length,1);assert.match(headers[0].description,/Not used.*operation_id/);
+  assert.match(operation.description,/Replays reauthorize/);
+  assert.ok(operation.responses[409]);
+});
+
 test('Task and alternate write contracts expose required revisions and safe append/create exceptions',()=>{
   const paths=buildOpenApiSpec({},'release').paths;
   for(const [path,method] of [

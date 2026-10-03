@@ -1,0 +1,6 @@
+# Isolated Phase 3 candidate; retains the verified Phase 2 privacy runtime.
+FROM yuvomi:notes-canvas-test-79feabad
+WORKDIR /app
+COPY . /app
+ARG REVISION
+LABEL org.opencontainers.image.revision=$REVISION

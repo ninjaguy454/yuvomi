@@ -110,6 +110,8 @@ function assertCachedRotationCreationAccess(conn, req, body) {
  * Idempotenz-Middleware. Muss NACH requireAuth laufen (`req.authUserId`).
  */
 function idempotencyMiddleware(req, res, next) {
+  // Acceptance receipts reauthorize and project current data inside the service.
+  if(/^\/tasks\/[^/]+\/accept\/?$/i.test(req.path))return next();
   // Manual point corrections have permanent, transaction-bound provenance and
   // must recheck administrator access on every retry, including after demotion.
   if (/^\/rewards\/(?:adjustments|bonus)\/?$/i.test(req.path)) return next();

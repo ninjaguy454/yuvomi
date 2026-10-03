@@ -12,6 +12,25 @@
  * -------------------------------------------------------- */
 .tasks-page { --module-accent: var(--module-tasks); }
 
+.task-acceptance { min-width: 0; }
+.task-acceptance__helpers { border: 0; padding: 0; margin: var(--space-4) 0; }
+.task-acceptance__helpers legend { font-weight: 600; }
+.task-acceptance__member { display: flex; align-items: center; gap: var(--space-3); min-height: var(--target-base); }
+.task-acceptance__pools { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: var(--space-3); }
+.task-acceptance__pool { min-width: 0; min-height: 120px; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); background: var(--color-surface); }
+.task-acceptance__pool--target { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.task-acceptance__pool h4 { margin: 0 0 var(--space-3); overflow-wrap: anywhere; }
+.task-acceptance__step { display: grid; grid-template-columns: var(--target-base) minmax(0, 1fr); gap: var(--space-2); align-items: center; margin-block: var(--space-2); padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); }
+.task-acceptance__step > span { overflow-wrap: anywhere; }
+.task-acceptance__step select { grid-column: 1 / -1; min-width: 0; width: 100%; }
+.task-acceptance__drag { touch-action: none; cursor: grab; min-height: var(--target-base); min-width: var(--target-base); }
+.open-task-board { min-width: 0; padding: var(--space-4); }
+.open-task-board__header { display: flex; gap: var(--space-3); align-items: center; justify-content: space-between; }
+.open-task-board__header h2 { margin: 0; font-size: var(--text-lg); }
+.open-task-board__list { display: grid; gap: var(--space-3); }
+.open-task-board__card { width: 100%; text-align: start; white-space: normal; min-height: var(--target-base); padding: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-bg); color: var(--color-text-primary); }
+.open-task-board__card strong { display: block; overflow-wrap: anywhere; }
+
 .modal-panel__body--tasks-fit {
   flex: 0 1 auto;
 }

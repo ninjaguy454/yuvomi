@@ -9,6 +9,7 @@ export const PERMISSION_CAPABILITIES = Object.freeze([
   task('change_dates', 'Change dates and recurrence'), task('change_required_skills', 'Change required skills'),
   task('complete_own', 'Complete or reopen own Tasks'), task('complete_others', 'Complete or reopen other members’ Tasks'),
   task('claim', 'Claim Tasks'), task('comment', 'Write Task comments'),
+  { ...task('accept_with_helpers', 'Accept open Tasks with co-assignees and optional subtask allocation'), default: 'none' },
   template('activities.view', 'View Activity Templates', 'allow'), template('activities.create', 'Create Activity Templates'), template('activities.edit', 'Edit Activity Templates'),
   template('workflows.view', 'View Task Workflows', 'allow'), template('workflows.run', 'Run Task Workflows', 'allow'),
   template('workflows.create', 'Create Task Workflows'), template('workflows.edit', 'Edit Task Workflows'),

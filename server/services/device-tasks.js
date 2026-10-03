@@ -7,6 +7,7 @@ import { taskRotationContexts } from './task-rotation.js';
 import { claimTask } from './assignment-responsibilities.js';
 import { flushOutbound } from './caldav-todo-outbound.js';
 import { taskScopeWhere, taskStartProjection } from './task-scope.js';
+import {listTaskOffers,taskOfferState} from './task-offers.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
@@ -89,13 +90,22 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
       occurrence:{...pick(context.occurrence,['id','status','state','strategy','provisional','period_date']),
         order:(context.occurrence.order||[]).map(item=>pick(item,['id','display_name','position'])),
         selected_member:context.occurrence.selected_member?member(context.occurrence.selected_member):null}})) : [];
+  const offer=taskOfferState(d,principal,row);
+  out.is_offer=offer.visible;out.offer_reason=offer.reason;out.permissions.accept=offer.claimable;
   return out;
 }
 export function deviceTaskList(d,principal,{query=null,withVisibility=false}={}) {
   // The snapshot has no human actor. Every row still passes device visibility
   // and capability checks; pairing never lends a member's permissions.
   return withTaskReadSnapshot(d,null,()=>{
-  const cache=new Map();
+    const cache=new Map();
+    if(query?.offers==='1'){
+      const candidates=listTaskOffers(d,principal,{includeFuture:true,query});
+      const starts=taskStartProjection(d,{tasks:candidates});
+      const projected=candidates.filter(starts.visible).slice(0,500).map(row=>project(d,principal,row,cache));
+      const data=projected.map(starts.project);
+      return withVisibility?{data,visibility:starts.metadata([...candidates,...projected])}:data;
+  }
   const values=value=>(value==null?[]:[value].flat()).filter(value=>typeof value==='string'&&value!=='').slice(0,50);
   const statuses=values(query?.status),priorities=values(query?.priority),assigned=values(query?.assigned_to).map(Number),categories=values(query?.category),tags=values(query?.tag).map(value=>value.toLocaleLowerCase());
   const includeFuture=query?.include_future==='1';

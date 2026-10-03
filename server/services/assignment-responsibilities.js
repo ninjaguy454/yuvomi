@@ -39,6 +39,27 @@ function taskWindow(d, taskId, taskOverride = null) {
   };
 }
 
+/** Pure claim eligibility shared by previews and the atomic acceptance flow.
+ * Existing policy-backed claiming remains authoritative; ordinary Tasks do not
+ * acquire an Activity context or an obligation merely to validate a member. */
+export function assertTaskClaimMember(d,taskId,userId){
+  const context=d.prepare('SELECT * FROM task_assignment_context WHERE task_id=?').get(taskId);
+  if(context){
+    if(context.strategy!=='open_claimable'||!['open','unavailable'].includes(context.state))throw new Error('This task is not claimable.');
+    const activity=activityForTask(d,taskId);
+    if(activity)assertEligibleActivityMember(d,activity,userId,taskWindow(d,taskId));
+    else {
+      if(!['planning_context','meal_execution'].includes(context.source))throw new Error('The Activity Template for this task is unavailable.');
+      const trip=d.prepare(`SELECT pc.status FROM task_action_links l LEFT JOIN planning_contexts pc ON pc.id=l.source_id
+        WHERE l.task_id=? AND l.action_type='travel_meal_plan' AND l.source_type='planning_context'`).get(taskId);
+      if(trip&&(!trip.status||['cancelled','completed'].includes(trip.status)))throw new Error('This trip is no longer active.');
+      if(!d.prepare('SELECT 1 FROM task_claim_eligibility WHERE task_id=? AND user_id=?').get(taskId,userId))throw new Error('You are not eligible for this task.');
+      assertTaskMemberSkills(d,taskId,userId);assertTaskAssignmentAvailability(d,taskId,[userId]);
+    }
+  }else{assertTaskMemberSkills(d,taskId,userId);assertTaskAssignmentAvailability(d,taskId,[userId]);}
+  assertTaskSupervisionAssignee(d,taskId,userId);
+}
+
 export class TaskAssignmentAvailabilityError extends Error {}
 
 /** Revalidate existing people without consuming a rotation or rewriting work.

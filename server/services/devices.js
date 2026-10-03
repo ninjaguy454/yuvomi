@@ -6,7 +6,7 @@ import { deviceAppRouteSupported } from './device-app-paths.js';
 import { validateDeviceApproval } from './device-approval.js';
 
 export const DEVICE_COOKIE = 'vidamia.device';
-export const DEVICE_ACTIONS = ['complete','reopen','reset','claim'];
+export const DEVICE_ACTIONS = ['complete','reopen','reset','claim','accept_with_helpers'];
 export const DEVICE_NOTE_ACTIONS = ['view','create','edit','delete'];
 export const DEVICE_WIDGETS = ['tasks','calendar','meals','shopping','points','rewards','rotations'];
 export const DEVICE_DEFINITION_CAPABILITIES = ['tasks.create','tasks.edit_others','tasks.change_assignment','tasks.reassign','tasks.change_dates','tasks.change_points'];

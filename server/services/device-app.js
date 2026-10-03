@@ -3,6 +3,9 @@
  * must never infer a member from a device, a null ID, or its pairing parent.
  * Consumers reuse the existing lifecycle and shared-content projections. */
 import * as db from '../db.js';
+import {acceptanceOptions} from './task-acceptance-policy.js';
+import {acceptTask} from './task-acceptance.js';
+import {flushOutbound} from './caldav-todo-outbound.js';
 import { deviceNotesRequest } from './device-notes.js';
 import { assertNoteAction } from './note-access.js';
 import { deviceTaskList,deviceTaskDetail,deviceTaskStatus,deviceTaskClaim } from './device-tasks.js';
@@ -138,6 +141,13 @@ export function deviceAppMiddleware(req,res,next) {
       if(path==='/tasks/sync-targets')return res.json({data:{caldav:[]}});
       if(path==='/tasks/completions')return res.json(completions(d,p,{query}));
       const [,id,action]=path.match(/^\/tasks\/(\d+)(?:\/([^/]+))?$/)||[];
+      if(action==='acceptance')return res.json({data:{...acceptanceOptions(d,req,Number(id),query.primary_user_id),task:deviceTaskDetail(d,p,Number(id))}});
+      if(action==='accept'){
+        const result=acceptTask(d,req,Number(id),req.body);
+        res.json({data:deviceTaskDetail(d,p,Number(id)),replayed:result.replayed});
+        if(!result.replayed)flushOutbound().catch(()=>{});
+        return;
+      }
       if(action==='status')return res.json({data:deviceTaskStatus(d,p,Number(id),req.body)});
       if(method==='PUT')return res.json({data:deviceTaskUpdate(d,p,Number(id),req.body)});
       if(!action)return res.json({data:task(d,p,id)});

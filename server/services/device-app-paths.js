@@ -15,8 +15,8 @@ export function deviceAppRouteSupported(method,path) {
   if(/^\/notes\/\d+$/.test(path)&&['PUT','DELETE'].includes(method))return true;
   if((path==='/notes/layout'||/^\/notes\/\d+\/(pin|check|layout)$/.test(path))&&method==='PATCH')return true;
   if(/^\/notes\/\d+$/.test(path)&&method==='GET')return true;
-  if(method==='GET')return reads.has(path)||/^\/tasks\/\d+(?:\/(?:activity|completions|comments|documents))?$/.test(path)
+  if(method==='GET')return reads.has(path)||/^\/tasks\/\d+(?:\/(?:activity|completions|comments|documents|acceptance))?$/.test(path)
     ||/^\/calendar\/\d+$/.test(path)||/^\/shopping\/\d+\/items$/.test(path)||/^\/automation\/rotation-groups\/\d+$/.test(path);
-  if(method==='POST')return path==='/tasks'||/^\/automation\/tasks\/\d+\/claim$/.test(path);
+  if(method==='POST')return path==='/tasks'||/^\/tasks\/\d+\/accept$/.test(path)||/^\/automation\/tasks\/\d+\/claim$/.test(path);
   return method==='PUT'&&/^\/tasks\/\d+$/.test(path)||method==='PATCH'&&/^\/tasks\/\d+\/status$/.test(path);
 }

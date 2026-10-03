@@ -5,7 +5,7 @@ import { openModal, closeModal, confirmModal } from '/components/modal.js';
 const option=(value,current,label=value)=>`<option value="${esc(value)}"${value===current?' selected':''}>${esc(label)}</option>`;
 const modules=['tasks','calendar','meals','shopping','rewards'];
 const noteActions={view:'View notes',create:'Create notes',edit:'Edit notes (including pins and checklist items)',delete:'Delete notes'};
-const actions={complete:'Complete existing independent steps',reopen:'Reopen completed steps',reset:'Reset existing progress',claim:'Claim approved unassigned Tasks for an explicit member'};
+const actions={complete:'Complete existing independent steps',reopen:'Reopen completed steps',reset:'Reset existing progress',claim:'Accept eligible unassigned Tasks for an explicit member',accept_with_helpers:'Add co-assignees and allocate unassigned subtasks during initial acceptance (requires Claim; does not grant reassignment)'};
 const definitions={'tasks.create':'Create plain Tasks','tasks.edit_others':'Edit plain Task titles and descriptions','tasks.change_assignment':'Choose a Task assignee','tasks.reassign':'Reassign existing Tasks','tasks.change_dates':'Change Start and Due windows','tasks.change_points':'Set or change Task point values'};
 export async function render(container) {
   let model, disposed=false;

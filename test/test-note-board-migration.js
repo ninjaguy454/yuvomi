@@ -12,7 +12,7 @@ test('Phase2 additive migration preserves encrypted populated notes and is resta
     const file=join(path,'synthetic.db');const open=()=>{const value=new Database(file);value.pragma("key='synthetic-notes-key'");value.pragma('foreign_keys=ON');return value;};d=open();
     for(const m of ALL_MIGRATIONS.filter(m=>m.version<=10048)){if(m.version===10048)d.pragma('foreign_keys=OFF');d.transaction(()=>{typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);})();if(m.version===10048)d.pragma('foreign_keys=ON');}
     d.exec("INSERT INTO users(id,username,display_name,password_hash,role) VALUES(1,'owner','Owner','x','member'); INSERT INTO notes(title,content,created_by,pinned) VALUES('Legacy','Exact text\n- [x] Keep',1,1)");
-    const before=d.prepare('SELECT * FROM notes').all();const additions=ALL_MIGRATIONS.filter(m=>m.version>10048);
+    const before=d.prepare('SELECT * FROM notes').all();const additions=ALL_MIGRATIONS.filter(m=>m.version>10048&&m.version<=10049);
     assert.equal(additions.length,1,'one additive Phase2 migration exists');
     for(const m of additions)d.transaction(()=>{typeof m.up==='function'?m.up(d):d.exec(m.up);m.afterUp?.(d);})();
     const after=d.prepare('SELECT * FROM notes').all();for(const key of Object.keys(before[0]))assert.equal(after[0][key],before[0][key],key);

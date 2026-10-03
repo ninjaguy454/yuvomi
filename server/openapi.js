@@ -18,6 +18,9 @@ function withIdempotency(paths) {
   for (const [path, item] of Object.entries(paths)) {
     if (!item?.post) continue;
     if (!path.startsWith('/api/v1/') || path.startsWith('/api/v1/auth/')) continue;
+    // A transaction-owned operation may explicitly document its own retry
+    // contract instead of the generic cached-response middleware.
+    if (item.post.parameters?.some(parameter => parameter.in === 'header' && parameter.name.toLowerCase() === 'idempotency-key')) continue;
     item.post.parameters = [...(item.post.parameters ?? []), idempotencyHeaderParam()];
     item.post.responses = {
       ...item.post.responses,

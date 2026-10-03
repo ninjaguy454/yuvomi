@@ -1886,10 +1886,10 @@ export function openTaskDetail({
     },
   }] : [];
 
-  if (!archived && !isExpired(task) && canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable')) {
+  if (!archived && !isExpired(task) && (task.is_offer === true ? canTask(task, 'accept') : canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable'))) {
     actions.push({
       id: 'task-detail-claim',
-      label: t('tasks.claimTask'),
+      label: t(task.is_offer === true ? 'tasks.acceptTitle' : 'tasks.claimTask'),
       variant: 'primary',
       icon: 'hand',
       onClick: ({ button }) => claimOpenTask(task, button, ctx),
@@ -1998,7 +1998,7 @@ export function openTaskDetail({
       commentsForm.hidden = !canTask(task, 'comment');
       commentsForm.querySelectorAll('input, textarea, button').forEach(control => { control.disabled = !canTask(task, 'comment'); });
     }
-    for (const [id, permission] of [['detail-view-edit', 'edit'], ['task-detail-delete', 'delete_archive'], ['task-detail-archive', 'delete_archive'], ['task-detail-claim', 'claim']]) {
+    for (const [id, permission] of [['detail-view-edit', 'edit'], ['task-detail-delete', 'delete_archive'], ['task-detail-archive', 'delete_archive'], ['task-detail-claim', task.is_offer === true ? 'accept' : 'claim']]) {
       const control = document.getElementById(id);
       if (control) control.hidden = id === 'detail-view-edit' && task.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task))
         ? !canTask(task, 'edit_series') : !canTask(task, permission) || (id === 'detail-view-edit' || id === 'task-detail-claim') && isExpired(task);

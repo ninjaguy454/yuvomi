@@ -1,3 +1,7 @@
+import {setTaskAssignments as setAssignments} from '../services/task-assignments.js';
+import {listTaskOffers,taskOfferState} from '../services/task-offers.js';
+import {acceptanceOptions} from '../services/task-acceptance-policy.js';
+import {acceptTask} from '../services/task-acceptance.js';
 /**
  * Modul: Aufgaben (Tasks)
  * Zweck: REST-API-Routen für Aufgaben und Teilaufgaben (max. 2 Ebenen)
@@ -148,7 +152,7 @@ router.param('id',(req,res,next,value)=>{
     return res.status(404).json({error:'Task not found.',code:404});
   if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
   const route=req.route.path;
-  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile') return next();
+  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept') return next();
   try {
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
     if (!task) return res.status(404).json({error:'Task not found.',code:404});
@@ -502,41 +506,6 @@ function parseAssignedTo(val) {
   return [];
 }
 
-function setAssignments(d, taskId, userIds) {
-  d.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
-  const ins = d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)');
-  for (const uid of userIds) ins.run(taskId, uid);
-
-  const task = d.prepare('SELECT parent_task_id FROM tasks WHERE id = ?').get(taskId);
-  if (!task?.parent_task_id) return;
-  d.prepare("DELETE FROM task_responsibilities WHERE task_id = ? AND role = 'subtask_assignee'").run(taskId);
-  const responsibility = d.prepare(`
-    INSERT OR IGNORE INTO task_responsibilities (task_id, user_id, role, source)
-    VALUES (?, ?, ?, ?)
-  `);
-  for (const uid of userIds) responsibility.run(taskId, uid, 'subtask_assignee', 'subtask');
-
-  const previous = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id = ? AND role = 'participant' AND source = 'subtasks'")
-    .all(task.parent_task_id).map((row) => Number(row.user_id));
-  d.prepare("DELETE FROM task_responsibilities WHERE task_id = ? AND role = 'participant' AND source = 'subtasks'")
-    .run(task.parent_task_id);
-  const current = d.prepare(`
-    SELECT DISTINCT ta.user_id
-      FROM tasks child
-      JOIN task_assignments ta ON ta.task_id = child.id
-     WHERE child.parent_task_id = ? AND child.archived_at IS NULL
-  `).all(task.parent_task_id).map((row) => Number(row.user_id));
-  for (const uid of current) {
-    responsibility.run(task.parent_task_id, uid, 'participant', 'subtasks');
-    ins.run(task.parent_task_id, uid);
-  }
-  for (const uid of previous.filter((id) => !current.includes(id))) {
-    const otherRole = d.prepare("SELECT 1 FROM task_responsibilities WHERE task_id = ? AND user_id = ? AND status = 'active'")
-      .get(task.parent_task_id, uid);
-    if (!otherRole) d.prepare('DELETE FROM task_assignments WHERE task_id = ? AND user_id = ?').run(task.parent_task_id, uid);
-  }
-}
-
 function parseTaskActivityBinding(body, existing = null) {
   const hasTemplate = Object.prototype.hasOwnProperty.call(body, 'activity_template_id');
   const hasSubject = Object.prototype.hasOwnProperty.call(body, 'activity_subject_user_id');
@@ -874,6 +843,7 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   task = db.get().prepare(`SELECT t.*,u.display_name AS assigned_name,u.avatar_color AS assigned_color,
     u.avatar_data AS assigned_avatar,${ASSIGNED_USERS_SQL}
     FROM tasks t LEFT JOIN users u ON u.id=t.assigned_to WHERE t.id=?`).get(task.id);
+  const offer=taskOfferState(db.get(),me,task);
   addAssignedUsers(task);
   task.subtasks=loadSubtasks(task.id,me,supervisionViews);
   if(task.parent_task_id)task.parent_revision=db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision;
@@ -920,6 +890,9 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
     && operational.every(child=>child.status==='done')
     && (structural.some(child=>!child.is_optional&&child.is_delegated_action&&child.status!=='done')
       || task.supervision_action?.action_task_id===task.id && task.supervision_action?.state!=='not_required');
+  task.is_offer=offer.visible;
+  task.offer_reason=offer.reason;
+  task.permissions.accept=offer.claimable;
   return task;
 }
 
@@ -1319,6 +1292,15 @@ router.delete('/categories/:key', (req, res) => {
 router.get('/', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;
+    if(req.query.offers==='1'){
+      const payload=withTaskReadSnapshot(db.get(),me,()=>{
+        const candidates=listTaskOffers(db.get(),req,{includeFuture:true,query:req.query});
+        const starts=taskStartProjection(db.get(),{tasks:candidates});
+        const hydrated=candidates.filter(starts.visible).slice(0,500).map(task=>hydrateTask(task,me));
+        return {data:hydrated.map(starts.project),visibility:starts.metadata([...candidates,...hydrated])};
+      });
+      return res.set('Cache-Control','private, no-store').json(payload);
+    }
     const payload = withTaskReadSnapshot(db.get(),me,()=>{
     const { status, priority, assigned_to, category, tag, include_future, archived } = req.query;
 
@@ -1491,6 +1473,23 @@ router.get('/', (req, res) => {
 // Einzelne Aufgabe mit Subtasks.
 // Response: { data: Task & { subtasks: Task[] } }
 // --------------------------------------------------------
+router.get('/:id/acceptance',(req,res)=>{
+  try{
+    const data=withTaskReadSnapshot(db.get(),req,()=>{
+      const options=acceptanceOptions(db.get(),req,Number(req.params.id),req.query.primary_user_id);
+      return {...options,task:hydrateTask({id:Number(req.params.id)},req.authUserId||req.session.userId)};
+    });
+    res.set('Cache-Control','private, no-store').json({data});
+  }catch(error){res.status(error.status||500).json({error:error.status?error.message:'Could not load acceptance options.',code:error.status||500,reason:error.reason});}
+});
+router.post('/:id/accept',(req,res)=>{
+  try{
+    const result=acceptTask(db.get(),req,Number(req.params.id),req.body);
+    const data=hydrateTask({id:result.task_id},req.authUserId||req.session.userId);
+    res.set('Cache-Control','private, no-store').json({data,replayed:result.replayed});
+    if(!result.replayed)pushToCalDAV('Task acceptance');
+  }catch(error){res.status(error.status||500).json({error:error.status?error.message:'Could not accept this Task.',code:error.status||500,reason:error.reason,...error.details});}
+});
 router.get('/:id', (req, res) => {
   try {
     const me = req.authUserId || req.session.userId;

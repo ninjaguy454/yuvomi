@@ -211,6 +211,7 @@ function sortedTasks(tasks, bucketKey = null) {
 
 function canCheckAndClaim(task) {
   if (isExpired(task)) return false;
+  if (task.is_offer === true) return canTask(task, 'accept');
   const strategy = task.activity_assignment_policy || task.activity_assignment_strategy;
   return task.activity_assignment_state === 'open'
     || (task.activity_assignment_state === 'unavailable' && strategy === 'open_claimable');
@@ -704,7 +705,7 @@ function renderTaskCard(task, opts = {}) {
       </div>
     </div>
     ${blocked ? `<div class="activity-card__blocker"><i data-lucide="user-round-check" class="icon-sm" aria-hidden="true"></i>${delegated ? 'Helper needed' : 'Supervision needed'}</div>` : ''}
-    ${canTask(task, 'claim') && canCheckAndClaim(task) ? `<div class="activity-card__claim"><button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button></div>` : ''}
+    ${(task.is_offer === true ? canTask(task, 'accept') : canTask(task, 'claim')) && canCheckAndClaim(task) ? `<div class="activity-card__claim"><button class="btn btn--primary btn--sm" data-action="claim-activity" data-id="${task.id}">${esc(task.is_offer === true ? t('tasks.acceptTitle') : task.activity_assignment_state === 'unavailable' ? 'Check availability and claim' : t('tasks.claimTask'))}</button></div>` : ''}
 
     ${detailsExpanded && hasDetails ? `<div class="activity-card__details" id="activity-details-${task.id}">
       ${task.description ? `<div class="activity-card__description">${renderMarkdownLight(task.description)}</div>` : ''}
@@ -1314,6 +1315,7 @@ let state = {
   // Status, Priorität und Person halten mehrere Werte (#671); innerhalb einer
   // Achse wirken sie ODER, zwischen den Achsen UND. Tags bleiben UND-verknüpft.
   filters:         { status: ['open', 'in_progress'], priority: [], assigned_to: [], tags: [] },
+  offersOnly:      false,
   groupMode:       'category',   // 'category' | 'due'
   viewMode:        'list',       // 'list' | 'kanban' | 'calendar' | 'history'
   boardScope:      'personal',   // device layout only; never a visibility/assignment filter
@@ -1443,6 +1445,7 @@ function filteredTasks() {
  */
 function taskQuery() {
   const params = new URLSearchParams();
+  if (state.offersOnly) params.set('offers', '1');
   // Kanban-Spalten SIND der Status: den Statusfilter dort nicht an den Server
   // senden, sonst blieben "In Bearbeitung"/"Erledigt" trotz vorhandener Aufgaben
   // leer (Audit A1-07/P3). In der Liste wirkt er normal; state bleibt erhalten,
@@ -3940,7 +3943,7 @@ function renderFilters(container) {
     + state.filters.priority.length
     + state.filters.assigned_to.length
     + state.filters.tags.length
-    + (state.showFuture ? 1 : 0);
+    + (state.showFuture ? 1 : 0) + (state.offersOnly ? 1 : 0);
   const panelOpen = isTaskPopoverOpen(panel);
 
   toggleBtn.classList.toggle('filter-toggle-btn--open', panelOpen);
@@ -3959,6 +3962,10 @@ function renderFilters(container) {
   quick.className = 'filter-panel__quick';
   quick.setAttribute('role', 'group');
   quick.setAttribute('aria-label', t('tasks.filterBtn'));
+  const offersChip = makeChip({ label: t('tasks.openTasks'), active: state.offersOnly, extraClass: 'filter-chip--toggle' });
+  offersChip.id = 'filter-open-tasks';
+  offersChip.setAttribute('aria-pressed', String(state.offersOnly));
+  quick.appendChild(offersChip);
 
   if (state.users.length > 1 && state.currentUserId != null) {
     const meActive = isAssignedToMe();
@@ -4307,6 +4314,7 @@ function wireFilterChips(container) {
   container.querySelector('#filter-clear-all')?.addEventListener('click', async () => {
     state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
     state.showFuture = false;
+    state.offersOnly = false;
     try { taskViewStorage.setItem(SHOW_FUTURE_KEY, '0'); } catch {}
     persistAssignedToMe();
     renderFilters(container);
@@ -4314,6 +4322,11 @@ function wireFilterChips(container) {
   });
 
   // "Geplante anzeigen" Toggle
+  container.querySelector('#filter-open-tasks')?.addEventListener('click', async () => {
+    state.offersOnly = !state.offersOnly;
+    renderFilters(container);
+    await loadTasks(container);
+  });
   container.querySelector('#filter-show-future')?.addEventListener('click', async () => {
     state.showFuture = !state.showFuture;
     try { taskViewStorage.setItem(SHOW_FUTURE_KEY, state.showFuture ? '1' : '0'); } catch {}
@@ -5438,6 +5451,8 @@ function wireTaskSearch(container) {
 }
 
 export async function render(container, { user }) {
+  state.offersOnly = new URLSearchParams(window.location.search).get('offers') === '1';
+  if (state.offersOnly) state.filters = { status: [], priority: [], assigned_to: [], tags: [] };
   state.user = user ?? null;
   state.currentUserId = user?.id ?? null;
   loadCollapsedGroups();
@@ -5447,7 +5462,7 @@ export async function render(container, { user }) {
 
   // „Mir zugewiesen" pro Gerät wiederherstellen (setzt assigned_to auf die eigene ID)
   try {
-    if (state.currentUserId != null && taskViewStorage.getItem(ASSIGNED_TO_ME_KEY) === '1') {
+    if (!state.offersOnly && state.currentUserId != null && taskViewStorage.getItem(ASSIGNED_TO_ME_KEY) === '1') {
       if (!hasFilter('assigned_to', state.currentUserId)) {
         state.filters.assigned_to = [...state.filters.assigned_to, String(state.currentUserId)];
       }

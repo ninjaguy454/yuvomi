@@ -21,6 +21,7 @@ import { authenticationSnapshot, sameAuthentication } from '/utils/device-contex
 import { wireNoteBoard } from '/components/note-board.js';
 import { normalizeNoteLayout, organizeNoteLayouts } from '/utils/note-board-layout.js';
 import { watchNoteChanges } from '/utils/note-live.js';
+import { mountOpenTaskBoard } from '/components/open-task-board.js';
 
 const canNote = action => getPermissions().principal_kind === 'device'
   ? moduleAccess('notes') !== 'none' && canCapability(`device_notes.${action}`)
@@ -63,6 +64,7 @@ let state = { notes: [], user: null, filterQuery: '', filterCreator: '' };
 let _container = null;
 let board = null;
 let stopLive = null;
+let stopOpenTasks = null;
 const currentPage = (page, auth) => state === page && page.active && sameAuthentication(auth);
 
 // --------------------------------------------------------
@@ -157,13 +159,13 @@ async function handleCheckConflict() {
 // --------------------------------------------------------
 
 export async function render(container, { user }) {
-  board?.destroy(); stopLive?.();
+  board?.destroy(); stopLive?.(); stopOpenTasks?.();
   if (state) state.active = false;
   _container = container;
   state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, pending: new Set(), deleting: new Set() };
   const pageState = state;
   const auth = authenticationSnapshot();
-  const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; board?.destroy(); board = null; stopLive?.(); stopLive = null; container.replaceChildren(); closeModal({ force: true }); } };
+  const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
   window.addEventListener('auth:context-ending', clearNotes, { once: true });
   window.addEventListener('auth:expired', clearNotes, { once: true });
 
@@ -184,8 +186,11 @@ export async function render(container, { user }) {
         <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
       </div>
       <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
-      <div class="notes-scroll page-scrollport">
-        <div id="notes-grid" class="notes-grid" aria-busy="true">${renderSkeletonList({ rows: 5, lines: 3 })}</div>
+      <div class="notes-workspace">
+        <aside id="notes-open-tasks" class="notes-open-tasks" hidden></aside>
+        <div class="notes-scroll page-scrollport">
+          <div id="notes-grid" class="notes-grid" aria-busy="true">${renderSkeletonList({ rows: 5, lines: 3 })}</div>
+        </div>
       </div>
       <button class="page-fab" id="fab-new-note" aria-label="${t('notes.addNoteLabel')}" data-dock-label="${t('newLabel.notes')}">
         <i data-lucide="plus" class="icon-xl" aria-hidden="true"></i>
@@ -194,6 +199,7 @@ export async function render(container, { user }) {
   `);
 
   if (window.lucide) lucide.createIcons({ el: container });
+  stopOpenTasks = mountOpenTaskBoard(container.querySelector('#notes-open-tasks'), { user });
 
   try {
     const res  = canNote('view') ? await api.get('/notes') : { data: [] };

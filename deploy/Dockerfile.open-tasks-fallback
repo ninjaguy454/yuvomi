@@ -1,0 +1,9 @@
+# Data-preserving Phase 3 recovery. Never substitute pre-privacy code.
+ARG CANDIDATE_IMAGE
+FROM ${CANDIDATE_IMAGE}
+USER root
+COPY deploy/build-open-tasks-fallback.mjs /tmp/build-open-tasks-fallback.mjs
+RUN node /tmp/build-open-tasks-fallback.mjs && rm /tmp/build-open-tasks-fallback.mjs
+ARG REVISION
+LABEL org.opencontainers.image.revision=$REVISION
+LABEL io.vidamia.task-acceptance-fallback="acceptance-paused-current-data"

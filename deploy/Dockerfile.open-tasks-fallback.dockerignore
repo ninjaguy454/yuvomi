@@ -1,0 +1,76 @@
+node_modules
+.git
+.github
+.worktrees
+.env
+.env.*
+
+# Local AI/dev tooling. None of it exists in a fresh clone, but a build from a
+# working copy would otherwise bake it into a published image.
+.claude
+.codex
+.agents
+.superpowers
+.qa
+.impeccable
+.interface-design
+graphify-out
+.shoot*.mjs
+.measure.mjs
+
+# Database files (never include real data in image)
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.nvmrc
+.gitignore
+.dockerignore
+
+# Documentation (not needed at runtime)
+docs/
+
+# Tests. The bare `test-*.js` patterns only ever matched the context root -
+# Docker's globs do not cross a slash - so the whole 180-file test/ directory
+# shipped in the image until this line was added.
+test/
+test-*.js
+test-*.mjs
+coverage/
+
+# Deployment descriptors and store listings (build inputs, not runtime files)
+deploy/
+templates/
+backups/
+ca_profile.xml
+nginx.conf.example
+docker-compose.yml
+podman-compose.yml
+
+# Scripts (dev-only)
+scripts/
+
+# Markdown files (README etc.)
+*.md
+# Exception: the changelog view falls back to this file when api.github.com
+# does not answer (#838). Without it in the image, an instance without outbound
+# network shows no history at all.
+!CHANGELOG.md
+
+# Installer tools (not part of the running app)
+tools/
+install.sh
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+!deploy/
+deploy/*
+!deploy/build-open-tasks-fallback.mjs

@@ -1,6 +1,6 @@
 /** Explicit normal-application route boundary for a non-human device principal. */
 export const canonicalPath=path=>String(path||'').split('?')[0].replace(/^\/api\/v1(?=\/|$)/,'').replace(/\/+$/,'')||'/';
-const reads=new Set(['/notes','/tasks','/tasks/meta/options','/tasks/categories','/tasks/tags','/tasks/completions',
+const reads=new Set(['/notes','/notes/changes','/tasks','/tasks/meta/options','/tasks/categories','/tasks/tags','/tasks/completions',
   '/tasks/changes','/tasks/sync-targets','/dashboard','/preferences','/auth/users','/module-counts',
   '/calendar','/calendar/holidays','/calendar/search','/calendar/sync-targets',
   '/meals','/meals/week-model','/meals/status','/meals/planning','/meals/selection-requests',
@@ -13,7 +13,8 @@ export function deviceAppRouteSupported(method,path) {
   path=canonicalPath(path);method=String(method||'GET').toUpperCase();
   if(path==='/notes'&&method==='POST')return true;
   if(/^\/notes\/\d+$/.test(path)&&['PUT','DELETE'].includes(method))return true;
-  if(/^\/notes\/\d+\/(pin|check)$/.test(path)&&method==='PATCH')return true;
+  if((path==='/notes/layout'||/^\/notes\/\d+\/(pin|check|layout)$/.test(path))&&method==='PATCH')return true;
+  if(/^\/notes\/\d+$/.test(path)&&method==='GET')return true;
   if(method==='GET')return reads.has(path)||/^\/tasks\/\d+(?:\/(?:activity|completions|comments|documents))?$/.test(path)
     ||/^\/calendar\/\d+$/.test(path)||/^\/shopping\/\d+\/items$/.test(path)||/^\/automation\/rotation-groups\/\d+$/.test(path);
   if(method==='POST')return path==='/tasks'||/^\/automation\/tasks\/\d+\/claim$/.test(path);

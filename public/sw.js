@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.29`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.30`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -196,6 +196,9 @@ const APP_SHELL = [
   '/utils/kitchen-tabs.js',
   '/utils/kitchen-transfer.js',
   '/utils/markdown-checklist.js',
+  '/components/note-board.js',
+  '/utils/note-board-layout.js',
+  '/utils/note-live.js',
   '/utils/markdown-toolbar.js',
   '/utils/meal-week-model.js',
   '/utils/meal-cycle-portions.js',
@@ -614,12 +617,22 @@ async function networkFirstApi(request) {
   await wallReady;
   const epoch = wallEpoch;
   const contextBound = !!request.headers?.get('X-Auth-Context');
+  // Dashboard includes revocable Private/Selected note previews. Never serve
+  // even an older cached snapshot, including when the network is unavailable.
+  const dashboard = /^\/api\/v1\/dashboard\/?$/.test(new URL(request.url).pathname);
+  if (dashboard) {
+    try { await (await caches.open(API_CACHE)).delete(request); } catch { /* Offline cache is optional. */ }
+  }
   try {
     const response = await fetch(request);
     // Defend against a new streaming endpoint entering the finite-response whitelist.
     if (response.headers.get('content-type')?.includes('text/event-stream')) return response;
     // Nur erfolgreiche, gleichoriginäre (basic) Antworten cachen.
-    if (response.ok && response.type === 'basic' && !contextBound && !wallLocked && !pairedDevice && epoch === wallEpoch) {
+    const noStore = /\bno-store\b/i.test(response.headers.get('Cache-Control') || '');
+    if (noStore) {
+      try { await (await caches.open(API_CACHE)).delete(request); } catch { /* Offline cache is optional. */ }
+    }
+    if (response.ok && response.type === 'basic' && !dashboard && !noStore && !contextBound && !wallLocked && !pairedDevice && epoch === wallEpoch) {
       try {
         const cache   = await caches.open(API_CACHE);
         const cloned  = response.clone();
@@ -639,7 +652,7 @@ async function networkFirstApi(request) {
     try {
       const cache  = await caches.open(API_CACHE);
       const cached = await cache.match(request);
-      if (cached && !contextBound && !wallLocked && !pairedDevice && epoch === wallEpoch) return cached;
+      if (cached && !dashboard && !/\bno-store\b/i.test(cached.headers.get('Cache-Control') || '') && !contextBound && !wallLocked && !pairedDevice && epoch === wallEpoch) return cached;
     } catch { /* Storage may be unavailable along with the network. */ }
     return new Response(JSON.stringify({ error: 'offline' }), {
       status: 503,

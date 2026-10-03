@@ -108,7 +108,7 @@ test('PUT /:id: ungültige Farbe → 400', async () => {
 
 test('PUT /:id: aktualisiert Inhalt/Titel/Farbe/pinned', async () => {
   const note = (await call('POST', '/', { content: 'Alt', title: 'T' })).body.data;
-  const r = await call('PUT', `/${note.id}`, { content: 'Neu', title: 'T2', color: '#00FF00', pinned: true });
+  const r = await call('PUT', `/${note.id}`, { content: 'Neu', title: 'T2', color: '#00FF00', pinned: true, expected_revision: note.revision });
   assert.equal(r.status, 200);
   assert.equal(r.body.data.content, 'Neu');
   assert.equal(r.body.data.title, 'T2');
@@ -118,7 +118,7 @@ test('PUT /:id: aktualisiert Inhalt/Titel/Farbe/pinned', async () => {
 
 test('PUT /:id: leerer Titel → null', async () => {
   const note = (await call('POST', '/', { content: 'C', title: 'Hat Titel' })).body.data;
-  const r = await call('PUT', `/${note.id}`, { title: '' });
+  const r = await call('PUT', `/${note.id}`, { title: '', expected_revision: note.revision });
   assert.equal(r.status, 200);
   assert.equal(r.body.data.title, null);
 });

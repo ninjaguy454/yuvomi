@@ -2,6 +2,7 @@ import {addMealCycleFinalizationSchema} from './services/meal-cycle-finalization
 import {addMealCycleReconciliationSchema} from './services/meal-cycle-reconciliation-schema.js';
 import {addMealCycleAdjustmentSchema} from './services/meal-cycle-adjustment-schema.js';
 import {addDeviceNotesSchema} from './services/device-notes-schema.js';
+import {addNoteBoardSchema} from './services/note-board-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9103,6 +9104,7 @@ FORK_MIGRATIONS.push({version:10045, description:'Kitchen: exact grocery scope a
 FORK_MIGRATIONS.push({version:10046, description:'Kitchen: durable targeted source reconciliation', up:addMealCycleReconciliationSchema});
 FORK_MIGRATIONS.push({version:10047, description:'Kitchen: reviewed adjustments and outstanding grocery attribution', up:addMealCycleAdjustmentSchema});
 FORK_MIGRATIONS.push({version:10048, description:'Notes: explicit paired-device authorship', up:addDeviceNotesSchema});
+FORK_MIGRATIONS.push({version:10049, description:'Notes: private audiences and independent canvas layouts', up:addNoteBoardSchema});
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 

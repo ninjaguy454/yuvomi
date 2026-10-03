@@ -1394,6 +1394,33 @@
         "agendaDayEmpty": "Nichts geplant"
     },
     "notes": {
+        "compactView": "Kompakte Ansicht",
+        "organize": "Im Raster anordnen",
+        "moveCard": "Karte verschieben",
+        "resizeCard": "Kartengroesse aendern",
+        "adjustCard": "Groesse und Position",
+        "visibleTo": "Sichtbar fuer",
+        "audienceHint": "Alle meint diesen Haushalt. Private und ausgewaehlte Notizen erfordern eine Anmeldung.",
+        "chooseMembers": "Haushaltsmitglieder auswaehlen",
+        "membersUnavailable": "Mitglieder konnten nicht geladen werden. Notiz zum Wiederholen schliessen und erneut oeffnen.",
+        "memberRequired": "Mindestens ein anderes Haushaltsmitglied auswaehlen.",
+        "layoutSaving": "Anordnung wird gespeichert...",
+        "layoutSaved": "Anordnung gespeichert",
+        "layoutConflict": "Die Anordnung wurde anderswo geaendert. Aktuelle Positionen wurden geladen. Erneut versuchen.",
+        "layoutFailed": "Anordnung konnte nicht gespeichert werden. Aktuelle Position pruefen und erneut versuchen.",
+        "layoutHint": "Kartengroesse und Position auf der gemeinsamen Pinnwand mit 12 Spalten. Auf Telefonen passen sich Karten an den Bildschirm an, ohne diese Werte zu aendern.",
+        "layoutPreview": "Spalte {{x}}, Zeile {{y}}; {{width}} Spalten breit und {{height}} Zeilen hoch.",
+        "audience": {
+            "private": "Privat",
+            "all": "Alle",
+            "selected": "Ausgewaehlte Mitglieder"
+        },
+        "layoutField": {
+            "x": "Spalte (0-9)",
+            "y": "Zeile",
+            "width": "Breite (3-12 Spalten)",
+            "height": "Hoehe (4-100 Zeilen)"
+        },
         "title": "Notizen",
         "newNote": "Neue Notiz",
         "editNote": "Notiz bearbeiten",

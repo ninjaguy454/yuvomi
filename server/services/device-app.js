@@ -4,6 +4,7 @@
  * Consumers reuse the existing lifecycle and shared-content projections. */
 import * as db from '../db.js';
 import { deviceNotesRequest } from './device-notes.js';
+import { assertNoteAction } from './note-access.js';
 import { deviceTaskList,deviceTaskDetail,deviceTaskStatus,deviceTaskClaim } from './device-tasks.js';
 import { deviceTaskCreateOnce,deviceTaskUpdate } from './device-task-definitions.js';
 import { deviceTaskVisible } from './task-access.js';
@@ -111,8 +112,11 @@ export function deviceAppMiddleware(req,res,next) {
   try {
     if(!deviceAppRouteSupported(method,path))fail();
     if(path==='/notes'||path.startsWith('/notes/')) {
-      const [,id,action]=path.match(/^\/notes(?:\/(\d+)(?:\/(pin|check))?)?$/)||[];
-      const result=deviceNotesRequest(d,p,method,id?Number(id):null,action,req.body);
+      if(path==='/notes/changes')return changes(req,res,'note_change_clock',(database,principal)=>assertNoteAction(database,principal,null,'view'));
+      const [,id,suffix]=path.match(/^\/notes(?:\/(\d+)(?:\/(pin|check|layout))?)?$/)||[];
+      const action=path==='/notes/layout'?'layout':suffix;
+      const body=method==='DELETE'?{expected_revision:req.query.expected_revision===undefined?undefined:Number(req.query.expected_revision)}:req.body;
+      const result=deviceNotesRequest(d,p,method,id?Number(id):null,action,body);
       return result.status===204?res.status(204).end():res.status(result.status).json(result.body);
     }
     if(path==='/preferences')return res.json({data:deviceAppPreferences(d,p)});

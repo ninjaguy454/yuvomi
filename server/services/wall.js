@@ -144,7 +144,9 @@ export function wallDashboard(d,hostId,hydrateTask) {
   if(allows('calendar'))result.upcomingEvents=getUpcomingEvents(d,{userId:null,fromToday:true,limit:20,includeBirthdays:false}).map(publicCalendarEvent);
   if(allows('meals'))result.todayMeals=d.prepare("SELECT id FROM meals WHERE date=? AND scope='household' AND parent_meal_id IS NULL AND superseded_by_id IS NULL AND selection_status='selected' ORDER BY scheduled_time,meal_type LIMIT 12").all(today).map(row=>wallMeal(d,row.id));
   if(allows('shopping'))result.shoppingLists=d.prepare('SELECT id FROM shopping_lists ORDER BY updated_at DESC LIMIT 8').all().map(row=>{const value=wallShopping(d,row.id);return {...value,open_count:value.items.filter(i=>!i.is_checked).length,items:value.items.filter(i=>!i.is_checked).slice(0,12)};});
-  if(allows('notes'))result.pinnedNotes=d.prepare('SELECT id,title,content FROM notes WHERE pinned=1 ORDER BY updated_at DESC LIMIT 8').all();
+  // The Wall is a shared projection, even when its host owns a restricted note.
+  // Selecting a member for a Wall action never changes the Notes audience.
+  if(allows('notes'))result.pinnedNotes=d.prepare("SELECT id,title,content FROM notes WHERE pinned=1 AND visibility='all' ORDER BY updated_at DESC LIMIT 8").all();
   if(allows('rewards'))result.rewardCatalog=d.prepare('SELECT id,name,cost,icon,description FROM reward_catalog WHERE is_active=1 ORDER BY sort_order,cost,name').all();
   if(allows('points','rewards')&&config.privacy.showPoints)result.points=d.prepare(`SELECT u.id AS user_id,u.display_name,COALESCE(SUM(l.delta),0) AS balance FROM users u
     JOIN reward_participants p ON p.user_id=u.id AND p.enabled=1 LEFT JOIN reward_ledger l ON l.user_id=u.id

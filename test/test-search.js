@@ -8,6 +8,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { MIGRATIONS_SQL } from '../server/db-schema-test.js';
 import { runSearch, buildMatchQuery } from '../server/services/search.js';
+import { addNoteBoardSchema } from '../server/services/note-board-schema.js';
 
 let passed = 0;
 let failed = 0;
@@ -31,6 +32,10 @@ db.exec(MIGRATIONS_SQL[44]);
 db.exec(MIGRATIONS_SQL[65]);
 // Migration 66: FTS triggers + backfill for medications and health activities.
 db.exec(MIGRATIONS_SQL[66]);
+// Current Notes search uses the audience schema. This deliberately small
+// historical FTS fixture only needs the device-author column and Notes upgrade.
+db.exec('ALTER TABLE notes ADD COLUMN created_by_device INTEGER');
+addNoteBoardSchema(db);
 
 console.log('\n[Search-Test] FTS5-Volltextsuche\n');
 

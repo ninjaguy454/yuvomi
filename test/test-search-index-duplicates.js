@@ -26,6 +26,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import Database from 'better-sqlite3-multiple-ciphers';
+import { addNoteBoardSchema } from '../server/services/note-board-schema.js';
 
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'search-index-duplicates-test-secret';
@@ -54,6 +55,10 @@ function buildDatabase(upTo = Infinity) {
     db.prepare('INSERT INTO schema_migrations (version, description) VALUES (?, ?)')
       .run(migration.version, migration.description);
   }
+  // Keep the old FTS migration under test while providing the current Notes
+  // audience dependency used by runSearch. No Task/FTS migration is advanced.
+  db.exec('ALTER TABLE notes ADD COLUMN created_by_device INTEGER');
+  addNoteBoardSchema(db);
   return db;
 }
 

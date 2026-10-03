@@ -1,0 +1,6 @@
+# Local candidate only: reuse the exact Phase 1 runtime and unchanged dependencies.
+FROM yuvomi:release-70a06cbc1a98d28207c9838fc1a3d48396bbae9a
+WORKDIR /app
+COPY . /app
+ARG REVISION
+LABEL org.opencontainers.image.revision=$REVISION

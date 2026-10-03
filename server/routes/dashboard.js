@@ -1,4 +1,5 @@
 import { taskVisibilityWhere } from '../services/task-access.js';
+import { noteVisibleSql } from '../services/note-access.js';
 /**
  * Modul: Dashboard
  * Zweck: Aggregierter Endpoint - liefert Daten aller Dashboard-Widgets in einem Request
@@ -127,6 +128,7 @@ const router = express.Router();
  * }
  */
 router.get('/', (req, res) => {
+  res.set('Cache-Control', 'private, no-store');
   try {
   const d = db.get();
   const result = {};
@@ -352,6 +354,7 @@ router.get('/', (req, res) => {
       SELECT n.*, u.display_name AS author_name, u.avatar_color AS author_color
       FROM notes n
       LEFT JOIN users u ON n.created_by = u.id
+      WHERE ${noteVisibleSql('n', 'viewerId')}
       ORDER BY n.pinned DESC, n.updated_at DESC
       -- FUENF, WEIL DIE KACHEL ZWEI HOCH SEIN DARF - dieselbe Korrektur, die
       -- die Geburtstage oben schon bekommen haben und bei der die Notizen
@@ -362,14 +365,15 @@ router.get('/', (req, res) => {
       -- (listRowCap in public/pages/dashboard.js) - der Server liefert nur
       -- den Vorrat fuer die groesste Fassung.
       LIMIT 5
-    `).all();
+    `).all({ viewerId: userId });
     /* `pinnedNotes` HEISST SO, IST ES ABER NICHT: die Liste sortiert Gepinntes
      * nach vorn und schneidet bei fuenf ab - sie filtert nicht. Fuer die Vorschau
      * ist das richtig (sie zeigt, was oben liegt), als ZAHL war es zweimal
      * falsch: ein Haushalt ohne einen einzigen Pin las "3 angepinnt", einer mit
      * fuenf Pins ebenfalls "3" (Codex-Review zu PR #754). Die Kennzahlkachel
      * braucht deshalb eine eigene, echte Zahl. */
-    result.pinnedNotesCount = d.prepare('SELECT COUNT(*) AS n FROM notes WHERE pinned = 1').get().n;
+    result.pinnedNotesCount = d.prepare(`SELECT COUNT(*) AS n FROM notes n
+      WHERE n.pinned = 1 AND ${noteVisibleSql('n', 'viewerId')}`).get({ viewerId: userId }).n;
   } catch (err) {
     log.error('pinnedNotes error:', err.message);
     result.pinnedNotes = [];

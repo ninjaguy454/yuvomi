@@ -227,6 +227,29 @@ test('Wall entry clears personal API content even if persisting its lock fails',
 
 function apiUrl(path) { return `${ORIGIN}/api/v1${path}`; }
 
+test('dashboard restricted-note previews never persist or replay from an older cache',async()=>{
+  const env=loadSw({fetchImpl:async()=>new MockResponse('{"pinnedNotes":[{"content":"private"}]}')});
+  const req=new MockRequest(apiUrl('/dashboard'));
+  const cache=await env.caches.open(env.cacheNames.API_CACHE);
+  await cache.put(req,new MockResponse('{"pinnedNotes":[{"content":"old private"}]}'));
+  env.setFetch(async()=>{throw new Error('offline');});
+  assert.equal((await dispatchFetch(env,req).result).status,503);
+  assert.equal(await cache.match(req),undefined);
+  env.setFetch(async()=>new MockResponse('{"pinnedNotes":[{"content":"private"}]}'));
+  assert.equal((await dispatchFetch(env,req).result).status,200);
+  assert.equal(await cache.match(req),undefined);
+});
+
+test('an API no-store response removes the previous offline snapshot',async()=>{
+  const env=loadSw();const req=new MockRequest(apiUrl('/calendar'));
+  await dispatchFetch(env,req).result;
+  env.setFetch(async()=>new MockResponse('{"secret":true}',{headers:{'Cache-Control':'private, no-store'}}));
+  await dispatchFetch(env,req).result;
+  assert.equal(await(await env.caches.open(env.cacheNames.API_CACHE)).match(req),undefined);
+  env.setFetch(async()=>{throw new Error('offline');});
+  assert.equal((await dispatchFetch(env,req).result).status,503);
+});
+
 /** Feuert ein fetch-Event; liefert ob respondWith aufgerufen wurde + dessen Promise. */
 function dispatchFetch(env, request) {
   let responded = false;

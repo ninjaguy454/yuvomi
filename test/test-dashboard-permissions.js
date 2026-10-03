@@ -27,13 +27,13 @@ import express from 'express';
 process.env.DB_PATH = ':memory:';
 process.env.SESSION_SECRET = 'dashboard-permissions-test-secret';
 
-const { MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
+const { ALL_MIGRATIONS, get, _setTestDatabase } = await import('../server/db.js');
 const { resolvePermissions, buildSessionModuleAccess, PERMISSION_MODULES } = await import('../server/permissions.js');
 const { moduleForPath } = await import('../server/scopes.js');
 const { default: dashboardRouter } = await import('../server/routes/dashboard.js');
 
 const moduleDatabase = get();
-const db = buildMigratedDatabase(MIGRATIONS);
+const db = buildMigratedDatabase(ALL_MIGRATIONS);
 _setTestDatabase(db);
 moduleDatabase.close();
 

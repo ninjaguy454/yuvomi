@@ -46,7 +46,8 @@ test('Notes permissions are independent and creation never grants editing or del
   assert.equal((await call('/notes')).body.data[0].title,'Existing note');
   assert.equal((await call('/notes','POST',{content:'Blocked'})).status,403);
   p.permissions.capabilities['device_notes.create']='allow';
-  const created=await call('/notes','POST',{title:'From display',content:'New note',created_by:1});
+  assert.equal((await call('/notes','POST',{title:'From display',content:'New note',created_by:1})).status,400);
+  const created=await call('/notes','POST',{title:'From display',content:'New note'});
   assert.equal(created.status,201,JSON.stringify(created.body));
   const id=created.body.data.id;
   assert.equal(d.prepare('SELECT created_by FROM notes WHERE id=?').get(id).created_by,null);

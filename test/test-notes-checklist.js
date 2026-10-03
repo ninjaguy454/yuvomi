@@ -205,7 +205,7 @@ test('die Aufgaben rendern ihre Notiz interaktiv - sie zeigen den ganzen Text', 
 
 test('die Notizenseite schaltet die Kaestchen frei und faengt den Klick ab', async () => {
   const src = await readFile(new URL('../public/pages/notes.js', import.meta.url), 'utf8');
-  assert.match(src, /interactive:\s*canNote\('edit'\)/, 'Notes checklist changes require the edit permission');
+  assert.match(src, /interactive:\s*canOnNote\(note, 'edit'\)/, 'Notes checklist changes require module and per-note edit permission');
   assert.match(src, /notes\/\$\{noteId\}\/check/, 'sie schreiben ueber die schmale Route zurueck');
   assert.match(src, /note-md-box\[data-md-line\]/, 'ein Klick auf das Kaestchen wird erkannt');
   assert.match(src, /e\.stopPropagation\(\);\s*\n\s*const owner/,
@@ -293,7 +293,8 @@ test('zwei Mitglieder haken verschiedene Zeilen ab - beide Haken bleiben', async
 
 test('PATCH /:id/check: veraltete Zeile → 409 statt falschem Haken', async () => {
   const note = await newNote('- [ ] Milch');
-  await call('PUT', `/${note.id}`, { content: '- [ ] Eier\n- [ ] Milch' });
+  const edit = await call('PUT', `/${note.id}`, { content: '- [ ] Eier\n- [ ] Milch', expected_revision: note.revision });
+  assert.equal(edit.status, 200);
   const r = await call('PATCH', `/${note.id}/check`, { line: 0, checked: true, expect: '- [ ] Milch' });
   assert.equal(r.status, 409);
   assert.equal(r.body.reason, 'stale');

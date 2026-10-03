@@ -6,7 +6,7 @@
 
 import { api } from '/api.js';
 import { openModal as openSharedModal, closeModal, btnError, advancedSection, reportFieldError } from '/components/modal.js';
-import { stagger, vibrate, scheduleUndoableDelete } from '/utils/ux.js';
+import { vibrate, scheduleUndoableDelete } from '/utils/ux.js';
 import { t } from '/i18n.js';
 import { esc, renderMarkdownLight } from '/utils/html.js';
 import { splitKeepingLineEndings } from '/utils/markdown-checklist.js';
@@ -18,10 +18,15 @@ import { emptyStateHTML } from '/utils/empty-state.js';
 import { AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 import { getPermissions, moduleAccess, canCapability } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
+import { wireNoteBoard } from '/components/note-board.js';
+import { normalizeNoteLayout, organizeNoteLayouts } from '/utils/note-board-layout.js';
+import { watchNoteChanges } from '/utils/note-live.js';
 
 const canNote = action => getPermissions().principal_kind === 'device'
   ? moduleAccess('notes') !== 'none' && canCapability(`device_notes.${action}`)
   : moduleAccess('notes') === 'write' || (action === 'view' && moduleAccess('notes') === 'read');
+const canOnNote = (note, action) => canNote(action) && note?.permissions?.[action] !== false;
+const audienceLabel = note => t(`notes.audience.${note?.visibility || 'all'}`);
 
 // --------------------------------------------------------
 // Konstanten
@@ -56,6 +61,9 @@ const NOTE_COLOR_NAMES = () => ({
 
 let state = { notes: [], user: null, filterQuery: '', filterCreator: '' };
 let _container = null;
+let board = null;
+let stopLive = null;
+const currentPage = (page, auth) => state === page && page.active && sameAuthentication(auth);
 
 // --------------------------------------------------------
 // Antippbare Checklisten (#704)
@@ -65,8 +73,8 @@ let _container = null;
 // sie zeigen den vollstaendigen Text und kennen die Notiz-ID. Das Dashboard
 // bekommt diese Optionen deshalb ausdruecklich nicht - dort steht ein gekuerzter
 // Auszug, dessen Zeilennummern nicht die der Notiz sind.
-const CHECKLIST_OPTS = () => ({
-  checklist: { interactive: canNote('edit'), toggleLabel: t('notes.checklistToggle') },
+const CHECKLIST_OPTS = (note) => ({
+  checklist: { interactive: canOnNote(note, 'edit'), toggleLabel: t('notes.checklistToggle') },
 });
 
 /**
@@ -103,7 +111,8 @@ function paintCheck(noteId, line, checked) {
 async function toggleCheck(noteId, box) {
   if (!canNote('edit')) return;
   const note = state.notes.find((n) => n.id === noteId);
-  if (!note) return;
+  if (!note || !canOnNote(note, 'edit')) return;
+  const page = state, auth = authenticationSnapshot();
 
   const line    = parseInt(box.dataset.mdLine, 10);
   const checked = box.dataset.mdChecked !== '1';
@@ -123,9 +132,12 @@ async function toggleCheck(noteId, box) {
 
   try {
     const res = await api.patch(`/notes/${noteId}/check`, { line, checked, expect });
+    if (!currentPage(page, auth)) return;
     note.content = res.data.content;
     note.updated_at = res.data.updated_at;
+    note.revision = res.data.revision ?? note.revision;
   } catch (err) {
+    if (!currentPage(page, auth)) return;
     paintCheck(noteId, line, !checked);
     if (err.status === 409) {
       await handleCheckConflict();
@@ -145,11 +157,15 @@ async function handleCheckConflict() {
 // --------------------------------------------------------
 
 export async function render(container, { user }) {
+  board?.destroy(); stopLive?.();
+  if (state) state.active = false;
   _container = container;
-  state = { notes: [], user, filterQuery: '', filterCreator: '' };
+  state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, pending: new Set(), deleting: new Set() };
   const pageState = state;
-  const clearNotes = () => { if (state === pageState) { state.notes = []; container.replaceChildren(); closeModal({ force: true }); } };
+  const auth = authenticationSnapshot();
+  const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; board?.destroy(); board = null; stopLive?.(); stopLive = null; container.replaceChildren(); closeModal({ force: true }); } };
   window.addEventListener('auth:context-ending', clearNotes, { once: true });
+  window.addEventListener('auth:expired', clearNotes, { once: true });
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -161,6 +177,11 @@ export async function render(container, { user }) {
           <i data-lucide="plus" class="icon-md" aria-hidden="true"></i>
           <span class="toolbar-new-btn__label">${t('newLabel.notes')}</span>
         </button>
+      </div>
+      <div class="notes-board-toolbar">
+        <button class="btn btn--secondary btn--sm" id="notes-compact-view" aria-pressed="false">${t('notes.compactView')}</button>
+        ${canNote('view') && canNote('edit') ? `<button class="btn btn--secondary btn--sm" id="notes-organize">${t('notes.organize')}</button>` : ''}
+        <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
       </div>
       <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
       <div class="notes-scroll page-scrollport">
@@ -176,13 +197,17 @@ export async function render(container, { user }) {
 
   try {
     const res  = canNote('view') ? await api.get('/notes') : { data: [] };
+    if (!currentPage(pageState, auth)) return () => {};
     state.notes = res.data;
   } catch (err) {
+    if (!currentPage(pageState, auth)) return () => {};
     console.error('[Notes] Laden fehlgeschlagen:', err);
     throw err;
   }
   const grid = container.querySelector('#notes-grid');
   grid.addEventListener('click', async (e) => {
+    const adjust = e.target.closest('[data-board-action="adjust"]');
+    if (adjust) { e.stopPropagation(); openLayoutModal(Number(adjust.closest('.note-card').dataset.id)); return; }
     const pinBtn = e.target.closest('[data-action="pin"]');
     if (pinBtn) { e.stopPropagation(); await togglePin(parseInt(pinBtn.dataset.id, 10)); return; }
 
@@ -211,6 +236,11 @@ export async function render(container, { user }) {
 
   renderCreatorFilter();
   renderGrid();
+  if (canNote('view')) stopLive = watchNoteChanges(reloadNotes);
+  container.querySelector('#notes-compact-view').addEventListener('click', e => {
+    state.compact = !state.compact; e.currentTarget.setAttribute('aria-pressed', String(state.compact)); renderGrid();
+  });
+  container.querySelector('#notes-organize')?.addEventListener('click', organizeNotes);
 
   if (!canNote('create')) {
     _container.querySelector('#notes-add-btn')?.remove();
@@ -231,7 +261,7 @@ export async function render(container, { user }) {
       renderGrid();
     },
   });
-  return () => { window.removeEventListener('auth:context-ending', clearNotes); clearNotes(); };
+  return () => { window.removeEventListener('auth:context-ending', clearNotes); window.removeEventListener('auth:expired', clearNotes); clearNotes(); };
 }
 
 // --------------------------------------------------------
@@ -292,12 +322,23 @@ function visibleNotes() {
 }
 
 function renderGrid() {
+  if (!state.active) return;
   const grid = _container.querySelector('#notes-grid');
   if (!grid) return;
+  const focused = document.activeElement?.closest('.note-card');
+  const focusId = focused?.dataset.id;
+  const focusAction = document.activeElement?.dataset.action;
+  const focusBoardAction = document.activeElement?.dataset.boardAction;
+  const focusChecklistLine = document.activeElement?.dataset.mdLine;
+  const previewScroll = new Map([...grid.querySelectorAll('.note-card')].map(card => [card.dataset.id, card.querySelector('.note-card__content')?.scrollTop || 0]));
+  board?.destroy(); board = null;
   grid.removeAttribute('aria-busy');
 
   const q = state.filterQuery.trim().toLowerCase();
   const visible = visibleNotes();
+  const forceCompact = state.notes.some(note => note.layout?.overflow);
+  const compactButton = _container.querySelector('#notes-compact-view');
+  if (compactButton) { compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
 
   if (!visible.length) {
     const isFiltered = q.length > 0 || !!state.filterCreator;
@@ -330,19 +371,20 @@ function renderGrid() {
   // die Trennung war nur aus dem Ring an der Karte zu erschließen. Zwei
   // Abschnittsköpfe machen die bestehende Sortierung lesbar. Sie erscheinen
   // nur, wenn es tatsächlich beide Gruppen gibt.
-  const pinned = visible.filter((n) => n.pinned);
-  const rest   = visible.filter((n) => !n.pinned);
-  const heading = (label) => `<h2 class="notes-group__title">${label}</h2>`;
-
-  const html = (pinned.length && rest.length)
-    ? heading(t('notes.groupPinned')) + pinned.map(renderNoteCard).join('')
-      + heading(t('notes.groupOthers')) + rest.map(renderNoteCard).join('')
-    : visible.map(renderNoteCard).join('');
+  const html = visible.map(renderNoteCard).join('');
 
   grid.replaceChildren();
   grid.insertAdjacentHTML('beforeend', html);
   if (window.lucide) lucide.createIcons({ el: grid });
-  stagger(grid.querySelectorAll('.note-card'));
+  board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout,
+    compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator });
+  if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
+  if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
+  if (focusId && focusChecklistLine !== undefined) grid.querySelector(`.note-card[data-id="${focusId}"] .note-md-box[data-md-line="${focusChecklistLine}"]`)?.focus({ preventScroll: true });
+  for (const [id, top] of previewScroll) {
+    const preview = grid.querySelector(`.note-card[data-id="${id}"] .note-card__content`);
+    if (preview) preview.scrollTop = top;
+  }
 }
 
 function renderNoteCard(note) {
@@ -362,12 +404,17 @@ function renderNoteCard(note) {
     <div class="note-card ${note.pinned ? 'note-card--pinned' : ''}"
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
-      ${canNote('edit') ? `<button class="note-card__pin" data-action="pin" data-id="${note.id}"
+      ${canOnNote(note, 'edit') ? `<div class="note-card__board-tools">
+        <button type="button" class="note-card__handle" data-board-handle="move" aria-label="${t('notes.moveCard')}" title="${t('notes.moveCard')}" tabindex="-1"><i data-lucide="move" class="icon-sm" aria-hidden="true"></i></button>
+        <button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>
+      </div>` : ''}
+      <span class="note-card__audience">${audienceLabel(note)}${note.pinned ? ` · ${t('notes.groupPinned')}` : ''}</span>
+      ${canOnNote(note, 'edit') ? `<button class="note-card__pin" data-action="pin" data-id="${note.id}"
               aria-label="${note.pinned ? t('notes.unpinAction') : t('notes.pinAction')}">
         <i data-lucide="${note.pinned ? 'pin-off' : 'pin'}" class="icon-sm" aria-hidden="true"></i>
       </button>` : ''}
       ${note.title ? `<div class="note-card__title">${esc(note.title)}</div>` : ''}
-      <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS())}</div>
+      <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS(note))}</div>
       <div class="note-card__footer">
         <div class="note-card__creator">
           <span class="note-card__avatar"
@@ -387,11 +434,12 @@ function renderNoteCard(note) {
                   aria-label="${t('notes.openNote')}">
             <i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i>
           </button>
-          ${canNote('delete') ? `<button class="note-card__delete" data-action="delete" data-id="${note.id}" aria-label="${t('notes.deleteLabel')}">
+          ${canOnNote(note, 'delete') ? `<button class="note-card__delete" data-action="delete" data-id="${note.id}" aria-label="${t('notes.deleteLabel')}">
             <i data-lucide="trash-2" class="icon-sm" aria-hidden="true"></i>
           </button>` : ''}
         </div>
       </div>
+      ${canOnNote(note, 'edit') ? `<button type="button" class="note-card__resize" data-board-handle="resize" aria-label="${t('notes.resizeCard')}" title="${t('notes.resizeCard')}" tabindex="-1"><i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i></button>` : ''}
     </div>
   `;
 }
@@ -419,14 +467,17 @@ function renderNoteReadHtml(content, { live = false } = {}) {
 
 function openNoteModal({ mode, note = null }) {
   if (mode === 'create' && !canNote('create')) return;
-  if (note && !canNote('view')) return;
-  if (note && !canNote('edit')) {
+  if (note && !canOnNote(note, 'view')) return;
+  if (note && !canOnNote(note, 'edit')) {
     openSharedModal({title: note.title || t('notes.viewNote'), size: 'lg',
-      content: `<div class="note-modal" data-view="read" data-note-id="${note.id}"><div class="note-read-view">${renderNoteReadHtml(note.content)}</div>${canNote('delete') ? `<div class="modal-panel__footer"><button class="btn btn--danger-outline" id="note-modal-delete">${t('common.delete')}</button></div>` : ''}</div>`,
+      content: `<div class="note-modal" data-view="read" data-note-id="${note.id}"><p class="note-audience-summary">${audienceLabel(note)}</p><div class="note-read-view">${renderNoteReadHtml(note.content)}</div>${canOnNote(note, 'delete') ? `<div class="modal-panel__footer"><button class="btn btn--danger-outline" id="note-modal-delete">${t('common.delete')}</button></div>` : ''}</div>`,
       onSave(panel) { panel.querySelector('#note-modal-delete')?.addEventListener('click', () => deleteNote(note.id)); }});
     return;
   }
   const isEdit      = mode === 'edit';
+  const page = state, auth = authenticationSnapshot();
+  const canManageAudience = getPermissions().principal_kind !== 'device' && (!isEdit || note.permissions?.manage_visibility === true);
+  let originalRevision = note?.revision ?? 0;
   const selColor    = (isEdit ? note.color : null) || NOTE_COLORS[0];
   // Bestehende Notizen können Farben außerhalb der Palette tragen (Alt-Daten,
   // frühere Paletten). Die aktuelle Farbe wird dann als eigener Swatch
@@ -438,6 +489,7 @@ function openNoteModal({ mode, note = null }) {
 
   const content = `
     <div class="note-modal" data-view="${initialView}"${isEdit ? ` data-note-id="${note.id}"` : ''} style="--note-color:${esc(selColor)};">
+      <p class="note-audience-summary">${audienceLabel(note)}</p>
       <div class="note-mode-switch" role="tablist" aria-label="${t('notes.modeSwitchLabel')}">
         <button type="button" id="note-tab-read" class="sub-tab${initialView === 'read' ? ' sub-tab--active' : ''}"
                 role="tab" aria-selected="${initialView === 'read' ? 'true' : 'false'}"
@@ -460,6 +512,12 @@ function openNoteModal({ mode, note = null }) {
 
       <div class="note-edit-view" id="note-pane-edit" data-pane="edit" role="tabpanel"
            aria-labelledby="note-tab-edit"${initialView === 'edit' ? '' : ' hidden'}>
+    ${canManageAudience ? `<div class="form-group">
+      <label class="form-label" for="note-visibility">${t('notes.visibleTo')}</label>
+      <select class="form-input" id="note-visibility">${['private', 'all', 'selected'].map(value => `<option value="${value}"${(note?.visibility || 'all') === value ? ' selected' : ''}>${t(`notes.audience.${value}`)}</option>`).join('')}</select>
+      <p class="form-hint">${t('notes.audienceHint')}</p>
+      <fieldset id="note-members"${note?.visibility === 'selected' ? '' : ' hidden'}><legend>${t('notes.chooseMembers')}</legend><div id="note-member-options" role="status">${t('common.loading')}</div></fieldset>
+    </div>` : ''}
     <div class="form-group">
       <label class="form-label" for="note-title">${t('notes.titleLabel')}</label>
       <input type="text" class="form-input" id="note-title"
@@ -498,7 +556,7 @@ function openNoteModal({ mode, note = null }) {
       </div>
 
       <div class="modal-panel__footer modal-panel__footer--plain note-modal__footer">
-        ${isEdit && canNote('delete') ? `<button type="button" class="btn btn--danger-outline" id="note-modal-delete" style="margin-right:auto">${t('common.delete')}</button>` : ''}
+        ${isEdit && canOnNote(note, 'delete') ? `<button type="button" class="btn btn--danger-outline" id="note-modal-delete" style="margin-right:auto">${t('common.delete')}</button>` : ''}
         <button type="button" class="btn btn--secondary" id="note-modal-cancel" data-editor-only>${t('common.cancel')}</button>
         <button type="button" class="btn btn--primary" id="note-modal-save" data-editor-only>${isEdit ? t('common.save') : t('common.create')}</button>
       </div>
@@ -516,6 +574,22 @@ function openNoteModal({ mode, note = null }) {
     // die Leseansicht derselben Notiz haengt an derselben Breite.
     size: 'lg',
     onSave(panel) {
+      const visibility = panel.querySelector('#note-visibility');
+      visibility?.addEventListener('change', () => {
+        panel.querySelector('#note-members').hidden = visibility.value !== 'selected';
+        panel.querySelector('.note-audience-summary').textContent = t(`notes.audience.${visibility.value}`);
+      });
+      if (visibility) {
+        api.get('/notes/members').then(res => {
+          if (!currentPage(page, auth) || !panel.isConnected) return;
+          const options = panel.querySelector('#note-member-options');
+          options.replaceChildren();
+          options.insertAdjacentHTML('beforeend', res.data.filter(member => member.id !== state.user?.id).map(member => `<label class="note-member-option"><input type="checkbox" data-note-member="${member.id}" value="${member.id}"${note?.access_user_ids?.includes(member.id) ? ' checked' : ''}><span>${esc(member.display_name)}</span></label>`).join(''));
+        }).catch(() => {
+          if (!currentPage(page, auth) || !panel.isConnected) return;
+          panel.querySelector('#note-member-options').textContent = t('notes.membersUnavailable');
+        });
+      }
       // Reader/Editor-Umschalter (#507): beide Panes bleiben im DOM, damit
       // Dirty-Check und Feld-Verdrahtung intakt bleiben und der Toggle nichts
       // verwirft. Die Leseansicht wird bei jedem Wechsel aus den Live-Feldern
@@ -529,6 +603,7 @@ function openNoteModal({ mode, note = null }) {
       const viewTitle   = panel.querySelector('#note-title');
       const viewContent = panel.querySelector('#note-content');
       const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+      let draftStarted = !isEdit;
 
       function animatePane(pane) {
         if (reduceMotion) return;
@@ -545,6 +620,27 @@ function openNoteModal({ mode, note = null }) {
       }
 
       function setView(view, { focusField = false } = {}) {
+        if (view === 'edit' && !draftStarted) {
+          // The first editor draft starts from the complete current snapshot,
+          // including successful reader checklist operations. Later read/edit
+          // switches must never rebase an existing draft over another writer.
+          const fresh = state.notes.find(n => n.id === note.id);
+          if (fresh) {
+            originalRevision = fresh.revision ?? originalRevision;
+            note = fresh;
+            viewTitle.value = fresh.title || '';
+            viewContent.value = fresh.content || '';
+            panel.querySelector('#note-pinned').checked = !!fresh.pinned;
+            const swatch = [...panel.querySelectorAll('.note-color-swatch')].find(el => el.dataset.color === fresh.color);
+            if (swatch) selectSwatch(swatch);
+            if (visibility) {
+              visibility.value = fresh.visibility || 'all';
+              panel.querySelector('#note-members').hidden = visibility.value !== 'selected';
+              panel.querySelectorAll('[data-note-member]').forEach(input => { input.checked = fresh.access_user_ids?.includes(Number(input.value)) || false; });
+            }
+          }
+          draftStarted = true;
+        }
         noteModal.dataset.view = view;
         readPane.hidden = view !== 'read';
         editPane.hidden = view !== 'edit';
@@ -669,12 +765,17 @@ function openNoteModal({ mode, note = null }) {
       panel.querySelector('#note-modal-cancel').addEventListener('click', closeModal);
 
       panel.querySelector('#note-modal-save').addEventListener('click', async () => {
-        if (!canNote(isEdit ? 'edit' : 'create')) return;
+        if (!currentPage(page, auth) || !canNote(isEdit ? 'edit' : 'create')) return;
         const saveBtn = panel.querySelector('#note-modal-save');
         const title   = panel.querySelector('#note-title').value.trim() || null;
         const cnt     = panel.querySelector('#note-content').value.trim();
         const color   = panel.querySelector('.note-color-swatch--active')?.dataset.color || NOTE_COLORS[0];
         const pinned  = panel.querySelector('#note-pinned').checked ? 1 : 0;
+        const audience = visibility ? { visibility: visibility.value, access_user_ids: visibility.value === 'selected' ? [...panel.querySelectorAll('[data-note-member]:checked')].map(input => Number(input.value)) : [] }
+          : !isEdit ? { visibility: 'all' } : {};
+        if (audience.visibility === 'selected' && !audience.access_user_ids.length) {
+          reportFieldError(visibility, t('notes.memberRequired')); return;
+        }
 
         if (!cnt) {
           // Fehler am Feld statt als ortloser Toast (geteiltes Muster, Critique P1).
@@ -687,10 +788,12 @@ function openNoteModal({ mode, note = null }) {
 
         try {
           if (mode === 'create') {
-            const res = await api.post('/notes', { title, content: cnt, color, pinned });
+            const res = await api.post('/notes', { title, content: cnt, color, pinned, ...audience });
+            if (!currentPage(page, auth) || !panel.isConnected) return;
             if (canNote('view') && res.data) state.notes.unshift(res.data);
           } else {
-            const res = await api.put(`/notes/${note.id}`, { title, content: cnt, color, pinned });
+            const res = await api.put(`/notes/${note.id}`, { title, content: cnt, color, pinned, expected_revision: originalRevision, ...audience });
+            if (!currentPage(page, auth) || !panel.isConnected) return;
             const idx = state.notes.findIndex((n) => n.id === note.id);
             if (idx !== -1) state.notes[idx] = res.data;
             state.notes.sort((a, b) => b.pinned - a.pinned);
@@ -699,6 +802,8 @@ function openNoteModal({ mode, note = null }) {
           renderGrid();
           window.yuvomi?.showToast(mode === 'create' ? t('notes.createdToast') : t('notes.savedToast'), 'success');
         } catch (err) {
+          if (!currentPage(page, auth) || !panel.isConnected) return;
+          if (err.status === 403 || err.status === 404) { await reloadNotes(); if (!panel.isConnected) return; }
           window.yuvomi?.showToast(err.data?.error ?? t('common.unknownError'), 'danger');
           btnError(saveBtn);
           saveBtn.disabled    = false;
@@ -714,15 +819,20 @@ function openNoteModal({ mode, note = null }) {
 // --------------------------------------------------------
 
 async function togglePin(id) {
-  if (!canNote('edit')) return;
+  const note = state.notes.find(n => n.id === id);
+  if (!note || !canOnNote(note, 'edit')) return;
+  const page = state, auth = authenticationSnapshot();
   try {
-    const res  = await api.patch(`/notes/${id}/pin`, {});
-    const note = state.notes.find((n) => n.id === id);
-    if (note) note.pinned = res.data.pinned;
+    const res  = await api.patch(`/notes/${id}/pin`, { expected_revision: note.revision ?? 0 });
+    if (!currentPage(page, auth)) return;
+    note.pinned = res.data.pinned;
+    note.revision = res.data.revision ?? note.revision;
     state.notes.sort((a, b) => b.pinned - a.pinned);
     renderGrid();
   } catch (err) {
+    if (!currentPage(page, auth)) return;
     window.yuvomi?.showToast(err.data?.error ?? t('common.unknownError'), 'danger');
+    await reloadNotes();
   }
 }
 
@@ -734,35 +844,145 @@ async function togglePin(id) {
  * damit sie nicht ein zweites Mal hier steht.
  */
 async function reloadNotes() {
-  if (!canNote('view')) return;
+  if (!state.active) return;
+  const page = state, auth = authenticationSnapshot();
+  if (!canNote('view')) { state.notes = []; closeModal({ force: true }); renderGrid(); return; }
+  const sequence = page.readSequence = (page.readSequence || 0) + 1;
   try {
     const res = await api.get('/notes');
-    state.notes = res.data;
-    renderGrid();
+    if (!currentPage(page, auth) || page.readSequence !== sequence) return;
+    const modal = document.querySelector('.note-modal[data-note-id]');
+    if (modal) {
+      const fresh = res.data.find(n => n.id === Number(modal.dataset.noteId));
+      if (!fresh || ((modal.querySelector('#note-content') || modal.hasAttribute('data-layout-editor')) && !canOnNote(fresh, 'edit')) || (modal.querySelector('#note-visibility') && fresh.permissions?.manage_visibility !== true)) closeModal({ force: true });
+    }
+    // A remotely hidden/deleted note must immediately cancel a pending gesture.
+    const disappeared = state.notes.some(n => !res.data.some(fresh => fresh.id === n.id));
+    const changedAccess = state.notes.some(n => res.data.find(fresh => fresh.id === n.id)?.permissions?.edit !== n.permissions?.edit);
+    state.notes = res.data.filter(note => !page.deleting.has(note.id));
+    renderCreatorFilter();
+    if (!board?.busy() || disappeared || changedAccess) renderGrid();
   } catch (err) {
+    if (!currentPage(page, auth)) return;
+    // Fail closed when current authorization cannot be established.
+    if (err.status === 401 || err.status === 403 || err.status === 404) {
+      state.notes = []; closeModal({ force: true }); renderCreatorFilter(); renderGrid();
+    }
     console.error('[Notes] Neuladen fehlgeschlagen:', err);
   }
 }
 
 async function deleteNote(id) {
-  if (!canNote('delete')) return;
-  const auth = authenticationSnapshot(), originalState = state;
-  closeModal({ force: true });
   const note = state.notes.find((n) => n.id === id);
+  if (!note || !canOnNote(note, 'delete')) return;
+  const auth = authenticationSnapshot(), originalState = state;
+  originalState.deleting.add(id);
+  closeModal({ force: true });
   state.notes = state.notes.filter((n) => n.id !== id);
   renderGrid();
   vibrate([30, 50, 30]);
 
   scheduleUndoableDelete({
     message: t('notes.deletedToast'),
-    commit: ({ keepalive }) => sameAuthentication(auth) && canNote('delete') ? api.delete(`/notes/${id}`, { keepalive }) : undefined,
+    commit: async ({ keepalive }) => {
+      if (!sameAuthentication(auth) || !canNote('delete')) return;
+      await api.delete(`/notes/${id}?expected_revision=${note.revision ?? 0}`, { keepalive });
+      originalState.deleting.delete(id);
+    },
     restore: (err) => {
-      if (!sameAuthentication(auth) || state !== originalState) return;
-      if (note) {
-        state.notes = [...state.notes, note].sort((a, b) => b.pinned - a.pinned);
-        renderGrid();
-      }
+      originalState.deleting.delete(id);
+      if (!currentPage(originalState, auth)) return;
+      // Undo must reauthorize: never repaint a cached restricted note.
+      reloadNotes();
       if (err) window.yuvomi?.showToast(err.data?.error ?? t('common.unknownError'), 'danger');
     },
   });
+}
+
+function layoutStatus(text) {
+  const status = _container?.querySelector('#notes-board-status');
+  if (status) status.textContent = text;
+}
+
+async function saveLayout(note, value) {
+  if (!state.active || state.organizing || !canOnNote(note, 'edit') || state.pending.has(note.id)) return false;
+  const page = state, auth = authenticationSnapshot();
+  const { x, y, width, height } = normalizeNoteLayout(value);
+  page.pending.add(note.id);
+  layoutStatus(t('notes.layoutSaving'));
+  try {
+    const res = await api.patch(`/notes/${note.id}/layout`, { expected_layout_revision: note.layout?.revision ?? 0, layout: { x, y, width, height } });
+    if (!currentPage(page, auth)) return false;
+    const current = state.notes.find(n => n.id === note.id);
+    if (current) current.layout = res.data.layout || res.data;
+    layoutStatus(t('notes.layoutSaved'));
+    return true;
+  } catch (err) {
+    if (!currentPage(page, auth)) return false;
+    layoutStatus(err.status === 409 ? t('notes.layoutConflict') : t('notes.layoutFailed'));
+    await reloadNotes();
+    return false;
+  } finally { page.pending.delete(note.id); }
+}
+
+function openLayoutModal(id) {
+  let note = state.notes.find(n => n.id === id);
+  if (!note || !canOnNote(note, 'edit') || state.pending.has(id)) return;
+  const layout = normalizeNoteLayout(note.layout);
+  const page = state, auth = authenticationSnapshot();
+  const fields = [['x', 0, 9], ['y', 0, 10000], ['width', 3, 12], ['height', 4, 100]];
+  openSharedModal({
+    title: t('notes.adjustCard'),
+    content: `<div class="note-modal" data-note-id="${id}" data-layout-editor>
+      <p>${t('notes.layoutHint')}</p>
+      <div class="note-layout-fields">${fields.map(([name, min, max]) => `<div class="form-group"><label class="form-label" for="note-layout-${name}">${t(`notes.layoutField.${name}`)}</label><input class="form-input" type="number" inputmode="numeric" min="${min}" max="${max}" step="1" value="${layout[name]}" id="note-layout-${name}"></div>`).join('')}</div>
+      <p id="note-layout-preview" role="status"></p>
+      <div class="modal-panel__footer"><button class="btn btn--secondary" id="note-layout-cancel">${t('common.cancel')}</button><button class="btn btn--primary" id="note-layout-save">${t('common.save')}</button></div>
+    </div>`,
+    onSave(panel) {
+      const read = () => Object.fromEntries(fields.map(([name]) => [name, Number(panel.querySelector(`#note-layout-${name}`).value)]));
+      const preview = () => {
+        const next = normalizeNoteLayout(read());
+        panel.querySelector('#note-layout-preview').textContent = t('notes.layoutPreview', next);
+      };
+      panel.querySelectorAll('input').forEach(input => input.addEventListener('input', preview)); preview();
+      panel.querySelector('#note-layout-cancel').addEventListener('click', () => closeModal());
+      panel.querySelector('#note-layout-save').addEventListener('click', async () => {
+        if (!currentPage(page, auth)) return;
+        for (const input of panel.querySelectorAll('input')) if (!input.reportValidity()) return;
+        const btn = panel.querySelector('#note-layout-save'); btn.disabled = true;
+        const ok = await saveLayout(note, read());
+        if (!currentPage(page, auth) || !panel.isConnected) return;
+        if (ok) { closeModal({ force: true }); renderGrid(); }
+        else {
+          note = state.notes.find(n => n.id === id);
+          if (!note || !canOnNote(note, 'edit')) { closeModal({ force: true }); return; }
+          const fresh = normalizeNoteLayout(note.layout);
+          fields.forEach(([name]) => { panel.querySelector(`#note-layout-${name}`).value = fresh[name]; });
+          btn.disabled = false; panel.querySelector('#note-layout-preview').textContent = t('notes.layoutConflict');
+        }
+      });
+    },
+  });
+}
+
+async function organizeNotes() {
+  if (!state.active || state.organizing || state.pending.size || board?.busy()) return;
+  const editable = visibleNotes().filter(note => canOnNote(note, 'edit'));
+  if (!editable.length) return;
+  const page = state, auth = authenticationSnapshot();
+  page.organizing = true;
+  const button = _container.querySelector('#notes-organize'); if (button) button.disabled = true;
+  layoutStatus(t('notes.layoutSaving'));
+  try {
+    await api.patch('/notes/layout', { items: organizeNoteLayouts(editable) });
+    if (!currentPage(page, auth)) return;
+    await reloadNotes(); layoutStatus(t('notes.layoutSaved'));
+  } catch (err) {
+    if (!currentPage(page, auth)) return;
+    layoutStatus(err.status === 409 ? t('notes.layoutConflict') : t('notes.layoutFailed')); await reloadNotes();
+  } finally {
+    page.organizing = false;
+    if (currentPage(page, auth) && button) button.disabled = false;
+  }
 }

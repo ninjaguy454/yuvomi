@@ -1382,6 +1382,33 @@
         "agendaDayEmpty": "Inget planerat"
     },
     "notes": {
+        "compactView": "Compact view",
+        "organize": "Organize on grid",
+        "moveCard": "Move card",
+        "resizeCard": "Resize card",
+        "adjustCard": "Size and position",
+        "visibleTo": "Visible to",
+        "audienceHint": "Everyone means this household. Private and selected notes need a signed-in account.",
+        "chooseMembers": "Select household members",
+        "membersUnavailable": "Members could not be loaded. Close and reopen the note to retry.",
+        "memberRequired": "Select at least one other household member.",
+        "layoutSaving": "Saving layout...",
+        "layoutSaved": "Layout saved",
+        "layoutConflict": "Layout changed elsewhere. The current positions have been restored. Try again.",
+        "layoutFailed": "Layout could not be saved. Check the current position and try again.",
+        "layoutHint": "Card dimensions and position on the shared 12-column board. Phones fit cards to the screen without changing these values.",
+        "layoutPreview": "Column {{x}}, row {{y}}; {{width}} columns wide and {{height}} rows high.",
+        "audience": {
+            "private": "Private",
+            "all": "Everyone",
+            "selected": "Selected members"
+        },
+        "layoutField": {
+            "x": "Column (0-9)",
+            "y": "Row",
+            "width": "Width (3-12 columns)",
+            "height": "Height (4-100 rows)"
+        },
         "title": "Anteckningar",
         "newNote": "Ny anteckning",
         "editNote": "Redigera anteckning",

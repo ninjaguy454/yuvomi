@@ -1,4 +1,5 @@
 import { taskVisibilityWhere } from './task-access.js';
+import { noteVisibleSql } from './note-access.js';
 /**
  * Modul: Such-Service (FTS5)
  * Zweck: Reine Suchlogik gegen den FTS5-Index `search_index` (Migration 44).
@@ -142,7 +143,7 @@ export function runSearch(database, q, userId, { hiddenModules = null } = {}) {
     FROM search_index s
     JOIN notes n ON n.id = s.entity_id
     WHERE s.entity = 'note' AND s.search_index MATCH @match
-      AND n.created_by = @userId
+      AND ${noteVisibleSql('n', 'userId')}
     ORDER BY n.pinned DESC, n.updated_at DESC
     LIMIT @limit
   `).all({ match, userId, limit });

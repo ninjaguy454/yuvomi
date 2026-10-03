@@ -3350,7 +3350,7 @@ function renderSearchResults(container, data, onClose) {
 // navModuleAccess liefert 'write' für nicht-gateable Module (Dashboard, Settings,
 // Third-Party), sodass diese nie fälschlich als read-only markiert werden.
 function applyModuleReadonly(moduleName, pageWrapper) {
-  const readOnly = navModuleAccess(moduleName) === 'read' && !(isDevicePrincipal() && moduleName === 'tasks');
+  const readOnly = navModuleAccess(moduleName) === 'read' && !(isDevicePrincipal() && ['tasks', 'notes'].includes(moduleName));
   document.documentElement.toggleAttribute('data-module-readonly', readOnly);
   if (!readOnly || !pageWrapper || pageWrapper.querySelector('.module-readonly-banner')) return;
   const banner = document.createElement('div');

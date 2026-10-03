@@ -7,8 +7,8 @@ import { normalizeDevicePreferences } from './devices.js';
 import { householdTimeZone, todayKey, shiftDateKey } from '../utils/timezone.js';
 import { previewSharedRotation, sharedGroupConfiguration } from './rotation-shared.js';
 
-export const DEVICE_CONTENT_MODULES = Object.freeze(['dashboard','tasks','calendar','meals','shopping','rewards']);
-export const DEVICE_UNSUPPORTED_MODULES = Object.freeze(['notes','contacts','pantry','inventory','budget','documents','housekeeping','health','schedule','search','reader','mcp']);
+export const DEVICE_CONTENT_MODULES = Object.freeze(['dashboard','tasks','calendar','meals','shopping','rewards','notes']);
+export const DEVICE_UNSUPPORTED_MODULES = Object.freeze(['contacts','pantry','inventory','budget','documents','housekeeping','health','schedule','search','reader','mcp']);
 const pick = (value, keys) => Object.fromEntries(keys.filter(key => value?.[key] !== undefined).map(key => [key,value[key]]));
 const permits = (principal, module) => ['read','write'].includes(principal?.permissions?.modules?.[module]);
 const capability = (principal, key) => principal?.permissions?.capabilities?.[key] === 'allow';

@@ -16,6 +16,12 @@ import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { findPageFab } from '/utils/fab.js';
 import { emptyStateHTML } from '/utils/empty-state.js';
 import { AVATAR_FALLBACK_COLOR } from '/utils/color.js';
+import { getPermissions, moduleAccess, canCapability } from '/permissions.js';
+import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
+
+const canNote = action => getPermissions().principal_kind === 'device'
+  ? moduleAccess('notes') !== 'none' && canCapability(`device_notes.${action}`)
+  : moduleAccess('notes') === 'write' || (action === 'view' && moduleAccess('notes') === 'read');
 
 // --------------------------------------------------------
 // Konstanten
@@ -60,7 +66,7 @@ let _container = null;
 // bekommt diese Optionen deshalb ausdruecklich nicht - dort steht ein gekuerzter
 // Auszug, dessen Zeilennummern nicht die der Notiz sind.
 const CHECKLIST_OPTS = () => ({
-  checklist: { interactive: true, toggleLabel: t('notes.checklistToggle') },
+  checklist: { interactive: canNote('edit'), toggleLabel: t('notes.checklistToggle') },
 });
 
 /**
@@ -95,6 +101,7 @@ function paintCheck(noteId, line, checked) {
  * geladen, statt einen Haken zu behaupten, den der Server nicht kennt.
  */
 async function toggleCheck(noteId, box) {
+  if (!canNote('edit')) return;
   const note = state.notes.find((n) => n.id === noteId);
   if (!note) return;
 
@@ -139,7 +146,10 @@ async function handleCheckConflict() {
 
 export async function render(container, { user }) {
   _container = container;
-  state.user = user;
+  state = { notes: [], user, filterQuery: '', filterCreator: '' };
+  const pageState = state;
+  const clearNotes = () => { if (state === pageState) { state.notes = []; container.replaceChildren(); closeModal({ force: true }); } };
+  window.addEventListener('auth:context-ending', clearNotes, { once: true });
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -165,7 +175,7 @@ export async function render(container, { user }) {
   if (window.lucide) lucide.createIcons({ el: container });
 
   try {
-    const res  = await api.get('/notes');
+    const res  = canNote('view') ? await api.get('/notes') : { data: [] };
     state.notes = res.data;
   } catch (err) {
     console.error('[Notes] Laden fehlgeschlagen:', err);
@@ -202,11 +212,16 @@ export async function render(container, { user }) {
   renderCreatorFilter();
   renderGrid();
 
+  if (!canNote('create')) {
+    _container.querySelector('#notes-add-btn')?.remove();
+    findPageFab('fab-new-note')?.remove();
+  }
+
   const addHandler = () => openNoteModal({ mode: 'create' });
   // #notes-add-btn ist per .toolbar-new-btn global ausgeblendet (FAB übernimmt),
   // bleibt aber als einheitliches Modul-Muster erhalten (frontend-audit 1.9).
-  _container.querySelector('#notes-add-btn').addEventListener('click', addHandler);
-  findPageFab('fab-new-note').addEventListener('click', addHandler);
+  _container.querySelector('#notes-add-btn')?.addEventListener('click', addHandler);
+  findPageFab('fab-new-note')?.addEventListener('click', addHandler);
 
   wirePageSearch(_container, {
     id: 'notes-search',
@@ -216,6 +231,7 @@ export async function render(container, { user }) {
       renderGrid();
     },
   });
+  return () => { window.removeEventListener('auth:context-ending', clearNotes); clearNotes(); };
 }
 
 // --------------------------------------------------------
@@ -301,7 +317,7 @@ function renderGrid() {
         title: t('notes.emptyTitle'),
         description: t('notes.emptyDescription'),
         hint: t('emptyHint.notes'),
-        action: { label: t('notes.emptyAction'), icon: 'plus', attrs: { id: 'empty-cta-notes' } },
+        action: canNote('create') ? { label: t('notes.emptyAction'), icon: 'plus', attrs: { id: 'empty-cta-notes' } } : undefined,
       }));
     if (window.lucide) lucide.createIcons({ el: grid });
     grid.querySelector('#empty-cta-notes')?.addEventListener('click', () => {
@@ -346,10 +362,10 @@ function renderNoteCard(note) {
     <div class="note-card ${note.pinned ? 'note-card--pinned' : ''}"
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
-      <button class="note-card__pin" data-action="pin" data-id="${note.id}"
+      ${canNote('edit') ? `<button class="note-card__pin" data-action="pin" data-id="${note.id}"
               aria-label="${note.pinned ? t('notes.unpinAction') : t('notes.pinAction')}">
         <i data-lucide="${note.pinned ? 'pin-off' : 'pin'}" class="icon-sm" aria-hidden="true"></i>
-      </button>
+      </button>` : ''}
       ${note.title ? `<div class="note-card__title">${esc(note.title)}</div>` : ''}
       <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS())}</div>
       <div class="note-card__footer">
@@ -371,9 +387,9 @@ function renderNoteCard(note) {
                   aria-label="${t('notes.openNote')}">
             <i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i>
           </button>
-          <button class="note-card__delete" data-action="delete" data-id="${note.id}" aria-label="${t('notes.deleteLabel')}">
+          ${canNote('delete') ? `<button class="note-card__delete" data-action="delete" data-id="${note.id}" aria-label="${t('notes.deleteLabel')}">
             <i data-lucide="trash-2" class="icon-sm" aria-hidden="true"></i>
-          </button>
+          </button>` : ''}
         </div>
       </div>
     </div>
@@ -402,6 +418,14 @@ function renderNoteReadHtml(content, { live = false } = {}) {
 }
 
 function openNoteModal({ mode, note = null }) {
+  if (mode === 'create' && !canNote('create')) return;
+  if (note && !canNote('view')) return;
+  if (note && !canNote('edit')) {
+    openSharedModal({title: note.title || t('notes.viewNote'), size: 'lg',
+      content: `<div class="note-modal" data-view="read" data-note-id="${note.id}"><div class="note-read-view">${renderNoteReadHtml(note.content)}</div>${canNote('delete') ? `<div class="modal-panel__footer"><button class="btn btn--danger-outline" id="note-modal-delete">${t('common.delete')}</button></div>` : ''}</div>`,
+      onSave(panel) { panel.querySelector('#note-modal-delete')?.addEventListener('click', () => deleteNote(note.id)); }});
+    return;
+  }
   const isEdit      = mode === 'edit';
   const selColor    = (isEdit ? note.color : null) || NOTE_COLORS[0];
   // Bestehende Notizen können Farben außerhalb der Palette tragen (Alt-Daten,
@@ -474,7 +498,7 @@ function openNoteModal({ mode, note = null }) {
       </div>
 
       <div class="modal-panel__footer modal-panel__footer--plain note-modal__footer">
-        ${isEdit ? `<button type="button" class="btn btn--danger-outline" id="note-modal-delete" style="margin-right:auto">${t('common.delete')}</button>` : ''}
+        ${isEdit && canNote('delete') ? `<button type="button" class="btn btn--danger-outline" id="note-modal-delete" style="margin-right:auto">${t('common.delete')}</button>` : ''}
         <button type="button" class="btn btn--secondary" id="note-modal-cancel" data-editor-only>${t('common.cancel')}</button>
         <button type="button" class="btn btn--primary" id="note-modal-save" data-editor-only>${isEdit ? t('common.save') : t('common.create')}</button>
       </div>
@@ -645,6 +669,7 @@ function openNoteModal({ mode, note = null }) {
       panel.querySelector('#note-modal-cancel').addEventListener('click', closeModal);
 
       panel.querySelector('#note-modal-save').addEventListener('click', async () => {
+        if (!canNote(isEdit ? 'edit' : 'create')) return;
         const saveBtn = panel.querySelector('#note-modal-save');
         const title   = panel.querySelector('#note-title').value.trim() || null;
         const cnt     = panel.querySelector('#note-content').value.trim();
@@ -663,7 +688,7 @@ function openNoteModal({ mode, note = null }) {
         try {
           if (mode === 'create') {
             const res = await api.post('/notes', { title, content: cnt, color, pinned });
-            state.notes.unshift(res.data);
+            if (canNote('view') && res.data) state.notes.unshift(res.data);
           } else {
             const res = await api.put(`/notes/${note.id}`, { title, content: cnt, color, pinned });
             const idx = state.notes.findIndex((n) => n.id === note.id);
@@ -689,6 +714,7 @@ function openNoteModal({ mode, note = null }) {
 // --------------------------------------------------------
 
 async function togglePin(id) {
+  if (!canNote('edit')) return;
   try {
     const res  = await api.patch(`/notes/${id}/pin`, {});
     const note = state.notes.find((n) => n.id === id);
@@ -708,6 +734,7 @@ async function togglePin(id) {
  * damit sie nicht ein zweites Mal hier steht.
  */
 async function reloadNotes() {
+  if (!canNote('view')) return;
   try {
     const res = await api.get('/notes');
     state.notes = res.data;
@@ -718,6 +745,8 @@ async function reloadNotes() {
 }
 
 async function deleteNote(id) {
+  if (!canNote('delete')) return;
+  const auth = authenticationSnapshot(), originalState = state;
   closeModal({ force: true });
   const note = state.notes.find((n) => n.id === id);
   state.notes = state.notes.filter((n) => n.id !== id);
@@ -726,8 +755,9 @@ async function deleteNote(id) {
 
   scheduleUndoableDelete({
     message: t('notes.deletedToast'),
-    commit: ({ keepalive }) => api.delete(`/notes/${id}`, { keepalive }),
+    commit: ({ keepalive }) => sameAuthentication(auth) && canNote('delete') ? api.delete(`/notes/${id}`, { keepalive }) : undefined,
     restore: (err) => {
+      if (!sameAuthentication(auth) || state !== originalState) return;
       if (note) {
         state.notes = [...state.notes, note].sort((a, b) => b.pinned - a.pinned);
         renderGrid();

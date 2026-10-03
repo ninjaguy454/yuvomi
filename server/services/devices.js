@@ -7,6 +7,7 @@ import { validateDeviceApproval } from './device-approval.js';
 
 export const DEVICE_COOKIE = 'vidamia.device';
 export const DEVICE_ACTIONS = ['complete','reopen','reset','claim'];
+export const DEVICE_NOTE_ACTIONS = ['view','create','edit','delete'];
 export const DEVICE_WIDGETS = ['tasks','calendar','meals','shopping','points','rewards','rotations'];
 export const DEVICE_DEFINITION_CAPABILITIES = ['tasks.create','tasks.edit_others','tasks.change_assignment','tasks.reassign','tasks.change_dates','tasks.change_points'];
 const json = value => JSON.stringify(value);
@@ -22,9 +23,10 @@ export function devicePreset() {
     modules:Object.fromEntries(PERMISSION_MODULES.map(m=>[m.key,['dashboard','tasks','calendar','meals','shopping','rewards'].includes(m.key)?'read':'none'])),
     widgets:Object.fromEntries(PERMISSION_WIDGETS.map(w=>[w.id,['tasks','calendar','meals','shopping','rewards','clock'].includes(w.id)?'allow':'none'])),
     capabilities:{...Object.fromEntries(PERMISSION_CAPABILITIES.map(c=>[c.key,['tasks.view_household','rotations.view'].includes(c.key)?'allow':'none'])),
+      ...Object.fromEntries(DEVICE_NOTE_ACTIONS.map(a=>[`device_notes.${a}`,'none'])),
       ...Object.fromEntries(DEVICE_ACTIONS.map(a=>[`device_tasks.${a}`,a==='complete'?'allow':'none']))}};
 }
-const allowedModules=new Set(['dashboard','tasks','calendar','meals','shopping','rewards']);
+const allowedModules=new Set(['dashboard','tasks','calendar','meals','shopping','rewards','notes']);
 export function normalizeDevicePermissions(input=devicePreset()) {
   if(!input||typeof input!=='object'||Array.isArray(input))throw deviceError('Invalid device permissions.');
   const result=devicePreset();
@@ -38,10 +40,11 @@ export function normalizeDevicePermissions(input=devicePreset()) {
   for(const key of Object.keys(result.capabilities)) {
     const value=input.capabilities?.[key]??result.capabilities[key];
     if(!['allow','none'].includes(value))throw deviceError('Choose Allow or Not allowed.');
-    if(value==='allow'&&!['tasks.view_household','rotations.view',...DEVICE_DEFINITION_CAPABILITIES,...DEVICE_ACTIONS.map(a=>`device_tasks.${a}`)].includes(key))
+    if(value==='allow'&&!['tasks.view_household','rotations.view',...DEVICE_DEFINITION_CAPABILITIES,...DEVICE_ACTIONS.map(a=>`device_tasks.${a}`),...DEVICE_NOTE_ACTIONS.map(a=>`device_notes.${a}`)].includes(key))
       throw deviceError('This action requires authenticated personal access.');
     result.capabilities[key]=value;
   }
+  result.modules.notes=DEVICE_NOTE_ACTIONS.some(a=>result.capabilities[`device_notes.${a}`]==='allow')?'read':'none';
   return result;
 }
 export function normalizeDeviceScope(d,input={}) {

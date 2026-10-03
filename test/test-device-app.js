@@ -38,6 +38,34 @@ test.afterEach(async()=>{server.closeAllConnections?.();await new Promise(resolv
 async function call(path,method='GET',body,headers={}){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json',...headers},...(body&&method!=='GET'?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json(),replayed:r.headers.get('Idempotent-Replayed')};}
 const revision=id=>d.prepare('SELECT revision FROM tasks WHERE id=?').get(id).revision;
 
+test('Notes permissions are independent and creation never grants editing or deletion',async()=>{
+  d.prepare('INSERT INTO notes(title,content,created_by) VALUES(?,?,?)').run('Existing note','- [ ] Read this',1);
+  assert.equal((await call('/notes')).status,403);
+  p.permissions.modules.notes='read';
+  p.permissions.capabilities['device_notes.view']='allow';
+  assert.equal((await call('/notes')).body.data[0].title,'Existing note');
+  assert.equal((await call('/notes','POST',{content:'Blocked'})).status,403);
+  p.permissions.capabilities['device_notes.create']='allow';
+  const created=await call('/notes','POST',{title:'From display',content:'New note',created_by:1});
+  assert.equal(created.status,201,JSON.stringify(created.body));
+  const id=created.body.data.id;
+  assert.equal(d.prepare('SELECT created_by FROM notes WHERE id=?').get(id).created_by,null);
+  assert.equal(d.prepare('SELECT created_by_device FROM notes WHERE id=?').get(id).created_by_device,p.id);
+  for(const noteId of [1,id])for(const [suffix,method,body]of [['','PUT',{content:'Changed'}],['/pin','PATCH',{}],['/check','PATCH',{line:0,checked:true}],['','DELETE',{}]])
+    assert.equal((await call(`/notes/${noteId}${suffix}`,method,body)).status,403);
+  p.permissions.capabilities['device_notes.view']='none';
+  assert.equal((await call('/notes')).status,403);
+  const blind=await call('/notes','POST',{content:'Create only'});assert.equal(blind.status,201);assert.equal(blind.body.data,null);
+  p.permissions.capabilities['device_notes.edit']='allow';
+  const blindEdit=await call(`/notes/${id}`,'PUT',{content:'Edited'});assert.equal(blindEdit.status,200);assert.equal(blindEdit.body.data,null);
+  assert.equal((await call(`/notes/${id}`,'DELETE')).status,403);
+  p.permissions.capabilities['device_notes.edit']='none';p.permissions.capabilities['device_notes.delete']='allow';
+  assert.equal((await call(`/notes/${id}`,'PUT',{content:'Denied'})).status,403);
+  const removed=await fetch(base+`/notes/${id}`,{method:'DELETE'});assert.equal(removed.status,204);
+  assert.equal(d.prepare('SELECT count(*) n FROM notes WHERE id=?').get(id).n,0);
+  assert.deepEqual(d.pragma('foreign_key_check'),[]);
+});
+
 test('normal Task board and metadata use the same scoped identity without private nested content',async()=>{
   const list=await call('/tasks?include_future=1');assert.equal(list.status,200);assert.deepEqual(list.body.data.map(row=>row.id),[1]);
   assert.equal(list.body.data[0].subtasks[0].title,'Brush teeth');assert.deepEqual(list.body.data[0].tags,['Routine']);

@@ -3,6 +3,7 @@
  * must never infer a member from a device, a null ID, or its pairing parent.
  * Consumers reuse the existing lifecycle and shared-content projections. */
 import * as db from '../db.js';
+import { deviceNotesRequest } from './device-notes.js';
 import { deviceTaskList,deviceTaskDetail,deviceTaskStatus,deviceTaskClaim } from './device-tasks.js';
 import { deviceTaskCreateOnce,deviceTaskUpdate } from './device-task-definitions.js';
 import { deviceTaskVisible } from './task-access.js';
@@ -109,6 +110,11 @@ export function deviceAppMiddleware(req,res,next) {
   res.set('Cache-Control','private, no-store');
   try {
     if(!deviceAppRouteSupported(method,path))fail();
+    if(path==='/notes'||path.startsWith('/notes/')) {
+      const [,id,action]=path.match(/^\/notes(?:\/(\d+)(?:\/(pin|check))?)?$/)||[];
+      const result=deviceNotesRequest(d,p,method,id?Number(id):null,action,req.body);
+      return result.status===204?res.status(204).end():res.status(result.status).json(result.body);
+    }
     if(path==='/preferences')return res.json({data:deviceAppPreferences(d,p)});
     if(path==='/auth/users')return res.json({data:deviceMembers(d,p)});
     if(path==='/dashboard')return res.json(dashboard(d,p,query));

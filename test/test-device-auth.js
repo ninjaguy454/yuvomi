@@ -88,6 +88,29 @@ async function temporary(client,username='parent'){
  await ok(client,'POST','/api/v1/device/temporary/begin',{});const result=await login(client,username);return result;
 }
 
+test('Notes View+Create survives refresh/logout/expiry without author or privilege borrowing',async()=>{
+ const {client:display,id}=await pair('Notes test display');
+ await ok(display,'GET','/api/v1/notes',undefined,403);
+ const config={revision:d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision,permissions:{capabilities:{'device_notes.view':'allow','device_notes.create':'allow','device_notes.edit':'none','device_notes.delete':'none'}}};
+ await ok(child,'PATCH',`/api/v1/devices/${id}`,config,403);
+ await ok(administrator,'PATCH',`/api/v1/devices/${id}`,config);
+ await ok(display,'GET','/api/v1/device/context');
+ const created=await ok(display,'POST','/api/v1/notes',{content:'Synthetic device note'},201);const noteId=created.body.data.id;
+ const assertDevice=async()=>{
+   const me=await ok(display,'GET','/api/v1/auth/me');assert.equal(me.body.principal.kind,'device');
+   assert.ok((await ok(display,'GET','/api/v1/notes')).body.data.some(note=>note.id===noteId));
+   await ok(display,'PUT',`/api/v1/notes/${noteId}`,{content:'Forbidden'},403);
+   await ok(display,'DELETE',`/api/v1/notes/${noteId}`,undefined,403);
+   await ok(display,'GET','/api/v1/tasks');await ok(display,'GET','/api/v1/calendar');
+ };
+ await assertDevice();await ok(display,'POST','/api/v1/device/launch',{});await assertDevice();
+ await temporary(display);await ok(display,'POST','/api/v1/device/return',{});await assertDevice();
+ await temporary(display);d.prepare('UPDATE device_credentials SET temporary_idle_at=? WHERE id=?').run(Date.now()-301000,credential(display).id);
+ await ok(display,'PUT',`/api/v1/notes/${noteId}`,{content:'Expired authority'},409);
+ await ok(display,'GET','/api/v1/device/context');await assertDevice();
+ assert.equal(d.prepare('SELECT content FROM notes WHERE id=?').get(noteId).content,'Synthetic device note');
+});
+
 test('pairing is approved by a real administrator, single use, restricted and explicitly removes only this browser personal session',async()=>{
  const display=new Client();await login(display);const oldSession=display.cookies.get('yuvomi.sid');
  assert.equal((await display.call('POST','/api/v1/device/pair',{})).status,400);

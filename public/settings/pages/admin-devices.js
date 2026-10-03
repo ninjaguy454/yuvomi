@@ -4,6 +4,7 @@ import { openModal, closeModal, confirmModal } from '/components/modal.js';
 
 const option=(value,current,label=value)=>`<option value="${esc(value)}"${value===current?' selected':''}>${esc(label)}</option>`;
 const modules=['tasks','calendar','meals','shopping','rewards'];
+const noteActions={view:'View notes',create:'Create notes',edit:'Edit notes (including pins and checklist items)',delete:'Delete notes'};
 const actions={complete:'Complete existing independent steps',reopen:'Reopen completed steps',reset:'Reset existing progress',claim:'Claim approved unassigned Tasks for an explicit member'};
 const definitions={'tasks.create':'Create plain Tasks','tasks.edit_others':'Edit plain Task titles and descriptions','tasks.change_assignment':'Choose a Task assignee','tasks.reassign':'Reassign existing Tasks','tasks.change_dates':'Change Start and Due windows','tasks.change_points':'Set or change Task point values'};
 export async function render(container) {
@@ -37,10 +38,14 @@ export async function render(container) {
       const definitionBox=document.createElement('section');
       definitionBox.innerHTML=`<h3>Optional Task definition permissions</h3><p>These are off in the family checklist preset. Enabling creation together with points permits anyone at the display to create rewarded work. Templates, Workflows, reward prices, ledger changes and administration still require personal authentication.</p>${Object.entries(definitions).map(([key,label])=>`<label class="device-setting"><input type="checkbox" name="definition:${key}" ${permissions.capabilities[key]==='allow'?'checked':''}>${label}</label>`).join('')}`;
       panel.querySelector('[data-device-form-error]').before(definitionBox);
+      const notesBox=document.createElement('section');
+      notesBox.innerHTML=`<h3>Notes permissions</h3><p>These four permissions are independent and off by default. View shares all current and future regular Notes with anyone using this display. Notes currently has no private or member-only audience; the member filter above does not limit Notes.</p><p>For children, enable View and Create and leave Edit and Delete off. Creating a note never grants permission to edit or delete it.</p>${Object.entries(noteActions).map(([key,label])=>`<label class="device-setting"><input type="checkbox" name="note:${key}" ${permissions.capabilities[`device_notes.${key}`]==='allow'?'checked':''}>${label}</label>`).join('')}`;
+      panel.querySelector('[data-device-form-error]').before(notesBox);
       panel.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target),submit=event.submitter||panel.querySelector('[data-device-save]');submit.disabled=true;
         for(const key of modules)permissions.modules[key]=form.has(`module:${key}`)?'read':'none';
         for(const key of Object.keys(actions))permissions.capabilities[`device_tasks.${key}`]=form.has(`action:${key}`)?'allow':'none';
         for(const key of Object.keys(definitions))permissions.capabilities[key]=form.has(`definition:${key}`)?'allow':'none';
+        for(const key of Object.keys(noteActions))permissions.capabilities[`device_notes.${key}`]=form.has(`note:${key}`)?'allow':'none';
         permissions.capabilities['rotations.view']=form.has('rotations')?'allow':'none';
         scope.member_ids=form.getAll('members').map(Number);scope.show_points=form.has('points');
         prefs.default_view=form.get('default_view');for(const key of ['theme','palette','font','density'])prefs.appearance[key]=form.get(key);

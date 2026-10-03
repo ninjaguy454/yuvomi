@@ -205,7 +205,7 @@ test('die Aufgaben rendern ihre Notiz interaktiv - sie zeigen den ganzen Text', 
 
 test('die Notizenseite schaltet die Kaestchen frei und faengt den Klick ab', async () => {
   const src = await readFile(new URL('../public/pages/notes.js', import.meta.url), 'utf8');
-  assert.match(src, /interactive:\s*true/, 'die Notizen schalten die Kaestchen frei');
+  assert.match(src, /interactive:\s*canNote\('edit'\)/, 'Notes checklist changes require the edit permission');
   assert.match(src, /notes\/\$\{noteId\}\/check/, 'sie schreiben ueber die schmale Route zurueck');
   assert.match(src, /note-md-box\[data-md-line\]/, 'ein Klick auf das Kaestchen wird erkannt');
   assert.match(src, /e\.stopPropagation\(\);\s*\n\s*const owner/,

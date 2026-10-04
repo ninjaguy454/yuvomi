@@ -83,6 +83,28 @@ for(const width of [320,390,1440])test(`session control remains keyboard/touch r
   await snapshot(`session-control-${width}`);
   if(width<640)await display.keyboard.press('Escape');
 });
+test('locale changes refresh both session actions and retain navigation focus behavior',async()=>{
+  await display.bringToFront();await display.setViewport({width:1440,height:1000});
+  const selector='.nav-sidebar [data-device-login]';
+  await display.focus(selector);
+  try {
+    const retained=await display.evaluate(async()=>{
+      let retained=false;
+      window.addEventListener('locale-changed',()=>{retained=document.activeElement===document.querySelector('.nav-sidebar [data-device-login]');},{once:true});
+      await (await import('/i18n.js')).setLocale('de');return retained;
+    });
+    assert.equal(retained,true,'the navigation rebuild preserves focus on its replaced control');
+    await display.waitForFunction(()=>document.querySelector('.more-sheet [data-device-login]')?.getAttribute('aria-label')==='Vorübergehend anmelden');
+    const state=await display.$eval(selector,n=>({text:n.textContent.trim(),label:n.getAttribute('aria-label'),title:n.title}));
+    assert.equal(state.text,'Vorübergehend anmelden');assert.equal(state.label,state.text);assert.equal(state.title,state.text);
+    // Locale changes also rerender the current page; its normal route-focus
+    // behavior takes over after the synchronous navigation rebuild.
+    await display.waitForFunction(()=>document.activeElement?.id==='main-content');
+  } finally {
+    await display.evaluate(async()=>{await (await import('/i18n.js')).setLocale('en');});
+    await display.waitForFunction(()=>document.querySelector('.nav-sidebar [data-device-login]')?.getAttribute('aria-label')==='Sign in temporarily');
+  }
+});
 test('temporary login and expiry switch personal greeting back to household with no residual private context',async()=>{
   await display.bringToFront();await display.setViewport({width:1440,height:1000});await display.reload();await display.waitForSelector('.nav-sidebar [data-device-login]');
   await display.click('.nav-sidebar [data-device-login]');await login(display);

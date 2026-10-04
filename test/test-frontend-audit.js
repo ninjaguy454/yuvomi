@@ -1622,8 +1622,9 @@ test('sync-calendar leaf loads CalDAV, Google, and Apple with independent status
   assert.match(source, /createDisclosure\(/);
   assert.match(source, /settings\.moreProviders/);
 
-  // Google: provider-specific labelled, all endpoints preserved.
-  assert.match(source, /settings\.providerSpecific/);
+  // The provider name identifies the section; duplicate type badges add no status.
+  assert.match(source, /t\('settings\.googleCalendar'\)/);
+  assert.doesNotMatch(source, /settings\.providerSpecific/);
   assert.match(source, /api\.get\('\/calendar\/google\/status'\)/);
   assert.match(source, /\/api\/v1\/calendar\/google\/auth/);
   assert.match(source, /api\.post\('\/calendar\/google\/sync'/);

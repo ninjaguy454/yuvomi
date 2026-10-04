@@ -153,13 +153,10 @@ function formHtml(state, isEdit) {
   return `
     <div class="quick-link-form">
       <div class="quick-link-form__face">
-        <button type="button" class="quick-link-face quick-link-face--lg${faceInk(state.color)}" id="quick-link-icon-trigger"
+        <button type="button" class="quick-link-face quick-link-face--lg photo-editor${faceInk(state.color)}" id="quick-link-icon-trigger"
                 style="--quick-link-color:${esc(state.color)}"
-                aria-label="${esc(t('quickLinks.iconChoose'))}"></button>
+                aria-label="${esc(t('quickLinks.iconSymbol'))}" title="${esc(t('quickLinks.iconSymbol'))}"></button>
         <div class="quick-link-form__face-actions">
-          <button type="button" class="btn btn--secondary btn--sm" id="quick-link-icon-symbol">
-            ${esc(t('quickLinks.iconSymbol'))}
-          </button>
           <button type="button" class="btn btn--secondary btn--sm" id="quick-link-icon-pick">
             ${esc(t('quickLinks.iconPick'))}
           </button>
@@ -168,7 +165,6 @@ function formHtml(state, isEdit) {
             ${esc(t('quickLinks.iconClear'))}
           </button>
         </div>
-        <p class="form-hint">${esc(t('quickLinks.iconHint'))}</p>
         <input type="file" id="quick-link-icon-file" accept="image/png,image/jpeg,image/webp" hidden>
       </div>
 
@@ -196,7 +192,6 @@ function formHtml(state, isEdit) {
           <option value="all" ${state.visibility === 'all' ? 'selected' : ''}>${esc(t('quickLinks.visibilityAll'))}</option>
           <option value="private" ${state.visibility === 'private' ? 'selected' : ''}>${esc(t('quickLinks.visibilityPrivate'))}</option>
         </select>
-        <p class="form-hint">${esc(t('quickLinks.visibilityHint'))}</p>
       </div>
     </div>
     <div class="modal-panel__footer modal-panel__footer--plain">
@@ -238,6 +233,8 @@ function openQuickLinkForm(link, onDone) {
         face.style.setProperty('--quick-link-color', state.color);
         face.classList.toggle('quick-link-face--ink', prefersInkText(state.color));
         face.replaceChildren(faceInner(state.iconData, state.iconName, state.name));
+        face.insertAdjacentHTML('beforeend', '<span class="photo-editor__cue" aria-hidden="true"><i data-lucide="pencil"></i></span>');
+        window.lucide?.createIcons({ el: face });
         clearBtn.hidden = !state.iconData && !state.iconName;
       };
 
@@ -267,9 +264,7 @@ function openQuickLinkForm(link, onDone) {
         repaintFace();
       };
 
-      [face, panel.querySelector('#quick-link-icon-symbol')].forEach((el) => {
-        el.addEventListener('click', openSymbolPicker);
-      });
+      face.addEventListener('click', openSymbolPicker);
 
       panel.querySelector('#quick-link-icon-pick').addEventListener('click', () => fileInput.click());
 

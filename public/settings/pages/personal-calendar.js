@@ -114,7 +114,6 @@ function renderPage(container, preferences, syncTargets = null) {
       <h2 class="settings-section__title">${t('settings.calendarSectionEvents')}</h2>
       <div class="settings-card">
         <h3 class="settings-card__title">${t('settings.calendarDefaultsTitle')}</h3>
-        <p class="settings-card-description">${t('settings.calendarDefaultsDescription')}</p>
 
         <div class="form-group">
           ${toggleRowHtml({

@@ -526,10 +526,7 @@ function buildGoogleProvider(googleStatus, user) {
   const title = document.createElement('h4');
   title.className = 'settings-provider__name';
   title.textContent = t('settings.googleCalendar');
-  const badge = document.createElement('span');
-  badge.className = 'badge badge--neutral settings-provider__badge';
-  badge.textContent = t('settings.providerSpecific');
-  header.append(title, badge);
+  header.appendChild(title);
   section.appendChild(header);
 
   const status = document.createElement('p');
@@ -1113,10 +1110,7 @@ function buildOutlookProvider(outlookStatus, user) {
   const title = document.createElement('h4');
   title.className = 'settings-provider__name';
   title.textContent = t('settings.outlookCalendar');
-  const badge = document.createElement('span');
-  badge.className = 'badge badge--neutral settings-provider__badge';
-  badge.textContent = t('settings.providerSpecific');
-  header.append(title, badge);
+  header.appendChild(title);
   section.appendChild(header);
 
   const hint = document.createElement('p');

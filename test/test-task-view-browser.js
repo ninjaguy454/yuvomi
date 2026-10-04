@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import express from 'express';
 import puppeteer from 'puppeteer';
 
@@ -11,10 +12,11 @@ const app = express();
 const copy = value => structuredClone(value);
 let server, browser, base, fixture;
 app.use(express.json());
-app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
+const sourceRoot = process.env.UX_SOURCE_ROOT || fileURLToPath(new URL('../public', import.meta.url));
+app.use(express.static(sourceRoot));
 app.get('/view-test', (_req, res) => res.send(`<!doctype html><html lang="en"><head>
   <meta name="viewport" content="width=device-width,initial-scale=1"><script src="/lucide.min.js"></script>
-  ${[...readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(match => match[0]).join('')}
+  ${[...readFileSync(join(sourceRoot, 'index.html'), 'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(match => match[0]).join('')}
   <link rel="stylesheet" href="/styles/tasks.css">
   <style>html,body{height:100%;margin:0}body{display:flex;flex-direction:column}
     .app-content{height:100vh;flex:none}#main-content{padding:16px}
@@ -206,6 +208,23 @@ test('UX cleanup: supervisor shield starts existing verification without complet
     await page.click('[data-approval-cancel]');
     assert.equal(fixture.writes.length, 0);
     assert.equal(await page.evaluate(async () => (await import('/utils/device-context.js')).isDevicePrincipal()), true);
+  } finally { await page.close(); }
+});
+
+test('UX cleanup: expiration guidance follows the selected policy and preserves consequences', async () => {
+  const page = await mounted();
+  try {
+    await page.click('#btn-new-task'); await page.waitForSelector('#task-expiration-policy');
+    assert.equal(await page.$eval('#task-expiration-hint', n => n.hidden), true);
+    assert.equal(await page.$('#task-countdown-hint'), null, 'countdown label carries the meaning');
+    await page.select('#task-expiration-policy', 'expire_incomplete');
+    assert.equal(await page.$eval('#task-expiration-hint', n => n.hidden), false);
+    assert.match(await page.$eval('#task-expiration-hint', n => n.textContent), /0 completion points/);
+    assert.match(await page.$eval('#task-expiration-hint', n => n.textContent), /household timezone/);
+    assert.match(await page.$eval('#task-expiration-hint', n => n.textContent), /reopened and completed/);
+    await page.select('#task-expiration-policy', 'keep_overdue');
+    assert.equal(await page.$eval('#task-expiration-hint', n => n.hidden), true);
+    assert.equal(fixture.writes.length, 0);
   } finally { await page.close(); }
 });
 

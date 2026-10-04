@@ -1148,21 +1148,20 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         </div>
       </div>
       <div class="form-group">
-        <label class="label" for="task-expiration-policy">When incomplete at deadline</label>
+        <label class="label" for="task-expiration-policy">If unfinished at deadline</label>
         <select class="input" id="task-expiration-policy" name="expiration_policy" aria-describedby="task-expiration-hint">
           <option value="keep_overdue" ${(task?.expiration_policy || 'keep_overdue') === 'keep_overdue' ? 'selected' : ''}>Keep overdue</option>
           <option value="expire_incomplete" ${task?.expiration_policy === 'expire_incomplete' ? 'selected' : ''}>Expire incomplete</option>
         </select>
-        <p class="task-field-hint" id="task-expiration-hint">Expire incomplete at Due Time for 0 completion points. A due date is required; without a time, the deadline is the end of that day in the household timezone. Scheduled repeats keep their dates. Repeat from completion pauses after expiration until this occurrence is reopened and completed.</p>
+        <p class="task-field-hint" id="task-expiration-hint" ${task?.expiration_policy === 'expire_incomplete' ? '' : 'hidden'}>Expire incomplete at Due Time for 0 completion points. A due date is required; without a time, the deadline is the end of that day in the household timezone. Scheduled repeats keep their dates. Repeat from completion pauses after expiration until this occurrence is reopened and completed.</p>
       </div>
       <div class="form-group" style="margin-top:var(--space-4)">
         <label class="toggle" style="margin:0">
-          <input type="checkbox" id="task-countdown" name="countdown" aria-describedby="task-countdown-hint"
+          <input type="checkbox" id="task-countdown" name="countdown" aria-describedby="task-countdown-warning"
                  ${task?.countdown ? 'checked' : ''}>
           <span class="toggle__track"></span>
           <span>${t('tasks.countdownToggle')}</span>
         </label>
-        <p class="task-field-hint" id="task-countdown-hint">${t('tasks.countdownHint')}</p>
         <p class="task-field-hint field-hint--warn" id="task-countdown-warning" role="status" hidden><i data-lucide="alert-triangle" aria-hidden="true"></i><span>${t('tasks.countdownNeedsDue')}</span></p>
       </div>
 
@@ -2047,6 +2046,16 @@ async function saveTaskAsTemplate(form) {
  * der Schalter je nach Bedienweg (Kalenderblatt vs. Tastatur) hinterher.
  */
 function wireCountdownGate(panel) {
+  const expiration = panel.querySelector('#task-expiration-policy');
+  const expirationHint = panel.querySelector('#task-expiration-hint');
+  const updateExpirationHint = () => {
+    if (!expiration || !expirationHint) return;
+    expirationHint.hidden = expiration.value !== 'expire_incomplete';
+    if (expirationHint.hidden) expiration.removeAttribute('aria-describedby');
+    else expiration.setAttribute('aria-describedby', expirationHint.id);
+  };
+  expiration?.addEventListener('change', updateExpirationHint);
+  updateExpirationHint();
   const toggle = panel.querySelector('#task-countdown');
   const due    = panel.querySelector('#task-due-date');
   const warn   = panel.querySelector('#task-countdown-warning');
@@ -5515,21 +5524,7 @@ export async function render(container, { user }) {
         })}
         </div>
         <div class="page-toolbar__actions">
-          <!-- ICON PLUS LABEL, wie beim Geschwister-Umschalter in der Filterreihe
-               (#group-mode-toggle, ~60 Zeilen tiefer). tasks.css:143 sagt ueber
-               den Label-Verlust ausdruecklich „Der Ansichts-Umschalter im Kopf
-               bekommt sie mit; er ist dasselbe Bauteil" - nur trug er gar kein
-               Label, das haette fallen koennen. Die Regel lief hier ins Leere,
-               und uebrig blieben drei stumme Glyphen (Critique 2026-08-28, P1:
-               ein Kanban-Rechteck und ein Verlaufs-Pfeil sind kein geteiltes
-               Vokabular). Unter 640px faellt das Label ueber die vorhandene
-               Regel weg, mobil bleibt also die Icon-Form - iOS-Kanon.
-               Die drei EINZELNEN Knoepfe daneben behalten ihre reine Icon-Form:
-               ihre Namen sind Verben („Kategorien verwalten"), und ein
-               aria-label als sichtbaren Text weiterzureichen verbietet
-               DESIGN.md. Damit trennt jetzt auch der Text, was vorher nur die
-               Behaelterform andeutete: benannte Ansichten in der Gruppe,
-               unbenannte Werkzeuge daneben. -->
+          <!-- Primary view controls stay on the toolbar; named management actions share Manage. -->
           <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar-control filter-toggle-btn" id="filter-toggle-btn"
                   aria-label="${t('tasks.filterBtn')}" aria-expanded="false" aria-controls="filter-panel">
             <i data-lucide="sliders-horizontal" class="icon-sm" aria-hidden="true"></i>

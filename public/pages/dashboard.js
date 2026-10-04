@@ -674,7 +674,7 @@ function widgetHeader(widgetId, title, count, linkHref, linkLabel, sealSlug = nu
   // Ein Kopf-Link muesste sich fuer eine der beiden entscheiden und waere fuer
   // die andere Haelfte der Liste falsch. `href="null"` waere die schlechtere
   // Antwort auf dieselbe Frage gewesen.
-  const link = linkHref
+  const link = linkHref && customLabel
     ? `<a href="${linkHref}" data-route="${linkHref}" class="widget__link"
          aria-label="${esc(customLabel ? `${linkLabel}: ${title}` : t('dashboard.allLinkFor', { module: title }))}">
         ${linkLabel}
@@ -705,7 +705,7 @@ function widgetHeader(widgetId, title, count, linkHref, linkLabel, sealSlug = nu
         <span class="module-seal module-seal--sm"${seal} aria-hidden="true">
           ${moduleIconHTML(icon)}
         </span>
-        <span class="widget__title-text">${title}</span>
+        <span class="widget__title-text">${linkHref && !customLabel ? `<a href="${linkHref}" data-route="${linkHref}" class="widget__title-link" aria-label="${esc(t('dashboard.allLinkFor', { module: title }))}"><span>${title}</span><i data-lucide="chevron-right" class="icon-sm" aria-hidden="true"></i></a>` : title}</span>
         ${badge}
       </h3>
       ${link}

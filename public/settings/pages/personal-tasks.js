@@ -89,7 +89,6 @@ function renderPage(container, preferences, lists = null) {
       <div class="settings-card">
         ${toggleRowHtml({ label: 'Warn before replacing an edited Task draft', checked: preferences.tasks_template_switch_warning !== false, attrs: { id: 'tasks-template-switch-warning' } })}
         <p class="form-hint">Applies when switching Activity Templates in New Task. Untouched drafts switch immediately.</p>
-        <p class="settings-card-description">${t('settings.tasksDefaultsDescription')}</p>
 ${options.length > 1 ? targetFieldHtml(options, current) : `        <p class="form-hint">${t('settings.tasksDefaultTargetEmpty')}</p>`}
       </div>
     </section>

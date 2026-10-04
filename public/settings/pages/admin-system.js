@@ -12,7 +12,6 @@ function renderPage(container) {
     <section class="settings-section">
       <h2 class="settings-section__title">${t('settings.systemTitle')}</h2>
       <div class="settings-card" id="system-info-card">
-        <p class="settings-card-description">${t('settings.systemDescription')}</p>
         <div id="system-info-host"></div>
       </div>
     </section>

@@ -834,6 +834,11 @@
    -------------------------------------------------------- */
 
 .settings-card--automation,
+.automation-help > summary {
+  min-height: var(--target-base);
+  align-content: center;
+  cursor: pointer;
+}
 .automation-manager,
 .automation-manager__body,
 .automation-quick-template > span,

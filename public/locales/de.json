@@ -1416,6 +1416,8 @@
         "listExpanded": "Erweitert",
         "showMore": "Mehr anzeigen",
         "showLess": "Weniger anzeigen",
+        "revealOverlapping": "Überlappende angeheftete Notizen",
+        "revealNote": "Notiz anzeigen: {{title}}",
         "untitledNote": "Unbenannte Notiz",
         "cardMenu": "Notizoptionen",
         "compactView": "Listenansicht",

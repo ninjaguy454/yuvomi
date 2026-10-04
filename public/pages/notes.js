@@ -191,6 +191,7 @@ export async function render(container, { user }) {
         <span id="notes-board-hint" class="notes-board-hint" hidden>${t('notes.canvasGestureHint')}</span>
       </div>
       <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
+      <div class="notes-reveal-strip" role="group" aria-label="${t('notes.revealOverlapping')}" hidden></div>
       <div class="notes-scroll page-scrollport">
         <div class="notes-canvas-space"><div id="notes-grid" class="notes-grid" aria-busy="true">${renderSkeletonList({ rows: 5, lines: 3 })}</div></div>
       </div>

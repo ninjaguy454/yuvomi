@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 
 const layout = await import('../public/utils/note-board-layout.js').catch(() => ({}));
 
+test('overlap reveal includes every locked card in a dense stack without changing canonical positions', () => {
+  const notes=Array.from({length:30},(_,i)=>({id:i+1,layout:{x:80,y:90,width:4,height:6,position_locked:true,always_on_top:i===2}}));
+  notes.push({id:31,layout:{x:80,y:90,width:4,height:6,position_locked:false}});
+  notes.push({id:32,layout:{x:84,y:90,width:4,height:6,position_locked:true}});
+  const before=structuredClone(notes);
+  assert.equal(typeof layout.overlappingLockedNoteIds,'function');
+  assert.deepEqual(layout.overlappingLockedNoteIds(notes),Array.from({length:30},(_,i)=>i+1));
+  assert.deepEqual(layout.overlappingLockedNoteIds(notes,layout.projectNoteLayouts(notes,{filtered:true})),[]);
+  assert.deepEqual(notes,before);
+  assert.deepEqual(layout.overlappingLockedNoteIds([notes[0]]),[],'only the authorized input collection contributes overlap');
+});
+
 test('layout clamps invalid or off-board geometry and keeps controls readable', () => {
   assert.equal(typeof layout.normalizeNoteLayout, 'function', 'board layout helper exists');
   assert.deepEqual(layout.normalizeNoteLayout({x:-20,y:-8,width:300,height:0,revision:2}), {x:0,y:0,width:12,height:4,revision:2});

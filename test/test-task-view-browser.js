@@ -147,7 +147,7 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, p
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
-for (const width of [320, 390, 1100]) test(`UX cleanup: Manage is reachable by keyboard and touch at ${width}px`, async () => {
+for (const width of [320, 390, 1024, 1100, 1280]) test(`UX cleanup: Manage is reachable by keyboard and touch at ${width}px`, async () => {
   const page = await mounted('list', { width, height: 850, hasTouch: width < 640, isMobile: width < 640 });
   try {
     if (process.env.UX_CLEANUP_EVIDENCE) {

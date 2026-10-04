@@ -541,7 +541,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "आइटम पर निशान लगाएं",
-        "checkConflict": "कार्य इस बीच बदल गया है। कृपया इसे फिर से खोलें।"
+        "checkConflict": "कार्य इस बीच बदल गया है। कृपया इसे फिर से खोलें।",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "सूची भेजें",
@@ -1130,7 +1136,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "महीना और वर्ष चुनें",
@@ -3033,7 +3042,13 @@
         "twoFactorMemberOff": "सेट नहीं है",
         "memberSsoOnlyLabel": "केवल SSO साइन-इन",
         "memberSsoOnlyHint": "इस खाते को कोई पासवर्ड नहीं मिलेगा। सदस्य केवल SSO से ही साइन इन कर सकता है।",
-        "memberSsoOnlyEditHint": "स्विच चालू होने पर खाता अपना पासवर्ड खो देता है और केवल SSO से ही अंदर आता है। बंद करने के लिए नया पासवर्ड सेट करना होगा।"
+        "memberSsoOnlyEditHint": "स्विच चालू होने पर खाता अपना पासवर्ड खो देता है और केवल SSO से ही अंदर आता है। बंद करने के लिए नया पासवर्ड सेट करना होगा।",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "आपकी ज़िंदगी, साथ-साथ।",
@@ -3187,7 +3202,8 @@
         "sourceNative": "मूल",
         "sourceAll": "सभी",
         "sourceFilterLabel": "स्रोत के अनुसार फ़िल्टर करें",
-        "plannedThisWeek": "इस सप्ताह नियोजित"
+        "plannedThisWeek": "इस सप्ताह नियोजित",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "कार्य, ईवेंट, नोट्स, संपर्क, खरीदारी और स्वास्थ्य में खोजने के लिए कम से कम 2 अक्षर लिखें।",

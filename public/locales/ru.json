@@ -541,7 +541,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Отметить пункт",
-        "checkConflict": "Задача была изменена. Откройте её заново."
+        "checkConflict": "Задача была изменена. Откройте её заново.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Отправить список",
@@ -1130,7 +1136,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Выберите месяц и год",
@@ -3033,7 +3042,13 @@
         "twoFactorMemberOff": "не настроен",
         "memberSsoOnlyLabel": "Только вход через SSO",
         "memberSsoOnlyHint": "Учётная запись не получает пароль. Участник может войти только через SSO.",
-        "memberSsoOnlyEditHint": "При включённом переключателе учётная запись теряет свой пароль и входит только через SSO. Чтобы выключить его, нужно задать новый пароль."
+        "memberSsoOnlyEditHint": "При включённом переключателе учётная запись теряет свой пароль и входит только через SSO. Чтобы выключить его, нужно задать новый пароль.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Ваша жизнь, вместе.",
@@ -3187,7 +3202,8 @@
         "sourceNative": "Локальный",
         "sourceAll": "Все",
         "sourceFilterLabel": "Фильтр по источнику",
-        "plannedThisWeek": "Запланировано на этой неделе"
+        "plannedThisWeek": "Запланировано на этой неделе",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Введите минимум 2 символа для поиска по задачам, событиям, заметкам, контактам, покупкам и здоровью.",

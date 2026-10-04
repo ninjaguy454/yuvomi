@@ -742,7 +742,7 @@ export async function renderPlacesManager(body, manager) {
   const places = response.places ?? [];
   const searchStatus = searchResponse.data || { configured: false };
   replaceHtml(body, `${managerHeader('Places address book', 'automation-add-place', 'Add address manually')}
-    <p class="form-hint automation-manager__hint">Save reusable household locations.</p>
+    <p class="form-hint automation-manager__hint">${h(t('settings.automationPlacesHint'))}</p>
     <div class="detail-inline-actions" style="margin-bottom:var(--space-3)"><button type="button" class="btn btn--secondary btn--sm" id="automation-find-place" ${searchStatus.configured ? '' : 'disabled'}><i data-lucide="search" class="icon-sm"></i>Find with Google</button><button type="button" class="btn btn--ghost btn--sm" id="automation-configure-google"><i data-lucide="settings-2" class="icon-sm"></i>Configure Google search</button><span class="form-hint">${searchStatus.configured ? 'Search deliberately by name or category; no coordinates are required.' : 'Google search is not configured yet. Add an API key here, or continue entering Places manually.'}</span></div>
     <div class="automation-list">${places.map((place) => {
       const usage = Object.values(place.usage || {}).reduce((sum, count) => sum + Number(count || 0), 0);
@@ -1611,7 +1611,7 @@ async function renderWorkflowsManager(body, manager) {
     <div class="automation-list">
       ${workflows.map((workflow) => `
         <div class="list-row automation-list-row">
-          <div class="automation-list-row__copy">${canCapability('workflows.edit') ? `<button type="button" class="ux-name-control" data-edit-workflow="${workflow.id}" aria-label="Edit Task Workflow: ${h(workflow.name)}">${h(workflow.name)}</button>` : `<strong>${h(workflow.name)}</strong>`}<br><small class="form-hint">${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Available in Task Workflows' : 'Hidden from the launcher'}</small></div>
+          <div class="automation-list-row__copy">${canCapability('workflows.edit') ? `<button type="button" class="ux-name-control" data-edit-workflow="${workflow.id}" aria-label="${h(t('settings.workflowEditNamed', { name: workflow.name }))}">${h(workflow.name)}</button>` : `<strong>${h(workflow.name)}</strong>`}<br><small class="form-hint">${workflow.steps?.length ?? 0} activities · ${workflow.quick_add_enabled ? 'Available in Task Workflows' : 'Hidden from the launcher'}</small></div>
           <div class="automation-list-row__actions">
             <button type="button" class="btn btn--danger-ghost btn--sm" data-delete-workflow="${workflow.id}" aria-label="Delete ${h(workflow.name)} Task Workflow">Delete</button>
           </div>
@@ -1817,14 +1817,14 @@ async function loadWorkflowEditorContext() {
 
 function openWorkflowForm(workflow, context, manager = null, { asChild = false, onSaved = null } = {}) {
   const content = `<form id="automation-workflow-form">
-    ${inputRow('Workflow name', `<input class="input" name="name" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false" required value="${h(workflow?.name || '')}">`, 'Insert an answer with @.')}
+    ${inputRow('Workflow name', `<input class="input" name="name" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false" required value="${h(workflow?.name || '')}">`, t('settings.workflowVariableInsertHint'))}
     ${inputRow('Description', `<textarea class="input" name="description" rows="2" data-variable-mentions="workflow" aria-autocomplete="list" aria-expanded="false">${h(workflow?.description || '')}</textarea>`, '')}
     ${inputRow('Category', `<select class="input" name="category">${categoryOptions(context.categories, workflow?.category || 'misc')}</select>`)}
     <label class="automation-check-row"><input type="checkbox" name="subject_required" ${(workflow?.subject_required ?? true) ? 'checked' : ''}> Ask which household member this is for</label>
     <label class="automation-check-row automation-check-row--section-end"><input type="checkbox" name="quick_add_enabled" ${(workflow?.quick_add_enabled ?? true) ? 'checked' : ''}> Show in Task Workflows</label>
     ${renderRotationBindings(workflow?.rotation_bindings || [], {...context,workflowOperations:true})}
 
-    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>      <details class="automation-help"><summary>Variable help</summary><p class="form-hint">Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.</p><p class="form-hint">Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member).</p></details>
+    <div class="automation-workflow-step__header"><strong>Workflow questions and variables</strong><div class="automation-question-add"><select class="input" id="workflow-reusable-variable"><option value="">Reusable variable…</option>${(context.variables || []).map((variable) => `<option value="${variable.id}">${h(variable.label)} · {{${h(variable.variable_key)}}}</option>`).join('')}</select><button type="button" class="btn btn--ghost btn--sm" id="workflow-use-reusable">Use reusable</button><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-question">Add local variable</button></div></div>      <details class="automation-help"><summary>${h(t('settings.workflowVariableHelp'))}</summary><p class="form-hint">${h(t('settings.workflowVariableHelpIds'))}</p><p class="form-hint">${h(t('settings.workflowVariableHelpRotation'))}</p></details>
     <div id="workflow-questions">${(workflow?.input_schema || []).map((question) => questionHtml(question, workflow?.id)).join('')}</div>
 
     <div class="automation-workflow-step__header automation-workflow-step__header--section"><strong>Activities</strong><button type="button" class="btn btn--ghost btn--sm" id="workflow-add-step">Add activity</button></div>

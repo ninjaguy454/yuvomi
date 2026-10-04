@@ -618,7 +618,7 @@ function renderActivitySubtasks(task, expanded) {
       </button>
       <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_optional ? ' · Optional' : ''}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
       <div class="subtask-item__metadata">
-      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--icon subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="Supervisor approval: ${esc(subtask.title)}" title="Supervisor approval"><i data-lucide="shield" class="icon-md" aria-hidden="true"></i></button>` : ''}
+      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--icon subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="${esc(t('tasks.supervisorApprovalFor', { title: subtask.title }))}" title="${esc(t('tasks.supervisorApproval'))}"><i data-lucide="shield" class="icon-md" aria-hidden="true"></i></button>` : ''}
       <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(subtask) }))}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
@@ -1148,7 +1148,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
         </div>
       </div>
       <div class="form-group">
-        <label class="label" for="task-expiration-policy">If unfinished at deadline</label>
+        <label class="label" for="task-expiration-policy">${esc(t('tasks.expirationPolicyLabel'))}</label>
         <select class="input" id="task-expiration-policy" name="expiration_policy" aria-describedby="task-expiration-hint">
           <option value="keep_overdue" ${(task?.expiration_policy || 'keep_overdue') === 'keep_overdue' ? 'selected' : ''}>Keep overdue</option>
           <option value="expire_incomplete" ${task?.expiration_policy === 'expire_incomplete' ? 'selected' : ''}>Expire incomplete</option>
@@ -5550,8 +5550,8 @@ export async function render(container, { user }) {
             <i data-lucide="inbox" class="icon-lg" aria-hidden="true"></i>
           </button>
           <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar__manage" id="task-manage-btn"
-                  aria-label="Manage" aria-expanded="false" aria-controls="task-manage-panel">
-            <i data-lucide="settings-2" class="icon-sm" aria-hidden="true"></i><span>Manage</span>
+                  aria-label="${esc(t('tasks.manage'))}" aria-expanded="false" aria-controls="task-manage-panel">
+            <i data-lucide="settings-2" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.manage'))}</span>
           </button>
           <button class="btn btn--primary toolbar-new-btn" id="btn-new-task" style="gap:var(--space-1)"
                   aria-label="${t('tasks.newTask')}">
@@ -5566,11 +5566,11 @@ export async function render(container, { user }) {
         <div class="task-control-popover" id="task-sort-panel" popover="auto"></div>
         <div class="task-control-popover" id="task-group-panel" popover="auto"></div>
         <div class="task-control-popover" id="task-view-panel" popover="auto"></div>
-        <div class="task-control-popover" id="task-manage-panel" popover="auto" role="group" aria-label="Manage">
+        <div class="task-control-popover" id="task-manage-panel" popover="auto" role="group" aria-label="${esc(t('tasks.manage'))}">
           <div class="task-control-options">
-            <button type="button" class="task-control-option" id="btn-manage-categories"><i data-lucide="folder-tree" class="icon-sm" aria-hidden="true"></i><span>Categories</span></button>
-            <button type="button" class="task-control-option" id="btn-manage-tags"><i data-lucide="tags" class="icon-sm" aria-hidden="true"></i><span>Tags</span></button>
-            <button type="button" class="task-control-option" id="btn-quick-add"><i data-lucide="zap" class="icon-sm" aria-hidden="true"></i><span>Workflows</span></button>
+            <button type="button" class="task-control-option" id="btn-manage-categories"><i data-lucide="folder-tree" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.categoriesLabel'))}</span></button>
+            <button type="button" class="task-control-option" id="btn-manage-tags"><i data-lucide="tags" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.tagsLabel'))}</span></button>
+            <button type="button" class="task-control-option" id="btn-quick-add"><i data-lucide="zap" class="icon-sm" aria-hidden="true"></i><span>${esc(t('tasks.workflowsLabel'))}</span></button>
           </div>
         </div>
         <div class="task-control-popover task-profile-popover" id="task-profile-popover" popover="auto" role="dialog"></div>

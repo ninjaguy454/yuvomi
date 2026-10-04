@@ -541,7 +541,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Позначити пункт",
-        "checkConflict": "Завдання тим часом змінено. Відкрийте його ще раз."
+        "checkConflict": "Завдання тим часом змінено. Відкрийте його ще раз.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Надіслати список",
@@ -1130,7 +1136,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Виберіть місяць і рік",
@@ -3033,7 +3042,13 @@
         "twoFactorMemberOff": "не налаштовано",
         "memberSsoOnlyLabel": "Лише вхід через SSO",
         "memberSsoOnlyHint": "Обліковий запис не отримує пароля. Учасник може увійти лише через SSO.",
-        "memberSsoOnlyEditHint": "З увімкненим перемикачем обліковий запис втрачає свій пароль і заходить лише через SSO. Щоб вимкнути його, потрібно задати новий пароль."
+        "memberSsoOnlyEditHint": "З увімкненим перемикачем обліковий запис втрачає свій пароль і заходить лише через SSO. Щоб вимкнути його, потрібно задати новий пароль.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Ваше життя, разом.",
@@ -3222,7 +3237,8 @@
         "sourceNative": "Локальний",
         "sourceAll": "Усі",
         "sourceFilterLabel": "Фільтр за джерелом",
-        "plannedThisWeek": "Заплановано на цей тиждень"
+        "plannedThisWeek": "Заплановано на цей тиждень",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Введіть щонайменше 2 символи для пошуку в завданнях, подіях, нотатках, контактах, покупках і здоров'ї.",

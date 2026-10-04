@@ -541,7 +541,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Σημείωση στοιχείου",
-        "checkConflict": "Η εργασία άλλαξε στο μεταξύ. Ανοίξτε την ξανά."
+        "checkConflict": "Η εργασία άλλαξε στο μεταξύ. Ανοίξτε την ξανά.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Αποστολή λίστας",
@@ -1130,7 +1136,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Επιλέξτε μήνα και έτος",
@@ -3033,7 +3042,13 @@
         "twoFactorMemberOff": "μη ρυθμισμένο",
         "memberSsoOnlyLabel": "Μόνο σύνδεση με SSO",
         "memberSsoOnlyHint": "Ο λογαριασμός δεν αποκτά κωδικό. Το μέλος μπορεί να συνδεθεί μόνο μέσω SSO.",
-        "memberSsoOnlyEditHint": "Με τον διακόπτη ενεργό, ο λογαριασμός χάνει τον κωδικό του και μπαίνει μόνο μέσω SSO. Για την απενεργοποίηση πρέπει να οριστεί νέος κωδικός."
+        "memberSsoOnlyEditHint": "Με τον διακόπτη ενεργό, ο λογαριασμός χάνει τον κωδικό του και μπαίνει μόνο μέσω SSO. Για την απενεργοποίηση πρέπει να οριστεί νέος κωδικός.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Η ζωή σας, μαζί.",
@@ -3187,7 +3202,8 @@
         "sourceNative": "Τοπική",
         "sourceAll": "Όλες",
         "sourceFilterLabel": "Φιλτράρισμα κατά προέλευση",
-        "plannedThisWeek": "Προγραμματισμένο αυτή την εβδομάδα"
+        "plannedThisWeek": "Προγραμματισμένο αυτή την εβδομάδα",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Πληκτρολόγησε τουλάχιστον 2 χαρακτήρες για αναζήτηση σε εργασίες, ραντεβού, σημειώσεις, επαφές, αγορές και υγεία.",

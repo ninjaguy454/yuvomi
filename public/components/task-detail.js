@@ -684,10 +684,10 @@ function subtaskRowNode(task, subtask, ctx) {
     if (canApproveDeviceTask(subtask)) {
       const approve = document.createElement('button'); approve.type = 'button';
       approve.className = 'btn btn--secondary btn--icon';
-      approve.title = 'Supervisor approval';
+      approve.title = t('tasks.supervisorApproval');
       const shield = document.createElement('i'); shield.dataset.lucide = 'shield'; shield.className = 'icon-md'; shield.setAttribute('aria-hidden', 'true');
       approve.appendChild(shield);
-      approve.setAttribute('aria-label', `Supervisor approval: ${subtask.title}`);
+      approve.setAttribute('aria-label', t('tasks.supervisorApprovalFor', { title: subtask.title }));
       approve.dataset.focusKey = 'approve-' + subtask.id; approve.dataset.deviceApproval = String(subtask.id);
       approve.addEventListener('click', () => ctx.runMutation(approve, () => approveDeviceTask(subtask, task), {subtask, status:'done'}));
       row.appendChild(approve);
@@ -1322,10 +1322,10 @@ function statusSummaryNode(task, ctx) {
   if (canApproveDeviceTask(task)) {
     const approve = document.createElement('button'); approve.type = 'button';
     approve.className = 'btn btn--secondary btn--icon';
-      approve.title = 'Supervisor approval';
+      approve.title = t('tasks.supervisorApproval');
       const shield = document.createElement('i'); shield.dataset.lucide = 'shield'; shield.className = 'icon-md'; shield.setAttribute('aria-hidden', 'true');
       approve.appendChild(shield);
-    approve.setAttribute('aria-label', `Supervisor approval: ${task.title}`);
+    approve.setAttribute('aria-label', t('tasks.supervisorApprovalFor', { title: task.title }));
     approve.dataset.focusKey = 'approve-' + task.id; approve.dataset.deviceApproval = String(task.id);
     approve.addEventListener('click', () => ctx.runMutation(approve, () => approveDeviceTask(task)));
     summary.appendChild(approve);

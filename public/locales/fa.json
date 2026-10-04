@@ -553,7 +553,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "علامت‌زدن مورد",
-        "checkConflict": "وظیفه در این میان تغییر کرده است. لطفاً دوباره آن را باز کنید."
+        "checkConflict": "وظیفه در این میان تغییر کرده است. لطفاً دوباره آن را باز کنید.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "ارسال فهرست",
@@ -1142,7 +1148,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "ماه و سال را انتخاب کنید",
@@ -3045,7 +3054,13 @@
         "twoFactorMemberOff": "تنظیم‌نشده",
         "memberSsoOnlyLabel": "فقط ورود با SSO",
         "memberSsoOnlyHint": "این حساب رمز عبوری دریافت نمی‌کند. عضو تنها می‌تواند از طریق SSO وارد شود.",
-        "memberSsoOnlyEditHint": "با روشن بودن این کلید، حساب رمز عبور خود را از دست می‌دهد و فقط از طریق SSO وارد می‌شود. برای خاموش کردن باید رمز عبور جدیدی تعیین شود."
+        "memberSsoOnlyEditHint": "با روشن بودن این کلید، حساب رمز عبور خود را از دست می‌دهد و فقط از طریق SSO وارد می‌شود. برای خاموش کردن باید رمز عبور جدیدی تعیین شود.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "زندگی شما، در کنار هم.",
@@ -3278,7 +3293,8 @@
         "sourceNative": "بومی",
         "sourceAll": "همه",
         "sourceFilterLabel": "فیلتر بر اساس منبع",
-        "plannedThisWeek": "برنامه‌ریزی‌شده برای این هفته"
+        "plannedThisWeek": "برنامه‌ریزی‌شده برای این هفته",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "onboarding": {
         "step1Title": "به {{name}} خوش آمدید",

@@ -49,6 +49,7 @@ async function mount({ width = 1280, height = 900, permission = 'edit', fixture,
   if (fixture === 'fitting') notes = [notes[0]];
   if (fixture === 'locked') notes[0].layout.position_locked = true;
   if (fixture === 'layers') { notes[1].layout = { x:6,y:2,width:4,height:6,revision:1,always_on_top:true }; }
+  if (fixture === 'menu-overlap') { notes[1].layout = { x:5,y:3,width:4,height:6,revision:1,always_on_top:true }; }
   if (fixture === 'tall-top') { notes = [notes[0]]; notes[0].layout.y = 105; }
   if (fixture === 'long-content') notes[0].content = 'A plain paragraph to drag.\n\n' + Array.from({ length: 35 }, (_, i) => `Scrollable preview paragraph ${i}.`).join('\n\n') + '\n\n' + notes[0].content;
   if (permission !== 'edit') for (const note of notes) note.permissions = { view: true, edit: false, delete: false, manage_visibility: false };
@@ -142,6 +143,78 @@ test('zoomed drag uses world units and right-edge autoscroll grows beyond twelve
     assert.ok(notes[0].layout.x>12,'saved world position is beyond the old board edge');
     const extent=await page.$eval('.notes-canvas-space',n=>n.getBoundingClientRect().width);
     assert.ok(extent >= ((notes[0].layout.x+notes[0].layout.width)*pitch+192)*1.25-1);
+  } finally { await page.close(); }
+});
+
+for (const input of ['pointer', 'keyboard']) test(`open note menu stays reachable above overlapping cards and restores its tier on close (${input})`, async () => {
+  const page = await mount({ fixture: 'menu-overlap' });
+  try {
+    const tiers = () => page.$$eval('.note-card', nodes => nodes.map(n => Number(getComputedStyle(n).zIndex)));
+    const initial = await tiers(); assert.ok(initial[0] < initial[1]);
+    if (input === 'keyboard') { await page.focus(`${card} summary`); await page.keyboard.press('Enter'); }
+    else await page.click(`${card} summary`);
+    await page.waitForSelector(`${card} details[open]`);
+    await page.waitForFunction(() => {
+      const cards = [...document.querySelectorAll('.note-card')];
+      return Number(getComputedStyle(cards[0]).zIndex) > Number(getComputedStyle(cards[1]).zIndex);
+    });
+    assert.equal(await page.$eval(`${card} [data-board-action="top"]`, el => {
+      const r = el.getBoundingClientRect();
+      return el.contains(document.elementFromPoint(r.right - 10, r.top + r.height / 2));
+    }), true, 'the menu action itself receives the click above the overlapping top card');
+    await page.click(`${card} summary`);
+    await page.waitForFunction(() => {
+      const cards = [...document.querySelectorAll('.note-card')];
+      return !cards[0].querySelector('details').open && Number(getComputedStyle(cards[0]).zIndex) < Number(getComputedStyle(cards[1]).zIndex);
+    });
+    const restored = await tiers(); assert.ok(restored[0] < restored[1]);
+    assert.equal(writes.length, 0, 'opening a menu does not change persistent layers');
+  } finally { await page.close(); }
+});
+
+test('viewport capture loss ends background pan before subsequent movement', async () => {
+  const page = await mount();
+  try {
+    const area = await box(page, '.notes-scroll'), start = { x: area.x + 20, y: area.y + area.height - 100 };
+    await page.evaluate(() => document.addEventListener('pointerdown', e => { window.panPointer = e.pointerId; }, { capture: true, once: true }));
+    await page.mouse.move(start.x, start.y); await page.mouse.down();
+    await page.mouse.move(start.x, start.y - 80);
+    const stopped = await page.$eval('.notes-scroll', el => {
+      if (!el.hasPointerCapture(window.panPointer)) throw new Error('viewport must own pan capture');
+      el.releasePointerCapture(window.panPointer); return el.scrollTop;
+    });
+    assert.ok(stopped > 0);
+    await page.mouse.move(start.x, start.y - 180);
+    assert.equal(await page.$eval('.notes-scroll', el => el.scrollTop), stopped);
+    await page.mouse.up(); assert.equal(writes.length, 0);
+  } finally { await page.close(); }
+});
+
+test('drop restores the persistent tier while its layout request is pending', async () => {
+  const page = await mount({ fixture: 'layers' }); let held;
+  try {
+    await page.setRequestInterception(true);
+    const intercepted = new Promise(resolve => page.on('request', request => {
+      if (request.url().endsWith('/layout')) { held = request; resolve(); }
+      else request.continue();
+    }));
+    await mouseDrag(page, await bodyPoint(page), -100, 100); await intercepted;
+    assert.equal(await page.$('.note-card--moving'), null);
+    const tiers = await page.$$eval('.note-card', nodes => nodes.map(n => Number(getComputedStyle(n).zIndex)));
+    assert.ok(tiers[0] < tiers[1], 'pending network save must not retain active drag elevation');
+  } finally { if (held) await held.continue(); await page.close(); }
+});
+
+test('held-edge resizing exposes corner and edge markers only during the gesture', async () => {
+  const page = await mount();
+  try {
+    const markers = () => page.$eval(card, n => getComputedStyle(n, '::after').backgroundImage);
+    const before = await markers(), b = await box(page);
+    await page.mouse.move(b.x + 3, b.y + 40); await page.mouse.down();
+    await page.waitForSelector('.note-card--resizing');
+    const active = await markers(); assert.notEqual(active, 'none'); assert.notEqual(active, before);
+    await page.keyboard.press('Escape'); await page.mouse.up();
+    assert.equal(await markers(), before); assert.equal(writes.length, 0);
   } finally { await page.close(); }
 });
 

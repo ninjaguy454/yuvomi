@@ -4949,6 +4949,50 @@ p.field-hint--warn[hidden] {
 
 
 /* FAB und page-fab ausblenden wenn virtuelle Tastatur offen (nur Mobile) */
+/* The picture is the single picker target; the pencil is a visual cue only. */
+.photo-editor.photo-editor { position: relative; overflow: visible; }
+.photo-editor__preview { display: contents; border-radius: inherit; }
+.photo-editor__preview > img { border-radius: inherit; }
+.photo-editor__cue {
+  position: absolute;
+  inset-inline-end: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-8);
+  height: var(--space-8);
+  border: var(--space-px) solid var(--color-border);
+  border-radius: var(--radius-full);
+  color: var(--color-text-primary);
+  background: var(--color-surface);
+  pointer-events: none;
+}
+.photo-editor__cue svg { width: var(--space-4); height: var(--space-4); }
+
+/* A record name can carry its existing View/Edit action without a second button. */
+.ux-name-control {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target-base);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.ux-name-control:hover { text-decoration: underline; }
+.ux-name-control:focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+  border-radius: var(--radius-sm);
+}
+
 @media (max-width: 1023px) {
   .keyboard-visible .fab,
   .keyboard-visible .page-fab {

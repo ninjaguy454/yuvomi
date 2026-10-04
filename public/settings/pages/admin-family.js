@@ -75,15 +75,12 @@ function avatarHtml(user, className = 'settings-avatar') {
 function avatarEditorHtml(user, prefix) {
   return `
     <div class="settings-avatar-editor">
-      <button type="button" class="settings-avatar-button" id="${prefix}-avatar-preview" aria-label="${t('settings.profilePictureLabel')}">
-        ${avatarHtml(user, 'settings-avatar settings-avatar--lg')}
+      <button type="button" class="settings-avatar-button photo-editor" id="${prefix}-avatar-preview" aria-label="${t('settings.profilePictureLabel')}">
+        <span class="photo-editor__preview">${avatarHtml(user, 'settings-avatar settings-avatar--lg')}</span><span class="photo-editor__cue" aria-hidden="true"><i data-lucide="pencil"></i></span>
       </button>
       <input class="sr-only" type="file" id="${prefix}-avatar-file" accept="image/png,image/jpeg,image/webp" />
       <div class="settings-avatar-actions">
-        <button type="button" class="settings-avatar-action" id="${prefix}-avatar-edit" aria-label="${t('settings.profilePictureLabel')}" title="${t('settings.profilePictureLabel')}">
-          <i data-lucide="edit-2" aria-hidden="true"></i>
-        </button>
-        <button type="button" class="settings-avatar-action settings-avatar-action--danger" id="${prefix}-avatar-remove" aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
+        <button type="button" class="settings-avatar-action settings-avatar-action--danger" id="${prefix}-avatar-remove" ${user?.avatar_data ? '' : 'hidden'} aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
           <i data-lucide="trash-2" aria-hidden="true"></i>
         </button>
       </div>
@@ -92,7 +89,9 @@ function avatarEditorHtml(user, prefix) {
 }
 
 function setAvatarPreview(container, selector, user) {
-  const preview = container.querySelector(selector);
+  const remove = container.querySelector(selector.replace('-preview', '-remove'));
+  if (remove) remove.hidden = !user?.avatar_data;
+  const preview = container.querySelector(selector)?.querySelector('.photo-editor__preview');
   if (!preview) return;
   preview.replaceChildren();
   preview.insertAdjacentHTML('beforeend', avatarHtml(user, 'settings-avatar settings-avatar--lg'));
@@ -103,7 +102,6 @@ function bindAvatarPicker(container, prefix) {
   const fileInput = container.querySelector(`#${prefix}-avatar-file`);
   [
     container.querySelector(`#${prefix}-avatar-preview`),
-    container.querySelector(`#${prefix}-avatar-edit`),
   ].forEach((picker) => {
     picker?.addEventListener('click', () => fileInput?.click());
   });
@@ -148,7 +146,7 @@ function renderPage(container) {
       <h2 class="settings-section__title">${t('settings.sectionFamily')}</h2>
       <div class="settings-card" id="members-card">
         <ul class="settings-members" id="members-list"></ul>
-        <button class="btn btn--primary settings-add-btn" id="add-member-btn" hidden>${t('settings.addMember')}</button>
+        <button class="btn btn--primary settings-add-btn" id="add-member-btn" hidden><i data-lucide="user-plus" class="icon-md" aria-hidden="true"></i>${t('settings.addMember')}</button>
       </div>
 
       <div class="settings-card" id="two-factor-household-card">
@@ -230,7 +228,7 @@ function renderPage(container) {
         <h3 class="settings-card__title">${t('settings.invites.title')}</h3>
         <p class="form-hint">${t('settings.invites.intro')}</p>
         <ul class="settings-members" id="invites-list"></ul>
-        <button class="btn btn--primary settings-add-btn" id="add-invite-btn" hidden>${t('settings.invites.add')}</button>
+        <button class="btn btn--primary settings-add-btn" id="add-invite-btn" hidden><i data-lucide="user-plus" class="icon-md" aria-hidden="true"></i>${t('settings.invites.add')}</button>
       </div>
 
       <div class="settings-card settings-card--hidden" id="add-invite-form-card">

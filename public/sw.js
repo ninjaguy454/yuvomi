@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.54`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.56`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -78,6 +78,9 @@ const APP_SHELL = [
   '/utils/activity-schedule.js',
   '/utils/task-edit-scope.js',
   '/utils/task-progress.js',
+  '/utils/member-label.js',
+  '/utils/member-label-loader.js',
+  '/utils/member-age.js',
   '/utils/session-lifecycle.js',
   '/utils/device-context.js',
   '/utils/device-session.js',

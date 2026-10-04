@@ -32,7 +32,7 @@ app.use('/api/v1', (req, res) => {
     return res.json({ data: note });
   }
   if (req.path.endsWith('/layout') && note) {
-    note.layout = { ...req.body.layout, revision: note.layout.revision + 1 };
+    note.layout = { ...note.layout, ...req.body.layout, ...Object.fromEntries(['position_locked','always_on_top'].filter(key => key in req.body).map(key => [key, req.body[key]])), revision: note.layout.revision + 1 };
     return res.json({ data: note.layout });
   }
   return res.json({ data: [] });
@@ -106,8 +106,9 @@ test('usable board width decides the 640px boundary and viewport transitions ret
     assert.equal(await page.$eval('#notes-board-hint', el => el.hidden), true);
     await page.click('#notes-compact-view'); await view(page, 'canvas');
     await page.$eval('.notes-scroll', el => { el.style.paddingInline = '0'; el.style.width = '639px'; });
-    assert.equal(await page.$eval('#notes-grid', el => el.clientWidth), 639);
+    assert.equal(await page.$eval('.notes-scroll', el => el.clientWidth), 639);
     await page.waitForFunction(() => document.querySelector('#notes-grid').dataset.boardView === 'list');
+    assert.equal(await page.$eval('#notes-grid', el => el.clientWidth), 639);
     await page.$eval('.notes-scroll', el => el.style.width = '640px');
     await page.waitForFunction(() => document.querySelector('#notes-grid').dataset.boardView === 'canvas');
     await page.$eval('.notes-scroll', el => { el.style.removeProperty('width'); el.style.removeProperty('padding-inline'); });
@@ -170,7 +171,7 @@ test('Expanded list caps visible Unicode preview at 200 and Show more reveals sa
   } finally { await page.close(); }
 });
 
-test('Compact density is title-only, has an untitled fallback, and retains an accessible secondary size menu', async () => {
+test('Compact density is title-only and numeric adjustment is accessible outside the ordinary menu', async () => {
   const page = await mount();
   try {
     await page.select('#notes-list-density', 'compact');
@@ -182,13 +183,64 @@ test('Compact density is title-only, has an untitled fallback, and retains an ac
     const menu = `${card(1)} details[data-board-menu]`;
     assert.ok(await page.$(`${menu} summary`));
     assert.ok(await page.$eval(`${menu} summary`, el => !!(el.getAttribute('aria-label') || el.textContent).trim()));
-    assert.ok(await page.$(`${menu} [data-board-action="adjust"]`));
+    assert.equal(await page.$(`${menu} [data-board-action="adjust"]`), null);
     await page.focus(`${menu} summary`); await page.keyboard.press('Enter');
     assert.equal(await page.$eval(menu, el => el.open), true);
     assert.equal(await page.$('.note-modal'), null);
-    await page.click(`${menu} [data-board-action="adjust"]`); await page.waitForSelector('#note-layout-width');
+    await page.focus(`${card(1)} [data-board-action="adjust"]`); await page.keyboard.press('Enter'); await page.waitForSelector('#note-layout-width');
     assert.equal(await page.$eval('#note-layout-width', el => el.value), '5');
     assert.equal(writes.length, 0);
+  } finally { await page.close(); }
+});
+
+test('narrow header keeps Search on title row, hides organize and removes duplicate open glyph', async () => {
+  const page = await mount(320);
+  try {
+    const positions = await page.evaluate(() => {
+      const title = document.querySelector('.notes-toolbar h1').getBoundingClientRect();
+      const search = document.querySelector('.notes-toolbar__search').getBoundingClientRect();
+      return { titleBottom: title.bottom, titleTop: title.top, searchBottom: search.bottom, searchTop: search.top };
+    });
+    assert.ok(positions.searchTop < positions.titleBottom && positions.titleTop < positions.searchBottom, 'Search shares title row');
+    assert.equal(await page.$eval('#notes-organize', n => n.hidden || n.getClientRects().length === 0), true);
+    assert.equal(await page.$('.note-card__open'), null);
+    assert.equal(await page.$eval(expand(1), n => getComputedStyle(n).backgroundColor), 'rgba(0, 0, 0, 0)', 'inline expansion has no filled button surface');
+    await page.focus(`${card(1)} [data-action="open"]`); await page.keyboard.press('Enter');
+    assert.ok(await page.$('.note-modal[data-view="read"]'), 'title remains keyboard-accessible');
+  } finally { await page.close(); }
+});
+
+test('position lock and always-on-top persist separately from dashboard pin', async () => {
+  const page = await mount(1280);
+  try {
+    const lock = `${card(1)} [data-board-action="lock"]`;
+    assert.equal(await page.$eval(lock, n => n.getAttribute('aria-pressed')), 'false', 'old dashboard pin does not imply position lock');
+    await page.click(lock);
+    await page.waitForFunction(() => document.querySelector('[data-board-action="lock"]').getAttribute('aria-pressed') === 'true');
+    assert.equal(writes[0].body.position_locked, true);
+    assert.equal(notes[0].pinned, 1);
+    assert.equal(writes[0].body.expected_layout_revision, 2);
+    await page.click(`${card(1)} summary`);
+    assert.equal(await page.$eval(`${card(1)} [data-action="pin"]`, n => n.textContent.trim().replace(/^✓\s*/, '')), 'Show on Dashboard');
+    await page.click(`${card(1)} [data-board-action="top"]`);
+    await page.waitForFunction(() => document.querySelector('[data-board-action="top"]').getAttribute('aria-pressed') === 'true');
+    assert.equal(writes[1].body.always_on_top, true);
+    assert.equal(writes[1].body.expected_layout_revision, 3);
+    assert.equal(notes[0].pinned, 1);
+    assert.equal(notes[0].layout.position_locked, true);
+  } finally { await page.close(); }
+});
+
+for (const width of [360,1280]) test(`${width} cards and reader omit audience prose; edit retains audience selection`, async () => {
+  const page = await mount(width);
+  try {
+    assert.equal(await page.$('.note-card__audience'), null);
+    assert.ok(!(await page.$eval('#notes-grid', n => n.textContent)).includes('Only me'));
+    await page.$eval(`${card(1)} [data-action="open"]`, n => n.click());
+    assert.equal(await page.$('.note-read-view .note-audience-summary'), null);
+    assert.equal(await page.$('.note-modal > .note-audience-summary'), null);
+    await page.click('#note-tab-edit');
+    assert.ok(await page.$('#note-visibility'), 'create/edit retains audience selection');
   } finally { await page.close(); }
 });
 

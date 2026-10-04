@@ -27,7 +27,6 @@ const canNote = action => getPermissions().principal_kind === 'device'
   ? moduleAccess('notes') !== 'none' && canCapability(`device_notes.${action}`)
   : moduleAccess('notes') === 'write' || (action === 'view' && moduleAccess('notes') === 'read');
 const canOnNote = (note, action) => canNote(action) && note?.permissions?.[action] !== false;
-const audienceLabel = note => t(`notes.audience.${note?.visibility || 'all'}`);
 
 // --------------------------------------------------------
 // Konstanten
@@ -162,7 +161,7 @@ export async function render(container, { user }) {
   board?.destroy(); stopLive?.(); stopOpenTasks?.();
   if (state) state.active = false;
   _container = container;
-  state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set() };
+  state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set(), viewport: {} };
   const pageState = state;
   const auth = authenticationSnapshot();
   const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
@@ -185,7 +184,11 @@ export async function render(container, { user }) {
         <label class="notes-list-density" id="notes-list-density-label" hidden>${t('notes.listDensity')}
           <select id="notes-list-density"><option value="compact">${t('notes.listCompact')}</option><option value="expanded" selected>${t('notes.listExpanded')}</option></select>
         </label>
-        ${canNote('view') && canNote('edit') ? `<button class="btn btn--secondary btn--sm" id="notes-organize">${t('notes.organize')}</button>` : ''}
+        ${canNote('view') && canNote('edit') ? `<button class="btn btn--secondary btn--sm" id="notes-organize">${t('notes.organize')}</button><label id="notes-include-locked" class="notes-include-locked"><input type="checkbox" id="notes-organize-locked">${t('notes.includeLocked')}</label>` : ''}
+        <div class="notes-zoom-controls" id="notes-zoom-controls" hidden>
+          <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-out" aria-label="${t('notes.zoomOut')}">−</button><output id="notes-zoom-value">100%</output>
+          <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-in" aria-label="${t('notes.zoomIn')}">+</button><button type="button" class="btn btn--ghost btn--sm" id="notes-reset-view">${t('notes.resetView')}</button>
+        </div>
         <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
         <span id="notes-board-hint" class="notes-board-hint" hidden>${t('notes.canvasGestureHint')}</span>
       </div>
@@ -193,7 +196,7 @@ export async function render(container, { user }) {
       <div class="notes-workspace">
         <aside id="notes-open-tasks" class="notes-open-tasks" hidden></aside>
         <div class="notes-scroll page-scrollport">
-          <div id="notes-grid" class="notes-grid" aria-busy="true">${renderSkeletonList({ rows: 5, lines: 3 })}</div>
+          <div class="notes-canvas-space"><div id="notes-grid" class="notes-grid" aria-busy="true">${renderSkeletonList({ rows: 5, lines: 3 })}</div></div>
         </div>
       </div>
       <button class="page-fab" id="fab-new-note" aria-label="${t('notes.addNoteLabel')}" data-dock-label="${t('newLabel.notes')}">
@@ -229,6 +232,14 @@ export async function render(container, { user }) {
     if (e.target.closest('a, summary')) { e.stopPropagation(); return; }
     const adjust = e.target.closest('[data-board-action="adjust"]');
     if (adjust) { e.stopPropagation(); openLayoutModal(Number(adjust.closest('.note-card').dataset.id)); return; }
+    const flagButton = e.target.closest('[data-board-action="lock"], [data-board-action="top"]');
+    if (flagButton) {
+      e.stopPropagation();
+      const note = state.notes.find(n => n.id === Number(flagButton.closest('.note-card').dataset.id));
+      const flag = flagButton.dataset.boardAction === 'lock' ? 'position_locked' : 'always_on_top';
+      if (note && await saveLayoutChange(note, { [flag]: !note.layout?.[flag] })) renderGrid();
+      return;
+    }
     const pinBtn = e.target.closest('[data-action="pin"]');
     if (pinBtn) { e.stopPropagation(); await togglePin(parseInt(pinBtn.dataset.id, 10)); return; }
 
@@ -250,6 +261,7 @@ export async function render(container, { user }) {
     // der Button liegt in der Karte, ein Treffer reicht.
     const card = e.target.closest('.note-card[data-id]');
     if (card) {
+      if (!window.getSelection()?.isCollapsed) return;
       const note = state.notes.find((n) => n.id === parseInt(card.dataset.id, 10));
       if (note) openNoteModal({ mode: 'edit', note });
     }
@@ -265,6 +277,9 @@ export async function render(container, { user }) {
     state.listDensity = e.currentTarget.value === 'compact' ? 'compact' : 'expanded'; renderGrid();
   });
   container.querySelector('#notes-organize')?.addEventListener('click', organizeNotes);
+  container.querySelector('#notes-zoom-in').addEventListener('click', () => board?.zoomBy(.25));
+  container.querySelector('#notes-zoom-out').addEventListener('click', () => board?.zoomBy(-.25));
+  container.querySelector('#notes-reset-view').addEventListener('click', () => board?.resetView());
 
   if (!canNote('create')) {
     _container.querySelector('#notes-add-btn')?.remove();
@@ -362,14 +377,21 @@ function renderGrid() {
   const q = state.filterQuery.trim().toLowerCase();
   const visible = visibleNotes();
   const forceCompact = state.notes.some(note => note.layout?.overflow);
-  state.listView = state.compact || forceCompact || grid.clientWidth < 640;
+  const scrollport = _container.querySelector('.notes-scroll');
+  const usableWidth = scrollport.clientWidth - parseFloat(getComputedStyle(scrollport).paddingLeft) - parseFloat(getComputedStyle(scrollport).paddingRight);
+  state.listView = state.compact || forceCompact || usableWidth < 640;
   grid.dataset.boardView = state.listView ? 'list' : 'canvas';
   grid.dataset.listDensity = state.listDensity;
   _container.querySelector('#notes-list-density-label').hidden = !state.listView;
   _container.querySelector('#notes-list-density').value = state.listDensity;
+  const organizeButton = _container.querySelector('#notes-organize');
+  if (organizeButton) organizeButton.hidden = state.listView;
+  const includeLocked = _container.querySelector('#notes-include-locked');
+  if (includeLocked) includeLocked.hidden = state.listView;
+  _container.querySelector('#notes-zoom-controls').hidden = state.listView;
   for (const id of state.expandedNotes) if (!state.notes.some(note => note.id === id && canOnNote(note, 'view'))) state.expandedNotes.delete(id);
   const compactButton = _container.querySelector('#notes-compact-view');
-  if (compactButton) { compactButton.hidden = grid.clientWidth < 640; compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
+  if (compactButton) { compactButton.hidden = usableWidth < 640; compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
   _container.querySelector('#notes-board-hint').hidden = state.listView || !!q || !!state.filterCreator || !visible.some(note => canOnNote(note, 'edit'));
 
   if (!visible.length) {
@@ -396,7 +418,7 @@ function renderGrid() {
     grid.querySelector('#empty-cta-notes')?.addEventListener('click', () => {
       document.querySelector('.page-fab')?.click();
     });
-    board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout,
+    board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout, viewState: state.viewport,
       compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
     return;
   }
@@ -410,7 +432,7 @@ function renderGrid() {
   grid.replaceChildren();
   grid.insertAdjacentHTML('beforeend', html);
   if (window.lucide) lucide.createIcons({ el: grid });
-  board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout,
+  board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout, viewState: state.viewport,
     compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
   if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
@@ -455,11 +477,21 @@ function renderBoardMenu(note) {
   return `<details class="note-card__menu" data-board-menu>
     <summary aria-label="${t('notes.cardMenu')}"><i data-lucide="ellipsis" class="icon-sm" aria-hidden="true"></i></summary>
     <div class="note-card__menu-items">
-      ${canOnNote(note, 'edit') ? `<button type="button" data-board-action="adjust">${t('notes.adjustCard')}</button>
-      <button type="button" data-action="pin" data-id="${note.id}">${note.pinned ? t('notes.unpinAction') : t('notes.pinAction')}</button>` : ''}
+      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span>${t('notes.showOnDashboard')}</button>
+      <button type="button" data-board-action="top" aria-pressed="${!!note.layout?.always_on_top}"><span aria-hidden="true">${note.layout?.always_on_top ? '✓' : ''}</span>${t('notes.alwaysOnTop')}</button>` : ''}
       ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}">${t('notes.deleteLabel')}</button>` : ''}
     </div>
   </details>`;
+}
+
+function renderPositionControls(note) {
+  if (!canOnNote(note, 'edit')) return '';
+  return `<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!note.layout?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>
+    <button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>`;
+}
+
+function renderNoteTitle(note) {
+  return `<button type="button" class="note-card__title" data-action="open" data-id="${note.id}">${esc(note.title?.trim() || t('notes.untitledNote'))}</button>`;
 }
 
 function renderListCard(note) {
@@ -468,13 +500,13 @@ function renderListCard(note) {
   const preview = compact ? null : listPreview(note, expanded);
   return `<div class="note-card note-card--list ${note.pinned ? 'note-card--pinned' : ''}" data-id="${note.id}" style="--note-color:${esc(note.color)};">
     <div class="note-card__list-heading">
-      <div class="note-card__title">${esc(note.title?.trim() || t('notes.untitledNote'))}</div>
-      <button type="button" class="note-card__open" data-action="open" data-id="${note.id}" aria-label="${t('notes.openNote')}"><i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i></button>
+      ${renderPositionControls(note)}
+      ${renderNoteTitle(note)}
       ${renderBoardMenu(note)}
     </div>
-    ${compact ? '' : `<div class="note-card__content" id="note-list-body-${note.id}">${preview.html}</div>
-      ${preview.truncated ? `<button type="button" class="note-card__expand" data-note-expand aria-expanded="${expanded}" aria-controls="note-list-body-${note.id}">${t(expanded ? 'notes.showLess' : 'notes.showMore')}</button>` : ''}
-      <div class="note-card__list-meta">${audienceLabel(note)}${note.creator_name ? ` · ${esc(note.creator_name)}` : ''}</div>`}
+    ${compact ? '' : `<div class="note-card__preview"><div class="note-card__content" id="note-list-body-${note.id}">${preview.html}</div>
+      ${preview.truncated ? `<button type="button" class="note-card__expand" data-note-expand aria-expanded="${expanded}" aria-controls="note-list-body-${note.id}">${t(expanded ? 'notes.showLess' : 'notes.showMore')}</button>` : ''}</div>
+      <div class="note-card__list-meta">${esc(note.creator_name || '')}</div>`}
   </div>`;
 }
 
@@ -497,8 +529,8 @@ function renderNoteCard(note) {
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
       ${renderBoardMenu(note)}
-      <span class="note-card__audience">${audienceLabel(note)}${note.pinned ? ` · ${t('notes.groupPinned')}` : ''}</span>
-      ${note.title ? `<div class="note-card__title">${esc(note.title)}</div>` : ''}
+      ${renderPositionControls(note)}
+      ${renderNoteTitle(note)}
       <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS(note))}</div>
       <div class="note-card__footer">
         <div class="note-card__creator">
@@ -509,16 +541,6 @@ function renderNoteCard(note) {
               : ''}
           </span>
           <span>${esc(note.creator_name || '')}</span>
-        </div>
-        <div class="note-card__actions">
-          <!-- Die Karte selbst ist ein Div mit Klick-Handler und daher nicht
-               fokussierbar. Ohne diesen Button gäbe es für Tastatur- und
-               Screenreader-Nutzung keinen Weg, eine Notiz zu öffnen. Analog zur
-               Inline-Aktion auf der Aufgaben-Karte. -->
-          <button class="note-card__open" data-action="open" data-id="${note.id}"
-                  aria-label="${t('notes.openNote')}">
-            <i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i>
-          </button>
         </div>
       </div>
     </div>
@@ -551,7 +573,7 @@ function openNoteModal({ mode, note = null }) {
   if (note && !canOnNote(note, 'view')) return;
   if (note && !canOnNote(note, 'edit')) {
     openSharedModal({title: note.title || t('notes.viewNote'), size: 'lg',
-      content: `<div class="note-modal" data-view="read" data-note-id="${note.id}"><p class="note-audience-summary">${audienceLabel(note)}</p><div class="note-read-view">${renderNoteReadHtml(note.content)}</div>${canOnNote(note, 'delete') ? `<div class="modal-panel__footer"><button class="btn btn--danger-outline" id="note-modal-delete">${t('common.delete')}</button></div>` : ''}</div>`,
+      content: `<div class="note-modal" data-view="read" data-note-id="${note.id}"><div class="note-read-view">${renderNoteReadHtml(note.content)}</div>${canOnNote(note, 'delete') ? `<div class="modal-panel__footer"><button class="btn btn--danger-outline" id="note-modal-delete">${t('common.delete')}</button></div>` : ''}</div>`,
       onSave(panel) { panel.querySelector('#note-modal-delete')?.addEventListener('click', () => deleteNote(note.id)); }});
     return;
   }
@@ -570,7 +592,6 @@ function openNoteModal({ mode, note = null }) {
 
   const content = `
     <div class="note-modal" data-view="${initialView}"${isEdit ? ` data-note-id="${note.id}"` : ''} style="--note-color:${esc(selColor)};">
-      <p class="note-audience-summary">${audienceLabel(note)}</p>
       <div class="note-mode-switch" role="tablist" aria-label="${t('notes.modeSwitchLabel')}">
         <button type="button" id="note-tab-read" class="sub-tab${initialView === 'read' ? ' sub-tab--active' : ''}"
                 role="tab" aria-selected="${initialView === 'read' ? 'true' : 'false'}"
@@ -598,7 +619,7 @@ function openNoteModal({ mode, note = null }) {
       <select class="form-input" id="note-visibility">${['private', 'all', 'selected'].map(value => `<option value="${value}"${(note?.visibility || 'all') === value ? ' selected' : ''}>${t(`notes.audience.${value}`)}</option>`).join('')}</select>
       <p class="form-hint">${t('notes.audienceHint')}</p>
       <fieldset id="note-members"${note?.visibility === 'selected' ? '' : ' hidden'}><legend>${t('notes.chooseMembers')}</legend><div id="note-member-options" role="status">${t('common.loading')}</div></fieldset>
-    </div>` : ''}
+    </div>` : `<p class="note-audience-summary">${t('notes.visibleTo')}: ${t(`notes.audience.${note?.visibility || 'all'}`)}</p>`}
     <div class="form-group">
       <label class="form-label" for="note-title">${t('notes.titleLabel')}</label>
       <input type="text" class="form-input" id="note-title"
@@ -658,7 +679,6 @@ function openNoteModal({ mode, note = null }) {
       const visibility = panel.querySelector('#note-visibility');
       visibility?.addEventListener('change', () => {
         panel.querySelector('#note-members').hidden = visibility.value !== 'selected';
-        panel.querySelector('.note-audience-summary').textContent = t(`notes.audience.${visibility.value}`);
       });
       if (visibility) {
         api.get('/notes/members').then(res => {
@@ -986,13 +1006,17 @@ function layoutStatus(text) {
 }
 
 async function saveLayout(note, value) {
+  const { x, y, width, height } = normalizeNoteLayout(value);
+  return saveLayoutChange(note, { layout: { x, y, width, height } });
+}
+
+async function saveLayoutChange(note, changes) {
   if (!state.active || state.organizing || !canOnNote(note, 'edit') || state.pending.has(note.id)) return false;
   const page = state, auth = authenticationSnapshot();
-  const { x, y, width, height } = normalizeNoteLayout(value);
   page.pending.add(note.id);
   layoutStatus(t('notes.layoutSaving'));
   try {
-    const res = await api.patch(`/notes/${note.id}/layout`, { expected_layout_revision: note.layout?.revision ?? 0, layout: { x, y, width, height } });
+    const res = await api.patch(`/notes/${note.id}/layout`, { expected_layout_revision: note.layout?.revision ?? 0, ...changes });
     if (!currentPage(page, auth)) return false;
     const current = state.notes.find(n => n.id === note.id);
     if (current) current.layout = res.data.layout || res.data;
@@ -1011,7 +1035,7 @@ function openLayoutModal(id) {
   if (!note || !canOnNote(note, 'edit') || state.pending.has(id)) return;
   const layout = normalizeNoteLayout(note.layout);
   const page = state, auth = authenticationSnapshot();
-  const fields = [['x', 0, 9], ['y', 0, 10000], ['width', 3, 12], ['height', 4, 100]];
+  const fields = [['x', 0, 10000], ['y', 0, 10000], ['width', 3, 12], ['height', 4, 100]];
   openSharedModal({
     title: t('notes.adjustCard'),
     content: `<div class="note-modal" data-note-id="${id}" data-layout-editor>
@@ -1021,6 +1045,7 @@ function openLayoutModal(id) {
       <div class="modal-panel__footer"><button class="btn btn--secondary" id="note-layout-cancel">${t('common.cancel')}</button><button class="btn btn--primary" id="note-layout-save">${t('common.save')}</button></div>
     </div>`,
     onSave(panel) {
+      if (note.layout?.position_locked) for (const name of ['x', 'y']) panel.querySelector(`#note-layout-${name}`).disabled = true;
       const read = () => Object.fromEntries(fields.map(([name]) => [name, Number(panel.querySelector(`#note-layout-${name}`).value)]));
       const preview = () => {
         const next = normalizeNoteLayout(read());
@@ -1039,7 +1064,7 @@ function openLayoutModal(id) {
           note = state.notes.find(n => n.id === id);
           if (!note || !canOnNote(note, 'edit')) { closeModal({ force: true }); return; }
           const fresh = normalizeNoteLayout(note.layout);
-          fields.forEach(([name]) => { panel.querySelector(`#note-layout-${name}`).value = fresh[name]; });
+          fields.forEach(([name]) => { const input = panel.querySelector(`#note-layout-${name}`); input.value = fresh[name]; input.disabled = !!note.layout?.position_locked && ['x','y'].includes(name); });
           btn.disabled = false; panel.querySelector('#note-layout-preview').textContent = t('notes.layoutConflict');
         }
       });
@@ -1049,14 +1074,15 @@ function openLayoutModal(id) {
 
 async function organizeNotes() {
   if (!state.active || state.organizing || state.pending.size || board?.busy()) return;
-  const editable = visibleNotes().filter(note => canOnNote(note, 'edit'));
-  if (!editable.length) return;
+  const includeLocked = _container.querySelector('#notes-organize-locked')?.checked === true;
+  const items = organizeNoteLayouts(visibleNotes(), { includeLocked, canEdit: note => canOnNote(note, 'edit') });
+  if (!items.length) return;
   const page = state, auth = authenticationSnapshot();
   page.organizing = true;
   const button = _container.querySelector('#notes-organize'); if (button) button.disabled = true;
   layoutStatus(t('notes.layoutSaving'));
   try {
-    await api.patch('/notes/layout', { items: organizeNoteLayouts(editable) });
+    await api.patch('/notes/layout', { items, include_locked: includeLocked });
     if (!currentPage(page, auth)) return;
     await reloadNotes(); layoutStatus(t('notes.layoutSaved'));
   } catch (err) {

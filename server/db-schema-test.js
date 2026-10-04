@@ -1014,4 +1014,13 @@ const MIGRATIONS_SQL = {
   `,
 };
 
-export { MIGRATIONS_SQL };
+// Latest Notes layout table, separate from the canonical migration excerpts.
+// Migration 10049 remains immutable; migration 10051 rebuilds to this shape.
+const NOTE_LAYOUTS_SCHEMA_SQL = `CREATE TABLE note_layouts(note_id INTEGER PRIMARY KEY REFERENCES notes(id) ON DELETE CASCADE,
+  x INTEGER NOT NULL CHECK(x BETWEEN 0 AND 10000), y INTEGER NOT NULL CHECK(y BETWEEN 0 AND 10000),
+  width INTEGER NOT NULL CHECK(width BETWEEN 3 AND 12), height INTEGER NOT NULL CHECK(height BETWEEN 4 AND 100),
+  revision INTEGER NOT NULL DEFAULT 1,
+  position_locked INTEGER NOT NULL DEFAULT 0 CHECK(position_locked IN (0,1)),
+  always_on_top INTEGER NOT NULL DEFAULT 0 CHECK(always_on_top IN (0,1)));`;
+
+export { MIGRATIONS_SQL, NOTE_LAYOUTS_SCHEMA_SQL };

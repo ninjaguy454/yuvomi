@@ -13,32 +13,39 @@ app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
 app.use('/api/v1',(req,res)=>{
   requests.push({method:req.method,path:req.path,context:req.get('X-Auth-Context')||null});
   if(req.path==='/auth/me')return res.json(authResponse||{csrfToken:'fixture'});
+  if(req.path==='/tasks')return res.json({data:[projection.task]});
   if(req.method==='GET'&&req.path.endsWith('/acceptance')){reads++;return res.json({data:{...projection,primary_user_id:Number(req.query.primary_user_id)||projection.primary_user_id}});}
   if(req.path.endsWith('/accept')){writes.push(structuredClone(req.body));if(failure){const code=failure;failure=null;return res.status(code).json({error:'Changed elsewhere'});}return res.json({data:{...projection.task,assigned_to:req.body.primary_user_id},replayed:writes.length>1});}
   return res.json({data:[]});
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width}={}){
+async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width,long=false,theme='light'}={}){
   projection=structuredClone(original);writes=[];failure=null;reads=0;requests=[];authResponse=null;
   if(device){projection.primary_mode='choose';projection.primary_user_id=null;projection.primary_candidates=members;}
   if(!children){projection.subtasks=[];projection.subtask_snapshot=[];}
   if(extraStep){projection.subtasks.push({id:12,title:'Plant the herbs',revision:3,allocatable:true,eligible_assignee_ids:[1,2,3]});projection.subtask_snapshot.push({id:12,revision:3});}
   if(scopedDevice){projection.primary_candidates=members.slice(1);authResponse={csrfToken:'fixture',authContext:'scoped-display',principal:{kind:'device',id:91},device:{id:91},temporary:false,permissions:{principal_kind:'device',modules:{tasks:'read',notes:'none'},capabilities:{'device_tasks.accept_with_helpers':'allow'}}};}
   projection.can_add_helpers=helpers;
+  if(long){
+    projection.task.title='Prepare our shared garden and organize the InternationalHouseholdCommunityGardenVolunteerPreparationChecklist '.repeat(3).trim();
+    projection.coassignee_candidates[0].display_name='Grace Elizabeth VeryLongFamilyNameWithoutBreaksToExerciseNarrowLayouts';
+    projection.coassignee_candidates[1].display_name='Samuel Christopher De La Cruz';
+    projection.primary_candidates=projection.primary_candidates.map(member=>({...member,display_name:projection.coassignee_candidates.find(helper=>helper.id===member.id)?.display_name||member.display_name}));
+  }
   if(stress){
     projection.coassignee_candidates=Array.from({length:9},(_,i)=>({id:i+2,display_name:`Household helper ${i+2}`}));
     projection.subtasks=Array.from({length:12},(_,i)=>({id:20+i,title:`${i+1}. Prepare supplies and check the long household project checklist`,revision:1,allocatable:true,eligible_assignee_ids:Array.from({length:10},(_,j)=>j+1)}));
     projection.subtask_snapshot=projection.subtasks.map(({id,revision})=>({id,revision}));
   }
-  const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width:width||(phone?390:1280),height:900,isMobile:phone,hasTouch:phone});await page.goto(base+'/acceptance-test');
+  const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width:width||(phone?390:1280),height:900,isMobile:phone,hasTouch:phone});await page.goto(base+'/acceptance-test');await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
   await page.evaluate(async(authResponse)=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();if(authResponse){(await import('/utils/device-context.js')).acceptAuthentication(authResponse);(await import('/permissions.js')).setPermissions(authResponse.permissions);}const {acceptOpenTask}=await import('/components/task-acceptance.js');document.querySelector('#start').onclick=()=>{window.resultPromise=acceptOpenTask({id:7,is_offer:true});};},authResponse);
   await page.click('#start');await page.waitForSelector('[data-acceptance-next]');return page;
 }
 for(const children of [false,true])for(const helpers of [false,true])test(`helpers question always; allocation only for helpers=${helpers}, children=${children}`,async()=>{
   const page=await mount({children});try{
     assert.ok(await page.$('[data-acceptance-helper="2"]'));
-    assert.ok((await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Accepted by: Alex'));
+    assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Accepted by:'));
     if(helpers)await page.click('[data-acceptance-helper="2"]');
     await page.click('[data-acceptance-next]');
     assert.equal(Boolean(await page.$('[data-acceptance-pool]')),helpers&&children);
@@ -189,6 +196,68 @@ test('uncertain retry reuses exact operation, while conflict requires reload and
 });
 test('context ending discards local allocation without a request',async()=>{
   const page=await mount();try{await page.click('[data-acceptance-helper="2"]');await page.evaluate(()=>window.dispatchEvent(new Event('auth:context-ending')));await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.equal(writes.length,0);}finally{await page.close();}
+});
+
+for(const width of [320,360,752,1280])for(const theme of ['light','dark'])test(`compact acceptance feedback ${width} ${theme}`,async()=>{
+  const page=await mount({width,phone:width<500,long:true,theme});
+  const output=process.env.ACCEPTANCE_REFINEMENT_EVIDENCE;
+  try{
+    const text=await page.$eval('[data-task-acceptance]',el=>el.textContent);
+    assert.ok(!text.includes('Accepted by:'),'helper stage omits repeated accepting identity');
+    assert.ok(!text.includes('Choose co-assignees, or continue without helpers.'),'helper stage omits redundant explanation');
+    const title=await page.$eval('[data-task-acceptance] h3',el=>({text:el.textContent,height:el.getBoundingClientRect().height,lineHeight:parseFloat(getComputedStyle(el).lineHeight),full:el.scrollHeight}));
+    assert.equal(title.text,projection.task.title,'accessible title keeps the complete text');
+    assert.ok(title.height<=title.lineHeight*2+1,'heading uses at most two visible lines');
+    assert.ok(title.full>title.height,'long title is visibly truncated');
+    assert.equal(await page.$$eval('.task-acceptance__avatar',els=>els.map(el=>el.textContent).join(',')),'GV,SC','helpers have distinct initials');
+    const helper='[data-acceptance-helper="2"]';
+    assert.equal(await page.$eval(helper,el=>el.type),'checkbox');
+    assert.ok(await page.$(`::-p-aria(${projection.coassignee_candidates[0].display_name})`),'native checkbox accessible name contains only the complete member name');
+    const measure=()=>page.$eval(helper,el=>{const card=el.closest('label'),r=card.getBoundingClientRect(),style=getComputedStyle(card);return{x:r.x,y:r.y,width:r.width,height:r.height,border:style.borderColor,shadow:style.boxShadow,bg:style.backgroundColor,outline:style.outlineStyle};});
+    const before=await measure();assert.ok(before.height>=44,'whole helper card is a touch target');
+    await page.focus(helper);await page.keyboard.press('Space');assert.equal(await page.$eval(helper,el=>el.checked),true);
+    const after=await measure();assert.deepEqual([after.x,after.y,after.width,after.height],[before.x,before.y,before.width,before.height],'selection does not shift the card');
+    assert.ok(after.border!==before.border||after.shadow!==before.shadow||after.outline!=='none','selected card has an outline in addition to the native checkmark');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+    assert.equal(await page.$eval('.modal-panel__body',el=>el.scrollWidth>el.clientWidth+1),false);
+    if(output){mkdirSync(output,{recursive:true});await page.screenshot({path:`${output}/helpers-${width}-${theme}.png`});writeFileSync(`${output}/helpers-${width}-${theme}.json`,JSON.stringify({width,theme,title,before,after},null,2));}
+    await page.click('[data-acceptance-next]');await page.click('[data-acceptance-next]');
+    const confirm=await page.$eval('[data-task-acceptance]',el=>el.textContent);
+    assert.ok(!confirm.includes('Accepted by:'),'confirmation removes redundant prose');
+    assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent.trim()),'Alex','confirmation retains accepting person');
+    assert.equal(writes.length,0);await page.click('[data-acceptance-cancel]');
+  }finally{await page.close();}
+});
+
+test('paired confirmation preserves chosen accepting identity without repeated prose',async()=>{
+  const page=await mount({device:true,children:false});try{
+    await page.select('[data-acceptance-primary]','2');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');
+    await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent.trim()),'Grace');
+    assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Accepted by:'));
+    await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.equal(writes[0].primary_user_id,2);
+  }finally{await page.close();}
+});
+
+test('paired confirmation preserves long identity avatar size at 320px',async()=>{
+  const page=await mount({device:true,children:false,width:320,phone:true,long:true});try{
+    await page.select('[data-acceptance-primary]','2');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('.task-acceptance__identity .task-acceptance__avatar',el=>el.getBoundingClientRect().width),36,'avatar does not shrink or wrap initials beside a long name');
+    assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent.trim()),projection.coassignee_candidates[0].display_name);
+    assert.equal(await page.$eval('.modal-panel__body',el=>el.scrollWidth>el.clientWidth+1),false);await page.click('[data-acceptance-cancel]');
+  }finally{await page.close();}
+});
+
+test('open-task card clamps its visible title while retaining complete accessible text',async()=>{
+  const page=await mount({width:320,phone:true,long:true});try{
+    await page.click('[data-acceptance-cancel]');
+    await page.evaluate(async title=>{(await import('/permissions.js')).setPermissions({admin:true});window.EventSource=class{addEventListener(){}close(){}};document.body.insertAdjacentHTML('beforeend','<div id="board"></div>');window.stopBoard=(await import('/components/open-task-board.js')).mountOpenTaskBoard(document.querySelector('#board'));},projection.task.title);
+    // The board endpoint shares the authorized synthetic projection for this fixture.
+    await page.waitForSelector('[data-open-task="7"]');
+    const title=await page.$eval('[data-open-task="7"] strong',el=>({text:el.textContent,height:el.getBoundingClientRect().height,lineHeight:parseFloat(getComputedStyle(el).lineHeight),full:el.scrollHeight}));
+    assert.equal(title.text,projection.task.title);assert.ok(title.height<=title.lineHeight*2+1);assert.ok(title.full>title.height);
+    await page.evaluate(()=>window.stopBoard());
+  }finally{await page.close();}
 });
 
 for(const touch of [false,true])test(`${touch?'touch':'mouse'} drag allocates a step to a helper without saving until confirmation`,async()=>{

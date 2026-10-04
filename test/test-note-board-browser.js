@@ -35,8 +35,8 @@ async function screenshot(page,name) {
   await page.screenshot({path:`${process.env.NOTES_SCREENSHOTS}/${name}.png`});
 }
 async function openAdjustment(page) {
-  await page.click('[data-id="1"] [data-board-menu] summary');
-  await page.click('[data-id="1"] [data-board-action="adjust"]');
+  await page.focus('[data-id="1"] [data-board-action="adjust"]');
+  await page.keyboard.press('Enter');
 }
 for(const width of [780,840])test(`short landscape ${width}x360 scrolls the full Notes page`,async()=>{
   const page=await mount(width,false,360);try{
@@ -116,7 +116,7 @@ test('an old page read cannot repaint after its authentication context ends',asy
 });
 test('drag and resize commit separate geometry; Escape cancels without opening the note',async()=>{
   const page=await mount();try{
-    const move=await page.$('[data-id="1"] .note-card__title');const box=await move.boundingBox();
+    const move=await page.$('[data-id="1"] .note-card__content .note-md-p');const box=await move.boundingBox();
     await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+110,box.y+box.height/2+96,{steps:4});await page.mouse.up();
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
     assert.equal(writes.length,1);assert.ok(writes[0].body.layout.x>0);assert.equal(await page.$('.note-modal'),null);
@@ -174,7 +174,7 @@ test('touch movement on empty board scrolls; a body drop saves without opening t
     // Native momentum from the scroll is unrelated to a fresh card gesture.
     // Use a new view rather than race its compositor with an immediate reset.
     await cdp.detach();await page.close();page=await mount();cdp=await page.createCDPSession();
-    const handle=await page.$('[data-id="1"] .note-card__title');const box=await handle.boundingBox();
+    const handle=await page.$('[data-id="1"] .note-card__content .note-md-p');const box=await handle.boundingBox();
     await swipe(box.x+box.width/2,box.y+box.height/2,110,96);
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');assert.equal(writes.length,1);assert.equal(await page.$('.note-modal'),null);
     await cdp.detach();

@@ -3,6 +3,7 @@ import {addMealCycleReconciliationSchema} from './services/meal-cycle-reconcilia
 import {addMealCycleAdjustmentSchema} from './services/meal-cycle-adjustment-schema.js';
 import {addDeviceNotesSchema} from './services/device-notes-schema.js';
 import {addNoteBoardSchema} from './services/note-board-schema.js';
+import {addNoteLayoutStateSchema} from './services/note-layout-state-schema.js';
 import {addTaskAcceptanceSchema} from './services/task-acceptance-schema.js';
 /**
  * Modul: Datenbank (Database)
@@ -9107,6 +9108,7 @@ FORK_MIGRATIONS.push({version:10047, description:'Kitchen: reviewed adjustments 
 FORK_MIGRATIONS.push({version:10048, description:'Notes: explicit paired-device authorship', up:addDeviceNotesSchema});
 FORK_MIGRATIONS.push({version:10049, description:'Notes: private audiences and independent canvas layouts', up:addNoteBoardSchema});
 FORK_MIGRATIONS.push({version:10050, description:'Tasks: context-bound atomic acceptance receipts', up:addTaskAcceptanceSchema});
+FORK_MIGRATIONS.push({version:10051, description:'Notes: persistent position locks, layers and expanding canvas bounds', up:addNoteLayoutStateSchema});
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 

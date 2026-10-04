@@ -18,6 +18,11 @@ export async function acceptOpenTask(task) {
   for (const event of endEvents) window.addEventListener(event, close);
   function names() { return new Map([...(draft?.projection.primary_candidates || []), ...(draft?.projection.coassignee_candidates || [])].map(member => [Number(member.id), member.display_name])); }
   function memberName(id) { return names().get(Number(id)) || t('tasks.acceptMember'); }
+  function memberInitials(name) {
+    const parts = String(name || t('tasks.acceptMember')).trim().split(/\s+/);
+    return [parts[0], ...(parts.length > 1 ? [parts.at(-1)] : [])].map(part => Array.from(part)[0] || '').join('').toLocaleUpperCase();
+  }
+  function memberAvatar(name) { return `<span class="task-acceptance__avatar" aria-hidden="true">${esc(memberInitials(name))}</span>`; }
   const button = (action, label, primary = false) => `<button type="button" class="btn btn--${primary ? 'primary' : 'secondary'}" data-acceptance-${action}>${esc(label)}</button>`;
   function render(focus = true) {
     if (!valid()) return;
@@ -32,13 +37,13 @@ export async function acceptOpenTask(task) {
       actions += button('retry', t('tasks.acceptRetry'), true);
     } else {
       const p = draft.projection;
-      content = `<h3>${esc(p.task.title)}</h3>${message ? `<p role="status">${esc(message)}</p>` : ''}`;
+      content = `<h3 class="task-acceptance__title" title="${esc(p.task.title)}">${esc(p.task.title)}</h3>${message ? `<p role="status">${esc(message)}</p>` : ''}`;
       if (stage === 'primary') {
         content += `<label for="acceptance-primary">${esc(t('tasks.acceptWho'))}</label><p class="text-muted">${esc(t('tasks.acceptIdentityHint'))}</p><select id="acceptance-primary" class="input" data-immediate-action data-acceptance-primary><option value="">${esc(t('tasks.acceptChoose'))}</option>${p.primary_candidates.map(member => `<option value="${Number(member.id)}" ${draft.primary === Number(member.id) ? 'selected' : ''}>${esc(member.display_name)}</option>`).join('')}</select>`;
         actions += button('next', t('common.next'), true);
       } else if (stage === 'helpers') {
-        content += `<p>${esc(t('tasks.acceptPrimary', { name: memberName(draft.primary) }))}</p><fieldset class="task-acceptance__helpers"><legend>${esc(t('tasks.acceptHelpers'))}</legend><p class="text-muted">${esc(t('tasks.acceptHelpersHint'))}</p>`;
-        if (p.can_add_helpers) content += p.coassignee_candidates.filter(member => Number(member.id) !== draft.primary).map(member => `<label class="task-acceptance__member"><input type="checkbox" data-immediate-action data-acceptance-helper="${Number(member.id)}" ${draft.helpers.includes(Number(member.id)) ? 'checked' : ''}>${esc(member.display_name)}</label>`).join('');
+        content += `<fieldset class="task-acceptance__helpers"><legend>${esc(t('tasks.acceptHelpers'))}</legend>`;
+        if (p.can_add_helpers) content += p.coassignee_candidates.filter(member => Number(member.id) !== draft.primary).map(member => `<label class="task-acceptance__member">${memberAvatar(member.display_name)}<span class="task-acceptance__member-name">${esc(member.display_name)}</span><input type="checkbox" data-immediate-action data-acceptance-helper="${Number(member.id)}" ${draft.helpers.includes(Number(member.id)) ? 'checked' : ''}></label>`).join('');
         else content += `<p data-acceptance-helper-unavailable>${esc(t('tasks.acceptHelpersUnavailable'))}</p>${document.querySelector('[data-device-login]') ? button('signin', t('tasks.acceptSignIn')) : ''}`;
         content += '</fieldset>';
         if (p.primary_mode === 'choose') actions += button('back', t('common.back'));
@@ -50,7 +55,7 @@ export async function acceptOpenTask(task) {
         if (protectedSteps.length) content += `<p class="text-muted">${esc(t('tasks.acceptPreserved'))}</p><ul>${protectedSteps.map(child => `<li>${esc(child.title)}</li>`).join('')}</ul>`;
         actions += button('back', t('common.back')) + button('next', t('common.next'), true);
       } else if (stage === 'confirm') {
-        content += `<p>${esc(t('tasks.acceptPrimary', { name: memberName(draft.primary) }))}</p><p>${esc(t('tasks.acceptWithHelpers', { names: draft.helpers.length ? draft.helpers.map(memberName).join(', ') : t('tasks.acceptNoHelpers') }))}</p>`;
+        content += `<div class="task-acceptance__identity">${memberAvatar(memberName(draft.primary))}<span class="task-acceptance__member-name" data-acceptance-identity>${esc(memberName(draft.primary))}</span></div><p>${esc(t('tasks.acceptWithHelpers', { names: draft.helpers.length ? draft.helpers.map(memberName).join(', ') : t('tasks.acceptNoHelpers') }))}</p>`;
         if (p.subtasks.length) content += `<ul>${p.subtasks.map(child => `<li>${esc(child.title)}: ${esc(!child.allocatable ? t('tasks.acceptPreservedShort') : draft.assignments[child.id] ? memberName(draft.assignments[child.id]) : t('tasks.acceptUnassigned'))}</li>`).join('')}</ul>`;
         content += `<p class="text-muted">${esc(t('tasks.acceptConfirmHint'))}</p>`;
         actions += button('back', t('common.back')) + button('confirm', t('tasks.acceptConfirm'), true);

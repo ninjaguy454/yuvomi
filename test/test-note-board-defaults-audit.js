@@ -58,7 +58,7 @@ test('new missing cards do not move earlier missing defaults when their list ord
 });
 test('pinned legacy notes receive the first free default slot without moving stored layouts',()=>{
   const first=create('Unpinned');const pinned=updateNote(d,1,null,{content:'Pinned first',pinned:true});
-  assert.deepEqual(pinned.layout,{x:0,y:0,width:4,height:6,revision:0});
+  assert.deepEqual(pinned.layout,{x:0,y:0,width:4,height:6,revision:0,position_locked:false,always_on_top:false});
   assert.ok(separate(readNote(d,1,first.id).layout,pinned.layout));
 });
 test('create-only devices audit the actual inserted note ID while returning no note projection',()=>{

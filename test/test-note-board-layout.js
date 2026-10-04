@@ -7,8 +7,28 @@ test('layout clamps invalid or off-board geometry and keeps controls readable', 
   assert.equal(typeof layout.normalizeNoteLayout, 'function', 'board layout helper exists');
   assert.deepEqual(layout.normalizeNoteLayout({x:-20,y:-8,width:300,height:0,revision:2}), {x:0,y:0,width:12,height:4,revision:2});
   const bounded = layout.normalizeNoteLayout({x:11,y:8,width:4,height:6});
-  assert.equal(bounded.x,8);
+  assert.equal(bounded.x,11);
   assert.equal(bounded.width,4);
+});
+
+test('wide world positions remain canonical and extents grow only right and down with margin', () => {
+  assert.equal(layout.normalizeNoteLayout({x:40,y:80,width:4,height:6}).x,40);
+  assert.equal(layout.normalizeNoteLayout({x:20000,y:20000}).x,10000);
+  assert.deepEqual(layout.noteCanvasExtent([],1200,700),{width:1200,height:700});
+  assert.deepEqual(layout.noteCanvasExtent([{x:40,y:80,width:4,height:6}],1200,700),{width:4592,height:4320});
+});
+
+test('organize treats locks and noneditable visible notes as fixed obstacles', () => {
+  const notes=[{id:1,layout:{x:0,y:0,width:4,height:6,position_locked:true,revision:2}},
+    {id:2,layout:{x:4,y:0,width:4,height:6,revision:1},permissions:{edit:false}},
+    {id:3,layout:{x:0,y:0,width:4,height:6,revision:3}}];
+  const before=structuredClone(notes);
+  const arranged=layout.organizeNoteLayouts(notes,{canEdit:n=>n.permissions?.edit!==false});
+  assert.deepEqual(arranged,[{note_id:3,expected_layout_revision:3,layout:{x:8,y:0,width:4,height:6}}]);
+  const unlocked=layout.organizeNoteLayouts(notes,{includeLocked:true,canEdit:n=>n.permissions?.edit!==false});
+  assert.deepEqual(unlocked.map(item=>item.note_id),[1,3]);
+  assert.deepEqual(unlocked[1].layout,{x:8,y:0,width:4,height:6});
+  assert.deepEqual(notes,before,'packing cannot alter canonical data or lock flags');
 });
 
 test('organize preserves sizes, stable pinned order and creates no overlaps', () => {

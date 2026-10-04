@@ -1421,6 +1421,13 @@
         "agendaDayEmpty": "Không có kế hoạch"
     },
     "notes": {
+        "resetView": "Reset view",
+        "includeLocked": "Include locked",
+        "zoomIn": "Zoom in",
+        "zoomOut": "Zoom out",
+        "positionLock": "Lock position",
+        "showOnDashboard": "Show on Dashboard",
+        "alwaysOnTop": "Always on top",
         "canvasGestureHint": "Drag a note to move it. Hold an edge to resize.",
         "listDensity": "List detail",
         "listCompact": "Compact",

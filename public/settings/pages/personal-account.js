@@ -38,7 +38,7 @@ function avatarEditorHtml(user) {
       </button>
       <input class="sr-only" type="file" id="profile-avatar-file" accept="image/png,image/jpeg,image/webp" aria-label="${t('settings.profilePictureLabel')}" aria-describedby="profile-error" tabindex="-1">
       <div class="settings-avatar-actions">
-        <button type="button" class="settings-avatar-action settings-avatar-action--danger" id="profile-avatar-remove" ${user?.avatar_data ? '' : 'hidden'} aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
+        <button type="button" class="settings-avatar-action settings-avatar-action--danger photo-editor__remove" id="profile-avatar-remove" ${user?.avatar_data ? '' : 'hidden'} aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
           <i data-lucide="trash-2" aria-hidden="true"></i>
         </button>
       </div>
@@ -622,6 +622,7 @@ function bindEvents(container, user, profileState) {
     profileState.avatarData = null;
     if (avatarFile) avatarFile.value = '';
     updatePreview();
+    container.querySelector('#profile-avatar-preview')?.focus();
   });
 
   const profileForm = container.querySelector('#profile-form');

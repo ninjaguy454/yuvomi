@@ -148,7 +148,7 @@
 @media (max-width: 1023px) {
   .tasks-page .tasks-toolbar { grid-template-columns: auto minmax(0, 1fr) auto auto; }
   .tasks-page .tasks-toolbar > .notification-header-button { grid-column: 4; }
-  .tasks-page .tasks-toolbar > .page-toolbar__actions { grid-column: 1 / -1; grid-row: 2; }
+  .tasks-page .tasks-toolbar > .page-toolbar__actions { grid-column: 1 / -1; grid-row: 2; flex-wrap: wrap; }
   .tasks-page .tasks-toolbar:has(> .tasks-toolbar__search:not([hidden])) > .page-toolbar__actions { grid-row: 3; }
 }
 
@@ -161,6 +161,7 @@
  * Mehrfachauswahl aus). Ohne diese Regel gewinnt display:flex/inline-flex der
  * Komponente gegen das Attribut. */
 .tasks-toolbar [hidden],
+.task-control-popover [hidden],
 .tasks-filters-row [hidden] {
   display: none;
 }

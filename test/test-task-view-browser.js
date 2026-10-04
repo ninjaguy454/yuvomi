@@ -158,6 +158,8 @@ for (const width of [320, 390, 1100]) test(`UX cleanup: Manage is reachable by k
     for (const id of ['filter-toggle-btn', 'task-sort-btn', 'group-mode-toggle', 'task-view-btn', 'btn-assignment-requests']) {
       assert.equal(await page.$eval(`#${id}`, n => n.hidden), false, `${id} remains outside Manage`);
     }
+    const toolbarFits=await page.$eval('.page-toolbar__actions', n=>n.scrollWidth<=n.clientWidth+1);
+    assert.equal(toolbarFits,true,'toolbar names and request action are visible without horizontal scrolling');
     await page.focus('#task-manage-btn'); await page.keyboard.press('Enter'); await frames(page);
     assert.equal(await page.$eval('#task-manage-btn', n => n.getAttribute('aria-expanded')), 'true');
     assert.deepEqual(await page.$$eval('#task-manage-panel button:not([hidden])', ns => ns.map(n => n.textContent.trim())), ['Categories', 'Tags', 'Workflows']);
@@ -186,7 +188,7 @@ for (const capabilities of [{}, { 'workflows.run': 'allow' }, { 'tasks.change_ca
       assert.equal(await page.$eval('#task-manage-btn', n => n.hidden), !Object.keys(capabilities).length);
       if (Object.keys(capabilities).length) {
         await page.click('#task-manage-btn');
-        const visible = await page.$$eval('#task-manage-panel button:not([hidden])', ns => ns.map(n => n.id));
+        const visible = await page.$$eval('#task-manage-panel button', ns => ns.filter(n=>n.checkVisibility()).map(n => n.id));
         assert.deepEqual(visible, capabilities['workflows.run'] ? ['btn-quick-add'] : ['btn-manage-categories', 'btn-manage-tags']);
       }
     } finally { await page.close(); }

@@ -13,10 +13,9 @@ let server, browser, base, fixture;
 app.use(express.json());
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 app.get('/view-test', (_req, res) => res.send(`<!doctype html><html lang="en"><head>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/layout.css">
-  <link rel="stylesheet" href="/styles/typography.css"><link rel="stylesheet" href="/styles/list-row.css">
-  <link rel="stylesheet" href="/styles/tasks.css"><link rel="stylesheet" href="/styles/detail-view.css">
+  <meta name="viewport" content="width=device-width,initial-scale=1"><script src="/lucide.min.js"></script>
+  ${[...readFileSync(new URL('../public/index.html', import.meta.url), 'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(match => match[0]).join('')}
+  <link rel="stylesheet" href="/styles/tasks.css">
   <style>html,body{height:100%;margin:0}body{display:flex;flex-direction:column}
     .app-content{height:100vh;flex:none}#main-content{padding:16px}
     *,*::before,*::after{animation:none!important;scroll-behavior:auto!important;transition:none!important}
@@ -104,7 +103,7 @@ test.before(async () => {
 });
 test.after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve) || resolve()); });
 
-async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
+async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, permissions = { admin: true }) {
   fixture = { tasks: Array.from({ length: 60 }, (_, index) => taskRow(index + 1)), reads: 0, writes: [], approvals: [], held: [], holdNext: false,
     categories: Array.from({ length: 6 }, (_, index) => ({ key: `group-${index}`, name: `Group ${index + 1}`, sort_order: index })),
     holdHistory: false, heldHistory: [], history: Array.from({ length: 80 }, (_, index) => ({ id: 80 - index,
@@ -120,7 +119,7 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
   // stagger timer. Reduced motion is also a supported user preference.
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
   await page.goto(`${base}/view-test?view=${mode}`);
-  await page.evaluate(async () => {
+  await page.evaluate(async permissions => {
     localStorage.clear(); localStorage.setItem('yuvomi:swipeHintSeen', '3'); localStorage.setItem('yuvomi-locale', 'en');
     window.toasts = []; window.liveStreams = [];
     window.yuvomi = { showToast: message => window.toasts.push(message) };
@@ -130,11 +129,11 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
       close() { this.readyState = 2; }
     };
     await (await import('/i18n.js')).initI18n();
-    (await import('/permissions.js')).setPermissions({ admin: true });
+    (await import('/permissions.js')).setPermissions(permissions);
     const module = await import('/pages/tasks.js');
     window.subject = module.__test; window.taskContainer = document.getElementById('main-content');
-    window.stopTasks = await module.render(window.taskContainer, { user: { id: 1, role: 'admin' } });
-  });
+    window.stopTasks = await module.render(window.taskContainer, { user: { id: 1, role: permissions.admin ? 'admin' : 'member' } });
+  }, permissions);
   try { await page.waitForSelector('.task-card[data-task-id="25"]'); }
   catch (error) {
     const content = await page.evaluate(() => ({ text: document.body.innerText.slice(0, 2000), error: window.subject?.state.loadError?.message }));
@@ -145,6 +144,70 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }) {
   return page;
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+for (const width of [320, 390, 1100]) test(`UX cleanup: Manage is reachable by keyboard and touch at ${width}px`, async () => {
+  const page = await mounted('list', { width, height: 850, hasTouch: width < 640, isMobile: width < 640 });
+  try {
+    if (process.env.UX_CLEANUP_EVIDENCE) {
+      mkdirSync(process.env.UX_CLEANUP_EVIDENCE, { recursive: true });
+      await page.screenshot({ path: `${process.env.UX_CLEANUP_EVIDENCE}/tasks-${width}.png`, fullPage: true });
+    }
+    assert.ok(await page.$('#task-manage-btn'), 'one named Manage trigger replaces the three management toolbar actions');
+    for (const id of ['filter-toggle-btn', 'task-sort-btn', 'group-mode-toggle', 'task-view-btn', 'btn-assignment-requests']) {
+      assert.equal(await page.$eval(`#${id}`, n => n.hidden), false, `${id} remains outside Manage`);
+    }
+    await page.focus('#task-manage-btn'); await page.keyboard.press('Enter'); await frames(page);
+    assert.equal(await page.$eval('#task-manage-btn', n => n.getAttribute('aria-expanded')), 'true');
+    assert.deepEqual(await page.$$eval('#task-manage-panel button:not([hidden])', ns => ns.map(n => n.textContent.trim())), ['Categories', 'Tags', 'Workflows']);
+    const rect = await page.$eval('#task-manage-panel', n => { const r=n.getBoundingClientRect(); return {left:r.left,right:r.right}; });
+    assert.ok(rect.left >= 0 && rect.right <= width, `popover fits viewport: ${JSON.stringify(rect)}`);
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'btn-manage-categories');
+    await page.keyboard.press('Escape'); await frames(page);
+    assert.equal(await page.$eval('#task-manage-btn', n => n.getAttribute('aria-expanded')), 'false');
+    assert.equal(await page.evaluate(() => document.activeElement?.id), 'task-manage-btn');
+    for (const [id, target] of [['btn-manage-categories', 'yuvomi-category-manager'], ['btn-manage-tags', 'yuvomi-tag-manager'], ['btn-quick-add', '[data-workflow-launcher]']]) {
+      await page.click('#task-manage-btn'); await frames(page); await page.click(`#${id}`);
+      await page.waitForSelector(target);
+      assert.equal(await page.$eval('#task-manage-btn', n => n.getAttribute('aria-expanded')), 'false');
+      await page.evaluate(async () => (await import('/components/modal.js')).closeModal({ force: true }));
+      await page.waitForFunction(() => !document.querySelector('.modal-panel'));
+    }
+    assert.equal(fixture.writes.length, 0, 'opening management does not write Tasks');
+  } finally { await page.close(); }
+});
+
+for (const capabilities of [{}, { 'workflows.run': 'allow' }, { 'tasks.change_category_tags': 'allow' }]) {
+  test(`UX cleanup: Manage respects capabilities ${JSON.stringify(capabilities)}`, async () => {
+    const page = await mounted('list', { width: 1100, height: 850 }, { admin: false, modules: {}, widgets: {}, capabilities });
+    try {
+      assert.ok(await page.$('#task-manage-btn'));
+      assert.equal(await page.$eval('#task-manage-btn', n => n.hidden), !Object.keys(capabilities).length);
+      if (Object.keys(capabilities).length) {
+        await page.click('#task-manage-btn');
+        const visible = await page.$$eval('#task-manage-panel button:not([hidden])', ns => ns.map(n => n.id));
+        assert.deepEqual(visible, capabilities['workflows.run'] ? ['btn-quick-add'] : ['btn-manage-categories', 'btn-manage-tags']);
+      }
+    } finally { await page.close(); }
+  });
+}
+
+test('UX cleanup: supervisor shield starts existing verification without completing a task', async () => {
+  const page = await mounted();
+  try {
+    fixture.tasks[0].subtasks[0].permissions = { view: true, complete: false, supervisor_approval: true };
+    await page.evaluate(async () => (await import('/utils/device-context.js')).acceptAuthentication({ authContext: 'ux-device', principal: { kind: 'device' }, device: { id: 5, preferences: {} } }));
+    await refresh(page);
+    const selector = '.task-card[data-task-id="1"] [data-action="approve-device-task"]';
+    assert.equal(await page.$eval(selector, n => n.textContent.trim()), '', 'icon replaces the long button label');
+    assert.ok(await page.$(`${selector} [data-lucide="shield"]`));
+    assert.match(await page.$eval(selector, n => n.getAttribute('aria-label')), /^Supervisor approval:/);
+    await page.click(selector); await page.waitForSelector('#device-task-approval');
+    assert.equal(fixture.approvals.length, 1); assert.equal(fixture.writes.length, 0);
+    await page.click('[data-approval-cancel]');
+    assert.equal(fixture.writes.length, 0);
+    assert.equal(await page.evaluate(async () => (await import('/utils/device-context.js')).isDevicePrincipal()), true);
+  } finally { await page.close(); }
+});
 
 // Regression: the approval action must not consume the title's reading width,
 // whether the containing card is narrow on a phone or on the family wall board.

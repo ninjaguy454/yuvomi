@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import puppeteer from 'puppeteer';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 const app=express();let browser,server,base,projection,writes,failure,reads,requests,authResponse;
 const members=[{id:1,display_name:'Alex'},{id:2,display_name:'Grace'},{id:3,display_name:'Sam'}];
@@ -19,14 +19,19 @@ app.use('/api/v1',(req,res)=>{
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false}={}){
+async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width}={}){
   projection=structuredClone(original);writes=[];failure=null;reads=0;requests=[];authResponse=null;
   if(device){projection.primary_mode='choose';projection.primary_user_id=null;projection.primary_candidates=members;}
   if(!children){projection.subtasks=[];projection.subtask_snapshot=[];}
   if(extraStep){projection.subtasks.push({id:12,title:'Plant the herbs',revision:3,allocatable:true,eligible_assignee_ids:[1,2,3]});projection.subtask_snapshot.push({id:12,revision:3});}
   if(scopedDevice){projection.primary_candidates=members.slice(1);authResponse={csrfToken:'fixture',authContext:'scoped-display',principal:{kind:'device',id:91},device:{id:91},temporary:false,permissions:{principal_kind:'device',modules:{tasks:'read',notes:'none'},capabilities:{'device_tasks.accept_with_helpers':'allow'}}};}
   projection.can_add_helpers=helpers;
-  const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width:phone?390:1280,height:900,isMobile:phone,hasTouch:phone});await page.goto(base+'/acceptance-test');
+  if(stress){
+    projection.coassignee_candidates=Array.from({length:9},(_,i)=>({id:i+2,display_name:`Household helper ${i+2}`}));
+    projection.subtasks=Array.from({length:12},(_,i)=>({id:20+i,title:`${i+1}. Prepare supplies and check the long household project checklist`,revision:1,allocatable:true,eligible_assignee_ids:Array.from({length:10},(_,j)=>j+1)}));
+    projection.subtask_snapshot=projection.subtasks.map(({id,revision})=>({id,revision}));
+  }
+  const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width:width||(phone?390:1280),height:900,isMobile:phone,hasTouch:phone});await page.goto(base+'/acceptance-test');
   await page.evaluate(async(authResponse)=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();if(authResponse){(await import('/utils/device-context.js')).acceptAuthentication(authResponse);(await import('/permissions.js')).setPermissions(authResponse.permissions);}const {acceptOpenTask}=await import('/components/task-acceptance.js');document.querySelector('#start').onclick=()=>{window.resultPromise=acceptOpenTask({id:7,is_offer:true});};},authResponse);
   await page.click('#start');await page.waitForSelector('[data-acceptance-next]');return page;
 }
@@ -41,6 +46,78 @@ for(const children of [false,true])for(const helpers of [false,true])test(`helpe
     await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
     assert.equal(writes.length,1);assert.ok(writes[0].subtask_assignments.every(row=>row.user_id===null));
   }finally{await page.close();}
+});
+
+for(const width of [320,390,1280])test(`offscreen pool drag ${width}: scroll, cancel, retry and keyboard assignment`,async()=>{
+  const touch=width<500,page=await mount({phone:touch,width,stress:true});
+  let cdp;
+  const output=process.env.OPEN_TASK_DRAG_EVIDENCE;
+  const scrollTop=()=>page.$eval('.modal-panel__body',el=>el.scrollTop);
+  const press=async selector=>{await page.focus(selector);await page.keyboard.press('Enter');};
+  try{
+    for(let id=2;id<=10;id++)await page.click(`[data-acceptance-helper="${id}"]`);
+    await press('[data-acceptance-next]');
+    assert.equal(await page.$$eval('[data-acceptance-pool]',els=>els.length),11);
+    const initial=await page.evaluate(()=>({body:document.querySelector('.modal-panel__body').getBoundingClientRect().toJSON(),target:document.querySelector('[data-acceptance-pool="10"]').getBoundingClientRect().toJSON()}));
+    assert.ok(initial.target.top>initial.body.bottom,'last recipient must begin offscreen');
+    if(touch)cdp=await page.createCDPSession();
+    async function gesture(type,x,y){
+      if(touch)await cdp.send('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd',cancel:'touchCancel'}[type],touchPoints:['up','cancel'].includes(type)?[]:[{x,y}]});
+      else if(type==='down'){await page.mouse.move(x,y);await page.mouse.down();}
+      else if(type==='move')await page.mouse.move(x,y,{steps:6});
+      else await page.mouse.up();
+    }
+    async function start(){
+      await page.$eval('.modal-panel__body',el=>el.scrollTop=0);
+      await page.$eval('[data-acceptance-drag="20"]',el=>el.scrollIntoView({block:'center'}));
+      await page.$eval('[data-acceptance-drag="20"]',el=>el.addEventListener('pointerdown',event=>{window.activeAcceptancePointer=event.pointerId;},{once:true}));
+      const box=await(await page.$('[data-acceptance-drag="20"]')).boundingBox();
+      await gesture('down',box.x+box.width/2,box.y+box.height/2);
+      const edge=await page.$eval('.modal-panel__body',el=>{const r=el.getBoundingClientRect();return{x:r.left+r.width/2,y:r.bottom-8};});
+      const before=await scrollTop();await gesture('move',edge.x,edge.y);
+      await page.waitForFunction(before=>document.querySelector('.modal-panel__body').scrollTop>before+80,{timeout:2500},before);
+      return edge;
+    }
+    // Cancellation must stop a held edge-scroll and leave the local draft unchanged.
+    await start();
+    if(touch)await gesture('cancel');else{await page.keyboard.press('Escape');await gesture('up');}
+    const stopped=await scrollTop();await new Promise(r=>setTimeout(r,250));
+    assert.equal(await scrollTop(),stopped,'cancel stops scrolling');
+    assert.ok(await page.$('[data-acceptance-pool=""] [data-acceptance-child="20"]'));
+    await start();
+    await page.$eval('[data-acceptance-drag="20"]',el=>el.releasePointerCapture(window.activeAcceptancePointer));
+    await gesture('move',initial.body.left+initial.body.width/2,initial.body.bottom-8);
+    const captureLost=await scrollTop();await new Promise(r=>setTimeout(r,250));
+    assert.equal(await scrollTop(),captureLost,'capture loss stops scrolling');await gesture('up');
+    assert.ok(await page.$('[data-acceptance-pool=""] [data-acceptance-child="20"]'));
+    // A fresh gesture traverses the long source list and many recipient pools without wheel/script scrolling.
+    await start();
+    await page.waitForFunction(()=>{const body=document.querySelector('.modal-panel__body').getBoundingClientRect(),target=document.querySelector('[data-acceptance-pool="10"]').getBoundingClientRect();return target.top>body.top+12&&target.top+50<body.bottom-45;},{timeout:20000});
+    const target=await page.$eval('[data-acceptance-pool="10"]',el=>{const r=el.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+40};});
+    await gesture('move',target.x,target.y);await gesture('up');
+    assert.ok(await page.$('[data-acceptance-pool="10"] [data-acceptance-child="20"]'),'drop assigns exactly to formerly offscreen pool');
+    assert.equal(await page.$$eval('[data-acceptance-child="20"]',els=>els.length),1);
+    const released=await scrollTop();await new Promise(r=>setTimeout(r,250));assert.equal(await scrollTop(),released,'release stops scrolling');
+    assert.equal(writes.length,0);
+    if(output){mkdirSync(output,{recursive:true});await page.screenshot({path:`${output}/offscreen-drag-${width}.png`});}
+    // Use actual keyboard navigation on the labelled native Assign-to select for another distant recipient.
+    await page.focus('[data-acceptance-assignment="21"]');await page.keyboard.press('Space');await page.keyboard.press('End');await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-acceptance-pool="10"] [data-acceptance-child="21"]');
+    assert.equal(await page.$eval('[data-acceptance-assignment="21"]',el=>!!document.querySelector(`label[for="${el.id}"]`)&&el===document.activeElement),true);
+    if(output)await page.screenshot({path:`${output}/keyboard-assign-${width}.png`});
+    await press('[data-acceptance-next]');await press('[data-acceptance-confirm]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});
+    assert.equal(writes.length,1);assert.equal(writes[0].subtask_assignments.length,12);
+    assert.deepEqual(writes[0].subtask_assignments.filter(row=>row.user_id!==null),[{id:20,user_id:10},{id:21,user_id:10}]);
+    await page.click('#start');await page.waitForSelector('[data-acceptance-next]');
+    for(let id=2;id<=10;id++)await page.click(`[data-acceptance-helper="${id}"]`);
+    await press('[data-acceptance-next]');await start();
+    await page.evaluate(()=>{window.endingDragBody=document.querySelector('.modal-panel__body');window.dispatchEvent(new Event('auth:context-ending'));});
+    await page.waitForSelector('[data-task-acceptance]',{hidden:true});
+    const ended=await page.evaluate(()=>window.endingDragBody.scrollTop);await new Promise(r=>setTimeout(r,250));
+    assert.equal(await page.evaluate(()=>window.endingDragBody.scrollTop),ended,'context ending stops active edge scroll');
+    await gesture('up');assert.equal(writes.length,1,'context ending sends no additional assignment');
+    if(output)writeFileSync(`${output}/offscreen-drag-${width}.json`,JSON.stringify({width,touch,subtasks:12,recipients:10,pools:11,initialTarget:initial.target,initialBody:initial.body,cancelledWithoutAssignment:true,captureLossStopsScroll:true,scrollStoppedAfterRelease:true,contextEndingStopsScroll:true,keyboardAssigned:true,writes:writes.length,payload:writes[0]},null,2));
+  }finally{await cdp?.detach();await page.close();}
 });
 
 for(const allocation of ['zero','partial','all'])test(`helpers and multiple subtasks confirm ${allocation} allocation, preserving protected steps`,async()=>{

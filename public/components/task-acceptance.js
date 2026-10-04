@@ -81,28 +81,54 @@ export async function acceptOpenTask(task) {
   function wireDrag() {
     dragListeners = new AbortController();
     const options = { signal: dragListeners.signal };
-    let drag = null;
+    let drag = null, frame = 0, previousTime = 0;
+    const highlight = () => {
+      const pool = drag && document.elementFromPoint(drag.x, drag.y)?.closest('[data-acceptance-pool]');
+      modal.panel.querySelectorAll('[data-acceptance-pool]').forEach(el => el.classList.toggle('task-acceptance__pool--target', el === pool));
+    };
+    const stop = () => {
+      const previous = drag; drag = null;
+      cancelAnimationFrame(frame); frame = 0; previousTime = 0;
+      if (previous?.handle.hasPointerCapture?.(previous.pointer)) previous.handle.releasePointerCapture(previous.pointer);
+      highlight();
+    };
+    dragListeners.signal.addEventListener('abort', stop, { once: true });
+    function scroll(time) {
+      if (!drag || !valid() || !drag.handle.hasPointerCapture(drag.pointer)) { stop(); return; }
+      const rect = body.getBoundingClientRect(), edge = 56;
+      const elapsed = previousTime ? Math.min(time - previousTime, 32) : 0;
+      previousTime = time;
+      // Only the allocation body scrolls; a held pointer keeps working as pools move beneath it.
+      if (drag.x >= rect.left && drag.x <= rect.right && drag.y >= rect.top && drag.y <= rect.bottom) {
+        const strength = drag.y < rect.top + edge ? -Math.min(1, (rect.top + edge - drag.y) / edge)
+          : drag.y > rect.bottom - edge ? Math.min(1, (drag.y - rect.bottom + edge) / edge) : 0;
+        body.scrollTop += strength * elapsed * 0.9;
+      }
+      highlight(); frame = requestAnimationFrame(scroll);
+    }
     modal.panel.addEventListener('pointerdown', event => {
       const handle = event.target.closest('[data-acceptance-drag]');
-      if (!handle || event.button !== 0 || busy) return;
-      drag = { id: Number(handle.dataset.acceptanceDrag), pointer: event.pointerId };
+      if (!handle || event.button !== 0 || busy || drag) return;
+      drag = { id: Number(handle.dataset.acceptanceDrag), pointer: event.pointerId, handle, x: event.clientX, y: event.clientY };
       handle.setPointerCapture?.(event.pointerId); event.preventDefault();
+      frame = requestAnimationFrame(scroll);
     }, options);
     modal.panel.addEventListener('pointermove', event => {
-      if (!drag) return;
-      const pool = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-acceptance-pool]');
-      modal.panel.querySelectorAll('[data-acceptance-pool]').forEach(el => el.classList.toggle('task-acceptance__pool--target', el === pool));
+      if (!drag || event.pointerId !== drag.pointer) return;
+      drag.x = event.clientX; drag.y = event.clientY; highlight();
       event.preventDefault();
     }, { ...options, passive: false });
     modal.panel.addEventListener('pointerup', event => {
       if (!drag || event.pointerId !== drag.pointer) return;
       const pool = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-acceptance-pool]');
-      const id = drag.id; drag = null;
+      const id = drag.id; stop();
       if (pool) assignAcceptanceSubtask(draft, id, pool.dataset.acceptancePool ? Number(pool.dataset.acceptancePool) : null);
       render(false); modal.panel.querySelector(`[data-acceptance-drag="${id}"]`)?.focus({ preventScroll: true });
     }, options);
-    modal.panel.addEventListener('pointercancel', () => { drag = null; render(false); }, options);
-    modal.panel.addEventListener('keydown', event => { if (event.key === 'Escape' && drag) { event.stopImmediatePropagation(); drag = null; render(false); } }, { ...options, capture: true });
+    const cancel = event => { if (drag && event.pointerId === drag.pointer) { stop(); render(false); } };
+    modal.panel.addEventListener('pointercancel', cancel, options);
+    modal.panel.addEventListener('lostpointercapture', cancel, options);
+    modal.panel.addEventListener('keydown', event => { if (event.key === 'Escape' && drag) { event.stopImmediatePropagation(); stop(); render(false); } }, { ...options, capture: true });
   }
   async function load(primary = null, refreshed = false) {
     const generation = ++loadGeneration;

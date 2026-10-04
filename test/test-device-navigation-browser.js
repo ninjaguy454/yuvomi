@@ -80,8 +80,12 @@ test.before(async () => {
     page.setDefaultTimeout(10000);
     await page.setViewport({ width: 1440, height: 1000 });
     await page.goto(origin + '/login');
+    // First installation may replace the document at its next navigation.
+    // Exercise the held personal render from the installed shell instead.
+    await page.waitForFunction(() => navigator.serviceWorker.controller?.state === 'activated');
     await page.evaluate(() => localStorage.setItem('yuvomi-locale', 'en'));
     await page.reload();
+    await page.waitForSelector('#username', { visible: true });
     pages.push(page);
   }
   [admin, display] = pages;
@@ -122,6 +126,7 @@ test('navigation requested from the visible sidebar during temporary login is re
     await intercepted;
     await display.waitForSelector('.dashboard');
     assert.equal(await display.$('.dashboard-overview__title'), null, 'dashboard is still loading');
+    assert.ok(held.request && !held.request.isInterceptResolutionHandled(), 'the real dashboard request remains held before the sidebar click');
     await display.click('.nav-sidebar [data-route="/settings"]');
     await held.request.continue();
     await display.waitForFunction(() => location.pathname.startsWith('/settings'));

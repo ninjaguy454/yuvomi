@@ -80,7 +80,7 @@ for (const [width, height, expected] of [[320, 740, 'list'], [360, 840, 'list'],
       await view(page, expected);
       assert.equal(await page.$eval('#notes-compact-view', el => el.hidden), expected === 'list');
       assert.equal(await page.$eval('#notes-compact-view', el => el.textContent.trim()), 'List view');
-      assert.equal(await page.$eval('#notes-board-hint', el => el.hidden), expected === 'list');
+      assert.equal(await page.$('#notes-board-hint'), null);
       assert.equal(await page.$$eval('.note-card', els => els.length), 3);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
       if (expected === 'list') {
@@ -103,7 +103,7 @@ test('usable board width decides the 640px boundary and viewport transitions ret
     const geometry = await page.$$eval('.note-card', els => els.map(el => ({ id: el.dataset.id, left: el.style.left, top: el.style.top, width: el.style.width, height: el.style.height })));
     const canonical = structuredClone(notes.map(note => note.layout));
     await page.click('#notes-compact-view'); await view(page, 'list');
-    assert.equal(await page.$eval('#notes-board-hint', el => el.hidden), true);
+    assert.equal(await page.$('#notes-board-hint'), null);
     await page.click('#notes-compact-view'); await view(page, 'canvas');
     await page.$eval('.notes-scroll', el => { el.style.paddingInline = '0'; el.style.width = '639px'; });
     assert.equal(await page.$eval('.notes-scroll', el => el.clientWidth), 639);

@@ -188,7 +188,6 @@ export async function render(container, { user }) {
           <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-in" aria-label="${t('notes.zoomIn')}">+</button><button type="button" class="btn btn--ghost btn--sm" id="notes-reset-view">${t('notes.resetView')}</button>
         </div>
         <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
-        <span id="notes-board-hint" class="notes-board-hint" hidden>${t('notes.canvasGestureHint')}</span>
       </div>
       <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
       <div class="notes-reveal-strip" role="group" aria-label="${t('notes.revealOverlapping')}" hidden></div>
@@ -387,7 +386,6 @@ function renderGrid() {
   for (const id of state.expandedNotes) if (!state.notes.some(note => note.id === id && canOnNote(note, 'view'))) state.expandedNotes.delete(id);
   const compactButton = _container.querySelector('#notes-compact-view');
   if (compactButton) { compactButton.hidden = usableWidth < 640; compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
-  _container.querySelector('#notes-board-hint').hidden = state.listView || !!q || !!state.filterCreator || !visible.some(note => canOnNote(note, 'edit'));
 
   if (!visible.length) {
     const isFiltered = q.length > 0 || !!state.filterCreator;
@@ -472,9 +470,9 @@ function renderBoardMenu(note) {
   return `<details class="note-card__menu" data-board-menu>
     <summary aria-label="${t('notes.cardMenu')}"><i data-lucide="ellipsis" class="icon-sm" aria-hidden="true"></i></summary>
     <div class="note-card__menu-items">
-      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span>${t('notes.showOnDashboard')}</button>
-      <button type="button" data-board-action="top" aria-pressed="${!!note.layout?.always_on_top}"><span aria-hidden="true">${note.layout?.always_on_top ? '✓' : ''}</span>${t('notes.alwaysOnTop')}</button>` : ''}
-      ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}">${t('notes.deleteLabel')}</button>` : ''}
+      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span><span>${t('notes.showOnDashboard')}</span></button>
+      <button type="button" data-board-action="top" aria-pressed="${!!note.layout?.always_on_top}"><span aria-hidden="true">${note.layout?.always_on_top ? '✓' : ''}</span><span>${t('notes.alwaysOnTop')}</span></button>` : ''}
+      ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}"><span aria-hidden="true"></span><span>${t('notes.deleteLabel')}</span></button>` : ''}
     </div>
   </details>`;
 }

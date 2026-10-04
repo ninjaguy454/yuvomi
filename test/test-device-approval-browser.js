@@ -27,12 +27,21 @@ for(const id of steps)setTaskSkills(d,id,[skill]);reconcileTaskSupervision(d,roo
 let server,browser,origin,admin,display,context,other;
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const call=(page,method,path,body)=>page.evaluate(async({method,path,body})=>{const {api}=await import('/api.js');return api[method](path,body);},{method,path,body});
+async function settleInitialWorker(page) {
+  // First installation emits SW_UPDATED and marks the current shell stale.
+  // Start approval interactions in the installed shell, rather than racing its
+  // intentional next-navigation reload. Keep the real service worker enabled.
+  await page.waitForFunction(() => navigator.serviceWorker.controller?.state === 'activated');
+  await page.reload();
+  await page.waitForSelector('#username', { visible: true });
+}
+
 test.before(async()=>{
   server=fork(new URL('./helpers/task-card-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0',TASK_CARD_BROWSER_SERVER_CHILD:'1'},stdio:['ignore','pipe','pipe','ipc']});let output='';for(const stream of [server.stdout,server.stderr])stream.on('data',value=>output=(output+value).slice(-6000));
   origin=await new Promise((resolve,reject)=>{const timeout=setTimeout(()=>reject(new Error(output)),60000);server.once('message',message=>{clearTimeout(timeout);resolve(message.origin);});server.once('exit',code=>{clearTimeout(timeout);reject(new Error(`Server ${code}: ${output}`));});});
   browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||(process.platform==='win32'?'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe':undefined),args:['--no-sandbox']});
   admin=await browser.newPage();context=await browser.createBrowserContext();display=await context.newPage();
-  for(const page of [admin,display]){page.setDefaultTimeout(20000);page.errors=[];page.on('pageerror',error=>page.errors.push(error.message));await page.setViewport({width:1440,height:1000});await page.goto(origin+'/login');await page.evaluate(()=>localStorage.setItem('yuvomi-lang','en'));await page.reload();}
+  for(const page of [admin,display]){page.setDefaultTimeout(20000);page.errors=[];page.on('pageerror',error=>page.errors.push(error.message));await page.setViewport({width:1440,height:1000});await page.goto(origin+'/login');await page.evaluate(()=>localStorage.setItem('yuvomi-lang','en'));await settleInitialWorker(page);}
   await admin.type('#username','Parent');await admin.type('#password',password);await admin.click('[type=submit]');await admin.waitForSelector('.dashboard');
   const pair=await call(display,'post','/device/pair',{});
   await call(admin,'post','/devices/pairing-approve',{code:pair.code,name:'Kitchen Wall'});

@@ -1,3 +1,4 @@
+import { householdGreeting } from '/utils/household-greeting.js';
 /**
  * Modul: Dashboard
  * Zweck: Startseite mit Begrüßung, Terminen, Aufgaben, Essen, Notizen und FAB
@@ -420,7 +421,8 @@ function firstName(displayName) {
   return String(displayName ?? '').trim().split(/\s+/)[0] || String(displayName ?? '');
 }
 
-function greeting(displayName) {
+function greeting(displayName, familyName = '') {
+  if (isDevicePrincipal()) return esc(householdGreeting(familyName));
   const h = nowFields().hour;
   const name = esc(firstName(displayName));
   if (h >= 5 && h < 12) return t('dashboard.greetingMorning', { name });
@@ -2290,7 +2292,7 @@ function renderDashboardOverview(user, editing = false, weather = null, updatedA
       <div class="dashboard-overview__header${editing ? ' dashboard-overview__header--editing' : ''}">
         <div class="dashboard-overview__heading">
           <span class="dashboard-overview__date">${dateLabel}</span>
-          <h2 class="dashboard-overview__title dashboard-overview__title--${greetingPeriod()}">${greeting(user.display_name)}</h2>
+          <h2 class="dashboard-overview__title dashboard-overview__title--${greetingPeriod()}">${greeting(user.display_name, scope.familyName)}</h2>
           ${mastheadWeatherHtml(weather)}
         </div>
         <div class="dashboard-overview__tools">
@@ -3774,6 +3776,7 @@ export async function render(container, { user }) {
   // wieder wahr (siehe die Notiz an `countdownAvailable`).
   setCountdownAvailability([]);
   rotationsAvailable = false;
+  let familyName   = '';
   let weather      = null;
   let weatherAutoLocate = false;
   let widgetConfig = DEFAULT_WIDGET_CONFIG;
@@ -3807,6 +3810,7 @@ export async function render(container, { user }) {
       api.get(`/weather?lang=${encodeURIComponent(getLocale())}`).catch(() => ({ data: null })),
       api.get('/preferences').catch(() => ({ data: {} })),
     ]);
+    familyName   = prefsRes.data?.family_name || '';
     data         = dashRes;
     rotationsAvailable = Array.isArray(data?.rotations);
     /* Die Zahlen an den Nav-Zielen und Modulkacheln kommen aus derselben
@@ -4250,7 +4254,7 @@ export async function render(container, { user }) {
     const weatherCardShown = cfg.some((w) => w.id === 'weather' && w.visible);
     setHtml(shell, `
       <section class="dashboard-masthead dashboard-masthead--${greetingPeriod()}${mastheadSlim}">
-        ${renderDashboardOverview(user, isCustomizing, weatherCardShown ? null : weather, lastLoadedAt, { followsDefault, canPublish, canCustomize })}
+        ${renderDashboardOverview(user, isCustomizing, weatherCardShown ? null : weather, lastLoadedAt, { followsDefault, canPublish, canCustomize, familyName })}
         ${cockpitHtml}
       </section>
       ${renderDashboardLayout(cfg, data, weather, currency, { editing: isCustomizing, visibleMealTypes, glanceHidden: !glanceVisible })}
@@ -4355,7 +4359,7 @@ export async function render(container, { user }) {
     const titleEl = container.querySelector('.dashboard-overview__title');
     if (titleEl) {
       titleEl.replaceChildren();
-      titleEl.insertAdjacentHTML('afterbegin', greeting(user.display_name));
+      titleEl.insertAdjacentHTML('afterbegin', greeting(user.display_name, familyName));
       // Gradient-Periode mit-resyncen: sonst aktualisieren sich über Mittag/18 Uhr
       // die Worte, aber der Tageszeit-Gradient bliebe auf dem alten Fenster stehen.
       titleEl.classList.remove(

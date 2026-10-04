@@ -42,7 +42,7 @@ export function deviceAppPreferences(d,p) {
     const allowed=id==='rotations'?p.permissions?.capabilities?.['rotations.view']==='allow':['read','write'].includes(p.permissions?.modules?.[id]);
     if(!widgets.has(id)||row.visible)widgets.set(id,{...row,id,visible:row.visible&&allowed,options:{}});
   }
-  return {timezone:householdTimeZone(d),language:setting('language','en'),date_format:setting('date_format','locale'),
+  return {family_name:setting('family_name',''),timezone:householdTimeZone(d),language:setting('language','en'),date_format:setting('date_format','locale'),
     time_format:setting('time_format','12h'),week_start:setting('week_start','monday'),currency:setting('currency','USD'),
     theme:a.theme,color_theme:a.palette,heading_font:a.font==='serif'?'serif':'default',density:a.density,
     dashboard_widgets:[...widgets.values()],dashboard_today_glance:true,dashboard_follows_default:false,

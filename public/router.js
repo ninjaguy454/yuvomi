@@ -5,7 +5,7 @@
  */
 
 import { api, auth } from '/api.js';
-import { deviceBootstrap, pairedDeviceHint, concealPersonalContext, isDevicePrincipal, deviceLandingPath } from '/utils/device-context.js';
+import { deviceBootstrap, pairedDeviceHint, concealPersonalContext, isDevicePrincipal, deviceLandingPath, authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { prepareDeviceBoot, installDeviceSession, temporaryLoginPending, beginTemporarySignIn, returnToDevice } from '/utils/device-session.js';
 import { displayAppName } from '/utils/branding.js';
 import { canAccessNavModule, navModuleAccess } from '/permissions.js';
@@ -406,6 +406,9 @@ let currentUser = null;
 let _navBuiltForUserId = null;
 let currentPath = null;
 let isNavigating = false;
+let _pendingNavigation = null;
+let _activeNavigationPath = null;
+let _navigationRun = 0;
 // A Wall-only document has never rendered personal content. Crossing into Wall
 // from a personal document instead replaces it once: pending page renders and
 // modal callbacks cannot be reliably cancelled by an ordinary SPA navigation.
@@ -730,8 +733,22 @@ async function navigate(path, userOrPushState = true, pushState = true) {
   if (_wallPrivacyTransitioning) return;
   if (path.split('?')[0] === '/device') path = deviceLandingPath();
   if (isWallModeEnabled() && !['/login', '/setup', '/device/pair'].includes(path.split('?')[0])) path = '/';
-  if (isNavigating) return;
+  if (isNavigating) {
+    if (path === _activeNavigationPath && (typeof userOrPushState !== 'object' || userOrPushState === null)) {
+      _pendingNavigation = null;
+      return;
+    }
+    // The shell is interactive while page data loads. Keep the latest intent,
+    // but never carry a personal destination across an authentication boundary.
+    _pendingNavigation = {
+      args: [path, userOrPushState, pushState],
+      authentication: authenticationSnapshot(), revision: sessionRevision(),
+    };
+    return;
+  }
   isNavigating = true;
+  const navigationRun = ++_navigationRun;
+  _activeNavigationPath = path;
 
   // Offenes „Mehr“-Sheet beim Navigieren immer schließen — robust und
   // unabhängig vom Klick-Bubbling (das reißt, wenn die Navigation
@@ -977,13 +994,20 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       setTimeout(() => openNotificationCenter({ notificationId }), 0);
     }
   } finally {
-    isNavigating = false;
-    // auth:expired kann waehrend einer Navigation gefeuert haben (z.B. wenn ein
-    // paralleler API-Call 401 zurueckgab). Jetzt wo die Navigation abgeschlossen
-    // ist, holen wir die Login-Weiterleitung nach.
-    if (_pendingLoginRedirect) {
-      _pendingLoginRedirect = false;
-      navigate('/login');
+    // Guards may have started a redirect without awaiting it. Only that newer
+    // navigation may unlock the router or drain a queued destination.
+    if (navigationRun === _navigationRun) {
+      isNavigating = false;
+      _activeNavigationPath = null;
+      const pending = _pendingNavigation;
+      _pendingNavigation = null;
+      // Authentication expiry takes precedence over a personal destination.
+      if (_pendingLoginRedirect) {
+        _pendingLoginRedirect = false;
+        navigate('/login');
+      } else if (pending && sameAuthentication(pending.authentication) && sessionRevision() === pending.revision) {
+        navigate(...pending.args);
+      }
     }
   }
 }
@@ -1162,8 +1186,7 @@ async function confirmAndLogout() {
   return true;
 }
 
-function sidebarActionEl({ labelKey, icon, className, onClick }) {
-  const label = t(labelKey);
+function sidebarActionEl({ labelKey, label = t(labelKey), icon, className, onClick }) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `nav-item ${className}`;
@@ -1186,6 +1209,23 @@ function sidebarActionEl({ labelKey, icon, className, onClick }) {
   labelEl.className = 'nav-item__label';
   labelEl.textContent = label;
   button.append(wrap, labelEl);
+  return button;
+}
+
+// Same explicit session action in the desktop rail and the mobile More sheet.
+function deviceSessionAction({ mobile = false } = {}) {
+  const temporary = deviceBootstrap()?.temporary;
+  if (!isDevicePrincipal() && !temporary) return null;
+  const label = t(temporary ? 'pairedDisplay.returnToHousehold' : 'pairedDisplay.signIn');
+  const options = { label, icon: temporary ? 'log-out' : 'log-in', className: mobile ? 'more-action--device-session' : 'nav-item--device-session',
+    onClick: async () => {
+      if (mobile) window._closeMoreSheet?.({ restoreFocus: false });
+      try { await (temporary ? returnToDevice() : beginTemporarySignIn()); }
+      catch (error) { window.yuvomi?.showToast(error.message, 'danger'); }
+    } };
+  const button = mobile ? moreActionEl(options) : sidebarActionEl(options);
+  button.dataset[temporary ? 'deviceReturn' : 'deviceLogin'] = '';
+  if (temporary) button.title = t('pairedDisplay.sessionTitle', { name: deviceBootstrap()?.user?.display_name || t('pairedDisplay.memberFallback'), action: label });
   return button;
 }
 
@@ -1248,8 +1288,7 @@ function adoptNotificationHeader() {
 // Hilfe und Änderungen (Overlays). Vollbreite Listenzeilen — der ruhige,
 // monochrome System-Cluster, klar abgesetzt vom farbigen Modul-Grid.
 // `route` → navigierender <a> (aria-current-fähig); sonst Overlay-<button>.
-function moreActionEl({ labelKey, icon, className = '', onClick, route, navHref }) {
-  const label = t(labelKey);
+function moreActionEl({ labelKey, label = t(labelKey), icon, className = '', onClick, route, navHref }) {
   const el = document.createElement(route ? 'a' : 'button');
   if (route) {
     el.href = navHref || route;
@@ -1557,6 +1596,8 @@ function buildMoreSheetBody() {
   nodes.push(divider);
 
   // System-Reihe im selben Vierer-Raster (Icon-über-Label, monochrom).
+  const sessionAction = deviceSessionAction({ mobile: true });
+  if (sessionAction) nodes.push(sessionAction);
   const system = document.createElement('div');
   system.className = 'more-sheet__system';
   pinnedItems.forEach((item) => {
@@ -1600,7 +1641,7 @@ function buildMoreSheetBody() {
    * Es bleibt das LETZTE Ziel der Reihe, und das ist kein Zufall: es ist die
    * terminale Aktion, sie steht am Ende der Leserichtung, und der
    * Bestaetigungsdialog bleibt davor. */
-  if (!isDevicePrincipal()) system.appendChild(moreActionEl({
+  if (!isDevicePrincipal() && !deviceBootstrap()?.temporary) system.appendChild(moreActionEl({
     labelKey: 'settings.logout',
     icon: 'log-out',
     className: 'more-item--logout',
@@ -2000,6 +2041,8 @@ function renderAppShell(container) {
   // Route (data-route, Aktiv-Pille) und gehoert damit nicht zu den Aktionen
   // darunter, aber auch nicht mehr in den Scroller darueber.
   pinnedSidebarItems.forEach((el) => sidebar.appendChild(el));
+  const sessionAction = deviceSessionAction();
+  if (sessionAction) sidebar.insertBefore(sessionAction, pinnedSidebarItems.find(el => el.dataset.route === '/settings') || null);
 
   // Footer-Aktionen (keine Routen → kein data-route, damit Delegation/Indikator
   // sie ignorieren): Hilfe und Live-Changelog.
@@ -2021,7 +2064,7 @@ function renderAppShell(container) {
     // Abmelden als terminale Aktion: bricht in eine eigene, volle Zeile unter
     // Hilfe/Änderungen (CSS: flex-wrap + border-top). Monochrom wie die
     // Geschwister — Danger-Rot erscheint erst im Confirm.
-    ...(!isDevicePrincipal() ? [sidebarActionEl({
+    ...(!isDevicePrincipal() && !deviceBootstrap()?.temporary ? [sidebarActionEl({
       labelKey: 'settings.logout',
       icon: 'log-out',
       className: 'nav-item--logout',
@@ -4314,6 +4357,7 @@ window.addEventListener('popstate', (e) => {
  * die Praeferenzen nachlaedt. Ihn zu leeren gewaenne nichts und oeffnete ein
  * Fenster, in dem eine abgeschaltete Route wieder erreichbar waere. */
 function forgetSessionState() {
+  _pendingNavigation = null;
   currentUser = null;
   _preferencesLoaded = false;
   _hiddenModules = new Set();
@@ -4492,6 +4536,8 @@ function rebuildNavigation({ updateLabels = true } = {}) {
         .forEach((el) => el.remove());
       const footer = navSidebar.querySelector(':scope > .nav-sidebar__footer-actions');
       pinnedSidebarEls.forEach((el) => navSidebar.insertBefore(el, footer || null));
+      const sessionAction = navSidebar.querySelector(':scope > .nav-item--device-session');
+      if (sessionAction) navSidebar.insertBefore(sessionAction, pinnedSidebarEls.find(el => el.dataset.route === '/settings') || footer || null);
     }
     if (window.lucide) window.lucide.createIcons({ el: navSidebar || navSidebarItems });
     requestAnimationFrame(() => {

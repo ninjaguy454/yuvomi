@@ -1,5 +1,8 @@
 import { api } from '/api.js';
 import { t } from '/i18n.js';
+import { esc } from '/utils/html.js';
+import { isPermAdmin } from '/permissions.js';
+import { getPreferences, savePreferences } from '/settings/preferences-cache.js';
 import {
   createInfoList,
   createRetryState,
@@ -11,6 +14,7 @@ function renderPage(container) {
   container.insertAdjacentHTML('beforeend', `
     <section class="settings-section">
       <h2 class="settings-section__title">${t('settings.systemTitle')}</h2>
+      ${isPermAdmin() ? '<div class="settings-card" id="household-profile-host"></div>' : ''}
       <div class="settings-card" id="system-info-card">
         <div id="system-info-host"></div>
       </div>
@@ -78,6 +82,39 @@ async function loadSystemInfo(container) {
 export async function render(container, { user } = {}) {
   void user;
   renderPage(container);
-  await loadSystemInfo(container);
+  await Promise.all([loadSystemInfo(container), loadHouseholdProfile(container)]);
   window.lucide?.createIcons({ el: container });
+}
+
+async function loadHouseholdProfile(container) {
+  const host = container.querySelector('#household-profile-host');
+  if (!host || !isPermAdmin()) return;
+  try {
+    const preferences = await getPreferences();
+    host.replaceChildren();
+    host.insertAdjacentHTML('beforeend', `<form id="household-profile-form" class="settings-form">
+      <div class="form-group"><label class="form-label" for="household-family-name">${t('pairedDisplay.familyName')}</label>
+        <input class="form-input" id="household-family-name" name="family_name" type="text" maxlength="80" value="${esc(preferences.family_name || '')}" aria-describedby="household-family-name-hint">
+        <p class="form-hint" id="household-family-name-hint">${t('pairedDisplay.familyNameHint')}</p>
+      </div>
+      <p id="household-profile-status" role="status" hidden></p>
+      <button class="btn btn--primary" type="submit">${t('common.save')}</button>
+    </form>`);
+    const form = host.querySelector('form');
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const submit = form.querySelector('[type="submit"]'), status = host.querySelector('#household-profile-status');
+      if (submit.disabled) return;
+      submit.disabled = true;
+      try {
+        const result = await savePreferences({ family_name: form.elements.family_name.value });
+        form.elements.family_name.value = result.data.family_name;
+        form.elements.family_name.defaultValue = result.data.family_name;
+        status.textContent = t('pairedDisplay.familyNameSaved');
+      } catch (error) { status.textContent = error.message || t('common.errorGeneric'); }
+      finally { status.hidden = false; submit.disabled = false; }
+    });
+  } catch (error) {
+    host.replaceChildren(createRetryState({ message: error.message || t('common.errorGeneric'), onRetry: () => loadHouseholdProfile(container) }));
+  }
 }

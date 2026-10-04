@@ -501,6 +501,7 @@ router.get('/', (req, res) => {
         language_effective: resolveHouseholdLocale(db.get()),
         language_auto: resolveHouseholdLocale(db.get(), { ignoreExplicit: true }),
         app_name: APP_NAME,
+        family_name: cfgGet('family_name') || '',
         // Anordnung und Kopfband der Übersicht - persönlich, mit Haushalts-Fallback (#585).
         ...dashboardPersonalViews(req.authUserId),
         disabled_modules: disabledModules,
@@ -557,6 +558,14 @@ router.get('/', (req, res) => {
 // --------------------------------------------------------
 
 router.put('/', requireCapability('settings.personal'), (req, res, next) => {
+  if (req.body.family_name !== undefined) {
+    if (req.authRole !== 'admin' || !hasCapability(db.get(), req, 'admin.household_settings')) {
+      return res.status(403).json({ error: 'Family Name requires a household administrator.', code: 403 });
+    }
+    if (typeof req.body.family_name !== 'string' || req.body.family_name.trim().length > 80 || /[\u0000-\u001f\u007f]/.test(req.body.family_name)) {
+      return res.status(400).json({ error: 'Family Name must be at most 80 characters without control characters.', code: 400 });
+    }
+  }
   if (['date_format','time_format','week_start'].some(key => req.body[key] !== undefined)
     && !hasCapability(db.get(),req,'admin.household_settings')) {
     return res.status(403).json({error:'Household date and time settings require an administrator.',code:403});
@@ -1132,6 +1141,7 @@ router.put('/', requireCapability('settings.personal'), (req, res, next) => {
       }
     }
 
+    if (req.body.family_name !== undefined) cfgSet('family_name', req.body.family_name.trim());
     const rawMealTypes = cfgGet('visible_meal_types') ?? DEFAULT_MEAL_TYPES;
     const savedMealTypes = rawMealTypes.split(',').filter((t) => VALID_MEAL_TYPES.includes(t));
     const savedCurrency = cfgGet('currency') ?? DEFAULT_CURRENCY;
@@ -1160,6 +1170,7 @@ router.put('/', requireCapability('settings.personal'), (req, res, next) => {
         language_effective: resolveHouseholdLocale(db.get()),
         language_auto: resolveHouseholdLocale(db.get(), { ignoreExplicit: true }),
         app_name: APP_NAME,
+        family_name: cfgGet('family_name') || '',
         ...dashboardPersonalViews(req.authUserId),
         disabled_modules: savedDisabledModules,
         hidden_modules: savedHiddenModules,

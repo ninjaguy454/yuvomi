@@ -107,6 +107,40 @@ for(const width of [360,752,1920])test(`Notes header reserves separate notificat
     assert.equal(writes.length,0);
   }finally{await page.close();}
 });
+for(const width of [320,360])for(const direction of ['ltr','rtl'])test(`enlarged Notes header keeps search reachable at ${width}px ${direction}`,async()=>{
+  const page=await mount(width);try{
+    await page.evaluate(async(direction)=>{
+      document.documentElement.dir=direction;
+      await new Promise(resolve=>{const link=document.createElement('link');link.rel='stylesheet';link.href='/styles/notes.css';link.onload=resolve;document.head.append(link);});
+      await new Promise(resolve=>{const link=document.createElement('link');link.rel='stylesheet';link.href='/styles/reminders.css';link.onload=resolve;document.head.append(link);});
+      const header=document.querySelector('.notes-toolbar');header.classList.add('notification-header-host');
+      const seal=document.createElement('span');seal.className='module-seal module-seal--head';header.prepend(seal);
+      const button=document.createElement('button');button.className='btn btn--ghost btn--icon notification-header-button';button.textContent='Bell';header.append(button);
+      const enlarged=[...header.querySelectorAll('h1,input,button')].map(el=>[el,parseFloat(getComputedStyle(el).fontSize)*2]);
+      for(const [el,size] of enlarged)el.style.fontSize=`${size}px`;
+    },direction);
+    async function check(stage,minWidth){
+      const geometry=await page.evaluate(()=>{
+        const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON();
+        const input=document.querySelector('#notes-search'),r=input.getBoundingClientRect();
+        return {title:rect('.page-toolbar__title'),search:r.toJSON(),container:rect('.notes-toolbar__search'),bell:rect('.notification-header-button'),hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===input,width:innerWidth,documentWidth:document.documentElement.scrollWidth};
+      });
+      const {title,search,container,bell}=geometry;
+      assert.ok(search.width>=minWidth&&search.left>=0&&search.right<=width,`${stage}: usable search ${JSON.stringify(geometry)}`);
+      assert.ok(search.left>=container.left-1&&search.right<=container.right+1,`${stage}: search fits its container ${JSON.stringify(geometry)}`);
+      assert.ok(search.right<=bell.left||search.left>=bell.right,`${stage}: no bell overlap ${JSON.stringify(geometry)}`);
+      assert.ok(search.right<=title.left||search.left>=title.right,`${stage}: no title overlap ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.hit&&geometry.documentWidth<=width,`${stage}: target receives input ${JSON.stringify(geometry)}`);
+      await screenshot(page,`notes-header-enlarged-${width}-${direction}-${stage}`);
+    }
+    await check('empty',44);
+    await page.click('#notes-search');await check('focused',120);
+    await page.keyboard.type('Household');await page.waitForFunction(()=>document.querySelectorAll('.note-card').length===1);
+    await page.$eval('#notes-search',el=>el.blur());await check('filled',120);
+    await page.click('[data-page-search-clear]');await page.waitForFunction(()=>document.querySelectorAll('.note-card').length===2);
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
 for(const width of [360,752,1920])test(`Notes header icon controls retain names, targets and states at ${width}px`,async()=>{
   const page=await mount(width);try{
     // The router loads page CSS after the shell; reproduce that cascade order.

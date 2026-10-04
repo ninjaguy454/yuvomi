@@ -34,6 +34,19 @@ async function screenshot(page,name) {
   mkdirSync(process.env.NOTES_SCREENSHOTS,{recursive:true});
   await page.screenshot({path:`${process.env.NOTES_SCREENSHOTS}/${name}.png`});
 }
+
+test('minimum cards truncate long titles on whole lines while the reader keeps the full title',async()=>{
+  const page=await mount();try{
+    const full='Weekend plans and everything to remember before we head outside with the family';
+    notes[0].title=full;notes[0].layout={x:0,y:0,width:3,height:4,revision:3};
+    await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(title=>document.querySelector('.note-card[data-id="1"] .note-card__title')?.textContent===title,{},full);
+    const metrics=await page.$eval('.note-card[data-id="1"] .note-card__title',el=>({height:el.getBoundingClientRect().height,lineHeight:parseFloat(getComputedStyle(el).lineHeight)}));
+    assert.ok(metrics.height<=metrics.lineHeight*2+1,JSON.stringify(metrics));
+    await page.click('[data-id="1"] [data-action="open"]');
+    assert.equal(await page.$eval('#note-title',el=>el.value),full,'the full title remains available in the note');
+  }finally{await page.close();}
+});
 test('wide board persists a keyboard-accessible per-card size change with its layout revision',async()=>{
   const page=await mount();try{
     assert.ok(await page.$('[data-board-action="adjust"]'),'card offers non-drag geometry controls');

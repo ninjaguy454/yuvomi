@@ -371,7 +371,7 @@
     "test:meal-cycle-ui": "node --loader ./test/test-browser-loader.mjs --test test/test-meal-cycle-ui.js",
     "test:meal-cycles": "node --test test/test-meal-cycles.js",
     "test:notes-canvas": "node --experimental-sqlite --test --test-concurrency=2 test/test-note-board-routes.js test/test-note-board-migration.js test/test-note-board-concurrency.js test/test-note-board-context.js test/test-note-privacy-surfaces.js test/test-note-privacy-rollback.js test/test-note-board-layout.js test/test-note-board-defaults-audit.js",
-    "test:notes-canvas-browser": "node --test --test-concurrency=1 test/test-note-board-browser.js test/test-note-board-full-app-browser.js",
+    "test:notes-canvas-browser": "node --test --test-concurrency=1 test/test-note-board-browser.js test/test-note-board-list-browser.js test/test-note-board-direct-browser.js test/test-note-board-full-app-browser.js",
     "test:task-acceptance": "node --experimental-sqlite --test test/test-task-acceptance.js test/test-task-acceptance-policy.js test/test-task-acceptance-races.js test/test-task-acceptance-context.js test/test-task-acceptance-capabilities.js test/test-task-acceptance-migration.js test/test-task-acceptance-draft.js",
     "test:task-acceptance-browser": "node --experimental-sqlite --test test/test-task-acceptance-browser.js test/test-open-task-board-browser.js test/test-task-acceptance-full-app-browser.js",
     "test:task-acceptance-visual": "node --experimental-sqlite --test test/test-task-acceptance-visual.js"

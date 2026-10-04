@@ -162,10 +162,10 @@ export async function render(container, { user }) {
   board?.destroy(); stopLive?.(); stopOpenTasks?.();
   if (state) state.active = false;
   _container = container;
-  state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, pending: new Set(), deleting: new Set() };
+  state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set() };
   const pageState = state;
   const auth = authenticationSnapshot();
-  const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
+  const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
   window.addEventListener('auth:context-ending', clearNotes, { once: true });
   window.addEventListener('auth:expired', clearNotes, { once: true });
 
@@ -182,8 +182,12 @@ export async function render(container, { user }) {
       </div>
       <div class="notes-board-toolbar">
         <button class="btn btn--secondary btn--sm" id="notes-compact-view" aria-pressed="false">${t('notes.compactView')}</button>
+        <label class="notes-list-density" id="notes-list-density-label" hidden>${t('notes.listDensity')}
+          <select id="notes-list-density"><option value="compact">${t('notes.listCompact')}</option><option value="expanded" selected>${t('notes.listExpanded')}</option></select>
+        </label>
         ${canNote('view') && canNote('edit') ? `<button class="btn btn--secondary btn--sm" id="notes-organize">${t('notes.organize')}</button>` : ''}
         <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
+        <span id="notes-board-hint" class="notes-board-hint" hidden>${t('notes.canvasGestureHint')}</span>
       </div>
       <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
       <div class="notes-workspace">
@@ -212,6 +216,17 @@ export async function render(container, { user }) {
   }
   const grid = container.querySelector('#notes-grid');
   grid.addEventListener('click', async (e) => {
+    const expand = e.target.closest('[data-note-expand]');
+    if (expand) {
+      e.stopPropagation();
+      const id = Number(expand.closest('.note-card').dataset.id);
+      const note = state.notes.find(note => note.id === id);
+      if (!state.active || !note || !canOnNote(note, 'view')) return;
+      if (state.expandedNotes.has(id)) state.expandedNotes.delete(id); else state.expandedNotes.add(id);
+      renderGrid();
+      return;
+    }
+    if (e.target.closest('a, summary')) { e.stopPropagation(); return; }
     const adjust = e.target.closest('[data-board-action="adjust"]');
     if (adjust) { e.stopPropagation(); openLayoutModal(Number(adjust.closest('.note-card').dataset.id)); return; }
     const pinBtn = e.target.closest('[data-action="pin"]');
@@ -245,6 +260,9 @@ export async function render(container, { user }) {
   if (canNote('view')) stopLive = watchNoteChanges(reloadNotes);
   container.querySelector('#notes-compact-view').addEventListener('click', e => {
     state.compact = !state.compact; e.currentTarget.setAttribute('aria-pressed', String(state.compact)); renderGrid();
+  });
+  container.querySelector('#notes-list-density').addEventListener('change', e => {
+    state.listDensity = e.currentTarget.value === 'compact' ? 'compact' : 'expanded'; renderGrid();
   });
   container.querySelector('#notes-organize')?.addEventListener('click', organizeNotes);
 
@@ -335,6 +353,7 @@ function renderGrid() {
   const focusId = focused?.dataset.id;
   const focusAction = document.activeElement?.dataset.action;
   const focusBoardAction = document.activeElement?.dataset.boardAction;
+  const focusExpand = document.activeElement?.hasAttribute('data-note-expand');
   const focusChecklistLine = document.activeElement?.dataset.mdLine;
   const previewScroll = new Map([...grid.querySelectorAll('.note-card')].map(card => [card.dataset.id, card.querySelector('.note-card__content')?.scrollTop || 0]));
   board?.destroy(); board = null;
@@ -343,8 +362,15 @@ function renderGrid() {
   const q = state.filterQuery.trim().toLowerCase();
   const visible = visibleNotes();
   const forceCompact = state.notes.some(note => note.layout?.overflow);
+  state.listView = state.compact || forceCompact || grid.clientWidth < 640;
+  grid.dataset.boardView = state.listView ? 'list' : 'canvas';
+  grid.dataset.listDensity = state.listDensity;
+  _container.querySelector('#notes-list-density-label').hidden = !state.listView;
+  _container.querySelector('#notes-list-density').value = state.listDensity;
+  for (const id of state.expandedNotes) if (!state.notes.some(note => note.id === id && canOnNote(note, 'view'))) state.expandedNotes.delete(id);
   const compactButton = _container.querySelector('#notes-compact-view');
-  if (compactButton) { compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
+  if (compactButton) { compactButton.hidden = grid.clientWidth < 640; compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
+  _container.querySelector('#notes-board-hint').hidden = state.listView || !!q || !!state.filterCreator || !visible.some(note => canOnNote(note, 'edit'));
 
   if (!visible.length) {
     const isFiltered = q.length > 0 || !!state.filterCreator;
@@ -370,6 +396,8 @@ function renderGrid() {
     grid.querySelector('#empty-cta-notes')?.addEventListener('click', () => {
       document.querySelector('.page-fab')?.click();
     });
+    board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout,
+      compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
     return;
   }
 
@@ -383,9 +411,10 @@ function renderGrid() {
   grid.insertAdjacentHTML('beforeend', html);
   if (window.lucide) lucide.createIcons({ el: grid });
   board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout,
-    compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator });
+    compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
   if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
+  if (focusId && focusExpand) grid.querySelector(`.note-card[data-id="${focusId}"] [data-note-expand]`)?.focus({ preventScroll: true });
   if (focusId && focusChecklistLine !== undefined) grid.querySelector(`.note-card[data-id="${focusId}"] .note-md-box[data-md-line="${focusChecklistLine}"]`)?.focus({ preventScroll: true });
   for (const [id, top] of previewScroll) {
     const preview = grid.querySelector(`.note-card[data-id="${id}"] .note-card__content`);
@@ -393,7 +422,64 @@ function renderGrid() {
   }
 }
 
+// Truncate the safe rendered DOM, not Markdown source: retained links and checklist
+// buttons keep their original source-line indices, without hidden trailing content.
+function listPreview(note, expanded) {
+  const html = renderMarkdownLight(note.content, CHECKLIST_OPTS(note));
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const truncated = [...template.content.textContent].length > 200;
+  if (!truncated || expanded) return { html, truncated };
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  let remaining = 199, node;
+  while ((node = walker.nextNode())) {
+    const chars = [...node.textContent];
+    if (chars.length <= remaining) { remaining -= chars.length; continue; }
+    const prefix = chars.slice(0, remaining).join('');
+    const range = document.createRange();
+    range.setStart(node, prefix.length);
+    range.setEnd(template.content, template.content.childNodes.length);
+    range.deleteContents();
+    node.textContent = prefix + '…';
+    break;
+  }
+  // A checklist's accessible name must not disclose the omitted part of its line.
+  for (const box of template.content.querySelectorAll('button.note-md-box')) {
+    box.setAttribute('aria-label', box.closest('.note-md-check')?.textContent || t('notes.checklistToggle'));
+  }
+  return { html: template.innerHTML, truncated };
+}
+
+function renderBoardMenu(note) {
+  if (!canOnNote(note, 'edit') && !canOnNote(note, 'delete')) return '';
+  return `<details class="note-card__menu" data-board-menu>
+    <summary aria-label="${t('notes.cardMenu')}"><i data-lucide="ellipsis" class="icon-sm" aria-hidden="true"></i></summary>
+    <div class="note-card__menu-items">
+      ${canOnNote(note, 'edit') ? `<button type="button" data-board-action="adjust">${t('notes.adjustCard')}</button>
+      <button type="button" data-action="pin" data-id="${note.id}">${note.pinned ? t('notes.unpinAction') : t('notes.pinAction')}</button>` : ''}
+      ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}">${t('notes.deleteLabel')}</button>` : ''}
+    </div>
+  </details>`;
+}
+
+function renderListCard(note) {
+  const compact = state.listDensity === 'compact';
+  const expanded = state.expandedNotes.has(note.id);
+  const preview = compact ? null : listPreview(note, expanded);
+  return `<div class="note-card note-card--list ${note.pinned ? 'note-card--pinned' : ''}" data-id="${note.id}" style="--note-color:${esc(note.color)};">
+    <div class="note-card__list-heading">
+      <div class="note-card__title">${esc(note.title?.trim() || t('notes.untitledNote'))}</div>
+      <button type="button" class="note-card__open" data-action="open" data-id="${note.id}" aria-label="${t('notes.openNote')}"><i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i></button>
+      ${renderBoardMenu(note)}
+    </div>
+    ${compact ? '' : `<div class="note-card__content" id="note-list-body-${note.id}">${preview.html}</div>
+      ${preview.truncated ? `<button type="button" class="note-card__expand" data-note-expand aria-expanded="${expanded}" aria-controls="note-list-body-${note.id}">${t(expanded ? 'notes.showLess' : 'notes.showMore')}</button>` : ''}
+      <div class="note-card__list-meta">${audienceLabel(note)}${note.creator_name ? ` · ${esc(note.creator_name)}` : ''}</div>`}
+  </div>`;
+}
+
 function renderNoteCard(note) {
+  if (state.listView) return renderListCard(note);
   // KEINE INITIALEN AUF EINER 16px-SCHEIBE (Initialen-Schwelle-Regel).
   //
   // Hier standen bis zuletzt zwei Buchstaben auf einer 16-%-Waschung - unter der
@@ -407,18 +493,11 @@ function renderNoteCard(note) {
   const avatarColor = note.creator_color || AVATAR_FALLBACK_COLOR;
 
   return `
-    <div class="note-card ${note.pinned ? 'note-card--pinned' : ''}"
+    <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${canOnNote(note, 'edit') ? 'note-card--editable' : ''}"
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
-      ${canOnNote(note, 'edit') ? `<div class="note-card__board-tools">
-        <button type="button" class="note-card__handle" data-board-handle="move" aria-label="${t('notes.moveCard')}" title="${t('notes.moveCard')}" tabindex="-1"><i data-lucide="move" class="icon-sm" aria-hidden="true"></i></button>
-        <button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>
-      </div>` : ''}
+      ${renderBoardMenu(note)}
       <span class="note-card__audience">${audienceLabel(note)}${note.pinned ? ` · ${t('notes.groupPinned')}` : ''}</span>
-      ${canOnNote(note, 'edit') ? `<button class="note-card__pin" data-action="pin" data-id="${note.id}"
-              aria-label="${note.pinned ? t('notes.unpinAction') : t('notes.pinAction')}">
-        <i data-lucide="${note.pinned ? 'pin-off' : 'pin'}" class="icon-sm" aria-hidden="true"></i>
-      </button>` : ''}
       ${note.title ? `<div class="note-card__title">${esc(note.title)}</div>` : ''}
       <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS(note))}</div>
       <div class="note-card__footer">
@@ -440,12 +519,8 @@ function renderNoteCard(note) {
                   aria-label="${t('notes.openNote')}">
             <i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i>
           </button>
-          ${canOnNote(note, 'delete') ? `<button class="note-card__delete" data-action="delete" data-id="${note.id}" aria-label="${t('notes.deleteLabel')}">
-            <i data-lucide="trash-2" class="icon-sm" aria-hidden="true"></i>
-          </button>` : ''}
         </div>
       </div>
-      ${canOnNote(note, 'edit') ? `<button type="button" class="note-card__resize" data-board-handle="resize" aria-label="${t('notes.resizeCard')}" title="${t('notes.resizeCard')}" tabindex="-1"><i data-lucide="maximize-2" class="icon-sm" aria-hidden="true"></i></button>` : ''}
     </div>
   `;
 }

@@ -34,6 +34,10 @@ async function screenshot(page,name) {
   mkdirSync(process.env.NOTES_SCREENSHOTS,{recursive:true});
   await page.screenshot({path:`${process.env.NOTES_SCREENSHOTS}/${name}.png`});
 }
+async function openAdjustment(page) {
+  await page.click('[data-id="1"] [data-board-menu] summary');
+  await page.click('[data-id="1"] [data-board-action="adjust"]');
+}
 for(const width of [780,840])test(`short landscape ${width}x360 scrolls the full Notes page`,async()=>{
   const page=await mount(width,false,360);try{
     await page.$eval('#main-content',el=>{el.classList.add('app-content');el.style.height='calc(100dvh - 64px)';});
@@ -64,21 +68,23 @@ test('wide board persists a keyboard-accessible per-card size change with its la
   const page=await mount();try{
     assert.ok(await page.$('[data-board-action="adjust"]'),'card offers non-drag geometry controls');
     await screenshot(page,'notes-board-desktop');
-    await page.click('[data-id="1"] [data-board-action="adjust"]');await page.waitForSelector('#note-layout-width');
+    await openAdjustment(page);await page.waitForSelector('#note-layout-width');
     await page.$eval('#note-layout-width',el=>{el.value='6';el.dispatchEvent(new Event('input',{bubbles:true}));});await page.click('#note-layout-save');
     await page.waitForFunction(()=>!document.querySelector('#note-layout-save'));
     assert.equal(writes[0].path,'/notes/1/layout');assert.equal(writes[0].body.expected_layout_revision,2);assert.equal(writes[0].body.layout.width,6);
     assert.equal(notes[0].content,original[0].content);
   }finally{await page.close();}
 });
-test('phone keeps distant notes reachable, supports size controls, and never saves a viewport reflow',async()=>{
+test('phone keeps distant notes reachable in a list and never saves a viewport reflow',async()=>{
   const page=await mount(320);try{
-    assert.ok(await page.$('#notes-compact-view'),'compact view is available');
+    assert.ok(await page.$('#notes-list-density'),'list density is available');
+    assert.equal(await page.$eval('#notes-grid',el=>el.dataset.boardView),'list');
     assert.equal(await page.$$eval('.note-card',els=>els.length),2);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
     const positions=await page.$$eval('.note-card',els=>els.map(el=>el.getBoundingClientRect().top));assert.ok(positions[1]-positions[0]<600);
     await page.setViewport({width:1280,height:900});await page.setViewport({width:390,height:900});assert.equal(writes.length,0);
-    assert.ok(await page.$('[data-board-action="adjust"]'));
+    assert.equal(await page.$('[data-board-handle]'),null);
+    assert.equal(await page.$eval('#notes-grid',el=>el.dataset.boardView),'list');
     await screenshot(page,'notes-board-phone');
     await page.evaluate(()=>document.documentElement.dataset.theme='dark');await screenshot(page,'notes-board-phone-dark');
   }finally{await page.close();}
@@ -110,15 +116,15 @@ test('an old page read cannot repaint after its authentication context ends',asy
 });
 test('drag and resize commit separate geometry; Escape cancels without opening the note',async()=>{
   const page=await mount();try{
-    const move=await page.$('[data-id="1"] [data-board-handle="move"]');const box=await move.boundingBox();
-    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+160,box.y+70,{steps:4});await page.mouse.up();
+    const move=await page.$('[data-id="1"] .note-card__title');const box=await move.boundingBox();
+    await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+110,box.y+box.height/2+96,{steps:4});await page.mouse.up();
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
     assert.equal(writes.length,1);assert.ok(writes[0].body.layout.x>0);assert.equal(await page.$('.note-modal'),null);
-    const resize=await page.$('[data-id="1"] [data-board-handle="resize"]');const rb=await resize.boundingBox();
-    await page.mouse.move(rb.x+rb.width/2,rb.y+rb.height/2);await page.mouse.down();await page.mouse.move(rb.x+130,rb.y+80,{steps:4});await page.mouse.up();
+    const resize=await page.$('.note-card[data-id="1"]');const rb=await resize.boundingBox();
+    await page.mouse.move(rb.x+rb.width-3,rb.y+rb.height-3);await page.mouse.down();await new Promise(r=>setTimeout(r,520));await page.mouse.move(rb.x+rb.width+110,rb.y+rb.height+80,{steps:4});await page.mouse.up();
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
     assert.equal(writes.length,2);assert.ok(writes[1].body.layout.width>writes[0].body.layout.width);assert.equal(writes[1].body.expected_layout_revision,3);
-    const mb=await move.boundingBox();await page.mouse.move(mb.x+mb.width/2,mb.y+mb.height/2);await page.mouse.down();await page.mouse.move(mb.x+110,mb.y+70);await page.keyboard.press('Escape');await page.mouse.up();
+    const mb=await move.boundingBox();await page.mouse.move(mb.x+mb.width/2,mb.y+mb.height/2);await page.mouse.down();await page.mouse.move(mb.x+mb.width/2+110,mb.y+mb.height/2+96);await page.keyboard.press('Escape');await page.mouse.up();
     assert.equal(writes.length,2);assert.equal(await page.$('.note-modal'),null);
   }finally{await page.close();}
 });
@@ -139,7 +145,7 @@ test('revalidation removes revoked note content and an open draft',async()=>{
 });
 test('failed layout save restores latest geometry and permits an explicit retry',async()=>{
   const page=await mount();try{
-    await page.click('[data-id="1"] [data-board-action="adjust"]');await page.waitForSelector('#note-layout-width');
+    await openAdjustment(page);await page.waitForSelector('#note-layout-width');
     notes[0].layout={...notes[0].layout,width:5,revision:9};conflictLayout=true;
     await page.$eval('#note-layout-width',el=>el.value='6');await page.click('#note-layout-save');await page.waitForFunction(()=>!document.querySelector('#note-layout-save').disabled);
     assert.equal(await page.$eval('#note-layout-width',el=>el.value),'5','conflict reloads canonical geometry into the controls');
@@ -149,13 +155,13 @@ test('failed layout save restores latest geometry and permits an explicit retry'
 });
 test('live refresh does not resurrect a pending delete, and undo rechecks access',async()=>{
   const page=await mount();try{
-    await page.click('[data-id="1"] [data-action="delete"]');await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await new Promise(r=>setTimeout(r,150));
+    await page.click('[data-id="1"] [data-board-menu] summary');await page.click('[data-id="1"] [data-action="delete"]');await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await new Promise(r=>setTimeout(r,150));
     assert.equal(await page.$('.note-card[data-id="1"]'),null,'pending deletion stays hidden while undo is available');
     notes=notes.filter(n=>n.id!==1);await page.evaluate(()=>window.undoNoteDelete());await new Promise(r=>setTimeout(r,150));
     assert.equal(await page.$('.note-card[data-id="1"]'),null,'undo never paints a revoked cached note');
   }finally{await page.close();}
 });
-test('touch movement outside a handle scrolls; a handle drop saves without opening the note',async()=>{
+test('touch movement on empty board scrolls; a body drop saves without opening the note',async()=>{
   let page=await mount();try{
     let cdp=await page.createCDPSession();
     const swipe=async(x,y,dx,dy)=>{
@@ -165,10 +171,10 @@ test('touch movement outside a handle scrolls; a handle drop saves without openi
     };
     await swipe(550,600,0,-200);
     assert.ok(await page.$eval('.notes-scroll',el=>el.scrollTop)>0);assert.equal(writes.length,0);
-    // Native momentum from the scroll is unrelated to a fresh handle gesture.
+    // Native momentum from the scroll is unrelated to a fresh card gesture.
     // Use a new view rather than race its compositor with an immediate reset.
     await cdp.detach();await page.close();page=await mount();cdp=await page.createCDPSession();
-    const handle=await page.$('[data-id="1"] [data-board-handle="move"]');const box=await handle.boundingBox();
+    const handle=await page.$('[data-id="1"] .note-card__title');const box=await handle.boundingBox();
     await swipe(box.x+box.width/2,box.y+box.height/2,110,96);
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');assert.equal(writes.length,1);assert.equal(await page.$('.note-modal'),null);
     await cdp.detach();
@@ -193,10 +199,10 @@ test('live repaint preserves focused checklist line and card preview scroll',asy
     assert.equal(await page.evaluate(()=>document.activeElement.dataset.mdLine),'0');assert.equal(await page.$eval('[data-id="1"] .note-card__content',el=>el.scrollTop),80);
   }finally{await page.close();}
 });
-test('a saturated canonical board forces compact projection without any writes',async()=>{
+test('a saturated canonical board forces a reachable list without any writes',async()=>{
   const page=await mount();try{
     notes[1].layout.overflow=true;await page.evaluate(()=>window.dispatchEvent(new Event('focus')));await new Promise(r=>setTimeout(r,150));
-    assert.equal(await page.$eval('#notes-compact-view',el=>el.disabled),true);
-    assert.ok(await page.$('.notes-board--compact'));assert.equal(await page.$$eval('.note-card',els=>els.length),2);assert.equal(writes.length,0);
+    assert.equal(await page.$eval('#notes-grid',el=>el.dataset.boardView),'list');
+    assert.ok(await page.$('#notes-list-density'));assert.equal(await page.$$eval('.note-card',els=>els.length),2);assert.equal(writes.length,0);
   }finally{await page.close();}
 });

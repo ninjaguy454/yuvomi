@@ -1223,7 +1223,7 @@ function buildItemForm({ mode, item = null }) {
             </button>
             <input class="sr-only" id="inv-photo" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="inventory-photo-actions">
-              <button type="button" class="inventory-photo-action inventory-photo-action--danger" id="inv-remove-photo" ${photoData ? '' : 'hidden'}
+              <button type="button" class="inventory-photo-action inventory-photo-action--danger photo-editor__remove" id="inv-remove-photo" ${photoData ? '' : 'hidden'}
                       aria-label="${esc(t('inventory.removePhoto'))}" title="${esc(t('inventory.removePhoto'))}">
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
@@ -1346,6 +1346,7 @@ function buildItemForm({ mode, item = null }) {
       photoData = null;
       if (photoInput) photoInput.value = '';
       renderPhotoPreview();
+      panel.querySelector('#inv-photo-preview')?.focus();
     });
 
     wireBlurValidation(panel);

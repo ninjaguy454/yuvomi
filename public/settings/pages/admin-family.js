@@ -80,7 +80,7 @@ function avatarEditorHtml(user, prefix) {
       </button>
       <input class="sr-only" type="file" id="${prefix}-avatar-file" accept="image/png,image/jpeg,image/webp" />
       <div class="settings-avatar-actions">
-        <button type="button" class="settings-avatar-action settings-avatar-action--danger" id="${prefix}-avatar-remove" ${user?.avatar_data ? '' : 'hidden'} aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
+        <button type="button" class="settings-avatar-action settings-avatar-action--danger photo-editor__remove" id="${prefix}-avatar-remove" ${user?.avatar_data ? '' : 'hidden'} aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
           <i data-lucide="trash-2" aria-hidden="true"></i>
         </button>
       </div>
@@ -659,6 +659,7 @@ async function openEditMemberModal(member, currentUser, users, container) {
           avatar_color: panel.querySelector('#edit-member-avatar-color')?.value || member.avatar_color,
           avatar_data: null,
         });
+        panel.querySelector('#edit-member-avatar-preview')?.focus();
       });
 
       if (caregiverIds !== null) bindUserMultiSelect(panel, 'member_caregivers');

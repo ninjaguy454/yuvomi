@@ -833,12 +833,12 @@
    Household automation
    -------------------------------------------------------- */
 
-.settings-card--automation,
 .automation-help > summary {
   min-height: var(--target-base);
   align-content: center;
   cursor: pointer;
 }
+.settings-card--automation,
 .automation-manager,
 .automation-manager__body,
 .automation-quick-template > span,

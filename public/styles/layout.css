@@ -4951,6 +4951,7 @@ p.field-hint--warn[hidden] {
 /* FAB und page-fab ausblenden wenn virtuelle Tastatur offen (nur Mobile) */
 /* The picture is the single picker target; the pencil is a visual cue only. */
 .photo-editor.photo-editor { position: relative; overflow: visible; }
+.photo-editor__remove[hidden] { display: none; }
 .photo-editor__preview { display: contents; border-radius: inherit; }
 .photo-editor__preview > img { border-radius: inherit; }
 .photo-editor__cue {

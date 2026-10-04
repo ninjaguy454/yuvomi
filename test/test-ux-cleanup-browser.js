@@ -81,6 +81,8 @@ for (const width of [390,1100]) for (const kind of ['profile','birthday','invent
       const name=kind==='profile'?'#profile-display-name':kind==='birthday'?'#bd-name':'#inv-name';
       await page.waitForSelector(preview); await page.evaluate(()=>window.lucide?.createIcons()); await capture(page,`${kind}-${width}`);
       assert.equal(await page.$(`#${prefix}-edit`),null,'no second button opens the same picker');
+      const remove=kind==='profile'?'#profile-avatar-remove':kind==='birthday'?'#bd-remove-photo':'#inv-remove-photo';
+      assert.equal(await page.$eval(remove,n=>n.checkVisibility()),false,'remove is not rendered or focusable without a photo');
       await page.focus(name); await page.keyboard.type(' Draft');
       const before=await page.$eval(name,n=>n.value);
       await page.focus(preview);
@@ -105,6 +107,21 @@ test('workflow title opens the same editable draft and cancellation makes no wri
     await page.evaluate(async()=> (await import('/components/modal.js')).closeModal({force:true}));
     assert.equal(writes.length,0);
   } finally { await page.close(); }
+});
+
+for(const family of [false,true]) test(`${family?'family member':'personal'} photo removal returns focus to the remaining picker`, async()=>{
+  user.avatar_data='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const page=await mount(family?'/settings/pages/admin-family.js':'/settings/pages/personal-account.js',390);
+  try {
+    if(family)await page.click('[data-edit-user="1"]');
+    const prefix=family?'edit-member-avatar':'profile-avatar';
+    await page.waitForSelector(`#${prefix}-remove`);
+    assert.equal(await page.$eval(`#${prefix}-remove`,n=>n.checkVisibility()),true);
+    await page.focus(`#${prefix}-remove`);await page.keyboard.press('Enter');
+    assert.equal(await page.$eval(`#${prefix}-remove`,n=>n.checkVisibility()),false);
+    assert.equal(await page.evaluate(()=>document.activeElement.id),`${prefix}-preview`);
+    assert.equal(writes.length,0,'removing a photo changes only the unsaved parent draft');
+  } finally { user.avatar_data=null;await page.close(); }
 });
 
 test('meal plan name opens the existing read-only view while Edit stays separate', async()=>{

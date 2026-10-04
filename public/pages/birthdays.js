@@ -364,7 +364,7 @@ function openBirthdayModal({ mode, birthday = null }) {
             </button>
             <input class="sr-only" id="bd-photo" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="birthday-modal__photo-actions">
-              <button type="button" class="birthday-modal__photo-action birthday-modal__photo-action--danger" id="bd-remove-photo" ${photoData ? '' : 'hidden'} aria-label="${t('birthdays.removePhoto')}" title="${t('birthdays.removePhoto')}">
+              <button type="button" class="birthday-modal__photo-action birthday-modal__photo-action--danger photo-editor__remove" id="bd-remove-photo" ${photoData ? '' : 'hidden'} aria-label="${t('birthdays.removePhoto')}" title="${t('birthdays.removePhoto')}">
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </div>
@@ -433,6 +433,7 @@ function openBirthdayModal({ mode, birthday = null }) {
         photoData = null;
         if (fileInput) fileInput.value = '';
         renderPreview();
+        panel.querySelector('#birthday-preview')?.focus();
       });
 
       const reminderOffset = panel.querySelector('#bd-reminder-offset');

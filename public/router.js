@@ -4536,8 +4536,14 @@ function rebuildNavigation({ updateLabels = true } = {}) {
         .forEach((el) => el.remove());
       const footer = navSidebar.querySelector(':scope > .nav-sidebar__footer-actions');
       pinnedSidebarEls.forEach((el) => navSidebar.insertBefore(el, footer || null));
-      const sessionAction = navSidebar.querySelector(':scope > .nav-item--device-session');
-      if (sessionAction) navSidebar.insertBefore(sessionAction, pinnedSidebarEls.find(el => el.dataset.route === '/settings') || footer || null);
+      const previousSessionAction = navSidebar.querySelector(':scope > .nav-item--device-session');
+      const restoreSessionFocus = previousSessionAction?.contains(document.activeElement);
+      const sessionAction = deviceSessionAction();
+      previousSessionAction?.remove();
+      if (sessionAction) {
+        navSidebar.insertBefore(sessionAction, pinnedSidebarEls.find(el => el.dataset.route === '/settings') || footer || null);
+        if (restoreSessionFocus) sessionAction.focus({ preventScroll: true });
+      }
     }
     if (window.lucide) window.lucide.createIcons({ el: navSidebar || navSidebarItems });
     requestAnimationFrame(() => {

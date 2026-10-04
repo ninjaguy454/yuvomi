@@ -5428,11 +5428,11 @@
         "familyNameHint": "Wird in der Begrüßung auf dem gemeinsamen Display angezeigt. Für eine allgemeine Begrüßung leer lassen.",
         "familyNameSaved": "Familienname gespeichert.",
         "greetingGeneric": "Hallo Haushalt",
-        "greetingNamed": "Hallo {name}",
-        "greetingFamily": "Hallo Familie {name}",
+        "greetingNamed": "Hallo {{name}}",
+        "greetingFamily": "Hallo Familie {{name}}",
         "signIn": "Vorübergehend anmelden",
         "returnToHousehold": "Zurück zum Haushaltsdisplay",
-        "sessionTitle": "Vorübergehend angemeldet als {name}. {action}",
+        "sessionTitle": "Vorübergehend angemeldet als {{name}}. {{action}}",
         "memberFallback": "Haushaltsmitglied"
     }
 }

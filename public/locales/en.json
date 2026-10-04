@@ -5394,5 +5394,17 @@
         "addedDemand": "New demand",
         "removedDemand": "Removed demand",
         "changedDemand": "Changed demand"
+    },
+    "pairedDisplay": {
+        "familyName": "Family Name",
+        "familyNameHint": "Shown in the shared display greeting. Leave blank for a generic household greeting.",
+        "familyNameSaved": "Family Name saved.",
+        "greetingGeneric": "Hello household",
+        "greetingNamed": "Hello {name}",
+        "greetingFamily": "Hello {name} Family",
+        "signIn": "Sign in temporarily",
+        "returnToHousehold": "Return to household display",
+        "sessionTitle": "Signed in temporarily as {name}. {action}",
+        "memberFallback": "household member"
     }
 }

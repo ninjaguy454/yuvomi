@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.41`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.43`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -190,6 +190,7 @@ const APP_SHELL = [
   '/utils/health-vitals.js',
   '/utils/help.js',
   '/utils/household.js',
+  '/utils/household-greeting.js',
   '/utils/html.js',
   '/utils/ingredient-row.js',
   '/utils/inventory-warranty.js',

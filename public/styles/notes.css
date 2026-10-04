@@ -100,6 +100,13 @@
 .notes-header-actions [aria-pressed="true"], .notes-header-actions .notes-include-locked:has(input:checked) { background: var(--color-surface-3); border-color: var(--color-accent); color: var(--color-accent); }
 .notes-header-actions .notes-include-locked:has(input:focus-visible) { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
 
+@media (max-width: 640px), (max-width: 1023px) and (max-height: 499px) {
+  /* Let the existing title ellipsis yield space to Search at enlarged text sizes.
+   * A filled field needs the same space after focus leaves it. */
+  .notes-toolbar .page-toolbar__title { flex-shrink: 1; }
+  .notes-page .notes-toolbar > .notes-toolbar__search:is(:focus-within, :has(input:not(:placeholder-shown))) { min-width: 120px; }
+}
+
 /* --------------------------------------------------------
  * Masonry-Grid
  * -------------------------------------------------------- */

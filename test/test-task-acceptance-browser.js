@@ -22,10 +22,10 @@ test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>serv
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
 async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width,long=false,theme='light',duplicateNames=false}={}){
   projection=structuredClone(original);writes=[];failure=null;reads=0;requests=[];authResponse=null;
-  if(device){projection.primary_mode='choose';projection.primary_user_id=null;projection.primary_candidates=members;}
+  if(device){projection.primary_mode='choose';projection.primary_user_id=null;projection.primary_candidates=structuredClone(members);}
   if(!children){projection.subtasks=[];projection.subtask_snapshot=[];}
   if(extraStep){projection.subtasks.push({id:12,title:'Plant the herbs',revision:3,allocatable:true,eligible_assignee_ids:[1,2,3]});projection.subtask_snapshot.push({id:12,revision:3});}
-  if(scopedDevice){projection.primary_candidates=members.slice(1);authResponse={csrfToken:'fixture',authContext:'scoped-display',principal:{kind:'device',id:91},device:{id:91},temporary:false,permissions:{principal_kind:'device',modules:{tasks:'read',notes:'none'},capabilities:{'device_tasks.accept_with_helpers':'allow'}}};}
+  if(scopedDevice){projection.primary_candidates=structuredClone(members.slice(1));authResponse={csrfToken:'fixture',authContext:'scoped-display',principal:{kind:'device',id:91},device:{id:91},temporary:false,permissions:{principal_kind:'device',modules:{tasks:'read',notes:'none'},capabilities:{'device_tasks.accept_with_helpers':'allow'}}};}
   projection.can_add_helpers=helpers;
   if(duplicateNames){
     for(const list of [projection.primary_candidates,projection.coassignee_candidates])for(const member of list)if(member.id<3)member.display_name='Alex';

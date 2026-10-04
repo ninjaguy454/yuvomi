@@ -2,6 +2,25 @@ import { op, jsonBody, idParam } from '../helpers.js';
 
 export function authPaths() {
   return {
+    '/api/v1/auth/member-labels': {
+      get: op({
+        summary: 'Household member presentation labels', tag: 'Auth',
+        description: 'Requires a household member session or a valid paired-device credential. Returns only id, display_name, first_name, last_name, username, and computed age (nullable). Paired devices receive only their scoped members. Excludes workers, split guests, birth dates, contact details, photos, roles, and credentials. Scoped API tokens and unauthenticated visitors cannot use this endpoint.',
+        responses: {
+          200: { description: 'Authorized household labels', content: { 'application/json': { schema: {
+            type: 'object', properties: { data: { type: 'array', items: { type: 'object', additionalProperties: false,
+              required: ['id','display_name','first_name','last_name','username','age'], properties: {
+                id: { type: 'integer' }, display_name: { type: 'string' },
+                first_name: { type: 'string', nullable: true }, last_name: { type: 'string', nullable: true },
+                username: { type: 'string' }, age: { type: 'integer', minimum: 0, nullable: true },
+              },
+            } } },
+          } } } },
+          401: { $ref: '#/components/responses/Unauthorized' },
+          403: { description: 'Household membership or paired access is required' },
+        },
+      }),
+    },
     '/api/v1/auth/login': {
       post: op({
         summary: 'Login with username and password',

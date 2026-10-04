@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Das Ueberlappungszeichen: wer ∩ was.
  *
@@ -75,6 +76,6 @@ function whoMarkHtml(user) {
     : esc(initials);
   return `<span class="seal-pair__who"
     style="background-color:${esc(color)};color:${getReadableTextColor(color)}">
-    <span class="sr-only">${esc(name)}</span><span aria-hidden="true">${inner}</span>
+    <span class="sr-only">${esc(memberLabel(user))}</span><span aria-hidden="true">${inner}</span>
   </span>`;
 }

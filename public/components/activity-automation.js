@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { canCapability, isPermAdmin } from '/permissions.js';
 import { api } from '/api.js';
 import { renderGooglePlacesSettings } from '/components/google-places-settings.js';
@@ -244,7 +245,7 @@ export function wireVariableMentions(panel) {
 
 function memberOptions(members, selected = null, emptyLabel = 'Choose…') {
   return `<option value="">${h(emptyLabel)}</option>${members.map((member) =>
-    `<option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${h(member.display_name)}</option>`
+    `<option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${h(memberLabel(member))}</option>`
   ).join('')}`;
 }
 
@@ -460,9 +461,9 @@ function renderQuickPreview(panel, template, preview, subjectUserId, inputs, onC
           <strong>${index + 1}.</strong>
           <div>
             <div>${h(step.title)}</div>
-            <small class="form-hint">Assigned to ${h(step.assigned_to?.display_name || 'Unassigned')}${step.subject_proficiency ? ` · ${h(step.subject_proficiency)}` : ''}</small>
+            <small class="form-hint">Assigned to ${h(memberLabel(step.assigned_to) || 'Unassigned')}${step.subject_proficiency ? ` · ${h(step.subject_proficiency)}` : ''}</small>
             ${step.place ? `<br><small class="form-hint">Place: ${h(step.place.path_label || step.place.name)} · ${h(step.presence_policy || 'ignore')}</small>` : (step.presence_policy && step.presence_policy !== 'ignore' ? `<br><small class="form-hint">Presence: ${h(step.presence_policy)}</small>` : '')}
-            ${step.supervisor ? `<br><small class="form-hint">+ ${h(step.supervisor_title)} → ${h(step.supervisor.display_name)}</small>` : ''}
+            ${step.supervisor ? `<br><small class="form-hint">+ ${h(step.supervisor_title)} → ${h(memberLabel(step.supervisor))}</small>` : ''}
             ${step.depends_on?.length ? `<br><small class="form-hint">After: ${h(step.depends_on.join(', '))}</small>` : ''}
           </div>
         </div>`).join('')}
@@ -951,7 +952,7 @@ function openTripForm(trip, context, manager) {
   const content = `<form id="automation-trip-form">
     ${inputRow('Trip name', `<input class="input" name="name" required maxlength="120" value="${h(trip?.name || '')}" placeholder="Summer vacation">`)}
     <div class="automation-workflow-condition">${inputRow('Trip type', `<select class="input" name="trip_type">${[['vacation','Vacation'],['business','Business'],['family','Family visit'],['road_trip','Road trip'],['other','Other']].map(([value,label]) => `<option value="${value}" ${trip?.trip_type === value ? 'selected' : ''}>${label}</option>`).join('')}</select>`)}${inputRow('Status', `<select class="input" name="status">${['planning','active','completed','cancelled'].map((value) => `<option value="${value}" ${trip?.status === value ? 'selected' : ''}>${value}</option>`).join('')}</select>`)}</div>
-    <fieldset class="automation-fieldset"><legend class="label">Travelers</legend>${members.map((member) => `<label class="automation-check-row"><input type="checkbox" name="participant_id" value="${member.id}" ${selected.has(Number(member.id)) ? 'checked' : ''}>${h(member.display_name)}</label>`).join('')}</fieldset>
+    <fieldset class="automation-fieldset"><legend class="label">Travelers</legend>${members.map((member) => `<label class="automation-check-row"><input type="checkbox" name="participant_id" value="${member.id}" ${selected.has(Number(member.id)) ? 'checked' : ''}>${h(memberLabel(member))}</label>`).join('')}</fieldset>
     <div class="automation-workflow-condition">${inputRow('Destination Place', `<select class="input" name="destination_place_id">${placeOptions(places, trip?.destination_place_id, 'No saved destination')}</select>`)}${inputRow('Lodging Place', `<select class="input" name="lodging_place_id">${placeOptions(places, trip?.lodging_place_id, 'No saved lodging')}</select>`)}</div>
     <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at, context.timezone))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at, context.timezone))}">`)}</div>
     ${inputRow('Notes', `<textarea class="input" name="notes" rows="3">${h(trip?.notes || '')}</textarea>`)}
@@ -1062,12 +1063,12 @@ function planningTimeRange(start, end, timezone) {
 
 function currentLocationHTML(snapshots) {
   return snapshots.map(({ member, value, error }) => {
-    if (error) return `<div class="automation-presence-card"><strong>${h(member.display_name || member.username)}</strong><span>Current location unavailable</span><small>${h(error)}</small></div>`;
+    if (error) return `<div class="automation-presence-card"><strong>${h(memberLabel(member) || member.username)}</strong><span>Current location unavailable</span><small>${h(error)}</small></div>`;
     const presence = value?.current_presence;
     const place = presence?.place;
     // The legacy top-level effective signal can be an advisory Calendar event.
     const availability = value?.windows?.[0];
-    return `<div class="automation-presence-card"><strong>${h(member.display_name || member.username)}</strong><span>Expected location: ${h(place?.path_label || place?.name || 'Unknown')}</span><small>${h(presence?.reason || 'No current location signal')}</small><small>Source: ${h(presence?.source || 'None')}${presence?.at ? ` · checked ${h(planningTime(presence.at, value?.timezone))}` : ''}</small><small>Availability now: ${h(availability?.effective?.custom_state || availability?.state || 'unknown')}</small></div>`;
+    return `<div class="automation-presence-card"><strong>${h(memberLabel(member) || member.username)}</strong><span>Expected location: ${h(place?.path_label || place?.name || 'Unknown')}</span><small>${h(presence?.reason || 'No current location signal')}</small><small>Source: ${h(presence?.source || 'None')}${presence?.at ? ` · checked ${h(planningTime(presence.at, value?.timezone))}` : ''}</small><small>Availability now: ${h(availability?.effective?.custom_state || availability?.state || 'unknown')}</small></div>`;
   }).join('');
 }
 
@@ -1102,9 +1103,9 @@ export async function renderAvailabilityManager(body, manager) {
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Current household location</strong><span class="form-hint">Inferred from current plans</span></div>
     <div class="automation-presence-grid" data-current-location>${currentLocationHTML(snapshots)}</div>
     ${administrator ? `<div class="automation-manager__header automation-workflow-step__header--section"><strong>Weekly routines</strong><span></span></div>
-    <div class="automation-list">${rules.map((rule) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(rule.display_name)} · ${h(rule.name)}</strong><br><small class="form-hint">${rule.weekdays.map((day) => WEEKDAYS.find((item) => item[1] === day)?.[0]).filter(Boolean).join(', ')} · ${h(rule.start_time)}–${h(rule.end_time)} · ${h(rule.custom_state || rule.state)}${rule.place_name ? ` at ${h(rule.place_name)}` : ''}${rule.active ? '' : ' · inactive'}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-rule="${rule.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-rule="${rule.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No recurring availability rules yet.</p>'}</div>
+    <div class="automation-list">${rules.map((rule) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(memberLabel({ id: rule.user_id, display_name: rule.display_name }))} · ${h(rule.name)}</strong><br><small class="form-hint">${rule.weekdays.map((day) => WEEKDAYS.find((item) => item[1] === day)?.[0]).filter(Boolean).join(', ')} · ${h(rule.start_time)}–${h(rule.end_time)} · ${h(rule.custom_state || rule.state)}${rule.place_name ? ` at ${h(rule.place_name)}` : ''}${rule.active ? '' : ' · inactive'}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-rule="${rule.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-rule="${rule.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No recurring availability rules yet.</p>'}</div>
     <div class="automation-manager__header automation-workflow-step__header--section"><strong>Dated exceptions and manual overrides</strong><button type="button" class="btn btn--secondary btn--sm" id="automation-add-period"><i data-lucide="calendar-plus" class="icon-md"></i>Add dated period</button></div>
-    <div class="automation-list">${periods.map((period) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(period.display_name)} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>` : '<p class="form-hint">Household administrators maintain weekly routines, Trips and dated Availability exceptions. You can maintain your own alternating and rotating routines below.</p>'}
+    <div class="automation-list">${periods.map((period) => `<div class="list-row automation-list-row"><div class="automation-list-row__copy"><strong>${h(memberLabel({ id: period.user_id, display_name: period.display_name }))} · ${h(period.custom_state || period.state)}</strong><br><small class="form-hint">${h(period.source)} · ${h(period.starts_at)}${period.ends_at ? ` → ${h(period.ends_at)}` : ' · until changed'}${period.place_name ? ` · ${h(period.place_name)}` : ''}</small></div><div class="automation-list-row__actions"><button type="button" class="btn btn--ghost btn--sm" data-edit-period="${period.id}">Edit</button><button type="button" class="btn btn--danger-ghost btn--sm" data-delete-period="${period.id}">Delete</button></div></div>`).join('') || '<p class="form-hint">No dated exceptions or manual overrides yet.</p>'}</div>` : '<p class="form-hint">Household administrators maintain weekly routines, Trips and dated Availability exceptions. You can maintain your own alternating and rotating routines below.</p>'}
     <section data-availability-routines></section>`);
   let disposed = false;
   let disposeRoutines = null;

@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Ordered household-member selector for round-robin tasks.
  *
@@ -19,8 +20,8 @@ export function renderUserRotationOrder(allUsers, selectedIds = []) {
           <label class="list-row" data-rotation-user="${user.id}" style="display:grid;grid-template-columns:4.5rem 1fr;gap:var(--space-3);align-items:center">
             <input class="input" type="number" inputmode="numeric" min="1" max="${max}"
                    data-rotation-position value="${order.get(Number(user.id)) ?? ''}"
-                   aria-label="Rotation position for ${esc(user.display_name)}">
-            <span>${esc(user.display_name)}</span>
+                   aria-label="Rotation position for ${esc(memberLabel(user))}">
+            <span>${esc(memberLabel(user))}</span>
           </label>`).join('')}
       </div>
       <p class="task-field-hint">Enter 1, 2, 3… for the members who should rotate. The first member is assigned the current occurrence.</p>

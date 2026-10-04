@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Essensplan (Meals)
  * Zweck: Wochenansicht mit Mahlzeit-CRUD, Zutaten-Verwaltung und Einkaufslisten-Integration
@@ -503,7 +504,7 @@ export async function render(container, { user }) {
           <label class="meal-member-filter" for="meal-member-select">
             <span>${mealText('meals.memberLabel', 'Person')}</span>
             <select class="form-input" id="meal-member-select" aria-label="${mealText('meals.memberLabel', 'Person')}">
-              <option value="${state.selectedMemberId || ''}">${esc(user?.display_name || user?.username || mealText('meals.meLabel', 'Me'))}</option>
+              <option value="${state.selectedMemberId || ''}">${esc(memberLabel(user) || user?.username || mealText('meals.meLabel', 'Me'))}</option>
             </select>
           </label>
           <label class="meal-context-filter" for="meal-context-select">
@@ -685,8 +686,8 @@ function mealActingForNotice(model = activeWeekModel()) {
     canAct,
     icon: canAct ? 'user-round-cog' : 'eye',
     message: canAct
-      ? mealText('meals.actingFor', "You're helping {{name}} pick their meal.", { name: member.display_name })
-      : mealText('meals.viewingFor', 'Viewing {{name}}. Choices are read-only.', { name: member.display_name }),
+      ? mealText('meals.actingFor', "You're helping {{name}} pick their meal.", { name: memberLabel(member) })
+      : mealText('meals.viewingFor', 'Viewing {{name}}. Choices are read-only.', { name: memberLabel(member) }),
   };
 }
 
@@ -773,7 +774,7 @@ function renderWeekExperienceHeader() {
     members.forEach((member) => {
       const option = document.createElement('option');
       option.value = String(member.id);
-      option.textContent = member.display_name || member.name || mealText('meals.householdMember', 'Household member');
+      option.textContent = memberLabel(member) || member.name || mealText('meals.householdMember', 'Household member');
       option.selected = Number(member.id) === Number(state.selectedMemberId);
       memberSelect.appendChild(option);
     });
@@ -867,7 +868,7 @@ function mealTimeLabel(occurrence) {
 function renderPersonList(people) {
   if (!people?.length) return `<span class="meal-person-list__empty">${mealText('meals.noPeople', 'No one yet')}</span>`;
   return `<ul class="meal-person-list">${people.map((person) => `
-    <li>${person.avatar_data ? `<img src="${esc(person.avatar_data)}" alt="">` : `<span class="meal-person-list__avatar" aria-hidden="true">${esc((person.display_name || '?').slice(0, 1))}</span>`}<span>${esc(person.display_name || mealText('meals.householdMember', 'Household member'))}</span></li>
+    <li>${person.avatar_data ? `<img src="${esc(person.avatar_data)}" alt="">` : `<span class="meal-person-list__avatar" aria-hidden="true">${esc((person.display_name || '?').slice(0, 1))}</span>`}<span>${esc(memberLabel(person) || mealText('meals.householdMember', 'Household member'))}</span></li>
   `).join('')}</ul>`;
 }
 
@@ -902,8 +903,8 @@ function renderCookingSummary(occurrence) {
     return `<span class="meal-detail-value meal-detail-value--muted">${mealText('meals.notAssigned', 'Not assigned')}</span>`;
   }
   return `<span class="meal-detail-value">${[
-    ...cooks.map((person) => `${person.display_name} (${mealText('meals.cook', 'cook')})`),
-    ...supervisors.map((person) => `${person.display_name} (${mealText('meals.supervisor', 'supervision')})`),
+    ...cooks.map((person) => `${memberLabel(person)} (${mealText('meals.cook', 'cook')})`),
+    ...supervisors.map((person) => `${memberLabel(person)} (${mealText('meals.supervisor', 'supervision')})`),
   ].map(esc).join(', ')}</span>`;
 }
 
@@ -962,7 +963,7 @@ function renderPublishedHouseholdMenu(occurrence, {
   const items = publishedMenuItems(occurrence);
   const entrees = items.filter((item) => item.kind === 'entree');
   const sides = items.filter((item) => item.kind === 'side');
-  const chooserName = occurrence?.chooser?.display_name
+  const chooserName = memberLabel(occurrence?.chooser)
     || occurrence?.chooser?.username
     || mealText('meals.chooserFallbackName', 'The chooser');
   const handoffPending = occurrenceHasActiveChooser(occurrence)
@@ -1158,7 +1159,7 @@ function renderChoiceOccurrenceDetails(occurrence, model, { includeActingNotice 
     ${renderMealRotationNotice(occurrence)}
     ${occurrence.unavailable_reason ? `<div class="meal-unavailable"><i data-lucide="calendar-off" class="icon-sm" aria-hidden="true"></i><span>${esc(occurrence.unavailable_reason)}</span></div>` : ''}
     <dl class="meal-role-summary">
-      <div><dt>${mealText('meals.chooserResponsibility', "Who's choosing?")}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
+      <div><dt>${mealText('meals.chooserResponsibility', "Who's choosing?")}</dt><dd><span>${esc(memberLabel(occurrence.chooser) || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
       <div><dt>${mealText('meals.participationTitle', 'Participation')}</dt><dd>${esc(participationLabel(decision?.participation))}</dd></div>
       <div><dt>Portions</dt><dd>${esc(formatPortions(Number(occurrence.planned_portions) || 0))} requested${(occurrence.dish_portions || []).map((dish) => `<small>${esc(dish.title)} · cook ${esc(formatPortions(dish.cook_portions))}</small>`).join('')}</dd></div>
       ${decision?.choice_kind && decision.choice_kind !== 'household' ? `<div><dt>Your meal</dt><dd>${chosen.length ? chosen.map((item) => `<span class="meal-selected-food meal-selected-food--${esc(item.kind)}">${esc(item.label)}</span>`).join('') : `<span class="meal-detail-value--muted">${esc(title || mealText('meals.noMealSelected', 'No meal selected yet'))}</span>`}</dd></div>` : ''}
@@ -1230,7 +1231,7 @@ function statusOccurrenceOptions(occurrence) {
 function renderStatusOccurrenceDetails(occurrence) {
   const options = statusOccurrenceOptions(occurrence);
   return `${renderMealRotationNotice(occurrence)}<dl class="meal-role-summary">
-      <div><dt>${mealText('meals.chooserResponsibility', 'Chooser responsibility')}</dt><dd><span>${esc(occurrence.chooser?.display_name || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
+      <div><dt>${mealText('meals.chooserResponsibility', 'Chooser responsibility')}</dt><dd><span>${esc(memberLabel(occurrence.chooser) || mealText('meals.unassigned', 'Unassigned'))}</span><small>${esc(chooserStatusLabel(occurrenceHasActiveChooser(occurrence) ? occurrence.chooser_status : 'needs_fallback'))}</small></dd></div>
       <div><dt>${mealText('meals.cookingResponsibility', 'Cooking and supervision')}</dt><dd>${renderCookingSummary(occurrence)}</dd></div>
     </dl>
     ${renderChooserRepairAction(occurrence)}
@@ -1574,7 +1575,7 @@ function renderTimelineGrid(grid) {
           : mealDisplayTitle(meal, mealText('meals.pending', 'Pending'));
         const mealId = Number(meal.meal?.id || meal.id);
         const canEdit = state.mode === 'choices' && mealId > 0;
-        const roles = (meal.participants || []).map((participant) => `${participant.display_name} · ${participant.role}`).join(', ');
+        const roles = (meal.participants || []).map((participant) => `${memberLabel(participant)} · ${participant.role}`).join(', ');
         return `<button type="button" class="meal-timeline__item" data-action="edit-meal" data-meal-id="${mealId}" ${canEdit ? '' : 'disabled aria-disabled="true"'}>
           <span class="meal-timeline__time">${esc(time)}</span>
           <span class="meal-timeline__copy"><strong>${esc(title)}</strong><small>${esc(typeLabels[meal.meal_type] || meal.meal_type)}${roles ? ` · ${esc(roles)}` : ''}</small></span>
@@ -1730,7 +1731,7 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
     const mealTime = meal.scheduled_time || meal.preferred_time || '';
     const roleSummary = (meal.participants || [])
       .filter((participant) => participant.role === 'chooser' || participant.role === 'cook')
-      .map((participant) => `${participant.display_name} · ${participant.role}`)
+      .map((participant) => `${memberLabel(participant)} · ${participant.role}`)
       .join(', ');
     const mealPlace = (state.planning.places || []).find((place) => Number(place.id) === Number(meal.place_id));
     const activeConflicts = (meal.calendar_conflicts || []).filter((conflict) => conflict.active);
@@ -1800,14 +1801,14 @@ function renderSlot(date, type, mealsForDay, dayCol, typeRow) {
 function openConflictModal(meal) {
   const conflicts = (meal.calendar_conflicts || []).filter((conflict) => conflict.active);
   const members = state.planning.members || [];
-  const content = `<div class="meal-conflicts"><p class="form-hint">These overlaps are advisory. Resolve each affected person independently; changing a Calendar title or description will not reopen a resolved conflict.</p>${conflicts.map((conflict) => `<form class="meal-conflict" data-conflict-id="${conflict.id}"><strong>${esc(conflict.user_name)} • ${esc(conflict.calendar_title || 'Calendar event')}</strong><p class="form-hint">${esc(conflict.occurrence_start)} → ${esc(conflict.occurrence_end || '')}</p><select class="form-input" name="resolution"><option value="participating">Still participating</option><option value="not_participating">Not participating</option><option value="time_changed">Move meal within its window</option><option value="backup_assigned">Assign a backup participant</option><option value="personal_alternative">Create a personal alternative</option><option value="keep_preferred_time">Keep preferred time</option><option value="keep_window">Keep acceptable window</option><option value="ignore">Ignore this conflict</option></select><div data-conflict-extra style="margin-top:var(--space-2)"></div><button class="btn btn--primary btn--sm" type="submit">Save resolution</button></form>`).join('')}</div>`;
+  const content = `<div class="meal-conflicts"><p class="form-hint">These overlaps are advisory. Resolve each affected person independently; changing a Calendar title or description will not reopen a resolved conflict.</p>${conflicts.map((conflict) => `<form class="meal-conflict" data-conflict-id="${conflict.id}"><strong>${esc(memberLabel({ id: conflict.user_id, display_name: conflict.user_name }))} • ${esc(conflict.calendar_title || 'Calendar event')}</strong><p class="form-hint">${esc(conflict.occurrence_start)} → ${esc(conflict.occurrence_end || '')}</p><select class="form-input" name="resolution"><option value="participating">Still participating</option><option value="not_participating">Not participating</option><option value="time_changed">Move meal within its window</option><option value="backup_assigned">Assign a backup participant</option><option value="personal_alternative">Create a personal alternative</option><option value="keep_preferred_time">Keep preferred time</option><option value="keep_window">Keep acceptable window</option><option value="ignore">Ignore this conflict</option></select><div data-conflict-extra style="margin-top:var(--space-2)"></div><button class="btn btn--primary btn--sm" type="submit">Save resolution</button></form>`).join('')}</div>`;
   openSharedModal({ title: `Calendar conflicts • ${meal.title}`, content, size: 'lg', onSave(panel) {
     panel.querySelectorAll('[data-conflict-id]').forEach((form) => {
       const select = form.querySelector('[name="resolution"]'); const extra = form.querySelector('[data-conflict-extra]');
       const renderExtra = () => {
         extra.replaceChildren();
         if (select.value === 'time_changed') extra.insertAdjacentHTML('beforeend', `<label class="label">New meal time<input class="form-input" name="scheduled_time" type="time" required></label>`);
-        else if (select.value === 'backup_assigned') extra.insertAdjacentHTML('beforeend', `<label class="label">Backup person<select class="form-input" name="user_id">${members.map((member) => `<option value="${member.id}">${esc(member.display_name)}</option>`).join('')}</select></label>`);
+        else if (select.value === 'backup_assigned') extra.insertAdjacentHTML('beforeend', `<label class="label">Backup person<select class="form-input" name="user_id">${members.map((member) => `<option value="${member.id}">${esc(memberLabel(member))}</option>`).join('')}</select></label>`);
         else if (select.value === 'personal_alternative') extra.insertAdjacentHTML('beforeend', `<label class="label">Alternative meal<input class="form-input" name="title" required placeholder="Personal meal"></label><label class="label">Notes<textarea class="form-input" name="notes" rows="2"></textarea></label>`);
       };
       select.addEventListener('change', renderExtra); renderExtra();
@@ -1887,7 +1888,7 @@ function openMealExecutionDetail(execution) {
     <p class="form-hint">${esc(t('meals.executionRevision', { revision: execution?.revision || 1, status: execution?.status || 'planned' }))}</p>
     <div class="meal-execution-detail__tasks">${tasks.map((task) => `<button type="button" class="meal-execution-task" data-task-id="${task.task_id || ''}" ${task.task_id ? '' : 'disabled'}>
       <i data-lucide="${task.task_status === 'done' ? 'circle-check-big' : 'circle'}" class="icon-sm" aria-hidden="true"></i>
-      <span><strong>${esc(roleLabels[task.role] || task.role)}</strong><small>${esc(task.title_snapshot)} · ${esc(task.due_date_snapshot)} ${esc(task.due_time_snapshot || '')}${task.assigned_name ? ` · ${esc(task.assigned_name)}` : ''}</small></span>
+      <span><strong>${esc(roleLabels[task.role] || task.role)}</strong><small>${esc(task.title_snapshot)} · ${esc(task.due_date_snapshot)} ${esc(task.due_time_snapshot || '')}${task.assigned_name ? ` · ${esc(memberLabel({ id: task.assigned_to, display_name: task.assigned_name }))}` : ''}</small></span>
     </button>`).join('') || `<p class="form-hint">${esc(t('meals.noExecutionTasks'))}</p>`}</div>
     <div class="modal-panel__footer modal-panel__footer--plain"><button type="button" class="btn btn--secondary" data-open-pantry>${esc(t('meals.openPantry'))}</button><button type="button" class="btn btn--primary" data-open-tasks>${esc(t('meals.openTasks'))}</button></div>
   </div>`;
@@ -2132,7 +2133,7 @@ async function loadMealPlans() {
 function planMemberOptions(selected, emptyLabel = null) {
   const members = state.weekModel?.members?.length ? state.weekModel.members : (state.planning.members || []);
   return `<option value="">${esc(emptyLabel || mealText('meals.chooseMember', 'Choose a member'))}</option>${members.map((member) => `
-    <option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${esc(member.display_name || member.name)}</option>
+    <option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${esc(memberLabel(member) || member.name)}</option>
   `).join('')}`;
 }
 
@@ -2436,7 +2437,7 @@ function renderMealPlanRule(rule = {}) {
           </div></section>
         </div>
         <label class="meal-inline-choice meal-plan-rule__presence"><input type="checkbox" name="rule_presence_required" ${rule.presence_required ? 'checked' : ''}><span>${mealText('meals.presenceRequired', 'Only assign people who are available in this context')}</span></label>
-        <details class="meal-plan-rule__participants" data-participant-override ${allParticipants ? '' : 'open'}><summary><span><strong>${mealText('meals.manualParticipants', 'Manual participant override')}</strong><small>${mealText('meals.manualParticipantsHint', 'By default, every household member participates and new members are included automatically.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><label class="meal-inline-choice meal-plan-rule__all-participants"><input type="checkbox" name="rule_all_participants" ${allParticipants ? 'checked' : ''}><span>${mealText('meals.allHouseholdMembers', 'All household members')}</span></label><div data-plan-participant-list ${allParticipants ? 'hidden' : ''}>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="rule_participant" value="${member.id}" ${participants.has(Number(member.id)) ? 'checked' : ''} ${allParticipants ? 'disabled' : ''}><span>${esc(member.display_name || member.name)}</span></label>`).join('') || `<span class="form-hint">${mealText('meals.noMembers', 'No household members found.')}</span>`}</div></div></details>
+        <details class="meal-plan-rule__participants" data-participant-override ${allParticipants ? '' : 'open'}><summary><span><strong>${mealText('meals.manualParticipants', 'Manual participant override')}</strong><small>${mealText('meals.manualParticipantsHint', 'By default, every household member participates and new members are included automatically.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><label class="meal-inline-choice meal-plan-rule__all-participants"><input type="checkbox" name="rule_all_participants" ${allParticipants ? 'checked' : ''}><span>${mealText('meals.allHouseholdMembers', 'All household members')}</span></label><div data-plan-participant-list ${allParticipants ? 'hidden' : ''}>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="rule_participant" value="${member.id}" ${participants.has(Number(member.id)) ? 'checked' : ''} ${allParticipants ? 'disabled' : ''}><span>${esc(memberLabel(member) || member.name)}</span></label>`).join('') || `<span class="form-hint">${mealText('meals.noMembers', 'No household members found.')}</span>`}</div></div></details>
       </div></details>
       <details class="meal-plan-rule__section" data-rule-section="what" open><summary><span><strong>${mealText('meals.sectionWhat', 'What')}</strong></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__section-body">
         <p class="form-hint">${mealText('meals.executionTasksPlainHint', 'These are real household Tasks. Each one follows the Cook, Supervisor, chooser, or eligible round-robin responsibility selected below.')}</p>
@@ -2793,7 +2794,7 @@ async function openMealDefaultSettingsModal() {
       <p class="form-hint">${mealText('meals.chooserFailsafeHint', 'After a primary chooser and every fixed backup decline or become unavailable, use this final safety net.')}</p>
       <label class="label"><span>${mealText('meals.finalFailsafe', 'Final failsafe')}</span><select class="form-input" name="chooser_terminal_strategy"><option value="personal_choice" ${terminalStrategy === 'personal_choice' ? 'selected' : ''}>${mealText('meals.policyPersonalChoice', 'Personal Choice')}</option><option value="eligible_round_robin" ${terminalStrategy === 'eligible_round_robin' ? 'selected' : ''}>${mealText('meals.eligibleRoundRobin', 'Eligible round robin')}</option><option value="fixed" ${terminalStrategy === 'fixed' ? 'selected' : ''}>${mealText('meals.fixedLastResort', 'Fixed last-resort person')}</option></select></label>
       <label class="label" data-terminal-fixed ${terminalStrategy === 'fixed' ? '' : 'hidden'}><span>${mealText('meals.lastResortPerson', 'Last-resort person')}</span><select class="form-input" name="chooser_terminal_user_id">${planMemberOptions(defaults.chooser_terminal_user_id)}</select><small class="form-hint">${mealText('meals.lastResortPersonHint', 'This person is prompted only after every normal option is exhausted, even if they previously skipped.')}</small></label>
-      <details class="meal-plan-rule__participants" data-terminal-rotation ${terminalStrategy === 'eligible_round_robin' ? 'open' : 'hidden'}><summary><span><strong>${mealText('meals.eligibleRotationOverride', 'Eligible rotation override')}</strong><small>${mealText('meals.eligibleRotationOverrideHint', 'Leave everyone unchecked to use all eligible household members.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><div data-plan-participant-list>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="chooser_round_robin_user_id" value="${member.id}" ${terminalRotation.has(Number(member.id)) ? 'checked' : ''}><span>${esc(member.display_name || member.name)}</span></label>`).join('')}</div></div></details>
+      <details class="meal-plan-rule__participants" data-terminal-rotation ${terminalStrategy === 'eligible_round_robin' ? 'open' : 'hidden'}><summary><span><strong>${mealText('meals.eligibleRotationOverride', 'Eligible rotation override')}</strong><small>${mealText('meals.eligibleRotationOverrideHint', 'Leave everyone unchecked to use all eligible household members.')}</small></span><i data-lucide="chevron-down" class="icon-sm" aria-hidden="true"></i></summary><div class="meal-plan-rule__participants-body"><div data-plan-participant-list>${members.map((member) => `<label class="meal-inline-choice"><input type="checkbox" name="chooser_round_robin_user_id" value="${member.id}" ${terminalRotation.has(Number(member.id)) ? 'checked' : ''}><span>${esc(memberLabel(member) || member.name)}</span></label>`).join('')}</div></div></details>
     </section>
     <section>
       <h3>${esc(t('meals.executionTaskRoles'))}</h3>
@@ -2974,7 +2975,7 @@ function openMealScheduleModal() {
   const slotByKey = new Map((state.planning.slots || []).map((row) => [`${row.weekday}:${row.meal_type}`, row]));
   const members = state.planning.members || [];
   const places = state.planning.places || [];
-  const memberOptions = (selected) => `<option value="">Choose a member</option>${members.map((member) => `<option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${esc(member.display_name)}</option>`).join('')}`;
+  const memberOptions = (selected) => `<option value="">Choose a member</option>${members.map((member) => `<option value="${member.id}" ${Number(selected) === Number(member.id) ? 'selected' : ''}>${esc(memberLabel(member))}</option>`).join('')}`;
   const placeOptions = (selected) => `<option value="">No specific Place</option>${places.map((place) => `<option value="${place.id}" ${Number(selected) === Number(place.id) ? 'selected' : ''} ${!place.active && Number(selected) !== Number(place.id) ? 'disabled' : ''}>${esc(place.name)}${place.active ? '' : ' (inactive)'}</option>`).join('')}`;
   const timingRows = MEAL_TYPES().map((type) => {
     const timing = timingByType.get(type.key) || {};
@@ -2999,7 +3000,7 @@ function openMealScheduleModal() {
             <option value="personal_choice" ${slot.policy === 'personal_choice' ? 'selected' : ''}>Each person chooses</option>
           </select></label>
           <label data-fixed-chooser>Chooser<select class="form-input" data-schedule-fixed>${memberOptions(slot.fixed_user_id)}</select></label>
-          <fieldset><legend>Participants</legend>${members.map((member) => `<label class="meal-schedule-person"><input type="checkbox" data-schedule-participant value="${member.id}" ${selectedParticipants.has(Number(member.id)) ? 'checked' : ''}> ${esc(member.display_name)}</label>`).join('') || '<small>No household members found.</small>'}</fieldset>
+          <fieldset><legend>Participants</legend>${members.map((member) => `<label class="meal-schedule-person"><input type="checkbox" data-schedule-participant value="${member.id}" ${selectedParticipants.has(Number(member.id)) ? 'checked' : ''}> ${esc(memberLabel(member))}</label>`).join('') || '<small>No household members found.</small>'}</fieldset>
           <label>Fallback chooser<select class="form-input" data-schedule-fallback>${memberOptions(slot.fallback_user_id)}</select></label>
           <label>Cook<select class="form-input" data-schedule-cook>${memberOptions(slot.cook_user_id)}</select></label>
           <label>Supervisor<select class="form-input" data-schedule-supervisor>${memberOptions(slot.supervisor_user_id)}</select></label>
@@ -4587,7 +4588,7 @@ function buildModalContent({ mode, date, mealType, meal, planningContextId = nul
   ].map(([value, label]) => `<option value="${value}" ${(meal?.scope || 'household') === value ? 'selected' : ''}>${label}</option>`).join('');
   const mealRoles = ['participant', 'chooser', 'cook', 'supervisor'];
   const participantRows = (state.planning.members || []).map((member) => {
-    return `<div class="meal-role-row" data-meal-role-user="${member.id}"><strong>${esc(member.display_name)}</strong>${mealRoles.map((role) => {
+    return `<div class="meal-role-row" data-meal-role-user="${member.id}"><strong>${esc(memberLabel(member))}</strong>${mealRoles.map((role) => {
       const roleState = mealEditorRoleState(meal?.participants || [], member.id, role);
       return `<label><input type="checkbox" data-meal-role="${role}" data-meal-role-present="${roleState.present}" data-meal-role-status="${esc(roleState.status)}" data-meal-role-touched="false" ${roleState.checked ? 'checked' : ''}> ${role[0].toUpperCase()}${role.slice(1)}</label>`;
     }).join('')}</div>`;

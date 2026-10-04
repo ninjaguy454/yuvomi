@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { householdGreeting } from '/utils/household-greeting.js';
 /**
  * Modul: Dashboard
@@ -421,10 +422,10 @@ function firstName(displayName) {
   return String(displayName ?? '').trim().split(/\s+/)[0] || String(displayName ?? '');
 }
 
-function greeting(displayName, familyName = '') {
+function greeting(displayName, familyName = '', member = null) {
   if (isDevicePrincipal()) return esc(householdGreeting(familyName));
   const h = nowFields().hour;
-  const name = esc(firstName(displayName));
+  const name = esc(memberLabel(member || { display_name: displayName }, [], { format: person => firstName(person.display_name) }));
   if (h >= 5 && h < 12) return t('dashboard.greetingMorning', { name });
   if (h >= 12 && h < 18) return t('dashboard.greetingDay',    { name });
   return t('dashboard.greetingEvening', { name });
@@ -1394,7 +1395,7 @@ function renderFamilyWidget(users, data) {
           ${u.avatar_data ? `<img src="${esc(u.avatar_data)}" alt="" loading="lazy">` : esc(initials(u.display_name))}
         </span>
         <span class="family-member__body">
-          <span class="family-member__name">${esc(u.display_name)}</span>
+          <span class="family-member__name">${esc(memberLabel(u))}</span>
           <span class="family-member__status${free ? ' family-member__status--free' : ''}">${status}</span>
         </span>
       </div>`;
@@ -1654,7 +1655,7 @@ function metricTileFor(id, data, currency) {
       return {
         id, route, icon: widgetIcon('rewards'), label: t('nav.rewards'),
         value: t('dashboard.metricPoints', { count: leader.balance ?? 0 }),
-        note: leader.display_name,
+        note: memberLabel(leader),
       };
     }
     case 'health': {
@@ -1805,7 +1806,7 @@ function renderRewardsWidget(rewards) {
       <div class="rewards-widget-row${i === 0 ? ' rewards-widget-row--leader' : ''}" data-route="/rewards" role="button" tabindex="0">
         <span class="rewards-widget-row__rank" aria-hidden="true">${i + 1}</span>
         <span class="rewards-widget-row__avatar" style="background:${esc(color)};color:${getReadableTextColor(color)}">${avatarInner}</span>
-        <span class="rewards-widget-row__name">${esc(m.display_name)}</span>
+        <span class="rewards-widget-row__name">${esc(memberLabel(m))}</span>
         <span class="rewards-widget-row__points"><strong>${esc(formatPoints(m.balance))}</strong> ${esc(t('rewards.pointsUnit'))}</span>
       </div>
     `;
@@ -2292,7 +2293,7 @@ function renderDashboardOverview(user, editing = false, weather = null, updatedA
       <div class="dashboard-overview__header${editing ? ' dashboard-overview__header--editing' : ''}">
         <div class="dashboard-overview__heading">
           <span class="dashboard-overview__date">${dateLabel}</span>
-          <h2 class="dashboard-overview__title dashboard-overview__title--${greetingPeriod()}">${greeting(user.display_name, scope.familyName)}</h2>
+          <h2 class="dashboard-overview__title dashboard-overview__title--${greetingPeriod()}">${greeting(user.display_name, scope.familyName, user)}</h2>
           ${mastheadWeatherHtml(weather)}
         </div>
         <div class="dashboard-overview__tools">
@@ -3302,7 +3303,7 @@ function renderWallWho(data, model) {
                 <span class="sr-only">${esc(t('dashboard.wallWhoCount', { count }))}</span>
               </span>
             </span>
-            <span class="wall-who__name">${esc(firstName(u.display_name))}</span>
+            <span class="wall-who__name">${esc(memberLabel(u, [], { format: person => firstName(person.display_name) }))}</span>
           </li>`;
       }).join('')}</ul>${onDuty.length > shown.length
         ? `<p class="wall-who__more">${esc(t('dashboard.shoppingMore', { count: onDuty.length - shown.length }))}</p>`
@@ -4359,7 +4360,7 @@ export async function render(container, { user }) {
     const titleEl = container.querySelector('.dashboard-overview__title');
     if (titleEl) {
       titleEl.replaceChildren();
-      titleEl.insertAdjacentHTML('afterbegin', greeting(user.display_name, familyName));
+      titleEl.insertAdjacentHTML('afterbegin', greeting(user.display_name, familyName, user));
       // Gradient-Periode mit-resyncen: sonst aktualisieren sich über Mittag/18 Uhr
       // die Worte, aber der Tageszeit-Gradient bliebe auf dem alten Fenster stehen.
       titleEl.classList.remove(

@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Module: Family Documents
  * Purpose: Grid/list document management with local uploads and member visibility.
@@ -1481,7 +1482,7 @@ function memberOptions(selected = []) {
   return state.members.map((member) => `
     <label class="document-member-option">
       <input type="checkbox" value="${member.id}" ${selectedSet.has(String(member.id)) ? 'checked' : ''}>
-      <span>${esc(member.display_name)}</span>
+      <span>${esc(memberLabel(member))}</span>
     </label>
   `).join('');
 }

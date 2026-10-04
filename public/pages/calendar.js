@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Kalender (Calendar)
  * Zweck: Monats-/Wochen-/Tages-/Agenda-Ansicht mit vollem Termin-CRUD
@@ -525,7 +526,7 @@ function chipAssigneeStack(ev, { size, maxVisible }) {
  * Leerstring, wenn niemand zugewiesen ist.
  */
 function chipAssigneeLabel(ev) {
-  const names = (ev.assigned_users ?? []).map((u) => u.display_name).filter(Boolean);
+  const names = (ev.assigned_users ?? []).map((u) => memberLabel(u)).filter(Boolean);
   return names.length ? `${t('calendar.assignedLabel')}: ${names.join(', ')}` : '';
 }
 
@@ -2162,7 +2163,7 @@ function scheduleHasTimes(entry) { return Boolean(entry.shift_type?.start_time &
 
 function scheduleOwnerName(entry) {
   const owner = state.users.find((user) => Number(user.id) === Number(entry.user_id));
-  return owner?.display_name || owner?.username || "";
+  return memberLabel(owner) || owner?.username || "";
 }
 
 function scheduleEntryLabel(entry) {
@@ -2793,7 +2794,7 @@ function openCalendarFilters() {
     : '';
 
   const personRows = people.map((u) => toggleRowHtml({
-    label: u.display_name ?? '',
+    label: memberLabel(u),
     // Leeres Set heisst ALLE - die Haekchen stehen dann auf „an", weil genau
     // das der sichtbare Zustand ist. Wer das erste abwaehlt, waehlt damit die
     // uebrigen aus; das ist die Lesart, die Apple in derselben Liste hat.
@@ -3346,7 +3347,7 @@ function travelConflictRows(travel) {
     return {
       icon: 'triangle-alert',
       label: 'Travel-plan decision',
-      value: `${conflict.user_name || 'A traveler'} is included in plan A (${first}) and plan B (${second}). Keep one plan for this overlap.`,
+      value: `${memberLabel({ id: conflict.user_id, display_name: conflict.user_name }) || 'A traveler'} is included in plan A (${first}) and plan B (${second}). Keep one plan for this overlap.`,
       multiline: true,
     };
   });
@@ -3376,7 +3377,7 @@ function renderEventDetail(ev, reminders = []) {
     travel ? { icon: 'bed-double', label: 'Lodging', value: travel.lodging_name || '' } : null,
     travel ? { icon: 'route', label: 'Planning context', value: travel.context_name || travel.context_status || '' } : null,
     ...(travel ? travelConflictRows(travel) : []),
-    assignedRow(ev.assigned_users, t('calendar.assignedLabel'), ev.assigned_name || ''),
+    assignedRow(ev.assigned_users, t('calendar.assignedLabel'), memberLabel({ id: ev.assigned_to, display_name: ev.assigned_name })),
     {
       icon: 'bell',
       label: reminders.length > 1 ? t('reminders.sectionTitlePlural') : t('reminders.sectionTitle'),
@@ -3424,7 +3425,7 @@ async function openEventDetail(ev, anchor = null) {
         { icon: meal ? 'utensils' : 'plane', label: meal ? 'Meal Plan' : 'Travel plan', value: ev.cal_name },
         { icon: 'clock', label: t('calendar.detailWhen'), value: `${formatDate(ev.start_datetime)} ${formatTime(ev.start_datetime)}` },
         { icon: 'map-pin', label: t('calendar.locationLabel'), value: ev.location || '' },
-        assignedRow(ev.assigned_users, t('calendar.assignedLabel'), ev.assigned_name || ''),
+        assignedRow(ev.assigned_users, t('calendar.assignedLabel'), memberLabel({ id: ev.assigned_to, display_name: ev.assigned_name })),
         { icon: 'triangle-alert', label: 'Calendar conflicts', value: meal && ev.conflict_count ? `${ev.conflict_count} needs review` : '' },
         { icon: 'align-left', label: t('calendar.descriptionLabel'), value: ev.description || '', multiline: true },
       ],
@@ -3481,7 +3482,7 @@ async function openEventDetail(ev, anchor = null) {
       ]) {
         actions.push({
           id: `detail-travel-conflict-${conflict.id}-${resolution}`,
-          label: `Keep ${planLabel}: ${contextDescription} for ${conflict.user_name || 'traveler'}`,
+          label: `Keep ${planLabel}: ${contextDescription} for ${memberLabel({ id: conflict.user_id, display_name: conflict.user_name }) || 'traveler'}`,
           variant: 'secondary',
           icon: 'route',
           onClick: async ({ close }) => {
@@ -3495,7 +3496,7 @@ async function openEventDetail(ev, anchor = null) {
               // those rows so a closed conflict cannot remain actionable.
               await reloadCalendarEventsOnly();
               renderView();
-              window.yuvomi?.showToast(`Kept ${planLabel} for ${conflict.user_name || 'the traveler'}.`, 'success');
+              window.yuvomi?.showToast(`Kept ${planLabel} for ${memberLabel({ id: conflict.user_id, display_name: conflict.user_name }) || 'the traveler'}.`, 'success');
             } catch (err) {
               window.yuvomi?.showToast(err.data?.error ?? 'Could not resolve the travel-plan conflict.', 'danger');
             }

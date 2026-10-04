@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api } from '/api.js';
 import { deviceContext } from '/utils/device-context.js';
 import { esc } from '/utils/html.js';
@@ -12,7 +13,7 @@ const names = { round_robin: 'Round Robin', rotating_order: 'Rotating Order', fi
 const directions = { first_to_last: 'First moves to last', last_to_first: 'Last moves to first' };
 const directionExample = direction => `With 3 members, a person’s positions: ${direction==='last_to_first'?'1 → 2 → 3 → 1':'1 → 3 → 2 → 1'}.`;
 const methodText = config => `${names[config.strategy]}${config.strategy==='rotating_order'?` · ${directions[config.direction||'first_to_last']}`:''}`;
-const orderText = occurrence => occurrence?.order?.map(member => member.display_name).join(' → ') || 'No eligible member';
+const orderText = occurrence => occurrence?.order?.map(member => memberLabel(member)).join(' → ') || 'No eligible member';
 const trackLabel = track => track.display_label || track.label || track.purpose_key.replaceAll('_',' ');
 const consumerStatus = track => ({previous:'Previous consumer · History retained',archived:'Archived consumer',inactive:'Inactive consumer',restricted:'Consumer details restricted'}[track.consumer_status]||'');
 const button = (action, label, kind='secondary') => `<button type="button" class="btn btn--${kind}" data-rotation-${action}>${esc(label)}</button>`;
@@ -22,7 +23,7 @@ const isShared = group => group?.usage_mode === 'shared';
 const weekdays = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const modeLabel = group => isShared(group)?'Shared across activities':'Independent per activity';
 const dayText = days => days?.length===7?'Every day':(days||[]).map(day=>weekdays[day]?.slice(0,3)).join(', ')||'No days selected';
-const orderList = (members=[], empty='No members yet') => members.length?`<ol class="rotation-order">${members.map(member=>`<li><span>${esc(member.display_name)}</span></li>`).join('')}</ol>`:`<p class="form-hint">${esc(empty)}</p>`;
+const orderList = (members=[], empty='No members yet') => members.length?`<ol class="rotation-order">${members.map(member=>`<li><span>${esc(memberLabel(member))}</span></li>`).join('')}</ol>`:`<p class="form-hint">${esc(empty)}</p>`;
 const toggle = (name, label, checked, hint='') => `<label class="rotation-switch"><span class="rotation-switch__copy"><strong>${esc(label)}</strong>${hint?`<span class="form-hint">${esc(hint)}</span>`:''}</span><span class="toggle"><input name="${name}" type="checkbox" ${checked?'checked':''} aria-label="${esc(label)}"><span class="toggle__track" aria-hidden="true"></span></span></label>`;
 const localDate = () => { const now=zonedFields(new Date());return `${now.year}-${String(now.month).padStart(2,'0')}-${String(now.day).padStart(2,'0')}`; };
 const sharedConfig = group => { const value={ strategy:'rotating_order',direction:'first_to_last',starting_member_id:group?.members?.[0]?.id||null,
@@ -37,7 +38,7 @@ function sharedFields(group) {
     <div class="rotation-section__heading"><h3>Shared rotation schedule</h3><p class="form-hint">Set the turns once. Every activity using this Group follows this schedule.</p></div>
     <div class="modal-grid modal-grid--2">
       <label class="form-label">Rotation method<select class="form-input" name="shared_strategy">${['round_robin','rotating_order','fixed_order'].map(value=>`<option value="${value}" ${config.strategy===value?'selected':''}>${names[value]}</option>`).join('')}</select></label>
-      <label class="form-label" data-rotation-starting-field>Starting member<select class="form-input" name="shared_starting_member"><option value="">Choose a member</option>${(group?.members||[]).filter(member=>member.id).map(member=>`<option value="${member.id}" ${Number(config.starting_member_id)===member.id?'selected':''}>${esc(member.display_name)}</option>`).join('')}</select></label>
+      <label class="form-label" data-rotation-starting-field>Starting member<select class="form-input" name="shared_starting_member"><option value="">Choose a member</option>${(group?.members||[]).filter(member=>member.id).map(member=>`<option value="${member.id}" ${Number(config.starting_member_id)===member.id?'selected':''}>${esc(memberLabel(member))}</option>`).join('')}</select></label>
     </div>
     <p class="form-hint" data-rotation-method-help></p>
     <div data-rotation-direction-field ${config.strategy==='rotating_order'?'':'hidden'}>
@@ -64,9 +65,9 @@ function errorAt(panel, error, field=null, {focus=true}={}) {
 }
 function orderedRows(members) {
   return members.map(member=>`<li data-rotation-member="${member.id}" class="rotation-member">
-    <button type="button" class="btn btn--ghost rotation-member-handle" aria-label="Reorder ${esc(member.display_name)}" title="Drag, or use Alt + Up/Down">⠿</button>
-    <span class="rotation-member__name">${esc(member.display_name)}</span>
-    <button type="button" class="btn btn--ghost btn--sm rotation-member__remove" data-rotation-remove aria-label="Remove ${esc(member.display_name)}">Remove</button></li>`).join('');
+    <button type="button" class="btn btn--ghost rotation-member-handle" aria-label="Reorder ${esc(memberLabel(member))}" title="Drag, or use Alt + Up/Down">⠿</button>
+    <span class="rotation-member__name">${esc(memberLabel(member))}</span>
+    <button type="button" class="btn btn--ghost btn--sm rotation-member__remove" data-rotation-remove aria-label="Remove ${esc(memberLabel(member))}">Remove</button></li>`).join('');
 }
 /** Shared handle-only pointer interaction and explicit keyboard alternative. */
 function bindOrder(list, changed, { removable=true }={}) {
@@ -120,7 +121,7 @@ async function editGroup(group,onSaved,live) {
     <input type="hidden" name="member_order" value="${esc(JSON.stringify(group?.members.map(m=>m.id)||[]))}">
     <ul class="rotation-members" data-rotation-member-list>${orderedRows(group?.members.filter(m=>m.id)||[])}</ul>
     <p class="rotation-empty" data-rotation-members-empty ${group?.members.some(m=>m.id)?'hidden':''}>No members yet. Choose someone below to start the order.</p>
-    <label class="form-label"><i data-lucide="user-plus" class="icon-sm" aria-hidden="true"></i> Add member<select class="form-input" data-rotation-add-member><option value="">Choose a household member</option>${members.map(m=>`<option value="${m.id}">${esc(m.display_name)}</option>`).join('')}</select></label>
+    <label class="form-label"><i data-lucide="user-plus" class="icon-sm" aria-hidden="true"></i> Add member<select class="form-input" data-rotation-add-member><option value="">Choose a household member</option>${members.map(m=>`<option value="${m.id}">${esc(memberLabel(m))}</option>`).join('')}</select></label>
     <p class="form-hint">Drag the dotted handle to reorder. Keyboard: focus the handle and press Alt + ↑ / ↓.</p>
     <p class="sr-only" role="status" aria-live="polite" data-rotation-order-status></p>
     </section>
@@ -145,10 +146,10 @@ async function editGroup(group,onSaved,live) {
       const independentDate=panel.querySelector('[data-rotation-independent-date]');if(independentDate)independentDate.hidden=shared;
       panel.querySelector('[data-rotation-usage-help]').textContent=shared?'All activities using this Group share the same order and rotation schedule.':'Each activity uses these members but maintains its own turns.';
       const ids=memberIds(list),starting=form.elements.shared_starting_member,previous=starting.value;
-      starting.innerHTML='<option value="">Choose a member</option>'+ids.map(id=>`<option value="${id}">${esc(members.find(member=>member.id===id)?.display_name||'Former household member')}</option>`).join('');
+      starting.innerHTML='<option value="">Choose a member</option>'+ids.map(id=>`<option value="${id}">${esc(memberLabel(members.find(member=>member.id===id))||'Former household member')}</option>`).join('');
       starting.value=ids.includes(Number(previous))?previous:String(ids[0]||'');
       const config=sharedValue(),pivot=Math.max(0,ids.indexOf(config.starting_member_id)),order=config.strategy==='fixed_order'?ids:[...ids.slice(pivot),...ids.slice(0,pivot)];
-      const text=order.map(id=>members.find(member=>member.id===id)?.display_name||'Former household member');
+      const text=order.map(id=>memberLabel(members.find(member=>member.id===id))||'Former household member');
       panel.querySelector('[data-rotation-shared-preview]').textContent=config.strategy==='round_robin'?text[0]||'Add members to preview the first turn.':text.join(' → ')||'Add members to preview the starting order.';
       panel.querySelector('[data-rotation-method-help]').textContent={round_robin:'Selects one person each turn. To give everyone a position, choose Rotating Order.',rotating_order:'Everyone gets a position; a different person goes first each evening.',fixed_order:'Everyone keeps the same position in the members list.'}[config.strategy];
       panel.querySelector('[data-rotation-finalize-label]').textContent=config.strategy==='fixed_order'?'Evening ends at':'Move to the next turn at';
@@ -162,7 +163,7 @@ async function editGroup(group,onSaved,live) {
       panel.querySelector('[data-rotation-member-count]').textContent=ids.length;
       panel.querySelector('[data-rotation-members-empty]').hidden=ids.length>0;
       for(const option of select.options)option.disabled=ids.includes(Number(option.value));
-      panel.querySelector('[data-rotation-order-status]').textContent=`Order: ${ids.map(id=>members.find(m=>m.id===id)?.display_name||'Former household member').join(', ')||'No members'}.`;
+      panel.querySelector('[data-rotation-order-status]').textContent=`Order: ${ids.map(id=>memberLabel(members.find(m=>m.id===id))||'Former household member').join(', ')||'No members'}.`;
       paintShared();
       form.dispatchEvent(new Event('input',{bubbles:true}));
     };
@@ -214,8 +215,8 @@ async function confirmUsageChange(group,payload,members) {
       ${preview.proposed_order?`<p><strong>Proposed shared order:</strong> ${esc(orderText({order:preview.proposed_order}))}</p>`:''}
       ${!reverse&&payload.shared_config?.strategy==='rotating_order'?`<p><strong>Rotation direction:</strong> ${esc(directions[payload.shared_config.direction||'first_to_last'])}</p>`:''}
       <h3>Existing consumers</h3>${consumers.length?consumers.map((consumer,index)=>`<section class="rotation-history-item"><strong>${esc(consumer.display_label||consumer.label||consumer.purpose_key||'Restricted consumer')}</strong>
-        <p>${esc(consumer.current_order?.map(member=>member.display_name).join(' → ')||(consumer.next_member_id?`Next: ${members.find(member=>member.id===consumer.next_member_id)?.display_name||'Former household member'}`:orderText(consumer.next||consumer.current)))}</p>
-        ${reverse?`<label class="form-label">Future starting member<select class="form-input" data-rotation-independent-start="${index}" required><option value="">Choose explicitly</option>${members.filter(member=>payload.member_ids.includes(member.id)).map(member=>`<option value="${member.id}">${esc(member.display_name)}</option>`).join('')}</select></label>`:''}</section>`).join(''):'<p>No current consumer bindings.</p>'}
+        <p>${esc(consumer.current_order?.map(member=>memberLabel(member)).join(' → ')||(consumer.next_member_id?`Next: ${memberLabel(members.find(member=>member.id===consumer.next_member_id))||'Former household member'}`:orderText(consumer.next||consumer.current)))}</p>
+        ${reverse?`<label class="form-label">Future starting member<select class="form-input" data-rotation-independent-start="${index}" required><option value="">Choose explicitly</option>${members.filter(member=>payload.member_ids.includes(member.id)).map(member=>`<option value="${member.id}">${esc(memberLabel(member))}</option>`).join('')}</select></label>`:''}</section>`).join(''):'<p>No current consumer bindings.</p>'}
       ${(preview.exceptions||[]).length?`<h3>Bindings preserved as exceptions</h3><ul>${preview.exceptions.map(item=>`<li>${esc(typeof item==='string'?item:item.reason||item.message||'Existing activity cannot safely reconcile.')}</li>`).join('')}</ul>`:''}
       <p class="form-hint">Historical occurrences remain unchanged. Cancel returns to your complete edited draft.</p>
       ${toggle('confirm_usage','I understand who this change affects',false,'Apply the rotation settings from the effective date shown above.')}
@@ -253,7 +254,7 @@ async function changeOccurrence(occurrence,onSaved) {
   const shared=Boolean(occurrence.period_date||occurrence.config?.shared_schedule||occurrence.shared);
   modal=openChildModal({title:shared?'Change this evening’s order':occurrence.order.length?'Override this occurrence':'Resolve this occurrence',content:`<form class="rotation-editor" data-rotation-override-form>${errorBox}${draftNotice}
     <p>Planned: ${esc(orderText({order:occurrence.original_order}))}</p><p class="form-hint">${shared?'Changes the shared order for every Activity using this Group for this evening.':'Changes this occurrence only.'} ${occurrence.config.override_affects_next?'Future advancement follows this effective planned result.':'Future advancement keeps the original plan.'}</p>
-    ${isSingle?`<label class="form-label">Selected member<select class="form-input" name="member">${occurrence.eligible.map(m=>`<option value="${m.id}" ${m.id===occurrence.member_ids[0]?'selected':''}>${esc(m.display_name)}</option>`).join('')}</select></label>`:
+    ${isSingle?`<label class="form-label">Selected member<select class="form-input" name="member">${occurrence.eligible.map(m=>`<option value="${m.id}" ${m.id===occurrence.member_ids[0]?'selected':''}>${esc(memberLabel(m))}</option>`).join('')}</select></label>`:
       `<input type="hidden" name="member_order" value="${esc(JSON.stringify(ordered.map(m=>m.id)))}"><p class="form-hint">Drag the dotted handle, or focus it and press Alt + Up/Down.</p><ul class="rotation-members" data-rotation-member-list>${orderedRows(ordered)}</ul>`}
     <div class="modal-panel__footer">${button('cancel','Cancel','ghost')}<button class="btn btn--primary" type="submit">Apply override</button></div></form>`,onSave(panel){
       const form=panel.querySelector('form'),list=panel.querySelector('[data-rotation-member-list]');
@@ -268,7 +269,7 @@ function correctTrack(track,onSaved) {
   let modal;
   modal=openChildModal({title:track.consumer_type==='rotation_group_schedule'?'Set the next order':'Set who is next',content:`<form class="rotation-editor" data-rotation-correct-form>${errorBox}${draftNotice}
     <p>Changes future resolutions for ${esc(trackLabel(track))}. Historical occurrences stay unchanged.</p>
-    <label class="form-label">Next member<select class="form-input" name="member">${track.next.members.filter(m=>m.id).map(m=>`<option value="${m.id}" ${m.membership_id===track.next_membership_id?'selected':''}>${esc(m.display_name)}</option>`).join('')}</select></label>
+    <label class="form-label">Next member<select class="form-input" name="member">${track.next.members.filter(m=>m.id).map(m=>`<option value="${m.id}" ${m.membership_id===track.next_membership_id?'selected':''}>${esc(memberLabel(m))}</option>`).join('')}</select></label>
     <label class="form-label">Reason (optional)<textarea class="form-input" name="reason" maxlength="1000"></textarea></label>
     <div class="modal-panel__footer">${button('cancel','Cancel','ghost')}<button class="btn btn--primary" type="submit">Apply correction</button></div></form>`,onSave(panel){
     panel.querySelector('[data-rotation-cancel]').onclick=()=>modal.close();
@@ -333,7 +334,7 @@ async function trackHistory(trackId,live) {
       <div class="rotation-heading"><strong>${esc(occ.period_date?formatDate(occ.period_date):occ.context.label||formatDate(occ.context.due_date||occ.resolved_at.slice(0,10)))}</strong><span class="rotation-badge">${esc(names[occ.status])}${!occ.order.length?' · Unresolved':''}</span></div>
       <p>${esc(orderText(occ))}</p>${occ.overridden_at?`<p class="form-hint">Original plan: ${esc(orderText({order:occ.original_order}))} · Overridden ${esc(occ.overridden_at)}</p>`:''}
       <p class="form-hint">${occ.advanced?'Advanced once':`No advance${occ.advance_reason?': '+occ.advance_reason.replaceAll('_',' '):''}`}</p>
-      ${occ.skipped.length?`<details data-rotation-explanation="${occ.id}"><summary data-rotation-explanation-toggle="${occ.id}">Eligibility explanation</summary><ul>${occ.skipped.map(m=>`<li>${esc(m.display_name)}: ${esc(m.reason)}</li>`).join('')}</ul></details>`:''}
+      ${occ.skipped.length?`<details data-rotation-explanation="${occ.id}"><summary data-rotation-explanation-toggle="${occ.id}">Eligibility explanation</summary><ul>${occ.skipped.map(m=>`<li>${esc(memberLabel(m))}: ${esc(m.reason)}</li>`).join('')}</ul></details>`:''}
       ${occ.status==='resolved'&&canCapability('rotations.override')?`${occ.eligible.length?button('override',occ.period_date?'Change this evening’s order':occ.order.length?'Override':'Resolve with eligible members'):''}${!occ.order.length?button('recheck','Recheck eligibility'):''}`:''}
       ${occ.status==='resolved'&&canCapability('rotations.advance')?`${occ.order.length&&!occ.period_date?button('finalize','Finalize'):''}${button('skip',occ.period_date?'Skip this evening':'Skip')}`:''}
       ${!occ.period_date&&occ.config.advance_policy==='manual'&&!occ.advanced&&occ.order.length&&occ.status!=='skipped'&&canCapability('rotations.advance')?button('advance','Advance once'):''}
@@ -425,7 +426,7 @@ export async function renderRotationGroups(body) {
         <div class="rotation-group-list">${groups.length?groups.map(group=>`<button type="button" class="rotation-group-card" data-rotation-open="${group.id}">
           <span class="rotation-group-card__heading"><strong>${esc(group.name)}</strong><span class="rotation-badges"><span class="rotation-badge rotation-badge--mode">${modeLabel(group)}</span>${group.active?'':'<span class="rotation-badge">Inactive</span>'}</span><span class="rotation-group-card__chevron" aria-hidden="true">›</span></span>
           ${group.description?`<span class="rotation-group-card__description">${esc(group.description)}</span>`:''}
-          <span class="rotation-group-card__members">${group.members.length?group.members.map((m,index)=>`<span class="rotation-member-chip"><span aria-hidden="true">${index+1}</span>${esc(m.display_name)}</span>`).join(''):'No current members'}</span>
+          <span class="rotation-group-card__members">${group.members.length?group.members.map((m,index)=>`<span class="rotation-member-chip"><span aria-hidden="true">${index+1}</span>${esc(memberLabel(m))}</span>`).join(''):'No current members'}</span>
           <span class="form-hint">${isShared(group)&&group.shared_config?`${esc(methodText(group.shared_config))} · ${esc(scheduleText(sharedConfig(group)))}`:`${group.members.length} member${group.members.length===1?'':'s'}`}${group.usage_effective_date?` · Effective from ${esc(formatDate(group.usage_effective_date))}`:''}</span></button>`).join(''):'<div class="rotation-empty"><strong>No Rotation Groups yet</strong><p>Create a group to organize household turns for activities, meals, and more.</p></div>'}</div></div>`;
       body.querySelector('[data-rotation-create]')?.addEventListener('click',async event=>{
         const control=event.currentTarget;control.disabled=true;

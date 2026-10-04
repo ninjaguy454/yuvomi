@@ -84,6 +84,35 @@ async function pair(name,{display=new Client(),confirm=true}={}){
  return {client:display,id:approved.body.data.id};
 }
 const credential=client=>d.prepare('SELECT * FROM device_credentials WHERE token_hash=?').get(deviceHash(client.cookies.get(DEVICE_COOKIE)));
+test('household presentation labels require membership or a scoped paired credential and exclude private profile fields', async () => {
+ const endpoint='/api/v1/auth/member-labels';
+ assert.equal((await new Client().call('GET',endpoint)).status,401);
+ const stranger=new Client();stranger.cookies.set(DEVICE_COOKIE,'credential-from-another-household');
+ assert.notEqual((await stranger.call('GET',endpoint)).status,200);
+ const signedIn=await ok(child,'GET',endpoint);
+ assert.ok(signedIn.body.data.length>=2);
+ const {client:display,id}=await pair('Member label display');
+ const revision=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision;
+ await ok(administrator,'PATCH',`/api/v1/devices/${id}`,{revision,scope:{member_ids:[2]}});
+ await ok(display,'POST','/api/v1/device/launch',{});
+ const response=await ok(display,'GET',endpoint);
+ assert.deepEqual(response.body.data.map(row=>row.id),[2]);
+ assert.deepEqual(Object.keys(response.body.data[0]).sort(),['age','display_name','first_name','id','last_name','username']);
+ assert.equal(response.body.data[0].username,'child');
+ for(const forbidden of ['birth_date','email','phone','avatar_data','password_hash','role']) assert.ok(!(forbidden in response.body.data[0]));
+ await ok(administrator,'POST',`/api/v1/devices/${id}/revoke`,{revision:d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision});
+ assert.notEqual((await display.call('GET',endpoint)).status,200);
+});
+test('signed-in guests and workers cannot read the household presentation roster', async () => {
+ for(const [id,username,table] of [[8001,'label-guest','split_expense_guest_users'],[8002,'label-worker','housekeeping_workers']]) {
+  d.prepare("INSERT INTO users(id,username,display_name,password_hash,role) VALUES(?,?,?,?,'member')").run(id,username,username,await hashPassword(password));
+  try {
+   const visitor=new Client();await login(visitor,username);
+   d.prepare(`INSERT INTO ${table}(user_id) VALUES(?)`).run(id);
+   await ok(visitor,'GET','/api/v1/auth/member-labels',undefined,403);
+  } finally { d.prepare('DELETE FROM users WHERE id=?').run(id); }
+ }
+});
 async function temporary(client,username='parent'){
  await ok(client,'POST','/api/v1/device/temporary/begin',{});const result=await login(client,username);return result;
 }

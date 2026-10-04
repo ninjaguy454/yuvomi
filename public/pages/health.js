@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Gesundheit (Health) — Seitenmodul mit Sub-Tab-Leiste
  * Zweck: Ein Seitenmodul mit fünf Deep-Link-Routen (Übersicht, Vitalwerte,
@@ -465,8 +466,8 @@ function personChipsMarkup(members, activeId, meId) {
   return (members || []).map((m) => {
     const active = m.id === activeId;
     const label = m.id === meId
-      ? `${m.display_name} · ${t('health.vitals.you')}`
-      : m.display_name;
+      ? `${memberLabel(m)} · ${t('health.vitals.you')}`
+      : memberLabel(m);
     return `
       <button type="button" class="health-person-chip${active ? ' is-active' : ''}"
         data-person-id="${esc(m.id)}" role="tab" aria-selected="${active}">
@@ -486,7 +487,7 @@ function personChipsMarkup(members, activeId, meId) {
 function readOnlyBannerMarkup(members, personId, canEdit, meId) {
   if (personId == null || personId === meId) return '';
   const m = (members || []).find((x) => x.id === personId);
-  const name = m ? m.display_name : '';
+  const name = memberLabel(m);
   if (canEdit) {
     return `
       <div class="health-readonly-banner health-readonly-banner--care" role="status">

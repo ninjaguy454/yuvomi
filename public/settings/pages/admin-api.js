@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api } from '/api.js';
 import { formatDate, formatTime, t } from '/i18n.js';
 import { esc } from '/utils/html.js';
@@ -166,7 +167,7 @@ function bindEvents(container, initialTokens, users, currentUserId) {
   for (const member of users) {
     const option = document.createElement('option');
     option.value = String(member.id);
-    option.textContent = member.display_name || member.username;
+    option.textContent = memberLabel(member) || member.username;
     option.selected = Number(member.id) === Number(currentUserId);
     subject.appendChild(option);
   }

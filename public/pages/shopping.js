@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import {renderCycleReturn} from '/utils/meal-cycle-state.js';
 /**
  * Modul: Einkaufslisten (Shopping)
@@ -273,7 +274,7 @@ async function openSendListDialog(container) {
       <div class="form-group">
         <label class="form-label" for="send-list-recipient">${esc(t('shopping.sendListRecipient'))}</label>
         <select id="send-list-recipient" class="form-input">
-          ${members.map((m) => `<option value="${m.id}">${esc(m.display_name)}</option>`).join('')}
+          ${members.map((m) => `<option value="${m.id}">${esc(memberLabel(m))}</option>`).join('')}
         </select>
       </div>
       <p class="form-hint">${esc(t('shopping.sendListSnapshotHint'))}</p>
@@ -286,7 +287,7 @@ async function openSendListDialog(container) {
         const btn = event.currentTarget;
         const select = panel.querySelector('#send-list-recipient');
         const userId = Number(select.value);
-        const name = members.find((m) => m.id === userId)?.display_name ?? '';
+        const name = memberLabel(members.find((m) => m.id === userId));
         btn.disabled = true;
         try {
           await api.post(`/shopping/${listId}/send`, { userId });

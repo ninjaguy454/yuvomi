@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Pinnwand / Notizen (Notes)
  * Zweck: Masonry-Grid mit farbigen Sticky Notes, Pin-Toggle, CRUD
@@ -58,7 +59,7 @@ const NOTE_COLOR_NAMES = () => ({
 // State
 // --------------------------------------------------------
 
-let state = { notes: [], user: null, filterQuery: '', filterCreator: '' };
+let state = { notes: [], user: null, filterQuery: '', filterCreator: '', filterCreatorLabel: '' };
 let _container = null;
 let board = null;
 let stopLive = null;
@@ -159,7 +160,7 @@ export async function render(container, { user }) {
   board?.destroy(); stopLive?.();
   if (state) state.active = false;
   _container = container;
-  state = { notes: [], user, filterQuery: '', filterCreator: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set(), viewport: {} };
+  state = { notes: [], user, filterQuery: '', filterCreator: '', filterCreatorLabel: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set(), viewport: {} };
   const pageState = state;
   const auth = authenticationSnapshot();
   const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; container.replaceChildren(); closeModal({ force: true }); } };
@@ -308,6 +309,12 @@ export async function render(container, { user }) {
  * Ein-Personen-Haushalt wäre sie ein Chip ohne Alternative. Nutzt dieselben
  * Button-Chips wie Dokumente/Aufgaben (Tastatur + aria-pressed).
  */
+function creatorFilterKey(note) {
+  if (note.created_by != null) return `member:${note.created_by}`;
+  if (note.created_by_device != null) return `device:${note.created_by_device}`;
+  return `name:${note.creator_name || ''}`;
+}
+
 function renderCreatorFilter() {
   const row = _container.querySelector('#notes-filters');
   if (!row) return;
@@ -315,7 +322,7 @@ function renderCreatorFilter() {
   const creators = [...new Map(
     state.notes
       .filter((n) => n.creator_name)
-      .map((n) => [n.creator_name, n])
+      .map((n) => [creatorFilterKey(n), n])
   ).values()];
 
   row.hidden = creators.length < 2;
@@ -334,12 +341,13 @@ function renderCreatorFilter() {
   };
 
   row.appendChild(makeChip(t('common.all'), ''));
-  creators.forEach((n) => row.appendChild(makeChip(n.creator_name, n.creator_name)));
+  creators.forEach((n) => row.appendChild(makeChip(memberLabel({ id: n.created_by, display_name: n.creator_name }), creatorFilterKey(n))));
 
   row.querySelectorAll('[data-creator]').forEach((chip) => {
     chip.addEventListener('click', () => {
       // Erneuter Klick auf den aktiven Chip hebt den Filter auf.
       state.filterCreator = state.filterCreator === chip.dataset.creator ? '' : chip.dataset.creator;
+      state.filterCreatorLabel = state.filterCreator ? chip.textContent : '';
       renderCreatorFilter();
       renderGrid();
     });
@@ -349,7 +357,7 @@ function renderCreatorFilter() {
 function visibleNotes() {
   const q = state.filterQuery.trim().toLowerCase();
   return state.notes.filter((n) => {
-    if (state.filterCreator && n.creator_name !== state.filterCreator) return false;
+    if (state.filterCreator && creatorFilterKey(n) !== state.filterCreator) return false;
     if (!q) return true;
     return (n.title   || '').toLowerCase().includes(q)
         || (n.content || '').toLowerCase().includes(q);
@@ -401,7 +409,7 @@ function renderGrid() {
         title: t('notes.noResultsTitle'),
         description: q
           ? t('notes.noResultsDescription', { query: state.filterQuery })
-          : t('notes.noResultsCreatorDescription', { name: state.filterCreator }),
+          : t('notes.noResultsCreatorDescription', { name: state.filterCreatorLabel }),
       })
       : emptyStateHTML({
         icon: 'file-text',
@@ -502,7 +510,7 @@ function renderListCard(note) {
     </div>
     ${compact ? '' : `<div class="note-card__preview"><div class="note-card__content" id="note-list-body-${note.id}">${preview.html}</div>
       ${preview.truncated ? `<button type="button" class="note-card__expand" data-note-expand aria-expanded="${expanded}" aria-controls="note-list-body-${note.id}">${t(expanded ? 'notes.showLess' : 'notes.showMore')}</button>` : ''}</div>
-      <div class="note-card__list-meta">${esc(note.creator_name || '')}</div>`}
+      <div class="note-card__list-meta">${esc(memberLabel({ id: note.created_by, display_name: note.creator_name }))}</div>`}
   </div>`;
 }
 
@@ -533,10 +541,10 @@ function renderNoteCard(note) {
           <span class="note-card__avatar"
                 style="--avatar-color:${esc(avatarColor)};">
             ${note.creator_avatar
-              ? `<img src="${esc(note.creator_avatar)}" alt="${esc(note.creator_name || '')}" loading="lazy">`
+              ? `<img src="${esc(note.creator_avatar)}" alt="${esc(memberLabel({ id: note.created_by, display_name: note.creator_name }))}" loading="lazy">`
               : ''}
           </span>
-          <span>${esc(note.creator_name || '')}</span>
+          <span>${esc(memberLabel({ id: note.created_by, display_name: note.creator_name }))}</span>
         </div>
       </div>
     </div>
@@ -681,7 +689,7 @@ function openNoteModal({ mode, note = null }) {
           if (!currentPage(page, auth) || !panel.isConnected) return;
           const options = panel.querySelector('#note-member-options');
           options.replaceChildren();
-          options.insertAdjacentHTML('beforeend', res.data.filter(member => member.id !== state.user?.id).map(member => `<label class="note-member-option"><input type="checkbox" data-note-member="${member.id}" value="${member.id}"${note?.access_user_ids?.includes(member.id) ? ' checked' : ''}><span>${esc(member.display_name)}</span></label>`).join(''));
+          options.insertAdjacentHTML('beforeend', res.data.filter(member => member.id !== state.user?.id).map(member => `<label class="note-member-option"><input type="checkbox" data-note-member="${member.id}" value="${member.id}"${note?.access_user_ids?.includes(member.id) ? ' checked' : ''}><span>${esc(memberLabel(member))}</span></label>`).join(''));
         }).catch(() => {
           if (!currentPage(page, auth) || !panel.isConnected) return;
           panel.querySelector('#note-member-options').textContent = t('notes.membersUnavailable');

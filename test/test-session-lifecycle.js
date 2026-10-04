@@ -81,7 +81,7 @@ test('only completed authentication and logout publish a session change', async 
   const context = vm.createContext({
     api: { post: async () => { if (reject) throw new Error('Offline'); return response; }, get: async () => response },
     setPermissions: noop, setHouseholdSize: noop, clearPermissions: noop, clearHouseholdSize: noop,
-    clearApiCache: noop, forgetLayoutHint: noop, broadcastSessionChange: (reason) => events.push(reason),
+    clearMemberLabels: noop, clearApiCache: noop, forgetLayoutHint: noop, broadcastSessionChange: (reason) => events.push(reason),
   });
   vm.runInContext(source.slice(start, end), context);
   await vm.runInContext('auth.login("alice", "synthetic")', context);

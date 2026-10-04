@@ -21,6 +21,8 @@ import { init as initReminders, stop as stopReminders } from '/reminders.js';
 import { openNotificationCenter, paintNotificationBadges } from '/notification-center.js';
 import { applyAppearancePreferences, resetAppearancePreferences, appearanceRevision } from '/utils/appearance-preferences.js';
 import { watchSessionChanges, sessionRevision } from '/utils/session-lifecycle.js';
+import { loadMemberLabels } from '/utils/member-label-loader.js';
+import { clearMemberLabels, memberLabel } from '/utils/member-label.js';
 import { initPush, stopPush } from '/push.js';
 import { numberLocaleFor } from '/settings/region-presets.js';
 import { setDisplayTimeZone } from '/utils/timezone.js';
@@ -913,6 +915,12 @@ async function navigate(path, userOrPushState = true, pushState = true) {
       return;
     }
 
+    if (route.requiresAuth && currentUser && currentUser.access_scope !== 'split_guest' && !isWallModeEnabled()) {
+      const labelUser = currentUser;
+      const labelContext = authenticationSnapshot();
+      await loadMemberLabels();
+      if (currentUser !== labelUser || !sameAuthentication(labelContext)) return;
+    }
     if (pushState) pushNavigationHistory(path);
 
     // Soft-Navigation innerhalb desselben Moduls (z. B. Settings-Blatt → Blatt
@@ -1225,7 +1233,7 @@ function deviceSessionAction({ mobile = false } = {}) {
     } };
   const button = mobile ? moreActionEl(options) : sidebarActionEl(options);
   button.dataset[temporary ? 'deviceReturn' : 'deviceLogin'] = '';
-  if (temporary) button.title = t('pairedDisplay.sessionTitle', { name: deviceBootstrap()?.user?.display_name || t('pairedDisplay.memberFallback'), action: label });
+  if (temporary) button.title = t('pairedDisplay.sessionTitle', { name: memberLabel(deviceBootstrap()?.user) || t('pairedDisplay.memberFallback'), action: label });
   return button;
 }
 
@@ -4357,6 +4365,7 @@ window.addEventListener('popstate', (e) => {
  * die Praeferenzen nachlaedt. Ihn zu leeren gewaenne nichts und oeffnete ein
  * Fenster, in dem eine abgeschaltete Route wieder erreichbar waere. */
 function forgetSessionState() {
+  clearMemberLabels();
   _pendingNavigation = null;
   currentUser = null;
   _preferencesLoaded = false;

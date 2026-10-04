@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api } from '/api.js';
 import { esc } from '/utils/html.js';
 import { openModal, closeModal } from '/components/modal.js';
@@ -9,7 +10,7 @@ export function openPointAdjustment({actorId,members,reference=null,onSaved=()=>
   if(!members.length&&!restored)return;
   const option=(id,label,selected)=>`<option value="${id}"${String(id)===String(selected)?' selected':''}>${esc(label)}</option>`;
   openModal({title:'Adjust points',content:`<form id="rw-adjustment-form" novalidate>
-    <div class="form-group"><label class="label" for="rw-adjust-member">Member</label><select class="input" id="rw-adjust-member">${members.map(m=>option(m.id,`${m.display_name} · ${m.balance} points`,reference?.user_id)).join('')}</select></div>
+    <div class="form-group"><label class="label" for="rw-adjust-member">Member</label><select class="input" id="rw-adjust-member">${members.map(m=>option(m.id,`${memberLabel(m)} · ${m.balance} points`,reference?.user_id)).join('')}</select></div>
     <div class="form-group"><label class="label" for="rw-adjust-points">Points to add or remove</label><input class="input" id="rw-adjust-points" type="text" inputmode="text" autocomplete="off" placeholder="+5 or -5" required><p class="rw-hint">Use a positive number to add points or a negative number to remove them.</p></div>
     <div class="form-group"><label class="label" for="rw-adjust-reason">Reason (required)</label><input class="input" id="rw-adjust-reason" maxlength="200" required placeholder="Explain why these points are being added or removed"></div>
     <p class="rw-hint">This adds an adjustment to history. Existing awards and redemptions stay unchanged.</p>
@@ -27,7 +28,7 @@ export function openPointAdjustment({actorId,members,reference=null,onSaved=()=>
     const ledgerInput=panel.querySelector('#rw-adjust-ledger');
     const error=message=>{const el=panel.querySelector('#rw-adjust-error');el.textContent=message;el.hidden=false;};
     const freeze=locked=>panel.querySelectorAll('input,select').forEach(input=>input.disabled=locked);
-    const preview=()=>{const member=members.find(m=>m.id===Number(memberInput.value)),delta=Number(pointsInput.value);panel.querySelector('#rw-adjust-preview').textContent=pending?`Confirming the original ${pending.body.delta>0?'+':''}${pending.body.delta}-point adjustment. Retrying does not create another adjustment.`:member&&Number.isSafeInteger(delta)&&delta!==0?`${member.display_name}: ${member.balance} → ${member.balance+delta} points`:'';};
+    const preview=()=>{const member=members.find(m=>m.id===Number(memberInput.value)),delta=Number(pointsInput.value);panel.querySelector('#rw-adjust-preview').textContent=pending?`Confirming the original ${pending.body.delta>0?'+':''}${pending.body.delta}-point adjustment. Retrying does not create another adjustment.`:member&&Number.isSafeInteger(delta)&&delta!==0?`${memberLabel(member)}: ${member.balance} → ${member.balance+delta} points`:'';};
     if(pending){
       for(const [id,value]of [['member',pending.body.user_id],['points',pending.body.delta],['reason',pending.body.reason],['task',pending.body.related_task_id],['reward',pending.body.related_reward_id],['ledger',pending.body.related_ledger_id]]){
         const input=panel.querySelector(`#rw-adjust-${id}`);

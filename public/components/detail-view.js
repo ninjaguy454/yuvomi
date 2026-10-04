@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Geteilte Detail-/Vorschauansicht
  * Zweck: Eine bestehende Entität ansehen, ohne im Formular zu landen. Antippen
@@ -140,7 +141,7 @@ export function visibilityRow(visibility) {
  * @returns {{icon: string, label: string, value: string}}
  */
 export function assignedRow(users, label, fallbackName = '') {
-  const names = (users ?? []).map((u) => u.display_name).filter(Boolean);
+  const names = (users ?? []).map((u) => memberLabel(u)).filter(Boolean);
   return {
     icon: names.length > 1 ? 'users' : 'user',
     label,

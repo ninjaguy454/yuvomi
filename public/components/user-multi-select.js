@@ -6,6 +6,7 @@
 
 import { esc } from '/utils/html.js';
 import { t } from '/i18n.js';
+import { memberLabel } from '/utils/member-label.js';
 import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 
 /**
@@ -16,7 +17,7 @@ import { getReadableTextColor, AVATAR_FALLBACK_COLOR } from '/utils/color.js';
  * @param {number} [opts.maxVisible=3] Maximale Avatare vor "+N"-Anzeige
  * @returns {string} HTML-String
  */
-export function renderAvatarStack(users, { size = 28, maxVisible = 3 } = {}) {
+export function renderAvatarStack(users, { size = 28, maxVisible = 3, members = users } = {}) {
   if (!users?.length) return '';
   const visible = users.slice(0, maxVisible);
   const overflow = users.length - visible.length;
@@ -31,6 +32,7 @@ export function renderAvatarStack(users, { size = 28, maxVisible = 3 } = {}) {
   const fs = Math.max(11, Math.round(size * 0.4));
   const showText = size >= 20;
   const avatars = visible.map((u) => {
+    const name = memberLabel(u, members);
     const initials = (u.display_name ?? '')
       .split(' ')
       .map((w) => w[0] ?? '')
@@ -38,11 +40,11 @@ export function renderAvatarStack(users, { size = 28, maxVisible = 3 } = {}) {
       .toUpperCase()
       .slice(0, 2);
     const inner = u.avatar_data
-      ? `<img src="${esc(u.avatar_data)}" alt="${esc(u.display_name ?? '')}" loading="lazy">`
+      ? `<img src="${esc(u.avatar_data)}" alt="${esc(name)}" loading="lazy">`
       : (showText ? esc(initials) : '');
     return `<span class="avatar-stack__item"
       style="width:${size}px;height:${size}px;font-size:${fs}px;background-color:${esc(u.color ?? AVATAR_FALLBACK_COLOR)};color:${getReadableTextColor(u.color ?? AVATAR_FALLBACK_COLOR)}"
-      title="${esc(u.display_name ?? '')}">
+      title="${esc(name)}">
       ${inner}
     </span>`;
   });
@@ -65,6 +67,7 @@ export function renderAvatarStack(users, { size = 28, maxVisible = 3 } = {}) {
 export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey) {
   const selectedSet = new Set(selectedIds ?? []);
   const items = allUsers.map((u) => {
+    const name = memberLabel(u, allUsers);
     const checked = selectedSet.has(u.id) ? 'checked' : '';
     const initials = (u.display_name ?? '')
       .split(' ')
@@ -73,7 +76,7 @@ export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey
       .toUpperCase()
       .slice(0, 2);
     const inner = u.avatar_data
-      ? `<img src="${esc(u.avatar_data)}" alt="${esc(u.display_name ?? '')}" loading="lazy">`
+      ? `<img src="${esc(u.avatar_data)}" alt="${esc(name)}" loading="lazy">`
       : esc(initials);
     return `
       <label class="user-ms__option">
@@ -82,7 +85,7 @@ export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey
         <span class="user-ms__avatar" style="background-color:${esc(u.avatar_color ?? AVATAR_FALLBACK_COLOR)};color:${getReadableTextColor(u.avatar_color ?? AVATAR_FALLBACK_COLOR)}">
           ${inner}
         </span>
-        <span class="user-ms__name">${esc(u.display_name)}</span>
+        <span class="user-ms__name">${esc(name)}</span>
       </label>`;
   });
 

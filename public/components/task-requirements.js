@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { esc } from '../utils/html-escape.js';
 import { bindSubtaskReorder } from '../utils/subtask-reorder.js';
 
@@ -127,7 +128,7 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
         </div>
       </details>
     </div>
-    ${!template && users.length ? `<label class="label" data-task-subtask-assignment hidden>For<select class="input" data-task-subtask-assignee><option value="">Use the parent Activity's responsibility</option>${users.map(user=>`<option value="${Number(user.id)}" ${Number(subtask.assigned_to||subtask.assigned_user_ids?.[0])===Number(user.id)?'selected':''}>${esc(user.display_name)}</option>`).join('')}</select></label>` : ''}
+    ${!template && users.length ? `<label class="label" data-task-subtask-assignment hidden>For<select class="input" data-task-subtask-assignee><option value="">Use the parent Activity's responsibility</option>${users.map(user=>`<option value="${Number(user.id)}" ${Number(subtask.assigned_to||subtask.assigned_user_ids?.[0])===Number(user.id)?'selected':''}>${esc(memberLabel(user))}</option>`).join('')}</select></label>` : ''}
     ${renderSkillPicker({ skills, selectedIds: subtask.skill_ids ?? subtask.skills ?? [], name: 'subtask_skill_ids', canCreateSkill })}
   </div>`;
 }

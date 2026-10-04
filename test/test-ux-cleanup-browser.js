@@ -86,6 +86,9 @@ for (const width of [390,1100]) for (const kind of ['profile','birthday','invent
       await page.focus(name); await page.keyboard.type(' Draft');
       const before=await page.$eval(name,n=>n.value);
       await page.focus(preview);
+      // Acknowledge interception before the native Enter click; otherwise CDP
+      // can deliver the file-input click before Puppeteer's setup has completed.
+      await page._client().send('Page.setInterceptFileChooserDialog', { enabled: true });
       const chooser=page.waitForFileChooser(); await page.keyboard.press('Enter'); await (await chooser).cancel();
       assert.equal(await page.$eval(name,n=>n.value),before,'canceling file selection retains unsaved text');
       const box=await page.$eval(preview,n=>{const r=n.getBoundingClientRect();return {w:r.width,h:r.height,label:n.getAttribute('aria-label')};});

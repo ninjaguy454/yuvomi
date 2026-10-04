@@ -63,6 +63,17 @@ async function confirm(page,id){
   await press(page,'[data-acceptance-confirm]');const saved=await response;assert.equal(saved.status(),200,await saved.text());await page.waitForSelector('[data-task-acceptance]',{hidden:true});
 }
 const assigned=id=>d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(r=>r.user_id);
+async function captureWizard(page,label){
+  const viewport=page.viewport(),theme=await page.evaluate(()=>document.documentElement.dataset.theme);
+  for(const width of [320,390,768,1280,1440])for(const mode of ['light','dark']){
+    await page.setViewport({width,height:width<500?844:960});
+    await page.evaluate(mode=>{document.documentElement.dataset.theme=mode;document.querySelectorAll('.toast').forEach(el=>el.remove());},mode);
+    await page.screenshot({path:join(output,`${label}-${width}-${mode}.png`)});
+    (evidence.screenshots??=[]).push({file:`${label}-${width}-${mode}.png`,...await page.evaluate(()=>({width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.theme,stage:document.querySelector('[data-task-acceptance]')?.dataset.stage}))});
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  }
+  await page.setViewport(viewport);await page.evaluate(theme=>{if(theme)document.documentElement.dataset.theme=theme;else delete document.documentElement.dataset.theme;},theme);
+}
 test('real open-task board accepts self, optional helper allocation, and paired recipients without changing identity or points',{timeout:180000},async()=>{
   owner=await pageFor();await login(owner,'Accept Parent');const solo=await create('Solo open task');
   member=await pageFor(390);await login(member,'Accept Grace');await open(member,solo.id);
@@ -72,13 +83,13 @@ test('real open-task board accepts self, optional helper allocation, and paired 
   grant(2,'tasks.accept_with_helpers','allow');const shared=await create('Shared open task',{children:2});await open(member,shared.id);
   await member.click('[data-acceptance-helper="3"]');await press(member,'[data-acceptance-next]');assert.equal(await member.$eval('[data-task-acceptance]',el=>el.dataset.stage),'allocation');
   assert.equal(await member.$$eval('[data-acceptance-pool]',els=>els.length),3);await member.select(`[data-acceptance-assignment="${shared.steps[0]}"]`,'3');
-  await member.screenshot({path:join(output,'acceptance-phone-pools.png')});await press(member,'[data-acceptance-next]');await confirm(member,shared.id);
+  await captureWizard(member,'actual-human-pools');await press(member,'[data-acceptance-next]');await confirm(member,shared.id);
   assert.deepEqual(assigned(shared.id),[2,3]);assert.deepEqual(assigned(shared.steps[0]),[3]);assert.deepEqual(assigned(shared.steps[1]),[]);evidence.steps.push('Narrow helper grant allows atomic optional allocation; an untouched subtask remains explicitly unassigned');
   const paired=await create('Paired open task',{children:2});display=await pageFor();await display.goto(origin+'/device/pair');await press(display,'[data-pair-start]');await display.waitForSelector('[data-pair-code]');const code=await display.$eval('[data-pair-code]',el=>el.textContent);
   await owner.evaluate(async code=>{const {api}=await import('/api.js');await api.post('/devices/pairing-approve',{code,name:'Synthetic Acceptance Display',scope:{member_ids:[2,3]},permissions:{capabilities:{'device_notes.view':'allow','device_tasks.claim':'allow','device_tasks.accept_with_helpers':'allow'}}});},code);
   await display.waitForSelector('[data-pair-claim]');await press(display,'[data-pair-claim]');await display.waitForFunction(()=>!!document.querySelector('[data-device-login]')&&!!document.querySelector('.dashboard'));
   await open(display,paired.id);assert.equal(await display.$eval('[data-task-acceptance]',el=>el.dataset.stage),'primary');await display.select('[data-acceptance-primary]','2');await press(display,'[data-acceptance-next]');await display.waitForSelector('[data-acceptance-helper="3"]');await display.click('[data-acceptance-helper="3"]');await press(display,'[data-acceptance-next]');
-  await display.screenshot({path:join(output,'acceptance-paired-pools.png')});await press(display,'[data-acceptance-next]');await confirm(display,paired.id);
+  await captureWizard(display,'actual-paired-pools');await press(display,'[data-acceptance-next]');await confirm(display,paired.id);
   assert.deepEqual(assigned(paired.id),[2,3]);for(const child of paired.steps)assert.deepEqual(assigned(child),[]);
   const identity=await display.evaluate(async()=>{const {getPermissions}=await import('/permissions.js');return getPermissions().principal_kind;});assert.equal(identity,'device');evidence.steps.push('Real scoped paired display selects recipients and confirms zero allocations while remaining a device');
   assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);assert.equal(d.prepare('SELECT COUNT(*) n FROM task_acceptance_receipts').get().n,3);

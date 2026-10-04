@@ -517,7 +517,7 @@
   flex: 1;
   overscroll-behavior: contain;
 }
-.notes-board .note-card__title { flex-shrink: 0; max-height: 3em; overflow: hidden; }
+.notes-board .note-card__title { flex-shrink: 0; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
 .notes-board .note-card__footer { flex-shrink: 0; margin-top: var(--space-1); padding-top: var(--space-1); padding-inline-end: var(--target-base); }
 .notes-board .note-card__creator { min-width: 0; }
 .notes-board .note-card__creator > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -12,10 +12,11 @@
  * -------------------------------------------------------- */
 .tasks-page { --module-accent: var(--module-tasks); }
 
-.task-acceptance { min-width: 0; }
-.task-acceptance__helpers { border: 0; padding: 0; margin: var(--space-4) 0; }
+.task-acceptance { min-width: 0; overflow-wrap: anywhere; }
+.task-acceptance__helpers { min-inline-size: 0; border: 0; padding: 0; margin: var(--space-4) 0; }
 .task-acceptance__helpers legend { font-weight: 600; }
 .task-acceptance__member { display: flex; align-items: center; gap: var(--space-3); min-height: var(--target-base); }
+.task-acceptance__member input { flex: 0 0 auto; }
 .task-acceptance__pools { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: var(--space-3); }
 .task-acceptance__pool { min-width: 0; min-height: 120px; border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); background: var(--color-surface); }
 .task-acceptance__pool--target { outline: 2px solid var(--color-accent); outline-offset: 2px; }

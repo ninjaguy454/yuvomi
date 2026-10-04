@@ -76,6 +76,9 @@
 .notes-page .notes-toolbar > .notes-toolbar__search { flex: 1 1 0; min-width: 0; max-width: 280px; width: auto; }
 .notes-toolbar__search .page-search__control { min-width: 0; }
 .notes-toolbar__search .page-search__input { min-width: 0; }
+/* Notes keeps its controls on one row, including the shell's absolute bell. */
+.notes-page .notes-toolbar.notification-header-host { padding-inline-end: calc(var(--page-inline-pad) + var(--target-base) + var(--space-2)); }
+.notes-page .notes-toolbar.notification-header-host:not(.page-toolbar--in-group) > .page-toolbar__title { flex-basis: auto; margin-inline-end: 0; }
 
 /* --------------------------------------------------------
  * Masonry-Grid

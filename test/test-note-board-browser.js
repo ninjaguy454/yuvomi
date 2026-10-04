@@ -38,6 +38,30 @@ async function openAdjustment(page) {
   await page.focus('[data-id="1"] [data-board-action="adjust"]');
   await page.keyboard.press('Enter');
 }
+for(const width of [360,752,1920])test(`Notes header reserves separate notification, search and creation targets at ${width}px`,async()=>{
+  const page=await mount(width);try{
+    await page.evaluate(async()=>{
+      await new Promise(resolve=>{const link=document.createElement('link');link.rel='stylesheet';link.href='/styles/reminders.css';link.onload=resolve;document.head.append(link);});
+      const header=document.querySelector('.notes-toolbar');header.classList.add('notification-header-host');
+      const seal=document.createElement('span');seal.className='module-seal module-seal--head';header.prepend(seal);
+      const button=document.createElement('button');button.className='btn btn--ghost btn--icon notification-header-button';button.textContent='Bell';header.append(button);
+    });
+    const geometry=await page.evaluate(()=>{
+      const rect=selector=>document.querySelector(selector).getBoundingClientRect().toJSON();
+      return {bell:rect('.notification-header-button'),search:rect('.notes-toolbar__search'),create:rect('#notes-add-btn')};
+    });
+    for(const name of ['search','create']){
+      const a=geometry.bell,b=geometry[name];if(!b.width||!b.height)continue;
+      assert.ok(a.right<=b.left||a.left>=b.right||a.bottom<=b.top||a.top>=b.bottom,`${name} and bell must not overlap: ${JSON.stringify(geometry)}`);
+    }
+    assert.ok(geometry.search.width>=44,'unfocused phone search keeps its existing icon-size target');
+    await page.click('#notes-search');await page.type('#notes-search','Household');
+    await page.waitForFunction(()=>document.querySelectorAll('.note-card').length===1);
+    const focused=await page.$eval('#notes-search',el=>{const r=el.getBoundingClientRect(),bell=document.querySelector('.notification-header-button').getBoundingClientRect();return{width:r.width,right:r.right,bellLeft:bell.left,active:el===document.activeElement};});
+    assert.ok(focused.active&&focused.width>=80&&focused.right<=focused.bellLeft,`focused search expands and remains separate: ${JSON.stringify(focused)}`);
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
 for(const width of [780,840])test(`short landscape ${width}x360 scrolls the full Notes page`,async()=>{
   const page=await mount(width,false,360);try{
     await page.$eval('#main-content',el=>{el.classList.add('app-content');el.style.height='calc(100dvh - 64px)';});

@@ -20,13 +20,16 @@ app.use('/api/v1',(req,res)=>{
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width,long=false,theme='light'}={}){
+async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width,long=false,theme='light',duplicateNames=false}={}){
   projection=structuredClone(original);writes=[];failure=null;reads=0;requests=[];authResponse=null;
   if(device){projection.primary_mode='choose';projection.primary_user_id=null;projection.primary_candidates=members;}
   if(!children){projection.subtasks=[];projection.subtask_snapshot=[];}
   if(extraStep){projection.subtasks.push({id:12,title:'Plant the herbs',revision:3,allocatable:true,eligible_assignee_ids:[1,2,3]});projection.subtask_snapshot.push({id:12,revision:3});}
   if(scopedDevice){projection.primary_candidates=members.slice(1);authResponse={csrfToken:'fixture',authContext:'scoped-display',principal:{kind:'device',id:91},device:{id:91},temporary:false,permissions:{principal_kind:'device',modules:{tasks:'read',notes:'none'},capabilities:{'device_tasks.accept_with_helpers':'allow'}}};}
   projection.can_add_helpers=helpers;
+  if(duplicateNames){
+    for(const list of [projection.primary_candidates,projection.coassignee_candidates])for(const member of list)if(member.id<3)member.display_name='Alex';
+  }
   if(long){
     projection.task.title='Prepare our shared garden and organize the InternationalHouseholdCommunityGardenVolunteerPreparationChecklist '.repeat(3).trim();
     projection.coassignee_candidates[0].display_name='Grace Elizabeth VeryLongFamilyNameWithoutBreaksToExerciseNarrowLayouts';
@@ -40,8 +43,28 @@ async function mount({device=false,children=true,helpers=true,phone=false,extraS
   }
   const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width:width||(phone?390:1280),height:900,isMobile:phone,hasTouch:phone});await page.goto(base+'/acceptance-test');await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
   await page.evaluate(async(authResponse)=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();if(authResponse){(await import('/utils/device-context.js')).acceptAuthentication(authResponse);(await import('/permissions.js')).setPermissions(authResponse.permissions);}const {acceptOpenTask}=await import('/components/task-acceptance.js');document.querySelector('#start').onclick=()=>{window.resultPromise=acceptOpenTask({id:7,is_offer:true});};},authResponse);
+  if(duplicateNames)await page.evaluate(async()=>{(await import('/utils/member-label.js')).setMemberLabels([{id:1,display_name:'Alex',age:null,username:'alex.parent'},{id:2,display_name:'Alex',age:12,username:'alex.child'},{id:3,display_name:'Sam',age:null,username:'sam'}]);});
   await page.click('#start');await page.waitForSelector('[data-acceptance-next]');return page;
 }
+test('duplicate member labels remain distinct through paired acceptance without changing initials or IDs',async()=>{
+  const page=await mount({device:true,duplicateNames:true});try{
+    assert.deepEqual(await page.$$eval('#acceptance-primary option[value]:not([value=""])',els=>els.map(el=>[el.value,el.textContent])),[['1','Alex (alex.parent)'],['2','Alex (12)'],['3','Sam']]);
+    await page.select('#acceptance-primary','1');await page.click('[data-acceptance-next]');
+    await page.waitForSelector('[data-acceptance-helper="2"]');
+    assert.equal(await page.$eval('[data-acceptance-helper="2"]',el=>el.closest('label').querySelector('.task-acceptance__member-name').textContent),'Alex (12)');
+    assert.equal(await page.$eval('[data-acceptance-helper="2"]',el=>el.closest('label').querySelector('.task-acceptance__avatar').textContent),'A');
+    await page.click('[data-acceptance-helper="2"]');await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('[data-acceptance-pool="1"] h4',el=>el.textContent),'Alex (alex.parent)');
+    assert.equal(await page.$eval('[data-acceptance-pool="2"] h4',el=>el.textContent),'Alex (12)');
+    await page.select('[data-acceptance-assignment="10"]','2');await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent),'Alex (alex.parent)');
+    assert.equal(await page.$eval('[data-acceptance-summary-helper="2"] .task-acceptance__member-name',el=>el.textContent),'Alex (12)');
+    assert.deepEqual(await page.$$eval('.task-acceptance__identity .task-acceptance__avatar',els=>els.map(el=>el.textContent)),['A','A']);
+    await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
+    assert.equal(writes.length,1);assert.equal(writes[0].primary_user_id,1);assert.deepEqual(writes[0].coassignee_ids,[2]);assert.equal(writes[0].subtask_assignments.find(row=>row.id===10).user_id,2);
+    assert.ok(!requests.some(request=>request.path.includes('birth')||request.path==='/auth/users'));
+  }finally{await page.close();}
+});
 for(const children of [false,true])for(const helpers of [false,true])test(`helpers question always; allocation only for helpers=${helpers}, children=${children}`,async()=>{
   const page=await mount({children});try{
     assert.ok(await page.$('[data-acceptance-helper="2"]'));

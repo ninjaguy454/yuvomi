@@ -1,6 +1,7 @@
 import { api } from '/api.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
+import { memberLabel } from '/utils/member-label.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { openChildModal, mountFooter, focusFirstField } from '/components/modal.js';
 import { createAcceptanceDraft, setAcceptanceHelpers, needsAcceptanceAllocation, assignAcceptanceSubtask, lockAcceptancePayload } from '/utils/task-acceptance-draft.js';
@@ -16,8 +17,9 @@ export async function acceptOpenTask(task) {
   const endEvents = ['auth:context-ending', 'auth:expired', 'auth:context-rejected'];
   const close = () => { active = false; loadGeneration++; dragListeners?.abort(); return modal.close({ force: true }); };
   for (const event of endEvents) window.addEventListener(event, close);
-  function names() { return new Map([...(draft?.projection.primary_candidates || []), ...(draft?.projection.coassignee_candidates || [])].map(member => [Number(member.id), member.display_name])); }
-  function memberName(id) { return names().get(Number(id)) || t('tasks.acceptMember'); }
+  function membersById() { return new Map([...(draft?.projection.primary_candidates || []), ...(draft?.projection.coassignee_candidates || [])].map(member => [Number(member.id), member])); }
+  function memberName(id) { return memberLabel(membersById().get(Number(id))) || t('tasks.acceptMember'); }
+  function canonicalName(id) { return membersById().get(Number(id))?.display_name || t('tasks.acceptMember'); }
   function memberInitials(name) {
     const parts = String(name || t('tasks.acceptMember')).trim().split(/\s+/);
     return [parts[0], ...(parts.length > 1 ? [parts.at(-1)] : [])].map(part => Array.from(part)[0] || '').join('').toLocaleUpperCase();
@@ -39,11 +41,11 @@ export async function acceptOpenTask(task) {
       const p = draft.projection;
       content = `<h3 class="task-acceptance__title" title="${esc(p.task.title)}">${esc(p.task.title)}</h3>${message ? `<p role="status">${esc(message)}</p>` : ''}`;
       if (stage === 'primary') {
-        content += `<label for="acceptance-primary">${esc(t('tasks.acceptWho'))}</label><p class="text-muted">${esc(t('tasks.acceptIdentityHint'))}</p><select id="acceptance-primary" class="input" data-immediate-action data-acceptance-primary><option value="">${esc(t('tasks.acceptChoose'))}</option>${p.primary_candidates.map(member => `<option value="${Number(member.id)}" ${draft.primary === Number(member.id) ? 'selected' : ''}>${esc(member.display_name)}</option>`).join('')}</select>`;
+        content += `<label for="acceptance-primary">${esc(t('tasks.acceptWho'))}</label><p class="text-muted">${esc(t('tasks.acceptIdentityHint'))}</p><select id="acceptance-primary" class="input" data-immediate-action data-acceptance-primary><option value="">${esc(t('tasks.acceptChoose'))}</option>${p.primary_candidates.map(member => `<option value="${Number(member.id)}" ${draft.primary === Number(member.id) ? 'selected' : ''}>${esc(memberLabel(member))}</option>`).join('')}</select>`;
         actions += button('next', t('common.next'), true);
       } else if (stage === 'helpers') {
         content += `<fieldset class="task-acceptance__helpers"><legend>${esc(t('tasks.acceptHelpers'))}</legend>`;
-        if (p.can_add_helpers) content += p.coassignee_candidates.filter(member => Number(member.id) !== draft.primary).map(member => `<label class="task-acceptance__member">${memberAvatar(member.display_name)}<span class="task-acceptance__member-name">${esc(member.display_name)}</span><input type="checkbox" data-immediate-action data-acceptance-helper="${Number(member.id)}" ${draft.helpers.includes(Number(member.id)) ? 'checked' : ''}></label>`).join('');
+        if (p.can_add_helpers) content += p.coassignee_candidates.filter(member => Number(member.id) !== draft.primary).map(member => `<label class="task-acceptance__member">${memberAvatar(member.display_name)}<span class="task-acceptance__member-name">${esc(memberLabel(member))}</span><input type="checkbox" data-immediate-action data-acceptance-helper="${Number(member.id)}" ${draft.helpers.includes(Number(member.id)) ? 'checked' : ''}></label>`).join('');
         else content += `<p data-acceptance-helper-unavailable>${esc(t('tasks.acceptHelpersUnavailable'))}</p>${document.querySelector('[data-device-login]') ? button('signin', t('tasks.acceptSignIn')) : ''}`;
         content += '</fieldset>';
         if (p.primary_mode === 'choose') actions += button('back', t('common.back'));
@@ -55,7 +57,7 @@ export async function acceptOpenTask(task) {
         if (protectedSteps.length) content += `<p class="text-muted">${esc(t('tasks.acceptPreserved'))}</p><ul>${protectedSteps.map(child => `<li>${esc(child.title)}</li>`).join('')}</ul>`;
         actions += button('back', t('common.back')) + button('next', t('common.next'), true);
       } else if (stage === 'confirm') {
-        content += `<div class="task-acceptance__identity">${memberAvatar(memberName(draft.primary))}<span class="task-acceptance__member-name" data-acceptance-identity>${esc(memberName(draft.primary))}</span></div><section class="task-acceptance__summary-helpers" aria-labelledby="acceptance-summary-helpers"><h4 id="acceptance-summary-helpers">${esc(t('tasks.acceptHelpersLabel'))}</h4>${draft.helpers.length ? `<ul class="task-acceptance__summary-members">${draft.helpers.map(id => `<li class="task-acceptance__identity" data-acceptance-summary-helper="${Number(id)}">${memberAvatar(memberName(id))}<span class="task-acceptance__member-name">${esc(memberName(id))}</span></li>`).join('')}</ul>` : `<p data-acceptance-no-helpers>${esc(t('tasks.acceptNoHelpers'))}</p>`}</section>`;
+        content += `<div class="task-acceptance__identity">${memberAvatar(canonicalName(draft.primary))}<span class="task-acceptance__member-name" data-acceptance-identity>${esc(memberName(draft.primary))}</span></div><section class="task-acceptance__summary-helpers" aria-labelledby="acceptance-summary-helpers"><h4 id="acceptance-summary-helpers">${esc(t('tasks.acceptHelpersLabel'))}</h4>${draft.helpers.length ? `<ul class="task-acceptance__summary-members">${draft.helpers.map(id => `<li class="task-acceptance__identity" data-acceptance-summary-helper="${Number(id)}">${memberAvatar(canonicalName(id))}<span class="task-acceptance__member-name">${esc(memberName(id))}</span></li>`).join('')}</ul>` : `<p data-acceptance-no-helpers>${esc(t('tasks.acceptNoHelpers'))}</p>`}</section>`;
         if (p.subtasks.length) content += `<ul>${p.subtasks.map(child => `<li>${esc(child.title)}: ${esc(!child.allocatable ? t('tasks.acceptPreservedShort') : draft.assignments[child.id] ? memberName(draft.assignments[child.id]) : t('tasks.acceptUnassigned'))}</li>`).join('')}</ul>`;
         actions += button('back', t('common.back')) + button('confirm', t('tasks.acceptConfirm'), true);
       }

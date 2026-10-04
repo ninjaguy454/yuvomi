@@ -44,13 +44,14 @@ test.after(async () => { await browser?.close(); if (server) await new Promise(r
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const card = '.note-card[data-id="1"]';
 const layoutWrites = () => writes.filter(write => write.path.endsWith('/layout'));
-async function mount({ width = 1280, height = 900, permission = 'edit', fixture } = {}) {
+async function mount({ width = 1280, height = 900, permission = 'edit', fixture, mobile = false } = {}) {
   writes = []; notes = structuredClone(original);
   if (fixture === 'fitting') notes = [notes[0]];
   if (fixture === 'tall-top') { notes = [notes[0]]; notes[0].layout.y = 105; }
+  if (fixture === 'long-content') notes[0].content = 'A plain paragraph to drag.\n\n' + Array.from({ length: 35 }, (_, i) => `Scrollable preview paragraph ${i}.`).join('\n\n') + '\n\n' + notes[0].content;
   if (permission !== 'edit') for (const note of notes) note.permissions = { view: true, edit: false, delete: false, manage_visibility: false };
   const page = await browser.newPage(); page.setDefaultTimeout(2500);
-  await page.setViewport({ width, height }); await page.goto(base + '/direct-board-test');
+  await page.setViewport({ width, height, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: mobile ? 2.625 : 1 }); await page.goto(base + '/direct-board-test');
   await page.evaluate(async permission => {
     localStorage.setItem('yuvomi-locale', 'en'); await (await import('/i18n.js')).initI18n();
     window.yuvomi = { showToast() {} };
@@ -116,6 +117,37 @@ test('real touch body drag moves a card and advances the layout revision', async
     assert.ok(notes[0].layout.x > 2); assert.ok(notes[0].layout.y > 2);
     await mouseDrag(page, await bodyPoint(page), 110, 48); await saved(page, 2);
     assert.equal(layoutWrites()[1].body.expected_layout_revision, 3);
+  } finally { await input.close(); await page.close(); }
+});
+
+test('coarse mobile touch drags a paragraph inside a scrollable card preview', async () => {
+  const page = await mount({ width: 954, height: 859, mobile: true, fixture: 'long-content' });
+  const input = await touch(page);
+  try {
+    assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
+    assert.equal(await page.evaluate(() => devicePixelRatio), 2.625);
+    assert.equal(await page.$eval('#notes-grid', el => el.dataset.boardView), 'canvas');
+    const preview = await page.$eval(`${card} .note-card__content`, el => ({ height: el.clientHeight, content: el.scrollHeight, overflow: getComputedStyle(el).overflowY }));
+    assert.ok(preview.content > preview.height, 'the body preview must really overflow');
+    assert.match(preview.overflow, /auto|scroll/, 'exercise the inner scrollport that intercepts native touch panning');
+    const paragraph = await box(page, `${card} .note-card__content .note-md-p`);
+    const point = { x: paragraph.x + paragraph.width / 2, y: paragraph.y + paragraph.height / 2 };
+    await page.evaluate(() => {
+      window.fixtureBodyTouch = { paragraph: false, cancelled: false };
+      window.addEventListener('pointerdown', event => { window.fixtureBodyTouch.paragraph = !!event.target.closest('.note-card__content .note-md-p'); }, { once: true, capture: true });
+      window.addEventListener('pointercancel', () => { window.fixtureBodyTouch.cancelled = true; }, { once: true });
+    });
+    const content = notes[0].content;
+    await input.start(point.x, point.y);
+    for (let i = 1; i <= 10; i++) await input.move(point.x + 90 * i / 10, point.y + 96 * i / 10);
+    await input.end();
+    assert.equal(await page.evaluate(() => window.fixtureBodyTouch.paragraph), true, 'touch must begin on a paragraph, not the title or border');
+    assert.equal(await page.evaluate(() => window.fixtureBodyTouch.cancelled), false, 'native preview panning must not cancel an editable canvas body drag');
+    await saved(page);
+    assert.equal(layoutWrites()[0].body.expected_layout_revision, 2);
+    assert.ok(notes[0].layout.x > 2); assert.ok(notes[0].layout.y > 2);
+    assert.equal(notes[0].layout.width, 4); assert.equal(notes[0].layout.height, 6);
+    assert.equal(notes[0].content, content, 'moving retains all long preview content');
   } finally { await input.close(); await page.close(); }
 });
 

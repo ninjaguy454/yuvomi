@@ -45,7 +45,7 @@ test('wide Notes controls share the canvas edge gutter',async()=>{
       return {page:rect('.notes-page'),heading:rect('.page-toolbar__title'),toolbar:rect('#notes-compact-view'),card:rect('[data-id="1"]')};
     });
     assert.ok(geometry.heading.left-geometry.page.left<=40,JSON.stringify(geometry));
-    assert.ok(Math.abs(geometry.toolbar.left-geometry.card.left)<=1,JSON.stringify(geometry));
+    assert.ok(geometry.toolbar.left>=geometry.heading.right&&geometry.toolbar.top<geometry.card.top,JSON.stringify(geometry));
     assert.equal(writes.length,0);
   }finally{await page.close();}
 });
@@ -93,9 +93,9 @@ for(const width of [360,752,1920])test(`Notes header reserves separate notificat
     });
     const geometry=await page.evaluate(()=>{
       const rect=selector=>document.querySelector(selector).getBoundingClientRect().toJSON();
-      return {bell:rect('.notification-header-button'),search:rect('.notes-toolbar__search'),create:rect('#notes-add-btn')};
+      return {bell:rect('.notification-header-button'),search:rect('.notes-toolbar__search'),create:rect('#notes-add-btn'),list:rect('#notes-compact-view'),organize:rect('#notes-organize'),locked:rect('#notes-include-locked')};
     });
-    for(const name of ['search','create']){
+    for(const name of ['search','create','list','organize','locked']){
       const a=geometry.bell,b=geometry[name];if(!b.width||!b.height)continue;
       assert.ok(a.right<=b.left||a.left>=b.right||a.bottom<=b.top||a.top>=b.bottom,`${name} and bell must not overlap: ${JSON.stringify(geometry)}`);
     }
@@ -104,6 +104,31 @@ for(const width of [360,752,1920])test(`Notes header reserves separate notificat
     await page.waitForFunction(()=>document.querySelectorAll('.note-card').length===1);
     const focused=await page.$eval('#notes-search',el=>{const r=el.getBoundingClientRect(),bell=document.querySelector('.notification-header-button').getBoundingClientRect();return{width:r.width,right:r.right,bellLeft:bell.left,active:el===document.activeElement};});
     assert.ok(focused.active&&focused.width>=80&&focused.right<=focused.bellLeft,`focused search expands and remains separate: ${JSON.stringify(focused)}`);
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+for(const width of [360,752,1920])test(`Notes header icon controls retain names, targets and states at ${width}px`,async()=>{
+  const page=await mount(width);try{
+    // The router loads page CSS after the shell; reproduce that cascade order.
+    await page.evaluate(()=>document.head.append(document.querySelector('link[href="/styles/notes.css"]')));
+    const controls=await page.evaluate(()=>['#notes-compact-view','#notes-organize','#notes-include-locked'].map(selector=>{
+      const el=document.querySelector(selector),r=el.getBoundingClientRect(),input=el.querySelector('input');
+      return {selector,header:!!el.closest('.notes-toolbar'),label:(input||el).getAttribute('aria-label'),title:el.title,text:el.textContent.trim(),icon:!!el.querySelector('svg'),width:r.width,height:r.height,top:r.top,bottom:r.bottom,left:r.left,right:r.right};
+    }));
+    for(const c of controls){assert.ok(c.header&&c.label&&c.title&&c.icon&&!c.text,JSON.stringify(c));if(width===360)assert.equal(c.width,0);else assert.ok(c.width>=44&&c.height>=44&&c.right<=width,JSON.stringify(c));}
+    if(width!==360){
+      for(let i=1;i<controls.length;i++)assert.ok(controls[i].left>=controls[i-1].right,JSON.stringify(controls));
+      await page.focus('#notes-organize-locked');await page.keyboard.press('Space');
+      assert.equal(await page.$eval('#notes-organize-locked',el=>el.checked),true);
+      await page.focus('#notes-compact-view');await page.keyboard.press('Enter');
+      assert.equal(await page.$eval('#notes-compact-view',el=>el.getAttribute('aria-pressed')),'true');
+      assert.equal(await page.$eval('#notes-grid',el=>el.dataset.boardView),'list');
+      assert.equal(await page.$eval('#notes-organize',el=>el.getBoundingClientRect().width),0);
+      assert.equal(await page.$eval('#notes-include-locked',el=>el.getBoundingClientRect().width),0);
+      await page.keyboard.press('Enter');
+      assert.equal(await page.$eval('#notes-grid',el=>el.dataset.boardView),'canvas');
+      assert.equal(await page.$eval('#notes-organize-locked',el=>el.checked),true);
+    }
     assert.equal(writes.length,0);
   }finally{await page.close();}
 });

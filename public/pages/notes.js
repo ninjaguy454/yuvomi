@@ -171,6 +171,10 @@ export async function render(container, { user }) {
     <div class="notes-page">
       <div class="page-toolbar notes-toolbar">
         <h1 class="page-toolbar__title">${t('notes.title')}</h1>
+        <div class="notes-header-actions" id="notes-header-actions">
+          <button type="button" class="btn btn--ghost btn--icon" id="notes-compact-view" aria-label="${t('notes.compactView')}" title="${t('notes.compactView')}" aria-pressed="false"><i data-lucide="list" class="icon-md" aria-hidden="true"></i></button>
+          ${canNote('view') && canNote('edit') ? `<button type="button" class="btn btn--ghost btn--icon" id="notes-organize" aria-label="${t('notes.organize')}" title="${t('notes.organize')}"><i data-lucide="layout-grid" class="icon-md" aria-hidden="true"></i></button><label id="notes-include-locked" class="btn btn--ghost btn--icon notes-include-locked" title="${t('notes.includeLocked')}"><input type="checkbox" id="notes-organize-locked" aria-label="${t('notes.includeLocked')}"><i data-lucide="pin" class="icon-md" aria-hidden="true"></i></label>` : ''}
+        </div>
         ${renderPageSearch({ id: 'notes-search', label: t('notes.searchPlaceholder'), placeholder: t('notes.searchPlaceholder'), value: state.filterQuery, clearLabel: t('common.searchClear'), className: 'notes-toolbar__search' })}
         <button class="btn btn--primary toolbar-new-btn" id="notes-add-btn" aria-label="${t('notes.addNoteLabel')}">
           <i data-lucide="plus" class="icon-md" aria-hidden="true"></i>
@@ -178,11 +182,9 @@ export async function render(container, { user }) {
         </button>
       </div>
       <div class="notes-board-toolbar">
-        <button class="btn btn--secondary btn--sm" id="notes-compact-view" aria-pressed="false">${t('notes.compactView')}</button>
         <label class="notes-list-density" id="notes-list-density-label" hidden>${t('notes.listDensity')}
           <select id="notes-list-density"><option value="compact">${t('notes.listCompact')}</option><option value="expanded" selected>${t('notes.listExpanded')}</option></select>
         </label>
-        ${canNote('view') && canNote('edit') ? `<button class="btn btn--secondary btn--sm" id="notes-organize">${t('notes.organize')}</button><label id="notes-include-locked" class="notes-include-locked"><input type="checkbox" id="notes-organize-locked">${t('notes.includeLocked')}</label>` : ''}
         <div class="notes-zoom-controls" id="notes-zoom-controls" hidden>
           <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-out" aria-label="${t('notes.zoomOut')}">−</button><output id="notes-zoom-value">100%</output>
           <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-in" aria-label="${t('notes.zoomIn')}">+</button><button type="button" class="btn btn--ghost btn--sm" id="notes-reset-view">${t('notes.resetView')}</button>
@@ -386,6 +388,7 @@ function renderGrid() {
   for (const id of state.expandedNotes) if (!state.notes.some(note => note.id === id && canOnNote(note, 'view'))) state.expandedNotes.delete(id);
   const compactButton = _container.querySelector('#notes-compact-view');
   if (compactButton) { compactButton.hidden = usableWidth < 640; compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
+  _container.querySelector('#notes-header-actions').hidden = usableWidth < 640 || forceCompact;
 
   if (!visible.length) {
     const isFiltered = q.length > 0 || !!state.filterCreator;

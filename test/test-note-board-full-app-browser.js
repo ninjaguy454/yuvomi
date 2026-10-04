@@ -52,6 +52,10 @@ async function notesPage(page,{reload=false}={}){
   else{await page.waitForFunction(()=>typeof window.yuvomi?.navigate==='function');for(let attempt=0;attempt<30;attempt++){await page.evaluate(()=>window.yuvomi.navigate('/notes'));if(new URL(page.url()).pathname==='/notes')break;await new Promise(resolve=>setTimeout(resolve,100));}}
   await page.waitForSelector('.notes-page');await page.waitForFunction(()=>!document.querySelector('#notes-grid[aria-busy]'));
 }
+async function adjust(page,id){
+  await press(page,`.note-card[data-id="${id}"] [data-board-menu] summary`);
+  await press(page,`.note-card[data-id="${id}"] [data-board-action="adjust"]`);
+}
 async function create(page,title,visibility='all',member=null){
   await page.bringToFront();
   const createButton=await page.evaluate(()=>['#notes-add-btn','#fab-new-note'].find(selector=>{const el=document.querySelector(selector);return el&&el.getBoundingClientRect().width>0&&getComputedStyle(el).visibility!=='hidden';}));
@@ -69,10 +73,10 @@ test('real encrypted Notes creation, audience isolation, responsive saved sizing
   owner=await pageFor();await owner.goto(origin+'/login');await login(owner,'Notes Parent');await notesPage(owner);
   const all=await create(owner,'Everyone plan');const privateNote=await create(owner,'Private parent note','private');const selected=await create(owner,'Selected Grace note','selected',2);
   assert.equal(privateNote.visibility,'private');assert.deepEqual(d.prepare('SELECT user_id FROM note_access WHERE note_id=?').all(selected.id).map(row=>row.user_id),[2]);evidence.steps.push('Actual UI creates Everyone, Private and Selected members notes');
-  await press(owner,`.note-card[data-id="${privateNote.id}"] [data-board-action="adjust"]`);await field(owner,'#note-layout-width','5');await field(owner,'#note-layout-height','7');await field(owner,'#note-layout-x','4');await field(owner,'#note-layout-y','3');await press(owner,'#note-layout-save');await owner.waitForSelector('#note-layout-save',{hidden:true});
+  await adjust(owner,privateNote.id);await field(owner,'#note-layout-width','5');await field(owner,'#note-layout-height','7');await field(owner,'#note-layout-x','4');await field(owner,'#note-layout-y','3');await press(owner,'#note-layout-save');await owner.waitForSelector('#note-layout-save',{hidden:true});
   assert.deepEqual(d.prepare('SELECT x,y,width,height FROM note_layouts WHERE note_id=?').get(privateNote.id),{x:4,y:3,width:5,height:7});await notesPage(owner,{reload:true});
-  await press(owner,'#notes-compact-view');await capture(owner,'notes-full-app-desktop');
-  await owner.setViewport({width:390,height:960});await create(owner,'Phone-created note');await capture(owner,'notes-full-app-phone');assert.equal(await owner.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
+  assert.equal(await owner.$eval('#notes-grid',g=>g.dataset.boardView),'canvas');await press(owner,'#notes-compact-view');await owner.select('#notes-list-density','compact');assert.equal(await owner.$('.note-card__content'),null,'Compact list hides body');await capture(owner,'notes-full-app-desktop');await owner.select('#notes-list-density','expanded');await press(owner,'#notes-compact-view');
+  await owner.setViewport({width:390,height:960});await create(owner,'Phone-created note');await owner.waitForFunction(()=>document.querySelector('#notes-grid')?.dataset.boardView==='list');assert.ok((await owner.$$eval('.note-card__content',els=>els.map(el=>[...el.textContent].length))).every(n=>n<=200));await capture(owner,'notes-full-app-phone');assert.equal(await owner.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
   assert.equal(d.prepare('SELECT width FROM note_layouts WHERE note_id=?').get(privateNote.id).width,5);evidence.steps.push('Desktop layout survives reload and phone reflow; phone creates normal note');
   recipient=await pageFor(390);await recipient.goto(origin+'/login');await login(recipient,'Notes Grace');await notesPage(recipient);assert.ok((await titles(recipient)).includes(selected.title));assert.ok(!(await titles(recipient)).includes(privateNote.title));
   other=await pageFor();await other.goto(origin+'/login');await login(other,'Notes Other');await notesPage(other);assert.ok(!(await titles(other)).some(title=>[privateNote.title,selected.title].includes(title)));evidence.steps.push('Real household accounts see exactly their permitted audiences');

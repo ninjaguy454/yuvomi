@@ -1394,7 +1394,15 @@
         "agendaDayEmpty": "Nichts geplant"
     },
     "notes": {
-        "compactView": "Kompakte Ansicht",
+        "canvasGestureHint": "Notiz zum Verschieben ziehen. Zum Vergrößern oder Verkleinern eine Kante gedrückt halten.",
+        "listDensity": "Listendetails",
+        "listCompact": "Kompakt",
+        "listExpanded": "Erweitert",
+        "showMore": "Mehr anzeigen",
+        "showLess": "Weniger anzeigen",
+        "untitledNote": "Unbenannte Notiz",
+        "cardMenu": "Notizoptionen",
+        "compactView": "Listenansicht",
         "organize": "Im Raster anordnen",
         "moveCard": "Karte verschieben",
         "resizeCard": "Kartengroesse aendern",

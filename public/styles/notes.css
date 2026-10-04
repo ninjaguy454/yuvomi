@@ -486,6 +486,8 @@
   flex-shrink: 0;
 }
 .notes-board-status { color: var(--color-text-secondary); font-size: var(--text-xs); }
+.notes-board-toolbar [hidden] { display: none; }
+.notes-board-hint { flex-basis: 100%; color: var(--color-text-secondary); font-size: var(--text-xs); }
 .notes-grid.notes-board { display: block; position: relative; padding-top: 0; margin-top: var(--space-3); }
 .notes-board > .note-card {
   position: absolute;
@@ -511,23 +513,8 @@
 .notes-board .note-card__footer { flex-shrink: 0; margin-top: var(--space-1); padding-top: var(--space-1); padding-inline-end: var(--target-base); }
 .notes-board .note-card__creator { min-width: 0; }
 .notes-board .note-card__creator > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.note-card__board-tools { display: flex; align-items: center; padding-inline-end: var(--target-base); flex-shrink: 0; }
-.note-card__handle, .note-card__adjust, .note-card__resize {
-  border: none;
-  color: inherit;
-  background: var(--note-action-bg);
-  border-radius: var(--radius-full);
-  min-height: var(--target-base);
-  cursor: pointer;
-}
-.note-card__handle, .note-card__resize { touch-action: none; width: var(--target-base); display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
-.note-card__handle { cursor: grab; }
-.note-card__adjust { font-size: var(--text-xs); padding-inline: var(--space-2); }
-.note-card__resize { position: absolute; bottom: 0; inset-inline-end: 0; cursor: nwse-resize; }
 .note-card__audience { color: var(--color-text-secondary); font-size: var(--text-xs); padding-inline-end: var(--target-base); flex-shrink: 0; }
 .note-card--moving { z-index: 2; box-shadow: var(--shadow-lg); }
-.notes-board--compact .note-card__handle, .notes-board--compact .note-card__resize { display: none; }
-.notes-board--projected .note-card__handle, .notes-board--projected .note-card__resize { display: none; }
 .notes-board--compact .note-card__footer { padding-inline-end: 0; }
 .notes-board .note-card__open, .notes-board .note-card__delete, .notes-board .note-card__pin { opacity: 1; pointer-events: auto; }
 .note-layout-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
@@ -537,6 +524,33 @@
 #note-members legend { font-size: var(--text-sm); color: var(--color-text-secondary); }
 #note-members[hidden] { display: none; }
 .note-audience-summary { color: var(--color-text-secondary); font-size: var(--text-xs); margin-bottom: var(--space-3); }
+
+/* Narrow boards are ordinary rows. Preview truncation happens in the renderer;
+ * hidden text is never kept in a clipped, independently scrolling note body. */
+.notes-grid.notes-board[data-board-view="list"] { display: flex; flex-direction: column; gap: var(--space-3); padding-bottom: 96px; }
+.notes-board[data-board-view="list"] > .note-card { position: relative; width: 100%; height: auto; flex: none; touch-action: auto; }
+.notes-board[data-board-view="list"] .note-card__content { overflow: visible; flex: none; overscroll-behavior: auto; }
+.notes-board[data-board-view="list"] .note-card__title { display: block; margin: 0; padding: 0; overflow-wrap: anywhere; }
+.note-card__list-heading { display: flex; align-items: flex-start; gap: var(--space-1); }
+.note-card__list-heading .note-card__title { flex: 1; min-width: 0; align-self: center; }
+.note-card__list-heading .note-card__open { flex: none; }
+.note-card__list-meta { color: var(--color-text-secondary); font-size: var(--text-xs); margin-top: var(--space-2); }
+.note-card__expand { align-self: flex-start; border: 0; border-radius: var(--radius-md); background: var(--note-action-bg); color: inherit; min-height: var(--target-base); padding-inline: var(--space-3); cursor: pointer; }
+.notes-list-density { display: inline-flex; gap: var(--space-2); align-items: center; color: var(--color-text-secondary); font-size: var(--text-sm); }
+.notes-list-density[hidden] { display: none; }
+.notes-list-density select { min-height: var(--target-base); max-width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text-primary); padding-inline: var(--space-2); }
+.note-card__menu { flex: none; position: relative; }
+.note-card > .note-card__menu { position: absolute; top: var(--space-2); inset-inline-end: var(--space-2); }
+.note-card__menu summary { display: flex; align-items: center; justify-content: center; list-style: none; cursor: pointer; width: var(--target-base); min-height: var(--target-base); border-radius: var(--radius-full); background: var(--note-action-bg); }
+.note-card__menu summary::-webkit-details-marker { display: none; }
+.note-card__menu-items { position: absolute; inset-inline-end: 0; top: 100%; display: flex; flex-direction: column; min-width: 160px; max-width: min(240px, 70vw); padding: var(--space-1); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 4; }
+.note-card__menu-items button { min-height: var(--target-base); padding: var(--space-2); border: none; border-radius: var(--radius-md); color: var(--color-text-primary); background: transparent; text-align: start; cursor: pointer; }
+.note-card__menu-items button:hover { background: var(--note-action-bg-hover); }
+.notes-board > .note-card:has(.note-card__menu[open]) { overflow: visible; z-index: 3; }
+.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable { touch-action: pinch-zoom; user-select: none; cursor: grab; }
+.notes-board[data-board-view="canvas"] > .note-card--moving { cursor: grabbing; }
+.notes-board[data-board-view="canvas"] > .note-card > .note-card__title { padding-inline-end: var(--target-base); }
+.notes-board .note-card__footer { padding-inline-end: 0; }
 
 /* Match the shell's short-height class. Let the page scroll as one flow:
  * fixed headers must not squeeze the notes into a tiny nested scrollport. */

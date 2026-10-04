@@ -52,6 +52,10 @@ async function notesPage(page,{reload=false}={}){
   else{await page.waitForFunction(()=>typeof window.yuvomi?.navigate==='function');for(let attempt=0;attempt<30;attempt++){await page.evaluate(()=>window.yuvomi.navigate('/notes'));if(new URL(page.url()).pathname==='/notes')break;await new Promise(resolve=>setTimeout(resolve,100));}}
   await page.waitForSelector('.notes-page');await page.waitForFunction(()=>!document.querySelector('#notes-grid[aria-busy]'));
 }
+async function adjust(page,id){
+  await press(page,`.note-card[data-id="${id}"] [data-board-menu] summary`);
+  await press(page,`.note-card[data-id="${id}"] [data-board-action="adjust"]`);
+}
 async function create(page,title,visibility='all',member=null){
   await page.bringToFront();
   const createButton=await page.evaluate(()=>['#notes-add-btn','#fab-new-note'].find(selector=>{const el=document.querySelector(selector);return el&&el.getBoundingClientRect().width>0&&getComputedStyle(el).visibility!=='hidden';}));
@@ -70,7 +74,7 @@ async function shot(page,name) {
   await capture(page,name);
   evidence.steps.push({image:name+'.png',viewport:page.viewport(),theme:await page.evaluate(()=>document.documentElement.dataset.theme),horizontalOverflow:await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1)});
 }
-async function theme(page,value){await page.evaluate(value=>document.documentElement.dataset.theme=value,value);}
+async function theme(page,value){await page.evaluate(value=>window.yuvomi.applyTheme(value),value);}
 async function savedLayout(page,id,layout){
   await page.evaluate(async({id,layout})=>{const {api}=await import('/api.js');const {data}=await api.get('/notes');const note=data.find(note=>note.id===id);await api.patch(`/notes/${id}/layout`,{expected_layout_revision:note.layout.revision,layout});},{id,layout});
 }
@@ -102,13 +106,17 @@ test('Phase 2 actual-app visual QA matrix and interaction states',{timeout:30000
   }
   // Real pointer operations on paired display, with authoritative persisted geometry.
   await theme(display,'light');await display.setViewport({width:1440,height:960});
-  const handle=await display.$(`.note-card[data-id="${small.id}"] [data-board-handle="move"]`);let box=await handle.boundingBox();assert.ok(box,'wide canvas exposes move handle');
-  await display.mouse.move(box.x+box.width/2,box.y+box.height/2);await display.mouse.down();await display.mouse.move(box.x+box.width/2+90,box.y+box.height/2+250,{steps:6});await display.mouse.up();await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
-  await shot(display,'paired-move-after-1440-light');
-  box=await(await display.$(`.note-card[data-id="${small.id}"] [data-board-handle="resize"]`)).boundingBox();await display.mouse.move(box.x+box.width/2,box.y+box.height/2);await display.mouse.down();await display.mouse.move(box.x+box.width/2+200,box.y+box.height/2+150,{steps:6});await display.mouse.up();await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');await shot(display,'paired-resize-after-1440-light');
+  await display.waitForFunction(()=>document.querySelector('#notes-grid')?.dataset.boardView==='canvas');
+  const beforeMove=d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision;
+  let box=await display.$eval('.note-card[data-id="'+small.id+'"]',el=>el.getBoundingClientRect().toJSON());
+  await display.mouse.move(box.x+box.width/2,box.y+85);await display.mouse.down();await display.mouse.move(box.x+box.width/2+90,box.y+335,{steps:10});await display.mouse.up();await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
+  assert.ok(d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision>beforeMove,'direct card drag persisted');await shot(display,'paired-move-after-1440-light');
+  const beforeResize=d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision;
+  box=await display.$eval('.note-card[data-id="'+small.id+'"]',el=>el.getBoundingClientRect().toJSON());await display.mouse.move(box.right-5,box.bottom-5);await display.mouse.down();await new Promise(resolve=>setTimeout(resolve,500));await display.mouse.move(box.right+195,box.bottom+145,{steps:10});await display.mouse.up();await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
+  assert.ok(d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision>beforeResize,'held corner resize persisted');await shot(display,'paired-resize-after-1440-light');
   await press(display,'#notes-organize');await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');await shot(display,'paired-organize-after-1440-light');
   // Keyboard-only alternative on tablet, then apply the legal maximum size.
-  await display.setViewport({width:768,height:960});await theme(display,'dark');await press(display,`.note-card[data-id="${small.id}"] [data-board-action="adjust"]`);await shot(display,'keyboard-layout-768-dark');
+  await display.setViewport({width:768,height:960});await theme(display,'dark');await adjust(display,small.id);await shot(display,'keyboard-layout-768-dark');
   await field(display,'#note-layout-width','12');await field(display,'#note-layout-height','100');await field(display,'#note-layout-x','0');await field(display,'#note-layout-y','0');await press(display,'#note-layout-save');await display.waitForSelector('#note-layout-save',{hidden:true});
   await display.setViewport({width:1440,height:960});await display.evaluate(()=>document.querySelector('.notes-scroll').scrollTop=0);await shot(display,'maximum-card-top-1440-dark');
   await display.evaluate(id=>document.querySelector(`.note-card[data-id="${id}"] [data-action="open"]`).scrollIntoView({block:'center'}),small.id);await shot(display,'maximum-card-controls-1440-dark');

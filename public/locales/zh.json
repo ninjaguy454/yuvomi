@@ -1382,7 +1382,15 @@
         "agendaDayEmpty": "没有安排"
     },
     "notes": {
-        "compactView": "Compact view",
+        "canvasGestureHint": "Drag a note to move it. Hold an edge to resize.",
+        "listDensity": "List detail",
+        "listCompact": "Compact",
+        "listExpanded": "Expanded",
+        "showMore": "Show more",
+        "showLess": "Show less",
+        "untitledNote": "Untitled note",
+        "cardMenu": "Note options",
+        "compactView": "List view",
         "organize": "Organize on grid",
         "moveCard": "Move card",
         "resizeCard": "Resize card",

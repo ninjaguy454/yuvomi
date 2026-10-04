@@ -81,6 +81,7 @@ const APP_SHELL = [
   '/utils/member-label.js',
   '/utils/member-label-loader.js',
   '/utils/member-age.js',
+  '/utils/member-name-formats.js',
   '/utils/session-lifecycle.js',
   '/utils/device-context.js',
   '/utils/device-session.js',

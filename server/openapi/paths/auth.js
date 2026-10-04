@@ -5,14 +5,15 @@ export function authPaths() {
     '/api/v1/auth/member-labels': {
       get: op({
         summary: 'Household member presentation labels', tag: 'Auth',
-        description: 'Requires a household member session or a valid paired-device credential. Returns only id, display_name, first_name, last_name, username, and computed age (nullable). Paired devices receive only their scoped members. Excludes workers, split guests, birth dates, contact details, photos, roles, and credentials. Scoped API tokens and unauthenticated visitors cannot use this endpoint.',
+        description: 'Requires a household member session or a valid paired-device credential. Returns only id, display_name, first_name, last_name, username, computed age (nullable), and name_collisions format flags. Flags compare names within this household before scope filtering, without returning hidden identities or changing eligibility. Paired devices receive only their scoped members. Excludes workers, split guests, birth dates, contact details, photos, roles, and credentials. Scoped API tokens and unauthenticated visitors cannot use this endpoint.',
         responses: {
           200: { description: 'Authorized household labels', content: { 'application/json': { schema: {
             type: 'object', properties: { data: { type: 'array', items: { type: 'object', additionalProperties: false,
-              required: ['id','display_name','first_name','last_name','username','age'], properties: {
+              required: ['id','display_name','first_name','last_name','username','age','name_collisions'], properties: {
                 id: { type: 'integer' }, display_name: { type: 'string' },
                 first_name: { type: 'string', nullable: true }, last_name: { type: 'string', nullable: true },
                 username: { type: 'string' }, age: { type: 'integer', minimum: 0, nullable: true },
+                name_collisions: { type: 'array', uniqueItems: true, items: { type: 'string', enum: ['display','first','first_last_initial'] }, description: 'Rendered-name formats that collide with another household member. Empty when unique.' },
               },
             } } },
           } } } },

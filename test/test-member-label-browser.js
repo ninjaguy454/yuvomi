@@ -19,7 +19,7 @@ const date=todayKey(d),birth=String(Number(date.slice(0,4))-12)+date.slice(4);
 d.prepare("INSERT INTO birthdays(name,birth_date,family_user_id,created_by) VALUES('Alex',?,2,1)").run(birth);
 d.exec("INSERT INTO notes(title,content,created_by,visibility) VALUES('Parent note','Parent text',1,'all'),('Child note','Child text',2,'all'),('Riley note','Riley text',3,'all')");
 d.exec("INSERT INTO tasks(title,created_by,assigned_to,visibility) VALUES('Assigned task',1,2,'all')");
-let server,browser,origin,admin,display;
+let server,browser,origin,admin,display,displayId;
 const call=(page,method,path,body)=>page.evaluate(async({method,path,body})=>{const {api}=await import('/api.js');return api[method](path,body);},{method,path,body});
 const names=page=>page.evaluate(async()=>{const {memberLabel}=await import('/utils/member-label.js');return [1,2,3].map(id=>memberLabel({id,display_name:id===3?'Riley':'Alex'}));});
 const screenshot=async(name,page=admin)=>{if(process.env.MEMBER_EVIDENCE){mkdirSync(process.env.MEMBER_EVIDENCE,{recursive:true});await page.evaluate(()=>Promise.all(document.getAnimations().filter(a=>a.effect?.getComputedTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{}))));await page.screenshot({path:join(process.env.MEMBER_EVIDENCE,name+'.png'),fullPage:true});}};
@@ -36,7 +36,7 @@ test.before(async()=>{
  }
  await admin.type('#username','alex.parent');await admin.type('#password',password);await admin.click('[type=submit]');await admin.waitForSelector('.dashboard-overview__title');
  const pair=await call(display,'post','/device/pair',{});
- await call(admin,'post','/devices/pairing-approve',{code:pair.code,name:'Label test wall'});
+ displayId=(await call(admin,'post','/devices/pairing-approve',{code:pair.code,name:'Label test wall'})).data.id;
  await call(display,'post','/device/pair/claim',{confirm_transition:true});
  await display.goto(origin+'/device');await display.waitForSelector('.dashboard-overview__title');
 });
@@ -46,11 +46,24 @@ test('paired household labels use age or username without exposing birthday or g
  assert.deepEqual(await names(display),['Alex (alex.parent)','Alex (12)','Riley']);
  const payload=await call(display,'get','/auth/member-labels');
  assert.ok(!JSON.stringify(payload).includes(birth));
- assert.deepEqual(Object.keys(payload.data[0]).sort(),['age','display_name','first_name','id','last_name','username']);
+ assert.deepEqual(Object.keys(payload.data[0]).sort(),['age','display_name','first_name','id','last_name','name_collisions','username']);
  await assert.rejects(call(display,'get','/family/members'));
  assert.equal(await display.$('[data-route="/settings"]'),null);
  await screenshot('paired-dashboard',display);
 });
+test('a scoped paired browser disambiguates a hidden household collision without adding candidates',async()=>{
+ const revision=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(displayId).revision;
+ await call(admin,'patch',`/devices/${displayId}`,{revision,scope:{member_ids:[2]}});
+ await display.goto(origin+'/device');await display.waitForSelector('.dashboard-overview__title');
+ const labels=await call(display,'get','/auth/member-labels');
+ assert.deepEqual(labels.data.map(row=>row.id),[2]);
+ assert.deepEqual(await names(display),['Alex','Alex (12)','Riley']);
+ assert.deepEqual((await call(display,'get','/auth/users')).data.map(row=>row.id),[2]);
+ await assert.rejects(call(display,'get','/family/members'));
+ await assert.rejects(call(display,'post','/tasks',{title:'Forbidden',assigned_to:1}));
+ await screenshot('scoped-paired-dashboard',display);
+});
+
 test('Task, Calendar and Kitchen use one formatter with unchanged assignment IDs',async()=>{
  for(const route of ['/tasks','/calendar','/meals?legacy=1']){
   await admin.goto(origin+route);

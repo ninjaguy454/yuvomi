@@ -25,8 +25,8 @@ app.use('/api/v1',async(req,res)=>{
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount(width=1280,device=false){
-  writes=[];notes=structuredClone(original);delayRead=false;conflictLayout=false;const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width,height:900});await page.goto(base+'/board-test');
+async function mount(width=1280,device=false,height=900){
+  writes=[];notes=structuredClone(original);delayRead=false;conflictLayout=false;const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width,height});await page.goto(base+'/board-test');
   await page.evaluate(async(device)=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();window.yuvomi={showToast:(_message,_kind,_duration,undo)=>{if(undo)window.undoNoteDelete=undo;}};(await import('/permissions.js')).setPermissions(device?{principal_kind:'device',modules:{notes:'read'},capabilities:{'device_notes.view':'allow','device_notes.create':'allow'}}:{admin:true});window.stopNotes=await(await import('/pages/notes.js')).render(document.getElementById('main-content'),{user:{id:1}});},device);return page;
 }
 async function screenshot(page,name) {
@@ -34,6 +34,19 @@ async function screenshot(page,name) {
   mkdirSync(process.env.NOTES_SCREENSHOTS,{recursive:true});
   await page.screenshot({path:`${process.env.NOTES_SCREENSHOTS}/${name}.png`});
 }
+for(const width of [780,840])test(`short landscape ${width}x360 scrolls the full Notes page`,async()=>{
+  const page=await mount(width,false,360);try{
+    await page.$eval('#main-content',el=>{el.classList.add('app-content');el.style.height='calc(100dvh - 64px)';});
+    const geometry=await page.evaluate(()=>{const notes=document.querySelector('.notes-scroll'),main=document.querySelector('#main-content');return {notes:notes.clientHeight,content:notes.scrollHeight,page:main.clientHeight,pageContent:main.scrollHeight};});
+    assert.ok(geometry.notes>=geometry.content-1,'Notes must not be squeezed into a nested scroll area: '+JSON.stringify(geometry));
+    assert.ok(geometry.pageContent>geometry.page,'the page must carry overflow');
+    const button='.note-card[data-id="2"] [data-action="open"]';
+    await page.$eval(button,el=>el.scrollIntoView({block:'center'}));
+    const box=await page.$eval(button,el=>{const r=el.getBoundingClientRect();return {top:r.top,bottom:r.bottom};});
+    assert.ok(box.top>=0&&box.bottom<=360,'the final note control is reachable');
+    await page.click(button);await page.waitForSelector('.note-modal');assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
 
 test('minimum cards truncate long titles on whole lines while the reader keeps the full title',async()=>{
   const page=await mount();try{

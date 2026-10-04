@@ -548,4 +548,19 @@
 #note-members[hidden] { display: none; }
 .note-audience-summary { color: var(--color-text-secondary); font-size: var(--text-xs); margin-bottom: var(--space-3); }
 
+/* Match the shell's short-height class. Keep full task cards and notes in
+ * the page's natural scroll flow instead of dividing a tiny leftover height. */
+@media (max-height: 499px) {
+  .notes-page { display: block; height: auto; min-height: 100%; overflow: visible; }
+  .notes-page .notes-toolbar { position: static; }
+  .notes-workspace { display: block; }
+  .notes-scroll { overflow: visible; }
+  .notes-open-tasks {
+    max-height: none;
+    overflow: visible;
+    border-inline-start: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+}
+
 

@@ -31,15 +31,32 @@ app.use('/api/v1',(req,res)=>{
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount(width=1280,{denied=false,tasks=false,future=false}={}){
+async function mount(width=1280,{denied=false,tasks=false,future=false,height=900,touch=false}={}){
   reads=[];writes=[];futureOffer=future?{reads:0}:null;permissions=denied?{modules:{notes:'write',tasks:'none'}}:tasks?{modules:{notes:'none',tasks:'read'}}:{admin:true};
-  const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width,height:900});
+  const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width,height,isMobile:touch,hasTouch:touch});
   // Loopback server is reachable in this isolated network-none container.
   if(future)await page.evaluateOnNewDocument(()=>Object.defineProperty(navigator,'onLine',{get:()=>true}));
   await page.goto(base+'/open-board-test'+(tasks?'?offers=1&view=list':''));
   await page.evaluate(async({permissions,tasks})=>{localStorage.clear();localStorage.setItem('yuvomi-locale','en');window.yuvomi={showToast(){}};window.EventSource=class{addEventListener(){}close(){}};await(await import('/i18n.js')).initI18n();(await import('/permissions.js')).setPermissions(permissions);window.stopPage=await(await import(tasks?'/pages/tasks.js':'/pages/notes.js')).render(document.querySelector('#main-content'),{user:{id:1,role:'admin'}});},{permissions,tasks});
   return page;
 }
+for(const width of [780,840])test(`short landscape ${width}x360 keeps full task cards in the page scroll`,async()=>{
+  const page=await mount(width,{height:360,touch:true});try{
+    await page.waitForSelector('[data-open-task="7"]');
+    // Reserve the paired banner above the real module styles, as in the app shell.
+    await page.$eval('#main-content',el=>{el.classList.add('app-content');el.style.height='calc(100dvh - 64px)';});
+    const size=await page.evaluate(()=>{const panel=document.querySelector('.notes-open-tasks'),card=panel.querySelector('[data-open-task]'),notes=document.querySelector('.notes-scroll'),main=document.querySelector('#main-content');return {panel:panel.clientHeight,panelContent:panel.scrollHeight,card:card.getBoundingClientRect().height,notes:notes.clientHeight,note:notes.querySelector('.note-card').getBoundingClientRect().height,page:main.clientHeight,pageContent:main.scrollHeight};});
+    assert.ok(size.panel>=size.panelContent-1,'task section must not become a nested scroll trap: '+JSON.stringify(size));
+    assert.ok(size.panel>=size.card,'a whole task card fits in its section');
+    assert.ok(size.notes>=size.note,'Notes grows with its cards instead of sharing a tiny remainder');
+    assert.ok(size.pageContent>size.page,'the page carries the overflow');
+    await page.$eval('[data-open-task="7"]',el=>el.scrollIntoView({block:'center'}));
+    const target=await page.$eval('[data-open-task="7"]',el=>{const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2,top:r.top,bottom:r.bottom};});
+    assert.ok(target.top>=0&&target.bottom<=360,'whole card can be brought into view');
+    await page.touchscreen.tap(target.x,target.y);await page.waitForSelector('#task-detail-claim');
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
 for(const width of [390,1440])test(`Notes and ordinary offers share the page at ${width}px without sharing layout`,async()=>{
   const page=await mount(width);try{
     await page.waitForSelector('[data-open-task="7"]');assert.ok(await page.$('.note-card'));

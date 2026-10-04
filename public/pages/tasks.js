@@ -619,7 +619,7 @@ function renderActivitySubtasks(task, expanded) {
       </button>
       <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_optional ? ' · Optional' : ''}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
       <div class="subtask-item__metadata">
-      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--sm subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="Supervisor approval: ${esc(subtask.title)}">Supervisor approval</button>` : ''}
+      ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--icon subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="Supervisor approval: ${esc(subtask.title)}" title="Supervisor approval"><i data-lucide="shield" class="icon-md" aria-hidden="true"></i></button>` : ''}
       <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(subtask) }))}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
@@ -4683,6 +4683,25 @@ function wireNewTaskBtn(container) {
 }
 
 function wireQuickAddBtn(container) {
+  const anchor = container.querySelector('#task-manage-btn');
+  const panel = container.querySelector('#task-manage-panel');
+  anchor?.addEventListener('click', () => {
+    toggleTaskControlPopover(container, panel, anchor);
+    if (isTaskPopoverOpen(panel)) panel.querySelector('button:not([hidden])')?.focus({ preventScroll: true });
+  });
+  panel?.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeTaskPopover(container, panel);
+    anchor.focus({ preventScroll: true });
+  });
+  // Close before the existing destination opens so its dialog returns focus
+  // to the visible toolbar trigger, never to a hidden popover item.
+  panel?.addEventListener('click', event => {
+    if (!event.target.closest('button')) return;
+    closeTaskPopover(container, panel);
+    anchor.focus({ preventScroll: true });
+  }, true);
   container.querySelector('#btn-quick-add')?.addEventListener('click', () => {
     container.querySelectorAll('.task-control-popover').forEach((panel) => closeTaskPopover(container, panel));
     openTaskWorkflows({ onCreated: async () => loadTasks(container), canCreate: state.isAdmin });
@@ -5405,6 +5424,8 @@ function applyTaskPagePermissions(container) {
     const button = container.querySelector(`#${id}`);
     if (button) button.hidden = !canCapability('tasks.create');
   }
+  const manageButton = container.querySelector('#task-manage-btn');
+  if (manageButton) manageButton.hidden = !canCapability('workflows.run') && !canCapability('tasks.change_category_tags');
   const workflowButton = container.querySelector('#btn-quick-add');
   if (workflowButton) workflowButton.hidden = !canCapability('workflows.run');
   for (const id of ['btn-manage-categories', 'btn-manage-tags']) {
@@ -5544,28 +5565,17 @@ export async function render(container, { user }) {
             <i data-lucide="layout-grid" class="icon-sm" aria-hidden="true"></i>
             <span class="tasks-toolbar-control__label">${t('tasks.viewToggleLabel')}</span>
           </button>
-          <button class="btn btn--icon btn--ghost" id="btn-manage-categories"
-                  aria-label="${t('tasks.manageCategories')}" title="${t('tasks.manageCategories')}">
-            <i data-lucide="folder-tree" class="icon-lg" aria-hidden="true"></i>
-          </button>
-          <!-- Der Tag-Verwalter bekommt das Etiketten-Icon, die Kategorien den
-               Ordnerbaum: die beiden Achsen sind bewusst getrennt, und dieselbe
-               Bildsprache für beide hätte genau das wieder eingeebnet. -->
-          <button class="btn btn--icon btn--ghost" id="btn-manage-tags"
-                  aria-label="${t('tasks.manageTags')}" title="${t('tasks.manageTags')}">
-            <i data-lucide="tags" class="icon-lg" aria-hidden="true"></i>
-          </button>
           <button class="btn btn--icon btn--ghost" id="btn-assignment-requests"
                   aria-label="Assignment requests" title="Assignment requests">
             <i data-lucide="inbox" class="icon-lg" aria-hidden="true"></i>
           </button>
+          <button type="button" class="btn btn--ghost task-control-btn tasks-toolbar__manage" id="task-manage-btn"
+                  aria-label="Manage" aria-expanded="false" aria-controls="task-manage-panel">
+            <i data-lucide="settings-2" class="icon-sm" aria-hidden="true"></i><span>Manage</span>
+          </button>
           <button class="btn btn--primary toolbar-new-btn" id="btn-new-task" style="gap:var(--space-1)"
                   aria-label="${t('tasks.newTask')}">
             <i data-lucide="plus" class="icon-lg" aria-hidden="true"></i> <span class="toolbar-new-btn__label">${t('newLabel.tasks')}</span>
-          </button>
-          <button class="btn btn--icon btn--ghost" id="btn-quick-add"
-                  aria-label="Task Workflows" title="Task Workflows">
-            <i data-lucide="zap" class="icon-lg" aria-hidden="true"></i>
           </button>
         </div>
       </div>
@@ -5576,6 +5586,13 @@ export async function render(container, { user }) {
         <div class="task-control-popover" id="task-sort-panel" popover="auto"></div>
         <div class="task-control-popover" id="task-group-panel" popover="auto"></div>
         <div class="task-control-popover" id="task-view-panel" popover="auto"></div>
+        <div class="task-control-popover" id="task-manage-panel" popover="auto" role="group" aria-label="Manage">
+          <div class="task-control-options">
+            <button type="button" class="task-control-option" id="btn-manage-categories"><i data-lucide="folder-tree" class="icon-sm" aria-hidden="true"></i><span>Categories</span></button>
+            <button type="button" class="task-control-option" id="btn-manage-tags"><i data-lucide="tags" class="icon-sm" aria-hidden="true"></i><span>Tags</span></button>
+            <button type="button" class="task-control-option" id="btn-quick-add"><i data-lucide="zap" class="icon-sm" aria-hidden="true"></i><span>Workflows</span></button>
+          </div>
+        </div>
         <div class="task-control-popover task-profile-popover" id="task-profile-popover" popover="auto" role="dialog"></div>
         <div class="bulk-actions-bar" id="bulk-actions-bar" hidden>
           <span class="bulk-actions-bar__count" id="bulk-count" role="status" aria-live="polite"></span>

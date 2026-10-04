@@ -370,7 +370,7 @@
     "test:meal-cycle-scheduler": "node --test test/test-meal-cycle-scheduler.js",
     "test:meal-cycle-ui": "node --loader ./test/test-browser-loader.mjs --test test/test-meal-cycle-ui.js",
     "test:meal-cycles": "node --test test/test-meal-cycles.js",
-    "test:notes-canvas": "node --experimental-sqlite --test --test-concurrency=2 test/test-note-board-routes.js test/test-note-board-migration.js test/test-note-board-concurrency.js test/test-note-board-context.js test/test-note-privacy-surfaces.js test/test-note-privacy-rollback.js test/test-note-board-layout.js test/test-note-board-defaults-audit.js",
+    "test:notes-canvas": "node --experimental-sqlite --test --test-concurrency=2 test/test-note-board-routes.js test/test-note-board-migration.js test/test-note-board-concurrency.js test/test-note-board-context.js test/test-note-privacy-surfaces.js test/test-note-privacy-rollback.js test/test-note-board-layout.js test/test-note-board-defaults-audit.js test/test-note-layout-state.js test/test-note-layout-state-migration.js",
     "test:notes-canvas-browser": "node --test --test-concurrency=1 test/test-note-board-browser.js test/test-note-board-list-browser.js test/test-note-board-direct-browser.js test/test-note-board-full-app-browser.js",
     "test:notes-visual": "node --experimental-sqlite --test test/test-note-board-visual-qa.js",
     "test:ux-cleanup-browser": "node --test --test-concurrency=1 test/test-ux-cleanup-browser.js && node --test --test-name-pattern=\"UX cleanup|approval layout\" test/test-task-view-browser.js"

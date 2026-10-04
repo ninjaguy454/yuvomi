@@ -47,6 +47,8 @@ const layoutWrites = () => writes.filter(write => write.path.endsWith('/layout')
 async function mount({ width = 1280, height = 900, permission = 'edit', fixture, mobile = false } = {}) {
   writes = []; notes = structuredClone(original);
   if (fixture === 'fitting') notes = [notes[0]];
+  if (fixture === 'locked') notes[0].layout.position_locked = true;
+  if (fixture === 'layers') { notes[1].layout = { x:6,y:2,width:4,height:6,revision:1,always_on_top:true }; }
   if (fixture === 'tall-top') { notes = [notes[0]]; notes[0].layout.y = 105; }
   if (fixture === 'long-content') notes[0].content = 'A plain paragraph to drag.\n\n' + Array.from({ length: 35 }, (_, i) => `Scrollable preview paragraph ${i}.`).join('\n\n') + '\n\n' + notes[0].content;
   if (permission !== 'edit') for (const note of notes) note.permissions = { view: true, edit: false, delete: false, manage_visibility: false };
@@ -65,7 +67,7 @@ async function box(page, selector = card) {
 }
 async function bodyPoint(page) {
   // A real noninteractive descendant catches implementations that only accept card backgrounds.
-  const rect = await box(page, `${card} .note-card__title`);
+  const rect = await box(page, `${card} .note-card__content .note-md-p`);
   return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
 }
 async function mouseDrag(page, point, dx = 110, dy = 96) {
@@ -105,6 +107,100 @@ for (const width of [1280, 752]) test(`body mouse drag saves CAS at canvas width
     assert.equal(write.body.layout.width, 4); assert.equal(write.body.layout.height, 6);
     assert.equal(notes[0].content, original[0].content);
   } finally { await page.close(); }
+});
+
+test('zoom controls change only the view, survive refresh, and Reset restores origin', async () => {
+  const page = await mount();
+  try {
+    const before = await box(page), canonical = structuredClone(notes);
+    await page.click('#notes-zoom-in');
+    const zoomed = await box(page);
+    assert.ok(zoomed.width > before.width * 1.2);
+    assert.equal(await page.$eval('#notes-zoom-value', n => n.textContent), '125%');
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await sleep(100);
+    assert.equal(await page.$eval('#notes-zoom-value', n => n.textContent), '125%');
+    await page.click('#notes-reset-view');
+    assert.equal(await page.$eval('#notes-zoom-value', n => n.textContent), '100%');
+    assert.equal(await page.$eval('.notes-scroll', n => n.scrollLeft + n.scrollTop), 0);
+    assert.deepEqual(notes, canonical); assert.equal(writes.length, 0);
+  } finally { await page.close(); }
+});
+
+test('zoomed drag uses world units and right-edge autoscroll grows beyond twelve columns', async () => {
+  const page=await mount();
+  try {
+    await page.click('#notes-zoom-in');
+    const pitch=await page.$eval('.notes-scroll',n=>(n.clientWidth-parseFloat(getComputedStyle(n).paddingLeft)-parseFloat(getComputedStyle(n).paddingRight))/12);
+    await mouseDrag(page,await bodyPoint(page),pitch*1.25,60); await saved(page);
+    assert.equal(notes[0].layout.x,3); assert.equal(notes[0].layout.y,3);
+    const start=await bodyPoint(page), bounds=await box(page,'.notes-scroll');
+    await page.mouse.move(start.x,start.y); await page.mouse.down();
+    await page.mouse.move(bounds.x+bounds.width-5,start.y,{steps:8}); await sleep(700);
+    assert.ok(await page.$eval('.notes-scroll',n=>n.scrollLeft)>0,'right edge scrolls horizontally');
+    await page.mouse.up(); await saved(page,2);
+    assert.ok(notes[0].layout.x>12,'saved world position is beyond the old board edge');
+    const extent=await page.$eval('.notes-canvas-space',n=>n.getBoundingClientRect().width);
+    assert.ok(extent >= ((notes[0].layout.x+notes[0].layout.width)*pitch+192)*1.25-1);
+  } finally { await page.close(); }
+});
+
+test('background pan and keyboard pan move only the viewport', async () => {
+  const page=await mount();
+  try {
+    const originalNotes=structuredClone(notes);
+    const area=await box(page,'.notes-scroll'), start={x:area.x+area.width-100,y:area.y+400};
+    await mouseDrag(page,start,-120,-120);
+    assert.ok(await page.$eval('.notes-scroll',n=>n.scrollTop)>0);
+    assert.ok(await page.$eval('.notes-scroll',n=>n.scrollLeft)>0);
+    await page.click('#notes-reset-view'); await page.focus('#notes-grid'); await page.keyboard.press('ArrowDown');
+    await page.waitForFunction(()=>document.querySelector('.notes-scroll').scrollTop>0);
+    assert.deepEqual(notes,originalNotes); assert.equal(writes.length,0);
+  } finally { await page.close(); }
+});
+
+test('locked cards cannot move, resize stays anchored, and active resize has an outline', async () => {
+  const page = await mount({fixture:'locked'});
+  try {
+    const before = await box(page);
+    await mouseDrag(page, await bodyPoint(page)); await unchanged(page, before, false);
+    const point={x:before.x+before.width-3,y:before.y+before.height-3};
+    await page.mouse.move(point.x,point.y); await page.mouse.down(); await sleep(520);
+    assert.ok(await page.$eval(card,n=>parseFloat(getComputedStyle(n).outlineWidth)>=2));
+    await page.mouse.move(point.x+110,point.y+48); await page.mouse.up(); await saved(page);
+    assert.equal(notes[0].layout.x,2); assert.equal(notes[0].layout.y,2);
+    assert.ok(notes[0].layout.width>4);
+  } finally { await page.close(); }
+});
+
+test('ordinary selection stays below always-on-top and drag elevation is temporary', async () => {
+  const page=await mount({fixture:'layers'});
+  try {
+    const tiers=()=>page.$$eval('.note-card',nodes=>nodes.map(n=>Number(getComputedStyle(n).zIndex)));
+    const initial=await tiers(); assert.ok(initial[0]<initial[1]);
+    const point=await bodyPoint(page); await page.mouse.move(point.x,point.y); await page.mouse.down();
+    await page.mouse.move(point.x+30,point.y+48);
+    const during=await tiers(); assert.ok(during[0]>during[1]);
+    await page.keyboard.press('Escape'); await page.mouse.up();
+    const after=await tiers(); assert.ok(after[0]<after[1]);
+    assert.equal(writes.length,0);
+  } finally { await page.close(); }
+});
+
+test('pinch takes over an active touch drag without saving and changes viewport scale', async () => {
+  const page=await mount({width:954,height:859,mobile:true}); const cdp=await page.createCDPSession();
+  try {
+    const canonical=structuredClone(notes), p=await bodyPoint(page);
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...p}]});
+    const first={id:1,x:p.x+50,y:p.y+48};
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[first]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[first,{id:2,x:first.x+100,y:first.y}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{...first,x:first.x-30},{id:2,x:first.x+140,y:first.y}]});
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    assert.ok(Number.parseInt(await page.$eval('#notes-zoom-value',n=>n.textContent))>100);
+    assert.deepEqual(notes,canonical); assert.equal(writes.length,0);
+    assert.equal(await page.$('.note-card--moving'),null);
+  } finally { await cdp.detach(); await page.close(); }
 });
 
 test('real touch body drag moves a card and advances the layout revision', async () => {
@@ -187,7 +283,9 @@ test('real touch long press on an edge resizes', async () => {
   try {
     // Keep the contact away from links/checklists that Chromium may prioritize for touch hit testing.
     const b = await box(page), x = b.x + 3, y = b.y + 40;
+    await page.evaluate(() => window.addEventListener('pointerdown', event => { window.edgeTarget = event.target.closest('button')?.outerHTML || event.target.tagName; }, { once: true }));
     await input.start(x, y); await sleep(520);
+    assert.equal(await page.$('.note-card--resizing') !== null, true, `held edge should resize; hit target: ${await page.evaluate(() => window.edgeTarget)}`);
     for (let i = 1; i <= 6; i++) await input.move(x - 105 * i / 6, y);
     await input.end(); await saved(page);
     assert.equal(notes[0].layout.x + notes[0].layout.width, 6);

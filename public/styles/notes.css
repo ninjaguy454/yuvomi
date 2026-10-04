@@ -71,6 +71,12 @@
   flex: 0 0 auto;
 }
 
+.notes-page .notes-toolbar:not(.page-toolbar--in-group):has(> .page-toolbar__title) { flex-wrap: nowrap; }
+.notes-page .notes-toolbar:not(.page-toolbar--in-group) > .page-toolbar__title { flex-basis: auto; }
+.notes-page .notes-toolbar > .notes-toolbar__search { flex: 1 1 0; min-width: 0; max-width: 280px; width: auto; }
+.notes-toolbar__search .page-search__control { min-width: 0; }
+.notes-toolbar__search .page-search__input { min-width: 0; }
+
 /* --------------------------------------------------------
  * Masonry-Grid
  * -------------------------------------------------------- */
@@ -535,7 +541,10 @@
 .note-card__list-heading .note-card__title { flex: 1; min-width: 0; align-self: center; }
 .note-card__list-heading .note-card__open { flex: none; }
 .note-card__list-meta { color: var(--color-text-secondary); font-size: var(--text-xs); margin-top: var(--space-2); }
-.note-card__expand { align-self: flex-start; border: 0; border-radius: var(--radius-md); background: var(--note-action-bg); color: inherit; min-height: var(--target-base); padding-inline: var(--space-3); cursor: pointer; }
+.note-card__expand { display: inline; border: 0; background: transparent; color: var(--color-text-primary); padding: 0; margin-inline-start: .3em; text-decoration: underline; text-underline-offset: .15em; font: inherit; cursor: pointer; }
+.note-card__preview > .note-card__content { display: contents; }
+.note-card__preview > .note-card__content > :last-child { display: inline; }
+.note-card__preview { overflow-wrap: anywhere; }
 .notes-list-density { display: inline-flex; gap: var(--space-2); align-items: center; color: var(--color-text-secondary); font-size: var(--text-sm); }
 .notes-list-density[hidden] { display: none; }
 .notes-list-density select { min-height: var(--target-base); max-width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text-primary); padding-inline: var(--space-2); }
@@ -555,6 +564,31 @@
 .notes-board[data-board-view="canvas"] > .note-card--moving { cursor: grabbing; }
 .notes-board[data-board-view="canvas"] > .note-card > .note-card__title { padding-inline-end: var(--target-base); }
 .notes-board .note-card__footer { padding-inline-end: 0; }
+
+.notes-canvas-space { position: relative; min-width: 0; }
+.notes-canvas-space--active { overflow: clip; }
+.notes-canvas-space--active > .notes-board { position: absolute; top: 0; left: 0; margin-top: 0; transform-origin: top left; }
+.notes-scroll--canvas { touch-action: none; }
+.notes-zoom-controls { display: inline-flex; align-items: center; gap: var(--space-1); margin-inline-start: auto; }
+.notes-zoom-controls output { min-width: 3.5em; text-align: center; font-size: var(--text-xs); }
+.notes-include-locked { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-xs); }
+.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable,
+.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable .note-card__content { touch-action: none; }
+.notes-board > .note-card--moving { box-shadow: var(--shadow-lg), 0 12px 24px rgb(0 0 0 / .22); }
+.notes-board > .note-card--resizing { outline: 3px solid var(--color-accent); outline-offset: -3px; box-shadow: var(--shadow-lg); }
+
+/* Small glyphs, usable transparent targets; title is the keyboard reader entry. */
+.notes-board .note-card__title { border: 0; background: transparent; color: inherit; text-align: start; font-family: inherit; cursor: pointer; }
+.notes-board[data-board-view="canvas"] > .note-card > .note-card__title { padding-inline: 0; margin-inline: 44px; min-height: 40px; }
+.note-card__lock { position: absolute; top: 16px; left: 16px; display: grid; place-items: center; width: 40px; height: 40px; border: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-md); }
+.note-card__lock[aria-pressed="true"] { color: var(--color-text-primary); background: var(--note-action-bg); }
+.note-card__lock svg { width: 16px; height: 16px; }
+.note-card__list-heading > .note-card__lock { position: static; flex: none; }
+.note-card__menu summary { width: 40px; min-height: 40px; background: transparent; }
+.note-card__menu summary svg { width: 16px; height: 16px; }
+.note-card__menu-items button > span { display: inline-block; width: 1.2em; }
+.note-card__adjust { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); border: 0; padding: 0; white-space: nowrap; }
+.note-card__adjust:focus { top: 44px; left: 8px; width: auto; height: auto; clip-path: none; padding: var(--space-2); color: var(--color-text-primary); background: var(--color-surface); z-index: 5; border-radius: var(--radius-md); }
 
 /* Match the shell's short-height class. Let the page scroll as one flow:
  * fixed headers must not squeeze the notes into a tiny nested scrollport. */

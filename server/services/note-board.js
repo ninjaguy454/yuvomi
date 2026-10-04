@@ -10,7 +10,10 @@ function revision(note,body,{required=false}={}){
   if(body.expected_revision===undefined&&!required)return;
   if(!Number.isSafeInteger(body.expected_revision)||body.expected_revision!==note.revision)throw noteError('The note has changed. Reload it before trying again.',409);
 }
-function savedLayout(d,n){return d.prepare('SELECT x,y,width,height,revision FROM note_layouts WHERE note_id=?').get(n.id);}
+function savedLayout(d,n){
+  const layout=d.prepare('SELECT x,y,width,height,revision,position_locked,always_on_top FROM note_layouts WHERE note_id=?').get(n.id);
+  return layout?{...layout,position_locked:Boolean(layout.position_locked),always_on_top:Boolean(layout.always_on_top)}:undefined;
+}
 function visibleNotes(d,p){
   const device=noteDevice(p);
   return d.prepare(`SELECT n.* FROM notes n WHERE ${device?"n.visibility='all'":noteVisibleSql()} ORDER BY n.pinned DESC,n.updated_at DESC,n.id DESC`)
@@ -28,14 +31,14 @@ function projectedLayouts(d,p,notes=visibleNotes(d,p)){
     const rows=[...new Set([0,...occupied.map(r=>r.y+r.height)])].filter(y=>y<=10000).sort((a,b)=>a-b);
     for(const y of rows){
       for(const x of [0,4,8,1,2,3,5,6,7]){
-        const candidate={x,y,width:4,height:6,revision:0};
+        const candidate={x,y,width:4,height:6,revision:0,position_locked:false,always_on_top:false};
         if(occupied.every(r=>x+4<=r.x||r.x+r.width<=x||y+6<=r.y||r.y+r.height<=y)){placed=candidate;break;}
       }
       if(placed)break;
     }
     // A fully occupied bounded board remains readable in compact view. Never
     // emit out-of-bounds geometry that the client would clamp over another card.
-    result.set(note.id,placed||{x:0,y:0,width:4,height:6,revision:0,overflow:true});
+    result.set(note.id,placed||{x:0,y:0,width:4,height:6,revision:0,position_locked:false,always_on_top:false,overflow:true});
     if(placed)occupied.push(placed);
   }
   return result;
@@ -107,27 +110,38 @@ export function mutateNote(d,p,id,action,body={}){
 function checkedLayout(value){
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!['x','y','width','height'].includes(key)))throw noteError('Invalid note layout.');
   const {x,y,width,height}=value;
-  if(![x,y,width,height].every(Number.isSafeInteger)||x<0||y<0||y>10000||width<3||width>12||height<4||height>100||x+width>12)throw noteError('Invalid note layout.');
+  if(![x,y,width,height].every(Number.isSafeInteger)||x<0||x>10000||y<0||y>10000||width<3||width>12||height<4||height>100)throw noteError('Invalid note layout.');
   return {x,y,width,height};
 }
-export function setNoteLayouts(d,p,{items}={}){
+const layoutChangeFields=['layout','position_locked','always_on_top'];
+const layoutRequestFields=['expected_layout_revision',...layoutChangeFields];
+const owns=(object,key)=>Object.prototype.hasOwnProperty.call(object,key);
+export function setNoteLayouts(d,p,body={}){
+  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!['items','include_locked'].includes(key))||owns(body,'include_locked')&&typeof body.include_locked!=='boolean')throw noteError('Invalid note layout request.');
+  const {items,include_locked=false}=body;
   if(!Array.isArray(items)||!items.length||items.length>500||new Set(items.map(i=>i?.note_id)).size!==items.length)throw noteError('Choose distinct notes to arrange.');
   return d.transaction(()=>{
+    let defaults;
     const planned=items.map(item=>{
-      if(!item||!Number.isSafeInteger(item.note_id)||item.note_id<1||Object.keys(item).some(key=>!['note_id','expected_layout_revision','layout'].includes(key)))throw noteError('Invalid note layout request.');
+      if(!item||typeof item!=='object'||Array.isArray(item)||!Number.isSafeInteger(item.note_id)||item.note_id<1||Object.keys(item).some(key=>!['note_id',...layoutRequestFields].includes(key))||!layoutChangeFields.some(key=>owns(item,key)))throw noteError('Invalid note layout request.');
       const note=requireNote(d,p,item.note_id,'edit');assertNoteAction(d,p,note,'view');
-      const geometry=checkedLayout(item.layout),current=savedLayout(d,note)||{revision:0};
+      for(const flag of ['position_locked','always_on_top'])if(owns(item,flag)&&typeof item[flag]!=='boolean')throw noteError('Invalid note layout flag.');
+      const saved=savedLayout(d,note),current=saved||(defaults??=projectedLayouts(d,p)).get(note.id);
       if(!Number.isSafeInteger(item.expected_layout_revision)||item.expected_layout_revision!==current.revision)throw noteError('The note layout changed. Reload before trying again.',409);
-      return {note,geometry,current};
+      const geometry=owns(item,'layout')?checkedLayout(item.layout):{x:current.x,y:current.y,width:current.width,height:current.height};
+      const flags={position_locked:owns(item,'position_locked')?item.position_locked:current.position_locked,always_on_top:owns(item,'always_on_top')?item.always_on_top:current.always_on_top};
+      if(current.position_locked&&flags.position_locked&&!include_locked&&(geometry.x!==current.x||geometry.y!==current.y))throw noteError('The note position is locked. Unlock it before moving it.',409);
+      return {note,geometry,flags,current,saved,hasGeometry:owns(item,'layout')};
     });
-    return planned.map(({note,geometry:g,current})=>{
-      if(!current.revision)d.prepare('INSERT INTO note_layouts(note_id,x,y,width,height) VALUES(?,?,?,?,?)').run(note.id,g.x,g.y,g.width,g.height);
-      else if(['x','y','width','height'].some(key=>g[key]!==current[key]))d.prepare('UPDATE note_layouts SET x=?,y=?,width=?,height=?,revision=revision+1 WHERE note_id=?').run(g.x,g.y,g.width,g.height,note.id);
+    return planned.map(({note,geometry:g,flags,current,saved,hasGeometry})=>{
+      if(!saved&&!hasGeometry&&['position_locked','always_on_top'].every(key=>flags[key]===current[key]))return {note_id:note.id,...current};
+      if(!saved)d.prepare('INSERT INTO note_layouts(note_id,x,y,width,height,position_locked,always_on_top) VALUES(?,?,?,?,?,?,?)').run(note.id,g.x,g.y,g.width,g.height,flags.position_locked?1:0,flags.always_on_top?1:0);
+      else if(['x','y','width','height'].some(key=>g[key]!==current[key])||['position_locked','always_on_top'].some(key=>flags[key]!==current[key]))d.prepare('UPDATE note_layouts SET x=?,y=?,width=?,height=?,position_locked=?,always_on_top=?,revision=revision+1 WHERE note_id=?').run(g.x,g.y,g.width,g.height,flags.position_locked?1:0,flags.always_on_top?1:0,note.id);
       return {note_id:note.id,...savedLayout(d,note)};
     });
   }).immediate();
 }
 export function setNoteLayout(d,p,id,body){
-  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!['expected_layout_revision','layout'].includes(key)))throw noteError('Invalid note layout request.');
+  if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(key=>!layoutRequestFields.includes(key)))throw noteError('Invalid note layout request.');
   return setNoteLayouts(d,p,{items:[{...body,note_id:idValue(id)}]})[0];
 }

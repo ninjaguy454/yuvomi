@@ -1403,6 +1403,13 @@
         "agendaDayEmpty": "Nichts geplant"
     },
     "notes": {
+        "resetView": "Ansicht zurücksetzen",
+        "includeLocked": "Fixierte einbeziehen",
+        "zoomIn": "Vergrößern",
+        "zoomOut": "Verkleinern",
+        "positionLock": "Position fixieren",
+        "showOnDashboard": "Auf dem Dashboard anzeigen",
+        "alwaysOnTop": "Immer im Vordergrund",
         "canvasGestureHint": "Notiz zum Verschieben ziehen. Zum Vergrößern oder Verkleinern eine Kante gedrückt halten.",
         "listDensity": "Listendetails",
         "listCompact": "Kompakt",

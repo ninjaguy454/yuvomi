@@ -51,7 +51,16 @@ test('layout CAS is separate from content and unauthorized/stale batches roll ba
   actor=2;items[1].expected_layout_revision=0;
   assert.equal((await call('PATCH','/layout',{items})).status,404);
   assert.equal(d.prepare('SELECT x FROM note_layouts WHERE note_id=?').get(sharedNote.id).x,0);
-  for(const shape of [{x:-1,y:0,width:4,height:6},{x:10,y:0,width:4,height:6},{x:0,y:0,width:2,height:6},{x:0,y:Infinity,width:4,height:6}])assert.equal((await call('PATCH',`/${sharedNote.id}/layout`,{expected_layout_revision:1,layout:shape})).status,400);
+  for(const shape of [{x:-1,y:0,width:4,height:6},{x:10001,y:0,width:4,height:6},{x:0,y:0,width:2,height:6},{x:0,y:Infinity,width:4,height:6}])assert.equal((await call('PATCH',`/${sharedNote.id}/layout`,{expected_layout_revision:1,layout:shape})).status,400);
+});
+test('single and bulk HTTP layouts persist strict flags, lock movement and preserve the dashboard pin',async()=>{
+  actor=1;const note=(await call('POST','/',{content:'HTTP layout flags',pinned:true})).body.data;
+  const first=await call('PATCH',`/${note.id}/layout`,{expected_layout_revision:0,position_locked:true,always_on_top:true});assert.equal(first.status,200);assert.equal(first.body.data.position_locked,true);assert.equal(first.body.data.always_on_top,true);
+  const {x,y,width,height}=first.body.data,items=[{note_id:note.id,expected_layout_revision:1,layout:{x:x+30,y,width,height}}];
+  assert.equal((await call('PATCH','/layout',{items})).status,409);assert.equal((await call('PATCH','/layout',{items,include_locked:1})).status,400);
+  const moved=await call('PATCH','/layout',{items,include_locked:true});assert.equal(moved.status,200);assert.equal(moved.body.data[0].position_locked,true);assert.equal(moved.body.data[0].always_on_top,true);assert.equal(moved.body.data[0].revision,2);
+  assert.equal((await call('PATCH',`/${note.id}/layout`,{expected_layout_revision:2,position_locked:null})).status,400);assert.equal((await call('PATCH',`/${note.id}/layout`,{expected_layout_revision:2})).status,400);
+  const read=(await call('GET',`/${note.id}`)).body.data;assert.equal(read.pinned,1);assert.equal(read.revision,note.revision);assert.equal(read.layout.x,x+30);
 });
 test('paired devices retain all independent grants but never see or mutate restricted notes',()=>{
   d.prepare("INSERT INTO household_devices(id,name,permissions_json,scope_json,preferences_json) VALUES(99,'Synthetic display','{}','{}','{}')").run();

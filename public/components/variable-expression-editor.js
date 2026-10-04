@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api } from '/api.js';
 import { esc } from '/utils/html.js';
 import { EXPRESSION_FUNCTIONS, EXPRESSION_PROPERTIES, EXPRESSION_LIMITS, validateExpression, validateVariableDefinitions } from '/utils/variable-expressions.js';
@@ -12,11 +13,11 @@ export function renderVariableInput(variable, { members = [], places = [], rotat
   const type = variable.type === 'select' ? 'choice' : variable.type;
   const common = `${attribute}="${h(keyOf(variable))}" data-variable-type="${h(type)}" aria-label="${h(variable.label || keyOf(variable))}"`;
   let options;
-  if (type === 'household_member') options = members.map(member => [member.id, member.display_name || member.name]);
+  if (type === 'household_member') options = members.map(member => [member.id, memberLabel(member) || member.name]);
   if (type === 'location') options = places.filter(place => place.active !== 0).map(place => [place.id, place.path_label || place.name]);
   if (type === 'rotation_group') options = (rotationGroups.length ? rotationGroups : variable.module_options || []).filter(group => group.active !== 0).map(group => [group.id, group.name]);
   if (type === 'rotation_occurrence') options = (rotationOccurrences.length ? rotationOccurrences : variable.module_options || []).map(occurrence => [occurrence.id, occurrence.label || `${occurrence.purpose_label || 'Rotation'} · ${occurrence.occurrence_key || occurrence.id}`]);
-  if (type === 'household_member_list') return `<select class="input" multiple ${common}>${members.map(member => `<option value="${member.id}" ${(value || []).map(Number).includes(Number(member.id)) ? 'selected' : ''}>${h(member.display_name || member.name)}</option>`).join('')}</select>`;
+  if (type === 'household_member_list') return `<select class="input" multiple ${common}>${members.map(member => `<option value="${member.id}" ${(value || []).map(Number).includes(Number(member.id)) ? 'selected' : ''}>${h(memberLabel(member) || member.name)}</option>`).join('')}</select>`;
   if (type === 'boolean') options = [[false, 'No'], [true, 'Yes']];
   if (type === 'choice') options = (variable.options || []).map(option => [option, option]);
   if (options) return `<select class="input" ${common}>${optional || ['household_member', 'location', 'rotation_group', 'rotation_occurrence'].includes(type) ? '<option value="">Choose…</option>' : ''}${options.map(([id, label]) => `<option value="${h(id)}" ${String(id) === String(value) ? 'selected' : ''}>${h(label)}</option>`).join('')}</select>`;
@@ -131,7 +132,7 @@ export function bindVariableValueEditor(root, { variable = {}, getDefinition, ge
     const graph = validateVariableDefinitions(definitions()).dependencies;
     const seen = new Set();
     const needsSubject = key => key === 'context.household_member' || (!seen.has(key) && (seen.add(key), (graph[key] || []).some(needsSubject)));
-    const subjectInput = needsSubject(keyOf(getDefinition())) ? `<label class="label">Person this is for<select class="input" data-expression-subject><option value="">Choose…</option>${members.map(member => `<option value="${member.id}" ${Number(previous.subject_user_id) === Number(member.id) ? 'selected' : ''}>${h(member.display_name || member.name)}</option>`).join('')}</select></label>` : '';
+    const subjectInput = needsSubject(keyOf(getDefinition())) ? `<label class="label">Person this is for<select class="input" data-expression-subject><option value="">Choose…</option>${members.map(member => `<option value="${member.id}" ${Number(previous.subject_user_id) === Number(member.id) ? 'selected' : ''}>${h(memberLabel(member) || member.name)}</option>`).join('')}</select></label>` : '';
     if (!ordinary.length && !subjectInput) { sampleArea.replaceChildren(); return; }
     replaceHtml(sampleArea, `<details open><summary>Try with these values</summary><div class="variable-expression__samples">${ordinary.map(item => `<label class="label">${h(item.label || keyOf(item))}${renderVariableInput(item, { members, places, rotationGroups, rotationOccurrences, value: previous.inputs[keyOf(item)] ?? item.default_value, optional: true })}</label>`).join('')}${subjectInput}</div></details>`);
   };
@@ -150,7 +151,7 @@ export function bindVariableValueEditor(root, { variable = {}, getDefinition, ge
     const button = event.target.closest('[data-expression-insert]'); if (button) insert(button.dataset.expressionInsert);
   });
   const memberPicker = root.querySelector('[data-expression-member]');
-  if (memberPicker) replaceHtml(memberPicker, `<option value="">Choose a member…</option>${members.map(member => `<option value="${member.id}">${h(member.display_name || member.name)}</option>`).join('')}`);
+  if (memberPicker) replaceHtml(memberPicker, `<option value="">Choose a member…</option>${members.map(member => `<option value="${member.id}">${h(memberLabel(member) || member.name)}</option>`).join('')}`);
   root.querySelector('[data-expression-insert-member]')?.addEventListener('click', () => { if (memberPicker.value) insert(memberPicker.value); });
   const runPreview = async () => {
     previewRequested = true;

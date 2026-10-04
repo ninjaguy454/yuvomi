@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import {renderCycleReturn} from '/utils/meal-cycle-state.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
@@ -229,7 +230,7 @@ function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveSt
   if (mode === 'assignee') {
     const buckets = new Map();
     if (includeEmptyAssignees) {
-      state.users.forEach((user) => buckets.set(`user-${user.id}`, { id: `user-${user.id}`, label: user.display_name, tasks: [], user }));
+      state.users.forEach((user) => buckets.set(`user-${user.id}`, { id: `user-${user.id}`, label: memberLabel(user), tasks: [], user }));
     }
     for (const task of tasks) {
       const people = taskParticipants(task);
@@ -241,7 +242,7 @@ function taskBuckets(tasks, mode, { includeEmptyAssignees = false, mergeActiveSt
       }
       for (const user of people) {
         const key = `user-${user.id}`;
-        const bucket = buckets.get(key) || { id: key, label: user.display_name, tasks: [], user };
+        const bucket = buckets.get(key) || { id: key, label: memberLabel(user), tasks: [], user };
         bucket.tasks.push(task);
         buckets.set(key, bucket);
       }
@@ -579,7 +580,7 @@ function renderResponsiveTagBadges(task) {
 
 function renderProfileAvatarButton(participant, size = 34) {
   if (!participant?.id) return '';
-  const name = participant.display_name || t('tasks.filterGroupPerson');
+  const name = memberLabel(participant) || t('tasks.filterGroupPerson');
   return `<button type="button" class="activity-card__participant-profile" data-action="show-participant-profile"
     data-user-id="${Number(participant.id)}" aria-haspopup="dialog" aria-label="${esc(name)}" title="${esc(name)}">
     ${renderAvatarStack([participant], { size, maxVisible: 1 })}
@@ -655,7 +656,7 @@ function renderTaskCard(task, opts = {}) {
   const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
   const due = formatDueDate(task.due_date, task.due_time, isDone || archived || isExpired(task));
   const location = taskLocationLabel(task);
-  const names = (task.assigned_users || []).map(person => person.display_name).filter(Boolean).join(', ') || task.assigned_name;
+  const names = (task.assigned_users || []).map(person => memberLabel(person)).filter(Boolean).join(', ') || memberLabel({ id: task.assigned_to, display_name: task.assigned_name });
   const blocked = !isExpired(task) && ['needed', 'excluded'].includes(task.supervision?.state);
   const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
   const waiting = helperWaitingLabel(task, state.currentUserId);
@@ -1026,7 +1027,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
     return `<option value="${activity.id}" data-subject-required="${policy.subject_required ? '1' : '0'}" ${activityTemplateId === Number(activity.id) ? 'selected' : ''}>${esc(activity.name)}${activity.inactive ? ' (inactive)' : ''}</option>`;
   }).join('');
   const activitySubjectOptions = users.map((user) =>
-    `<option value="${user.id}" ${activitySubjectUserId === Number(user.id) ? 'selected' : ''}>${esc(user.display_name)}</option>`
+    `<option value="${user.id}" ${activitySubjectUserId === Number(user.id) ? 'selected' : ''}>${esc(memberLabel(user))}</option>`
   ).join('');
 
   const selectedCat = task?.category ?? presetActivityTemplate?.category ?? FALLBACK_CATEGORY;
@@ -1198,8 +1199,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
       ${isEdit && task?.activity_template_id ? `<section class="form-group">
         <label class="label">Activity responsibility</label>
-        <p class="task-field-hint">${(task.activity_responsibilities || []).map((row) => `${esc(row.role)}: ${esc(row.display_name)}`).join(' · ') || (task.activity_assignment_state === 'open' ? 'Open for an eligible household member to claim.' : 'No active responsibility recorded.')}</p>
-        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(user.display_name)}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Vidamia will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
+        <p class="task-field-hint">${(task.activity_responsibilities || []).map((row) => `${esc(row.role)}: ${esc(memberLabel(row))}`).join(' · ') || (task.activity_assignment_state === 'open' ? 'Open for an eligible household member to claim.' : 'No active responsibility recorded.')}</p>
+        ${state.isAdmin && task.activity_assignment_override_allowed ? `<div class="modal-grid modal-grid--2"><select class="input" data-activity-reassign>${users.map((user) => `<option value="${user.id}" ${Number(user.id) === Number(task.assigned_to) ? 'selected' : ''}>${esc(memberLabel(user))}</option>`).join('')}</select><button class="btn btn--secondary" type="button" data-activity-reassign-submit data-task-id="${task.id}">Reassign safely</button></div><p class="task-field-hint">Vidamia will recheck skills, age limits, availability, and presence before changing the assignment.</p>` : ''}
       </section>` : ''}
       <div class="form-group" id="task-manual-assignment-mode" style="margin-top:var(--space-4)"${isSoloHousehold() ? ' hidden' : ''}>
         <label class="label" for="task-assignment-mode">Assignment mode</label>
@@ -1253,7 +1254,7 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
 
       <div id="task-root-skills">${renderSkillPicker({ skills: state.skills, selectedIds: task.skill_ids || task.skills || [], readOnly: !!activityTemplateId && task.recurrence_series_id == null, canCreateSkill: canCapability('skills.manage') && (!activityTemplateId || task.recurrence_series_id != null) })}</div>
       <p class="task-field-hint">${activityTemplateId && task.recurrence_series_id == null ? 'Required skills and assignment rules come from this Activity Template.' : 'Required skills apply to assignment and claiming. Each subtask has its own requirements.'}</p>
-      ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(person.display_name)).join(', ')}</p>` : ''}
+      ${isEdit && task.task_responsibilities?.length ? `<p class="task-field-hint">Participants: ${task.task_responsibilities.map((person) => esc(memberLabel(person))).join(', ')}</p>` : ''}
       </section>
       ${!task.parent_task_id && !task.is_supervision_projection ? `<section class="task-editor__section" aria-labelledby="task-subtasks-heading"><h3 id="task-subtasks-heading">Subtasks</h3>${renderSubtaskEditor({ subtasks: structuralSubtasks(task), skills: state.skills, users:state.users, canCreateSkill: canCapability('skills.manage') })}</section>` : ''}
       ${!task.parent_task_id && !task.is_supervision_projection && (canCapability('rotations.configure') || task.rotation_bindings?.length) ? `<section id="task-rotations">${renderRotationBindings(task.rotation_bindings || task.rotation_bindings_json, {skills:state.skills,places:state.places})}</section>` : ''}
@@ -3255,7 +3256,7 @@ function renderHistoryEntry(entry) {
   const expired = entry.event_type === 'expired';
   const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
   // Expiration is automatic; a missing actor is not a removed household member.
-  const name = expired ? '' : entry.source_device_name ? [entry.user_name, `From ${entry.source_device_name}`].filter(Boolean).join(' · ') : entry.user_name || t('tasks.historyUnknownMember');
+  const name = expired ? '' : entry.source_device_name ? [memberLabel({ id: entry.user_id, display_name: entry.user_name }), `From ${entry.source_device_name}`].filter(Boolean).join(' · ') : memberLabel({ id: entry.user_id, display_name: entry.user_name }) || t('tasks.historyUnknownMember');
   const avatar = expired ? '<i data-lucide="clock" aria-hidden="true"></i>' : entry.source_device_name ? '<i data-lucide="monitor" aria-hidden="true"></i>' : renderAvatarStack(
     [{ display_name: name, color: entry.user_color, avatar_data: entry.user_avatar }],
     { size: 32, maxVisible: 1 },
@@ -3293,7 +3294,7 @@ function renderHistoryPeople() {
   return `
     <div class="group-toggle history-people" role="group" aria-label="${t('tasks.historyPersonFilter')}">
       ${chip(null, t('common.all'))}
-      ${state.users.map((u) => chip(u.id, u.display_name)).join('')}
+      ${state.users.map((u) => chip(u.id, memberLabel(u))).join('')}
     </div>`;
 }
 
@@ -4008,7 +4009,7 @@ function renderFilters(container) {
     groups.push({
       key: 'assigned_to',
       label: t('tasks.filterGroupPerson'),
-      items: state.users.map((user) => ({ value: String(user.id), label: user.display_name })),
+      items: state.users.map((user) => ({ value: String(user.id), label: memberLabel(user) })),
     });
   }
   if (state.allTags.length) {
@@ -5055,11 +5056,11 @@ function openParticipantProfile(container, userId, anchor) {
     </a>` : '',
   ].filter(Boolean).join('');
 
-  panel.setAttribute('aria-label', user.display_name);
+  panel.setAttribute('aria-label', memberLabel(user));
   panel.replaceChildren();
   panel.insertAdjacentHTML('beforeend', `<div class="task-profile-popover__identity">
       ${renderAvatarStack([participant], { size: 52, maxVisible: 1 })}
-      <span class="task-profile-popover__name">${esc(user.display_name)}</span>
+      <span class="task-profile-popover__name">${esc(memberLabel(user))}</span>
       ${user.family_role ? `<span class="task-profile-popover__role">${esc(user.family_role)}</span>` : ''}
     </div>
     ${rows ? `<div class="task-profile-popover__contacts">${rows}</div>` : ''}`);

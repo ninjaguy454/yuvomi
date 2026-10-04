@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api } from '/api.js';
 import { esc } from '/utils/html.js';
 import { canCapability } from '/permissions.js';
@@ -152,8 +153,8 @@ export function renderRotationContext(contexts = [], { compact = false } = {}) {
     const provisional=pending||occurrence.status==='preview'||occurrence.provisional;
     if(!occurrence.order.length)return `<div><strong>${esc(label)}</strong><p class="form-hint">${esc(reason || 'No eligible member is available. An authorized household member can review this rotation.')}</p></div>`;
     return `<div><strong>${esc(label)}</strong>${position ? ` <span class="badge">${provisional?'Preview: ':''}${ordinal(position)}</span>` : ''}${compact
-      ? `<span class="text-muted"> · ${provisional?'Provisional · ':''}${occurrence.order.map(member => esc(member.display_name)).join(' → ')}</span>`
-      : `<p class="form-hint">${provisional?'Provisional order · confirmed when the scheduled period activates':occurrence.overridden_at?'Effective planned order':'Planned order'}</p><ol>${occurrence.order.map(member => `<li>${esc(member.display_name)}</li>`).join('')}</ol>
+      ? `<span class="text-muted"> · ${provisional?'Provisional · ':''}${occurrence.order.map(member => esc(memberLabel(member))).join(' → ')}</span>`
+      : `<p class="form-hint">${provisional?'Provisional order · confirmed when the scheduled period activates':occurrence.overridden_at?'Effective planned order':'Planned order'}</p><ol>${occurrence.order.map(member => `<li>${esc(memberLabel(member))}</li>`).join('')}</ol>
         ${recorded_completions.length?`<details data-rotation-recorded-completions data-disclosure-key="rotation-completions-${esc(purpose_key)}"><summary>Recorded completion order</summary>
           <p class="form-hint">Linked Task completion records, not proof of the order activities happened. Bulk or indistinguishable records have no inferred order.</p>
           <ul>${recorded_completions.map(group=>`<li><time>${esc(group.recorded_at)}</time>${group.unordered?' · Order not established':''}<ul>${group.events.map(event=>`<li>${esc(event.title)}${event.bulk?' · Bulk completion':''}</li>`).join('')}</ul></li>`).join('')}</ul></details>`:''}`}</div>`;

@@ -25,6 +25,7 @@ function harness() {
     canAccessNavModule: () => true, deviceLandingPath: () => '/',
     authenticationSnapshot: () => ({ epoch }), sameAuthentication: snapshot => snapshot.epoch === epoch,
     sessionRevision: () => revision,
+    loadMemberLabels: async () => {},
     rememberScrollPosition: noop, scrollPositionFor: () => 0,
     pushNavigationHistory: path => history.push(path),
     renderPage: async route => { rendered.push(route.path); if (rendered.length === 1) await loading; },
@@ -47,6 +48,7 @@ test('a visible navigation request survives loading and the latest destination w
   await app.navigate('/settings');
   assert.deepEqual(app.rendered, ['/'], 'renders never overlap');
   app.release(); await first;
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(app.rendered, ['/', '/settings']);
   assert.deepEqual(app.history, ['/', '/settings'], 'discarded intermediate clicks do not pollute history');
 });
@@ -108,6 +110,7 @@ test('an authentication guard redirect owns the render before queued navigation 
   await app.navigate('/settings');
   authenticated({ user: { id: null, kind: 'device' } });
   await original;
+  await new Promise(resolve => setImmediate(resolve));
   assert.deepEqual(app.rendered, ['/'], 'redirect must finish its held render before Settings starts');
   assert.equal(app.context.isNavigating, true, 'redirect retains navigation ownership');
   app.release();

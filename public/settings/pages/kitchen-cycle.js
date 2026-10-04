@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import {authenticationSnapshot} from '/utils/device-context.js';
 import {sessionRevision} from '/utils/session-lifecycle.js';
 import {mealCycles} from '/api.js';
@@ -32,7 +33,7 @@ export async function render(container){
   let settings,previewed=null,loadVersion=0;const state=draft.state;
   const error=e=>{const target=container.querySelector('[data-cycle-error]');if(target){target.textContent=e.outcome==='unknown'?text('unknown'):e.status===409?`${text('stale')} ${e.message}`:e.message;target.hidden=false;target.focus();}container.querySelector('[data-cycle-retry]')?.toggleAttribute('hidden',!state.pending&&!draft.ensurePending);};
   async function load(){const version=++loadVersion;try{const response=await mealCycles.settings();if(version!==loadVersion||!container.isConnected)return;settings=response.data;state.acceptLoad(state.loadToken(),settings);draw();}catch(e){container.innerHTML=`<p role="alert">${esc(e.message)}</p>`;}}
-  const select=(name,label,rows,value)=>`<label>${label}<select class="form-input" name="${name}" required><option value="">${text('choose')}</option>${rows.map(row=>`<option value="${row.id}"${Number(value)===row.id?' selected':''}>${esc(row.name||row.display_name)}</option>`).join('')}</select></label>`;
+  const select=(name,label,rows,value)=>`<label>${label}<select class="form-input" name="${name}" required><option value="">${text('choose')}</option>${rows.map(row=>`<option value="${row.id}"${Number(value)===row.id?' selected':''}>${esc(row.display_name ? memberLabel(row) : row.name)}</option>`).join('')}</select></label>`;
   function draw(){
     if(!alive())return;
     if(!settings.admin){container.innerHTML=`<p>${text('adminSetup')}</p>`;return;}

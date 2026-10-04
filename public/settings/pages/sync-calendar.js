@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api } from '/api.js';
 import { formatDate, formatTime, t } from '/i18n.js';
 import { closeModal, confirmModal, openModal } from '/components/modal.js';
@@ -124,7 +125,7 @@ function buildCalendarAssigneeSelect({ source, externalId, currentId }) {
     for (const u of users) {
       const opt = document.createElement('option');
       opt.value = String(u.id);
-      opt.textContent = u.display_name;
+      opt.textContent = memberLabel(u);
       if (Number(currentId) === u.id) opt.selected = true;
       select.appendChild(opt);
     }
@@ -977,7 +978,7 @@ function buildOutlookAutoSyncControls(account, calendars) {
     for (const u of users) {
       const opt = document.createElement('option');
       opt.value = String(u.id);
-      opt.textContent = u.display_name;
+      opt.textContent = memberLabel(u);
       if (Number(account.ownerUserId) === u.id) opt.selected = true;
       ownerSelect.appendChild(opt);
     }

@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { api, auth } from '/api.js';
 import {
   formatDate,
@@ -121,18 +122,18 @@ function memberHtml(u, currentUserId) {
   // erst bei Hover/Fokus laut. Der eigene Account bekommt keine Lösch-Aktion
   // in der Mitgliederliste (Audit A2-25d).
   const deleteBtn = u.id === currentUserId ? '' : `
-      <button class="row-action row-action--danger" data-delete-user="${u.id}" data-name="${esc(u.display_name)}" aria-label="${esc(u.display_name)} ${t('settings.deleteMemberLabel')}" title="${t('settings.deleteMemberLabel')}">
+      <button class="row-action row-action--danger" data-delete-user="${u.id}" data-name="${esc(memberLabel(u))}" aria-label="${esc(memberLabel(u))} ${t('settings.deleteMemberLabel')}" title="${t('settings.deleteMemberLabel')}">
         <i data-lucide="trash-2" class="icon-md" aria-hidden="true"></i>
       </button>`;
   return `
     <li class="settings-member" data-id="${u.id}">
       ${avatarHtml(u, 'settings-avatar settings-avatar--sm')}
       <div class="settings-member__info">
-        <span class="settings-member__name">${esc(u.display_name)}</span>
+        <span class="settings-member__name">${esc(memberLabel(u))}</span>
         <span class="settings-member__meta">@${esc(u.username)} · ${esc(familyRole)}${systemRole}</span>
         ${profileMeta ? `<span class="settings-member__meta">${profileMeta}</span>` : ''}
       </div>
-      <button class="row-action" data-edit-user="${u.id}" aria-label="${esc(u.display_name)} ${t('settings.editMemberLabel')}" title="${t('settings.editMemberLabel')}">
+      <button class="row-action" data-edit-user="${u.id}" aria-label="${esc(memberLabel(u))} ${t('settings.editMemberLabel')}" title="${t('settings.editMemberLabel')}">
         <i data-lucide="edit-2" class="icon-md" aria-hidden="true"></i>
       </button>${deleteBtn}
     </li>
@@ -900,7 +901,7 @@ async function loadTwoFactorHousehold(container) {
     <li class="settings-2fa__member">
       <i data-lucide="${member.enabled ? 'shield-check' : 'shield-off'}" aria-hidden="true"
          class="settings-2fa__member-icon settings-2fa__member-icon--${member.enabled ? 'on' : 'off'}"></i>
-      <span class="settings-2fa__member-name">${esc(member.display_name)}</span>
+      <span class="settings-2fa__member-name">${esc(memberLabel(member))}</span>
       <span class="settings-2fa__member-state">${member.enabled
         ? t('settings.twoFactorMemberOn')
         : t('settings.twoFactorMemberOff')}</span>

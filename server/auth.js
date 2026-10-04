@@ -40,6 +40,7 @@ import { withDeviceWriteLease, withoutDeviceWriteLease } from './services/device
 import { validateDeviceApproval, completeDeviceApproval } from './services/device-approval.js';
 import { deviceAppRouteSupported } from './services/device-app-paths.js';
 import { deviceMembers } from './services/device-content.js';
+import { householdMemberPresentation } from './services/member-presentation.js';
 
 // A proof for one displayed Task must never establish a personal session. Bind
 // every async authentication step to its original durable intent, not whatever
@@ -2242,6 +2243,18 @@ router.put('/2fa/require', requireAuth, requireAdmin, csrfMiddleware, (req, res)
  * Listet alle Familienmitglieder (für Zuweisung in Kalender, Tasks etc.).
  * Response: { data: User[] }
  */
+router.get('/member-labels', requireAuth, (req, res) => {
+  const d = db.get();
+  if (req.devicePrincipal) {
+    return res.json({ data: householdMemberPresentation(d, { memberIds: deviceMembers(d, req.devicePrincipal).map(member => member.id) }) });
+  }
+  const member = d.prepare(`SELECT id FROM users u WHERE id=?
+    AND NOT EXISTS(SELECT 1 FROM housekeeping_workers w WHERE w.user_id=u.id)
+    AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id)`).get(req.authUserId);
+  if (!member) return res.status(403).json({ error: 'Household membership is required.', code: 403 });
+  return res.json({ data: householdMemberPresentation(d) });
+});
+
 router.get('/users', requireAuth, (req, res) => {
   if (req.devicePrincipal) return res.json({data:deviceMembers(db.get(),req.devicePrincipal)});
   try {

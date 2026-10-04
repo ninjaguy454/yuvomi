@@ -9,6 +9,7 @@ import { setPermissions, clearPermissions } from '/permissions.js';
 import { setHouseholdSize, clearHouseholdSize } from '/utils/household.js';
 import { forgetLayoutHint } from '/utils/dashboard-layout-hint.js';
 import { broadcastSessionChange } from '/utils/session-lifecycle.js';
+import { clearMemberLabels } from '/utils/member-label.js';
 import { setWallModeEnabled } from '/utils/wall-mode.js';
 import { acceptAuthentication, authenticationSnapshot, sameAuthentication, trackContextRequest, pairedDeviceHint } from '/utils/device-context.js';
 
@@ -248,6 +249,14 @@ const api = {
 // Auth-spezifische Methoden
 // --------------------------------------------------------
 
+async function refreshMemberLabels() {
+  clearMemberLabels();
+  try {
+    const { loadMemberLabels } = await import('/utils/member-label-loader.js');
+    await loadMemberLabels();
+  } catch { /* The member edit succeeded; an unavailable presentation module must not report it as failed. */ }
+}
+
 const auth = {
   login: async (username, password) => {
     const res = await api.post('/auth/login', { username, password });
@@ -272,6 +281,7 @@ const auth = {
   disableTwoFactor: (code) => api.post('/auth/2fa/disable', { code }),
   regenerateRecoveryCodes: (code) => api.post('/auth/2fa/recovery-codes', { code }),
   logout: async () => {
+    clearMemberLabels();
     try {
       return await api.post('/auth/logout');
     } finally {
@@ -309,14 +319,24 @@ const auth = {
   createUser: async (data) => {
     const res = await api.post('/auth/users', data);
     await auth.me().catch(() => {});
+    await refreshMemberLabels();
     return res;
   },
-  updateUser: (id, data) => api.patch(`/auth/users/${id}`, data),
-  updateProfile: (data) => api.patch('/auth/me/profile', data),
+  updateUser: async (id, data) => {
+    const res = await api.patch(`/auth/users/${id}`, data);
+    await refreshMemberLabels();
+    return res;
+  },
+  updateProfile: async (data) => {
+    const res = await api.patch('/auth/me/profile', data);
+    await refreshMemberLabels();
+    return res;
+  },
   markOnboardingSeen: () => api.post('/auth/onboarding-seen', {}),
   deleteUser: async (id) => {
     const res = await api.delete(`/auth/users/${id}`);
     await auth.me().catch(() => {});
+    await refreshMemberLabels();
     return res;
   },
   forgotPassword: (identifier) => api.post('/auth/forgot-password', { identifier }),

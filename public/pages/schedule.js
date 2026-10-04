@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { canCapability } from '/permissions.js';
 import { api as apiClient } from '/api.js';
 import { t, formatDate } from '/i18n.js';
@@ -43,7 +44,7 @@ const SHIFT_PRESETS = Object.freeze([
 const SHIFT_COLOR_FALLBACK = SHIFT_PRESETS[0].color;
 
 const option = (value, label, selected = false) => `<option value="${esc(String(value ?? ''))}"${selected ? ' selected' : ''}>${esc(label)}</option>`;
-const userName = (id) => state.users.find((user) => Number(user.id) === Number(id))?.display_name
+const userName = (id) => memberLabel(state.users.find((user) => Number(user.id) === Number(id)))
   || state.users.find((user) => Number(user.id) === Number(id))?.username
   || String(id);
 const selectedOwner = () => currentUserId ?? state.users[0]?.id ?? '';
@@ -218,7 +219,7 @@ function applyShiftPreset(form) {
   form.elements.color.value = selected.color;
 }
 function userOptions(selected) {
-  return state.users.filter((user) => canManageOthers || Number(user.id) === Number(currentUserId)).map((user) => option(user.id, user.display_name || user.username, Number(selected) === Number(user.id))).join('');
+  return state.users.filter((user) => canManageOthers || Number(user.id) === Number(currentUserId)).map((user) => option(user.id, memberLabel(user) || user.username, Number(selected) === Number(user.id))).join('');
 }
 
 function formField(label, control, className = '') {
@@ -363,7 +364,7 @@ function renderStatistics() {
       + '</div>';
   return '<section class="schedule-statistics">'
     + '<form class="card card--padded schedule-stat-filters" data-form="statistics">'
-    + formField(t('schedule.owner'), '<select class="input" required name="user_id">' + state.users.map((user) => option(user.id, user.display_name || user.username, Number(selectedUser) === Number(user.id))).join('') + '</select>')
+    + formField(t('schedule.owner'), '<select class="input" required name="user_id">' + state.users.map((user) => option(user.id, memberLabel(user) || user.username, Number(selectedUser) === Number(user.id))).join('') + '</select>')
     + '<div class="form-field schedule-stat-range"><span class="label">' + esc(t('schedule.statisticsRange')) + '</span><div class="segmented schedule-stat-range__choices" role="group" aria-label="' + esc(t('schedule.statisticsRange')) + '">'
     + [['current', 'schedule.currentMonth'], ['months', 'schedule.selectedMonths'], ['custom', 'schedule.customRange']].map(([value, label]) => '<button type="button" class="segmented__item' + (range === value ? ' is-active' : '') + '" data-action="statistics-range" data-range="' + value + '" aria-pressed="' + (range === value ? 'true' : 'false') + '">' + esc(t(label)) + '</button>').join('')
     + '</div></div>' + (controls ? '<div class="schedule-stat-dates">' + controls + '</div>' : '')

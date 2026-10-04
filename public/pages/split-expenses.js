@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Module: Split Expenses
  * Purpose: Mobile-first shared expense groups, balances, settlements, and activity.
@@ -397,7 +398,7 @@ function renderBalances() {
   if (!debts.length) return `<div class="split-muted">${t('splitExpenses.noBalances')}</div>`;
   return debts.map((debt) => `
     <div class="split-debt">
-      <span>${esc(debt.from_name)} ${t('splitExpenses.owes')} ${esc(debt.to_name)}</span>
+      <span>${esc(memberLabel({ id: debt.from_user_id, display_name: debt.from_name }))} ${t('splitExpenses.owes')} ${esc(memberLabel({ id: debt.to_user_id, display_name: debt.to_name }))}</span>
       <strong>${money(debt.amount, debt.currency)}</strong>
     </div>
   `).join('');
@@ -416,7 +417,7 @@ function renderExpenses(readOnly = false) {
       <div class="split-expense__icon"><i data-lucide="${categoryIcon(expense.category)}" aria-hidden="true"></i></div>
       <div class="split-expense__body">
         <strong>${esc(expense.title)}</strong>
-        <span>${t('splitExpenses.paidBy')}: ${esc(expense.payer_name || '')} · ${formatDate(expense.expense_date)}${receiptMark}</span>
+        <span>${t('splitExpenses.paidBy')}: ${esc(memberLabel({ id: expense.payer_id, display_name: expense.payer_name }))} · ${formatDate(expense.expense_date)}${receiptMark}</span>
       </div>
       <div class="split-expense__amount">${money(expense.amount, expense.currency)}</div>
     `;
@@ -438,7 +439,7 @@ function renderActivity() {
       <span class="split-activity-dot"></span>
       <div>
         <strong>${esc(t(`splitExpenses.activityType.${item.type}`))}</strong>
-        <span>${esc(item.actor_name || t('splitExpenses.system'))} · ${formatDate(item.created_at.slice(0, 10))}</span>
+        <span>${esc(memberLabel({ id: item.actor_user_id, display_name: item.actor_name }) || t('splitExpenses.system'))} · ${formatDate(item.created_at.slice(0, 10))}</span>
       </div>
     </div>
   `).join('');
@@ -510,7 +511,7 @@ async function deleteGroup(groupId) {
 function memberOptions(selectedId = '', source = state.groupMembers.length ? state.groupMembers : state.members) {
   return source.map((member) => {
     const id = member.id ?? member.user_id;
-    return `<option value="${id}" ${String(id) === String(selectedId) ? 'selected' : ''}>${esc(member.display_name)}</option>`;
+    return `<option value="${id}" ${String(id) === String(selectedId) ? 'selected' : ''}>${esc(memberLabel({ ...member, id: Object.hasOwn(member, 'user_id') ? member.user_id : member.id }))}</option>`;
   }).join('');
 }
 
@@ -520,7 +521,7 @@ function memberCandidateOptions(candidates = []) {
     .map((candidate) => {
       const value = candidate.source === 'contact' ? `contact:${candidate.contact_id}` : `user:${candidate.user_id}`;
       const suffix = candidate.source === 'contact' ? ` · ${t('nav.contacts')}` : '';
-      return `<option value="${esc(value)}">${esc(candidate.display_name)}${suffix}</option>`;
+      return `<option value="${esc(value)}">${esc(candidate.source === 'contact' ? candidate.display_name : memberLabel({ ...candidate, id: candidate.user_id }))}${suffix}</option>`;
     }).join('');
 }
 
@@ -535,9 +536,9 @@ function groupMemberCheckboxes(selectedIds = null, splitValues = {}) {
     <div class="split-participant-row" data-participant-row="${id}">
       <label class="split-check">
         <input type="checkbox" name="participants" value="${id}" ${checked ? 'checked' : ''}>
-        <span>${esc(member.display_name)}</span>
+        <span>${esc(memberLabel({ ...member, id: Object.hasOwn(member, 'user_id') ? member.user_id : member.id }))}</span>
       </label>
-      <input class="input split-split-value" name="split_value_${id}" inputmode="decimal" aria-label="${esc(member.display_name)} ${t('splitExpenses.splitValue')}" placeholder="" value="${esc(value)}">
+      <input class="input split-split-value" name="split_value_${id}" inputmode="decimal" aria-label="${esc(memberLabel({ ...member, id: Object.hasOwn(member, 'user_id') ? member.user_id : member.id }))} ${t('splitExpenses.splitValue')}" placeholder="" value="${esc(value)}">
     </div>
   `;
   }).join('');
@@ -726,8 +727,8 @@ function renderGroupDefaults(group) {
         const id = member.id ?? member.user_id;
         return `
         <div class="split-participant-row" data-default-row="${id}">
-          <span>${esc(member.display_name)}</span>
-          <input class="input split-default-value" name="default_value_${id}" inputmode="decimal" aria-label="${esc(member.display_name)} ${t('splitExpenses.splitValue')}" value="${esc(values[id] ?? '')}">
+          <span>${esc(memberLabel({ ...member, id: Object.hasOwn(member, 'user_id') ? member.user_id : member.id }))}</span>
+          <input class="input split-default-value" name="default_value_${id}" inputmode="decimal" aria-label="${esc(memberLabel({ ...member, id: Object.hasOwn(member, 'user_id') ? member.user_id : member.id }))} ${t('splitExpenses.splitValue')}" value="${esc(values[id] ?? '')}">
         </div>`;
       }).join('')}
       <p class="form-hint" id="split-default-hint" role="status"></p>
@@ -830,7 +831,7 @@ function renderGroupMemberEditor(candidates = []) {
         return `
           <label class="split-check">
             <input type="checkbox" name="group_members" value="${esc(key)}" ${candidate.in_group ? 'checked' : ''} ${locked ? 'disabled' : ''}>
-            <span>${esc(candidate.display_name)}${badge}${candidate.group_role === 'guest' ? ` · ${t('splitExpenses.roleGuest')}` : ''}</span>
+            <span>${esc(candidate.source === 'contact' ? candidate.display_name : memberLabel({ ...candidate, id: candidate.user_id }))}${badge}${candidate.group_role === 'guest' ? ` · ${t('splitExpenses.roleGuest')}` : ''}</span>
           </label>
         `;
       }).join('')}

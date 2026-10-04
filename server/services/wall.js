@@ -1,5 +1,6 @@
 /** Shared-display configuration and explicit, deliberately small public projections. */
 import crypto from 'node:crypto';
+import { householdMemberPresentation } from './member-presentation.js';
 import { resolvePermissions } from '../permissions.js';
 import { taskCapabilities, taskVisibilityWhere } from './task-access.js';
 import { getUpcomingEvents } from './calendar-events.js';
@@ -128,9 +129,11 @@ export function wallDashboard(d,hostId,hydrateTask) {
   const config=wallConfig(d),p=wallPermissions(d,hostId),today=todayKey(d);
   const visible=id=>config.widgets.some(w=>w.id===id&&w.visible);
   const allows=(id,module=id)=>visible(id)&&p.widgets[id==='points'?'rewards':id==='presence'?'family':id]!=='none'&&wallModuleAllowed(d,hostId,module);
+  const presentation=new Map(householdMemberPresentation(d).map(member=>[member.id,member]));
   const users=d.prepare(`SELECT u.id,u.display_name,u.avatar_color FROM users u
     WHERE NOT EXISTS(SELECT 1 FROM housekeeping_workers h WHERE h.user_id=u.id)
-    AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id) ORDER BY u.display_name`).all();
+    AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id) ORDER BY u.display_name`).all()
+    .map(member=>({...member,...presentation.get(member.id)}));
   const result={config,canConfigure:p.admin,today,timezone:householdTimeZone(d),users,
     urgentTasks:[],upcomingEvents:[],todayMeals:[],shoppingLists:[],pinnedNotes:[],points:[],rewardCatalog:[],presence:[],notification:{mode:config.privacy.notifications}};
   if(allows('tasks')) {

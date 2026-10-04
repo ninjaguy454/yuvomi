@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Belohnungen (Rewards)
  * Zweck: Punkte-Übersicht je Mitglied, Prämien-Katalog mit Eltern-Freigabe und
@@ -296,10 +297,10 @@ function renderStandingRow(member) {
   return `
     <li class="list-row rw-standing">
       <button class="rw-standing__id" type="button" data-member="${member.id}"
-              aria-label="${esc(`${member.display_name}, ${pointsLabel(member.balance)}. ${t('rewards.openDetails')}`)}">
+              aria-label="${esc(`${memberLabel(member)}, ${pointsLabel(member.balance)}. ${t('rewards.openDetails')}`)}">
         ${avatar(member, 40)}
         <span class="rw-standing__idtext">
-          <span class="rw-standing__name">${esc(member.display_name)}</span>
+          <span class="rw-standing__name">${esc(memberLabel(member))}</span>
           <span class="rw-standing__points"><strong data-countup="${member.balance}" data-from="${startVal}">${fmtPoints(startVal)}</strong> ${esc(t('rewards.pointsUnit'))}</span>
         </span>
       </button>
@@ -360,7 +361,7 @@ function renderPendingPanel() {
       ${avatar(r, 32)}
       <div class="rw-pending__text">
         <p class="rw-pending__title">${esc(r.reward_icon ? `${r.reward_icon} ` : '')}${esc(r.reward_name)}</p>
-        <p class="rw-pending__meta">${esc(isAdmin() ? r.user_name : '')}${isAdmin() ? ' · ' : ''}${esc(pointsLabel(r.cost))}${r.note ? ` · „${esc(r.note)}“` : ''}</p>
+        <p class="rw-pending__meta">${esc(isAdmin() ? memberLabel({ id: r.user_id, display_name: r.user_name }) : '')}${isAdmin() ? ' · ' : ''}${esc(pointsLabel(r.cost))}${r.note ? ` · „${esc(r.note)}“` : ''}</p>
       </div>
       <div class="rw-pending__actions">
         ${isAdmin() ? `
@@ -524,7 +525,7 @@ function ledgerReason(row) {
 
 function ledgerContext(row) {
   const parts=[row.type==='adjust'?'Points adjustment':t(`rewards.ledgerType.${row.type}`)];
-  if(row.actor_name)parts.push(`By ${row.actor_name}`);
+  if(row.actor_name)parts.push(`By ${memberLabel({ id: row.created_by, display_name: row.actor_name })}`);
   if(row.related_task_id)parts.push(`Task #${row.related_task_id}`);
   if(row.related_reward_id)parts.push(`Reward #${row.related_reward_id}`);
   if(row.related_ledger_id)parts.push(`Ledger entry #${row.related_ledger_id}`);
@@ -534,7 +535,7 @@ function ledgerContext(row) {
 function renderLedger(el) {
   el.replaceChildren();
   const filterChips = [{ id: null, label: t('rewards.all') }]
-    .concat(balances().map((b) => ({ id: b.id, label: b.display_name })))
+    .concat(balances().map((b) => ({ id: b.id, label: memberLabel(b) })))
     .map((c) => `<button class="rw-chip${(state.ledgerFilter ?? null) === c.id ? ' rw-chip--active' : ''}" type="button" data-filter="${c.id ?? ''}">${esc(c.label)}</button>`)
     .join('');
   // Bonus vergeben läuft über den Kontext-FAB (Ledger-Tab, Admin); kein Inline-Button.
@@ -549,7 +550,7 @@ function renderLedger(el) {
           <p class="rw-ledger-row__reason">${esc(ledgerReason(row))}</p>
           <p class="rw-ledger-row__meta">${esc(ledgerContext(row))}</p>
           ${isAdmin()?`<button type="button" class="btn btn--secondary btn--sm" data-adjust-ledger="${row.id}">Adjust points</button>`:''}
-          <p class="rw-ledger-row__meta">${esc(row.user_name)} · ${esc(formatDate(row.created_at))}</p>
+          <p class="rw-ledger-row__meta">${esc(memberLabel({ id: row.user_id, display_name: row.user_name }))} · ${esc(formatDate(row.created_at))}</p>
         </div>
         <span class="rw-delta ${positive ? 'rw-delta--pos' : 'rw-delta--neg'}">${positive ? '+' : '−'}${fmtPoints(Math.abs(row.delta))}</span>
       </li>`;
@@ -596,7 +597,7 @@ async function openRedeemModal(memberId, presetItemId = null) {
     ? `<div class="form-group">
          <label class="label" for="rw-redeem-member">${esc(t('rewards.member'))}</label>
          <select class="input" id="rw-redeem-member">
-           ${members.map((m) => `<option value="${m.id}" ${m.id === defaultMember ? 'selected' : ''}>${esc(m.display_name)} · ${esc(pointsLabel(m.balance))}</option>`).join('')}
+           ${members.map((m) => `<option value="${m.id}" ${m.id === defaultMember ? 'selected' : ''}>${esc(memberLabel(m))} · ${esc(pointsLabel(m.balance))}</option>`).join('')}
          </select>
        </div>` : `<input type="hidden" id="rw-redeem-member" value="${defaultMember ?? ''}">`;
 
@@ -827,7 +828,7 @@ async function openParticipantsModal() {
         ${members.map((m) => `
           <li class="rw-participant">
             ${avatar(m, 36)}
-            <span class="rw-participant__name">${esc(m.display_name)}</span>
+            <span class="rw-participant__name">${esc(memberLabel(m))}</span>
             <label class="rw-switch rw-switch--compact">
               <input type="checkbox" data-participant="${m.id}" ${m.enabled ? 'checked' : ''}>
               <span class="rw-switch__track" aria-hidden="true"></span>
@@ -880,7 +881,7 @@ async function openMemberDetail(memberId) {
   }).join('') : `<li class="rw-ledger-row rw-ledger-row--compact"><p class="rw-ledger-row__meta">${esc(t('rewards.emptyLedgerBody'))}</p></li>`;
   const canRedeem = isAdmin() || member.id === state.overview?.me;
   openModal({
-    title: member.display_name,
+    title: memberLabel(member),
     content: `
       <div class="rw-detail-head">
         ${avatar(member, 52)}

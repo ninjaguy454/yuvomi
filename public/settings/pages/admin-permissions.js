@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Settings-Blatt: Rollen & Rechte (#467)
  * Admin konfiguriert pro Familienrolle (Standard) und pro Mitglied (Override),
@@ -270,7 +271,7 @@ function renderSummary(container) {
 function subjectTitle() {
   if (state.mode === 'role') return familyRoleLabel(state.subjectId);
   const member = state.catalog.members.find((m) => String(m.id) === String(state.subjectId));
-  return member ? member.display_name : '';
+  return memberLabel(member);
 }
 
 function renderMatrix(container) {
@@ -405,7 +406,7 @@ function renderSubjectSelector(container) {
             style="background:${esc(m.avatar_color) || 'var(--color-accent)'}">${
             m.avatar_data ? `<img src="${esc(m.avatar_data)}" alt="">` : esc(initials(m.display_name))
           }</span>
-          <span class="perm-chip__name">${esc(m.display_name)}</span>${badge}
+          <span class="perm-chip__name">${esc(memberLabel(m))}</span>${badge}
         </button>
       `;
     }).join('');

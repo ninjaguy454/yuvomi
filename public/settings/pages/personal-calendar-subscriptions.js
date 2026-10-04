@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 /**
  * Modul: Kalender-Abos (persoenlich)
  * Zweck: ICS-/Webcal-Abonnements und der einmalige Kalenderimport - also alles,
@@ -304,7 +305,7 @@ function openIcsEditModal(container, sub, subs, user) {
           for (const u of users) {
             const opt = document.createElement('option');
             opt.value = String(u.id);
-            opt.textContent = u.display_name;
+            opt.textContent = memberLabel(u);
             if (Number(sub.default_assignee_user_id) === u.id) opt.selected = true;
             assigneeSel.appendChild(opt);
           }
@@ -360,7 +361,7 @@ function bindIcsEvents(container, subs, user) {
       for (const u of users) {
         const opt = document.createElement('option');
         opt.value = String(u.id);
-        opt.textContent = u.display_name;
+        opt.textContent = memberLabel(u);
         assigneeSel.appendChild(opt);
       }
     }).catch(() => { assigneesLoaded = false; });

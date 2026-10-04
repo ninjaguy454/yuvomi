@@ -1,3 +1,5 @@
+import { memberLabel } from '/utils/member-label.js';
+import { setMemberLabels, memberLabelSnapshot } from '/utils/member-label.js';
 import { api, auth } from '/api.js';
 import { esc } from '/utils/html.js';
 import { formatDate, formatTime } from '/i18n.js';
@@ -31,7 +33,7 @@ export function wallWidgetContent(id, data, renderers) {
   if (id === 'notes') return renderers.notes(data.pinnedNotes || [], '2x2');
   if (id === 'points') return renderers.points({standings:data.points || [],pending:0});
   if (id === 'weather') return data.weather ? renderers.weather(data.weather) : empty('Set a household weather location to show the forecast.');
-  if (id === 'presence') return (data.presence || []).map(p => `<div class="wall-member-row"><strong>${esc(p.display_name)}</strong><span>${esc(p.state || 'Unknown')}${p.inferred ? ' · estimated' : ''}</span></div>`).join('') || empty('Presence is hidden or not available.');
+  if (id === 'presence') return (data.presence || []).map(p => `<div class="wall-member-row"><strong>${esc(memberLabel(p))}</strong><span>${esc(p.state || 'Unknown')}${p.inferred ? ' · estimated' : ''}</span></div>`).join('') || empty('Presence is hidden or not available.');
   if (id === 'rewards') return data.rewardCatalog?.length ? `<div class="wall-reward-grid">${data.rewardCatalog.map(r => `<button type="button" class="wall-reward" data-wall-reward="${r.id}"><span class="wall-reward__icon" aria-hidden="true">${esc(r.icon || '🎁')}</span><strong>${esc(r.name)}</strong><span>${r.cost} points</span></button>`).join('')}</div>` : empty('No Rewards yet.');
   return '';
 }
@@ -64,7 +66,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
   }
   function paintIdentity() {
     const el=container.querySelector('[data-wall-identify]');
-    if(el) el.textContent=actorValid() ? `Acting as ${actor.member?.display_name || actor.user?.display_name || actor.display_name || 'member'}` : 'Identify yourself';
+    if(el) el.textContent=actorValid() ? `Acting as ${memberLabel(actor.member || actor.user || actor) || 'member'}` : 'Identify yourself';
     const done=container.querySelector('[data-wall-forget]'); if(done) done.hidden=!actorValid();
   }
   function identify(next = () => {}, admin = false) {
@@ -73,7 +75,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
     safeModal({title:admin ? 'Administrator verification' : 'Who is acting?', initialFocus:'none', content:`
       <form data-wall-identify-form class="wall-form">
         <p>${admin ? 'Verify an administrator to change this display or leave Wall Mode.' : 'Use your own Vidamia account. Your actions will be recorded in your name.'}</p>
-        <label>Household member<select class="form-input" name="user_id" required>${(snapshot?.users || []).map(u=>option(String(u.id),u.display_name,'')).join('')}</select></label>
+        <label>Household member<select class="form-input" name="user_id" required>${(snapshot?.users || []).map(u=>option(String(u.id),memberLabel(u),'')).join('')}</select></label>
         <label>Password<input class="form-input" name="password" type="password" autocomplete="current-password" required></label>
         <label>Two-factor code, if enabled<input class="form-input" name="code" inputmode="numeric" autocomplete="one-time-code"></label>
         <p class="form-error" role="alert" data-wall-error hidden></p>
@@ -186,10 +188,11 @@ export async function mountWallDashboard(container, { user, signal, renderers })
   async function refresh() {
     if(disposed||document.hidden)return;
     if(refreshPending){refreshAgain=true;return;}refreshPending=true; const run=++generation;
+    const labelContext=memberLabelSnapshot();
     try{
       const response=await api.get('/wall/dashboard');
       if(disposed||run!==generation)return;
-      snapshot=response.data;configuration=snapshot.config || configuration;
+      snapshot=response.data;if(!setMemberLabels(snapshot.users || [],labelContext))return;configuration=snapshot.config || configuration;
       setDisplayTimeZone(snapshot.timezone);
       if(configuration.widgets.some(w=>w.id==='weather'&&w.visible))snapshot.weather=(await api.get('/wall/weather').catch(()=>({data:null}))).data;
       if(disposed||run!==generation)return;paint();
@@ -215,7 +218,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
     }catch(error){if(refreshOnly){if(error.status===403||error.status===404){detail=null;await closeModal({force:true});}}else fail(error);}
   }
   function detailContent(kind,data){
-    const who=actorValid()?`Acting as ${actor.member?.display_name || actor.user?.display_name || actor.display_name || 'member'}`:'Identify yourself to take an action';
+    const who=actorValid()?`Acting as ${memberLabel(actor.member || actor.user || actor) || 'member'}`:'Identify yourself to take an action';
     let html=`<p class="wall-action-identity">${esc(who)}</p>`;
     if(kind==='tasks'){
       const actions=(data.subtasks || data.children || []).filter(s=>data.is_supervision_projection || !s.is_supervision_projection);

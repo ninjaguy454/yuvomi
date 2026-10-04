@@ -1,3 +1,4 @@
+import { memberLabel } from '/utils/member-label.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
 import { isDevicePrincipal } from '/utils/device-context.js';
@@ -368,7 +369,7 @@ function openParticipantPreview(person, anchor, ctx) {
   const panel = document.createElement('div');
   panel.className = 'task-detail-profile-preview';
   panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-label', profile.display_name || t('tasks.participantsLabel'));
+  panel.setAttribute('aria-label', memberLabel(profile) || t('tasks.participantsLabel'));
 
   const close = document.createElement('button');
   close.type = 'button';
@@ -390,7 +391,7 @@ function openParticipantPreview(person, anchor, ctx) {
   const identity = document.createElement('div');
   identity.className = 'task-detail-profile-preview__identity';
   const name = document.createElement('strong');
-  name.textContent = profile.display_name || '';
+  name.textContent = memberLabel(profile);
   identity.append(avatar, name);
   if (profile.family_role) {
     const familyRole = document.createElement('span');
@@ -450,7 +451,7 @@ function participantButton(person, role, ctx) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'task-detail-participant';
-  button.setAttribute('aria-label', normalized.display_name);
+  button.setAttribute('aria-label', memberLabel(normalized));
 
   const avatar = document.createElement(normalized.avatar_data ? 'img' : 'span');
   avatar.className = 'task-detail-participant__avatar';
@@ -464,7 +465,7 @@ function participantButton(person, role, ctx) {
   const text = document.createElement('span');
   text.className = 'task-detail-participant__text';
   const name = document.createElement('strong');
-  name.textContent = normalized.display_name;
+  name.textContent = memberLabel(normalized);
   text.appendChild(name);
   if (role) {
     const roleLabel = document.createElement('small');
@@ -1115,7 +1116,7 @@ function wireMentionSuggest(field, ctx) {
         : 'task-comment__suggest-item';
       option.setAttribute('role', 'option');
       option.setAttribute('aria-selected', String(index === active));
-      option.textContent = user.display_name;
+      option.textContent = memberLabel(user);
       // mousedown statt click: ein Klick käme erst nach dem blur, und das
       // schließt die Liste, bevor der Treffer übernommen wäre.
       option.addEventListener('mousedown', (e) => { e.preventDefault(); apply(user); });
@@ -1476,7 +1477,7 @@ function supervisionNode(task, ctx) {
     select.dataset.focusKey = 'task-supervisor';
     select.setAttribute('aria-label', hasDelegated ? 'Supervisor for all remaining supervised actions and direct responsibilities' : 'Supervisor for all remaining supervised actions');
     for (const person of supervision.eligible_supervisors) {
-      const option = document.createElement('option'); option.value = person.id; option.textContent = person.display_name;
+      const option = document.createElement('option'); option.value = person.id; option.textContent = memberLabel(person);
       option.selected = Number(person.id) === Number(supervision.supervisor_user_id); select.appendChild(option);
     }
     const assign = document.createElement('button'); assign.type = 'button'; assign.className = 'btn btn--secondary btn--sm';
@@ -1557,8 +1558,8 @@ function activityNode(task, ctx) {
       const row = document.createElement('p');
       const detail = entry.details || {};
       row.textContent = [labels[entry.event_type] || String(entry.event_type || 'Updated').replaceAll('_', ' '), detail.title,
-        entry.event_type === 'expired' ? null : detail.source_device?.name ? [entry.actor_name, `From ${detail.source_device.name}`].filter(Boolean).join(' · ') : entry.actor_name,
-        detail.source_device && detail.assigned_members?.length ? `Assigned to ${detail.assigned_members.map(member=>member.display_name).join(', ')}` : null,
+        entry.event_type === 'expired' ? null : detail.source_device?.name ? [memberLabel({ id: entry.actor_user_id, display_name: entry.actor_name }), `From ${detail.source_device.name}`].filter(Boolean).join(' · ') : memberLabel({ id: entry.actor_user_id, display_name: entry.actor_name }),
+        detail.source_device && detail.assigned_members?.length ? `Assigned to ${detail.assigned_members.map(member=>memberLabel(member)).join(', ')}` : null,
         `${formatDate(entry.created_at)} ${formatTime(entry.created_at)}`].filter(Boolean).join(' · ');
       wrap.appendChild(row);
     }
@@ -2163,7 +2164,7 @@ function seriesHistoryNode(task, ctx = {}) {
       none.className = 'detail-history__empty';
       const terminal = activity?.data?.find(entry => ['completed', 'expired'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
       none.textContent = terminal
-        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.details?.source_device?.name ? [terminal.actor_name, `From ${terminal.details.source_device.name}`].filter(Boolean).join(' · ') : terminal.actor_name,
+        ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.details?.source_device?.name ? [memberLabel({ id: terminal.actor_user_id, display_name: terminal.actor_name }), `From ${terminal.details.source_device.name}`].filter(Boolean).join(' · ') : memberLabel({ id: terminal.actor_user_id, display_name: terminal.actor_name }),
           terminal.event_type === 'expired' ? 'Task expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
         : 'No completed or expired occurrences currently recorded.';
       list.appendChild(none);

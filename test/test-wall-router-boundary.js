@@ -16,6 +16,7 @@ function harness({startedInWall=false,navigating=false,offline=false}={}) {
     currentUser:{id:1},_preferencesLoaded:true,_hiddenModules:new Set(),_moduleOrder:[],_mobileNavOrder:[],
     _renderedModule:{},_renderedModuleName:'tasks',_renderedDispose(){state.disposals++;},
     _wallOnlyDocument:startedInWall,_wallPrivacyTransitioning:false,isNavigating:navigating,
+    clearMemberLabels(){calls.push('clear-member-labels');},
     clearApiCache(){calls.push('clear-api-cache');},forgetLayoutHint:noOp,forgetScrollPositions:noOp,
     resetModuleCounts:noOp,resetNavBadges:noOp,stopThirdPartyModulePolling:noOp,stopReminders:noOp,stopPush:noOp,resetAppearancePreferences:noOp,
     closeAllOverlays(){state.modal=false;calls.push('close-modal');},
@@ -32,6 +33,7 @@ test('entering Wall closes an existing private modal and disposes/clears its per
   assert.equal(env.state.disposals,1);assert.equal(env.state.reloads,1);
   assert.ok(env.calls.indexOf('close-modal')<env.calls.indexOf('reload'));
   assert.ok(env.calls.indexOf('clear-api-cache')<env.calls.indexOf('reload'));
+  assert.ok(env.calls.indexOf('clear-member-labels')<env.calls.indexOf('reload'));
 });
 
 test('Wall entry interrupts an in-flight navigation and late private callbacks remain invisible',()=>{

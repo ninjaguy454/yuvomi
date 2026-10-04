@@ -23,7 +23,9 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     if (selectedId) viewState.order = [...viewState.order.filter(id => id !== selectedId), selectedId];
     for (const note of notes) {
       const card = grid.querySelector(`.note-card[data-id="${note.id}"]`);
-      if (card) card.style.zIndex = String(gesture?.active && gesture.note.id === note.id ? notes.length * 2 + 2 : (note.layout?.always_on_top ? notes.length : 0) + viewState.order.indexOf(note.id) + 1);
+      if (card) card.style.zIndex = String(gesture?.active && gesture.note.id === note.id ? notes.length * 2 + 2
+        : card.querySelector('.note-card__menu[open]') ? notes.length * 2 + 1
+        : (note.layout?.always_on_top ? notes.length : 0) + viewState.order.indexOf(note.id) + 1);
     }
   }
   function extent(layouts) {
@@ -208,6 +210,7 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     if (!gesture || gesture.pointer !== event.pointerId) { setTimeout(() => { suppressClick = false; }, 0); return; }
     const current = gesture; gesture = null;
     release(current);
+    layerCards();
     suppressClick = current.active;
     setTimeout(() => { suppressClick = false; }, 0);
     if (!current.active || JSON.stringify(current.start) === JSON.stringify(current.next)) { refresh(); return; }
@@ -225,10 +228,14 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   }
   function pointerCancel(event) { touches.delete(event.pointerId); navigation = null; cancel(); }
   function lost(event) {
+    if (navigation?.kind === 'pan' && navigation.pointer === event.pointerId && event.target === viewport) {
+      navigation = null; touches.delete(event.pointerId);
+    }
     // Touch starts with implicit capture on the hit descendant. Transferring it
     // to the card loses that descendant's capture without ending our gesture.
     if (gesture?.pointer === event.pointerId && event.target === gesture.card) cancel();
   }
+  function menuToggle(event) { if (event.target.matches('.note-card__menu')) layerCards(); }
   let observedWidth = viewportWidth();
   const observer = new ResizeObserver(() => {
     if (viewportWidth() === observedWidth) return;
@@ -241,7 +248,8 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   window.addEventListener('pointermove', move, { passive: false });
   window.addEventListener('pointerup', up);
   window.addEventListener('pointercancel', pointerCancel);
-  grid.addEventListener('lostpointercapture', lost);
+  viewport.addEventListener('lostpointercapture', lost);
+  grid.addEventListener('toggle', menuToggle, true);
   grid.addEventListener('click', click, true);
   window.addEventListener('keydown', key);
   refresh();
@@ -256,7 +264,8 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       cancel(); disposed = true; observer.disconnect();
       window.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', pointerCancel);
-      grid.removeEventListener('lostpointercapture', lost);
+      viewport.removeEventListener('lostpointercapture', lost);
+      grid.removeEventListener('toggle', menuToggle, true);
       grid.removeEventListener('click', click, true); window.removeEventListener('keydown', key);
       grid.classList.remove('notes-board', 'notes-board--compact', 'notes-board--projected');
       viewport.classList.remove('notes-scroll--canvas'); space.classList.remove('notes-canvas-space--active');

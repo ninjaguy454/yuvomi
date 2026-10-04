@@ -1218,16 +1218,12 @@ function buildItemForm({ mode, item = null }) {
         <div class="form-group">
           <span class="form-label">${esc(t('inventory.photoLabel'))}</span>
           <div class="inventory-photo-wrap">
-            <button type="button" class="inventory-photo-editor" id="inv-photo-preview" aria-label="${esc(t('inventory.photoLabel'))}">
-              ${photoPreviewHtml(photoData)}
+            <button type="button" class="inventory-photo-editor photo-editor" id="inv-photo-preview" aria-label="${esc(t('inventory.photoLabel'))}">
+              <span class="photo-editor__preview">${photoPreviewHtml(photoData)}</span><span class="photo-editor__cue" aria-hidden="true"><i data-lucide="pencil"></i></span>
             </button>
             <input class="sr-only" id="inv-photo" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="inventory-photo-actions">
-              <button type="button" class="inventory-photo-action" id="inv-photo-edit"
-                      aria-label="${esc(t('inventory.photoLabel'))}" title="${esc(t('inventory.photoLabel'))}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button type="button" class="inventory-photo-action inventory-photo-action--danger" id="inv-remove-photo"
+              <button type="button" class="inventory-photo-action inventory-photo-action--danger" id="inv-remove-photo" ${photoData ? '' : 'hidden'}
                       aria-label="${esc(t('inventory.removePhoto'))}" title="${esc(t('inventory.removePhoto'))}">
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
@@ -1318,12 +1314,13 @@ function buildItemForm({ mode, item = null }) {
     const photoPreview = panel.querySelector('#inv-photo-preview');
     const photoInput = panel.querySelector('#inv-photo');
     const renderPhotoPreview = () => {
-      photoPreview.replaceChildren();
-      photoPreview.insertAdjacentHTML('beforeend', photoPreviewHtml(photoData));
+      panel.querySelector('#inv-remove-photo').hidden = !photoData;
+      const image = photoPreview.querySelector('.photo-editor__preview');
+      image.replaceChildren();
+      image.insertAdjacentHTML('beforeend', photoPreviewHtml(photoData));
       if (window.lucide) window.lucide.createIcons({ el: photoPreview });
     };
     photoPreview?.addEventListener('click', () => photoInput?.click());
-    panel.querySelector('#inv-photo-edit')?.addEventListener('click', () => photoInput?.click());
     photoInput?.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
       // Sofort zurücksetzen: ohne Reset feuert dieselbe Datei kein zweites

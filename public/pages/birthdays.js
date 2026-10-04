@@ -361,15 +361,12 @@ function openBirthdayModal({ mode, birthday = null }) {
       <div class="birthday-modal">
         <div class="birthday-modal__identity">
           <div class="birthday-modal__photo-wrap">
-            <button type="button" class="birthday-avatar-editor" id="birthday-preview" aria-label="${t('birthdays.photoLabel')}">
-              ${birthdayPreviewHtml(birthday?.name || '', photoData)}
+            <button type="button" class="birthday-avatar-editor photo-editor" id="birthday-preview" aria-label="${t('birthdays.photoLabel')}">
+              <span class="photo-editor__preview">${birthdayPreviewHtml(birthday?.name || '', photoData)}</span><span class="photo-editor__cue" aria-hidden="true"><i data-lucide="pencil"></i></span>
             </button>
             <input class="sr-only" id="bd-photo" type="file" accept="image/png,image/jpeg,image/webp">
             <div class="birthday-modal__photo-actions">
-              <button type="button" class="birthday-modal__photo-action" id="bd-photo-edit" aria-label="${t('birthdays.photoLabel')}" title="${t('birthdays.photoLabel')}">
-                <i data-lucide="pencil" aria-hidden="true"></i>
-              </button>
-              <button type="button" class="birthday-modal__photo-action birthday-modal__photo-action--danger" id="bd-remove-photo" aria-label="${t('birthdays.removePhoto')}" title="${t('birthdays.removePhoto')}">
+              <button type="button" class="birthday-modal__photo-action birthday-modal__photo-action--danger" id="bd-remove-photo" ${photoData ? '' : 'hidden'} aria-label="${t('birthdays.removePhoto')}" title="${t('birthdays.removePhoto')}">
                 <i data-lucide="trash-2" aria-hidden="true"></i>
               </button>
             </div>
@@ -407,14 +404,14 @@ function openBirthdayModal({ mode, birthday = null }) {
       const nameInput = panel.querySelector('#bd-name');
       const preview = panel.querySelector('#birthday-preview');
       const fileInput = panel.querySelector('#bd-photo');
-      const photoEdit = panel.querySelector('#bd-photo-edit');
       const renderPreview = () => {
-        preview.replaceChildren();
-        preview.insertAdjacentHTML('beforeend', birthdayPreviewHtml(nameInput.value.trim(), photoData));
+        panel.querySelector('#bd-remove-photo').hidden = !photoData;
+        const image = preview.querySelector('.photo-editor__preview');
+        image.replaceChildren();
+        image.insertAdjacentHTML('beforeend', birthdayPreviewHtml(nameInput.value.trim(), photoData));
       };
       nameInput.addEventListener('input', renderPreview);
       preview.addEventListener('click', () => fileInput?.click());
-      photoEdit?.addEventListener('click', () => fileInput?.click());
       fileInput?.addEventListener('change', async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;

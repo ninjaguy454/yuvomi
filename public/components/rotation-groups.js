@@ -120,7 +120,7 @@ async function editGroup(group,onSaved,live) {
     <input type="hidden" name="member_order" value="${esc(JSON.stringify(group?.members.map(m=>m.id)||[]))}">
     <ul class="rotation-members" data-rotation-member-list>${orderedRows(group?.members.filter(m=>m.id)||[])}</ul>
     <p class="rotation-empty" data-rotation-members-empty ${group?.members.some(m=>m.id)?'hidden':''}>No members yet. Choose someone below to start the order.</p>
-    <label class="form-label">Add member<select class="form-input" data-rotation-add-member><option value="">Choose a household member</option>${members.map(m=>`<option value="${m.id}">${esc(m.display_name)}</option>`).join('')}</select></label>
+    <label class="form-label"><i data-lucide="user-plus" class="icon-sm" aria-hidden="true"></i> Add member<select class="form-input" data-rotation-add-member><option value="">Choose a household member</option>${members.map(m=>`<option value="${m.id}">${esc(m.display_name)}</option>`).join('')}</select></label>
     <p class="form-hint">Drag the dotted handle to reorder. Keyboard: focus the handle and press Alt + ↑ / ↓.</p>
     <p class="sr-only" role="status" aria-live="polite" data-rotation-order-status></p>
     </section>

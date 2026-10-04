@@ -33,15 +33,12 @@ function avatarHtml(user, className = 'settings-avatar') {
 function avatarEditorHtml(user) {
   return `
     <div class="settings-avatar-editor">
-      <button type="button" class="settings-avatar-button" id="profile-avatar-preview" aria-label="${t('settings.profilePictureLabel')}">
-        ${avatarHtml(user, 'settings-avatar settings-avatar--lg')}
+      <button type="button" class="settings-avatar-button photo-editor" id="profile-avatar-preview" aria-label="${t('settings.profilePictureLabel')}">
+        <span class="photo-editor__preview">${avatarHtml(user, 'settings-avatar settings-avatar--lg')}</span><span class="photo-editor__cue" aria-hidden="true"><i data-lucide="pencil"></i></span>
       </button>
       <input class="sr-only" type="file" id="profile-avatar-file" accept="image/png,image/jpeg,image/webp" aria-label="${t('settings.profilePictureLabel')}" aria-describedby="profile-error" tabindex="-1">
       <div class="settings-avatar-actions">
-        <button type="button" class="settings-avatar-action" id="profile-avatar-edit" aria-label="${t('settings.profilePictureLabel')}" title="${t('settings.profilePictureLabel')}">
-          <i data-lucide="edit-2" aria-hidden="true"></i>
-        </button>
-        <button type="button" class="settings-avatar-action settings-avatar-action--danger" id="profile-avatar-remove" aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
+        <button type="button" class="settings-avatar-action settings-avatar-action--danger" id="profile-avatar-remove" ${user?.avatar_data ? '' : 'hidden'} aria-label="${t('settings.profilePictureRemove')}" title="${t('settings.profilePictureRemove')}">
           <i data-lucide="trash-2" aria-hidden="true"></i>
         </button>
       </div>
@@ -62,7 +59,9 @@ function clearError(element) {
 }
 
 function setAvatarPreview(container, user) {
-  const preview = container.querySelector('#profile-avatar-preview');
+  const remove = container.querySelector('#profile-avatar-remove');
+  if (remove) remove.hidden = !user?.avatar_data;
+  const preview = container.querySelector('#profile-avatar-preview .photo-editor__preview');
   if (!preview) return;
   preview.replaceChildren();
   preview.insertAdjacentHTML(
@@ -597,7 +596,6 @@ function bindEvents(container, user, profileState) {
   };
 
   container.querySelector('#profile-avatar-preview')?.addEventListener('click', () => avatarFile?.click());
-  container.querySelector('#profile-avatar-edit')?.addEventListener('click', () => avatarFile?.click());
   displayName?.addEventListener('input', updatePreview);
   avatarColor?.addEventListener('input', updatePreview);
 

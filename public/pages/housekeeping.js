@@ -250,7 +250,7 @@ function renderWorkerSummary() {
       description: t('housekeeping.noWorkerHint'),
       action: {
         label: t('housekeeping.setupProfileAction'),
-        icon: 'plus',
+        icon: 'user-plus',
         attrs: { id: 'housekeeping-create-profile' },
       },
     });

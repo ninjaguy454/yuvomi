@@ -97,12 +97,37 @@ test('household presentation labels require membership or a scoped paired creden
  await ok(display,'POST','/api/v1/device/launch',{});
  const response=await ok(display,'GET',endpoint);
  assert.deepEqual(response.body.data.map(row=>row.id),[2]);
- assert.deepEqual(Object.keys(response.body.data[0]).sort(),['age','display_name','first_name','id','last_name','username']);
+ assert.deepEqual(Object.keys(response.body.data[0]).sort(),['age','display_name','first_name','id','last_name','name_collisions','username']);
  assert.equal(response.body.data[0].username,'child');
  for(const forbidden of ['birth_date','email','phone','avatar_data','password_hash','role']) assert.ok(!(forbidden in response.body.data[0]));
  await ok(administrator,'POST',`/api/v1/devices/${id}/revoke`,{revision:d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision});
  assert.notEqual((await display.call('GET',endpoint)).status,200);
 });
+test('scoped read-only displays receive household collision flags without extra candidates or authority', async () => {
+ const {client:display,id}=await pair('Scoped collision display');
+ const previous=d.prepare('SELECT id,display_name FROM users WHERE id IN (1,2)').all();
+ try {
+  d.exec("UPDATE users SET display_name='Alex' WHERE id IN (1,2)");
+  const revision=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision;
+  await ok(administrator,'PATCH',`/api/v1/devices/${id}`,{revision,scope:{member_ids:[2]},permissions:{capabilities:{'device_tasks.complete':'none','device_tasks.claim':'none'}}});
+  await ok(display,'POST','/api/v1/device/launch',{});
+  const before=(await ok(display,'GET','/api/v1/auth/me')).body.permissions;
+  const labels=(await ok(display,'GET','/api/v1/auth/member-labels')).body.data;
+  assert.deepEqual(labels.map(row=>row.id),[2]);
+  assert.deepEqual(labels[0].name_collisions,['display','first','first_last_initial']);
+  assert.ok(!JSON.stringify(labels).includes('parent'));
+  assert.deepEqual((await ok(display,'GET','/api/v1/auth/users')).body.data.map(row=>row.id),[2]);
+  assert.deepEqual((await ok(display,'GET','/api/v1/dashboard')).body.users.map(row=>row.id),[2]);
+  assert.deepEqual((await ok(display,'GET','/api/v1/auth/me')).body.permissions,before);
+  assert.equal(before.capabilities['device_tasks.complete'],'none');
+  await ok(display,'POST','/api/v1/tasks',{title:'Forbidden',assigned_to:1},403);
+  await ok(display,'GET','/api/v1/family/members',undefined,403);
+  await ok(display,'POST','/api/v1/auth/member-labels',{},403);
+ } finally {
+  for(const row of previous)d.prepare('UPDATE users SET display_name=? WHERE id=?').run(row.display_name,row.id);
+ }
+});
+
 test('signed-in guests and workers cannot read the household presentation roster', async () => {
  for(const [id,username,table] of [[8001,'label-guest','split_expense_guest_users'],[8002,'label-worker','housekeeping_workers']]) {
   d.prepare("INSERT INTO users(id,username,display_name,password_hash,role) VALUES(?,?,?,?,'member')").run(id,username,username,await hashPassword(password));

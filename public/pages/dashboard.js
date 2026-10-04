@@ -1,4 +1,4 @@
-import { memberLabel } from '/utils/member-label.js';
+import { memberLabel, firstDisplayName } from '/utils/member-label.js';
 import { householdGreeting } from '/utils/household-greeting.js';
 /**
  * Modul: Dashboard
@@ -405,27 +405,11 @@ const BUDGET_CATEGORY_LABEL_KEYS = {
 // Hilfsfunktionen
 // --------------------------------------------------------
 
-/**
- * DER GRUSS NENNT DEN VORNAMEN (Critique 2026-08-10).
- *
- * „Guten Abend, Linda Johnson" brach den Large Title mobil auf zwei Zeilen
- * (82px, 24 % des ersten Screens) und machte aus einem Gruss eine
- * Datenbankzeile. Apple gruesst mit dem Vornamen, und ein Haushalt von 2-6
- * Personen braucht keinen Nachnamen zur Unterscheidung.
- *
- * Das erste WORT, nicht das erste Zeichen bis zum Leerzeichen: `display_name`
- * ist ein frei gesetztes Feld und kann alles enthalten, auch einen einzelnen
- * Namen oder einen Spitznamen. Ohne Leerzeichen bleibt er, wie er ist - das
- * Kuerzen darf nie mehr wegnehmen, als es findet.
- */
-function firstName(displayName) {
-  return String(displayName ?? '').trim().split(/\s+/)[0] || String(displayName ?? '');
-}
-
+// Compact greetings share the household name-format collision rules.
 function greeting(displayName, familyName = '', member = null) {
   if (isDevicePrincipal()) return esc(householdGreeting(familyName));
   const h = nowFields().hour;
-  const name = esc(memberLabel(member || { display_name: displayName }, [], { format: person => firstName(person.display_name) }));
+  const name = esc(memberLabel(member || { display_name: displayName }, [], { format: firstDisplayName }));
   if (h >= 5 && h < 12) return t('dashboard.greetingMorning', { name });
   if (h >= 12 && h < 18) return t('dashboard.greetingDay',    { name });
   return t('dashboard.greetingEvening', { name });
@@ -3303,7 +3287,7 @@ function renderWallWho(data, model) {
                 <span class="sr-only">${esc(t('dashboard.wallWhoCount', { count }))}</span>
               </span>
             </span>
-            <span class="wall-who__name">${esc(memberLabel(u, [], { format: person => firstName(person.display_name) }))}</span>
+            <span class="wall-who__name">${esc(memberLabel(u, [], { format: firstDisplayName }))}</span>
           </li>`;
       }).join('')}</ul>${onDuty.length > shown.length
         ? `<p class="wall-who__more">${esc(t('dashboard.shoppingMore', { count: onDuty.length - shown.length }))}</p>`

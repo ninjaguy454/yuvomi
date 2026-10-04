@@ -571,7 +571,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Cocher l’élément",
-        "checkConflict": "La tâche a été modifiée entre-temps. Veuillez la rouvrir."
+        "checkConflict": "La tâche a été modifiée entre-temps. Veuillez la rouvrir.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Envoyer la liste",
@@ -1160,7 +1166,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Choisir le mois et l’année",
@@ -3063,7 +3072,13 @@
         "twoFactorMemberOff": "non configuré",
         "memberSsoOnlyLabel": "Connexion SSO uniquement",
         "memberSsoOnlyHint": "Le compte ne reçoit pas de mot de passe. Le membre ne peut se connecter que via le SSO.",
-        "memberSsoOnlyEditHint": "Lorsque l'option est activée, le compte perd son mot de passe et n'entre plus que via le SSO. Pour la désactiver, il faut définir un nouveau mot de passe."
+        "memberSsoOnlyEditHint": "Lorsque l'option est activée, le compte perd son mot de passe et n'entre plus que via le SSO. Pour la désactiver, il faut définir un nouveau mot de passe.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Votre vie, ensemble.",
@@ -3217,7 +3232,8 @@
         "sourceNative": "Natif",
         "sourceAll": "Tous",
         "sourceFilterLabel": "Filtrer par source",
-        "plannedThisWeek": "Prévu cette semaine"
+        "plannedThisWeek": "Prévu cette semaine",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Saisis au moins 2 caractères pour chercher dans les tâches, rendez-vous, notes, contacts, courses et santé.",

@@ -571,7 +571,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Öğeyi işaretle",
-        "checkConflict": "Görev bu arada değişti. Lütfen yeniden açın."
+        "checkConflict": "Görev bu arada değişti. Lütfen yeniden açın.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Listeyi gönder",
@@ -1160,7 +1166,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Ay ve yıl seçin",
@@ -3063,7 +3072,13 @@
         "twoFactorMemberOff": "kurulmadı",
         "memberSsoOnlyLabel": "Yalnızca SSO ile giriş",
         "memberSsoOnlyHint": "Hesap şifre almaz. Üye yalnızca SSO ile giriş yapabilir.",
-        "memberSsoOnlyEditHint": "Anahtar açıkken hesap şifresini kaybeder ve yalnızca SSO ile girer. Kapatmak için yeni bir şifre belirlenmelidir."
+        "memberSsoOnlyEditHint": "Anahtar açıkken hesap şifresini kaybeder ve yalnızca SSO ile girer. Kapatmak için yeni bir şifre belirlenmelidir.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Hayatınız, birlikte.",
@@ -3217,7 +3232,8 @@
         "sourceNative": "Yerel",
         "sourceAll": "Tümü",
         "sourceFilterLabel": "Kaynağa göre filtrele",
-        "plannedThisWeek": "Bu hafta planlandı"
+        "plannedThisWeek": "Bu hafta planlandı",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Görevler, etkinlikler, notlar, kişiler, alışveriş ve sağlıkta aramak için en az 2 karakter yaz.",

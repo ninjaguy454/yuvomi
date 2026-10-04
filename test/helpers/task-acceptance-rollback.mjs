@@ -62,7 +62,7 @@ if(stage==='worker'){
     assert.equal(d.prepare('SELECT visibility FROM notes WHERE id=1').get().visibility,'private');save('after-probe',snapshot());
   }else if(stage==='fallback'){
     assert.equal(schema(),10050);assert.deepEqual(snapshot(),load('after-probe'));privacy();
-    assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.38-acceptance-paused'));
+    assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.40-acceptance-paused'));
     assert.ok(readFileSync('/app/public/styles/notes.css','utf8').includes('#notes-open-tasks { display: none !important; }'));
     assert.ok(readFileSync('/app/public/styles/tasks.css','utf8').includes('#filter-open-tasks { display: none !important; }'));
     assert.ok(!readFileSync('/app/public/pages/tasks.js','utf8').includes("new URLSearchParams(window.location.search).get('offers') === '1'"));

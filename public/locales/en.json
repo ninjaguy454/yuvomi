@@ -571,7 +571,13 @@
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "listLoadError": "Tasks could not be loaded.",
         "checklistToggle": "Tick item",
-        "checkConflict": "The task has changed in the meantime. Please open it again."
+        "checkConflict": "The task has changed in the meantime. Please open it again.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Send list",
@@ -1160,7 +1166,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Choose month and year",
@@ -3065,7 +3074,13 @@
         "twoFactorMemberOff": "not set up",
         "memberSsoOnlyLabel": "SSO sign-in only",
         "memberSsoOnlyHint": "The account gets no password. The member can only sign in through SSO.",
-        "memberSsoOnlyEditHint": "With this on, the account loses its password and only gets in through SSO. Turning it off requires setting a new password."
+        "memberSsoOnlyEditHint": "With this on, the account loses its password and only gets in through SSO. Turning it off requires setting a new password.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Your life, together.",
@@ -3298,7 +3313,8 @@
         "sourceNative": "Native",
         "sourceAll": "All",
         "sourceFilterLabel": "Filter by source",
-        "plannedThisWeek": "Planned this week"
+        "plannedThisWeek": "Planned this week",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Type at least 2 characters to search tasks, events, notes, contacts, shopping and health.",

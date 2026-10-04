@@ -583,7 +583,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Markahan ang item",
-        "checkConflict": "Nabago ang gawain samantala. Pakibuksan itong muli."
+        "checkConflict": "Nabago ang gawain samantala. Pakibuksan itong muli.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Ipadala ang listahan",
@@ -1172,7 +1178,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Piliin ang buwan at taon",
@@ -3075,7 +3084,13 @@
         "twoFactorMemberOff": "hindi naka-set up",
         "memberSsoOnlyLabel": "Pag-sign in sa SSO lamang",
         "memberSsoOnlyHint": "Walang password na makukuha ang account. Makakapag-sign in lang ang miyembro sa pamamagitan ng SSO.",
-        "memberSsoOnlyEditHint": "Kapag naka-on ito, mawawala ang password ng account at sa SSO na lang ito papasok. Para i-off, kailangang magtakda ng bagong password."
+        "memberSsoOnlyEditHint": "Kapag naka-on ito, mawawala ang password ng account at sa SSO na lang ito papasok. Para i-off, kailangang magtakda ng bagong password.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Ang buhay mo, magkakasama.",
@@ -3308,7 +3323,8 @@
         "sourceNative": "Katutubo",
         "sourceAll": "Lahat",
         "sourceFilterLabel": "I-filter ayon sa pinagmulan",
-        "plannedThisWeek": "Nakaplano ngayong linggo"
+        "plannedThisWeek": "Nakaplano ngayong linggo",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "onboarding": {
         "step1Title": "Maligayang pagdating sa {{name}}",

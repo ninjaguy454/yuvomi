@@ -571,7 +571,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "項目にチェックを入れる",
-        "checkConflict": "タスクはその間に変更されました。もう一度開いてください。"
+        "checkConflict": "タスクはその間に変更されました。もう一度開いてください。",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "リストを送る",
@@ -1160,7 +1166,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "月と年を選択",
@@ -3063,7 +3072,13 @@
         "twoFactorMemberOff": "未設定",
         "memberSsoOnlyLabel": "SSO サインインのみ",
         "memberSsoOnlyHint": "このアカウントにはパスワードが設定されません。メンバーは SSO でのみサインインできます。",
-        "memberSsoOnlyEditHint": "オンにするとアカウントはパスワードを失い、SSO でのみ入れるようになります。オフにするには新しいパスワードの設定が必要です。"
+        "memberSsoOnlyEditHint": "オンにするとアカウントはパスワードを失い、SSO でのみ入れるようになります。オフにするには新しいパスワードの設定が必要です。",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "あなたの暮らしを、ともに。",
@@ -3217,7 +3232,8 @@
         "sourceNative": "ネイティブ",
         "sourceAll": "すべて",
         "sourceFilterLabel": "ソースで絞り込み",
-        "plannedThisWeek": "今週の予定あり"
+        "plannedThisWeek": "今週の予定あり",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "2文字以上入力すると、タスク・予定・メモ・連絡先・買い物・健康を検索できます。",

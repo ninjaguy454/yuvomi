@@ -571,7 +571,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "شطب العنصر",
-        "checkConflict": "تم تغيير المهمة في هذه الأثناء. يرجى فتحها من جديد."
+        "checkConflict": "تم تغيير المهمة في هذه الأثناء. يرجى فتحها من جديد.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "إرسال القائمة",
@@ -1160,7 +1166,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "اختر الشهر والسنة",
@@ -3063,7 +3072,13 @@
         "twoFactorMemberOff": "غير مُعَدّ",
         "memberSsoOnlyLabel": "تسجيل الدخول بـ SSO فقط",
         "memberSsoOnlyHint": "لن يحصل الحساب على كلمة مرور. لا يمكن للعضو تسجيل الدخول إلا عبر SSO.",
-        "memberSsoOnlyEditHint": "عند تفعيل هذا الخيار يفقد الحساب كلمة مروره ولا يدخل إلا عبر SSO. لإيقافه يجب تعيين كلمة مرور جديدة."
+        "memberSsoOnlyEditHint": "عند تفعيل هذا الخيار يفقد الحساب كلمة مروره ولا يدخل إلا عبر SSO. لإيقافه يجب تعيين كلمة مرور جديدة.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "حياتك، معًا.",
@@ -3217,7 +3232,8 @@
         "sourceNative": "محلي",
         "sourceAll": "الكل",
         "sourceFilterLabel": "التصفية حسب المصدر",
-        "plannedThisWeek": "مخطط لهذا الأسبوع"
+        "plannedThisWeek": "مخطط لهذا الأسبوع",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "اكتب حرفين على الأقل للبحث في المهام والمواعيد والملاحظات وجهات الاتصال والتسوق والصحة.",

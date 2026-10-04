@@ -583,7 +583,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Eintrag abhaken",
-        "checkConflict": "Die Aufgabe wurde inzwischen geändert. Bitte erneut öffnen."
+        "checkConflict": "Die Aufgabe wurde inzwischen geändert. Bitte erneut öffnen.",
+        "manage": "Verwalten",
+        "categoriesLabel": "Kategorien",
+        "workflowsLabel": "Abläufe",
+        "supervisorApproval": "Freigabe durch Aufsichtsperson",
+        "supervisorApprovalFor": "Freigabe durch Aufsichtsperson: {{title}}",
+        "expirationPolicyLabel": "Wenn bei Fristablauf nicht erledigt"
     },
     "shopping": {
         "sendList": "Liste senden",
@@ -1172,7 +1178,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "Essensplan ansehen: {{name}}",
+        "editMealPlanNamed": "Bearbeiten: {{name}}",
+        "deleteMealPlanNamed": "Löschen: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Monat und Jahr auswählen",
@@ -3075,7 +3084,13 @@
         "twoFactorMemberOff": "nicht eingerichtet",
         "memberSsoOnlyLabel": "Nur SSO-Anmeldung",
         "memberSsoOnlyHint": "Das Konto bekommt kein Passwort. Anmelden kann sich das Mitglied nur über SSO.",
-        "memberSsoOnlyEditHint": "Ist der Schalter an, verliert das Konto sein Passwort und kommt nur noch über SSO herein. Zum Ausschalten muss ein neues Passwort gesetzt werden."
+        "memberSsoOnlyEditHint": "Ist der Schalter an, verliert das Konto sein Passwort und kommt nur noch über SSO herein. Zum Ausschalten muss ein neues Passwort gesetzt werden.",
+        "automationPlacesHint": "Wiederverwendbare Orte für den Haushalt speichern.",
+        "workflowEditNamed": "Aufgabenablauf bearbeiten: {{name}}",
+        "workflowVariableInsertHint": "Mit @ eine Antwort einfügen.",
+        "workflowVariableHelp": "Hilfe zu Variablen",
+        "workflowVariableHelpIds": "Antworten mit @ einfügen. IDs werden aus Namen erzeugt und bleiben nach dem Speichern unverändert; doppelte Namen erhalten eine angehängte Zahl.",
+        "workflowVariableHelpRotation": "Rotationszwecke liefern berechnete Werte für das jeweilige Rotationsvorkommen. Für eine Zahlenvariable rotationPosition(shower_order, context.household_member) verwenden."
     },
     "login": {
         "tagline": "Dein Leben, gemeinsam.",
@@ -3308,7 +3323,8 @@
         "sourceNative": "Nativ",
         "sourceAll": "Alle",
         "sourceFilterLabel": "Nach Quelle filtern",
-        "plannedThisWeek": "Diese Woche geplant"
+        "plannedThisWeek": "Diese Woche geplant",
+        "importHint": "Rezeptlink oder Markdown-Text einfügen. Vor dem Speichern prüfen."
     },
     "onboarding": {
         "step1Title": "Willkommen bei {{name}}",

@@ -571,7 +571,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Bocka av post",
-        "checkConflict": "Uppgiften har ändrats under tiden. Öppna den igen."
+        "checkConflict": "Uppgiften har ändrats under tiden. Öppna den igen.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Skicka listan",
@@ -1160,7 +1166,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Välj månad och år",
@@ -3063,7 +3072,13 @@
         "twoFactorMemberOff": "inte inställd",
         "memberSsoOnlyLabel": "Endast SSO-inloggning",
         "memberSsoOnlyHint": "Kontot får inget lösenord. Medlemmen kan bara logga in via SSO.",
-        "memberSsoOnlyEditHint": "Med reglaget på förlorar kontot sitt lösenord och kommer bara in via SSO. För att stänga av det måste ett nytt lösenord anges."
+        "memberSsoOnlyEditHint": "Med reglaget på förlorar kontot sitt lösenord och kommer bara in via SSO. För att stänga av det måste ett nytt lösenord anges.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Ditt liv, tillsammans.",
@@ -3217,7 +3232,8 @@
         "sourceNative": "Egna",
         "sourceAll": "Alla",
         "sourceFilterLabel": "Filtrera efter källa",
-        "plannedThisWeek": "Planerad denna vecka"
+        "plannedThisWeek": "Planerad denna vecka",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "search": {
         "emptyHint": "Skriv minst 2 tecken för att söka bland uppgifter, händelser, anteckningar, kontakter, inköp och hälsa.",

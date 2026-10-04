@@ -583,7 +583,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "Odhacz pozycję",
-        "checkConflict": "Zadanie zostało w międzyczasie zmienione. Otwórz je ponownie."
+        "checkConflict": "Zadanie zostało w międzyczasie zmienione. Otwórz je ponownie.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "Wyślij listę",
@@ -1172,7 +1178,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "Wybierz miesiąc i rok",
@@ -3075,7 +3084,13 @@
         "twoFactorMemberOff": "nieskonfigurowane",
         "memberSsoOnlyLabel": "Tylko logowanie przez SSO",
         "memberSsoOnlyHint": "Konto nie otrzyma hasła. Członek może zalogować się wyłącznie przez SSO.",
-        "memberSsoOnlyEditHint": "Przy włączonym przełączniku konto traci hasło i wchodzi już tylko przez SSO. Aby go wyłączyć, trzeba ustawić nowe hasło."
+        "memberSsoOnlyEditHint": "Przy włączonym przełączniku konto traci hasło i wchodzi już tylko przez SSO. Aby go wyłączyć, trzeba ustawić nowe hasło.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "Twoje życie, razem.",
@@ -3308,7 +3323,8 @@
         "sourceNative": "Lokalny",
         "sourceAll": "Wszystkie",
         "sourceFilterLabel": "Filtruj według źródła",
-        "plannedThisWeek": "Zaplanowane na ten tydzień"
+        "plannedThisWeek": "Zaplanowane na ten tydzień",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "onboarding": {
         "step1Title": "Witaj w {{name}}",

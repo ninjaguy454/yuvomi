@@ -583,7 +583,13 @@
         "personalBoardEmptyDescription": "Tasks will appear here when they match this board and its filters.",
         "moveBetweenBucketsHint": "Open the task details to change its participants or group.",
         "checklistToggle": "항목 체크",
-        "checkConflict": "그 사이에 할 일이 변경되었습니다. 다시 열어 주세요."
+        "checkConflict": "그 사이에 할 일이 변경되었습니다. 다시 열어 주세요.",
+        "manage": "Manage",
+        "categoriesLabel": "Categories",
+        "workflowsLabel": "Workflows",
+        "supervisorApproval": "Supervisor approval",
+        "supervisorApprovalFor": "Supervisor approval: {{title}}",
+        "expirationPolicyLabel": "If unfinished at deadline"
     },
     "shopping": {
         "sendList": "목록 보내기",
@@ -1172,7 +1178,10 @@
         "portionCountInvalid": "Enter at least one portion.",
         "householdPlanDefaults": "Household defaults",
         "planDefaultsSaveFailed": "Meal Plan Default Settings could not be saved. Your changes are still open; please try again.",
-        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again."
+        "grocerySettingsSaveFailed": "Grocery settings could not be saved. Your changes are still open; please try again.",
+        "viewMealPlanNamed": "View Meal Plan: {{name}}",
+        "editMealPlanNamed": "Edit: {{name}}",
+        "deleteMealPlanNamed": "Delete: {{name}}"
     },
     "calendar": {
         "chooseMonthYear": "월과 연도 선택",
@@ -3075,7 +3084,13 @@
         "twoFactorMemberOff": "설정 안 됨",
         "memberSsoOnlyLabel": "SSO 로그인만 허용",
         "memberSsoOnlyHint": "이 계정에는 비밀번호가 없습니다. 구성원은 SSO로만 로그인할 수 있습니다.",
-        "memberSsoOnlyEditHint": "켜면 계정은 비밀번호를 잃고 SSO로만 들어옵니다. 끄려면 새 비밀번호를 설정해야 합니다."
+        "memberSsoOnlyEditHint": "켜면 계정은 비밀번호를 잃고 SSO로만 들어옵니다. 끄려면 새 비밀번호를 설정해야 합니다.",
+        "automationPlacesHint": "Save reusable household locations.",
+        "workflowEditNamed": "Edit Task Workflow: {{name}}",
+        "workflowVariableInsertHint": "Insert an answer with @.",
+        "workflowVariableHelp": "Variable help",
+        "workflowVariableHelpIds": "Insert answers with @. IDs are generated from names and stay stable after saving; duplicate names receive a number suffix.",
+        "workflowVariableHelpRotation": "Rotation purposes provide calculated Rotation Occurrence values. For a Number variable, use rotationPosition(shower_order, context.household_member)."
     },
     "login": {
         "tagline": "당신의 일상, 함께.",
@@ -3308,7 +3323,8 @@
         "sourceNative": "기본",
         "sourceAll": "전체",
         "sourceFilterLabel": "출처별로 필터링",
-        "plannedThisWeek": "이번 주에 계획됨"
+        "plannedThisWeek": "이번 주에 계획됨",
+        "importHint": "Paste a recipe link or Markdown text. Review before saving."
     },
     "onboarding": {
         "step1Title": "{{name}}에 오신 것을 환영합니다",

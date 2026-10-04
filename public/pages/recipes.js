@@ -956,7 +956,7 @@ function openRecipeImportModal() {
     title: 'Import recipe',
     size: 'sm',
     content: `
-      <p class="form-hint recipe-import-intro">Paste a recipe link or Markdown text. Review before saving.</p>
+      <p class="form-hint recipe-import-intro">${esc(t('recipes.importHint'))}</p>
       <div class="form-group">
         <label class="form-label" for="recipe-import-url">Recipe page or source URL</label>
         <input id="recipe-import-url" class="form-input" type="url" autocomplete="url" placeholder="https://example.com/recipe">

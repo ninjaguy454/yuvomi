@@ -193,6 +193,7 @@ export async function render(container, { user }) {
         <span id="notes-board-hint" class="notes-board-hint" hidden>${t('notes.canvasGestureHint')}</span>
       </div>
       <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
+      <div class="notes-reveal-strip" role="group" aria-label="${t('notes.revealOverlapping')}" hidden></div>
       <div class="notes-workspace">
         <aside id="notes-open-tasks" class="notes-open-tasks" hidden></aside>
         <div class="notes-scroll page-scrollport">

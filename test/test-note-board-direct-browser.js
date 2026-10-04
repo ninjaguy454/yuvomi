@@ -50,6 +50,9 @@ async function mount({ width = 1280, height = 900, permission = 'edit', fixture,
   if (fixture === 'locked') notes[0].layout.position_locked = true;
   if (fixture === 'layers') { notes[1].layout = { x:6,y:2,width:4,height:6,revision:1,always_on_top:true }; }
   if (fixture === 'menu-overlap') { notes[1].layout = { x:5,y:3,width:4,height:6,revision:1,always_on_top:true }; }
+  if (fixture === 'reveal' || fixture === 'reveal-distant') {
+    notes=Array.from({length:fixture==='reveal-distant'?30:3},(_,i)=>({...structuredClone(original[0]),id:i+1,title:i===2?'Locked <b>third</b>':`Locked note ${i+1}`,layout:{x:fixture==='reveal-distant'?80:2,y:fixture==='reveal-distant'?90:2,width:4,height:6,revision:2,position_locked:true,always_on_top:i===1}}));
+  }
   if (fixture === 'tall-top') { notes = [notes[0]]; notes[0].layout.y = 105; }
   if (fixture === 'long-content') notes[0].content = 'A plain paragraph to drag.\n\n' + Array.from({ length: 35 }, (_, i) => `Scrollable preview paragraph ${i}.`).join('\n\n') + '\n\n' + notes[0].content;
   if (permission !== 'edit') for (const note of notes) note.permissions = { view: true, edit: false, delete: false, manage_visibility: false };
@@ -144,6 +147,99 @@ test('zoomed drag uses world units and right-edge autoscroll grows beyond twelve
     const extent=await page.$eval('.notes-canvas-space',n=>n.getBoundingClientRect().width);
     assert.ok(extent >= ((notes[0].layout.x+notes[0].layout.width)*pitch+192)*1.25-1);
   } finally { await page.close(); }
+});
+
+test('reveal tabs expose every overlapping locked card without moving or saving it', async () => {
+  const page=await mount({fixture:'reveal'});
+  try {
+    const before=structuredClone(notes);
+    await page.waitForSelector('[data-note-reveal="1"]');
+    assert.equal(await page.$$eval('[data-note-reveal]',nodes=>nodes.length),3);
+    const label=await page.$eval('[data-note-reveal="3"]',n=>({text:n.textContent,markup:!!n.querySelector('b')}));
+    assert.ok(label.text.includes('<b>third</b>'));assert.equal(label.markup,false);
+    await page.focus('[data-note-reveal="1"]');await page.keyboard.press('Enter');
+    assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n.getAttribute('aria-pressed')),'true');
+    assert.equal(await page.$eval(`${card} .note-card__title`,n=>{const r=n.getBoundingClientRect();return n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));}),true);
+    await page.keyboard.press('Escape');
+    const tiers=await page.$$eval('.note-card',nodes=>nodes.map(n=>Number(getComputedStyle(n).zIndex)));
+    assert.ok(tiers[0]<tiers[1]);
+    assert.deepEqual(notes,before);assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+
+test('reveal tabs have 24px visuals with separate 44px touch targets and work on touch canvas',async()=>{
+  const page=await mount({fixture:'reveal',width:752,mobile:true});
+  try {
+    await page.waitForSelector('[data-note-reveal="1"]');
+    const targets=await page.$$eval('[data-note-reveal]',nodes=>nodes.map(n=>{const r=n.getBoundingClientRect(),v=n.querySelector('.notes-reveal-tab__label').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,visualHeight:v.height};}));
+    for(const target of targets){assert.ok(target.width>=44&&target.height>=44);assert.equal(target.visualHeight,24);}
+    for(let i=1;i<targets.length;i++)assert.ok(targets[i].x>=targets[i-1].x+targets[i-1].width);
+    const area=await box(page,'.notes-scroll');assert.ok(targets.every(t=>t.y+t.height<=area.y));
+    await page.touchscreen.tap(targets[0].x+targets[0].width/2,targets[0].y+targets[0].height/2);
+    assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n.getAttribute('aria-pressed')),'true');assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+
+test('reveal tabs follow authorized revalidation and clear at authentication teardown',async()=>{
+  const page=await mount({fixture:'reveal'});
+  try {
+    await page.focus('[data-note-reveal="1"]');await page.keyboard.press('Space');
+    notes=notes.filter(n=>n.id!==1);await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(()=>!document.querySelector('[data-note-reveal="1"]'));
+    assert.equal(await page.$eval('.notes-reveal-strip',n=>n.textContent.includes('Locked note 1')),false);
+    assert.equal(await page.$$eval('[data-note-reveal]',nodes=>nodes.length),2);
+    await page.evaluate(()=>window.dispatchEvent(new Event('auth:context-ending')));
+    assert.equal(await page.$('[data-note-reveal]'),null);assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+
+test('reveal survives authorized refresh with keyboard focus and clears when another card is selected',async()=>{
+  const page=await mount({fixture:'reveal'});
+  try{
+    await page.focus('[data-note-reveal="1"]');await page.keyboard.press('Enter');
+    notes[0].title='Updated visible note';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(()=>document.querySelector('[data-note-reveal="1"]')?.textContent==='Updated visible note');
+    assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n===document.activeElement&&n.getAttribute('aria-pressed')==='true'),true);
+    await page.focus('.note-card[data-id="2"] [data-action="open"]');
+    assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n.getAttribute('aria-pressed')),'false');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('Escape');
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+
+test('dense reveal strip reaches every authorized locked note by keyboard and pans only its viewport for read-only devices',async()=>{
+  const page=await mount({fixture:'reveal-distant',permission:'read',width:752});
+  try{
+    const before=structuredClone(notes);
+    assert.equal(await page.$$eval('[data-note-reveal]',nodes=>nodes.length),30);
+    await page.focus('[data-note-reveal="1"]');
+    for(let i=1;i<30;i++)await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.noteReveal),'30');
+    const tab=await box(page,'[data-note-reveal="30"]'),strip=await box(page,'.notes-reveal-strip');
+    assert.ok(tab.x>=strip.x&&tab.x+tab.width<=strip.x+strip.width+1,`keyboard scrolling keeps the last tab visible: ${JSON.stringify({tab,strip})}`);
+    const documentScroll=await page.evaluate(()=>[scrollX,scrollY]);
+    await page.keyboard.press('Enter');
+    const target=await box(page,'.note-card[data-id="30"]'),viewport=await box(page,'.notes-scroll');
+    assert.ok(target.x>=viewport.x&&target.x+target.width<=viewport.x+viewport.width&&target.y>=viewport.y&&target.y+target.height<=viewport.y+viewport.height,`distant card is fully visible within bounded canvas extent: ${JSON.stringify({target,viewport})}`);
+    assert.deepEqual(await page.evaluate(()=>[scrollX,scrollY]),documentScroll);
+    assert.equal(await page.$('.note-card[data-id="30"] [data-board-action="lock"]'),null);
+    assert.deepEqual(notes,before);assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+
+test('phone transition hides reveal controls while retaining all locked note positions',async()=>{
+  const page=await mount({fixture:'reveal'});
+  try {
+    const before=structuredClone(notes);
+    await page.click('[data-note-reveal="1"]');
+    await page.setViewport({width:360,height:800});
+    await page.waitForSelector('#notes-grid[data-board-view="list"]');
+    assert.equal(await page.$eval('.notes-reveal-strip',n=>n.hidden),true);
+    assert.equal(await page.$$eval('.note-card',nodes=>nodes.length),3);
+    await page.setViewport({width:1280,height:900});await page.waitForSelector('[data-note-reveal="1"]');
+    assert.deepEqual(notes,before);assert.equal(writes.length,0);
+  }finally{await page.close();}
 });
 
 for (const input of ['pointer', 'keyboard']) test(`open note menu stays reachable above overlapping cards and restores its tier on close (${input})`, async () => {

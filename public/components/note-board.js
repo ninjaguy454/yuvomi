@@ -1,8 +1,11 @@
-import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent } from '/utils/note-board-layout.js';
+import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent, overlappingLockedNoteIds } from '/utils/note-board-layout.js';
+import { t } from '/i18n.js';
 
 /** Layout changes commit only after an intentional completed gesture. */
 export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = false, filtered = false, viewState = {}, onViewChange = () => {} }) {
   const viewport = grid.closest('.notes-scroll'), space = grid.parentElement;
+  const revealStrip = grid.closest('.notes-page')?.querySelector('.notes-reveal-strip');
+  let revealIds = [];
   const viewportWidth = () => viewport.clientWidth - (parseFloat(getComputedStyle(viewport).paddingLeft) || 0) - (parseFloat(getComputedStyle(viewport).paddingRight) || 0);
   let disposed = false, gesture = null, narrow = compact || viewportWidth() < 640;
   let suppressClick = false, frame = 0, excludedPointer = null;
@@ -21,12 +24,66 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     const notes = getNotes(), ids = notes.map(note => note.id);
     viewState.order = [...viewState.order.filter(id => ids.includes(id)), ...ids.filter(id => !viewState.order.includes(id))];
     if (selectedId) viewState.order = [...viewState.order.filter(id => id !== selectedId), selectedId];
+    if (selectedId && selectedId !== viewState.revealed) viewState.revealed = null;
     for (const note of notes) {
       const card = grid.querySelector(`.note-card[data-id="${note.id}"]`);
-      if (card) card.style.zIndex = String(gesture?.active && gesture.note.id === note.id ? notes.length * 2 + 2
-        : card.querySelector('.note-card__menu[open]') ? notes.length * 2 + 1
+      if (card) card.style.zIndex = String(gesture?.active && gesture.note.id === note.id ? notes.length * 2 + 3
+        : card.querySelector('.note-card__menu[open]') ? notes.length * 2 + 2
+        : viewState.revealed === note.id ? notes.length * 2 + 1
         : (note.layout?.always_on_top ? notes.length : 0) + viewState.order.indexOf(note.id) + 1);
     }
+    revealStrip?.querySelectorAll('[data-note-reveal]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.noteReveal) === viewState.revealed)));
+  }
+  function revealTabs(projected) {
+    if (!revealStrip) return;
+    const focused = revealStrip.contains(document.activeElement) ? Number(document.activeElement.dataset.noteReveal) : viewState.revealFocus;
+    revealIds = narrow ? [] : overlappingLockedNoteIds(getNotes(), projected);
+    if (!revealIds.includes(viewState.revealed)) viewState.revealed = null;
+    const buttons = getNotes().filter(note => revealIds.includes(note.id)).map(note => {
+      const button = document.createElement('button'), label = document.createElement('span');
+      const title = note.title?.trim() || t('notes.untitledNote');
+      button.type = 'button'; button.className = 'notes-reveal-tab'; button.dataset.noteReveal = String(note.id);
+      button.setAttribute('aria-label', t('notes.revealNote', { title })); button.title = title;
+      const card = grid.querySelector(`.note-card[data-id="${note.id}"]`);
+      if (card) { card.id = `notes-board-card-${note.id}`; button.setAttribute('aria-controls', card.id); }
+      label.className = 'notes-reveal-tab__label'; label.textContent = title; button.append(label);
+      return button;
+    });
+    revealStrip.hidden = !buttons.length; revealStrip.replaceChildren(...buttons);
+    if (focused) {
+      const target = buttons.find(button => Number(button.dataset.noteReveal) === focused)
+        || (narrow ? grid.querySelector(`.note-card[data-id="${focused}"] [data-action="open"]`) : null);
+      target?.focus({ preventScroll: true });
+    }
+    viewState.revealFocus = null;
+  }
+  function reveal(event) {
+    const button = event.target.closest('[data-note-reveal]');
+    if (!button || !revealStrip.contains(button) || disposed) return;
+    const id = Number(button.dataset.noteReveal);
+    if (!revealIds.includes(id)) return;
+    cancel(); viewState.revealed = viewState.revealed === id ? null : id; layerCards();
+    if (viewState.revealed) {
+      const card = grid.querySelector(`.note-card[data-id="${id}"]`), bounds = viewport.getBoundingClientRect();
+      if (card) {
+        const rect = card.getBoundingClientRect();
+        viewport.scrollLeft += rect.left - bounds.left - 12;
+        viewport.scrollTop += rect.top - bounds.top - 12;
+      }
+    }
+  }
+  function revealFocus(event) {
+    const button = event.target.closest('[data-note-reveal]');
+    if (!button || !revealStrip.contains(button)) return;
+    // Native focus scrolling may expose only part of a flex item. Keep the
+    // complete target visible without scrolling the shell or canvas.
+    const bounds = revealStrip.getBoundingClientRect(), rect = button.getBoundingClientRect();
+    if (rect.left < bounds.left) revealStrip.scrollLeft += rect.left - bounds.left;
+    else if (rect.right > bounds.right) revealStrip.scrollLeft += rect.right - bounds.right;
+  }
+  function cardFocus(event) {
+    const card = event.target.closest('.note-card');
+    if (card) layerCards(Number(card.dataset.id));
   }
   function extent(layouts) {
     if (narrow) return;
@@ -56,7 +113,7 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
         else paint(card, item.layout);
       }
     }
-    extent(projected.map(item => item.layout)); layerCards();
+    revealTabs(projected); extent(projected.map(item => item.layout)); layerCards();
   }
   function setZoom(value, point) {
     if (narrow || disposed) return;
@@ -222,6 +279,10 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   function click(event) { if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); } }
   function key(event) {
     if (event.key === 'Escape' && (gesture || navigation)) { event.preventDefault(); cancel(); navigation = null; touches.clear(); }
+    if (event.key === 'Escape' && viewState.revealed) {
+      const id = viewState.revealed; viewState.revealed = null; layerCards();
+      revealStrip?.querySelector(`[data-note-reveal="${id}"]`)?.focus({ preventScroll: true });
+    }
     if (event.target !== grid || narrow) return;
     const delta = { ArrowLeft:[-80,0], ArrowRight:[80,0], ArrowUp:[0,-80], ArrowDown:[0,80] }[event.key];
     if (delta) { event.preventDefault(); viewport.scrollBy(...delta); }
@@ -250,6 +311,9 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   window.addEventListener('pointercancel', pointerCancel);
   viewport.addEventListener('lostpointercapture', lost);
   grid.addEventListener('toggle', menuToggle, true);
+  grid.addEventListener('focusin', cardFocus);
+  revealStrip?.addEventListener('click', reveal);
+  revealStrip?.addEventListener('focusin', revealFocus);
   grid.addEventListener('click', click, true);
   window.addEventListener('keydown', key);
   refresh();
@@ -260,12 +324,17 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     resetView() { cancel(); viewState.zoom = 1; refresh(); viewport.scrollLeft = 0; viewport.scrollTop = 0; },
     busy: () => !!gesture || !!navigation || pending.size > 0,
     destroy() {
+      if (revealStrip?.contains(document.activeElement)) viewState.revealFocus = Number(document.activeElement.dataset.noteReveal);
       if (!narrow) { viewState.left = viewport.scrollLeft; viewState.top = viewport.scrollTop; }
       cancel(); disposed = true; observer.disconnect();
       window.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', pointerCancel);
       viewport.removeEventListener('lostpointercapture', lost);
       grid.removeEventListener('toggle', menuToggle, true);
+      grid.removeEventListener('focusin', cardFocus);
+      revealStrip?.removeEventListener('click', reveal);
+      revealStrip?.removeEventListener('focusin', revealFocus);
+      if (revealStrip) { revealStrip.replaceChildren(); revealStrip.hidden = true; }
       grid.removeEventListener('click', click, true); window.removeEventListener('keydown', key);
       grid.classList.remove('notes-board', 'notes-board--compact', 'notes-board--projected');
       viewport.classList.remove('notes-scroll--canvas'); space.classList.remove('notes-canvas-space--active');

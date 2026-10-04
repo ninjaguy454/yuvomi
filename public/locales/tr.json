@@ -1434,6 +1434,8 @@
         "listExpanded": "Expanded",
         "showMore": "Show more",
         "showLess": "Show less",
+        "revealOverlapping": "Overlapping locked notes",
+        "revealNote": "Reveal note: {{title}}",
         "untitledNote": "Untitled note",
         "cardMenu": "Note options",
         "compactView": "List view",

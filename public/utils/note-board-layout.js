@@ -28,6 +28,17 @@ export function noteCanvasExtent(layouts, viewportWidth, viewportHeight) {
   return { width, height };
 }
 
+/** Discover stacks using only the caller's authorized, currently projected notes. */
+export function overlappingLockedNoteIds(notes, projected = projectNoteLayouts(notes)) {
+  const rectangles = new Map(projected.map(item => [item.note_id, item.layout]));
+  return notes.filter(note => {
+    const rect = rectangles.get(note.id);
+    return note.layout?.position_locked && rect && projected.some(other => other.note_id !== note.id
+      && rect.x < other.layout.x + other.layout.width && rect.x + rect.width > other.layout.x
+      && rect.y < other.layout.y + other.layout.height && rect.y + rect.height > other.layout.y);
+  }).map(note => note.id);
+}
+
 export function organizeNoteLayouts(notes, { includeLocked = false, canEdit = () => true } = {}) {
   const fixed = note => !canEdit(note) || (!includeLocked && note.layout?.position_locked);
   const occupied = notes.filter(fixed).map(note => normalizeNoteLayout(note.layout));

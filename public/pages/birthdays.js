@@ -293,8 +293,6 @@ function renderPage() {
         </div>
       </div>
 
-      <p class="birthdays-hint">${t('birthdays.calendarHint')}</p>
-
       <div class="row-carrier birthdays-list" id="birthdays-list"></div>
 
       <button class="page-fab" id="fab-new-birthday" aria-label="${t('birthdays.addButton')}" data-dock-label="${t('newLabel.birthdays')}">

@@ -133,6 +133,7 @@ async function editGroup(group,onSaved,live) {
     ${sharedFields(group)}
     <div class="modal-panel__footer">${button('cancel','Cancel','ghost')}<button class="btn btn--primary" type="submit">${group?'Save Group':'Create Group'}</button></div>
   </form>`,onSave(panel){
+    window.lucide?.createIcons({ el: panel });
     const form=panel.querySelector('form'),list=panel.querySelector('[data-rotation-member-list]'),select=panel.querySelector('[data-rotation-add-member]');
     const sharedValue=()=>({ ...sharedConfig(group),strategy:form.elements.shared_strategy.value,direction:form.elements.shared_direction.value,
       starting_member_id:Number(form.elements.shared_starting_member.value)||null,effective_date:form.elements.shared_effective_date.value,

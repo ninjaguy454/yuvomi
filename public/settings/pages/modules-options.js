@@ -98,7 +98,6 @@ function renderPage(container, preferences) {
       <h2 class="settings-section__title">${t('nav.tasks')}</h2>
       <div class="settings-card">
         <h3 class="settings-card__title">${t('settings.tasksSubtasksExpandedTitle')}</h3>
-        <p class="form-hint">${t('settings.tasksSubtasksExpandedHint')}</p>
         ${toggleRowHtml({
           label: t('settings.tasksSubtasksExpandedLabel'),
           checked: checked.get('tasks-subtasks-expanded'),

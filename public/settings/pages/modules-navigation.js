@@ -377,7 +377,6 @@ function renderPage(container, rows, mobileOrder) {
       </section>
       <section class="settings-navigation-panel">
         <h2 class="settings-navigation-panel__title">${t('settings.desktopNavigationTitle')}</h2>
-        <p class="form-hint">${t('settings.desktopNavigationHint')}</p>
         <p class="form-hint">${t('settings.modulesDragHint')}</p>
         <p class="form-hint">${t('settings.modulesHiddenScopeHint')}</p>
         ${desktopGroups}

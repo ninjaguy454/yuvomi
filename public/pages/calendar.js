@@ -4522,20 +4522,11 @@ function buildEventModalContent({ mode, event, date, reminder = null, time = nul
          Kachel fuer niemanden, der nicht danach sucht. -->
     <div class="form-group">
       <label class="toggle">
-        <input type="checkbox" id="modal-countdown" aria-describedby="modal-countdown-hint"
+        <input type="checkbox" id="modal-countdown"
                ${isEdit && event.countdown ? 'checked' : ''}>
         <span class="toggle__track"></span>
         <span>${t('calendar.countdownToggle')}</span>
       </label>
-      <!-- cal-field-hint UND NICHT form-hint: die Regel fuer form-hint steht in
-           settings.css, und der Router laedt genau ein Page-CSS pro Seite - auf
-           /calendar ist sie schlicht nicht geladen. Der Hinweis rendert dort in
-           16px voller Primaertinte und war damit lauter als der Schalter, zu dem
-           er gehoert (gemessen 4 Zeilen / 94px).
-           Die uebrigen fuenf form-hint dieses Dialogs haben dasselbe Problem und
-           app-weit noch 34 weitere in elf Modulen - das ist ein eigener Umzug
-           und keine Beifang-Aenderung dieses Features. -->
-      <p class="cal-field-hint" id="modal-countdown-hint">${t('calendar.countdownHint')}</p>
     </div>
 
     ${advancedSection(advancedFieldsHtml, { open: advancedFieldsOpen })}

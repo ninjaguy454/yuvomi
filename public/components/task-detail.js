@@ -1641,7 +1641,7 @@ function renderTaskDetail(task, reminders = [], ctx) {
     { label: t('tasks.subtasksLabel'), node: subtaskListNode(task, ctx) },
     { node: metadataNode(task, ctx, reminders) },
     { node: secondaryMetadataNode(task, ctx) },
-    { label: 'Open', node: taskActionNode(task) },
+    { node: taskActionNode(task) },
     { label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
     { label: t('tasks.commentsLabel'), node: commentsNode(task, ctx) },
     { node: activity },

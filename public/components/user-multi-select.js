@@ -88,7 +88,7 @@ export function renderUserMultiSelect(allUsers, selectedIds, inputName, labelKey
 
   const noneLabel = t('userMultiSelect.nobody');
   return `
-    <div class="user-ms" data-ms-name="${esc(inputName)}">
+    <div class="user-ms" data-ms-name="${esc(inputName)}" role="group" aria-label="${esc(t(labelKey))}">
       <span class="label user-ms__label"><i data-lucide="user-plus" class="icon-sm" aria-hidden="true"></i> ${t(labelKey)}</span>
       <div class="user-ms__options">
         <label class="user-ms__option">

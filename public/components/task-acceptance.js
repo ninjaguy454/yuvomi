@@ -55,9 +55,8 @@ export async function acceptOpenTask(task) {
         if (protectedSteps.length) content += `<p class="text-muted">${esc(t('tasks.acceptPreserved'))}</p><ul>${protectedSteps.map(child => `<li>${esc(child.title)}</li>`).join('')}</ul>`;
         actions += button('back', t('common.back')) + button('next', t('common.next'), true);
       } else if (stage === 'confirm') {
-        content += `<div class="task-acceptance__identity">${memberAvatar(memberName(draft.primary))}<span class="task-acceptance__member-name" data-acceptance-identity>${esc(memberName(draft.primary))}</span></div><p>${esc(t('tasks.acceptWithHelpers', { names: draft.helpers.length ? draft.helpers.map(memberName).join(', ') : t('tasks.acceptNoHelpers') }))}</p>`;
+        content += `<div class="task-acceptance__identity">${memberAvatar(memberName(draft.primary))}<span class="task-acceptance__member-name" data-acceptance-identity>${esc(memberName(draft.primary))}</span></div><section class="task-acceptance__summary-helpers" aria-labelledby="acceptance-summary-helpers"><h4 id="acceptance-summary-helpers">${esc(t('tasks.acceptHelpersLabel'))}</h4>${draft.helpers.length ? `<ul class="task-acceptance__summary-members">${draft.helpers.map(id => `<li class="task-acceptance__identity" data-acceptance-summary-helper="${Number(id)}">${memberAvatar(memberName(id))}<span class="task-acceptance__member-name">${esc(memberName(id))}</span></li>`).join('')}</ul>` : `<p data-acceptance-no-helpers>${esc(t('tasks.acceptNoHelpers'))}</p>`}</section>`;
         if (p.subtasks.length) content += `<ul>${p.subtasks.map(child => `<li>${esc(child.title)}: ${esc(!child.allocatable ? t('tasks.acceptPreservedShort') : draft.assignments[child.id] ? memberName(draft.assignments[child.id]) : t('tasks.acceptUnassigned'))}</li>`).join('')}</ul>`;
-        content += `<p class="text-muted">${esc(t('tasks.acceptConfirmHint'))}</p>`;
         actions += button('back', t('common.back')) + button('confirm', t('tasks.acceptConfirm'), true);
       }
     }

@@ -60,6 +60,9 @@ for(const width of [780,840])test(`short landscape ${width}x360 keeps full task 
 for(const width of [390,1440])test(`Notes and ordinary offers share the page at ${width}px without sharing layout`,async()=>{
   const page=await mount(width);try{
     await page.waitForSelector('[data-open-task="7"]');assert.ok(await page.$('.note-card'));
+    assert.equal(await page.$eval('.open-task-board__header h2',el=>el.textContent.trim()),'Quest Hub');
+    assert.equal(await page.$eval('.open-task-board',el=>el.getAttribute('aria-label')),'Quest Hub');
+    const boardText=await page.$eval('.open-task-board',el=>el.textContent);assert.ok(!boardText.includes('Choose an unassigned task'));assert.ok(!boardText.includes('Create a regular task'));
     const geometry=await page.evaluate(()=>{const n=document.querySelector('.notes-scroll').getBoundingClientRect(),o=document.querySelector('#notes-open-tasks').getBoundingClientRect();return {nt:n.top,nr:n.right,ot:o.top,ol:o.left,ob:o.bottom,scroll:document.documentElement.scrollWidth,width:innerWidth};});
     if(width<1400)assert.ok(geometry.ob<=geometry.nt+1);else assert.ok(geometry.nr<=geometry.ol+1);
     assert.ok(geometry.scroll<=geometry.width+1);

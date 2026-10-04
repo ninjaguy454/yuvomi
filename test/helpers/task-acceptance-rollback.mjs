@@ -84,7 +84,7 @@ if(stage==='worker'){
     assert.equal(d.prepare('SELECT visibility FROM notes WHERE id=1').get().visibility,'private');layoutState(report);save('after-probe',snapshot());
   }else if(stage==='fallback'){
     assert.equal(schema(),10051);assert.equal(d.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=10050').get().n,1);assert.deepEqual(snapshot(),load('after-probe'));privacy();
-    assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.48-acceptance-paused'));
+    assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.50-acceptance-paused'));
     assert.ok(readFileSync('/app/public/styles/notes.css','utf8').includes('#notes-open-tasks { display: none !important; }'));
     assert.ok(readFileSync('/app/public/styles/tasks.css','utf8').includes('#filter-open-tasks { display: none !important; }'));
     assert.ok(!readFileSync('/app/public/pages/tasks.js','utf8').includes("new URLSearchParams(window.location.search).get('offers') === '1'"));

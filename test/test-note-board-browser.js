@@ -38,6 +38,51 @@ async function openAdjustment(page) {
   await page.focus('[data-id="1"] [data-board-action="adjust"]');
   await page.keyboard.press('Enter');
 }
+test('wide Notes controls share the canvas edge gutter',async()=>{
+  const page=await mount(1920);try{
+    const geometry=await page.evaluate(()=>{
+      const rect=s=>document.querySelector(s).getBoundingClientRect().toJSON();
+      return {page:rect('.notes-page'),heading:rect('.page-toolbar__title'),toolbar:rect('#notes-compact-view'),card:rect('[data-id="1"]')};
+    });
+    assert.ok(geometry.heading.left-geometry.page.left<=40,JSON.stringify(geometry));
+    assert.ok(Math.abs(geometry.toolbar.left-geometry.card.left)<=1,JSON.stringify(geometry));
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+for(const width of [360,1280])test(`Notes menu aligns action labels and stays inside the visible viewport at ${width}px`,async()=>{
+  const page=await mount(width,false,620);try{
+    const summary='[data-id="2"] .note-card__menu summary';
+    await page.$eval(summary,el=>el.scrollIntoView({block:'end'}));
+    await page.focus(summary);await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-id="2"] .note-card__menu[open]');
+    await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    const metrics=await page.$eval('[data-id="2"] .note-card__menu-items',menu=>{
+      const rect=menu.getBoundingClientRect(),viewport=document.querySelector('.notes-scroll').getBoundingClientRect();
+      const starts=[...menu.querySelectorAll('button')].map(button=>{
+        const walker=document.createTreeWalker(button,NodeFilter.SHOW_TEXT);let node;
+        while((node=walker.nextNode()))if(/[A-Za-z]/.test(node.textContent)){const range=document.createRange();range.selectNodeContents(node);return range.getBoundingClientRect().left;}
+      });
+      return {rect:rect.toJSON(),viewport:viewport.toJSON(),starts,height:innerHeight,width:innerWidth};
+    });
+    assert.ok(Math.max(...metrics.starts)-Math.min(...metrics.starts)<=1,`menu labels align: ${JSON.stringify(metrics)}`);
+    assert.ok(metrics.rect.left>=0&&metrics.rect.right<=metrics.width&&metrics.rect.top>=Math.max(0,metrics.viewport.top)&&metrics.rect.bottom<=Math.min(metrics.height,metrics.viewport.bottom),`menu is not clipped: ${JSON.stringify(metrics)}`);
+    await page.keyboard.press('Tab');
+    assert.equal(await page.evaluate(()=>document.activeElement.dataset.action),'pin');
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+test('Notes reader close keeps a full keyboard target without a circular surround',async()=>{
+  const page=await mount();try{
+    await page.click('[data-id="1"] [data-action="open"]');
+    await page.keyboard.press('Tab');
+    await page.focus('.modal-panel__close');
+    const style=await page.$eval('.modal-panel__close',el=>{const s=getComputedStyle(el),r=el.getBoundingClientRect();return {radius:parseFloat(s.borderRadius),width:r.width,height:r.height,outline:s.outlineStyle,label:el.getAttribute('aria-label')};});
+    assert.ok(style.radius<Math.min(style.width,style.height)/2,JSON.stringify(style));
+    assert.ok(style.width>=44&&style.height>=44&&style.label&&style.outline!=='none',JSON.stringify(style));
+    await page.keyboard.press('Enter');await page.waitForFunction(()=>!document.querySelector('.modal-overlay'));
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
 for(const width of [360,752,1920])test(`Notes header reserves separate notification, search and creation targets at ${width}px`,async()=>{
   const page=await mount(width);try{
     await page.evaluate(async()=>{

@@ -113,7 +113,7 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
         else paint(card, item.layout);
       }
     }
-    revealTabs(projected); extent(projected.map(item => item.layout)); layerCards();
+    revealTabs(projected); extent(projected.map(item => item.layout)); layerCards(); positionMenus();
   }
   function setZoom(value, point) {
     if (narrow || disposed) return;
@@ -296,7 +296,26 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     // to the card loses that descendant's capture without ending our gesture.
     if (gesture?.pointer === event.pointerId && event.target === gesture.card) cancel();
   }
-  function menuToggle(event) { if (event.target.matches('.note-card__menu')) layerCards(); }
+  function positionMenus() {
+    if (disposed) return;
+    const bounds = viewport.getBoundingClientRect(), canvas = space.getBoundingClientRect();
+    const left = Math.max(0, bounds.left, narrow ? 0 : canvas.left) + 4;
+    const right = Math.min(innerWidth, bounds.right, narrow ? innerWidth : canvas.right) - 4;
+    const top = Math.max(0, bounds.top, narrow ? 0 : canvas.top) + 4;
+    const bottom = Math.min(innerHeight, bounds.bottom, narrow ? innerHeight : canvas.bottom) - 4;
+    for (const menu of grid.querySelectorAll('.note-card__menu[open] .note-card__menu-items')) {
+      menu.style.transform = '';
+      menu.style.maxWidth = `${Math.max(0, Math.min(280, (right - left) / zoom()))}px`;
+      menu.style.maxHeight = `${Math.max(0, (bottom - top) / zoom())}px`;
+      const rect = menu.getBoundingClientRect();
+      const x = Math.max(left, Math.min(rect.left, right - rect.width)) - rect.left;
+      const y = Math.max(top, Math.min(rect.top, bottom - rect.height)) - rect.top;
+      menu.style.transform = `translate(${x / zoom()}px, ${y / zoom()}px)`;
+    }
+  }
+  function menuToggle(event) {
+    if (event.target.matches('.note-card__menu')) { layerCards(); positionMenus(); }
+  }
   let observedWidth = viewportWidth();
   const observer = new ResizeObserver(() => {
     if (viewportWidth() === observedWidth) return;
@@ -311,6 +330,8 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   window.addEventListener('pointercancel', pointerCancel);
   viewport.addEventListener('lostpointercapture', lost);
   grid.addEventListener('toggle', menuToggle, true);
+  window.addEventListener('scroll', positionMenus, true);
+  window.addEventListener('resize', positionMenus);
   grid.addEventListener('focusin', cardFocus);
   revealStrip?.addEventListener('click', reveal);
   revealStrip?.addEventListener('focusin', revealFocus);
@@ -331,6 +352,8 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', pointerCancel);
       viewport.removeEventListener('lostpointercapture', lost);
       grid.removeEventListener('toggle', menuToggle, true);
+      window.removeEventListener('scroll', positionMenus, true);
+      window.removeEventListener('resize', positionMenus);
       grid.removeEventListener('focusin', cardFocus);
       revealStrip?.removeEventListener('click', reveal);
       revealStrip?.removeEventListener('focusin', revealFocus);

@@ -1,7 +1,7 @@
 import { api } from '/api.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
-import { moduleAccess, canCapability } from '/permissions.js';
+import { moduleAccess } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh } from '/utils/task-live.js';
 import { openTaskDetail } from '/components/task-detail.js';
@@ -16,7 +16,7 @@ export function mountOpenTaskBoard(container, { user } = {}) {
     if (!valid()) return;
     container.replaceChildren(); container.hidden = !allowed();
     if (!allowed()) return;
-    container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.openTasks'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.openTasks'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><p class="text-muted">${esc(t('tasks.openTasksHint'))}</p>${canCapability('tasks.create') ? `<p class="text-muted">${esc(t('tasks.openTasksCreateHint'))}</p>` : ''}<div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong>${task.points ? `<span class="text-muted">${esc(t('tasks.pointsSummary', { count: task.points }))}</span>` : ''}</button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
+    container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.questHub'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.questHub'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong>${task.points ? `<span class="text-muted">${esc(t('tasks.pointsSummary', { count: task.points }))}</span>` : ''}</button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
     container.querySelectorAll('[data-open-task]').forEach(button => {
       button.onclick = async () => {
         button.disabled = true;

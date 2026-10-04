@@ -234,8 +234,25 @@ test('paired confirmation preserves chosen accepting identity without repeated p
     await page.select('[data-acceptance-primary]','2');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');
     await page.click('[data-acceptance-next]');
     assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent.trim()),'Grace');
+    assert.equal(await page.$eval('[data-acceptance-no-helpers]',el=>el.textContent.trim()),'None');
+    assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Confirm to accept the task'));
     assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Accepted by:'));
     await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.equal(writes[0].primary_user_id,2);
+  }finally{await page.close();}
+});
+
+for(const width of [320,752])for(const theme of ['light','dark'])test(`confirmation helpers stay readable and preserve allocation ${width} ${theme}`,async()=>{
+  const page=await mount({width,phone:width<500,long:true,theme});try{
+    await page.click('[data-acceptance-helper="2"]');await page.click('[data-acceptance-helper="3"]');await page.click('[data-acceptance-next]');
+    await page.select('[data-acceptance-assignment="10"]','2');await page.click('[data-acceptance-next]');
+    const summary=await page.$eval('[data-task-acceptance]',el=>({text:el.textContent,title:el.querySelector('.task-acceptance__title').textContent,primary:el.querySelector('[data-acceptance-identity]').textContent,helpers:[...el.querySelectorAll('[data-acceptance-summary-helper]')].map(row=>{const avatar=row.querySelector('.task-acceptance__avatar');return {id:Number(row.dataset.acceptanceSummaryHelper),name:row.querySelector('.task-acceptance__member-name').textContent,avatarWidth:avatar.getBoundingClientRect().width,avatarHeight:avatar.getBoundingClientRect().height};}),label:document.getElementById(el.querySelector('.task-acceptance__summary-helpers').getAttribute('aria-labelledby')).textContent}));
+    assert.equal(summary.primary,'Alex');assert.equal(summary.title,projection.task.title);assert.equal(summary.label,'Helpers');
+    assert.deepEqual(summary.helpers.map(({id,name})=>({id,name})),projection.coassignee_candidates.map(({id,display_name})=>({id,name:display_name})));
+    assert.ok(summary.helpers.every(row=>row.avatarWidth===36&&row.avatarHeight===36),'summary initials remain round beside long wrapping names');
+    assert.ok(!summary.text.includes('Confirm to accept the task'),'confirmation keeps its explicit action without redundant instruction');assert.ok(summary.text.includes('Water seedlings: '+projection.coassignee_candidates[0].display_name));assert.ok(summary.text.includes('Reserved step: Unchanged'));
+    const geometry=await page.evaluate(()=>{const body=document.querySelector('.modal-panel__body'),footer=document.querySelector('.modal-panel__footer').getBoundingClientRect();return {overflow:body.scrollWidth>body.clientWidth+1,footer:footer.bottom,height:innerHeight};});assert.equal(geometry.overflow,false);assert.ok(geometry.footer<=geometry.height+1);
+    if(process.env.OPEN_TASK_SCREENSHOTS){mkdirSync(process.env.OPEN_TASK_SCREENSHOTS,{recursive:true});await page.screenshot({path:`${process.env.OPEN_TASK_SCREENSHOTS}/summary-${width}-${theme}.png`});}
+    await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.equal(writes.length,1);assert.equal(writes[0].primary_user_id,1);assert.deepEqual(writes[0].coassignee_ids,[2,3]);assert.deepEqual(writes[0].subtask_assignments,[{id:10,user_id:2}]);
   }finally{await page.close();}
 });
 

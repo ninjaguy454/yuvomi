@@ -79,7 +79,7 @@ for (const [width, height, expected] of [[320, 740, 'list'], [360, 840, 'list'],
     try {
       await view(page, expected);
       assert.equal(await page.$eval('#notes-compact-view', el => el.hidden), expected === 'list');
-      assert.equal(await page.$eval('#notes-compact-view', el => el.textContent.trim()), 'List view');
+      assert.equal(await page.$eval('#notes-compact-view', el => el.getAttribute('aria-label')), 'List view');
       assert.equal(await page.$('#notes-board-hint'), null);
       assert.equal(await page.$$eval('.note-card', els => els.length), 3);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);

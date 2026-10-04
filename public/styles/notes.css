@@ -91,6 +91,14 @@
 /* Notes keeps its controls on one row, including the shell's absolute bell. */
 .notes-page .notes-toolbar.notification-header-host { padding-inline-end: calc(var(--page-inline-pad) + var(--target-base) + var(--space-2)); }
 .notes-page .notes-toolbar.notification-header-host:not(.page-toolbar--in-group) > .page-toolbar__title { flex-basis: auto; margin-inline-end: 0; }
+.notes-header-actions { display: flex; align-items: center; gap: var(--space-1); flex: 0 0 auto; }
+.notes-header-actions[hidden], .notes-header-actions > [hidden] { display: none; }
+.notes-header-actions > .btn { width: var(--target-base); min-width: 44px; min-height: 44px; padding: 0; border: 1px solid transparent; }
+.notes-header-actions .notes-include-locked { position: relative; display: inline-flex; }
+.notes-header-actions .notes-include-locked input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.notes-header-actions .notes-include-locked svg { pointer-events: none; }
+.notes-header-actions [aria-pressed="true"], .notes-header-actions .notes-include-locked:has(input:checked) { background: var(--color-surface-3); border-color: var(--color-accent); color: var(--color-accent); }
+.notes-header-actions .notes-include-locked:has(input:focus-visible) { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
 
 /* --------------------------------------------------------
  * Masonry-Grid

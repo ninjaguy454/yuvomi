@@ -8,4 +8,4 @@ replace('/app/server/services/task-acceptance.js','export function acceptTask(d,
 fs.appendFileSync('/app/public/styles/notes.css','\n/* Certified fallback retains Notes canvas/privacy, hides new task board. */\n#notes-open-tasks { display: none !important; }\n.notes-workspace { grid-template-columns: minmax(0, 1fr) !important; }\n');
 fs.appendFileSync('/app/public/styles/tasks.css','\n#filter-open-tasks { display: none !important; }\n');
 replace('/app/public/pages/tasks.js',"new URLSearchParams(window.location.search).get('offers') === '1'","false");
-replace('/app/public/sw.js','-vidamia.50','-vidamia.50-acceptance-paused');
+replace('/app/public/sw.js','-vidamia.52','-vidamia.52-acceptance-paused');

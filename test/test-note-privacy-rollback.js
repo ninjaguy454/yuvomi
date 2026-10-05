@@ -25,7 +25,7 @@ const create=async(body)=>{const result=await call('POST','/notes',body);assert.
 const privateNote=await create({title:'Rollback PRIVATE',content:'- [ ] Secret private step',visibility:'private'});
 const selectedNote=await create({title:'Rollback SELECTED',content:'- [ ] Secret selected step',visibility:'selected',access_user_ids:[2]});
 const sharedNote=await create({title:'Rollback EVERYONE',content:'Shared legacy content'});
-const snapshot=id=>({note:d.prepare('SELECT * FROM notes WHERE id=?').get(id),access:d.prepare('SELECT * FROM note_access WHERE note_id=?').all(id),layout:d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(id)});
+const snapshot=id=>({note:d.prepare('SELECT * FROM notes WHERE id=?').get(id),access:d.prepare('SELECT * FROM note_access WHERE note_id=?').all(id),layouts:d.prepare('SELECT * FROM note_board_note_layouts WHERE note_id=? ORDER BY owner_key').all(id),owners:d.prepare('SELECT * FROM note_board_owners ORDER BY owner_key').all(),seedLayout:d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(id)});
 function noRestricted(value){const text=JSON.stringify(value);for(const marker of ['Rollback PRIVATE','Rollback SELECTED','Secret private step','Secret selected step'])assert.ok(!text.includes(marker),marker);}
 
 test('pre-canvas clients can list authorized legacy note content but cannot reset audience by blind PUT',async()=>{

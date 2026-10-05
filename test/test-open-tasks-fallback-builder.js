@@ -21,6 +21,9 @@ const originals={
   'server/services/task-acceptance-policy.js':"function acceptanceError(message,status,code){return Object.assign(new Error(message),{status,code});}\nexport function acceptanceOptions(d,principal,id,primaryUserId){return {available:true};}\nexport const unrelated = 'policy preserved';\n",
   'server/services/task-acceptance.js':"function acceptanceError(message,status,code){return Object.assign(new Error(message),{status,code});}\nexport function acceptTask(d,principal,taskId,body){return {accepted:true};}\nexport const unrelated = 'acceptance preserved';\n",
   'server/services/note-groups.js':"export const schemaAndMembershipsUnchanged = true;\n",
+  'server/services/note-layout-owner.js':"export const ownerInitializationUnchanged = true;\n",
+  'server/services/note-layout-owner-schema.js':"export const ownerSchemaUnchanged = true;\n",
+  'server/db.js':"export const migration10053Unchanged = true;\n",
   'public/pages/tasks.js':"export const offers = new URLSearchParams(window.location.search).get('offers') === '1';\n",
   'public/pages/notes.js':"const NOTE_GROUPS_INTERFACE_ENABLED = true;\nconst state = {compact: false, active: true};\n",
   'public/styles/notes.css':'.notes { color: teal; }\n',
@@ -48,7 +51,7 @@ test('rooted fallback retains the original acceptance pause and disables group p
   assert.throws(()=>policy.acceptanceOptions(),paused);
   assert.throws(()=>acceptance.acceptTask(),paused);
   assert.equal(offers.unrelated,'offers preserved');assert.equal(policy.unrelated,'policy preserved');assert.equal(acceptance.unrelated,'acceptance preserved');
-  assert.equal(f.read('server/services/note-groups.js'),before['server/services/note-groups.js']);
+  for(const file of ['server/services/note-groups.js','server/services/note-layout-owner.js','server/services/note-layout-owner-schema.js','server/db.js'])assert.equal(f.read(file),before[file],'fallback preserves owner backend and schema');
   assert.equal(f.read('public/pages/tasks.js'),'export const offers = false;\n');
   assert.equal(f.read('public/pages/notes.js'),'const NOTE_GROUPS_INTERFACE_ENABLED = false;\nconst state = {compact: true, active: true};\n');
   assert.equal(f.read('public/sw.js'),'const CACHE_VERSION = `${APP_RELEASE}-vidamia.61-acceptance-paused`;\n');
@@ -132,6 +135,9 @@ for(const [name,stage,versions,message] of [
   ['duplicate group migration','seed',{10051:1,10052:2},'required migration 10052'],
   ['acceptance already present at seed','seed',{10050:1,10051:1,10052:1},'P3 acceptance migration presence'],
   ['acceptance absent after upgrade','upgrade',{10051:1,10052:1},'P3 acceptance migration presence'],
+  ['owner migration missing after upgrade','upgrade',{10050:1,10051:1,10052:1},'Notes owner migration presence'],
+  ['owner migration duplicated after upgrade','upgrade',{10050:1,10051:1,10052:1,10053:2},'Notes owner migration presence'],
+  ['owner migration present before historical P2 seed','seed',{10051:1,10052:1,10053:1},'Notes owner migration presence'],
 ])test(`${name} is rejected by the recovery ledger gate despite MAX(version)=10052`,t=>{
   const result=ledgerProbe(t,stage,versions);
   assert.notEqual(result.status,0);assert.ok(result.stderr.includes(message),result.stderr);

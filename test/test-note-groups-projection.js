@@ -19,7 +19,8 @@ function fixture(){
   const device={kind:'device',id:99,status:'active',scope:{member_ids:[1]},permissions:{modules:{notes:'write'},capabilities:{'device_notes.view':'allow','device_notes.edit':'allow'}}};
   return {d,note,group,device};
 }
-const state=d=>({changes:d.prepare('SELECT total_changes() n').get().n,clock:d.prepare('SELECT version FROM note_change_clock').get().version,members:d.prepare('SELECT * FROM note_group_members ORDER BY group_id,ordinal').all(),groups:d.prepare('SELECT * FROM note_groups ORDER BY id').all(),layouts:d.prepare('SELECT * FROM note_layouts ORDER BY note_id').all()});
+// Legacy seed fixtures deliberately exercise read-only projection for uninitialized owners.
+const state=d=>({scoped:Object.fromEntries(['note_board_owners','note_board_note_layouts','note_board_groups','note_board_group_members','note_board_group_receipts'].map(table=>[table,d.prepare(`SELECT * FROM ${table}`).all()])),changes:d.prepare('SELECT total_changes() n').get().n,clock:d.prepare('SELECT version FROM note_change_clock').get().version,members:d.prepare('SELECT * FROM note_group_members ORDER BY group_id,ordinal').all(),groups:d.prepare('SELECT * FROM note_groups ORDER BY id').all(),layouts:d.prepare('SELECT * FROM note_layouts ORDER BY note_id').all()});
 const ids=board=>board.notes.map(n=>n.id).sort((a,b)=>a-b);
 const rect={x:40,y:50,width:8,height:10,position_locked:true,always_on_top:true};
 
@@ -34,7 +35,7 @@ test('Everyone device sees a mixed group singleton without hidden content, IDs o
     const projected=projectEveryoneDevice().notes[0];assert.deepEqual(projected.layout,{...rect,revision:0});
     assert.equal(projected.permissions.arrange,false);assert.equal(projected.permissions.edit,true);
     assert.equal('group_id' in projected,false);assert.equal('member_ids' in projected,false);
-    assert.deepEqual(state(d),before);assert.deepEqual(readGroupMembers(d,mixedGroup),[privateNote.id,publicNote.id]);
+    assert.deepEqual(state(d),before);assert.deepEqual(readGroupMembers(d,'human:1',mixedGroup),[privateNote.id,publicNote.id]);
   }finally{d.close();}
 });
 
@@ -61,7 +62,7 @@ test('permission changes alter projection without dissolving or reordering store
     d.prepare("INSERT INTO access_permissions(subject_type,subject_id,resource_type,resource_key,access) VALUES('user','2','module','notes','read')").run();
     assert.equal(readGroupedNoteBoard(d,2).groups[0].can_manage,false);
     d.prepare("UPDATE access_permissions SET access='none' WHERE subject_type='user' AND subject_id='2' AND resource_key='notes'").run();
-    assert.throws(()=>readGroupedNoteBoard(d,2),e=>e.status===403);assert.deepEqual(readGroupMembers(d,id),[a.id,b.id,c.id]);
+    assert.throws(()=>readGroupedNoteBoard(d,2),e=>e.status===403);assert.deepEqual(readGroupMembers(d,'human:1',id),[a.id,b.id,c.id]);
   }finally{d.close();}
 });
 

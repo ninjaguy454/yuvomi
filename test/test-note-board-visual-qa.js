@@ -107,20 +107,22 @@ test('Phase 2 actual-app visual QA matrix and interaction states',{timeout:30000
   // Real pointer operations on paired display, with authoritative persisted geometry.
   await theme(display,'light');await display.setViewport({width:1440,height:960});
   await display.waitForFunction(()=>document.querySelector('#notes-grid')?.dataset.boardView==='canvas');
-  const beforeMove=d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision;
+  const displayId=d.prepare("SELECT id FROM household_devices WHERE name='Kitchen display'").get().id;
+  const displayLayout=id=>d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=? AND note_id=?').get(`device:${displayId}`,id);
+  const beforeMove=displayLayout(small.id)?.revision??0;
   let box=await display.$eval('.note-card[data-id="'+small.id+'"]',el=>el.getBoundingClientRect().toJSON());
   await display.mouse.move(box.x+box.width/2,box.y+85);await display.mouse.down();await display.mouse.move(box.x+box.width/2+90,box.y+335,{steps:10});await display.mouse.up();await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
-  assert.ok(d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision>beforeMove,'direct card drag persisted');await shot(display,'paired-move-after-1440-light');
-  const beforeResize=d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision;
+  assert.ok(displayLayout(small.id).revision>beforeMove,'direct card drag persisted');await shot(display,'paired-move-after-1440-light');
+  const beforeResize=displayLayout(small.id).revision;
   box=await display.$eval('.note-card[data-id="'+small.id+'"]',el=>el.getBoundingClientRect().toJSON());await display.mouse.move(box.right-5,box.bottom-5);await display.mouse.down();await new Promise(resolve=>setTimeout(resolve,500));await display.mouse.move(box.right+195,box.bottom+145,{steps:10});await display.mouse.up();await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
-  assert.ok(d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(small.id).revision>beforeResize,'held corner resize persisted');await shot(display,'paired-resize-after-1440-light');
+  assert.ok(displayLayout(small.id).revision>beforeResize,'held corner resize persisted');await shot(display,'paired-resize-after-1440-light');
   await press(display,'#notes-organize');await display.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');await shot(display,'paired-organize-after-1440-light');
   // Keyboard-only alternative on tablet, then apply the legal maximum size.
   await display.setViewport({width:768,height:960});await theme(display,'dark');await adjust(display,small.id);await shot(display,'keyboard-layout-768-dark');
   await field(display,'#note-layout-width','12');await field(display,'#note-layout-height','100');await field(display,'#note-layout-x','0');await field(display,'#note-layout-y','0');await press(display,'#note-layout-save');await display.waitForSelector('#note-layout-save',{hidden:true});
   await display.setViewport({width:1440,height:960});await display.evaluate(()=>document.querySelector('.notes-scroll').scrollTop=0);await shot(display,'maximum-card-top-1440-dark');
   await display.evaluate(id=>document.querySelector(`.note-card[data-id="${id}"] [data-action="open"]`).scrollIntoView({block:'center'}),small.id);await shot(display,'maximum-card-controls-1440-dark');
-  await savedLayout(owner,small.id,{x:0,y:8,width:3,height:4});await display.goto(origin+'/');await display.waitForSelector('.dashboard');await notesPage(display);
+  await savedLayout(display,small.id,{x:0,y:8,width:3,height:4});await display.goto(origin+'/');await display.waitForSelector('.dashboard');await notesPage(display);
   // Long reader/editor with actual scroll and a selected audience picker.
   await owner.setViewport({width:390,height:960});await theme(owner,'dark');await notesPage(owner,{reload:true});await theme(owner,'dark');
   await openRead(owner,long.id);await shot(owner,'long-reader-top-390-dark');
@@ -144,7 +146,7 @@ test('Phase 2 actual-app visual QA matrix and interaction states',{timeout:30000
   const finalCards=await display.$$eval('.note-card',cards=>cards.map(card=>{const rect=card.getBoundingClientRect();return {id:Number(card.dataset.id),x:rect.x,y:rect.y,width:rect.width,height:rect.height};}));
   assert.equal(new Set(finalCards.map(card=>card.id)).size,finalCards.length,'no duplicate note DOM after return');
   for(let i=0;i<finalCards.length;i++)for(let j=i+1;j<finalCards.length;j++){const a=finalCards[i],b=finalCards[j];assert.ok(a.x+a.width<=b.x||b.x+b.width<=a.x||a.y+a.height<=b.y||b.y+b.height<=a.y,'organized returned cards do not overlap');}
-  evidence.returnedCards=finalCards;evidence.returnedLayouts=d.prepare('SELECT note_id,x,y,width,height FROM note_layouts').all();
+  evidence.returnedCards=finalCards;evidence.returnedLayouts=d.prepare('SELECT note_id,x,y,width,height FROM note_board_note_layouts WHERE owner_key=?').all(`device:${displayId}`);
   await shot(display,'returned-device-cleared-1280-dark');
   assert.equal(await display.$('.note-modal'),null);assert.ok(!(await titles(display)).some(title=>[privateNote.title,selected.title].includes(title)));assert.deepEqual(evidence.errors,[]);
 });

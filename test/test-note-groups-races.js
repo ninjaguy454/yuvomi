@@ -21,10 +21,10 @@ for(const retry of [false,true])test(`independent connections ${retry?'retry one
     const a=group([1,2,3]),b=group([4,5,6]),c=command(d,'transfer',{source_group_id:a,target_group_id:b,selected_ids:[2],before_note_id:5},[1,2,3,4,5,6],[a,b]);
     const other=retry?c:{...c,operation_id:'competitor',selected_ids:[3]};await d.backup(file);const results=await race(file,[c,other]);assert.deepEqual(results.map(r=>r.status).sort(),retry?[200,200]:[200,409]);
     if(retry)assert.equal(results.filter(r=>r.value.replayed).length,1);
-    check=new Database(file);check.pragma('foreign_keys=ON');assert.equal(check.prepare('SELECT count(*) n FROM note_group_receipts').get().n,1);assert.deepEqual(check.prepare('SELECT revision FROM note_groups').all().map(g=>g.revision),[2,2]);assert.deepEqual(check.pragma('foreign_key_check'),[]);
+    check=new Database(file);check.pragma('foreign_keys=ON');assert.equal(check.prepare('SELECT count(*) n FROM note_board_group_receipts WHERE owner_key=\'human:1\'').get().n,1);assert.deepEqual(check.prepare('SELECT revision FROM note_board_groups WHERE owner_key=\'human:1\'').all().map(g=>g.revision),[2,2]);assert.deepEqual(check.pragma('foreign_key_check'),[]);
     // Apply the winning request independently to prove the loser changed no clocks,
     // memberships, layouts, receipts or note content.
     const winning=results[0].status===200&&!results[0].value?.replayed?c:other;service.applyNoteGroupCommand(d,1,winning);
-    const comparable=db=>{const s=state(db);s.note_group_receipts=s.note_group_receipts.map(({created_at,...r})=>r);return s;};assert.deepEqual(comparable(check),comparable(d));
+    const comparable=db=>{const s=state(db);s.note_board_group_receipts=s.note_board_group_receipts.map(({created_at,...r})=>r);return s;};assert.deepEqual(comparable(check),comparable(d));
   }finally{check?.close();d.close();rmSync(folder,{recursive:true,force:true});}
 });

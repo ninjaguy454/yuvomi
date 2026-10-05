@@ -68,7 +68,7 @@ async function command(client, kind, fields) { return freezeNoteGroupCommand(cre
 async function createPair(client = admin, visibility = 'all') {
   const target = (await ok(admin, 'POST', '/api/v1/notes', { title: `Target ${operation}`, content: 'group target', visibility }, 201)).body.data;
   const source = (await ok(admin, 'POST', '/api/v1/notes', { title: `Source ${operation}`, content: 'group source', visibility }, 201)).body.data;
-  await ok(admin, 'PATCH', `/api/v1/notes/${target.id}/layout`, { expected_layout_revision: 0, position_locked: true });
+  await ok(client, 'PATCH', `/api/v1/notes/${target.id}/layout`, { expected_layout_revision: 0, position_locked: true });
   const body = await command(client, 'create', { source_note_id: source.id, target_note_id: target.id });
   const result = (await ok(client, 'POST', '/api/v1/notes/group-operations', body)).body.data;
   return { source, target, command: body, result, group: result.board.groups.find(group => group.member_ids.includes(target.id)) };
@@ -133,21 +133,21 @@ test('invisible and unknown groups are concealed, while visible read-only member
     const response = await user.call('POST', '/api/v1/notes/group-operations', { operation_id: `invisible-${id}`, kind: 'reorder', expected: { groups: [], notes: [] }, group_id: id, selected_ids: [hidden.source.id], before_note_id: null });
     assert.equal(response.status, 404); assert.ok(!JSON.stringify(response.body).includes('group source'));
   }
-  const made = await createPair(); const body = await command(user, 'reorder', { group_id: made.group.id, selected_ids: [made.source.id], before_note_id: null });
+  const made = await createPair(user); const body = await command(user, 'reorder', { group_id: made.group.id, selected_ids: [made.source.id], before_note_id: null });
   d.prepare("INSERT INTO access_permissions(subject_type,subject_id,resource_type,resource_key,access) VALUES('user','2','module','notes','read')").run();
   try { assert.equal((await user.call('POST', '/api/v1/notes/group-operations', body)).status, 403); }
   finally { d.prepare("DELETE FROM access_permissions WHERE subject_type='user' AND subject_id='2' AND resource_key='notes'").run(); }
 });
 test('partial group projection has dense authorized members and does not dissolve storage', async () => {
-  const made = await createPair();
+  const made = await createPair(user);
   await ok(admin, 'PUT', `/api/v1/notes/${made.source.id}`, { visibility: 'private', expected_revision: made.source.revision });
   const visible = await board(user);
   assert.ok(!visible.notes.some(note => note.id === made.source.id));
   assert.ok(!visible.groups.some(group => group.id === made.group.id), 'a sole visible page looks like a standalone note');
-  assert.deepEqual((await board()).groups.find(group => group.id === made.group.id).member_ids, [made.target.id, made.source.id]);
+  assert.deepEqual(d.prepare('SELECT note_id FROM note_board_group_members WHERE owner_key=? AND group_id=? ORDER BY ordinal').all('human:2',made.group.id).map(row=>row.note_id),[made.target.id,made.source.id],'visibility changes preserve exact canonical order');
 });
 test('generic HTTP idempotency cannot replay an old group board after access is lost', async () => {
-  const made = await createPair();
+  const made = await createPair(user);
   const body = await command(user, 'reorder', { group_id: made.group.id, selected_ids: [made.source.id], before_note_id: made.target.id });
   const headers = { 'Idempotency-Key': 'group-access-check' };
   assert.equal((await user.call('POST', '/api/v1/notes/group-operations/?test=1', body, headers)).status, 200);
@@ -172,7 +172,8 @@ test('devices need both view and edit, retain member scope, and audit as the dev
   await ok(admin, 'PATCH', `/api/v1/devices/${id}`, { revision: d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision, permissions: { capabilities: { 'device_notes.view': 'allow', 'device_notes.edit': 'allow' } }, scope: { member_ids: [2] } });
   await ok(display, 'GET', '/api/v1/device/context');
   const scoped = await board(display); assert.ok(scoped.notes.every(note => !('created_by' in note) && !note.creator_name));
-  const body = await command(display, 'reorder', { group_id: made.group.id, selected_ids: [made.source.id], before_note_id: made.target.id });
+  const owned = await createPair(display);
+  const body = await command(display, 'reorder', { group_id: owned.group.id, selected_ids: [owned.source.id], before_note_id: owned.target.id });
   const response = await ok(display, 'POST', '/api/v1/notes/group-operations', body);
   assert.ok(!JSON.stringify(response.body).includes('SECRET'));
   const audit = d.prepare('SELECT * FROM device_audit_events WHERE device_id=? ORDER BY id DESC LIMIT 1').get(id);

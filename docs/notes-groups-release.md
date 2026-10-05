@@ -10,6 +10,18 @@ Notes stay in their existing records. Grouping adds a persisted rectangle and or
 - Group receipts support bounded retry and revision-checked undo. They do not contain note content or audiences. Ordinary authorized deletion performs necessary internal container cleanup without revealing hidden members.
 - Selection, overview, placement previews and gestures are transient. Authentication, access, page and relevant board changes invalidate them. Structural writes are not queued offline.
 
+## Independent personal and display arrangements
+
+Migration 10053 adds independent layouts and group membership. An ordinary or temporarily signed-in person uses `human:<user id>`; an anonymous paired display uses `device:<household device id>`. The server derives that owner from the effective authenticated principal. Returning from temporary sign-in restores the display arrangement. Credential rotation and permission changes do not create another layout.
+
+Geometry, canvas lock, stacking, group membership/order and their revisions are independent. Note content, audience, creator, content revision and **Show on Dashboard** remain shared. Existing View plus Edit permissions still govern arrangement; no device or Wall Calendar grant is added.
+
+The original `note_layouts`, `note_groups` and `note_group_members` remain the initial arrangement. Reads do not write. Each owner's first authorized structural change atomically copies that seed, preserving fractional coordinates, flags, group IDs, order and revisions. Later owners receive the preserved seed, not someone else's changes. Shared note deletion is the necessary exception: it repairs affected containers in the seed and every initialized layout, including each singleton survivor's own anchor.
+
+The new `note_board_owners`, `note_board_note_layouts`, `note_board_groups`, `note_board_group_members` and `note_board_group_receipts` must all be retained in backups and recovery checks. Group IDs and revisions are interpreted within the server-selected owner. Retry and undo additionally retain the existing authentication-context fence. Pre-isolation receipts remain stored but cannot apply a legacy inverse; clients must reload after their conflict response.
+
+Once independent arrangements are used, keep the 10053-capable backend in both forward and recovery images. Never run the older global-layout writer against this data. The existing mutation-disable fallback preserves owner rows, sequences and receipts; content deletion must still repair all affected owners. Forward, recovery and return verification must compare every scoped table as well as the legacy seed and migration ledger.
+
 ## Recovery images
 
 The recovery image is built from the exact forward image. It keeps that backend, migration registry, privacy rules, receipts and grouping data. Never substitute an earlier non-grouping writer or restore an old database over later household edits.

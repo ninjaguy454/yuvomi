@@ -17,7 +17,7 @@ test('standalone fractional coordinates survive flags, no-op, CAS and independen
   const {d}=fixture(2);try{
     const first=setNoteLayout(d,1,1,{expected_layout_revision:0,layout:geometry});
     assert.equal(first.x,geometry.x);assert.equal(first.y,geometry.y);
-    assert.deepEqual(d.prepare('SELECT typeof(x) x,typeof(y) y FROM note_layouts WHERE note_id=1').get(),{x:'real',y:'real'});
+    assert.deepEqual(d.prepare('SELECT typeof(x) x,typeof(y) y FROM note_board_note_layouts WHERE owner_key=\'human:1\' AND note_id=1').get(),{x:'real',y:'real'});
     const pinned=setNoteLayout(d,1,1,{expected_layout_revision:1,position_locked:true,always_on_top:true});
     assert.equal(pinned.x,geometry.x);assert.equal(pinned.y,geometry.y);
     const before=state(d);assert.equal(setNoteLayout(d,1,1,{expected_layout_revision:2,layout:geometry}).revision,2);assert.deepEqual(state(d),before);
@@ -42,10 +42,10 @@ test('fractional mixed arrange receipts replay exactly, reject collisions and st
     const after=state(d);assert.equal(apply(d,1,structuredClone(frozen)).replayed,true);assert.deepEqual(state(d),after);
     const collision=structuredClone(frozen);collision.items[0].layout.x+=0.0001;throwsWithoutWrites(d,()=>apply(d,1,collision),409);
     throwsWithoutWrites(d,()=>apply(d,1,{...frozen,operation_id:'stale-fraction'}),409);
-    const receipt=JSON.parse(d.prepare('SELECT after_json FROM note_group_receipts WHERE operation_id=?').get(frozen.operation_id).after_json);
+    const receipt=JSON.parse(d.prepare('SELECT after_json FROM note_board_group_receipts WHERE owner_key=\'human:1\' AND operation_id=?').get(frozen.operation_id).after_json);
     assert.deepEqual(receipt.groups.find(value=>value.id===id).layout,target);
     const undo=apply(d,1,command(d,'undo',{undo_operation_id:frozen.operation_id},[]));assert.deepEqual(undo.board.groups[0].layout,original);
-    assert.equal(d.prepare('SELECT typeof(x) type FROM note_groups WHERE id=?').get(id).type,'real');
+    assert.equal(d.prepare('SELECT typeof(x) type FROM note_board_groups WHERE owner_key=\'human:1\' AND id=?').get(id).type,'real');
   }finally{d.close();}
 });
 

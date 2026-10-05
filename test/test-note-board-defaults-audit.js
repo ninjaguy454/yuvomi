@@ -8,7 +8,7 @@ const {devicePreset,normalizeDevicePermissions,auditDevice}=await import('../ser
 const d=get();
 for(const id of [1,2])d.prepare("INSERT INTO users(id,username,display_name,password_hash,role) VALUES(?,?,?,'synthetic','member')").run(id,`member${id}`,`Member ${id}`);
 d.prepare("INSERT INTO household_devices(id,name,permissions_json,scope_json,preferences_json) VALUES(99,'Synthetic display','{}','{}','{}')").run();
-test.beforeEach(()=>d.prepare('DELETE FROM notes').run());
+test.beforeEach(()=>{d.prepare('DELETE FROM notes').run();d.prepare('DELETE FROM note_board_owners').run();});
 const create=(name,visibility='all',owner=1)=>updateNote(d,owner,null,{title:name,content:name,visibility});
 const separate=(a,b)=>a.x+a.width<=b.x||b.x+b.width<=a.x||a.y+a.height<=b.y||b.y+b.height<=a.y;
 const layouts=actor=>readNoteBoard(d,actor).notes.map(n=>({id:n.id,layout:n.layout}));
@@ -42,7 +42,7 @@ test('all missing layouts occupy distinct free space around saved card sizes wit
     assert.deepEqual(readNote(d,1,rows[a].id).layout,rows[a].layout);
     for(let b=a+1;b<rows.length;b++)assert.ok(separate(rows[a].layout,rows[b].layout),`${rows[a].id}/${rows[b].id}`);
   }
-  assert.equal(d.prepare('SELECT COUNT(*) n FROM note_layouts').get().n,1);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM note_board_note_layouts WHERE owner_key=\'human:1\'').get().n,1);
   assert.deepEqual({changes:d.prepare('SELECT total_changes() n').get().n,clock:d.prepare('SELECT version FROM note_change_clock').get().version},before);
 });
 test('hidden saved and missing note rectangles cannot influence another viewer default positions',()=>{

@@ -16,7 +16,7 @@ const MARKER='notes-groups-recovery-synthetic-v1',MARKER_KEY='synthetic_notes_gr
 const USERS=[{id:91001,username:'synthetic-recovery-owner'},{id:91002,username:'synthetic-recovery-recipient'},{id:91003,username:'synthetic-recovery-other'}];
 const OWNER=USERS[0].id,RECIPIENT=USERS[1].id,OTHER=USERS[2].id,DEVICE=91099;
 const MODES=['seed','assert-forward','assert-fallback','exercise-fallback','assert-restored','fault-rollback'];
-const mutable=['notes','note_access','note_layouts','note_groups','note_group_members','note_group_receipts','note_change_clock','sqlite_sequence'];
+const mutable=['notes','note_access','note_layouts','note_groups','note_group_members','note_group_receipts','note_board_owners','note_board_note_layouts','note_board_groups','note_board_group_members','note_board_group_receipts','note_change_clock','sqlite_sequence'];
 const hash=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const check=(value,code)=>{if(!value)throw Object.assign(new Error(code),{recoveryCode:code});};
 const same=(actual,expected,code)=>check(hash(actual)===hash(expected),code);
@@ -71,8 +71,8 @@ function safePaths(mode){
   return {file,state,manifest};
 }
 const rectangle=(x,y,locked=true,top=true)=>({x,y,width:6,height:8,position_locked:locked,always_on_top:top});
-function frozenCommand(s,d,kind,fields,noteIds,groupIds,operation_id){
-  const board=s.readGroupedNoteBoard(d,OWNER);
+function frozenCommand(s,d,kind,fields,noteIds,groupIds,operation_id,actor=OWNER){
+  const board=s.readGroupedNoteBoard(d,actor);
   return {operation_id,kind,...fields,expected:{groups:groupIds.map(id=>({id,revision:board.groups.find(g=>g.id===id).revision})),notes:noteIds.map(id=>{const n=board.notes.find(n=>n.id===id);return {id,revision:n.revision,layout_revision:n.layout.revision};})}};
 }
 function mustReject(d,work,status,code){
@@ -91,13 +91,13 @@ function assertPrivacy(d,s,m){
     const encoded=JSON.stringify(board);for(const id of [m.ids.private,m.ids.selected,m.ids.survivor])check(!encoded.includes(d.prepare('SELECT title FROM notes WHERE id=?').get(id).title),'hidden_title_leak');
     check(!board.groups.some(g=>g.id===m.groups.pinned),'hidden_group_count_leak');
   }
-  const partial=recipient.groups.find(g=>g.id===m.groups.pinned);same(partial?.member_ids,[m.ids.anchor,m.ids.selected],'dense_partial_order');check(partial.can_manage===false,'partial_group_manage');
+  const partial=recipient.groups.find(g=>g.id===m.scopedGroups.recipientPinned);same(partial?.member_ids,[m.ids.anchor,m.ids.selected],'dense_partial_order');check(partial.can_manage===false,'partial_group_manage');
   const flat=s.readNoteBoard(d,principal(d,s));same(flat.notes.map(n=>n.id),device.notes.map(n=>n.id),'flat_authorized_projection');
   same(snapshot(d),before,'read_changed_structure');
 }
 function summarize(mode,d,extra={}){
-  const s=snapshot(d);return {ok:true,mode,notes:s.notes.length,groups:s.note_groups.length,receipts:s.note_group_receipts.length,clock:s.note_change_clock[0].version,
-    state_hash:hash(s),membership_hash:hash(s.note_group_members),receipt_hash:hash(s.note_group_receipts),schema_hash:s.schema_hash,...extra};
+  const s=snapshot(d);return {ok:true,mode,notes:s.notes.length,groups:s.note_board_groups.length,receipts:s.note_board_group_receipts.length,owners:s.note_board_owners.length,owner_hash:hash(s.note_board_owners),scoped_hash:hash(Object.fromEntries(mutable.filter(t=>t.startsWith('note_board_')).map(t=>[t,s[t]]))),clock:s.note_change_clock[0].version,
+    state_hash:hash(s),membership_hash:hash([s.note_group_members,s.note_board_group_members]),receipt_hash:hash([s.note_group_receipts,s.note_board_group_receipts]),schema_hash:s.schema_hash,...extra};
 }
 function storeManifest(file,m,d){m.current=snapshot(d);fs.writeFileSync(file,JSON.stringify(m,null,2),{mode:0o600});}
 
@@ -115,15 +115,30 @@ export async function runNoteGroupsRecovery(mode){
       const permissions={modules:{notes:'read'},capabilities:Object.fromEntries(['view','create','edit','delete'].map(a=>[`device_notes.${a}`,'allow']))};
       d.prepare("INSERT INTO household_devices(id,name,permissions_json,scope_json,preferences_json) VALUES(?,'Synthetic recovery display',?,'{}','{}')").run(DEVICE,JSON.stringify(permissions));
       const note=(label,visibility='all',owner=OWNER)=>s.updateNote(d,owner,null,{title:`SYNTHETIC RECOVERY ${label}`,content:`Body ${label}`,visibility,...(visibility==='selected'?{access_user_ids:[RECIPIENT]}:{})}).id;
-      const ids={anchor:note('Everyone anchor'),private:note('PRIVATE owner','private'),selected:note('SELECTED recipient','selected'),freeAnchor:note('Everyone free anchor'),freePage:note('Everyone free page'),deleteMe:note('Everyone deletion owner'),survivor:note('PRIVATE future survivor','all',RECIPIENT),faultTarget:note('Everyone fault target'),faultSource:note('Everyone fault source')};
-      const pin=(id,layout)=>s.setNoteLayout(d,OWNER,id,{expected_layout_revision:0,layout:{x:layout.x,y:layout.y,width:layout.width,height:layout.height},position_locked:layout.position_locked,always_on_top:layout.always_on_top});
-      const create=(target,source,name,layout)=>{pin(target,layout);const c=frozenCommand(s,d,'create',{source_note_id:source,target_note_id:target},[target,source],[],`recovery:create:${name}`);return s.applyNoteGroupCommand(d,OWNER,c).board.groups.find(g=>g.member_ids.includes(target)).id;};
+      const ids={anchor:note('Everyone anchor'),private:note('PRIVATE owner'),selected:note('SELECTED recipient','selected'),freeAnchor:note('Everyone free anchor'),freePage:note('Everyone free page'),deleteMe:note('Everyone deletion owner'),survivor:note('PRIVATE future survivor','all',RECIPIENT),faultTarget:note('Everyone fault target'),faultSource:note('Everyone fault source'),legacyDelete:note('Everyone legacy deletion'),legacySurvivor:note('PRIVATE legacy survivor','all',RECIPIENT)};
+      // A populated frozen seed is copied by each owner, then mandatory shared
+      // deletion repairs that seed and every initialized copy independently.
+      d.prepare('INSERT INTO note_layouts(note_id,x,y,width,height,revision,position_locked,always_on_top) VALUES(?,17.125,23.875,5,7,9,0,1)').run(ids.legacyDelete);
+      d.prepare('INSERT INTO note_layouts(note_id,x,y,width,height,revision,position_locked,always_on_top) VALUES(?,41.125,43.875,4,6,13,0,0)').run(ids.legacySurvivor);
+      d.prepare('INSERT INTO note_groups(id,revision,x,y,width,height,position_locked,always_on_top) VALUES(71,17,27.125,31.875,6,8,1,1)').run();
+      for(const [ordinal,id] of [ids.legacyDelete,ids.legacySurvivor].entries())d.prepare('INSERT INTO note_group_members(note_id,group_id,ordinal) VALUES(?,71,?)').run(id,ordinal);
+      d.prepare('INSERT INTO note_group_receipts(principal_key,operation_id,request_hash,before_json,after_json) VALUES(?,?,?,?,?)').run(`person:${OWNER}`,'recovery:legacy-receipt','frozen-legacy-request','{}','{}');
+      const legacySeed=Object.fromEntries(['note_layouts','note_groups','note_group_members','note_group_receipts'].map(table=>[table,rows(d,table)]));
+      const pin=(id,layout,actor=OWNER)=>s.setNoteLayout(d,actor,id,{expected_layout_revision:0,layout:{x:layout.x,y:layout.y,width:layout.width,height:layout.height},position_locked:layout.position_locked,always_on_top:layout.always_on_top});
+      const create=(target,source,name,layout,actor=OWNER)=>{pin(target,layout,actor);const c=frozenCommand(s,d,'create',{source_note_id:source,target_note_id:target},[target,source],[],`recovery:create:${name}`,actor);return s.applyNoteGroupCommand(d,actor,c).board.groups.find(g=>g.member_ids.includes(target)).id;};
       const groups={pinned:create(ids.anchor,ids.private,'pinned',rectangle(40,50)),unpinned:create(ids.freeAnchor,ids.freePage,'free',rectangle(100,120,true,false)),survivor:create(ids.deleteMe,ids.survivor,'survivor',rectangle(220,250))};
       s.applyNoteGroupCommand(d,OWNER,frozenCommand(s,d,'join',{target_group_id:groups.pinned,note_ids:[ids.selected],before_note_id:null},[ids.anchor,ids.private,ids.selected],[groups.pinned],'recovery:join:selected'));
+      const display=principal(d,s),scopedGroups={recipientPinned:create(ids.anchor,ids.private,'recipient-pinned',rectangle(60.125,70.875),RECIPIENT),recipientSurvivor:create(ids.deleteMe,ids.survivor,'recipient-survivor',rectangle(240.125,270.875),RECIPIENT),devicePinned:create(ids.anchor,ids.private,'device-pinned',rectangle(80.125,90.875),display),deviceSurvivor:create(ids.deleteMe,ids.survivor,'device-survivor',rectangle(260.125,290.875),display)};
+      s.applyNoteGroupCommand(d,RECIPIENT,frozenCommand(s,d,'join',{target_group_id:scopedGroups.recipientPinned,note_ids:[ids.selected],before_note_id:null},[ids.anchor,ids.private,ids.selected],[scopedGroups.recipientPinned],'recovery:recipient-join:selected',RECIPIENT));
+      pin(ids.faultTarget,rectangle(610.125,710.875),RECIPIENT);pin(ids.faultTarget,rectangle(810.125,910.875),display);
+      s.updateNote(d,OWNER,ids.private,{expected_revision:1,visibility:'private'});
       const receiptCommand=frozenCommand(s,d,'arrange',{items:[{kind:'group',id:groups.unpinned,layout:rectangle(100,120,false,false)}],include_locked:false},[ids.freeAnchor,ids.freePage],[groups.unpinned],'recovery:unpinned-layout');s.applyNoteGroupCommand(d,OWNER,receiptCommand);
       const hidden=d.prepare('SELECT revision FROM notes WHERE id=?').get(ids.survivor);s.updateNote(d,RECIPIENT,ids.survivor,{expected_revision:hidden.revision,visibility:'private'});pin(ids.faultTarget,rectangle(400,500));
+      const legacyHidden=d.prepare('SELECT revision FROM notes WHERE id=?').get(ids.legacySurvivor);s.updateNote(d,RECIPIENT,ids.legacySurvivor,{expected_revision:legacyHidden.revision,visibility:'private'});
+      for(const ownerKey of [`human:${OWNER}`,`human:${RECIPIENT}`,`device:${DEVICE}`]){const copied=d.prepare('SELECT revision,x,y,width,height,position_locked,always_on_top FROM note_board_groups WHERE owner_key=? AND id=71').get(ownerKey);same(copied,{revision:17,x:27.125,y:31.875,width:6,height:8,position_locked:1,always_on_top:1},'seed_group_copy_changed');}
+      for(const [table,values] of Object.entries(legacySeed))same(rows(d,table),values,'owner_write_changed_seed');
       const staleCommand=frozenCommand(s,d,'reorder',{group_id:groups.pinned,selected_ids:[ids.selected],before_note_id:ids.anchor},[ids.anchor,ids.private,ids.selected],[groups.pinned],'recovery:stale-before-content');
-      m={format:1,marker:MARKER,stage:'seeded',ids,groups,receiptCommand,staleCommand,survivorLayout:rectangle(220,250),protected:protectedHashes(d)};m.seed=snapshot(d);storeManifest(paths.state,m,d);assertPrivacy(d,s,m);return summarize(mode,d);
+      m={format:1,marker:MARKER,stage:'seeded',ids,groups,scopedGroups,legacySeed,receiptCommand,staleCommand,survivorLayout:rectangle(220,250),protected:protectedHashes(d)};m.seed=snapshot(d);storeManifest(paths.state,m,d);assertPrivacy(d,s,m);return summarize(mode,d);
     }
     same(snapshot(d),m.current,'restart_changed_state');assertPrivacy(d,s,m);
     if(mode==='assert-forward')return summarize(mode,d);
@@ -133,20 +148,21 @@ export async function runNoteGroupsRecovery(mode){
       return summarize(mode,d,{blocked_commands:3});
     }
     if(mode==='exercise-fallback'){
-      check(m.stage==='seeded','recovery_already_exercised');const before=snapshot(d),survivor=d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.survivor);
+      check(m.stage==='seeded','recovery_already_exercised');const before=snapshot(d),survivor=d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.survivor),legacySurvivor=d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.legacySurvivor);
       mustReject(d,()=>s.mutateNote(d,OWNER,m.ids.survivor,'delete'),404,'hidden_delete_allowed');
       const old=d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.anchor);s.updateNote(d,OWNER,m.ids.anchor,{expected_revision:old.revision,content:'- [ ] Recovery item\nSynthetic ordinary edit'});
       s.mutateNote(d,OWNER,m.ids.anchor,'check',{line:0,checked:true,expect:'- [ ] Recovery item'});s.mutateNote(d,OWNER,m.ids.anchor,'pin');
       const changed=d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.anchor);check(changed.content==='- [x] Recovery item\nSynthetic ordinary edit'&&changed.pinned===1,'ordinary_actions_not_preserved');
       mustReject(d,()=>s.setNoteLayout(d,OWNER,m.ids.anchor,{expected_layout_revision:0,position_locked:false}),409,'legacy_group_layout_allowed');
-      check(s.mutateNote(d,OWNER,m.ids.deleteMe,'delete')===null,'delete_disclosed_survivor');same(d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.survivor),survivor,'survivor_content_changed');
-      const survivorLayout=d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(m.ids.survivor);same(Object.fromEntries(Object.keys(m.survivorLayout).map(k=>[k,typeof m.survivorLayout[k]==='boolean'?Boolean(survivorLayout[k]):survivorLayout[k]])),m.survivorLayout,'survivor_anchor_changed');
-      check(!d.prepare('SELECT id FROM note_groups WHERE id=?').get(m.groups.survivor),'singleton_container_retained');same(rows(d,'note_group_receipts'),before.note_group_receipts,'ordinary_action_changed_receipts');
+      check(s.mutateNote(d,OWNER,m.ids.deleteMe,'delete')===null,'delete_disclosed_survivor');same(d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.survivor),survivor,'survivor_content_changed');check(s.mutateNote(d,OWNER,m.ids.legacyDelete,'delete')===null,'seed_delete_disclosed_survivor');same(d.prepare('SELECT * FROM notes WHERE id=?').get(m.ids.legacySurvivor),legacySurvivor,'seed_survivor_content_changed');
+      const expectedSeedAnchor=rectangle(27.125,31.875);for(const ownerKey of [null,`human:${OWNER}`,`human:${RECIPIENT}`,`device:${DEVICE}`]){const layout=ownerKey===null?d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(m.ids.legacySurvivor):d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=? AND note_id=?').get(ownerKey,m.ids.legacySurvivor);for(const [field,value] of Object.entries(expectedSeedAnchor))same(typeof value==='boolean'?Boolean(layout[field]):layout[field],value,'seed_survivor_anchor_changed');check(layout.revision>13,'seed_survivor_revision_not_advanced');}
+      const survivorLayout=d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=? AND note_id=?').get(`human:${OWNER}`,m.ids.survivor);same(Object.fromEntries(Object.keys(m.survivorLayout).map(k=>[k,typeof m.survivorLayout[k]==='boolean'?Boolean(survivorLayout[k]):survivorLayout[k]])),m.survivorLayout,'survivor_anchor_changed');
+      check(!d.prepare('SELECT id FROM note_board_groups WHERE owner_key=? AND id=?').get(`human:${OWNER}`,m.groups.survivor),'singleton_container_retained');same(rows(d,'note_group_receipts'),before.note_group_receipts,'ordinary_action_changed_seed_receipts');same(rows(d,'note_board_group_receipts'),before.note_board_group_receipts,'ordinary_action_changed_receipts');same(rows(d,'note_board_owners'),before.note_board_owners,'ordinary_action_changed_owner_counters');
       same(rows(d,'note_access'),before.note_access,'ordinary_action_changed_audiences');
-      const untouchedNotes=values=>values.filter(n=>![m.ids.anchor,m.ids.deleteMe].includes(n.id));same(untouchedNotes(rows(d,'notes')),untouchedNotes(before.notes),'unrelated_note_changed');
-      const untouchedLayouts=values=>values.filter(n=>![m.ids.survivor,m.ids.deleteMe].includes(n.note_id));same(untouchedLayouts(rows(d,'note_layouts')),untouchedLayouts(before.note_layouts),'unrelated_layout_changed');
+      const untouchedNotes=values=>values.filter(n=>![m.ids.anchor,m.ids.deleteMe,m.ids.legacyDelete].includes(n.id));same(untouchedNotes(rows(d,'notes')),untouchedNotes(before.notes),'unrelated_note_changed');
+      const untouchedLayouts=values=>values.filter(n=>![m.ids.survivor,m.ids.deleteMe,m.ids.legacyDelete,m.ids.legacySurvivor].includes(n.note_id));same(untouchedLayouts(rows(d,'note_layouts')),untouchedLayouts(before.note_layouts),'unrelated_seed_layout_changed');same(untouchedLayouts(rows(d,'note_board_note_layouts')),untouchedLayouts(before.note_board_note_layouts),'unrelated_layout_changed');
       for(const field of ['id','title','color','visibility','created_by','created_by_device','created_at'])same(changed[field],old[field],'ordinary_action_changed_identity');
-      same(rows(d,'note_group_members'),before.note_group_members.filter(row=>row.group_id!==m.groups.survivor),'unrelated_membership_changed');same(rows(d,'note_groups'),before.note_groups.filter(row=>row.id!==m.groups.survivor),'unrelated_group_changed');same(protectedHashes(d),m.protected,'unrelated_user_data_changed');
+      same(rows(d,'note_group_members'),before.note_group_members.filter(row=>row.group_id!==71),'unrelated_seed_membership_changed');same(rows(d,'note_groups'),before.note_groups.filter(row=>row.id!==71),'unrelated_seed_groups_changed');check(!d.prepare('SELECT 1 FROM note_groups WHERE id=71').get(),'seed_singleton_group_retained');const affected=new Map([[`human:${OWNER}`,m.groups.survivor],[`human:${RECIPIENT}`,m.scopedGroups.recipientSurvivor],[`device:${DEVICE}`,m.scopedGroups.deviceSurvivor]]);same(rows(d,'note_board_group_members'),before.note_board_group_members.filter(row=>row.group_id!==71&&row.group_id!==affected.get(row.owner_key)),'unrelated_membership_changed');same(rows(d,'note_board_groups'),before.note_board_groups.filter(row=>row.id!==71&&row.id!==affected.get(row.owner_key)),'unrelated_group_changed');for(const [ownerKey,layout] of [[`human:${RECIPIENT}`,rectangle(240.125,270.875)],[`device:${DEVICE}`,rectangle(260.125,290.875)]]){const current=d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=? AND note_id=?').get(ownerKey,m.ids.survivor);for(const [field,value] of Object.entries(layout))same(typeof value==='boolean'?Boolean(current[field]):current[field],value,'scoped_survivor_anchor_changed');}same(protectedHashes(d),m.protected,'unrelated_user_data_changed');
       m.stage='fallback-exercised';storeManifest(paths.state,m,d);assertPrivacy(d,s,m);return summarize(mode,d,{hidden_survivor_preserved:true});
     }
     if(mode==='assert-restored'){
@@ -159,11 +175,11 @@ export async function runNoteGroupsRecovery(mode){
       const next=frozenCommand(s,d,'reorder',{group_id:m.groups.unpinned,selected_ids:[m.ids.freePage],before_note_id:m.ids.freeAnchor},[m.ids.freeAnchor,m.ids.freePage],[m.groups.unpinned],'recovery:resumed-reorder');
       const changed=s.applyNoteGroupCommand(d,OWNER,next);same(changed.board.groups.find(g=>g.id===m.groups.unpinned).member_ids,[m.ids.freePage,m.ids.freeAnchor],'forward_not_reenabled');
       s.applyNoteGroupCommand(d,OWNER,{operation_id:'recovery:resumed-undo',kind:'undo',expected:{groups:[],notes:[]},undo_operation_id:next.operation_id});
-      same(rows(d,'note_group_members'),before.note_group_members,'forward_return_changed_membership');same(snapshot(d).schema_hash,before.schema_hash,'schema_rolled_back');m.stage='restored';storeManifest(paths.state,m,d);return summarize(mode,d,{replayed:true,stale_client_rejected:true});
+      same(rows(d,'note_group_members'),before.note_group_members,'forward_return_changed_seed_membership');same(rows(d,'note_board_group_members'),before.note_board_group_members,'forward_return_changed_membership');same(rows(d,'note_board_owners'),before.note_board_owners,'forward_return_changed_counters');same(snapshot(d).schema_hash,before.schema_hash,'schema_rolled_back');m.stage='restored';storeManifest(paths.state,m,d);return summarize(mode,d,{replayed:true,stale_client_rejected:true});
     }
     if(mode==='fault-rollback'){
       const before=snapshot(d),c=frozenCommand(s,d,'create',{source_note_id:m.ids.faultSource,target_note_id:m.ids.faultTarget},[m.ids.faultSource,m.ids.faultTarget],[],'recovery:fault');
-      const triggers=[`CREATE TEMP TRIGGER recovery_fault BEFORE INSERT ON note_group_members WHEN NEW.note_id=${m.ids.faultSource} BEGIN SELECT RAISE(ABORT,'synthetic recovery fault'); END`,"CREATE TEMP TRIGGER recovery_fault BEFORE INSERT ON note_group_receipts BEGIN SELECT RAISE(ABORT,'synthetic recovery fault'); END"];
+      const triggers=[`CREATE TEMP TRIGGER recovery_fault BEFORE INSERT ON note_board_group_members WHEN NEW.note_id=${m.ids.faultSource} BEGIN SELECT RAISE(ABORT,'synthetic recovery fault'); END`,"CREATE TEMP TRIGGER recovery_fault BEFORE INSERT ON note_board_group_receipts BEGIN SELECT RAISE(ABORT,'synthetic recovery fault'); END"];
       for(const sql of triggers){
         d.exec(sql);let failed=false;try{s.applyNoteGroupCommand(d,OWNER,c);}catch(error){failed=error.code==='SQLITE_CONSTRAINT_TRIGGER';}finally{d.exec('DROP TRIGGER recovery_fault');}
         check(failed,'injected_fault_not_reached');same(snapshot(d),before,'fault_did_not_rollback');

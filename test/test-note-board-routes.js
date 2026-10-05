@@ -7,6 +7,8 @@ const {default:router}=await import('../server/routes/notes.js');
 const {deviceNotesRequest}=await import('../server/services/device-notes.js');
 const {devicePreset,normalizeDevicePermissions}=await import('../server/services/devices.js');
 const d=get();
+const arrangementState=()=>Object.fromEntries(['note_board_owners','note_board_note_layouts','note_board_groups','note_board_group_members','note_board_group_receipts'].map(table=>[table,d.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all()]));
+
 for(const [id,role] of [[1,'member'],[2,'member'],[3,'admin']])d.prepare('INSERT INTO users(id,username,display_name,password_hash,role) VALUES(?,?,?,?,?)').run(id,`notes${id}`,`Member ${id}`,'x',role);
 let actor=1;const app=express();app.use(express.json());app.use((req,res,next)=>{req.authUserId=actor;req.session={userId:actor};next();});app.use('/',router);
 const server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));
@@ -41,17 +43,17 @@ test('layout CAS is separate from content and unauthorized/stale batches roll ba
   actor=1;const before=d.prepare('SELECT * FROM notes WHERE id=?').get(sharedNote.id);
   const shape={x:0,y:0,width:4,height:6};
   assert.equal((await call('PATCH',`/${sharedNote.id}/layout`,{note_id:privateNote.id,expected_layout_revision:0,layout:shape})).status,400);
-  assert.equal(d.prepare('SELECT COUNT(*) n FROM note_layouts').get().n,0);
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM note_board_note_layouts WHERE owner_key=\'human:1\'').get().n,0);
   const r=await call('PATCH',`/${sharedNote.id}/layout`,{expected_layout_revision:0,layout:shape});assert.equal(r.status,200);
   assert.deepEqual(d.prepare('SELECT * FROM notes WHERE id=?').get(sharedNote.id),before);
   assert.equal((await call('PATCH',`/${sharedNote.id}/layout`,{expected_layout_revision:0,layout:shape})).status,409);
   const items=[{note_id:sharedNote.id,expected_layout_revision:1,layout:{...shape,x:4}},{note_id:privateNote.id,expected_layout_revision:999,layout:shape}];
   assert.equal((await call('PATCH','/layout',{items})).status,409);
-  assert.equal(d.prepare('SELECT x FROM note_layouts WHERE note_id=?').get(sharedNote.id).x,0);
-  actor=2;items[1].expected_layout_revision=0;
-  assert.equal((await call('PATCH','/layout',{items})).status,404);
-  assert.equal(d.prepare('SELECT x FROM note_layouts WHERE note_id=?').get(sharedNote.id).x,0);
-  for(const shape of [{x:-1,y:0,width:4,height:6},{x:10001,y:0,width:4,height:6},{x:0,y:0,width:2,height:6},{x:0,y:Infinity,width:4,height:6}])assert.equal((await call('PATCH',`/${sharedNote.id}/layout`,{expected_layout_revision:1,layout:shape})).status,400);
+  assert.equal(d.prepare('SELECT x FROM note_board_note_layouts WHERE owner_key=\'human:1\' AND note_id=?').get(sharedNote.id).x,0);
+  actor=2;items[0].expected_layout_revision=0;items[1].expected_layout_revision=0;const beforeDenied=arrangementState();
+  assert.equal((await call('PATCH','/layout',{items})).status,404);assert.deepEqual(arrangementState(),beforeDenied,'denied batch rolls back owner initialization and every arrangement table');
+  assert.equal(d.prepare('SELECT x FROM note_board_note_layouts WHERE owner_key=\'human:1\' AND note_id=?').get(sharedNote.id).x,0);
+  actor=1;for(const shape of [{x:-1,y:0,width:4,height:6},{x:10001,y:0,width:4,height:6},{x:0,y:0,width:2,height:6},{x:0,y:Infinity,width:4,height:6}])assert.equal((await call('PATCH',`/${sharedNote.id}/layout`,{expected_layout_revision:1,layout:shape})).status,400);
 });
 test('single and bulk HTTP layouts persist strict flags, lock movement and preserve the dashboard pin',async()=>{
   actor=1;const note=(await call('POST','/',{content:'HTTP layout flags',pinned:true})).body.data;

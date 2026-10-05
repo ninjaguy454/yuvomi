@@ -106,11 +106,11 @@ test('held real Notes writes cannot commit after return, expiry, or device revoc
 });
 test('held real layout flag writes cannot commit after return, expiry or device revocation',async()=>{
   for(const invalidation of ['return','expiry','revoke']){
-    const {display,id}=await pair();await temporary(display);const before=d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(privateId),beforeNote=d.prepare('SELECT * FROM notes WHERE id=?').get(privateId);
+    const {display,id}=await pair();await temporary(display);const before=d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=\'human:1\' AND note_id=?').get(privateId),beforeNote=d.prepare('SELECT * FROM notes WHERE id=?').get(privateId);
     let entered,release;const started=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);held={entered,gate};
     const pending=new Client(display).call('PATCH',`/api/v1/notes/${privateId}/layout`,{expected_layout_revision:before?.revision??0,position_locked:true,always_on_top:true},{'x-test-hold':'yes'});
     try{await started;if(invalidation==='return')await ok(display,'POST','/api/v1/device/return',{});if(invalidation==='expiry')d.prepare('UPDATE device_credentials SET temporary_idle_at=? WHERE id=?').run(Date.now()-301000,credential(display).id);if(invalidation==='revoke')await ok(admin,'POST',`/api/v1/devices/${id}/revoke`,{revision:d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision});
-      release();const result=await pending;assert.equal(result.status,409,JSON.stringify(result.body));assert.deepEqual(d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(privateId),before);assert.deepEqual(d.prepare('SELECT * FROM notes WHERE id=?').get(privateId),beforeNote);
+      release();const result=await pending;assert.equal(result.status,409,JSON.stringify(result.body));assert.deepEqual(d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=\'human:1\' AND note_id=?').get(privateId),before);assert.deepEqual(d.prepare('SELECT * FROM notes WHERE id=?').get(privateId),beforeNote);
     }finally{release();}
   }
 });

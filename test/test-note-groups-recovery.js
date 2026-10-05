@@ -28,13 +28,13 @@ function open(f){const d=new Database(f.file);d.pragma("cipher='sqlcipher'");d.p
 
 test('encrypted on-disk fixture survives forward, disabled recovery and restored forward subprocesses',()=>{
   const f=fixture();try{
-    const seed=run(f,'seed');assert.equal(seed.groups,3);assert.ok(seed.receipts>=5);assert.notEqual(readFileSync(f.file).subarray(0,16).toString(),'SQLite format 3\0');
+    const seed=run(f,'seed');assert.equal(seed.groups,10);assert.equal(seed.owners,3);assert.ok(seed.receipts>=5);assert.notEqual(readFileSync(f.file).subarray(0,16).toString(),'SQLite format 3\0');
     const bare=new Database(f.file,{readonly:true});try{assert.throws(()=>bare.prepare('SELECT count(*) FROM notes').get());}finally{bare.close();}
     const forward=run(f,'assert-forward');assert.equal(forward.membership_hash,seed.membership_hash);assert.equal(forward.receipt_hash,seed.receipt_hash);
-    const fallback=run(f,'assert-fallback',{VIDAMIA_NOTE_GROUPS_MUTATIONS:'0'});assert.equal(fallback.blocked_commands,3);assert.equal(fallback.membership_hash,forward.membership_hash);assert.equal(fallback.receipt_hash,forward.receipt_hash);assert.equal(fallback.clock,forward.clock);
-    const ordinary=run(f,'exercise-fallback',{VIDAMIA_NOTE_GROUPS_MUTATIONS:'0'});assert.equal(ordinary.groups,2);assert.equal(ordinary.receipt_hash,forward.receipt_hash);assert.equal(ordinary.hidden_survivor_preserved,true);
-    const restored=run(f,'assert-restored');assert.equal(restored.groups,2);assert.equal(restored.replayed,true);assert.equal(restored.stale_client_rejected,true);assert.equal(restored.schema_hash,seed.schema_hash);
-    const restart=run(f,'assert-forward');assert.equal(restart.membership_hash,restored.membership_hash);assert.equal(restart.receipt_hash,restored.receipt_hash);
+    const fallback=run(f,'assert-fallback',{VIDAMIA_NOTE_GROUPS_MUTATIONS:'0'});assert.equal(fallback.blocked_commands,3);assert.equal(fallback.membership_hash,forward.membership_hash);assert.equal(fallback.receipt_hash,forward.receipt_hash);assert.equal(fallback.clock,forward.clock);assert.equal(fallback.scoped_hash,forward.scoped_hash);assert.equal(fallback.owner_hash,seed.owner_hash);
+    const ordinary=run(f,'exercise-fallback',{VIDAMIA_NOTE_GROUPS_MUTATIONS:'0'});assert.equal(ordinary.groups,4);assert.equal(ordinary.receipt_hash,forward.receipt_hash);assert.equal(ordinary.hidden_survivor_preserved,true);
+    const restored=run(f,'assert-restored');assert.equal(restored.groups,4);assert.equal(restored.replayed,true);assert.equal(restored.stale_client_rejected,true);assert.equal(restored.schema_hash,seed.schema_hash);
+    const restart=run(f,'assert-forward');assert.equal(restart.membership_hash,restored.membership_hash);assert.equal(restart.receipt_hash,restored.receipt_hash);assert.equal(restart.scoped_hash,restored.scoped_hash);assert.equal(restart.owner_hash,restored.owner_hash);
   }finally{f.close();}
 });
 

@@ -12,7 +12,7 @@ const {get}=await import('../../server/db.js');const d=get();
 const {devicePreset,normalizeDevicePermissions,createDevice,updateDevice,devicePrincipal}=await import('../../server/services/devices.js');
 const {readNoteBoard,saveNote,setNoteLayout}=await import('../../server/services/note-board.js');
 const {deviceNotesRequest}=await import('../../server/services/device-notes.js');
-const tables=['notes','note_access','note_layouts','note_groups','note_group_members','note_group_receipts','tasks','task_assignments','task_responsibilities','task_acceptance_receipts'];
+const tables=['notes','note_access','note_layouts','note_groups','note_group_members','note_group_receipts','note_board_owners','note_board_note_layouts','note_board_groups','note_board_group_members','note_board_group_receipts','tasks','task_assignments','task_responsibilities','task_acceptance_receipts'];
 const snapshot=()=>Object.fromEntries(tables.filter(t=>d.prepare('SELECT 1 FROM sqlite_master WHERE name=?').get(t)).map(t=>[t,d.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()]));
 const load=name=>JSON.parse(readFileSync(root+'/'+name+'.json','utf8'));
 const save=(name,value)=>writeFileSync(root+'/'+name+'.json',JSON.stringify(value,null,2));
@@ -20,6 +20,7 @@ const schema=()=>d.prepare('SELECT MAX(version) n FROM schema_migrations').get()
 function migrations() {
   for(const version of [10051,10052])assert.equal(d.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=?').get(version).n,1,`required migration ${version}`);
   assert.equal(d.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=10050').get().n,stage==='seed'?0:1,'P3 acceptance migration presence');
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=?').get(10053).n,stage==='seed'?0:1,'Notes owner migration presence');
 }
 const integrity=()=>{assert.equal(d.pragma('integrity_check',{simple:true}),'ok');assert.deepEqual(d.pragma('foreign_key_check'),[]);assert.notEqual(readFileSync(process.env.DB_PATH).subarray(0,16).toString(),'SQLite format 3\0');};
 function layoutState(report){
@@ -28,7 +29,8 @@ function layoutState(report){
   assert.equal(d.prepare('SELECT COUNT(*) n FROM schema_migrations WHERE version=10051').get().n,1);
   report.layout_state=[];
   for(const [id,x,y] of [[1,77,24],[2,99,60],[3,120,100]]){
-    const current=d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(id);
+    const initialized=stage!=='seed'&&d.prepare('SELECT 1 FROM note_board_owners WHERE owner_key=?').get('human:1');
+    const current=initialized?d.prepare('SELECT * FROM note_board_note_layouts WHERE owner_key=? AND note_id=?').get('human:1',id):d.prepare('SELECT * FROM note_layouts WHERE note_id=?').get(id);
     assert.equal(current.x,x);assert.equal(current.y,y);assert.equal(current.width,4+stageIndex);assert.equal(current.height,6);
     assert.equal(current.position_locked,1);assert.equal(current.always_on_top,1);
     const before=snapshot(),changes=d.prepare('SELECT total_changes() n').get().n;
@@ -43,6 +45,8 @@ function layoutState(report){
   report.migration_10050_present=Boolean(d.prepare('SELECT 1 FROM schema_migrations WHERE version=10050').get());
   report.migration_10051_present=true;
   report.migration_10052_present=true;
+  report.migration_10053_present=stage!=='seed';
+  if(stage!=='seed')report.scoped_state=Object.fromEntries(tables.filter(t=>t.startsWith('note_board_')).map(t=>[t,d.prepare(`SELECT COUNT(*) n FROM ${t}`).get().n]));
 }
 function privacy(){
   assert.deepEqual(readNoteBoard(d,2).notes.map(n=>n.id).sort(),[2,3]);
@@ -80,7 +84,7 @@ if(stage==='worker'){
     }finally{for(const c of workers){const exited=new Promise(resolve=>c.once('exit',resolve));c.kill();await exited;}}
     const row=d.prepare('SELECT * FROM household_devices WHERE id=1').get();updateDevice(d,1,{revision:row.revision,permissions:{capabilities:{'device_tasks.accept_with_helpers':'allow'}}},1);
     assert.equal(d.prepare('SELECT COUNT(*) n FROM task_acceptance_receipts').get().n,4);assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);
-    layoutState(report);privacy();save('requests',{partial,solo});save('accepted',snapshot());report.assignments=d.prepare('SELECT task_id,user_id FROM task_assignments ORDER BY task_id,user_id').all();
+    layoutState(report);setNoteLayout(d,2,2,{expected_layout_revision:readNoteBoard(d,2).notes.find(n=>n.id===2).layout.revision,layout:{x:199.125,y:260.875,width:5,height:8},position_locked:false,always_on_top:true});const display=devicePrincipal(d.prepare('SELECT * FROM household_devices WHERE id=1').get());setNoteLayout(d,display,3,{expected_layout_revision:readNoteBoard(d,display).notes.find(n=>n.id===3).layout.revision,layout:{x:320.125,y:400.875,width:6,height:9},position_locked:false});privacy();save('requests',{partial,solo});save('accepted',snapshot());report.assignments=d.prepare('SELECT task_id,user_id FROM task_assignments ORDER BY task_id,user_id').all();
   }else if(stage==='fallback'){
     assert.deepEqual(snapshot(),load('accepted'));privacy();
     assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.61-acceptance-paused'));

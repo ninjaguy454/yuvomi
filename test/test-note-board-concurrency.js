@@ -26,8 +26,8 @@ for(const mode of ['layout','content'])test(`two SQLite connections ${mode}: one
   try{
     await d.backup(file);const results=await race(file,mode);assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
     check=new Database(file);const note=check.prepare('SELECT * FROM notes WHERE id=1').get();
-    if(mode==='layout'){assert.equal(note.content,'Original');assert.equal(note.revision,1);assert.equal(check.prepare('SELECT revision FROM note_layouts WHERE note_id=1').get().revision,1);}
-    else{assert.equal(note.revision,2);assert.equal(note.content,results.find(r=>r.status===200).value.content);assert.equal(check.prepare('SELECT COUNT(*) n FROM note_layouts').get().n,0);}
+    if(mode==='layout'){assert.equal(note.content,'Original');assert.equal(note.revision,1);assert.equal(check.prepare('SELECT revision FROM note_board_note_layouts WHERE owner_key=\'human:1\' AND note_id=1').get().revision,1);}
+    else{assert.equal(note.revision,2);assert.equal(note.content,results.find(r=>r.status===200).value.content);assert.equal(check.prepare('SELECT COUNT(*) n FROM note_board_note_layouts WHERE owner_key=\'human:1\'').get().n,0);}
     assert.deepEqual(check.pragma('foreign_key_check'),[]);
   }finally{check?.close();rmSync(folder,{recursive:true,force:true});}
 });

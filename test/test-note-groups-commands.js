@@ -6,7 +6,7 @@ import {fixture,command,rect,state} from './helpers/note-group-fixture.mjs';
 const service=await import('../server/services/note-groups.js');
 const {devicePrincipal,deviceHash}=await import('../server/services/devices.js');
 const apply=(...args)=>{assert.equal(typeof service.applyNoteGroupCommand,'function','canonical command service exists');return service.applyNoteGroupCommand(...args);};
-const rejects=(d,p,c,status)=>{const before=state(d);assert.throws(()=>apply(d,p,c),e=>e.status===status);assert.deepEqual(state(d),before);};
+const rejects=(d,p,c,status,reason)=>{const before=state(d);assert.throws(()=>apply(d,p,c),e=>e.status===status&&(!reason||e.reason===reason));assert.deepEqual(state(d),before);};
 
 test('create takes target geometry, preserves records, retries fresh projection, and undoes monotonically',()=>{
   const {d,pin}=fixture(2);try{
@@ -118,9 +118,9 @@ test('device service refreshes grants and rejects revoked credentials/context an
     permissions.capabilities['device_notes.edit']='allow';d.prepare('UPDATE household_devices SET permissions_json=? WHERE id=99').run(JSON.stringify(permissions));d.exec("UPDATE household_devices SET status='revoked' WHERE id=99");rejects(d,p,c,401);d.exec("UPDATE household_devices SET status='active' WHERE id=99");
     d.prepare("INSERT INTO device_credentials(id,device_id,token_hash,context_key) VALUES(7,99,?,'context-a')").run(deviceHash('synthetic-token'));
     const req={devicePrincipal:p,headers:{cookie:'vidamia.device=synthetic-token','x-auth-context':'context-a'}};const c2=command(d,'reorder',{group_id:id,selected_ids:[2],before_note_id:3},[1,2,3],[id]);apply(d,req,c2);
-    d.exec("UPDATE device_credentials SET context_key='context-b' WHERE id=7");rejects(d,req,c2,401);
+    d.exec("UPDATE device_credentials SET context_key='context-b' WHERE id=7");rejects(d,req,c2,409,'device_context_changed');
     const old=Date.now()-3600000;d.prepare("UPDATE device_credentials SET context_key='context-a',temporary_sid='sid',temporary_user_id=3,temporary_started_at=?,temporary_idle_at=? WHERE id=7").run(old,old);
-    rejects(d,{...req,devicePrincipal:undefined,authUserId:3,sessionID:'sid',session:{userId:3,deviceCredentialId:7}},c2,401);
+    rejects(d,{...req,devicePrincipal:undefined,authUserId:3,sessionID:'sid',session:{userId:3,deviceCredentialId:7}},c2,409,'device_context_changed');
   }finally{d.close();}
 });
 test('recovery switch blocks new commands, replay and undo but allows ordinary content and mandatory deletion cleanup',()=>{

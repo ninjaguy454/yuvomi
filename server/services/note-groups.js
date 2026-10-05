@@ -67,7 +67,7 @@ function validateCommand(c){
  * A request snapshot never revives a revoked device or expired personal lease. */
 export function currentNoteGroupPrincipal(d,principal) {
   const request=object(principal)?principal:{authUserId:actorId(principal)};
-  if(!deviceRequestStillValid(d,request))throw noteError('Sign-in has changed. Reload before trying again.',401);
+  if(!deviceRequestStillValid(d,request))throw Object.assign(noteError('Sign-in has changed. Reload before trying again.',409),{reason:'device_context_changed'});
   const context=readDeviceContext(d,request,{expire:false}),device=noteDevice(principal);
   let current=request;
   if(device){

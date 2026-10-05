@@ -47,7 +47,7 @@ export function authorizedAcceptanceChildren(d,p,task){
 }
 export function childAllocationReason(d,p,task,child,supervision=inspectTaskSupervision(d,task.id)){
   if(child.parent_task_id!==task.id||!taskCapabilities(d,p,child).view)return 'not_available';
-  if(child.archived_at||child.status!=='open'||taskExpirationDue(d,child))return 'not_open';
+  if(child.archived_at||!['open','in_progress'].includes(child.status)||taskExpirationDue(d,child))return 'not_open';
   if(child.locked||task.locked)return 'locked';
   if(generatedTask(d,child.id)||supervision.actions.some(a=>(a.action_task_id===child.id||a.counterpart_task_id===child.id)&&a.state!=='not_required'))return 'protected_action';
   if(hasTaskAssignees(d,child))return 'already_assigned';

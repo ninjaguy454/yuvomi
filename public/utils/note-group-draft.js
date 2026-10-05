@@ -1,4 +1,15 @@
 /** Pure, in-memory command snapshots. Only the server can authorize a command. */
+export function newNoteGroupOperationId(cryptoSource = globalThis.crypto) {
+  if (typeof cryptoSource?.randomUUID === 'function') return cryptoSource.randomUUID();
+  if (typeof cryptoSource?.getRandomValues !== 'function') throw new Error('Secure operation identity is unavailable. Reload the board in a supported browser.');
+  // Local HTTP browsers expose getRandomValues even without secure-context UUIDs.
+  const bytes = cryptoSource.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = [...bytes].map(value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+}
+
 const unavailable = () => new Error('This action is no longer available. Reload the board.');
 const validId = id => Number.isSafeInteger(id) && id > 0;
 const clone = value => structuredClone(value);

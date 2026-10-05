@@ -12,6 +12,16 @@ const expectedNotes = ids => ids.map(id => ({ id, revision: id + 10, layout_revi
 test('exports the pure draft contract', () => {
   for (const name of ['createNoteGroupDraft', 'orderedSelection', 'moveSelectionBefore', 'freezeNoteGroupCommand']) assert.equal(typeof draftModule[name], 'function', name);
 });
+
+test('operation IDs use secure UUIDs and the local HTTP cryptographic fallback', () => {
+  assert.equal(typeof draftModule.newNoteGroupOperationId, 'function');
+  assert.equal(draftModule.newNoteGroupOperationId({randomUUID:()=> 'native-uuid'}),'native-uuid');
+  let calls=0;
+  const cryptoSource={getRandomValues(bytes){calls++;bytes.set(Array.from({length:16},(_,index)=>index));return bytes;}};
+  assert.equal(draftModule.newNoteGroupOperationId(cryptoSource),'00010203-0405-4607-8809-0a0b0c0d0e0f');
+  assert.equal(calls,1);
+  assert.throws(()=>draftModule.newNoteGroupOperationId({}),/secure operation identity/i);
+});
 test('selection deduplicates into canonical order and rejects unknown members', () => {
   assert.deepEqual(orderedSelection([1, 2, 3, 4], [4, 2, 4]), [2, 4]);
   assert.throws(() => orderedSelection([1, 2], [3]), /selection/i);

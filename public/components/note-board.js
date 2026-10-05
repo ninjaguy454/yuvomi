@@ -51,13 +51,14 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   const items = () => getBoardItems ? getBoardItems() : projectNoteLayouts(getNotes(), { filtered }).map(value => {
     const note = getNotes().find(note => note.id === value.note_id);
     return { key:`note:${note.id}`, kind:'note', id:note.id, note, layout:{...value.layout,
-      position_locked:!!note.layout?.position_locked,always_on_top:!!note.layout?.always_on_top},can_manage:canEdit(note) };
+      position_locked:!!note.layout?.position_locked,always_on_top:!!note.layout?.always_on_top},can_manage:note.permissions?.arrange!==false && canEdit(note) };
   });
   const cardFor = item => grid.querySelector(`[data-board-key="${item.key}"]`)
     || (item.kind === 'note' ? grid.querySelector(`.note-card[data-id="${item.id}"]`) : null);
   const itemFor = card => items().find(item => item.key === card?.dataset.boardKey
     || (!card?.dataset.boardKey && item.kind === 'note' && item.id === Number(card?.dataset.id)));
-  const editable = item => item && (item.kind === 'group' ? item.can_manage === true : canEdit(item.note));
+  const editable = item => item && !filtered && (item.kind === 'group' ? item.can_manage === true
+    : item.can_manage!==false && item.note.permissions?.arrange!==false && canEdit(item.note));
   const commandFor = (item, layout) => ({ kind:'arrange',items:[noteGroupArrangeItem(item,layout)],include_locked:true });
   let adopted = null, hoverKey = null, waitingForBridge = false, interactionGeneration = 0;
   const gap = () => parseFloat(getComputedStyle(grid).getPropertyValue('--space-3')) || 12;

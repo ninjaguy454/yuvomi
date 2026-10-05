@@ -55,3 +55,22 @@ test('arrange drafts keep group flags and normalize explicit world placement bou
   assert.deepEqual(layout.noteGroupArrangeItem(item,{x:-3,y:12000,width:100,height:0}),
     {kind:'group',id:1,layout:{...rect,x:0,y:10000,width:12,height:4}});
 });
+
+test('explicit arrange denial keeps a singleton out of structural projection and Organize', () => {
+  const notes=[{id:1,permissions:{edit:true,arrange:false},layout:{x:0,y:0,width:8,height:6}},
+    {id:2,permissions:{edit:true},layout:{x:0,y:0,width:4,height:6}}];
+  const items=layout.projectNoteGroupItems({notes,groups:[]});
+  assert.equal(items[0].can_manage,false);
+  assert.equal(items[1].can_manage,true,'legacy notes keep their existing default');
+  assert.deepEqual(layout.organizeNoteGroupItems(items,{canEdit:()=>true}).map(item=>[item.kind,item.id,item.layout.x]),[['note',2,8]]);
+  assert.deepEqual(layout.organizeNoteLayouts(notes,{canEdit:()=>true}).map(item=>[item.note_id,item.layout.x]),[[2,8]]);
+});
+
+test('group authority is independent of individual member arrange denial, and filtering is browse-only', () => {
+  const board=fixture();board.notes.forEach(note=>{note.permissions={edit:true,arrange:false};});
+  assert.equal(layout.projectNoteGroupItems(board)[0].can_manage,true);
+  const projected=layout.projectNoteGroupItems(board,{filtered:true});
+  assert.ok(projected.every(item=>item.can_manage===false));
+  assert.deepEqual(projected[0].layout,{...rect,x:0,y:0},'browse projection remains compact without rewriting the source');
+  assert.deepEqual(board.groups[0].layout,rect);
+});

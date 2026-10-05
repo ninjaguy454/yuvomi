@@ -39,7 +39,7 @@ export function overlappingLockedNoteIds(notes, projected = projectNoteLayouts(n
   }).map(note => note.id);
 }
 
-export function organizeNoteLayouts(notes, { includeLocked = false, canEdit = () => true } = {}) {
+function packNoteLayouts(notes, { includeLocked = false, canEdit = () => true } = {}) {
   const fixed = note => !canEdit(note) || (!includeLocked && note.layout?.position_locked);
   const occupied = notes.filter(fixed).map(note => normalizeNoteLayout(note.layout));
   return [...notes].filter(note => !fixed(note)).sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned)).map(note => {
@@ -63,8 +63,12 @@ export function organizeNoteLayouts(notes, { includeLocked = false, canEdit = ()
   });
 }
 
+export function organizeNoteLayouts(notes, { includeLocked = false, canEdit = () => true } = {}) {
+  return packNoteLayouts(notes,{includeLocked,canEdit:note=>note.permissions?.arrange!==false && canEdit(note)});
+}
+
 export function projectNoteLayouts(notes, { compact = false, filtered = false } = {}) {
-  const defaults = new Map(organizeNoteLayouts(notes, { includeLocked: true }).map(item => [item.note_id, item.layout]));
+  const defaults = new Map(packNoteLayouts(notes, { includeLocked: true }).map(item => [item.note_id, item.layout]));
   let y = 0;
   return notes.map(note => {
     const layout = normalizeNoteLayout(filtered ? { ...defaults.get(note.id), revision: note.layout?.revision } : note.layout || defaults.get(note.id));
@@ -104,21 +108,27 @@ export function projectNoteGroupItems(board, { activePages = new Map(), compact 
       if (!emitted.has(groupId)) { items.push(groups.get(groupId)); emitted.add(groupId); }
     } else items.push({ key:`note:${note.id}`, kind:'note', id:note.id, note,
       layout:noteGroupArrangeItem({ kind:'note', id:note.id, layout:note.layout || defaults.get(note.id) }).layout,
-      can_manage:note.permissions?.edit !== false });
+      can_manage:note.permissions?.edit !== false && note.permissions?.arrange !== false });
   }
-  const packed = filtered ? new Map(organizeNoteGroupItems(items, { includeLocked:true, canEdit:()=>true }).map(item=>[`${item.kind}:${item.id}`,item.layout])) : null;
+  const packed = filtered ? new Map(packNoteGroupItems(items, { includeLocked:true, canEdit:()=>true }).map(item=>[`${item.kind}:${item.id}`,item.layout])) : null;
   let y = 0;
   return items.map(item => {
     const layout = { ...(packed?.get(item.key) || item.layout) };
     if (compact) { layout.x=0; layout.y=y; layout.width=NOTE_COLUMNS; y+=layout.height; }
-    return { ...item, layout };
+    return { ...item, layout, can_manage:!filtered && item.can_manage };
   });
 }
 
 /** Pack whole groups and standalone notes atomically; locked items remain obstacles. */
-export function organizeNoteGroupItems(items, { includeLocked = false, canEdit = item => item.can_manage !== false } = {}) {
+export function organizeNoteGroupItems(items, { includeLocked = false, canEdit = () => true } = {}) {
+  return packNoteGroupItems(items,{includeLocked,canEdit:item=>item.can_manage!==false
+    && (item.kind==='group' || item.note?.permissions?.arrange!==false) && canEdit(item)});
+}
+
+/** Visual packing has no write authority; structural callers apply it above. */
+function packNoteGroupItems(items, { includeLocked = false, canEdit = () => true } = {}) {
   const byKey = new Map(items.map(item => [item.key,item]));
   const proxies = items.map(item => ({ id:item.key, layout:item.layout, pinned:item.kind==='note' && item.note?.pinned }));
-  return organizeNoteLayouts(proxies,{includeLocked,canEdit:proxy=>canEdit(byKey.get(proxy.id))})
+  return packNoteLayouts(proxies,{includeLocked,canEdit:proxy=>canEdit(byKey.get(proxy.id))})
     .map(result=>noteGroupArrangeItem(byKey.get(result.note_id),result.layout));
 }

@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import puppeteer from 'puppeteer';
 import {fileURLToPath} from 'node:url';
+import {readFileSync} from 'node:fs';
 const app=express();let browser,server,base;
 app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
 app.get('/group-fixture',(_req,res)=>res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/notes.css"><style>html,body{height:100%;margin:0}.notes-page{height:100vh;--page-inline-pad:12px}.notes-scroll{padding-bottom:12px}*,*::before,*::after{animation:none!important;transition:none!important}</style></head><body><div class="notes-page"><div class="notes-reveal-strip" hidden></div><div class="notes-scroll"><div class="notes-canvas-space"><div class="notes-grid"></div></div></div></div></body></html>`));
+const pageLinks='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(match=>`<link rel="stylesheet" href="${match[1]}">`).join('');
+app.get('/group-page-fixture',(_req,res)=>res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">${pageLinks}<style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}*,*::before,*::after{animation:none!important;transition:none!important}</style></head><body><main id="main-content"></main></body></html>`));
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
 async function mount({width=1280,rtl=false,locked=true,offscreen=false}={}) {
@@ -17,11 +20,11 @@ async function mount({width=1280,rtl=false,locked=true,offscreen=false}={}) {
     window.featureAvailable=typeof layout.projectNoteGroupItems==='function'&&typeof canvas.renderNoteGroupFrame==='function';
     if(!window.featureAvailable)return;
     window.data={notes:[1,2,3].map(id=>({id,title:`Note ${id}`,revision:1,layout:{x:0,y:0,width:4,height:6,revision:2,position_locked:true}})),groups:[{id:1,revision:3,member_ids:[2,1],can_manage:true,layout:{x:offscreen?80:0,y:offscreen?90:0,width:4,height:6,position_locked:locked,always_on_top:true}}]};
-    window.pages=new Map();window.writes=[];window.actions=[];window.view={};window.compact=false;
+    window.pages=new Map();window.writes=[];window.actions=[];window.view={};window.compact=false;window.filtered=false;
     const grid=document.querySelector('.notes-grid');
-    window.items=()=>layout.projectNoteGroupItems(window.data,{activePages:window.pages});
+    window.items=()=>layout.projectNoteGroupItems(window.data,{activePages:window.pages,filtered:window.filtered});
     window.draw=()=>{window.board?.dispose();grid.innerHTML=window.items().map(item=>canvas.renderNoteGroupFrame(item,`<div class="note-card" data-id="${item.note.id}"><button data-action="open">${item.note.title}</button><div class="note-card__content"><p>Drag this text</p></div><button data-board-action="lock">Pin</button><button data-board-action="top">Top</button><button data-group-action="remove">Remove from group</button></div>`)).join('');
-      window.board=canvas.wireNoteBoard(grid,{getNotes:()=>window.data.notes,getBoardItems:window.items,activePages:window.pages,canEdit:()=>true,compact:window.compact,viewState:window.view,groupDragBridge:window.bridge,onViewChange:window.draw,onGroupAction:(action,item)=>window.actions.push({action,key:item.key}),saveLayout:()=>{throw Error('group used note writer');},saveBoardCommand:async command=>{window.writes.push(command);for(const item of command.items){const owner=item.kind==='group'?window.data.groups.find(g=>g.id===item.id):window.data.notes.find(n=>n.id===item.id);owner.layout={...owner.layout,...item.layout};}window.draw();}});};window.draw();
+      window.board=canvas.wireNoteBoard(grid,{getNotes:()=>window.data.notes,getBoardItems:window.items,activePages:window.pages,canEdit:()=>true,compact:window.compact,filtered:window.filtered,viewState:window.view,groupDragBridge:window.bridge,onViewChange:window.draw,onGroupAction:(action,item)=>window.actions.push({action,key:item.key}),saveLayout:()=>{throw Error('group used note writer');},saveBoardCommand:async command=>{window.writes.push(command);for(const item of command.items){const owner=item.kind==='group'?window.data.groups.find(g=>g.id===item.id):window.data.notes.find(n=>n.id===item.id);owner.layout={...owner.layout,...item.layout};}window.draw();}});};window.draw();
   },{rtl,locked,offscreen});
   return page;
 }
@@ -164,5 +167,75 @@ test('a delayed bridge result cannot save a layout after the board is disposed',
   await page.waitForFunction(()=>typeof window.finishBridge==='function');
   await page.evaluate(async()=>{window.board.dispose();window.finishBridge(false);await new Promise(resolve=>setTimeout(resolve,20));});
   assert.equal(await page.evaluate(()=>window.writes.length),0);
+ }finally{await page.close();}
+});
+
+test('filtered group controls cannot write the packed projection while local paging stays available',async()=>{
+ const page=await mount({offscreen:true});try{await requireFeature(page);
+  await page.evaluate(()=>{window.filtered=true;window.draw();});
+  for(const action of ['lock','top'])await page.click(`[data-board-key="group:1"] [data-board-action="${action}"]`);
+  await page.click('[data-board-key="group:1"] [data-group-action="remove"]');
+  assert.equal(await page.evaluate(()=>window.writes.length),0);
+  assert.equal(await page.evaluate(()=>window.actions.length),0);
+  await page.click('[data-board-key="group:1"] [data-group-page="next"]');
+  assert.equal(await page.$eval('[data-board-key="group:1"]',node=>node.dataset.id),'1');
+  assert.deepEqual(await page.evaluate(()=>({x:window.data.groups[0].layout.x,y:window.data.groups[0].layout.y})),{x:80,y:90});
+ }finally{await page.close();}
+});
+
+async function mountPage({arrange=false,width=1280}={}) {
+ const notes=[1,2].map(id=>({id,title:id===1?'Keep visible':'Other note',content:'- [ ] Keep content editable\n\nA body paragraph.',color:'#C7DED9',revision:2,created_by:1,creator_name:'Parent',permissions:{view:true,edit:true,delete:true,manage_visibility:true,...(id===1&&arrange===false?{arrange:false}:{})},layout:{x:id===1?0:8,y:id===1?0:10,width:4,height:6,revision:1}}));
+ const writes=[],page=await browser.newPage();page.setDefaultTimeout(4000);await page.setViewport({width,height:760});
+ await page.setRequestInterception(true);page.on('request',request=>{
+  const path=new URL(request.url()).pathname;if(!path.startsWith('/api/v1/'))return request.continue();
+  if(request.method()!=='GET')writes.push({path,body:JSON.parse(request.postData()||'{}')});
+  const note=notes.find(note=>note.id===Number(path.split('/')[4]));
+  let value={data:[]};
+  if(path==='/api/v1/auth/me')value={csrfToken:'fixture'};
+  if(path==='/api/v1/notes')value={data:notes};
+  if(path.endsWith('/pin')&&note){note.pinned=1;note.revision++;value={data:note};}
+  if(path.endsWith('/check')&&note){note.content=note.content.replace('- [ ]','- [x]');note.revision++;value={data:note};}
+  request.respond({status:path.endsWith('/changes')?204:200,contentType:'application/json',body:JSON.stringify(value)});
+ });
+ await page.goto(base+'/group-page-fixture');await page.evaluate(async()=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();window.yuvomi={showToast(){}};(await import('/permissions.js')).setPermissions({admin:true});window.stopPage=await(await import('/pages/notes.js')).render(document.querySelector('#main-content'),{user:{id:1}});});
+ return {page,writes};
+}
+for(const width of [360,1280])test(`singleton arrange denial hides structural controls but retains note content actions at ${width}px`,async()=>{
+ const {page,writes}=await mountPage({width});try{
+  const card='.note-card[data-id="1"]';
+  assert.equal(await page.$$eval(`${card} [data-board-action],${card} [data-group-action]`,nodes=>nodes.length),0);
+  assert.equal(await page.$$eval(`${card} [data-action="pin"],${card} [data-action="delete"],${card} [data-action="open"]`,nodes=>nodes.length),3);
+  await page.click(`${card} .note-md-box`);await page.waitForFunction(()=>document.querySelector('.note-card[data-id="1"] .note-md-box').getAttribute('aria-checked')==='true');
+  await page.click(`${card} .note-card__menu summary`);await page.click(`${card} [data-action="pin"]`);
+  await page.waitForFunction(()=>document.querySelector('.note-card[data-id="1"]').classList.contains('note-card--pinned'));
+  assert.ok(writes.some(write=>write.path==='/api/v1/notes/1/check'));
+  assert.ok(writes.some(write=>write.path==='/api/v1/notes/1/pin'));
+  assert.ok(!writes.some(write=>write.path.endsWith('/layout')));
+ }finally{await page.close();}
+});
+test('singleton arrange denial blocks injected numeric/flag controls, dragging and Organize membership',async()=>{
+ const {page,writes}=await mountPage();try{
+  const card='.note-card[data-id="1"]';
+  await page.$eval(card,node=>node.insertAdjacentHTML('beforeend','<button data-board-action="adjust">Injected adjust</button><button data-board-action="top">Injected top</button>'));
+  await page.click(`${card} [data-board-action="adjust"]`);assert.equal(await page.$$eval('[data-layout-editor]',nodes=>nodes.length),0);
+  await page.click(`${card} [data-board-action="top"]`);
+  const point=await page.$eval(`${card} .note-card__content .note-md-p`,node=>{const r=node.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2};});
+  await page.mouse.move(point.x,point.y);await page.mouse.down();await page.mouse.move(point.x+100,point.y+80,{steps:4});await page.mouse.up();
+  await page.keyboard.press('Escape');await page.click('#notes-organize');
+  await page.waitForFunction(()=>document.querySelector('#notes-organize').disabled===false);
+  assert.ok(!writes.some(write=>write.path==='/api/v1/notes/1/layout'));
+  const organize=writes.find(write=>write.path==='/api/v1/notes/layout');assert.ok(organize);
+  assert.deepEqual(organize.body.items.map(item=>item.note_id),[2]);
+ }finally{await page.close();}
+});
+test('filtered production cards are browse-only while content edit and dashboard pin stay present',async()=>{
+ const {page,writes}=await mountPage({arrange:true});try{
+  await page.type('#notes-search','Keep visible');
+  await page.waitForFunction(()=>document.querySelectorAll('.note-card').length===1);
+  assert.equal(await page.$$eval('.note-card [data-board-action],.note-card [data-group-action]',nodes=>nodes.length),0);
+  assert.equal(await page.$$eval('.note-card [data-action="pin"],.note-card [data-action="open"]',nodes=>nodes.length),2);
+  await page.$eval('.note-card',node=>node.insertAdjacentHTML('beforeend','<button data-board-action="adjust">Injected adjust</button><button data-board-action="top">Injected top</button>'));
+  await page.click('.note-card [data-board-action="adjust"]');assert.equal(await page.$$eval('[data-layout-editor]',nodes=>nodes.length),0);
+  await page.click('.note-card [data-board-action="top"]');assert.equal(writes.length,0);
  }finally{await page.close();}
 });

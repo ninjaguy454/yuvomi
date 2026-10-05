@@ -199,7 +199,9 @@ test('reveal survives authorized refresh with keyboard focus and clears when ano
     await page.focus('[data-note-reveal="1"]');await page.keyboard.press('Enter');
     notes[0].title='Updated visible note';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
     await page.waitForFunction(()=>document.querySelector('[data-note-reveal="1"]')?.textContent==='Updated visible note');
-    assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n===document.activeElement&&n.getAttribute('aria-pressed')==='true'),true);
+    // Refresh may replace the strip between $eval's handle lookup and evaluation.
+    // Read the current target and both focus/selection conditions atomically.
+    assert.equal(await page.evaluate(()=>{const n=document.querySelector('[data-note-reveal="1"]');return n===document.activeElement&&n.getAttribute('aria-pressed')==='true';}),true);
     await page.focus('.note-card[data-id="2"] [data-action="open"]');
     assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n.getAttribute('aria-pressed')),'false');
     await page.keyboard.press('Enter');

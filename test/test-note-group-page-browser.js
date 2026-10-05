@@ -246,3 +246,35 @@ test('responsive RTL canvas drag to the physical right saves positive world coor
     assert.ok(writes[0].items[0].layout.x > 0); assert.equal(writes[0].items[0].layout.y, 0);
   } finally { await page.close(); }
 });
+
+for (const cancel of [true, false]) {
+  test(`native landscape drag uses separate horizontal and vertical scroll owners before ${cancel ? 'cancel' : 'drop'}`, async () => {
+    const page = await mount({ width: 844, height: 390, appShell: true }); try {
+      snapshot.groups[0].layout = { ...snapshot.groups[0].layout, x: 0, height: 20 }; snapshot.groups[0].revision++;
+      snapshot.notes[2].layout = { ...snapshot.notes[2].layout, x: 5, y: 0 };
+      snapshot.notes.push({ ...snapshot.notes[2], id: 4, title: 'Far note', layout: { ...snapshot.notes[2].layout, x: 50 } });
+      await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change'))); await page.waitForSelector('[data-board-key="note:4"]');
+      await page.$eval('[data-board-key="note:3"]', element => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
+      const before = await page.$eval('.notes-scroll', element => ({ left: element.scrollLeft, width: element.clientWidth, world: element.scrollWidth, height: element.clientHeight, content: element.scrollHeight }));
+      assert.ok(before.world > before.width); assert.equal(before.height, before.content, 'vertical scrolling belongs to the page shell');
+      const start = await center(page, '[data-board-key="note:3"] .note-card__content');
+      const end = { x: before.width - 8, y: start.y };
+      await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 5 });
+      await page.waitForFunction(() => document.querySelector('.notes-scroll').scrollLeft > 20, { timeout: 1000 });
+      const dropX = before.width * .7;
+      await page.mouse.move(dropX, start.y);
+      const position = await page.$eval('[data-board-key="note:3"]', element => ({ x: parseFloat(element.style.left), pitch: parseFloat(element.style.width) / 4 + 3 }));
+      const after = await page.$eval('.notes-scroll', element => ({ left: element.scrollLeft, height: element.clientHeight }));
+      assert.equal(after.height, before.height, 'horizontal dragging preserves the page-flow height');
+      const expectedX = 5 + Math.round((dropX - start.x + after.left - before.left) / position.pitch);
+      assert.equal(Math.round(position.x / position.pitch), expectedX, 'world X includes horizontal viewport scrolling');
+      if (cancel) await page.keyboard.press('Escape');
+      await page.mouse.up();
+      if (cancel) assert.equal(writes.length, 0);
+      else {
+        await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'arrange');
+        assert.equal(writes[0].items[0].layout.x, expectedX); assert.equal(writes[0].items[0].layout.y, 0);
+      }
+    } finally { await page.close(); }
+  });
+}

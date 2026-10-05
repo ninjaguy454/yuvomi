@@ -54,13 +54,23 @@ test('actual phone, open Fold and desktop keep a readable Bounty rail and read-o
   for (const width of [390, 690, 752, 1920]) {
     await page.setViewport({ width, height: width === 390 ? 844 : 939, isMobile: width <= 752, hasTouch: width <= 752 });
     await page.waitForFunction(expected => document.querySelector('#notes-grid')?.dataset.boardView === expected, {}, width < 640 ? 'list' : 'canvas');
-    await page.waitForFunction(id => { const card=document.querySelector(`.note-card[data-id="${id}"]`); return card?.isConnected&&card.getBoundingClientRect().width>0&&card.querySelector('.note-card__title')?.getBoundingClientRect().width>0; }, {}, noteIds[0]);
-    const geometry = await page.evaluate(() => { const note = document.querySelector('.notes-scroll').getBoundingClientRect(), offer = document.querySelector('#notes-open-tasks').getBoundingClientRect(), workspace = document.querySelector('.notes-page'); return { page: workspace.clientWidth, canvas: note.width, sidebar: offer.width, nr: note.right, ol: offer.left, nt: note.top, ob: offer.bottom, scroll: document.documentElement.scrollWidth, width: innerWidth }; });
+    // Chromium reloads when mobile capability changes; ResizeObserver can also replace
+    // cards between Puppeteer's selector lookup and ElementHandle evaluation. Capture
+    // connected current-DOM metrics atomically, without carrying a DOM handle forward.
+    const snapshot = await page.waitForFunction((id, expectedWidth) => {
+      const card=document.querySelector(`.note-card[data-id="${id}"]`), title=card?.querySelector('.note-card__title');
+      const viewport=document.querySelector('.notes-scroll'), rail=document.querySelector('#notes-open-tasks'), workspace=document.querySelector('.notes-page');
+      if(innerWidth!==expectedWidth||!card?.isConnected||!title||!viewport||!rail||!workspace)return false;
+      const bounds=card.getBoundingClientRect(), titleBounds=title.getBoundingClientRect();
+      if(bounds.width<=0||titleBounds.width<=0)return false;
+      const note=viewport.getBoundingClientRect(),offer=rail.getBoundingClientRect();
+      return {geometry:{page:workspace.clientWidth,canvas:note.width,sidebar:offer.width,nr:note.right,ol:offer.left,nt:note.top,ob:offer.bottom,scroll:document.documentElement.scrollWidth,width:innerWidth},card:{width:bounds.width,title:titleBounds.width,isConnected:card.isConnected}};
+    }, {}, noteIds[0], width);
+    const {geometry,card}=await snapshot.jsonValue(); await snapshot.dispose();
     if (width >= 690) { assert.ok(geometry.nr <= geometry.ol + 1, JSON.stringify(geometry)); assert.ok(geometry.canvas >= 450, JSON.stringify(geometry)); assert.ok(geometry.sidebar >= 210 && geometry.sidebar <= 250, JSON.stringify(geometry)); }
     else assert.ok(geometry.ob <= geometry.nt + 1, 'phone stacks offers above notes');
     assert.ok(geometry.scroll <= geometry.width + 1, 'no document horizontal overflow'); evidence.layout.push({ viewport: width, ...geometry });
     if (width >= 690) {
-      const card = await page.$eval(`.note-card[data-id="${noteIds[0]}"]`, el => ({ width: el.getBoundingClientRect().width, title: el.querySelector('.note-card__title').getBoundingClientRect().width }));
       assert.ok(card.width >= 190 && card.title >= 80, 'default note keeps readable title space beside Bounty rail: ' + JSON.stringify(card));
       evidence.layout.at(-1).card = card;
     }
@@ -68,19 +78,17 @@ test('actual phone, open Fold and desktop keep a readable Bounty rail and read-o
       await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
       await page.screenshot({ path: join(output, `actual-bounty-${width}-${theme}.png`) });
     }
-    const points = await page.$$eval(`[data-open-task="${offerId}"] .text-muted:not([data-task-countdown])`, rows => rows.map(row => row.textContent.trim()));
-    assert.ok(points.includes('0 points')); assert.match(await page.$eval(`[data-open-task="${evidence.positiveOfferId}"]`, el => el.textContent), /5 points/);
+    const offers = await page.evaluate((zeroId,positiveId)=>({ points:[...document.querySelectorAll(`[data-open-task="${zeroId}"] .text-muted:not([data-task-countdown])`)].map(row=>row.textContent.trim()),positive:document.querySelector(`[data-open-task="${positiveId}"]`)?.textContent }),offerId,evidence.positiveOfferId);
+    assert.ok(offers.points.includes('0 points')); assert.match(offers.positive, /5 points/);
   }
   const writes = []; const track = request => { if (new URL(request.url()).pathname.startsWith('/api/') && !['GET', 'HEAD'].includes(request.method())) writes.push(request.url()); }; page.on('request', track);
   await page.setViewport({ width: 752, height: 939, isMobile: true, hasTouch: true });
   await page.waitForSelector(`[data-open-task="${offerId}"]`, { visible: true });
   await page.waitForFunction(()=>document.querySelector('#notes-grid')?.dataset.boardView==='canvas');
-  await page.$eval(`.note-card[data-id="${noteIds.at(-1)}"]`, el => el.scrollIntoView({ block: 'nearest', inline: 'center' }));
-  const handleState = await page.$eval(`.note-card[data-id="${noteIds.at(-1)}"]`, el => ({ isConnected: el.isConnected, hasScrollAncestor: !!el.closest('.notes-scroll'), currentCardExists: !!document.querySelector(`.note-card[data-id="${el.dataset.id}"]`) }));
-  console.log('BOUNTY_PAN_HANDLE_STATE', JSON.stringify(handleState));
-  const reached = await page.evaluate(id => { const el=document.querySelector(`.note-card[data-id="${id}"]`), host=document.querySelector('.notes-scroll'); if(!el||!host||!host.contains(el))throw Error('Current canvas note or scroll ancestor missing'); const card=el.getBoundingClientRect(),viewport=host.getBoundingClientRect(); return { left: card.left, right: card.right, viewportLeft: viewport.left, viewportRight: viewport.right }; }, noteIds.at(-1));
+  const reached = await page.evaluate(id => { const el=document.querySelector(`.note-card[data-id="${id}"]`), host=document.querySelector('.notes-scroll'); if(!el?.isConnected||!host||!host.contains(el))throw Error('Current canvas note or scroll ancestor missing'); el.scrollIntoView({block:'nearest',inline:'center'}); const card=el.getBoundingClientRect(),viewport=host.getBoundingClientRect(); return { isConnected:el.isConnected,hasScrollAncestor:!!el.closest('.notes-scroll'),left: card.left, right: card.right, viewportLeft: viewport.left, viewportRight: viewport.right }; }, noteIds.at(-1));
+  console.log('BOUNTY_PAN_CURRENT_DOM',JSON.stringify(reached));
   assert.ok(reached.left >= reached.viewportLeft && reached.right <= reached.viewportRight, 'horizontal canvas reveals the distant original note: ' + JSON.stringify(reached));
-  await page.$eval('.notes-scroll', el => { el.scrollLeft = 0; });
+  await page.evaluate(() => { const viewport=document.querySelector('.notes-scroll'); if(!viewport)throw Error('Canvas scrollport missing'); viewport.scrollLeft=0; });
   assert.deepEqual(d.prepare('SELECT * FROM note_layouts ORDER BY note_id').all(), originalLayouts, 'responsive projection and panning never persist note placements');
   await page.evaluate(id => { const button=document.querySelector(`[data-open-task="${id}"]`); if(!button||!button.isConnected)throw Error('Current Bounty offer missing before keyboard inspection'); button.focus(); }, offerId);
   await page.keyboard.press('Enter'); await page.waitForSelector('#task-detail-claim');

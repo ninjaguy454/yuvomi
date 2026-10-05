@@ -20,7 +20,7 @@ export function buildOpenTasksFallback(root='/app') {
   const unavailable="\n  throw acceptanceError('New task acceptance is temporarily unavailable. Existing Tasks and Notes remain available.',503,'acceptance_paused');";
   const notes=transform('public/pages/notes.js','const NOTE_GROUPS_INTERFACE_ENABLED = true;',
     'const NOTE_GROUPS_INTERFACE_ENABLED = false;');
-  const marker='-vidamia.61',cacheParts=source['public/sw.js'].split(marker);
+  const marker='-vidamia.62',cacheParts=source['public/sw.js'].split(marker);
   if(cacheParts.length!==2||!["'",'"','`'].includes(cacheParts[1][0]))throw Error('Unexpected open Tasks fallback cache identity');
   const result={
     'server/services/task-offers.js':transform('server/services/task-offers.js',
@@ -37,7 +37,7 @@ export function buildOpenTasksFallback(root='/app') {
     'public/styles/notes.css':source['public/styles/notes.css']+
       '\n/* Group-aware recovery retains Notes privacy, hides the new task board. */\n#notes-open-tasks { display: none !important; }\n.notes-workspace { grid-template-columns: minmax(0, 1fr) !important; }\n#notes-compact-view { display: none !important; }\n',
     'public/styles/tasks.css':source['public/styles/tasks.css']+'\n#filter-open-tasks { display: none !important; }\n',
-    'public/sw.js':source['public/sw.js'].replace(marker,'-vidamia.61-acceptance-paused'),
+    'public/sw.js':source['public/sw.js'].replace(marker,'-vidamia.62-acceptance-paused'),
   };
   for(const file of files)fs.writeFileSync(path.join(absolute,file),result[file]);
 }

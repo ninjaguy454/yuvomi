@@ -32,6 +32,8 @@ P3 `deploy/build-open-tasks-fallback.mjs` additionally pauses new task acceptanc
 
 Cache identities are allocated separately: P2 `vidamia.60`, P2 recovery `vidamia.60-notes-compact`, combined P3 `vidamia.61`, P3 recovery `vidamia.61-acceptance-paused`. Every browser module and stylesheet introduced by these releases must be precached. Recovery verification supplies the corresponding exact cache identity to `test-sw-upgrade.js` through `VIDAMIA_TEST_SW_CACHE_VERSION`.
 
+The Notes touch cleanup and independent-layout release advances the forward cache to `vidamia.62` and its acceptance-paused recovery cache to `vidamia.62-acceptance-paused`. This stages the changed frontend assets separately from the deployed `vidamia.61` generation while retaining the shared-device privacy cache.
+
 ## Evidence and ordered release
 
 Freeze a clean commit archive before building. Record the full commit, archive hash, dependency-base image, forward/recovery/browser image IDs and full runtime source hashes. Independently transform another copy of the archive and compare it with the recovery images; a revision label alone is insufficient. The browser recovery derivative must explicitly retain the disabled structural-write setting.

@@ -592,10 +592,9 @@
 .note-card__menu-items button:hover { background: var(--note-action-bg-hover); }
 .notes-board > .note-card:has(.note-card__menu[open]) { overflow: visible; z-index: 3; }
 .notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable { touch-action: pinch-zoom; user-select: none; cursor: grab; }
-/* The preview is itself a scroll container, so its touch policy must participate
- * before ancestor intersection stops here. Wheel scrolling still works; touch
- * body drags move the card, while the full reader and list retain native pan. */
-.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable .note-card__content { touch-action: pinch-zoom; }
+/* Preview scrolling is independent of whether its card can be moved or pinned.
+ * A deliberate hold claims movement; ordinary preview swipes remain native. */
+.notes-board[data-board-view="canvas"] .note-card__content { touch-action: pan-y; }
 .notes-board[data-board-view="canvas"] > .note-card--moving { cursor: grabbing; }
 .notes-board[data-board-view="canvas"] > .note-card > .note-card__title { padding-inline-end: var(--target-base); }
 .notes-board .note-card__footer { padding-inline-end: 0; }
@@ -608,8 +607,7 @@
 .notes-zoom-controls { display: inline-flex; align-items: center; gap: var(--space-1); margin-inline-start: auto; }
 .notes-zoom-controls output { min-width: 3.5em; text-align: center; font-size: var(--text-xs); }
 .notes-include-locked { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-xs); }
-.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable,
-.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable .note-card__content { touch-action: none; }
+.notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable { touch-action: none; }
 .notes-board > .note-card--moving { box-shadow: var(--shadow-lg), 0 12px 24px rgb(0 0 0 / .22); }
 .notes-board > .note-card--resizing { outline: 3px solid var(--color-accent); outline-offset: -3px; box-shadow: var(--shadow-lg); }
 

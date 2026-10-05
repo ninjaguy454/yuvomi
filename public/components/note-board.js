@@ -207,6 +207,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function activate() {
     if (!gesture || disposed) return;
+    if (navigation?.kind === 'touch') navigation = null;
     gesture.active = true;
     gesture.card.classList.add('note-card--moving');
     if (gesture.edges) gesture.card.classList.add('note-card--resizing');
@@ -242,6 +243,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       navigation = { kind: 'pan', pointer: event.pointerId, x: event.clientX, y: event.clientY, left: viewport.scrollLeft, top: viewport.scrollTop };
       viewport.setPointerCapture(event.pointerId); return;
     }
+    if (event.pointerType === 'touch') {
+      const scroller = scrollParent(card);
+      navigation = { kind: 'touch', pointer: event.pointerId, x: event.clientX, y: event.clientY,
+        left: viewport.scrollLeft, top: scroller.scrollTop, scroller,
+        content: event.target.closest('.note-card__content') };
+    }
     if (filtered) return;
     const item = itemFor(card), note = item?.note;
     if (!editable(item) || pending.has(item.key)) return;
@@ -256,7 +263,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight,
       edges: Object.values(edges).some(Boolean) ? edges : null };
     suppressClick = false;
-    if (gesture.edges) gesture.timer = setTimeout(activate, 450);
+    if (gesture.edges || event.pointerType === 'touch') gesture.timer = setTimeout(activate, 450);
   }
   function update() {
     if (!gesture?.active) return;
@@ -291,10 +298,22 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       }
       event.preventDefault(); return;
     }
+    if (navigation?.kind === 'touch' && navigation.pointer === event.pointerId) {
+      const pending = navigation, dx = event.clientX - pending.x, dy = event.clientY - pending.y;
+      if (Math.hypot(dx, dy) < 7) return;
+      navigation = null;
+      if (gesture) { const current = gesture; gesture = null; release(current); }
+      suppressClick = true;
+      // A scrollable preview keeps native touch scrolling, including when its
+      // card is pinned. An ordinary swipe elsewhere pans the canvas.
+      if (pending.content?.scrollHeight > pending.content?.clientHeight && Math.abs(dy) >= Math.abs(dx)) return;
+      navigation = { ...pending, kind: 'pan' };
+      viewport.setPointerCapture(event.pointerId);
+    }
     if (navigation?.kind === 'pan' && navigation.pointer === event.pointerId) {
       if (Math.hypot(event.clientX-navigation.x,event.clientY-navigation.y) >= 7) suppressClick = true;
       viewport.scrollLeft = navigation.left + navigation.x-event.clientX;
-      viewport.scrollTop = navigation.top + navigation.y-event.clientY;
+      (navigation.scroller || viewport).scrollTop = navigation.top + navigation.y-event.clientY;
       event.preventDefault(); return;
     }
     if (excludedPointer?.id === event.pointerId && Math.hypot(event.clientX - excludedPointer.x, event.clientY - excludedPointer.y) >= 7) suppressClick = true;
@@ -350,6 +369,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     const currentSession=gesture || adopted;
     if (currentSession && (currentSession.viewportWidth!==viewportWidth() || currentSession.viewportHeight!==viewport.clientHeight)) { cancel(); refresh(); return; }
     touches.delete(event.pointerId);
+    if (navigation?.kind === 'touch' && navigation.pointer === event.pointerId) navigation = null;
     if (adopted?.pointerId === event.pointerId) {
       const session=adopted; adopted=null;
       await groupDragBridge?.dropTarget(targetAt(event,session),{...session,clientX:event.clientX,clientY:event.clientY,world:clientToWorld(event.clientX,event.clientY)});
@@ -432,6 +452,11 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (delta) { event.preventDefault(); viewport.scrollBy(...delta); }
   }
   function pointerCancel(event) { touches.delete(event.pointerId); navigation = null; cancel(); }
+  function touchMove(event) {
+    // Native preview scroll remains available until a hold deliberately arms a
+    // move/resize, or our canvas navigation takes ownership of the touch.
+    if (gesture?.active || navigation?.kind === 'pan' || navigation?.kind === 'pinch') event.preventDefault();
+  }
   function lost(event) {
     if (navigation?.kind === 'pan' && navigation.pointer === event.pointerId && event.target === viewport) {
       navigation = null; touches.delete(event.pointerId);
@@ -470,6 +495,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   observer.observe(viewport);
   window.addEventListener('pointerdown', down);
   window.addEventListener('pointermove', move, { passive: false });
+  window.addEventListener('touchmove', touchMove, { passive: false });
   window.addEventListener('pointerup', up);
   window.addEventListener('pointercancel', pointerCancel);
   viewport.addEventListener('lostpointercapture', lost);
@@ -501,6 +527,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       cancel(); disposed = true; observer.disconnect();
       window.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', pointerCancel);
+      window.removeEventListener('touchmove', touchMove);
       viewport.removeEventListener('lostpointercapture', lost);
       grid.removeEventListener('toggle', menuToggle, true);
       window.removeEventListener('scroll', positionMenus, true);

@@ -46,7 +46,7 @@ test.after(async () => { await browser?.close(); if (server) await new Promise(r
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const card = '.note-card[data-id="1"]';
 const layoutWrites = () => writes.filter(write => write.path === '/notes/group-operations' && write.body.kind === 'arrange');
-async function mount({ width = 1280, height = 900, permission = 'edit', fixture, mobile = false } = {}) {
+async function mount({ width = 1280, height = 900, permission = 'edit', fixture, mobile = false, appShell = false } = {}) {
   writes = []; notes = structuredClone(original);
   if (fixture === 'fitting') notes = [notes[0]];
   if (fixture === 'locked') notes[0].layout.position_locked = true;
@@ -56,16 +56,18 @@ async function mount({ width = 1280, height = 900, permission = 'edit', fixture,
     notes=Array.from({length:fixture==='reveal-distant'?30:3},(_,i)=>({...structuredClone(original[0]),id:i+1,title:i===2?'Locked <b>third</b>':`Locked note ${i+1}`,layout:{x:fixture==='reveal-distant'?80:2,y:fixture==='reveal-distant'?90:2,width:4,height:6,revision:2,position_locked:true,always_on_top:i===1}}));
   }
   if (fixture === 'tall-top') { notes = [notes[0]]; notes[0].layout.y = 105; }
-  if (fixture === 'long-content') notes[0].content = 'A plain paragraph to drag.\n\n' + Array.from({ length: 35 }, (_, i) => `Scrollable preview paragraph ${i}.`).join('\n\n') + '\n\n' + notes[0].content;
+  if (fixture === 'long-content' || fixture === 'long-content-locked') notes[0].content = 'A plain paragraph to drag.\n\n' + Array.from({ length: 35 }, (_, i) => `Scrollable preview paragraph ${i}.`).join('\n\n') + '\n\n' + notes[0].content;
+  if (fixture === 'long-content-locked') notes[0].layout.position_locked = true;
   if (permission !== 'edit') for (const note of notes) note.permissions = { view: true, edit: false, delete: false, manage_visibility: false };
   const page = await browser.newPage(); page.setDefaultTimeout(2500);
   await page.setViewport({ width, height, isMobile: mobile, hasTouch: mobile, deviceScaleFactor: mobile ? 2.625 : 1 }); await page.goto(base + '/direct-board-test');
-  await page.evaluate(async permission => {
+  await page.evaluate(async ({ permission, appShell }) => {
+    if (appShell) { document.getElementById('main-content').className = 'app-content'; document.getElementById('main-content').style.padding = '0'; }
     localStorage.setItem('yuvomi-locale', 'en'); await (await import('/i18n.js')).initI18n();
     window.yuvomi = { showToast() {} };
     (await import('/permissions.js')).setPermissions(permission === 'edit' ? { admin: true } : { principal_kind: 'device', modules: { notes: 'read' }, capabilities: { 'device_notes.view': 'allow', 'device_notes.create': permission === 'create' ? 'allow' : 'deny' } });
     window.stopNotes = await (await import('/pages/notes.js')).render(document.getElementById('main-content'), { user: { id: 1 } });
-  }, permission);
+  }, { permission, appShell });
   return page;
 }
 async function box(page, selector = card) {
@@ -102,6 +104,74 @@ async function unchanged(page, before, checkReader = true) {
   for (const key of ['x', 'y', 'width', 'height']) assert.ok(Math.abs(after[key] - before[key]) < 1, `${key} restored after cancellation`);
   if (checkReader) assert.equal(await page.$('.note-modal'), null);
 }
+
+for (const pinned of [false, true]) test(`touch intent: ordinary swipe scrolls ${pinned ? 'pinned' : 'movable'} note content without moving its card`, async () => {
+  const page = await mount({ width: 954, height: 859, mobile: true, appShell: true, fixture: pinned ? 'long-content-locked' : 'long-content' });
+  const input = await touch(page);
+  try {
+    const canonical = structuredClone(notes), content = `${card} .note-card__content`;
+    const before = await page.$eval(content, element => ({ height: element.clientHeight, content: element.scrollHeight, top: element.scrollTop, action: getComputedStyle(element).touchAction }));
+    assert.ok(before.content > before.height + 150, 'the actual styled preview must overflow');
+    const area = await box(page, content), start = { x: area.x + area.width / 2, y: area.y + area.height - 25 };
+    await input.start(start.x, start.y);
+    for (let step = 1; step <= 8; step++) { await input.move(start.x, start.y - step * 15); await sleep(16); }
+    await input.end(); await sleep(100);
+    const after = await page.$eval(content, element => ({ top: element.scrollTop, moving: !!element.closest('.note-card--moving') }));
+    console.log('TOUCH_CONTENT_INTENT', JSON.stringify({ pinned, before, after, writes: layoutWrites().length }));
+    assert.ok(after.top > before.top + 50, 'an ordinary swipe scrolls the note preview');
+    assert.equal(after.moving, false); assert.equal(layoutWrites().length, 0); assert.deepEqual(notes, canonical);
+    assert.equal(await page.$('.note-modal'), null, 'a swipe must not open the reader');
+  } finally { await input.close(); await page.close(); }
+});
+
+test('touch intent: ordinary swipe on a short note pans the canvas and cancels hold arming', async () => {
+  const page = await mount({ width: 954, height: 859, mobile: true, appShell: true }); const input = await touch(page);
+  try {
+    const canonical = structuredClone(notes), point = await bodyPoint(page), before = await page.$eval('.notes-scroll', element => element.scrollTop);
+    await input.start(point.x, point.y);
+    for (let step = 1; step <= 8; step++) { await input.move(point.x, point.y - step * 12); await sleep(16); }
+    await sleep(520);
+    assert.equal(await page.$('.note-card--moving'), null, 'movement before the hold must never arm a later move');
+    await input.end(); await sleep(100);
+    assert.ok(await page.$eval('.notes-scroll', element => element.scrollTop) > before + 50, 'short-note swipe pans the canvas');
+    assert.equal(layoutWrites().length, 0); assert.deepEqual(notes, canonical); assert.equal(await page.$('.note-modal'), null);
+  } finally { await input.close(); await page.close(); }
+});
+
+test('touch intent: deliberate body hold visibly lifts before moving and submits one placement', async () => {
+  const page = await mount({ width: 954, height: 859, mobile: true, appShell: true, fixture: 'long-content' }); const input = await touch(page);
+  try {
+    const point = await bodyPoint(page), before = await box(page);
+    await input.start(point.x, point.y); await sleep(100);
+    assert.equal(await page.$('.note-card--moving'), null, 'a new touch is not a move yet');
+    await page.waitForSelector('.note-card--moving');
+    assert.notEqual(await page.$eval(card, element => getComputedStyle(element).boxShadow), 'none');
+    assert.deepEqual(await box(page), before, 'arming lifts without changing placement');
+    for (let step = 1; step <= 8; step++) await input.move(point.x + step * 12, point.y + step * 10);
+    await input.end(); await saved(page);
+    assert.ok(notes[0].layout.x > 2); assert.ok(notes[0].layout.y > 2);
+    assert.equal(await page.$eval(`${card} .note-card__content`, element => element.scrollTop), 0, 'armed movement does not scroll the preview');
+  } finally { await input.close(); await page.close(); }
+});
+
+test('touch intent: quick body tap opens the reader without arming or writing placement', async () => {
+  const page = await mount({ width: 954, height: 859, mobile: true, appShell: true }); const input = await touch(page);
+  try {
+    const point = await bodyPoint(page); await input.start(point.x, point.y); await input.end();
+    await page.waitForSelector('.note-modal'); await sleep(500);
+    assert.equal(await page.$('.note-card--moving'), null); assert.equal(layoutWrites().length, 0);
+  } finally { await input.close(); await page.close(); }
+});
+
+for (const armed of [false, true]) test(`touch intent: pointer cancellation ${armed ? 'after' : 'before'} hold clears lift and timers`, async () => {
+  const page = await mount({ width: 954, height: 859, mobile: true, appShell: true }); const input = await touch(page);
+  try {
+    const before = await box(page), point = await bodyPoint(page); await input.start(point.x, point.y);
+    if (armed) await page.waitForSelector('.note-card--moving');
+    await input.cancel(); await sleep(520);
+    assert.equal(await page.$('.note-card--moving'), null); await unchanged(page, before);
+  } finally { await input.close(); await page.close(); }
+});
 
 for (const width of [1280, 752]) test(`body mouse drag saves CAS at canvas width ${width}`, async () => {
   const page = await mount({ width, height: width === 752 ? 835 : 900 });
@@ -366,6 +436,7 @@ test('pinch takes over an active touch drag without saving and changes viewport 
   try {
     const canonical=structuredClone(notes), p=await bodyPoint(page);
     await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...p}]});
+    await page.waitForSelector('.note-card--moving');
     const first={id:1,x:p.x+50,y:p.y+48};
     await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[first]});
     await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[first,{id:2,x:first.x+100,y:first.y}]});
@@ -377,10 +448,11 @@ test('pinch takes over an active touch drag without saving and changes viewport 
   } finally { await cdp.detach(); await page.close(); }
 });
 
-test('real touch body drag moves a card and advances the layout revision', async () => {
+test('real touch body hold then drag moves a card and advances the layout revision', async () => {
   const page = await mount(); const input = await touch(page);
   try {
     const point = await bodyPoint(page); await input.start(point.x, point.y);
+    await page.waitForSelector('.note-card--moving');
     for (let i = 1; i <= 8; i++) await input.move(point.x + 110 * i / 8, point.y + 96 * i / 8);
     await input.end(); await saved(page);
     assert.equal(layoutWrites()[0].body.expected.notes[0].layout_revision, 2);
@@ -390,7 +462,7 @@ test('real touch body drag moves a card and advances the layout revision', async
   } finally { await input.close(); await page.close(); }
 });
 
-test('coarse mobile touch drags a paragraph inside a scrollable card preview', async () => {
+test('coarse mobile touch hold then drag moves a paragraph inside a scrollable card preview', async () => {
   const page = await mount({ width: 954, height: 859, mobile: true, fixture: 'long-content' });
   const input = await touch(page);
   try {
@@ -409,6 +481,7 @@ test('coarse mobile touch drags a paragraph inside a scrollable card preview', a
     });
     const content = notes[0].content;
     await input.start(point.x, point.y);
+    await page.waitForSelector('.note-card--moving');
     for (let i = 1; i <= 10; i++) await input.move(point.x + 90 * i / 10, point.y + 96 * i / 10);
     await input.end();
     assert.equal(await page.evaluate(() => window.fixtureBodyTouch.paragraph), true, 'touch must begin on a paragraph, not the title or border');
@@ -533,6 +606,7 @@ test('a second real touch outside the board cancels the active card gesture', as
   try {
     const before = await box(page), point = await bodyPoint(page);
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, ...point }] });
+    await page.waitForSelector('.note-card--moving');
     const moved = { id: 1, x: point.x + 110, y: point.y + 96 };
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [moved] });
     assert.ok((await box(page)).y > before.y + 20, 'first touch must activate the gesture');

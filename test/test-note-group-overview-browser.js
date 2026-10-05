@@ -212,6 +212,8 @@ test('canvas interaction factory opens group menu actions and freezes a board-na
     await page.waitForSelector('[data-board-key="note:14"].is-note-group-target'); assert.equal(await page.evaluate(() => window.commands.length), 0);
     await page.evaluate(() => window.interactions.groupDragBridge.leaveTarget());
     assert.equal(await page.$('[data-board-key="note:14"].is-note-group-target'), null);
+    await page.evaluate(() => window.interactions.groupDragBridge.hoverTarget({ kind: 'note', id: 14, key: 'note:14', layout: window.notes.find(note => note.id === 14).layout, can_manage: true }, { item: { kind: 'note', id: 13, key: 'note:13', layout: window.notes.find(note => note.id === 13).layout, can_manage: true }, pointerId: 1 }));
+    await page.waitForSelector('[data-board-key="note:14"].is-note-group-target');
     const consumed = await page.evaluate(() => window.interactions.groupDragBridge.dropTarget({ kind: 'note', id: 14, key: 'note:14', layout: window.notes.find(note => note.id === 14).layout, can_manage: true }, { item: { kind: 'note', id: 13, key: 'note:13', layout: window.notes.find(note => note.id === 13).layout, can_manage: true }, pointerId: 1, clientX: 100, clientY: 100, world: { x: 1, y: 2 } }));
     assert.equal(consumed, true); const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
     assert.equal(commands[0].kind, 'create'); assert.equal(commands[0].source_note_id, 13); assert.equal(commands[0].target_note_id, 14);
@@ -230,6 +232,25 @@ async function prepareInteractions(page) {
     return true;
   });
 }
+
+test('native grouping requires a continuous completed hover from the same source pointer', async () => {
+  const page = await mount(); try {
+    assert.equal(await prepareInteractions(page), true);
+    const early = await page.evaluate(() => {
+      const bridge = window.interactions.groupDragBridge;
+      bridge.hoverTarget(window.nativeTarget, window.nativeSession);
+      return bridge.dropTarget(window.nativeTarget, window.nativeSession);
+    });
+    assert.equal(early, false); assert.equal(await page.evaluate(() => window.commands.length), 0);
+    await page.evaluate(() => window.interactions.groupDragBridge.hoverTarget(window.nativeTarget, window.nativeSession));
+    await page.waitForSelector('[data-group-page="12"]');
+    const stale = await page.evaluate(() => {
+      const bridge = window.interactions.groupDragBridge; bridge.leaveTarget();
+      return bridge.dropTarget(window.nativeTarget, window.nativeSession);
+    });
+    assert.equal(stale, false); assert.equal(await page.evaluate(() => window.commands.length), 0);
+  } finally { await page.close(); }
+});
 
 test('board-owned hover opens a destination preview and inserts once at the displayed page', async () => {
   const page = await mount(); try {
@@ -409,5 +430,22 @@ test('supported HTTP browsers without randomUUID still create one frozen operati
     await select(page, [2]); await page.click('[data-group-action="order"]'); await page.select('[data-group-before]', '5'); await page.click('[data-group-confirm]');
     const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
     assert.match(commands[0].operation_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i);
+  } finally { await page.close(); }
+});
+
+test('dark theme overview and pager retain readable contrast on the actual surface tokens', async () => {
+  const page = await mount(); try {
+    await page.addStyleTag({ url: base + '/styles/tokens.css' });
+    const pairs = await page.evaluate(() => {
+      document.documentElement.dataset.theme = 'dark';
+      const pager = document.createElement('nav'); pager.className = 'note-group-pages';
+      const button = document.createElement('button'); button.textContent = '1/10'; pager.append(button); document.getElementById('host').append(pager);
+      return [[document.querySelector('.note-group-overview__header h2'), document.querySelector('.note-group-overview__panel')], [button, pager]].map(([foreground, background]) => ({ color: getComputedStyle(foreground).color, background: getComputedStyle(background).backgroundColor }));
+    });
+    const luminance = color => color.match(/[\d.]+/g).slice(0, 3).map(Number).map(value => value / 255).map(value => value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+    for (const pair of pairs) {
+      const values = [luminance(pair.color), luminance(pair.background)].sort((a, b) => b - a);
+      assert.ok((values[0] + .05) / (values[1] + .05) >= 4.5, `readable foreground ${pair.color} on ${pair.background}`);
+    }
   } finally { await page.close(); }
 });

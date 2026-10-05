@@ -1,5 +1,5 @@
 import { t } from '../i18n.js';
-import { createNoteGroupDraft, freezeNoteGroupCommand, orderedSelection, moveSelectionBefore } from '../utils/note-group-draft.js';
+import { createNoteGroupDraft, freezeNoteGroupCommand, orderedSelection, moveSelectionBefore, newNoteGroupOperationId } from '../utils/note-group-draft.js';
 import { createNoteGroupGesture } from '../utils/note-group-gesture.js';
 import { normalizeNoteLayout, organizeNoteLayouts, NOTE_MAX_POSITION } from '../utils/note-board-layout.js';
 import { pushOverlay, dropOverlay } from '../utils/overlay-history.js';
@@ -49,7 +49,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const restoreFocus = document.activeElement, subscriptions = [];
   let closed = false, busy = false, suppressClick = false, dragging = false, canvasDrag = false;
   let currentGroup = source, placement = null, action = null, lastPoint = null, scrollFrame = 0, overlayToken;
-  let activePointer = null;
+  let activePointer = null, highlightedTarget = null;
   const overlay = document.createElement('div'); overlay.className = 'note-group-overview';
   const dialog = document.createElement('section'); dialog.className = 'note-group-overview__panel';
   dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', text('overview', 'Group overview')); dialog.tabIndex = -1;
@@ -64,7 +64,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const tools = document.createElement('div'); tools.className = 'note-group-overview__tools';
   const status = document.createElement('div'); status.className = 'note-group-overview__status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   dialog.append(header, exit, toolbar, grid, tools, status); overlay.append(dialog); host.append(overlay);
-  const draft = createNoteGroupDraft(snapshot, crypto.randomUUID());
+  const draft = createNoteGroupDraft(snapshot, newNoteGroupOperationId());
 
   function button(label, data = {}, ariaLabel) {
     const element = document.createElement('button'); element.type = 'button'; element.textContent = label;
@@ -81,6 +81,14 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function selection() { return source.member_ids.filter(id => selected.has(id)); }
   function announce(message) { status.textContent = message; }
   function stopScroll() { if (scrollFrame) cancelAnimationFrame(scrollFrame); scrollFrame = 0; }
+  function highlightTarget(id) {
+    highlightedTarget?.classList.remove('is-note-group-target'); highlightedTarget = null;
+    const note = snapshot.notes.find(note => note.id === id);
+    if (!note?.layout?.position_locked || note.permissions?.edit === false || note.permissions?.arrange === false
+      || snapshot.groups.some(group => group.member_ids.includes(id))) return;
+    highlightedTarget = host.querySelector(`[data-board-key="note:${id}"]`);
+    highlightedTarget?.classList.add('is-note-group-target');
+  }
   function renderPages() {
     grid.replaceChildren();
     for (const id of currentGroup.member_ids.filter(id => noteById.has(id))) {
@@ -206,6 +214,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function paintPreview({ state, session, target }) {
     if (!current()) return;
+    highlightTarget(state === 'target-ready' && target?.kind === 'note' ? target.id : null);
     if (state === 'holding') activePointer = session.pointerId;
     dragging = !['holding', 'placement-choice', 'submitting'].includes(state);
     if (dragging) suppressClick = true;
@@ -249,7 +258,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         ? { group_id: source.id, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null }
         : { source_group_id: source.id, target_group_id: targetId, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null });
     },
-    onCancel() { activePointer = null; dragging = false; canvasDrag = false; stopScroll(); if (!closed) { overlay.dataset.gestureState = 'idle'; currentGroup = source; overlay.hidden = false; renderPages(); } },
+    onCancel() { activePointer = null; dragging = false; canvasDrag = false; stopScroll(); highlightTarget(null); if (!closed) { overlay.dataset.gestureState = 'idle'; currentGroup = source; overlay.hidden = false; renderPages(); } },
   });
   function pointerDown(event) {
     if (!current() || busy || dragPreview || standaloneIds.length) return;
@@ -301,7 +310,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function close({ restore = true } = {}) {
     if (closed) return;
-    closed = true; stopScroll(); gesture.dispose(); subscriptions.splice(0).forEach(unsubscribe => unsubscribe());
+    closed = true; stopScroll(); highlightTarget(null); gesture.dispose(); subscriptions.splice(0).forEach(unsubscribe => unsubscribe());
     overlay.remove(); if (overlayToken != null) dropOverlay(overlayToken);
     if (restore && restoreFocus?.isConnected) restoreFocus.focus({ preventScroll: true }); onClose();
   }
@@ -350,7 +359,7 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
   onExitDrag, hitTest, onError = () => {}, clock = globalThis,
 }) {
   const snapshot = structuredClone(board);
-  let disposed = false, overview = null, preview = null, hover = null, hoverTimer = null, lastDrop = null;
+  let disposed = false, overview = null, preview = null, hover = null, hoverTimer = null, lastDrop = null, highlightedTarget = null;
   const current = () => !disposed && !authentication.signal?.aborted && authentication.isCurrent?.() !== false;
   const sourceAllowed = item => {
     if (!item || item.can_manage === false || item.layout?.position_locked) return false;
@@ -369,13 +378,14 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
   function leaveTarget() {
     if (hoverTimer !== null) clock.clearTimeout(hoverTimer);
     hoverTimer = null; hover = null;
+    highlightedTarget?.classList.remove('is-note-group-target'); highlightedTarget = null;
     const old = preview; preview = null; old?.dispose();
   }
   function clearOverview() { const old = overview; overview = null; old?.dispose(); }
   function emit(kind, fields) {
     if (!current()) return false;
     try {
-      const command = freezeNoteGroupCommand(createNoteGroupDraft(snapshot, crypto.randomUUID()), kind, fields);
+      const command = freezeNoteGroupCommand(createNoteGroupDraft(snapshot, newNoteGroupOperationId()), kind, fields);
       clearOverview(); leaveTarget();
       if (current()) Promise.resolve(onCommand(command)).catch(onError);
     } catch (error) { onError(error); }
@@ -402,13 +412,19 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
   }
   function hoverTarget(item, session) {
     if (!current() || !sourceAllowed(session.item) || !destinationAllowed(item) || item.key === session.item.key) { leaveTarget(); return; }
-    if (hover?.item.key === item.key && hover.session.pointerId === session.pointerId) { hover.session = session; return; }
+    if (hover?.item.key === item.key && hover.session.pointerId === session.pointerId && hover.session.item.key === session.item.key) { hover.session = session; return; }
     leaveTarget(); lastDrop = null;
-    hover = { item, session };
+    hover = { item, session, ready: false };
     const expectedHover = hover;
     hoverTimer = clock.setTimeout(() => {
       hoverTimer = null;
-      if (!current() || hover !== expectedHover || item.kind !== 'group') return;
+      if (!current() || hover !== expectedHover) return;
+      hover.ready = true;
+      if (item.kind === 'note') {
+        highlightedTarget = host.querySelector(`[data-board-key="note:${item.id}"]`);
+        highlightedTarget?.classList.add('is-note-group-target');
+        return;
+      }
       const group = snapshot.groups.find(group => group.id === item.id);
       preview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes, group, activeId: group.member_ids[0], dragPreview: session,
         authentication, onError, onClose: () => { preview = null; } });
@@ -423,6 +439,7 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
     const key = `${session.pointerId}:${session.item?.key}`;
     if (lastDrop === key) return true;
     if (!sourceAllowed(session.item) || !destinationAllowed(item) || item.key === session.item.key) { leaveTarget(); return false; }
+    if (!hover?.ready || hover.item.key !== item.key || hover.session.pointerId !== session.pointerId || hover.session.item.key !== session.item.key) { leaveTarget(); return false; }
     const insertion = preview?.dragTarget(session.clientX, session.clientY);
     if (preview && !insertion) { leaveTarget(); return true; }
     const before = insertion?.group_id === item.id ? insertion.before_note_id : null;

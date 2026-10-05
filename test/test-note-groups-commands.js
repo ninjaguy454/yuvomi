@@ -35,6 +35,7 @@ for(const result of ['group','individual'])test(`extract ${result} ignores obsol
     assert.deepEqual({...r.board.notes.find(n=>n.id===3).layout,revision:undefined},{...rect({position_locked:true}),revision:undefined});
     if(result==='group'){assert.deepEqual(r.board.groups[0].member_ids,[1,2]);assert.deepEqual(r.board.groups[0].layout,placement);}
     else {assert.equal(r.board.groups.length,0);for(const n of r.board.notes.filter(n=>n.id!==3))assert.equal(n.layout.position_locked,false);}
+    assert.deepEqual(d.prepare('SELECT note_id,revision FROM note_layouts ORDER BY note_id').all(),[{note_id:1,revision:2},{note_id:2,revision:1},{note_id:3,revision:1}],'membership and geometry share exactly one revision increment');
   }finally{d.close();}
 });
 test('atomic selected extraction onto pinned target and empty source removal',()=>{
@@ -177,5 +178,32 @@ test('device receipt identity is isolated across credential contexts and device 
     const p=devicePrincipal(d.prepare('SELECT * FROM household_devices WHERE id=99').get()),req=context=>({devicePrincipal:p,headers:{cookie:'vidamia.device=synthetic-context-token','x-auth-context':context}}),id=group([1,2]),c=command(d,'reorder',{group_id:id,selected_ids:[2],before_note_id:1},[1,2],[id]);apply(d,req('a'),c);
     d.exec("UPDATE device_credentials SET context_key='b' WHERE id=7");rejects(d,req('b'),c,409);
     d.exec("UPDATE device_credentials SET context_key='a' WHERE id=7; UPDATE household_devices SET revision=revision+1 WHERE id=99");rejects(d,req('a'),c,409);
+  }finally{d.close();}
+});
+
+for(const saved of [false,true])test(`membership and inverse fence old standalone snapshots (${saved?'saved identical geometry':'initially absent layout'})`,()=>{
+  const {d,pin}=fixture(2);try{
+    pin(1);let arranged;
+    if(saved){
+      setNoteLayout(d,1,2,{expected_layout_revision:0,layout:{x:0,y:0,width:4,height:6}});
+      arranged=command(d,'arrange',{items:[{kind:'note',id:2,layout:rect({x:5,y:6,width:4,height:6,always_on_top:false})}],include_locked:false},[2]);apply(d,1,arranged);
+    }
+    const stale=command(d,'arrange',{items:[{kind:'note',id:2,layout:rect({x:70,y:80})}],include_locked:false},[2]);
+    const before=d.prepare('SELECT * FROM notes ORDER BY id').all(),revision=stale.expected.notes[0].layout_revision;
+    const create=command(d,'create',{source_note_id:2,target_note_id:1},[1,2]);apply(d,1,create);
+    assert.equal(d.prepare('SELECT revision FROM note_layouts WHERE note_id=2').get()?.revision,revision+1);
+    const inverse=command(d,'undo',{undo_operation_id:create.operation_id},[]);apply(d,1,inverse);
+    assert.equal(d.prepare('SELECT revision FROM note_layouts WHERE note_id=2').get()?.revision,revision+2);
+    rejects(d,1,stale,409);if(arranged)rejects(d,1,command(d,'undo',{undo_operation_id:arranged.operation_id},[]),409);
+    const redo=command(d,'undo',{undo_operation_id:inverse.operation_id},[]);const redone=apply(d,1,redo);assert.equal(redone.board.groups.length,1);assert.equal(d.prepare('SELECT revision FROM note_layouts WHERE note_id=2').get().revision,revision+3);
+    const undoneAgain=apply(d,1,command(d,'undo',{undo_operation_id:redo.operation_id},[]));assert.equal(undoneAgain.board.groups.length,0);assert.equal(d.prepare('SELECT revision FROM note_layouts WHERE note_id=2').get().revision,revision+4);
+    assert.deepEqual(d.prepare('SELECT * FROM notes ORDER BY id').all(),before);
+  }finally{d.close();}
+});
+test('authorized singleton cleanup fences identical stored geometry without editing survivor content',()=>{
+  const {d,group}=fixture(2);try{
+    setNoteLayout(d,1,2,{expected_layout_revision:0,layout:{x:20,y:30,width:6,height:8},position_locked:true,always_on_top:true});group([1,2]);
+    const before=d.prepare('SELECT * FROM notes WHERE id=2').get();mutateNote(d,1,1,'delete');
+    assert.equal(d.prepare('SELECT revision FROM note_layouts WHERE note_id=2').get().revision,2);assert.deepEqual(d.prepare('SELECT * FROM notes WHERE id=2').get(),before);
   }finally{d.close();}
 });

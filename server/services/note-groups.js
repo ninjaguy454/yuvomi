@@ -194,7 +194,11 @@ export function applyNoteGroupCommand(d,principal,command) {
     // dissolution. A survivor inherits the container even if its old pin differs.
     for(const g of groups.values())if(g.member_ids.length===1)noteLayouts.set(g.member_ids[0],g.layout);
     persistGroups(d,before,groups);
-    for(const [noteId,layout] of noteLayouts)writeNoteGroupLayout(d,noteId,layout);
+    for(const note of before.notes){
+      const membershipChanged=note.group_id!==(readNoteGroup(d,note.id)?.id??null);
+      const layout=noteLayouts.get(note.id)||(membershipChanged?(note.stored_layout||note.layout):null);
+      if(layout)writeNoteGroupLayout(d,note.id,layout,{forceRevision:membershipChanged});
+    }
     const after=captureGroupStructure(d,noteIds,groups.keys(),layouts);
     saveGroupReceipt(d,key,c,before,after);
     return {operation_id:c.operation_id,replayed:false,board:readGroupedNoteBoard(d,p),undo_available:true};

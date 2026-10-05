@@ -106,7 +106,8 @@ function bindGroupInteractions() {
         const valid = item.can_manage !== false && (item.kind === 'group' || canArrangeNote(item.note) && item.layout.position_locked);
         return { kind: item.kind, id: item.id, valid };
       }
-      return { kind: 'canvas', valid: true };
+      // List coordinates describe its packed reading order, not world placement.
+      return host.querySelector('#notes-grid')?.dataset.boardView === 'canvas' ? { kind: 'canvas', valid: true } : null;
     },
     onActivate: (noteId, groupId) => {
       if (!authentication.isCurrent()) return;

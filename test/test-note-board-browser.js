@@ -297,11 +297,17 @@ test('live refresh does not resurrect a pending delete, and undo rechecks access
     assert.equal(await page.$('.note-card[data-id="1"]'),null,'undo never paints a revoked cached note');
   }finally{await page.close();}
 });
-test('touch movement on empty board scrolls; a body drop saves without opening the note',async()=>{
+test('touch movement on empty board scrolls; a deliberate held body drop saves without opening the note',async()=>{
   let page=await mount();try{
     let cdp=await page.createCDPSession();
-    const swipe=async(x,y,dx,dy)=>{
+    const swipe=async(x,y,dx,dy,holdForMove=false)=>{
       await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x,y}]});
+      if(holdForMove){
+        // A stationary native touch must reach the 450ms hold and visible lift
+        // before movement expresses placement intent instead of scrolling.
+        await page.waitForSelector('[data-id="1"].note-card--moving');
+        assert.equal(writes.length,0,'arming the card does not save a layout');
+      }
       for(let step=1;step<=8;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:x+dx*step/8,y:y+dy*step/8}]});
       await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
     };
@@ -311,7 +317,7 @@ test('touch movement on empty board scrolls; a body drop saves without opening t
     // Use a new view rather than race its compositor with an immediate reset.
     await cdp.detach();await page.close();page=await mount();cdp=await page.createCDPSession();
     const handle=await page.$('[data-id="1"] .note-card__content .note-md-p');const box=await handle.boundingBox();
-    await swipe(box.x+box.width/2,box.y+box.height/2,110,96);
+    await swipe(box.x+box.width/2,box.y+box.height/2,110,96,true);
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');assert.equal(writes.length,1);assert.equal(await page.$('.note-modal'),null);
     await cdp.detach();
   }finally{await page.close();}

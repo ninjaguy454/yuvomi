@@ -20,6 +20,7 @@ import { AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 import { getPermissions, moduleAccess, canCapability } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { wireNoteBoard, renderNoteGroupFrame } from '/components/note-board.js';
+import { createNoteGroupInteractions } from '/components/note-group-overview.js';
 import { normalizeNoteLayout, organizeNoteGroupItems, projectNoteGroupItems, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { watchNoteChanges } from '/utils/note-live.js';
 import { mountOpenTaskBoard } from '/components/open-task-board.js';
@@ -79,8 +80,44 @@ function normalizedBoard(value) {
 function cancelGroupDrafts(page = state) {
   page.boardGeneration++;
   page.draftAbort.abort(); page.draftAbort = new AbortController();
+  disposeGroupInteractions(page);
   board?.cancel();
   if (document.querySelector('.note-modal[data-layout-editor]')) closeModal({ force:true });
+}
+function disposeGroupInteractions(page) {
+  page.groupInteractions?.dispose(); page.groupInteractions = null;
+  if (page.boardActions) { delete page.boardActions.onGroupAction; delete page.boardActions.groupDragBridge; }
+}
+function bindGroupInteractions() {
+  const page = state, actions = page.boardActions;
+  disposeGroupInteractions(page);
+  if (!NOTE_GROUPS_INTERFACE_ENABLED) return;
+  const host = _container.querySelector('.notes-page'), authentication = actions.authentication;
+  const interactions = createNoteGroupInteractions({
+    host, board: { notes: page.notes, groups: page.groups }, authentication,
+    onCommand: actions.submitGroupCommand,
+    onError: error => { if (authentication.isCurrent() && !error.groupCommandHandled) layoutStatus(error.message || t('notes.layoutFailed')); },
+    clientToWorld: (x, y) => board?.clientToWorld(x, y),
+    hitTest: session => {
+      if (!authentication.isCurrent() || boardIsFiltered()) return null;
+      const element = document.elementFromPoint(session.clientX, session.clientY);
+      if (!element || !host.querySelector('.notes-scroll')?.contains(element)) return null;
+      const key = element.closest('.note-card')?.dataset.boardKey;
+      const item = key && visibleBoardItems().find(item => item.key === key);
+      if (item) {
+        const valid = item.can_manage !== false && (item.kind === 'group' || canArrangeNote(item.note) && item.layout.position_locked);
+        return { kind: item.kind, id: item.id, valid };
+      }
+      return { kind: 'canvas', valid: true };
+    },
+    onActivate: (noteId, groupId) => {
+      if (!authentication.isCurrent()) return;
+      page.activePages.set(groupId, noteId); renderGrid();
+      _container.querySelector(`[data-board-key="group:${groupId}"] [data-group-page="overview"]`)?.focus({ preventScroll: true });
+    },
+  });
+  page.groupInteractions = interactions;
+  actions.onGroupAction = interactions.onGroupAction; actions.groupDragBridge = interactions.groupDragBridge;
 }
 function acceptBoardView(value) {
   const fresh = normalizedBoard(value), page = state;
@@ -214,13 +251,13 @@ async function handleCheckConflict() {
 
 export async function render(container, { user }) {
   board?.destroy(); stopLive?.(); stopOpenTasks?.();
-  if (state) { state.active = false; state.requests?.abort(); state.draftAbort?.abort(); }
+  if (state) { state.active = false; state.requests?.abort(); state.draftAbort?.abort(); disposeGroupInteractions(state); }
   _container = container;
   state = { notes: [], groups: [], activePages:new Map(), user, filterQuery: '', filterCreator: '', filterCreatorLabel: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set(), viewport: {}, requests:new AbortController(), draftAbort:new AbortController(), boardGeneration:0, accessGeneration:0 };
   const pageState = state;
   const auth = authenticationSnapshot();
   pageState.auth = auth;
-  const clearNotes = () => { if (state === pageState) { state.active = false; state.requests.abort(); state.draftAbort.abort(); state.notes = []; state.groups=[]; state.activePages.clear(); state.groupRetry=null; state.groupUndo=null; state.pending.clear(); state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
+  const clearNotes = () => { if (state === pageState) { state.active = false; state.requests.abort(); state.draftAbort.abort(); disposeGroupInteractions(state); state.notes = []; state.groups=[]; state.activePages.clear(); state.groupRetry=null; state.groupUndo=null; state.pending.clear(); state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
   const contextChanged = () => { if (!sameAuthentication(auth)) clearNotes(); };
   window.addEventListener('auth:context-ending', clearNotes, { once: true });
   window.addEventListener('auth:expired', clearNotes, { once: true });
@@ -459,6 +496,7 @@ function renderGrid() {
   const focusChecklistLine = document.activeElement?.dataset.mdLine;
   const previewScroll = new Map([...grid.querySelectorAll('.note-card')].map(card => [card.dataset.id, card.querySelector('.note-card__content')?.scrollTop || 0]));
   board?.destroy(); board = null;
+  bindGroupInteractions();
   grid.removeAttribute('aria-busy');
 
   const q = state.filterQuery.trim().toLowerCase();

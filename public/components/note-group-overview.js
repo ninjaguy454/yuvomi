@@ -225,23 +225,25 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       const destination = snapshot.groups.find(item => item.id === target.id && item.can_manage);
       if (destination) { currentGroup = destination; overlay.hidden = false; renderPages(); }
     }
-    if (dragging && !overlay.hidden) startScroll(session);
+    if (dragging) startScroll(session);
   }
   function startScroll(session) {
     lastPoint = { x: session.clientX, y: session.clientY }; if (scrollFrame) return;
     const step = () => {
       scrollFrame = 0;
-      if (closed || !dragging || overlay.hidden) return;
-      const bounds = grid.getBoundingClientRect(), edge = 36, speed = 12;
+      if (closed || !dragging) return;
+      const scroller = overlay.hidden ? host.querySelector('.notes-scroll') : grid;
+      if (!scroller) return;
+      const bounds = scroller.getBoundingClientRect(), edge = 36, speed = 12;
       const delta = (value, start, end) => value < start + edge ? -speed : value > end - edge ? speed : 0;
-      grid.scrollLeft = Math.max(0, Math.min(grid.scrollWidth - grid.clientWidth, grid.scrollLeft + delta(lastPoint.x, bounds.left, bounds.right)));
-      grid.scrollTop = Math.max(0, Math.min(grid.scrollHeight - grid.clientHeight, grid.scrollTop + delta(lastPoint.y, bounds.top, bounds.bottom)));
+      scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth, scroller.scrollLeft + delta(lastPoint.x, Math.max(0, bounds.left), Math.min(innerWidth, bounds.right))));
+      scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + delta(lastPoint.y, Math.max(0, bounds.top), Math.min(innerHeight, bounds.bottom))));
       scrollFrame = requestAnimationFrame(step);
     };
     scrollFrame = requestAnimationFrame(step);
   }
   const gesture = createNoteGroupGesture({ clientToWorld, hitTest, onPreview: paintPreview,
-    onExit(session) { if (!current()) return; canvasDrag = true; overlay.hidden = true; stopScroll(); onExitDrag(session); },
+    onExit(session) { if (!current()) return; canvasDrag = true; overlay.hidden = true; stopScroll(); startScroll(session); onExitDrag(session); },
     onDrop(session, target) {
       activePointer = null; dragging = false; stopScroll(); if (!current()) return;
       if (target.kind === 'canvas') {

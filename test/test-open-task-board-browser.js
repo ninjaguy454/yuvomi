@@ -23,7 +23,15 @@ app.use('/api/v1',(req,res)=>{
     return res.json({data:[projectedTask]});
   }
   if(req.path==='/tasks/7')return detailReadStatus===200?res.json({data:projectedTask}):res.status(detailReadStatus).json({error:'Task unavailable'});
-  if(req.path==='/tasks/7/acceptance')return res.json({data:{task,expected_revision:4,primary_mode:'self',primary_user_id:1,primary_candidates:[{id:1,display_name:'Alex'}],can_add_helpers:false,coassignee_candidates:[],subtasks:[],subtask_snapshot:[]}});
+  if(req.path==='/tasks/7/acceptance'){
+    const paired=identity.principal?.kind==='device',primary=paired?Number(req.query.primary_user_id)||null:1;
+    const helpers=permissions.capabilities?.['device_tasks.accept_with_helpers']==='allow';
+    const members=[{id:1,display_name:'Alex'},{id:2,display_name:'Grace'}];
+    return res.json({data:{task:projectedTask,expected_revision:4,primary_mode:paired?'choose':'self',primary_user_id:primary,
+      primary_candidates:paired?members:[members[0]],can_add_helpers:helpers,coassignee_candidates:helpers?members.filter(m=>m.id!==primary):[],
+      subtasks:projectedTask.subtasks.map(child=>({...child,allocatable:helpers,eligible_assignee_ids:helpers?[1,2]:[]})),
+      subtask_snapshot:projectedTask.subtasks.map(({id,revision})=>({id,revision}))}});
+  }
   if(req.path==='/tasks/7/accept'){writes.push(req.body);return res.json({data:{...task,is_offer:false,assigned_to:1}});}
   if(req.path==='/tasks/meta/options')return res.json({users:[{id:1,display_name:'Alex'}],categories:[{key:'household',name:'Household'}],tags:[]});
   if(req.path==='/preferences')return res.json({data:{}});
@@ -33,10 +41,12 @@ app.use('/api/v1',(req,res)=>{
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount(width=1280,{denied=false,tasks=false,future=false,height=900,touch=false,viewer='admin',taskOverrides={}}={}){
+async function mount(width=1280,{denied=false,tasks=false,future=false,height=900,touch=false,viewer='admin',acceptanceHelpers=false,taskOverrides={}}={}){
   reads=[];writes=[];futureOffer=future?{reads:0}:null;permissions=denied?{modules:{notes:'write',tasks:'none'}}:tasks?{modules:{notes:'none',tasks:'read'}}:{admin:true};
   if(viewer==='member')permissions={modules:{notes:'write',tasks:'write'}};
-  if(viewer==='paired')permissions={principal_kind:'device',modules:{notes:'read',tasks:'read'},capabilities:{'device_notes.view':'allow'}};
+  if(viewer==='paired')permissions={principal_kind:'device',modules:{notes:'read',tasks:'read'},capabilities:{'device_notes.view':'allow',
+    'tasks.view_household':'allow','tasks.change_assignment':'none','tasks.reassign':'none','tasks.edit_others':'none',
+    'device_tasks.claim':taskOverrides.permissions?.accept===false?'none':'allow','device_tasks.accept_with_helpers':acceptanceHelpers?'allow':'none'}};
   projectedTask=structuredClone({...task,...taskOverrides});
   detailReadStatus=200;
   identity=viewer==='paired'?{user:null,device:{id:99},principal:{kind:'device',id:99},authContext:'paired-fixture',permissions,csrfToken:'fixture'}:{user:{id:viewer==='member'?2:1,role:viewer==='member'?'member':'admin'},authContext:viewer+'-fixture',permissions,csrfToken:'fixture'};
@@ -114,6 +124,27 @@ for(const points of [0,5])test(`Bounty offer shows configured ${points} completi
     const labels=await page.$$eval('[data-open-task="7"] .text-muted:not([data-task-countdown])',elements=>elements.map(el=>el.textContent.trim()));
     assert.ok(labels.includes(`${points} points`),'configured reward is a separate readable value: '+JSON.stringify(labels));
     assert.doesNotMatch(await page.$eval('[data-open-task="7"]',el=>el.textContent),/100 points|105 points/,'subtask points are not added to the parent completion reward');
+  }finally{await page.close();}
+});
+
+for(const helpers of [false,true])for(const children of [false,true])test(`paired Bounty acceptance ignores denied generic assignment (helpers ${helpers}, subtasks ${children})`,async()=>{
+  const page=await mount(1280,{viewer:'paired',acceptanceHelpers:helpers,taskOverrides:{
+    permissions:{...task.permissions,change_assignment:false,reassign:false},
+    subtasks:children?[{id:8,title:'Synthetic step',revision:2,status:'open'}]:[],
+  }});try{
+    await page.waitForSelector('[data-open-task="7"]');await page.click('[data-open-task="7"]');await page.waitForSelector('#task-detail-claim');
+    assert.equal(await page.$('#detail-view-edit,#task-detail-delete,.task-comments__form,.subtask-check'),null);
+    await page.click('#task-detail-claim');await page.waitForSelector('[data-acceptance-primary]');await page.select('[data-acceptance-primary]','1');await page.click('[data-acceptance-next]');
+    await page.waitForSelector('[data-task-acceptance][data-stage="helpers"]');
+    if(helpers)await page.click('[data-acceptance-helper="2"]');else assert.ok(await page.$('[data-acceptance-helper-unavailable]'));
+    await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('[data-task-acceptance]',el=>el.dataset.stage),helpers&&children?'allocation':'confirm');
+    if(helpers&&children){await page.click('[data-acceptance-target="8"]');await page.click('[data-acceptance-choice="2"]');await page.click('[data-acceptance-next]');}
+    await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
+    assert.equal(writes.length,1);assert.equal(writes[0].primary_user_id,1);assert.deepEqual(writes[0].coassignee_ids,helpers?[2]:[]);
+    assert.deepEqual(writes[0].subtask_assignments,helpers&&children?[{id:8,user_id:2}]:[]);
+    const current=await page.evaluate(async()=>({device:(await import('/utils/device-context.js')).isDevicePrincipal(),capabilities:(await import('/permissions.js')).getPermissions().capabilities}));
+    assert.equal(current.device,true);for(const key of ['tasks.change_assignment','tasks.reassign','tasks.edit_others'])assert.equal(current.capabilities[key],'none');
   }finally{await page.close();}
 });
 

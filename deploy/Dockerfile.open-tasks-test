@@ -1,5 +1,5 @@
-# Isolated Phase 3 candidate; retains the verified Phase 2 privacy runtime.
-FROM yuvomi:notes-canvas-test-79feabad
+# Isolated Phase 3 candidate; retains the verified installed runtime dependencies.
+FROM yuvomi:release-70a06cbc1a98d28207c9838fc1a3d48396bbae9a
 WORKDIR /app
 COPY . /app
 ARG REVISION

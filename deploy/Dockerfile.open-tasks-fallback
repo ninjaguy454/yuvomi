@@ -1,9 +1,12 @@
-# Data-preserving Phase 3 recovery. Never substitute pre-privacy code.
+# Data-preserving Phase 3 recovery from the exact group-aware forward image.
+# Never substitute a pre-privacy or non-grouping backend.
 ARG CANDIDATE_IMAGE
 FROM ${CANDIDATE_IMAGE}
 USER root
 COPY deploy/build-open-tasks-fallback.mjs /tmp/build-open-tasks-fallback.mjs
 RUN node /tmp/build-open-tasks-fallback.mjs && rm /tmp/build-open-tasks-fallback.mjs
+ENV VIDAMIA_NOTE_GROUPS_MUTATIONS=0
 ARG REVISION
 LABEL org.opencontainers.image.revision=$REVISION
 LABEL io.vidamia.task-acceptance-fallback="acceptance-paused-current-data"
+LABEL io.vidamia.note-groups-fallback="flat-list-current-group-data"

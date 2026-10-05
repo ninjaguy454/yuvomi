@@ -71,6 +71,7 @@ Thumbs.db
 *.swp
 *.swo
 
+# The image-only transformer is required despite the deployment-directory exclusion.
 !deploy/
 deploy/*
 !deploy/build-open-tasks-fallback.mjs

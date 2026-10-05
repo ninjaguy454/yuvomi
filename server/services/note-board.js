@@ -2,7 +2,7 @@ import {actorId} from '../permissions.js';
 import {str,color,collectErrors,MAX_TEXT,MAX_TITLE} from '../middleware/validate.js';
 import {toggleChecklistLine} from '../../public/utils/markdown-checklist.js';
 import {noteDevice,noteError,noteVisibleSql,noteCapabilities,assertNoteAction,noteMembers,normalizeNoteAudience} from './note-access.js';
-import {readNoteGroup,groupLayout} from './note-group-store.js';
+import {readNoteGroup,groupLayout,assertStandaloneLayoutWrite,cleanupGroupsAfterNoteDeletion} from './note-group-store.js';
 
 const fields=['title','content','color','pinned','visibility','access_user_ids','expected_revision'];
 const idValue=id=>{if(!Number.isSafeInteger(Number(id))||Number(id)<1)throw noteError('Note not found.',404);return Number(id);};
@@ -107,7 +107,11 @@ export function updateNote(d,p,id,body={}){return saveNote(d,p,id,body).data;}
 export function mutateNote(d,p,id,action,body={}){
   return d.transaction(()=>{
     const note=requireNote(d,p,id,action==='delete'?'delete':'edit');
-    if(action==='delete'){revision(note,body);d.prepare('DELETE FROM notes WHERE id=?').run(note.id);return null;}
+    if(action==='delete'){
+      revision(note,body);const group=readNoteGroup(d,note.id);
+      d.prepare('DELETE FROM notes WHERE id=?').run(note.id);
+      cleanupGroupsAfterNoteDeletion(d,group?[group.id]:[]);return null;
+    }
     if(action==='pin'){revision(note,body);d.prepare('UPDATE notes SET pinned=? WHERE id=?').run(note.pinned?0:1,note.id);}
     else if(action==='check'){
       if(!Number.isInteger(body.line)||body.line<0||typeof body.checked!=='boolean'||body.expect!=null&&typeof body.expect!=='string')throw noteError('Invalid checklist change.');
@@ -136,6 +140,7 @@ export function setNoteLayouts(d,p,body={}){
     const planned=items.map(item=>{
       if(!item||typeof item!=='object'||Array.isArray(item)||!Number.isSafeInteger(item.note_id)||item.note_id<1||Object.keys(item).some(key=>!['note_id',...layoutRequestFields].includes(key))||!layoutChangeFields.some(key=>owns(item,key)))throw noteError('Invalid note layout request.');
       const note=requireNote(d,p,item.note_id,'edit');assertNoteAction(d,p,note,'view');
+      assertStandaloneLayoutWrite(d,note.id);
       for(const flag of ['position_locked','always_on_top'])if(owns(item,flag)&&typeof item[flag]!=='boolean')throw noteError('Invalid note layout flag.');
       const saved=savedLayout(d,note),current=saved||(defaults??=projectedLayouts(d,p)).get(note.id);
       if(!Number.isSafeInteger(item.expected_layout_revision)||item.expected_layout_revision!==current.revision)throw noteError('The note layout changed. Reload before trying again.',409);

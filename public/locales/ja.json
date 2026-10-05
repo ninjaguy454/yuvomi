@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "ノート",
+            "selectedCount": "{{count}}件選択中",
+            "selectionMode": "ノートを選択",
+            "actions": "操作",
+            "exitDrag": "外に出す",
+            "exitDwell": "1秒",
+            "dragCount": "{{count}}件のノート",
+            "placeCount": "{{count}}件のノートを配置",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

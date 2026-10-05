@@ -193,6 +193,15 @@ test('a cancelled established drag consumes its eventual pointer release', () =>
   assert.equal(f.gesture.pointerUp(f.event()), false, 'a later ordinary tap with the reused pointer ID remains a tap');
 });
 
+for (const target of [null, { kind:'note', id:12, valid:true }]) test(`rejected ${target ? 'unarmed' : 'invalid'} release cannot consume the following menu click with the same mouse pointer`, () => {
+  const f=fixture([2]); f.start(); f.target(target);
+  assert.equal(f.gesture.pointerUp(f.event()),true, 'the rejected drop itself is consumed');
+  assert.equal(f.drops.length,0); assert.equal(f.captured.size,0);
+  // A menu press has no group seed; it must remain an ordinary click.
+  f.gesture.pointerDown(f.event({pointerType:'mouse'}));
+  assert.equal(f.gesture.pointerUp(f.event({pointerType:'mouse'})),false);
+});
+
 test('cancellation during a holding preview cannot arm another lifecycle hold timer', () => {
   let replaced = false;
   const f = fixture([2], { onPreview(preview, { gesture, event, seed }) {

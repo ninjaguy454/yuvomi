@@ -1441,6 +1441,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Notizen",
+            "selectedCount": "{{count}} ausgewählt",
+            "selectionMode": "Notizen auswählen",
+            "actions": "Aktionen",
+            "exitDrag": "Verlassen",
+            "exitDwell": "1 s",
+            "dragCount": "{{count}} Notizen",
+            "placeCount": "{{count}} Notizen platzieren",
             "overview": "Gruppenübersicht",
             "close": "Gruppenübersicht schließen",
             "exit": "Notizfläche",

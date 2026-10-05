@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Anteckningar",
+            "selectedCount": "{{count}} valda",
+            "selectionMode": "Välj anteckningar",
+            "actions": "Åtgärder",
+            "exitDrag": "Lämna",
+            "exitDwell": "1 s",
+            "dragCount": "{{count}} anteckningar",
+            "placeCount": "Placera {{count}} anteckningar",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

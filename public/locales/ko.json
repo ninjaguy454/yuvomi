@@ -1441,6 +1441,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "메모",
+            "selectedCount": "{{count}}개 선택됨",
+            "selectionMode": "메모 선택",
+            "actions": "작업",
+            "exitDrag": "나가기",
+            "exitDwell": "1초",
+            "dragCount": "메모 {{count}}개",
+            "placeCount": "메모 {{count}}개 배치",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

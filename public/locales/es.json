@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Notas",
+            "selectedCount": "{{count}} seleccionadas",
+            "selectionMode": "Seleccionar notas",
+            "actions": "Acciones",
+            "exitDrag": "Salir",
+            "exitDwell": "1 s",
+            "dragCount": "{{count}} notas",
+            "placeCount": "Colocar {{count}} notas",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

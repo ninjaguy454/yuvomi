@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Σημειώσεις",
+            "selectedCount": "Επιλεγμένες: {{count}}",
+            "selectionMode": "Επιλογή σημειώσεων",
+            "actions": "Ενέργειες",
+            "exitDrag": "Έξοδος",
+            "exitDwell": "1 δ.",
+            "dragCount": "{{count}} σημειώσεις",
+            "placeCount": "Τοποθέτηση {{count}} σημειώσεων",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

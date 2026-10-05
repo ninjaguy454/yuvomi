@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Jegyzetek",
+            "selectedCount": "{{count}} kiválasztva",
+            "selectionMode": "Jegyzetek kiválasztása",
+            "actions": "Műveletek",
+            "exitDrag": "Kilépés",
+            "exitDwell": "1 mp",
+            "dragCount": "{{count}} jegyzet",
+            "placeCount": "{{count}} jegyzet elhelyezése",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

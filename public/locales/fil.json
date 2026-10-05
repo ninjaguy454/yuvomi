@@ -1441,6 +1441,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Mga tala",
+            "selectedCount": "{{count}} ang napili",
+            "selectionMode": "Pumili ng mga tala",
+            "actions": "Mga aksyon",
+            "exitDrag": "Lumabas",
+            "exitDwell": "1 s",
+            "dragCount": "{{count}} tala",
+            "placeCount": "Ilagay ang {{count}} tala",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

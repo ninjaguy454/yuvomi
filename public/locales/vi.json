@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Ghi chú",
+            "selectedCount": "Đã chọn {{count}}",
+            "selectionMode": "Chọn ghi chú",
+            "actions": "Thao tác",
+            "exitDrag": "Thoát",
+            "exitDwell": "1 giây",
+            "dragCount": "{{count}} ghi chú",
+            "placeCount": "Đặt {{count}} ghi chú",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

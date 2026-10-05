@@ -1441,6 +1441,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "یادداشت‌ها",
+            "selectedCount": "{{count}} مورد انتخاب‌شده",
+            "selectionMode": "انتخاب یادداشت‌ها",
+            "actions": "کارها",
+            "exitDrag": "خروج",
+            "exitDwell": "۱ ثانیه",
+            "dragCount": "{{count}} یادداشت",
+            "placeCount": "قرار دادن {{count}} یادداشت",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

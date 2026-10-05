@@ -34,7 +34,12 @@ async function mount({ width = 1000, height = 800, touch = false, canManage = tr
   }, { canManage, selected, noUUID });
   assert.equal(loaded, true, 'group overview component exists'); return page;
 }
-async function select(page, ids) { for (const id of ids) await page.click(`[data-group-select="${id}"]`); }
+async function select(page, ids) {
+  if (await page.$eval('[data-group-selection-mode]', element => element.getAttribute('aria-pressed') === 'false')) await page.click('[data-group-selection-mode]');
+  for (const id of ids) await page.click(`[data-group-select="${id}"]`);
+}
+async function actions(page) { if (!await page.$eval('[data-group-menu]', element => element.open)) await page.click('[data-group-menu] summary'); }
+async function action(page, name) { await actions(page); await page.click(`[data-group-action="${name}"]`); }
 
 test('cancelled pre-hold movement keeps the existing ordered multiselection', async () => {
   const page = await mount({ selected: [2,5,7,9] }); try {
@@ -58,7 +63,7 @@ test('overview presents authorized pages in canonical row-major order with acces
 
 test('selecting 2/5/7/9 and keyboard order position 3 preserves canonical block order', async () => {
   const page = await mount(); try {
-    await select(page, [9,2,7,5]); await page.focus('[data-group-action="order"]'); await page.keyboard.press('Enter');
+    await select(page, [9,2,7,5]); await actions(page); await page.focus('[data-group-action="order"]'); await page.keyboard.press('Enter');
     await page.select('[data-group-before]', '4'); await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
     const command = await page.evaluate(() => window.commands[0]);
     assert.equal(command.kind, 'reorder'); assert.deepEqual(command.selected_ids, [2,5,7,9]); assert.equal(command.before_note_id, 4);
@@ -105,7 +110,7 @@ test('browse-only projections can activate pages but expose no structural contro
 
 test('keyboard destination and insertion controls create one atomic transfer command', async () => {
   const page = await mount(); try {
-    await select(page, [5,2]); await page.click('[data-group-action="move"]');
+    await select(page, [5,2]); await action(page, 'move');
     await page.select('[data-group-destination]', '20'); await page.select('[data-group-before]', '12'); await page.click('[data-group-confirm]');
     const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
     assert.equal(commands[0].kind, 'transfer'); assert.deepEqual(commands[0].selected_ids, [2,5]);
@@ -115,8 +120,8 @@ test('keyboard destination and insertion controls create one atomic transfer com
 
 test('multiple extraction offers exact bounded preview and Cancel writes nothing', async () => {
   const page = await mount(); try {
-    await select(page, [5,2]); await page.click('[data-group-action="remove"]');
-    assert.deepEqual(await page.$$eval('[data-group-extract-choice]', buttons => buttons.map(button => button.textContent.trim())), ['New group', 'Individual notes', 'Cancel']);
+    await select(page, [5,2]); await action(page, 'remove');
+    assert.deepEqual(await page.$$eval('[data-group-extract-choice]', elements => elements.map(element => (element.closest('label') || element).textContent.trim())), ['New group', 'Individual notes', 'Cancel']);
     await page.click('[data-group-extract-choice="individual"]');
     assert.equal(await page.$$eval('[data-group-placement]', rects => rects.length), 2);
     assert.equal(await page.evaluate(() => window.commands.length), 0); await page.click('[data-group-cancel]');
@@ -126,7 +131,7 @@ test('multiple extraction offers exact bounded preview and Cancel writes nothing
 
 test('final Place saves exactly previewed unpinned rectangles in canonical selected order', async () => {
   const page = await mount(); try {
-    await select(page, [5,2]); await page.click('[data-group-action="remove"]'); await page.click('[data-group-extract-choice="individual"]');
+    await select(page, [5,2]); await action(page, 'remove'); await page.click('[data-group-extract-choice="individual"]');
     const preview = await page.$$eval('[data-group-placement]', els => els.map(el => JSON.parse(el.dataset.groupPlacement)));
     await page.click('[data-group-confirm]'); const command = await page.evaluate(() => window.commands[0]);
     assert.equal(command.kind, 'extract'); assert.deepEqual(command.selected_ids, [2,5]); assert.deepEqual(command.placements, preview);
@@ -137,7 +142,7 @@ test('final Place saves exactly previewed unpinned rectangles in canonical selec
 
 for (const result of ['individual', 'group']) test(`bulk ${result} preview preserves its explicit fractional anchor through Place`, async () => {
   const page = await mount(); try {
-    await select(page, [5,2]); await page.click('[data-group-action="remove"]'); await page.click(`[data-group-extract-choice="${result}"]`);
+    await select(page, [5,2]); await action(page, 'remove'); await page.click(`[data-group-extract-choice="${result}"]`);
     await page.evaluate(() => {
       for (const [selector, value] of [['[data-group-x]', '20.25'], ['[data-group-y]', '15.125']]) {
         const field = document.querySelector(selector); field.value = value; field.dispatchEvent(new Event('input', { bubbles: true }));
@@ -172,7 +177,7 @@ test('bulk canvas drop seeds the explicit preview with its fractional pointer an
 
 test('authentication abort immediately removes private previews and queued gestures', async () => {
   const page = await mount(); try {
-    await select(page, [2,5]); await page.click('[data-group-action="remove"]'); await page.click('[data-group-extract-choice="group"]');
+    await select(page, [2,5]); await action(page, 'remove'); await page.click('[data-group-extract-choice="group"]');
     await page.evaluate(() => window.abort.abort()); assert.equal(await page.$('.note-group-overview'), null);
     assert.equal(await page.evaluate(() => document.body.textContent.includes('Authorized preview')), false);
     assert.equal(await page.evaluate(() => window.commands.length), 0);
@@ -182,9 +187,13 @@ test('authentication abort immediately removes private previews and queued gestu
 test('narrow overview keeps exit and close reachable and honours reduced motion', async () => {
   const page = await mount({ width: 360 }); try {
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+    assert.equal(await page.$eval('[data-group-exit]', element => element.hidden), true);
+    const start = await page.$eval('[data-group-activate="2"]', element => { const rect = element.getBoundingClientRect(); return { x:rect.x+rect.width/2,y:rect.y+rect.height/2 }; });
+    await page.mouse.move(start.x,start.y); await page.mouse.down(); await page.waitForFunction(()=>document.querySelector('.note-group-overview').dataset.gestureState==='dragging');
     const result = await page.evaluate(() => { const exit = document.querySelector('[data-group-exit]').getBoundingClientRect(), close = document.querySelector('[data-group-close]').getBoundingClientRect(), overlay = getComputedStyle(document.querySelector('.note-group-overview')); return { exit: exit.toJSON(), close: close.toJSON(), animation: overlay.animationDuration, background: overlay.backgroundColor }; });
     assert.ok(result.exit.height >= 44 && result.exit.top >= 0 && result.exit.bottom <= 800);
     assert.ok(result.close.left >= 0 && result.close.right <= 360); assert.equal(result.animation, '0s'); assert.notEqual(result.background, 'rgba(0, 0, 0, 0)');
+    await page.keyboard.press('Escape'); await page.mouse.up(); assert.equal(await page.evaluate(()=>window.commands.length),0);
   } finally { await page.close(); }
 });
 
@@ -429,11 +438,11 @@ test('real board-native destination preview clears on capture cancellation witho
   } finally { await page.close(); }
 });
 
-test('changing selected notes discards the previous placement preview before any Place can submit it', async () => {
+test('cancelling placement before changing selected notes discards its preview before any Place can submit it', async () => {
   const page = await mount(); try {
-    await select(page, [2,5]); await page.click('[data-group-action="remove"]'); await page.click('[data-group-extract-choice="individual"]');
+    await select(page, [2,5]); await action(page, 'remove'); await page.click('[data-group-extract-choice="individual"]');
     assert.equal(await page.$$eval('[data-group-placement]', nodes => nodes.length), 2);
-    await page.click('[data-group-select="2"]');
+    await page.click('[data-group-cancel]'); await page.click('[data-group-select="2"]');
     assert.equal(await page.$('[data-group-placement]'), null, 'selection changes must invalidate the exact placement draft');
     assert.equal(await page.$('[data-group-confirm]'), null); assert.equal(await page.evaluate(() => window.commands.length), 0);
   } finally { await page.close(); }
@@ -475,7 +484,7 @@ test('Escape from a native drag preview cancels its board owner before release',
 
 test('visual viewport resize invalidates placement preview without saving it', async () => {
   const page = await mount(); try {
-    await select(page, [2,5]); await page.click('[data-group-action="remove"]'); await page.click('[data-group-extract-choice="individual"]');
+    await select(page, [2,5]); await action(page, 'remove'); await page.click('[data-group-extract-choice="individual"]');
     await page.evaluate(() => window.visualViewport.dispatchEvent(new Event('resize')));
     assert.equal(await page.$('[data-group-placement]'), null); assert.equal(await page.evaluate(() => window.commands.length), 0);
   } finally { await page.close(); }
@@ -483,7 +492,7 @@ test('visual viewport resize invalidates placement preview without saving it', a
 
 test('supported HTTP browsers without randomUUID still create one frozen operation identity', async () => {
   const page = await mount({ noUUID: true }); try {
-    await select(page, [2]); await page.click('[data-group-action="order"]'); await page.select('[data-group-before]', '5'); await page.click('[data-group-confirm]');
+    await select(page, [2]); await action(page, 'order'); await page.select('[data-group-before]', '5'); await page.click('[data-group-confirm]');
     const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
     assert.match(commands[0].operation_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i);
   } finally { await page.close(); }

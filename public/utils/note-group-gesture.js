@@ -146,6 +146,9 @@ export function createNoteGroupGesture({
       return consumed;
     }
     if (state === 'holding') { reset(); return false; }
+    // This physical release is being consumed now, including rejected drops.
+    // Retaining its token would swallow the next unrelated menu click.
+    consumedPointers.delete(event.pointerId);
     event.preventDefault?.();
     if (!updateCoordinates(event)) { cancel('coordinates'); return true; }
     const currentGeneration = generation;

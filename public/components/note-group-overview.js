@@ -3,9 +3,21 @@ import { createNoteGroupDraft, freezeNoteGroupCommand, orderedSelection, moveSel
 import { createNoteGroupGesture } from '../utils/note-group-gesture.js';
 import { normalizeNoteLayout, organizeNoteLayouts, NOTE_MAX_POSITION } from '../utils/note-board-layout.js';
 import { pushOverlay, dropOverlay } from '../utils/overlay-history.js';
+import { renderMarkdownLight } from '../utils/html.js';
 
 const text = (key, fallback, values) => { const value = t(`notes.groups.${key}`, values); return value === `notes.groups.${key}` ? fallback : value; };
 const overlaps = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+function previewText(content) {
+  const template = document.createElement('template'); template.innerHTML = renderMarkdownLight(content);
+  // Preview-only underscore emphasis; identifiers and literal code stay intact.
+  const nodes = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
+    if (!node.parentElement?.closest('code')) node.textContent = node.textContent.replace(/(^|[^\p{L}\p{N}_])(__?)(?=\S)([^_\n]*?\S)\2(?=$|[^\p{L}\p{N}_])/gu, '$1$3');
+  }
+  template.content.querySelectorAll('br').forEach(element => element.replaceWith('\n'));
+  template.content.querySelectorAll('p,li,blockquote,div').forEach(element => element.append('\n'));
+  return template.content.textContent.trim();
+}
 
 /** Compact grid packing near an explicit anchor. Failure keeps the placement draft local. */
 export function noteGroupExtractionPlacements(board, group, selectedIds, result, point) {
@@ -52,21 +64,30 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const restoreFocus = document.activeElement, subscriptions = [];
   let closed = false, busy = false, suppressClick = false, dragging = false, canvasDrag = false;
   let currentGroup = source, placement = null, action = null, lastPoint = null, scrollFrame = 0, overlayToken;
-  let activePointer = null, highlightedTarget = null;
+  let activePointer = null, highlightedTarget = null, proxy = null, footer = null;
+  let selectionMode = selected.size > 0, placing = false;
   const overlay = document.createElement('div'); overlay.className = 'note-group-overview';
   const dialog = document.createElement('section'); dialog.className = 'note-group-overview__panel';
   dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', text('overview', 'Group overview')); dialog.tabIndex = -1;
   const header = document.createElement('header'); header.className = 'note-group-overview__header';
-  const title = document.createElement('h2'); title.textContent = text('overview', 'Group overview');
+  const title = document.createElement('h2'); title.textContent = text('overviewTitle', 'Notes');
+  const count = document.createElement('span'); count.dataset.groupSelectionCount = ''; count.className = 'note-group-overview__count'; count.setAttribute('aria-live', 'polite');
+  const mode = button('\u2611', { groupSelectionMode: '' }, text('selectionMode', 'Select notes'));
+  const menu = document.createElement('details'); menu.dataset.groupMenu = ''; menu.className = 'note-group-overview__menu';
+  const menuToggle = document.createElement('summary'); menuToggle.textContent = '\u22ef'; menuToggle.setAttribute('aria-label', text('actions', 'Actions')); menu.append(menuToggle);
   const closeButton = button('×', { groupClose: '' }, text('close', 'Close group overview'));
-  header.append(closeButton, title);
+  header.append(title);
+  if (manageable && !dragPreview && !standaloneIds.length) header.append(count, mode, menu);
+  header.append(closeButton);
   const exit = document.createElement('div'); exit.className = 'note-group-overview__exit'; exit.dataset.groupExit = '';
-  exit.textContent = text('exit', 'Canvas'); exit.setAttribute('aria-label', text('exit', 'Canvas'));
+  const exitLabel = document.createElement('span'), exitTime = document.createElement('span');
+  exitLabel.textContent = text('exitDrag', 'Exit'); exitTime.textContent = text('exitDwell', '1 s'); exit.append(exitLabel, exitTime); exit.hidden = true;
   const toolbar = document.createElement('div'); toolbar.className = 'note-group-overview__toolbar';
+  menu.append(toolbar);
   const grid = document.createElement('div'); grid.className = 'note-group-overview__grid';
   const tools = document.createElement('div'); tools.className = 'note-group-overview__tools';
   const status = document.createElement('div'); status.className = 'note-group-overview__status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  dialog.append(header, exit, toolbar, grid, tools, status); overlay.append(dialog); document.body.append(overlay);
+  dialog.append(header, grid, tools, status); overlay.append(dialog, exit); document.body.append(overlay);
   const draft = createNoteGroupDraft(snapshot, newNoteGroupOperationId());
 
   function button(label, data = {}, ariaLabel) {
@@ -83,6 +104,24 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function selection() { return source.member_ids.filter(id => selected.has(id)); }
   function announce(message) { status.textContent = message; }
+  function updateHeader() {
+    title.textContent = placing ? text('placeCount', `Place ${selected.size} notes`, { count: selected.size }) : text('overviewTitle', 'Notes');
+    dialog.setAttribute('aria-label', title.textContent);
+    count.textContent = selected.size ? text('selectedCount', `${selected.size} selected`, { count: selected.size }) : '';
+    mode.setAttribute('aria-pressed', String(selectionMode));
+    count.hidden = mode.hidden = menu.hidden = placing;
+    menu.style.visibility = selected.size ? '' : 'hidden'; menu.inert = !selected.size;
+    if (placing || !selected.size) menu.open = false;
+  }
+  function clearProxy() { proxy?.remove(); proxy = null; }
+  function paintProxy(session) {
+    if (!proxy) { proxy = document.createElement('div'); proxy.className = 'note-group-drag-proxy'; proxy.dataset.groupDragProxy = ''; proxy.setAttribute('aria-hidden', 'true'); document.body.append(proxy); }
+    proxy.dataset.selectedIds = JSON.stringify(session.selected_ids);
+    proxy.textContent = session.selected_ids.length === 1 ? noteById.get(session.selected_ids[0])?.title || text('untitled', 'Untitled note') : text('dragCount', `${session.selected_ids.length} notes`, { count: session.selected_ids.length });
+    const rect = proxy.getBoundingClientRect();
+    proxy.style.left = `${Math.max(8, Math.min(innerWidth - rect.width - 8, session.clientX + 18))}px`;
+    proxy.style.top = `${Math.max(8, Math.min(innerHeight - rect.height - 8, session.clientY - rect.height - 20))}px`;
+  }
   function stopScroll() { if (scrollFrame) cancelAnimationFrame(scrollFrame); scrollFrame = 0; }
   function highlightTarget(id) {
     highlightedTarget?.classList.remove('is-note-group-target'); highlightedTarget = null;
@@ -97,15 +136,16 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     for (const id of currentGroup.member_ids.filter(id => noteById.has(id))) {
       const note = noteById.get(id), card = document.createElement('article');
       card.className = 'note-group-overview__page'; card.dataset.groupPage = String(id); card.classList.toggle('is-selected', selected.has(id));
+      if (typeof note.color === 'string' && CSS.supports('color', note.color)) card.style.setProperty('--note-color', note.color);
       const activate = button('', { groupActivate: String(id) }); activate.className = 'note-group-overview__activate';
       activate.setAttribute('aria-label', note.title?.trim() || text('untitled', 'Untitled note'));
       if (id === activeId && currentGroup.id === source.id) activate.setAttribute('aria-current', 'page');
       const heading = document.createElement('strong'); heading.textContent = note.title?.trim() || text('untitled', 'Untitled note');
-      const preview = document.createElement('span'); preview.className = 'note-group-overview__excerpt'; preview.textContent = note.content || '';
+      const preview = document.createElement('span'); preview.className = 'note-group-overview__excerpt'; preview.textContent = previewText(note.content);
       activate.append(heading, preview); card.append(activate);
       if (manageable && currentGroup.id === source.id && !dragPreview) {
         const toggle = button(selected.has(id) ? '✓' : '○', { groupSelect: String(id) }, text('selectNote', `Select ${note.title || id}`, { title: note.title || String(id) }));
-        toggle.className = 'note-group-overview__select'; toggle.setAttribute('aria-pressed', String(selected.has(id))); card.append(toggle);
+        toggle.className = 'note-group-overview__select'; toggle.hidden = !selectionMode; toggle.setAttribute('aria-pressed', String(selected.has(id))); card.append(toggle);
       }
       grid.append(card);
     }
@@ -113,15 +153,21 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (manageable && !dragPreview && !standaloneIds.length) for (const [name, label] of [['order', text('order', 'Order')], ['move', text('moveToGroup', 'Move to group')], ['remove', text('remove', 'Remove from group')]]) {
       const control = button(label, { groupAction: name }); control.disabled = !selected.size || busy; toolbar.append(control);
     }
+    updateHeader();
   }
   function updateSelection(id) {
     clearTools();
     if (selected.has(id)) selected.delete(id); else selected.add(id);
-    const focused = document.activeElement?.dataset.groupSelect; renderPages();
-    if (focused) grid.querySelector(`[data-group-select="${focused}"]`)?.focus();
+    const focused = document.activeElement;
+    const attribute = focused?.hasAttribute('data-group-select') ? 'data-group-select' : 'data-group-activate';
+    const focusedId = focused?.getAttribute(attribute); renderPages();
+    if (focusedId) grid.querySelector(`[${attribute}="${focusedId}"]`)?.focus();
   }
-  function clearTools() { action = null; placement = null; destinations.clear(); tools.replaceChildren(); status.textContent = ''; }
-  function field(labelText, control) { const label = document.createElement('label'); label.textContent = labelText; label.append(control); tools.append(label); return control; }
+  function clearTools() {
+    action = null; placement = null; placing = false; destinations.clear(); tools.replaceChildren(); status.textContent = '';
+    footer?.remove(); footer = null; grid.hidden = false; dialog.removeAttribute('data-group-place-dialog'); updateHeader();
+  }
+  function field(labelText, control, parent = tools) { const label = document.createElement('label'); label.textContent = labelText; label.append(control); parent.append(label); return control; }
   function insertionControl(targetGroup, selectionIds) {
     const control = document.createElement('select'); control.dataset.groupBefore = '';
     for (const id of targetGroup.member_ids.filter(id => noteById.has(id) && !selectionIds.includes(id))) {
@@ -131,13 +177,16 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     return field(text('position', 'Position'), control);
   }
   function confirmControls(label = text('place', 'Place')) {
-    tools.append(button(label, { groupConfirm: '' }), button(text('cancel', 'Cancel'), { groupCancel: '' }));
+    footer = document.createElement('div'); footer.className = 'note-group-overview__footer';
+    const cancel = button(text('cancel', 'Cancel'), { groupCancel: '' });
+    if (placing) cancel.dataset.groupExtractChoice = 'cancel';
+    footer.append(cancel, button(label, { groupConfirm: '' })); dialog.append(footer);
   }
   function orderSelection() {
-    clearTools(); action = 'order'; insertionControl(source, selection()); confirmControls(); tools.querySelector('select')?.focus();
+    clearTools(); menu.open = false; action = 'order'; insertionControl(source, selection()); confirmControls(); tools.querySelector('select')?.focus();
   }
   function moveSelection() {
-    clearTools(); action = standaloneIds.length ? 'join' : 'move';
+    clearTools(); menu.open = false; action = standaloneIds.length ? 'join' : 'move';
     const destination = document.createElement('select'); destination.dataset.groupDestination = '';
     for (const item of snapshot.groups.filter(item => item.can_manage && item.id !== source.id)) {
       const option = document.createElement('option'); option.value = String(item.id);
@@ -158,35 +207,46 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     confirmControls(); destination.focus();
   }
   function extractionChoices(point = { x: source.layout.x + source.layout.width, y: source.layout.y }) {
-    clearTools(); action = 'extract-choice'; lastPoint = point;
-    if (selected.size === 1) { previewExtraction('individual', point); return; }
-    tools.append(button(text('newGroup', 'New group'), { groupExtractChoice: 'group' }), button(text('individual', 'Individual notes'), { groupExtractChoice: 'individual' }), button(text('cancel', 'Cancel'), { groupExtractChoice: 'cancel' }));
-    tools.querySelector('button')?.focus();
+    lastPoint = point; previewExtraction(selected.size === 1 ? 'individual' : 'group', point);
+    (tools.querySelector('[data-group-extract-choice]') || footer.querySelector('[data-group-confirm]'))?.focus();
   }
   function previewExtraction(result, point) {
-    clearTools(); action = 'extract';
+    clearTools(); action = 'extract'; placing = true; grid.hidden = true; exit.hidden = true; dialog.dataset.groupPlaceDialog = ''; updateHeader();
+    const choices = document.createElement('div'); choices.className = 'note-group-overview__choices';
+    if (selected.size > 1) for (const [value, label] of [['group', text('newGroup', 'New group')], ['individual', text('individual', 'Individual notes')]]) {
+      const control = document.createElement('input'); control.type = 'radio'; control.name = `group-result-${draft.operation_id}`; control.value = value; control.dataset.groupExtractChoice = value; control.checked = value === result;
+      const row = document.createElement('label'); row.append(control, document.createTextNode(label)); choices.append(row);
+    }
+    tools.append(choices);
+    const position = document.createElement('details'); position.dataset.groupPosition = '';
+    const positionToggle = document.createElement('summary'); positionToggle.textContent = text('position', 'Position'); position.append(positionToggle);
+    const fields = document.createElement('div'); fields.className = 'note-group-overview__coordinates'; position.append(fields);
     const x = document.createElement('input'), y = document.createElement('input');
     for (const input of [x, y]) { input.type = 'number'; input.min = '0'; input.max = String(NOTE_MAX_POSITION); input.step = 'any'; }
     x.value = String(point.x); y.value = String(point.y); x.dataset.groupX = ''; y.dataset.groupY = '';
-    field(text('horizontal', 'Horizontal position'), x); field(text('vertical', 'Vertical position'), y);
+    field(text('horizontal', 'Horizontal position'), x, fields); field(text('vertical', 'Vertical position'), y, fields);
     const preview = document.createElement('div'); preview.className = 'note-group-overview__placement'; preview.dataset.groupPlacementPreview = '';
     const calculate = () => {
       preview.replaceChildren();
+      result = choices.querySelector('input:checked')?.value || 'individual';
       const placements = noteGroupExtractionPlacements(snapshot, source, selection(), result, { x: x.value, y: y.value });
       placement = placements ? { result, placements } : null;
-      const confirm = tools.querySelector('[data-group-confirm]'); if (confirm) confirm.disabled = !placement;
+      const confirm = dialog.querySelector('[data-group-confirm]'); if (confirm) confirm.disabled = !placement;
       if (!placement) { announce(text('noPlacement', 'No room here. Choose another position or use List.')); return; }
       announce('');
+      const left = Math.min(...placements.map(rect => rect.x)), top = Math.min(...placements.map(rect => rect.y));
+      const width = Math.max(...placements.map(rect => rect.x + rect.width)) - left, height = Math.max(...placements.map(rect => rect.y + rect.height)) - top;
+      const scale = Math.min(28, 280 / width, 144 / height);
       for (let index = 0; index < placements.length; index++) {
         const rect = placements[index], box = document.createElement('div'); box.dataset.groupPlacement = JSON.stringify(rect);
         box.className = 'note-group-overview__placement-rect';
         box.textContent = result === 'group' ? text('newGroup', 'New group') : noteById.get(selection()[index]).title || String(selection()[index]);
-        box.style.left = `${(rect.x - Math.min(...placements.map(item => item.x))) * 12}px`; box.style.top = `${(rect.y - Math.min(...placements.map(item => item.y))) * 8}px`;
-        box.style.width = `${rect.width * 12}px`; box.style.height = `${rect.height * 8}px`; preview.append(box);
+        box.style.left = `${(rect.x - left) * scale}px`; box.style.top = `${(rect.y - top) * scale}px`;
+        box.style.width = `${rect.width * scale}px`; box.style.height = `${rect.height * scale}px`; preview.append(box);
       }
-      preview.style.minHeight = `${Math.max(...placements.map(rect => rect.y + rect.height)) * 8 - Math.min(...placements.map(rect => rect.y)) * 8}px`;
+      preview.style.minHeight = `${height * scale}px`;
     };
-    tools.append(preview); confirmControls(); x.addEventListener('input', calculate); y.addEventListener('input', calculate); calculate();
+    tools.append(preview, position); confirmControls(); choices.addEventListener('change', calculate); x.addEventListener('input', calculate); y.addEventListener('input', calculate); calculate();
   }
   function submit(kind, fields) {
     if (!current() || !manageable || busy) return;
@@ -223,10 +283,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (!current()) return null;
     const element = document.elementFromPoint(session.clientX, session.clientY);
     if (!overlay.hidden && overlay.contains(element)) {
-      if (element.closest('[data-group-exit]')) return { kind: 'exit' };
       const card = element.closest('[data-group-page]');
       if (card) return { kind: 'overview', group_id: currentGroup.id, before_note_id: Number(card.dataset.groupPage), valid: currentGroup.can_manage === true };
-      if (element === grid) return { kind: 'overview', group_id: currentGroup.id, before_note_id: null, valid: currentGroup.can_manage === true };
+      if (grid.contains(element)) return { kind: 'overview', group_id: currentGroup.id, before_note_id: null, valid: currentGroup.can_manage === true };
+      if (element.closest('button,input,select,summary,a')) return null;
+      if (dragging && (element === overlay || element.closest('[data-group-exit]') || session.clientY < grid.getBoundingClientRect().top)) return { kind: 'exit' };
       return null;
     }
     if (canvasHitTest) return canvasHitTest(session);
@@ -237,17 +298,20 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     highlightTarget(state === 'target-ready' && target?.kind === 'note' ? target.id : null);
     if (state === 'holding') activePointer = session.pointerId;
     if (state === 'dragging' && !dragging) {
-      selected.clear(); session.selected_ids.forEach(id => selected.add(id));
+      selected.clear(); session.selected_ids.forEach(id => selected.add(id)); selectionMode = true;
       // Retain the browser's original touch target while capture takes effect.
       grid.querySelectorAll('[data-group-page]').forEach(card => {
         const checked = selected.has(Number(card.dataset.groupPage));
         card.classList.toggle('is-selected', checked);
         const toggle = card.querySelector('[data-group-select]');
-        if (toggle) { toggle.setAttribute('aria-pressed', String(checked)); toggle.textContent = checked ? '\u2713' : '\u25cb'; }
+        if (toggle) { toggle.hidden = false; toggle.setAttribute('aria-pressed', String(checked)); toggle.textContent = checked ? '\u2713' : '\u25cb'; }
       });
       toolbar.querySelectorAll('button').forEach(control => { control.disabled = !selected.size || busy; });
+      updateHeader();
     }
     dragging = !['holding', 'placement-choice', 'submitting'].includes(state);
+    exit.hidden = !dragging;
+    if (dragging) paintProxy(session); else clearProxy();
     if (dragging) suppressClick = true;
     exit.classList.toggle('is-dwelling', state === 'exit-dwell');
     overlay.dataset.gestureState = state;
@@ -291,7 +355,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         ? { group_id: source.id, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null }
         : { source_group_id: source.id, target_group_id: targetId, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null });
     },
-    onCancel() { activePointer = null; dragging = false; canvasDrag = false; stopScroll(); highlightTarget(null); if (!closed) { overlay.dataset.gestureState = 'idle'; currentGroup = source; overlay.hidden = false; renderPages(); } },
+    onCancel() { activePointer = null; dragging = false; canvasDrag = false; exit.hidden = true; clearProxy(); stopScroll(); highlightTarget(null); if (!closed) { overlay.dataset.gestureState = 'idle'; currentGroup = source; overlay.hidden = false; renderPages(); } },
   });
   function pointerDown(event) {
     if (!current() || busy || dragPreview || standaloneIds.length) return;
@@ -316,7 +380,8 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const element = event.target.closest('button');
     if (event.target === overlay || element?.hasAttribute('data-group-close')) { close(); return; }
     if (!element || !overlay.contains(element)) return;
-    if (element.hasAttribute('data-group-activate')) { const id = Number(element.dataset.groupActivate); close(); onActivate(id); }
+    if (element.hasAttribute('data-group-selection-mode')) { clearTools(); selectionMode = !selectionMode; if (!selectionMode) selected.clear(); renderPages(); mode.focus(); }
+    else if (element.hasAttribute('data-group-activate')) { const id = Number(element.dataset.groupActivate); if (selectionMode && manageable && !dragPreview) updateSelection(id); else { close(); onActivate(id); } }
     else if (manageable && element.hasAttribute('data-group-select')) updateSelection(Number(element.dataset.groupSelect));
     else if (element.dataset.groupAction === 'order') orderSelection();
     else if (element.dataset.groupAction === 'move') moveSelection();
@@ -337,18 +402,19 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       // The board remains the owner of a native drag and must receive Escape
       // after its destination preview closes.
       if (!dragPreview) event.stopPropagation();
-      if (action) { clearTools(); closeButton.focus(); } else close();
+      if (menu.open) { menu.open = false; menuToggle.focus(); }
+      else if (action) { clearTools(); closeButton.focus(); } else close();
       return;
     }
     if (event.key !== 'Tab') return;
-    const focusable = [...dialog.querySelectorAll('button:not(:disabled),select:not(:disabled),input:not(:disabled),[tabindex="0"]')].filter(element => element.getClientRects().length);
+    const focusable = [...dialog.querySelectorAll('button:not(:disabled),select:not(:disabled),input:not(:disabled),summary,[tabindex="0"]')].filter(element => element.getClientRects().length && getComputedStyle(element).visibility !== 'hidden');
     const first = focusable[0], last = focusable.at(-1);
     if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
     else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
   }
   function close({ restore = true } = {}) {
     if (closed) return;
-    closed = true; stopScroll(); highlightTarget(null); gesture.dispose(); subscriptions.splice(0).forEach(unsubscribe => unsubscribe());
+    closed = true; clearProxy(); stopScroll(); highlightTarget(null); gesture.dispose(); subscriptions.splice(0).forEach(unsubscribe => unsubscribe());
     overlay.remove(); if (overlayToken != null) dropOverlay(overlayToken);
     if (restore && restoreFocus?.isConnected) restoreFocus.focus({ preventScroll: true }); onClose();
   }

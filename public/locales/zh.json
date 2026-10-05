@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "便笺",
+            "selectedCount": "已选择 {{count}} 项",
+            "selectionMode": "选择便笺",
+            "actions": "操作",
+            "exitDrag": "移出",
+            "exitDwell": "1 秒",
+            "dragCount": "{{count}} 张便笺",
+            "placeCount": "放置 {{count}} 张便笺",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

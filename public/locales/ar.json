@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "ملاحظات",
+            "selectedCount": "تم تحديد {{count}}",
+            "selectionMode": "تحديد الملاحظات",
+            "actions": "إجراءات",
+            "exitDrag": "خروج",
+            "exitDwell": "١ ث",
+            "dragCount": "{{count}} ملاحظات",
+            "placeCount": "وضع {{count}} ملاحظات",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Заметки",
+            "selectedCount": "Выбрано: {{count}}",
+            "selectionMode": "Выбрать заметки",
+            "actions": "Действия",
+            "exitDrag": "Выход",
+            "exitDwell": "1 с",
+            "dragCount": "Заметок: {{count}}",
+            "placeCount": "Разместить заметки: {{count}}",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

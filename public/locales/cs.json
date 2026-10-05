@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Poznámky",
+            "selectedCount": "Vybráno: {{count}}",
+            "selectionMode": "Vybrat poznámky",
+            "actions": "Akce",
+            "exitDrag": "Opustit",
+            "exitDwell": "1 s",
+            "dragCount": "{{count}} poznámek",
+            "placeCount": "Umístit {{count}} poznámek",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

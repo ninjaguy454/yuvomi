@@ -54,7 +54,13 @@ async function mount({ width = 1280, height = 900, touch = false, compact = fals
 }
 const card = '[data-board-key="group:11"]';
 async function open(page) { await page.click(`${card} [data-group-page="overview"]`); await page.waitForSelector('.note-group-overview'); }
-async function order(page) { await open(page); await page.click('[data-group-select="2"]'); await page.click('.note-group-overview [data-group-action="order"]'); await page.select('[data-group-before]', '1'); await page.click('[data-group-confirm]'); }
+async function select(page, id) { if (await page.$eval('[data-group-selection-mode]', element => element.getAttribute('aria-pressed') === 'false')) await page.click('[data-group-selection-mode]'); await page.click(`[data-group-select="${id}"]`); }
+async function actions(page) {
+  if (!await page.$eval('[data-group-menu]', element => element.open)) await page.click('[data-group-menu] summary');
+  await page.waitForSelector('[data-group-menu][open] [data-group-action]', { visible:true });
+}
+async function action(page, name) { await actions(page); await page.click(`.note-group-overview [data-group-action="${name}"]`); }
+async function order(page) { await open(page); await select(page, 2); await action(page, 'order'); await page.select('[data-group-before]', '1'); await page.click('[data-group-confirm]'); }
 const center = async (page, selector) => page.$eval(selector, element => { const rect = element.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
 
 for (const width of [390,1280]) test(`actual app shell overview keeps modal blur and removes its body portal on disposal at ${width}px`, async () => {
@@ -151,7 +157,7 @@ test('overview uncertain result retries the identical frozen command through pag
 
 test('remote revision invalidates an open overview extraction preview before Place', async () => {
   const page = await mount(); try {
-    await open(page); await page.click('[data-group-select="2"]'); await page.click('.note-group-overview [data-group-action="remove"]'); await page.waitForSelector('[data-group-confirm]');
+    await open(page); await select(page, 2); await action(page, 'remove'); await page.waitForSelector('[data-group-confirm]');
     snapshot.groups[0].revision++; snapshot.groups[0].can_manage = false;
     await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change')));
     await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
@@ -192,7 +198,7 @@ test('actual canvas Escape after overview exit consumes release without a comman
 
 test('changing a page filter discards an open placement draft and keeps filtered browsing read-only', async () => {
   const page = await mount(); try {
-    await open(page); await page.click('[data-group-select="2"]'); await page.click('.note-group-overview [data-group-action="remove"]');
+    await open(page); await select(page, 2); await action(page, 'remove');
     await page.evaluate(() => { const search = document.querySelector('#notes-search'); search.value = 'Page'; search.dispatchEvent(new Event('input', { bubbles: true })); });
     await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
     await open(page); assert.equal(await page.$('.note-group-overview [data-group-select]'), null); assert.equal(writes.length, 0);
@@ -248,7 +254,8 @@ for (const [name, options] of [['narrow touch', { width: 360, touch: true }], ['
       } else { await page.mouse.move(point.x, point.y); await page.mouse.up(); }
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       assert.equal(writes.length, 0, 'List pixels must not become saved world coordinates');
-      await page.focus('.note-group-overview [data-group-action="remove"]'); await page.keyboard.press('Enter');
+      await actions(page); await page.focus('.note-group-overview [data-group-action="remove"]');
+      assert.equal(await page.evaluate(()=>document.activeElement.dataset.groupAction),'remove'); await page.keyboard.press('Enter');
       const placements = await page.$$eval('[data-group-placement]', elements => elements.map(element => JSON.parse(element.dataset.groupPlacement)));
       assert.equal(placements.length, 1); await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
       await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'extract'); assert.deepEqual(writes[0].placements, placements);
@@ -273,8 +280,10 @@ for (const [width, height] of [[320, 720], [844, 390]]) {
       assert.ok(geometry.gridHeight >= Math.min(160, height * .35), `usable grid height: ${geometry.gridHeight}`);
       assert.ok(geometry.documentWidth <= geometry.viewportWidth + 1);
       if (process.env.QA_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.QA_SCREENSHOT_DIR}/overview-${width}x${height}-rtl-200.png` });
+      await page.focus('[data-group-selection-mode]'); await page.keyboard.press('Enter');
       await page.focus('[data-group-select="2"]'); await page.keyboard.press('Enter');
       assert.equal(await page.evaluate(() => document.activeElement.dataset.groupSelect), '2');
+      await actions(page);
       assert.equal(await page.$eval('.note-group-overview [data-group-action="order"]', element => !element.disabled && element.getClientRects().length > 0), true);
       assert.equal(writes.length, 0);
     } finally { await page.close(); }

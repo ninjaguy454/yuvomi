@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "नोट्स",
+            "selectedCount": "{{count}} चुने गए",
+            "selectionMode": "नोट्स चुनें",
+            "actions": "कार्रवाइयाँ",
+            "exitDrag": "बाहर निकलें",
+            "exitDwell": "1 सेकंड",
+            "dragCount": "{{count}} नोट्स",
+            "placeCount": "{{count}} नोट्स रखें",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

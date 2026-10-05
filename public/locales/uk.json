@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Нотатки",
+            "selectedCount": "Вибрано: {{count}}",
+            "selectionMode": "Вибрати нотатки",
+            "actions": "Дії",
+            "exitDrag": "Вихід",
+            "exitDwell": "1 с",
+            "dragCount": "Нотаток: {{count}}",
+            "placeCount": "Розмістити нотатки: {{count}}",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

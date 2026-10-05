@@ -1429,6 +1429,14 @@
     },
     "notes": {
         "groups": {
+            "overviewTitle": "Notlar",
+            "selectedCount": "{{count}} seçili",
+            "selectionMode": "Notları seç",
+            "actions": "İşlemler",
+            "exitDrag": "Çıkış",
+            "exitDwell": "1 sn",
+            "dragCount": "{{count}} not",
+            "placeCount": "{{count}} notu yerleştir",
             "overview": "Group overview",
             "close": "Close group overview",
             "exit": "Canvas",

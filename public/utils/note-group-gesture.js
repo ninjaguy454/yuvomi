@@ -88,6 +88,7 @@ export function createNoteGroupGesture({
           hoverTimer = null;
           if (!session || generation !== hoverGeneration || hoverKey !== nextKey) return;
           hoverActive = true;
+          if (target.kind === 'group') onCanvas = false;
           preview(target.kind === 'group' ? 'destination-overview' : 'target-ready');
         }, 400);
       }

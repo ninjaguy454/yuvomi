@@ -186,3 +186,13 @@ test('cancellation during a holding preview cannot arm another lifecycle hold ti
   f.gesture.pointerDown(f.event(), f.seed);
   assert.equal(f.clock.pending, 1, 'only the replacement gesture owns a hold timer'); f.gesture.dispose(); assert.equal(f.clock.pending, 0);
 });
+
+test('a hovered destination overview can exit again with the same continuous selection', () => {
+  const f = fixture(); f.start(); f.target({ kind: 'exit' }); f.gesture.pointerMove(f.event()); f.clock.tick(1000);
+  f.target({ kind: 'group', id: 12, valid: true }); f.gesture.pointerMove(f.event()); f.clock.tick(400);
+  assert.equal(f.previews.at(-1).state, 'destination-overview');
+  f.target({ kind: 'exit' }); f.gesture.pointerMove(f.event()); f.clock.tick(999);
+  assert.equal(f.exits.length, 1); f.clock.tick(1); assert.equal(f.exits.length, 2);
+  assert.equal(f.exits[1].pointerId, 6); assert.deepEqual(f.exits[1].selected_ids, [2,5,7,9]); assert.equal(f.drops.length, 0);
+  f.gesture.dispose();
+});

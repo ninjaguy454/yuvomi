@@ -37,9 +37,11 @@ export function noteGroupExtractionPlacements(board, group, selectedIds, result,
 /** Authorized, local overview. The page owns requests, uncertain retries and invalidation. */
 export function openNoteGroupOverview({ host, group, notes, activeId, onActivate = () => {}, onCommand = () => {}, onExitDrag = () => {}, authentication = {},
   board = { notes, groups: [group] }, selectedIds = [], clientToWorld = (x, y) => ({ x, y }), hitTest: canvasHitTest,
-  onError = () => {}, onClose = () => {}, dragPreview = null,
+  onError = () => {}, onClose = () => {}, dragPreview = null, initialAction = null, standaloneIds = [],
 }) {
-  const snapshot = structuredClone(board), source = snapshot.groups.find(item => item.id === group.id) || structuredClone(group);
+  // Display the caller's authorized projection. The complete command board is
+  // revision evidence, never a reason to expand a filtered/browse-only view.
+  const snapshot = structuredClone(board), source = structuredClone(group);
   const noteById = new Map(snapshot.notes.map(note => [note.id, note]));
   const visibleIds = source.member_ids.filter(id => noteById.has(id));
   const manageable = source.can_manage === true && visibleIds.length === source.member_ids.length;
@@ -97,7 +99,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       grid.append(card);
     }
     toolbar.replaceChildren();
-    if (manageable && !dragPreview) for (const [name, label] of [['order', text('order', 'Order')], ['move', text('moveToGroup', 'Move to group')], ['remove', text('remove', 'Remove from group')]]) {
+    if (manageable && !dragPreview && !standaloneIds.length) for (const [name, label] of [['order', text('order', 'Order')], ['move', text('moveToGroup', 'Move to group')], ['remove', text('remove', 'Remove from group')]]) {
       const control = button(label, { groupAction: name }); control.disabled = !selected.size || busy; toolbar.append(control);
     }
   }
@@ -123,7 +125,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     clearTools(); action = 'order'; insertionControl(source, selection()); confirmControls(); tools.querySelector('select')?.focus();
   }
   function moveSelection() {
-    clearTools(); action = 'move';
+    clearTools(); action = standaloneIds.length ? 'join' : 'move';
     const destination = document.createElement('select'); destination.dataset.groupDestination = '';
     for (const item of snapshot.groups.filter(item => item.can_manage && item.id !== source.id)) {
       const option = document.createElement('option'); option.value = String(item.id);
@@ -182,6 +184,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       if (moveSelectionBefore(source.member_ids, ids, before).every((id, index) => id === source.member_ids[index])) { clearTools(); return; }
       submit('reorder', { group_id: source.id, selected_ids: ids, before_note_id: before });
     } else if (action === 'move') submit('transfer', { source_group_id: source.id, target_group_id: Number(tools.querySelector('[data-group-destination]').value), selected_ids: ids, before_note_id: before });
+    else if (action === 'join') submit('join', { target_group_id: Number(tools.querySelector('[data-group-destination]').value), note_ids: standaloneIds, before_note_id: before });
     else if (action === 'extract' && placement) submit('extract', { source_group_id: source.id, selected_ids: ids, result: placement.result, placements: placement.placements });
   }
   function hitTest(session) {
@@ -245,7 +248,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     onCancel() { activePointer = null; dragging = false; canvasDrag = false; stopScroll(); if (!closed) { overlay.dataset.gestureState = 'idle'; currentGroup = source; overlay.hidden = false; renderPages(); } },
   });
   function pointerDown(event) {
-    if (!current() || busy || dragPreview) return;
+    if (!current() || busy || dragPreview || standaloneIds.length) return;
     if (activePointer != null) { gesture.pointerDown(event); return; }
     const activate = event.target.closest('[data-group-activate]');
     if (!activate || !overlay.contains(activate) || !manageable || action) return;
@@ -253,7 +256,9 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     // Keep the pressed DOM target alive until the browser has dispatched its
     // click; a short tap must still activate this page.
     if (!selected.has(id)) { selected.clear(); selected.add(id); }
-    const expected = freezeNoteGroupCommand(draft, 'reorder', { group_id: source.id, selected_ids: selection(), before_note_id: null }).expected;
+    let expected;
+    try { expected = freezeNoteGroupCommand(draft, 'reorder', { group_id: source.id, selected_ids: selection(), before_note_id: null }).expected; }
+    catch (error) { announce(error.message); return; }
     gesture.pointerDown({ pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary, button: event.button, clientX: event.clientX, clientY: event.clientY, currentTarget: host }, { selected_ids: selection(), source_group_id: source.id, expected, can_manage: manageable });
   }
   function click(event) {
@@ -287,6 +292,13 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (restore && restoreFocus?.isConnected) restoreFocus.focus({ preventScroll: true }); onClose();
   }
   function dispose() { close({ restore: false }); }
+  function dragTarget(clientX, clientY) {
+    if (!current() || overlay.hidden || !currentGroup.can_manage) return null;
+    const element = document.elementFromPoint(clientX, clientY);
+    if (!element || !grid.contains(element)) return null;
+    const card = element.closest('[data-group-page]');
+    return { group_id: currentGroup.id, before_note_id: card ? Number(card.dataset.groupPage) : null };
+  }
   listen(host, 'pointerdown', pointerDown, true);
   listen(window, 'pointermove', event => { if (current()) gesture.pointerMove(event); }, { passive: false });
   listen(window, 'pointerup', event => { if (gesture.pointerUp(event)) suppressClick = true; if (activePointer === event.pointerId) activePointer = null; }, true);
@@ -306,6 +318,109 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   if (authentication.signal) listen(authentication.signal, 'abort', dispose, { once: true });
   overlayToken = pushOverlay(() => { close(); return true; });
   renderPages(); closeButton.focus({ preventScroll: true });
-  if (!current()) return { close, dispose };
-  return { close, dispose };
+  if (current() && manageable) {
+    if (initialAction === 'order') orderSelection();
+    else if (initialAction === 'move' || initialAction === 'add') moveSelection();
+    else if (initialAction === 'remove') extractionChoices();
+  }
+  return { close, dispose, dragTarget };
+}
+
+/** One page-generation adapter. Native board drags retain their existing owner. */
+export function createNoteGroupInteractions({ host, board, onCommand, onActivate = () => {}, authentication = {}, clientToWorld,
+  onExitDrag, hitTest, onError = () => {}, clock = globalThis,
+}) {
+  const snapshot = structuredClone(board);
+  let disposed = false, overview = null, preview = null, hover = null, hoverTimer = null, lastDrop = null;
+  const current = () => !disposed && !authentication.signal?.aborted && authentication.isCurrent?.() !== false;
+  const sourceAllowed = item => {
+    if (!item || item.can_manage === false || item.layout?.position_locked) return false;
+    if (item.kind === 'group') return snapshot.groups.some(group => group.id === item.id && group.can_manage);
+    const note = snapshot.notes.find(note => note.id === item.id);
+    return !!note && note.permissions?.edit !== false && note.permissions?.arrange !== false && !note.layout?.position_locked
+      && !snapshot.groups.some(group => group.member_ids.includes(note.id));
+  };
+  const destinationAllowed = item => {
+    if (!item || item.can_manage === false) return false;
+    if (item.kind === 'group') return snapshot.groups.some(group => group.id === item.id && group.can_manage);
+    const note = snapshot.notes.find(note => note.id === item.id);
+    return !!note && !!note.layout?.position_locked && note.permissions?.edit !== false && note.permissions?.arrange !== false
+      && !snapshot.groups.some(group => group.member_ids.includes(note.id));
+  };
+  function leaveTarget() {
+    if (hoverTimer !== null) clock.clearTimeout(hoverTimer);
+    hoverTimer = null; hover = null;
+    const old = preview; preview = null; old?.dispose();
+  }
+  function clearOverview() { const old = overview; overview = null; old?.dispose(); }
+  function emit(kind, fields) {
+    if (!current()) return false;
+    try {
+      const command = freezeNoteGroupCommand(createNoteGroupDraft(snapshot, crypto.randomUUID()), kind, fields);
+      clearOverview(); leaveTarget();
+      if (current()) Promise.resolve(onCommand(command)).catch(onError);
+    } catch (error) { onError(error); }
+    return true;
+  }
+  function onGroupAction(action, item) {
+    if (!current()) return;
+    leaveTarget(); clearOverview();
+    if (item.kind === 'note') {
+      if (action !== 'add' || !sourceAllowed(item)) return;
+      const note = snapshot.notes.find(note => note.id === item.id);
+      overview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes,
+        group: { id: null, member_ids: [note.id], can_manage: true, layout: note.layout }, standaloneIds: [note.id], selectedIds: [note.id],
+        activeId: note.id, initialAction: 'add', authentication, onCommand, onError, onClose: () => { overview = null; } });
+      return;
+    }
+    const canonical = snapshot.groups.find(group => group.id === item.id);
+    if (!canonical) return;
+    const group = { ...canonical, member_ids: item.member_ids || canonical.member_ids, can_manage: canonical.can_manage && item.can_manage !== false };
+    overview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes, group, activeId: item.note?.id,
+      selectedIds: action === 'overview' ? [] : [item.note?.id || group.member_ids[0]], initialAction: action,
+      authentication, onCommand, onError, clientToWorld, onExitDrag, hitTest,
+      onActivate: id => onActivate(id, canonical.id), onClose: () => { overview = null; } });
+  }
+  function hoverTarget(item, session) {
+    if (!current() || !sourceAllowed(session.item) || !destinationAllowed(item) || item.key === session.item.key) { leaveTarget(); return; }
+    if (hover?.item.key === item.key && hover.session.pointerId === session.pointerId) { hover.session = session; return; }
+    leaveTarget(); lastDrop = null;
+    hover = { item, session };
+    const expectedHover = hover;
+    hoverTimer = clock.setTimeout(() => {
+      hoverTimer = null;
+      if (!current() || hover !== expectedHover || item.kind !== 'group') return;
+      const group = snapshot.groups.find(group => group.id === item.id);
+      preview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes, group, activeId: group.member_ids[0], dragPreview: session,
+        authentication, onError, onClose: () => { preview = null; } });
+    }, 400);
+  }
+  function targetAt(event, session) {
+    if (!current() || !hover || hover.session.pointerId !== session.pointerId || hover.session.item.key !== session.item?.key) return null;
+    return preview?.dragTarget(event.clientX, event.clientY) ? hover.item : null;
+  }
+  function dropTarget(item, session) {
+    if (!current()) return true;
+    const key = `${session.pointerId}:${session.item?.key}`;
+    if (lastDrop === key) return true;
+    if (!sourceAllowed(session.item) || !destinationAllowed(item) || item.key === session.item.key) { leaveTarget(); return false; }
+    const insertion = preview?.dragTarget(session.clientX, session.clientY);
+    const before = insertion?.group_id === item.id ? insertion.before_note_id : null;
+    const source = session.item;
+    lastDrop = key;
+    if (item.kind === 'note') {
+      return source.kind === 'group'
+        ? emit('create', { source_group_id: source.id, selected_ids: snapshot.groups.find(group => group.id === source.id).member_ids, target_note_id: item.id })
+        : emit('create', { source_note_id: source.id, target_note_id: item.id });
+    }
+    return source.kind === 'group'
+      ? emit('transfer', { source_group_id: source.id, target_group_id: item.id, selected_ids: snapshot.groups.find(group => group.id === source.id).member_ids, before_note_id: before })
+      : emit('join', { target_group_id: item.id, note_ids: [source.id], before_note_id: before });
+  }
+  function dispose() {
+    if (disposed) return;
+    disposed = true; leaveTarget(); clearOverview(); authentication.signal?.removeEventListener('abort', dispose);
+  }
+  authentication.signal?.addEventListener('abort', dispose, { once: true });
+  return { onGroupAction, groupDragBridge: { hoverTarget, leaveTarget, dropTarget, targetAt }, dispose };
 }

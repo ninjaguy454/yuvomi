@@ -1,0 +1,139 @@
+/* Paging belongs to the group rectangle; the canvas reserves room at y=0. */
+.notes-canvas-space--active > .notes-grid.notes-board--groups { top: 48px; }
+.notes-board > .note-card.note-card--group { overflow: visible; }
+.note-group-pages {
+  position: absolute;
+  top: calc(-46px * var(--note-group-ui-scale, 1));
+  left: 0;
+  display: flex;
+  gap: 2px;
+  width: max-content;
+  height: 44px;
+  direction: ltr;
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface, #fff);
+  box-shadow: 0 1px 4px #0002;
+  transform: scale(var(--note-group-ui-scale, 1));
+  transform-origin: top left;
+}
+.note-group-pages button {
+  appearance: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--color-text-primary, #222);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.note-group-pages button:disabled { opacity: .45; cursor: default; }
+.note-group-pages button:focus-visible { outline: 2px solid var(--color-primary, #236a62); outline-offset: -3px; }
+.notes-board--compact .note-group-pages { position: static; margin-block-end: 8px; transform: none; }
+.notes-board--compact .note-card--group { overflow: visible; }
+.note-card__menu-items [data-group-action] { min-height: 44px; }
+
+.note-group-overview {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 1000);
+  display: grid;
+  place-items: center;
+  padding: clamp(8px, 3vw, 32px);
+  box-sizing: border-box;
+  background: rgba(28, 30, 32, .72);
+  color: var(--color-text-primary, #222);
+  overscroll-behavior: contain;
+}
+.note-group-overview[hidden] { display: none; }
+@supports (backdrop-filter: blur(12px)) {
+  .note-group-overview { background: rgba(28, 30, 32, .45); backdrop-filter: blur(12px); }
+}
+.note-group-overview__panel {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 1080px);
+  max-height: calc(100dvh - 64px);
+  padding: clamp(12px, 2vw, 24px);
+  box-sizing: border-box;
+  border-radius: var(--radius-lg, 16px);
+  background: var(--color-surface, #fff);
+  box-shadow: var(--shadow-lg, 0 12px 48px #0004);
+  overflow: hidden;
+}
+.note-group-overview__header { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+.note-group-overview__header h2 { margin: 0; font-size: 1.25rem; }
+.note-group-overview button,
+.note-group-overview select,
+.note-group-overview input {
+  font: inherit;
+  color: inherit;
+  min-height: 44px;
+  min-width: 44px;
+  border: 1px solid var(--color-border, #cfcfcf);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface, #fff);
+}
+.note-group-overview button { padding: 8px 12px; cursor: pointer; }
+.note-group-overview button:disabled { opacity: .45; cursor: default; }
+.note-group-overview :is(button, select, input):focus-visible { outline: 3px solid var(--color-primary, #236a62); outline-offset: 2px; }
+.note-group-overview__exit {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  min-height: 56px;
+  margin-block: 16px;
+  border: 2px dashed var(--color-border, #b9b9b9);
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-bg, #f5f3ed);
+  box-sizing: border-box;
+}
+.note-group-overview__exit.is-dwelling { border-color: var(--color-primary, #236a62); background: var(--color-primary-light, #dbeae5); }
+.note-group-overview__toolbar { display: flex; flex-wrap: wrap; gap: 8px; padding-block-end: 12px; flex: 0 0 auto; }
+.note-group-overview__toolbar:empty { display: none; }
+.note-group-overview__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(180px, 100%), 1fr));
+  gap: 16px;
+  min-height: 80px;
+  padding: 4px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+}
+.note-group-overview__page {
+  position: relative;
+  min-width: 0;
+  height: 160px;
+  padding: 4px;
+  border: 2px solid transparent;
+  border-radius: var(--radius-md, 8px);
+  box-sizing: border-box;
+}
+.note-group-overview__page.is-selected { border-color: var(--color-primary, #236a62); }
+.note-group-overview__page.is-placeholder { opacity: .35; border-style: dashed; }
+.note-card.is-note-group-target { outline: 3px solid var(--color-primary, #236a62); outline-offset: 4px; }
+.note-group-overview__activate { display: flex; flex-direction: column; gap: 12px; width: 100%; height: 100%; text-align: start; overflow: hidden; touch-action: pan-x pan-y; }
+.note-group-overview__activate strong { padding-inline-end: 36px; }
+.note-group-overview__excerpt { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-wrap; font-size: .9em; }
+.note-group-overview .note-group-overview__select { position: absolute; inset-block-start: 4px; inset-inline-end: 4px; padding: 6px; font-size: 1.35rem; }
+.note-group-overview__tools { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; max-height: 45dvh; overflow: auto; padding: 8px 4px; flex: 0 0 auto; }
+.note-group-overview__tools:empty { display: none; }
+.note-group-overview__tools label { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
+.note-group-overview__tools :is(input, select) { box-sizing: border-box; max-width: 100%; padding-inline: 8px; }
+.note-group-overview__tools input { width: 140px; }
+.note-group-overview__status { flex: 0 0 auto; padding-block: 4px; }
+.note-group-overview__status:empty { display: none; }
+.note-group-overview__placement { position: relative; flex: 0 0 100%; min-height: 48px; max-height: 160px; overflow: auto; }
+.note-group-overview__placement-rect { position: absolute; box-sizing: border-box; border: 1px solid var(--color-primary, #236a62); border-radius: 4px; padding: 4px; background: var(--color-primary-light, #dbeae5); overflow: hidden; font-size: .75rem; }
+@media (max-width: 640px) {
+  .note-group-overview__panel { max-height: calc(100dvh - 16px); }
+  .note-group-overview__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .note-group-overview__page { height: 148px; }
+  .note-group-overview__exit { margin-block: 10px; min-height: 48px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .note-group-overview, .note-group-overview * { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}

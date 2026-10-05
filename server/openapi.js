@@ -21,6 +21,7 @@ function withIdempotency(paths) {
     // A transaction-owned operation may explicitly document its own retry
     // contract instead of the generic cached-response middleware.
     if (item.post.parameters?.some(parameter => parameter.in === 'header' && parameter.name.toLowerCase() === 'idempotency-key')) continue;
+    if (path === '/api/v1/notes/group-operations') continue;
     item.post.parameters = [...(item.post.parameters ?? []), idempotencyHeaderParam()];
     item.post.responses = {
       ...item.post.responses,

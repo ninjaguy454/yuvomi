@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Không có kế hoạch"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Các trang nhóm",
+        "groupPrevious": "Ghi chú trước",
+        "groupNext": "Ghi chú tiếp theo",
+        "groupOverview": "Mở tổng quan nhóm, ghi chú {{current}} trên {{count}}",
+        "groupAction": {
+            "add": "Thêm vào nhóm",
+            "move": "Di chuyển mục đã chọn",
+            "remove": "Xóa khỏi nhóm",
+            "order": "Đổi thứ tự"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Nic naplánováno"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Stránky skupiny",
+        "groupPrevious": "Předchozí poznámka",
+        "groupNext": "Další poznámka",
+        "groupOverview": "Otevřít přehled skupiny, poznámka {{current}} z {{count}}",
+        "groupAction": {
+            "add": "Přidat do skupiny",
+            "move": "Přesunout vybrané",
+            "remove": "Odebrat ze skupiny",
+            "order": "Změnit pořadí"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

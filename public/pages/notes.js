@@ -19,15 +19,20 @@ import { emptyStateHTML } from '/utils/empty-state.js';
 import { AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 import { getPermissions, moduleAccess, canCapability } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
-import { wireNoteBoard } from '/components/note-board.js';
-import { normalizeNoteLayout, organizeNoteLayouts } from '/utils/note-board-layout.js';
+import { wireNoteBoard, renderNoteGroupFrame } from '/components/note-board.js';
+import { normalizeNoteLayout, organizeNoteGroupItems, projectNoteGroupItems, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { watchNoteChanges } from '/utils/note-live.js';
 import { mountOpenTaskBoard } from '/components/open-task-board.js';
+import { createNoteGroupDraft, freezeNoteGroupCommand, newNoteGroupOperationId } from '/utils/note-group-draft.js';
+
+const NOTE_GROUPS_INTERFACE_ENABLED = true;
 
 const canNote = action => getPermissions().principal_kind === 'device'
   ? moduleAccess('notes') !== 'none' && canCapability(`device_notes.${action}`)
   : moduleAccess('notes') === 'write' || (action === 'view' && moduleAccess('notes') === 'read');
 const canOnNote = (note, action) => canNote(action) && note?.permissions?.[action] !== false;
+const canArrangeNote = note => canOnNote(note,'edit') && note?.permissions?.arrange !== false;
+const boardIsFiltered = () => !!state.filterQuery.trim() || !!state.filterCreator;
 
 // --------------------------------------------------------
 // Konstanten
@@ -60,12 +65,61 @@ const NOTE_COLOR_NAMES = () => ({
 // State
 // --------------------------------------------------------
 
-let state = { notes: [], user: null, filterQuery: '', filterCreator: '', filterCreatorLabel: '' };
+let state = { notes: [], groups: [], user: null, filterQuery: '', filterCreator: '', filterCreatorLabel: '' };
 let _container = null;
 let board = null;
 let stopLive = null;
 let stopOpenTasks = null;
 const currentPage = (page, auth) => state === page && page.active && sameAuthentication(auth);
+const boardSignature = value => JSON.stringify({ notes:value.notes.map(note=>[note.id,note.revision,note.layout,note.permissions]),groups:value.groups });
+function normalizedBoard(value) {
+  if (!Array.isArray(value?.notes) || !Array.isArray(value?.groups)) throw new Error('The Notes board response is incomplete. Reload it.');
+  return NOTE_GROUPS_INTERFACE_ENABLED ? value : { notes:value.notes.map(note=>({...note,permissions:{...note.permissions,arrange:false}})),groups:[] };
+}
+function cancelGroupDrafts(page = state) {
+  page.boardGeneration++;
+  page.draftAbort.abort(); page.draftAbort = new AbortController();
+  board?.cancel();
+  if (document.querySelector('.note-modal[data-layout-editor]')) closeModal({ force:true });
+}
+function acceptBoardView(value) {
+  const fresh = normalizedBoard(value), page = state;
+  const lostAccess = page.notes.some(note => {
+    const next = fresh.notes.find(value=>value.id===note.id);
+    return !next || ['view','edit','delete','manage_visibility'].some(action=>note.permissions?.[action]===true && next.permissions?.[action]!==true);
+  });
+  if (lostAccess) { page.accessGeneration++; page.groupRetry=null; page.groupUndo=null; }
+  const changed = boardSignature(page) !== boardSignature(fresh);
+  if (changed) page.groupUndo=null;
+  page.notes = fresh.notes.filter(note=>!page.deleting.has(note.id)); page.groups = fresh.groups;
+  for (const [id,member] of page.activePages) if (!page.groups.some(group=>group.id===id && group.member_ids.includes(member))) page.activePages.delete(id);
+  return { fresh, changed, lostAccess };
+}
+function bindGroupCommands() {
+  const page = state, signature = boardSignature(page) + JSON.stringify([page.filterQuery,page.filterCreator]);
+  if (page.renderSignature !== undefined && page.renderSignature !== signature) cancelGroupDrafts(page);
+  page.renderSignature = signature;
+  const auth = page.auth, generation = page.boardGeneration;
+  const isCurrent = () => currentPage(page,auth) && page.boardGeneration===generation;
+  const draft = createNoteGroupDraft({notes:page.notes,groups:page.groups},newNoteGroupOperationId());
+  page.boardActions = { ...page.boardActions,
+    authentication:{signal:page.draftAbort.signal,isCurrent},
+    submitGroupCommand: command => {
+      if (!isCurrent() || boardIsFiltered()) return Promise.reject(new Error(t('notes.layoutConflict')));
+      return submitGroupCommand(command);
+    },
+    saveBoardCommand: async input => {
+      if (!NOTE_GROUPS_INTERFACE_ENABLED || !isCurrent() || boardIsFiltered() || page.groupPending || page.groupRetry) return false;
+      try {
+        const {kind,...fields}=input;
+        return await submitGroupCommand(freezeNoteGroupCommand(draft,kind,fields));
+      } catch (error) {
+        if (currentPage(page,auth) && !error.groupCommandHandled) layoutStatus(error.message || t('notes.layoutFailed'));
+        return false;
+      }
+    },
+  };
+}
 
 // --------------------------------------------------------
 // Antippbare Checklisten (#704)
@@ -160,14 +214,18 @@ async function handleCheckConflict() {
 
 export async function render(container, { user }) {
   board?.destroy(); stopLive?.(); stopOpenTasks?.();
-  if (state) state.active = false;
+  if (state) { state.active = false; state.requests?.abort(); state.draftAbort?.abort(); }
   _container = container;
-  state = { notes: [], user, filterQuery: '', filterCreator: '', filterCreatorLabel: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set(), viewport: {} };
+  state = { notes: [], groups: [], activePages:new Map(), user, filterQuery: '', filterCreator: '', filterCreatorLabel: '', compact: false, active: true, listDensity: 'expanded', expandedNotes: new Set(), pending: new Set(), deleting: new Set(), viewport: {}, requests:new AbortController(), draftAbort:new AbortController(), boardGeneration:0, accessGeneration:0 };
   const pageState = state;
   const auth = authenticationSnapshot();
-  const clearNotes = () => { if (state === pageState) { state.active = false; state.notes = []; state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
+  pageState.auth = auth;
+  const clearNotes = () => { if (state === pageState) { state.active = false; state.requests.abort(); state.draftAbort.abort(); state.notes = []; state.groups=[]; state.activePages.clear(); state.groupRetry=null; state.groupUndo=null; state.pending.clear(); state.expandedNotes.clear(); board?.destroy(); board = null; stopLive?.(); stopLive = null; stopOpenTasks?.(); stopOpenTasks = null; container.replaceChildren(); closeModal({ force: true }); } };
+  const contextChanged = () => { if (!sameAuthentication(auth)) clearNotes(); };
   window.addEventListener('auth:context-ending', clearNotes, { once: true });
   window.addEventListener('auth:expired', clearNotes, { once: true });
+  window.addEventListener('auth:context-rejected', clearNotes, { once: true });
+  window.addEventListener('vidamia:auth-context', contextChanged);
 
   container.replaceChildren();
   container.insertAdjacentHTML('beforeend', `
@@ -212,9 +270,9 @@ export async function render(container, { user }) {
   stopOpenTasks = mountOpenTaskBoard(container.querySelector('#notes-open-tasks'), { user });
 
   try {
-    const res  = canNote('view') ? await api.get('/notes') : { data: [] };
+    const res  = canNote('view') ? await api.get('/notes/board',{signal:pageState.requests.signal,requireFresh:true}) : { data:{notes:[],groups:[]} };
     if (!currentPage(pageState, auth)) return () => {};
-    state.notes = res.data;
+    acceptBoardView(res.data);
   } catch (err) {
     if (!currentPage(pageState, auth)) return () => {};
     console.error('[Notes] Laden fehlgeschlagen:', err);
@@ -234,7 +292,10 @@ export async function render(container, { user }) {
     }
     if (e.target.closest('a, summary')) { e.stopPropagation(); return; }
     const adjust = e.target.closest('[data-board-action="adjust"]');
-    if (adjust) { e.stopPropagation(); openLayoutModal(Number(adjust.closest('.note-card').dataset.id)); return; }
+    if (adjust) {
+      e.stopPropagation(); const card=adjust.closest('.note-card');
+      openLayoutModal(Number(card.dataset.groupId || card.dataset.id),card.dataset.groupId?'group':'note'); return;
+    }
     const flagButton = e.target.closest('[data-board-action="lock"], [data-board-action="top"]');
     if (flagButton) {
       e.stopPropagation();
@@ -303,7 +364,7 @@ export async function render(container, { user }) {
       renderGrid();
     },
   });
-  return () => { window.removeEventListener('auth:context-ending', clearNotes); window.removeEventListener('auth:expired', clearNotes); clearNotes(); };
+  return () => { window.removeEventListener('auth:context-ending', clearNotes); window.removeEventListener('auth:expired', clearNotes); window.removeEventListener('auth:context-rejected', clearNotes); window.removeEventListener('vidamia:auth-context', contextChanged); clearNotes(); };
 }
 
 // --------------------------------------------------------
@@ -370,8 +431,24 @@ function visibleNotes() {
   });
 }
 
+function visibleBoardItems() {
+  state.activePages ||= new Map();
+  return projectNoteGroupItems({notes:visibleNotes(),groups:state.groups || []}, {
+    activePages:state.activePages,filtered:!!state.filterQuery.trim() || !!state.filterCreator,
+  });
+}
+
+function boardOptions(forceCompact) {
+  return { getNotes:visibleNotes,getBoardItems:visibleBoardItems,activePages:state.activePages,
+    canEdit:canArrangeNote,saveLayout,viewState:state.viewport,
+    saveBoardCommand:state.boardActions?.saveBoardCommand,groupDragBridge:state.boardActions?.groupDragBridge,
+    onGroupAction:(action,item)=>state.boardActions?.onGroupAction?.(action,item),
+    compact:state.compact || forceCompact,filtered:!!state.filterQuery.trim() || !!state.filterCreator,onViewChange:renderGrid };
+}
+
 function renderGrid() {
   if (!state.active) return;
+  bindGroupCommands();
   const grid = _container.querySelector('#notes-grid');
   if (!grid) return;
   const focused = document.activeElement?.closest('.note-card');
@@ -395,9 +472,9 @@ function renderGrid() {
   _container.querySelector('#notes-list-density-label').hidden = !state.listView;
   _container.querySelector('#notes-list-density').value = state.listDensity;
   const organizeButton = _container.querySelector('#notes-organize');
-  if (organizeButton) organizeButton.hidden = state.listView;
+  if (organizeButton) { organizeButton.hidden = state.listView || boardIsFiltered() || !NOTE_GROUPS_INTERFACE_ENABLED; organizeButton.disabled = !!state.groupPending || !!state.groupRetry; }
   const includeLocked = _container.querySelector('#notes-include-locked');
-  if (includeLocked) includeLocked.hidden = state.listView;
+  if (includeLocked) includeLocked.hidden = state.listView || boardIsFiltered() || !NOTE_GROUPS_INTERFACE_ENABLED;
   _container.querySelector('#notes-zoom-controls').hidden = state.listView;
   for (const id of state.expandedNotes) if (!state.notes.some(note => note.id === id && canOnNote(note, 'view'))) state.expandedNotes.delete(id);
   const compactButton = _container.querySelector('#notes-compact-view');
@@ -428,8 +505,8 @@ function renderGrid() {
     grid.querySelector('#empty-cta-notes')?.addEventListener('click', () => {
       document.querySelector('.page-fab')?.click();
     });
-    board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout, viewState: state.viewport,
-      compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
+    visibleBoardItems();
+    board = wireNoteBoard(grid, boardOptions(forceCompact));
     return;
   }
 
@@ -437,13 +514,12 @@ function renderGrid() {
   // die Trennung war nur aus dem Ring an der Karte zu erschließen. Zwei
   // Abschnittsköpfe machen die bestehende Sortierung lesbar. Sie erscheinen
   // nur, wenn es tatsächlich beide Gruppen gibt.
-  const html = visible.map(renderNoteCard).join('');
+  const html = visibleBoardItems().map(item => renderNoteGroupFrame(item,renderNoteCard(item.note,item))).join('');
 
   grid.replaceChildren();
   grid.insertAdjacentHTML('beforeend', html);
   if (window.lucide) lucide.createIcons({ el: grid });
-  board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout, viewState: state.viewport,
-    compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
+  board = wireNoteBoard(grid, boardOptions(forceCompact));
   if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusExpand) grid.querySelector(`.note-card[data-id="${focusId}"] [data-note-expand]`)?.focus({ preventScroll: true });
@@ -482,21 +558,27 @@ function listPreview(note, expanded) {
   return { html: template.innerHTML, truncated };
 }
 
-function renderBoardMenu(note) {
+function renderBoardMenu(note, item) {
   if (!canOnNote(note, 'edit') && !canOnNote(note, 'delete')) return '';
+  const layout=item?.layout || note.layout;
+  const manage=!boardIsFiltered() && (item?.kind==='group'?item.can_manage:canArrangeNote(note));
   return `<details class="note-card__menu" data-board-menu>
     <summary aria-label="${t('notes.cardMenu')}"><i data-lucide="ellipsis" class="icon-sm" aria-hidden="true"></i></summary>
     <div class="note-card__menu-items">
-      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span><span>${t('notes.showOnDashboard')}</span></button>
-      <button type="button" data-board-action="top" aria-pressed="${!!note.layout?.always_on_top}"><span aria-hidden="true">${note.layout?.always_on_top ? '✓' : ''}</span><span>${t('notes.alwaysOnTop')}</span></button>` : ''}
+      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span><span>${t('notes.showOnDashboard')}</span></button>` : ''}
+      ${manage ? `<button type="button" data-board-action="top" aria-pressed="${!!layout?.always_on_top}"><span aria-hidden="true">${layout?.always_on_top ? '✓' : ''}</span><span>${t('notes.alwaysOnTop')}</span></button>` : ''}
+      ${manage && item?.kind==='group' ? `<button type="button" data-board-action="adjust"><span aria-hidden="true"></span><span>${t('notes.adjustCard')}</span></button>` : ''}
+      ${manage && state.boardActions?.onGroupAction ? (item?.kind==='group'
+        ? ['move','remove','order'].map(action=>`<button type="button" data-group-action="${action}"><span aria-hidden="true"></span><span>${t(`notes.groupAction.${action}`)}</span></button>`).join('')
+        : `<button type="button" data-group-action="add"><span aria-hidden="true"></span><span>${t('notes.groupAction.add')}</span></button>`) : ''}
       ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}"><span aria-hidden="true"></span><span>${t('notes.deleteLabel')}</span></button>` : ''}
     </div>
   </details>`;
 }
 
-function renderPositionControls(note) {
-  if (!canOnNote(note, 'edit')) return '';
-  return `<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!note.layout?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>
+function renderPositionControls(note, item) {
+  if (boardIsFiltered() || (item?.kind==='group' ? !item.can_manage : !canArrangeNote(note))) return '';
+  return `<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!(item?.layout || note.layout)?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>
     <button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>`;
 }
 
@@ -504,15 +586,15 @@ function renderNoteTitle(note) {
   return `<button type="button" class="note-card__title" data-action="open" data-id="${note.id}">${esc(note.title?.trim() || t('notes.untitledNote'))}</button>`;
 }
 
-function renderListCard(note) {
+function renderListCard(note, item) {
   const compact = state.listDensity === 'compact';
   const expanded = state.expandedNotes.has(note.id);
   const preview = compact ? null : listPreview(note, expanded);
   return `<div class="note-card note-card--list ${note.pinned ? 'note-card--pinned' : ''}" data-id="${note.id}" style="--note-color:${esc(note.color)};">
     <div class="note-card__list-heading">
-      ${renderPositionControls(note)}
+      ${renderPositionControls(note,item)}
       ${renderNoteTitle(note)}
-      ${renderBoardMenu(note)}
+      ${renderBoardMenu(note,item)}
     </div>
     ${compact ? '' : `<div class="note-card__preview"><div class="note-card__content" id="note-list-body-${note.id}">${preview.html}</div>
       ${preview.truncated ? `<button type="button" class="note-card__expand" data-note-expand aria-expanded="${expanded}" aria-controls="note-list-body-${note.id}">${t(expanded ? 'notes.showLess' : 'notes.showMore')}</button>` : ''}</div>
@@ -520,8 +602,8 @@ function renderListCard(note) {
   </div>`;
 }
 
-function renderNoteCard(note) {
-  if (state.listView) return renderListCard(note);
+function renderNoteCard(note, item) {
+  if (state.listView) return renderListCard(note,item);
   // KEINE INITIALEN AUF EINER 16px-SCHEIBE (Initialen-Schwelle-Regel).
   //
   // Hier standen bis zuletzt zwei Buchstaben auf einer 16-%-Waschung - unter der
@@ -535,11 +617,11 @@ function renderNoteCard(note) {
   const avatarColor = note.creator_color || AVATAR_FALLBACK_COLOR;
 
   return `
-    <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${canOnNote(note, 'edit') ? 'note-card--editable' : ''}"
+    <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${!boardIsFiltered() && (item?.kind==='group'?item.can_manage:canArrangeNote(note)) ? 'note-card--editable' : ''}"
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
-      ${renderBoardMenu(note)}
-      ${renderPositionControls(note)}
+      ${renderBoardMenu(note,item)}
+      ${renderPositionControls(note,item)}
       ${renderNoteTitle(note)}
       <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS(note))}</div>
       <div class="note-card__footer">
@@ -956,28 +1038,27 @@ async function togglePin(id) {
  */
 async function reloadNotes() {
   if (!state.active) return;
-  const page = state, auth = authenticationSnapshot();
-  if (!canNote('view')) { state.notes = []; closeModal({ force: true }); renderGrid(); return; }
+  const page = state, auth = page.auth;
+  if (!canNote('view')) { page.readSequence=(page.readSequence||0)+1; acceptBoardView({notes:[],groups:[]}); closeModal({ force: true }); renderGrid(); groupStatus(''); return; }
   const sequence = page.readSequence = (page.readSequence || 0) + 1;
   try {
-    const res = await api.get('/notes');
+    const res = await api.get('/notes/board',{signal:page.requests.signal,requireFresh:true});
     if (!currentPage(page, auth) || page.readSequence !== sequence) return;
     const modal = document.querySelector('.note-modal[data-note-id]');
     if (modal) {
-      const fresh = res.data.find(n => n.id === Number(modal.dataset.noteId));
+      const fresh = res.data.notes.find(n => n.id === Number(modal.dataset.noteId));
       if (!fresh || ((modal.querySelector('#note-content') || modal.hasAttribute('data-layout-editor')) && !canOnNote(fresh, 'edit')) || (modal.querySelector('#note-visibility') && fresh.permissions?.manage_visibility !== true)) closeModal({ force: true });
     }
-    // A remotely hidden/deleted note must immediately cancel a pending gesture.
-    const disappeared = state.notes.some(n => !res.data.some(fresh => fresh.id === n.id));
-    const changedAccess = state.notes.some(n => res.data.find(fresh => fresh.id === n.id)?.permissions?.edit !== n.permissions?.edit);
-    state.notes = res.data.filter(note => !page.deleting.has(note.id));
+    const {fresh,changed,lostAccess}=acceptBoardView(res.data);
     renderCreatorFilter();
-    if (!board?.busy() || disappeared || changedAccess) renderGrid();
+    if (!board?.busy() || changed) renderGrid();
+    if (lostAccess) groupStatus('');
+    return fresh;
   } catch (err) {
-    if (!currentPage(page, auth)) return;
+    if (!currentPage(page, auth) || page.readSequence !== sequence) return;
     // Fail closed when current authorization cannot be established.
-    if (err.status === 401 || err.status === 403 || err.status === 404) {
-      state.notes = []; closeModal({ force: true }); renderCreatorFilter(); renderGrid();
+    if ([401,403,404,409].includes(err.status)) {
+      acceptBoardView({notes:[],groups:[]}); closeModal({ force: true }); renderCreatorFilter(); renderGrid(); groupStatus('');
     }
     console.error('[Notes] Neuladen fehlgeschlagen:', err);
   }
@@ -1015,13 +1096,77 @@ function layoutStatus(text) {
   if (status) status.textContent = text;
 }
 
+function groupStatus(message, { retry=null, undo=null } = {}) {
+  layoutStatus(message);
+  _container?.querySelector('#notes-group-actions')?.remove();
+  const status = _container?.querySelector('#notes-board-status');
+  if (!status || (!retry && !undo)) return;
+  const page=state, auth=page.auth, actions=document.createElement('span'); actions.id='notes-group-actions';
+  const button=(label,attribute,run)=>{
+    const element=document.createElement('button'); element.type='button'; element.className='btn btn--ghost btn--sm';
+    element.textContent=t(label); element.setAttribute(attribute,'');
+    element.addEventListener('click',()=>{if(currentPage(page,auth)) Promise.resolve(run()).catch(()=>{});}); actions.append(element);
+  };
+  if (retry) {
+    button('common.retry','data-group-retry',()=>submitGroupCommand(retry));
+    button('common.reload','data-group-reload',async()=>{page.groupRetry=null;cancelGroupDrafts(page);groupStatus('');await reloadNotes();});
+  } else if (undo) button('common.undo','data-group-undo',()=>{
+    if (boardIsFiltered()) return;
+    const draft=createNoteGroupDraft({notes:page.notes,groups:page.groups},newNoteGroupOperationId());
+    return submitGroupCommand(freezeNoteGroupCommand(draft,'undo',{undo_operation_id:undo}));
+  });
+  status.after(actions);
+}
+
+/** The only group request owner. Frozen bodies are never rebuilt for Retry. */
+async function submitGroupCommand(command) {
+  const page=state, auth=page.auth, generation=page.boardGeneration, access=page.accessGeneration;
+  if (!NOTE_GROUPS_INTERFACE_ENABLED || !currentPage(page,auth) || boardIsFiltered() || page.groupPending || (page.groupRetry && page.groupRetry!==command)) throw new Error(t('notes.layoutConflict'));
+  page.groupPending=command; page.readSequence=(page.readSequence||0)+1; page.groupUndo=null;
+  const pending=[...command.expected.notes.map(note=>note.id),...command.expected.groups.map(group=>`group:${group.id}`)];
+  pending.forEach(id=>page.pending.add(id)); groupStatus(t('notes.layoutSaving'));
+  try {
+    const response=await api.post('/notes/group-operations',command,{signal:page.requests.signal});
+    if (!currentPage(page,auth)) throw new DOMException('The Notes context ended.','AbortError');
+    let result=response.data;
+    if (result?.operation_id!==command.operation_id || !Array.isArray(result?.board?.notes) || !Array.isArray(result?.board?.groups)) throw Object.assign(new Error('The result is not yet known. Retry or reload the board.'),{outcome:'unknown'});
+    page.readSequence++;
+    // A newer access/revision refresh takes precedence over a delayed mutation body.
+    if (page.boardGeneration!==generation || page.accessGeneration!==access) {
+      const fresh=await reloadNotes();
+      if (!currentPage(page,auth) || !fresh) throw Object.assign(new Error(t('notes.layoutConflict')),{status:409});
+      result={...result,board:fresh};
+    } else acceptBoardView(result.board);
+    if (!currentPage(page,auth)) throw new DOMException('The Notes context ended.','AbortError');
+    page.groupPending=null; page.groupRetry=null; pending.forEach(id=>page.pending.delete(id));
+    cancelGroupDrafts(page); page.groupUndo=result.undo_available?result.operation_id:null;
+    renderCreatorFilter(); renderGrid(); groupStatus(t('notes.layoutSaved'),{undo:page.groupUndo});
+    return result;
+  } catch (error) {
+    if (currentPage(page,auth)) {
+      page.groupPending=null; pending.forEach(id=>page.pending.delete(id)); cancelGroupDrafts(page);
+      const unknown=error.outcome==='unknown' || error.status===0;
+      if (unknown && page.accessGeneration===access) {
+        page.groupRetry=command; renderGrid(); groupStatus(error.message||t('notes.layoutFailed'),{retry:command});
+      } else {
+        page.groupRetry=null; await reloadNotes();
+        if (currentPage(page,auth)) groupStatus(error.status===409?t('notes.layoutConflict'):error.data?.error||error.message||t('notes.layoutFailed'));
+      }
+    }
+    error.groupCommandHandled=true; throw error;
+  } finally {
+    if (page.groupPending===command) page.groupPending=null;
+    pending.forEach(id=>page.pending.delete(id));
+  }
+}
+
 async function saveLayout(note, value) {
   const { x, y, width, height } = normalizeNoteLayout(value);
   return saveLayoutChange(note, { layout: { x, y, width, height } });
 }
 
 async function saveLayoutChange(note, changes) {
-  if (!state.active || state.organizing || !canOnNote(note, 'edit') || state.pending.has(note.id)) return false;
+  if (!state.active || state.organizing || boardIsFiltered() || !canArrangeNote(note) || state.pending.has(note.id)) return false;
   const page = state, auth = authenticationSnapshot();
   page.pending.add(note.id);
   layoutStatus(t('notes.layoutSaving'));
@@ -1040,22 +1185,26 @@ async function saveLayoutChange(note, changes) {
   } finally { page.pending.delete(note.id); }
 }
 
-function openLayoutModal(id) {
-  let note = state.notes.find(n => n.id === id);
-  if (!note || !canOnNote(note, 'edit') || state.pending.has(id)) return;
-  const layout = normalizeNoteLayout(note.layout);
+function openLayoutModal(id, kind = 'note') {
+  // Retain the render's revision snapshot through the dialog's lifetime.
+  const saveBoardCommand=state.boardActions?.saveBoardCommand;
+  const findItem=()=>projectNoteGroupItems({notes:state.notes,groups:state.groups || []},{activePages:state.activePages}).find(item=>item.kind===kind && item.id===id);
+  let item=findItem(), note=item?.note;
+  const editable=()=>item && !boardIsFiltered() && (kind==='group' ? item.can_manage && !!saveBoardCommand : canArrangeNote(note));
+  if (!editable() || state.pending.has(kind==='group'?`group:${id}`:id)) return;
+  const layout = normalizeNoteLayout(item.layout);
   const page = state, auth = authenticationSnapshot();
   const fields = [['x', 0, 10000], ['y', 0, 10000], ['width', 3, 12], ['height', 4, 100]];
   openSharedModal({
     title: t('notes.adjustCard'),
-    content: `<div class="note-modal" data-note-id="${id}" data-layout-editor>
-      <p>${t('notes.layoutHint')}</p>
+    content: `<div class="note-modal" ${kind==='group'?`data-group-id="${id}"`:`data-note-id="${id}"`} data-layout-editor>
+      ${kind==='note'?`<p>${t('notes.layoutHint')}</p>`:''}
       <div class="note-layout-fields">${fields.map(([name, min, max]) => `<div class="form-group"><label class="form-label" for="note-layout-${name}">${t(`notes.layoutField.${name}`)}</label><input class="form-input" type="number" inputmode="numeric" min="${min}" max="${max}" step="1" value="${layout[name]}" id="note-layout-${name}"></div>`).join('')}</div>
       <p id="note-layout-preview" role="status"></p>
       <div class="modal-panel__footer"><button class="btn btn--secondary" id="note-layout-cancel">${t('common.cancel')}</button><button class="btn btn--primary" id="note-layout-save">${t('common.save')}</button></div>
     </div>`,
     onSave(panel) {
-      if (note.layout?.position_locked) for (const name of ['x', 'y']) panel.querySelector(`#note-layout-${name}`).disabled = true;
+      if (item.layout?.position_locked) for (const name of ['x', 'y']) panel.querySelector(`#note-layout-${name}`).disabled = true;
       const read = () => Object.fromEntries(fields.map(([name]) => [name, Number(panel.querySelector(`#note-layout-${name}`).value)]));
       const preview = () => {
         const next = normalizeNoteLayout(read());
@@ -1067,39 +1216,23 @@ function openLayoutModal(id) {
         if (!currentPage(page, auth)) return;
         for (const input of panel.querySelectorAll('input')) if (!input.reportValidity()) return;
         const btn = panel.querySelector('#note-layout-save'); btn.disabled = true;
-        const ok = await saveLayout(note, read());
+        const ok = saveBoardCommand
+          ? await saveBoardCommand({kind:'arrange',items:[noteGroupArrangeItem(item,read())],include_locked:true})
+          : await saveLayout(note, read());
         if (!currentPage(page, auth) || !panel.isConnected) return;
         if (ok) { closeModal({ force: true }); renderGrid(); }
-        else {
-          note = state.notes.find(n => n.id === id);
-          if (!note || !canOnNote(note, 'edit')) { closeModal({ force: true }); return; }
-          const fresh = normalizeNoteLayout(note.layout);
-          fields.forEach(([name]) => { const input = panel.querySelector(`#note-layout-${name}`); input.value = fresh[name]; input.disabled = !!note.layout?.position_locked && ['x','y'].includes(name); });
-          btn.disabled = false; panel.querySelector('#note-layout-preview').textContent = t('notes.layoutConflict');
-        }
+        else closeModal({ force:true });
       });
     },
   });
 }
 
 async function organizeNotes() {
-  if (!state.active || state.organizing || state.pending.size || board?.busy()) return;
+  if (!NOTE_GROUPS_INTERFACE_ENABLED || !state.active || boardIsFiltered() || state.groupPending || state.groupRetry || state.pending.size || board?.busy()) return;
   const includeLocked = _container.querySelector('#notes-organize-locked')?.checked === true;
-  const items = organizeNoteLayouts(visibleNotes(), { includeLocked, canEdit: note => canOnNote(note, 'edit') });
-  if (!items.length) return;
-  const page = state, auth = authenticationSnapshot();
-  page.organizing = true;
-  const button = _container.querySelector('#notes-organize'); if (button) button.disabled = true;
-  layoutStatus(t('notes.layoutSaving'));
   try {
-    await api.patch('/notes/layout', { items, include_locked: includeLocked });
-    if (!currentPage(page, auth)) return;
-    await reloadNotes(); layoutStatus(t('notes.layoutSaved'));
-  } catch (err) {
-    if (!currentPage(page, auth)) return;
-    layoutStatus(err.status === 409 ? t('notes.layoutConflict') : t('notes.layoutFailed')); await reloadNotes();
-  } finally {
-    page.organizing = false;
-    if (currentPage(page, auth) && button) button.disabled = false;
-  }
+    const all=projectNoteGroupItems({notes:state.notes,groups:state.groups},{activePages:state.activePages});
+    const items=organizeNoteGroupItems(all,{includeLocked,canEdit:item=>item.can_manage!==false && canOnNote(item.note,'edit')});
+    if (items.length) await state.boardActions.saveBoardCommand({kind:'arrange',items,include_locked:includeLocked});
+  } catch (error) { layoutStatus(error.message||t('notes.layoutFailed')); }
 }

@@ -2,6 +2,7 @@ import {actorId} from '../permissions.js';
 import {str,color,collectErrors,MAX_TEXT,MAX_TITLE} from '../middleware/validate.js';
 import {toggleChecklistLine} from '../../public/utils/markdown-checklist.js';
 import {noteDevice,noteError,noteVisibleSql,noteCapabilities,assertNoteAction,noteMembers,normalizeNoteAudience} from './note-access.js';
+import {readNoteGroup,groupLayout,assertStandaloneLayoutWrite,cleanupGroupsAfterNoteDeletion} from './note-group-store.js';
 
 const fields=['title','content','color','pinned','visibility','access_user_ids','expected_revision'];
 const idValue=id=>{if(!Number.isSafeInteger(Number(id))||Number(id)<1)throw noteError('Note not found.',404);return Number(id);};
@@ -23,8 +24,17 @@ function visibleNotes(d,p){
  * obstacles; hidden notes never affect positions. Pinned cards keep priority;
  * stable IDs within each group keep content edits/new cards from shuffling it. */
 function projectedLayouts(d,p,notes=visibleNotes(d,p)){
-  const result=new Map(),occupied=[];
-  for(const note of notes){const saved=savedLayout(d,note);if(saved){result.set(note.id,saved);occupied.push(saved);}}
+  const result=new Map(),occupied=[],displayedGroups=new Set();
+  for(const note of notes){
+    const saved=savedLayout(d,note),group=readNoteGroup(d,note.id);
+    // A visible page uses its container's geometry, but retains its independent
+    // compatibility revision. Hidden pages and obsolete member layouts occupy
+    // no extra space; a group is one packing obstacle even with several pages.
+    if(group){
+      const layout={...groupLayout(group),revision:saved?.revision??0};result.set(note.id,layout);
+      if(!displayedGroups.has(group.id)){occupied.push(layout);displayedGroups.add(group.id);}
+    }else if(saved){result.set(note.id,saved);occupied.push(saved);}
+  }
   for(const note of [...notes].sort((a,b)=>b.pinned-a.pinned||a.id-b.id)){
     if(result.has(note.id))continue;
     let placed;
@@ -46,6 +56,7 @@ function projectedLayouts(d,p,notes=visibleNotes(d,p)){
 function project(d,p,n,layouts){
   const permissions=noteCapabilities(d,p,n),device=noteDevice(p);
   if(!permissions.view)return null;
+  permissions.arrange=Boolean(permissions.edit&&!readNoteGroup(d,n.id));
   const creator=n.created_by?d.prepare('SELECT display_name,avatar_color,avatar_data FROM users WHERE id=?').get(n.created_by):null;
   const source=n.created_by_device?d.prepare('SELECT name FROM household_devices WHERE id=?').get(n.created_by_device):null;
   const scoped=!device||!device.scope?.member_ids?.length||device.scope.member_ids.includes(n.created_by);
@@ -96,7 +107,11 @@ export function updateNote(d,p,id,body={}){return saveNote(d,p,id,body).data;}
 export function mutateNote(d,p,id,action,body={}){
   return d.transaction(()=>{
     const note=requireNote(d,p,id,action==='delete'?'delete':'edit');
-    if(action==='delete'){revision(note,body);d.prepare('DELETE FROM notes WHERE id=?').run(note.id);return null;}
+    if(action==='delete'){
+      revision(note,body);const group=readNoteGroup(d,note.id);
+      d.prepare('DELETE FROM notes WHERE id=?').run(note.id);
+      cleanupGroupsAfterNoteDeletion(d,group?[group.id]:[]);return null;
+    }
     if(action==='pin'){revision(note,body);d.prepare('UPDATE notes SET pinned=? WHERE id=?').run(note.pinned?0:1,note.id);}
     else if(action==='check'){
       if(!Number.isInteger(body.line)||body.line<0||typeof body.checked!=='boolean'||body.expect!=null&&typeof body.expect!=='string')throw noteError('Invalid checklist change.');
@@ -125,6 +140,7 @@ export function setNoteLayouts(d,p,body={}){
     const planned=items.map(item=>{
       if(!item||typeof item!=='object'||Array.isArray(item)||!Number.isSafeInteger(item.note_id)||item.note_id<1||Object.keys(item).some(key=>!['note_id',...layoutRequestFields].includes(key))||!layoutChangeFields.some(key=>owns(item,key)))throw noteError('Invalid note layout request.');
       const note=requireNote(d,p,item.note_id,'edit');assertNoteAction(d,p,note,'view');
+      assertStandaloneLayoutWrite(d,note.id);
       for(const flag of ['position_locked','always_on_top'])if(owns(item,flag)&&typeof item[flag]!=='boolean')throw noteError('Invalid note layout flag.');
       const saved=savedLayout(d,note),current=saved||(defaults??=projectedLayouts(d,p)).get(note.id);
       if(!Number.isSafeInteger(item.expected_layout_revision)||item.expected_layout_revision!==current.revision)throw noteError('The note layout changed. Reload before trying again.',409);

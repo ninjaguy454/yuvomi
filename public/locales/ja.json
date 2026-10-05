@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "予定なし"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "グループのページ",
+        "groupPrevious": "前のメモ",
+        "groupNext": "次のメモ",
+        "groupOverview": "グループ一覧を開く、{{count}}件中{{current}}件目",
+        "groupAction": {
+            "add": "グループに追加",
+            "move": "選択項目を移動",
+            "remove": "グループから取り出す",
+            "order": "順序を変更"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

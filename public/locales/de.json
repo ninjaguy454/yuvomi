@@ -1440,6 +1440,38 @@
         "agendaDayEmpty": "Nichts geplant"
     },
     "notes": {
+        "groups": {
+            "overview": "Gruppenübersicht",
+            "close": "Gruppenübersicht schließen",
+            "exit": "Notizfläche",
+            "untitled": "Unbenannte Notiz",
+            "selectNote": "{{title}} auswählen",
+            "order": "Reihenfolge",
+            "moveToGroup": "In Gruppe verschieben",
+            "remove": "Aus Gruppe entfernen",
+            "beforeNote": "Vor {{title}}",
+            "last": "Zuletzt",
+            "position": "Position",
+            "place": "Platzieren",
+            "cancel": "Abbrechen",
+            "noDestination": "Keine Zielgruppe verfügbar.",
+            "destination": "Zielgruppe",
+            "newGroup": "Neue Gruppe",
+            "individual": "Einzelne Notizen",
+            "horizontal": "Horizontale Position",
+            "vertical": "Vertikale Position",
+            "noPlacement": "Hier ist kein Platz. Andere Position wählen oder Liste nutzen."
+        },
+        "groupPages": "Gruppenseiten",
+        "groupPrevious": "Vorherige Notiz",
+        "groupNext": "Nächste Notiz",
+        "groupOverview": "Gruppenübersicht öffnen, Notiz {{current}} von {{count}}",
+        "groupAction": {
+            "add": "Zur Gruppe hinzufügen",
+            "move": "Auswahl verschieben",
+            "remove": "Aus Gruppe entfernen",
+            "order": "Reihenfolge ändern"
+        },
         "resetView": "Ansicht zurücksetzen",
         "includeLocked": "Fixierte einbeziehen",
         "zoomIn": "Vergrößern",

@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "कुछ भी नियोजित नहीं"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "समूह के पृष्ठ",
+        "groupPrevious": "पिछला नोट",
+        "groupNext": "अगला नोट",
+        "groupOverview": "समूह अवलोकन खोलें, {{count}} में से नोट {{current}}",
+        "groupAction": {
+            "add": "समूह में जोड़ें",
+            "move": "चयनित को ले जाएँ",
+            "remove": "समूह से हटाएँ",
+            "order": "क्रम बदलें"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

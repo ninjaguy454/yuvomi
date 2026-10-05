@@ -1,3 +1,4 @@
+import { arrangeNotesFixture } from './helpers/note-group-http-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -20,8 +21,9 @@ app.use('/api/v1', (req, res) => {
   if (req.path === '/auth/me') return res.json({ csrfToken: 'fixture' });
   if (req.path === '/notes/members') return res.json({ data: [{ id: 1, display_name: 'Parent' }] });
   if (req.path === '/notes/changes') return res.status(204).end();
-  if (req.path === '/notes' && req.method === 'GET') return res.json({ data: notes });
+  if (req.path === '/notes/board' && req.method === 'GET') return res.json({ data: {notes,groups:[]} });
   if (req.method !== 'GET') writes.push({ path: req.path, method: req.method, body: req.body });
+  if(req.path==='/notes/group-operations'){const result=arrangeNotesFixture(notes,req.body);return res.status(result.status).json(result.body);}
   const note = notes.find(n => n.id === Number(req.path.split('/')[2]));
   if (req.path.endsWith('/check') && note) {
     note.content = note.content.replace('- [ ]', '- [x]'); note.revision++;
@@ -43,7 +45,7 @@ test.before(async () => {
 test.after(async () => { await browser?.close(); if (server) await new Promise(resolve => server.close(resolve)); });
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const card = '.note-card[data-id="1"]';
-const layoutWrites = () => writes.filter(write => write.path.endsWith('/layout'));
+const layoutWrites = () => writes.filter(write => write.path === '/notes/group-operations' && write.body.kind === 'arrange');
 async function mount({ width = 1280, height = 900, permission = 'edit', fixture, mobile = false } = {}) {
   writes = []; notes = structuredClone(original);
   if (fixture === 'fitting') notes = [notes[0]];
@@ -106,9 +108,10 @@ for (const width of [1280, 752]) test(`body mouse drag saves CAS at canvas width
   try {
     const point = await bodyPoint(page); await mouseDrag(page, point, width === 752 ? 70 : 110, 96); await saved(page);
     const write = layoutWrites()[0];
-    assert.equal(write.path, '/notes/1/layout'); assert.equal(write.body.expected_layout_revision, 2);
-    assert.ok(write.body.layout.x > 2); assert.ok(write.body.layout.y > 2);
-    assert.equal(write.body.layout.width, 4); assert.equal(write.body.layout.height, 6);
+    assert.equal(write.path, '/notes/group-operations'); assert.equal(write.body.expected.notes[0].layout_revision, 2);
+    assert.equal(write.method,'POST'); assert.deepEqual(write.body.expected,{groups:[],notes:[{id:1,revision:4,layout_revision:2}]});
+    assert.ok(write.body.items[0].layout.x > 2); assert.ok(write.body.items[0].layout.y > 2);
+    assert.equal(write.body.items[0].layout.width, 4); assert.equal(write.body.items[0].layout.height, 6);
     assert.equal(notes[0].content, original[0].content);
   } finally { await page.close(); }
 });
@@ -199,7 +202,9 @@ test('reveal survives authorized refresh with keyboard focus and clears when ano
     await page.focus('[data-note-reveal="1"]');await page.keyboard.press('Enter');
     notes[0].title='Updated visible note';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
     await page.waitForFunction(()=>document.querySelector('[data-note-reveal="1"]')?.textContent==='Updated visible note');
-    assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n===document.activeElement&&n.getAttribute('aria-pressed')==='true'),true);
+    // Refresh may replace the strip between $eval's handle lookup and evaluation.
+    // Read the current target and both focus/selection conditions atomically.
+    assert.equal(await page.evaluate(()=>{const n=document.querySelector('[data-note-reveal="1"]');return n===document.activeElement&&n.getAttribute('aria-pressed')==='true';}),true);
     await page.focus('.note-card[data-id="2"] [data-action="open"]');
     assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n.getAttribute('aria-pressed')),'false');
     await page.keyboard.press('Enter');
@@ -291,7 +296,7 @@ test('drop restores the persistent tier while its layout request is pending', as
   try {
     await page.setRequestInterception(true);
     const intercepted = new Promise(resolve => page.on('request', request => {
-      if (request.url().endsWith('/layout')) { held = request; resolve(); }
+      if (request.url().endsWith('/group-operations')) { held = request; resolve(); }
       else request.continue();
     }));
     await mouseDrag(page, await bodyPoint(page), -100, 100); await intercepted;
@@ -378,10 +383,10 @@ test('real touch body drag moves a card and advances the layout revision', async
     const point = await bodyPoint(page); await input.start(point.x, point.y);
     for (let i = 1; i <= 8; i++) await input.move(point.x + 110 * i / 8, point.y + 96 * i / 8);
     await input.end(); await saved(page);
-    assert.equal(layoutWrites()[0].body.expected_layout_revision, 2);
+    assert.equal(layoutWrites()[0].body.expected.notes[0].layout_revision, 2);
     assert.ok(notes[0].layout.x > 2); assert.ok(notes[0].layout.y > 2);
     await mouseDrag(page, await bodyPoint(page), 110, 48); await saved(page, 2);
-    assert.equal(layoutWrites()[1].body.expected_layout_revision, 3);
+    assert.equal(layoutWrites()[1].body.expected.notes[0].layout_revision, 3);
   } finally { await input.close(); await page.close(); }
 });
 
@@ -409,7 +414,7 @@ test('coarse mobile touch drags a paragraph inside a scrollable card preview', a
     assert.equal(await page.evaluate(() => window.fixtureBodyTouch.paragraph), true, 'touch must begin on a paragraph, not the title or border');
     assert.equal(await page.evaluate(() => window.fixtureBodyTouch.cancelled), false, 'native preview panning must not cancel an editable canvas body drag');
     await saved(page);
-    assert.equal(layoutWrites()[0].body.expected_layout_revision, 2);
+    assert.equal(layoutWrites()[0].body.expected.notes[0].layout_revision, 2);
     assert.ok(notes[0].layout.x > 2); assert.ok(notes[0].layout.y > 2);
     assert.equal(notes[0].layout.width, 4); assert.equal(notes[0].layout.height, 6);
     assert.equal(notes[0].content, content, 'moving retains all long preview content');
@@ -439,8 +444,8 @@ for (const edge of ['left', 'top', 'bottom-right']) test(`450ms hold then ${edge
     await page.mouse.move(point.x, point.y); await page.mouse.down(); await sleep(520);
     await page.mouse.move(point.x + (edge === 'left' ? -105 : edge === 'top' ? 0 : 105), point.y + (edge === 'top' ? -48 : edge === 'left' ? 0 : 96), { steps: 6 });
     await page.mouse.up(); await saved(page);
-    const next = layoutWrites()[0].body.layout;
-    assert.equal(layoutWrites()[0].body.expected_layout_revision, 2);
+    const next = layoutWrites()[0].body.items[0].layout;
+    assert.equal(layoutWrites()[0].body.expected.notes[0].layout_revision, 2);
     if (edge === 'left') { assert.ok(next.x < 2); assert.equal(next.x + next.width, 6); assert.equal(next.y, 2); assert.equal(next.height, 6); }
     if (edge === 'top') { assert.ok(next.y < 2); assert.equal(next.y + next.height, 8); assert.equal(next.x, 2); assert.equal(next.width, 4); }
     if (edge === 'bottom-right') { assert.equal(next.x, 2); assert.equal(next.y, 2); assert.ok(next.width > 4); assert.ok(next.height > 6); }
@@ -601,7 +606,7 @@ test('top-edge resizing at the 100-row limit preserves its original bottom edge'
     await page.waitForFunction(() => document.querySelector('.notes-scroll').scrollTop === 0);
     await page.mouse.move(point.x, Math.max(180, point.y - 250), { steps: 6 }); await page.mouse.up();
     await saved(page);
-    const next = layoutWrites()[0].body.layout;
+    const next = layoutWrites()[0].body.items[0].layout;
     assert.equal(next.height, 100); assert.equal(next.y + next.height, 111, 'maximum size keeps the opposite edge anchored');
     assert.equal(next.x, 2); assert.equal(next.width, 4);
   } finally { await page.close(); }

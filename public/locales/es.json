@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Nada planeado"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Páginas del grupo",
+        "groupPrevious": "Nota anterior",
+        "groupNext": "Nota siguiente",
+        "groupOverview": "Abrir vista del grupo, nota {{current}} de {{count}}",
+        "groupAction": {
+            "add": "Añadir al grupo",
+            "move": "Mover selección",
+            "remove": "Quitar del grupo",
+            "order": "Cambiar posición"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

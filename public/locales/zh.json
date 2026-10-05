@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "没有安排"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "分组页面",
+        "groupPrevious": "上一条笔记",
+        "groupNext": "下一条笔记",
+        "groupOverview": "打开分组概览，第 {{current}} 条，共 {{count}} 条",
+        "groupAction": {
+            "add": "添加到分组",
+            "move": "移动所选项",
+            "remove": "移出分组",
+            "order": "更改顺序"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

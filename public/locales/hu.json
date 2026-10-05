@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Semmi sincs tervezve"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Csoport oldalai",
+        "groupPrevious": "Előző jegyzet",
+        "groupNext": "Következő jegyzet",
+        "groupOverview": "Csoport áttekintése, {{current}}. jegyzet / {{count}}",
+        "groupAction": {
+            "add": "Hozzáadás csoporthoz",
+            "move": "Kijelöltek áthelyezése",
+            "remove": "Eltávolítás a csoportból",
+            "order": "Sorrend módosítása"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

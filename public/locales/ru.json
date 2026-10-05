@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Ничего не запланировано"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Страницы группы",
+        "groupPrevious": "Предыдущая заметка",
+        "groupNext": "Следующая заметка",
+        "groupOverview": "Открыть обзор группы, заметка {{current}} из {{count}}",
+        "groupAction": {
+            "add": "Добавить в группу",
+            "move": "Переместить выбранное",
+            "remove": "Удалить из группы",
+            "order": "Изменить порядок"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

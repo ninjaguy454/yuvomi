@@ -1440,6 +1440,38 @@
         "agendaDayEmpty": "예정된 일정 없음"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "그룹 페이지",
+        "groupPrevious": "이전 메모",
+        "groupNext": "다음 메모",
+        "groupOverview": "그룹 개요 열기, {{count}}개 중 {{current}}번째 메모",
+        "groupAction": {
+            "add": "그룹에 추가",
+            "move": "선택 항목 이동",
+            "remove": "그룹에서 제거",
+            "order": "순서 변경"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

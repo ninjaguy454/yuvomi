@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Planlanmış bir şey yok"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Grup sayfaları",
+        "groupPrevious": "Önceki not",
+        "groupNext": "Sonraki not",
+        "groupOverview": "Grup genel görünümünü aç, {{count}} nottan {{current}}. not",
+        "groupAction": {
+            "add": "Gruba ekle",
+            "move": "Seçilenleri taşı",
+            "remove": "Gruptan çıkar",
+            "order": "Sırayı değiştir"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

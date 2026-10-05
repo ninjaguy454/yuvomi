@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "Τίποτα προγραμματισμένο"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "Σελίδες ομάδας",
+        "groupPrevious": "Προηγούμενη σημείωση",
+        "groupNext": "Επόμενη σημείωση",
+        "groupOverview": "Άνοιγμα επισκόπησης ομάδας, σημείωση {{current}} από {{count}}",
+        "groupAction": {
+            "add": "Προσθήκη σε ομάδα",
+            "move": "Μετακίνηση επιλεγμένων",
+            "remove": "Αφαίρεση από ομάδα",
+            "order": "Αλλαγή σειράς"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

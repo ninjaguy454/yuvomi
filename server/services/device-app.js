@@ -117,6 +117,10 @@ export function deviceAppMiddleware(req,res,next) {
     if(!deviceAppRouteSupported(method,path))fail();
     if(path==='/notes'||path.startsWith('/notes/')) {
       if(path==='/notes/changes')return changes(req,res,'note_change_clock',(database,principal)=>assertNoteAction(database,principal,null,'view'));
+      if(path==='/notes/board'||path==='/notes/group-operations') {
+        const result=deviceNotesRequest(d,req,method,null,path.slice('/notes/'.length),req.body);
+        return res.status(result.status).json(result.body);
+      }
       const [,id,suffix]=path.match(/^\/notes(?:\/(\d+)(?:\/(pin|check|layout))?)?$/)||[];
       const action=path==='/notes/layout'?'layout':suffix;
       const body=method==='DELETE'?{expected_revision:req.query.expected_revision===undefined?undefined:Number(req.query.expected_revision)}:req.body;

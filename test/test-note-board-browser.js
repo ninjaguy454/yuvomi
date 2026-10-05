@@ -1,3 +1,4 @@
+import { arrangeNotesFixture } from './helpers/note-group-http-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -14,8 +15,9 @@ app.use('/api/v1',async(req,res)=>{
   if(req.path==='/auth/me')return res.json({csrfToken:'fixture'});
   if(req.path==='/notes/members')return res.json({data:[{id:1,display_name:'Parent'},{id:2,display_name:'Grace'}]});
   if(req.path==='/notes/changes')return res.status(204).end();
-  if(req.path==='/notes'&&req.method==='GET'){const snapshot=structuredClone(notes);if(delayRead)await new Promise(r=>setTimeout(r,250));return res.json({data:snapshot});}
+  if(req.path==='/notes/board'&&req.method==='GET'){const snapshot=structuredClone(notes);if(delayRead)await new Promise(r=>setTimeout(r,250));return res.json({data:{notes:snapshot,groups:[]}});}
   if(req.method!=='GET')writes.push({path:req.path,method:req.method,body:req.body});
+  if(req.path==='/notes/group-operations'){const result=arrangeNotesFixture(notes,req.body,{conflict:conflictLayout});return res.status(result.status).json(result.body);}
   const id=Number(req.path.split('/')[2]),note=notes.find(n=>n.id===id);
   if(req.method==='PUT')return res.status(409).json({error:'Changed elsewhere'});
   if(req.path.endsWith('/check')&&note){note.content=note.content.replace('- [ ]','- [x]');note.revision++;return res.json({data:note});}
@@ -199,7 +201,7 @@ test('wide board persists a keyboard-accessible per-card size change with its la
     await openAdjustment(page);await page.waitForSelector('#note-layout-width');
     await page.$eval('#note-layout-width',el=>{el.value='6';el.dispatchEvent(new Event('input',{bubbles:true}));});await page.click('#note-layout-save');
     await page.waitForFunction(()=>!document.querySelector('#note-layout-save'));
-    assert.equal(writes[0].path,'/notes/1/layout');assert.equal(writes[0].body.expected_layout_revision,2);assert.equal(writes[0].body.layout.width,6);
+    assert.equal(writes[0].path,'/notes/group-operations');assert.equal(writes[0].body.expected.notes[0].layout_revision,2);assert.equal(writes[0].body.items[0].layout.width,6);
     assert.equal(notes[0].content,original[0].content);
   }finally{await page.close();}
 });
@@ -247,20 +249,25 @@ test('drag and resize commit separate geometry; Escape cancels without opening t
     const move=await page.$('[data-id="1"] .note-card__content .note-md-p');const box=await move.boundingBox();
     await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2+110,box.y+box.height/2+96,{steps:4});await page.mouse.up();
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
-    assert.equal(writes.length,1);assert.ok(writes[0].body.layout.x>0);assert.equal(await page.$('.note-modal'),null);
+    assert.equal(writes.length,1);assert.ok(writes[0].body.items[0].layout.x>0);assert.equal(await page.$('.note-modal'),null);
     const resize=await page.$('.note-card[data-id="1"]');const rb=await resize.boundingBox();
     await page.mouse.move(rb.x+rb.width-3,rb.y+rb.height-3);await page.mouse.down();await new Promise(r=>setTimeout(r,520));await page.mouse.move(rb.x+rb.width+110,rb.y+rb.height+80,{steps:4});await page.mouse.up();
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
-    assert.equal(writes.length,2);assert.ok(writes[1].body.layout.width>writes[0].body.layout.width);assert.equal(writes[1].body.expected_layout_revision,3);
-    const mb=await move.boundingBox();await page.mouse.move(mb.x+mb.width/2,mb.y+mb.height/2);await page.mouse.down();await page.mouse.move(mb.x+mb.width/2+110,mb.y+mb.height/2+96);await page.keyboard.press('Escape');await page.mouse.up();
+    assert.equal(writes.length,2);assert.ok(writes[1].body.items[0].layout.width>writes[0].body.items[0].layout.width);assert.equal(writes[1].body.expected.notes[0].layout_revision,3);
+    const currentMove=await page.$('[data-id="1"] .note-card__content .note-md-p');const mb=await currentMove.boundingBox();await page.mouse.move(mb.x+mb.width/2,mb.y+mb.height/2);await page.mouse.down();await page.mouse.move(mb.x+mb.width/2+110,mb.y+mb.height/2+96);await page.keyboard.press('Escape');await page.mouse.up();
     assert.equal(writes.length,2);assert.equal(await page.$('.note-modal'),null);
   }finally{await page.close();}
 });
-test('organize applies only the filtered visible notes and preserves individual dimensions',async()=>{
+test('Organize is browse-only while filtered, then arranges the full board with complete revisions',async()=>{
   const page=await mount();try{
     await page.type('#notes-search','Private');await page.waitForFunction(()=>document.querySelectorAll('.note-card').length===1);
-    assert.equal(writes.length,0);await page.click('#notes-organize');await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
-    assert.equal(writes.length,1);assert.equal(writes[0].path,'/notes/layout');assert.equal(writes[0].body.items.length,1);assert.equal(writes[0].body.items[0].note_id,1);assert.equal(writes[0].body.items[0].layout.height,6);
+    assert.equal(writes.length,0);assert.equal(await page.$eval('#notes-organize',node=>node.hidden||node.disabled),true);
+    await page.evaluate(()=>document.querySelector('#notes-organize').click());assert.equal(writes.length,0);
+    await page.$eval('#notes-search',node=>{node.value='';node.dispatchEvent(new Event('input',{bubbles:true}));});
+    await page.waitForFunction(()=>!document.querySelector('#notes-organize').hidden);
+    await page.click('#notes-organize');await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');
+    assert.equal(writes.length,1);assert.equal(writes[0].path,'/notes/group-operations');assert.equal(writes[0].body.items.length,2);assert.equal(writes[0].body.items[0].id,1);assert.equal(writes[0].body.items[0].layout.height,6);
+    assert.deepEqual(writes[0].body.expected,{groups:[],notes:[{id:1,revision:4,layout_revision:2},{id:2,revision:1,layout_revision:0}]});
   }finally{await page.close();}
 });
 test('revalidation removes revoked note content and an open draft',async()=>{
@@ -275,10 +282,11 @@ test('failed layout save restores latest geometry and permits an explicit retry'
   const page=await mount();try{
     await openAdjustment(page);await page.waitForSelector('#note-layout-width');
     notes[0].layout={...notes[0].layout,width:5,revision:9};conflictLayout=true;
-    await page.$eval('#note-layout-width',el=>el.value='6');await page.click('#note-layout-save');await page.waitForFunction(()=>!document.querySelector('#note-layout-save').disabled);
-    assert.equal(await page.$eval('#note-layout-width',el=>el.value),'5','conflict reloads canonical geometry into the controls');
-    conflictLayout=false;await page.$eval('#note-layout-width',el=>el.value='6');await page.click('#note-layout-save');await page.waitForFunction(()=>!document.querySelector('#note-layout-save'));
-    assert.equal(writes[1].body.expected_layout_revision,9);assert.equal(notes[0].layout.width,6);
+    await page.$eval('#note-layout-width',el=>el.value='6');await page.click('#note-layout-save');await page.waitForFunction(()=>!document.querySelector('#note-layout-save'));
+    conflictLayout=false;await openAdjustment(page);await page.waitForSelector('#note-layout-width');
+    assert.equal(await page.$eval('#note-layout-width',el=>el.value),'5','a deliberate new draft starts from reauthorized geometry');
+    await page.$eval('#note-layout-width',el=>el.value='6');await page.click('#note-layout-save');await page.waitForFunction(()=>!document.querySelector('#note-layout-save'));
+    assert.equal(writes[1].body.expected.notes[0].layout_revision,9);assert.equal(notes[0].layout.width,6);
   }finally{await page.close();}
 });
 test('live refresh does not resurrect a pending delete, and undo rechecks access',async()=>{

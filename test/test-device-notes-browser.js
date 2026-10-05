@@ -11,7 +11,7 @@ const links='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(
 app.get('/notes-test',(_req,res)=>res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">${links}<style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}*,*::before,*::after{animation:none!important;transition:none!important}</style></head><body><main id="main-content"></main></body></html>`));
 app.use('/api/v1',(req,res)=>{
   if(req.path==='/auth/me')return res.json({csrfToken:'fixture'});
-  if(req.path==='/notes'&&req.method==='GET'){reads++;return res.json({data:[note]});}
+  if(req.path==='/notes/board'&&req.method==='GET'){reads++;return res.json({data:{notes:[note],groups:[]}});}
   if(req.path==='/notes'&&req.method==='POST'){writes.push(req.body);return res.status(201).json({data:{...note,...req.body,id:2}});}
   if(req.method!=='GET')writes.push({path:req.path,method:req.method});
   return res.json({data:[]});

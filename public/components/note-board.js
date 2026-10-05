@@ -1,8 +1,41 @@
-import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent, overlappingLockedNoteIds } from '/utils/note-board-layout.js';
+import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { t } from '/i18n.js';
 
+/** Keep the active content card's note identity distinct from its geometry owner. */
+export function renderNoteGroupFrame(item, cardHtml) {
+  const template = document.createElement('template');
+  template.innerHTML = cardHtml;
+  const card = template.content.firstElementChild;
+  card.dataset.boardKey = item.key;
+  card.dataset.boardKind = item.kind;
+  if (item.kind === 'group') {
+    card.dataset.groupId = String(item.id);
+    card.classList.add('note-card--group');
+    if (item.member_ids.length > 1) {
+      const pager = document.createElement('div');
+      pager.className = 'note-group-pages';
+      pager.setAttribute('role', 'group');
+      pager.setAttribute('aria-label', t('notes.groupPages'));
+      const index = item.member_ids.indexOf(item.note.id);
+      for (const [action, label, text, disabled] of [
+        ['previous',t('notes.groupPrevious'),'‹',index === 0],
+        ['overview',t('notes.groupOverview',{current:index+1,count:item.member_ids.length}),`${index+1} / ${item.member_ids.length}`,false],
+        ['next',t('notes.groupNext'),'›',index === item.member_ids.length-1],
+      ]) {
+        const button = document.createElement('button');
+        button.type='button'; button.dataset.groupPage=action; button.textContent=text;
+        button.setAttribute('aria-label',label); button.disabled=disabled;
+        pager.append(button);
+      }
+      card.prepend(pager);
+    }
+  }
+  return template.innerHTML;
+}
+
 /** Layout changes commit only after an intentional completed gesture. */
-export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = false, filtered = false, viewState = {}, onViewChange = () => {} }) {
+export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true, saveLayout, getBoardItems, saveBoardCommand,
+  activePages = new Map(), groupDragBridge, onGroupAction = () => {}, compact = false, filtered = false, viewState = {}, onViewChange = () => {} }) {
   const viewport = grid.closest('.notes-scroll'), space = grid.parentElement;
   const revealStrip = grid.closest('.notes-page')?.querySelector('.notes-reveal-strip');
   let revealIds = [];
@@ -15,29 +48,44 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   viewState.order ??= [];
   const zoom = () => narrow ? 1 : viewState.zoom;
   const pending = new Set();
+  const items = () => getBoardItems ? getBoardItems() : projectNoteLayouts(getNotes(), { filtered }).map(value => {
+    const note = getNotes().find(note => note.id === value.note_id);
+    return { key:`note:${note.id}`, kind:'note', id:note.id, note, layout:{...value.layout,
+      position_locked:!!note.layout?.position_locked,always_on_top:!!note.layout?.always_on_top},can_manage:note.permissions?.arrange!==false && canEdit(note) };
+  });
+  const cardFor = item => grid.querySelector(`[data-board-key="${item.key}"]`)
+    || (item.kind === 'note' ? grid.querySelector(`.note-card[data-id="${item.id}"]`) : null);
+  const itemFor = card => items().find(item => item.key === card?.dataset.boardKey
+    || (!card?.dataset.boardKey && item.kind === 'note' && item.id === Number(card?.dataset.id)));
+  const editable = item => item && !filtered && (item.kind === 'group' ? item.can_manage === true
+    : item.can_manage!==false && item.note.permissions?.arrange!==false && canEdit(item.note));
+  const commandFor = (item, layout) => ({ kind:'arrange',items:[noteGroupArrangeItem(item,layout)],include_locked:true });
+  let adopted = null, hoverKey = null, waitingForBridge = false, interactionGeneration = 0;
   const gap = () => parseFloat(getComputedStyle(grid).getPropertyValue('--space-3')) || 12;
   function paint(card, layout) {
     const pitch = viewportWidth() / NOTE_COLUMNS;
     Object.assign(card.style, { left: `${layout.x * pitch}px`, top: `${layout.y * NOTE_ROW_HEIGHT}px`, width: `${layout.width * pitch - gap()}px`, height: `${layout.height * NOTE_ROW_HEIGHT - gap()}px` });
   }
   function layerCards(selectedId) {
-    const notes = getNotes(), ids = notes.map(note => note.id);
+    const notes = items(), ids = notes.map(note => note.key);
     viewState.order = [...viewState.order.filter(id => ids.includes(id)), ...ids.filter(id => !viewState.order.includes(id))];
     if (selectedId) viewState.order = [...viewState.order.filter(id => id !== selectedId), selectedId];
-    if (selectedId && selectedId !== viewState.revealed) viewState.revealed = null;
+    if (selectedId && selectedId !== `note:${viewState.revealed}`) viewState.revealed = null;
     for (const note of notes) {
-      const card = grid.querySelector(`.note-card[data-id="${note.id}"]`);
-      if (card) card.style.zIndex = String(gesture?.active && gesture.note.id === note.id ? notes.length * 2 + 3
+      const card = cardFor(note);
+      if (card) card.style.zIndex = String(gesture?.active && gesture.item.key === note.key ? notes.length * 2 + 3
         : card.querySelector('.note-card__menu[open]') ? notes.length * 2 + 2
-        : viewState.revealed === note.id ? notes.length * 2 + 1
-        : (note.layout?.always_on_top ? notes.length : 0) + viewState.order.indexOf(note.id) + 1);
+        : note.kind === 'note' && viewState.revealed === note.id ? notes.length * 2 + 1
+        : (note.layout?.always_on_top ? notes.length : 0) + viewState.order.indexOf(note.key) + 1);
     }
     revealStrip?.querySelectorAll('[data-note-reveal]').forEach(button => button.setAttribute('aria-pressed', String(Number(button.dataset.noteReveal) === viewState.revealed)));
   }
   function revealTabs(projected) {
     if (!revealStrip) return;
     const focused = revealStrip.contains(document.activeElement) ? Number(document.activeElement.dataset.noteReveal) : viewState.revealFocus;
-    revealIds = narrow ? [] : overlappingLockedNoteIds(getNotes(), projected);
+    revealIds = narrow ? [] : projected.filter(item => item.kind === 'note' && item.layout.position_locked && projected.some(other =>
+      item.key !== other.key && item.layout.x < other.layout.x + other.layout.width && item.layout.x + item.layout.width > other.layout.x
+      && item.layout.y < other.layout.y + other.layout.height && item.layout.y + item.layout.height > other.layout.y)).map(item => item.id);
     if (!revealIds.includes(viewState.revealed)) viewState.revealed = null;
     const buttons = getNotes().filter(note => revealIds.includes(note.id)).map(note => {
       const button = document.createElement('button'), label = document.createElement('span');
@@ -83,19 +131,21 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   }
   function cardFocus(event) {
     const card = event.target.closest('.note-card');
-    if (card) layerCards(Number(card.dataset.id));
+    if (card) layerCards(itemFor(card)?.key);
   }
   function extent(layouts) {
     if (narrow) return;
+    grid.style.setProperty('--note-group-ui-scale',String(1/zoom()));
     const value = noteCanvasExtent(layouts, viewportWidth(), Math.max(320, viewport.clientHeight - 12) / zoom());
     value.width = Math.max(value.width, viewportWidth() / zoom());
     Object.assign(grid.style, { width: `${value.width}px`, minHeight: `${value.height}px`, transform: `scale(${zoom()})` });
-    Object.assign(space.style, { width: `${value.width * zoom()}px`, height: `${value.height * zoom()}px` });
+    Object.assign(space.style, { width: `${value.width * zoom()}px`, height: `${value.height * zoom() + (grid.classList.contains('notes-board--groups') ? 48 : 0)}px` });
     const label = viewport.closest('.notes-page')?.querySelector('#notes-zoom-value');
     if (label) label.textContent = `${Math.round(zoom() * 100)}%`;
   }
   function refresh() {
     if (disposed) return;
+    if (gesture && !editable(items().find(item => item.key === gesture.item.key))) { cancel(); return; }
     narrow = compact || viewportWidth() < 640;
     grid.dataset.boardView = narrow ? 'list' : 'canvas';
     grid.classList.add('notes-board');
@@ -105,9 +155,10 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     space.classList.toggle('notes-canvas-space--active', !narrow);
     grid.tabIndex = narrow ? -1 : 0;
     if (narrow) { space.style.width = ''; space.style.height = ''; grid.style.width = ''; grid.style.transform = ''; grid.style.minHeight = ''; }
-    const projected = projectNoteLayouts(getNotes(), { filtered });
+    const projected = items();
+    grid.classList.toggle('notes-board--groups', projected.some(item => item.kind === 'group' && item.member_ids.length > 1));
     for (const item of projected) {
-      const card = grid.querySelector(`.note-card[data-id="${item.note_id}"]`);
+      const card = cardFor(item);
       if (card) {
         if (narrow) for (const name of ['left', 'top', 'width', 'height']) card.style[name] = '';
         else paint(card, item.layout);
@@ -129,7 +180,12 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     current.card.classList.remove('note-card--moving', 'note-card--resizing');
     if (current.card.hasPointerCapture?.(current.pointer)) current.card.releasePointerCapture(current.pointer);
   }
-  function cancel() {
+  function cancel(preserveTouches = false) {
+    interactionGeneration++; waitingForBridge=false;
+    groupDragBridge?.leaveTarget(); hoverKey = null; adopted = null;
+    const previousNavigation=navigation; navigation=null; excludedPointer=null;
+    if (previousNavigation?.kind==='pan' && viewport.hasPointerCapture?.(previousNavigation.pointer)) viewport.releasePointerCapture(previousNavigation.pointer);
+    if (!preserveTouches) touches.clear();
     if (!gesture) return;
     const current = gesture; gesture = null;
     suppressClick = current.active;
@@ -147,23 +203,24 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     gesture.card.classList.add('note-card--moving');
     if (gesture.edges) gesture.card.classList.add('note-card--resizing');
     gesture.card.setPointerCapture(gesture.pointer);
-    layerCards(gesture.note.id);
+    layerCards(gesture.item.key);
     frame = requestAnimationFrame(autoscroll);
   }
   function down(event) {
     const inViewport = viewport.contains(event.target);
     if (event.pointerType === 'touch' && inViewport && !narrow) touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (touches.size >= 2) {
-      cancel(); suppressClick = true; excludedPointer = null;
+      cancel(true); suppressClick = true; excludedPointer = null;
       const [a,b] = [...touches.values()];
       navigation = { kind: 'pinch', distance: Math.hypot(a.x-b.x,a.y-b.y), zoom: zoom(), center: { x: (a.x+b.x)/2, y:(a.y+b.y)/2 } };
       event.preventDefault(); return;
     }
+    if (adopted) { if (adopted.pointerId !== event.pointerId) cancel(); return; }
     if (gesture) { if (gesture.pointer !== event.pointerId) cancel(); return; }
     suppressClick = false;
     if (event.button !== 0 || narrow || !inViewport) return;
     const selected = event.target.closest('.note-card');
-    if (selected) layerCards(Number(selected.dataset.id));
+    if (selected) layerCards(itemFor(selected)?.key);
     if (event.target.closest('a,button,input,select,textarea,summary,details,[role="checkbox"],[contenteditable="true"]')) {
       if (grid.contains(event.target)) excludedPointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
       return;
@@ -178,16 +235,17 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       viewport.setPointerCapture(event.pointerId); return;
     }
     if (filtered) return;
-    const note = getNotes().find(n => n.id === Number(card.dataset.id));
-    if (!note || !canEdit(note) || pending.has(note.id)) return;
+    const item = itemFor(card), note = item?.note;
+    if (!editable(item) || pending.has(item.key)) return;
     const rect = card.getBoundingClientRect();
     const edges = { left: event.clientX - rect.left < 12, right: rect.right - event.clientX < 12, top: event.clientY - rect.top < 12, bottom: rect.bottom - event.clientY < 12 };
-    if (note.layout?.position_locked && !Object.values(edges).some(Boolean)) {
+    if (item.layout?.position_locked && !Object.values(edges).some(Boolean)) {
       excludedPointer = { id: event.pointerId, x: event.clientX, y: event.clientY }; return;
     }
-    const start = normalizeNoteLayout(note.layout), scroller = scrollParent(card);
-    gesture = { note, card, pointer: event.pointerId, start, next: start, x: event.clientX, y: event.clientY,
+    const start = normalizeNoteLayout(item.layout), scroller = scrollParent(card);
+    gesture = { note, item, card, pointer: event.pointerId, start, next: start, x: event.clientX, y: event.clientY,
       lastX: event.clientX, lastY: event.clientY, scroller, scrollY: scroller.scrollTop, scrollX: scroller.scrollLeft, scale: zoom(), pitch: viewportWidth() / NOTE_COLUMNS, active: false,
+      viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight,
       edges: Object.values(edges).some(Boolean) ? edges : null };
     suppressClick = false;
     if (gesture.edges) gesture.timer = setTimeout(activate, 450);
@@ -204,7 +262,7 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       if (edges.right) next.width = start.width + dx;
       if (edges.top) { next.y = Math.max(0, start.y + start.height - 100, Math.min(start.y + start.height - 4, start.y + dy)); next.height = start.y + start.height - next.y; }
       if (edges.bottom) next.height = start.height + dy;
-      if (gesture.note.layout?.position_locked) {
+      if (gesture.item.layout?.position_locked) {
         next.x = start.x; next.y = start.y;
         if (edges.left) next.width = start.width - dx;
         if (edges.top) next.height = start.height - dy;
@@ -212,7 +270,7 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     }
     gesture.next = normalizeNoteLayout(next);
     paint(gesture.card, gesture.next);
-    extent(projectNoteLayouts(getNotes(), { filtered }).map(item => item.note_id === gesture.note.id ? gesture.next : item.layout));
+    extent(items().map(item => item.key === gesture.item.key ? gesture.next : item.layout));
   }
   function move(event) {
     if (touches.has(event.pointerId)) touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -232,6 +290,7 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       event.preventDefault(); return;
     }
     if (excludedPointer?.id === event.pointerId && Math.hypot(event.clientX - excludedPointer.x, event.clientY - excludedPointer.y) >= 7) suppressClick = true;
+    if (adopted?.pointerId === event.pointerId) { trackTarget(event, adopted); return; }
     if (!gesture || gesture.pointer !== event.pointerId) return;
     gesture.lastX = event.clientX; gesture.lastY = event.clientY;
     if (!gesture.active) {
@@ -240,6 +299,27 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       activate();
     }
     event.preventDefault(); update();
+    if (!gesture.edges) trackTarget(event, { item:gesture.item,pointerId:gesture.pointer });
+  }
+  function clientToWorld(clientX, clientY) {
+    const rect = grid.getBoundingClientRect();
+    return { x:(clientX-rect.left)/(viewportWidth()/NOTE_COLUMNS*zoom()), y:(clientY-rect.top)/(NOTE_ROW_HEIGHT*zoom()) };
+  }
+  function targetAt(event, session) {
+    if (filtered || narrow) return null;
+    const candidates = items().filter(item => item.key !== session.item?.key && editable(item)
+      && (item.kind === 'group' || item.layout.position_locked));
+    const preview = groupDragBridge?.targetAt?.(event, session);
+    const destination = preview && candidates.find(item => item.key === preview.key);
+    if (destination) return destination;
+    return document.elementsFromPoint(event.clientX,event.clientY).map(node => node.closest('.note-card'))
+      .map(card => candidates.find(item => cardFor(item) === card)).find(Boolean) || null;
+  }
+  function trackTarget(event, session) {
+    if (!groupDragBridge) return;
+    const target = targetAt(event,session);
+    if (target?.key !== hoverKey) { groupDragBridge.leaveTarget(); hoverKey = target?.key || null; }
+    if (target) groupDragBridge.hoverTarget(target,{...session,clientX:event.clientX,clientY:event.clientY,world:clientToWorld(event.clientX,event.clientY)});
   }
   function autoscroll() {
     if (!gesture?.active || disposed) return;
@@ -257,7 +337,14 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     frame = requestAnimationFrame(autoscroll);
   }
   async function up(event) {
+    const currentSession=gesture || adopted;
+    if (currentSession && (currentSession.viewportWidth!==viewportWidth() || currentSession.viewportHeight!==viewport.clientHeight)) { cancel(); refresh(); return; }
     touches.delete(event.pointerId);
+    if (adopted?.pointerId === event.pointerId) {
+      const session=adopted; adopted=null;
+      await groupDragBridge?.dropTarget(targetAt(event,session),{...session,clientX:event.clientX,clientY:event.clientY,world:clientToWorld(event.clientX,event.clientY)});
+      groupDragBridge?.leaveTarget(); hoverKey=null; return;
+    }
     if (navigation) {
       if (navigation.kind === 'pan' && viewport.hasPointerCapture?.(event.pointerId)) viewport.releasePointerCapture(event.pointerId);
       if (!touches.size) navigation = null;
@@ -270,15 +357,62 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
     layerCards();
     suppressClick = current.active;
     setTimeout(() => { suppressClick = false; }, 0);
+    const latest=items().find(item=>item.key===current.item.key);
+    if (disposed || !editable(latest) || latest.revision !== current.item.revision) { refresh(); return; }
+    if (current.active && !current.edges && groupDragBridge) {
+      const session={item:current.item,pointerId:current.pointer,clientX:event.clientX,clientY:event.clientY,world:clientToWorld(event.clientX,event.clientY)};
+      const target=targetAt(event,session);
+      const generation=interactionGeneration;
+      let consumed=false;
+      if (target) {
+        waitingForBridge=true;
+        try { consumed=await groupDragBridge.dropTarget(target,session); }
+        finally { waitingForBridge=false; }
+      }
+      groupDragBridge.leaveTarget(); hoverKey=null;
+      if (consumed || disposed || generation!==interactionGeneration || !editable(items().find(item=>item.key===current.item.key))) { if(!disposed)refresh(); return; }
+    }
     if (!current.active || JSON.stringify(current.start) === JSON.stringify(current.next)) { refresh(); return; }
-    if (disposed || !canEdit(current.note)) { refresh(); return; }
-    pending.add(current.note.id); current.card.setAttribute('aria-busy', 'true');
-    try { await saveLayout(current.note, current.next); }
-    finally { pending.delete(current.note.id); current.card.removeAttribute('aria-busy'); if (!disposed) refresh(); }
+    pending.add(current.item.key); current.card.setAttribute('aria-busy', 'true');
+    try {
+      if (saveBoardCommand) await saveBoardCommand(commandFor(current.item,current.next));
+      else if (current.item.kind === 'note') await saveLayout(current.note, current.next);
+    }
+    finally { pending.delete(current.item.key); current.card.removeAttribute('aria-busy'); if (!disposed) refresh(); }
   }
-  function click(event) { if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); } }
+  async function click(event) {
+    if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    const button=event.target.closest('[data-group-page],[data-group-action],[data-board-action="lock"],[data-board-action="top"]');
+    if (!button || !grid.contains(button)) return;
+    const item=itemFor(button.closest('.note-card'));
+    if (!item) return;
+    const page=button.dataset.groupPage;
+    if (page && item.kind === 'group') {
+      event.preventDefault(); event.stopImmediatePropagation(); cancel();
+      if (page === 'overview') { onGroupAction('overview',item); return; }
+      const index=item.member_ids.indexOf(item.note.id)+(page==='previous'?-1:1);
+      if (index < 0 || index >= item.member_ids.length) return;
+      if (activePages instanceof Map) activePages.set(item.id,item.member_ids[index]); else activePages[item.id]=item.member_ids[index];
+      onViewChange();
+      const next=grid.querySelector(`[data-board-key="${item.key}"] [data-group-page="${page}"]:not(:disabled)`)
+        || grid.querySelector(`[data-board-key="${item.key}"] [data-group-page="overview"]`);
+      next?.focus({preventScroll:true}); return;
+    }
+    if (button.dataset.groupAction) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      if (editable(item)) onGroupAction(button.dataset.groupAction,item);
+      return;
+    }
+    if (!saveBoardCommand || !getBoardItems) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    if (!editable(item) || pending.has(item.key)) return;
+    const flag=button.dataset.boardAction==='lock'?'position_locked':'always_on_top';
+    pending.add(item.key); button.disabled=true;
+    try { await saveBoardCommand(commandFor(item,{[flag]:!item.layout[flag]})); }
+    finally { pending.delete(item.key); button.disabled=false; if(!disposed)refresh(); }
+  }
   function key(event) {
-    if (event.key === 'Escape' && (gesture || navigation)) { event.preventDefault(); cancel(); navigation = null; touches.clear(); }
+    if (event.key === 'Escape' && (gesture || navigation || adopted || waitingForBridge)) { event.preventDefault(); cancel(); navigation = null; touches.clear(); }
     if (event.key === 'Escape' && viewState.revealed) {
       const id = viewState.revealed; viewState.revealed = null; layerCards();
       revealStrip?.querySelector(`[data-note-reveal="${id}"]`)?.focus({ preventScroll: true });
@@ -316,11 +450,11 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   function menuToggle(event) {
     if (event.target.matches('.note-card__menu')) { layerCards(); positionMenus(); }
   }
-  let observedWidth = viewportWidth();
+  let observedWidth = viewportWidth(), observedHeight=viewport.clientHeight;
   const observer = new ResizeObserver(() => {
-    if (viewportWidth() === observedWidth) return;
+    if (viewportWidth() === observedWidth && viewport.clientHeight === observedHeight) return;
     const crossedBreakpoint = (viewportWidth() < 640) !== (observedWidth < 640);
-    const wasNarrow = narrow; observedWidth = viewportWidth(); cancel(); navigation = null; touches.clear(); refresh();
+    const wasNarrow = narrow; observedWidth = viewportWidth(); observedHeight=viewport.clientHeight; cancel(); refresh();
     if (wasNarrow !== narrow || crossedBreakpoint) onViewChange();
   });
   observer.observe(viewport);
@@ -339,11 +473,18 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
   window.addEventListener('keydown', key);
   refresh();
   if (!narrow) { viewport.scrollLeft = viewState.left || 0; viewport.scrollTop = viewState.top || 0; }
-  return {
+  const controller = {
     refresh,
+    clientToWorld,
+    adoptGroupDrag(session) {
+      cancel();
+      if (disposed || filtered || narrow || !Number.isInteger(session?.pointerId)) return false;
+      adopted={...session,viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight}; return true;
+    },
+    cancel,
     zoomBy(amount) { cancel(); setZoom(zoom() + amount); },
     resetView() { cancel(); viewState.zoom = 1; refresh(); viewport.scrollLeft = 0; viewport.scrollTop = 0; },
-    busy: () => !!gesture || !!navigation || pending.size > 0,
+    busy: () => !!gesture || !!navigation || !!adopted || waitingForBridge || pending.size > 0,
     destroy() {
       if (revealStrip?.contains(document.activeElement)) viewState.revealFocus = Number(document.activeElement.dataset.noteReveal);
       if (!narrow) { viewState.left = viewport.scrollLeft; viewState.top = viewport.scrollTop; }
@@ -359,10 +500,12 @@ export function wireNoteBoard(grid, { getNotes, canEdit, saveLayout, compact = f
       revealStrip?.removeEventListener('focusin', revealFocus);
       if (revealStrip) { revealStrip.replaceChildren(); revealStrip.hidden = true; }
       grid.removeEventListener('click', click, true); window.removeEventListener('keydown', key);
-      grid.classList.remove('notes-board', 'notes-board--compact', 'notes-board--projected');
+      grid.classList.remove('notes-board', 'notes-board--compact', 'notes-board--projected', 'notes-board--groups');
       viewport.classList.remove('notes-scroll--canvas'); space.classList.remove('notes-canvas-space--active');
       for (const name of ['minHeight','width','transform']) grid.style[name] = '';
       space.style.width = ''; space.style.height = '';
     },
   };
+  controller.dispose = controller.destroy;
+  return controller;
 }

@@ -388,7 +388,7 @@ test('die Spec nennt den Header an jedem POST, den die Middleware erreicht', asy
   const posts = Object.entries(spec.paths).filter(([, item]) => item?.post);
   assert.ok(posts.length > 10, 'die Spec muss ihre POST-Operationen überhaupt kennen');
 
-  const covered = posts.filter(([p]) => p.startsWith('/api/v1/') && !p.startsWith('/api/v1/auth/'));
+  const covered = posts.filter(([p]) => p.startsWith('/api/v1/') && !p.startsWith('/api/v1/auth/') && p !== '/api/v1/notes/group-operations');
   assert.ok(covered.length > 0);
   for (const [path, item] of covered) {
     const names = (item.post.parameters ?? []).map((param) => param.name);
@@ -402,4 +402,6 @@ test('die Spec nennt den Header an jedem POST, den die Middleware erreicht', asy
     const names = (item.post.parameters ?? []).map((param) => param.name);
     assert.ok(!names.includes('Idempotency-Key'), `${path} liegt vor der Middleware und darf nichts versprechen`);
   }
+  const groupPost = spec.paths['/api/v1/notes/group-operations'].post;
+  assert.ok(!groupPost.parameters.some(parameter => parameter.name === 'Idempotency-Key'), 'Notes operation receipts reauthorize every retry');
 });

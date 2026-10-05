@@ -1428,6 +1428,38 @@
         "agendaDayEmpty": "لا شيء مُخطط"
     },
     "notes": {
+        "groups": {
+            "overview": "Group overview",
+            "close": "Close group overview",
+            "exit": "Canvas",
+            "untitled": "Untitled note",
+            "selectNote": "Select {{title}}",
+            "order": "Order",
+            "moveToGroup": "Move to group",
+            "remove": "Remove from group",
+            "beforeNote": "Before {{title}}",
+            "last": "Last",
+            "position": "Position",
+            "place": "Place",
+            "cancel": "Cancel",
+            "noDestination": "No available destination group.",
+            "destination": "Destination group",
+            "newGroup": "New group",
+            "individual": "Individual notes",
+            "horizontal": "Horizontal position",
+            "vertical": "Vertical position",
+            "noPlacement": "No room here. Choose another position or use List."
+        },
+        "groupPages": "صفحات المجموعة",
+        "groupPrevious": "الملاحظة السابقة",
+        "groupNext": "الملاحظة التالية",
+        "groupOverview": "فتح عرض المجموعة، الملاحظة {{current}} من {{count}}",
+        "groupAction": {
+            "add": "إضافة إلى مجموعة",
+            "move": "نقل المحدد",
+            "remove": "إزالة من المجموعة",
+            "order": "تغيير الترتيب"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

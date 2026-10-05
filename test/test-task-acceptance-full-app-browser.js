@@ -34,7 +34,7 @@ test.after(async()=>{
 });
 test.afterEach(async context=>{if(context.error)for(const [name,page] of Object.entries({owner,member,display})){if(!page||page.isClosed())continue;console.log('ACCEPTANCE_FULL_APP_FAILURE',name,page.url(),await page.$eval('body',el=>el.innerText.slice(-1800)).catch(()=>''));await page.screenshot({path:join(output,`failure-${name}.png`)}).catch(()=>{});}});
 async function pageFor(width=1280){
-  const context=await browser.createBrowserContext(),page=await context.newPage();page.setDefaultTimeout(15000);await page.setViewport({width,height:960});
+  const context=await browser.createBrowserContext(),page=await context.newPage();page.setDefaultTimeout(15000);await page.setViewport({width,height:width<500?844:960,isMobile:width<500,hasTouch:width<900});
   const cdp=await page.createCDPSession();await cdp.send('Emulation.setFocusEmulationEnabled',{enabled:true});
   await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
   await page.evaluateOnNewDocument(()=>{localStorage.setItem('yuvomi-lang','en');localStorage.setItem('yuvomi-locale','en');Object.defineProperty(navigator,'onLine',{get:()=>true});});
@@ -62,11 +62,23 @@ async function confirm(page,id){
   const response=page.waitForResponse(r=>r.url().endsWith(`/api/v1/tasks/${id}/accept`)&&r.request().method()==='POST');
   await press(page,'[data-acceptance-confirm]');const saved=await response;assert.equal(saved.status(),200,await saved.text());await page.waitForSelector('[data-task-acceptance]',{hidden:true});
 }
+async function dragAvatar(page,userId,childId,touch=false){
+  const from=await(await page.$(`[data-acceptance-person="${userId}"]`)).boundingBox(),to=await(await page.$(`[data-acceptance-target="${childId}"]`)).boundingBox();
+  const start={x:from.x+from.width/2,y:from.y+from.height/2},end={x:to.x+to.width/2,y:to.y+to.height/2};
+  if(touch){
+    const cdp=await page.createCDPSession();
+    try{await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:1}]});for(let step=1;step<=8;step++)await cdp.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[{x:start.x+(end.x-start.x)*step/8,y:start.y+(end.y-start.y)*step/8,id:1}]});await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});}finally{await cdp.detach();}
+  }else{await page.mouse.move(start.x,start.y);await page.mouse.down();await page.mouse.move(end.x,end.y,{steps:8});await page.mouse.up();}
+  await page.waitForSelector(`[data-acceptance-target="${childId}"][data-assignee="${userId}"]`);
+}
 const assigned=id=>d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(id).map(r=>r.user_id);
 async function captureWizard(page,label){
   const viewport=page.viewport(),theme=await page.evaluate(()=>document.documentElement.dataset.theme);
   for(const width of [320,390,768,1280,1440])for(const mode of ['light','dark']){
-    await page.setViewport({width,height:width<500?844:960});
+    // Resizing must preserve device emulation; toggling isMobile reloads the app
+    // and discards the very draft this screenshot sweep is meant to inspect.
+    await page.setViewport({...viewport,width,height:width<500?844:960});
+    assert.ok(await page.$('[data-task-acceptance]'),'viewport resize preserves the active draft');
     await page.evaluate(mode=>{document.documentElement.dataset.theme=mode;document.querySelectorAll('.toast').forEach(el=>el.remove());},mode);
     await page.screenshot({path:join(output,`${label}-${width}-${mode}.png`)});
     (evidence.screenshots??=[]).push({file:`${label}-${width}-${mode}.png`,...await page.evaluate(()=>({width:innerWidth,height:innerHeight,theme:document.documentElement.dataset.theme,stage:document.querySelector('[data-task-acceptance]')?.dataset.stage}))});
@@ -82,16 +94,41 @@ test('real open-task board accepts self, optional helper allocation, and paired 
   assert.deepEqual(assigned(solo.id),[2]);assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(solo.id).status,'open');evidence.steps.push('Regular unassigned task appears beside Notes; restricted member accepts self without extra rights');
   grant(2,'tasks.accept_with_helpers','allow');const shared=await create('Shared open task',{children:2});await open(member,shared.id);
   await member.click('[data-acceptance-helper="3"]');await press(member,'[data-acceptance-next]');assert.equal(await member.$eval('[data-task-acceptance]',el=>el.dataset.stage),'allocation');
-  assert.equal(await member.$$eval('[data-acceptance-pool]',els=>els.length),3);await member.select(`[data-acceptance-assignment="${shared.steps[0]}"]`,'3');
-  await captureWizard(member,'actual-human-pools');await press(member,'[data-acceptance-next]');await confirm(member,shared.id);
+  assert.equal(await member.$$eval('[data-acceptance-person]',els=>els.length),2);
+  await dragAvatar(member,3,shared.steps[0],true);await dragAvatar(member,2,shared.steps[0],true);
+  assert.deepEqual(assigned(shared.id),[]);assert.deepEqual(assigned(shared.steps[0]),[]);
+  await press(member,`[data-acceptance-target="${shared.steps[0]}"]`);await press(member,'[data-acceptance-choice="3"]');
+  assert.deepEqual(assigned(shared.id),[]);assert.deepEqual(assigned(shared.steps[0]),[]);
+  await captureWizard(member,'actual-human-avatars');await press(member,'[data-acceptance-next]');await confirm(member,shared.id);
   assert.deepEqual(assigned(shared.id),[2,3]);assert.deepEqual(assigned(shared.steps[0]),[3]);assert.deepEqual(assigned(shared.steps[1]),[]);evidence.steps.push('Narrow helper grant allows atomic optional allocation; an untouched subtask remains explicitly unassigned');
   const paired=await create('Paired open task',{children:2});display=await pageFor();await display.goto(origin+'/device/pair');await press(display,'[data-pair-start]');await display.waitForSelector('[data-pair-code]');const code=await display.$eval('[data-pair-code]',el=>el.textContent);
   await owner.evaluate(async code=>{const {api}=await import('/api.js');await api.post('/devices/pairing-approve',{code,name:'Synthetic Acceptance Display',scope:{member_ids:[2,3]},permissions:{capabilities:{'device_notes.view':'allow','device_tasks.claim':'allow','device_tasks.accept_with_helpers':'allow'}}});},code);
   await display.waitForSelector('[data-pair-claim]');await press(display,'[data-pair-claim]');await display.waitForFunction(()=>!!document.querySelector('[data-device-login]')&&!!document.querySelector('.dashboard'));
   await open(display,paired.id);assert.equal(await display.$eval('[data-task-acceptance]',el=>el.dataset.stage),'primary');await display.select('[data-acceptance-primary]','2');await press(display,'[data-acceptance-next]');await display.waitForSelector('[data-acceptance-helper="3"]');await display.click('[data-acceptance-helper="3"]');await press(display,'[data-acceptance-next]');
-  await captureWizard(display,'actual-paired-pools');await press(display,'[data-acceptance-next]');await confirm(display,paired.id);
+  await captureWizard(display,'actual-paired-avatars');await press(display,'[data-acceptance-next]');await confirm(display,paired.id);
   assert.deepEqual(assigned(paired.id),[2,3]);for(const child of paired.steps)assert.deepEqual(assigned(child),[]);
   const identity=await display.evaluate(async()=>{const {getPermissions}=await import('/permissions.js');return getPermissions().principal_kind;});assert.equal(identity,'device');evidence.steps.push('Real scoped paired display selects recipients and confirms zero allocations while remaining a device');
   assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);assert.equal(d.prepare('SELECT COUNT(*) n FROM task_acceptance_receipts').get().n,3);
   assert.deepEqual(evidence.errors,[]);assert.equal(d.pragma('integrity_check',{simple:true}),'ok');evidence.steps.push('Three acceptance receipts, no awarded points, database integrity preserved');
+});
+
+test('ordinary Tasks entry uses the same local avatar draft and one atomic confirmation',async()=>{
+  const task=await create('Tasks entry avatar acceptance',{children:2});
+  await member.setViewport({width:1280,height:800,isMobile:false,hasTouch:false});
+  await member.goto(origin+'/tasks?offers=1&view=list');
+  await press(member,`[data-action="claim-activity"][data-id="${task.id}"]`);
+  await member.waitForSelector('[data-acceptance-helper="3"]');await member.click('[data-acceptance-helper="3"]');await press(member,'[data-acceptance-next]');
+  const mutations=[];const capture=request=>{if(new URL(request.url()).pathname.startsWith('/api/')&&!['GET','HEAD'].includes(request.method()))mutations.push({method:request.method(),url:request.url()});};
+  member.on('request',capture);
+  try{
+    await dragAvatar(member,3,task.steps[0]);
+    await press(member,'[data-acceptance-person="3"]');await member.waitForSelector('.task-detail-profile-preview');await member.keyboard.press('Escape');
+    assert.ok(await member.$('[data-acceptance-allocation]'));
+    assert.deepEqual(mutations,[]);assert.deepEqual(assigned(task.id),[]);assert.deepEqual(assigned(task.steps[0]),[]);
+    await press(member,'[data-acceptance-next]');await confirm(member,task.id);
+    assert.equal(mutations.length,1);assert.ok(mutations[0].url.endsWith(`/api/v1/tasks/${task.id}/accept`));
+    assert.deepEqual(assigned(task.id),[2,3]);assert.deepEqual(assigned(task.steps[0]),[3]);assert.deepEqual(assigned(task.steps[1]),[]);
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);
+    evidence.steps.push('Actual Notes touch overwrite and Tasks mouse avatar drag remain local until one atomic acceptance; person-card Escape preserves the draft');
+  }finally{member.off('request',capture);}
 });

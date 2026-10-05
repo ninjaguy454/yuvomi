@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 // Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.59`;
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.60-avatar`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -90,6 +90,9 @@ const APP_SHELL = [
   '/components/device-approval-return.js',
   '/components/device-task-claim.js',
   '/components/task-acceptance.js',
+  '/components/task-acceptance-allocation.js',
+  '/components/task-person-card.js',
+  '/utils/task-avatar-gesture.js',
   '/components/open-task-board.js',
   '/utils/task-acceptance-draft.js',
   '/components/rotation-bindings.js',

@@ -1,4 +1,5 @@
 import { memberLabel } from '/utils/member-label.js';
+import { openTaskPersonCard, taskPersonInitials } from '/components/task-person-card.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
 import { isDevicePrincipal } from '/utils/device-context.js';
@@ -354,94 +355,22 @@ function lucideIcon(name) {
 let activeParticipantPreview = null;
 
 function closeParticipantPreview() {
-  activeParticipantPreview?.remove();
+  activeParticipantPreview?.dispose();
   activeParticipantPreview = null;
 }
 
 function participantInitials(name = '') {
-  return name.split(/\s+/).filter(Boolean).map((part) => part[0]).join('').slice(0, 2).toUpperCase();
+  return taskPersonInitials(name);
 }
 
 function openParticipantPreview(person, anchor, ctx) {
   closeParticipantPreview();
   const known = (ctx.users || []).find((user) => Number(user.id) === Number(person.id));
   const profile = { ...person, ...(known || {}) };
-  const panel = document.createElement('div');
-  panel.className = 'task-detail-profile-preview';
-  panel.setAttribute('role', 'dialog');
-  panel.setAttribute('aria-label', memberLabel(profile) || t('tasks.participantsLabel'));
-
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.className = 'btn btn--ghost btn--icon btn--icon-sm task-detail-profile-preview__close';
-  close.setAttribute('aria-label', t('common.close'));
-  close.appendChild(lucideIcon('x'));
-  close.addEventListener('click', closeParticipantPreview);
-
-  const avatar = document.createElement(profile.avatar_data ? 'img' : 'span');
-  avatar.className = 'task-detail-profile-preview__avatar';
-  if (profile.avatar_data) {
-    avatar.src = profile.avatar_data;
-    avatar.alt = '';
-  } else {
-    avatar.textContent = participantInitials(profile.display_name);
-    avatar.style.backgroundColor = profile.avatar_color || profile.color || '#64748b';
-  }
-
-  const identity = document.createElement('div');
-  identity.className = 'task-detail-profile-preview__identity';
-  const name = document.createElement('strong');
-  name.textContent = memberLabel(profile);
-  identity.append(avatar, name);
-  if (profile.family_role) {
-    const familyRole = document.createElement('span');
-    familyRole.textContent = profile.family_role;
-    identity.appendChild(familyRole);
-  }
-
-  const contacts = document.createElement('div');
-  contacts.className = 'task-detail-profile-preview__contacts';
-  for (const [kind, value, label] of [
-    ['phone', profile.phone, t('contacts.phoneLabel')],
-    ['mail', profile.email, t('contacts.emailLabel')],
-  ]) {
-    if (!value) continue;
-    const link = document.createElement('a');
-    link.href = kind === 'phone' ? `tel:${value}` : `mailto:${value}`;
-    const icon = document.createElement('i');
-    icon.dataset.lucide = kind;
-    icon.className = 'icon-sm';
-    icon.setAttribute('aria-hidden', 'true');
-    const text = document.createElement('span');
-    const caption = document.createElement('small');
-    caption.textContent = label;
-    text.append(caption, document.createTextNode(String(value)));
-    link.append(icon, text);
-    contacts.appendChild(link);
-  }
-
-  panel.append(close, identity);
-  if (contacts.childElementCount) panel.appendChild(contacts);
-  document.body.appendChild(panel);
-  activeParticipantPreview = panel;
-
-  const rect = anchor.getBoundingClientRect();
-  const width = panel.getBoundingClientRect().width;
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
-  panel.style.left = `${Math.round(left)}px`;
-  panel.style.top = `${Math.round(Math.min(rect.bottom + 8, window.innerHeight - panel.offsetHeight - 8))}px`;
-  if (window.lucide) window.lucide.createIcons({ el: panel });
-
-  const outside = (event) => {
-    if (panel.contains(event.target) || anchor.contains(event.target)) return;
-    closeParticipantPreview();
-    document.removeEventListener('pointerdown', outside, true);
-  };
-  setTimeout(() => document.addEventListener('pointerdown', outside, true), 0);
-  panel.addEventListener('keydown', (event) => {
-    if (event.key !== 'Escape') return;
-    closeParticipantPreview();
-    anchor.focus();
+  activeParticipantPreview = openTaskPersonCard({
+    person: profile, anchor, host: anchor.closest('.modal-panel') || document.body,
+    signal: ctx.personCardController.signal,
+    onClose: () => { activeParticipantPreview = null; },
   });
 }
 
@@ -1867,7 +1796,7 @@ export function openTaskDetail({
   edit = null,
 }) {
   const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged,
-    pendingSubtasks: new Map(), childRenderKeys: new Map() };
+    pendingSubtasks: new Map(), childRenderKeys: new Map(), personCardController: new AbortController() };
   ctx.refresh = async () => { if (!ctx.closed) await ctx.loader?.load(); };
   ctx.runMutation = (button, operation, options) => runTaskDetailMutation(ctx, button, operation, options);
 
@@ -1922,7 +1851,7 @@ export function openTaskDetail({
     size: 'lg',
     sections: renderTaskDetail(task, reminder, ctx),
     actions,
-    onClose: () => { ctx.closed = true; ctx.queue?.dispose(); ctx.loader?.dispose(); ctx.stopLive?.(); },
+    onClose: () => { ctx.closed = true; ctx.personCardController.abort(); ctx.queue?.dispose(); ctx.loader?.dispose(); ctx.stopLive?.(); },
     edit: canEdit && edit ? {
       label: t('common.edit'),
       title: t('tasks.editTask'),

@@ -140,7 +140,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
   await privacy.put('/wall-mode', new MockResponse('', { headers: { 'X-Wall-Mode': '1' } }));
 
   await dispatchLifecycle(env.listeners.install[0]);
-  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.59');
+  assert.equal(env.cacheNames.SHELL_CACHE, 'yuvomi-shell-2.54.0-kitchen.5-vidamia.60-avatar');
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   assert.notEqual(shell, oldShell, 'the new identity stages independently of the running installation');
   for (const path of ['/index.html', '/manifest.json', '/utils/branding.js', '/icons/vidamia-mark.svg',
@@ -194,6 +194,9 @@ test('older releases and the previous refinement candidate upgrade to fresh Meal
   const shell = await env.caches.open(env.cacheNames.SHELL_CACHE);
   const pages = await env.caches.open(env.cacheNames.PAGES_CACHE);
   assert.ok(await shell.match('/components/task-detail.js'));
+  assert.ok(await shell.match('/components/task-person-card.js'));
+  assert.ok(await shell.match('/components/task-acceptance-allocation.js'));
+  assert.ok(await shell.match('/utils/task-avatar-gesture.js'));
   assert.ok(await shell.match('/utils/task-fields.js'));
   assert.ok(await shell.match('/utils/meal-week-model.js'));
   assert.ok(await pages.match('/pages/tasks.js'));

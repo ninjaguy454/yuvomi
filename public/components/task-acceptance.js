@@ -1,21 +1,23 @@
 import { api } from '/api.js';
+import { mountAcceptanceAllocation } from '/components/task-acceptance-allocation.js';
+import { openTaskPersonCard } from '/components/task-person-card.js';
 import { t } from '/i18n.js';
 import { esc } from '/utils/html.js';
 import { memberLabel } from '/utils/member-label.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { openChildModal, mountFooter, focusFirstField } from '/components/modal.js';
-import { createAcceptanceDraft, setAcceptanceHelpers, needsAcceptanceAllocation, assignAcceptanceSubtask, lockAcceptancePayload } from '/utils/task-acceptance-draft.js';
+import { createAcceptanceDraft, setAcceptanceHelpers, needsAcceptanceAllocation, lockAcceptancePayload } from '/utils/task-acceptance-draft.js';
 
 /** One server-authorized acceptance; all choices stay local until confirmation. */
 export async function acceptOpenTask(task) {
   const authentication = authenticationSnapshot();
   let active = true, draft = null, stage = 'loading', message = '', result = null, busy = false, loadGeneration = 0;
-  let dragListeners = null;
+  let allocation = null, allocationScope = null, personCard = null;
   const valid = () => active && sameAuthentication(authentication);
-  const modal = openChildModal({ title: t('tasks.acceptTitle'), size: 'lg', initialFocus: 'none', content: '<div data-task-acceptance></div>', onClose: () => { active = false; } });
+  const modal = openChildModal({ title: t('tasks.acceptTitle'), size: 'lg', initialFocus: 'none', content: '<div data-task-acceptance></div>', onClose: () => { active = false; clearAllocation(); } });
   const body = modal.panel.querySelector('.modal-panel__body');
   const endEvents = ['auth:context-ending', 'auth:expired', 'auth:context-rejected'];
-  const close = () => { active = false; loadGeneration++; dragListeners?.abort(); return modal.close({ force: true }); };
+  const close = () => { active = false; loadGeneration++; clearAllocation(); return modal.close({ force: true }); };
   for (const event of endEvents) window.addEventListener(event, close);
   function membersById() { return new Map([...(draft?.projection.primary_candidates || []), ...(draft?.projection.coassignee_candidates || [])].map(member => [Number(member.id), member])); }
   function memberName(id) { return memberLabel(membersById().get(Number(id))) || t('tasks.acceptMember'); }
@@ -28,7 +30,7 @@ export async function acceptOpenTask(task) {
   const button = (action, label, primary = false) => `<button type="button" class="btn btn--${primary ? 'primary' : 'secondary'}" data-acceptance-${action}>${esc(label)}</button>`;
   function render(focus = true) {
     if (!valid()) return;
-    dragListeners?.abort();
+    clearAllocation();
     let content = '', actions = button('cancel', t('common.cancel'));
     if (stage === 'loading') content = `<p role="status">${esc(t('common.loading'))}</p>`;
     else if (stage === 'error' || stage === 'conflict') {
@@ -51,10 +53,7 @@ export async function acceptOpenTask(task) {
         if (p.primary_mode === 'choose') actions += button('back', t('common.back'));
         actions += button('next', t('common.next'), true);
       } else if (stage === 'allocation') {
-        const recipients = [draft.primary, ...draft.helpers];
-        content += `<p>${esc(t('tasks.acceptAllocateHint'))}</p><div class="task-acceptance__pools">${[null, ...recipients].map(id => `<section class="task-acceptance__pool" data-acceptance-pool="${id ?? ''}" aria-label="${esc(id == null ? t('tasks.acceptUnassigned') : memberName(id))}"><h4>${esc(id == null ? t('tasks.acceptUnassigned') : memberName(id))}</h4>${p.subtasks.filter(child => child.allocatable && (draft.assignments[child.id] ?? null) === id).map(child => `<div class="task-acceptance__step" data-acceptance-child="${Number(child.id)}"><button type="button" class="btn btn--ghost task-acceptance__drag" data-acceptance-drag="${Number(child.id)}" aria-label="${esc(t('tasks.acceptMove', { title: child.title }))}">↕</button><span>${esc(child.title)}</span><label class="sr-only" for="acceptance-child-${Number(child.id)}">${esc(t('tasks.acceptAssign', { title: child.title }))}</label><select id="acceptance-child-${Number(child.id)}" class="input" data-immediate-action data-acceptance-assignment="${Number(child.id)}"><option value="">${esc(t('tasks.acceptUnassigned'))}</option>${recipients.filter(uid => child.eligible_assignee_ids.map(Number).includes(uid)).map(uid => `<option value="${uid}" ${id === uid ? 'selected' : ''}>${esc(memberName(uid))}</option>`).join('')}</select></div>`).join('')}</section>`).join('')}</div>`;
-        const protectedSteps = p.subtasks.filter(child => !child.allocatable);
-        if (protectedSteps.length) content += `<p class="text-muted">${esc(t('tasks.acceptPreserved'))}</p><ul>${protectedSteps.map(child => `<li>${esc(child.title)}</li>`).join('')}</ul>`;
+        content += '<div data-acceptance-allocation></div>';
         actions += button('back', t('common.back')) + button('next', t('common.next'), true);
       } else if (stage === 'confirm') {
         content += `<div class="task-acceptance__identity">${memberAvatar(canonicalName(draft.primary))}<span class="task-acceptance__member-name" data-acceptance-identity>${esc(memberName(draft.primary))}</span></div><section class="task-acceptance__summary-helpers" aria-labelledby="acceptance-summary-helpers"><h4 id="acceptance-summary-helpers">${esc(t('tasks.acceptHelpersLabel'))}</h4>${draft.helpers.length ? `<ul class="task-acceptance__summary-members">${draft.helpers.map(id => `<li class="task-acceptance__identity" data-acceptance-summary-helper="${Number(id)}">${memberAvatar(canonicalName(id))}<span class="task-acceptance__member-name">${esc(memberName(id))}</span></li>`).join('')}</ul>` : `<p data-acceptance-no-helpers>${esc(t('tasks.acceptNoHelpers'))}</p>`}</section>`;
@@ -80,62 +79,32 @@ export async function acceptOpenTask(task) {
     });
     on('back', () => { stage = stage === 'helpers' ? 'primary' : stage === 'confirm' && needsAcceptanceAllocation(draft) ? 'allocation' : 'helpers'; render(); });
     modal.panel.querySelectorAll('[data-acceptance-helper]').forEach(el => { el.onchange = () => setAcceptanceHelpers(draft, [...modal.panel.querySelectorAll('[data-acceptance-helper]:checked')].map(input => Number(input.dataset.acceptanceHelper))); });
-    modal.panel.querySelectorAll('[data-acceptance-assignment]').forEach(el => { el.onchange = () => { const id = Number(el.dataset.acceptanceAssignment); assignAcceptanceSubtask(draft, id, el.value ? Number(el.value) : null); render(false); modal.panel.querySelector(`[data-acceptance-assignment="${id}"]`)?.focus(); }; });
-    wireDrag();
+    if (stage === 'allocation') {
+      allocationScope = new AbortController();
+      allocation = mountAcceptanceAllocation(modal.panel.querySelector('[data-acceptance-allocation]'), {
+        draft, authentication, signal: allocationScope.signal,
+        onPerson(person, anchor) {
+          if (!valid() || busy || draft.submission) return;
+          personCard?.dispose();
+          personCard = openTaskPersonCard({ person, anchor, host: modal.panel, signal: allocationScope.signal, onClose: () => { personCard = null; } });
+        },
+      });
+    }
     if (focus) focusFirstField(modal.panel);
   }
-  function wireDrag() {
-    dragListeners = new AbortController();
-    const options = { signal: dragListeners.signal };
-    let drag = null, frame = 0, previousTime = 0;
-    const highlight = () => {
-      const pool = drag && document.elementFromPoint(drag.x, drag.y)?.closest('[data-acceptance-pool]');
-      modal.panel.querySelectorAll('[data-acceptance-pool]').forEach(el => el.classList.toggle('task-acceptance__pool--target', el === pool));
-    };
-    const stop = () => {
-      const previous = drag; drag = null;
-      cancelAnimationFrame(frame); frame = 0; previousTime = 0;
-      if (previous?.handle.hasPointerCapture?.(previous.pointer)) previous.handle.releasePointerCapture(previous.pointer);
-      highlight();
-    };
-    dragListeners.signal.addEventListener('abort', stop, { once: true });
-    function scroll(time) {
-      if (!drag || !valid() || !drag.handle.hasPointerCapture(drag.pointer)) { stop(); return; }
-      const rect = body.getBoundingClientRect(), edge = 56;
-      const elapsed = previousTime ? Math.min(time - previousTime, 32) : 0;
-      previousTime = time;
-      // Only the allocation body scrolls; a held pointer keeps working as pools move beneath it.
-      if (drag.x >= rect.left && drag.x <= rect.right && drag.y >= rect.top && drag.y <= rect.bottom) {
-        const strength = drag.y < rect.top + edge ? -Math.min(1, (rect.top + edge - drag.y) / edge)
-          : drag.y > rect.bottom - edge ? Math.min(1, (drag.y - rect.bottom + edge) / edge) : 0;
-        body.scrollTop += strength * elapsed * 0.9;
-      }
-      highlight(); frame = requestAnimationFrame(scroll);
-    }
-    modal.panel.addEventListener('pointerdown', event => {
-      const handle = event.target.closest('[data-acceptance-drag]');
-      if (!handle || event.button !== 0 || busy || drag) return;
-      drag = { id: Number(handle.dataset.acceptanceDrag), pointer: event.pointerId, handle, x: event.clientX, y: event.clientY };
-      handle.setPointerCapture?.(event.pointerId); event.preventDefault();
-      frame = requestAnimationFrame(scroll);
-    }, options);
-    modal.panel.addEventListener('pointermove', event => {
-      if (!drag || event.pointerId !== drag.pointer) return;
-      drag.x = event.clientX; drag.y = event.clientY; highlight();
-      event.preventDefault();
-    }, { ...options, passive: false });
-    modal.panel.addEventListener('pointerup', event => {
-      if (!drag || event.pointerId !== drag.pointer) return;
-      const pool = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-acceptance-pool]');
-      const id = drag.id; stop();
-      if (pool) assignAcceptanceSubtask(draft, id, pool.dataset.acceptancePool ? Number(pool.dataset.acceptancePool) : null);
-      render(false); modal.panel.querySelector(`[data-acceptance-drag="${id}"]`)?.focus({ preventScroll: true });
-    }, options);
-    const cancel = event => { if (drag && event.pointerId === drag.pointer) { stop(); render(false); } };
-    modal.panel.addEventListener('pointercancel', cancel, options);
-    modal.panel.addEventListener('lostpointercapture', cancel, options);
-    modal.panel.addEventListener('keydown', event => { if (event.key === 'Escape' && drag) { event.stopImmediatePropagation(); stop(); render(false); } }, { ...options, capture: true });
+  function clearAllocation() {
+    allocationScope?.abort(); allocationScope = null;
+    allocation?.dispose(); allocation = null;
+    personCard?.dispose(); personCard = null;
   }
+  // The shared modal also owns its close button and Escape dismissal. Stop local
+  // gestures as soon as those routes begin, before the closing animation ends.
+  modal.panel.addEventListener('click', event => {
+    if (event.target.closest('[data-action="close-modal"]')) clearAllocation();
+  }, { capture: true });
+  modal.panel.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !event.defaultPrevented) clearAllocation();
+  });
   async function load(primary = null, refreshed = false) {
     const generation = ++loadGeneration;
     stage = 'loading'; render();
@@ -167,7 +136,7 @@ export async function acceptOpenTask(task) {
   }
   void load();
   await modal.closed;
-  active = false; dragListeners?.abort();
+  active = false; clearAllocation();
   for (const event of endEvents) window.removeEventListener(event, close);
   return result;
 }

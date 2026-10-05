@@ -687,3 +687,10 @@
 .priority-dot--medium { background-color: var(--color-priority-medium); }
 .priority-dot--high   { background-color: var(--color-priority-high); }
 .priority-dot--urgent { background-color: var(--color-priority-urgent); }
+/* Countdowns share the existing due metadata slot on every Task surface. */
+.task-countdown {
+  font-variant-numeric: tabular-nums;
+}
+.task-countdown.task-countdown--overdue {
+  color: var(--color-danger);
+}

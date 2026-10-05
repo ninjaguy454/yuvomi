@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown stöds.",
         "countdownToggle": "Räkna ner på översikten",
         "countdownHint": "Visar på översikten hur lång tid det är kvar. Om uppgiften upprepas från att den bockas av börjar nedräkningen om efteråt.",
+        "countdownRemaining": "{{duration}} kvar",
         "countdownNeedsDue": "Utan förfallodatum finns det inget att räkna ner till.",
         "countdownDetail": "Räknar ner på översikten",
         "syncTargetLabel": "Synkroniseringsmål",

@@ -156,7 +156,10 @@
     "test:modal-dismissal-browser": "node --test test/test-modal-dismissal-browser.js",
     "test:modal-utils": "node --loader ./test/test-browser-loader.mjs test/test-modal-utils.js",
     "test:detail-view": "node --test test/test-detail-view.js",
-    "test:task-fields": "node --loader ./test/test-browser-loader.mjs --test test/test-task-fields.js",
+    "test:task-card-countdown": "node --loader ./test/test-browser-loader.mjs --test test/test-task-card-countdown.js test/test-task-countdown.js test/test-task-countdown-surfaces.js",
+    "test:task-countdown-projections": "node --test test/test-task-countdown-projections.js",
+    "test:task-countdown-browser": "node --test --test-name-pattern=\"countdown\" test/test-task-view-browser.js && node --test test/test-task-countdown-surface-lifecycle.js",
+    "test:task-fields": "node --loader ./test/test-browser-loader.mjs --test test/test-task-fields.js && npm run test:task-card-countdown",
     "test:overlay-history": "node --test test/test-overlay-history.js",
     "test:nav-badges": "node --test test/test-nav-badges.js",
     "test:category-manager": "node --experimental-sqlite test/test-category-manager.js",
@@ -273,7 +276,7 @@
     "test:folder-tree": "node --test test/test-folder-tree.js",
     "test:task-documents": "node --experimental-sqlite --test test/test-task-documents.js",
     "test:task-tags": "node --experimental-sqlite --test test/test-task-tags.js",
-    "test:countdown": "DB_PATH=:memory: node --experimental-sqlite --test test/test-countdown.js",
+    "test:countdown": "DB_PATH=:memory: node --experimental-sqlite --test test/test-countdown.js && npm run test:task-countdown-projections",
     "test:quick-links": "DB_PATH=:memory: node --experimental-sqlite --test test/test-quick-links.js",
     "test:image-picker": "node --test test/test-image-picker.js",
     "test:task-completions": "DB_PATH=:memory: node --experimental-sqlite --test test/test-task-completions.js",
@@ -375,7 +378,7 @@
     "test:task-acceptance": "node --experimental-sqlite --test test/test-task-acceptance.js test/test-task-acceptance-policy.js test/test-task-acceptance-races.js test/test-task-acceptance-context.js test/test-task-acceptance-capabilities.js test/test-task-acceptance-migration.js test/test-task-acceptance-draft.js",
     "test:task-acceptance-browser": "node --experimental-sqlite --test test/test-task-acceptance-browser.js test/test-open-task-board-browser.js test/test-task-acceptance-full-app-browser.js",
     "test:task-acceptance-visual": "node --experimental-sqlite --test test/test-task-acceptance-visual.js",
-    "test:ux-cleanup-browser": "node --test --test-concurrency=1 test/test-ux-cleanup-browser.js && node --test --test-name-pattern=\"UX cleanup|approval layout\" test/test-task-view-browser.js"
+    "test:ux-cleanup-browser": "node --test --test-concurrency=1 test/test-ux-cleanup-browser.js && node --test --test-name-pattern=\"UX cleanup|approval layout\" test/test-task-view-browser.js && npm run test:task-countdown-browser"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

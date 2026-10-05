@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown é suportado.",
         "countdownToggle": "Fazer contagem regressiva na visão geral",
         "countdownHint": "Mostra na visão geral quanto tempo falta. Se a tarefa se repetir a partir da conclusão, a contagem recomeça depois.",
+        "countdownRemaining": "Faltam {{duration}}",
         "countdownNeedsDue": "Sem data de vencimento não há nada para contar.",
         "countdownDetail": "Contagem regressiva na visão geral",
         "syncTargetLabel": "Destino de sincronização",

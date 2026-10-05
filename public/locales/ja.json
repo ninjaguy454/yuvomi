@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown に対応しています。",
         "countdownToggle": "概要でカウントダウンする",
         "countdownHint": "概要に残り時間を表示します。完了時点から繰り返すタスクなら、その後カウントダウンは最初からやり直します。",
+        "countdownRemaining": "あと{{duration}}",
         "countdownNeedsDue": "期限日がないと、数える対象がありません。",
         "countdownDetail": "概要でカウントダウン中",
         "syncTargetLabel": "同期先",

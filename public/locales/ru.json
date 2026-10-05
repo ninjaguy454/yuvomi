@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Поддерживается Markdown.",
         "countdownToggle": "Вести обратный отсчёт в обзоре",
         "countdownHint": "Показывает в обзоре, сколько осталось. Если задача повторяется от момента выполнения, отсчёт затем начинается заново.",
+        "countdownRemaining": "Осталось {{duration}}",
         "countdownNeedsDue": "Без даты срока отсчитывать нечего.",
         "countdownDetail": "Идёт обратный отсчёт в обзоре",
         "syncTargetLabel": "Цель синхронизации",

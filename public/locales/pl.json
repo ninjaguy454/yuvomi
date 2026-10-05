@@ -476,6 +476,7 @@
         "descriptionMarkdownHint": "Markdown jest obsługiwany.",
         "countdownToggle": "Odliczaj na przeglądzie",
         "countdownHint": "Pokazuje na przeglądzie, ile jeszcze zostało. Jeśli zadanie powtarza się od wykonania, odliczanie zaczyna się potem od nowa.",
+        "countdownRemaining": "Pozostało {{duration}}",
         "countdownNeedsDue": "Bez terminu nie ma czego odliczać.",
         "countdownDetail": "Odlicza na przeglądzie",
         "syncTargetLabel": "Cel synchronizacji",

@@ -42,6 +42,7 @@ import { maxUploadBytes, maxUploadMb } from '/utils/upload-limit.js';
 import { emptyStateHTML, emptyHintHTML, mountLoadError } from '/utils/empty-state.js';
 import { renderAvailabilityManager, renderTripsManager } from '/components/activity-automation.js';
 import { routineEntriesOnDay, routineSegmentTimeLabel } from '/utils/availability-calendar.js';
+import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 
 // --------------------------------------------------------
 // Konstanten
@@ -591,6 +592,7 @@ let state = {
   people:        new Set(),
 };
 let _container = null;
+const _countdownBindings = new WeakMap();
 
 // Termin-Suche (#471): datumsunabhängiges Finden über den FTS-Index. Der
 // Suchmodus blendet eine Leiste unter der Toolbar ein und ersetzt den Ansichts-
@@ -1125,8 +1127,13 @@ function renderTaskChip(task, { interactive = true, icon = true } = {}) {
   const priority = task.priority || 'none';
   const label    = esc(task.title);
   const timeStr  = task.due_time ? ` · ${task.due_time.slice(0, 5)}` : '';
+  const countdown = renderTaskCountdown(task, { compact: true });
+  const countdownId = countdown && interactive ? `cal-task-countdown-${Number(task.id)}` : '';
+  const absoluteDue = countdown
+    ? `${formatPreferredDate(task.due_date)}${task.due_time ? `, ${formatTime(`${task.due_date}T${task.due_time}`)}` : ''}`
+    : '';
   const button   = interactive
-    ? ` role="button" tabindex="0" aria-label="${esc(t('calendar.taskChipAriaLabel', { title: task.title }))}"`
+    ? ` role="button" tabindex="0" aria-label="${esc(t('calendar.taskChipAriaLabel', { title: task.title }))}"${countdownId ? ` aria-describedby="${countdownId}"` : ''}`
     : '';
   // Die Prioritaet steht als Rangmarke im Punkt (list-row.css), nicht mehr als
   // getoentes Feld mit getoenter Schrift: dieselbe Stufe, die die Aufgabenliste
@@ -1137,10 +1144,11 @@ function renderTaskChip(task, { interactive = true, icon = true } = {}) {
     : '';
   return `<div class="cal-task-chip cal-task-chip--${priority}"
                data-task-id="${task.id}"${button}
-               title="${label}${esc(timeStr)}">
+               title="${label}${absoluteDue ? ` · ${esc(absoluteDue)}` : esc(timeStr)}">
     ${icon ? '<i data-lucide="check-square" class="icon-sm" aria-hidden="true"></i>' : ''}
     ${dot}
-    <span>${label}${esc(timeStr)}</span>
+    <span class="cal-task-chip__title">${label}${countdown ? '' : esc(timeStr)}</span>
+    ${countdown ? `<span class="cal-task-chip__countdown"${countdownId ? ` id="${countdownId}"` : ''}>${countdown}</span>` : ''}
   </div>`;
 }
 
@@ -1372,6 +1380,8 @@ async function renderCalendarPlanningSection(container, section, user, openTripI
 }
 
 export async function render(container, { user }) {
+  _countdownBindings.get(container)?.();
+  _countdownBindings.delete(container);
   const requestedSection = new URLSearchParams(window.location.search).get('section');
   if (['availability', 'trips'].includes(requestedSection)) {
     return renderCalendarPlanningSection(container, requestedSection, user, new URLSearchParams(window.location.search).get('open'));
@@ -1476,6 +1486,12 @@ export async function render(container, { user }) {
       openEventDetail(occurrence);
     }
   }
+  const stopTaskCountdowns = bindTaskCountdowns(container);
+  _countdownBindings.set(container, stopTaskCountdowns);
+  return () => {
+    _countdownBindings.get(container)?.();
+    _countdownBindings.delete(container);
+  };
 }
 
 // --------------------------------------------------------

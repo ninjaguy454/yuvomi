@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "يتم دعم Markdown.",
         "countdownToggle": "العد التنازلي في النظرة العامة",
         "countdownHint": "يعرض في النظرة العامة الوقت المتبقي. وإذا كانت المهمة تتكرر من وقت إنجازها، يبدأ العد التنازلي من جديد بعد ذلك.",
+        "countdownRemaining": "متبقٍ {{duration}}",
         "countdownNeedsDue": "بدون تاريخ استحقاق لا يوجد ما يمكن العد التنازلي إليه.",
         "countdownDetail": "يجري العد التنازلي في النظرة العامة",
         "syncTargetLabel": "وجهة المزامنة",

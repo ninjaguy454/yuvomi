@@ -476,6 +476,7 @@
         "descriptionMarkdownHint": "Markdown wird unterstützt.",
         "countdownToggle": "Auf der Übersicht herunterzählen",
         "countdownHint": "Zeigt auf der Übersicht, wie lange es noch dauert. Wiederholt sich die Aufgabe ab Erledigung, beginnt der Countdown danach von vorn.",
+        "countdownRemaining": "Noch {{duration}}",
         "countdownNeedsDue": "Ohne Fälligkeitsdatum gibt es nichts, worauf gezählt werden kann.",
         "countdownDetail": "Zählt auf der Übersicht herunter",
         "syncTargetLabel": "Sync-Ziel",

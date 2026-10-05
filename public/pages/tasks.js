@@ -1,4 +1,5 @@
 import { memberLabel } from '/utils/member-label.js';
+import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 import {renderCycleReturn} from '/utils/meal-cycle-state.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
@@ -655,6 +656,7 @@ function renderTaskCard(task, opts = {}) {
   const detailsExpanded = state.expandedTasks.has(Number(task.id));
   const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
   const due = formatDueDate(task.due_date, task.due_time, isDone || archived || isExpired(task));
+  const countdown = renderTaskCountdown(task);
   const location = taskLocationLabel(task);
   const names = (task.assigned_users || []).map(person => memberLabel(person)).filter(Boolean).join(', ') || memberLabel({ id: task.assigned_to, display_name: task.assigned_name });
   const blocked = !isExpired(task) && ['needed', 'excluded'].includes(task.supervision?.state);
@@ -676,7 +678,7 @@ function renderTaskCard(task, opts = {}) {
       <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}"${!board ? ' aria-keyshortcuts="Shift+Space" aria-describedby="task-selection-hint" title="Open Task. Hold to select, or press Shift+Space."' : ''}>
         <span class="activity-card__title u-card-title u-compact">${esc(task.title)}</span>
         <span class="activity-card__when">
-          ${due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i>${esc(due.label)}</span>` : (renderStartDateBadge(task.start_date) || '')}
+          ${countdown ? `<span class="due-date"><i data-lucide="hourglass" class="icon-sm" aria-hidden="true"></i>${countdown}</span>` : due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i>${esc(due.label)}</span>` : (renderStartDateBadge(task.start_date) || '')}
           ${location ? `<span class="due-date activity-card__location" title="${esc(task.location?.address || location)}"><i data-lucide="map-pin" class="icon-sm" aria-hidden="true"></i>${esc(location)}</span>` : ''}
         </span>
       </button>
@@ -3512,14 +3514,15 @@ function taskCalendarRangeContains(dateKey) {
 
 function renderTaskCalendarChip(task) {
   const time = task.due_time ? task.due_time.slice(0, 5) : '';
+  const countdown = renderTaskCountdown(task, { className: 'task-calendar-chip__countdown', compact: true });
   const priority = task.priority && task.priority !== 'none'
     ? `<span class="priority-dot priority-dot--${esc(task.priority)}" aria-hidden="true"></span>`
     : '';
-  return `<button type="button" class="task-calendar-chip" data-action="open-task" data-id="${task.id}"
+  return `<button type="button" class="task-calendar-chip${countdown ? ' task-calendar-chip--countdown' : ''}" data-action="open-task" data-id="${task.id}"
       title="${esc(task.title)}${isExpired(task) ? ' · Expired · 0 completion points' : ''}${time ? ` - ${esc(time)}` : ''}">
     ${priority}<span class="task-calendar-chip__title">${esc(task.title)}</span>
     ${isExpired(task) ? '<span class="task-calendar-chip__time">Expired</span>' : ''}
-    ${time ? `<span class="task-calendar-chip__time">${esc(time)}</span>` : ''}
+    ${countdown || (time ? `<span class="task-calendar-chip__time">${esc(time)}</span>` : '')}
   </button>`;
 }
 
@@ -3571,12 +3574,13 @@ function taskCalendarRule(task) {
 function renderTaskCalendarAgendaRow(task) {
   const rule = taskCalendarRule(task);
   const time = task.due_time ? task.due_time.slice(0, 5) : '';
+  const countdown = renderTaskCountdown(task);
   const people = taskParticipants(task);
   return `<button type="button" class="task-calendar-agenda-task" data-action="open-task" data-id="${task.id}">
     <span class="task-calendar-agenda-task__main">
       <span class="task-calendar-agenda-task__title">${esc(task.title)}</span>
       <span class="task-calendar-agenda-task__facts">
-        ${time ? `<span>${esc(time)}</span>` : ''}
+        ${countdown || (time ? `<span>${esc(time)}</span>` : '')}
         ${isExpired(task) ? '<span>Expired · 0 completion points</span>' : taskCompletionPoints(task) > 0 ? `<span>${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>` : ''}
       </span>
       ${rule ? `<span class="task-calendar-agenda-task__rule"><i data-lucide="repeat-2" class="icon-sm" aria-hidden="true"></i>${esc(rule)}</span>` : ''}
@@ -5723,6 +5727,8 @@ export async function render(container, { user }) {
 
   wireTaskSearch(container);
 
+  const stopCountdowns = bindTaskCountdowns(container);
+
   const stopLive = watchTaskChanges(() => {
     void loadTasks(container).catch(() => {});
   });
@@ -5749,6 +5755,7 @@ export async function render(container, { user }) {
   }
   return () => {
     stopConnectionNotice();
+    stopCountdowns();
     stopLive();
     taskStartRefreshers.get(container)?.dispose();
     taskStartRefreshers.delete(container);

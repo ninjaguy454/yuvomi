@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown je podporován.",
         "countdownToggle": "Odpočítávat na přehledu",
         "countdownHint": "Na přehledu ukazuje, kolik ještě zbývá. Pokud se úkol opakuje od dokončení, odpočet začne poté znovu.",
+        "countdownRemaining": "Zbývá {{duration}}",
         "countdownNeedsDue": "Bez data splnění není co odpočítávat.",
         "countdownDetail": "Odpočítává na přehledu",
         "syncTargetLabel": "Cíl synchronizace",

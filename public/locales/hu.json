@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "A Markdown támogatott.",
         "countdownToggle": "Visszaszámlálás az áttekintésen",
         "countdownHint": "Az áttekintésen megmutatja, mennyi van még hátra. Ha a feladat az elvégzéstől ismétlődik, a visszaszámlálás utána elölről kezdődik.",
+        "countdownRemaining": "Még {{duration}}",
         "countdownNeedsDue": "Határidő nélkül nincs mit visszaszámlálni.",
         "countdownDetail": "Visszaszámlál az áttekintésen",
         "syncTargetLabel": "Szinkronizálási cél",

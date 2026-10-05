@@ -11,7 +11,7 @@ import {listTaskOffers,taskOfferState} from './task-offers.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
-const keys = ['id','title','description','status','priority','points','category','start_date','start_time','due_date','due_time',
+const keys = ['id','title','description','status','priority','points','category','start_date','start_time','due_date','due_time','countdown',
   'revision','parent_task_id','assigned_to','is_optional','sort_order','is_recurring','expiration_policy','expired_at',
   'created_at','updated_at','completed_at','locked','recurrence_rule','recurrence_from_completion'];
 const member = row => pick(row,['id','display_name','avatar_color']);

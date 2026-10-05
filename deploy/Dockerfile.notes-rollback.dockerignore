@@ -1,0 +1,4 @@
+**
+!deploy/
+deploy/**
+!deploy/build-notes-fallback.mjs

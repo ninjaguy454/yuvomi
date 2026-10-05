@@ -16,8 +16,8 @@
  */
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
-// Load scoped series editing with the existing immediate Task feedback path.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.58`;
+// Stage the grouped Notes interface and its complete module graph together.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.60`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -130,6 +130,7 @@ const APP_SHELL = [
   '/styles/schedule.css',
   '/styles/markdown-toolbar.css',
   '/styles/notes.css',
+  '/styles/note-groups.css',
   '/styles/contacts.css',
   '/styles/birthdays.css',
   '/styles/budget.css',
@@ -203,6 +204,8 @@ const APP_SHELL = [
   '/utils/markdown-checklist.js',
   '/components/note-board.js',
   '/utils/note-board-layout.js',
+  '/utils/note-group-draft.js',
+  '/utils/note-group-gesture.js',
   '/utils/note-live.js',
   '/utils/markdown-toolbar.js',
   '/utils/meal-week-model.js',

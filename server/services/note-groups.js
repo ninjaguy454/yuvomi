@@ -4,19 +4,20 @@ import {actorId} from '../permissions.js';
 import {noteDevice,noteError,assertNoteAction} from './note-access.js';
 import {deviceRequestStillValid,devicePrincipal,readDeviceContext} from './devices.js';
 import {groupReceiptPrincipalKey,groupRequestHash,readGroupReceipt,saveGroupReceipt,captureGroupStructure,groupStructureMatches} from './note-group-receipts.js';
+import {noteLayoutOwnerKey,ensureNoteLayoutOwner,nextNoteGroupId,readNoteOwnerLayout,readNoteOwnerGroup} from './note-layout-owner.js';
 
 /** Authorize content first, then project only visible pages. Canonical counts
  * and ordinals never cross this boundary, and reads never dissolve containers. */
 export function readGroupedNoteBoard(d,principal) {
   return d.transaction(()=>{
-    const {notes}=readNoteBoard(d,principal),visible=new Map(notes.map(note=>[note.id,note]));
+    const ownerKey=noteLayoutOwnerKey(principal),{notes}=readNoteBoard(d,principal),visible=new Map(notes.map(note=>[note.id,note]));
     const candidates=new Map(),groups=[];
     for(const note of notes){
-      const group=readNoteGroup(d,note.id);
+      const group=readNoteGroup(d,ownerKey,note.id);
       if(group)candidates.set(group.id,group);
     }
     for(const group of candidates.values()){
-      const members=readGroupMembers(d,group.id),member_ids=members.filter(id=>visible.has(id));
+      const members=readGroupMembers(d,ownerKey,group.id),member_ids=members.filter(id=>visible.has(id));
       if(member_ids.length<2)continue;
       groups.push({id:group.id,revision:group.revision,layout:groupLayout(group),member_ids,
         can_manage:members.every(id=>visible.get(id)?.permissions.view&&visible.get(id)?.permissions.edit)});
@@ -87,27 +88,27 @@ function authorize(d,p,noteIds){
   }
 }
 function receiptScope(receipt){return {noteIds:new Set([...receipt.before.notes,...receipt.after.notes].map(n=>n.id)),groupIds:new Set([...receipt.before.groups,...receipt.after.groups].map(g=>g.id))};}
-function expectedMatches(d,c,noteIds,groups){
+function expectedMatches(d,ownerKey,c,noteIds,groups){
   const sort=rows=>[...rows].sort((a,b)=>a.id-b.id);
-  const expected={groups:sort([...groups.values()].map(g=>({id:g.id,revision:g.revision}))),notes:sort([...noteIds].map(id=>({id,revision:d.prepare('SELECT revision FROM notes WHERE id=?').get(id).revision,layout_revision:d.prepare('SELECT revision FROM note_layouts WHERE note_id=?').get(id)?.revision??0})))};
+  const expected={groups:sort([...groups.values()].map(g=>({id:g.id,revision:g.revision}))),notes:sort([...noteIds].map(id=>({id,revision:d.prepare('SELECT revision FROM notes WHERE id=?').get(id).revision,layout_revision:readNoteOwnerLayout(d,ownerKey,id)?.revision??0})))};
   if(!equal(expected,{groups:sort(c.expected.groups).map(({id,revision})=>({id,revision})),notes:sort(c.expected.notes).map(({id,revision,layout_revision})=>({id,revision,layout_revision}))}))throw conflict();
 }
 function orderedSelection(group,selected){if(selected.some(id=>!group.member_ids.includes(id)))throw invalid();return group.member_ids.filter(id=>selected.includes(id));}
 function insertBefore(members,selected,before){const rest=members.filter(id=>!selected.includes(id)),index=before===null?rest.length:rest.indexOf(before);if(index<0)throw invalid();return [...rest.slice(0,index),...selected,...rest.slice(index)];}
-function persistGroups(d,before,groups){
+function persistGroups(d,ownerKey,before,groups){
   const changed=[...groups.values()].filter(g=>{
     const old=before.groups.find(row=>row.id===g.id);return !old||old.missing||!equal(old.member_ids,g.member_ids)||!equal(old.layout,g.layout);
   });
   // Clear affected membership before reinsertion. This collision-free empty
   // sequence handles both cross-group moves and arbitrary page permutations.
-  for(const g of changed)d.prepare('DELETE FROM note_group_members WHERE group_id=?').run(g.id);
+  for(const g of changed)d.prepare('DELETE FROM note_board_group_members WHERE owner_key=? AND group_id=?').run(ownerKey,g.id);
   for(const g of changed){
     const old=before.groups.find(row=>row.id===g.id);
-    if(g.member_ids.length<2){d.prepare('DELETE FROM note_groups WHERE id=?').run(g.id);continue;}
+    if(g.member_ids.length<2){d.prepare('DELETE FROM note_board_groups WHERE owner_key=? AND id=?').run(ownerKey,g.id);continue;}
     const l=g.layout;
-    if(old&&!old.missing)d.prepare('UPDATE note_groups SET x=?,y=?,width=?,height=?,position_locked=?,always_on_top=?,revision=revision+1 WHERE id=?').run(l.x,l.y,l.width,l.height,+l.position_locked,+l.always_on_top,g.id);
-    else if(!d.prepare('SELECT id FROM note_groups WHERE id=?').get(g.id))d.prepare('INSERT INTO note_groups(id,revision,x,y,width,height,position_locked,always_on_top) VALUES(?,?,?,?,?,?,?,?)').run(g.id,g.revision,l.x,l.y,l.width,l.height,+l.position_locked,+l.always_on_top);
-    g.member_ids.forEach((noteId,ordinal)=>d.prepare('INSERT INTO note_group_members(note_id,group_id,ordinal) VALUES(?,?,?)').run(noteId,g.id,ordinal));
+    if(old&&!old.missing)d.prepare('UPDATE note_board_groups SET x=?,y=?,width=?,height=?,position_locked=?,always_on_top=?,revision=revision+1 WHERE owner_key=? AND id=?').run(l.x,l.y,l.width,l.height,+l.position_locked,+l.always_on_top,ownerKey,g.id);
+    else if(!readNoteOwnerGroup(d,ownerKey,g.id))d.prepare('INSERT INTO note_board_groups(owner_key,id,revision,x,y,width,height,position_locked,always_on_top) VALUES(?,?,?,?,?,?,?,?,?)').run(ownerKey,g.id,g.revision,l.x,l.y,l.width,l.height,+l.position_locked,+l.always_on_top);
+    g.member_ids.forEach((noteId,ordinal)=>d.prepare('INSERT INTO note_board_group_members(owner_key,note_id,group_id,ordinal) VALUES(?,?,?,?)').run(ownerKey,noteId,g.id,ordinal));
   }
 }
 
@@ -115,39 +116,40 @@ export function applyNoteGroupCommand(d,principal,command) {
   return d.transaction(()=>{
     if(process.env.VIDAMIA_NOTE_GROUPS_MUTATIONS==='0')throw noteError('Notes arrangement is temporarily unavailable. You can still edit note content.',503);
     const p=currentNoteGroupPrincipal(d,principal);validateCommand(command);
-    const key=groupReceiptPrincipalKey(p),prior=readGroupReceipt(d,key,command.operation_id);
+    const ownerKey=noteLayoutOwnerKey(p),key=groupReceiptPrincipalKey(p),prior=readGroupReceipt(d,ownerKey,key,command.operation_id);
     if(prior){
       // Receipt structure is internal metadata, never a cached board response.
       // Always authorize its full scope before acknowledging an ID or payload.
       authorize(d,p,receiptScope(prior).noteIds);
-      if(prior.hash!==groupRequestHash(command))throw conflict();
-      return {operation_id:command.operation_id,replayed:true,board:readGroupedNoteBoard(d,p),undo_available:groupStructureMatches(d,prior.after)};
+      if(prior.legacy||prior.hash!==groupRequestHash(command))throw conflict();
+      return {operation_id:command.operation_id,replayed:true,board:readGroupedNoteBoard(d,p),undo_available:groupStructureMatches(d,ownerKey,prior.after)};
     }
     let undo;
     const noteIds=new Set(),groups=new Map();
     const useGroup=groupId=>{
       if(groups.has(groupId))return groups.get(groupId);
-      const row=d.prepare('SELECT * FROM note_groups WHERE id=?').get(groupId);if(!row)throw unavailable();
-      const group={id:row.id,revision:row.revision,layout:groupLayout(row),member_ids:readGroupMembers(d,groupId)};groups.set(groupId,group);group.member_ids.forEach(id=>noteIds.add(id));return group;
+      const row=readNoteOwnerGroup(d,ownerKey,groupId);if(!row)throw unavailable();
+      const group={id:row.id,revision:row.revision,layout:groupLayout(row),member_ids:readGroupMembers(d,ownerKey,groupId)};groups.set(groupId,group);group.member_ids.forEach(id=>noteIds.add(id));return group;
     };
     if(command.kind==='undo'){
-      undo=readGroupReceipt(d,key,command.undo_operation_id);if(!undo)throw unavailable();
+      undo=readGroupReceipt(d,ownerKey,key,command.undo_operation_id);if(!undo)throw unavailable();
       const scope=receiptScope(undo);scope.noteIds.forEach(id=>noteIds.add(id));authorize(d,p,noteIds);
-      if(!groupStructureMatches(d,undo.after))throw conflict();
-      for(const id of scope.groupIds){const row=d.prepare('SELECT * FROM note_groups WHERE id=?').get(id);groups.set(id,row?{id,revision:row.revision,layout:groupLayout(row),member_ids:readGroupMembers(d,id)}:{id,missing:true});}
+      if(undo.legacy||!groupStructureMatches(d,ownerKey,undo.after))throw conflict();
+      for(const id of scope.groupIds){const row=readNoteOwnerGroup(d,ownerKey,id);groups.set(id,row?{id,revision:row.revision,layout:groupLayout(row),member_ids:readGroupMembers(d,ownerKey,id)}:{id,missing:true});}
     }else{
       for(const field of ['source_group_id','target_group_id','group_id'])if(Object.hasOwn(command,field))useGroup(command[field]);
       for(const field of ['source_note_id','target_note_id'])if(Object.hasOwn(command,field))noteIds.add(command[field]);
       command.note_ids?.forEach(id=>noteIds.add(id));
       for(const item of command.items||[])item.kind==='group'?useGroup(item.id):noteIds.add(item.id);
-      authorize(d,p,noteIds);expectedMatches(d,command,noteIds,groups);
+      authorize(d,p,noteIds);expectedMatches(d,ownerKey,command,noteIds,groups);
     }
     const layouts=new Map(readNoteBoard(d,p).notes.map(n=>[n.id,n.layout]));
-    const before=captureGroupStructure(d,noteIds,groups.keys(),layouts),noteLayouts=new Map();
-    const standalone=id=>{if(readNoteGroup(d,id))throw conflict();return layouts.get(id);};
+    ensureNoteLayoutOwner(d,ownerKey);
+    const before=captureGroupStructure(d,ownerKey,noteIds,groups.keys(),layouts),noteLayouts=new Map();
+    const standalone=id=>{if(readNoteGroup(d,ownerKey,id))throw conflict();return layouts.get(id);};
     const movable=id=>{const l=standalone(id);if(l.position_locked)throw noteError('Unlock the source note before moving it.',409);return l;};
     const newGroup=(members,layout)=>{
-      const l=groupLayout(layout),id=Number(d.prepare('INSERT INTO note_groups(x,y,width,height,position_locked,always_on_top) VALUES(?,?,?,?,?,?)').run(l.x,l.y,l.width,l.height,+l.position_locked,+l.always_on_top).lastInsertRowid);
+      const l=groupLayout(layout),id=nextNoteGroupId(d,ownerKey);
       groups.set(id,{id,revision:1,layout:l,member_ids:members});before.groups.push({id,missing:true});before.groups.sort((a,b)=>a.id-b.id);return id;
     };
     const c=command;
@@ -193,14 +195,14 @@ export function applyNoteGroupCommand(d,principal,command) {
     // Actual canonical cardinality, never a filtered visible subset, controls
     // dissolution. A survivor inherits the container even if its old pin differs.
     for(const g of groups.values())if(g.member_ids.length===1)noteLayouts.set(g.member_ids[0],g.layout);
-    persistGroups(d,before,groups);
+    persistGroups(d,ownerKey,before,groups);
     for(const note of before.notes){
-      const membershipChanged=note.group_id!==(readNoteGroup(d,note.id)?.id??null);
+      const membershipChanged=note.group_id!==(readNoteGroup(d,ownerKey,note.id)?.id??null);
       const layout=noteLayouts.get(note.id)||(membershipChanged?(note.stored_layout||note.layout):null);
-      if(layout)writeNoteGroupLayout(d,note.id,layout,{forceRevision:membershipChanged});
+      if(layout)writeNoteGroupLayout(d,ownerKey,note.id,layout,{forceRevision:membershipChanged});
     }
-    const after=captureGroupStructure(d,noteIds,groups.keys(),layouts);
-    saveGroupReceipt(d,key,c,before,after);
+    const after=captureGroupStructure(d,ownerKey,noteIds,groups.keys(),layouts);
+    saveGroupReceipt(d,ownerKey,key,c,before,after);
     return {operation_id:c.operation_id,replayed:false,board:readGroupedNoteBoard(d,p),undo_available:true};
   }).immediate();
 }

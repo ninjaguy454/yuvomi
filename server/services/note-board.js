@@ -2,7 +2,8 @@ import {actorId} from '../permissions.js';
 import {str,color,collectErrors,MAX_TEXT,MAX_TITLE} from '../middleware/validate.js';
 import {toggleChecklistLine} from '../../public/utils/markdown-checklist.js';
 import {noteDevice,noteError,noteVisibleSql,noteCapabilities,assertNoteAction,noteMembers,normalizeNoteAudience} from './note-access.js';
-import {readNoteGroup,groupLayout,assertStandaloneLayoutWrite,cleanupGroupsAfterNoteDeletion} from './note-group-store.js';
+import {readNoteGroup,groupLayout,assertStandaloneLayoutWrite,groupsAffectedByNoteDeletion,cleanupGroupsAfterNoteDeletion} from './note-group-store.js';
+import {noteLayoutOwnerKey,ensureNoteLayoutOwner,readNoteOwnerLayout} from './note-layout-owner.js';
 
 const fields=['title','content','color','pinned','visibility','access_user_ids','expected_revision'];
 const idValue=id=>{if(!Number.isSafeInteger(Number(id))||Number(id)<1)throw noteError('Note not found.',404);return Number(id);};
@@ -11,9 +12,11 @@ function revision(note,body,{required=false}={}){
   if(body.expected_revision===undefined&&!required)return;
   if(!Number.isSafeInteger(body.expected_revision)||body.expected_revision!==note.revision)throw noteError('The note has changed. Reload it before trying again.',409);
 }
-function savedLayout(d,n){
-  const layout=d.prepare('SELECT x,y,width,height,revision,position_locked,always_on_top FROM note_layouts WHERE note_id=?').get(n.id);
-  return layout?{...layout,position_locked:Boolean(layout.position_locked),always_on_top:Boolean(layout.always_on_top)}:undefined;
+function savedLayout(d,ownerKey,n){
+  const row=readNoteOwnerLayout(d,ownerKey,n.id);
+  if(!row)return undefined;
+  const {x,y,width,height,revision,position_locked,always_on_top}=row;
+  return {x,y,width,height,revision,position_locked:Boolean(position_locked),always_on_top:Boolean(always_on_top)};
 }
 function visibleNotes(d,p){
   const device=noteDevice(p);
@@ -24,9 +27,9 @@ function visibleNotes(d,p){
  * obstacles; hidden notes never affect positions. Pinned cards keep priority;
  * stable IDs within each group keep content edits/new cards from shuffling it. */
 function projectedLayouts(d,p,notes=visibleNotes(d,p)){
-  const result=new Map(),occupied=[],displayedGroups=new Set();
+  const ownerKey=noteLayoutOwnerKey(p),result=new Map(),occupied=[],displayedGroups=new Set();
   for(const note of notes){
-    const saved=savedLayout(d,note),group=readNoteGroup(d,note.id);
+    const saved=savedLayout(d,ownerKey,note),group=readNoteGroup(d,ownerKey,note.id);
     // A visible page uses its container's geometry, but retains its independent
     // compatibility revision. Hidden pages and obsolete member layouts occupy
     // no extra space; a group is one packing obstacle even with several pages.
@@ -56,7 +59,7 @@ function projectedLayouts(d,p,notes=visibleNotes(d,p)){
 function project(d,p,n,layouts){
   const permissions=noteCapabilities(d,p,n),device=noteDevice(p);
   if(!permissions.view)return null;
-  permissions.arrange=Boolean(permissions.edit&&!readNoteGroup(d,n.id));
+  permissions.arrange=Boolean(permissions.edit&&!readNoteGroup(d,noteLayoutOwnerKey(p),n.id));
   const creator=n.created_by?d.prepare('SELECT display_name,avatar_color,avatar_data FROM users WHERE id=?').get(n.created_by):null;
   const source=n.created_by_device?d.prepare('SELECT name FROM household_devices WHERE id=?').get(n.created_by_device):null;
   const scoped=!device||!device.scope?.member_ids?.length||device.scope.member_ids.includes(n.created_by);
@@ -108,9 +111,9 @@ export function mutateNote(d,p,id,action,body={}){
   return d.transaction(()=>{
     const note=requireNote(d,p,id,action==='delete'?'delete':'edit');
     if(action==='delete'){
-      revision(note,body);const group=readNoteGroup(d,note.id);
+      revision(note,body);const affected=groupsAffectedByNoteDeletion(d,note.id);
       d.prepare('DELETE FROM notes WHERE id=?').run(note.id);
-      cleanupGroupsAfterNoteDeletion(d,group?[group.id]:[]);return null;
+      cleanupGroupsAfterNoteDeletion(d,affected);return null;
     }
     if(action==='pin'){revision(note,body);d.prepare('UPDATE notes SET pinned=? WHERE id=?').run(note.pinned?0:1,note.id);}
     else if(action==='check'){
@@ -136,24 +139,26 @@ export function setNoteLayouts(d,p,body={}){
   const {items,include_locked=false}=body;
   if(!Array.isArray(items)||!items.length||items.length>500||new Set(items.map(i=>i?.note_id)).size!==items.length)throw noteError('Choose distinct notes to arrange.');
   return d.transaction(()=>{
+    const ownerKey=noteLayoutOwnerKey(p);
     let defaults;
     const planned=items.map(item=>{
       if(!item||typeof item!=='object'||Array.isArray(item)||!Number.isSafeInteger(item.note_id)||item.note_id<1||Object.keys(item).some(key=>!['note_id',...layoutRequestFields].includes(key))||!layoutChangeFields.some(key=>owns(item,key)))throw noteError('Invalid note layout request.');
       const note=requireNote(d,p,item.note_id,'edit');assertNoteAction(d,p,note,'view');
-      assertStandaloneLayoutWrite(d,note.id);
+      assertStandaloneLayoutWrite(d,ownerKey,note.id);
       for(const flag of ['position_locked','always_on_top'])if(owns(item,flag)&&typeof item[flag]!=='boolean')throw noteError('Invalid note layout flag.');
-      const saved=savedLayout(d,note),current=saved||(defaults??=projectedLayouts(d,p)).get(note.id);
+      const saved=savedLayout(d,ownerKey,note),current=saved||(defaults??=projectedLayouts(d,p)).get(note.id);
       if(!Number.isSafeInteger(item.expected_layout_revision)||item.expected_layout_revision!==current.revision)throw noteError('The note layout changed. Reload before trying again.',409);
       const geometry=owns(item,'layout')?checkedLayout(item.layout):{x:current.x,y:current.y,width:current.width,height:current.height};
       const flags={position_locked:owns(item,'position_locked')?item.position_locked:current.position_locked,always_on_top:owns(item,'always_on_top')?item.always_on_top:current.always_on_top};
       if(current.position_locked&&flags.position_locked&&!include_locked&&(geometry.x!==current.x||geometry.y!==current.y))throw noteError('The note position is locked. Unlock it before moving it.',409);
       return {note,geometry,flags,current,saved,hasGeometry:owns(item,'layout')};
     });
+    ensureNoteLayoutOwner(d,ownerKey);
     return planned.map(({note,geometry:g,flags,current,saved,hasGeometry})=>{
       if(!saved&&!hasGeometry&&['position_locked','always_on_top'].every(key=>flags[key]===current[key]))return {note_id:note.id,...current};
-      if(!saved)d.prepare('INSERT INTO note_layouts(note_id,x,y,width,height,position_locked,always_on_top) VALUES(?,?,?,?,?,?,?)').run(note.id,g.x,g.y,g.width,g.height,flags.position_locked?1:0,flags.always_on_top?1:0);
-      else if(['x','y','width','height'].some(key=>g[key]!==current[key])||['position_locked','always_on_top'].some(key=>flags[key]!==current[key]))d.prepare('UPDATE note_layouts SET x=?,y=?,width=?,height=?,position_locked=?,always_on_top=?,revision=revision+1 WHERE note_id=?').run(g.x,g.y,g.width,g.height,flags.position_locked?1:0,flags.always_on_top?1:0,note.id);
-      return {note_id:note.id,...savedLayout(d,note)};
+      if(!saved)d.prepare('INSERT INTO note_board_note_layouts(owner_key,note_id,x,y,width,height,position_locked,always_on_top) VALUES(?,?,?,?,?,?,?,?)').run(ownerKey,note.id,g.x,g.y,g.width,g.height,flags.position_locked?1:0,flags.always_on_top?1:0);
+      else if(['x','y','width','height'].some(key=>g[key]!==current[key])||['position_locked','always_on_top'].some(key=>flags[key]!==current[key]))d.prepare('UPDATE note_board_note_layouts SET x=?,y=?,width=?,height=?,position_locked=?,always_on_top=?,revision=revision+1 WHERE owner_key=? AND note_id=?').run(g.x,g.y,g.width,g.height,flags.position_locked?1:0,flags.always_on_top?1:0,ownerKey,note.id);
+      return {note_id:note.id,...savedLayout(d,ownerKey,note)};
     });
   }).immediate();
 }

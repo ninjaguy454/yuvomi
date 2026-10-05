@@ -138,3 +138,41 @@ test('narrow overview keeps exit and close reachable and honours reduced motion'
     assert.ok(result.close.left >= 0 && result.close.right <= 360); assert.equal(result.animation, '0s'); assert.notEqual(result.background, 'rgba(0, 0, 0, 0)');
   } finally { await page.close(); }
 });
+
+test('a second pointer during the initial hold cancels without activation or mutation', async () => {
+  const page = await mount(); try {
+    await page.evaluate(() => {
+      const page = document.querySelector('[data-group-activate="2"]'), host = document.getElementById('host');
+      page.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 11, pointerType: 'touch', isPrimary: true, clientX: 100, clientY: 200, button: 0 }));
+      host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 12, pointerType: 'touch', isPrimary: false, clientX: 300, clientY: 300, button: 0 }));
+    });
+    assert.equal(await page.$eval('.note-group-overview', el => el.dataset.gestureState), 'idle');
+    assert.equal(await page.evaluate(() => window.commands.length), 0); assert.equal(await page.evaluate(() => window.activations.length), 0);
+  } finally { await page.close(); }
+});
+
+test('real pointer extraction stays alive through exit and only its final drop creates one command', async () => {
+  const page = await mount(); try {
+    const start = await page.$eval('[data-group-activate="2"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    await page.mouse.move(start.x, start.y); await page.mouse.down();
+    await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
+    const exit = await page.$eval('[data-group-exit]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    await page.mouse.move(exit.x, exit.y); await page.waitForFunction(() => window.exits.length === 1);
+    assert.equal(await page.evaluate(() => window.commands.length), 0);
+    const pointer = await page.evaluate(() => window.exits[0]); assert.deepEqual(pointer.selected_ids, [2]);
+    await page.mouse.move(100, 700); await page.mouse.up();
+    const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
+    assert.equal(commands[0].kind, 'extract'); assert.deepEqual(commands[0].selected_ids, [2]); assert.equal(commands[0].placements[0].position_locked, false);
+    assert.deepEqual(await page.evaluate(() => window.activations), []);
+  } finally { await page.close(); }
+});
+
+test('capture loss after a real hold consumes release without activating a page', async () => {
+  const page = await mount(); try {
+    const start = await page.$eval('[data-group-activate="2"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + 20, y: r.y + 20 }; });
+    await page.mouse.move(start.x, start.y); await page.mouse.down();
+    await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
+    await page.evaluate(() => document.getElementById('host').releasePointerCapture(1)); await page.mouse.up();
+    assert.equal(await page.evaluate(() => window.commands.length), 0); assert.equal(await page.evaluate(() => window.activations.length), 0);
+  } finally { await page.close(); }
+});

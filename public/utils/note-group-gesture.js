@@ -6,6 +6,8 @@ export function createNoteGroupGesture({
   let disposed = false, session = null, state = 'idle', origin = null, captureHost = null;
   let holdTimer = null, hoverTimer = null, exitTimer = null, target = null, hoverKey = null;
   let onCanvas = false, hoverActive = false;
+  let generation = 0;
+  const consumedPointers = new Set();
 
   function clearTimer(name) {
     const timer = name === 'hold' ? holdTimer : name === 'hover' ? hoverTimer : exitTimer;
@@ -26,12 +28,16 @@ export function createNoteGroupGesture({
   }
   function reset() {
     const previous = session, host = captureHost;
+    generation++;
     clearTimers(); session = null; captureHost = null; target = null; hoverKey = null;
     origin = null; onCanvas = false; hoverActive = false; state = 'idle';
     if (previous) release(host, previous.pointerId);
     return previous;
   }
   function cancel(reason) {
+    // A consumer may cancel synchronously from the final preview, after capture
+    // has been released. That still invalidates the pending onDrop callback.
+    generation++;
     if (!session) return false;
     const previous = reset();
     onCancel(reason, previous);
@@ -52,17 +58,21 @@ export function createNoteGroupGesture({
         && session.selected_ids.includes(value.before_note_id));
   }
   function visitTarget() {
-    target = hitTest(session) || null;
+    const currentGeneration = generation;
+    const found = hitTest(session) || null;
+    if (generation !== currentGeneration || !session) return;
+    target = found;
     if (target?.kind === 'exit' && !onCanvas) {
       clearTimer('hover'); hoverKey = null; hoverActive = false;
       if (exitTimer === null) {
-        const pointerId = session.pointerId;
+        const exitGeneration = generation;
         exitTimer = clock.setTimeout(() => {
           exitTimer = null;
-          if (!session || session.pointerId !== pointerId || state !== 'exit-dwell') return;
+          if (!session || generation !== exitGeneration || state !== 'exit-dwell') return;
           onCanvas = true;
+          const exitingSession = session;
           preview('canvas-drag');
-          if (session) onExit(session);
+          if (session && generation === exitGeneration) onExit(exitingSession);
         }, 1000);
       }
       preview('exit-dwell');
@@ -73,10 +83,10 @@ export function createNoteGroupGesture({
     if (nextKey !== hoverKey) {
       clearTimer('hover'); hoverKey = nextKey; hoverActive = false;
       if (nextKey) {
-        const pointerId = session.pointerId;
+        const hoverGeneration = generation;
         hoverTimer = clock.setTimeout(() => {
           hoverTimer = null;
-          if (!session || session.pointerId !== pointerId || hoverKey !== nextKey) return;
+          if (!session || generation !== hoverGeneration || hoverKey !== nextKey) return;
           hoverActive = true;
           preview(target.kind === 'group' ? 'destination-overview' : 'target-ready');
         }, 400);
@@ -94,6 +104,8 @@ export function createNoteGroupGesture({
       || !Number.isInteger(event.pointerId) || !Array.isArray(seed.selected_ids) || !seed.selected_ids.length) return false;
     const selected = [...new Set(seed.selected_ids)];
     if (selected.some(id => !Number.isSafeInteger(id) || id <= 0) || selected.length > 500) return false;
+    const currentGeneration = ++generation;
+    consumedPointers.delete(event.pointerId);
     // Never retain caller-owned mutable revision or selection objects across a dwell.
     session = Object.freeze({
       pointerId: event.pointerId, selected_ids: Object.freeze(selected),
@@ -104,12 +116,13 @@ export function createNoteGroupGesture({
     origin = { x: event.clientX, y: event.clientY };
     onCanvas = false; hoverActive = false;
     preview('holding');
-    if (!session) return false;
+    if (!session || generation !== currentGeneration) return false;
     holdTimer = clock.setTimeout(() => {
       holdTimer = null;
-      if (!session || state !== 'holding') return;
+      if (!session || generation !== currentGeneration || state !== 'holding') return;
       try { captureHost?.setPointerCapture?.(session.pointerId); }
       catch { cancel('capture-failed'); return; }
+      consumedPointers.add(session.pointerId);
       preview('dragging');
     }, 250);
     return false; // Native scrolling remains available until the hold completes.
@@ -126,19 +139,28 @@ export function createNoteGroupGesture({
     return true;
   }
   function pointerUp(event) {
-    if (disposed || !session || event.pointerId !== session.pointerId) return false;
+    if (disposed || !session || event.pointerId !== session.pointerId) {
+      const consumed = consumedPointers.delete(event.pointerId);
+      if (consumed) event.preventDefault?.();
+      return consumed;
+    }
     if (state === 'holding') { reset(); return false; }
     event.preventDefault?.();
     if (!updateCoordinates(event)) { cancel('coordinates'); return true; }
-    target = hitTest(session) || null;
+    const currentGeneration = generation;
+    const found = hitTest(session) || null;
+    if (generation !== currentGeneration || !session) return true;
+    target = found;
     if (!validTarget(target) || (target.kind === 'canvas' && !onCanvas)) { cancel('invalid-drop'); return true; }
     const finalState = target.kind === 'canvas' && session.selected_ids.length > 1 ? 'placement-choice' : 'submitting';
     const finalSession = session, finalTarget = target;
     reset();
+    consumedPointers.delete(event.pointerId);
+    const submissionGeneration = generation;
     // Release capture before notifying a consumer that may synchronously replace its DOM.
     state = finalState;
     onPreview({ state, session: finalSession, target: finalTarget });
-    if (!disposed) onDrop(finalSession, finalTarget);
+    if (!disposed && generation === submissionGeneration) onDrop(finalSession, finalTarget);
     return true; // A completed or cancelled drag must never be interpreted as a tap.
   }
   function pointerCancel(reason = 'pointercancel') {

@@ -22,14 +22,14 @@ function fakeClock() {
   };
 }
 
-function fixture(selected = [2, 5, 7, 9]) {
+function fixture(selected = [2, 5, 7, 9], hooks = {}) {
   assert.equal(typeof createNoteGroupGesture, 'function', 'group gesture controller exists');
   const clock = fakeClock(), previews = [], drops = [], exits = [], cancels = [], captured = new Set();
   let target = { kind: 'overview', group_id: 10, before_note_id: 3, valid: true };
   const host = { setPointerCapture(id) { captured.add(id); }, hasPointerCapture(id) { return captured.has(id); }, releasePointerCapture(id) { captured.delete(id); } };
   const seed = { selected_ids: selected, source_group_id: 10, can_manage: true, expected: { groups: [{ id: 10, revision: 4 }], notes: [{ id: 2, revision: 1, layout_revision: 2 }] } };
   const event = (overrides = {}) => ({ pointerId: 6, pointerType: 'touch', isPrimary: true, button: 0, clientX: 100, clientY: 120, currentTarget: host, preventDefault() {}, ...overrides });
-  const gesture = createNoteGroupGesture({ clock, hitTest: () => target, clientToWorld: (x, y) => ({ x: x / 2, y: y / 4 }), onPreview: preview => previews.push(preview), onExit: session => exits.push(session), onDrop: (session, dropTarget) => drops.push({ session, target: dropTarget }), onCancel: (reason, session) => cancels.push({ reason, session }) });
+  const gesture = createNoteGroupGesture({ clock, hitTest: () => target, clientToWorld: (x, y) => ({ x: x / 2, y: y / 4 }), onPreview: preview => { previews.push(preview); hooks.onPreview?.(preview, { gesture, event, seed }); }, onExit: session => exits.push(session), onDrop: (session, dropTarget) => drops.push({ session, target: dropTarget }), onCancel: (reason, session) => cancels.push({ reason, session }) });
   return { gesture, clock, previews, drops, exits, cancels, captured, seed, event, target(value) { target = value; }, start() { gesture.pointerDown(event(), seed); clock.tick(250); } };
 }
 
@@ -150,4 +150,39 @@ test('dispose is permanent, idempotent and cancels queued callbacks', () => {
   f.clock.tick(5000); f.gesture.pointerDown(f.event(), f.seed); f.clock.tick(1000);
   assert.equal(f.previews.length, length); assert.equal(f.captured.size, 0); assert.equal(f.drops.length, 0);
   assert.equal(f.clock.pending, 0); assert.equal(f.cancels.length, 1);
+});
+
+test('authentication cancellation during the final preview vetoes the pending drop', () => {
+  const f = fixture([2], { onPreview(preview, { gesture }) { if (preview.state === 'submitting') gesture.pointerCancel('authentication'); } });
+  f.start(); f.gesture.pointerUp(f.event());
+  assert.equal(f.drops.length, 0); assert.equal(f.clock.pending, 0); assert.equal(f.captured.size, 0);
+});
+
+for (const replacementId of [6, 7]) test(`exit preview cannot hand off a replacement gesture using pointer ${replacementId}`, () => {
+  let replaced = false;
+  const f = fixture([2], { onPreview(preview, { gesture, event, seed }) {
+    if (preview.state !== 'canvas-drag' || replaced) return;
+    replaced = true; gesture.pointerCancel('access'); gesture.pointerDown(event({ pointerId: replacementId }), { ...seed, selected_ids: [9] });
+  } });
+  f.start(); f.target({ kind: 'exit' }); f.gesture.pointerMove(f.event()); f.clock.tick(1000);
+  assert.equal(f.exits.length, 0, 'cancelled lifecycle cannot publish the replacement session');
+  f.gesture.dispose(); assert.equal(f.clock.pending, 0);
+});
+
+test('a cancelled established drag consumes its eventual pointer release', () => {
+  const f = fixture(); f.start(); f.gesture.pointerCancel('lostpointercapture');
+  assert.equal(f.gesture.pointerUp(f.event()), true, 'cancelled drag release cannot activate a note');
+  assert.equal(f.drops.length, 0);
+  f.gesture.pointerDown(f.event(), f.seed); f.clock.tick(100);
+  assert.equal(f.gesture.pointerUp(f.event()), false, 'a later ordinary tap with the reused pointer ID remains a tap');
+});
+
+test('cancellation during a holding preview cannot arm another lifecycle hold timer', () => {
+  let replaced = false;
+  const f = fixture([2], { onPreview(preview, { gesture, event, seed }) {
+    if (preview.state !== 'holding' || replaced) return;
+    replaced = true; gesture.pointerCancel('stale'); gesture.pointerDown(event({ pointerId: 7 }), seed);
+  } });
+  f.gesture.pointerDown(f.event(), f.seed);
+  assert.equal(f.clock.pending, 1, 'only the replacement gesture owns a hold timer'); f.gesture.dispose(); assert.equal(f.clock.pending, 0);
 });

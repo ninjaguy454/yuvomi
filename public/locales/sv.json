@@ -1461,6 +1461,8 @@
             "order": "Ändra ordning"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Fäst mot rutnät",
+        "canvasView": "Arbetsytevy",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

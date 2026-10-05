@@ -4,7 +4,7 @@ const strictObject = properties => ({ type:'object', additionalProperties:false,
 const id = { type:'integer', minimum:1 }, revision = { type:'integer', minimum:1 }, layoutRevision = { type:'integer', minimum:0 };
 const ids = { type:'array', minItems:1, maxItems:500, uniqueItems:true, items:id };
 const before = { type:['integer','null'], minimum:1 };
-const rectangle = strictObject({ x:{ type:'integer', minimum:0, maximum:10000 }, y:{ type:'integer', minimum:0, maximum:10000 },
+const rectangle = strictObject({ x:{ type:'number', minimum:0, maximum:10000 }, y:{ type:'number', minimum:0, maximum:10000 },
   width:{ type:'integer', minimum:3, maximum:12 }, height:{ type:'integer', minimum:4, maximum:100 },
   position_locked:{ type:'boolean' }, always_on_top:{ type:'boolean' } });
 const expected = strictObject({

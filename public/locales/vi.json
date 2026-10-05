@@ -1461,6 +1461,8 @@
             "order": "Đổi thứ tự"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Căn vào lưới",
+        "canvasView": "Chế độ xem bảng",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

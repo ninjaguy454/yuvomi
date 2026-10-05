@@ -1461,6 +1461,8 @@
             "order": "順序を変更"
         },
         "resetView": "Reset view",
+        "snapToGrid": "グリッドに合わせる",
+        "canvasView": "キャンバス表示",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

@@ -12,9 +12,9 @@ const pageLinks='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileS
 app.get('/group-page-fixture',(_req,res)=>res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1">${pageLinks}<style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}*,*::before,*::after{animation:none!important;transition:none!important}</style></head><body><main id="main-content"></main></body></html>`));
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount({width=1280,rtl=false,locked=true,offscreen=false}={}) {
+async function mount({width=1280,rtl=false,locked=true,offscreen=false,responsivePage=false}={}) {
   const page=await browser.newPage();await page.setViewport({width,height:760});await page.goto(base+'/group-fixture');
-  await page.evaluate(async({rtl,locked,offscreen})=>{
+  await page.evaluate(async({rtl,locked,offscreen,responsivePage})=>{
     localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();
     if(rtl)document.documentElement.dir='rtl';
     const layout=await import('/utils/note-board-layout.js'),canvas=await import('/components/note-board.js');
@@ -25,11 +25,97 @@ async function mount({width=1280,rtl=false,locked=true,offscreen=false}={}) {
     const grid=document.querySelector('.notes-grid');
     window.items=()=>layout.projectNoteGroupItems(window.data,{activePages:window.pages,filtered:window.filtered});
     window.draw=()=>{window.board?.dispose();grid.innerHTML=window.items().map(item=>canvas.renderNoteGroupFrame(item,`<div class="note-card" data-id="${item.note.id}"><button data-action="open">${item.note.title}</button><div class="note-card__content"><p>Drag this text</p></div><button data-board-action="lock">Pin</button><button data-board-action="top">Top</button><button data-group-action="remove">Remove from group</button></div>`)).join('');
-      window.board=canvas.wireNoteBoard(grid,{getNotes:()=>window.data.notes,getBoardItems:window.items,activePages:window.pages,canEdit:()=>true,compact:window.compact,filtered:window.filtered,viewState:window.view,groupDragBridge:window.bridge,onViewChange:window.draw,onGroupAction:(action,item)=>window.actions.push({action,key:item.key}),saveLayout:()=>{throw Error('group used note writer');},saveBoardCommand:async command=>{window.writes.push(command);for(const item of command.items){const owner=item.kind==='group'?window.data.groups.find(g=>g.id===item.id):window.data.notes.find(n=>n.id===item.id);owner.layout={...owner.layout,...item.layout};}window.draw();}});};window.draw();
-  },{rtl,locked,offscreen});
+      window.board=canvas.wireNoteBoard(grid,{getNotes:()=>window.data.notes,getBoardItems:window.items,activePages:window.pages,canEdit:()=>true,compact:window.compact,filtered:window.filtered,viewState:window.view,getResponsiveWidth:responsivePage?()=>document.querySelector('.notes-page').clientWidth:undefined,groupDragBridge:window.bridge,onViewChange:window.draw,onGroupAction:(action,item)=>window.actions.push({action,key:item.key}),saveLayout:()=>{throw Error('group used note writer');},saveBoardCommand:async command=>{window.writes.push(command);for(const item of command.items){const owner=item.kind==='group'?window.data.groups.find(g=>g.id===item.id):window.data.notes.find(n=>n.id===item.id);owner.layout={...owner.layout,...item.layout};}window.draw();}});};window.draw();
+  },{rtl,locked,offscreen,responsivePage});
   return page;
 }
 async function requireFeature(page){assert.equal(await page.evaluate(()=>window.featureAvailable),true,'group projection and group card renderer exist');}
+
+test('sidebar width preserves Canvas until the responsive page crosses the phone boundary', async () => {
+  const page = await mount({ width: 752, responsivePage: true }); try {
+    await requireFeature(page); const canonical = await page.evaluate(() => structuredClone(window.data));
+    await page.evaluate(() => { document.querySelector('.notes-scroll').style.width = '440px'; window.draw(); });
+    assert.equal(await page.$eval('.notes-grid', element => element.dataset.boardView), 'canvas', 'a right rail must not turn a tablet workspace into List');
+    assert.ok(await page.$eval('[data-board-key="group:1"]', element => element.getBoundingClientRect().width) >= 200, 'the canvas retains a readable world basis beside the rail');
+    assert.ok(Math.abs(await page.evaluate(() => { const rect = document.querySelector('.notes-grid').getBoundingClientRect(); return window.board.clientToWorld(rect.left + 640 / 12, rect.top).x; }) - 1) < .000001);
+    await page.setViewport({ width: 390, height: 760 });
+    await page.waitForFunction(() => document.querySelector('.notes-grid').dataset.boardView === 'list');
+    await page.setViewport({ width: 752, height: 760 });
+    await page.waitForFunction(() => document.querySelector('.notes-grid').dataset.boardView === 'canvas');
+    assert.deepEqual(await page.evaluate(() => window.data), canonical); assert.equal(await page.evaluate(() => window.writes.length), 0);
+  } finally { await page.close(); }
+});
+
+test('sidebar zoom out fits the visible scrollport without artificial blank horizontal overflow', async () => {
+  const page = await mount({ width: 752, responsivePage: true }); try {
+    await page.evaluate(() => { document.querySelector('.notes-scroll').style.width = '440px'; window.draw(); });
+    const canonical = await page.evaluate(() => structuredClone(window.data));
+    assert.ok(await page.$eval('[data-board-key="group:1"]', element => element.getBoundingClientRect().width) >= 200);
+    await page.evaluate(() => window.board.zoomBy(-.5));
+    const geometry = await page.$eval('.notes-scroll', element => ({ visible: element.clientWidth, total: element.scrollWidth }));
+    assert.ok(geometry.total <= geometry.visible + 1, `a fitting zoomed-out world should not add empty horizontal scrolling: ${JSON.stringify(geometry)}`);
+    assert.equal(await page.evaluate(() => window.view.zoom), .5);
+    assert.deepEqual(await page.evaluate(() => window.data), canonical); assert.equal(await page.evaluate(() => window.writes.length), 0);
+  } finally { await page.close(); }
+});
+
+test('freeform stationary touch hold with Snap enabled preserves existing fractional placement', async () => {
+  const page = await mount({ locked: false }), input = await page.createCDPSession(); try {
+    await page.evaluate(() => { Object.assign(window.data.groups[0].layout, { x: .375, y: .125 }); window.draw(); window.board.setSnapToGrid(true); });
+    const canonical = await page.evaluate(() => structuredClone(window.data));
+    const point = await page.$eval('[data-board-key="group:1"] p', element => { const r = element.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; });
+    await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ id: 1, ...point }] });
+    await page.waitForSelector('.note-card--moving');
+    await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => window.writes.length), 0, 'stationary hold/release is not a request to snap existing positions');
+    assert.deepEqual(await page.evaluate(() => window.data), canonical);
+  } finally { await input.detach(); await page.close(); }
+});
+
+for (const axis of ['left', 'top']) test(`freeform ${axis} resize keeps the opposite edge at the fractional origin boundary`, async () => {
+  const page = await mount({ locked: false }); try {
+    await page.evaluate(() => { Object.assign(window.data.groups[0].layout, { x: 1.375, y: 1.125 }); window.draw(); });
+    const before = await page.evaluate(() => structuredClone(window.data.groups[0].layout));
+    const point = await page.$eval('[data-board-key="group:1"]', (element, axis) => { const r = element.getBoundingClientRect(); return { x: axis === 'left' ? r.left + 3 : r.left + r.width / 2, y: axis === 'top' ? r.top + 3 : r.top + r.height / 2 }; }, axis);
+    await page.mouse.move(point.x, point.y); await page.mouse.down(); await page.waitForSelector('.note-card--resizing');
+    await page.mouse.move(point.x - (axis === 'left' ? 300 : 0), point.y - (axis === 'top' ? 144 : 0), { steps: 6 }); await page.mouse.up();
+    await page.waitForFunction(() => window.writes.length === 1);
+    const after = await page.evaluate(() => window.data.groups[0].layout);
+    assert.equal(after.x + after.width, before.x + before.width); assert.equal(after.y + after.height, before.y + before.height);
+    assert.ok(Number.isInteger(after.width) && Number.isInteger(after.height)); assert.ok(after.x >= 0 && after.y >= 0);
+    assert.equal(axis === 'left' ? after.x : after.y, axis === 'left' ? .375 : .125);
+  } finally { await page.close(); }
+});
+
+for (const snap of [false, true]) for (const scale of [1, 1.5]) test(`freeform group preview stays fluid at zoom ${scale}, final snap=${snap}`, async () => {
+  const page = await mount({ locked: false }); try {
+    await requireFeature(page);
+    const canonical = await page.evaluate(() => structuredClone(window.data));
+    assert.equal(await page.evaluate(() => window.view.snapToGrid), false, 'free movement is the default view preference');
+    if (snap) await page.evaluate(() => window.board.setSnapToGrid(true));
+    await page.evaluate(scale => { window.board.zoomBy(scale - 1); window.draw(); document.querySelector('.notes-scroll').scrollTo(0, 0); }, scale);
+    assert.equal(await page.evaluate(() => window.view.snapToGrid), snap, 'preference survives a board rerender');
+    assert.deepEqual(await page.evaluate(() => window.data), canonical, 'changing view preferences cannot rewrite existing positions');
+    assert.equal(await page.evaluate(() => window.writes.length), 0);
+    const geometry = await page.$eval('[data-board-key="group:1"] p', element => {
+      const r = element.getBoundingClientRect(), port = document.querySelector('.notes-scroll'), style = getComputedStyle(port);
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2, pitch: (port.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) / 12 };
+    });
+    const dx = 143, dy = 73, expected = { x: dx / (geometry.pitch * scale), y: dy / (48 * scale) };
+    assert.ok(geometry.x > 0 && geometry.y > 0 && geometry.x + dx < 1280 && geometry.y + dy < 760, 'drag stays inside the visible canvas after zoom');
+    await page.mouse.move(geometry.x, geometry.y); await page.mouse.down(); await page.mouse.move(geometry.x + dx, geometry.y + dy, { steps: 7 });
+    const preview = await page.$eval('[data-board-key="group:1"]', element => ({ left: parseFloat(element.style.left), top: parseFloat(element.style.top) }));
+    assert.ok(Math.abs(preview.left - dx / scale) < .1 && Math.abs(preview.top - dy / scale) < .1, 'preview follows physical pointer movement without grid jumps');
+    assert.equal(await page.evaluate(() => window.writes.length), 0, 'preview is not a write');
+    await page.mouse.up(); await page.waitForFunction(() => window.writes.length === 1);
+    const saved = await page.evaluate(() => window.writes[0].items[0].layout);
+    assert.ok(Math.abs(saved.x - (snap ? Math.round(expected.x) : expected.x)) < .00001);
+    assert.ok(Math.abs(saved.y - (snap ? Math.round(expected.y) : expected.y)) < .00001);
+    assert.equal(saved.width, 4); assert.equal(saved.height, 6);
+    assert.deepEqual(await page.evaluate(() => window.data.groups[0].member_ids), [2, 1]);
+  } finally { await page.close(); }
+});
 test('paging is local, stops at both ends and retains group geometry and note identity',async()=>{
  const page=await mount();try{await requireFeature(page);const group='[data-board-key="group:1"]';
   assert.equal(await page.$$eval('.note-card',n=>n.length),2);

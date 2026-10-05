@@ -6,6 +6,7 @@ import { authenticationSnapshot, sameAuthentication } from '/utils/device-contex
 import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh } from '/utils/task-live.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 import { openTaskDetail } from '/components/task-detail.js';
+import { taskCompletionPoints } from '/utils/task-fields.js';
 
 /** A task projection beside Notes, with independent permission and lifecycle. */
 export function mountOpenTaskBoard(container, { user } = {}) {
@@ -17,14 +18,14 @@ export function mountOpenTaskBoard(container, { user } = {}) {
     if (!valid()) return;
     container.replaceChildren(); container.hidden = !allowed();
     if (!allowed()) return;
-    container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.bountyTasks'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.bountyTasks'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><p class="open-task-board__description text-muted">${esc(t('tasks.bountyTasksDescription'))}</p><div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong>${[task.points ? `<span class="text-muted">${esc(t('tasks.pointsSummary', { count: task.points }))}</span>` : '', renderTaskCountdown(task, { className: 'text-muted' })].filter(Boolean).join(' · ')}</button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
+    container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.bountyTasks'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.bountyTasks'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><p class="open-task-board__description text-muted">${esc(t('tasks.bountyTasksDescription'))}</p><div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong><span class="open-task-board__meta"><span class="text-muted">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>${renderTaskCountdown(task, { className: 'text-muted' })}</span></button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
     container.querySelectorAll('[data-open-task]').forEach(button => {
       button.onclick = async () => {
         button.disabled = true;
         try {
           const response = await api.get(`/tasks/${Number(button.dataset.openTask)}`, { requireFresh: true });
           if (!valid() || !allowed()) return;
-          openTaskDetail({ task: response.data, currentUserId: user?.id ?? null, isAdmin: user?.role === 'admin', onChanged: refresh });
+          openTaskDetail({ task: response.data, currentUserId: user?.id ?? null, isAdmin: user?.role === 'admin', onChanged: refresh, offerInspection: true });
         } catch (error) { if (valid()) window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
         finally { if (button.isConnected) button.disabled = false; }
       };

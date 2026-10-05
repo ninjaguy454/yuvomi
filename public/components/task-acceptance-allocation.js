@@ -137,7 +137,12 @@ export function mountAcceptanceAllocation(host, { draft, authentication, signal,
     host.querySelectorAll('[data-acceptance-target]').forEach(target => target.classList.toggle('task-allocation__target--active', !!session && Number(target.dataset.acceptanceTarget) === session.childId));
     if (!session) { ghost?.remove(); ghost = null; return; }
     if (!ghost) { ghost = document.createElement('div'); ghost.className = 'task-allocation__ghost'; ghost.setAttribute('aria-hidden', 'true'); ghost.append(avatar(personById(session.userId))); document.body.append(ghost); }
-    ghost.style.left = `${session.x}px`; ghost.style.top = `${session.y}px`;
+    // Offset only the visual feedback. Gesture hit testing and edge scrolling
+    // continue to use the real pointer coordinates, including on release.
+    const half = ghost.offsetWidth / 2, inset = half + 4;
+    const visualY = session.y - (session.pointerType === 'touch' ? half + 12 : 0);
+    ghost.style.left = `${Math.max(inset, Math.min(innerWidth - inset, session.x))}px`;
+    ghost.style.top = `${Math.max(inset, Math.min(innerHeight - inset, visualY))}px`;
   }
   const gesture = createTaskAvatarGesture({
     host, isValid: userId => valid() && selected(userId),
@@ -181,11 +186,13 @@ export function mountAcceptanceAllocation(host, { draft, authentication, signal,
       const reason = !child.allocatable && child.reason && !protectedReasonCodes.has(child.reason) ? ` (${child.reason})` : '';
       target.disabled = !child.allocatable || !valid(); target.dataset.assignee = userId == null ? '' : String(userId);
       target.classList.toggle('task-allocation__target--empty', !person && !!child.allocatable);
+      target.classList.toggle('task-allocation__target--protected', !child.allocatable);
       target.setAttribute('aria-label', t('tasks.acceptAssignedTo', { title: child.title, name: label }) + reason);
       target.title = target.getAttribute('aria-label');
       target.replaceChildren();
-      if (person) target.append(avatar(person));
-      else { const mark = document.createElement('span'); mark.setAttribute('aria-hidden', 'true'); mark.textContent = child.allocatable ? '?' : '—'; target.append(mark); }
+      if (!child.allocatable) target.insertAdjacentHTML('beforeend', '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V6a4 4 0 0 1 8 0v4"/></svg>');
+      else if (person) target.append(avatar(person));
+      else { const mark = document.createElement('span'); mark.setAttribute('aria-hidden', 'true'); mark.textContent = '?'; target.append(mark); }
     }
     host.querySelectorAll('[data-acceptance-person]').forEach(button => { button.disabled = !valid() || !selected(Number(button.dataset.acceptancePerson)); });
   }

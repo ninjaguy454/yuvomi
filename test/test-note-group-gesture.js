@@ -81,6 +81,22 @@ test('leaving a hover target cancels its timer and a new target gets a full dwel
   f.clock.tick(1); assert.equal(f.previews.at(-1).target.id, 13); f.gesture.dispose();
 });
 
+for (const kind of ['note', 'group']) {
+  for (const dwell of [0, 100, 399, 400]) test(`overview ${kind} drop requires its completed 400ms hover (${dwell}ms)`, () => {
+    const f = fixture([2]); f.start(); f.target({ kind: 'exit' }); f.gesture.pointerMove(f.event()); f.clock.tick(1000);
+    f.target({ kind, id: 12, valid: true }); f.gesture.pointerMove(f.event()); f.clock.tick(dwell);
+    f.gesture.pointerUp(f.event());
+    assert.equal(f.drops.length, dwell === 400 ? 1 : 0);
+    assert.equal(f.captured.size, 0); assert.equal(f.clock.pending, 0);
+  });
+  test(`overview ${kind} drop cannot switch to an unarmed target at release`, () => {
+    const f = fixture([2]); f.start(); f.target({ kind: 'exit' }); f.gesture.pointerMove(f.event()); f.clock.tick(1000);
+    f.target({ kind, id: 12, valid: true }); f.gesture.pointerMove(f.event()); f.clock.tick(400);
+    f.target({ kind, id: 13, valid: true }); f.gesture.pointerUp(f.event());
+    assert.equal(f.drops.length, 0); assert.equal(f.captured.size, 0); assert.equal(f.clock.pending, 0);
+  });
+}
+
 test('exit dwell keeps the pointer and ordered selection alive at exactly 1000ms without writing', () => {
   const f = fixture(); f.start(); f.target({ kind: 'exit' }); f.gesture.pointerMove(f.event());
   f.clock.tick(999); assert.equal(f.exits.length, 0); assert.equal(f.previews.at(-1).state, 'exit-dwell');

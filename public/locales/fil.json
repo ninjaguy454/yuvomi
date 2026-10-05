@@ -1473,6 +1473,8 @@
             "order": "Baguhin ang pagkakasunod-sunod"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Ihanay sa grid",
+        "canvasView": "View ng canvas",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

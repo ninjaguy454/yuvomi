@@ -36,6 +36,15 @@ async function mount({ width = 1000, height = 800, touch = false, canManage = tr
 }
 async function select(page, ids) { for (const id of ids) await page.click(`[data-group-select="${id}"]`); }
 
+test('cancelled pre-hold movement keeps the existing ordered multiselection', async () => {
+  const page = await mount({ selected: [2,5,7,9] }); try {
+    const point = await page.$eval('[data-group-activate="3"]', element => { const r = element.getBoundingClientRect(); return { x:r.x+r.width/2,y:r.y+r.height/2 }; });
+    await page.mouse.move(point.x, point.y); await page.mouse.down(); await page.mouse.move(point.x, point.y+20); await page.mouse.up();
+    assert.deepEqual(await page.$$eval('[data-group-select][aria-pressed="true"]', elements => elements.map(element => Number(element.dataset.groupSelect))), [2,5,7,9]);
+    assert.equal(await page.evaluate(() => window.commands.length), 0); assert.equal(await page.evaluate(() => window.activations.length), 0);
+  } finally { await page.close(); }
+});
+
 test('overview presents authorized pages in canonical row-major order with accessible selection icons', async () => {
   const page = await mount(); try {
     const result = await page.evaluate(() => ({ ids: [...document.querySelectorAll('[data-group-page]')].map(el => Number(el.dataset.groupPage)), labels: [...document.querySelectorAll('[data-group-select]')].map(el => ({ label: el.getAttribute('aria-label'), selected: el.getAttribute('aria-pressed'), text: el.textContent.trim() })), geometry: [...document.querySelectorAll('[data-group-page]')].map(el => { const r = el.getBoundingClientRect(); return { x: r.x, y: r.y }; }), dialog: document.querySelector('[role="dialog"]').getAttribute('aria-modal') }));
@@ -123,6 +132,41 @@ test('final Place saves exactly previewed unpinned rectangles in canonical selec
     assert.equal(command.kind, 'extract'); assert.deepEqual(command.selected_ids, [2,5]); assert.deepEqual(command.placements, preview);
     assert.ok(preview.every(rect => !rect.position_locked && rect.always_on_top && rect.width === 4 && rect.height === 6 && rect.x >= 0 && rect.x <= 10000 && rect.y >= 0 && rect.y <= 10000));
     const [a,b] = preview; assert.ok(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y);
+  } finally { await page.close(); }
+});
+
+for (const result of ['individual', 'group']) test(`bulk ${result} preview preserves its explicit fractional anchor through Place`, async () => {
+  const page = await mount(); try {
+    await select(page, [5,2]); await page.click('[data-group-action="remove"]'); await page.click(`[data-group-extract-choice="${result}"]`);
+    await page.evaluate(() => {
+      for (const [selector, value] of [['[data-group-x]', '20.25'], ['[data-group-y]', '15.125']]) {
+        const field = document.querySelector(selector); field.value = value; field.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    });
+    const preview = await page.$$eval('[data-group-placement]', els => els.map(el => JSON.parse(el.dataset.groupPlacement)));
+    assert.equal(preview[0].x,20.25); assert.equal(preview[0].y,15.125);
+    assert.ok(preview.every(rect => Number.isInteger(rect.width) && Number.isInteger(rect.height)));
+    assert.deepEqual(await page.$$eval('[data-group-x],[data-group-y]', fields => fields.map(field => [field.step,field.validity.valid])), [['any',true],['any',true]]);
+    assert.equal(await page.evaluate(() => window.commands.length),0);
+    await page.click('[data-group-confirm]'); const command=await page.evaluate(() => window.commands[0]);
+    assert.deepEqual(command.placements,preview); assert.deepEqual(command.selected_ids,[2,5]); assert.equal(command.result,result);
+  } finally { await page.close(); }
+});
+
+test('bulk canvas drop seeds the explicit preview with its fractional pointer anchor and Cancel writes nothing', async () => {
+  const page = await mount({ selected:[2,5] }); try {
+    const start=await page.$eval('[data-group-activate="2"]', element=>{const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};});
+    await page.mouse.move(start.x,start.y); await page.mouse.down();
+    await page.waitForFunction(()=>document.querySelector('.note-group-overview').dataset.gestureState==='dragging');
+    const exit=await page.$eval('[data-group-exit]', element=>{const r=element.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};});
+    await page.mouse.move(exit.x,exit.y); await page.waitForFunction(()=>document.querySelector('.note-group-overview').hidden);
+    await page.mouse.move(125,678); await page.mouse.up();
+    await page.click('[data-group-extract-choice="individual"]');
+    assert.deepEqual(await page.$$eval('[data-group-x],[data-group-y]', fields=>fields.map(field=>Number(field.value))),[1.25,14.125]);
+    const preview=await page.$$eval('[data-group-placement]', elements=>elements.map(element=>JSON.parse(element.dataset.groupPlacement)));
+    assert.equal(preview[0].x,1.25); assert.equal(preview[0].y,14.125); assert.equal(preview.length,2);
+    await page.click('[data-group-cancel]'); assert.equal(await page.evaluate(()=>window.commands.length),0);
+    assert.deepEqual(await page.$$eval('[data-group-select][aria-pressed="true"]', elements=>elements.map(element=>Number(element.dataset.groupSelect))),[2,5]);
   } finally { await page.close(); }
 });
 

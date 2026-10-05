@@ -38,7 +38,7 @@ function ids(values){if(!Array.isArray(values)||!values.length||new Set(values).
 function rectangle(value){
   fields(value,['x','y','width','height','position_locked','always_on_top']);
   const {x,y,width,height,position_locked,always_on_top}=value;
-  if(![x,y,width,height].every(Number.isSafeInteger)||x<0||x>10000||y<0||y>10000||width<3||width>12||height<4||height>100||typeof position_locked!=='boolean'||typeof always_on_top!=='boolean')throw invalid();
+  if(![x,y].every(Number.isFinite)||![width,height].every(Number.isSafeInteger)||x<0||x>10000||y<0||y>10000||width<3||width>12||height<4||height>100||typeof position_locked!=='boolean'||typeof always_on_top!=='boolean')throw invalid();
   return groupLayout(value);
 }
 function validateCommand(c){

@@ -1473,6 +1473,8 @@
             "order": "تغییر ترتیب"
         },
         "resetView": "Reset view",
+        "snapToGrid": "چسباندن به شبکه",
+        "canvasView": "نمای بوم",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

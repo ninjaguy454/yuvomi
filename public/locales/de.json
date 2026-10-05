@@ -1473,6 +1473,8 @@
             "order": "Reihenfolge ändern"
         },
         "resetView": "Ansicht zurücksetzen",
+        "snapToGrid": "Am Raster ausrichten",
+        "canvasView": "Leinwandansicht",
         "includeLocked": "Fixierte einbeziehen",
         "zoomIn": "Vergrößern",
         "zoomOut": "Verkleinern",

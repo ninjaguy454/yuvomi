@@ -1461,6 +1461,8 @@
             "order": "Volgorde wijzigen"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Uitlijnen op raster",
+        "canvasView": "Canvasweergave",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

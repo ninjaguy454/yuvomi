@@ -1461,6 +1461,8 @@
             "order": "Змінити порядок"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Прив'язка до сітки",
+        "canvasView": "Вигляд полотна",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

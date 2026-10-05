@@ -80,7 +80,7 @@ test('strict variants, distinct IDs, exact complete revisions and bounds reject 
     const id=group([1,2,3]),good=command(d,'reorder',{group_id:id,selected_ids:[1],before_note_id:null},[1,2,3],[id]);
     for(const patch of [{unexpected:1},{kind:['reorder']},{selected_ids:[]},{selected_ids:[1,1]},{selected_ids:[0]},{selected_ids:[2**53]},{before_note_id:1},{group_id:'1'}])rejects(d,1,{...good,...patch},400);
     for(const expected of [{...good.expected,notes:good.expected.notes.slice(1)},{...good.expected,notes:[...good.expected.notes,{id:4,revision:1,layout_revision:0}]},{...good.expected,groups:[]},{...good.expected,notes:good.expected.notes.map(n=>({...n,revision:999}))}])rejects(d,1,{...good,expected},409);
-    for(const bad of [{x:-1},{y:10001},{width:2},{height:101},{x:1.5},{position_locked:1},{oops:true}])rejects(d,1,command(d,'arrange',{items:[{kind:'group',id,layout:rect(bad)}],include_locked:true},[1,2,3],[id]),400);
+    for(const bad of [{x:-1},{y:10001},{width:2},{height:101},{width:3.5},{position_locked:1},{oops:true}])rejects(d,1,command(d,'arrange',{items:[{kind:'group',id,layout:rect(bad)}],include_locked:true},[1,2,3],[id]),400);
   }finally{d.close();}
 });
 test('receipt replay reauthorizes all members and projects current content; payload collision and stale undo fail',()=>{

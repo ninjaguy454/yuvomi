@@ -1461,6 +1461,8 @@
             "order": "Změnit pořadí"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Přichytit k mřížce",
+        "canvasView": "Zobrazení plátna",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

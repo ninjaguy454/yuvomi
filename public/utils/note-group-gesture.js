@@ -153,6 +153,9 @@ export function createNoteGroupGesture({
     if (generation !== currentGeneration || !session) return true;
     target = found;
     if (!validTarget(target) || (target.kind === 'canvas' && !onCanvas)) { cancel('invalid-drop'); return true; }
+    if (['note', 'group'].includes(target.kind) && (!hoverActive || hoverKey !== `${target.kind}:${target.id}`)) {
+      cancel('target-not-ready'); return true;
+    }
     const finalState = target.kind === 'canvas' && session.selected_ids.length > 1 ? 'placement-choice' : 'submitting';
     const finalSession = session, finalTarget = target;
     reset();

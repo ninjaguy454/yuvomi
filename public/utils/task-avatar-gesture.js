@@ -122,6 +122,7 @@ export function createTaskAvatarGesture({
         || (event.button != null && event.button !== 0)) return false;
     const session = {
       pointerId: event.pointerId,
+      pointerType: event.pointerType,
       userId: candidate.userId,
       anchor: candidate.anchor,
       startX: event.clientX,

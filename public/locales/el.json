@@ -1461,6 +1461,8 @@
             "order": "Αλλαγή σειράς"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Προσκόλληση στο πλέγμα",
+        "canvasView": "Προβολή καμβά",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

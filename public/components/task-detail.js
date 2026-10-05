@@ -2,7 +2,7 @@ import { memberLabel } from '/utils/member-label.js';
 import { openTaskPersonCard, taskPersonInitials } from '/components/task-person-card.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
-import { isDevicePrincipal } from '/utils/device-context.js';
+import { isDevicePrincipal, authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 /**
  * Modul: Aufgaben-Leseansicht (geteilte Komponente)
  * Zweck: Eine Aufgabe ansehen und mit ihr arbeiten - Status weiterschalten,
@@ -48,7 +48,7 @@ import { splitKeepingLineEndings } from '/utils/markdown-checklist.js';
 import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
-import { canTask, canCapability } from '/permissions.js';
+import { canTask, canCapability, moduleAccess } from '/permissions.js';
 import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, taskRevision } from '/utils/task-state.js';
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
@@ -508,7 +508,7 @@ function taskLocationNode(task, ctx) {
     navigate.append(lucideIcon('navigation'), label);
     actions.appendChild(navigate);
   }
-  if (ctx.isAdmin && location.kind === 'google_place') {
+  if (!ctx.offerInspection && ctx.isAdmin && location.kind === 'google_place') {
     const promote = document.createElement('button');
     promote.type = 'button';
     promote.className = 'btn btn--secondary btn--sm';
@@ -872,7 +872,7 @@ function commentRowNode(comment, { onChanged, ctx }) {
   head.append(author, when);
 
   const mine = comment.user_id === ctx.currentUserId;
-  if ((mine || ctx.isAdmin) && canTask(ctx.task, 'comment')) {
+  if (!ctx.offerInspection && (mine || ctx.isAdmin) && canTask(ctx.task, 'comment')) {
     const actions = document.createElement('div');
     actions.className = 'task-comment__actions';
 
@@ -1137,7 +1137,7 @@ function commentsNode(task, ctx) {
   // zum Schreiben einlaedt und dann nicht abschickt, ist dieselbe leere Zusage
   // wie der fehlende Knopf, der #700 ausgeloest hat.
   ctx.refreshComments = load;
-  if (!canTask(task, 'comment')) {
+  if (ctx.offerInspection || !canTask(task, 'comment')) {
     wrap.append(list);
     load();
     return wrap;
@@ -1555,6 +1555,28 @@ function rotationContextNode(task, ctx) {
 }
 
 function renderTaskDetail(task, reminders = [], ctx) {
+  if (ctx.offerInspection) {
+    const metrics = document.createElement('div'); metrics.className = 'task-detail-metrics';
+    const points = document.createElement('span'); points.className = 'task-detail-points';
+    points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(task) }); metrics.append(points);
+    const children = document.createElement('ul'); children.className = 'detail-subtasks';
+    for (const child of actionableSubtasks(task)) {
+      const row = document.createElement('li'); row.textContent = child.title;
+      if (child.description) { const detail = document.createElement('div'); detail.innerHTML = renderMarkdownLight(child.description); row.append(detail); }
+      children.append(row);
+    }
+    return [
+      { label: t('tasks.statusLabel'), value: STATUS_LABELS()[task.status] || task.status },
+      { node: metrics },
+      { label: 'Instructions', node: descriptionNode(task, ctx), multiline: true },
+      { node: tagChipsNode(task.tags) },
+      { label: t('tasks.subtasksLabel'), node: children.children.length ? children : null },
+      { node: metadataNode(task, ctx, reminders) },
+      { node: secondaryMetadataNode(task, ctx) },
+      { label: t('tasks.documentsLabel'), node: documentListNode(task.documents) },
+      { label: t('tasks.commentsLabel'), node: commentsNode(task, ctx) },
+    ];
+  }
   const tags = tagChipsNode(task.tags);
   if (tags) tags.classList.add('task-detail-tags');
   const activity = disclosureNode(ctx, 'activity', 'Activity', 'task-detail-activity-disclosure');
@@ -1601,11 +1623,11 @@ function descriptionNode(task, ctx) {
   // sind also die der Aufgabe) und sie kennt die Aufgaben-Id. Das Dashboard und
   // die Kalender-Chips bekommen diese Optionen deshalb ausdrücklich nicht.
   box.insertAdjacentHTML('beforeend', renderMarkdownLight(text, {
-    checklist: { interactive: canTask(task, 'complete'), toggleLabel: t('tasks.checklistToggle') },
+    checklist: { interactive: !ctx.offerInspection && canTask(task, 'complete'), toggleLabel: t('tasks.checklistToggle') },
   }));
   box.addEventListener('click', (e) => {
     const hit = e.target.closest('.note-md-box[data-md-line]');
-    if (hit && canTask(task, 'complete')) toggleDescriptionCheck(task, hit, ctx);
+    if (hit && !ctx.offerInspection && canTask(task, 'complete')) toggleDescriptionCheck(task, hit, ctx);
   });
   return box;
 }
@@ -1781,6 +1803,7 @@ async function runTaskDetailMutation(ctx, button, operation, { subtask, status }
  *   container?: HTMLElement|null,
  *   onChanged?: () => (void|Promise<void>),
  *   edit?: {mount: (panel: HTMLElement, pane: HTMLElement) => void}|null,
+ *   offerInspection?: boolean, // Bounty entry: read-only information and permitted acceptance only.
  * }} options
  */
 export function openTaskDetail({
@@ -1794,7 +1817,9 @@ export function openTaskDetail({
   container = null,
   onChanged = () => {},
   edit = null,
+  offerInspection = false,
 }) {
+  if (offerInspection) return openTaskOfferInspection({ task, reminder, users, skills, currentUserId, isAdmin, categories, onChanged });
   const ctx = { task, users, skills, currentUserId, isAdmin, categories, container, onChanged,
     pendingSubtasks: new Map(), childRenderKeys: new Map(), personCardController: new AbortController() };
   ctx.refresh = async () => { if (!ctx.closed) await ctx.loader?.load(); };
@@ -2026,6 +2051,60 @@ export function openTaskDetail({
       ctx.closed = true; ctx.queue?.dispose(); ctx.loader?.dispose(); ctx.stopLive?.();
       view.update([{ label: 'Task unavailable', value: 'This Task was removed or you no longer have access.' }]);
     }
+  }); });
+  return view;
+}
+
+/** The Bounty entry point inspects a regular Task without mounting its management handlers. */
+function openTaskOfferInspection({ task, reminder, users, skills, currentUserId, isAdmin, categories, onChanged }) {
+  const authentication = authenticationSnapshot();
+  const ctx = { task, users, skills, currentUserId, isAdmin, categories, onChanged, offerInspection: true,
+    personCardController: new AbortController() };
+  const valid = () => !ctx.closed && sameAuthentication(authentication);
+  const acceptable = () => valid() && moduleAccess('tasks') !== 'none' && canTask(task, 'view') && task.is_offer === true && canTask(task, 'accept') && !isArchived(task) && !isExpired(task) && ['open','in_progress'].includes(task.status);
+  const endEvents = ['auth:context-ending','auth:expired','auth:context-rejected'];
+  function stop() {
+    ctx.closed = true; ctx.personCardController.abort(); ctx.loader?.dispose(); ctx.stopLive?.();
+    for (const name of endEvents) window.removeEventListener(name, end);
+  }
+  const end = () => { stop(); if (view.isOpen()) void closeDetailView({ force: true }); };
+  function unavailable() {
+    const pane = document.querySelector('.detail-view__pane');
+    const title = pane?.closest('.modal-panel')?.querySelector('.modal-panel__title');
+    if (title) title.textContent = 'Task unavailable';
+    document.getElementById('task-detail-claim')?.remove(); stop();
+    view.update([{ label: 'Task unavailable', value: 'This Task was removed or you no longer have access.' }]);
+  }
+  const view = openDetailView({ title: task.title, size: 'lg', sections: renderTaskDetail(task, reminder, ctx),
+    onClose: stop, actions: acceptable() ? [{ id: 'task-detail-claim', label: t('tasks.acceptTitle'), variant: 'primary', icon: 'hand',
+      onClick: async ({ button }) => {
+        if (!acceptable() || button.disabled) return;
+        const loading = btnLoading(button);
+        try {
+          if (!acceptable() || !await claimTask(task)) return;
+          if (!valid()) return;
+          await closeDetailView({ force: true }); await onChanged();
+        } catch (error) { if (valid()) window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
+        finally { loading(); }
+      },
+    }] : [],
+  });
+  for (const name of endEvents) window.addEventListener(name, end);
+  ctx.loader = latestTaskLoader(() => api.get(`/tasks/${task.id}`, { requireFresh: true }), response => {
+    if (!valid() || !view.isOpen()) return;
+    if (response.data?.permissions?.view === false || moduleAccess('tasks') === 'none') { unavailable(); return; }
+    if (!mergeTaskDetailSnapshot(task, response.data)) return;
+    view.update(renderTaskDetail(task, reminder, ctx));
+    const pane = document.querySelector('.detail-view__pane');
+    const title = pane?.closest('.modal-panel')?.querySelector('.modal-panel__title');
+    if (title) title.textContent = task.title;
+    const accept = document.getElementById('task-detail-claim');
+    if (accept) { accept.hidden = !acceptable(); accept.disabled = !acceptable(); }
+    ctx.refreshComments?.();
+  });
+  ctx.stopLive = watchTaskChanges(() => { if (valid()) void ctx.loader.load().catch(error => {
+    if (!valid() || !view.isOpen()) return;
+    if ([403,404].includes(error.status)) unavailable();
   }); });
   return view;
 }

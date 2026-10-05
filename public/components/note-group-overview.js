@@ -18,8 +18,10 @@ export function noteGroupExtractionPlacements(board, group, selectedIds, result,
     ...board.groups.filter(item => item.id !== group.id || selected.length !== group.member_ids.length).map(item => normalizeNoteLayout(item.layout)),
     ...board.notes.filter(note => !grouped.has(note.id)).map(note => normalizeNoteLayout(note.layout)),
   ];
-  const x = Math.round(Number(point.x)), y = Math.round(Number(point.y));
+  const single = result === 'individual' && selected.length === 1;
+  const x = Number(point.x), y = Number(point.y);
   if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x > NOTE_MAX_POSITION || y > NOTE_MAX_POSITION) return null;
+  if (single) return [{ x, y, ...size, position_locked: false, always_on_top: !!group.layout?.always_on_top }];
   // Search a bounded neighbourhood; the user can choose another anchor if it is full.
   for (let radius = 0; radius <= 24; radius++) {
     for (let dy = -radius; dy <= radius; dy++) {
@@ -46,6 +48,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const visibleIds = source.member_ids.filter(id => noteById.has(id));
   const manageable = source.can_manage === true && visibleIds.length === source.member_ids.length;
   const selected = new Set(selectedIds.filter(id => visibleIds.includes(id)));
+  const destinations = new Map();
   const restoreFocus = document.activeElement, subscriptions = [];
   let closed = false, busy = false, suppressClick = false, dragging = false, canvasDrag = false;
   let currentGroup = source, placement = null, action = null, lastPoint = null, scrollFrame = 0, overlayToken;
@@ -63,7 +66,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const grid = document.createElement('div'); grid.className = 'note-group-overview__grid';
   const tools = document.createElement('div'); tools.className = 'note-group-overview__tools';
   const status = document.createElement('div'); status.className = 'note-group-overview__status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  dialog.append(header, exit, toolbar, grid, tools, status); overlay.append(dialog); host.append(overlay);
+  dialog.append(header, exit, toolbar, grid, tools, status); overlay.append(dialog); document.body.append(overlay);
   const draft = createNoteGroupDraft(snapshot, newNoteGroupOperationId());
 
   function button(label, data = {}, ariaLabel) {
@@ -117,7 +120,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const focused = document.activeElement?.dataset.groupSelect; renderPages();
     if (focused) grid.querySelector(`[data-group-select="${focused}"]`)?.focus();
   }
-  function clearTools() { action = null; placement = null; tools.replaceChildren(); status.textContent = ''; }
+  function clearTools() { action = null; placement = null; destinations.clear(); tools.replaceChildren(); status.textContent = ''; }
   function field(labelText, control) { const label = document.createElement('label'); label.textContent = labelText; label.append(control); tools.append(label); return control; }
   function insertionControl(targetGroup, selectionIds) {
     const control = document.createElement('select'); control.dataset.groupBefore = '';
@@ -139,10 +142,20 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     for (const item of snapshot.groups.filter(item => item.can_manage && item.id !== source.id)) {
       const option = document.createElement('option'); option.value = String(item.id);
       option.textContent = item.member_ids.map(id => noteById.get(id)?.title).filter(Boolean).join(' · '); destination.append(option);
+      destinations.set(option.value, { kind: 'group', ...item });
+    }
+    const grouped = new Set(snapshot.groups.flatMap(item => item.member_ids));
+    if (standaloneIds.length <= 1) for (const note of snapshot.notes.filter(note => !grouped.has(note.id) && !standaloneIds.includes(note.id)
+      && note.layout?.position_locked && note.permissions?.edit !== false && note.permissions?.arrange !== false)) {
+      const option = document.createElement('option'); option.value = `note:${note.id}`;
+      option.textContent = `${note.title?.trim() || text('untitled', 'Untitled note')} · ${text('newGroup', 'New group')}`;
+      destination.append(option); destinations.set(option.value, { kind: 'note', id: note.id });
     }
     if (!destination.options.length) { announce(text('noDestination', 'No available destination group.')); return; }
     field(text('destination', 'Destination group'), destination);
-    insertionControl(snapshot.groups.find(item => item.id === Number(destination.value)), []); confirmControls(); destination.focus();
+    const target = destinations.get(destination.value);
+    if (target.kind === 'group') insertionControl(target, []);
+    confirmControls(); destination.focus();
   }
   function extractionChoices(point = { x: source.layout.x + source.layout.width, y: source.layout.y }) {
     clearTools(); action = 'extract-choice'; lastPoint = point;
@@ -153,8 +166,8 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function previewExtraction(result, point) {
     clearTools(); action = 'extract';
     const x = document.createElement('input'), y = document.createElement('input');
-    for (const input of [x, y]) { input.type = 'number'; input.min = '0'; input.max = String(NOTE_MAX_POSITION); input.step = '1'; }
-    x.value = String(Math.round(point.x)); y.value = String(Math.round(point.y)); x.dataset.groupX = ''; y.dataset.groupY = '';
+    for (const input of [x, y]) { input.type = 'number'; input.min = '0'; input.max = String(NOTE_MAX_POSITION); input.step = 'any'; }
+    x.value = String(point.x); y.value = String(point.y); x.dataset.groupX = ''; y.dataset.groupY = '';
     field(text('horizontal', 'Horizontal position'), x); field(text('vertical', 'Vertical position'), y);
     const preview = document.createElement('div'); preview.className = 'note-group-overview__placement'; preview.dataset.groupPlacementPreview = '';
     const calculate = () => {
@@ -195,8 +208,15 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (action === 'order') {
       if (moveSelectionBefore(source.member_ids, ids, before).every((id, index) => id === source.member_ids[index])) { clearTools(); return; }
       submit('reorder', { group_id: source.id, selected_ids: ids, before_note_id: before });
-    } else if (action === 'move') submit('transfer', { source_group_id: source.id, target_group_id: Number(tools.querySelector('[data-group-destination]').value), selected_ids: ids, before_note_id: before });
-    else if (action === 'join') submit('join', { target_group_id: Number(tools.querySelector('[data-group-destination]').value), note_ids: standaloneIds, before_note_id: before });
+    } else if (action === 'move' || action === 'join') {
+      const target = destinations.get(tools.querySelector('[data-group-destination]')?.value);
+      if (!target) return;
+      if (target.kind === 'note') submit('create', standaloneIds.length
+        ? { source_note_id: standaloneIds[0], target_note_id: target.id }
+        : { source_group_id: source.id, selected_ids: ids, target_note_id: target.id });
+      else if (action === 'move') submit('transfer', { source_group_id: source.id, target_group_id: target.id, selected_ids: ids, before_note_id: before });
+      else submit('join', { target_group_id: target.id, note_ids: standaloneIds, before_note_id: before });
+    }
     else if (action === 'extract' && placement) submit('extract', { source_group_id: source.id, selected_ids: ids, result: placement.result, placements: placement.placements });
   }
   function hitTest(session) {
@@ -216,6 +236,17 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (!current()) return;
     highlightTarget(state === 'target-ready' && target?.kind === 'note' ? target.id : null);
     if (state === 'holding') activePointer = session.pointerId;
+    if (state === 'dragging' && !dragging) {
+      selected.clear(); session.selected_ids.forEach(id => selected.add(id));
+      // Retain the browser's original touch target while capture takes effect.
+      grid.querySelectorAll('[data-group-page]').forEach(card => {
+        const checked = selected.has(Number(card.dataset.groupPage));
+        card.classList.toggle('is-selected', checked);
+        const toggle = card.querySelector('[data-group-select]');
+        if (toggle) { toggle.setAttribute('aria-pressed', String(checked)); toggle.textContent = checked ? '\u2713' : '\u25cb'; }
+      });
+      toolbar.querySelectorAll('button').forEach(control => { control.disabled = !selected.size || busy; });
+    }
     dragging = !['holding', 'placement-choice', 'submitting'].includes(state);
     if (dragging) suppressClick = true;
     exit.classList.toggle('is-dwelling', state === 'exit-dwell');
@@ -273,11 +304,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const id = Number(activate.dataset.groupActivate);
     // Keep the pressed DOM target alive until the browser has dispatched its
     // click; a short tap must still activate this page.
-    if (!selected.has(id)) { selected.clear(); selected.add(id); }
+    const dragIds = selected.has(id) ? selection() : [id];
     let expected;
-    try { expected = freezeNoteGroupCommand(draft, 'reorder', { group_id: source.id, selected_ids: selection(), before_note_id: null }).expected; }
+    try { expected = freezeNoteGroupCommand(draft, 'reorder', { group_id: source.id, selected_ids: dragIds, before_note_id: null }).expected; }
     catch (error) { announce(error.message); return; }
-    gesture.pointerDown({ pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary, button: event.button, clientX: event.clientX, clientY: event.clientY, currentTarget: host }, { selected_ids: selection(), source_group_id: source.id, expected, can_manage: manageable });
+    gesture.pointerDown({ pointerId: event.pointerId, pointerType: event.pointerType, isPrimary: event.isPrimary, button: event.button, clientX: event.clientX, clientY: event.clientY, currentTarget: host }, { selected_ids: dragIds, source_group_id: source.id, expected, can_manage: manageable });
   }
   function click(event) {
     if (!current()) return;
@@ -347,8 +378,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   listen(tools, 'change', event => {
     if (!event.target.hasAttribute('data-group-destination')) return;
     const before = tools.querySelector('[data-group-before]'); before?.parentElement.remove();
-    const control = insertionControl(snapshot.groups.find(item => item.id === Number(event.target.value)), []);
-    tools.insertBefore(control.parentElement, tools.querySelector('[data-group-confirm]'));
+    const target = destinations.get(event.target.value);
+    if (target?.kind === 'group') {
+      const control = insertionControl(target, []);
+      tools.insertBefore(control.parentElement, tools.querySelector('[data-group-confirm]'));
+    }
   });
   if (authentication.signal) listen(authentication.signal, 'abort', dispose, { once: true });
   overlayToken = pushOverlay(() => { close(); return true; });

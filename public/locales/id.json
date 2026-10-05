@@ -1473,6 +1473,8 @@
             "order": "Ubah urutan"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Sejajarkan ke kisi",
+        "canvasView": "Tampilan kanvas",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

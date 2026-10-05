@@ -82,6 +82,18 @@ async function choose(page, child, recipient) {
   await page.click(`[data-acceptance-target="${child}"]`);
   await page.click(`[data-acceptance-choice="${recipient ?? ''}"]`);
 }
+async function touchPoint(page, selector) {
+  const box = await (await page.$(selector)).boundingBox();
+  assert.ok(box, `touch target is visible: ${selector}`);
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+async function touchTap(page, selector) {
+  const point = await touchPoint(page, selector);
+  await page.touchscreen.tap(point.x, point.y);
+}
+async function touchEvidence(page, name) {
+  if (process.env.ACCEPTANCE_TOUCH_EVIDENCE) await page.screenshot({ path: `${process.env.ACCEPTANCE_TOUCH_EVIDENCE}/${name}.png` });
+}
 function assertNoWrites() {
   assert.deepEqual(requests.filter(request => !['GET', 'HEAD'].includes(request.method)), [], 'draft interactions never make any mutation request');
   assert.equal(writes.length, 0);
@@ -248,6 +260,80 @@ test('native touch pans the step list and taps a chooser without starting an ava
   } finally { await cdp?.detach(); await page.close(); }
 });
 
+test('native touch empty and assigned targets share a participant picker and clearing remains optional', async () => {
+  const page = await mount({ touch: true }); try {
+    await touchTap(page, '[data-acceptance-target="10"]');
+    await page.waitForSelector('[data-acceptance-picker]');
+    assert.deepEqual(await page.$$eval('[data-acceptance-choice]', els => els.map(el => el.dataset.acceptanceChoice)), ['', '1', '2', '3']);
+    await touchEvidence(page, 'empty-target-picker');
+    await touchTap(page, '[data-acceptance-choice="2"]');
+    assert.equal(await page.$eval('[data-acceptance-target="10"]', el => el.dataset.assignee), '2');
+    await touchTap(page, '[data-acceptance-target="10"]');
+    assert.deepEqual(await page.$$eval('[data-acceptance-choice]', els => els.map(el => el.dataset.acceptanceChoice)), ['', '1', '2', '3']);
+    await touchTap(page, '[data-acceptance-choice="1"]');
+    assert.equal(await page.$eval('[data-acceptance-target="10"]', el => el.dataset.assignee), '1');
+    await touchTap(page, '[data-acceptance-target="10"]');
+    await touchTap(page, '[data-acceptance-choice=""]');
+    const empty = await page.$eval('[data-acceptance-target="10"]', el => ({ assignee: el.dataset.assignee, text: el.textContent, border: getComputedStyle(el).borderStyle, radius: getComputedStyle(el).borderRadius }));
+    assert.deepEqual(empty, { assignee: '', text: '?', border: 'dashed', radius: '50%' });
+    await touchEvidence(page, 'cleared-question-mark');
+    // Protected is a server decision, distinct from an editable null draft.
+    await touchTap(page, '[data-acceptance-target="11"]');
+    assert.equal(await page.$('[data-acceptance-picker]'), null);
+    assert.equal(await page.$eval('[data-acceptance-target="11"]', el => el.disabled), true);
+    assertNoWrites();
+    await touchTap(page, '[data-acceptance-next]');
+    await touchTap(page, '[data-acceptance-confirm]');
+    await page.waitForSelector('[data-task-acceptance]', { hidden: true });
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].subtask_assignments, [10, 12, 13].map(id => ({ id, user_id: null })));
+  } finally { await page.close(); }
+});
+
+test('native touch drag ghost stays above the finger while actual pointer selects empty or assigned targets', async () => {
+  const page = await mount({ touch: true }); const cdp = await page.createCDPSession(); try {
+    const source = '[data-acceptance-person="2"]', target = '[data-acceptance-target="10"]';
+    async function startDrag() {
+      const start = await touchPoint(page, source), end = await touchPoint(page, target);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: start.x + 12, y: start.y + 12 }] });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [end] });
+      await page.waitForSelector('.task-allocation__ghost');
+      await page.waitForSelector('[data-acceptance-target="10"].task-allocation__target--active');
+      return end;
+    }
+    const finger = await startDrag();
+    const ghost = await page.$eval('.task-allocation__ghost', (el, finger) => {
+      const box = el.getBoundingClientRect();
+      return { top: box.top, bottom: box.bottom, parentBody: el.parentElement === document.body, pointerEvents: getComputedStyle(el).pointerEvents, hit: document.elementFromPoint(finger.x, finger.y)?.closest('[data-acceptance-target]')?.dataset.acceptanceTarget };
+    }, finger);
+    assert.ok(ghost.bottom <= finger.y - 8 && ghost.bottom >= finger.y - 20, `ghost should clear the finger, not cover it: ${JSON.stringify({ ghost, finger })}`);
+    assert.equal(ghost.parentBody, true); assert.equal(ghost.pointerEvents, 'none'); assert.equal(ghost.hit, '10');
+    await touchEvidence(page, 'touch-ghost-above-finger');
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    assert.equal(await page.$('.task-allocation__ghost'), null);
+    assert.equal(await page.$eval(target, el => el.dataset.assignee), '');
+    await startDrag(); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    assert.equal(await page.$eval(target, el => el.dataset.assignee), '2', 'actual finger target accepts an empty assignment');
+    await choose(page, 10, 1);
+    await startDrag(); await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    assert.equal(await page.$eval(target, el => el.dataset.assignee), '2', 'actual finger target replaces an existing assignment');
+    await touchEvidence(page, 'touch-replaced-assignment');
+    // Moving near the viewport edge must not clip the body-level ghost.
+    const start = await touchPoint(page, source);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [start] });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 3, y: 10 }] });
+    const edge = await page.$eval('.task-allocation__ghost', el => el.getBoundingClientRect().toJSON());
+    assert.ok(edge.left >= 0 && edge.top >= 0, `ghost remains visible at viewport edge: ${JSON.stringify(edge)}`);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+    assertNoWrites();
+    await touchTap(page, '[data-acceptance-next]'); await touchTap(page, '[data-acceptance-confirm]');
+    await page.waitForSelector('[data-task-acceptance]', { hidden: true });
+    assert.equal(writes.length, 1);
+    assert.deepEqual(writes[0].subtask_assignments, [{ id: 10, user_id: 2 }, { id: 12, user_id: null }, { id: 13, user_id: null }]);
+  } finally { await cdp.detach(); await page.close(); }
+});
+
 test('supplied canonical photos appear in strip, chooser and assignment while remote photo URLs stay initials', async () => {
   const page = await mount({ photos: true }); try {
     assert.equal(await page.$eval('[data-acceptance-person="3"] img', el => el.getAttribute('src')), authorizedPhoto);
@@ -273,6 +359,8 @@ test('protected step labels retain Unchanged without exposing server reason code
     const target = await page.$eval('[data-acceptance-target="11"]', el => ({ label: el.getAttribute('aria-label'), title: el.title, disabled: el.disabled }));
     assert.equal(target.disabled, true); assert.ok(target.label.includes('Unchanged'));
     assert.ok(!target.label.includes('already_assigned')); assert.ok(!target.title.includes('already_assigned'));
+    assert.ok(await page.$('[data-acceptance-target="11"] svg'), 'protected rows show a lock rather than an empty avatar slot');
+    assert.equal(await page.$eval('[data-acceptance-target="11"]', el => getComputedStyle(el).borderStyle), 'none');
     assertNoWrites();
   } finally { await page.close(); }
 });

@@ -78,7 +78,7 @@ test('Task, Calendar and Kitchen use one formatter with unchanged assignment IDs
 });
 test('Notes author chips distinguish duplicate names and filter by the selected creator',async()=>{
  await admin.goto(origin+'/notes');await admin.waitForSelector('[data-creator]');
- const chips=await admin.$$eval('[data-creator]',nodes=>nodes.map(n=>({label:n.textContent,value:n.dataset.creator})));
+ const chips=await admin.$$eval('[data-creator]',nodes=>nodes.map(n=>({label:n.getAttribute('aria-label'),value:n.dataset.creator})));
  const child=chips.find(c=>c.label==='Alex (12)'),parent=chips.find(c=>c.label==='Alex (alex.parent)');
  assert.ok(child&&parent,JSON.stringify(chips));assert.notEqual(child.value,parent.value);
  await admin.locator(`[data-creator="${child.value}"]`).click();

@@ -50,6 +50,7 @@ async function mount({ width = 1280, height = 900, permission = 'edit', fixture,
   writes = []; notes = structuredClone(original);
   if (fixture === 'fitting') notes = [notes[0]];
   if (fixture === 'locked') notes[0].layout.position_locked = true;
+  if (fixture === 'fractional') Object.assign(notes[0].layout, { x: 2.375, y: 3.125 });
   if (fixture === 'layers') { notes[1].layout = { x:6,y:2,width:4,height:6,revision:1,always_on_top:true }; }
   if (fixture === 'menu-overlap') { notes[1].layout = { x:5,y:3,width:4,height:6,revision:1,always_on_top:true }; }
   if (fixture === 'reveal' || fixture === 'reveal-distant') {
@@ -186,6 +187,37 @@ for (const width of [1280, 752]) test(`body mouse drag saves CAS at canvas width
   } finally { await page.close(); }
 });
 
+for (const scale of [1, 1.25]) test(`freeform actual Notes drag persists non-grid coordinates at zoom ${scale}`, async () => {
+  const page = await mount({ appShell: true }); try {
+    if (scale > 1) await page.click('#notes-zoom-in');
+    const point = await bodyPoint(page), pitch = await page.$eval('.notes-scroll', element => { const style = getComputedStyle(element); return (element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)) / 12; });
+    const expected = { x: 2 + 73 / (pitch * scale), y: 2 + 37 / (48 * scale) };
+    await mouseDrag(page, point, 73, 37); await saved(page);
+    assert.ok(Math.abs(notes[0].layout.x - expected.x) < .00001); assert.ok(Math.abs(notes[0].layout.y - expected.y) < .00001);
+    assert.equal(notes[0].layout.width, 4); assert.equal(notes[0].layout.height, 6);
+  } finally { await page.close(); }
+});
+
+test('freeform numeric layout editor preserves a no-op save and accepts keyboard fractional positions', async () => {
+  const page = await mount({ appShell: true, fixture: 'fractional' }); try {
+    await page.focus(`${card} [data-board-action="adjust"]`); await page.keyboard.press('Enter'); await page.waitForSelector('#note-layout-x');
+    for (const [axis, expected] of [['x', '2.375'], ['y', '3.125']]) {
+      const field = await page.$eval(`#note-layout-${axis}`, element => ({ value: element.value, step: element.step, valid: element.checkValidity() }));
+      assert.deepEqual(field, { value: expected, step: 'any', valid: true });
+    }
+    assert.equal(await page.$eval('#note-layout-height', element => element.step), '1');
+    await page.click('#note-layout-save'); await page.waitForFunction(() => !document.querySelector('.note-modal'));
+    assert.equal(layoutWrites().length, 1); assert.equal(notes[0].layout.x, 2.375); assert.equal(notes[0].layout.y, 3.125);
+    await page.focus(`${card} [data-board-action="adjust"]`); await page.keyboard.press('Enter'); await page.waitForSelector('#note-layout-x');
+    for (const [axis, value] of [['x', '2.625'], ['y', '3.875']]) {
+      await page.focus(`#note-layout-${axis}`); await page.keyboard.down('Control'); await page.keyboard.press('A'); await page.keyboard.up('Control'); await page.keyboard.type(value);
+    }
+    await page.$eval('#note-layout-height', element => { element.value = '7'; element.dispatchEvent(new Event('input', { bubbles: true })); });
+    await page.click('#note-layout-save'); await page.waitForFunction(() => !document.querySelector('.note-modal'));
+    assert.equal(layoutWrites().length, 2); assert.equal(notes[0].layout.x, 2.625); assert.equal(notes[0].layout.y, 3.875); assert.equal(notes[0].layout.height, 7);
+  } finally { await page.close(); }
+});
+
 test('zoom controls change only the view, survive refresh, and Reset restores origin', async () => {
   const page = await mount();
   try {
@@ -210,7 +242,7 @@ test('zoomed drag uses world units and right-edge autoscroll grows beyond twelve
     await page.click('#notes-zoom-in');
     const pitch=await page.$eval('.notes-scroll',n=>(n.clientWidth-parseFloat(getComputedStyle(n).paddingLeft)-parseFloat(getComputedStyle(n).paddingRight))/12);
     await mouseDrag(page,await bodyPoint(page),pitch*1.25,60); await saved(page);
-    assert.equal(notes[0].layout.x,3); assert.equal(notes[0].layout.y,3);
+    assert.ok(Math.abs(notes[0].layout.x - 3) < .01); assert.ok(Math.abs(notes[0].layout.y - 3) < .01);
     const start=await bodyPoint(page), bounds=await box(page,'.notes-scroll');
     await page.mouse.move(start.x,start.y); await page.mouse.down();
     await page.mouse.move(bounds.x+bounds.width-5,start.y,{steps:8}); await sleep(700);

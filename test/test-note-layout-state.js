@@ -69,7 +69,7 @@ test('strict flags, geometry, unknown fields and missing mutations are rejected'
 });
 test('widened coordinates accept the upper x/y boundary and reject unsafe geometry',()=>{
   const id=make();assert.equal(patch(id,0,{layout:{...shape,x:10000,y:10000,width:12,height:100}}).x,10000);
-  for(const bad of [{x:10001},{y:10001},{x:-1},{width:13},{height:101},{x:1.5}])assert.throws(()=>patch(id,1,{layout:{...shape,...bad}}),e=>e.status===400);
+  for(const bad of [{x:10001},{y:10001},{x:-1},{width:13},{height:101},{width:3.5}])assert.throws(()=>patch(id,1,{layout:{...shape,...bad}}),e=>e.status===400);
 });
 test('stale, inaccessible, invalid and locked items fail a batch without partial writes',()=>{
   const a=make(),b=make(),privateId=make('private');patch(a,0,{layout:shape});patch(b,0,{layout:shape,position_locked:true});

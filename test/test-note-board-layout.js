@@ -3,6 +3,36 @@ import assert from 'node:assert/strict';
 
 const layout = await import('../public/utils/note-board-layout.js').catch(() => ({}));
 
+test('freeform positions preserve finite fractions while sizes and revisions remain integer', () => {
+  const source = { x: 2.375, y: 8.125, width: 4.4, height: 6.3, revision: 7.2 };
+  assert.deepEqual(layout.normalizeNoteLayout(source), { x: 2.375, y: 8.125, width: 4, height: 6, revision: 7 });
+  assert.deepEqual(source, { x: 2.375, y: 8.125, width: 4.4, height: 6.3, revision: 7.2 });
+  for (const invalid of [NaN, Infinity, -Infinity]) {
+    assert.equal(layout.normalizeNoteLayout({ x: invalid, y: invalid }).x, 0);
+    assert.equal(layout.normalizeNoteLayout({ x: invalid, y: invalid }).y, 0);
+  }
+  assert.deepEqual(layout.normalizeNoteLayout({ x: -0.2, y: 10000.25 }), { x: 0, y: 10000, width: 4, height: 6, revision: 0 });
+});
+
+test('freeform projection retains existing fractional note and group placements without writes', () => {
+  const notes = [{ id: 1, layout: { x: 2.25, y: 3.75, width: 4, height: 6 } }, { id: 2, layout: { x: 9.125, y: 12.5, width: 4, height: 6 } }];
+  const before = structuredClone(notes), projected = layout.projectNoteLayouts(notes);
+  assert.equal(projected[0].layout.x, 2.25); assert.equal(projected[0].layout.y, 3.75);
+  const board = { notes, groups: [{ id: 1, revision: 1, member_ids: [1, 2], can_manage: true, layout: { x: 4.125, y: 6.625, width: 4, height: 6 } }] };
+  const grouped = layout.projectNoteGroupItems(board);
+  assert.equal(grouped[0].layout.x, 4.125); assert.equal(grouped[0].layout.y, 6.625);
+  assert.deepEqual(notes, before);
+});
+
+test('organize keeps a fractional pinned obstacle exact and packs movable notes on the grid', () => {
+  const notes = [{ id: 1, layout: { x: 0, y: .25, width: 12, height: 6, position_locked: true } }, { id: 2, layout: { x: 2.375, y: 3.125, width: 4, height: 6 } }];
+  const before = structuredClone(notes), arranged = layout.organizeNoteLayouts(notes);
+  assert.equal(arranged.length, 1); assert.equal(arranged[0].note_id, 2);
+  assert.equal(arranged[0].layout.x, 0); assert.equal(arranged[0].layout.y, 7);
+  assert.ok(arranged[0].layout.y >= notes[0].layout.y + notes[0].layout.height, 'the packed card clears the fractional obstacle');
+  assert.deepEqual(notes, before, 'organizing cannot mutate the fixed obstacle or source snapshot');
+});
+
 test('overlap reveal includes every locked card in a dense stack without changing canonical positions', () => {
   const notes=Array.from({length:30},(_,i)=>({id:i+1,layout:{x:80,y:90,width:4,height:6,position_locked:true,always_on_top:i===2}}));
   notes.push({id:31,layout:{x:80,y:90,width:4,height:6,position_locked:false}});

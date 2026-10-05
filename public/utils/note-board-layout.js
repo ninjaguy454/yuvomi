@@ -5,12 +5,13 @@ export const NOTE_MAX_POSITION = 10000;
 export const NOTE_CANVAS_MARGIN = 192;
 const integer = (value, fallback, min, max) => Number.isFinite(Number(value))
   ? Math.max(min, Math.min(max, Math.round(Number(value)))) : fallback;
+const position = value => Number.isFinite(Number(value)) ? Math.max(0, Math.min(NOTE_MAX_POSITION, Number(value))) : 0;
 
 export function normalizeNoteLayout(value = {}) {
   const width = integer(value.width, 4, 3, NOTE_COLUMNS);
   return {
-    x: integer(value.x, 0, 0, NOTE_MAX_POSITION),
-    y: integer(value.y, 0, 0, 10000),
+    x: position(value.x),
+    y: position(value.y),
     width,
     height: integer(value.height, 6, 4, 100),
     revision: integer(value.revision, 0, 0, Number.MAX_SAFE_INTEGER),
@@ -52,7 +53,7 @@ function packNoteLayouts(notes, { includeLocked = false, canEdit = () => true } 
         while (nextY <= NOTE_MAX_POSITION) {
           const overlaps = occupied.filter(rect => column < rect.x + rect.width && column + layout.width > rect.x && nextY < rect.y + rect.height && nextY + layout.height > rect.y);
           if (!overlaps.length) break;
-          nextY = Math.max(...overlaps.map(rect => rect.y + rect.height));
+          nextY = Math.ceil(Math.max(...overlaps.map(rect => rect.y + rect.height)));
         }
         if (nextY <= NOTE_MAX_POSITION && nextY < y) { x = column; y = nextY; }
       }

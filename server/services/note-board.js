@@ -125,7 +125,7 @@ export function mutateNote(d,p,id,action,body={}){
 function checkedLayout(value){
   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!['x','y','width','height'].includes(key)))throw noteError('Invalid note layout.');
   const {x,y,width,height}=value;
-  if(![x,y,width,height].every(Number.isSafeInteger)||x<0||x>10000||y<0||y>10000||width<3||width>12||height<4||height>100)throw noteError('Invalid note layout.');
+  if(![x,y].every(Number.isFinite)||![width,height].every(Number.isSafeInteger)||x<0||x>10000||y<0||y>10000||width<3||width>12||height<4||height>100)throw noteError('Invalid note layout.');
   return {x,y,width,height};
 }
 const layoutChangeFields=['layout','position_locked','always_on_top'];

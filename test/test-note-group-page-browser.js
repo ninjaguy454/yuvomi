@@ -57,6 +57,72 @@ async function open(page) { await page.click(`${card} [data-group-page="overview
 async function order(page) { await open(page); await page.click('[data-group-select="2"]'); await page.click('.note-group-overview [data-group-action="order"]'); await page.select('[data-group-before]', '1'); await page.click('[data-group-confirm]'); }
 const center = async (page, selector) => page.$eval(selector, element => { const rect = element.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
 
+for (const width of [390,1280]) test(`actual app shell overview keeps modal blur and removes its body portal on disposal at ${width}px`, async () => {
+  const page = await mount({ width, appShell:true }); try {
+    await open(page);
+    const style=await page.$eval('.note-group-overview', element => ({ blur:getComputedStyle(element).backdropFilter, body:element.parentElement===document.body }));
+    assert.match(style.blur,/blur\(/); assert.equal(style.body,true);
+    await page.evaluate(() => window.stopNotes());
+    assert.equal(await page.$('.note-group-overview'),null);
+    assert.equal(writes.length,0);
+  } finally { await page.close(); }
+});
+
+test('portaled touch overview releases host capture and private content when authentication expires', async () => {
+  const page = await mount({ width:390, touch:true, appShell:true }); try {
+    await open(page); const cdp=await page.createCDPSession();
+    await page.evaluate(() => { window.groupCaptureHost=document.querySelector('.notes-page'); window.addEventListener('pointerdown', event => { window.activeGroupPointer=event.pointerId; }, { once:true }); });
+    const start=await center(page,'[data-group-activate="2"]');
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{...start,id:0}]});
+    await page.waitForFunction(()=>document.querySelector('.note-group-overview').dataset.gestureState==='dragging');
+    assert.equal(await page.evaluate(()=>window.groupCaptureHost.hasPointerCapture(window.activeGroupPointer)),true);
+    await page.evaluate(()=>window.dispatchEvent(new Event('auth:expired')));
+    await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+    assert.equal(await page.$('.note-group-overview'),null);
+    assert.equal(await page.evaluate(()=>window.groupCaptureHost.hasPointerCapture(window.activeGroupPointer)),false);
+    assert.equal(await page.evaluate(()=>document.body.textContent.includes('Authorized body')),false); assert.equal(writes.length,0);
+  } finally { await page.close(); }
+});
+
+test('phone keyboard Add to group creates the first group on an authorized pinned note', async () => {
+  const page = await mount({ width:390, height:844, appShell:true }); try {
+    snapshot.groups = [];
+    snapshot.notes[0].layout = { ...snapshot.notes[0].layout, x:6, position_locked:true };
+    snapshot.notes[1].layout = { ...snapshot.notes[1].layout, x:12 };
+    snapshot.notes.push({ ...snapshot.notes[0], id:4, title:'Unavailable target', permissions:{...snapshot.notes[0].permissions,edit:false,arrange:false} });
+    await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change'))); await page.waitForSelector('[data-board-key="note:1"]');
+    assert.equal(await page.$eval('#notes-grid', element => element.dataset.boardView), 'list');
+    await page.focus('[data-board-key="note:3"] .note-card__menu summary'); await page.keyboard.press('Enter');
+    await page.focus('[data-board-key="note:3"] [data-group-action="add"]'); await page.keyboard.press('Enter');
+    await page.waitForSelector('.note-group-overview');
+    assert.deepEqual(await page.$$eval('[data-group-destination] option', elements => elements.map(element => element.value)), ['note:1']);
+    assert.equal(await page.$('[data-group-before]'), null, 'the pinned target is always the first page');
+    assert.equal(writes.length,0); await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
+    await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length,1);
+    assert.equal(writes[0].kind,'create'); assert.equal(writes[0].source_note_id,3); assert.equal(writes[0].target_note_id,1);
+    assert.deepEqual(writes[0].expected.groups,[]); assert.deepEqual(writes[0].expected.notes.map(note=>note.id),[1,3]);
+  } finally { await page.close(); }
+});
+
+test('single extraction preserves the fractional pointer drop despite a nearby obstacle', async () => {
+  const page = await mount({ appShell:true }); try {
+    snapshot.notes[2].layout={...snapshot.notes[2].layout,x:4,y:10};
+    await page.evaluate(()=>window.noteStream.dispatchEvent(new Event('change')));
+    await page.waitForFunction(()=>parseFloat(document.querySelector('[data-board-key="note:3"]').style.top)===480);
+    await open(page); const start=await center(page,'[data-group-activate="2"]');
+    await page.mouse.move(start.x,start.y); await page.mouse.down();
+    await page.waitForFunction(()=>document.querySelector('.note-group-overview').dataset.gestureState==='dragging');
+    const exit=await center(page,'[data-group-exit]'); await page.mouse.move(exit.x,exit.y);
+    await page.waitForFunction(()=>document.querySelector('.note-group-overview').hidden);
+    const point=await page.$eval('#notes-grid', element=>{const r=element.getBoundingClientRect(),pitch=parseFloat(document.querySelector('[data-board-key="note:3"]').style.left)/4;return {x:r.left+pitch*1.25,y:r.top+8.125*48};});
+    await page.mouse.move(point.x,point.y); assert.equal(writes.length,0); await page.mouse.up(); await page.waitForSelector('[data-group-undo]');
+    assert.equal(writes.length,1); assert.equal(writes[0].kind,'extract');
+    assert.ok(Math.abs(writes[0].placements[0].x-1.25)<.001); assert.equal(writes[0].placements[0].y,8.125);
+    assert.equal(writes[0].placements[0].width,4); assert.equal(writes[0].placements[0].height,6);
+    assert.equal(writes[0].placements[0].position_locked,false); assert.deepEqual(writes[0].selected_ids,[2]);
+  } finally { await page.close(); }
+});
+
 test('actual Notes page opens overview and restores the chosen active page without a write', async () => {
   const page = await mount(); try {
     await open(page); await page.click('[data-group-activate="2"]');
@@ -266,14 +332,14 @@ for (const cancel of [true, false]) {
       const position = await page.$eval('[data-board-key="note:3"]', element => ({ x: parseFloat(element.style.left), pitch: parseFloat(element.style.width) / 4 + 3 }));
       const after = await page.$eval('.notes-scroll', element => ({ left: element.scrollLeft, height: element.clientHeight }));
       assert.equal(after.height, before.height, 'horizontal dragging preserves the page-flow height');
-      const expectedX = 5 + Math.round((dropX - start.x + after.left - before.left) / position.pitch);
-      assert.equal(Math.round(position.x / position.pitch), expectedX, 'world X includes horizontal viewport scrolling');
+      const expectedX = 5 + (dropX - start.x + after.left - before.left) / position.pitch;
+      assert.ok(Math.abs(position.x / position.pitch - expectedX) < .00001, 'world X includes horizontal viewport scrolling');
       if (cancel) await page.keyboard.press('Escape');
       await page.mouse.up();
       if (cancel) assert.equal(writes.length, 0);
       else {
         await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'arrange');
-        assert.equal(writes[0].items[0].layout.x, expectedX); assert.equal(writes[0].items[0].layout.y, 0);
+        assert.ok(Math.abs(writes[0].items[0].layout.x - expectedX) < .00001); assert.equal(writes[0].items[0].layout.y, 0);
       }
     } finally { await page.close(); }
   });

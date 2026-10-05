@@ -1461,6 +1461,8 @@
             "order": "Cambia posizione"
         },
         "resetView": "Reset view",
+        "snapToGrid": "Allinea alla griglia",
+        "canvasView": "Vista tela",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",
         "zoomOut": "Zoom out",

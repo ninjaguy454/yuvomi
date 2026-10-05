@@ -17,6 +17,7 @@ import { renderPageSearch, wirePageSearch } from '/utils/page-search.js';
 import { findPageFab } from '/utils/fab.js';
 import { emptyStateHTML } from '/utils/empty-state.js';
 import { AVATAR_FALLBACK_COLOR } from '/utils/color.js';
+import { renderAvatarStack } from '/components/user-multi-select.js';
 import { getPermissions, moduleAccess, canCapability } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { wireNoteBoard, renderNoteGroupFrame } from '/components/note-board.js';
@@ -272,7 +273,7 @@ export async function render(container, { user }) {
         <h1 class="page-toolbar__title">${t('notes.title')}</h1>
         <div class="notes-header-actions" id="notes-header-actions">
           <button type="button" class="btn btn--ghost btn--icon" id="notes-compact-view" aria-label="${t('notes.compactView')}" title="${t('notes.compactView')}" aria-pressed="false"><i data-lucide="list" class="icon-md" aria-hidden="true"></i></button>
-          ${canNote('view') && canNote('edit') ? `<button type="button" class="btn btn--ghost btn--icon" id="notes-organize" aria-label="${t('notes.organize')}" title="${t('notes.organize')}"><i data-lucide="layout-grid" class="icon-md" aria-hidden="true"></i></button><label id="notes-include-locked" class="btn btn--ghost btn--icon notes-include-locked" title="${t('notes.includeLocked')}"><input type="checkbox" id="notes-organize-locked" aria-label="${t('notes.includeLocked')}"><i data-lucide="pin" class="icon-md" aria-hidden="true"></i></label>` : ''}
+          ${canNote('view') && canNote('edit') ? `<button type="button" class="btn btn--ghost btn--icon" id="notes-organize" aria-label="${t('notes.organize')}" title="${t('notes.organize')}"><i data-lucide="layout-grid" class="icon-md" aria-hidden="true"></i></button><label id="notes-include-locked" class="btn btn--ghost btn--icon notes-include-locked" title="${t('notes.organize')}: ${t('notes.includeLocked')}"><input type="checkbox" id="notes-organize-locked" aria-label="${t('notes.organize')}: ${t('notes.includeLocked')}"><i data-lucide="pin" class="icon-md" aria-hidden="true"></i></label>` : ''}
         </div>
         ${renderPageSearch({ id: 'notes-search', label: t('notes.searchPlaceholder'), placeholder: t('notes.searchPlaceholder'), value: state.filterQuery, clearLabel: t('common.searchClear'), className: 'notes-toolbar__search' })}
         <button class="btn btn--primary toolbar-new-btn" id="notes-add-btn" aria-label="${t('notes.addNoteLabel')}">
@@ -281,16 +282,18 @@ export async function render(container, { user }) {
         </button>
       </div>
       <div class="notes-board-toolbar">
-        <label class="notes-list-density" id="notes-list-density-label" hidden>${t('notes.listDensity')}
+        <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
+        <label class="notes-list-density" id="notes-list-density-label" hidden><span class="sr-only">${t('notes.listDensity')}</span>
           <select id="notes-list-density"><option value="compact">${t('notes.listCompact')}</option><option value="expanded" selected>${t('notes.listExpanded')}</option></select>
         </label>
         <div class="notes-zoom-controls" id="notes-zoom-controls" hidden>
-          <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-out" aria-label="${t('notes.zoomOut')}">−</button><output id="notes-zoom-value">100%</output>
-          <button type="button" class="btn btn--ghost btn--sm" id="notes-zoom-in" aria-label="${t('notes.zoomIn')}">+</button><button type="button" class="btn btn--ghost btn--sm" id="notes-reset-view">${t('notes.resetView')}</button>
+          <button type="button" class="btn btn--ghost btn--icon" id="notes-zoom-out" aria-label="${t('notes.zoomOut')}" title="${t('notes.zoomOut')}"><i data-lucide="minus" class="icon-md" aria-hidden="true"></i></button><output id="notes-zoom-value">100%</output>
+          <button type="button" class="btn btn--ghost btn--icon" id="notes-zoom-in" aria-label="${t('notes.zoomIn')}" title="${t('notes.zoomIn')}"><i data-lucide="plus" class="icon-md" aria-hidden="true"></i></button>
+          <button type="button" class="btn btn--ghost btn--icon" id="notes-reset-view" aria-label="${t('notes.resetView')}" title="${t('notes.resetView')}"><i data-lucide="rotate-ccw" class="icon-md" aria-hidden="true"></i></button>
+          <button type="button" class="btn btn--ghost btn--icon" id="notes-snap-to-grid" aria-label="${t('notes.snapToGrid')}" title="${t('notes.snapToGrid')}" aria-pressed="false"><i data-lucide="grid-2x2" class="icon-md" aria-hidden="true"></i></button>
         </div>
         <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
       </div>
-      <div class="notes-filters" id="notes-filters" role="group" aria-label="${t('notes.filterCreatorLabel')}" hidden></div>
       <div class="notes-reveal-strip" role="group" aria-label="${t('notes.revealOverlapping')}" hidden></div>
       <div class="notes-workspace">
         <aside id="notes-open-tasks" class="notes-open-tasks" hidden></aside>
@@ -382,6 +385,11 @@ export async function render(container, { user }) {
   container.querySelector('#notes-zoom-in').addEventListener('click', () => board?.zoomBy(.25));
   container.querySelector('#notes-zoom-out').addEventListener('click', () => board?.zoomBy(-.25));
   container.querySelector('#notes-reset-view').addEventListener('click', () => board?.resetView());
+  container.querySelector('#notes-snap-to-grid').addEventListener('click', e => {
+    state.viewport.snapToGrid = !state.viewport.snapToGrid;
+    e.currentTarget.setAttribute('aria-pressed', String(state.viewport.snapToGrid));
+    board?.setSnapToGrid(state.viewport.snapToGrid);
+  });
 
   if (!canNote('create')) {
     _container.querySelector('#notes-add-btn')?.remove();
@@ -430,29 +438,46 @@ function renderCreatorFilter() {
       .map((n) => [creatorFilterKey(n), n])
   ).values()];
 
+  const focusedCreator = row.contains(document.activeElement) ? document.activeElement.dataset.creator : undefined;
+  const scrollLeft = row.scrollLeft;
   row.hidden = creators.length < 2;
   row.replaceChildren();
   if (row.hidden) return;
 
-  const makeChip = (label, value) => {
+  const makeChip = (label, value, visual) => {
     const active = state.filterCreator === value;
     const chip = document.createElement('button');
     chip.type = 'button';
-    chip.className = `filter-chip filter-chip--sm${active ? ' filter-chip--active' : ''}`;
+    chip.className = `filter-chip filter-chip--sm notes-creator-chip${active ? ' filter-chip--active' : ''}`;
     chip.dataset.creator = value;
     chip.setAttribute('aria-pressed', String(active));
-    chip.textContent = label;
+    chip.setAttribute('aria-label', label);
+    chip.title = label;
+    chip.innerHTML = `<span aria-hidden="true">${visual}</span>`;
     return chip;
   };
 
-  row.appendChild(makeChip(t('common.all'), ''));
-  creators.forEach((n) => row.appendChild(makeChip(memberLabel({ id: n.created_by, display_name: n.creator_name }), creatorFilterKey(n))));
+  row.appendChild(makeChip(t('common.all'), '', '<i data-lucide="users" class="icon-md"></i>'));
+  creators.forEach((n) => {
+    const author = { id: n.created_by, display_name: n.creator_name, color: n.creator_color, avatar_data: n.creator_avatar };
+    const visual = n.created_by == null && n.created_by_device != null
+      ? '<i data-lucide="monitor" class="icon-md"></i>'
+      : renderAvatarStack([author], { size: 28 });
+    row.appendChild(makeChip(memberLabel(author), creatorFilterKey(n), visual));
+  });
+  if (window.lucide) lucide.createIcons({ el: row });
+  row.scrollLeft = scrollLeft;
+  if (focusedCreator !== undefined) {
+    const focused = [...row.children].find(chip => chip.dataset.creator === focusedCreator);
+    focused?.focus({ preventScroll: true });
+    focused?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
 
   row.querySelectorAll('[data-creator]').forEach((chip) => {
     chip.addEventListener('click', () => {
       // Erneuter Klick auf den aktiven Chip hebt den Filter auf.
       state.filterCreator = state.filterCreator === chip.dataset.creator ? '' : chip.dataset.creator;
-      state.filterCreatorLabel = state.filterCreator ? chip.textContent : '';
+      state.filterCreatorLabel = state.filterCreator ? chip.getAttribute('aria-label') : '';
       renderCreatorFilter();
       renderGrid();
     });
@@ -476,12 +501,13 @@ function visibleBoardItems() {
   });
 }
 
-function boardOptions(forceCompact) {
+function boardOptions() {
   return { getNotes:visibleNotes,getBoardItems:visibleBoardItems,activePages:state.activePages,
     canEdit:canArrangeNote,saveLayout,viewState:state.viewport,
+    getResponsiveWidth:()=>_container.querySelector('.notes-page').clientWidth,
     saveBoardCommand:state.boardActions?.saveBoardCommand,groupDragBridge:state.boardActions?.groupDragBridge,
     onGroupAction:(action,item)=>state.boardActions?.onGroupAction?.(action,item),
-    compact:state.compact || forceCompact,filtered:!!state.filterQuery.trim() || !!state.filterCreator,onViewChange:renderGrid };
+    compact:state.listView,filtered:!!state.filterQuery.trim() || !!state.filterCreator,onViewChange:renderGrid };
 }
 
 function renderGrid() {
@@ -503,9 +529,9 @@ function renderGrid() {
   const q = state.filterQuery.trim().toLowerCase();
   const visible = visibleNotes();
   const forceCompact = state.notes.some(note => note.layout?.overflow);
-  const scrollport = _container.querySelector('.notes-scroll');
-  const usableWidth = scrollport.clientWidth - parseFloat(getComputedStyle(scrollport).paddingLeft) - parseFloat(getComputedStyle(scrollport).paddingRight);
-  state.listView = state.compact || forceCompact || usableWidth < 640;
+  // A companion Tasks rail reduces the canvas, not the device's available page width.
+  const phoneWidth = _container.querySelector('.notes-page').clientWidth < 640;
+  state.listView = state.compact || forceCompact || phoneWidth;
   grid.dataset.boardView = state.listView ? 'list' : 'canvas';
   grid.dataset.listDensity = state.listDensity;
   _container.querySelector('#notes-list-density-label').hidden = !state.listView;
@@ -517,8 +543,17 @@ function renderGrid() {
   _container.querySelector('#notes-zoom-controls').hidden = state.listView;
   for (const id of state.expandedNotes) if (!state.notes.some(note => note.id === id && canOnNote(note, 'view'))) state.expandedNotes.delete(id);
   const compactButton = _container.querySelector('#notes-compact-view');
-  if (compactButton) { compactButton.hidden = usableWidth < 640; compactButton.disabled = forceCompact; compactButton.setAttribute('aria-pressed', String(state.compact || forceCompact)); }
-  _container.querySelector('#notes-header-actions').hidden = usableWidth < 640 || forceCompact;
+  if (compactButton) {
+    compactButton.hidden = phoneWidth;
+    compactButton.disabled = forceCompact;
+    compactButton.setAttribute('aria-pressed', String(state.listView));
+    const destination = t(state.listView ? 'notes.canvasView' : 'notes.compactView');
+    compactButton.setAttribute('aria-label', destination);
+    compactButton.title = destination;
+    compactButton.innerHTML = `<i data-lucide="${state.listView ? 'panels-top-left' : 'list'}" class="icon-md" aria-hidden="true"></i>`;
+    if (window.lucide) lucide.createIcons({ el: compactButton });
+  }
+  _container.querySelector('#notes-header-actions').hidden = phoneWidth || forceCompact;
 
   if (!visible.length) {
     const isFiltered = q.length > 0 || !!state.filterCreator;
@@ -545,7 +580,7 @@ function renderGrid() {
       document.querySelector('.page-fab')?.click();
     });
     visibleBoardItems();
-    board = wireNoteBoard(grid, boardOptions(forceCompact));
+    board = wireNoteBoard(grid, boardOptions());
     return;
   }
 
@@ -558,7 +593,7 @@ function renderGrid() {
   grid.replaceChildren();
   grid.insertAdjacentHTML('beforeend', html);
   if (window.lucide) lucide.createIcons({ el: grid });
-  board = wireNoteBoard(grid, boardOptions(forceCompact));
+  board = wireNoteBoard(grid, boardOptions());
   if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusExpand) grid.querySelector(`.note-card[data-id="${focusId}"] [data-note-expand]`)?.focus({ preventScroll: true });
@@ -1238,7 +1273,7 @@ function openLayoutModal(id, kind = 'note') {
     title: t('notes.adjustCard'),
     content: `<div class="note-modal" ${kind==='group'?`data-group-id="${id}"`:`data-note-id="${id}"`} data-layout-editor>
       ${kind==='note'?`<p>${t('notes.layoutHint')}</p>`:''}
-      <div class="note-layout-fields">${fields.map(([name, min, max]) => `<div class="form-group"><label class="form-label" for="note-layout-${name}">${t(`notes.layoutField.${name}`)}</label><input class="form-input" type="number" inputmode="numeric" min="${min}" max="${max}" step="1" value="${layout[name]}" id="note-layout-${name}"></div>`).join('')}</div>
+      <div class="note-layout-fields">${fields.map(([name, min, max]) => `<div class="form-group"><label class="form-label" for="note-layout-${name}">${t(`notes.layoutField.${name}`)}</label><input class="form-input" type="number" inputmode="${name==='x'||name==='y'?'decimal':'numeric'}" min="${min}" max="${max}" step="${name==='x'||name==='y'?'any':'1'}" value="${layout[name]}" id="note-layout-${name}"></div>`).join('')}</div>
       <p id="note-layout-preview" role="status"></p>
       <div class="modal-panel__footer"><button class="btn btn--secondary" id="note-layout-cancel">${t('common.cancel')}</button><button class="btn btn--primary" id="note-layout-save">${t('common.save')}</button></div>
     </div>`,

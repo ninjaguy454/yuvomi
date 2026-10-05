@@ -38,6 +38,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   activePages = new Map(), groupDragBridge, onGroupAction = () => {}, compact = false, filtered = false, viewState = {}, onViewChange = () => {} }) {
   const viewport = grid.closest('.notes-scroll'), space = grid.parentElement;
   const revealStrip = grid.closest('.notes-page')?.querySelector('.notes-reveal-strip');
+  const pageFlow = () => getComputedStyle(viewport.parentElement).display === 'block';
   let revealIds = [];
   const viewportWidth = () => viewport.clientWidth - (parseFloat(getComputedStyle(viewport).paddingLeft) || 0) - (parseFloat(getComputedStyle(viewport).paddingRight) || 0);
   let disposed = false, gesture = null, narrow = compact || viewportWidth() < 640;
@@ -137,7 +138,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   function extent(layouts) {
     if (narrow) return;
     grid.style.setProperty('--note-group-ui-scale',String(1/zoom()));
-    const value = noteCanvasExtent(layouts, viewportWidth(), Math.max(320, viewport.clientHeight - 12) / zoom());
+    // An auto-height page must not feed its growing world extent back into
+    // the minimum viewport height on every drag update.
+    const visibleHeight = pageFlow() ? Math.min(innerHeight, viewport.clientHeight) : viewport.clientHeight;
+    const value = noteCanvasExtent(layouts, viewportWidth(), Math.max(320, visibleHeight - 12) / zoom());
     value.width = Math.max(value.width, viewportWidth() / zoom());
     Object.assign(grid.style, { width: `${value.width}px`, minHeight: `${value.height}px`, transform: `scale(${zoom()})` });
     Object.assign(space.style, { width: `${value.width * zoom()}px`, height: `${value.height * zoom() + (grid.classList.contains('notes-board--groups') ? 48 : 0)}px` });
@@ -194,7 +198,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function scrollParent(card) {
     for (let node = card.parentElement; node; node = node.parentElement) {
-      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
+      if (node === viewport && pageFlow()) continue;
+      // Keep a bounded scrollport as owner before its first overflow; a drag
+      // can grow the world. Page flow delegates that axis to the shell.
+      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) return node;
     }
     return document.scrollingElement;
   }
@@ -245,7 +252,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     const start = normalizeNoteLayout(item.layout), scroller = scrollParent(card);
     gesture = { note, item, card, pointer: event.pointerId, start, next: start, x: event.clientX, y: event.clientY,
-      lastX: event.clientX, lastY: event.clientY, scroller, scrollY: scroller.scrollTop, scrollX: scroller.scrollLeft, scale: zoom(), pitch: viewportWidth() / NOTE_COLUMNS, active: false,
+      lastX: event.clientX, lastY: event.clientY, scroller, scrollY: scroller.scrollTop, scrollX: viewport.scrollLeft, scale: zoom(), pitch: viewportWidth() / NOTE_COLUMNS, active: false,
       viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight,
       edges: Object.values(edges).some(Boolean) ? edges : null };
     suppressClick = false;
@@ -254,7 +261,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   function update() {
     if (!gesture?.active) return;
     const { start, edges, scroller } = gesture;
-    const dx = Math.round((gesture.lastX - gesture.x + scroller.scrollLeft - gesture.scrollX) / (gesture.pitch * gesture.scale));
+    const dx = Math.round((gesture.lastX - gesture.x + viewport.scrollLeft - gesture.scrollX) / (gesture.pitch * gesture.scale));
     const dy = Math.round((gesture.lastY - gesture.y + scroller.scrollTop - gesture.scrollY) / (NOTE_ROW_HEIGHT * gesture.scale));
     const next = { ...start };
     if (!edges) { next.x += dx; next.y += dy; }
@@ -331,10 +338,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     const speed = gesture.lastY > bottom - 48 ? Math.min(18, (gesture.lastY - bottom + 48) / 3)
       : gesture.lastY < top + 48 ? -Math.min(18, (top + 48 - gesture.lastY) / 3) : 0;
     if (speed) { scroller.scrollTop += speed; update(); }
-    const bounds = scroller.getBoundingClientRect();
+    // Short page-flow layouts scroll vertically in the shell, but world X
+    // always belongs to the canvas viewport.
+    const bounds = viewport.getBoundingClientRect();
     const speedX = gesture.lastX > bounds.right - 48 ? Math.min(18,(gesture.lastX-bounds.right+48)/3)
       : gesture.lastX < bounds.left + 48 ? -Math.min(18,(bounds.left+48-gesture.lastX)/3) : 0;
-    if (speedX) { scroller.scrollLeft += speedX; update(); }
+    if (speedX) { viewport.scrollLeft += speedX; update(); }
     frame = requestAnimationFrame(autoscroll);
   }
   async function up(event) {

@@ -203,6 +203,7 @@ const APP_SHELL = [
   '/utils/kitchen-transfer.js',
   '/utils/markdown-checklist.js',
   '/components/note-board.js',
+  '/components/note-group-overview.js',
   '/utils/note-board-layout.js',
   '/utils/note-group-draft.js',
   '/utils/note-group-gesture.js',

@@ -1404,6 +1404,16 @@
         "agendaDayEmpty": "Nichts geplant"
     },
     "notes": {
+        "groupPages": "Gruppenseiten",
+        "groupPrevious": "Vorherige Notiz",
+        "groupNext": "Nächste Notiz",
+        "groupOverview": "Gruppenübersicht öffnen, Notiz {{current}} von {{count}}",
+        "groupAction": {
+            "add": "Zur Gruppe hinzufügen",
+            "move": "Auswahl verschieben",
+            "remove": "Aus Gruppe entfernen",
+            "order": "Reihenfolge ändern"
+        },
         "resetView": "Ansicht zurücksetzen",
         "includeLocked": "Fixierte einbeziehen",
         "zoomIn": "Vergrößern",

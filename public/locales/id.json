@@ -1404,6 +1404,16 @@
         "agendaDayEmpty": "Tidak ada rencana"
     },
     "notes": {
+        "groupPages": "Halaman grup",
+        "groupPrevious": "Catatan sebelumnya",
+        "groupNext": "Catatan berikutnya",
+        "groupOverview": "Buka ringkasan grup, catatan {{current}} dari {{count}}",
+        "groupAction": {
+            "add": "Tambahkan ke grup",
+            "move": "Pindahkan pilihan",
+            "remove": "Keluarkan dari grup",
+            "order": "Ubah urutan"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

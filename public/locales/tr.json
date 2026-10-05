@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Planlanmış bir şey yok"
     },
     "notes": {
+        "groupPages": "Grup sayfaları",
+        "groupPrevious": "Önceki not",
+        "groupNext": "Sonraki not",
+        "groupOverview": "Grup genel görünümünü aç, {{count}} nottan {{current}}. not",
+        "groupAction": {
+            "add": "Gruba ekle",
+            "move": "Seçilenleri taşı",
+            "remove": "Gruptan çıkar",
+            "order": "Sırayı değiştir"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

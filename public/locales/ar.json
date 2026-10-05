@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "لا شيء مُخطط"
     },
     "notes": {
+        "groupPages": "صفحات المجموعة",
+        "groupPrevious": "الملاحظة السابقة",
+        "groupNext": "الملاحظة التالية",
+        "groupOverview": "فتح عرض المجموعة، الملاحظة {{current}} من {{count}}",
+        "groupAction": {
+            "add": "إضافة إلى مجموعة",
+            "move": "نقل المحدد",
+            "remove": "إزالة من المجموعة",
+            "order": "تغيير الترتيب"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

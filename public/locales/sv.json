@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Inget planerat"
     },
     "notes": {
+        "groupPages": "Gruppsidor",
+        "groupPrevious": "Föregående anteckning",
+        "groupNext": "Nästa anteckning",
+        "groupOverview": "Öppna gruppöversikt, anteckning {{current}} av {{count}}",
+        "groupAction": {
+            "add": "Lägg till i grupp",
+            "move": "Flytta markerade",
+            "remove": "Ta bort från grupp",
+            "order": "Ändra ordning"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

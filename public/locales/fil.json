@@ -1404,6 +1404,16 @@
         "agendaDayEmpty": "Walang nakaplano"
     },
     "notes": {
+        "groupPages": "Mga pahina ng grupo",
+        "groupPrevious": "Nakaraang tala",
+        "groupNext": "Susunod na tala",
+        "groupOverview": "Buksan ang pangkalahatang-ideya ng grupo, tala {{current}} sa {{count}}",
+        "groupAction": {
+            "add": "Idagdag sa grupo",
+            "move": "Ilipat ang napili",
+            "remove": "Alisin sa grupo",
+            "order": "Baguhin ang pagkakasunod-sunod"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

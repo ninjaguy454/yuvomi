@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Τίποτα προγραμματισμένο"
     },
     "notes": {
+        "groupPages": "Σελίδες ομάδας",
+        "groupPrevious": "Προηγούμενη σημείωση",
+        "groupNext": "Επόμενη σημείωση",
+        "groupOverview": "Άνοιγμα επισκόπησης ομάδας, σημείωση {{current}} από {{count}}",
+        "groupAction": {
+            "add": "Προσθήκη σε ομάδα",
+            "move": "Μετακίνηση επιλεγμένων",
+            "remove": "Αφαίρεση από ομάδα",
+            "order": "Αλλαγή σειράς"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Niets gepland"
     },
     "notes": {
+        "groupPages": "Groepspagina’s",
+        "groupPrevious": "Vorige notitie",
+        "groupNext": "Volgende notitie",
+        "groupOverview": "Groepsoverzicht openen, notitie {{current}} van {{count}}",
+        "groupAction": {
+            "add": "Toevoegen aan groep",
+            "move": "Selectie verplaatsen",
+            "remove": "Uit groep verwijderen",
+            "order": "Volgorde wijzigen"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

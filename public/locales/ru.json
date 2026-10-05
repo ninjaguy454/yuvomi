@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Ничего не запланировано"
     },
     "notes": {
+        "groupPages": "Страницы группы",
+        "groupPrevious": "Предыдущая заметка",
+        "groupNext": "Следующая заметка",
+        "groupOverview": "Открыть обзор группы, заметка {{current}} из {{count}}",
+        "groupAction": {
+            "add": "Добавить в группу",
+            "move": "Переместить выбранное",
+            "remove": "Удалить из группы",
+            "order": "Изменить порядок"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

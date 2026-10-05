@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Rien de prévu"
     },
     "notes": {
+        "groupPages": "Pages du groupe",
+        "groupPrevious": "Note précédente",
+        "groupNext": "Note suivante",
+        "groupOverview": "Ouvrir la vue du groupe, note {{current}} sur {{count}}",
+        "groupAction": {
+            "add": "Ajouter au groupe",
+            "move": "Déplacer la sélection",
+            "remove": "Retirer du groupe",
+            "order": "Changer la position"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

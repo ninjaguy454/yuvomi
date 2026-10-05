@@ -1,0 +1,36 @@
+/* Paging belongs to the group rectangle; the canvas reserves room at y=0. */
+.notes-canvas-space--active > .notes-grid.notes-board--groups { top: 48px; }
+.notes-board > .note-card.note-card--group { overflow: visible; }
+.note-group-pages {
+  position: absolute;
+  top: calc(-46px * var(--note-group-ui-scale, 1));
+  left: 0;
+  display: flex;
+  gap: 2px;
+  width: max-content;
+  height: 44px;
+  direction: ltr;
+  border-radius: var(--radius-md, 8px);
+  background: var(--color-surface, #fff);
+  box-shadow: 0 1px 4px #0002;
+  transform: scale(var(--note-group-ui-scale, 1));
+  transform-origin: top left;
+}
+.note-group-pages button {
+  appearance: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: var(--color-text, #222);
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+.note-group-pages button:disabled { opacity: .45; cursor: default; }
+.note-group-pages button:focus-visible { outline: 2px solid var(--color-primary, #236a62); outline-offset: -3px; }
+.notes-board--compact .note-group-pages { position: static; margin-block-end: 8px; transform: none; }
+.notes-board--compact .note-card--group { overflow: visible; }
+.note-card__menu-items [data-group-action] { min-height: 44px; }

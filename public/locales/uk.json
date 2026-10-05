@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Нічого не заплановано"
     },
     "notes": {
+        "groupPages": "Сторінки групи",
+        "groupPrevious": "Попередня нотатка",
+        "groupNext": "Наступна нотатка",
+        "groupOverview": "Відкрити огляд групи, нотатка {{current}} з {{count}}",
+        "groupAction": {
+            "add": "Додати до групи",
+            "move": "Перемістити вибране",
+            "remove": "Вилучити з групи",
+            "order": "Змінити порядок"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

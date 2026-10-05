@@ -1404,6 +1404,16 @@
         "agendaDayEmpty": "چیزی برنامه‌ریزی نشده"
     },
     "notes": {
+        "groupPages": "صفحه‌های گروه",
+        "groupPrevious": "یادداشت قبلی",
+        "groupNext": "یادداشت بعدی",
+        "groupOverview": "باز کردن نمای گروه، یادداشت {{current}} از {{count}}",
+        "groupAction": {
+            "add": "افزودن به گروه",
+            "move": "انتقال انتخاب‌شده‌ها",
+            "remove": "حذف از گروه",
+            "order": "تغییر ترتیب"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

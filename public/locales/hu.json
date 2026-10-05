@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Semmi sincs tervezve"
     },
     "notes": {
+        "groupPages": "Csoport oldalai",
+        "groupPrevious": "Előző jegyzet",
+        "groupNext": "Következő jegyzet",
+        "groupOverview": "Csoport áttekintése, {{current}}. jegyzet / {{count}}",
+        "groupAction": {
+            "add": "Hozzáadás csoporthoz",
+            "move": "Kijelöltek áthelyezése",
+            "remove": "Eltávolítás a csoportból",
+            "order": "Sorrend módosítása"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

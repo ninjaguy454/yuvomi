@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "予定なし"
     },
     "notes": {
+        "groupPages": "グループのページ",
+        "groupPrevious": "前のメモ",
+        "groupNext": "次のメモ",
+        "groupOverview": "グループ一覧を開く、{{count}}件中{{current}}件目",
+        "groupAction": {
+            "add": "グループに追加",
+            "move": "選択項目を移動",
+            "remove": "グループから取り出す",
+            "order": "順序を変更"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

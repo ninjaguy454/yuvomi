@@ -1392,6 +1392,16 @@
         "agendaDayEmpty": "Không có kế hoạch"
     },
     "notes": {
+        "groupPages": "Các trang nhóm",
+        "groupPrevious": "Ghi chú trước",
+        "groupNext": "Ghi chú tiếp theo",
+        "groupOverview": "Mở tổng quan nhóm, ghi chú {{current}} trên {{count}}",
+        "groupAction": {
+            "add": "Thêm vào nhóm",
+            "move": "Di chuyển mục đã chọn",
+            "remove": "Xóa khỏi nhóm",
+            "order": "Đổi thứ tự"
+        },
         "resetView": "Reset view",
         "includeLocked": "Include locked",
         "zoomIn": "Zoom in",

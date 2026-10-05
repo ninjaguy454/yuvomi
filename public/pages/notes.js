@@ -19,8 +19,8 @@ import { emptyStateHTML } from '/utils/empty-state.js';
 import { AVATAR_FALLBACK_COLOR } from '/utils/color.js';
 import { getPermissions, moduleAccess, canCapability } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
-import { wireNoteBoard } from '/components/note-board.js';
-import { normalizeNoteLayout, organizeNoteLayouts } from '/utils/note-board-layout.js';
+import { wireNoteBoard, renderNoteGroupFrame } from '/components/note-board.js';
+import { normalizeNoteLayout, organizeNoteLayouts, projectNoteGroupItems, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { watchNoteChanges } from '/utils/note-live.js';
 
 const canNote = action => getPermissions().principal_kind === 'device'
@@ -228,7 +228,10 @@ export async function render(container, { user }) {
     }
     if (e.target.closest('a, summary')) { e.stopPropagation(); return; }
     const adjust = e.target.closest('[data-board-action="adjust"]');
-    if (adjust) { e.stopPropagation(); openLayoutModal(Number(adjust.closest('.note-card').dataset.id)); return; }
+    if (adjust) {
+      e.stopPropagation(); const card=adjust.closest('.note-card');
+      openLayoutModal(Number(card.dataset.groupId || card.dataset.id),card.dataset.groupId?'group':'note'); return;
+    }
     const flagButton = e.target.closest('[data-board-action="lock"], [data-board-action="top"]');
     if (flagButton) {
       e.stopPropagation();
@@ -364,6 +367,21 @@ function visibleNotes() {
   });
 }
 
+function visibleBoardItems() {
+  state.activePages ||= new Map();
+  return projectNoteGroupItems({notes:visibleNotes(),groups:state.groups || []}, {
+    activePages:state.activePages,filtered:!!state.filterQuery.trim() || !!state.filterCreator,
+  });
+}
+
+function boardOptions(forceCompact) {
+  return { getNotes:visibleNotes,getBoardItems:visibleBoardItems,activePages:state.activePages,
+    canEdit:note=>canOnNote(note,'edit'),saveLayout,viewState:state.viewport,
+    saveBoardCommand:state.boardActions?.saveBoardCommand,groupDragBridge:state.boardActions?.groupDragBridge,
+    onGroupAction:(action,item)=>state.boardActions?.onGroupAction?.(action,item),
+    compact:state.compact || forceCompact,filtered:!!state.filterQuery.trim() || !!state.filterCreator,onViewChange:renderGrid };
+}
+
 function renderGrid() {
   if (!state.active) return;
   const grid = _container.querySelector('#notes-grid');
@@ -422,8 +440,8 @@ function renderGrid() {
     grid.querySelector('#empty-cta-notes')?.addEventListener('click', () => {
       document.querySelector('.page-fab')?.click();
     });
-    board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout, viewState: state.viewport,
-      compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
+    visibleBoardItems();
+    board = wireNoteBoard(grid, boardOptions(forceCompact));
     return;
   }
 
@@ -431,13 +449,12 @@ function renderGrid() {
   // die Trennung war nur aus dem Ring an der Karte zu erschließen. Zwei
   // Abschnittsköpfe machen die bestehende Sortierung lesbar. Sie erscheinen
   // nur, wenn es tatsächlich beide Gruppen gibt.
-  const html = visible.map(renderNoteCard).join('');
+  const html = visibleBoardItems().map(item => renderNoteGroupFrame(item,renderNoteCard(item.note,item))).join('');
 
   grid.replaceChildren();
   grid.insertAdjacentHTML('beforeend', html);
   if (window.lucide) lucide.createIcons({ el: grid });
-  board = wireNoteBoard(grid, { getNotes: visibleNotes, canEdit: note => canOnNote(note, 'edit'), saveLayout, viewState: state.viewport,
-    compact: state.compact || forceCompact, filtered: !!q || !!state.filterCreator, onViewChange: renderGrid });
+  board = wireNoteBoard(grid, boardOptions(forceCompact));
   if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusExpand) grid.querySelector(`.note-card[data-id="${focusId}"] [data-note-expand]`)?.focus({ preventScroll: true });
@@ -476,21 +493,27 @@ function listPreview(note, expanded) {
   return { html: template.innerHTML, truncated };
 }
 
-function renderBoardMenu(note) {
+function renderBoardMenu(note, item) {
   if (!canOnNote(note, 'edit') && !canOnNote(note, 'delete')) return '';
+  const layout=item?.layout || note.layout;
+  const manage=item?.kind==='group'?item.can_manage:canOnNote(note,'edit');
   return `<details class="note-card__menu" data-board-menu>
     <summary aria-label="${t('notes.cardMenu')}"><i data-lucide="ellipsis" class="icon-sm" aria-hidden="true"></i></summary>
     <div class="note-card__menu-items">
-      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span><span>${t('notes.showOnDashboard')}</span></button>
-      <button type="button" data-board-action="top" aria-pressed="${!!note.layout?.always_on_top}"><span aria-hidden="true">${note.layout?.always_on_top ? '✓' : ''}</span><span>${t('notes.alwaysOnTop')}</span></button>` : ''}
+      ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span><span>${t('notes.showOnDashboard')}</span></button>` : ''}
+      ${manage ? `<button type="button" data-board-action="top" aria-pressed="${!!layout?.always_on_top}"><span aria-hidden="true">${layout?.always_on_top ? '✓' : ''}</span><span>${t('notes.alwaysOnTop')}</span></button>` : ''}
+      ${manage && item?.kind==='group' ? `<button type="button" data-board-action="adjust"><span aria-hidden="true"></span><span>${t('notes.adjustCard')}</span></button>` : ''}
+      ${manage && state.boardActions?.onGroupAction ? (item?.kind==='group'
+        ? ['move','remove','order'].map(action=>`<button type="button" data-group-action="${action}"><span aria-hidden="true"></span><span>${t(`notes.groupAction.${action}`)}</span></button>`).join('')
+        : `<button type="button" data-group-action="add"><span aria-hidden="true"></span><span>${t('notes.groupAction.add')}</span></button>`) : ''}
       ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}"><span aria-hidden="true"></span><span>${t('notes.deleteLabel')}</span></button>` : ''}
     </div>
   </details>`;
 }
 
-function renderPositionControls(note) {
-  if (!canOnNote(note, 'edit')) return '';
-  return `<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!note.layout?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>
+function renderPositionControls(note, item) {
+  if (item?.kind==='group' ? !item.can_manage : !canOnNote(note, 'edit')) return '';
+  return `<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!(item?.layout || note.layout)?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>
     <button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>`;
 }
 
@@ -498,15 +521,15 @@ function renderNoteTitle(note) {
   return `<button type="button" class="note-card__title" data-action="open" data-id="${note.id}">${esc(note.title?.trim() || t('notes.untitledNote'))}</button>`;
 }
 
-function renderListCard(note) {
+function renderListCard(note, item) {
   const compact = state.listDensity === 'compact';
   const expanded = state.expandedNotes.has(note.id);
   const preview = compact ? null : listPreview(note, expanded);
   return `<div class="note-card note-card--list ${note.pinned ? 'note-card--pinned' : ''}" data-id="${note.id}" style="--note-color:${esc(note.color)};">
     <div class="note-card__list-heading">
-      ${renderPositionControls(note)}
+      ${renderPositionControls(note,item)}
       ${renderNoteTitle(note)}
-      ${renderBoardMenu(note)}
+      ${renderBoardMenu(note,item)}
     </div>
     ${compact ? '' : `<div class="note-card__preview"><div class="note-card__content" id="note-list-body-${note.id}">${preview.html}</div>
       ${preview.truncated ? `<button type="button" class="note-card__expand" data-note-expand aria-expanded="${expanded}" aria-controls="note-list-body-${note.id}">${t(expanded ? 'notes.showLess' : 'notes.showMore')}</button>` : ''}</div>
@@ -514,8 +537,8 @@ function renderListCard(note) {
   </div>`;
 }
 
-function renderNoteCard(note) {
-  if (state.listView) return renderListCard(note);
+function renderNoteCard(note, item) {
+  if (state.listView) return renderListCard(note,item);
   // KEINE INITIALEN AUF EINER 16px-SCHEIBE (Initialen-Schwelle-Regel).
   //
   // Hier standen bis zuletzt zwei Buchstaben auf einer 16-%-Waschung - unter der
@@ -532,8 +555,8 @@ function renderNoteCard(note) {
     <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${canOnNote(note, 'edit') ? 'note-card--editable' : ''}"
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
-      ${renderBoardMenu(note)}
-      ${renderPositionControls(note)}
+      ${renderBoardMenu(note,item)}
+      ${renderPositionControls(note,item)}
       ${renderNoteTitle(note)}
       <div class="note-card__content">${renderMarkdownLight(note.content, CHECKLIST_OPTS(note))}</div>
       <div class="note-card__footer">
@@ -1034,22 +1057,26 @@ async function saveLayoutChange(note, changes) {
   } finally { page.pending.delete(note.id); }
 }
 
-function openLayoutModal(id) {
-  let note = state.notes.find(n => n.id === id);
-  if (!note || !canOnNote(note, 'edit') || state.pending.has(id)) return;
-  const layout = normalizeNoteLayout(note.layout);
+function openLayoutModal(id, kind = 'note') {
+  // Retain the render's revision snapshot through the dialog's lifetime.
+  const saveBoardCommand=state.boardActions?.saveBoardCommand;
+  const findItem=()=>projectNoteGroupItems({notes:state.notes,groups:state.groups || []},{activePages:state.activePages}).find(item=>item.kind===kind && item.id===id);
+  let item=findItem(), note=item?.note;
+  const editable=()=>item && (kind==='group' ? item.can_manage && !!saveBoardCommand : canOnNote(note,'edit'));
+  if (!editable() || state.pending.has(kind==='group'?`group:${id}`:id)) return;
+  const layout = normalizeNoteLayout(item.layout);
   const page = state, auth = authenticationSnapshot();
   const fields = [['x', 0, 10000], ['y', 0, 10000], ['width', 3, 12], ['height', 4, 100]];
   openSharedModal({
     title: t('notes.adjustCard'),
-    content: `<div class="note-modal" data-note-id="${id}" data-layout-editor>
-      <p>${t('notes.layoutHint')}</p>
+    content: `<div class="note-modal" ${kind==='group'?`data-group-id="${id}"`:`data-note-id="${id}"`} data-layout-editor>
+      ${kind==='note'?`<p>${t('notes.layoutHint')}</p>`:''}
       <div class="note-layout-fields">${fields.map(([name, min, max]) => `<div class="form-group"><label class="form-label" for="note-layout-${name}">${t(`notes.layoutField.${name}`)}</label><input class="form-input" type="number" inputmode="numeric" min="${min}" max="${max}" step="1" value="${layout[name]}" id="note-layout-${name}"></div>`).join('')}</div>
       <p id="note-layout-preview" role="status"></p>
       <div class="modal-panel__footer"><button class="btn btn--secondary" id="note-layout-cancel">${t('common.cancel')}</button><button class="btn btn--primary" id="note-layout-save">${t('common.save')}</button></div>
     </div>`,
     onSave(panel) {
-      if (note.layout?.position_locked) for (const name of ['x', 'y']) panel.querySelector(`#note-layout-${name}`).disabled = true;
+      if (item.layout?.position_locked) for (const name of ['x', 'y']) panel.querySelector(`#note-layout-${name}`).disabled = true;
       const read = () => Object.fromEntries(fields.map(([name]) => [name, Number(panel.querySelector(`#note-layout-${name}`).value)]));
       const preview = () => {
         const next = normalizeNoteLayout(read());
@@ -1061,14 +1088,16 @@ function openLayoutModal(id) {
         if (!currentPage(page, auth)) return;
         for (const input of panel.querySelectorAll('input')) if (!input.reportValidity()) return;
         const btn = panel.querySelector('#note-layout-save'); btn.disabled = true;
-        const ok = await saveLayout(note, read());
+        const ok = saveBoardCommand
+          ? await saveBoardCommand({kind:'arrange',items:[noteGroupArrangeItem(item,read())],include_locked:true})
+          : await saveLayout(note, read());
         if (!currentPage(page, auth) || !panel.isConnected) return;
         if (ok) { closeModal({ force: true }); renderGrid(); }
         else {
-          note = state.notes.find(n => n.id === id);
-          if (!note || !canOnNote(note, 'edit')) { closeModal({ force: true }); return; }
-          const fresh = normalizeNoteLayout(note.layout);
-          fields.forEach(([name]) => { const input = panel.querySelector(`#note-layout-${name}`); input.value = fresh[name]; input.disabled = !!note.layout?.position_locked && ['x','y'].includes(name); });
+          item=findItem(); note=item?.note;
+          if (!editable()) { closeModal({ force: true }); return; }
+          const fresh = normalizeNoteLayout(item.layout);
+          fields.forEach(([name]) => { const input = panel.querySelector(`#note-layout-${name}`); input.value = fresh[name]; input.disabled = !!item.layout?.position_locked && ['x','y'].includes(name); });
           btn.disabled = false; panel.querySelector('#note-layout-preview').textContent = t('notes.layoutConflict');
         }
       });

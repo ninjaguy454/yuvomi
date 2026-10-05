@@ -1,3 +1,4 @@
+import { arrangeNotesFixture } from './helpers/note-group-http-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -22,8 +23,9 @@ app.use('/api/v1', (req, res) => {
   if (req.path === '/auth/me') return res.json({ csrfToken: 'fixture' });
   if (req.path === '/notes/members') return res.json({ data: [{ id: 1, display_name: 'Parent' }] });
   if (req.path === '/notes/changes') return res.status(204).end();
-  if (req.path === '/notes' && req.method === 'GET') { reads++; return res.json({ data: structuredClone(notes) }); }
+  if (req.path === '/notes/board' && req.method === 'GET') { reads++; return res.json({ data: {notes:structuredClone(notes),groups:[]} }); }
   if (req.method !== 'GET') writes.push({ path: req.path, method: req.method, body: req.body });
+  if(req.path==='/notes/group-operations'){const result=arrangeNotesFixture(notes,req.body);return res.status(result.status).json(result.body);}
   const note = notes.find(n => n.id === Number(req.path.split('/')[2]));
   if (req.path.endsWith('/check') && note) {
     const lines = note.content.split('\n');
@@ -62,7 +64,7 @@ async function view(page, expected) {
 }
 async function refresh(page) {
   const before = reads;
-  const response = page.waitForResponse(response => response.url() === base + '/api/v1/notes' && response.request().method() === 'GET');
+  const response = page.waitForResponse(response => response.url() === base + '/api/v1/notes/board' && response.request().method() === 'GET');
   await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await (await response).json();
   assert.ok(reads > before, 'focus revalidates Notes');
@@ -217,15 +219,15 @@ test('position lock and always-on-top persist separately from dashboard pin', as
     assert.equal(await page.$eval(lock, n => n.getAttribute('aria-pressed')), 'false', 'old dashboard pin does not imply position lock');
     await page.click(lock);
     await page.waitForFunction(() => document.querySelector('[data-board-action="lock"]').getAttribute('aria-pressed') === 'true');
-    assert.equal(writes[0].body.position_locked, true);
+    assert.equal(writes[0].body.items[0].layout.position_locked, true);
     assert.equal(notes[0].pinned, 1);
-    assert.equal(writes[0].body.expected_layout_revision, 2);
+    assert.equal(writes[0].body.expected.notes[0].layout_revision, 2);
     await page.click(`${card(1)} summary`);
     assert.equal(await page.$eval(`${card(1)} [data-action="pin"]`, n => n.textContent.trim().replace(/^✓\s*/, '')), 'Show on Dashboard');
     await page.click(`${card(1)} [data-board-action="top"]`);
     await page.waitForFunction(() => document.querySelector('[data-board-action="top"]').getAttribute('aria-pressed') === 'true');
-    assert.equal(writes[1].body.always_on_top, true);
-    assert.equal(writes[1].body.expected_layout_revision, 3);
+    assert.equal(writes[1].body.items[0].layout.always_on_top, true);
+    assert.equal(writes[1].body.expected.notes[0].layout_revision, 3);
     assert.equal(notes[0].pinned, 1);
     assert.equal(notes[0].layout.position_locked, true);
   } finally { await page.close(); }

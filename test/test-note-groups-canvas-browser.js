@@ -4,6 +4,7 @@ import express from 'express';
 import puppeteer from 'puppeteer';
 import {fileURLToPath} from 'node:url';
 import {readFileSync} from 'node:fs';
+import {arrangeNotesFixture} from './helpers/note-group-http-fixture.js';
 const app=express();let browser,server,base;
 app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
 app.get('/group-fixture',(_req,res)=>res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/notes.css"><style>html,body{height:100%;margin:0}.notes-page{height:100vh;--page-inline-pad:12px}.notes-scroll{padding-bottom:12px}*,*::before,*::after{animation:none!important;transition:none!important}</style></head><body><div class="notes-page"><div class="notes-reveal-strip" hidden></div><div class="notes-scroll"><div class="notes-canvas-space"><div class="notes-grid"></div></div></div></div></body></html>`));
@@ -192,7 +193,11 @@ async function mountPage({arrange=false,width=1280}={}) {
   const note=notes.find(note=>note.id===Number(path.split('/')[4]));
   let value={data:[]};
   if(path==='/api/v1/auth/me')value={csrfToken:'fixture'};
-  if(path==='/api/v1/notes')value={data:notes};
+  if(path==='/api/v1/notes/board')value={data:{notes,groups:[]}};
+  if(path==='/api/v1/notes/group-operations'){
+   const result=arrangeNotesFixture(notes,JSON.parse(request.postData()));
+   return request.respond({status:result.status,contentType:'application/json',body:JSON.stringify(result.body)});
+  }
   if(path.endsWith('/pin')&&note){note.pinned=1;note.revision++;value={data:note};}
   if(path.endsWith('/check')&&note){note.content=note.content.replace('- [ ]','- [x]');note.revision++;value={data:note};}
   request.respond({status:path.endsWith('/changes')?204:200,contentType:'application/json',body:JSON.stringify(value)});
@@ -224,8 +229,9 @@ test('singleton arrange denial blocks injected numeric/flag controls, dragging a
   await page.keyboard.press('Escape');await page.click('#notes-organize');
   await page.waitForFunction(()=>document.querySelector('#notes-organize').disabled===false);
   assert.ok(!writes.some(write=>write.path==='/api/v1/notes/1/layout'));
-  const organize=writes.find(write=>write.path==='/api/v1/notes/layout');assert.ok(organize);
-  assert.deepEqual(organize.body.items.map(item=>item.note_id),[2]);
+  const organize=writes.find(write=>write.path==='/api/v1/notes/group-operations');assert.ok(organize);
+  assert.deepEqual(organize.body.items.map(item=>item.id),[2]);
+  assert.deepEqual(organize.body.expected,{groups:[],notes:[{id:2,revision:2,layout_revision:1}]});
  }finally{await page.close();}
 });
 test('filtered production cards are browse-only while content edit and dashboard pin stay present',async()=>{

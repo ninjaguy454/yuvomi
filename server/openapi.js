@@ -18,6 +18,7 @@ function withIdempotency(paths) {
   for (const [path, item] of Object.entries(paths)) {
     if (!item?.post) continue;
     if (!path.startsWith('/api/v1/') || path.startsWith('/api/v1/auth/')) continue;
+    if (path === '/api/v1/notes/group-operations') continue;
     item.post.parameters = [...(item.post.parameters ?? []), idempotencyHeaderParam()];
     item.post.responses = {
       ...item.post.responses,

@@ -110,6 +110,10 @@ function assertCachedRotationCreationAccess(conn, req, body) {
  * Idempotenz-Middleware. Muss NACH requireAuth laufen (`req.authUserId`).
  */
 function idempotencyMiddleware(req, res, next) {
+  // Notes group receipts reauthorize the complete affected scope and context on
+  // every retry. A cached HTTP board must never bypass that canonical service.
+  const originalPath=String(req.originalUrl || `${req.baseUrl||''}${req.path||''}`).split('?')[0];
+  if (/^\/(?:api\/v1\/)?notes\/group-operations\/?$/i.test(originalPath)) return next();
   // Manual point corrections have permanent, transaction-bound provenance and
   // must recheck administrator access on every retry, including after demotion.
   if (/^\/rewards\/(?:adjustments|bonus)\/?$/i.test(req.path)) return next();

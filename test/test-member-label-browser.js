@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import puppeteer from 'puppeteer';
 const folder=mkdtempSync(join(tmpdir(),'vidamia-member-labels-'));
-Object.assign(process.env,{DB_PATH:join(folder,'test.db'),SESSION_SECRET:'synthetic-member-labels-only',SESSION_SECURE:'false',BACKUP_ENABLED:'false',NODE_ENV:'development',LOG_LEVEL:'error',AUTH_ALLOW_PASSWORD_LOGIN:'true'});
+process.env.DB_PATH=join(folder,'test.db');
+Object.assign(process.env,{SESSION_SECRET:'synthetic-member-labels-only',SESSION_SECURE:'false',BACKUP_ENABLED:'false',NODE_ENV:'development',LOG_LEVEL:'error',AUTH_ALLOW_PASSWORD_LOGIN:'true'});
 delete process.env.DB_ENCRYPTION_KEY;
 const {get}=await import('../server/db.js');
 const {hashPassword}=await import('../server/utils/password.js');
@@ -27,7 +28,7 @@ test.before(async()=>{
  server=fork(new URL('./helpers/task-card-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0',TASK_CARD_BROWSER_SERVER_CHILD:'1'},stdio:['ignore','pipe','pipe','ipc']});
  let output='';for(const stream of [server.stdout,server.stderr])stream.on('data',v=>output=(output+v).slice(-5000));
  origin=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error(output)),60000);server.once('message',m=>{clearTimeout(timer);resolve(m.origin);});server.once('exit',code=>{clearTimeout(timer);reject(new Error(`${code}: ${output}`));});});
- browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH,args:['--no-sandbox']});
+ browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH});
  for(const kind of ['admin','display']) {
   const context=await browser.createBrowserContext(),page=await context.newPage();page.setDefaultTimeout(15000);await page.setViewport({width:390,height:900});await page.goto(origin+'/login');
   await page.evaluate(()=>localStorage.setItem('yuvomi-locale','en'));await page.reload();
@@ -51,6 +52,61 @@ test('paired household labels use age or username without exposing birthday or g
  assert.equal(await display.$('[data-route="/settings"]'),null);
  await screenshot('paired-dashboard',display);
 });
+for (const kind of ['personal', 'paired']) {
+ for (const theme of ['light', 'dark']) {
+  test(`Kitchen header renders duplicate member names in ${kind} ${theme} sessions`,async()=>{
+   const page=kind==='personal'?admin:display;
+   const errors=[],httpErrors=[];
+   const onError=error=>errors.push(error.message);
+   const onConsole=message=>{if(message.type()==='error'&&/\[Router\]|\[Vidamia\]/.test(message.text()))errors.push(message.text());};
+   const onResponse=response=>{if(response.status()>=400)httpErrors.push({status:response.status(),path:new URL(response.url()).pathname});};
+   page.on('pageerror',onError);page.on('console',onConsole);
+   page.on('response',onResponse);
+   try {
+    await page.bringToFront();
+    await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:'reduce'}]);
+    await page.setViewport({width:kind==='personal'?1280:390,height:900});
+    await page.evaluate(async()=>{await window.yuvomi.navigate('/meals');});
+    assert.deepEqual(errors,[],'Kitchen must finish rendering without a router or runtime error');
+    await page.waitForSelector('#week-grid',{visible:true});
+    await page.evaluate(theme=>{document.documentElement.dataset.theme=theme;},theme);
+    assert.equal(await page.$eval('html',node=>node.dataset.theme),theme);
+    assert.deepEqual(await names(page),['Alex (alex.parent)','Alex (12)','Riley']);
+    if(kind==='personal') {
+     assert.deepEqual(await page.$$eval('#meal-member-select option',nodes=>nodes.map(node=>({id:node.value,label:node.textContent}))),[
+      {id:'1',label:'Alex (alex.parent)'},{id:'2',label:'Alex (12)'},{id:'3',label:'Riley'},
+     ]);
+     assert.equal(await page.$eval('#meal-member-select',node=>node.value),'1');
+     assert.equal(await page.$eval('.meal-member-filter',node=>node.hidden),false);
+     await page.select('#meal-member-select','2');
+     await page.waitForFunction(()=>document.querySelector('#meal-acting-banner')?.textContent.includes('Alex (12)'));
+     assert.equal(await page.$eval('#meal-member-select',node=>node.value),'2');
+     await page.click('#meal-view-status');
+     await page.waitForFunction(()=>document.querySelector('#meal-view-status')?.getAttribute('aria-selected')==='true');
+     assert.equal(await page.$eval('.meal-member-filter',node=>node.hidden),true);
+     await page.click('#meal-view-choices');
+     await page.waitForFunction(()=>document.querySelector('#meal-view-choices')?.getAttribute('aria-selected')==='true');
+     assert.equal(await page.$eval('.meal-member-filter',node=>node.hidden),false);
+     assert.equal(await page.$eval('#meal-member-select',node=>node.value),'2');
+    } else {
+     assert.equal(await page.$eval('#meal-view-status',node=>node.getAttribute('aria-selected')),'true');
+     assert.equal(await page.$eval('#meal-view-choices',node=>node.hidden),true);
+     assert.equal(await page.$eval('.meal-member-filter',node=>node.hidden),true);
+    }
+    assert.deepEqual(errors,[],'Kitchen interactions must not throw');
+    // Existing paired grants deny these optional panels; do not widen them to test the header.
+    assert.deepEqual(httpErrors.filter(error=>!(kind==='paired'&&error.status===403
+     &&['/api/v1/kitchen/summary','/api/v1/recipes'].includes(error.path))),[]);
+    await page.$eval('.meal-view-bar',node=>node.scrollIntoView({block:'start',behavior:'instant'}));
+    await screenshot(`kitchen-${kind}-${theme}`,page);
+   } finally {
+    page.off('pageerror',onError);page.off('console',onConsole);
+    page.off('response',onResponse);
+   }
+  });
+ }
+}
+
 test('a scoped paired browser disambiguates a hidden household collision without adding candidates',async()=>{
  const revision=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(displayId).revision;
  await call(admin,'patch',`/devices/${displayId}`,{revision,scope:{member_ids:[2]}});

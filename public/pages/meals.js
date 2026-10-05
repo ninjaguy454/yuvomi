@@ -757,9 +757,9 @@ function renderWeekExperienceHeader() {
     ));
   }
 
-  const memberLabel = _container.querySelector('.meal-member-filter');
+  const memberFilterLabel = _container.querySelector('.meal-member-filter');
   const memberSelect = _container.querySelector('#meal-member-select');
-  if (memberLabel) memberLabel.hidden = state.mode === 'status';
+  if (memberFilterLabel) memberFilterLabel.hidden = state.mode === 'status';
   if (memberSelect && state.mode === 'choices') {
     const members = model.members?.length
       ? model.members
@@ -778,7 +778,7 @@ function renderWeekExperienceHeader() {
       option.selected = Number(member.id) === Number(state.selectedMemberId);
       memberSelect.appendChild(option);
     });
-    memberLabel.hidden = members.length <= 1;
+    memberFilterLabel.hidden = members.length <= 1;
   }
 
   const contexts = collectMealContexts(model);

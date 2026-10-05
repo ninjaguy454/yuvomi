@@ -32,10 +32,11 @@ test.before(async () => {
   browser = await puppeteer.launch({ headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage'] });
 });
 test.after(async () => { await browser?.close(); server?.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-async function mount() {
+async function mount({ width = 1280, touch = false, compact = false, overflow = false } = {}) {
   writes = []; truncate = false;
   snapshot = { notes: [1,2,3].map(id => ({ id, title: `Page ${id}`, content: `Authorized body ${id}`, color: '#C7DED9', created_by: 1, revision: 1, permissions: { view: true, edit: true, arrange: true, delete: true }, layout: { ...rect, x: 0, position_locked: false, revision: 1 } })), groups: [{ id: 11, revision: 7, member_ids: [1,2], can_manage: true, layout: { ...rect } }] };
-  const page = await browser.newPage(); page.setDefaultTimeout(4000); await page.setViewport({ width: 1280, height: 900 }); await page.goto(base + '/group-page-test');
+  if (overflow) snapshot.notes[2].layout.overflow = true;
+  const page = await browser.newPage(); page.setDefaultTimeout(4000); await page.setViewport({ width, height: 900, isMobile: touch, hasTouch: touch }); await page.goto(base + '/group-page-test');
   await page.evaluate(async () => {
     class Stream extends EventTarget { constructor() { super(); window.noteStream = this; } close() {} }
     window.EventSource = Stream; window.yuvomi = { showToast() {} };
@@ -44,7 +45,9 @@ async function mount() {
     (await import('/utils/device-context.js')).acceptAuthentication({ authContext: 'group-page-human' });
     const { handleBackNavigation } = await import('/utils/overlay-history.js'); window.addEventListener('popstate', () => handleBackNavigation());
     window.stopNotes = await (await import('/pages/notes.js')).render(document.getElementById('main-content'), { user: { id: 1 } });
-  }); return page;
+  });
+  if (compact) await page.click('#notes-compact-view');
+  return page;
 }
 const card = '[data-board-key="group:11"]';
 async function open(page) { await page.click(`${card} [data-group-page="overview"]`); await page.waitForSelector('.note-group-overview'); }
@@ -155,3 +158,31 @@ test('actual canvas native drag opens destination overview and inserts once thro
     assert.deepEqual(writes[0].note_ids, [3]); assert.equal(writes[0].before_note_id, 2);
   } finally { await page.close(); }
 });
+
+for (const [name, options] of [['narrow touch', { width: 360, touch: true }], ['explicit List', { compact: true }], ['overflow List', { overflow: true }]]) {
+  test(`${name} rejects blank List drop coordinates while explicit extraction preview still works`, async () => {
+    const page = await mount(options); try {
+      assert.equal(await page.$eval('#notes-grid', element => element.dataset.boardView), 'list');
+      await open(page); const start = await center(page, '[data-group-activate="2"]');
+      const cdp = options.touch ? await page.createCDPSession() : null;
+      if (cdp) await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...start, id: 0 }] });
+      else { await page.mouse.move(start.x, start.y); await page.mouse.down(); }
+      await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
+      const exit = await center(page, '[data-group-exit]');
+      if (cdp) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...exit, id: 0 }] });
+      else await page.mouse.move(exit.x, exit.y);
+      await page.waitForFunction(() => document.querySelector('.note-group-overview').hidden);
+      const point = await page.$eval('.notes-scroll', element => { const rect = element.getBoundingClientRect(); return { x: rect.left + rect.width / 2, y: Math.min(innerHeight, rect.bottom) - 30 }; });
+      if (cdp) {
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...point, id: 0 }] });
+        await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } else { await page.mouse.move(point.x, point.y); await page.mouse.up(); }
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(writes.length, 0, 'List pixels must not become saved world coordinates');
+      await page.focus('.note-group-overview [data-group-action="remove"]'); await page.keyboard.press('Enter');
+      const placements = await page.$$eval('[data-group-placement]', elements => elements.map(element => JSON.parse(element.dataset.groupPlacement)));
+      assert.equal(placements.length, 1); await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
+      await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'extract'); assert.deepEqual(writes[0].placements, placements);
+    } finally { await page.close(); }
+  });
+}

@@ -5,7 +5,7 @@ import puppeteer from 'puppeteer';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 const app=express();let browser,server,base,reads,writes,permissions,futureOffer;
-const task={id:7,title:'Prepare the garden',description:'Choose this regular task to help outside.',category:'household',assigned_to:null,assigned_users:[],created_by:1,revision:4,visibility:'all',status:'open',priority:'none',points:5,tags:[],subtasks:[],is_offer:true,permissions:{view:true,accept:true,complete:false,edit:false,delete_archive:false}};
+const task={id:7,title:'Prepare the garden',description:'Choose this regular task to help outside.',category:'household',assigned_to:null,assigned_users:[],created_by:1,revision:4,visibility:'all',status:'open',priority:'none',points:5,countdown:1,due_date:'2099-12-31',due_time:null,tags:[],subtasks:[],is_offer:true,permissions:{view:true,accept:true,complete:false,edit:false,delete_archive:false}};
 const note={id:1,title:'Family plans',content:'Dinner at six.',visibility:'all',revision:1,color:'#EFE3BE',permissions:{view:true,edit:true,delete:true},layout:{x:0,y:0,width:4,height:6,revision:0}};
 const links=[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(m=>m[0]).join('');
 app.use(express.json());app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
@@ -40,6 +40,22 @@ async function mount(width=1280,{denied=false,tasks=false,future=false,height=90
   await page.evaluate(async({permissions,tasks})=>{localStorage.clear();localStorage.setItem('yuvomi-locale','en');window.yuvomi={showToast(){}};window.EventSource=class{addEventListener(){}close(){}};await(await import('/i18n.js')).initI18n();(await import('/permissions.js')).setPermissions(permissions);window.stopPage=await(await import(tasks?'/pages/tasks.js':'/pages/notes.js')).render(document.querySelector('#main-content'),{user:{id:1,role:'admin'}});},{permissions,tasks});
   return page;
 }
+test('Notes offer countdown is readable, refreshes in place, and stops with the board',async()=>{
+  const page=await mount(390);try{
+    await page.waitForSelector('[data-open-task="7"]');
+    const countdown=await page.$('[data-open-task="7"] [data-task-countdown]');
+    assert.ok(countdown,'countdown-enabled offers show their remaining time');
+    const initial=await countdown.evaluate(el=>({text:el.textContent,title:el.title,muted:el.classList.contains('text-muted')}));
+    assert.match(initial.text,/left/);assert.ok(initial.title.includes('2099'));assert.equal(initial.muted,true);
+    const spacing=await countdown.evaluate(el=>{const points=el.previousElementSibling.getBoundingClientRect(),timer=el.getBoundingClientRect();return {gap:timer.left-points.right,below:timer.top>=points.bottom-1};});
+    assert.ok(spacing.below||spacing.gap>=4,'points and countdown must have visible separation: '+JSON.stringify(spacing));
+    const updated=await countdown.evaluate(el=>{el.dataset.dueDate='2000-01-01';window.dispatchEvent(new Event('focus'));return {text:el.textContent,overdue:el.classList.contains('task-countdown--overdue')};});
+    assert.match(updated.text,/Overdue/);assert.equal(updated.overdue,true);
+    const stopped=await countdown.evaluate(el=>{const board=document.querySelector('#notes-open-tasks');window.stopPage();board.append(el);el.dataset.dueDate='2099-12-31';window.dispatchEvent(new Event('focus'));return el.textContent;});
+    assert.equal(stopped,updated.text,'stopping the board removes countdown refresh listeners');
+    assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
 for(const width of [780,840])test(`short landscape ${width}x360 keeps full task cards in the page scroll`,async()=>{
   const page=await mount(width,{height:360,touch:true});try{
     await page.waitForSelector('[data-open-task="7"]');

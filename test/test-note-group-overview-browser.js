@@ -332,6 +332,18 @@ test('viewport resize during exit dwell cancels the real pointer without a stale
   } finally { await page.close(); }
 });
 
+test('Escape cancels an overview-owned canvas extraction after its overlay is hidden', async () => {
+  const page = await mount(); try {
+    const start = await page.$eval('[data-group-activate="2"]', element => { const rect = element.getBoundingClientRect(); return { x: rect.x + 30, y: rect.y + 30 }; });
+    await page.mouse.move(start.x, start.y); await page.mouse.down();
+    await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
+    const exit = await page.$eval('[data-group-exit]', element => { const rect = element.getBoundingClientRect(); return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }; });
+    await page.mouse.move(exit.x, exit.y); await page.waitForFunction(() => document.querySelector('.note-group-overview').hidden);
+    await page.mouse.move(100, 700); await page.keyboard.press('Escape'); await page.mouse.up();
+    assert.equal(await page.evaluate(() => window.commands.length), 0); assert.equal(await page.evaluate(() => window.activations.length), 0);
+  } finally { await page.close(); }
+});
+
 async function mountNativeBoard() {
   const page = await browser.newPage(); page.setDefaultTimeout(5000); await page.setViewport({ width: 1280, height: 800 }); await page.goto(base + '/native-board-test');
   await page.evaluate(async () => {

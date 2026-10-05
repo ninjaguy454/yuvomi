@@ -293,7 +293,12 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     else if (element.hasAttribute('data-group-confirm')) confirm();
   }
   function keydown(event) {
-    if (!current() || overlay.hidden) return;
+    if (!current()) return;
+    if (event.key === 'Escape' && overlay.hidden) {
+      event.preventDefault(); event.stopPropagation();
+      gesture.pointerCancel('escape'); closeButton.focus(); return;
+    }
+    if (overlay.hidden) return;
     if (event.key === 'Escape') {
       event.preventDefault();
       // The board remains the owner of a native drag and must receive Escape

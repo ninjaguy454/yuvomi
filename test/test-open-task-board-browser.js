@@ -13,6 +13,7 @@ app.get('/open-board-test',(_q,r)=>r.send(`<!doctype html><html lang="en"><head>
 app.use('/api/v1',(req,res)=>{
   reads.push(req.originalUrl);
   if(req.path==='/auth/me')return res.json({user:{id:1,role:'admin'},permissions,csrfToken:'fixture'});
+  if(req.path==='/notes/board')return res.json({data:{notes:[note],groups:[]}});
   if(req.path==='/notes')return res.json({data:[note]});
   if(req.path==='/tasks') {
     if(futureOffer && req.query.offers==='1') {

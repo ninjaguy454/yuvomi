@@ -2,6 +2,7 @@ import {actorId} from '../permissions.js';
 import {str,color,collectErrors,MAX_TEXT,MAX_TITLE} from '../middleware/validate.js';
 import {toggleChecklistLine} from '../../public/utils/markdown-checklist.js';
 import {noteDevice,noteError,noteVisibleSql,noteCapabilities,assertNoteAction,noteMembers,normalizeNoteAudience} from './note-access.js';
+import {readNoteGroup,groupLayout} from './note-group-store.js';
 
 const fields=['title','content','color','pinned','visibility','access_user_ids','expected_revision'];
 const idValue=id=>{if(!Number.isSafeInteger(Number(id))||Number(id)<1)throw noteError('Note not found.',404);return Number(id);};
@@ -23,8 +24,17 @@ function visibleNotes(d,p){
  * obstacles; hidden notes never affect positions. Pinned cards keep priority;
  * stable IDs within each group keep content edits/new cards from shuffling it. */
 function projectedLayouts(d,p,notes=visibleNotes(d,p)){
-  const result=new Map(),occupied=[];
-  for(const note of notes){const saved=savedLayout(d,note);if(saved){result.set(note.id,saved);occupied.push(saved);}}
+  const result=new Map(),occupied=[],displayedGroups=new Set();
+  for(const note of notes){
+    const saved=savedLayout(d,note),group=readNoteGroup(d,note.id);
+    // A visible page uses its container's geometry, but retains its independent
+    // compatibility revision. Hidden pages and obsolete member layouts occupy
+    // no extra space; a group is one packing obstacle even with several pages.
+    if(group){
+      const layout={...groupLayout(group),revision:saved?.revision??0};result.set(note.id,layout);
+      if(!displayedGroups.has(group.id)){occupied.push(layout);displayedGroups.add(group.id);}
+    }else if(saved){result.set(note.id,saved);occupied.push(saved);}
+  }
   for(const note of [...notes].sort((a,b)=>b.pinned-a.pinned||a.id-b.id)){
     if(result.has(note.id))continue;
     let placed;
@@ -46,6 +56,7 @@ function projectedLayouts(d,p,notes=visibleNotes(d,p)){
 function project(d,p,n,layouts){
   const permissions=noteCapabilities(d,p,n),device=noteDevice(p);
   if(!permissions.view)return null;
+  permissions.arrange=Boolean(permissions.edit&&!readNoteGroup(d,n.id));
   const creator=n.created_by?d.prepare('SELECT display_name,avatar_color,avatar_data FROM users WHERE id=?').get(n.created_by):null;
   const source=n.created_by_device?d.prepare('SELECT name FROM household_devices WHERE id=?').get(n.created_by_device):null;
   const scoped=!device||!device.scope?.member_ids?.length||device.scope.member_ids.includes(n.created_by);

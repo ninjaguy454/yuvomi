@@ -115,8 +115,9 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       const card = grid.querySelector(`.note-card[data-id="${id}"]`), bounds = viewport.getBoundingClientRect();
       if (card) {
         const rect = card.getBoundingClientRect();
+        const scroller = scrollParent(card), top = scroller === document.scrollingElement ? 0 : scroller.getBoundingClientRect().top;
         viewport.scrollLeft += rect.left - bounds.left - 12;
-        viewport.scrollTop += rect.top - bounds.top - 12;
+        scroller.scrollTop += rect.top - top - 12;
       }
     }
   }
@@ -193,7 +194,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function scrollParent(card) {
     for (let node = card.parentElement; node; node = node.parentElement) {
-      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY)) return node;
+      if (/(auto|scroll)/.test(getComputedStyle(node).overflowY) && node.scrollHeight > node.clientHeight) return node;
     }
     return document.scrollingElement;
   }

@@ -32,20 +32,23 @@ test.before(async () => {
   browser = await puppeteer.launch({ headless: true, executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium', args: ['--no-sandbox', '--disable-dev-shm-usage'] });
 });
 test.after(async () => { await browser?.close(); server?.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
-async function mount({ width = 1280, touch = false, compact = false, overflow = false } = {}) {
+async function mount({ width = 1280, height = 900, touch = false, compact = false, overflow = false, largeText = false, rtl = false, appShell = false } = {}) {
   writes = []; truncate = false;
   snapshot = { notes: [1,2,3].map(id => ({ id, title: `Page ${id}`, content: `Authorized body ${id}`, color: '#C7DED9', created_by: 1, revision: 1, permissions: { view: true, edit: true, arrange: true, delete: true }, layout: { ...rect, x: 0, position_locked: false, revision: 1 } })), groups: [{ id: 11, revision: 7, member_ids: [1,2], can_manage: true, layout: { ...rect } }] };
   if (overflow) snapshot.notes[2].layout.overflow = true;
-  const page = await browser.newPage(); page.setDefaultTimeout(4000); await page.setViewport({ width, height: 900, isMobile: touch, hasTouch: touch }); await page.goto(base + '/group-page-test');
-  await page.evaluate(async () => {
+  const page = await browser.newPage(); page.setDefaultTimeout(4000); await page.setViewport({ width, height, isMobile: touch, hasTouch: touch }); await page.goto(base + '/group-page-test');
+  await page.evaluate(async ({ largeText, rtl, appShell }) => {
     class Stream extends EventTarget { constructor() { super(); window.noteStream = this; } close() {} }
     window.EventSource = Stream; window.yuvomi = { showToast() {} };
-    localStorage.setItem('yuvomi-locale', 'en'); await (await import('/i18n.js')).initI18n();
+    localStorage.setItem('yuvomi-locale', rtl ? 'ar' : 'en'); await (await import('/i18n.js')).initI18n();
+    if (largeText) document.documentElement.style.fontSize = '200%';
+    document.documentElement.dir = rtl ? 'rtl' : 'ltr';
+    if (appShell) { document.getElementById('main-content').className = 'app-content'; document.getElementById('main-content').style.padding = '0'; }
     (await import('/permissions.js')).setPermissions({ admin: true });
     (await import('/utils/device-context.js')).acceptAuthentication({ authContext: 'group-page-human' });
     const { handleBackNavigation } = await import('/utils/overlay-history.js'); window.addEventListener('popstate', () => handleBackNavigation());
     window.stopNotes = await (await import('/pages/notes.js')).render(document.getElementById('main-content'), { user: { id: 1 } });
-  });
+  }, { largeText, rtl, appShell });
   if (compact) await page.click('#notes-compact-view');
   return page;
 }
@@ -186,3 +189,60 @@ for (const [name, options] of [['narrow touch', { width: 360, touch: true }], ['
     } finally { await page.close(); }
   });
 }
+
+for (const [width, height] of [[320, 720], [844, 390]]) {
+  test(`responsive RTL 200% overview keeps readable titles and a usable grid at ${width}x${height}`, async () => {
+    const page = await mount({ width, height, largeText: true, rtl: true, appShell: true }); try {
+      snapshot.notes[0].title = 'Planning and errands'; snapshot.notes[1].title = 'Household appointments'; snapshot.groups[0].revision++;
+      await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change')));
+      await page.waitForFunction(() => document.querySelector('[data-board-key="group:11"] .note-card__title')?.textContent.includes('Planning'));
+      await open(page);
+      const geometry = await page.evaluate(() => {
+        const grid = document.querySelector('.note-group-overview__grid'), heading = document.querySelector('.note-group-overview__activate strong'), button = heading.closest('button');
+        const text = heading.getBoundingClientRect(), bounds = button.getBoundingClientRect();
+        return { gridHeight: grid.getBoundingClientRect().height, textWidth: text.width, textLeft: text.left, textRight: text.right, buttonLeft: bounds.left, buttonRight: bounds.right, documentWidth: document.documentElement.scrollWidth, viewportWidth: innerWidth };
+      });
+      assert.ok(geometry.textWidth >= 160, `title has a readable measure: ${JSON.stringify(geometry)}`);
+      assert.ok(geometry.textLeft >= geometry.buttonLeft && geometry.textRight <= geometry.buttonRight, 'title fits the page preview horizontally');
+      assert.ok(geometry.gridHeight >= Math.min(160, height * .35), `usable grid height: ${geometry.gridHeight}`);
+      assert.ok(geometry.documentWidth <= geometry.viewportWidth + 1);
+      if (process.env.QA_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.QA_SCREENSHOT_DIR}/overview-${width}x${height}-rtl-200.png` });
+      await page.focus('[data-group-select="2"]'); await page.keyboard.press('Enter');
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.groupSelect), '2');
+      assert.equal(await page.$eval('.note-group-overview [data-group-action="order"]', element => !element.disabled && element.getClientRects().length > 0), true);
+      assert.equal(writes.length, 0);
+    } finally { await page.close(); }
+  });
+}
+
+test('responsive short RTL canvas retains its physical origin inside the actual shell', async () => {
+  const page = await mount({ width: 844, height: 390, largeText: true, rtl: true, appShell: true }); try {
+    snapshot.groups[0].layout.x = 0; snapshot.notes[2].layout.x = 14; snapshot.groups[0].revision++;
+    await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change')));
+    await page.waitForFunction(() => document.querySelector('[data-board-key="group:11"]').style.left === '0px');
+    const geometry = await page.$eval(`${card} [data-group-page="overview"]`, element => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, width: innerWidth, direction: getComputedStyle(element.closest('.note-card')).direction }; });
+    assert.ok(geometry.left >= 0 && geometry.right <= geometry.width, JSON.stringify(geometry)); assert.equal(geometry.direction, 'rtl'); assert.equal(writes.length, 0);
+    if (process.env.QA_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.QA_SCREENSHOT_DIR}/board-landscape-rtl-200.png` });
+  } finally { await page.close(); }
+});
+
+test('responsive short landscape reveal scrolls the actual page owner to its card', async () => {
+  const page = await mount({ width: 844, height: 390, largeText: true, rtl: true, appShell: true }); try {
+    snapshot.groups[0].layout.x = 0; snapshot.groups[0].layout.height = 20; snapshot.groups[0].revision++;
+    snapshot.notes[2].layout = { ...snapshot.notes[2].layout, x: 0, y: 8, position_locked: true };
+    await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change'))); await page.waitForSelector('[data-note-reveal="3"]');
+    await page.focus('[data-note-reveal="3"]'); await page.keyboard.press('Enter');
+    const bounds = await page.$eval('[data-board-key="note:3"]', element => { const r = element.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: innerHeight }; });
+    assert.ok(bounds.top >= 0 && bounds.top < bounds.height - 44, `revealed content enters the visible viewport: ${JSON.stringify(bounds)}`); assert.equal(writes.length, 0);
+    if (process.env.QA_SCREENSHOT_DIR) await page.screenshot({ path: `${process.env.QA_SCREENSHOT_DIR}/reveal-landscape-rtl-200.png` });
+  } finally { await page.close(); }
+});
+
+test('responsive RTL canvas drag to the physical right saves positive world coordinates', async () => {
+  const page = await mount({ largeText: true, rtl: true, appShell: true }); try {
+    const start = await center(page, '[data-board-key="note:3"] .note-card__content');
+    await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x + 200, start.y, { steps: 5 }); await page.mouse.up();
+    await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'arrange');
+    assert.ok(writes[0].items[0].layout.x > 0); assert.equal(writes[0].items[0].layout.y, 0);
+  } finally { await page.close(); }
+});

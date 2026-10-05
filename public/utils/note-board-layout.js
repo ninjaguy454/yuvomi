@@ -69,7 +69,10 @@ export function organizeNoteLayouts(notes, { includeLocked = false, canEdit = ()
 }
 
 export function projectNoteLayouts(notes, { compact = false, filtered = false } = {}) {
-  const defaults = new Map(packNoteLayouts(notes, { includeLocked: true }).map(item => [item.note_id, item.layout]));
+  // Saved boards already have geometry. Packing is only a fallback for legacy
+  // notes, or an intentional filtered projection, never part of every drag.
+  const defaults = filtered || notes.some(note => !note.layout)
+    ? new Map(packNoteLayouts(notes, { includeLocked: true }).map(item => [item.note_id, item.layout])) : new Map();
   let y = 0;
   return notes.map(note => {
     const layout = normalizeNoteLayout(filtered ? { ...defaults.get(note.id), revision: note.layout?.revision } : note.layout || defaults.get(note.id));

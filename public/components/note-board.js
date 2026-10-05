@@ -35,6 +35,7 @@ export function renderNoteGroupFrame(item, cardHtml) {
 
 /** Layout changes commit only after an intentional completed gesture. */
 export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true, saveLayout, getBoardItems, saveBoardCommand,
+  pendingLayouts = new Map(), onLayoutSettled = () => {},
   activePages = new Map(), groupDragBridge, onGroupAction = () => {}, compact = false, filtered = false, viewState = {}, onViewChange = () => {}, getResponsiveWidth }) {
   const viewport = grid.closest('.notes-scroll'), space = grid.parentElement;
   const revealStrip = grid.closest('.notes-page')?.querySelector('.notes-reveal-strip');
@@ -52,7 +53,8 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   viewState.snapToGrid ??= false;
   viewState.order ??= [];
   const zoom = () => narrow ? 1 : viewState.zoom;
-  const pending = new Set();
+  // The page owns in-flight geometry across responsive controller replacement.
+  const pending = pendingLayouts;
   const items = () => getBoardItems ? getBoardItems() : projectNoteLayouts(getNotes(), { filtered }).map(value => {
     const note = getNotes().find(note => note.id === value.note_id);
     return { key:`note:${note.id}`, kind:'note', id:note.id, note, layout:{...value.layout,
@@ -170,10 +172,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       const card = cardFor(item);
       if (card) {
         if (narrow) for (const name of ['left', 'top', 'width', 'height']) card.style[name] = '';
-        else paint(card, item.layout);
+        else paint(card, !filtered && pending.get(item.key) || item.layout);
       }
     }
-    revealTabs(projected); extent(projected.map(item => item.layout)); layerCards(); positionMenus();
+    revealTabs(projected); extent(projected.map(item => !filtered && pending.get(item.key) || item.layout)); layerCards(); positionMenus();
   }
   function setZoom(value, point) {
     if (narrow || disposed) return;
@@ -187,6 +189,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   function release(current) {
     clearTimeout(current.timer); cancelAnimationFrame(frame); frame = 0;
     current.card.classList.remove('note-card--moving', 'note-card--resizing');
+    current.card.style.removeProperty('--note-drag-tilt');
     if (current.card.hasPointerCapture?.(current.pointer)) current.card.releasePointerCapture(current.pointer);
   }
   function cancel(preserveTouches = false) {
@@ -262,9 +265,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       excludedPointer = { id: event.pointerId, x: event.clientX, y: event.clientY }; return;
     }
     const start = normalizeNoteLayout(item.layout), scroller = scrollParent(card);
+    // A non-interactive mouse drag must not blur the previously focused control.
+    if (event.pointerType === 'mouse') event.preventDefault();
     gesture = { note, item, card, pointer: event.pointerId, start, next: start, x: event.clientX, y: event.clientY,
       lastX: event.clientX, lastY: event.clientY, scroller, scrollY: scroller.scrollTop, scrollX: viewport.scrollLeft, scale: zoom(), pitch: canvasWidth() / NOTE_COLUMNS, active: false,
       viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight,
+      paintX:event.clientX, paintY:event.clientY, tilt:0, dirty:false,
       edges: Object.values(edges).some(Boolean) ? edges : null };
     suppressClick = false;
     if (gesture.edges || event.pointerType === 'touch') gesture.timer = setTimeout(activate, 450);
@@ -297,6 +303,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     gesture.next = normalizeNoteLayout(next);
     paint(gesture.card, gesture.next);
     extent(items().map(item => item.key === gesture.item.key ? gesture.next : item.layout));
+    gesture.dirty = false;
   }
   function move(event) {
     if (touches.has(event.pointerId)) touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -331,13 +338,13 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (adopted?.pointerId === event.pointerId) { trackTarget(event, adopted); return; }
     if (!gesture || gesture.pointer !== event.pointerId) return;
     gesture.lastX = event.clientX; gesture.lastY = event.clientY;
+    gesture.dirty = true;
     if (!gesture.active) {
       if (Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) < 7) return;
       if (gesture.edges) { cancel(); suppressClick = true; return; }
       activate();
     }
-    event.preventDefault(); update();
-    if (!gesture.edges) trackTarget(event, { item:gesture.item,pointerId:gesture.pointer });
+    event.preventDefault();
   }
   function clientToWorld(clientX, clientY) {
     const rect = grid.getBoundingClientRect();
@@ -367,13 +374,23 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
     const speed = gesture.lastY > bottom - 48 ? Math.min(18, (gesture.lastY - bottom + 48) / 3)
       : gesture.lastY < top + 48 ? -Math.min(18, (top + 48 - gesture.lastY) / 3) : 0;
-    if (speed) { scroller.scrollTop += speed; update(); }
+    if (speed) { scroller.scrollTop += speed; gesture.dirty = true; }
     // Short page-flow layouts scroll vertically in the shell, but world X
     // always belongs to the canvas viewport.
     const bounds = viewport.getBoundingClientRect();
     const speedX = gesture.lastX > bounds.right - 48 ? Math.min(18,(gesture.lastX-bounds.right+48)/3)
       : gesture.lastX < bounds.left + 48 ? -Math.min(18,(bounds.left+48-gesture.lastX)/3) : 0;
-    if (speedX) { viewport.scrollLeft += speedX; update(); }
+    if (speedX) { viewport.scrollLeft += speedX; gesture.dirty = true; }
+    if (gesture.dirty) {
+      update();
+      if (!gesture.edges) trackTarget({clientX:gesture.lastX,clientY:gesture.lastY}, {item:gesture.item,pointerId:gesture.pointer});
+    }
+    if (!gesture.edges) {
+      const movement = (gesture.lastX - gesture.paintX) * .045 + (gesture.lastY - gesture.paintY) * .015;
+      gesture.tilt = gesture.tilt * .75 + Math.max(-.9, Math.min(.9, movement)) * .25;
+      gesture.card.style.setProperty('--note-drag-tilt', `${gesture.tilt.toFixed(3)}deg`);
+      gesture.paintX=gesture.lastX; gesture.paintY=gesture.lastY;
+    }
     frame = requestAnimationFrame(autoscroll);
   }
   async function up(event) {
@@ -393,6 +410,8 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     if (excludedPointer?.id === event.pointerId) excludedPointer = null;
     if (!gesture || gesture.pointer !== event.pointerId) { setTimeout(() => { suppressClick = false; }, 0); return; }
+    // Commit the final pointer position even when pointerup precedes the frame.
+    gesture.lastX=event.clientX; gesture.lastY=event.clientY; update();
     const current = gesture; gesture = null;
     release(current);
     layerCards();
@@ -421,12 +440,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       paint(current.card, current.next);
     }
     if (!current.active || JSON.stringify(current.start) === JSON.stringify(current.next)) { refresh(); return; }
-    pending.add(current.item.key); current.card.setAttribute('aria-busy', 'true');
+    pending.set(current.item.key, current.next); current.card.setAttribute('aria-busy', 'true');
     try {
       if (saveBoardCommand) await saveBoardCommand(commandFor(current.item,current.next));
       else if (current.item.kind === 'note') await saveLayout(current.note, current.next);
     }
-    finally { pending.delete(current.item.key); current.card.removeAttribute('aria-busy'); if (!disposed) refresh(); }
+    finally { pending.delete(current.item.key); current.card.removeAttribute('aria-busy'); if (!disposed) refresh(); else onLayoutSettled(); }
   }
   async function click(event) {
     if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); return; }
@@ -455,9 +474,9 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     event.preventDefault(); event.stopImmediatePropagation();
     if (!editable(item) || pending.has(item.key)) return;
     const flag=button.dataset.boardAction==='lock'?'position_locked':'always_on_top';
-    pending.add(item.key); button.disabled=true;
+    pending.set(item.key, null); button.disabled=true;
     try { await saveBoardCommand(commandFor(item,{[flag]:!item.layout[flag]})); }
-    finally { pending.delete(item.key); button.disabled=false; if(!disposed)refresh(); }
+    finally { pending.delete(item.key); button.disabled=false; if(!disposed)refresh(); else onLayoutSettled(); }
   }
   function key(event) {
     if (event.key === 'Escape' && (gesture || navigation || adopted || waitingForBridge)) { event.preventDefault(); cancel(); navigation = null; touches.clear(); }

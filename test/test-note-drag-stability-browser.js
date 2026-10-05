@@ -1,0 +1,111 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import puppeteer from 'puppeteer';
+import {readFileSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import {arrangeNotesFixture} from './helpers/note-group-http-fixture.js';
+
+const app=express();app.use(express.json());app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
+const links='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(m=>`<link rel="stylesheet" href="${m[1]}">`).join('');
+app.get('/drag-test',(_req,res)=>res.send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">${links}<script src="/lucide.min.js"></script><style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}</style></head><body><main id="main-content"></main></body></html>`));
+let notes,writes,mode,releaseSave,browser,server,base;
+app.use('/api/v1',async(req,res)=>{
+  if(req.path==='/auth/me')return res.json({csrfToken:'synthetic'});
+  if(req.path==='/notes/members')return res.json({data:[{id:1,display_name:'Synthetic Parent'}]});
+  if(req.path==='/notes/changes')return res.status(204).end();
+  if(req.path==='/notes/board')return res.json({data:{notes,groups:[]}});
+  if(req.path==='/notes/group-operations'){
+    writes.push(structuredClone(req.body));await new Promise(resolve=>{releaseSave=resolve;});
+    if(mode==='conflict'){notes[0].layout={...notes[0].layout,x:6,revision:notes[0].layout.revision+1};return res.status(409).json({error:'Changed elsewhere',code:409});}
+    if(mode==='failed')return res.status(403).json({error:'Layout no longer allowed',code:403});
+    if(mode==='unknown'){mode='success';return res.type('json').send('{"data":');}
+    const result=arrangeNotesFixture(notes,req.body);return res.status(result.status).json(result.body);
+  }
+  return res.json({data:[]});
+});
+test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
+test.after(async()=>{releaseSave?.();await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
+const card='.note-card[data-id="1"]';
+async function mount({reduced=false,touch=false}={}){
+  writes=[];mode='success';releaseSave=null;
+  notes=Array.from({length:5},(_,i)=>({id:i+1,title:`Synthetic ${i+1}`,content:'A plain paragraph to drag.\n\n'+Array.from({length:20},(_,j)=>`Preview line ${j}`).join('\n\n'),color:'#C7DED9',created_by:1,creator_name:'Synthetic Parent',visibility:'all',revision:4,permissions:{view:true,edit:true,arrange:true,delete:true,manage_visibility:true},layout:{x:i?8:2,y:i?20+i*8:2,width:4,height:6,revision:2}}));
+  const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width:1280,height:1000,hasTouch:touch});
+  await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:reduced?'reduce':'no-preference'}]);
+  await page.evaluateOnNewDocument(()=>Object.defineProperty(navigator,'onLine',{get:()=>true}));await page.goto(base+'/drag-test');
+  await page.evaluate(async()=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();window.yuvomi={showToast(){}};(await import('/permissions.js')).setPermissions({admin:true});(await import('/utils/device-context.js')).acceptAuthentication({authContext:'synthetic-drag'});window.stopNotes=await(await import('/pages/notes.js')).render(document.getElementById('main-content'),{user:{id:1}});});
+  await page.waitForSelector(card);await page.evaluate(()=>{window.originalCard=document.querySelector('.note-card[data-id="1"]');window.originalPreview=originalCard.querySelector('.note-card__content');originalPreview.scrollTop=30;originalCard.querySelector('.note-card__title').focus({preventScroll:true});});return page;
+}
+async function snapshot(page){return page.evaluate(()=>{const c=document.querySelector('.note-card[data-id="1"]'),r=c.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,toolbar:document.querySelector('.notes-board-toolbar').getBoundingClientRect().height,sameCard:c===originalCard,preview:c.querySelector('.note-card__content').scrollTop,focus:document.activeElement===c.querySelector('.note-card__title'),zoom:document.querySelector('#notes-zoom-value').textContent};});}
+async function drag(page,dx=80,dy=50){const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+dx,p.y+dy,{steps:8});await page.mouse.up();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');return p;}
+async function finish(page){releaseSave();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');}
+test('slow saves preserve the dropped rectangle, card, focus, preview scroll and toolbar across repeated drags',async()=>{
+  const page=await mount();try{
+    for(let i=0;i<3;i++){
+      const before=await snapshot(page);await drag(page);const pending=await snapshot(page);
+      assert.ok(Math.abs(pending.x-before.x-80)<1,'pending position never snaps back');assert.ok(Math.abs(pending.y-before.y-50)<1,'feedback never shifts canvas');assert.equal(pending.toolbar,before.toolbar);
+      await page.evaluate(()=>{document.querySelector('.notes-scroll').style.height='500px';window.dispatchEvent(new Event('resize'));});await new Promise(r=>setTimeout(r,50));
+      const resized=await snapshot(page);assert.ok(Math.abs(resized.x-pending.x)<1,'pending geometry survives viewport refresh');
+      await finish(page);const saved=await snapshot(page);assert.equal(saved.sameCard,true);assert.equal(saved.toolbar,before.toolbar);assert.equal(saved.preview,before.preview);assert.equal(saved.focus,true);assert.equal(saved.zoom,before.zoom);assert.ok(Math.abs(saved.x-pending.x)<1);assert.ok(Math.abs(saved.y-pending.y)<1);assert.equal(writes.length,i+1);
+    }
+    assert.deepEqual(writes.map(w=>w.expected.notes[0].layout_revision),[2,3,4],'each drag uses the acknowledged layout revision');
+  }finally{releaseSave?.();await page.close();}
+});
+for(const failure of ['conflict','failed','unknown'])test(`${failure} save retains existing rollback/retry rules`,async()=>{
+  const page=await mount();try{const before=await snapshot(page);mode=failure;await drag(page);releaseSave();
+    if(failure==='unknown'){await page.waitForSelector('[data-group-retry]');const body=structuredClone(writes[0]);await page.click('[data-group-retry]');await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');await finish(page);assert.deepEqual(writes[1],body,'retry reuses the frozen operation');}
+    else{await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]')&&document.querySelector('#notes-board-status').textContent!=='Saving layout...');const after=await snapshot(page);if(failure==='failed')assert.ok(Math.abs(after.x-before.x)<1,'denied save rolls back');else assert.ok(after.x>before.x,'conflict reloads the newer canonical placement');assert.equal(writes.length,1);}
+  }finally{releaseSave?.();await page.close();}
+});
+for(const reduced of [false,true])test(`drag-only wiggle and pointer cancellation preserve geometry (reduced motion ${reduced})`,async()=>{
+  const page=await mount({reduced});try{const before=await snapshot(page);const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+40,p.y+30,{steps:4});await new Promise(r=>setTimeout(r,35));
+    const active=await snapshot(page);assert.equal(active.width,before.width);assert.equal(active.height,before.height);
+    const angle=await page.$eval(card,e=>getComputedStyle(e.querySelector('.note-card__content')).rotate);assert.equal(angle==='none'||parseFloat(angle)===0,reduced,'motion preference governs visual tilt');
+    await page.evaluate(()=>window.dispatchEvent(new PointerEvent('pointercancel',{pointerId:1})));await page.mouse.up();const cancelled=await snapshot(page);assert.ok(Math.abs(cancelled.x-before.x)<1);assert.ok(Math.abs(cancelled.y-before.y)<1);assert.equal(writes.length,0);assert.equal(await page.$('.note-card--moving'),null);
+  }finally{await page.close();}
+});
+
+test('a burst of pointer moves paints once per frame and pointerup commits the final unpainted position',async()=>{
+  const page=await mount();try{
+    const before=await snapshot(page),p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
+    await page.mouse.move(p.x,p.y);await page.mouse.down();
+    const burst=await page.evaluate(({x,y})=>{
+      const card=document.querySelector('.note-card[data-id="1"]'),left=card.style.left;
+      for(let i=1;i<=30;i++)window.dispatchEvent(new PointerEvent('pointermove',{pointerId:1,clientX:x+i*2,clientY:y+20,pointerType:'mouse',buttons:1}));
+      const unpainted=card.style.left===left;
+      window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,clientX:x+80,clientY:y+50,pointerType:'mouse'}));
+      return unpainted;
+    },p);
+    assert.equal(burst,true,'move events only record the newest pointer');
+    await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
+    const pending=await snapshot(page);assert.ok(Math.abs(pending.x-before.x-80)<1);assert.ok(Math.abs(pending.y-before.y-50)<1);
+    await finish(page);assert.equal(writes.length,1);
+  }finally{releaseSave?.();await page.mouse.up();await page.close();}
+});
+
+test('pending placement survives a responsive controller replacement and rolls back after denial',async()=>{
+  const page=await mount();try{
+    const before=await snapshot(page);mode='failed';await drag(page);const pending=await snapshot(page);
+    await page.setViewport({width:390,height:1000});await page.waitForSelector('#notes-grid[data-board-view="list"]');
+    await page.setViewport({width:1280,height:1000});await page.waitForSelector('#notes-grid[data-board-view="canvas"]');
+    const returned=await snapshot(page);assert.ok(Math.abs(returned.x-pending.x)<1);assert.ok(Math.abs(returned.y-pending.y)<1);
+    releaseSave();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent!=='Saving layout...');
+    const denied=await snapshot(page);assert.ok(Math.abs(denied.x-before.x)<1);assert.ok(Math.abs(denied.y-before.y)<1);
+  }finally{releaseSave?.();await page.close();}
+});
+
+test('content refresh retains neighboring focus and renders icons for every inserted card',async()=>{
+  const page=await mount();try{
+    assert.equal(await page.$$eval('.note-card',cards=>cards.every(card=>card.querySelector('summary svg')&&card.querySelector('.note-card__lock svg'))),true);
+    await page.evaluate(()=>{window.neighbor=document.querySelector('.note-card[data-id="2"]');window.neighborFocus=neighbor.querySelector('summary');neighborFocus.focus({preventScroll:true});});
+    notes[0].title='Changed content';notes[0].revision++;
+    await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(()=>document.querySelector('.note-card[data-id="1"] .note-card__title').textContent==='Changed content');
+    assert.equal(await page.evaluate(()=>neighbor===document.querySelector('.note-card[data-id="2"]')&&document.activeElement===neighborFocus),true);
+    assert.equal(await page.$$eval('.note-card',cards=>cards.every(card=>card.querySelector('summary svg')&&card.querySelector('.note-card__lock svg'))),true);
+    notes.shift();await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(()=>!document.querySelector('.note-card[data-id="1"]'));
+    assert.equal(await page.evaluate(()=>document.activeElement===neighborFocus),true,'deleting another card does not move the focused neighbor');
+  }finally{await page.close();}
+});
+

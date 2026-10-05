@@ -72,6 +72,7 @@ let _container = null;
 let board = null;
 let stopLive = null;
 let stopOpenTasks = null;
+const cardMarkup = new WeakMap();
 const currentPage = (page, auth) => state === page && page.active && sameAuthentication(auth);
 const boardSignature = value => JSON.stringify({ notes:value.notes.map(note=>[note.id,note.revision,note.layout,note.permissions]),groups:value.groups });
 function normalizedBoard(value) {
@@ -292,7 +293,7 @@ export async function render(container, { user }) {
           <button type="button" class="btn btn--ghost btn--icon" id="notes-reset-view" aria-label="${t('notes.resetView')}" title="${t('notes.resetView')}"><i data-lucide="rotate-ccw" class="icon-md" aria-hidden="true"></i></button>
           <button type="button" class="btn btn--ghost btn--icon" id="notes-snap-to-grid" aria-label="${t('notes.snapToGrid')}" title="${t('notes.snapToGrid')}" aria-pressed="false"><i data-lucide="grid-2x2" class="icon-md" aria-hidden="true"></i></button>
         </div>
-        <span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span>
+        <div class="notes-board-feedback"><span id="notes-board-status" class="notes-board-status" role="status" aria-live="polite"></span></div>
       </div>
       <div class="notes-reveal-strip" role="group" aria-label="${t('notes.revealOverlapping')}" hidden></div>
       <div class="notes-workspace">
@@ -502,7 +503,10 @@ function visibleBoardItems() {
 }
 
 function boardOptions() {
+  const page = state;
   return { getNotes:visibleNotes,getBoardItems:visibleBoardItems,activePages:state.activePages,
+    pendingLayouts:page.pendingLayouts ||= new Map(),
+    onLayoutSettled:()=>{if(page.active && state===page)board?.refresh();},
     canEdit:canArrangeNote,saveLayout,viewState:state.viewport,
     getResponsiveWidth:()=>_container.querySelector('.notes-page').clientWidth,
     saveBoardCommand:state.boardActions?.saveBoardCommand,groupDragBridge:state.boardActions?.groupDragBridge,
@@ -588,11 +592,29 @@ function renderGrid() {
   // die Trennung war nur aus dem Ring an der Karte zu erschließen. Zwei
   // Abschnittsköpfe machen die bestehende Sortierung lesbar. Sie erscheinen
   // nur, wenn es tatsächlich beide Gruppen gibt.
-  const html = visibleBoardItems().map(item => renderNoteGroupFrame(item,renderNoteCard(item.note,item))).join('');
-
-  grid.replaceChildren();
-  grid.insertAdjacentHTML('beforeend', html);
-  if (window.lucide) lucide.createIcons({ el: grid });
+  // Geometry acknowledgments do not change a card's contents. Keep those nodes
+  // connected so preview scroll, focus and open menus survive a layout save.
+  const projected = visibleBoardItems(), keys = new Set(projected.map(item=>item.key));
+  for (const card of [...grid.children]) if (!keys.has(card.dataset.boardKey)) card.remove();
+  const existing = new Map([...grid.children].map(card => [card.dataset.boardKey,card]));
+  const retained = new Set();
+  let index = 0, needsIcons = false;
+  for (const item of projected) {
+    const html = renderNoteGroupFrame(item,renderNoteCard(item.note,item));
+    let card = existing.get(item.key);
+    if (!card || cardMarkup.get(card) !== html) {
+      const template = document.createElement('template'); template.innerHTML = html;
+      const replacement = template.content.firstElementChild;
+      if (card) card.replaceWith(replacement);
+      card = replacement; cardMarkup.set(card,html); needsIcons = true;
+    }
+    retained.add(card);
+    if (grid.children[index] !== card) grid.insertBefore(card,grid.children[index] || null);
+    index++;
+  }
+  for (const card of [...grid.children]) if (!retained.has(card)) card.remove();
+  // The bundled Lucide version scans the connected document, not detached el.
+  if (needsIcons && window.lucide) lucide.createIcons({ el: grid });
   board = wireNoteBoard(grid, boardOptions());
   if (focusId && focusAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-action="${focusAction}"]`)?.focus({ preventScroll: true });
   if (focusId && focusBoardAction) grid.querySelector(`.note-card[data-id="${focusId}"] [data-board-action="${focusBoardAction}"]`)?.focus({ preventScroll: true });
@@ -1167,7 +1189,7 @@ async function deleteNote(id) {
 
 function layoutStatus(text) {
   const status = _container?.querySelector('#notes-board-status');
-  if (status) status.textContent = text;
+  if (status) { status.textContent = text; status.title = text; }
 }
 
 function groupStatus(message, { retry=null, undo=null } = {}) {

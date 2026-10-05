@@ -6,6 +6,7 @@ import {addNoteBoardSchema} from './services/note-board-schema.js';
 import {addNoteLayoutStateSchema} from './services/note-layout-state-schema.js';
 import {addTaskAcceptanceSchema} from './services/task-acceptance-schema.js';
 import {addNoteGroupSchema} from './services/note-group-schema.js';
+import {addNoteLayoutOwnerSchema} from './services/note-layout-owner-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9111,6 +9112,7 @@ FORK_MIGRATIONS.push({version:10049, description:'Notes: private audiences and i
 FORK_MIGRATIONS.push({version:10050, description:'Tasks: context-bound atomic acceptance receipts', up:addTaskAcceptanceSchema});
 FORK_MIGRATIONS.push({version:10051, description:'Notes: persistent position locks, layers and expanding canvas bounds', up:addNoteLayoutStateSchema});
 FORK_MIGRATIONS.push({version:10052, description:'Notes: independent groups, ordered membership and structural receipts', up:addNoteGroupSchema});
+FORK_MIGRATIONS.push({version:10053, description:'Notes: independent personal and paired-device layout owners', up:addNoteLayoutOwnerSchema});
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 

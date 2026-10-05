@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 const app = express(); let browser, server, base;
 app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 app.get('/overview-test', (_req, res) => res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles/note-groups.css"><style>body{margin:0}#host{min-height:100vh}button{min-height:44px}#opener{margin:16px}</style></head><body><main id="host"><button id="opener">Overview</button></main></body></html>`));
+app.get('/native-board-test', (_req, res) => res.send(`<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles/tokens.css"><link rel="stylesheet" href="/styles/notes.css"><style>html,body{height:100%;margin:0}.notes-page{height:100vh;--page-inline-pad:12px}.notes-scroll{padding-bottom:12px}</style></head><body><main id="host" class="notes-page"><div class="notes-reveal-strip" hidden></div><div class="notes-scroll"><div class="notes-canvas-space"><div class="notes-grid"></div></div></div></main></body></html>`));
 test.before(async () => {
   server = app.listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
@@ -14,9 +15,10 @@ test.before(async () => {
 });
 test.after(async () => { await browser?.close(); if (server) await new Promise(resolve => server.close(resolve)); });
 
-async function mount({ width = 1000, height = 800, touch = false, canManage = true, selected = [] } = {}) {
+async function mount({ width = 1000, height = 800, touch = false, canManage = true, selected = [], noUUID = false } = {}) {
   const page = await browser.newPage(); page.setDefaultTimeout(5000); await page.setViewport({ width, height, isMobile: touch, hasTouch: touch }); await page.goto(base + '/overview-test');
-  const loaded = await page.evaluate(async ({ canManage, selected }) => {
+  const loaded = await page.evaluate(async ({ canManage, selected, noUUID }) => {
+    if (noUUID) Object.defineProperty(window.crypto, 'randomUUID', { value: undefined });
     localStorage.setItem('yuvomi-locale', 'en'); await (await import('/i18n.js')).initI18n();
     const component = await import('/components/note-group-overview.js').catch(() => ({}));
     if (typeof component.openNoteGroupOverview !== 'function') return false;
@@ -29,7 +31,7 @@ async function mount({ width = 1000, height = 800, touch = false, canManage = tr
     document.getElementById('opener').focus();
     window.openOverview = () => component.openNoteGroupOverview({ host: document.getElementById('host'), group: window.group, notes: window.notes, board: { notes: window.notes, groups: [window.group, window.destination] }, activeId: 1, selectedIds: selected, onActivate: id => window.activations.push(id), onCommand: command => { window.commands.push(command); return Promise.resolve({}); }, onExitDrag: session => window.exits.push(session), authentication: { signal: window.abort.signal, isCurrent: () => !window.abort.signal.aborted }, clientToWorld: (x, y) => ({ x: x / 100, y: y / 48 }) });
     window.overview = window.openOverview(); return true;
-  }, { canManage, selected });
+  }, { canManage, selected, noUUID });
   assert.equal(loaded, true, 'group overview component exists'); return page;
 }
 async function select(page, ids) { for (const id of ids) await page.click(`[data-group-select="${id}"]`); }
@@ -147,7 +149,7 @@ test('a second pointer during the initial hold cancels without activation or mut
     await page.evaluate(() => {
       const page = document.querySelector('[data-group-activate="2"]'), host = document.getElementById('host');
       page.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 11, pointerType: 'touch', isPrimary: true, clientX: 100, clientY: 200, button: 0 }));
-      host.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 12, pointerType: 'touch', isPrimary: false, clientX: 300, clientY: 300, button: 0 }));
+      document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 12, pointerType: 'touch', isPrimary: false, clientX: 300, clientY: 300, button: 0 }));
     });
     assert.equal(await page.$eval('.note-group-overview', el => el.dataset.gestureState), 'idle');
     assert.equal(await page.evaluate(() => window.commands.length), 0); assert.equal(await page.evaluate(() => window.activations.length), 0);
@@ -203,6 +205,13 @@ test('canvas interaction factory opens group menu actions and freezes a board-na
     });
     assert.equal(ready, true, 'canvas interaction factory exists'); await page.waitForSelector('[data-group-before]');
     await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+    await page.evaluate(() => {
+      const card = document.createElement('article'); card.className = 'note-card'; card.dataset.boardKey = 'note:14'; document.getElementById('host').append(card);
+      window.interactions.groupDragBridge.hoverTarget({ kind: 'note', id: 14, key: 'note:14', layout: window.notes.find(note => note.id === 14).layout, can_manage: true }, { item: { kind: 'note', id: 13, key: 'note:13', layout: window.notes.find(note => note.id === 13).layout, can_manage: true }, pointerId: 1 });
+    });
+    await page.waitForSelector('[data-board-key="note:14"].is-note-group-target'); assert.equal(await page.evaluate(() => window.commands.length), 0);
+    await page.evaluate(() => window.interactions.groupDragBridge.leaveTarget());
+    assert.equal(await page.$('[data-board-key="note:14"].is-note-group-target'), null);
     const consumed = await page.evaluate(() => window.interactions.groupDragBridge.dropTarget({ kind: 'note', id: 14, key: 'note:14', layout: window.notes.find(note => note.id === 14).layout, can_manage: true }, { item: { kind: 'note', id: 13, key: 'note:13', layout: window.notes.find(note => note.id === 13).layout, can_manage: true }, pointerId: 1, clientX: 100, clientY: 100, world: { x: 1, y: 2 } }));
     assert.equal(consumed, true); const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
     assert.equal(commands[0].kind, 'create'); assert.equal(commands[0].source_note_id, 13); assert.equal(commands[0].target_note_id, 14);
@@ -299,5 +308,106 @@ test('viewport resize during exit dwell cancels the real pointer without a stale
     await page.mouse.move(exit.x, exit.y); await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'exit-dwell');
     await page.setViewport({ width: 900, height: 700 }); await page.mouse.up();
     assert.equal(await page.evaluate(() => window.commands.length), 0); assert.equal(await page.evaluate(() => window.exits.length), 0); assert.equal(await page.evaluate(() => window.activations.length), 0);
+  } finally { await page.close(); }
+});
+
+async function mountNativeBoard() {
+  const page = await browser.newPage(); page.setDefaultTimeout(5000); await page.setViewport({ width: 1280, height: 800 }); await page.goto(base + '/native-board-test');
+  await page.evaluate(async () => {
+    localStorage.setItem('yuvomi-locale', 'en'); await (await import('/i18n.js')).initI18n();
+    const { handleBackNavigation } = await import('/utils/overlay-history.js'); window.addEventListener('popstate', () => handleBackNavigation());
+    const canvas = await import('/components/note-board.js'), layout = await import('/utils/note-board-layout.js'), { createNoteGroupInteractions } = await import('/components/note-group-overview.js');
+    window.commands = []; window.layoutWrites = []; window.abort = new AbortController();
+    window.data = { notes: [11,12,13].map(id => ({ id, title: `Page ${id}`, content: 'Drag this page', revision: 1, permissions: { view: true, edit: true, arrange: true }, layout: { x: 0, y: 0, width: 4, height: 6, revision: 1 } })), groups: [{ id: 20, revision: 1, member_ids: [11,12], can_manage: true, layout: { x: 6, y: 0, width: 4, height: 6, position_locked: true } }] };
+    const host = document.getElementById('host'), grid = host.querySelector('.notes-grid'), items = () => layout.projectNoteGroupItems(window.data);
+    window.interactions = createNoteGroupInteractions({ host, board: window.data, authentication: { signal: window.abort.signal, isCurrent: () => !window.abort.signal.aborted }, onCommand: command => window.commands.push(command) });
+    grid.innerHTML = items().map(item => canvas.renderNoteGroupFrame(item, `<article class="note-card" data-id="${item.note.id}"><div class="note-card__content"><p>${item.note.title}</p></div></article>`)).join('');
+    window.nativeBoard = canvas.wireNoteBoard(grid, { getNotes: () => window.data.notes, getBoardItems: items, canEdit: () => true, groupDragBridge: window.interactions.groupDragBridge, onGroupAction: window.interactions.onGroupAction, saveBoardCommand: async command => { window.layoutWrites.push(command); } });
+  }); return page;
+}
+
+test('real board-native drag crosses into destination overview and commits its chosen insertion once', async () => {
+  const page = await mountNativeBoard(); try {
+    const points = await page.evaluate(() => {
+      const center = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; };
+      return { source: center('[data-board-key="note:13"] p'), target: center('[data-board-key="group:20"]') };
+    });
+    await page.mouse.move(points.source.x, points.source.y); await page.mouse.down(); await page.mouse.move(points.target.x, points.target.y, { steps: 8 });
+    await page.waitForSelector('.note-group-overview [data-group-page="12"]'); assert.equal(await page.evaluate(() => window.commands.length), 0);
+    const insert = await page.$eval('.note-group-overview [data-group-page="12"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    await page.mouse.move(insert.x, insert.y, { steps: 3 });
+    assert.ok(await page.$('.note-group-overview'), 'destination preview remains the drag target over its pages');
+    await page.mouse.up(); await page.waitForFunction(() => window.commands.length === 1);
+    const result = await page.evaluate(() => ({ commands: window.commands, layouts: window.layoutWrites }));
+    assert.equal(result.commands[0].kind, 'join'); assert.equal(result.commands[0].before_note_id, 12); assert.deepEqual(result.commands[0].note_ids, [13]); assert.equal(result.layouts.length, 0);
+  } finally { await page.close(); }
+});
+
+test('real board-native destination preview clears on capture cancellation without a layout or group write', async () => {
+  const page = await mountNativeBoard(); try {
+    const points = await page.evaluate(() => { const center = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }; return { source: center('[data-board-key="note:13"] p'), target: center('[data-board-key="group:20"]') }; });
+    await page.mouse.move(points.source.x, points.source.y); await page.mouse.down(); await page.mouse.move(points.target.x, points.target.y, { steps: 8 }); await page.waitForSelector('.note-group-overview');
+    await page.evaluate(() => window.nativeBoard.cancel()); await page.mouse.up();
+    assert.equal(await page.$('.note-group-overview'), null); assert.equal(await page.evaluate(() => window.commands.length + window.layoutWrites.length), 0);
+  } finally { await page.close(); }
+});
+
+test('changing selected notes discards the previous placement preview before any Place can submit it', async () => {
+  const page = await mount(); try {
+    await select(page, [2,5]); await page.click('[data-group-action="remove"]'); await page.click('[data-group-extract-choice="individual"]');
+    assert.equal(await page.$$eval('[data-group-placement]', nodes => nodes.length), 2);
+    await page.click('[data-group-select="2"]');
+    assert.equal(await page.$('[data-group-placement]'), null, 'selection changes must invalidate the exact placement draft');
+    assert.equal(await page.$('[data-group-confirm]'), null); assert.equal(await page.evaluate(() => window.commands.length), 0);
+  } finally { await page.close(); }
+});
+
+test('the first intentional choice after a real multi-note canvas drop is not swallowed', async () => {
+  const page = await mount(); try {
+    await select(page, [2,5]);
+    const start = await page.$eval('[data-group-activate="2"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
+    const exit = await page.$eval('[data-group-exit]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    await page.mouse.move(exit.x, exit.y); await page.waitForFunction(() => window.exits.length === 1);
+    await page.mouse.move(100, 700); await page.mouse.up(); await page.waitForSelector('[data-group-extract-choice="group"]');
+    await page.click('[data-group-extract-choice="group"]');
+    assert.ok(await page.$('[data-group-placement]'), 'first new deliberate click opens the exact placement preview');
+    assert.equal(await page.evaluate(() => window.commands.length), 0);
+    await page.click('[data-group-confirm]'); assert.equal(await page.evaluate(() => window.commands.length), 1);
+    assert.deepEqual(await page.evaluate(() => window.commands[0].selected_ids), [2,5]);
+  } finally { await page.close(); }
+});
+
+test('dropping a page in its existing order position is a local no-op', async () => {
+  const page = await mount(); try {
+    const points = await page.evaluate(() => { const center = id => { const r = document.querySelector(`[data-group-activate="${id}"]`).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }; return { start: center(2), end: center(3) }; });
+    await page.mouse.move(points.start.x, points.start.y); await page.mouse.down(); await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
+    await page.mouse.move(points.end.x, points.end.y); await page.mouse.up();
+    assert.equal(await page.evaluate(() => window.commands.length), 0);
+  } finally { await page.close(); }
+});
+
+test('Escape from a native drag preview cancels its board owner before release', async () => {
+  const page = await mountNativeBoard(); try {
+    const points = await page.evaluate(() => { const center = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }; return { source: center('[data-board-key="note:13"] p'), target: center('[data-board-key="group:20"]') }; });
+    await page.mouse.move(points.source.x, points.source.y); await page.mouse.down(); await page.mouse.move(points.target.x, points.target.y, { steps: 8 }); await page.waitForSelector('.note-group-overview');
+    await page.keyboard.press('Escape'); await page.mouse.up();
+    assert.equal(await page.$('.note-group-overview'), null); assert.equal(await page.evaluate(() => window.commands.length + window.layoutWrites.length), 0);
+  } finally { await page.close(); }
+});
+
+test('visual viewport resize invalidates placement preview without saving it', async () => {
+  const page = await mount(); try {
+    await select(page, [2,5]); await page.click('[data-group-action="remove"]'); await page.click('[data-group-extract-choice="individual"]');
+    await page.evaluate(() => window.visualViewport.dispatchEvent(new Event('resize')));
+    assert.equal(await page.$('[data-group-placement]'), null); assert.equal(await page.evaluate(() => window.commands.length), 0);
+  } finally { await page.close(); }
+});
+
+test('supported HTTP browsers without randomUUID still create one frozen operation identity', async () => {
+  const page = await mount({ noUUID: true }); try {
+    await select(page, [2]); await page.click('[data-group-action="order"]'); await page.select('[data-group-before]', '5'); await page.click('[data-group-confirm]');
+    const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
+    assert.match(commands[0].operation_id, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i);
   } finally { await page.close(); }
 });

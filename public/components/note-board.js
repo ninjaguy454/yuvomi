@@ -309,6 +309,9 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (filtered || narrow) return null;
     const candidates = items().filter(item => item.key !== session.item?.key && editable(item)
       && (item.kind === 'group' || item.layout.position_locked));
+    const preview = groupDragBridge?.targetAt?.(event, session);
+    const destination = preview && candidates.find(item => item.key === preview.key);
+    if (destination) return destination;
     return document.elementsFromPoint(event.clientX,event.clientY).map(node => node.closest('.note-card'))
       .map(card => candidates.find(item => cardFor(item) === card)).find(Boolean) || null;
   }

@@ -104,6 +104,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     }
   }
   function updateSelection(id) {
+    clearTools();
     if (selected.has(id)) selected.delete(id); else selected.add(id);
     const focused = document.activeElement?.dataset.groupSelect; renderPages();
     if (focused) grid.querySelector(`[data-group-select="${focused}"]`)?.focus();
@@ -169,6 +170,9 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function submit(kind, fields) {
     if (!current() || !manageable || busy) return;
     try {
+      if (kind === 'reorder' && moveSelectionBefore(source.member_ids, fields.selected_ids, fields.before_note_id).every((id, index) => id === source.member_ids[index])) {
+        clearTools(); renderPages(); return;
+      }
       const command = freezeNoteGroupCommand(draft, kind, fields);
       busy = true;
       // The page retains this frozen command for Retry. Closing prevents a
@@ -250,6 +254,9 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function pointerDown(event) {
     if (!current() || busy || dragPreview || standaloneIds.length) return;
     if (activePointer != null) { gesture.pointerDown(event); return; }
+    // A new physical press is a new intent. The compatibility click belonging
+    // to the previous released drag may have targeted the capture host instead.
+    suppressClick = false;
     const activate = event.target.closest('[data-group-activate]');
     if (!activate || !overlay.contains(activate) || !manageable || action) return;
     const id = Number(activate.dataset.groupActivate);
@@ -263,7 +270,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function click(event) {
     if (!current()) return;
-    if (suppressClick) { suppressClick = false; event.preventDefault(); event.stopPropagation(); return; }
+    if (suppressClick && event.detail !== 0) { suppressClick = false; event.preventDefault(); event.stopPropagation(); return; }
     const element = event.target.closest('button');
     if (event.target === overlay || element?.hasAttribute('data-group-close')) { close(); return; }
     if (!element || !overlay.contains(element)) return;
@@ -278,7 +285,14 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function keydown(event) {
     if (!current() || overlay.hidden) return;
-    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (action) { clearTools(); closeButton.focus(); } else close(); return; }
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      // The board remains the owner of a native drag and must receive Escape
+      // after its destination preview closes.
+      if (!dragPreview) event.stopPropagation();
+      if (action) { clearTools(); closeButton.focus(); } else close();
+      return;
+    }
     if (event.key !== 'Tab') return;
     const focusable = [...dialog.querySelectorAll('button:not(:disabled),select:not(:disabled),input:not(:disabled),[tabindex="0"]')].filter(element => element.getClientRects().length);
     const first = focusable[0], last = focusable.at(-1);
@@ -299,12 +313,17 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const card = element.closest('[data-group-page]');
     return { group_id: currentGroup.id, before_note_id: card ? Number(card.dataset.groupPage) : null };
   }
-  listen(host, 'pointerdown', pointerDown, true);
+  function containsPoint(clientX, clientY) {
+    return current() && !overlay.hidden && dialog.contains(document.elementFromPoint(clientX, clientY));
+  }
+  listen(window, 'pointerdown', pointerDown, true);
   listen(window, 'pointermove', event => { if (current()) gesture.pointerMove(event); }, { passive: false });
   listen(window, 'pointerup', event => { if (gesture.pointerUp(event)) suppressClick = true; if (activePointer === event.pointerId) activePointer = null; }, true);
   listen(window, 'pointercancel', event => gesture.pointerCancel(event));
   listen(host, 'lostpointercapture', event => gesture.pointerCancel(event));
-  listen(window, 'resize', () => { gesture.pointerCancel('viewport-resize'); if (action) clearTools(); });
+  const resize = () => { gesture.pointerCancel('viewport-resize'); if (action) clearTools(); };
+  listen(window, 'resize', resize);
+  if (window.visualViewport) listen(window.visualViewport, 'resize', resize);
   listen(window, 'blur', () => gesture.pointerCancel('blur'));
   listen(overlay, 'click', click);
   listen(document, 'keydown', keydown, true);
@@ -323,7 +342,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     else if (initialAction === 'move' || initialAction === 'add') moveSelection();
     else if (initialAction === 'remove') extractionChoices();
   }
-  return { close, dispose, dragTarget };
+  return { close, dispose, dragTarget, containsPoint };
 }
 
 /** One page-generation adapter. Native board drags retain their existing owner. */
@@ -397,7 +416,7 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
   }
   function targetAt(event, session) {
     if (!current() || !hover || hover.session.pointerId !== session.pointerId || hover.session.item.key !== session.item?.key) return null;
-    return preview?.dragTarget(event.clientX, event.clientY) ? hover.item : null;
+    return preview?.containsPoint(event.clientX, event.clientY) ? hover.item : null;
   }
   function dropTarget(item, session) {
     if (!current()) return true;
@@ -405,6 +424,7 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
     if (lastDrop === key) return true;
     if (!sourceAllowed(session.item) || !destinationAllowed(item) || item.key === session.item.key) { leaveTarget(); return false; }
     const insertion = preview?.dragTarget(session.clientX, session.clientY);
+    if (preview && !insertion) { leaveTarget(); return true; }
     const before = insertion?.group_id === item.id ? insertion.before_note_id : null;
     const source = session.item;
     lastDrop = key;

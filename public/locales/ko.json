@@ -476,6 +476,7 @@
         "descriptionMarkdownHint": "Markdown을 지원합니다.",
         "countdownToggle": "개요에서 카운트다운하기",
         "countdownHint": "개요에 얼마나 남았는지 보여줍니다. 완료 시점부터 반복되는 할 일이라면 그 뒤에 카운트다운이 다시 시작됩니다.",
+        "countdownRemaining": "{{duration}} 남음",
         "countdownNeedsDue": "마감일이 없으면 셀 대상이 없습니다.",
         "countdownDetail": "개요에서 카운트다운 중",
         "syncTargetLabel": "동기화 대상",

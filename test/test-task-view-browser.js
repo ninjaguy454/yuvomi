@@ -136,7 +136,7 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, p
     window.subject = module.__test; window.taskContainer = document.getElementById('main-content');
     window.stopTasks = await module.render(window.taskContainer, { user: { id: 1, role: permissions.admin ? 'admin' : 'member' } });
   }, permissions);
-  try { await page.waitForSelector('.task-card[data-task-id="25"]'); }
+  try { await page.waitForSelector(mode === 'calendar' ? '.task-calendar__grid' : '.task-card[data-task-id="25"]'); }
   catch (error) {
     const content = await page.evaluate(() => ({ text: document.body.innerText.slice(0, 2000), error: window.subject?.state.loadError?.message }));
     await page.close();
@@ -146,6 +146,80 @@ async function mounted(mode = 'list', viewport = { width: 1100, height: 800 }, p
   return page;
 }
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+for (const mode of ['list', 'kanban']) for (const width of [320, 1100]) for (const theme of ['light', 'dark']) {
+  test(`countdown card ${mode} ${width}px ${theme} keeps due metadata readable with approval controls`, async () => {
+    const page = await mounted(mode, { width, height: 950, isMobile: width < 640, hasTouch: width < 640 });
+    try {
+      fixture.tasks = [taskRow(1, {
+        title: 'Prepare the school bags and set out everything for tomorrow morning',
+        countdown: 1, due_date: '2026-10-06', due_time: '14:30', points: 125,
+        subtasks: [{ id: 101, parent_task_id: 1, parent_revision: 1, revision: 1,
+          title: 'Check the homework folder with Alexandria Montgomery-Wellington', status: 'open',
+          permissions: { view: true, complete: false, supervisor_approval: true } }],
+      }), taskRow(2, { title: 'Pack for the family trip', countdown: 1, due_date: '2026-10-08' }),
+      taskRow(3, { title: 'Return the library books', countdown: 1, due_date: '2026-10-06', due_time: '10:00' })];
+      await page.evaluate(async theme => {
+        document.documentElement.dataset.theme = theme;
+        const RealDate = Date;
+        window.countdownNow = RealDate.parse('2026-10-06T12:00:00Z');
+        window.Date = class extends RealDate {
+          constructor(...args) { super(...(args.length ? args : [window.countdownNow])); }
+          static now() { return window.countdownNow; }
+        };
+        (await import('/utils/timezone.js')).setDisplayTimeZone('UTC');
+        (await import('/utils/device-context.js')).acceptAuthentication({ authContext: 'countdown-device', principal: { kind: 'device' }, device: { id: 5, preferences: {} } });
+      }, theme);
+      await refresh(page); await frames(page);
+      const selector = '.task-card[data-task-id="1"]';
+      assert.equal(await page.$eval(`${selector} [data-task-countdown]`, n => n.textContent), '2h 30m left');
+      const bounds = await page.$eval(selector, card => {
+        const count = card.querySelector('[data-task-countdown]');
+        const rect = count.getBoundingClientRect(), outer = card.getBoundingClientRect();
+        return { x: rect.x, right: rect.right, left: outer.x, edge: outer.right,
+          absolute: count.title, accessible: count.getAttribute('aria-label'),
+          shield: !!card.querySelector('[data-action="approve-device-task"]'),
+          clipped: count.scrollWidth > count.clientWidth + 1 };
+      });
+      assert.ok(bounds.x >= bounds.left && bounds.right <= bounds.edge + 1, JSON.stringify(bounds));
+      assert.equal(bounds.clipped, false);
+      assert.equal(bounds.shield, true);
+      assert.match(bounds.absolute, /2026/); assert.match(bounds.accessible, /14:30|2:30/);
+      assert.equal(await page.$eval('.task-card[data-task-id="2"] [data-task-countdown]', n => n.textContent), '2d left');
+      assert.equal(await page.$eval('.task-card[data-task-id="3"] [data-task-countdown]', n => n.textContent), 'Overdue · 2h');
+      if (process.env.TASK_COUNTDOWN_EVIDENCE) {
+        mkdirSync(process.env.TASK_COUNTDOWN_EVIDENCE, { recursive: true });
+        await page.screenshot({ path: `${process.env.TASK_COUNTDOWN_EVIDENCE}/${mode}-${width}-${theme}.png`, fullPage: true });
+      }
+      await page.focus(`${selector} [data-action="open-task"]`);
+      await page.evaluate(() => { window.countdownNow += 60_000; window.dispatchEvent(new Event('focus')); });
+      assert.equal(await page.$eval(`${selector} [data-task-countdown]`, n => n.textContent), '2h 29m left');
+      assert.equal(await page.$eval(`${selector} [data-action="open-task"]`, n => n === document.activeElement), true);
+      fixture.tasks[0].countdown = 0; await refresh(page);
+      assert.equal(await page.$(`${selector} [data-task-countdown]`), null);
+      fixture.tasks[0].countdown = 1; await refresh(page);
+      await page.evaluate(() => window.stopTasks());
+      const stopped = await page.$eval(`${selector} [data-task-countdown]`, n => n.textContent);
+      await page.evaluate(() => { window.countdownNow += 60_000; window.dispatchEvent(new Event('pageshow')); });
+      assert.equal(await page.$eval(`${selector} [data-task-countdown]`, n => n.textContent), stopped);
+      assert.equal(fixture.writes.length, 0);
+    } finally { await page.close(); }
+  });
+}
+
+for (const width of [320, 1100]) test(`countdown appears in Tasks calendar chips and agenda at ${width}px`, async () => {
+  const page = await mounted('calendar', { width, height: 950 });
+  try {
+    const date = await page.evaluate(() => (new Date()).toISOString().slice(0, 10));
+    fixture.tasks = [taskRow(1, { due_date: date, due_time: '14:30', countdown: 1 })];
+    await refresh(page);
+    assert.ok(await page.$('.task-calendar-chip [data-task-countdown]'));
+    assert.ok(await page.$('.task-calendar-agenda-task [data-task-countdown]'));
+    assert.match(await page.$eval('.task-calendar-chip [data-task-countdown]', n => n.title), /2026/);
+    assert.ok(await page.$eval('.task-calendar-chip [data-task-countdown]', n => n.getBoundingClientRect().width > 0));
+    if (process.env.TASK_COUNTDOWN_EVIDENCE) await page.screenshot({ path: `${process.env.TASK_COUNTDOWN_EVIDENCE}/calendar-${width}.png`, fullPage: true });
+  } finally { await page.close(); }
+});
 
 for (const width of [320, 390, 1024, 1100, 1280]) test(`UX cleanup: Manage is reachable by keyboard and touch at ${width}px`, async () => {
   const page = await mounted('list', { width, height: 850, hasTouch: width < 640, isMobile: width < 640 });

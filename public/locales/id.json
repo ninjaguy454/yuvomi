@@ -476,6 +476,7 @@
         "descriptionMarkdownHint": "Markdown didukung.",
         "countdownToggle": "Hitung mundur di ikhtisar",
         "countdownHint": "Menampilkan di ikhtisar berapa lama lagi. Jika tugas berulang sejak diselesaikan, hitung mundurnya dimulai lagi sesudahnya.",
+        "countdownRemaining": "{{duration}} lagi",
         "countdownNeedsDue": "Tanpa tanggal tenggat tidak ada yang bisa dihitung mundur.",
         "countdownDetail": "Dihitung mundur di ikhtisar",
         "syncTargetLabel": "Target sinkronisasi",

@@ -156,7 +156,10 @@
     "test:modal-dismissal-browser": "node --test test/test-modal-dismissal-browser.js",
     "test:modal-utils": "node --loader ./test/test-browser-loader.mjs test/test-modal-utils.js",
     "test:detail-view": "node --test test/test-detail-view.js",
-    "test:task-fields": "node --loader ./test/test-browser-loader.mjs --test test/test-task-fields.js",
+    "test:task-card-countdown": "node --loader ./test/test-browser-loader.mjs --test test/test-task-card-countdown.js test/test-task-countdown.js test/test-task-countdown-surfaces.js",
+    "test:task-countdown-projections": "node --test test/test-task-countdown-projections.js",
+    "test:task-countdown-browser": "node --test --test-name-pattern=\"countdown\" test/test-task-view-browser.js && node --test test/test-task-countdown-surface-lifecycle.js",
+    "test:task-fields": "node --loader ./test/test-browser-loader.mjs --test test/test-task-fields.js && npm run test:task-card-countdown",
     "test:overlay-history": "node --test test/test-overlay-history.js",
     "test:nav-badges": "node --test test/test-nav-badges.js",
     "test:category-manager": "node --experimental-sqlite test/test-category-manager.js",
@@ -273,7 +276,7 @@
     "test:folder-tree": "node --test test/test-folder-tree.js",
     "test:task-documents": "node --experimental-sqlite --test test/test-task-documents.js",
     "test:task-tags": "node --experimental-sqlite --test test/test-task-tags.js",
-    "test:countdown": "DB_PATH=:memory: node --experimental-sqlite --test test/test-countdown.js",
+    "test:countdown": "DB_PATH=:memory: node --experimental-sqlite --test test/test-countdown.js && npm run test:task-countdown-projections",
     "test:quick-links": "DB_PATH=:memory: node --experimental-sqlite --test test/test-quick-links.js",
     "test:image-picker": "node --test test/test-image-picker.js",
     "test:task-completions": "DB_PATH=:memory: node --experimental-sqlite --test test/test-task-completions.js",
@@ -373,7 +376,7 @@
     "test:notes-canvas": "node --experimental-sqlite --test --test-concurrency=2 test/test-note-board-routes.js test/test-note-board-migration.js test/test-note-board-concurrency.js test/test-note-board-context.js test/test-note-privacy-surfaces.js test/test-note-privacy-rollback.js test/test-note-board-layout.js test/test-note-board-defaults-audit.js test/test-note-layout-state.js test/test-note-layout-state-migration.js",
     "test:notes-canvas-browser": "node --test --test-concurrency=1 test/test-note-board-browser.js test/test-note-board-list-browser.js test/test-note-board-direct-browser.js test/test-note-board-full-app-browser.js",
     "test:notes-visual": "node --experimental-sqlite --test test/test-note-board-visual-qa.js",
-    "test:ux-cleanup-browser": "node --test --test-concurrency=1 test/test-ux-cleanup-browser.js && node --test --test-name-pattern=\"UX cleanup|approval layout\" test/test-task-view-browser.js"
+    "test:ux-cleanup-browser": "node --test --test-concurrency=1 test/test-ux-cleanup-browser.js && node --test --test-name-pattern=\"UX cleanup|approval layout\" test/test-task-view-browser.js && npm run test:task-countdown-browser"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

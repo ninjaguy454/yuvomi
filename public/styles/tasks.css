@@ -3186,6 +3186,23 @@
   font-variant-numeric: tabular-nums;
 }
 
+.task-calendar-chip--countdown {
+  flex-wrap: wrap;
+  column-gap: var(--space-1);
+}
+
+.task-calendar-chip--countdown .task-calendar-chip__title {
+  flex: 1 1 0;
+}
+
+.task-calendar-chip__countdown {
+  flex-basis: 100%;
+  color: var(--color-text-secondary);
+  font-size: var(--text-2xs);
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
 .task-calendar-day__more {
   display: block;
   padding-inline: var(--space-2);

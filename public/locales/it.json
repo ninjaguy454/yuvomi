@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Il Markdown è supportato.",
         "countdownToggle": "Conta alla rovescia nella panoramica",
         "countdownHint": "Mostra nella panoramica quanto manca. Se l’attività si ripete dal completamento, il conto alla rovescia riparte da capo.",
+        "countdownRemaining": "Mancano {{duration}}",
         "countdownNeedsDue": "Senza una data di scadenza non c’è nulla da contare.",
         "countdownDetail": "Conta alla rovescia nella panoramica",
         "syncTargetLabel": "Destinazione di sincronizzazione",

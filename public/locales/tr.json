@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown desteklenir.",
         "countdownToggle": "Genel bakışta geri say",
         "countdownHint": "Genel bakışta ne kadar kaldığını gösterir. Görev tamamlanmadan itibaren tekrarlıyorsa geri sayım sonrasında baştan başlar.",
+        "countdownRemaining": "{{duration}} kaldı",
         "countdownNeedsDue": "Son tarih olmadan geri sayılacak bir şey yok.",
         "countdownDetail": "Genel bakışta geri sayıyor",
         "syncTargetLabel": "Eşitleme hedefi",

@@ -1757,6 +1757,15 @@
   white-space: nowrap;
 }
 
+.cal-task-chip__title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.cal-task-chip__countdown {
+  flex: 0 0 auto;
+}
+
 /* Die vier Prioritätsvarianten standen hier als TEXTFARBEN - der zweite Kanal
  * neben der getönten Fläche. Die Skalen-Regel gibt einer Rangmarke genau einen,
  * und der ist der Punkt (`.priority-dot`, list-row.css). Was die Klassen jetzt

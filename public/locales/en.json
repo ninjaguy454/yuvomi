@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown is supported.",
         "countdownToggle": "Count down on the overview",
         "countdownHint": "Shows on the overview how long there is to go. If the task repeats from completion, the countdown starts over afterwards.",
+        "countdownRemaining": "{{duration}} left",
         "countdownNeedsDue": "Without a due date there is nothing to count down to.",
         "countdownDetail": "Counts down on the overview",
         "syncTargetLabel": "Sync target",

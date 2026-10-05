@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Підтримується Markdown.",
         "countdownToggle": "Вести зворотний відлік в огляді",
         "countdownHint": "Показує в огляді, скільки лишилося. Якщо завдання повторюється від виконання, відлік потім починається заново.",
+        "countdownRemaining": "Залишилось {{duration}}",
         "countdownNeedsDue": "Без дати виконання немає чого відлічувати.",
         "countdownDetail": "Іде зворотний відлік в огляді",
         "syncTargetLabel": "Ціль синхронізації",

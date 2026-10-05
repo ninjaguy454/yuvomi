@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Hỗ trợ Markdown.",
         "countdownToggle": "Đếm ngược trên trang tổng quan",
         "countdownHint": "Hiển thị trên trang tổng quan còn bao lâu nữa. Nếu công việc lặp lại kể từ lúc hoàn thành, đếm ngược sẽ bắt đầu lại sau đó.",
+        "countdownRemaining": "Còn {{duration}}",
         "countdownNeedsDue": "Không có ngày đến hạn thì không có gì để đếm ngược.",
         "countdownDetail": "Đang đếm ngược trên trang tổng quan",
         "syncTargetLabel": "Đích đồng bộ",

@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown wordt ondersteund.",
         "countdownToggle": "Aftellen op het overzicht",
         "countdownHint": "Toont op het overzicht hoe lang het nog duurt. Herhaalt de taak zich vanaf het afvinken, dan begint het aftellen daarna opnieuw.",
+        "countdownRemaining": "Nog {{duration}}",
         "countdownNeedsDue": "Zonder vervaldatum valt er niets af te tellen.",
         "countdownDetail": "Telt af op het overzicht",
         "syncTargetLabel": "Synchronisatiedoel",

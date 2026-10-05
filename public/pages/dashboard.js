@@ -21,6 +21,7 @@ import { nowFields, zonedUTCProxy, zonedDateKey, zonedTimeKey } from '/utils/tim
 import { predictCycle, PHASE } from '/utils/health-cycle.js';
 import { localizeBirthdayEvent } from '/utils/birthday-event.js';
 import { countdownPhrase, countdownRank } from '/utils/countdown.js';
+import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
 import { findPageFab } from '/utils/fab.js';
 import { openModal, closeModal, confirmModal } from '/components/modal.js';
 import { renderAvatarStack } from '/components/user-multi-select.js';
@@ -46,6 +47,7 @@ import { renderRotationContext } from '/components/rotation-bindings.js';
 
 // Hält den AbortController des aktuellen FAB-Listeners - wird bei jedem render() erneuert.
 let _fabController = null;
+const _countdownBindings = new WeakMap();
 
 
 // ── Onboarding ──────────────────────────────────────────────────────────────
@@ -826,6 +828,7 @@ function buildTodayProgram(data, { includeTasks = true, includeCalendar = true, 
       rows.push({
         kind: 'task',
         objectId: task.id,
+        task,
         sortKey: overdue ? '00:00' : dueValid ? `${String(due.getHours()).padStart(2, '0')}:${String(due.getMinutes()).padStart(2, '0')}` : '00:02',
         timeLabel: overdue ? t('dashboard.overdue') : dueValid ? t('dashboard.todayUntil', { time: formatTime(due) }) : '',
         overdue,
@@ -911,13 +914,14 @@ function renderUrgentTasks(tasks) {
 
   const items = tasks.map((t) => {
     const due = formatDueDate(t.due_date, t.due_time);
+    const countdown = renderTaskCountdown(t);
     return `
       <div class="task-item" data-task-id="${t.id}" data-task-title="${esc(t.title)}" role="button" tabindex="0">
         ${t.priority !== 'none' ? `<div class="task-item__priority task-item__priority--${t.priority}" title="${esc(PRIORITY_LABELS()[t.priority] ?? t.priority)}" aria-hidden="true"></div>` : ''}
         <span class="sr-only">${PRIORITY_LABELS()[t.priority] ?? t.priority}</span>
         <div class="task-item__content">
           <div class="task-item__title">${esc(t.title)}</div>
-          ${due ? `<div class="task-item__meta ${due.overdue ? 'task-item__meta--overdue' : ''} ${due.soon ? 'task-item__meta--soon' : ''}">${due.text}</div>` : ''}
+          ${due ? `<div class="task-item__meta ${!countdown && due.overdue ? 'task-item__meta--overdue' : ''} ${!countdown && due.soon ? 'task-item__meta--soon' : ''}">${countdown || due.text}</div>` : ''}
         </div>
         ${renderAvatarStack(t.assigned_users ?? [], { size: 28 })}
       </div>
@@ -2022,9 +2026,9 @@ function renderTodayRow(row) {
   // Trailing-Detail ist die ZEIT, kein Zähler mehr: die Programm-Zeile
   // beantwortet „wann", und dieselbe Badge-Form für drei Bedeutungen
   // (Anzahl/offen/Alter) war ein Critique-Befund (H6).
-  const time = row.timeLabel
+  const time = renderTaskCountdown(row.task, { className: 'today-cockpit-card__time' }) || (row.timeLabel
     ? `<span class="today-cockpit-card__time${row.overdue ? ' today-cockpit-card__time--overdue' : ''}">${esc(row.timeLabel)}</span>`
-    : '';
+    : '');
   // Objekt-Anker für die Objekt-Deep-Links (Paket 2): die Zeile weiß bereits,
   // WOVON sie spricht - nur das Ziel bleibt vorerst die Modul-Route.
   const objectAttrs = row.objectId != null
@@ -3191,9 +3195,9 @@ const WALL_ROW_CAP = 4;
 
 /** Eine Programmzeile als reiner Text - kein href, kein data-route, kein Modal. */
 function renderWallRow(row) {
-  const time = row.timeLabel
+  const time = renderTaskCountdown(row.task, { className: 'wall-row__time' }) || (row.timeLabel
     ? `<span class="wall-row__time${row.overdue ? ' wall-row__time--overdue' : ''}">${esc(row.timeLabel)}</span>`
-    : '';
+    : '');
   return `
     <li class="wall-row wall-row--${esc(row.tone)}">
       <span class="module-seal wall-row__seal">${moduleIconHTML(row.icon)}</span>
@@ -3755,6 +3759,10 @@ export async function render(container, { user }) {
     </div>
     ${wallMode ? '' : renderFab()}
   `);
+
+  const stopTaskCountdowns = bindTaskCountdowns(container);
+  _countdownBindings.set(container, stopTaskCountdowns);
+  _fabController.signal.addEventListener('abort', stopTaskCountdowns, { once: true });
 
   let data         = { upcomingEvents: [], urgentTasks: [], todayMeals: [], pinnedNotes: [], shoppingLists: [], birthdays: [], countdowns: [], users: [], budget: {}, rewards: {}, health: {}, housekeeping: {} };
   // Ein Stand von vorhin darf keine Kachel versprechen: erst nach dem Laden
@@ -4410,6 +4418,12 @@ export async function render(container, { user }) {
   } else {
     maybeHintCustomize(container);
   }
+  // Internal Dashboard rerenders replace the binding. The router's original
+  // disposer must still stop the current binding owned by this page container.
+  return () => {
+    _countdownBindings.get(container)?.();
+    _countdownBindings.delete(container);
+  };
 }
 
 export const __test = { buildTodayHighlights, buildTodayProgram, buildTodayCockpitModel, renderTodayCockpit, renderPinnedNotes, renderFamilyWidget, formatDueDate, normalizeVisibleMealTypes, renderTodayMeals, calendarEventRoute, eventOccurrenceDateKey, eventStartDate, renderWallSurface, renderWallWho, selectMetricTiles, METRIC_TILE_ORDER, PROGRAM_ROW_CAP, WALL_ROW_CAP, weatherToneKey, weatherMotionAttr, weatherTempBand, weatherSpanModel, weatherDayLabel, weatherTodayRange, renderWeatherWidget, renderWallWeather, relativeDateLabel, onboardingStorageKey };

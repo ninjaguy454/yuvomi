@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "支持 Markdown。",
         "countdownToggle": "在概览中倒计时",
         "countdownHint": "在概览中显示还剩多久。如果任务从完成时开始重复，倒计时随后会重新开始。",
+        "countdownRemaining": "还剩{{duration}}",
         "countdownNeedsDue": "没有截止日期就没有可倒数的对象。",
         "countdownDetail": "在概览中倒计时",
         "syncTargetLabel": "同步目标",

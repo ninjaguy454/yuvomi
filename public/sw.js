@@ -242,6 +242,7 @@ const APP_SHELL = [
   '/utils/sync-target.js',
   '/utils/tablist.js',
   '/utils/task-fields.js',
+  '/utils/task-countdown.js',
   '/utils/timezone.js',
   '/utils/toast-surface.js',
   '/utils/ux.js',

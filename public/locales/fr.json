@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Le Markdown est pris en charge.",
         "countdownToggle": "Afficher un compte à rebours sur l’aperçu",
         "countdownHint": "Affiche sur l’aperçu le temps restant. Si la tâche se répète à partir de son achèvement, le compte à rebours redémarre ensuite.",
+        "countdownRemaining": "Encore {{duration}}",
         "countdownNeedsDue": "Sans date d’échéance, il n’y a rien à décompter.",
         "countdownDetail": "Compte à rebours sur l’aperçu",
         "syncTargetLabel": "Cible de synchronisation",

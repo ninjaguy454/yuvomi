@@ -80,7 +80,7 @@ export function wallTaskVisible(d,id,hostId,actorId=null) {
   return row&&(!actorId||taskCapabilities(d,actorId,row).view)?row:null;
 }
 export const publicMember = row => ({id:row.id,display_name:row.display_name,avatar_color:row.avatar_color});
-const taskKeys=['id','title','description','status','priority','points','due_date','due_time','start_date','start_time','revision','parent_revision','parent_task_id','assigned_to','assigned_name','subtask_total','subtask_done','waiting_on_helper','is_delegated_action','is_supervision_projection'];
+const taskKeys=['id','title','description','status','priority','points','due_date','due_time','start_date','start_time','countdown','revision','parent_revision','parent_task_id','assigned_to','assigned_name','subtask_total','subtask_done','waiting_on_helper','is_delegated_action','is_supervision_projection'];
 const pick=(row,keys)=>Object.fromEntries(keys.filter(k=>row[k]!==undefined).map(k=>[k,row[k]]));
 /** Hydrate through the Tasks reader, then expose only shared operational fields. */
 export function publicTaskProjection(d,task,hostId,actorId=null) {

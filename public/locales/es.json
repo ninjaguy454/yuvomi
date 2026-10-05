@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Se admite Markdown.",
         "countdownToggle": "Contar atrás en el resumen",
         "countdownHint": "Muestra en el resumen cuánto falta. Si la tarea se repite desde su finalización, la cuenta atrás vuelve a empezar.",
+        "countdownRemaining": "Quedan {{duration}}",
         "countdownNeedsDue": "Sin fecha de vencimiento no hay nada que contar.",
         "countdownDetail": "Cuenta atrás en el resumen",
         "syncTargetLabel": "Destino de sincronización",

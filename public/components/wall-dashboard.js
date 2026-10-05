@@ -10,6 +10,7 @@ import { clearApiCache } from '/sw-register.js';
 import { rewardRequest } from '/utils/reward-request.js';
 import { watchRewardChanges } from '/utils/reward-live.js';
 import { displayTimeZone, setDisplayTimeZone } from '/utils/timezone.js';
+import { bindTaskCountdowns } from '/utils/task-countdown.js';
 
 const LABELS = { tasks:'Tasks', calendar:'Upcoming events', meals:'Today’s meals', shopping:'Shopping',
   presence:'Household presence', points:'Points', rewards:'Rewards', notes:'Announcements', weather:'Weather' };
@@ -43,6 +44,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
   let generation = 0, disposed = false, detail = null, detailGeneration = 0, mutationPending = false, supportedActions=[];
   const originalAppearance = ['data-theme','data-color-theme','data-typography'].map(key => [key,document.documentElement.getAttribute(key)]);
   const originalZone = displayTimeZone();
+  const stopTaskCountdowns = bindTaskCountdowns(container);
   // Natural-height rows fill the space beside taller Task widgets. The DOM and
   // keyboard order remain the configured order; no dragging is needed.
   const layoutObserver = new ResizeObserver(entries => {
@@ -309,7 +311,7 @@ export async function mountWallDashboard(container, { user, signal, renderers })
         };
       }});
   }
-  function dispose(){disposed=true;generation++;detailGeneration++;clearTimeout(expiryTimer);clearInterval(refreshTimer);stopLive?.();stopRewards?.();layoutObserver.disconnect();css.remove();actor=null;setDisplayTimeZone(originalZone);for(const [key,value] of originalAppearance){if(value===null)document.documentElement.removeAttribute(key);else document.documentElement.setAttribute(key,value);}}
+  function dispose(){disposed=true;generation++;detailGeneration++;clearTimeout(expiryTimer);clearInterval(refreshTimer);stopTaskCountdowns();stopLive?.();stopRewards?.();layoutObserver.disconnect();css.remove();actor=null;setDisplayTimeZone(originalZone);for(const [key,value] of originalAppearance){if(value===null)document.documentElement.removeAttribute(key);else document.documentElement.setAttribute(key,value);}}
   let stopLive,stopRewards;
   signal?.addEventListener('abort',dispose,{once:true});
   try{

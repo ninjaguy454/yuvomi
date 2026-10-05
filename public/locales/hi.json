@@ -464,6 +464,7 @@
         "descriptionMarkdownHint": "Markdown समर्थित है।",
         "countdownToggle": "अवलोकन में काउंटडाउन दिखाएँ",
         "countdownHint": "अवलोकन में दिखाता है कि कितना समय बाकी है। यदि कार्य पूरा होने से दोहराता है, तो काउंटडाउन उसके बाद फिर से शुरू होता है।",
+        "countdownRemaining": "{{duration}} शेष",
         "countdownNeedsDue": "नियत तिथि के बिना गिनने के लिए कुछ नहीं है।",
         "countdownDetail": "अवलोकन में काउंटडाउन चलता है",
         "syncTargetLabel": "सिंक लक्ष्य",

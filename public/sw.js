@@ -17,7 +17,7 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage explicit paired-device household Weather and its opt-in controls.
+// Stage paired-device household Weather and Notes drag/save coordination.
 const CACHE_VERSION = `${APP_RELEASE}-vidamia.67`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;

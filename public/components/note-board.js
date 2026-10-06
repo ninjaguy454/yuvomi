@@ -1,5 +1,6 @@
 import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, NOTE_MAX_POSITION, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { t } from '/i18n.js';
+import { advanceNoteDragTilt } from '/utils/note-drag-motion.js';
 
 /** Keep the active content card's note identity distinct from its geometry owner. */
 export function renderNoteGroupFrame(item, cardHtml) {
@@ -216,6 +217,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (!gesture || disposed) return;
     if (navigation?.kind === 'touch') navigation = null;
     gesture.active = true;
+    gesture.paintTime = performance.now();
     gesture.card.classList.add('note-card--moving');
     if (gesture.edges) gesture.card.classList.add('note-card--resizing');
     gesture.card.setPointerCapture(gesture.pointer);
@@ -270,7 +272,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     gesture = { note, item, card, pointer: event.pointerId, start, next: start, x: event.clientX, y: event.clientY,
       lastX: event.clientX, lastY: event.clientY, scroller, scrollY: scroller.scrollTop, scrollX: viewport.scrollLeft, scale: zoom(), pitch: canvasWidth() / NOTE_COLUMNS, active: false,
       viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight,
-      paintX:event.clientX, paintY:event.clientY, tilt:0, dirty:false,
+      paintX:event.clientX, paintTime:0, tilt:0, dirty:false,
       edges: Object.values(edges).some(Boolean) ? edges : null };
     suppressClick = false;
     if (gesture.edges || event.pointerType === 'touch') gesture.timer = setTimeout(activate, 450);
@@ -366,7 +368,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (target?.key !== hoverKey) { groupDragBridge.leaveTarget(); hoverKey = target?.key || null; }
     if (target) groupDragBridge.hoverTarget(target,{...session,clientX:event.clientX,clientY:event.clientY,world:clientToWorld(event.clientX,event.clientY)});
   }
-  function autoscroll() {
+  function autoscroll(time) {
     if (!gesture?.active || disposed) return;
     if (!gesture.card.hasPointerCapture(gesture.pointer)) { cancel(); return; }
     const scroller = gesture.scroller;
@@ -386,10 +388,9 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       if (!gesture.edges) trackTarget({clientX:gesture.lastX,clientY:gesture.lastY}, {item:gesture.item,pointerId:gesture.pointer});
     }
     if (!gesture.edges) {
-      const movement = (gesture.lastX - gesture.paintX) * .045 + (gesture.lastY - gesture.paintY) * .015;
-      gesture.tilt = gesture.tilt * .75 + Math.max(-.9, Math.min(.9, movement)) * .25;
+      gesture.tilt = advanceNoteDragTilt(gesture.tilt, gesture.lastX - gesture.paintX, time - gesture.paintTime);
       gesture.card.style.setProperty('--note-drag-tilt', `${gesture.tilt.toFixed(3)}deg`);
-      gesture.paintX=gesture.lastX; gesture.paintY=gesture.lastY;
+      gesture.paintX=gesture.lastX; gesture.paintTime=time;
     }
     frame = requestAnimationFrame(autoscroll);
   }

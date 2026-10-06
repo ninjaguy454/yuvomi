@@ -572,8 +572,13 @@
 .note-card--moving { z-index: 2; box-shadow: var(--shadow-lg); }
 @media (prefers-reduced-motion: no-preference) {
   /* Tilt only the visual contents. The card rectangle and drop targets stay put. */
+  .note-card > :is(.note-card__title,.note-card__content,.note-card__footer) {
+    rotate: 0deg;
+    transition: rotate 160ms ease-out;
+  }
   .note-card--moving:not(.note-card--resizing) > :is(.note-card__title,.note-card__content,.note-card__footer) {
     rotate: var(--note-drag-tilt, 0deg);
+    transition: none;
     pointer-events: none;
   }
 }

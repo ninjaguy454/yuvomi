@@ -137,12 +137,50 @@ for(const outcome of ['success','failed'])test(`a canonical refresh during a pen
     assert.equal(writes[0].expected.notes[0].revision,notes[0].revision,'the next drag uses the current content revision');
   }finally{releaseCheck?.();releaseSave?.();await page.close();}
 });
-for(const reduced of [false,true])test(`drag-only wiggle and pointer cancellation preserve geometry (reduced motion ${reduced})`,async()=>{
+for(const reduced of [false,true])test(`drag-only tilt and pointer cancellation preserve geometry (reduced motion ${reduced})`,async()=>{
   const page=await mount({reduced});try{const before=await snapshot(page);const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+40,p.y+30,{steps:4});await new Promise(r=>setTimeout(r,35));
     const active=await snapshot(page);assert.equal(active.width,before.width);assert.equal(active.height,before.height);
     const angle=await page.$eval(card,e=>getComputedStyle(e.querySelector('.note-card__content')).rotate);assert.equal(angle==='none'||parseFloat(angle)===0,reduced,'motion preference governs visual tilt');
     await page.evaluate(()=>window.dispatchEvent(new PointerEvent('pointercancel',{pointerId:1})));await page.mouse.up();const cancelled=await snapshot(page);assert.ok(Math.abs(cancelled.x-before.x)<1);assert.ok(Math.abs(cancelled.y-before.y)<1);assert.equal(writes.length,0);assert.equal(await page.$('.note-card--moving'),null);
   }finally{await page.close();}
+});
+
+test('horizontal speed controls the lean and release smoothly levels only the visual contents',async()=>{
+  const page=await mount();try{
+    const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
+    await page.mouse.move(p.x,p.y);await page.mouse.down();
+    const result=await page.evaluate(async point=>{
+      const card=document.querySelector('.note-card[data-id="1"]'),content=card.querySelector('.note-card__content');
+      let x=point.x,y=point.y;
+      async function travel(vx,vy,duration=240){
+        let previous=await new Promise(requestAnimationFrame),elapsed=0;
+        while(elapsed<duration){
+          const time=await new Promise(requestAnimationFrame),dt=time-previous;previous=time;elapsed+=dt;
+          x+=vx*dt;y+=vy*dt;
+          window.dispatchEvent(new PointerEvent('pointermove',{pointerId:1,pointerType:'mouse',buttons:1,clientX:x,clientY:y}));
+        }
+        await new Promise(requestAnimationFrame);
+        return parseFloat(card.style.getPropertyValue('--note-drag-tilt'));
+      }
+      const slow=await travel(.1,0),fast=await travel(.8,0),left=await travel(-.8,0);
+      const vertical=await travel(0,.2,400);
+      await travel(.8,0);
+      const before=card.getBoundingClientRect().toJSON(),angle=getComputedStyle(content).rotate;
+      const outerRotate=getComputedStyle(card).rotate;
+      window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,pointerType:'mouse',clientX:x,clientY:y}));
+      const after=card.getBoundingClientRect().toJSON(),releasing=getComputedStyle(content).rotate;
+      return{slow,fast,left,vertical,before,after,angle,releasing,outerRotate,settling:content.getAnimations().some(animation=>animation.transitionProperty==='rotate')};
+    },p);
+    assert.ok(result.slow>0&&result.fast>result.slow*2,JSON.stringify(result));
+    assert.ok(result.left<0&&Math.abs(result.fast)<=.9&&Math.abs(result.left)<=.9);
+    assert.ok(Math.abs(result.vertical)<.02,'vertical-only motion does not sustain a sideways lean');
+    assert.ok(result.outerRotate==='none'||parseFloat(result.outerRotate)===0);
+    for(const field of ['x','y','width','height'])assert.ok(Math.abs(result.before[field]-result.after[field])<1,field);
+    assert.ok(result.settling&&parseFloat(result.releasing)>0,'release starts a visual transition rather than snapping');
+    await page.waitForFunction(()=>Math.abs(parseFloat(getComputedStyle(document.querySelector('.note-card__content')).rotate)||0)<.001);
+    await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
+    await finish(page);assert.equal(writes.length,1);
+  }finally{releaseSave?.();await page.mouse.up();await page.close();}
 });
 
 test('a burst of pointer moves paints once per frame and pointerup commits the final unpainted position',async()=>{

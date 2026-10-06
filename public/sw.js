@@ -212,6 +212,7 @@ const APP_SHELL = [
   '/components/note-board.js',
   '/components/note-group-overview.js',
   '/utils/note-board-layout.js',
+  '/utils/note-drag-motion.js',
   '/utils/note-group-draft.js',
   '/utils/note-group-gesture.js',
   '/utils/note-live.js',

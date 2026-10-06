@@ -10,7 +10,7 @@ import {toggleChecklistLine} from '../public/utils/markdown-checklist.js';
 const app=express();app.use(express.json());app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
 const links='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(m=>`<link rel="stylesheet" href="${m[1]}">`).join('');
 app.get('/drag-test',(_req,res)=>res.send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">${links}<script src="/lucide.min.js"></script><style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}</style></head><body><main id="main-content"></main></body></html>`));
-let notes,writes,mode,releaseSave,checkWrites,checkMode,browser,server,base;
+let notes,writes,mode,releaseSave,checkWrites,checkMode,holdCheck,releaseCheck,browser,server,base;
 app.use('/api/v1',async(req,res)=>{
   if(req.path==='/auth/me')return res.json({csrfToken:'synthetic'});
   if(req.path==='/notes/members')return res.json({data:[{id:1,display_name:'Synthetic Parent'}]});
@@ -18,6 +18,7 @@ app.use('/api/v1',async(req,res)=>{
   if(req.path==='/notes/board')return res.json({data:{notes,groups:[]}});
   if(req.path==='/notes/1/check'&&req.method==='PATCH'){
     checkWrites.push(structuredClone(req.body));
+    if(holdCheck)await new Promise(resolve=>{releaseCheck=resolve;});
     if(checkMode==='failed')return res.status(403).json({error:'Checklist no longer allowed'});
     const result=toggleChecklistLine(notes[0].content,req.body.line,req.body.checked,req.body.expect);
     if(!result.ok)return res.status(409).json({error:'Changed elsewhere'});
@@ -34,10 +35,10 @@ app.use('/api/v1',async(req,res)=>{
   return res.json({data:[]});
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--disable-dev-shm-usage']});});
-test.after(async()=>{releaseSave?.();await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
+test.after(async()=>{releaseSave?.();releaseCheck?.();await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
 const card='.note-card[data-id="1"]';
 async function mount({reduced=false,touch=false,checklist=false}={}){
-  writes=[];checkWrites=[];mode='success';checkMode='success';releaseSave=null;
+  writes=[];checkWrites=[];mode='success';checkMode='success';releaseSave=null;holdCheck=false;releaseCheck=null;
   notes=Array.from({length:5},(_,i)=>({id:i+1,title:`Synthetic ${i+1}`,content:'A plain paragraph to drag.\n\n'+Array.from({length:20},(_,j)=>`Preview line ${j}`).join('\n\n'),color:'#C7DED9',created_by:1,creator_name:'Synthetic Parent',visibility:'all',revision:4,permissions:{view:true,edit:true,arrange:true,delete:true,manage_visibility:true},layout:{x:i?8:2,y:i?20+i*8:2,width:4,height:6,revision:2}}));
   if(checklist)notes[0].content='- [ ] Synthetic checklist\n\n'+notes[0].content;
   const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width:1280,height:1000,hasTouch:touch});
@@ -118,6 +119,22 @@ test('a rejected checklist update restores both its display and retained card on
     assert.equal(await page.$eval(card,e=>e===originalCard),true);assert.equal(await page.$eval(box,e=>e===document.activeElement),true);
     assert.equal(await page.$eval(box,e=>e.getAttribute('aria-checked')),'false');
   }finally{releaseSave?.();await page.close();}
+});
+
+for(const outcome of ['success','failed'])test(`a canonical refresh during a pending checklist ${outcome} keeps the new content and command revision`,async()=>{
+  const page=await mount({checklist:true});try{
+    holdCheck=true;checkMode=outcome;
+    const response=page.waitForResponse(r=>r.url().endsWith('/notes/1/check')&&r.request().method()==='PATCH');
+    await page.click(card+' .note-md-box');
+    notes[0].title='Remote title during checkbox request';notes[0].revision++;
+    await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(()=>document.querySelector('.note-card[data-id="1"] .note-card__title').textContent==='Remote title during checkbox request');
+    assert.equal(typeof releaseCheck,'function');releaseCheck();await response;await page.waitForNetworkIdle({idleTime:50});
+    assert.equal(await page.$eval(card+' .note-md-box',e=>e.getAttribute('aria-checked')),String(outcome==='success'));
+    assert.equal(await page.$eval(card+' .note-card__title',e=>e.textContent),'Remote title during checkbox request');
+    await drag(page);await finish(page);
+    assert.equal(writes[0].expected.notes[0].revision,notes[0].revision,'the next drag uses the current content revision');
+  }finally{releaseCheck?.();releaseSave?.();await page.close();}
 });
 for(const reduced of [false,true])test(`drag-only wiggle and pointer cancellation preserve geometry (reduced motion ${reduced})`,async()=>{
   const page=await mount({reduced});try{const before=await snapshot(page);const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+40,p.y+30,{steps:4});await new Promise(r=>setTimeout(r,35));

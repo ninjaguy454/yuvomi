@@ -28,7 +28,7 @@ const originals={
   'public/pages/notes.js':"const NOTE_GROUPS_INTERFACE_ENABLED = true;\nconst state = {compact: false, active: true};\n",
   'public/styles/notes.css':'.notes { color: teal; }\n',
   'public/styles/tasks.css':'.tasks { color: teal; }\n',
-  'public/sw.js':"const CACHE_VERSION = `${APP_RELEASE}-vidamia.68`;\n",
+  'public/sw.js':"const CACHE_VERSION = `${APP_RELEASE}-vidamia.69`;\n",
 };
 function fixture(t) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'open-tasks-fallback-'));
@@ -54,7 +54,7 @@ test('rooted fallback retains the original acceptance pause and disables group p
   for(const file of ['server/services/note-groups.js','server/services/note-layout-owner.js','server/services/note-layout-owner-schema.js','server/db.js'])assert.equal(f.read(file),before[file],'fallback preserves owner backend and schema');
   assert.equal(f.read('public/pages/tasks.js'),'export const offers = false;\n');
   assert.equal(f.read('public/pages/notes.js'),'const NOTE_GROUPS_INTERFACE_ENABLED = false;\nconst state = {compact: true, active: true};\n');
-  assert.equal(f.read('public/sw.js'),'const CACHE_VERSION = `${APP_RELEASE}-vidamia.68-acceptance-paused`;\n');
+  assert.equal(f.read('public/sw.js'),'const CACHE_VERSION = `${APP_RELEASE}-vidamia.69-acceptance-paused`;\n');
   assert.ok(f.read('public/styles/notes.css').startsWith(before['public/styles/notes.css']));
   assert.ok(f.read('public/styles/tasks.css').startsWith(before['public/styles/tasks.css']));
   assert.match(f.read('public/styles/notes.css'),/#notes-open-tasks \{ display: none !important; \}/);
@@ -73,9 +73,9 @@ for(const [name,file,value] of [
   ['duplicate Notes mode','public/pages/notes.js',originals['public/pages/notes.js']+'// const NOTE_GROUPS_INTERFACE_ENABLED = true;\n'],
   ['missing List default','public/pages/notes.js','const NOTE_GROUPS_INTERFACE_ENABLED = true;\nconst state = {compact: false};\n'],
   ['wrong cache','public/sw.js',"const CACHE_VERSION='app-vidamia.59';\n"],
-  ['suffixed cache','public/sw.js',"const CACHE_VERSION='app-vidamia.68-acceptance-paused';\n"],
-  ['longer cache number','public/sw.js',"const CACHE_VERSION='app-vidamia.680';\n"],
-  ['duplicate cache','public/sw.js',"const CACHE_VERSION='app-vidamia.68';\nconst duplicate='app-vidamia.68';\n"],
+  ['suffixed cache','public/sw.js',"const CACHE_VERSION='app-vidamia.69-acceptance-paused';\n"],
+  ['longer cache number','public/sw.js',"const CACHE_VERSION='app-vidamia.690';\n"],
+  ['duplicate cache','public/sw.js',"const CACHE_VERSION='app-vidamia.69';\nconst duplicate='app-vidamia.69';\n"],
 ])test(`${name} rejects the source before modifying any file`,async t=>{
   const f=fixture(t),build=await builder();f.write(file,value);const before=f.snapshot();
   assert.throws(()=>build(f.root));assert.deepEqual(f.snapshot(),before);

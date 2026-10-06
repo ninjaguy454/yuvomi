@@ -5,19 +5,28 @@ import puppeteer from 'puppeteer';
 import {readFileSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import {arrangeNotesFixture} from './helpers/note-group-http-fixture.js';
+import {toggleChecklistLine} from '../public/utils/markdown-checklist.js';
 
 const app=express();app.use(express.json());app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
 const links='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(m=>`<link rel="stylesheet" href="${m[1]}">`).join('');
 app.get('/drag-test',(_req,res)=>res.send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">${links}<script src="/lucide.min.js"></script><style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}</style></head><body><main id="main-content"></main></body></html>`));
-let notes,writes,mode,releaseSave,browser,server,base;
+let notes,writes,mode,releaseSave,checkWrites,checkMode,browser,server,base;
 app.use('/api/v1',async(req,res)=>{
   if(req.path==='/auth/me')return res.json({csrfToken:'synthetic'});
   if(req.path==='/notes/members')return res.json({data:[{id:1,display_name:'Synthetic Parent'}]});
   if(req.path==='/notes/changes')return res.status(204).end();
   if(req.path==='/notes/board')return res.json({data:{notes,groups:[]}});
+  if(req.path==='/notes/1/check'&&req.method==='PATCH'){
+    checkWrites.push(structuredClone(req.body));
+    if(checkMode==='failed')return res.status(403).json({error:'Checklist no longer allowed'});
+    const result=toggleChecklistLine(notes[0].content,req.body.line,req.body.checked,req.body.expect);
+    if(!result.ok)return res.status(409).json({error:'Changed elsewhere'});
+    notes[0].content=result.content;notes[0].revision++;
+    return res.json({data:notes[0]});
+  }
   if(req.path==='/notes/group-operations'){
     writes.push(structuredClone(req.body));await new Promise(resolve=>{releaseSave=resolve;});
-    if(mode==='conflict'){notes[0].layout={...notes[0].layout,x:6,revision:notes[0].layout.revision+1};return res.status(409).json({error:'Changed elsewhere',code:409});}
+    if(mode==='conflict'){notes[0].layout={...notes[0].layout,x:notes[0].layout.x+1,revision:notes[0].layout.revision+1};return res.status(409).json({error:'Changed elsewhere',code:409});}
     if(mode==='failed')return res.status(403).json({error:'Layout no longer allowed',code:403});
     if(mode==='unknown'){mode='success';return res.type('json').send('{"data":');}
     const result=arrangeNotesFixture(notes,req.body);return res.status(result.status).json(result.body);
@@ -27,9 +36,10 @@ app.use('/api/v1',async(req,res)=>{
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--disable-dev-shm-usage']});});
 test.after(async()=>{releaseSave?.();await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
 const card='.note-card[data-id="1"]';
-async function mount({reduced=false,touch=false}={}){
-  writes=[];mode='success';releaseSave=null;
+async function mount({reduced=false,touch=false,checklist=false}={}){
+  writes=[];checkWrites=[];mode='success';checkMode='success';releaseSave=null;
   notes=Array.from({length:5},(_,i)=>({id:i+1,title:`Synthetic ${i+1}`,content:'A plain paragraph to drag.\n\n'+Array.from({length:20},(_,j)=>`Preview line ${j}`).join('\n\n'),color:'#C7DED9',created_by:1,creator_name:'Synthetic Parent',visibility:'all',revision:4,permissions:{view:true,edit:true,arrange:true,delete:true,manage_visibility:true},layout:{x:i?8:2,y:i?20+i*8:2,width:4,height:6,revision:2}}));
+  if(checklist)notes[0].content='- [ ] Synthetic checklist\n\n'+notes[0].content;
   const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width:1280,height:1000,hasTouch:touch});
   await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:reduced?'reduce':'no-preference'}]);
   await page.evaluateOnNewDocument(()=>Object.defineProperty(navigator,'onLine',{get:()=>true}));await page.goto(base+'/drag-test');
@@ -52,9 +62,61 @@ test('slow saves preserve the dropped rectangle, card, focus, preview scroll and
   }finally{releaseSave?.();await page.close();}
 });
 for(const failure of ['conflict','failed','unknown'])test(`${failure} save retains existing rollback/retry rules`,async()=>{
-  const page=await mount();try{const before=await snapshot(page);mode=failure;await drag(page);releaseSave();
-    if(failure==='unknown'){await page.waitForSelector('[data-group-retry]');const body=structuredClone(writes[0]);await page.click('[data-group-retry]');await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');await finish(page);assert.deepEqual(writes[1],body,'retry reuses the frozen operation');}
-    else{await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]')&&document.querySelector('#notes-board-status').textContent!=='Saving layout...');const after=await snapshot(page);if(failure==='failed')assert.ok(Math.abs(after.x-before.x)<1,'denied save rolls back');else assert.ok(after.x>before.x,'conflict reloads the newer canonical placement');assert.equal(writes.length,1);}
+  const page=await mount();try{
+    for(let iteration=0;iteration<3;iteration++){
+      const before=await snapshot(page),startWrites=writes.length;mode=failure;await drag(page,35,20);const pending=await snapshot(page);releaseSave();
+      if(failure==='unknown'){
+        await page.waitForSelector('[data-group-retry]');assertRetained(await snapshot(page),before);
+        const body=structuredClone(writes[startWrites]);await page.click('[data-group-retry]');
+        await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
+        await page.$eval(card+' .note-card__title',e=>e.focus({preventScroll:true}));
+        await finish(page);assert.deepEqual(writes[startWrites+1],body,'retry reuses the frozen operation');
+        const after=await snapshot(page);assert.ok(Math.abs(after.x-pending.x)<1);assert.ok(Math.abs(after.y-pending.y)<1);assert.equal(writes.length,startWrites+2);
+      }else{
+        await page.waitForFunction(()=>!document.querySelector('[aria-busy="true"]')&&document.querySelector('#notes-board-status').textContent!=='Saving layout...');
+        const after=await snapshot(page);if(failure==='failed')assert.ok(Math.abs(after.x-before.x)<1,'denied save rolls back');else assert.ok(after.x>before.x,'conflict reloads the newer canonical placement');assert.equal(writes.length,startWrites+1);
+      }
+      assertRetained(await snapshot(page),before);
+      mode='success';await drag(page,20,10);const nextPending=await snapshot(page);await finish(page);
+      const saved=await snapshot(page);assertRetained(saved,before);assert.ok(Math.abs(saved.x-nextPending.x)<1);assert.ok(Math.abs(saved.y-nextPending.y)<1,'a successful save after recovery stays at the dropped position');
+    }
+  }finally{releaseSave?.();await page.close();}
+});
+function assertRetained(after,before){
+  assert.equal(after.sameCard,true,'retain the connected card');assert.equal(after.focus,true,'retain note title focus');
+  assert.equal(after.preview,before.preview,'retain preview scroll');assert.equal(after.toolbar,before.toolbar,'keep toolbar height stable');assert.equal(after.zoom,before.zoom);
+}
+
+for(const saveBeforeRefresh of [false,true])test(`a local checklist update reflects a remote reversal (layout acknowledgment first: ${saveBeforeRefresh})`,async()=>{
+  const page=await mount({checklist:true});try{
+    const box=card+' .note-md-box';await page.click(box);
+    await page.waitForNetworkIdle({idleTime:50});
+    assert.equal(checkWrites.length,1);assert.equal(notes[0].content.startsWith('- [x]'),true);
+    await page.$eval(box,e=>e.focus({preventScroll:true}));
+    const before=await page.$eval(card,e=>({scroll:e.querySelector('.note-card__content').scrollTop}));
+    if(saveBeforeRefresh){await drag(page);await finish(page);}
+    assert.equal(await page.$eval(card,e=>e===originalCard),true,'the first layout save after a checklist toggle retains the card');
+    assert.equal(await page.$eval(box,e=>e===document.activeElement),true,'retain checkbox focus');
+    assert.equal(await page.$eval(card,e=>e.querySelector('.note-card__content').scrollTop),before.scroll);
+    assert.equal(await page.$eval(box,e=>e.getAttribute('aria-checked')),'true');
+    notes[0].content=notes[0].content.replace('- [x]','- [ ]');notes[0].revision++;
+    await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
+    await page.waitForFunction(()=>document.querySelector('.note-md-box').getAttribute('aria-checked')==='false');
+    assert.equal(await page.$eval(box,e=>e.dataset.mdChecked),'0');
+    assert.equal(await page.$eval(box,e=>e.closest('.note-md-check').classList.contains('is-checked')),false);
+    assert.equal(await page.$eval(box,e=>e===document.activeElement),true,'restore checkbox focus after remote content replacement');
+  }finally{releaseSave?.();await page.close();}
+});
+
+test('a rejected checklist update restores both its display and retained card on the next layout save',async()=>{
+  const page=await mount({checklist:true});try{
+    checkMode='failed';const box=card+' .note-md-box';await page.click(box);
+    await page.waitForNetworkIdle({idleTime:50});
+    await page.waitForFunction(()=>document.querySelector('.note-md-box').getAttribute('aria-checked')==='false');
+    assert.equal(checkWrites.length,1);await page.$eval(box,e=>e.focus({preventScroll:true}));
+    await drag(page);await finish(page);
+    assert.equal(await page.$eval(card,e=>e===originalCard),true);assert.equal(await page.$eval(box,e=>e===document.activeElement),true);
+    assert.equal(await page.$eval(box,e=>e.getAttribute('aria-checked')),'false');
   }finally{releaseSave?.();await page.close();}
 });
 for(const reduced of [false,true])test(`drag-only wiggle and pointer cancellation preserve geometry (reduced motion ${reduced})`,async()=>{

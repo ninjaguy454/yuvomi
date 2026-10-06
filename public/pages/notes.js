@@ -182,9 +182,14 @@ const CHECKLIST_OPTS = (note) => ({
  * Reihenfolge greift beim naechsten vollen Laden.
  */
 function paintCheck(noteId, line, checked) {
+  const card = _container?.querySelector(`.note-card[data-id="${noteId}"]`);
+  const markup = cardMarkup.get(card);
+  const cached = markup ? document.createElement('template') : null;
+  if (cached) cached.innerHTML = markup;
   const roots = [
-    _container?.querySelector(`.note-card[data-id="${noteId}"] .note-card__content`),
+    card?.querySelector('.note-card__content'),
     document.querySelector(`.note-modal[data-note-id="${noteId}"] .note-read__body`),
+    cached?.content.querySelector('.note-card__content'),
   ];
   for (const root of roots) {
     const box = root?.querySelector(`.note-md-box[data-md-line="${line}"]`);
@@ -193,6 +198,10 @@ function paintCheck(noteId, line, checked) {
     box.dataset.mdChecked = checked ? '1' : '0';
     box.closest('.note-md-check')?.classList.toggle('is-checked', checked);
   }
+  // The cache describes the displayed card, including optimistic checks and
+  // their rollback. Otherwise a later remote reversal could match stale HTML,
+  // or a geometry-only acknowledgment could replace a current, focused card.
+  if (cached) cardMarkup.set(card, cached.innerHTML);
 }
 
 /**

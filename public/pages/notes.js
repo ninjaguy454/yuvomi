@@ -176,10 +176,9 @@ const CHECKLIST_OPTS = (note) => ({
 /**
  * Zeichnet einen umgeschalteten Haken in jede Ansicht, die ihn gerade zeigt.
  *
- * Bewusst kein `renderGrid()`: das baute das ganze Raster neu, mit Einblend-
- * Staffelung und verlorenem Fokus - fuer einen Haken. Und da `state.notes` nicht
- * umsortiert wird, springt die Notiz auch nicht unter dem Finger weg; die neue
- * Reihenfolge greift beim naechsten vollen Laden.
+ * Optimistic painting leaves the card connected. After acknowledgment,
+ * reconciliation also retains it while refreshing the revision-bound layout
+ * commands; `state.notes` is not reordered until the next full reload.
  */
 function paintCheck(noteId, line, checked) {
   const card = _container?.querySelector(`.note-card[data-id="${noteId}"]`);
@@ -238,11 +237,17 @@ async function toggleCheck(noteId, box) {
   try {
     const res = await api.patch(`/notes/${noteId}/check`, { line, checked, expect });
     if (!currentPage(page, auth)) return;
+    // A refresh or permission change may have replaced this note while the
+    // check was in flight. Reload canonical state rather than painting an old
+    // response onto its replacement.
+    if (!page.notes.includes(note)) { await reloadNotes(); return; }
     note.content = res.data.content;
     note.updated_at = res.data.updated_at;
     note.revision = res.data.revision ?? note.revision;
+    renderGrid();
   } catch (err) {
     if (!currentPage(page, auth)) return;
+    if (!page.notes.includes(note)) { await reloadNotes(); return; }
     paintCheck(noteId, line, !checked);
     if (err.status === 409) {
       await handleCheckConflict();

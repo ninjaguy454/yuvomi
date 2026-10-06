@@ -58,7 +58,7 @@ async function open(page,id){
   await press(page,`[data-open-task="${id}"]`);
   await page.waitForFunction(()=>document.querySelector('[data-task-acceptance]')||document.querySelector('#task-detail-claim'));
   if(!await page.$('[data-task-acceptance]'))await press(page,'#task-detail-claim');
-  await page.waitForFunction(()=>['primary','helpers'].includes(document.querySelector('[data-task-acceptance]')?.dataset.stage));
+  await page.waitForFunction(()=>document.querySelector('[data-task-acceptance]')?.dataset.stage==='people');
 }
 async function confirm(page,id){
   const response=page.waitForResponse(r=>r.url().endsWith(`/api/v1/tasks/${id}/accept`)&&r.request().method()==='POST');
@@ -115,7 +115,7 @@ test('reopened unassigned child supports native touch allocation and atomic zero
     assert.equal(projected.allocatable,true,`reopened unassigned child: ${JSON.stringify(projected)}`);
     assert.equal(projected.reason,null);assert.ok(projected.eligible_assignee_ids.includes(2)&&projected.eligible_assignee_ids.includes(3));
     await open(page,task.id);
-    if(kind==='paired'){await page.select('[data-acceptance-primary]','2');await press(page,'[data-acceptance-next]');}
+    if(kind==='paired'){await page.click('[data-acceptance-primary="2"]');await page.waitForSelector('.task-acceptance__helpers');}
     await tap(page,'[data-acceptance-helper="3"]');await press(page,'[data-acceptance-next]');
     assert.deepEqual(await page.$eval(target,el=>({disabled:el.disabled,text:el.textContent,border:getComputedStyle(el).borderStyle})),{disabled:false,text:'?',border:'dashed'});
     const identityBefore=await page.evaluate(async()=>structuredClone((await import('/permissions.js')).getPermissions()));

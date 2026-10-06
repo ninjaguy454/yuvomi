@@ -134,11 +134,12 @@ for(const helpers of [false,true])for(const children of [false,true])test(`paire
   }});try{
     await page.waitForSelector('[data-open-task="7"]');await page.click('[data-open-task="7"]');await page.waitForSelector('#task-detail-claim');
     assert.equal(await page.$('#detail-view-edit,#task-detail-delete,.task-comments__form,.subtask-check'),null);
-    await page.click('#task-detail-claim');await page.waitForSelector('[data-acceptance-primary]');await page.select('[data-acceptance-primary]','1');await page.click('[data-acceptance-next]');
-    await page.waitForSelector('[data-task-acceptance][data-stage="helpers"]');
+    await page.click('#task-detail-claim');await page.waitForSelector('[data-acceptance-primary]');await page.click('[data-acceptance-primary="1"]');await page.waitForSelector('.task-acceptance__helpers');
+    await page.waitForSelector('[data-task-acceptance][data-stage="people"]');
     if(helpers)await page.click('[data-acceptance-helper="2"]');else assert.ok(await page.$('[data-acceptance-helper-unavailable]'));
-    await page.click('[data-acceptance-next]');
-    assert.equal(await page.$eval('[data-task-acceptance]',el=>el.dataset.stage),helpers&&children?'allocation':'confirm');
+    assert.equal(await page.$eval('[data-acceptance-next]',el=>!el.hidden),helpers&&children);
+    if(helpers&&children)await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('[data-task-acceptance]',el=>el.dataset.stage),helpers&&children?'allocation':'people');
     if(helpers&&children){await page.click('[data-acceptance-target="8"]');await page.click('[data-acceptance-choice="2"]');await page.click('[data-acceptance-next]');}
     await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
     assert.equal(writes.length,1);assert.equal(writes[0].primary_user_id,1);assert.deepEqual(writes[0].coassignee_ids,helpers?[2]:[]);

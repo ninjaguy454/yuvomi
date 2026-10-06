@@ -11,7 +11,6 @@ import {inspectTaskSupervision} from './task-supervision.js';
 import {taskExpirationDue} from './task-window.js';
 import {todayKey} from '../utils/timezone.js';
 
-const memberView=m=>({id:m.id,display_name:m.display_name,avatar_color:m.avatar_color});
 export function currentAcceptancePrincipal(d,principal){
   if(typeof principal==='object'&&(principal.deviceContext||principal.session?.deviceCredentialId)&&!deviceRequestStillValid(d,principal))throw acceptanceError('The display sign-in changed. Return to the display and try again.',409,'device_context_changed');
   const supplied=taskDevicePrincipal(principal);
@@ -71,6 +70,11 @@ export function acceptanceOptions(d,principal,id,primaryUserId){
   if(!device&&primaryUserId!==undefined&&Number(primaryUserId)!==me)throw acceptanceError('Accept this Task as your signed-in account.',403,'primary_not_self');
   const primary=device?(primaryUserId===undefined?null:Number(primaryUserId)):me;
   if(primary!==null)assertAcceptanceMember(d,p,task,primary);
+  // Match the existing /auth/users profile boundary: signed-in people can see
+  // photos; anonymous paired displays receive only scoped names and colors.
+  // Add presentation only after acceptance eligibility has filtered the IDs.
+  const appearance=d.prepare(device?'SELECT avatar_color FROM users WHERE id=?':'SELECT avatar_color,avatar_data FROM users WHERE id=?');
+  const memberView=member=>({id:member.id,display_name:member.display_name,...appearance.get(member.id)});
   const candidates=canHelpers?eligible.filter(m=>m.id!==primary):[];
   const children=authorizedAcceptanceChildren(d,p,task),supervision=inspectTaskSupervision(d,task.id);
   return {expected_revision:task.revision,primary_mode:device?'choose':'self',primary_user_id:primary,

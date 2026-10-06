@@ -60,10 +60,10 @@ async function choose(page,child,recipient){await press(page,`[data-acceptance-t
 for(const [width,height] of [[320,720],[390,844],[844,390],[768,1024],[1280,800],[1920,1080]])for(const theme of ['light','dark'])test(`visual wizard ${width}x${height} ${theme}`,async()=>{
   const name=`${width}x${height}-${theme}`,page=await mount({width,height,theme,device:true,scopedDevice:true,long:true});
   try{
-    await shot(page,`${name}-01-recipient`);await press(page,'[data-acceptance-next]');assert.equal(await page.$eval('[data-task-acceptance]',el=>el.dataset.stage),'primary');
-    assert.equal(await page.$eval('[data-acceptance-primary]',el=>el===document.activeElement),true);
+    await shot(page,`${name}-01-recipient`);assert.equal(await page.$eval('[data-acceptance-confirm]',el=>el.disabled),true);assert.equal(await page.$eval('[data-task-acceptance]',el=>el.dataset.stage),'people');
+    await page.focus('[data-acceptance-primary]');assert.equal(await page.$eval('[data-acceptance-primary]',el=>el===document.activeElement),true);
     if(width===320&&theme==='light')await shot(page,'320-light-validation-empty-recipient');
-    await page.select('[data-acceptance-primary]','2');await press(page,'[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');
+    await page.click('[data-acceptance-primary="2"]');await page.waitForSelector('.task-acceptance__helpers');await page.waitForSelector('[data-acceptance-helper="3"]');
     await shot(page,`${name}-02-helpers`);await page.click('[data-acceptance-helper="3"]');await press(page,'[data-acceptance-next]');
     await shot(page,`${name}-03-zero-allocation`);
     if(height<480){const visible=await page.$eval('[data-acceptance-target="20"]',target=>{const r=target.getBoundingClientRect(),body=target.closest('.modal-panel__body').getBoundingClientRect();return r.top>=body.top&&r.bottom<=body.bottom;});assert.equal(visible,true,'short landscape shows the first assignment target without discovering a hidden list');}
@@ -85,7 +85,7 @@ test('visual branch evidence: no helpers, helpers without children, permission h
     try{
       await shot(page,`branch-${branch}-question`);
       if(branch==='helpers-no-children')await page.click('[data-acceptance-helper="2"]');
-      await press(page,'[data-acceptance-next]');assert.equal(await page.$('[data-acceptance-allocation]'),null);
+      assert.equal(await page.$eval('[data-acceptance-next]',el=>el.hidden),true);assert.equal(await page.$('[data-acceptance-allocation]'),null);
       if(branch==='unknown-retry'){failure=503;await press(page,'[data-acceptance-confirm]');await page.waitForSelector('[data-acceptance-retry]');await shot(page,`branch-${branch}-uncertain`);await press(page,'[data-acceptance-retry]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.deepEqual(writes[0],writes[1]);}
       else{await shot(page,`branch-${branch}-confirm`);await press(page,'[data-acceptance-cancel]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.equal(writes.length,0);}
     }finally{await page.close();}
@@ -96,7 +96,7 @@ for(const [width,height] of [[320,720],[390,844],[844,390],[768,1024],[1280,800]
   const page=await mount({width,height,theme:width<900?'dark':'light',dir:'rtl',textScale:2,participants:10,device:true,scopedDevice:true,long:true});
   const name=`${width}x${height}-rtl-200`;
   try {
-    await page.select('[data-acceptance-primary]','2');await press(page,'[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');
+    await page.click('[data-acceptance-primary="2"]');await page.waitForSelector('.task-acceptance__helpers');await page.waitForSelector('[data-acceptance-helper="3"]');
     for(let id=3;id<12;id++)await page.click(`[data-acceptance-helper="${id}"]`);
     await press(page,'[data-acceptance-next]');
     assert.equal(await page.$$eval('[data-acceptance-person]',nodes=>nodes.length),10);

@@ -20,6 +20,7 @@ const grant=(id,key,value)=>d.prepare("INSERT INTO access_capabilities(subject_t
 test.before(async()=>{
   const hash=await hashPassword(password,4);
   for(const [id,name,role] of [[1,'Accept Parent','admin'],[2,'Accept Grace','member'],[3,'Accept Helper','member']])d.prepare('INSERT INTO users(id,username,display_name,password_hash,role,family_role,onboarding_version) VALUES(?,?,?,?,?,?,1)').run(id,name,name,hash,role,role==='admin'?'parent':'child');
+  d.prepare('UPDATE users SET avatar_data=? WHERE id=3').run('data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4x8AAAAASUVORK5CYII=');
   for(const key of ['tasks.change_assignment','tasks.reassign','tasks.accept_with_helpers'])grant(2,key,'none');
   server=fork(new URL('./helpers/note-board-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0'},stdio:['ignore','pipe','pipe','ipc']});
   let log='';for(const stream of [server.stdout,server.stderr])stream.on('data',chunk=>log=(log+chunk).slice(-6000));
@@ -56,7 +57,7 @@ async function open(page,id){
   await press(page,`[data-open-task="${id}"]`);
   await page.waitForFunction(()=>document.querySelector('[data-task-acceptance]')||document.querySelector('#task-detail-claim'));
   if(!await page.$('[data-task-acceptance]'))await press(page,'#task-detail-claim');
-  await page.waitForFunction(()=>['primary','helpers'].includes(document.querySelector('[data-task-acceptance]')?.dataset.stage));
+  await page.waitForFunction(()=>document.querySelector('[data-task-acceptance]')?.dataset.stage==='people');
 }
 async function confirm(page,id){
   const response=page.waitForResponse(r=>r.url().endsWith(`/api/v1/tasks/${id}/accept`)&&r.request().method()==='POST');
@@ -89,10 +90,12 @@ async function captureWizard(page,label){
 test('real open-task board accepts self, optional helper allocation, and paired recipients without changing identity or points',{timeout:180000},async()=>{
   owner=await pageFor();await login(owner,'Accept Parent');const solo=await create('Solo open task');
   member=await pageFor(390);await login(member,'Accept Grace');await open(member,solo.id);
-  assert.ok(await member.$('[data-acceptance-helper-unavailable]'));await press(member,'[data-acceptance-next]');
-  assert.equal(await member.$eval('[data-task-acceptance]',el=>el.dataset.stage),'confirm');await confirm(member,solo.id);
+  assert.ok(await member.$('[data-acceptance-helper-unavailable]'));assert.equal(await member.$eval('[data-acceptance-next]',el=>el.hidden),true);
+  assert.equal(await member.$eval('[data-task-acceptance]',el=>el.dataset.stage),'people');await confirm(member,solo.id);
   assert.deepEqual(assigned(solo.id),[2]);assert.equal(d.prepare('SELECT status FROM tasks WHERE id=?').get(solo.id).status,'open');evidence.steps.push('Regular unassigned task appears beside Notes; restricted member accepts self without extra rights');
   grant(2,'tasks.accept_with_helpers','allow');const shared=await create('Shared open task',{children:2});await open(member,shared.id);
+  assert.ok(await member.$('[data-acceptance-helper="3"] + .task-acceptance__avatar-wrap img'),'signed-in authorized helper photo');
+  await captureWizard(member,'actual-human-selection');
   await member.click('[data-acceptance-helper="3"]');await press(member,'[data-acceptance-next]');assert.equal(await member.$eval('[data-task-acceptance]',el=>el.dataset.stage),'allocation');
   assert.equal(await member.$$eval('[data-acceptance-person]',els=>els.length),2);
   await dragAvatar(member,3,shared.steps[0],true);await dragAvatar(member,2,shared.steps[0],true);
@@ -104,7 +107,9 @@ test('real open-task board accepts self, optional helper allocation, and paired 
   const paired=await create('Paired open task',{children:2});display=await pageFor();await display.goto(origin+'/device/pair');await press(display,'[data-pair-start]');await display.waitForSelector('[data-pair-code]');const code=await display.$eval('[data-pair-code]',el=>el.textContent);
   await owner.evaluate(async code=>{const {api}=await import('/api.js');await api.post('/devices/pairing-approve',{code,name:'Synthetic Acceptance Display',scope:{member_ids:[2,3]},permissions:{capabilities:{'device_notes.view':'allow','device_tasks.claim':'allow','device_tasks.accept_with_helpers':'allow'}}});},code);
   await display.waitForSelector('[data-pair-claim]');await press(display,'[data-pair-claim]');await display.waitForFunction(()=>!!document.querySelector('[data-device-login]')&&!!document.querySelector('.dashboard'));
-  await open(display,paired.id);assert.equal(await display.$eval('[data-task-acceptance]',el=>el.dataset.stage),'primary');await display.select('[data-acceptance-primary]','2');await press(display,'[data-acceptance-next]');await display.waitForSelector('[data-acceptance-helper="3"]');await display.click('[data-acceptance-helper="3"]');await press(display,'[data-acceptance-next]');
+  await open(display,paired.id);assert.equal(await display.$eval('[data-task-acceptance]',el=>el.dataset.stage),'people');await display.click('[data-acceptance-primary="2"]');await display.waitForSelector('.task-acceptance__helpers');await display.waitForSelector('[data-acceptance-helper="3"]');
+  assert.equal(await display.$('.task-acceptance__avatar img'),null,'anonymous paired display does not gain profile-photo access');
+  await display.click('[data-acceptance-helper="3"]');await captureWizard(display,'actual-paired-selection');await press(display,'[data-acceptance-next]');
   await captureWizard(display,'actual-paired-avatars');await press(display,'[data-acceptance-next]');await confirm(display,paired.id);
   assert.deepEqual(assigned(paired.id),[2,3]);for(const child of paired.steps)assert.deepEqual(assigned(child),[]);
   const identity=await display.evaluate(async()=>{const {getPermissions}=await import('/permissions.js');return getPermissions().principal_kind;});assert.equal(identity,'device');evidence.steps.push('Real scoped paired display selects recipients and confirms zero allocations while remaining a device');

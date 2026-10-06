@@ -20,13 +20,14 @@ app.use('/api/v1',(req,res)=>{
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
 test.after(async()=>{await browser?.close();await new Promise(r=>server.close(r));});
-async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width,long=false,theme='light',duplicateNames=false}={}){
+async function mount({device=false,children=true,helpers=true,phone=false,extraStep=false,scopedDevice=false,stress=false,width,long=false,theme='light',duplicateNames=false,photos=false}={}){
   projection=structuredClone(original);writes=[];failure=null;reads=0;requests=[];authResponse=null;
   if(device){projection.primary_mode='choose';projection.primary_user_id=null;projection.primary_candidates=structuredClone(members);}
   if(!children){projection.subtasks=[];projection.subtask_snapshot=[];}
   if(extraStep){projection.subtasks.push({id:12,title:'Plant the herbs',revision:3,allocatable:true,eligible_assignee_ids:[1,2,3]});projection.subtask_snapshot.push({id:12,revision:3});}
   if(scopedDevice){projection.primary_candidates=structuredClone(members.slice(1));authResponse={csrfToken:'fixture',authContext:'scoped-display',principal:{kind:'device',id:91},device:{id:91},temporary:false,permissions:{principal_kind:'device',modules:{tasks:'read',notes:'none'},capabilities:{'device_tasks.accept_with_helpers':'allow'}}};}
   projection.can_add_helpers=helpers;
+  if(photos){projection.primary_candidates[0].avatar_data='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a4x8AAAAASUVORK5CYII=';projection.coassignee_candidates[0].avatar_data='https://forbidden.invalid/avatar';}
   if(duplicateNames){
     for(const list of [projection.primary_candidates,projection.coassignee_candidates])for(const member of list)if(member.id<3)member.display_name='Alex';
   }
@@ -44,17 +45,52 @@ async function mount({device=false,children=true,helpers=true,phone=false,extraS
   const page=await browser.newPage();page.setDefaultTimeout(6000);await page.setViewport({width:width||(phone?390:1280),height:900,isMobile:phone,hasTouch:phone});await page.goto(base+'/acceptance-test');await page.evaluate(theme=>document.documentElement.dataset.theme=theme,theme);
   await page.evaluate(async(authResponse)=>{localStorage.setItem('yuvomi-locale','en');await(await import('/i18n.js')).initI18n();if(authResponse){(await import('/utils/device-context.js')).acceptAuthentication(authResponse);(await import('/permissions.js')).setPermissions(authResponse.permissions);}const {acceptOpenTask}=await import('/components/task-acceptance.js');document.querySelector('#start').onclick=()=>{window.resultPromise=acceptOpenTask({id:7,is_offer:true});};},authResponse);
   if(duplicateNames)await page.evaluate(async()=>{(await import('/utils/member-label.js')).setMemberLabels([{id:1,display_name:'Alex',age:null,username:'alex.parent'},{id:2,display_name:'Alex',age:12,username:'alex.child'},{id:3,display_name:'Sam',age:null,username:'sam'}]);});
-  await page.click('#start');await page.waitForSelector('[data-acceptance-next]');return page;
+  await page.click('#start');await page.waitForSelector('[data-task-acceptance][data-stage="people"]');return page;
 }
+async function choosePrimary(page,id){await page.click(`[data-acceptance-primary="${id}"]`);await page.waitForSelector('.task-acceptance__helpers');}
 async function chooseAllocation(page,id,userId) {
   await page.click(`[data-acceptance-target="${id}"]`);
   await page.click(`[data-acceptance-choice="${userId}"]`);
 }
 
+test('paired avatar radios reveal helper checkboxes beneath them without a separate step or identity change',async()=>{
+  const page=await mount({device:true,scopedDevice:true});try{
+    assert.equal(await page.$('select[data-acceptance-primary]'),null);
+    assert.equal(await page.$('.task-acceptance__helpers'),null);
+    assert.equal(await page.$eval('[data-acceptance-confirm]',e=>e.disabled),true);
+    assert.deepEqual(await page.$$eval('[data-acceptance-primary]',els=>els.map(e=>[e.type,e.value])),[['radio','2'],['radio','3']]);
+    await page.focus('[data-acceptance-primary="2"]');await page.keyboard.press('Space');await page.waitForSelector('[data-acceptance-helper="3"]');
+    assert.equal(await page.$eval('[data-task-acceptance]',e=>e.dataset.stage),'people');
+    assert.equal(await page.$eval('[data-acceptance-primary="2"]',e=>e.checked&&e===document.activeElement),true);
+    assert.equal(await page.$('[data-acceptance-helper="2"]'),null);
+    assert.equal(await page.evaluate(()=>document.querySelector('.task-acceptance__helpers').getBoundingClientRect().top>=document.querySelector('.task-acceptance__primaries').getBoundingClientRect().bottom),true);
+    await page.focus('[data-acceptance-helper="3"]');await page.keyboard.press('Space');
+    assert.equal(await page.$eval('[data-acceptance-helper="3"]',e=>e.type==='checkbox'&&e.checked&&e===document.activeElement),true);
+    assert.equal(await page.$eval('[data-acceptance-helper="3"]',e=>getComputedStyle(e.closest('label').querySelector('.task-acceptance__check')).display!=='none'),true);
+    await page.click('[data-acceptance-next]');await chooseAllocation(page,10,'3');await page.click('[data-acceptance-back]');
+    await choosePrimary(page,3);assert.equal(await page.$('[data-acceptance-helper="3"]'),null);
+    assert.equal(await page.$$eval('[data-acceptance-helper]:checked',els=>els.length),0,'changing the acceptor clears helper choices');
+    await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});
+    assert.equal(writes.length,1);assert.equal(writes[0].primary_user_id,3);assert.deepEqual(writes[0].coassignee_ids,[]);assert.ok(writes[0].subtask_assignments.every(row=>row.user_id===null));
+  }finally{await page.close();}
+});
+
+test('authorized data photos render in the grid; remote URLs and richer cached profiles use initials',async()=>{
+  const page=await mount({photos:true});try{
+    await page.evaluate(()=>{window.yuvomi={users:[{id:3,avatar_data:'data:image/png;base64,c2VjcmV0'}]};});
+    assert.ok(await page.$('[data-acceptance-primary="1"] + .task-acceptance__avatar-wrap img'));
+    assert.equal(await page.$('[data-acceptance-helper="2"] + .task-acceptance__avatar-wrap img'),null);
+    assert.equal(await page.$('[data-acceptance-helper="3"] + .task-acceptance__avatar-wrap img'),null);
+    assert.equal(await page.$eval('[data-acceptance-primary="1"]',e=>e.checked&&e.disabled),true,'personal identity cannot be reassigned');
+    assert.ok(!requests.some(r=>/profile|users|avatar/.test(r.path)));
+    await page.click('[data-acceptance-cancel]');assert.equal(writes.length,0);
+  }finally{await page.close();}
+});
+
 test('duplicate member labels remain distinct through paired acceptance without changing initials or IDs',async()=>{
   const page=await mount({device:true,duplicateNames:true});try{
-    assert.deepEqual(await page.$$eval('#acceptance-primary option[value]:not([value=""])',els=>els.map(el=>[el.value,el.textContent])),[['1','Alex (alex.parent)'],['2','Alex (12)'],['3','Sam']]);
-    await page.select('#acceptance-primary','1');await page.click('[data-acceptance-next]');
+    assert.deepEqual(await page.$$eval('[data-acceptance-primary]',els=>els.map(el=>[el.value,el.closest('label').querySelector('.task-acceptance__member-name').textContent])),[['1','Alex (alex.parent)'],['2','Alex (12)'],['3','Sam']]);
+    await page.click('[data-acceptance-primary="1"]');await page.waitForSelector('.task-acceptance__helpers');
     await page.waitForSelector('[data-acceptance-helper="2"]');
     assert.equal(await page.$eval('[data-acceptance-helper="2"]',el=>el.closest('label').querySelector('.task-acceptance__member-name').textContent),'Alex (12)');
     assert.equal(await page.$eval('[data-acceptance-helper="2"]',el=>el.closest('label').querySelector('.task-acceptance__avatar').textContent),'A');
@@ -75,7 +111,8 @@ for(const children of [false,true])for(const helpers of [false,true])test(`helpe
     assert.ok(await page.$('[data-acceptance-helper="2"]'));
     assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Accepted by:'));
     if(helpers)await page.click('[data-acceptance-helper="2"]');
-    await page.click('[data-acceptance-next]');
+    assert.equal(await page.$eval('[data-acceptance-next]',el=>!el.hidden),helpers&&children);
+    if(helpers&&children)await page.click('[data-acceptance-next]');
     assert.equal(Boolean(await page.$('[data-acceptance-allocation]')),helpers&&children);
     if(helpers&&children){assert.equal(await page.$$eval('[data-acceptance-person]',els=>els.length),2);await page.click('[data-acceptance-next]');}
     await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
@@ -176,7 +213,7 @@ test('back removing every helper skips allocation and clears both primary and he
   const page=await mount({extraStep:true});try{
     await page.click('[data-acceptance-helper="2"]');await page.click('[data-acceptance-next]');
     await chooseAllocation(page,10,'1');await chooseAllocation(page,12,'2');
-    await page.click('[data-acceptance-back]');await page.click('[data-acceptance-helper="2"]');await page.click('[data-acceptance-next]');
+    await page.click('[data-acceptance-back]');await page.click('[data-acceptance-helper="2"]');
     assert.equal(await page.$('[data-acceptance-pool]'),null);assert.ok(await page.$('[data-acceptance-confirm]'));assert.equal(writes.length,0);
     await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
     assert.deepEqual(writes[0].coassignee_ids,[]);assert.deepEqual(writes[0].subtask_assignments,[{id:10,user_id:null},{id:12,user_id:null}]);
@@ -187,10 +224,10 @@ test('scoped paired picker keeps device identity and rights through recipient ch
   const page=await mount({device:true,scopedDevice:true,phone:true});try{
     const identity=()=>page.evaluate(async()=>{const d=await import('/utils/device-context.js'),p=await import('/permissions.js');return {snapshot:d.authenticationSnapshot(),bootstrap:d.deviceBootstrap(),isDevice:d.isDevicePrincipal(),permissions:p.getPermissions(),notes:p.moduleAccess('notes')};});
     const initial=await identity();assert.equal(initial.isDevice,true);assert.equal(initial.notes,'none');
-    assert.deepEqual(await page.$$eval('[data-acceptance-primary] option',els=>els.map(el=>el.value)),['','2','3']);
-    await page.click('[data-acceptance-next]');assert.equal(await page.$eval('[data-task-acceptance]',el=>el.dataset.stage),'primary','recipient is required');assert.equal(reads,1);
-    await page.select('[data-acceptance-primary]','2');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');assert.deepEqual(await identity(),initial);
-    await page.click('[data-acceptance-helper="3"]');await page.click('[data-acceptance-back]');await page.click('[data-acceptance-next]');
+    assert.deepEqual(await page.$$eval('[data-acceptance-primary]',els=>els.map(el=>el.value)),['2','3']);
+    assert.equal(await page.$eval('[data-acceptance-confirm]',el=>el.disabled),true,'recipient is required');assert.equal(reads,1);
+    await page.click('[data-acceptance-primary="2"]');await page.waitForSelector('.task-acceptance__helpers');await page.waitForSelector('[data-acceptance-helper="3"]');assert.deepEqual(await identity(),initial);
+    await page.click('[data-acceptance-helper="3"]');await page.click('[data-acceptance-next]');await page.click('[data-acceptance-back]');
     assert.equal(await page.$eval('[data-acceptance-helper="3"]',el=>el.checked),true,'back to the same primary retains helper choices');
     await page.click('[data-acceptance-next]');await page.click('[data-acceptance-next]');await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));
     assert.deepEqual(await identity(),initial);assert.equal(writes[0].primary_user_id,2);assert.deepEqual(writes[0].coassignee_ids,[3]);
@@ -200,8 +237,8 @@ test('scoped paired picker keeps device identity and rights through recipient ch
 });
 test('paired phone recipient, chooser allocation, back removes helper assignments, cancel writes nothing',async()=>{
   const page=await mount({device:true,phone:true});try{
-    assert.ok((await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('does not sign'));
-    await page.select('[data-acceptance-primary]','1');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="2"]');await page.click('[data-acceptance-helper="2"]');await page.click('[data-acceptance-next]');
+    assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('does not sign'),'no extra instructional paragraph');
+    await page.click('[data-acceptance-primary="1"]');await page.waitForSelector('.task-acceptance__helpers');await page.waitForSelector('[data-acceptance-helper="2"]');await page.click('[data-acceptance-helper="2"]');await page.click('[data-acceptance-next]');
     await chooseAllocation(page,10,'2');
     assert.ok(await page.$('[data-acceptance-target="10"][data-assignee="2"]'));
     if(process.env.OPEN_TASK_SCREENSHOTS){mkdirSync(process.env.OPEN_TASK_SCREENSHOTS,{recursive:true});await page.screenshot({path:process.env.OPEN_TASK_SCREENSHOTS+'/acceptance-phone.png'});}
@@ -214,13 +251,13 @@ test('paired phone recipient, chooser allocation, back removes helper assignment
 test('helper denial still asks question and permits self acceptance',async()=>{
   const page=await mount({helpers:false});try{
     assert.ok(await page.$('[data-acceptance-helper-unavailable]'));assert.equal(await page.$('[data-acceptance-helper]'),null);
-    await page.click('[data-acceptance-next]');await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.deepEqual(writes[0].coassignee_ids,[]);
+    assert.equal(await page.$eval('[data-acceptance-next]',el=>el.hidden),true);await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.deepEqual(writes[0].coassignee_ids,[]);
   }finally{await page.close();}
 });
 test('uncertain retry reuses exact operation, while conflict requires reload and fresh confirmation',async()=>{
   const page=await mount();try{
-    await page.click('[data-acceptance-next]');failure=503;await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-acceptance-retry]');await page.click('[data-acceptance-retry]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.deepEqual(writes[1],writes[0]);
-    await page.click('#start');await page.waitForSelector('[data-acceptance-next]');await page.click('[data-acceptance-next]');failure=409;await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-acceptance-reload]');const previous=writes.at(-1).operation_id;projection.expected_revision=8;await page.click('[data-acceptance-reload]');await page.waitForSelector('[data-acceptance-next]');assert.equal(writes.length,3);await page.click('[data-acceptance-next]');await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.equal(writes.at(-1).expected_revision,8);assert.notEqual(writes.at(-1).operation_id,previous);
+    failure=503;await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-acceptance-retry]');await page.click('[data-acceptance-retry]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.deepEqual(writes[1],writes[0]);
+    await page.click('#start');await page.waitForSelector('[data-acceptance-confirm]');failure=409;await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-acceptance-reload]');const previous=writes.at(-1).operation_id;projection.expected_revision=8;await page.click('[data-acceptance-reload]');await page.waitForSelector('[data-acceptance-confirm]');assert.equal(writes.length,3);await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.equal(writes.at(-1).expected_revision,8);assert.notEqual(writes.at(-1).operation_id,previous);
   }finally{await page.close();}
 });
 test('context ending discards local allocation without a request',async()=>{
@@ -238,15 +275,15 @@ for(const width of [320,360,752,1280])for(const theme of ['light','dark'])test(`
     assert.equal(title.text,projection.task.title,'accessible title keeps the complete text');
     assert.ok(title.height<=title.lineHeight*2+1,'heading uses at most two visible lines');
     assert.ok(title.full>title.height,'long title is visibly truncated');
-    assert.equal(await page.$$eval('.task-acceptance__avatar',els=>els.map(el=>el.textContent).join(',')),'GV,SC','helpers have distinct initials');
+    assert.equal(await page.$$eval('.task-acceptance__helpers .task-acceptance__avatar',els=>els.map(el=>el.textContent).join(',')),'GV,SC','helpers have distinct initials');
     const helper='[data-acceptance-helper="2"]';
     assert.equal(await page.$eval(helper,el=>el.type),'checkbox');
     assert.ok(await page.$(`::-p-aria(${projection.coassignee_candidates[0].display_name})`),'native checkbox accessible name contains only the complete member name');
-    const measure=()=>page.$eval(helper,el=>{const card=el.closest('label'),r=card.getBoundingClientRect(),style=getComputedStyle(card);return{x:r.x,y:r.y,width:r.width,height:r.height,border:style.borderColor,shadow:style.boxShadow,bg:style.backgroundColor,outline:style.outlineStyle};});
+    const measure=()=>page.$eval(helper,el=>{const card=el.closest('label'),r=card.getBoundingClientRect(),style=getComputedStyle(card.querySelector('.task-acceptance__avatar-wrap'));return{x:r.x,y:r.y,width:r.width,height:r.height,shadow:style.boxShadow,check:getComputedStyle(card.querySelector('.task-acceptance__check')).display};});
     const before=await measure();assert.ok(before.height>=44,'whole helper card is a touch target');
     await page.focus(helper);await page.keyboard.press('Space');assert.equal(await page.$eval(helper,el=>el.checked),true);
     const after=await measure();assert.deepEqual([after.x,after.y,after.width,after.height],[before.x,before.y,before.width,before.height],'selection does not shift the card');
-    assert.ok(after.border!==before.border||after.shadow!==before.shadow||after.outline!=='none','selected card has an outline in addition to the native checkmark');
+    assert.notEqual(after.shadow,before.shadow,'selected portrait has a ring');assert.equal(after.check,'grid','selected portrait has a corner check badge');
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
     assert.equal(await page.$eval('.modal-panel__body',el=>el.scrollWidth>el.clientWidth+1),false);
     if(output){mkdirSync(output,{recursive:true});await page.screenshot({path:`${output}/helpers-${width}-${theme}.png`});writeFileSync(`${output}/helpers-${width}-${theme}.json`,JSON.stringify({width,theme,title,before,after},null,2));}
@@ -260,10 +297,10 @@ for(const width of [320,360,752,1280])for(const theme of ['light','dark'])test(`
 
 test('paired confirmation preserves chosen accepting identity without repeated prose',async()=>{
   const page=await mount({device:true,children:false});try{
-    await page.select('[data-acceptance-primary]','2');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');
-    await page.click('[data-acceptance-next]');
-    assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent.trim()),'Grace');
-    assert.equal(await page.$eval('[data-acceptance-no-helpers]',el=>el.textContent.trim()),'None');
+    await page.click('[data-acceptance-primary="2"]');await page.waitForSelector('.task-acceptance__helpers');await page.waitForSelector('[data-acceptance-helper="3"]');
+    assert.equal(await page.$eval('[data-acceptance-next]',el=>el.hidden),true);
+    assert.equal(await page.$eval('[data-acceptance-primary]:checked',el=>el.closest('label').querySelector('.task-acceptance__member-name').textContent.trim()),'Grace');
+    assert.equal(await page.$$eval('[data-acceptance-helper]:checked',els=>els.length),0);
     assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Confirm to accept the task'));
     assert.ok(!(await page.$eval('[data-task-acceptance]',el=>el.textContent)).includes('Accepted by:'));
     await page.click('[data-acceptance-confirm]');await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.equal(writes[0].primary_user_id,2);
@@ -287,9 +324,9 @@ for(const width of [320,752])for(const theme of ['light','dark'])test(`confirmat
 
 test('paired confirmation preserves long identity avatar size at 320px',async()=>{
   const page=await mount({device:true,children:false,width:320,phone:true,long:true});try{
-    await page.select('[data-acceptance-primary]','2');await page.click('[data-acceptance-next]');await page.waitForSelector('[data-acceptance-helper="3"]');await page.click('[data-acceptance-next]');
-    assert.equal(await page.$eval('.task-acceptance__identity .task-acceptance__avatar',el=>el.getBoundingClientRect().width),36,'avatar does not shrink or wrap initials beside a long name');
-    assert.equal(await page.$eval('[data-acceptance-identity]',el=>el.textContent.trim()),projection.coassignee_candidates[0].display_name);
+    await page.click('[data-acceptance-primary="2"]');await page.waitForSelector('.task-acceptance__helpers');await page.waitForSelector('[data-acceptance-helper="3"]');
+    assert.equal(await page.$eval('[data-acceptance-primary]:checked',el=>el.closest('label').querySelector('.task-acceptance__avatar').getBoundingClientRect().width),64,'avatar does not shrink or wrap initials beside a long name');
+    assert.equal(await page.$eval('[data-acceptance-primary]:checked',el=>el.closest('label').querySelector('.task-acceptance__member-name').textContent.trim()),projection.coassignee_candidates[0].display_name);
     assert.equal(await page.$eval('.modal-panel__body',el=>el.scrollWidth>el.clientWidth+1),false);await page.click('[data-acceptance-cancel]');
   }finally{await page.close();}
 });

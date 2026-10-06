@@ -29,6 +29,27 @@ const base=`http://127.0.0.1:${server.address().port}/api/v1/tasks`;
 test.after(()=>{server.closeAllConnections();server.close();});
 async function call(method,path,body,headers={}){const res=await fetch(base+path,{method,headers:{'Content-Type':'application/json',...headers},...(body===undefined?{}:{body:JSON.stringify(body)})});return {status:res.status,body:await res.json()};}
 
+test('acceptance photos retain human profile access and the paired display name/color boundary',async()=>{
+  const photo='data:image/png;base64,aGVsbG8=';
+  const before=d.prepare('SELECT id,avatar_data,avatar_color FROM users WHERE id IN (2,3,4)').all();
+  d.prepare('UPDATE users SET avatar_data=?,avatar_color=? WHERE id IN (2,3,4)').run(photo,'#235678');
+  const id=seed('Avatar selection');
+  try{
+    const human=await call('GET',`/${id}/acceptance`);assert.equal(human.status,200);
+    assert.equal(human.body.data.primary_candidates[0].avatar_data,photo);
+    assert.equal(human.body.data.coassignee_candidates.find(m=>m.id===3).avatar_data,photo);
+    asDevice=true;
+    const paired=await call('GET',`/${id}/acceptance?primary_user_id=2`);assert.equal(paired.status,200);
+    assert.deepEqual(paired.body.data.primary_candidates.map(m=>m.id),[2,3]);
+    assert.deepEqual(paired.body.data.coassignee_candidates.map(m=>m.id),[3]);
+    for(const person of [...paired.body.data.primary_candidates,...paired.body.data.coassignee_candidates]){
+      assert.equal(person.avatar_color,'#235678');assert.equal(Object.hasOwn(person,'avatar_data'),false);
+      assert.deepEqual(Object.keys(person).sort(),['avatar_color','display_name','id']);
+    }
+    assert.ok(!JSON.stringify(paired.body).includes(photo));
+  }finally{asDevice=false;for(const person of before)d.prepare('UPDATE users SET avatar_data=?,avatar_color=? WHERE id=?').run(person.avatar_data,person.avatar_color,person.id);}
+});
+
 test('authorized offer detail reveals no independently private child or hidden revision',async()=>{
   const id=seed('Visible parent'),visible=seed('Visible child',{parent:id}),hidden=seed('SECRET child',{parent:id,visibility:'private'});
   const before=d.prepare('SELECT total_changes() n').get().n,detail=await call('GET',`/${id}/acceptance`);

@@ -523,7 +523,7 @@
   grid-template-columns: minmax(var(--target-base), 1fr) auto;
   align-items: center;
   gap: 0 var(--space-2);
-  padding: 2px var(--page-inline-pad);
+  padding: 0 var(--page-inline-pad);
   flex-shrink: 0;
   min-width: 0;
 }

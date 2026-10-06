@@ -106,9 +106,10 @@ test('a pending save prevents an already armed resize hold from activating',asyn
     await page.mouse.move(p.x,p.y);await page.mouse.down();
     await page.$eval(secondCard+' .note-card__lock',button=>button.click());
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
-    await new Promise(resolve=>setTimeout(resolve,520));await page.mouse.move(p.x-40,p.y,{steps:4});
+    await new Promise(resolve=>setTimeout(resolve,520));await page.mouse.move(p.x+40,p.y,{steps:4});
     assert.equal(await page.$('.note-card--resizing'),null,'delayed activation rechecks the same write gate');
-    assert.equal((await snapshot(page)).width,before.width);await page.mouse.up();await finish(page);assert.equal(writes.length,1);
+    assert.equal((await snapshot(page)).width,before.width);await finish(page);await page.mouse.up();assert.equal(writes.length,1);
+    assert.equal(await page.$('.note-modal'),null,'acknowledgment cannot turn a canceled resize hold into a reader click');
   }finally{releaseSave?.();await page.mouse.up().catch(()=>{});await page.close();}
 });
 

@@ -11,11 +11,16 @@ const app=express();app.use(express.json());app.use(express.static(fileURLToPath
 const links='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(m=>`<link rel="stylesheet" href="${m[1]}">`).join('');
 app.get('/drag-test',(_req,res)=>res.send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">${links}<script src="/lucide.min.js"></script><style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}</style></head><body><main id="main-content"></main></body></html>`));
 let notes,writes,mode,releaseSave,checkWrites,checkMode,holdCheck,releaseCheck,browser,server,base;
+let holdRead=false,readMode='success',releaseReads=[];
 app.use('/api/v1',async(req,res)=>{
   if(req.path==='/auth/me')return res.json({csrfToken:'synthetic'});
   if(req.path==='/notes/members')return res.json({data:[{id:1,display_name:'Synthetic Parent'}]});
   if(req.path==='/notes/changes')return res.status(204).end();
-  if(req.path==='/notes/board')return res.json({data:{notes,groups:[]}});
+  if(req.path==='/notes/board'){
+    if(holdRead)await new Promise(resolve=>releaseReads.push(resolve));
+    if(readMode==='failed')return res.status(503).json({error:'Synthetic read unavailable'});
+    return res.json({data:{notes,groups:[]}});
+  }
   if(req.path==='/notes/1/check'&&req.method==='PATCH'){
     checkWrites.push(structuredClone(req.body));
     if(holdCheck)await new Promise(resolve=>{releaseCheck=resolve;});
@@ -35,11 +40,13 @@ app.use('/api/v1',async(req,res)=>{
   return res.json({data:[]});
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--disable-dev-shm-usage']});});
-test.after(async()=>{releaseSave?.();releaseCheck?.();await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
+test.after(async()=>{releaseSave?.();releaseCheck?.();releaseReads.splice(0).forEach(release=>release());await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
 const card='.note-card[data-id="1"]';
-async function mount({reduced=false,touch=false,checklist=false}={}){
+async function mount({reduced=false,touch=false,checklist=false,adjacent=false}={}){
   writes=[];checkWrites=[];mode='success';checkMode='success';releaseSave=null;holdCheck=false;releaseCheck=null;
+  holdRead=false;readMode='success';releaseReads=[];
   notes=Array.from({length:5},(_,i)=>({id:i+1,title:`Synthetic ${i+1}`,content:'A plain paragraph to drag.\n\n'+Array.from({length:20},(_,j)=>`Preview line ${j}`).join('\n\n'),color:'#C7DED9',created_by:1,creator_name:'Synthetic Parent',visibility:'all',revision:4,permissions:{view:true,edit:true,arrange:true,delete:true,manage_visibility:true},layout:{x:i?8:2,y:i?20+i*8:2,width:4,height:6,revision:2}}));
+  if(adjacent){notes.splice(2);notes[1].layout={...notes[1].layout,x:7,y:2};}
   if(checklist)notes[0].content='- [ ] Synthetic checklist\n\n'+notes[0].content;
   const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width:1280,height:1000,hasTouch:touch});
   await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:reduced?'reduce':'no-preference'}]);
@@ -50,6 +57,55 @@ async function mount({reduced=false,touch=false,checklist=false}={}){
 async function snapshot(page){return page.evaluate(()=>{const c=document.querySelector('.note-card[data-id="1"]'),r=c.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,toolbar:document.querySelector('.notes-board-toolbar').getBoundingClientRect().height,sameCard:c===originalCard,preview:c.querySelector('.note-card__content').scrollTop,focus:document.activeElement===c.querySelector('.note-card__title'),zoom:document.querySelector('#notes-zoom-value').textContent};});}
 async function drag(page,dx=80,dy=50){const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+dx,p.y+dy,{steps:8});await page.mouse.up();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');return p;}
 async function finish(page){releaseSave();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout saved');}
+
+const secondCard='.note-card[data-id="2"]';
+async function secondPosition(page){return page.$eval(secondCard,node=>({left:node.style.left,top:node.style.top,moving:node.classList.contains('note-card--moving')}));}
+async function beginSecondDrag(page){
+  const p=await page.$eval(secondCard,node=>{const r=node.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
+  await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+60,p.y+20,{steps:8});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));return p;
+}
+async function unblockReads(){holdRead=false;releaseReads.splice(0).forEach(release=>release());}
+async function waitForRead(){for(let i=0;i<100&&!releaseReads.length;i++)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(releaseReads.length,'canonical recovery read started');}
+
+for(const ackWhileHeld of [false,true])test(`another card cannot begin an uncommittable drag while saving (ack while held: ${ackWhileHeld})`,async()=>{
+  const page=await mount({adjacent:true});try{
+    await drag(page,35,10);const before=await secondPosition(page);
+    const point=await beginSecondDrag(page);
+    assert.deepEqual(await secondPosition(page),before,'busy gestures must not move and then snap back');
+    assert.equal(await page.$eval('#notes-grid',node=>node.getAttribute('aria-busy')),'true','the board exposes save progress');
+    assert.equal(await page.$eval(secondCard,node=>getComputedStyle(node).cursor),'progress');
+    if(ackWhileHeld){await finish(page);await page.mouse.move(point.x+90,point.y+35,{steps:4});assert.deepEqual(await secondPosition(page),before,'ack does not revive a rejected pointer');}
+    await page.mouse.up();assert.equal(writes.length,1);assert.equal(await page.$('.note-modal'),null,'a rejected drag is not a reader click');
+    if(!ackWhileHeld)await finish(page);
+    await beginSecondDrag(page);assert.equal((await secondPosition(page)).moving,true,'a fresh pointer works after acknowledgment');await page.mouse.up();
+    await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');await finish(page);
+    assert.equal(writes.length,2);assert.notEqual((await secondPosition(page)).left,before.left);
+  }finally{releaseSave?.();await page.mouse.up().catch(()=>{});await page.close();}
+});
+
+test('a rejected save keeps new drags blocked until canonical recovery completes',async()=>{
+  const page=await mount({adjacent:true});try{
+    mode='failed';await drag(page);holdRead=true;releaseSave();await waitForRead();
+    const before=await secondPosition(page);await beginSecondDrag(page);
+    assert.deepEqual(await secondPosition(page),before,'pending clearing must not open a stale-revision recovery gap');await page.mouse.up();
+    await unblockReads();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout no longer allowed');
+    mode='success';await beginSecondDrag(page);await page.mouse.up();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');await finish(page);assert.equal(writes.length,2);
+  }finally{releaseSave?.();await unblockReads();await page.mouse.up().catch(()=>{});await page.close();}
+});
+
+test('uncertain outcome and failed Reload keep layout gestures blocked until a successful Reload',async()=>{
+  const page=await mount({adjacent:true});try{
+    mode='unknown';await drag(page);releaseSave();await page.waitForSelector('[data-group-retry]');
+    const before=await secondPosition(page);await beginSecondDrag(page);assert.deepEqual(await secondPosition(page),before);await page.mouse.up();
+    holdRead=true;await page.click('[data-group-reload]');await waitForRead();
+    await beginSecondDrag(page);assert.deepEqual(await secondPosition(page),before,'Reload retains the gate while fetching current revisions');await page.mouse.up();
+    readMode='failed';await unblockReads();await page.waitForSelector('[data-group-reload]');
+    await beginSecondDrag(page);assert.deepEqual(await secondPosition(page),before,'failed recovery does not admit stale commands');await page.mouse.up();
+    readMode='success';await page.click('[data-group-reload]');await page.waitForFunction(()=>!document.querySelector('[data-group-reload]'));
+    await beginSecondDrag(page);await page.mouse.up();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');await finish(page);assert.equal(writes.length,2);
+  }finally{releaseSave?.();await unblockReads();await page.mouse.up().catch(()=>{});await page.close();}
+});
 test('slow saves preserve the dropped rectangle, card, focus, preview scroll and toolbar across repeated drags',async()=>{
   const page=await mount();try{
     for(let i=0;i<3;i++){

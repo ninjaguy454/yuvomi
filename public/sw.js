@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage Notes group scroll ownership and stable reorder saving.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.70`;
+// Release Notes scroll/save, corner badges and reviewed Task card layout.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.71`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

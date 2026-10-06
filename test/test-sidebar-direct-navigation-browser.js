@@ -251,7 +251,12 @@ test('repeated and rapid module taps keep only the latest queued destination', {
     await tap('.nav-sidebar [data-route="/calendar"]');
     await assertCollapsed();
     await blocker.request.continue();
-    await display.waitForFunction(() => location.pathname === '/calendar'); await settle();
+    // The router updates history before importing/rendering the destination.
+    // Main-content can still be focused with the preceding Notes DOM, so wait
+    // for Calendar's completed render before testing Back and opening a note.
+    await display.waitForFunction(() => location.pathname === '/calendar'
+      && document.querySelector('#cal-body')?.getAttribute('aria-busy') === null);
+    await settle();
     const trace = await display.evaluate(() => window.__stopShellTrace());
     assert.deepEqual(trace.events.filter(e => e.type === 'pushState').map(e => e.path), ['/notes', '/calendar']);
     assert.ok(trace.frames.every(f => f.width === 56));

@@ -53,7 +53,10 @@ async function mount({ width = 1280, height = 900, touch = false, compact = fals
   return page;
 }
 const card = '[data-board-key="group:11"]';
-async function open(page) { await page.click(`${card} [data-group-page="overview"]`); await page.waitForSelector('.note-group-overview'); }
+async function open(page) {
+  await page.click(`${card} [data-group-page="overview"]`); await page.waitForSelector('.note-group-overview');
+  await page.evaluate(() => { window.initialGroupOverview = document.querySelector('.note-group-overview'); });
+}
 async function select(page, id) { if (await page.$eval('[data-group-selection-mode]', element => element.getAttribute('aria-pressed') === 'false')) await page.click('[data-group-selection-mode]'); await page.click(`[data-group-select="${id}"]`); }
 async function actions(page) {
   if (!await page.$eval('[data-group-menu]', element => element.open)) await page.click('[data-group-menu] summary');
@@ -142,16 +145,19 @@ test('overview order uses the single page request owner and rendered canonical r
     await order(page); await page.waitForSelector('[data-group-undo]');
     assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'reorder'); assert.deepEqual(writes[0].selected_ids, [2]);
     assert.deepEqual(writes[0].expected.groups, [{ id: 11, revision: 7 }]);
-    await open(page); assert.deepEqual(await page.$$eval('[data-group-page].note-group-overview__page', elements => elements.map(element => Number(element.dataset.groupPage))), [2,1]);
+    assert.ok(await page.$('.note-group-overview'), 'the same group remains open after acknowledgement');
+    assert.equal(await page.evaluate(() => document.querySelector('.note-group-overview') === window.initialGroupOverview), true);
+    assert.deepEqual(await page.$$eval('[data-group-page].note-group-overview__page', elements => elements.map(element => Number(element.dataset.groupPage))), [2,1]);
   } finally { await page.close(); }
 });
 
 test('overview uncertain result retries the identical frozen command through page recovery', async () => {
   const page = await mount(); try {
     truncate = true; await order(page); await page.waitForSelector('[data-group-retry]');
-    assert.equal(await page.$('.note-group-overview'), null); const first = structuredClone(writes[0]);
-    await page.click('[data-group-retry]'); await page.waitForSelector('[data-group-undo]');
+    assert.ok(await page.$('.note-group-overview')); const first = structuredClone(writes[0]);
+    await page.click('.note-group-overview [data-group-retry]'); await page.waitForSelector('.note-group-overview [data-group-undo]');
     assert.equal(writes.length, 2); assert.deepEqual(writes[1], first);
+    assert.equal(await page.evaluate(() => document.querySelector('.note-group-overview') === window.initialGroupOverview), true);
   } finally { await page.close(); }
 });
 
@@ -160,7 +166,10 @@ test('remote revision invalidates an open overview extraction preview before Pla
     await open(page); await select(page, 2); await action(page, 'remove'); await page.waitForSelector('[data-group-confirm]');
     snapshot.groups[0].revision++; snapshot.groups[0].can_manage = false;
     await page.evaluate(() => window.noteStream.dispatchEvent(new Event('change')));
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await page.waitForFunction(() => !document.querySelector('[data-group-confirm]') && !document.querySelector('.note-group-overview [data-group-select]'));
+    assert.ok(await page.$('.note-group-overview'), 'revoked management keeps the authorized group browseable');
+    assert.equal(await page.evaluate(() => document.querySelector('.note-group-overview') === window.initialGroupOverview), true);
+    assert.equal(await page.$('[data-group-placement]'), null, 'revocation discards the invalid extraction preview');
     assert.equal(writes.length, 0);
   } finally { await page.close(); }
 });
@@ -228,7 +237,8 @@ test('actual canvas native drag opens destination overview and inserts once thro
     const start = await center(page, '[data-board-key="note:3"] .note-card__content'); const destination = await center(page, card);
     await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(destination.x, destination.y, { steps: 8 });
     await page.waitForSelector('.note-group-overview [data-group-page="2"]');
-    const insert = await center(page, '.note-group-overview [data-group-page="2"]'); await page.mouse.move(insert.x, insert.y); await page.mouse.up();
+    const insert = await page.$eval('.note-group-overview [data-group-page="2"]', element => { const rect = element.getBoundingClientRect(); return { x: rect.left + rect.width / 4, y: rect.top + rect.height / 2 }; });
+    await page.mouse.move(insert.x, insert.y); await page.mouse.up();
     await page.waitForSelector('[data-group-undo]'); assert.equal(writes.length, 1); assert.equal(writes[0].kind, 'join');
     assert.deepEqual(writes[0].note_ids, [3]); assert.equal(writes[0].before_note_id, 2);
   } finally { await page.close(); }

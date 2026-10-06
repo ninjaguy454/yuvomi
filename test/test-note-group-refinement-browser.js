@@ -103,14 +103,19 @@ async function mount({ width = 1440, height = 1000, theme = 'light', touch = fal
   }
   return page;
 }
-async function point(page, selector) {
+async function point(page, selector, before = false) {
   await page.$eval(selector, element => element.scrollIntoView({ block: 'nearest', inline: 'nearest' }));
-  return page.$eval(selector, element => {
+  return page.$eval(selector, (element, before) => {
     const rect = element.getBoundingClientRect(), scroller = element.closest('.note-group-overview__grid')?.getBoundingClientRect();
     const left = Math.max(0, rect.left, scroller?.left || 0), right = Math.min(innerWidth, rect.right, scroller?.right || innerWidth);
     const top = Math.max(0, rect.top, scroller?.top || 0), bottom = Math.min(innerHeight, rect.bottom, scroller?.bottom || innerHeight);
-    return { x: (left + right) / 2, y: (top + bottom) / 2 };
-  });
+    return { x: before ? left + (right - left) / 4 : (left + right) / 2, y: (top + bottom) / 2 };
+  }, before);
+}
+async function retainedAfterSave(page) {
+  await page.waitForFunction(() => !document.querySelector('#notes-grid')?.dataset.layoutWrite
+    && document.querySelector('.note-group-overview__status')?.textContent === 'Layout saved');
+  assert.ok(await page.$('.note-group-overview:not([hidden])'), 'the group remains open after saving');
 }
 async function select(page, ids) {
   if (await page.$eval('[data-group-selection-mode]', element => element.getAttribute('aria-pressed')) !== 'true') await page.click('[data-group-selection-mode]');
@@ -255,7 +260,7 @@ for (const operation of ['order', 'move', 'remove']) test(`refinement ${operatio
     else await page.click('[data-group-extract-choice="individual"]');
     assert.equal(writes.length, 0);
     await page.click('[data-group-confirm]');
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await retainedAfterSave(page);
     assert.equal(writes.length, 1); assert.deepEqual(writes[0].body.selected_ids, selectionOrder);
     assert.equal(writes[0].body.kind, { order: 'reorder', move: 'transfer', remove: 'extract' }[operation]);
   } finally { await page.close(); }
@@ -268,7 +273,7 @@ test('refinement transfer to the final insertion position preserves the selected
     const options = await page.$$eval('[data-group-before] option', elements => elements.map(element => ({ value: element.value, text: element.textContent.trim() })));
     assert.ok(options.length >= 2, 'transfer offers before-note and final positions');
     await page.select('[data-group-before]', options.at(-1).value); await page.click('[data-group-confirm]');
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await retainedAfterSave(page);
     assert.equal(writes.length, 1); assert.equal(writes[0].body.before_note_id, null);
     assert.deepEqual(writes[0].body.selected_ids, selectionOrder);
   } finally { await page.close(); }
@@ -285,7 +290,7 @@ for (const placement of ['beginning', 'end']) test(`refinement standalone Add to
     assert.equal(selected.text, `Add to ${placement}`);
     await page.select('[data-group-before]', selected.value); assert.equal(writes.length, 0);
     await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await retainedAfterSave(page);
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'join');
     assert.deepEqual(writes[0].body.note_ids, [13]); assert.equal(writes[0].body.before_note_id, placement === 'beginning' ? 1 : null);
   } finally { await page.close(); }
@@ -501,13 +506,13 @@ for (const touch of [false, true]) for (const zoom of [.5, 1, 1.5]) test(`refine
     await saveDragTrace(page, `short-group-entry-${touch ? 'touch' : 'mouse'}-${zoom}`);
     assert.ok(await page.$(overview), 'the incoming overview stays open while the held pointer travels from the hover location toward its panel');
     await assertFullProxy(page, [13], { ...start, exact: true }); await assertCapture(page, start.pointer);
-    const insert = await point(page, `${overview} [data-group-page="2"]`);
+    const insert = await point(page, `${overview} [data-group-page="2"]`, true);
     await move(page, insert, cdp); await release(page, cdp);
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await retainedAfterSave(page);
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'join'); assert.equal(writes[0].body.before_note_id, 2);
   } finally { await cdp?.detach(); await page.close(); }
 });
-for (const touch of [false, true]) for (const entered of [false, true]) test(`refinement incoming short-group preview allows retreat and repeated cancellation ${entered ? 'after panel entry' : 'during approach'}: ${touch ? 'touch' : 'mouse'}`, async () => {
+for (const touch of [false, true]) for (const entered of [false, true]) test(`refinement incoming short-group preview survives repeated backdrop travel ${entered ? 'after panel entry' : 'during approach'}: ${touch ? 'touch' : 'mouse'}`, async () => {
   const page = await mount({ canvas: true, touch, width: 1802, height: 1178, fixture: shortGroupFixture }), cdp = touch ? await page.createCDPSession() : null;
   try {
     const start = await beginNative(page, cdp);
@@ -515,13 +520,13 @@ for (const touch of [false, true]) for (const entered of [false, true]) test(`re
       await approachShortGroup(page, cdp);
       if (entered) await move(page, await point(page, `${overview} [data-group-page="2"]`), cdp);
       await move(page, { x: 12, y: 150 }, cdp); await frame(page);
-      assert.equal(await page.$(overview), null, 'moving out of the approach area or entered panel intentionally returns to the canvas');
-      assert.equal(await page.$(proxy), null); await assertCapture(page, start.pointer);
+      assert.ok(await page.$(overview), 'crossing the backdrop keeps the group available during a held drag');
+      assert.ok(await page.$(proxy)); await assertCapture(page, start.pointer);
       assert.equal(writes.length, 0);
     }
     await approachShortGroup(page, cdp);
     await page.keyboard.press('Escape'); await release(page, cdp); await frame(page);
-    assert.equal(await page.$(overview), null); assert.equal(await page.$(proxy), null); assert.equal(await page.$('.note-modal'), null);
+    assert.ok(await page.$(overview)); assert.equal(await page.$(proxy), null); assert.equal(await page.$('.note-modal'), null);
     assert.equal(writes.length, 0); await assertCapture(page, start.pointer, false);
   } finally { await cdp?.detach(); await page.close(); }
 });
@@ -534,7 +539,7 @@ test('refinement releasing over the approach gap cancels without joining or savi
     await move(page, { x: target.x + (insertion.x - target.x) / 6, y: target.y + (insertion.y - target.y) / 6 }); await frame(page);
     assert.ok(await page.$(overview), 'the approach preview remains available before release');
     await assertCapture(page, start.pointer); await release(page); await frame(page);
-    assert.equal(await page.$(overview), null); assert.equal(await page.$(proxy), null); assert.equal(await page.$('.note-modal'), null);
+    assert.ok(await page.$(overview)); assert.equal(await page.$(proxy), null); assert.equal(await page.$('.note-modal'), null);
     assert.equal(writes.length, 0, 'a backdrop release is not a structural command or a canvas layout save');
   } finally { await page.close(); }
 });
@@ -659,11 +664,11 @@ for (const touch of [false, true]) for (const zoom of [.5, 1, 1.5]) test(`refine
     await assertFullProxy(page, [13], { ...start, exact: true }); await assertCapture(page, start.pointer);
     assert.equal(await page.evaluate(() => originalSource === document.querySelector('[data-board-key="note:13"]') && originalSource.isConnected && captureOwner === originalSource), true, 'the original source owns capture while its visual clone floats above the overview');
     assert.equal(await page.$$eval('[data-board-key="note:13"]', elements => elements.length), 1, 'the decorative preview duplicates no actionable board identity');
-    const insert = await point(page, `${overview} [data-group-page="4"]`);
+    const insert = await point(page, `${overview} [data-group-page="4"]`, true);
     await move(page, insert, cdp); await frame(page);
     await assertFullProxy(page, [13], { ...start, exact: true }); assert.equal(writes.length, 0);
     await release(page, cdp);
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await retainedAfterSave(page);
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'join');
     assert.deepEqual(writes[0].body.note_ids, [13]); assert.equal(writes[0].body.before_note_id, 4);
     assert.equal(await page.$(proxy), null); await assertCapture(page, start.pointer, false);
@@ -751,10 +756,11 @@ for (const cancel of ['Escape', 'pointercancel', 'capture-loss']) test(`refineme
       else await page.evaluate(pointer => window.captureOwner.releasePointerCapture(pointer), start.pointer);
       if (cancel !== 'pointercancel') await release(page, cdp);
       await page.waitForFunction(() => !document.querySelector('[data-group-drag-proxy]') && !document.querySelector('.note-card--moving'));
-      assert.equal(await page.$(overview), null); assert.equal(await page.$('.note-modal'), null); assert.equal(writes.length, 0);
+      assert.ok(await page.$(overview)); assert.equal(await page.$('.note-modal'), null); assert.equal(writes.length, 0);
       assert.deepEqual(await paint(), before, 'cancellation restores every source paint property');
       assert.equal(await page.evaluate(() => originalSource.isConnected && originalSource === document.querySelector('[data-board-key="note:13"]') && !originalSource.classList.contains('note-card--drag-source')), true);
       await assertCapture(page, start.pointer, false);
+      await page.click('[data-group-close]'); assert.equal(await page.$(overview), null);
     }
   } finally { await cdp.detach(); await page.close(); }
 });
@@ -780,11 +786,11 @@ for (const touch of [false, true]) test(`refinement selected block crosses group
     await page.waitForSelector(`${overview}:not([hidden]) [data-group-page="11"]`);
     await screenshot(page, `cross-group-${touch ? 'touch' : 'mouse'}`);
     await assertFullProxy(page, selectionOrder); await assertCapture(page, start.pointer);
-    const insertion = await point(page, `${overview} [data-group-page="12"]`);
+    const insertion = await point(page, `${overview} [data-group-page="12"]`, true);
     await move(page, insertion, cdp);
     const dropState = await page.evaluate(({ x, y }) => ({ gesture: document.querySelector('.note-group-overview')?.dataset.gestureState, hit: document.elementFromPoint(x, y)?.outerHTML.slice(0, 400), owner: window.captureOwner?.className, pointer: window.pointerStarts.at(-1) }), insertion);
     assert.equal(writes.length, 0); await release(page, cdp);
-    try { await page.waitForFunction(() => !document.querySelector('.note-group-overview')); }
+    try { await retainedAfterSave(page); }
     catch (error) { error.message += `; before release ${JSON.stringify(dropState)}; after ${JSON.stringify(await page.evaluate(() => ({ state: document.querySelector('.note-group-overview')?.dataset.gestureState, events: window.gestureEvents, pages: [...document.querySelectorAll('.note-group-overview [data-group-page]')].map(element => element.dataset.groupPage) })))}; writes ${JSON.stringify(writes)}`; throw error; }
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'transfer');
     assert.deepEqual(writes[0].body.selected_ids, selectionOrder); assert.equal(writes[0].body.target_group_id, 42); assert.equal(writes[0].body.before_note_id, 12);

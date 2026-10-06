@@ -311,15 +311,24 @@ test('board-owned hover opens a destination preview and inserts once at the disp
     await page.evaluate(() => window.interactions.groupDragBridge.hoverTarget(window.nativeTarget, window.nativeSession));
     await page.waitForSelector('[data-group-page="12"]');
     assert.equal(await page.evaluate(() => window.commands.length), 0);
-    const point = await page.$eval('[data-group-page="12"]', el => { const r = el.getBoundingClientRect(); return { clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 }; });
+    const point = await page.$eval('[data-group-page="12"]', el => { const r = el.getBoundingClientRect(); return { clientX: r.x + r.width / 4, clientY: r.y + r.height / 2 }; });
     const result = await page.evaluate(async point => {
       const bridge = window.interactions.groupDragBridge, session = { ...window.nativeSession, ...point };
+      const before = document.querySelector('.note-group-overview__grid').getBoundingClientRect().toJSON();
+      window.dispatchEvent(new PointerEvent('pointermove', { pointerId: session.pointerId, ...point }));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       const target = bridge.targetAt(point, session);
+      const after = document.querySelector('.note-group-overview__grid').getBoundingClientRect().toJSON();
+      const previewWrites = window.commands.length;
       const first = await bridge.dropTarget(target, session); const second = await bridge.dropTarget(target, session);
-      return { targetId: target.id, first, second, commands: window.commands };
+      return { targetId: target.id, first, second, commands: window.commands, previewWrites, geometry: { before, after, point } };
     }, point);
     assert.equal(result.targetId, 20); assert.equal(result.first, true); assert.equal(result.commands.length, 1);
-    assert.equal(result.commands[0].kind, 'join'); assert.deepEqual(result.commands[0].note_ids, [13]); assert.equal(result.commands[0].before_note_id, 12);
+    assert.equal(result.previewWrites, 0);
+    assert.equal(result.geometry.after.height, result.geometry.before.height, 'incoming wrapped slots retain the visible grid height');
+    assert.equal(result.geometry.after.top, result.geometry.before.top, 'the centered panel cannot shift away from the held pointer');
+    assert.equal(result.commands[0].kind, 'join'); assert.deepEqual(result.commands[0].note_ids, [13]);
+    assert.equal(result.commands[0].before_note_id, 12, JSON.stringify(result.geometry));
   } finally { await page.close(); }
 });
 
@@ -420,7 +429,7 @@ test('real board-native drag crosses into destination overview and commits its c
     });
     await page.mouse.move(points.source.x, points.source.y); await page.mouse.down(); await page.mouse.move(points.target.x, points.target.y, { steps: 8 });
     await page.waitForSelector('.note-group-overview [data-group-page="12"]'); assert.equal(await page.evaluate(() => window.commands.length), 0);
-    const insert = await page.$eval('.note-group-overview [data-group-page="12"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+    const insert = await page.$eval('.note-group-overview [data-group-page="12"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 4, y: r.y + r.height / 2 }; });
     await page.mouse.move(insert.x, insert.y, { steps: 3 });
     assert.ok(await page.$('.note-group-overview'), 'destination preview remains the drag target over its pages');
     await page.mouse.up(); await page.waitForFunction(() => window.commands.length === 1);
@@ -429,12 +438,14 @@ test('real board-native drag crosses into destination overview and commits its c
   } finally { await page.close(); }
 });
 
-test('real board-native destination preview clears on capture cancellation without a layout or group write', async () => {
+test('real board-native capture cancellation clears dragging and keeps the destination open without a write', async () => {
   const page = await mountNativeBoard(); try {
     const points = await page.evaluate(() => { const center = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }; return { source: center('[data-board-key="note:13"] p'), target: center('[data-board-key="group:20"]') }; });
     await page.mouse.move(points.source.x, points.source.y); await page.mouse.down(); await page.mouse.move(points.target.x, points.target.y, { steps: 8 }); await page.waitForSelector('.note-group-overview');
     await page.evaluate(() => window.nativeBoard.cancel()); await page.mouse.up();
-    assert.equal(await page.$('.note-group-overview'), null); assert.equal(await page.evaluate(() => window.commands.length + window.layoutWrites.length), 0);
+    assert.ok(await page.$('.note-group-overview'));
+    assert.equal(await page.$('[data-group-drag-proxy],[data-group-insertion-gap]'), null);
+    assert.equal(await page.evaluate(() => window.commands.length + window.layoutWrites.length), 0);
   } finally { await page.close(); }
 });
 
@@ -466,7 +477,7 @@ test('the first intentional choice after a real multi-note canvas drop is not sw
 
 test('dropping a page in its existing order position is a local no-op', async () => {
   const page = await mount(); try {
-    const points = await page.evaluate(() => { const center = id => { const r = document.querySelector(`[data-group-activate="${id}"]`).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }; return { start: center(2), end: center(3) }; });
+    const points = await page.evaluate(() => { const point = (id, fraction = .5) => { const r = document.querySelector(`[data-group-activate="${id}"]`).getBoundingClientRect(); return { x: r.x + r.width * fraction, y: r.y + r.height / 2 }; }; return { start: point(2), end: point(3, .25) }; });
     await page.mouse.move(points.start.x, points.start.y); await page.mouse.down(); await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
     await page.mouse.move(points.end.x, points.end.y); await page.mouse.up();
     assert.equal(await page.evaluate(() => window.commands.length), 0);
@@ -478,7 +489,10 @@ test('Escape from a native drag preview cancels its board owner before release',
     const points = await page.evaluate(() => { const center = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }; return { source: center('[data-board-key="note:13"] p'), target: center('[data-board-key="group:20"]') }; });
     await page.mouse.move(points.source.x, points.source.y); await page.mouse.down(); await page.mouse.move(points.target.x, points.target.y, { steps: 8 }); await page.waitForSelector('.note-group-overview');
     await page.keyboard.press('Escape'); await page.mouse.up();
-    assert.equal(await page.$('.note-group-overview'), null); assert.equal(await page.evaluate(() => window.commands.length + window.layoutWrites.length), 0);
+    assert.ok(await page.$('.note-group-overview'), 'the first Escape cancels dragging while retaining the group');
+    assert.equal(await page.$('[data-group-drag-proxy],[data-group-insertion-gap]'), null);
+    assert.equal(await page.evaluate(() => window.commands.length + window.layoutWrites.length), 0);
+    await page.keyboard.press('Escape'); assert.equal(await page.$('.note-group-overview'), null);
   } finally { await page.close(); }
 });
 

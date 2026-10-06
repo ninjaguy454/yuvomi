@@ -67,7 +67,8 @@ async function mount({ width = 1280, height = 800, rtl = false, textScale = 1, t
     window.stopNotes = await (await import('/pages/notes.js')).render(document.getElementById('main-content'), { user: { id: 1 } });
     window.pointerStarts = []; window.addEventListener('pointerdown', event => window.pointerStarts.push(event.pointerId), true);
   }, { rtl, textScale, theme });
-  await page.click(`${group} [data-group-page="overview"]`); await page.waitForSelector(overview); return page;
+  await page.click(`${group} [data-group-page="overview"]`); await page.waitForSelector(overview);
+  await page.evaluate(() => { window.initialGroupOverview = document.querySelector('.note-group-overview'); }); return page;
 }
 async function select(page, ids) {
   // Older baseline has always-visible toggles; this fallback lets independent
@@ -198,7 +199,9 @@ test('scene2 puts structural actions in a secondary menu and preserves the exact
     assert.equal(await visible(page, `${overview} [data-group-action]`), 3);
     await page.focus(`${overview} [data-group-action="order"]`); await page.keyboard.press('Enter');
     await page.select('[data-group-before]', '4'); await page.click('[data-group-confirm]');
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await page.waitForFunction(() => !document.querySelector('.note-group-overview__panel')?.hasAttribute('aria-busy'));
+    assert.equal(await visible(page, overview), 1, 'the group stays open after saving the ordered block');
+    assert.equal(await page.evaluate(() => document.querySelector('.note-group-overview') === window.initialGroupOverview), true);
     assert.equal(writes.length, 1); const command = writes[0].body;
     assert.equal(command.kind, 'reorder'); assert.deepEqual(command.selected_ids, [9,2,7,5]); assert.equal(command.before_note_id, 4);
     const ordered = [1,3,4,6,8,10]; ordered.splice(ordered.indexOf(command.before_note_id), 0, ...command.selected_ids);
@@ -245,7 +248,9 @@ for (const edge of ['top', 'side', 'top-space']) test(`scene3 ${edge} open margi
     assert.equal(await page.evaluate(pointer => document.querySelector('.notes-page').hasPointerCapture(pointer), pointer), true, 'the existing host retains capture after the portal hides');
     await move(page, await dropPoint(page), cdp); assert.equal(writes.length, 0);
     if (cdp) await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }); else await page.mouse.up();
-    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await page.waitForFunction(() => !document.querySelector('.note-group-overview__panel')?.hasAttribute('aria-busy'));
+    assert.equal(await visible(page, overview), 1, 'the surviving source group stays open after extraction');
+    assert.equal(await page.evaluate(() => document.querySelector('.note-group-overview') === window.initialGroupOverview), true);
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'extract'); assert.deepEqual(writes[0].body.selected_ids, [2]);
     assert.equal(writes[0].body.placements[0].position_locked, false);
     assert.equal(await page.evaluate(pointer => document.querySelector('.notes-page').hasPointerCapture(pointer), pointer), false);
@@ -302,7 +307,9 @@ for (const result of ['group', 'individual']) test(`scene3 compact ${result} cho
     assert.equal(preview[0].x, 20.25); assert.equal(preview[0].y, 15.125);
     assert.ok(preview.every(rect => !rect.position_locked && rect.always_on_top && rect.width === 4 && rect.height === 6 && rect.x >= 0 && rect.y >= 0 && rect.x <= 10000 && rect.y <= 10000));
     await assertControlsInside(page, '[data-group-confirm],[data-group-cancel]');
-    await page.click('[data-group-confirm]'); await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    await page.click('[data-group-confirm]'); await page.waitForFunction(() => !document.querySelector('.note-group-overview__panel')?.hasAttribute('aria-busy'));
+    assert.equal(await visible(page, overview), 1, 'confirmation returns to the surviving group');
+    assert.equal(await page.evaluate(() => document.querySelector('.note-group-overview') === window.initialGroupOverview), true);
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'extract'); assert.equal(writes[0].body.result, result);
     assert.deepEqual(writes[0].body.selected_ids, [5,2]); assert.deepEqual(writes[0].body.placements, preview);
   } finally { await page.close(); }

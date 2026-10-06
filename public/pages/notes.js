@@ -82,9 +82,9 @@ function normalizedBoard(value) {
   return NOTE_GROUPS_INTERFACE_ENABLED ? value : { notes:value.notes.map(note=>({...note,permissions:{...note.permissions,arrange:false}})),groups:[] };
 }
 function cancelGroupDrafts(page = state) {
+  page.groupInteractions?.invalidateDraft();
   page.boardGeneration++;
   page.draftAbort.abort(); page.draftAbort = new AbortController();
-  disposeGroupInteractions(page);
   board?.cancel();
   if (document.querySelector('.note-modal[data-layout-editor]')) closeModal({ force:true });
 }
@@ -94,11 +94,13 @@ function disposeGroupInteractions(page) {
 }
 function bindGroupInteractions() {
   const page = state, actions = page.boardActions;
-  disposeGroupInteractions(page);
   if (!NOTE_GROUPS_INTERFACE_ENABLED) return;
   const host = _container.querySelector('.notes-page'), authentication = actions.authentication;
-  const interactions = createNoteGroupInteractions({
+  const context = {
     host, board: { notes: page.notes, groups: page.groups }, authentication,
+    viewAuthentication: { signal: page.requests.signal, isCurrent: () => currentPage(page, page.auth) },
+    canStartLayout: () => !boardIsFiltered() && canBeginLayout(page),
+    filtered: boardIsFiltered(), activePages: page.activePages,
     onCommand: actions.submitGroupCommand,
     onError: error => { if (authentication.isCurrent() && !error.groupCommandHandled) layoutStatus(error.message || t('notes.layoutFailed')); },
     clientToWorld: (x, y) => board?.clientToWorld(x, y),
@@ -120,8 +122,11 @@ function bindGroupInteractions() {
       page.activePages.set(groupId, noteId); renderGrid();
       _container.querySelector(`[data-board-key="group:${groupId}"] [data-group-page="overview"]`)?.focus({ preventScroll: true });
     },
-  });
+  };
+  const interactions = page.groupInteractions || createNoteGroupInteractions(context);
+  if (page.groupInteractions) interactions.update(context);
   page.groupInteractions = interactions;
+  interactions.setWriteState(page.groupFeedback || { phase: layoutWriteState(page) });
   actions.onGroupAction = interactions.onGroupAction; actions.groupDragBridge = interactions.groupDragBridge;
 }
 function acceptBoardView(value) {
@@ -1166,7 +1171,7 @@ async function reloadNotes() {
     page.layoutRecovery=false;
     renderCreatorFilter();
     if (recovered || !board?.busy() || changed) renderGrid();
-    if (lostAccess || recovered) groupStatus('');
+    if (lostAccess || recovered || (changed && !page.groupRetry && !page.groupPending)) groupStatus('');
     return fresh;
   } catch (err) {
     if (!currentPage(page, auth) || page.readSequence !== sequence) return;
@@ -1236,6 +1241,7 @@ function syncLayoutWriteState() {
   }
   const organize=_container?.querySelector('#notes-organize');
   if (organize) organize.disabled=!!phase;
+  state.groupInteractions?.setWriteState({ ...state.groupFeedback, phase });
 }
 async function reloadLayout(page=state) {
   if (!currentPage(page,page.auth)) return;
@@ -1255,9 +1261,13 @@ function groupStatus(message, { retry=null, undo=null, reload=false } = {}) {
   syncLayoutWriteState();
   _container?.querySelector('#notes-group-actions')?.remove();
   const status = _container?.querySelector('#notes-board-status');
+  const feedback = { message, phase: layoutWriteState(), actions: [] };
+  state.groupFeedback = feedback;
+  state.groupInteractions?.setWriteState(feedback);
   if (!status || (!retry && !undo && !reload)) return;
   const page=state, auth=page.auth, actions=document.createElement('span'); actions.id='notes-group-actions';
   const button=(label,attribute,run)=>{
+    feedback.actions.push({ label: t(label), attribute, run: () => currentPage(page,auth) && run() });
     const element=document.createElement('button'); element.type='button'; element.className='btn btn--ghost btn--sm';
     element.textContent=t(label); element.setAttribute(attribute,'');
     element.addEventListener('click',()=>{if(currentPage(page,auth)) Promise.resolve(run()).catch(()=>{});}); actions.append(element);
@@ -1271,6 +1281,7 @@ function groupStatus(message, { retry=null, undo=null, reload=false } = {}) {
     return submitGroupCommand(freezeNoteGroupCommand(draft,'undo',{undo_operation_id:undo}));
   });
   status.after(actions);
+  state.groupInteractions?.setWriteState(feedback);
 }
 
 /** The only group request owner. Frozen bodies are never rebuilt for Retry. */
@@ -1291,7 +1302,7 @@ async function submitGroupCommand(command) {
     if (page.boardGeneration!==generation || page.accessGeneration!==access) {
       const fresh=await reloadNotes();
       if (!currentPage(page,auth) || !fresh) throw Object.assign(new Error(t('notes.layoutConflict')),{status:409});
-      result={...result,board:fresh};
+      result={...result,board:fresh,undo_available:false};
     } else acceptBoardView(result.board);
     if (!currentPage(page,auth)) throw new DOMException('The Notes context ended.','AbortError');
     page.groupPending=null; page.groupRetry=null; pending.forEach(id=>page.pending.delete(id));

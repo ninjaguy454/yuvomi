@@ -130,7 +130,14 @@ async function overview(page, groupId) { await press(page, `[data-board-key="gro
 async function groupOrder(page, groupId) { await overview(page, groupId); const ids = await page.$$eval('.note-group-overview__page[data-group-page]', els => els.map(el => Number(el.dataset.groupPage))); await page.keyboard.press('Escape'); await page.waitForSelector('.note-group-overview', { hidden: true }); return ids; }
 async function selectPage(page, id) { if (await page.$eval('[data-group-selection-mode]', el => el.getAttribute('aria-pressed') === 'false')) await press(page, '[data-group-selection-mode]'); await press(page, `[data-group-select="${id}"]`); }
 async function groupAction(page, action) { if (!await page.$eval('[data-group-menu]', el => el.open)) await press(page, '[data-group-menu] summary'); await press(page, `.note-group-overview [data-group-action="${action}"]`); }
-async function confirmGroup(page) { const response = page.waitForResponse(r => r.url().endsWith('/notes/group-operations') && r.request().method() === 'POST'); await press(page, '[data-group-confirm]'); const result = await response; assert.equal(result.status(), 200, await result.text()); await page.waitForSelector('.note-group-overview', { hidden: true }); }
+async function confirmGroup(page, keepOpen = true) {
+  const existing = await page.$('.note-group-overview');
+  const response = page.waitForResponse(r => r.url().endsWith('/notes/group-operations') && r.request().method() === 'POST');
+  await press(page, '[data-group-confirm]'); const result = await response; assert.equal(result.status(), 200, await result.text());
+  await page.waitForFunction(() => !document.querySelector('#notes-grid')?.dataset.layoutWrite);
+  if (keepOpen) assert.equal(await existing.evaluate(element => element.isConnected && element === document.querySelector('.note-group-overview') && !element.hidden), true, 'acknowledgement retains the same authorized group window');
+  else await page.waitForSelector('.note-group-overview', { hidden: true });
+}
 async function paired(name, admin, edit = true) {
   const page = await pageFor(name); await page.goto(origin + '/device/pair'); await press(page, '[data-pair-start]'); await page.waitForSelector('[data-pair-code]'); const code = await page.$eval('[data-pair-code]', el => el.textContent);
   const result = await admin.evaluate(async ({ code, name, edit }) => (await (await import('/api.js')).api.post('/devices/pairing-approve', { code, name, permissions: { capabilities: { 'device_notes.view': 'allow', 'device_notes.create': 'none', 'device_notes.edit': edit ? 'allow' : 'none', 'device_notes.delete': 'none' } } })), { code, name, edit });
@@ -161,7 +168,7 @@ test('real group overview order and extraction persist only for the acting human
   assert.deepEqual(await groupOrder(two, 11), [101, 102]);
   await overview(one, 11); await selectPage(one, 102); await groupAction(one, 'order'); await one.select('[data-group-before]', '101'); await confirmGroup(one); await notesPage(one, true);
   assert.deepEqual(await groupOrder(one, 11), [102, 101]); await notesPage(two, true); assert.deepEqual(await groupOrder(two, 11), [101, 102], 'other human group order stays unchanged');
-  await overview(one, 11); await selectPage(one, 102); await groupAction(one, 'remove'); await press(one, '[data-group-position] summary'); await field(one, '[data-group-x]', 14.25); await field(one, '[data-group-y]', 4.5); await confirmGroup(one); await notesPage(one, true);
+  await overview(one, 11); await selectPage(one, 102); await groupAction(one, 'remove'); await press(one, '[data-group-position] summary'); await field(one, '[data-group-x]', 14.25); await field(one, '[data-group-y]', 4.5); await confirmGroup(one, false); await notesPage(one, true);
   assert.equal(await one.$('[data-board-key="group:11"]'), null); assert.ok(await one.$('[data-board-key="note:101"]')); assert.ok(await one.$('[data-board-key="note:102"]'));
   const extracted = await noteLayout(one, 102); assert.equal(extracted.x, 14.25); assert.equal(extracted.y, 4.5); assert.equal(extracted.position_locked, false); await assertCanvas(one, 'note:102', extracted);
   await notesPage(two, true); assert.deepEqual(await groupOrder(two, 11), [101, 102]);

@@ -121,13 +121,24 @@
 .note-group-overview__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, min(320px, 100%));
+  align-content: start;
   gap: 16px;
   min-height: 0;
   padding: 4px;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   overscroll-behavior: contain;
   touch-action: pan-y;
+}
+.note-group-overview__insertion-gap {
+  min-width: 0;
+  height: 276px;
+  box-sizing: border-box;
+  border: 2px dashed var(--group-accent-ink);
+  border-radius: var(--radius-md, 8px);
+  background: var(--group-feedback-bg);
+  pointer-events: none;
 }
 .note-card.note-group-overview__page {
   position: relative;

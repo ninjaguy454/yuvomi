@@ -349,6 +349,9 @@ test('a fast save acknowledgment retains settling protection across controller r
     const samples=await page.evaluate(()=>settleSamples);
     assert.ok(samples.some(sample=>sample.saved&&sample.angle>.2),'save response arrives before leveling finishes');
     assert.ok(samples.every(sample=>sample.same&&(sample.angle<=.001||sample.protected)),JSON.stringify(samples));
+    // The visual epsilon can be reached before animation completion clears the
+    // guard. Await its actual completion while retaining the sampled checks.
+    await page.waitForSelector('.note-card--settling',{hidden:true});
     assert.equal(await page.$('.note-card--settling'),null);assert.equal(writes.length,1);
   }finally{releaseSave?.();await page.mouse.up();await page.close();}
 });

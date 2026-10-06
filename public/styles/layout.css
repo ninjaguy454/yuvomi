@@ -3796,7 +3796,7 @@ p.field-hint--warn[hidden] {
   }
 
   /* Zwei volle Pointer-Ziele passen nicht nebeneinander in die 56px-Rail.
-   * Gestapelt bleiben beide erreichbar; das Hover-/Fokus-Flyout stellt die
+   * Gestapelt bleiben beide erreichbar; der Expand-Button stellt die
    * gewohnte horizontale Form wieder her. */
   html.sidebar-collapsed .nav-sidebar .nav-sidebar__history {
     flex-direction: column;
@@ -3840,7 +3840,7 @@ p.field-hint--warn[hidden] {
    * derselben Zeile sitzen und nur ausgeblendet werden müssen) belegt ein
    * Sektionslabel eine eigene Zeile — bliebe es nur per opacity verborgen,
    * klaffte zwischen den Icon-Gruppen eine leere Zeile (#501). Daher zusätzlich
-   * die Box auf null Höhe kollabieren; der Flyout (Hover/Fokus) stellt sie her. */
+   * die Box auf null Höhe kollabieren; explizites Aufklappen stellt sie her. */
   html.sidebar-collapsed .nav-sidebar .nav-section-label {
     opacity: 0;
     height: 0;
@@ -3849,75 +3849,7 @@ p.field-hint--warn[hidden] {
     transition: opacity var(--duration-xs) ease;
   }
 
-  /* ── Eingeklappt: Rail expandiert bei Hover/Fokus und zeigt Labels ──
-   * Wandelt den Icon-only-Recall in Recognition-on-demand für Maus (hover) und
-   * Tastatur (focus-within). Touch ist bewusst NICHT abgedeckt: ein Tap
-   * navigiert sofort und verweilt nicht im Fokus — auf Touch bleibt der
-   * eingeklappte Rail icon-only (bei ≥1024px jedoch selten). Die Sidebar ist
-   * fixed und überlagert Inhalt beim Aufklappen wie ein Flyout — --sidebar-width
-   * (und damit der .app-content-Margin) bleibt 56px, also kein Reflow. Die
-   * Breite animiert über die bestehende width-Transition. */
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover,
-  html.sidebar-collapsed .nav-sidebar:focus-within {
-    width: var(--sidebar-width-expanded);
-    box-shadow: var(--shadow-lg);
-  }
-
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-sidebar__brand-text,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-sidebar__brand-text {
-    display: flex;
-  }
-
-  /* Beim Aufklappen die Labels erst einblenden, NACHDEM die Breite gewachsen ist
-   * (Delay ≈ Dauer der width-Transition 0.4s). So erscheint der Text bei voller
-   * Breite statt beschnitten mitzuwachsen. Ausblenden (un-hover) läuft ohne Delay
-   * über die Basis-Regel oben. */
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-item__label,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-item__label,
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-section-label,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-section-label {
-    opacity: 1;
-    transition: opacity 180ms ease 220ms;
-  }
-
-  /* Flyout: die eingeklappt auf null Höhe kollabierten Sektionslabels wieder
-   * als eigene Zeile aufspannen (Gegenstück zur Kollaps-Regel oben). */
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-section-label,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-section-label {
-    height: auto;
-    padding-block: var(--space-2) var(--space-1);
-  }
-
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-sidebar__history,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-sidebar__history {
-    flex-direction: row;
-    align-items: center;
-    padding-inline: var(--space-3);
-  }
-
-  /* Beim Aufklappen (Hover/Fokus) muss der Footer das Expanded-Layout annehmen:
-   * Zeile statt Spalte, Abmelden bricht als volle Zeile um. Ohne dies blieben
-   * Hilfe/Änderungen/Abmelden in der eingeklappten, zentrierten Spalte stehen
-   * und flüchteten nicht linksbündig wie im gepinnten Zustand (#488). */
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-sidebar__footer-actions,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-sidebar__footer-actions {
-    flex-direction: row;
-    align-items: center;
-    padding-inline: var(--space-1);
-  }
-
-  /* Flyout: den 15px-Icon-Einzug der eingeklappten Spalte zurücknehmen, damit
-   * Hilfe/Änderungen wie im gepinnten Expanded-Zustand bündig stehen. */
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-sidebar__footer-actions .nav-item,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-sidebar__footer-actions .nav-item {
-    padding-left: var(--space-1);
-  }
-
-  html.sidebar-collapsed:not(.sidebar-collapse-pointer-lock) .nav-sidebar:hover .nav-sidebar__footer-actions .nav-item.nav-item--logout,
-  html.sidebar-collapsed .nav-sidebar:focus-within .nav-sidebar__footer-actions .nav-item.nav-item--logout {
-    flex: 1 1 100%;
-    margin-top: var(--space-1);
-  }
+  /* The collapsed rail stays icon-only for every input method. Only the explicit toggle expands it. */
 
   /* ── Fokus-Ring der Nav-Items/Toggle nach innen versetzt ──
    * Die Items sitzen flush-links an der geclippten Sidebar-Kante

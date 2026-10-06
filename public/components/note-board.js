@@ -250,6 +250,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     suppressClick = current.active;
     release(current); refresh();
   }
+  function rejectLayoutGesture() {
+    // Retain click suppression if the pending write rebinds this controller
+    // before the canceled hold/drag releases its pointer.
+    if (gesture) blockedLayoutPointers.set(grid, { pointer:gesture.pointer, x:gesture.x, y:gesture.y, moved:true });
+    cancel(); suppressClick = true;
+  }
   function scrollParent(card) {
     for (let node = card.parentElement; node; node = node.parentElement) {
       if (node === viewport && pageFlow()) continue;
@@ -261,7 +267,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function activate() {
     if (!gesture || disposed) return;
-    if (!canStartLayout()) { cancel(); suppressClick = true; return; }
+    if (!canStartLayout()) { rejectLayoutGesture(); return; }
     if (navigation?.kind === 'touch') navigation = null;
     gesture.active = true;
     gesture.paintTime = performance.now();
@@ -427,7 +433,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function autoscroll(time) {
     if (!gesture?.active || disposed) return;
-    if (!canStartLayout()) { cancel(); suppressClick = true; return; }
+    if (!canStartLayout()) { rejectLayoutGesture(); return; }
     if (!gesture.card.hasPointerCapture(gesture.pointer)) { cancel(); return; }
     const scroller = gesture.scroller;
     const rect = scroller === document.scrollingElement ? { top: 0, bottom: innerHeight } : scroller.getBoundingClientRect();
@@ -473,7 +479,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     if (excludedPointer?.id === event.pointerId) excludedPointer = null;
     if (!gesture || gesture.pointer !== event.pointerId) { setTimeout(() => { suppressClick = false; }, 0); return; }
-    if (!canStartLayout()) { cancel(); suppressClick = true; return; }
+    if (!canStartLayout()) { rejectLayoutGesture(); return; }
     // Commit the final pointer position even when pointerup precedes the frame.
     gesture.lastX=event.clientX; gesture.lastY=event.clientY; update();
     const current = gesture; gesture = null;

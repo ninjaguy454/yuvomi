@@ -669,7 +669,7 @@
 .notes-canvas-space { position: relative; min-width: 0; }
 .notes-canvas-space--active { overflow: clip; }
 .notes-canvas-space--active > .notes-board { position: absolute; top: 0; left: 0; margin-top: 0; transform-origin: top left; }
-.notes-scroll--canvas { touch-action: none; direction: ltr; }
+.notes-scroll--canvas { touch-action: none; direction: ltr; scrollbar-gutter: stable; }
 .notes-page:dir(rtl) .notes-canvas-space--active { direction: rtl; }
 .notes-zoom-controls { display: inline-flex; align-items: center; gap: var(--space-1); margin-inline-start: auto; }
 .notes-zoom-controls output { min-width: 3.5em; text-align: center; font-size: var(--text-xs); }

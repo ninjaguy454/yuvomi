@@ -74,7 +74,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   let closed = false, busy = false, suppressClick = false, dragging = false, canvasDrag = false;
   let currentGroup = source, placement = null, action = null, lastPoint = null, scrollFrame = 0, overlayToken;
   let activePointer = null, highlightedTarget = null, proxy = null, footer = null, dragAnchor = null, nativeSource = null;
-  let selectionMode = selected.size > 0, placing = false;
+  let selectionMode = selected.size > 0, placing = false, approaching = !!dragPreview;
   const overlay = document.createElement('div'); overlay.className = 'note-group-overview';
   const stage = document.createElement('div'); stage.className = 'note-group-overview__stage';
   const dialog = document.createElement('section'); dialog.className = 'note-group-overview__panel';
@@ -473,7 +473,15 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     return { group_id: currentGroup.id, before_note_id: card ? Number(card.dataset.groupPage) : null };
   }
   function containsPoint(clientX, clientY) {
-    return current() && !overlay.hidden && dialog.contains(document.elementFromPoint(clientX, clientY));
+    if (!current() || overlay.hidden) return false;
+    if (dialog.contains(document.elementFromPoint(clientX, clientY))) { approaching = false; return true; }
+    if (!approaching) return false;
+    // A centered destination can open away from the held pointer. Keep the
+    // direct approach to any point in its panel open until the pointer enters.
+    // Leaving this bounded region, or leaving after entry, returns to canvas.
+    const bounds = dialog.getBoundingClientRect();
+    return clientX >= Math.min(bounds.left, dragPreview.clientX) && clientX <= Math.max(bounds.right, dragPreview.clientX)
+      && clientY >= Math.min(bounds.top, dragPreview.clientY) && clientY <= Math.max(bounds.bottom, dragPreview.clientY);
   }
   listen(window, 'pointerdown', pointerDown, true);
   listen(window, 'pointermove', event => {

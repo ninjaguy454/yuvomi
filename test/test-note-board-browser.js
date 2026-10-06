@@ -212,7 +212,11 @@ test('phone keeps distant notes reachable in a list and never saves a viewport r
     assert.equal(await page.$$eval('.note-card',els=>els.length),2);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);
     const positions=await page.$$eval('.note-card',els=>els.map(el=>el.getBoundingClientRect().top));assert.ok(positions[1]-positions[0]<600);
-    await page.setViewport({width:1280,height:900});await page.setViewport({width:390,height:900});assert.equal(writes.length,0);
+    await page.setViewport({width:1280,height:900});
+    await page.waitForFunction(()=>document.querySelector('#notes-grid')?.dataset.boardView==='canvas');
+    await page.setViewport({width:390,height:900});
+    await page.waitForFunction(()=>document.querySelector('#notes-grid')?.dataset.boardView==='list');
+    assert.equal(writes.length,0);
     assert.equal(await page.$('[data-board-handle]'),null);
     assert.equal(await page.$eval('#notes-grid',el=>el.dataset.boardView),'list');
     await screenshot(page,'notes-board-phone');

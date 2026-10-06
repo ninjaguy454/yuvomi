@@ -61,6 +61,9 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   const pageFlow = () => getComputedStyle(responsivePage).display === 'block';
   let revealIds = [];
   const viewportWidth = () => viewport.clientWidth - (parseFloat(getComputedStyle(viewport).paddingLeft) || 0) - (parseFloat(getComputedStyle(viewport).paddingRight) || 0);
+  // World growth can add a horizontal scrollbar or grow a page-flow canvas.
+  // Neither changes the containing viewport that admitted the gesture.
+  const viewportHeight = () => pageFlow() ? innerHeight : viewport.offsetHeight;
   const canvasWidth = () => Math.max(640, viewportWidth());
   const responsiveWidth = () => getResponsiveWidth ? getResponsiveWidth() : viewportWidth();
   let disposed = false, gesture = null, narrow = compact || responsiveWidth() < 640;
@@ -330,7 +333,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (event.pointerType === 'mouse') event.preventDefault();
     gesture = { note, item, card, pointer: event.pointerId, start, next: start, x: event.clientX, y: event.clientY,
       lastX: event.clientX, lastY: event.clientY, scroller, scrollY: scroller.scrollTop, scrollX: viewport.scrollLeft, scale: zoom(), pitch: canvasWidth() / NOTE_COLUMNS, active: false,
-      viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight,
+      viewportWidth:viewportWidth(),viewportHeight:viewportHeight(),
       paintX:event.clientX, paintTime:0, tilt:0, dirty:false,
       edges: Object.values(edges).some(Boolean) ? edges : null };
     suppressClick = false;
@@ -464,7 +467,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       suppressClick ||= blocked.moved; blockedLayoutPointers.delete(grid);
     }
     const currentSession=gesture || adopted;
-    if (currentSession && (currentSession.viewportWidth!==viewportWidth() || currentSession.viewportHeight!==viewport.clientHeight)) { cancel(); refresh(); return; }
+    if (currentSession && (currentSession.viewportWidth!==viewportWidth() || currentSession.viewportHeight!==viewportHeight())) { cancel(); refresh(); return; }
     touches.delete(event.pointerId);
     if (navigation?.kind === 'touch' && navigation.pointer === event.pointerId) navigation = null;
     if (adopted?.pointerId === event.pointerId) {
@@ -593,13 +596,14 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   function menuToggle(event) {
     if (event.target.matches('.note-card__menu')) { layerCards(); positionMenus(); }
   }
-  let observedWidth = viewportWidth(), observedHeight=viewport.clientHeight, observedResponsiveWidth = responsiveWidth();
-  const observer = new ResizeObserver(() => {
-    if (viewportWidth() === observedWidth && viewport.clientHeight === observedHeight && responsiveWidth() === observedResponsiveWidth) return;
+  let observedWidth = viewportWidth(), observedHeight=viewportHeight(), observedResponsiveWidth = responsiveWidth();
+  const resize = () => {
+    if (viewportWidth() === observedWidth && viewportHeight() === observedHeight && responsiveWidth() === observedResponsiveWidth) return;
     const crossedBreakpoint = (responsiveWidth() < 640) !== (observedResponsiveWidth < 640);
-    const wasNarrow = narrow; observedWidth = viewportWidth(); observedHeight=viewport.clientHeight; observedResponsiveWidth = responsiveWidth(); cancel(); refresh();
+    const wasNarrow = narrow; observedWidth = viewportWidth(); observedHeight=viewportHeight(); observedResponsiveWidth = responsiveWidth(); cancel(); refresh();
     if (wasNarrow !== narrow || crossedBreakpoint) onViewChange();
-  });
+  };
+  const observer = new ResizeObserver(resize);
   observer.observe(viewport);
   if (getResponsiveWidth && responsivePage !== viewport) observer.observe(responsivePage);
   window.addEventListener('pointerdown', down);
@@ -610,6 +614,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   viewport.addEventListener('lostpointercapture', lost);
   grid.addEventListener('toggle', menuToggle, true);
   window.addEventListener('scroll', positionMenus, true);
+  window.addEventListener('resize', resize);
   window.addEventListener('resize', positionMenus);
   grid.addEventListener('focusin', cardFocus);
   revealStrip?.addEventListener('click', reveal);
@@ -624,7 +629,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     adoptGroupDrag(session) {
       cancel();
       if (disposed || filtered || narrow || !Number.isInteger(session?.pointerId) || !canStartLayout()) return false;
-      adopted={...session,viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight}; return true;
+      adopted={...session,viewportWidth:viewportWidth(),viewportHeight:viewportHeight()}; return true;
     },
     cancel,
     setSnapToGrid(value) { cancel(); viewState.snapToGrid = !!value; },
@@ -642,6 +647,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       viewport.removeEventListener('lostpointercapture', lost);
       grid.removeEventListener('toggle', menuToggle, true);
       window.removeEventListener('scroll', positionMenus, true);
+      window.removeEventListener('resize', resize);
       window.removeEventListener('resize', positionMenus);
       grid.removeEventListener('focusin', cardFocus);
       revealStrip?.removeEventListener('click', reveal);

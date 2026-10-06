@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import puppeteer from 'puppeteer';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
@@ -30,7 +30,7 @@ test.before(async () => {
   server = app.listen(0, '127.0.0.1');
   await new Promise(resolve => server.once('listening', resolve));
   base = `http://127.0.0.1:${server.address().port}`;
-  browser = await puppeteer.launch({ headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), args: ['--disable-dev-shm-usage'] });
+  browser = await puppeteer.launch({ headless: true, ...(process.env.PUPPETEER_EXECUTABLE_PATH ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH } : {}), ignoreDefaultArgs: ['--hide-scrollbars'], args: ['--disable-dev-shm-usage'] });
 });
 test.after(async () => {
   releaseSave?.();
@@ -51,7 +51,7 @@ async function screenshot(page, name) {
   mkdirSync(evidence, { recursive: true });
   await page.screenshot({ path: join(evidence, `${name}.png`) });
 }
-async function mount({ width = 1440, height = 1000, theme = 'light', touch = false, reduced = false, rtl = false, count = 10, zoom = 1, canvas = false, sourceSize = { width: 4, height: 6 } } = {}) {
+async function mount({ width = 1440, height = 1000, theme = 'light', touch = false, reduced = false, rtl = false, count = 10, zoom = 1, canvas = false, sourceSize = { width: 4, height: 6 }, fixture } = {}) {
   writes = []; holdSave = false; releaseSave = null;
   snapshot = {
     notes: Array.from({ length: count + 3 }, (_, index) => ({ id: index + 1,
@@ -67,6 +67,7 @@ async function mount({ width = 1440, height = 1000, theme = 'light', touch = fal
       { id: 42, revision: 3, member_ids: [count + 1, count + 2], can_manage: true, layout: { x: 5, y: 8, width: 4, height: 6, position_locked: true } },
     ],
   };
+  fixture?.(snapshot);
   const page = await browser.newPage(); page.setDefaultTimeout(5000);
   await page.setViewport({ width, height, hasTouch: touch, isMobile: touch });
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: reduced ? 'reduce' : 'no-preference' }]);
@@ -406,27 +407,28 @@ test('refinement a native touch swipe scrolls a long preview body without replac
   } finally { await cdp.detach(); await page.close(); }
 });
 
-async function beginNative(page, cdp) {
-  const start = await page.$eval('[data-board-key="note:13"]', element => {
+async function beginNative(page, cdp, selector = '[data-board-key="note:13"]', bodyTop = false) {
+  const start = await page.$eval(selector, (element, bodyTop) => {
     window.originalSource = element;
     const rect = element.getBoundingClientRect();
-    for (const fy of [.7, .6, .5, .4]) for (const fx of [.3, .5, .7]) {
-      const x = rect.left + rect.width * fx, y = rect.top + rect.height * fy;
+    const positions = bodyTop ? [{ x: rect.left + 40, y: Math.min(element.querySelector('.note-card__content').getBoundingClientRect().top + 40, rect.bottom - 40) }]
+      : [.7, .6, .5, .4].flatMap(fy => [.3, .5, .7].map(fx => ({ x: rect.left + rect.width * fx, y: rect.top + rect.height * fy })));
+    for (const { x, y } of positions) {
       const target = document.elementFromPoint(x, y);
       if (element.contains(target) && !target?.closest('a,button,input,select,textarea,summary,details,[role="checkbox"],[contenteditable="true"]')) return { x, y, grabX: x - rect.left, grabY: y - rect.top, width: rect.width, height: rect.height, draggable: true };
     }
     return { width: rect.width, height: rect.height, draggable: false };
-  });
+  }, bodyTop);
   assert.equal(start.draggable, true, `fixture starts on a noninteractive note body: ${JSON.stringify(start)}`);
   if (cdp) {
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: start.x, y: start.y, id: 0 }] });
-    try { await page.waitForSelector('[data-board-key="note:13"].note-card--moving'); }
+    try { await page.waitForSelector(`${selector}.note-card--moving`); }
     catch (error) { error.message += `; actual pointer target: ${await page.evaluate(() => window.pointerTargets.at(-1))}`; throw error; }
   } else {
     await page.mouse.move(start.x, start.y); await page.mouse.down();
   }
   await move(page, { x: start.x + 15, y: start.y }, cdp);
-  await page.waitForSelector('[data-board-key="note:13"].note-card--moving'); await frame(page);
+  await page.waitForSelector(`${selector}.note-card--moving`); await frame(page);
   return { ...start, pointer: await page.evaluate(() => window.pointerStarts.at(-1)) };
 }
 async function enterNativeOverview(page, cdp) {
@@ -437,6 +439,180 @@ async function enterNativeOverview(page, cdp) {
   await page.waitForSelector(`${overview} [data-group-page="1"]`); await frame(page);
   return start;
 }
+
+async function traceDragEvents(page, selector = '[data-board-key="note:13"]') {
+  await page.evaluate(selector => {
+    window.dragTimeline = [];
+    window.recordDragState = (type, event = {}) => {
+      const source = document.querySelector(selector);
+      const overlay = document.querySelector('.note-group-overview');
+      window.dragTimeline.push({ type, time: Math.round(performance.now()),
+        x: event.clientX, y: event.clientY, buttons: event.buttons,
+        target: event.target?.className || event.target?.nodeName,
+        moving: !!source?.classList.contains('note-card--moving'),
+        capture: !!source?.hasPointerCapture(window.pointerStarts.at(-1)),
+        overview: !!overlay, hidden: overlay?.hidden,
+        preview: !!document.querySelector('[data-group-drag-proxy]'),
+      });
+    };
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'gotpointercapture', 'lostpointercapture', 'dragstart', 'dragend', 'mousedown', 'mouseup', 'click', 'blur', 'resize']) {
+      window.addEventListener(type, event => window.recordDragState(type, event), true);
+    }
+  }, selector);
+}
+async function saveDragTrace(page, name) {
+  mkdirSync(evidence, { recursive: true });
+  writeFileSync(join(evidence, `${name}.json`), JSON.stringify({
+    timeline: await page.evaluate(() => window.dragTimeline), writes,
+  }, null, 2));
+  await screenshot(page, name);
+}
+
+const shortGroupFixture = board => {
+  board.groups[0].member_ids = [1, 2];
+  board.groups[1].member_ids = Array.from({ length: 10 }, (_, index) => index + 3);
+};
+async function approachShortGroup(page, cdp) {
+  await point(page, sourceGroup);
+  const target = await page.$eval(sourceGroup, element => { const rect = element.getBoundingClientRect(); return { x: rect.left + 40, y: rect.top + 60 }; });
+  await move(page, target, cdp);
+  await page.waitForSelector(`${overview} [data-group-page="1"]`); await frame(page);
+  const rect = await page.$eval(panel, element => element.getBoundingClientRect().toJSON());
+  assert.ok(target.y < rect.top, `the short centered panel appears below the incoming pointer: ${JSON.stringify({ target, rect })}`);
+  return target;
+}
+for (const touch of [false, true]) for (const zoom of [.5, 1, 1.5]) test(`refinement incoming drag can reach a short group panel from the original hover point: ${touch ? 'touch' : 'mouse'} zoom ${zoom}`, async () => {
+  const page = await mount({ canvas: true, touch, zoom, theme: touch ? 'dark' : 'light', reduced: zoom === .5, width: 1802, height: 1178, fixture(board) {
+    shortGroupFixture(board); board.notes.at(-1).layout.always_on_top = touch;
+  } }), cdp = touch ? await page.createCDPSession() : null;
+  try {
+    await traceDragEvents(page);
+    const start = await beginNative(page, cdp);
+    const target = await approachShortGroup(page, cdp);
+    await page.evaluate(() => window.recordDragState('overview-open'));
+    const insertion = await page.$eval(`${overview} [data-group-page="1"]`, element => { const rect = element.getBoundingClientRect(); return { x: rect.left + 30, y: rect.top + 60 }; });
+    // Follow the physical path into the centered panel. Teleporting straight
+    // to an insertion card misses the gap between it and the canvas target.
+    for (let step = 1; step <= 12; step++) {
+      await move(page, { x: target.x + (insertion.x - target.x) * step / 12, y: target.y + (insertion.y - target.y) * step / 12 }, cdp); await frame(page);
+      if (!await page.$(overview)) break;
+    }
+    await page.evaluate(() => window.recordDragState('continued-held-move'));
+    await saveDragTrace(page, `short-group-entry-${touch ? 'touch' : 'mouse'}-${zoom}`);
+    assert.ok(await page.$(overview), 'the incoming overview stays open while the held pointer travels from the hover location toward its panel');
+    await assertFullProxy(page, [13], { ...start, exact: true }); await assertCapture(page, start.pointer);
+    const insert = await point(page, `${overview} [data-group-page="2"]`);
+    await move(page, insert, cdp); await release(page, cdp);
+    await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
+    assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'join'); assert.equal(writes[0].body.before_note_id, 2);
+  } finally { await cdp?.detach(); await page.close(); }
+});
+for (const touch of [false, true]) for (const entered of [false, true]) test(`refinement incoming short-group preview allows retreat and repeated cancellation ${entered ? 'after panel entry' : 'during approach'}: ${touch ? 'touch' : 'mouse'}`, async () => {
+  const page = await mount({ canvas: true, touch, width: 1802, height: 1178, fixture: shortGroupFixture }), cdp = touch ? await page.createCDPSession() : null;
+  try {
+    const start = await beginNative(page, cdp);
+    for (let iteration = 0; iteration < 2; iteration++) {
+      await approachShortGroup(page, cdp);
+      if (entered) await move(page, await point(page, `${overview} [data-group-page="2"]`), cdp);
+      await move(page, { x: 12, y: 150 }, cdp); await frame(page);
+      assert.equal(await page.$(overview), null, 'moving out of the approach area or entered panel intentionally returns to the canvas');
+      assert.equal(await page.$(proxy), null); await assertCapture(page, start.pointer);
+      assert.equal(writes.length, 0);
+    }
+    await approachShortGroup(page, cdp);
+    await page.keyboard.press('Escape'); await release(page, cdp); await frame(page);
+    assert.equal(await page.$(overview), null); assert.equal(await page.$(proxy), null); assert.equal(await page.$('.note-modal'), null);
+    assert.equal(writes.length, 0); await assertCapture(page, start.pointer, false);
+  } finally { await cdp?.detach(); await page.close(); }
+});
+test('refinement releasing over the approach gap cancels without joining or saving a layout', async () => {
+  const page = await mount({ canvas: true, width: 1802, height: 1178, fixture: shortGroupFixture });
+  try {
+    const start = await beginNative(page);
+    const target = await approachShortGroup(page);
+    const insertion = await page.$eval(`${overview} [data-group-page="1"]`, element => { const rect = element.getBoundingClientRect(); return { x: rect.left + 30, y: rect.top + 60 }; });
+    await move(page, { x: target.x + (insertion.x - target.x) / 6, y: target.y + (insertion.y - target.y) / 6 }); await frame(page);
+    assert.ok(await page.$(overview), 'the approach preview remains available before release');
+    await assertCapture(page, start.pointer); await release(page); await frame(page);
+    assert.equal(await page.$(overview), null); assert.equal(await page.$(proxy), null); assert.equal(await page.$('.note-modal'), null);
+    assert.equal(writes.length, 0, 'a backdrop release is not a structural command or a canvas layout save');
+  } finally { await page.close(); }
+});
+
+for (const kind of ['note', 'group']) for (const touch of [false, true]) test(`refinement ${kind} drag survives a real scrollbar appearing while held: ${touch ? 'touch' : 'mouse'}`, async () => {
+  const selector = `[data-board-key="${kind === 'group' ? 'group:42' : 'note:13'}"]`;
+  const page = await mount({ canvas: true, touch, width: 1440, height: 880, fixture(board) {
+    board.groups[0].layout.x = 0;
+    board.groups[1].layout.x = 0;
+    const source = kind === 'group' ? board.groups[1] : board.notes.at(-1);
+    Object.assign(source.layout, { x: 5, y: 0, width: 4, height: 9, position_locked: false });
+    if (kind === 'group') Object.assign(board.notes.at(-1).layout, { x: 0, y: 8, position_locked: true });
+  } }), cdp = touch ? await page.createCDPSession() : null;
+  try {
+    if (kind === 'group') await page.click(`${selector} [data-group-page="next"]`);
+    await frame(page);
+    await traceDragEvents(page, selector);
+    const before = await page.$eval('.notes-scroll', element => ({ width: element.clientWidth, height: element.clientHeight, scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight }));
+    assert.ok(before.scrollWidth <= before.width + 1, 'the initial canvas fits without a horizontal scrollbar');
+    const start = await beginNative(page, cdp, selector);
+    const samples = [];
+    for (let step = 2; step <= 8; step++) {
+      await move(page, { x: start.x + step * 12, y: start.y }, cdp); await frame(page);
+      samples.push(await page.$eval(selector, element => {
+        const viewport = element.closest('.notes-scroll');
+        return { moving: element.classList.contains('note-card--moving'), capture: element.hasPointerCapture(window.pointerStarts.at(-1)),
+          x: element.getBoundingClientRect().x, width: viewport.clientWidth, height: viewport.clientHeight, scrollWidth: viewport.scrollWidth };
+      }));
+      if (!samples.at(-1).moving) break;
+    }
+    await page.evaluate(samples => { window.dragTimeline.push({ type: 'geometry-samples', samples }); }, samples);
+    await saveDragTrace(page, `scrollbar-${kind}-${touch ? 'touch' : 'mouse'}`);
+    assert.ok(samples.every(sample => sample.moving && sample.capture), `scrollbar growth must retain the held drag: ${JSON.stringify({ before, samples })}`);
+    assert.ok(samples.at(-1).scrollWidth > samples.at(-1).width, 'the movement crosses an actual horizontal overflow boundary');
+    if (!touch) assert.ok(samples.at(-1).height < before.height, 'the native horizontal scrollbar reduces the inner client height');
+    assert.ok(samples.at(-1).x > samples[0].x + 50, 'the card continues following the pointer beyond the old snap-back point');
+    assert.equal(writes.length, 0, 'held movement remains a preview');
+    if (touch) {
+      // Real browser resizing must still invalidate a gesture, including its
+      // release immediately after the device metrics change.
+      await page.setViewport({ width: 1438, height: 878, hasTouch: true, isMobile: true });
+      await release(page, cdp); await frame(page); assert.equal(writes.length, 0);
+    } else {
+      const saved = page.waitForResponse(response => response.url().endsWith('/notes/group-operations') && response.request().method() !== 'GET');
+      await release(page); await saved; await frame(page);
+      assert.equal(writes.length, 1, 'one completed drag produces one save');
+      assert.equal(writes[0].body.kind, 'arrange'); assert.equal(writes[0].body.items.length, 1);
+      const item = writes[0].body.items[0];
+      assert.equal(item.kind, kind); assert.equal(item.id, kind === 'group' ? 42 : 13);
+      assert.ok(item.layout.x > 5, 'the saved rectangle includes the rightward movement');
+      assert.deepEqual({ ...item.layout, x: 5 }, { x: 5, y: 0, width: 4, height: 9, position_locked: false, always_on_top: false });
+      assert.deepEqual(Object.keys(item).sort(), ['id', 'kind', 'layout'], 'the arrangement changes no note content or membership');
+    }
+    await assertCapture(page, start.pointer, false);
+  } finally { await cdp?.detach(); await page.close(); }
+});
+for (const touch of [false, true]) test(`refinement short page-flow drag survives natural world growth during edge scrolling: ${touch ? 'touch' : 'mouse'}`, async () => {
+  const page = await mount({ canvas: true, touch, width: 1057, height: 450, fixture(board) {
+    board.groups[0].layout.x = 0; board.groups[1].layout.x = 0;
+    Object.assign(board.notes.at(-1).layout, { x: 7, y: 0, width: 4, height: 9 });
+  } }), cdp = touch ? await page.createCDPSession() : null;
+  try {
+    await traceDragEvents(page);
+    await page.$eval('[data-board-key="note:13"]', element => element.scrollIntoView({ block: 'nearest', inline: 'nearest' })); await frame(page);
+    const before = await page.$eval('.notes-canvas-space', element => element.getBoundingClientRect().height);
+    const start = await beginNative(page, cdp, '[data-board-key="note:13"]', true);
+    for (let step = 0; step < 16; step++) {
+      await move(page, { x: start.x, y: 430 }, cdp); await frame(page);
+    }
+    await saveDragTrace(page, `page-growth-${touch ? 'touch' : 'mouse'}`);
+    assert.ok(await page.$('[data-board-key="note:13"].note-card--moving'), 'content growth from edge scrolling preserves the held card');
+    await assertCapture(page, start.pointer);
+    const after = await page.$eval('.notes-canvas-space', element => element.getBoundingClientRect().height);
+    assert.ok(after > before + 20, `the world really grew with the drag: ${before} -> ${after}`);
+    assert.equal(writes.length, 0); await page.keyboard.press('Escape'); await release(page, cdp); await frame(page);
+    assert.equal(writes.length, 0); await assertCapture(page, start.pointer, false);
+  } finally { await cdp?.detach(); await page.close(); }
+});
 async function sampleTilt(page, start, reduced = false) {
   return page.evaluate(async ({ start, reduced }) => {
     let x = start.x, y = start.y;

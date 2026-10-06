@@ -342,6 +342,10 @@ test('paired confirmation preserves long identity avatar size at 320px',async()=
 test('open-task card clamps its visible title while retaining complete accessible text',async()=>{
   const page=await mount({width:320,phone:true,long:true});try{
     await page.click('[data-acceptance-cancel]');
+    await page.evaluate(() => new Promise((resolve, reject) => {
+      const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = '/styles/notes.css';
+      link.onload = resolve; link.onerror = reject; document.head.appendChild(link);
+    }));
     await page.evaluate(async title=>{(await import('/permissions.js')).setPermissions({admin:true});window.EventSource=class{addEventListener(){}close(){}};document.body.insertAdjacentHTML('beforeend','<div id="board"></div>');window.stopBoard=(await import('/components/open-task-board.js')).mountOpenTaskBoard(document.querySelector('#board'));},projection.task.title);
     // The board endpoint shares the authorized synthetic projection for this fixture.
     await page.waitForSelector('[data-open-task="7"]');

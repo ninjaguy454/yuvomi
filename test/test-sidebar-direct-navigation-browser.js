@@ -189,6 +189,22 @@ test('one collapsed module tap navigates directly without any expansion', async 
   await recordTap('collapsed-warm');
 });
 
+test('Notes startup does not wait for task inspection styles', { timeout: 15000 }, async () => {
+  await fresh();
+  const blocker = { path: '/styles/tasks.css', resolve() {} };
+  requestBlocks.set(display, blocker);
+  try {
+    await tap(notesLink);
+    const ready = await display.waitForFunction(() => !!document.querySelector('#notes-grid') && !document.querySelector('#notes-grid').hasAttribute('aria-busy'), { timeout: 1800 }).then(() => true, () => false);
+    assert.equal(ready, true, 'Notes must render while task inspection CSS is unavailable');
+    assert.equal(blocker.request, undefined, 'task inspection CSS is requested only when opening an offer');
+    await settle(); await assertCollapsed();
+  } finally {
+    requestBlocks.delete(display);
+    if (blocker.request && !blocker.request.isInterceptResolutionHandled()) await blocker.request.continue();
+  }
+});
+
 test('mouse hover and keyboard focus preserve collapsed geometry and accessible navigation', async () => {
   await fresh();
   await display.hover(notesLink);

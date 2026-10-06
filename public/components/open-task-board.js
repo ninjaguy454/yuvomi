@@ -13,6 +13,26 @@ export function mountOpenTaskBoard(container, { user } = {}) {
   let active = true, tasks = [], stopLive = null, renderedProjection = null;
   const valid = () => active && container.isConnected && sameAuthentication(authentication);
   const allowed = () => moduleAccess('tasks') !== 'none';
+  // Notes needs only the offer cards until an inspection is requested. Keep
+  // the Tasks/Settings stylesheet graph out of the board's startup path.
+  let inspectionStyle = null;
+  function loadInspectionStyle() {
+    if (inspectionStyle) return inspectionStyle.ready;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet'; link.href = '/styles/tasks.css';
+    const entry = { link };
+    entry.ready = new Promise((resolve, reject) => {
+      entry.cancel = resolve;
+      link.onload = () => { link.onload = link.onerror = null; resolve(); };
+      link.onerror = () => {
+        link.onload = link.onerror = null; link.remove();
+        if (inspectionStyle === entry) inspectionStyle = null;
+        reject(new Error(t('common.loadErrorDescription')));
+      };
+    });
+    inspectionStyle = entry; document.head.appendChild(link);
+    return entry.ready;
+  }
   function render(error = '') {
     if (!valid()) return;
     // Routine revalidation must retain focused and pending offer controls.
@@ -31,6 +51,7 @@ export function mountOpenTaskBoard(container, { user } = {}) {
           const [response, { openTaskDetail }] = await Promise.all([
             api.get(`/tasks/${Number(button.dataset.openTask)}`, { requireFresh: true }),
             import('/components/task-detail.js'),
+            loadInspectionStyle(),
           ]);
           // A newer board projection can remove this offer while its module
           // loads. Never reopen the earlier response after that revalidation.
@@ -55,6 +76,10 @@ export function mountOpenTaskBoard(container, { user } = {}) {
   function stop() {
     if (!active) return;
     active = false; loader.dispose(); starts.dispose(); stopLive?.(); stopCountdowns(); tasks = []; renderedProjection = null; container.replaceChildren();
+    if (inspectionStyle) {
+      inspectionStyle.link.onload = inspectionStyle.link.onerror = null;
+      inspectionStyle.link.remove(); inspectionStyle.cancel(); inspectionStyle = null;
+    }
     for (const name of ['auth:context-ending', 'auth:expired', 'auth:context-rejected']) window.removeEventListener(name, stop);
   }
   for (const name of ['auth:context-ending', 'auth:expired', 'auth:context-rejected']) window.addEventListener(name, stop);

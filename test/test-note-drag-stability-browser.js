@@ -24,7 +24,7 @@ app.use('/api/v1',async(req,res)=>{
   }
   return res.json({data:[]});
 });
-test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--no-sandbox','--disable-dev-shm-usage']});});
+test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--disable-dev-shm-usage']});});
 test.after(async()=>{releaseSave?.();await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
 const card='.note-card[data-id="1"]';
 async function mount({reduced=false,touch=false}={}){

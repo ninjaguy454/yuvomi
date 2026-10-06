@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage device Notes permissions, stronger drag tilt and deferred offer styles.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.65`;
+// Stage whole-card Notes tilt, including its visible background and shadow.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.66`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

@@ -26,9 +26,11 @@ export function mountOpenTaskBoard(container, { user } = {}) {
             api.get(`/tasks/${Number(button.dataset.openTask)}`, { requireFresh: true }),
             import('/components/task-detail.js'),
           ]);
-          if (!valid() || !allowed()) return;
+          // A newer board projection can remove this offer while its module
+          // loads. Never reopen the earlier response after that revalidation.
+          if (!valid() || !allowed() || !button.isConnected) return;
           openTaskDetail({ task: response.data, currentUserId: user?.id ?? null, isAdmin: user?.role === 'admin', onChanged: refresh, offerInspection: true });
-        } catch (error) { if (valid()) window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
+        } catch (error) { if (valid() && allowed() && button.isConnected) window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }
         finally { if (button.isConnected) button.disabled = false; }
       };
     });

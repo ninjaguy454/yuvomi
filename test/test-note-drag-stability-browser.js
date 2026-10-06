@@ -145,12 +145,13 @@ for(const reduced of [false,true])test(`drag-only tilt and pointer cancellation 
   }finally{await page.close();}
 });
 
-test('horizontal speed controls the lean and release smoothly levels only the visual contents',async()=>{
+test('horizontal speed tilts the complete card surface and release leaves logical geometry unchanged',async()=>{
   const page=await mount();try{
     const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
     await page.mouse.move(p.x,p.y);await page.mouse.down();
     const result=await page.evaluate(async point=>{
       const card=document.querySelector('.note-card[data-id="1"]'),content=card.querySelector('.note-card__content');
+      const surface=card.querySelector('.note-card__surface'),visual=surface||content;
       let x=point.x,y=point.y;
       async function travel(vx,vy,duration=240){
         let previous=await new Promise(requestAnimationFrame),elapsed=0;
@@ -165,16 +166,24 @@ test('horizontal speed controls the lean and release smoothly levels only the vi
       const slow=await travel(.1,0),fast=await travel(.8,0),left=await travel(-.8,0);
       const vertical=await travel(0,.2,400);
       await travel(.8,0);
-      const before=card.getBoundingClientRect().toJSON(),angle=getComputedStyle(content).rotate;
+      const before=card.getBoundingClientRect().toJSON(),angle=getComputedStyle(visual).rotate;
+      const frame={backgroundRotation:getComputedStyle(surface||card).rotate,background:getComputedStyle(surface||card).backgroundColor,
+        shadow:getComputedStyle(surface||card).boxShadow,outerBackground:getComputedStyle(card).backgroundColor,outerShadow:getComputedStyle(card).boxShadow,
+        contentRotation:getComputedStyle(content).rotate,unified:!!surface&&['.note-card__title','.note-card__content','.note-card__footer','.note-card__menu','.note-card__position-controls'].every(selector=>surface.contains(card.querySelector(selector)))};
       const outerRotate=getComputedStyle(card).rotate;
       window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,pointerType:'mouse',clientX:x,clientY:y}));
-      const after=card.getBoundingClientRect().toJSON(),releasing=getComputedStyle(content).rotate;
-      return{slow,fast,left,vertical,before,after,angle,releasing,outerRotate,settling:content.getAnimations().some(animation=>animation.transitionProperty==='rotate')};
+      const after=card.getBoundingClientRect().toJSON(),releasing=getComputedStyle(visual).rotate;
+      return{slow,fast,left,vertical,before,after,angle,releasing,outerRotate,frame,settling:visual.getAnimations().some(animation=>animation.transitionProperty==='rotate')};
     },p);
     assert.ok(result.slow>0&&result.slow<.2&&result.fast>2,JSON.stringify(result));
     assert.ok(result.left< -2&&Math.abs(result.fast)<=4&&Math.abs(result.left)<=4);
     assert.ok(Math.abs(result.vertical)<.02,'vertical-only motion does not sustain a sideways lean');
     assert.ok(result.outerRotate==='none'||parseFloat(result.outerRotate)===0);
+    assert.equal(result.frame.backgroundRotation,result.angle,'the background must tilt with the card contents');
+    assert.equal(result.frame.unified,true,'title, preview, footer and controls share one visual surface');
+    assert.equal(result.frame.contentRotation,'none','content does not rotate a second time');
+    assert.notEqual(result.frame.background,'rgba(0, 0, 0, 0)');assert.notEqual(result.frame.shadow,'none');
+    assert.equal(result.frame.outerBackground,'rgba(0, 0, 0, 0)');assert.equal(result.frame.outerShadow,'none','no stationary frame shadow remains');
     for(const field of ['x','y','width','height'])assert.ok(Math.abs(result.before[field]-result.after[field])<1,field);
     assert.ok(result.settling&&parseFloat(result.releasing)>0,'release starts a visual transition rather than snapping');
     await page.waitForFunction(()=>Math.abs(parseFloat(getComputedStyle(document.querySelector('.note-card__content')).rotate)||0)<.001);

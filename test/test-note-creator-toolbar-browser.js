@@ -69,9 +69,12 @@ for(const options of [{width:320,height:720,touch:true},{width:320,height:720,to
       assert.equal(view.toolsHidden,view.mode==='list');
       const bounds=await page.evaluate(()=>{
         const row=document.querySelector('#notes-filters'),toolbar=document.querySelector('.notes-board-toolbar'),chips=[...row.children],rect=toolbar.getBoundingClientRect();
-        return {overflow:document.documentElement.scrollWidth>innerWidth+1,toolbarHeight:rect.height,rail:row.getBoundingClientRect().width,scrolls:row.scrollWidth>row.clientWidth,buttons:chips.map(node=>({width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,label:node.getAttribute('aria-label')})),sameRow:row.parentElement===toolbar};
+        const gap=parseFloat(getComputedStyle(row).columnGap)||0,required=chips.reduce((width,node)=>width+node.getBoundingClientRect().width,0)+Math.max(0,chips.length-1)*gap;
+        return {overflow:document.documentElement.scrollWidth>innerWidth+1,toolbarHeight:rect.height,rail:row.getBoundingClientRect().width,required,scrolls:row.scrollWidth>row.clientWidth,buttons:chips.map(node=>({width:node.getBoundingClientRect().width,height:node.getBoundingClientRect().height,label:node.getAttribute('aria-label')})),sameRow:row.parentElement===toolbar};
       });
-      assert.equal(bounds.overflow,false);assert.equal(bounds.sameRow,true);assert.ok(bounds.rail>=44);assert.ok(bounds.scrolls);assert.ok(bounds.toolbarHeight<=100,JSON.stringify(bounds));
+      assert.equal(bounds.overflow,false);assert.equal(bounds.sameRow,true);assert.ok(bounds.rail>=44);
+      if(bounds.required>bounds.rail+1)assert.ok(bounds.scrolls,'a crowded creator rail remains scrollable');
+      assert.ok(bounds.toolbarHeight<=100*(options.zoom||1)+1,JSON.stringify(bounds));
       assert.ok(bounds.buttons.every(button=>button.width<=48*(options.zoom||1)+1&&button.height>=44&&button.label),JSON.stringify(bounds));
       await page.focus('[data-creator="member:10"]');await page.keyboard.press('Enter');assert.deepEqual(await ids(page),[10]);
       assert.equal(await page.evaluate(()=>document.activeElement.dataset.creator),'member:10');

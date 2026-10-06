@@ -540,7 +540,7 @@ function renderGrid() {
   const focusExpand = document.activeElement?.hasAttribute('data-note-expand');
   const focusChecklistLine = document.activeElement?.dataset.mdLine;
   const previewScroll = new Map([...grid.querySelectorAll('.note-card')].map(card => [card.dataset.id, card.querySelector('.note-card__content')?.scrollTop || 0]));
-  board?.destroy(); board = null;
+  board?.destroy({ preserveReveal:true }); board = null;
   bindGroupInteractions();
   grid.removeAttribute('aria-busy');
 
@@ -1259,8 +1259,14 @@ async function submitGroupCommand(command) {
       if (unknown && page.accessGeneration===access) {
         page.groupRetry=command; renderGrid(); groupStatus(error.message||t('notes.layoutFailed'),{retry:command});
       } else {
-        page.groupRetry=null; await reloadNotes();
-        if (currentPage(page,auth)) groupStatus(error.status===409?t('notes.layoutConflict'):error.data?.error||error.message||t('notes.layoutFailed'));
+        page.groupRetry=null;
+        const fresh=await reloadNotes();
+        if (currentPage(page,auth)) {
+          // An unchanged reload can skip painting while this placement is still
+          // pending. Rebind the invalidated command context for the next drag.
+          if (fresh) renderGrid();
+          groupStatus(error.status===409?t('notes.layoutConflict'):error.data?.error||error.message||t('notes.layoutFailed'));
+        }
       }
     }
     error.groupCommandHandled=true; throw error;

@@ -95,21 +95,30 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       item.key !== other.key && item.layout.x < other.layout.x + other.layout.width && item.layout.x + item.layout.width > other.layout.x
       && item.layout.y < other.layout.y + other.layout.height && item.layout.y + item.layout.height > other.layout.y)).map(item => item.id);
     if (!revealIds.includes(viewState.revealed)) viewState.revealed = null;
+    const existing = new Map([...revealStrip.children].map(button => [Number(button.dataset.noteReveal), button]));
     const buttons = getNotes().filter(note => revealIds.includes(note.id)).map(note => {
-      const button = document.createElement('button'), label = document.createElement('span');
+      const button = existing.get(note.id) || document.createElement('button');
+      const label = button.querySelector('.notes-reveal-tab__label') || document.createElement('span');
       const title = note.title?.trim() || t('notes.untitledNote');
       button.type = 'button'; button.className = 'notes-reveal-tab'; button.dataset.noteReveal = String(note.id);
       button.setAttribute('aria-label', t('notes.revealNote', { title })); button.title = title;
       const card = grid.querySelector(`.note-card[data-id="${note.id}"]`);
       if (card) { card.id = `notes-board-card-${note.id}`; button.setAttribute('aria-controls', card.id); }
-      label.className = 'notes-reveal-tab__label'; label.textContent = title; button.append(label);
+      label.className = 'notes-reveal-tab__label'; label.textContent = title;
+      if (label.parentElement !== button) button.append(label);
       return button;
     });
-    revealStrip.hidden = !buttons.length; revealStrip.replaceChildren(...buttons);
+    // Keep authorized controls connected through revalidation and resize.
+    // A replaced button can otherwise lose a native pointer or keyboard action.
+    for (const button of [...revealStrip.children]) if (!buttons.includes(button)) button.remove();
+    buttons.forEach((button, index) => {
+      if (revealStrip.children[index] !== button) revealStrip.insertBefore(button, revealStrip.children[index] || null);
+    });
+    revealStrip.hidden = !buttons.length;
     if (focused) {
       const target = buttons.find(button => Number(button.dataset.noteReveal) === focused)
         || (narrow ? grid.querySelector(`.note-card[data-id="${focused}"] [data-action="open"]`) : null);
-      target?.focus({ preventScroll: true });
+      if (target && document.activeElement !== target) target.focus({ preventScroll: true });
     }
     viewState.revealFocus = null;
   }
@@ -561,7 +570,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     zoomBy(amount) { cancel(); setZoom(zoom() + amount); },
     resetView() { cancel(); viewState.zoom = 1; refresh(); viewport.scrollLeft = 0; viewport.scrollTop = 0; },
     busy: () => !!gesture || !!navigation || !!adopted || waitingForBridge || pending.size > 0,
-    destroy() {
+    destroy({ preserveReveal = false } = {}) {
       if (revealStrip?.contains(document.activeElement)) viewState.revealFocus = Number(document.activeElement.dataset.noteReveal);
       if (!narrow) { viewState.left = viewport.scrollLeft; viewState.top = viewport.scrollTop; }
       cancel(); disposed = true; observer.disconnect();
@@ -575,7 +584,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       grid.removeEventListener('focusin', cardFocus);
       revealStrip?.removeEventListener('click', reveal);
       revealStrip?.removeEventListener('focusin', revealFocus);
-      if (revealStrip) { revealStrip.replaceChildren(); revealStrip.hidden = true; }
+      if (revealStrip && !preserveReveal) { revealStrip.replaceChildren(); revealStrip.hidden = true; }
       grid.removeEventListener('click', click, true); window.removeEventListener('keydown', key);
       grid.classList.remove('notes-board', 'notes-board--compact', 'notes-board--projected', 'notes-board--groups');
       viewport.classList.remove('notes-scroll--canvas'); space.classList.remove('notes-canvas-space--active');

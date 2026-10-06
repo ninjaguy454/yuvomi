@@ -522,8 +522,8 @@
   display: grid;
   grid-template-columns: minmax(var(--target-base), 1fr) auto;
   align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-2) var(--page-inline-pad);
+  gap: 0 var(--space-2);
+  padding: 2px var(--page-inline-pad);
   flex-shrink: 0;
   min-width: 0;
 }

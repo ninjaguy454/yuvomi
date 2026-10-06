@@ -277,7 +277,7 @@ test('reveal tabs have 24px visuals with separate 44px touch targets and work on
   try {
     await page.waitForSelector('[data-note-reveal="1"]');
     const targets=await page.$$eval('[data-note-reveal]',nodes=>nodes.map(n=>{const r=n.getBoundingClientRect(),v=n.querySelector('.notes-reveal-tab__label').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,visualHeight:v.height};}));
-    for(const target of targets){assert.ok(target.width>=44&&target.height>=44);assert.equal(target.visualHeight,24);}
+    for(const target of targets){assert.ok(target.width>=44&&target.height>=44,JSON.stringify(target));assert.equal(target.visualHeight,24);}
     for(let i=1;i<targets.length;i++)assert.ok(targets[i].x>=targets[i-1].x+targets[i-1].width);
     const area=await box(page,'.notes-scroll');assert.ok(targets.every(t=>t.y+t.height<=area.y));
     await page.touchscreen.tap(targets[0].x+targets[0].width/2,targets[0].y+targets[0].height/2);
@@ -302,11 +302,12 @@ test('reveal survives authorized refresh with keyboard focus and clears when ano
   const page=await mount({fixture:'reveal'});
   try{
     await page.focus('[data-note-reveal="1"]');await page.keyboard.press('Enter');
+    assert.equal(await page.evaluate(()=>{const n=document.querySelector('[data-note-reveal="1"]');window.originalReveal=n;return n===document.activeElement&&n.getAttribute('aria-pressed')==='true';}),true,'keyboard activation selects the current connected reveal control');
     notes[0].title='Updated visible note';await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
     await page.waitForFunction(()=>document.querySelector('[data-note-reveal="1"]')?.textContent==='Updated visible note');
     // Refresh may replace the strip between $eval's handle lookup and evaluation.
     // Read the current target and both focus/selection conditions atomically.
-    assert.equal(await page.evaluate(()=>{const n=document.querySelector('[data-note-reveal="1"]');return n===document.activeElement&&n.getAttribute('aria-pressed')==='true';}),true);
+    assert.equal(await page.evaluate(()=>{const n=document.querySelector('[data-note-reveal="1"]');return n===originalReveal&&n===document.activeElement&&n.getAttribute('aria-pressed')==='true';}),true);
     await page.focus('.note-card[data-id="2"] [data-action="open"]');
     assert.equal(await page.$eval('[data-note-reveal="1"]',n=>n.getAttribute('aria-pressed')),'false');
     await page.keyboard.press('Enter');

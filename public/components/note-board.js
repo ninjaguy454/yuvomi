@@ -49,6 +49,7 @@ export function renderNoteGroupFrame(item, cardHtml) {
 
 /** Layout changes commit only after an intentional completed gesture. */
 export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true, saveLayout, getBoardItems, saveBoardCommand,
+  canStartLayout = () => true,
   pendingLayouts = new Map(), onLayoutSettled = () => {},
   activePages = new Map(), groupDragBridge, onGroupAction = () => {}, compact = false, filtered = false, viewState = {}, onViewChange = () => {}, getResponsiveWidth }) {
   const viewport = grid.closest('.notes-scroll'), space = grid.parentElement;
@@ -257,6 +258,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function activate() {
     if (!gesture || disposed) return;
+    if (!canStartLayout()) { cancel(); suppressClick = true; return; }
     if (navigation?.kind === 'touch') navigation = null;
     gesture.active = true;
     gesture.paintTime = performance.now();
@@ -303,7 +305,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     if (filtered) return;
     const item = itemFor(card), note = item?.note;
-    if (!editable(item) || pending.has(item.key)) return;
+    if (!editable(item)) return;
+    if (!canStartLayout() || pending.has(item.key)) {
+      excludedPointer = { id:event.pointerId, x:event.clientX, y:event.clientY }; return;
+    }
     const rect = card.getBoundingClientRect();
     const edges = { left: event.clientX - rect.left < 12, right: rect.right - event.clientX < 12, top: event.clientY - rect.top < 12, bottom: rect.bottom - event.clientY < 12 };
     if (item.layout?.position_locked && !Object.values(edges).some(Boolean)) {
@@ -413,6 +418,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function autoscroll(time) {
     if (!gesture?.active || disposed) return;
+    if (!canStartLayout()) { cancel(); suppressClick = true; return; }
     if (!gesture.card.hasPointerCapture(gesture.pointer)) { cancel(); return; }
     const scroller = gesture.scroller;
     const rect = scroller === document.scrollingElement ? { top: 0, bottom: innerHeight } : scroller.getBoundingClientRect();
@@ -454,6 +460,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     if (excludedPointer?.id === event.pointerId) excludedPointer = null;
     if (!gesture || gesture.pointer !== event.pointerId) { setTimeout(() => { suppressClick = false; }, 0); return; }
+    if (!canStartLayout()) { cancel(); suppressClick = true; return; }
     // Commit the final pointer position even when pointerup precedes the frame.
     gesture.lastX=event.clientX; gesture.lastY=event.clientY; update();
     const current = gesture; gesture = null;
@@ -511,12 +518,13 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     if (button.dataset.groupAction) {
       event.preventDefault(); event.stopImmediatePropagation();
-      if (!filtered) onGroupAction(button.dataset.groupAction,item);
+      if (!filtered && canStartLayout()) onGroupAction(button.dataset.groupAction,item);
       return;
     }
     if (!saveBoardCommand || !getBoardItems) return;
     event.preventDefault(); event.stopImmediatePropagation();
     if (filtered || !noteItemAllows(item,button.dataset.boardAction==='lock'?'pin':'move') || pending.has(item.key)) return;
+    if (!canStartLayout()) return;
     const flag=button.dataset.boardAction==='lock'?'position_locked':'always_on_top';
     pending.set(item.key, null); button.disabled=true;
     try { await saveBoardCommand(commandFor(item,{[flag]:!item.layout[flag]})); }
@@ -596,7 +604,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     clientToWorld,
     adoptGroupDrag(session) {
       cancel();
-      if (disposed || filtered || narrow || !Number.isInteger(session?.pointerId)) return false;
+      if (disposed || filtered || narrow || !Number.isInteger(session?.pointerId) || !canStartLayout()) return false;
       adopted={...session,viewportWidth:viewportWidth(),viewportHeight:viewport.clientHeight}; return true;
     },
     cancel,

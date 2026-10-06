@@ -151,7 +151,7 @@ function bindGroupCommands() {
       return submitGroupCommand(command);
     },
     saveBoardCommand: async input => {
-      if (!NOTE_GROUPS_INTERFACE_ENABLED || !isCurrent() || boardIsFiltered() || page.groupPending || page.groupRetry) return false;
+      if (!NOTE_GROUPS_INTERFACE_ENABLED || !isCurrent() || boardIsFiltered() || !canBeginLayout(page)) return false;
       try {
         const {kind,...fields}=input;
         return await submitGroupCommand(freezeNoteGroupCommand(draft,kind,fields));
@@ -521,6 +521,7 @@ function visibleBoardItems() {
 function boardOptions() {
   const page = state;
   return { getNotes:visibleNotes,getBoardItems:visibleBoardItems,activePages:state.activePages,
+    canStartLayout:()=>canBeginLayout(page),
     pendingLayouts:page.pendingLayouts ||= new Map(),
     onLayoutSettled:()=>{if(page.active && state===page)board?.refresh();},
     canEdit:canArrangeNote,saveLayout,viewState:state.viewport,
@@ -544,7 +545,7 @@ function renderGrid() {
   const previewScroll = new Map([...grid.querySelectorAll('.note-card')].map(card => [card.dataset.id, card.querySelector('.note-card__content')?.scrollTop || 0]));
   board?.destroy({ preserveReveal:true }); board = null;
   bindGroupInteractions();
-  grid.removeAttribute('aria-busy');
+  syncLayoutWriteState();
 
   const q = state.filterQuery.trim().toLowerCase();
   const visible = visibleNotes();
@@ -557,7 +558,7 @@ function renderGrid() {
   _container.querySelector('#notes-list-density-label').hidden = !state.listView;
   _container.querySelector('#notes-list-density').value = state.listDensity;
   const organizeButton = _container.querySelector('#notes-organize');
-  if (organizeButton) { organizeButton.hidden = state.listView || boardIsFiltered() || !NOTE_GROUPS_INTERFACE_ENABLED; organizeButton.disabled = !!state.groupPending || !!state.groupRetry; }
+  if (organizeButton) { organizeButton.hidden = state.listView || boardIsFiltered() || !NOTE_GROUPS_INTERFACE_ENABLED; organizeButton.disabled = !!layoutWriteState(); }
   const includeLocked = _container.querySelector('#notes-include-locked');
   if (includeLocked) includeLocked.hidden = state.listView || boardIsFiltered() || !NOTE_GROUPS_INTERFACE_ENABLED;
   _container.querySelector('#notes-zoom-controls').hidden = state.listView;
@@ -1161,9 +1162,11 @@ async function reloadNotes() {
       if (!fresh || (modal.querySelector('#note-content') && !canOnNote(fresh, 'edit')) || (modal.hasAttribute('data-layout-editor') && !canArrangeNote(fresh)) || (modal.querySelector('#note-visibility') && fresh.permissions?.manage_visibility !== true)) closeModal({ force: true });
     }
     const {fresh,changed,lostAccess}=acceptBoardView(res.data);
+    const recovered=!!page.layoutRecovery;
+    page.layoutRecovery=false;
     renderCreatorFilter();
-    if (!board?.busy() || changed) renderGrid();
-    if (lostAccess) groupStatus('');
+    if (recovered || !board?.busy() || changed) renderGrid();
+    if (lostAccess || recovered) groupStatus('');
     return fresh;
   } catch (err) {
     if (!currentPage(page, auth) || page.readSequence !== sequence) return;
@@ -1207,20 +1210,61 @@ function layoutStatus(text) {
   if (status) { status.textContent = text; status.title = text; }
 }
 
-function groupStatus(message, { retry=null, undo=null } = {}) {
+// The command owner admits one board write at a time. Do not let a gesture
+// paint an optimistic position when that owner cannot accept its drop.
+function layoutWriteState(page=state) {
+  return page.groupPending ? 'saving' : page.layoutRecovery==='loading' ? 'recovering'
+    : page.groupRetry || page.layoutRecovery==='failed' ? 'retry' : '';
+}
+function layoutWriteMessage(page=state) {
+  return t(layoutWriteState(page)==='saving' ? 'notes.layoutSaving'
+    : layoutWriteState(page)==='recovering' ? 'common.loading' : 'notes.layoutFailed');
+}
+function canBeginLayout(page=state) {
+  if (!page.active || state!==page) return false;
+  const phase=layoutWriteState(page);
+  if (!phase) return true;
+  // Keep the uncertain-outcome explanation and its explicit Retry/Reload.
+  if (phase!=='retry') layoutStatus(layoutWriteMessage(page));
+  return false;
+}
+function syncLayoutWriteState() {
+  const grid=_container?.querySelector('#notes-grid'), phase=layoutWriteState();
+  if (grid) {
+    if (phase) grid.dataset.layoutWrite=phase; else delete grid.dataset.layoutWrite;
+    if (phase==='saving' || phase==='recovering') grid.setAttribute('aria-busy','true'); else grid.removeAttribute('aria-busy');
+  }
+  const organize=_container?.querySelector('#notes-organize');
+  if (organize) organize.disabled=!!phase;
+}
+async function reloadLayout(page=state) {
+  if (!currentPage(page,page.auth)) return;
+  page.layoutRecovery='loading'; groupStatus(t('common.loading'));
+  const fresh=await reloadNotes();
+  if (!currentPage(page,page.auth)) return;
+  if (!fresh && page.layoutRecovery) {
+    page.layoutRecovery='failed'; groupStatus(t('notes.layoutFailed'),{reload:true});
+  }
+  // A newer successful refresh may have superseded this read. It already
+  // established current authority/revisions and cleared the recovery gate.
+  return fresh || (!page.layoutRecovery ? {notes:page.notes,groups:page.groups} : undefined);
+}
+
+function groupStatus(message, { retry=null, undo=null, reload=false } = {}) {
   layoutStatus(message);
+  syncLayoutWriteState();
   _container?.querySelector('#notes-group-actions')?.remove();
   const status = _container?.querySelector('#notes-board-status');
-  if (!status || (!retry && !undo)) return;
+  if (!status || (!retry && !undo && !reload)) return;
   const page=state, auth=page.auth, actions=document.createElement('span'); actions.id='notes-group-actions';
   const button=(label,attribute,run)=>{
     const element=document.createElement('button'); element.type='button'; element.className='btn btn--ghost btn--sm';
     element.textContent=t(label); element.setAttribute(attribute,'');
     element.addEventListener('click',()=>{if(currentPage(page,auth)) Promise.resolve(run()).catch(()=>{});}); actions.append(element);
   };
-  if (retry) {
-    button('common.retry','data-group-retry',()=>submitGroupCommand(retry));
-    button('common.reload','data-group-reload',async()=>{page.groupRetry=null;cancelGroupDrafts(page);groupStatus('');await reloadNotes();});
+  if (retry || reload) {
+    if (retry) button('common.retry','data-group-retry',()=>submitGroupCommand(retry));
+    button('common.reload','data-group-reload',async()=>{page.layoutRecovery='loading';page.groupRetry=null;cancelGroupDrafts(page);await reloadLayout(page);});
   } else if (undo) button('common.undo','data-group-undo',()=>{
     if (boardIsFiltered()) return;
     const draft=createNoteGroupDraft({notes:page.notes,groups:page.groups},newNoteGroupOperationId());
@@ -1232,7 +1276,8 @@ function groupStatus(message, { retry=null, undo=null } = {}) {
 /** The only group request owner. Frozen bodies are never rebuilt for Retry. */
 async function submitGroupCommand(command) {
   const page=state, auth=page.auth, generation=page.boardGeneration, access=page.accessGeneration;
-  if (!NOTE_GROUPS_INTERFACE_ENABLED || !currentPage(page,auth) || boardIsFiltered() || page.groupPending || (page.groupRetry && page.groupRetry!==command)) throw new Error(t('notes.layoutConflict'));
+  if (!NOTE_GROUPS_INTERFACE_ENABLED || !currentPage(page,auth) || boardIsFiltered()) throw new Error(t('notes.layoutConflict'));
+  if (page.groupPending || page.layoutRecovery || (page.groupRetry && page.groupRetry!==command)) throw new Error(layoutWriteMessage(page));
   page.groupPending=command; page.readSequence=(page.readSequence||0)+1; page.groupUndo=null;
   const pending=[...command.expected.notes.map(note=>note.id),...command.expected.groups.map(group=>`group:${group.id}`)];
   pending.forEach(id=>page.pending.add(id)); groupStatus(t('notes.layoutSaving'));
@@ -1261,12 +1306,12 @@ async function submitGroupCommand(command) {
         page.groupRetry=command; renderGrid(); groupStatus(error.message||t('notes.layoutFailed'),{retry:command});
       } else {
         page.groupRetry=null;
-        const fresh=await reloadNotes();
+        const fresh=await reloadLayout(page);
         if (currentPage(page,auth)) {
           // An unchanged reload can skip painting while this placement is still
           // pending. Rebind the invalidated command context for the next drag.
           if (fresh) renderGrid();
-          groupStatus(error.status===409?t('notes.layoutConflict'):error.data?.error||error.message||t('notes.layoutFailed'));
+          groupStatus(error.status===409?t('notes.layoutConflict'):error.data?.error||error.message||t('notes.layoutFailed'),{reload:!fresh});
         }
       }
     }
@@ -1274,6 +1319,7 @@ async function submitGroupCommand(command) {
   } finally {
     if (page.groupPending===command) page.groupPending=null;
     pending.forEach(id=>page.pending.delete(id));
+    if (currentPage(page,auth)) syncLayoutWriteState();
   }
 }
 
@@ -1303,6 +1349,7 @@ async function saveLayoutChange(note, changes) {
 }
 
 function openLayoutModal(id, kind = 'note') {
+  if (!canBeginLayout()) return;
   // Retain the render's revision snapshot through the dialog's lifetime.
   const saveBoardCommand=state.boardActions?.saveBoardCommand;
   const findItem=()=>projectNoteGroupItems({notes:state.notes,groups:state.groups || []},{activePages:state.activePages}).find(item=>item.kind===kind && item.id===id);
@@ -1345,7 +1392,7 @@ function openLayoutModal(id, kind = 'note') {
 }
 
 async function organizeNotes() {
-  if (!NOTE_GROUPS_INTERFACE_ENABLED || !state.active || boardIsFiltered() || state.groupPending || state.groupRetry || state.pending.size || board?.busy()) return;
+  if (!NOTE_GROUPS_INTERFACE_ENABLED || !state.active || boardIsFiltered() || !canBeginLayout() || state.pending.size || board?.busy()) return;
   const includeLocked = _container.querySelector('#notes-organize-locked')?.checked === true;
   try {
     const all=projectNoteGroupItems({notes:state.notes,groups:state.groups},{activePages:state.activePages});

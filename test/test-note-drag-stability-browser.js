@@ -94,6 +94,18 @@ test('a rejected save keeps new drags blocked until canonical recovery completes
   }finally{releaseSave?.();await unblockReads();await page.mouse.up().catch(()=>{});await page.close();}
 });
 
+test('a pending save prevents an already armed resize hold from activating',async()=>{
+  const page=await mount({adjacent:true});try{
+    const before=await snapshot(page),p={x:before.x+3,y:before.y+80};
+    await page.mouse.move(p.x,p.y);await page.mouse.down();
+    await page.$eval(secondCard+' .note-card__lock',button=>button.click());
+    await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
+    await new Promise(resolve=>setTimeout(resolve,520));await page.mouse.move(p.x-40,p.y,{steps:4});
+    assert.equal(await page.$('.note-card--resizing'),null,'delayed activation rechecks the same write gate');
+    assert.equal((await snapshot(page)).width,before.width);await page.mouse.up();await finish(page);assert.equal(writes.length,1);
+  }finally{releaseSave?.();await page.mouse.up().catch(()=>{});await page.close();}
+});
+
 test('uncertain outcome and failed Reload keep layout gestures blocked until a successful Reload',async()=>{
   const page=await mount({adjacent:true});try{
     mode='unknown';await drag(page);releaseSave();await page.waitForSelector('[data-group-retry]');

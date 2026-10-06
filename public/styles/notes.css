@@ -675,6 +675,9 @@
 .notes-zoom-controls output { min-width: 3.5em; text-align: center; font-size: var(--text-xs); }
 .notes-include-locked { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--text-xs); }
 .notes-board[data-board-view="canvas"]:not(.notes-board--projected) > .note-card--editable { touch-action: none; }
+.notes-board[data-board-view="canvas"][data-layout-write="saving"] > .note-card--editable,
+.notes-board[data-board-view="canvas"][data-layout-write="recovering"] > .note-card--editable { cursor: progress; }
+.notes-board[data-board-view="canvas"][data-layout-write="retry"] > .note-card--editable { cursor: not-allowed; }
 .notes-board > .note-card--moving { box-shadow: var(--shadow-lg), 0 12px 24px rgb(0 0 0 / .22); }
 .notes-board > .note-card--resizing { outline: 3px solid var(--color-accent); outline-offset: -3px; box-shadow: var(--shadow-lg); }
 

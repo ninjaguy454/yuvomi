@@ -8,7 +8,7 @@ import puppeteer from 'puppeteer';
 
 // Exercise the real page, card renderer, inherited application styles and
 // delegated handlers against a loopback-only fixture API. No household data.
-const publicDir = fileURLToPath(new URL('../public', import.meta.url));
+const publicDir = process.env.CARD_QA_PUBLIC_ROOT || fileURLToPath(new URL('../public', import.meta.url));
 const applicationStyles = [...readFileSync(path.join(publicDir, 'index.html'), 'utf8')
   .matchAll(/<link rel="stylesheet" href="([^\"]+)"\s*\/>/g)].map(match => match[0]).join('\n');
 const output = process.env.CARD_QA_OUTPUT;
@@ -66,6 +66,52 @@ test.before(async () => {
 });
 test.after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve) || resolve()); });
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+
+for (const [name, width, points, rootFont] of [['normal', 390, 5, 16], ['large text and points', 320, 10000, 32]]) {
+  test(`touch Kanban ghost preserves ${name} card layout and clears the title`, async () => {
+    const page = await mount({ mode: 'kanban', width, mobile: true, points, rootFont });
+    const cdp = await page.createCDPSession();
+    try {
+      const handle = 'article[data-task-id="1"] [data-task-drag-handle]';
+      await page.$eval(handle, node => node.scrollIntoView({ block: 'center' }));
+      await frames(page);
+      // The production gesture intentionally ignores contacts immediately after
+      // scrolling. Start after that quiet period, as a person pausing to drag.
+      await new Promise(resolve => setTimeout(resolve, 200));
+      const before = await page.$eval('article[data-task-id="1"]', card => {
+        const badge = card.querySelector('.activity-card__points'), style = getComputedStyle(badge);
+        return { classes: [...card.classList], badge: { width: style.width, height: style.height, text: badge.textContent, label: badge.getAttribute('aria-label') } };
+      });
+      const from = await page.$eval(handle, node => { const r = node.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ ...from, id: 1 }] });
+      await new Promise(resolve => setTimeout(resolve, 240));
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: from.x + 10, y: from.y + 30, id: 1 }] });
+      await frames(page);
+      const ghost = await page.$eval('.kanban-card--ghost', card => {
+        // Compare the layout in the proxy's local coordinates. The whole-card
+        // rotation gives axis-aligned text/control bounds misleading overlap.
+        const transform = card.style.transform; card.style.transform = 'none';
+        const badge = card.querySelector('.activity-card__points'), style = getComputedStyle(badge);
+        const title = card.querySelector('.activity-card__title-text');
+        const range = document.createRange(); range.selectNodeContents(title);
+        const text = [...range.getClientRects()][0], toggle = card.querySelector('.activity-card__details-toggle').getBoundingClientRect();
+        const result = { classes: [...card.classList], position: getComputedStyle(card).position, margin: getComputedStyle(card).marginTop,
+          inert: card.hasAttribute('inert'), hidden: card.getAttribute('aria-hidden'), duplicateIds: card.querySelectorAll('[id]').length,
+          badge: { width: style.width, height: style.height, text: badge.textContent, label: badge.getAttribute('aria-label') },
+          clear: text.left >= toggle.right - 1 };
+        card.style.transform = transform; return result;
+      });
+      assert.deepEqual(ghost.badge, before.badge, 'the actual rendered points circle keeps size, amount and accessible label');
+      for (const cls of before.classes) assert.ok(ghost.classes.includes(cls), `ghost retains layout class ${cls}`);
+      assert.equal(ghost.position, 'fixed'); assert.equal(ghost.margin, '0px'); assert.equal(ghost.clear, true);
+      assert.equal(ghost.inert, true); assert.equal(ghost.hidden, 'true'); assert.equal(ghost.duplicateIds, 0);
+      if (output) await page.screenshot({ path: path.join(output, `touch-ghost-${width}-${rootFont}.png`), fullPage: true });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+      assert.equal(await page.$('.kanban-card--ghost'), null, 'cancellation removes the proxy');
+      assert.deepEqual(writes, [], 'drag cancellation makes no API mutation');
+    } finally { await cdp.detach(); await page.close(); }
+  });
+}
 
 async function mount({ mode = 'kanban', width = 390, theme = 'dark', palette = 'warm', typography = 'sans', doneTask = false, longList = false, title = null, mobile = false, rootFont = null, points = null } = {}) {
   writes = [];

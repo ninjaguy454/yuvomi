@@ -108,7 +108,9 @@ export function bindTaskCardTouchDrag(board, {
       suppressedTaskId = pending.taskId;
       suppressClickUntil = Date.now() + 800;
       ghost = pending.card.cloneNode(true);
-      ghost.className = 'kanban-card kanban-card--ghost';
+      // The proxy needs the same card layout and size modifiers as its source.
+      ghost.classList.remove('kanban-card--dragging');
+      ghost.classList.add('kanban-card', 'kanban-card--ghost');
       ghost.setAttribute('aria-hidden', 'true');
       ghost.setAttribute('inert', '');
       ghost.removeAttribute('id');

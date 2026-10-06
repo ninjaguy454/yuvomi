@@ -2448,6 +2448,13 @@
   transition: background-color var(--transition-fast), border-color var(--transition-fast),
               box-shadow var(--transition-fast), opacity var(--transition-base);
 }
+.activity-card.kanban-card--ghost {
+  position: fixed;
+  margin: 0;
+  pointer-events: none;
+  box-shadow: var(--shadow-xl);
+  transition: none;
+}
 .activity-card--large-points { --task-points-size: 3rem; }
 .activity-card--has-details { --task-details-inset: 32px; }
 .activity-card--selecting { --task-selection-inset: 44px; }

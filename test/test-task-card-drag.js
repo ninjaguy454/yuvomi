@@ -16,7 +16,15 @@ class Element {
     this.isConnected = true;
     this.disabled = false;
     const classes = new Set();
-    this.classList = { add: name => classes.add(name), remove: name => classes.delete(name), contains: name => classes.has(name) };
+    this.classList = {
+      add: (...names) => names.forEach(name => classes.add(name)),
+      remove: (...names) => names.forEach(name => classes.delete(name)),
+      contains: name => classes.has(name),
+    };
+    Object.defineProperty(this, 'className', {
+      get: () => [...classes].join(' '),
+      set: value => { classes.clear(); String(value).split(/\s+/).filter(Boolean).forEach(name => classes.add(name)); },
+    });
     parent?.children.push(this);
   }
   closest(selector) {
@@ -36,6 +44,7 @@ class Element {
   getBoundingClientRect() { return { left: 40, top: 120, width: 270, height: 110 }; }
   cloneNode() {
     const clone = new Element();
+    clone.className = this.className;
     clone.setAttribute('id', 'card');
     new Element([], clone).setAttribute('id', 'subtask');
     return clone;
@@ -82,6 +91,7 @@ function fixture(t) {
   const bucket = new Element(['[data-bucket-key]'], board);
   bucket.dataset.bucketKey = 'Eleanor';
   const card = new Element(['.kanban-card[data-task-id]'], bucket);
+  card.className = 'kanban-card activity-card activity-card--large-points';
   card.dataset.taskId = '72';
   const handle = new Element(['[data-task-drag-handle]'], card);
   const handleIcon = new Element([], handle);
@@ -155,8 +165,10 @@ test('held handle moves deliberately, drops once, then cleans ghost/highlight an
   f.tick(TASK_DRAG_HOLD_MS);
   assert.equal(f.handle.classList.contains('task-card__drag-handle--ready'), true);
   assert.equal((await f.move(51, 180)).defaultPrevented, true);
-  const ghost = f.doc.body.children.find(child => child.className === 'kanban-card kanban-card--ghost');
+  const ghost = f.doc.body.children.find(child => child.classList.contains('kanban-card--ghost'));
   assert.ok(ghost);
+  assert.equal(ghost.classList.contains('activity-card'), true);
+  assert.equal(ghost.classList.contains('activity-card--large-points'), true);
   assert.equal(ghost.attributes.get('aria-hidden'), 'true');
   assert.equal(ghost.attributes.has('inert'), true);
   assert.equal(ghost.attributes.has('id'), false);

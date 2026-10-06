@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage whole-card Notes tilt, including its visible background and shadow.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.66`;
+// Stage explicit paired-device household Weather and its opt-in controls.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.67`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

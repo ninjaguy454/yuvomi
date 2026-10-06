@@ -5,7 +5,6 @@ import { moduleAccess } from '/permissions.js';
 import { authenticationSnapshot, sameAuthentication } from '/utils/device-context.js';
 import { watchTaskChanges, latestTaskLoader, createTaskStartRefresh } from '/utils/task-live.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
-import { openTaskDetail } from '/components/task-detail.js';
 import { taskCompletionPoints } from '/utils/task-fields.js';
 
 /** A task projection beside Notes, with independent permission and lifecycle. */
@@ -23,7 +22,10 @@ export function mountOpenTaskBoard(container, { user } = {}) {
       button.onclick = async () => {
         button.disabled = true;
         try {
-          const response = await api.get(`/tasks/${Number(button.dataset.openTask)}`, { requireFresh: true });
+          const [response, { openTaskDetail }] = await Promise.all([
+            api.get(`/tasks/${Number(button.dataset.openTask)}`, { requireFresh: true }),
+            import('/components/task-detail.js'),
+          ]);
           if (!valid() || !allowed()) return;
           openTaskDetail({ task: response.data, currentUserId: user?.id ?? null, isAdmin: user?.role === 'admin', onChanged: refresh, offerInspection: true });
         } catch (error) { if (valid()) window.yuvomi?.showToast(error.data?.error || error.message, 'danger'); }

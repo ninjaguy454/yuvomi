@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage paired-device household Weather and Notes drag/save coordination.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.67`;
+// Stage reviewed Notes group previews, foreground movement, and selection order.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.68`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

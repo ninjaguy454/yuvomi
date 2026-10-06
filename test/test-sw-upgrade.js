@@ -8,7 +8,7 @@ const REGISTER_SOURCE = readFileSync(new URL('../public/sw-register.js', import.
   .replace('export function clearApiCache()', 'function clearApiCache()');
 const ORIGIN = 'https://upgrade.test';
 // Recovery-image verification supplies its separately allocated exact identity.
-const EXPECTED_CACHE_VERSION = process.env.VIDAMIA_TEST_SW_CACHE_VERSION || '2.54.0-kitchen.5-vidamia.67';
+const EXPECTED_CACHE_VERSION = process.env.VIDAMIA_TEST_SW_CACHE_VERSION || '2.54.0-kitchen.5-vidamia.68';
 
 const keyOf = (input) => {
   const raw = typeof input === 'string' ? input : input.url;
@@ -174,7 +174,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
 test('older releases and the previous refinement candidate upgrade to fresh Meal and Task modules', async () => {
   const env = loadWorker();
   const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4',
-    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5', '2.54.0-kitchen.5-vidamia.7', '2.54.0-kitchen.5-vidamia.8', '2.54.0-kitchen.5-vidamia.9', '2.54.0-kitchen.5-vidamia.10', '2.54.0-kitchen.5-vidamia.61', '2.54.0-kitchen.5-vidamia.62', '2.54.0-kitchen.5-vidamia.63', '2.54.0-kitchen.5-vidamia.64', '2.54.0-kitchen.5-vidamia.65', '2.54.0-kitchen.5-vidamia.65-acceptance-paused', '2.54.0-kitchen.5-vidamia.66', '2.54.0-kitchen.5-vidamia.66-acceptance-paused'];
+    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5', '2.54.0-kitchen.5-vidamia.7', '2.54.0-kitchen.5-vidamia.8', '2.54.0-kitchen.5-vidamia.9', '2.54.0-kitchen.5-vidamia.10', '2.54.0-kitchen.5-vidamia.61', '2.54.0-kitchen.5-vidamia.62', '2.54.0-kitchen.5-vidamia.63', '2.54.0-kitchen.5-vidamia.64', '2.54.0-kitchen.5-vidamia.65', '2.54.0-kitchen.5-vidamia.65-acceptance-paused', '2.54.0-kitchen.5-vidamia.66', '2.54.0-kitchen.5-vidamia.66-acceptance-paused', '2.54.0-kitchen.5-vidamia.67', '2.54.0-kitchen.5-vidamia.67-acceptance-paused'];
   const oldCaches = oldReleases.flatMap((release) => [
     `yuvomi-shell-${release}`,
     `yuvomi-pages-${release}`,

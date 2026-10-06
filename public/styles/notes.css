@@ -579,17 +579,49 @@
 .notes-board .note-card__creator > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .note-card__audience { color: var(--color-text-secondary); font-size: var(--text-xs); padding-inline-end: var(--target-base); flex-shrink: 0; }
 .note-card--moving { z-index: 2; box-shadow: var(--shadow-lg); }
+/* The outer card is the stable layout/hit rectangle. The inner surface owns
+ * every visible card edge, shadow and child so they move as one object. */
+.notes-board > .note-card:has(> .note-card__surface) {
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  overflow: visible;
+}
+.note-card__surface {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-3);
+  border-radius: inherit;
+  background: color-mix(in srgb, var(--note-color, transparent) var(--tint-surface), var(--color-surface));
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.note-card:hover > .note-card__surface { box-shadow: var(--shadow-md); }
+.note-card--pinned > .note-card__surface { box-shadow: var(--shadow-md), 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent); }
+.note-card--moving > .note-card__surface { box-shadow: var(--shadow-lg), 0 12px 24px rgb(0 0 0 / .22); }
+.note-card--resizing > .note-card__surface { box-shadow: var(--shadow-lg); }
+.note-card--group > .note-card__surface,
+.note-card:has(.note-card__menu[open]) > .note-card__surface { overflow: visible; }
+/* Descendants with their own pointer-events rules must also stay on the
+ * unrotated hit rectangle during a drag and its settling transition. */
+.notes-board > :is(.note-card--moving,.note-card--settling) > .note-card__surface,
+.notes-board > :is(.note-card--moving,.note-card--settling) > .note-card__surface * { pointer-events: none; }
 @media (prefers-reduced-motion: no-preference) {
-  /* Tilt only the visual contents. The card rectangle and drop targets stay put. */
-  .note-card > :is(.note-card__title,.note-card__content,.note-card__footer) {
+  .note-card__surface {
     rotate: 0deg;
     transition: rotate 160ms ease-out;
   }
-  .note-card--moving:not(.note-card--resizing) > :is(.note-card__title,.note-card__content,.note-card__footer) {
+  .note-card--moving:not(.note-card--resizing) > .note-card__surface {
     rotate: var(--note-drag-tilt, 0deg);
     transition: none;
-    pointer-events: none;
   }
+  .note-card--resizing > .note-card__surface { rotate: 0deg; transition: none; }
 }
 .notes-board--compact .note-card__footer { padding-inline-end: 0; }
 .notes-board .note-card__open, .notes-board .note-card__delete, .notes-board .note-card__pin { opacity: 1; pointer-events: auto; }
@@ -619,7 +651,7 @@
 .notes-list-density[hidden] { display: none; }
 .notes-list-density select { min-height: var(--target-base); max-width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); color: var(--color-text-primary); padding-inline: var(--space-2); }
 .note-card__menu { flex: none; position: relative; }
-.note-card > .note-card__menu { position: absolute; top: var(--space-2); inset-inline-end: var(--space-2); }
+:is(.note-card,.note-card__surface) > .note-card__menu { position: absolute; top: var(--space-2); inset-inline-end: var(--space-2); }
 .note-card__menu summary { display: flex; align-items: center; justify-content: center; list-style: none; cursor: pointer; width: var(--target-base); min-height: var(--target-base); border-radius: var(--radius-full); background: var(--note-action-bg); }
 .note-card__menu summary::-webkit-details-marker { display: none; }
 .note-card__menu-items { position: absolute; inset-inline-end: 0; top: 100%; display: flex; flex-direction: column; width: max-content; min-width: 180px; max-width: min(280px, 80vw); padding: var(--space-1); overflow-y: auto; overscroll-behavior: contain; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); box-shadow: var(--shadow-lg); z-index: 4; }
@@ -631,7 +663,7 @@
  * A deliberate hold claims movement; ordinary preview swipes remain native. */
 .notes-board[data-board-view="canvas"] .note-card__content { touch-action: pan-y; }
 .notes-board[data-board-view="canvas"] > .note-card--moving { cursor: grabbing; }
-.notes-board[data-board-view="canvas"] > .note-card > .note-card__title { padding-inline-end: var(--target-base); }
+.notes-board[data-board-view="canvas"] > .note-card .note-card__title { padding-inline-end: var(--target-base); }
 .notes-board .note-card__footer { padding-inline-end: 0; }
 
 .notes-canvas-space { position: relative; min-width: 0; }
@@ -648,7 +680,7 @@
 
 /* Small glyphs, usable transparent targets; title is the keyboard reader entry. */
 .notes-board .note-card__title { border: 0; background: transparent; color: inherit; text-align: start; font-family: inherit; cursor: pointer; }
-.notes-board[data-board-view="canvas"] > .note-card > .note-card__title { padding-inline: 0; margin-inline: 44px; min-height: 40px; }
+.notes-board[data-board-view="canvas"] > .note-card .note-card__title { padding-inline: 0; margin-inline: 44px; min-height: 40px; }
 .note-card__lock { position: absolute; top: 16px; left: 16px; display: grid; place-items: center; width: 40px; height: 40px; border: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-md); }
 .note-card__lock[aria-pressed="true"] { color: var(--color-text-primary); background: var(--note-action-bg); }
 .note-card--resizing::after {

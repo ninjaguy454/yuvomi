@@ -32,6 +32,14 @@ export function renderNoteGroupFrame(item, cardHtml) {
       card.prepend(pager);
     }
   }
+  if (!card.classList.contains('note-card--list')) {
+    // One visual object can lean without rotating the geometry/capture owner.
+    // Include the pager and controls before serializing the reconciliation key.
+    const surface = document.createElement('div');
+    surface.className = 'note-card__surface';
+    surface.append(...card.childNodes);
+    card.append(surface);
+  }
   return template.innerHTML;
 }
 
@@ -48,6 +56,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   const canvasWidth = () => Math.max(640, viewportWidth());
   const responsiveWidth = () => getResponsiveWidth ? getResponsiveWidth() : viewportWidth();
   let disposed = false, gesture = null, narrow = compact || responsiveWidth() < 640;
+  const settlingCards = new Map();
   let suppressClick = false, frame = 0, excludedPointer = null;
   let navigation = null;
   const touches = new Map();
@@ -197,10 +206,28 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     viewport.scrollLeft += world.x * (zoom() - previous);
     viewport.scrollTop += world.y * (zoom() - previous);
   }
+  function clearSettling(card) {
+    settlingCards.delete(card);
+    card.classList.remove('note-card--settling');
+  }
   function release(current) {
     clearTimeout(current.timer); cancelAnimationFrame(frame); frame = 0;
     current.card.classList.remove('note-card--moving', 'note-card--resizing');
     current.card.style.removeProperty('--note-drag-tilt');
+    const surface = current.card.querySelector('.note-card__surface');
+    if (surface && current.active && !current.edges) {
+      // Rotated corners must not become new hit targets while leveling out.
+      // Follow the actual transition, including reduced motion/cancellation.
+      const token = {};
+      settlingCards.set(current.card, token);
+      current.card.classList.add('note-card--settling');
+      const transitions = surface.getAnimations().filter(animation => animation.transitionProperty === 'rotate');
+      Promise.allSettled(transitions.map(animation => animation.finished)).then(() => {
+        if (settlingCards.get(current.card) !== token) return;
+        clearSettling(current.card);
+        positionMenus();
+      });
+    }
     if (current.card.hasPointerCapture?.(current.pointer)) current.card.releasePointerCapture(current.pointer);
   }
   function cancel(preserveTouches = false) {
@@ -228,6 +255,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (navigation?.kind === 'touch') navigation = null;
     gesture.active = true;
     gesture.paintTime = performance.now();
+    clearSettling(gesture.card);
     gesture.card.classList.add('note-card--moving');
     if (gesture.edges) gesture.card.classList.add('note-card--resizing');
     gesture.card.setPointerCapture(gesture.pointer);
@@ -575,6 +603,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       if (revealStrip?.contains(document.activeElement)) viewState.revealFocus = Number(document.activeElement.dataset.noteReveal);
       if (!narrow) { viewState.left = viewport.scrollLeft; viewState.top = viewport.scrollTop; }
       cancel(); disposed = true; observer.disconnect();
+      for (const card of settlingCards.keys()) clearSettling(card);
       window.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', pointerCancel);
       window.removeEventListener('touchmove', touchMove);

@@ -140,7 +140,7 @@ for(const outcome of ['success','failed'])test(`a canonical refresh during a pen
 for(const reduced of [false,true])test(`drag-only tilt and pointer cancellation preserve geometry (reduced motion ${reduced})`,async()=>{
   const page=await mount({reduced});try{const before=await snapshot(page);const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});await page.mouse.move(p.x,p.y);await page.mouse.down();await page.mouse.move(p.x+40,p.y+30,{steps:4});await new Promise(r=>setTimeout(r,35));
     const active=await snapshot(page);assert.equal(active.width,before.width);assert.equal(active.height,before.height);
-    const angle=await page.$eval(card,e=>getComputedStyle(e.querySelector('.note-card__content')).rotate);assert.equal(angle==='none'||parseFloat(angle)===0,reduced,'motion preference governs visual tilt');
+    const angle=await page.$eval(card,e=>getComputedStyle(e.querySelector('.note-card__surface')).rotate);assert.equal(angle==='none'||parseFloat(angle)===0,reduced,'motion preference governs visual tilt');
     await page.evaluate(()=>window.dispatchEvent(new PointerEvent('pointercancel',{pointerId:1})));await page.mouse.up();const cancelled=await snapshot(page);assert.ok(Math.abs(cancelled.x-before.x)<1);assert.ok(Math.abs(cancelled.y-before.y)<1);assert.equal(writes.length,0);assert.equal(await page.$('.note-card--moving'),null);
   }finally{await page.close();}
 });
@@ -169,11 +169,19 @@ test('horizontal speed tilts the complete card surface and release leaves logica
       const before=card.getBoundingClientRect().toJSON(),angle=getComputedStyle(visual).rotate;
       const frame={backgroundRotation:getComputedStyle(surface||card).rotate,background:getComputedStyle(surface||card).backgroundColor,
         shadow:getComputedStyle(surface||card).boxShadow,outerBackground:getComputedStyle(card).backgroundColor,outerShadow:getComputedStyle(card).boxShadow,
-        contentRotation:getComputedStyle(content).rotate,unified:!!surface&&['.note-card__title','.note-card__content','.note-card__footer','.note-card__menu','.note-card__position-controls'].every(selector=>surface.contains(card.querySelector(selector)))};
+        contentRotation:getComputedStyle(content).rotate,unified:!!surface&&['.note-card__title','.note-card__content','.note-card__footer','.note-card__menu','.note-card__lock'].every(selector=>surface.contains(card.querySelector(selector)))};
       const outerRotate=getComputedStyle(card).rotate;
+      // Sample an interior point of the visible corner outside the logical
+      // rectangle, including controls with explicit pointer-events:auto.
+      const radians=parseFloat(angle)*Math.PI/180,cx=before.x+before.width/2,cy=before.y+before.height/2;
+      const dx=before.width/2-2,dy=-before.height/2+25;
+      const corner={x:cx+dx*Math.cos(radians)-dy*Math.sin(radians),y:cy+dx*Math.sin(radians)+dy*Math.cos(radians)};
+      const hitsCard=()=>document.elementFromPoint(corner.x,corner.y)?.closest('.note-card')===card;
+      const hit={outside:corner.x>before.right,moving:hitsCard(),controlsDisabled:[...card.querySelectorAll('button,summary')].every(node=>getComputedStyle(node).pointerEvents==='none')};
       window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,pointerType:'mouse',clientX:x,clientY:y}));
       const after=card.getBoundingClientRect().toJSON(),releasing=getComputedStyle(visual).rotate;
-      return{slow,fast,left,vertical,before,after,angle,releasing,outerRotate,frame,settling:visual.getAnimations().some(animation=>animation.transitionProperty==='rotate')};
+      hit.settling=hitsCard();
+      return{slow,fast,left,vertical,before,after,angle,releasing,outerRotate,frame,hit,settling:visual.getAnimations().some(animation=>animation.transitionProperty==='rotate')};
     },p);
     assert.ok(result.slow>0&&result.slow<.2&&result.fast>2,JSON.stringify(result));
     assert.ok(result.left< -2&&Math.abs(result.fast)<=4&&Math.abs(result.left)<=4);
@@ -184,9 +192,12 @@ test('horizontal speed tilts the complete card surface and release leaves logica
     assert.equal(result.frame.contentRotation,'none','content does not rotate a second time');
     assert.notEqual(result.frame.background,'rgba(0, 0, 0, 0)');assert.notEqual(result.frame.shadow,'none');
     assert.equal(result.frame.outerBackground,'rgba(0, 0, 0, 0)');assert.equal(result.frame.outerShadow,'none','no stationary frame shadow remains');
+    assert.deepEqual(result.hit,{outside:true,moving:false,controlsDisabled:true,settling:false},'visual protrusions never change the logical hit target');
     for(const field of ['x','y','width','height'])assert.ok(Math.abs(result.before[field]-result.after[field])<1,field);
     assert.ok(result.settling&&parseFloat(result.releasing)>0,'release starts a visual transition rather than snapping');
-    await page.waitForFunction(()=>Math.abs(parseFloat(getComputedStyle(document.querySelector('.note-card__content')).rotate)||0)<.001);
+    await page.waitForFunction(()=>Math.abs(parseFloat(getComputedStyle(document.querySelector('.note-card__surface')).rotate)||0)<.001);
+    await page.waitForFunction(()=>!document.querySelector('.note-card--settling'));
+    assert.notEqual(await page.$eval(card+' .note-card__title',node=>getComputedStyle(node).pointerEvents),'none','controls recover after settling');
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
     await finish(page);assert.equal(writes.length,1);
   }finally{releaseSave?.();await page.mouse.up();await page.close();}

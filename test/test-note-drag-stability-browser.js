@@ -127,10 +127,11 @@ for(const outcome of ['success','failed'])test(`a canonical refresh during a pen
     const response=page.waitForResponse(r=>r.url().endsWith('/notes/1/check')&&r.request().method()==='PATCH');
     await page.click(card+' .note-md-box');
     notes[0].title='Remote title during checkbox request';notes[0].revision++;
+    if(outcome==='failed')notes[0].content=notes[0].content.replace('- [ ]','- [x]');
     await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
     await page.waitForFunction(()=>document.querySelector('.note-card[data-id="1"] .note-card__title').textContent==='Remote title during checkbox request');
     assert.equal(typeof releaseCheck,'function');releaseCheck();await response;await page.waitForNetworkIdle({idleTime:50});
-    assert.equal(await page.$eval(card+' .note-md-box',e=>e.getAttribute('aria-checked')),String(outcome==='success'));
+    assert.equal(await page.$eval(card+' .note-md-box',e=>e.getAttribute('aria-checked')),'true','a stale denial must not undo a newer canonical check');
     assert.equal(await page.$eval(card+' .note-card__title',e=>e.textContent),'Remote title during checkbox request');
     await drag(page);await finish(page);
     assert.equal(writes[0].expected.notes[0].revision,notes[0].revision,'the next drag uses the current content revision');
@@ -187,4 +188,3 @@ test('content refresh retains neighboring focus and renders icons for every inse
     assert.equal(await page.evaluate(()=>document.activeElement===neighborFocus),true,'deleting another card does not move the focused neighbor');
   }finally{await page.close();}
 });
-

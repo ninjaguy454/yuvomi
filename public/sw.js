@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage the Kitchen member-filter fix in a fresh cache generation.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.63`;
+// Stage the Notes drag/save refinement while retaining the Kitchen correction.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.64`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

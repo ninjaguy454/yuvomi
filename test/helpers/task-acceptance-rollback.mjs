@@ -87,7 +87,7 @@ if(stage==='worker'){
     layoutState(report);setNoteLayout(d,2,2,{expected_layout_revision:readNoteBoard(d,2).notes.find(n=>n.id===2).layout.revision,layout:{x:199.125,y:260.875,width:5,height:8},position_locked:false,always_on_top:true});const display=devicePrincipal(d.prepare('SELECT * FROM household_devices WHERE id=1').get());setNoteLayout(d,display,3,{expected_layout_revision:readNoteBoard(d,display).notes.find(n=>n.id===3).layout.revision,layout:{x:320.125,y:400.875,width:6,height:9},position_locked:false});privacy();save('requests',{partial,solo});save('accepted',snapshot());report.assignments=d.prepare('SELECT task_id,user_id FROM task_assignments ORDER BY task_id,user_id').all();
   }else if(stage==='fallback'){
     assert.deepEqual(snapshot(),load('accepted'));privacy();
-    assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.63-acceptance-paused'));
+    assert.ok(readFileSync('/app/public/sw.js','utf8').includes('-vidamia.64-acceptance-paused'));
     assert.equal(process.env.VIDAMIA_NOTE_GROUPS_MUTATIONS,'0');
     assert.ok(readFileSync('/app/public/pages/notes.js','utf8').includes('const NOTE_GROUPS_INTERFACE_ENABLED = false;'));
     assert.ok(readFileSync('/app/public/pages/notes.js','utf8').includes('compact: true, active: true'));

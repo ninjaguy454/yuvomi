@@ -8,7 +8,7 @@ const REGISTER_SOURCE = readFileSync(new URL('../public/sw-register.js', import.
   .replace('export function clearApiCache()', 'function clearApiCache()');
 const ORIGIN = 'https://upgrade.test';
 // Recovery-image verification supplies its separately allocated exact identity.
-const EXPECTED_CACHE_VERSION = process.env.VIDAMIA_TEST_SW_CACHE_VERSION || '2.54.0-kitchen.5-vidamia.63';
+const EXPECTED_CACHE_VERSION = process.env.VIDAMIA_TEST_SW_CACHE_VERSION || '2.54.0-kitchen.5-vidamia.64';
 
 const keyOf = (input) => {
   const raw = typeof input === 'string' ? input : input.url;

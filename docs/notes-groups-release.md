@@ -32,7 +32,7 @@ P3 `deploy/build-open-tasks-fallback.mjs` additionally pauses new task acceptanc
 
 Cache identities are allocated separately: P2 `vidamia.60`, P2 recovery `vidamia.60-notes-compact`, combined P3 `vidamia.61`, P3 recovery `vidamia.61-acceptance-paused`. Every browser module and stylesheet introduced by these releases must be precached. Recovery verification supplies the corresponding exact cache identity to `test-sw-upgrade.js` through `VIDAMIA_TEST_SW_CACHE_VERSION`.
 
-The Notes touch cleanup and independent-layout release advanced the forward cache to `vidamia.62`. The Kitchen member-filter correction now advances it to `vidamia.63`, with the matching acceptance-paused recovery cache `vidamia.63-acceptance-paused`. This stages the corrected frontend assets separately from the deployed `vidamia.62` generation while retaining the shared-device privacy cache.
+The Notes touch cleanup and independent-layout release advanced the forward cache to `vidamia.62`; the Kitchen member-filter correction followed in `vidamia.63`. The Notes drag/save refinement now uses `vidamia.64`, with the matching acceptance-paused recovery cache `vidamia.64-acceptance-paused`. This stages the refined frontend assets separately while retaining the Kitchen correction, independent layouts and shared-device privacy cache.
 
 ## Evidence and ordered release
 

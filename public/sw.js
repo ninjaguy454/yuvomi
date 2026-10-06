@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage persistent Notes group windows, insertion previews, and drag corrections.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.69`;
+// Stage Notes group scroll ownership and stable reorder saving.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.70`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;

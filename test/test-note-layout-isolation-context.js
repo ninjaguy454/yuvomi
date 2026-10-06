@@ -136,6 +136,11 @@ async function pair(grants = { view: 'allow', edit: 'allow', create: 'none', del
   const display = new Client(), code = await ok(display, 'POST', '/api/v1/device/pair', {});
   const approved = await ok(admin, 'POST', '/api/v1/devices/pairing-approve', { code: code.body.code, name: `Synthetic display ${nextIp}` }, 201);
   const id = approved.body.data.id;
+  // These regressions exercise persisted pre-granularity displays. New pairing
+  // presets explicitly deny layout actions; legacy rows have no such keys.
+  const legacy=JSON.parse(d.prepare('SELECT permissions_json FROM household_devices WHERE id=?').get(id).permissions_json);
+  for(const action of ['move','pin','group','ungroup'])delete legacy.capabilities[`device_notes.${action}`];
+  d.prepare('UPDATE household_devices SET permissions_json=? WHERE id=?').run(JSON.stringify(legacy),id);
   await ok(display, 'POST', '/api/v1/device/pair/claim', { confirm_transition: true });
   await ok(display, 'POST', '/api/v1/device/launch', {});
   await permissions(display, id, grants);

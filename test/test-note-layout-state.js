@@ -80,10 +80,11 @@ test('stale, inaccessible, invalid and locked items fail a batch without partial
   const beforeDenied=arrangementState();assert.throws(()=>setNoteLayouts(d,2,{items:[{...base,expected_layout_revision:0},{note_id:privateId,expected_layout_revision:0,position_locked:true}]}),e=>e.status===404);
   assert.deepEqual(arrangementState(),beforeDenied,'inaccessible batch leaves all owners unchanged');assert.equal(readNote(d,1,a).layout.always_on_top,false);assert.equal(clock(),before);
 });
-test('flag mutation requires independent device view and edit grants',()=>{
+test('legacy flag mutation requires independent device view and inherited edit grants',()=>{
   const id=make();
   for(const grants of [[false,true],[true,false],[true,true]]){
     const permissions=devicePreset();permissions.capabilities['device_notes.view']=grants[0]?'allow':'none';permissions.capabilities['device_notes.edit']=grants[1]?'allow':'none';
+    for(const action of ['move','pin','group','ungroup'])delete permissions.capabilities[`device_notes.${action}`];
     const p={kind:'device',id:99,status:'active',permissions:normalizeDevicePermissions(permissions),scope:{}};
     if(grants.every(Boolean))assert.equal(setNoteLayout(d,p,id,{expected_layout_revision:0,position_locked:true}).position_locked,true);
     else assert.throws(()=>setNoteLayout(d,p,id,{expected_layout_revision:0,position_locked:true}),e=>e.status===403);

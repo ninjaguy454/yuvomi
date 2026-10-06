@@ -4,10 +4,11 @@ import { PERMISSION_CAPABILITIES, PERMISSION_MODULES, PERMISSION_WIDGETS } from 
 import { normalizeWallConfig, wallConfig, householdMember } from './wall.js';
 import { deviceAppRouteSupported } from './device-app-paths.js';
 import { validateDeviceApproval } from './device-approval.js';
+import { NOTE_LAYOUT_ACTIONS } from '../../public/utils/note-permissions.js';
 
 export const DEVICE_COOKIE = 'vidamia.device';
 export const DEVICE_ACTIONS = ['complete','reopen','reset','claim','accept_with_helpers'];
-export const DEVICE_NOTE_ACTIONS = ['view','create','edit','delete'];
+export const DEVICE_NOTE_ACTIONS = ['view','create','edit','delete',...NOTE_LAYOUT_ACTIONS];
 export const DEVICE_WIDGETS = ['tasks','calendar','meals','shopping','points','rewards','rotations'];
 export const DEVICE_DEFINITION_CAPABILITIES = ['tasks.create','tasks.edit_others','tasks.change_assignment','tasks.reassign','tasks.change_dates','tasks.change_points'];
 const json = value => JSON.stringify(value);
@@ -38,6 +39,8 @@ export function normalizeDevicePermissions(input=devicePreset()) {
     result.modules[key]=value;
   }
   for(const key of Object.keys(result.capabilities)) {
+    // Never materialize a legacy grant during an unrelated configuration save.
+    if(NOTE_LAYOUT_ACTIONS.some(action=>key===`device_notes.${action}`)&&!Object.hasOwn(input.capabilities||{},key)){delete result.capabilities[key];continue;}
     const value=input.capabilities?.[key]??result.capabilities[key];
     if(!['allow','none'].includes(value))throw deviceError('Choose Allow or Not allowed.');
     if(value==='allow'&&!['tasks.view_household','rotations.view',...DEVICE_DEFINITION_CAPABILITIES,...DEVICE_ACTIONS.map(a=>`device_tasks.${a}`),...DEVICE_NOTE_ACTIONS.map(a=>`device_notes.${a}`)].includes(key))

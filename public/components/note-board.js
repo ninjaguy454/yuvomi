@@ -1,6 +1,7 @@
 import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, NOTE_MAX_POSITION, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { t } from '/i18n.js';
 import { advanceNoteDragTilt } from '/utils/note-drag-motion.js';
+import {noteItemAllows} from '/utils/note-permissions.js';
 
 /** Keep the active content card's note identity distinct from its geometry owner. */
 export function renderNoteGroupFrame(item, cardHtml) {
@@ -65,7 +66,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     || (item.kind === 'note' ? grid.querySelector(`.note-card[data-id="${item.id}"]`) : null);
   const itemFor = card => items().find(item => item.key === card?.dataset.boardKey
     || (!card?.dataset.boardKey && item.kind === 'note' && item.id === Number(card?.dataset.id)));
-  const editable = item => item && !filtered && (item.kind === 'group' ? item.can_manage === true
+  const editable = item => item && !filtered && noteItemAllows(item,'move') && (item.kind === 'group' ? item.can_manage === true
     : item.can_manage!==false && item.note.permissions?.arrange!==false && canEdit(item.note));
   const commandFor = (item, layout) => ({ kind:'arrange',items:[noteGroupArrangeItem(item,layout)],include_locked:true });
   let adopted = null, hoverKey = null, waitingForBridge = false, interactionGeneration = 0;
@@ -363,7 +364,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   function targetAt(event, session) {
     if (filtered || narrow) return null;
-    const candidates = items().filter(item => item.key !== session.item?.key && editable(item)
+    const candidates = items().filter(item => item.key !== session.item?.key && noteItemAllows(item,'group')
       && (item.kind === 'group' || item.layout.position_locked));
     const preview = groupDragBridge?.targetAt?.(event, session);
     const destination = preview && candidates.find(item => item.key === preview.key);
@@ -477,12 +478,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     }
     if (button.dataset.groupAction) {
       event.preventDefault(); event.stopImmediatePropagation();
-      if (editable(item)) onGroupAction(button.dataset.groupAction,item);
+      if (!filtered) onGroupAction(button.dataset.groupAction,item);
       return;
     }
     if (!saveBoardCommand || !getBoardItems) return;
     event.preventDefault(); event.stopImmediatePropagation();
-    if (!editable(item) || pending.has(item.key)) return;
+    if (filtered || !noteItemAllows(item,button.dataset.boardAction==='lock'?'pin':'move') || pending.has(item.key)) return;
     const flag=button.dataset.boardAction==='lock'?'position_locked':'always_on_top';
     pending.set(item.key, null); button.disabled=true;
     try { await saveBoardCommand(commandFor(item,{[flag]:!item.layout[flag]})); }

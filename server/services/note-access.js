@@ -1,4 +1,5 @@
 import {actorId,actorPermissions} from '../permissions.js';
+import {NOTE_LAYOUT_ACTIONS,deviceNoteAllows} from '../../public/utils/note-permissions.js';
 
 export const noteDevice = principal => principal?.devicePrincipal?.kind==='device'?principal.devicePrincipal:principal?.kind==='device'?principal:null;
 export const noteError=(message,status=400)=>Object.assign(new Error(message),{status,code:status});
@@ -12,12 +13,14 @@ export function noteCapabilities(d,principal,note=null) {
   if(device){
     const valid=device.status!=='revoked'&&Number.isSafeInteger(device.id)&&device.id>0&&['read','write'].includes(device.permissions?.modules?.notes);
     const visible=!note||note.visibility==='all';
-    const allow=action=>Boolean(valid&&visible&&device.permissions?.capabilities?.[`device_notes.${action}`]==='allow');
-    return {view:allow('view'),create:allow('create'),edit:allow('edit'),delete:allow('delete'),manage_visibility:false};
+    const allow=action=>Boolean(valid&&visible&&deviceNoteAllows(device.permissions?.capabilities,action));
+    return {view:allow('view'),create:allow('create'),edit:allow('edit'),delete:allow('delete'),manage_visibility:false,
+      ...Object.fromEntries(NOTE_LAYOUT_ACTIONS.map(action=>[action,allow('view')&&allow(action)]))};
   }
   const me=actorId(principal),access=actorPermissions(d,principal).modules.notes;
   const visible=!note||note.visibility==='all'||Number(note.created_by)===me||note.visibility==='selected'&&!!d.prepare('SELECT 1 FROM note_access WHERE note_id=? AND user_id=?').get(note.id,me);
-  return {view:Boolean(access!=='none'&&visible),create:access==='write',edit:Boolean(access==='write'&&visible),delete:Boolean(access==='write'&&visible),manage_visibility:Boolean(access==='write'&&note&&Number(note.created_by)===me)};
+  return {view:Boolean(access!=='none'&&visible),create:access==='write',edit:Boolean(access==='write'&&visible),delete:Boolean(access==='write'&&visible),manage_visibility:Boolean(access==='write'&&note&&Number(note.created_by)===me),
+    ...Object.fromEntries(NOTE_LAYOUT_ACTIONS.map(action=>[action,Boolean(access==='write'&&visible)]))};
 }
 export function assertNoteAction(d,principal,note,action) {
   const device=noteDevice(principal);

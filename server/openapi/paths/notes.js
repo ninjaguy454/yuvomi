@@ -48,7 +48,7 @@ export function notesPaths() {
         requestBody:groupCommandBody, responses:{
           200:{ description:'Authorized current board and operation receipt status' },
           400:{ description:'Invalid command, unknown field, or more than 500 affected notes' },
-          401:{ description:'Authentication required' }, 403:{ description:'Current view/edit rights are insufficient' },
+          401:{ description:'Authentication required' }, 403:{ description:'Current View and operation-specific Move, Pin, Group or Ungroup rights are insufficient' },
           404:{ description:'Unknown or invisible note/group' }, 409:{ description:'Stale revisions, changed context, or reused operation identity' },
           503:{ description:'Group mutations are disabled in recovery mode' },
         } }),

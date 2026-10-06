@@ -40,8 +40,14 @@ test('administrator enables plain editing and the device creates a Task using th
   await adminPage.goto(origin+'/settings/admin/devices');await adminPage.waitForSelector('[data-device-approve]');await adminPage.click('[data-device-approve]');await adminPage.waitForSelector('[data-device-approve-form]');await adminPage.type('[name=code]',code);await adminPage.type('[name=name]','Editor Wall');await adminPage.click('[data-device-approve-form] [type=submit]');
   await display.waitForSelector('[data-pair-claim]');await display.click('[data-pair-claim]');await display.waitForSelector('[data-device-login]');
   await adminPage.waitForSelector('[data-device-edit]');await adminPage.click('[data-device-edit]');await adminPage.waitForSelector('[data-device-config]');
-  for(const name of ['action:claim','definition:tasks.create','definition:tasks.edit_others','definition:tasks.change_assignment','definition:tasks.reassign','definition:tasks.change_dates'])await adminPage.click(`[name="${name}"]`);
-  await adminPage.select('[name=members]',...kids.map(String));await adminPage.click('[data-device-config] [type=submit]');await adminPage.waitForFunction(()=>!document.querySelector('[data-device-config]'));
+  await adminPage.$eval('[name="definition:tasks.create"]',input=>input.closest('details').querySelector('summary').click());
+  for(const name of ['action:claim','definition:tasks.create','definition:tasks.edit_others','definition:tasks.change_assignment','definition:tasks.reassign','definition:tasks.change_dates']){
+    const selector=`[name="${name}"]`;
+    await adminPage.$eval(selector,input=>input.scrollIntoView({block:'center'}));
+    await adminPage.click(selector);
+    assert.ok(await adminPage.$('[data-device-config]'),`${name} changes its grant without submitting the form`);
+  }
+  await adminPage.select('[name=members]',...kids.map(String));await adminPage.click('[data-device-save]');await adminPage.waitForFunction(()=>!document.querySelector('[data-device-config]'));
   await display.goto(origin+'/device');await display.waitForSelector('.dashboard');await tasks();await display.waitForFunction(()=>document.querySelector('#btn-new-task')?.hidden===false);
   await display.click('#btn-new-task');await display.waitForSelector('#task-form');await display.type('#task-title','Device editor chore');await display.type('#task-description','Created from the normal Task editor.');
   await display.click(`label.user-ms__option:has([data-ms-input="task_assigned"][value="${kids[0]}"])`);

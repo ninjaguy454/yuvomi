@@ -4,6 +4,10 @@ import { createNoteGroupGesture } from '../utils/note-group-gesture.js';
 import { normalizeNoteLayout, organizeNoteLayouts, NOTE_MAX_POSITION } from '../utils/note-board-layout.js';
 import { pushOverlay, dropOverlay } from '../utils/overlay-history.js';
 import { renderMarkdownLight } from '../utils/html.js';
+import {noteItemAllows} from '../utils/note-permissions.js';
+
+const groupAllows=(group,action)=>noteItemAllows({kind:'group',...group},action);
+const noteAllows=(note,action)=>noteItemAllows({kind:'note',note,can_manage:note?.permissions?.arrange!==false},action);
 
 const text = (key, fallback, values) => { const value = t(`notes.groups.${key}`, values); return value === `notes.groups.${key}` ? fallback : value; };
 const overlaps = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
@@ -59,6 +63,8 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const noteById = new Map(snapshot.notes.map(note => [note.id, note]));
   const visibleIds = source.member_ids.filter(id => noteById.has(id));
   const manageable = source.can_manage === true && visibleIds.length === source.member_ids.length;
+  const allows = action => manageable && groupAllows(source,action);
+  const actionAllowed = action => action==='order'?allows('move'):action==='remove'?allows('ungroup'):action==='add'?allows('group'):allows('group')&&allows('ungroup');
   const selected = new Set(selectedIds.filter(id => visibleIds.includes(id)));
   const destinations = new Map();
   const restoreFocus = document.activeElement, subscriptions = [];
@@ -126,7 +132,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function highlightTarget(id) {
     highlightedTarget?.classList.remove('is-note-group-target'); highlightedTarget = null;
     const note = snapshot.notes.find(note => note.id === id);
-    if (!note?.layout?.position_locked || note.permissions?.edit === false || note.permissions?.arrange === false
+    if (!note?.layout?.position_locked || !noteAllows(note,'group')
       || snapshot.groups.some(group => group.member_ids.includes(id))) return;
     highlightedTarget = host.querySelector(`[data-board-key="note:${id}"]`);
     highlightedTarget?.classList.add('is-note-group-target');
@@ -151,6 +157,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     }
     toolbar.replaceChildren();
     if (manageable && !dragPreview && !standaloneIds.length) for (const [name, label] of [['order', text('order', 'Order')], ['move', text('moveToGroup', 'Move to group')], ['remove', text('remove', 'Remove from group')]]) {
+      if(!actionAllowed(name))continue;
       const control = button(label, { groupAction: name }); control.disabled = !selected.size || busy; toolbar.append(control);
     }
     updateHeader();
@@ -183,19 +190,21 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     footer.append(cancel, button(label, { groupConfirm: '' })); dialog.append(footer);
   }
   function orderSelection() {
+    if(!actionAllowed('order'))return;
     clearTools(); menu.open = false; action = 'order'; insertionControl(source, selection()); confirmControls(); tools.querySelector('select')?.focus();
   }
   function moveSelection() {
+    if(!actionAllowed(standaloneIds.length?'add':'move'))return;
     clearTools(); menu.open = false; action = standaloneIds.length ? 'join' : 'move';
     const destination = document.createElement('select'); destination.dataset.groupDestination = '';
-    for (const item of snapshot.groups.filter(item => item.can_manage && item.id !== source.id)) {
+    for (const item of snapshot.groups.filter(item => groupAllows(item,'group') && item.id !== source.id)) {
       const option = document.createElement('option'); option.value = String(item.id);
       option.textContent = item.member_ids.map(id => noteById.get(id)?.title).filter(Boolean).join(' · '); destination.append(option);
       destinations.set(option.value, { kind: 'group', ...item });
     }
     const grouped = new Set(snapshot.groups.flatMap(item => item.member_ids));
     if (standaloneIds.length <= 1) for (const note of snapshot.notes.filter(note => !grouped.has(note.id) && !standaloneIds.includes(note.id)
-      && note.layout?.position_locked && note.permissions?.edit !== false && note.permissions?.arrange !== false)) {
+      && note.layout?.position_locked && noteAllows(note,'group'))) {
       const option = document.createElement('option'); option.value = `note:${note.id}`;
       option.textContent = `${note.title?.trim() || text('untitled', 'Untitled note')} · ${text('newGroup', 'New group')}`;
       destination.append(option); destinations.set(option.value, { kind: 'note', id: note.id });
@@ -207,13 +216,16 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     confirmControls(); destination.focus();
   }
   function extractionChoices(point = { x: source.layout.x + source.layout.width, y: source.layout.y }) {
-    lastPoint = point; previewExtraction(selected.size === 1 ? 'individual' : 'group', point);
+    if(!actionAllowed('remove'))return;
+    lastPoint = point; previewExtraction(selected.size === 1 || !allows('group') ? 'individual' : 'group', point);
     (tools.querySelector('[data-group-extract-choice]') || footer.querySelector('[data-group-confirm]'))?.focus();
   }
   function previewExtraction(result, point) {
+    if(!allows('ungroup') || result==='group'&&!allows('group'))return;
     clearTools(); action = 'extract'; placing = true; grid.hidden = true; exit.hidden = true; dialog.dataset.groupPlaceDialog = ''; updateHeader();
     const choices = document.createElement('div'); choices.className = 'note-group-overview__choices';
     if (selected.size > 1) for (const [value, label] of [['group', text('newGroup', 'New group')], ['individual', text('individual', 'Individual notes')]]) {
+      if(value==='group'&&!allows('group'))continue;
       const control = document.createElement('input'); control.type = 'radio'; control.name = `group-result-${draft.operation_id}`; control.value = value; control.dataset.groupExtractChoice = value; control.checked = value === result;
       const row = document.createElement('label'); row.append(control, document.createTextNode(label)); choices.append(row);
     }
@@ -284,14 +296,15 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const element = document.elementFromPoint(session.clientX, session.clientY);
     if (!overlay.hidden && overlay.contains(element)) {
       const card = element.closest('[data-group-page]');
-      if (card) return { kind: 'overview', group_id: currentGroup.id, before_note_id: Number(card.dataset.groupPage), valid: currentGroup.can_manage === true };
-      if (grid.contains(element)) return { kind: 'overview', group_id: currentGroup.id, before_note_id: null, valid: currentGroup.can_manage === true };
+      const valid=currentGroup.id===source.id?allows('move'):allows('ungroup')&&allows('group')&&groupAllows(currentGroup,'group');
+      if (card) return { kind: 'overview', group_id: currentGroup.id, before_note_id: Number(card.dataset.groupPage), valid };
+      if (grid.contains(element)) return { kind: 'overview', group_id: currentGroup.id, before_note_id: null, valid };
       if (element.closest('button,input,select,summary,a')) return null;
       if (dragging && (element === overlay || element.closest('[data-group-exit]') || session.clientY < grid.getBoundingClientRect().top)) return { kind: 'exit' };
       return null;
     }
-    if (canvasHitTest) return canvasHitTest(session);
-    return canvasDrag ? { kind: 'canvas', valid: true } : null;
+    if (canvasHitTest) {const target=canvasHitTest(session);return target?{...target,valid:target.valid&&allows('ungroup')&&(target.kind==='canvas'||allows('group'))}:null;}
+    return canvasDrag ? { kind: 'canvas', valid: allows('ungroup') } : null;
   }
   function paintPreview({ state, session, target }) {
     if (!current()) return;
@@ -317,7 +330,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     overlay.dataset.gestureState = state;
     grid.querySelectorAll('[data-group-page]').forEach(card => card.classList.toggle('is-placeholder', dragging && session.selected_ids.includes(Number(card.dataset.groupPage))));
     if (state === 'destination-overview') {
-      const destination = snapshot.groups.find(item => item.id === target.id && item.can_manage);
+      const destination = snapshot.groups.find(item => item.id === target.id && groupAllows(item,'group'));
       if (destination) { currentGroup = destination; overlay.hidden = false; renderPages(); }
     }
     if (dragging) startScroll(session);
@@ -364,7 +377,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     // to the previous released drag may have targeted the capture host instead.
     suppressClick = false;
     const activate = event.target.closest('[data-group-activate]');
-    if (!activate || !overlay.contains(activate) || !manageable || action) return;
+    if (!activate || !overlay.contains(activate) || !(allows('move')||allows('ungroup')) || action) return;
     const id = Number(activate.dataset.groupActivate);
     // Keep the pressed DOM target alive until the browser has dispatched its
     // click; a short tap must still activate this page.
@@ -420,7 +433,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function dispose() { close({ restore: false }); }
   function dragTarget(clientX, clientY) {
-    if (!current() || overlay.hidden || !currentGroup.can_manage) return null;
+    if (!current() || overlay.hidden || !groupAllows(currentGroup,'group')) return null;
     const element = document.elementFromPoint(clientX, clientY);
     if (!element || !grid.contains(element)) return null;
     const card = element.closest('[data-group-page]');
@@ -470,16 +483,16 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
   const current = () => !disposed && !authentication.signal?.aborted && authentication.isCurrent?.() !== false;
   const sourceAllowed = item => {
     if (!item || item.can_manage === false || item.layout?.position_locked) return false;
-    if (item.kind === 'group') return snapshot.groups.some(group => group.id === item.id && group.can_manage);
+    if (item.kind === 'group') return snapshot.groups.some(group => group.id === item.id && groupAllows(group,'group')&&groupAllows(group,'ungroup'));
     const note = snapshot.notes.find(note => note.id === item.id);
-    return !!note && note.permissions?.edit !== false && note.permissions?.arrange !== false && !note.layout?.position_locked
+    return !!note && noteAllows(note,'group') && !note.layout?.position_locked
       && !snapshot.groups.some(group => group.member_ids.includes(note.id));
   };
   const destinationAllowed = item => {
     if (!item || item.can_manage === false) return false;
-    if (item.kind === 'group') return snapshot.groups.some(group => group.id === item.id && group.can_manage);
+    if (item.kind === 'group') return snapshot.groups.some(group => group.id === item.id && groupAllows(group,'group'));
     const note = snapshot.notes.find(note => note.id === item.id);
-    return !!note && !!note.layout?.position_locked && note.permissions?.edit !== false && note.permissions?.arrange !== false
+    return !!note && !!note.layout?.position_locked && noteAllows(note,'group')
       && !snapshot.groups.some(group => group.member_ids.includes(note.id));
   };
   function leaveTarget() {
@@ -505,7 +518,7 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
       if (action !== 'add' || !sourceAllowed(item)) return;
       const note = snapshot.notes.find(note => note.id === item.id);
       overview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes,
-        group: { id: null, member_ids: [note.id], can_manage: true, layout: note.layout }, standaloneIds: [note.id], selectedIds: [note.id],
+        group: { id: null, member_ids: [note.id], can_manage: true, permissions:note.permissions, layout: note.layout }, standaloneIds: [note.id], selectedIds: [note.id],
         activeId: note.id, initialAction: 'add', authentication, onCommand, onError, onClose: () => { overview = null; } });
       return;
     }

@@ -1,4 +1,5 @@
 /** Shared grid units, with a top-left origin. Projection never writes layouts. */
+import {noteItemAllows} from './note-permissions.js';
 export const NOTE_COLUMNS = 12;
 export const NOTE_ROW_HEIGHT = 48;
 export const NOTE_MAX_POSITION = 10000;
@@ -99,7 +100,7 @@ export function projectNoteGroupItems(board, { activePages = new Map(), compact 
     const active = activePages instanceof Map ? activePages.get(group.id) : activePages[group.id];
     const item = { key: `group:${group.id}`, kind: 'group', id: group.id, revision: group.revision,
       layout: noteGroupArrangeItem({ kind:'group', id:group.id, layout:group.layout }).layout,
-      note: byId.get(visible.includes(active) ? active : visible[0]), member_ids: visible,
+      note: byId.get(visible.includes(active) ? active : visible[0]), member_ids: visible,permissions:group.permissions,
       can_manage: group.can_manage === true && visible.length === group.member_ids.length };
     groups.set(group.id, item);
     visible.forEach(id => members.set(id, group.id));
@@ -112,7 +113,7 @@ export function projectNoteGroupItems(board, { activePages = new Map(), compact 
       if (!emitted.has(groupId)) { items.push(groups.get(groupId)); emitted.add(groupId); }
     } else items.push({ key:`note:${note.id}`, kind:'note', id:note.id, note,
       layout:noteGroupArrangeItem({ kind:'note', id:note.id, layout:note.layout || defaults.get(note.id) }).layout,
-      can_manage:note.permissions?.edit !== false && note.permissions?.arrange !== false });
+      can_manage:note.permissions?.arrange !== false });
   }
   const packed = filtered ? new Map(packNoteGroupItems(items, { includeLocked:true, canEdit:()=>true }).map(item=>[`${item.kind}:${item.id}`,item.layout])) : null;
   let y = 0;
@@ -125,7 +126,7 @@ export function projectNoteGroupItems(board, { activePages = new Map(), compact 
 
 /** Pack whole groups and standalone notes atomically; locked items remain obstacles. */
 export function organizeNoteGroupItems(items, { includeLocked = false, canEdit = () => true } = {}) {
-  return packNoteGroupItems(items,{includeLocked,canEdit:item=>item.can_manage!==false
+  return packNoteGroupItems(items,{includeLocked,canEdit:item=>noteItemAllows(item,'move')
     && (item.kind==='group' || item.note?.permissions?.arrange!==false) && canEdit(item)});
 }
 

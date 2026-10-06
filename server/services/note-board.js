@@ -59,7 +59,7 @@ function projectedLayouts(d,p,notes=visibleNotes(d,p)){
 function project(d,p,n,layouts){
   const permissions=noteCapabilities(d,p,n),device=noteDevice(p);
   if(!permissions.view)return null;
-  permissions.arrange=Boolean(permissions.edit&&!readNoteGroup(d,noteLayoutOwnerKey(p),n.id));
+  permissions.arrange=Boolean((permissions.move||permissions.pin||permissions.group||permissions.ungroup)&&!readNoteGroup(d,noteLayoutOwnerKey(p),n.id));
   const creator=n.created_by?d.prepare('SELECT display_name,avatar_color,avatar_data FROM users WHERE id=?').get(n.created_by):null;
   const source=n.created_by_device?d.prepare('SELECT name FROM household_devices WHERE id=?').get(n.created_by_device):null;
   const scoped=!device||!device.scope?.member_ids?.length||device.scope.member_ids.includes(n.created_by);
@@ -143,7 +143,9 @@ export function setNoteLayouts(d,p,body={}){
     let defaults;
     const planned=items.map(item=>{
       if(!item||typeof item!=='object'||Array.isArray(item)||!Number.isSafeInteger(item.note_id)||item.note_id<1||Object.keys(item).some(key=>!['note_id',...layoutRequestFields].includes(key))||!layoutChangeFields.some(key=>owns(item,key)))throw noteError('Invalid note layout request.');
-      const note=requireNote(d,p,item.note_id,'edit');assertNoteAction(d,p,note,'view');
+      const note=requireNote(d,p,item.note_id,'view');
+      if(owns(item,'layout')||owns(item,'always_on_top'))assertNoteAction(d,p,note,'move');
+      if(owns(item,'position_locked'))assertNoteAction(d,p,note,'pin');
       assertStandaloneLayoutWrite(d,ownerKey,note.id);
       for(const flag of ['position_locked','always_on_top'])if(owns(item,flag)&&typeof item[flag]!=='boolean')throw noteError('Invalid note layout flag.');
       const saved=savedLayout(d,ownerKey,note),current=saved||(defaults??=projectedLayouts(d,p)).get(note.id);

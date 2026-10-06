@@ -26,14 +26,16 @@ import { normalizeNoteLayout, organizeNoteGroupItems, projectNoteGroupItems, not
 import { watchNoteChanges } from '/utils/note-live.js';
 import { mountOpenTaskBoard } from '/components/open-task-board.js';
 import { createNoteGroupDraft, freezeNoteGroupCommand, newNoteGroupOperationId } from '/utils/note-group-draft.js';
+import {NOTE_LAYOUT_ACTIONS,deviceNoteAllows,noteItemAllows} from '/utils/note-permissions.js';
 
 const NOTE_GROUPS_INTERFACE_ENABLED = true;
 
 const canNote = action => getPermissions().principal_kind === 'device'
-  ? moduleAccess('notes') !== 'none' && canCapability(`device_notes.${action}`)
+  ? moduleAccess('notes') !== 'none' && deviceNoteAllows(getPermissions().capabilities,action)
   : moduleAccess('notes') === 'write' || (action === 'view' && moduleAccess('notes') === 'read');
 const canOnNote = (note, action) => canNote(action) && note?.permissions?.[action] !== false;
-const canArrangeNote = note => canOnNote(note,'edit') && note?.permissions?.arrange !== false;
+const canArrangeNote = note => canOnNote(note,'view') && canOnNote(note,'move') && note?.permissions?.arrange !== false;
+const canArrangeItem = (note,item,action) => !boardIsFiltered() && canOnNote(note,'view') && canNote(action) && (item ? noteItemAllows(item,action) : canOnNote(note,action) && note?.permissions?.arrange!==false);
 const boardIsFiltered = () => !!state.filterQuery.trim() || !!state.filterCreator;
 
 // --------------------------------------------------------
@@ -107,7 +109,7 @@ function bindGroupInteractions() {
       const key = element.closest('.note-card')?.dataset.boardKey;
       const item = key && visibleBoardItems().find(item => item.key === key);
       if (item) {
-        const valid = item.can_manage !== false && (item.kind === 'group' || canArrangeNote(item.note) && item.layout.position_locked);
+        const valid = noteItemAllows(item,'group') && (item.kind === 'group' || item.layout.position_locked);
         return { kind: item.kind, id: item.id, valid };
       }
       // List coordinates describe its packed reading order, not world placement.
@@ -126,7 +128,7 @@ function acceptBoardView(value) {
   const fresh = normalizedBoard(value), page = state;
   const lostAccess = page.notes.some(note => {
     const next = fresh.notes.find(value=>value.id===note.id);
-    return !next || ['view','edit','delete','manage_visibility'].some(action=>note.permissions?.[action]===true && next.permissions?.[action]!==true);
+    return !next || ['view','edit','delete','manage_visibility',...NOTE_LAYOUT_ACTIONS].some(action=>note.permissions?.[action]===true && next.permissions?.[action]!==true);
   });
   if (lostAccess) { page.accessGeneration++; page.groupRetry=null; page.groupUndo=null; }
   const changed = boardSignature(page) !== boardSignature(fresh);
@@ -288,7 +290,7 @@ export async function render(container, { user }) {
         <h1 class="page-toolbar__title">${t('notes.title')}</h1>
         <div class="notes-header-actions" id="notes-header-actions">
           <button type="button" class="btn btn--ghost btn--icon" id="notes-compact-view" aria-label="${t('notes.compactView')}" title="${t('notes.compactView')}" aria-pressed="false"><i data-lucide="list" class="icon-md" aria-hidden="true"></i></button>
-          ${canNote('view') && canNote('edit') ? `<button type="button" class="btn btn--ghost btn--icon" id="notes-organize" aria-label="${t('notes.organize')}" title="${t('notes.organize')}"><i data-lucide="layout-grid" class="icon-md" aria-hidden="true"></i></button><label id="notes-include-locked" class="btn btn--ghost btn--icon notes-include-locked" title="${t('notes.organize')}: ${t('notes.includeLocked')}"><input type="checkbox" id="notes-organize-locked" aria-label="${t('notes.organize')}: ${t('notes.includeLocked')}"><i data-lucide="pin" class="icon-md" aria-hidden="true"></i></label>` : ''}
+          ${canNote('view') && canNote('move') ? `<button type="button" class="btn btn--ghost btn--icon" id="notes-organize" aria-label="${t('notes.organize')}" title="${t('notes.organize')}"><i data-lucide="layout-grid" class="icon-md" aria-hidden="true"></i></button><label id="notes-include-locked" class="btn btn--ghost btn--icon notes-include-locked" title="${t('notes.organize')}: ${t('notes.includeLocked')}"><input type="checkbox" id="notes-organize-locked" aria-label="${t('notes.organize')}: ${t('notes.includeLocked')}"><i data-lucide="pin" class="icon-md" aria-hidden="true"></i></label>` : ''}
         </div>
         ${renderPageSearch({ id: 'notes-search', label: t('notes.searchPlaceholder'), placeholder: t('notes.searchPlaceholder'), value: state.filterQuery, clearLabel: t('common.searchClear'), className: 'notes-toolbar__search' })}
         <button class="btn btn--primary toolbar-new-btn" id="notes-add-btn" aria-label="${t('notes.addNoteLabel')}">
@@ -669,27 +671,26 @@ function listPreview(note, expanded) {
 }
 
 function renderBoardMenu(note, item) {
-  if (!canOnNote(note, 'edit') && !canOnNote(note, 'delete')) return '';
+  if (!canOnNote(note, 'edit') && !canOnNote(note, 'delete') && !NOTE_LAYOUT_ACTIONS.some(action=>canArrangeItem(note,item,action))) return '';
   const layout=item?.layout || note.layout;
-  const manage=!boardIsFiltered() && (item?.kind==='group'?item.can_manage:canArrangeNote(note));
+  const manage=canArrangeItem(note,item,'move'),group=canArrangeItem(note,item,'group'),ungroup=canArrangeItem(note,item,'ungroup');
   return `<details class="note-card__menu" data-board-menu>
     <summary aria-label="${t('notes.cardMenu')}"><i data-lucide="ellipsis" class="icon-sm" aria-hidden="true"></i></summary>
     <div class="note-card__menu-items">
       ${canOnNote(note, 'edit') ? `<button type="button" data-action="pin" data-id="${note.id}" aria-pressed="${!!note.pinned}"><span aria-hidden="true">${note.pinned ? '✓' : ''}</span><span>${t('notes.showOnDashboard')}</span></button>` : ''}
       ${manage ? `<button type="button" data-board-action="top" aria-pressed="${!!layout?.always_on_top}"><span aria-hidden="true">${layout?.always_on_top ? '✓' : ''}</span><span>${t('notes.alwaysOnTop')}</span></button>` : ''}
       ${manage && item?.kind==='group' ? `<button type="button" data-board-action="adjust"><span aria-hidden="true"></span><span>${t('notes.adjustCard')}</span></button>` : ''}
-      ${manage && state.boardActions?.onGroupAction ? (item?.kind==='group'
-        ? ['move','remove','order'].map(action=>`<button type="button" data-group-action="${action}"><span aria-hidden="true"></span><span>${t(`notes.groupAction.${action}`)}</span></button>`).join('')
-        : `<button type="button" data-group-action="add"><span aria-hidden="true"></span><span>${t('notes.groupAction.add')}</span></button>`) : ''}
+      ${state.boardActions?.onGroupAction ? (item?.kind==='group'
+        ? [['move',group&&ungroup],['remove',ungroup],['order',manage]].filter(([,allowed])=>allowed).map(([action])=>`<button type="button" data-group-action="${action}"><span aria-hidden="true"></span><span>${t(`notes.groupAction.${action}`)}</span></button>`).join('')
+        : group?`<button type="button" data-group-action="add"><span aria-hidden="true"></span><span>${t('notes.groupAction.add')}</span></button>`:'') : ''}
       ${canOnNote(note, 'delete') ? `<button type="button" data-action="delete" data-id="${note.id}"><span aria-hidden="true"></span><span>${t('notes.deleteLabel')}</span></button>` : ''}
     </div>
   </details>`;
 }
 
 function renderPositionControls(note, item) {
-  if (boardIsFiltered() || (item?.kind==='group' ? !item.can_manage : !canArrangeNote(note))) return '';
-  return `<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!(item?.layout || note.layout)?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>
-    <button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>`;
+  return `${canArrangeItem(note,item,'pin')?`<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!(item?.layout || note.layout)?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>`:''}
+    ${canArrangeItem(note,item,'move')?`<button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>`:''}`;
 }
 
 function renderNoteTitle(note) {
@@ -727,7 +728,7 @@ function renderNoteCard(note, item) {
   const avatarColor = note.creator_color || AVATAR_FALLBACK_COLOR;
 
   return `
-    <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${!boardIsFiltered() && (item?.kind==='group'?item.can_manage:canArrangeNote(note)) ? 'note-card--editable' : ''}"
+    <div class="note-card ${note.pinned ? 'note-card--pinned' : ''} ${!boardIsFiltered() && canArrangeItem(note,item,'move') ? 'note-card--editable' : ''}"
          data-id="${note.id}"
          style="--note-color:${esc(note.color)};">
       ${renderBoardMenu(note,item)}
@@ -1157,7 +1158,7 @@ async function reloadNotes() {
     const modal = document.querySelector('.note-modal[data-note-id]');
     if (modal) {
       const fresh = res.data.notes.find(n => n.id === Number(modal.dataset.noteId));
-      if (!fresh || ((modal.querySelector('#note-content') || modal.hasAttribute('data-layout-editor')) && !canOnNote(fresh, 'edit')) || (modal.querySelector('#note-visibility') && fresh.permissions?.manage_visibility !== true)) closeModal({ force: true });
+      if (!fresh || (modal.querySelector('#note-content') && !canOnNote(fresh, 'edit')) || (modal.hasAttribute('data-layout-editor') && !canArrangeNote(fresh)) || (modal.querySelector('#note-visibility') && fresh.permissions?.manage_visibility !== true)) closeModal({ force: true });
     }
     const {fresh,changed,lostAccess}=acceptBoardView(res.data);
     renderCreatorFilter();
@@ -1282,7 +1283,7 @@ async function saveLayout(note, value) {
 }
 
 async function saveLayoutChange(note, changes) {
-  if (!state.active || state.organizing || boardIsFiltered() || !canArrangeNote(note) || state.pending.has(note.id)) return false;
+  if (!state.active || state.organizing || boardIsFiltered() || !canArrangeItem(note,null,Object.hasOwn(changes,'position_locked')?'pin':'move') || state.pending.has(note.id)) return false;
   const page = state, auth = authenticationSnapshot();
   page.pending.add(note.id);
   layoutStatus(t('notes.layoutSaving'));
@@ -1306,7 +1307,7 @@ function openLayoutModal(id, kind = 'note') {
   const saveBoardCommand=state.boardActions?.saveBoardCommand;
   const findItem=()=>projectNoteGroupItems({notes:state.notes,groups:state.groups || []},{activePages:state.activePages}).find(item=>item.kind===kind && item.id===id);
   let item=findItem(), note=item?.note;
-  const editable=()=>item && !boardIsFiltered() && (kind==='group' ? item.can_manage && !!saveBoardCommand : canArrangeNote(note));
+  const editable=()=>item && canArrangeItem(note,item,'move') && (kind!=='group'||!!saveBoardCommand);
   if (!editable() || state.pending.has(kind==='group'?`group:${id}`:id)) return;
   const layout = normalizeNoteLayout(item.layout);
   const page = state, auth = authenticationSnapshot();
@@ -1348,7 +1349,7 @@ async function organizeNotes() {
   const includeLocked = _container.querySelector('#notes-organize-locked')?.checked === true;
   try {
     const all=projectNoteGroupItems({notes:state.notes,groups:state.groups},{activePages:state.activePages});
-    const items=organizeNoteGroupItems(all,{includeLocked,canEdit:item=>item.can_manage!==false && canOnNote(item.note,'edit')});
+    const items=organizeNoteGroupItems(all,{includeLocked,canEdit:item=>noteItemAllows(item,'move')});
     if (items.length) await state.boardActions.saveBoardCommand({kind:'arrange',items,include_locked:includeLocked});
   } catch (error) { layoutStatus(error.message||t('notes.layoutFailed')); }
 }

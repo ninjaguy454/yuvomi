@@ -5,6 +5,7 @@ import {noteDevice,noteError,assertNoteAction} from './note-access.js';
 import {deviceRequestStillValid,devicePrincipal,readDeviceContext} from './devices.js';
 import {groupReceiptPrincipalKey,groupRequestHash,readGroupReceipt,saveGroupReceipt,captureGroupStructure,groupStructureMatches} from './note-group-receipts.js';
 import {noteLayoutOwnerKey,ensureNoteLayoutOwner,nextNoteGroupId,readNoteOwnerLayout,readNoteOwnerGroup} from './note-layout-owner.js';
+import {NOTE_LAYOUT_ACTIONS,noteLayoutActions} from '../../public/utils/note-permissions.js';
 
 /** Authorize content first, then project only visible pages. Canonical counts
  * and ordinals never cross this boundary, and reads never dissolve containers. */
@@ -19,8 +20,9 @@ export function readGroupedNoteBoard(d,principal) {
     for(const group of candidates.values()){
       const members=readGroupMembers(d,ownerKey,group.id),member_ids=members.filter(id=>visible.has(id));
       if(member_ids.length<2)continue;
-      groups.push({id:group.id,revision:group.revision,layout:groupLayout(group),member_ids,
-        can_manage:members.every(id=>visible.get(id)?.permissions.view&&visible.get(id)?.permissions.edit)});
+      const permissions=Object.fromEntries(NOTE_LAYOUT_ACTIONS.map(action=>[action,members.every(id=>visible.get(id)?.permissions.view&&visible.get(id)?.permissions[action])]));
+      groups.push({id:group.id,revision:group.revision,layout:groupLayout(group),member_ids,permissions,
+        can_manage:Object.values(permissions).some(Boolean)});
     }
     return {notes,groups};
   }).deferred();
@@ -77,17 +79,47 @@ export function currentNoteGroupPrincipal(d,principal) {
     current={...request,devicePrincipal:devicePrincipal(row)};
   }else if(!d.prepare('SELECT id FROM users WHERE id=?').get(actorId(principal)))throw noteError('Sign-in is no longer available.',401);
   current={...current,_noteGroupReceiptContext:context?{credential:context.credential.id,context:context.credential.context_key,revision:context.device.revision}:null};
-  assertNoteAction(d,current,null,'view');assertNoteAction(d,current,null,'edit');return current;
+  const capabilities=assertNoteAction(d,current,null,'view');
+  if(!NOTE_LAYOUT_ACTIONS.some(action=>capabilities[action]))throw noteError('This Notes action is not allowed.',403);
+  return current;
 }
-function authorize(d,p,noteIds){
+function authorize(d,p,noteIds,actions=[]){
   if(noteIds.size>500)throw limit();
   for(const noteId of noteIds){
     const note=d.prepare('SELECT * FROM notes WHERE id=?').get(noteId);if(!note)throw unavailable();
-    try{assertNoteAction(d,p,note,'view');assertNoteAction(d,p,note,'edit');}
+    try{assertNoteAction(d,p,note,'view');for(const action of actions)assertNoteAction(d,p,note,action);}
     catch(error){if(error.status===404)throw unavailable();throw error;}
   }
 }
 function receiptScope(receipt){return {noteIds:new Set([...receipt.before.notes,...receipt.after.notes].map(n=>n.id)),groupIds:new Set([...receipt.before.groups,...receipt.after.groups].map(g=>g.id))};}
+/** Undo authorizes the inverse effects, including receipts written before granular grants. */
+function transitionActions(before,after){
+  const actions=new Set();
+  for(const next of after.notes){
+    const previous=before.notes.find(n=>n.id===next.id);
+    if(previous.group_id!==next.group_id){if(previous.group_id!==null)actions.add('ungroup');if(next.group_id!==null)actions.add('group');}
+    else if(next.group_id===null)noteLayoutActions(previous.layout,next.layout).forEach(a=>actions.add(a));
+  }
+  for(const next of after.groups){
+    const previous=before.groups.find(g=>g.id===next.id);
+    if(!previous||previous.missing||next.missing)continue;
+    const sameMembers=equal([...previous.member_ids].sort((a,b)=>a-b),[...next.member_ids].sort((a,b)=>a-b));
+    if(sameMembers&&!equal(previous.member_ids,next.member_ids))actions.add('move');
+    noteLayoutActions(previous.layout,next.layout).forEach(a=>actions.add(a));
+  }
+  return [...actions];
+}
+function commandActions(c){
+  if(c.kind==='create')return Object.hasOwn(c,'source_group_id')?['group','ungroup']:['group'];
+  if(c.kind==='join')return ['group'];
+  if(c.kind==='extract')return c.result==='group'?['ungroup','group']:['ungroup'];
+  if(c.kind==='transfer')return c.source_group_id===c.target_group_id?['move']:['group','ungroup'];
+  return c.kind==='reorder'?['move']:[];
+}
+function canUndo(d,p,receipt){
+  try {authorize(d,p,receiptScope(receipt).noteIds,transitionActions(receipt.after,receipt.before));return true;}
+  catch(error){if(error.status===403||error.status===404)return false;throw error;}
+}
 function expectedMatches(d,ownerKey,c,noteIds,groups){
   const sort=rows=>[...rows].sort((a,b)=>a.id-b.id);
   const expected={groups:sort([...groups.values()].map(g=>({id:g.id,revision:g.revision}))),notes:sort([...noteIds].map(id=>({id,revision:d.prepare('SELECT revision FROM notes WHERE id=?').get(id).revision,layout_revision:readNoteOwnerLayout(d,ownerKey,id)?.revision??0})))};
@@ -116,13 +148,15 @@ export function applyNoteGroupCommand(d,principal,command) {
   return d.transaction(()=>{
     if(process.env.VIDAMIA_NOTE_GROUPS_MUTATIONS==='0')throw noteError('Notes arrangement is temporarily unavailable. You can still edit note content.',503);
     const p=currentNoteGroupPrincipal(d,principal);validateCommand(command);
+    for(const action of commandActions(command))assertNoteAction(d,p,null,action);
     const ownerKey=noteLayoutOwnerKey(p),key=groupReceiptPrincipalKey(p),prior=readGroupReceipt(d,ownerKey,key,command.operation_id);
     if(prior){
       // Receipt structure is internal metadata, never a cached board response.
       // Always authorize its full scope before acknowledging an ID or payload.
-      authorize(d,p,receiptScope(prior).noteIds);
+      const actions=command.kind==='arrange'||command.kind==='undo'?transitionActions(prior.before,prior.after):commandActions(command);
+      authorize(d,p,receiptScope(prior).noteIds,actions);
       if(prior.legacy||prior.hash!==groupRequestHash(command))throw conflict();
-      return {operation_id:command.operation_id,replayed:true,board:readGroupedNoteBoard(d,p),undo_available:groupStructureMatches(d,ownerKey,prior.after)};
+      return {operation_id:command.operation_id,replayed:true,board:readGroupedNoteBoard(d,p),undo_available:groupStructureMatches(d,ownerKey,prior.after)&&canUndo(d,p,prior)};
     }
     let undo;
     const noteIds=new Set(),groups=new Map();
@@ -133,7 +167,7 @@ export function applyNoteGroupCommand(d,principal,command) {
     };
     if(command.kind==='undo'){
       undo=readGroupReceipt(d,ownerKey,key,command.undo_operation_id);if(!undo)throw unavailable();
-      const scope=receiptScope(undo);scope.noteIds.forEach(id=>noteIds.add(id));authorize(d,p,noteIds);
+      const scope=receiptScope(undo);scope.noteIds.forEach(id=>noteIds.add(id));authorize(d,p,noteIds,transitionActions(undo.after,undo.before));
       if(undo.legacy||!groupStructureMatches(d,ownerKey,undo.after))throw conflict();
       for(const id of scope.groupIds){const row=readNoteOwnerGroup(d,ownerKey,id);groups.set(id,row?{id,revision:row.revision,layout:groupLayout(row),member_ids:readGroupMembers(d,ownerKey,id)}:{id,missing:true});}
     }else{
@@ -141,7 +175,7 @@ export function applyNoteGroupCommand(d,principal,command) {
       for(const field of ['source_note_id','target_note_id'])if(Object.hasOwn(command,field))noteIds.add(command[field]);
       command.note_ids?.forEach(id=>noteIds.add(id));
       for(const item of command.items||[])item.kind==='group'?useGroup(item.id):noteIds.add(item.id);
-      authorize(d,p,noteIds);expectedMatches(d,ownerKey,command,noteIds,groups);
+      authorize(d,p,noteIds,commandActions(command));expectedMatches(d,ownerKey,command,noteIds,groups);
     }
     const layouts=new Map(readNoteBoard(d,p).notes.map(n=>[n.id,n.layout]));
     ensureNoteLayoutOwner(d,ownerKey);
@@ -176,6 +210,8 @@ export function applyNoteGroupCommand(d,principal,command) {
       case 'arrange': {
         for(const item of c.items){
           const current=item.kind==='group'?groups.get(item.id).layout:standalone(item.id),next=rectangle(item.layout);
+          const actions=noteLayoutActions(current,next);
+          authorize(d,p,new Set(item.kind==='group'?groups.get(item.id).member_ids:[item.id]),actions.length?actions:['move']);
           if(current.position_locked&&next.position_locked&&!c.include_locked&&(next.x!==current.x||next.y!==current.y))throw noteError('Unlock the position before moving it.',409);
           if(item.kind==='group')groups.get(item.id).layout=next;
           else if(!equal(groupLayout(current),next))noteLayouts.set(item.id,next);
@@ -203,6 +239,6 @@ export function applyNoteGroupCommand(d,principal,command) {
     }
     const after=captureGroupStructure(d,ownerKey,noteIds,groups.keys(),layouts);
     saveGroupReceipt(d,ownerKey,key,c,before,after);
-    return {operation_id:c.operation_id,replayed:false,board:readGroupedNoteBoard(d,p),undo_available:true};
+    return {operation_id:c.operation_id,replayed:false,board:readGroupedNoteBoard(d,p),undo_available:canUndo(d,p,{before,after})};
   }).immediate();
 }

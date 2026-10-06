@@ -43,7 +43,7 @@ test('partial groups have dense visible order and cannot manage hidden canonical
   const {d,note,group,device}=fixture();try{
     const a=note('A'),hidden=note('HIDDEN','private'),selected=note('SELECTED','selected'),b=note('B');
     const id=group([hidden.id,b.id,selected.id,a.id]),before=state(d);
-    const visible=readGroupedNoteBoard(d,2);assert.deepEqual(visible.groups,[{id,revision:1,layout:rect,member_ids:[b.id,selected.id,a.id],can_manage:false}]);
+    const visible=readGroupedNoteBoard(d,2);assert.deepEqual(visible.groups,[{id,revision:1,layout:rect,member_ids:[b.id,selected.id,a.id],permissions:{move:false,pin:false,group:false,ungroup:false},can_manage:false}]);
     assert.equal(JSON.stringify(visible).includes('HIDDEN'),false);assert.ok(visible.notes.every(n=>n.permissions.arrange===false));
     assert.deepEqual(readGroupedNoteBoard(d,device).groups[0].member_ids,[b.id,a.id]);
     const owner=readGroupedNoteBoard(d,1);assert.deepEqual(owner.groups[0].member_ids,[hidden.id,b.id,selected.id,a.id]);assert.equal(owner.groups[0].can_manage,true);

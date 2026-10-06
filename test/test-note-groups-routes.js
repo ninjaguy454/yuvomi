@@ -56,6 +56,10 @@ const user=new Client();await ok(user,'POST','/api/v1/auth/login',{username:'rec
 async function pair(){
   const display=new Client(),code=await ok(display,'POST','/api/v1/device/pair',{});
   const approved=await ok(admin,'POST','/api/v1/devices/pairing-approve',{code:code.body.code,name:`Synthetic Notes ${nextIp}`},201),id=approved.body.data.id;
+  // Exercise the compatible authority of a device paired before granular grants.
+  const legacy=JSON.parse(d.prepare('SELECT permissions_json FROM household_devices WHERE id=?').get(id).permissions_json);
+  for(const action of ['move','pin','group','ungroup'])delete legacy.capabilities[`device_notes.${action}`];
+  d.prepare('UPDATE household_devices SET permissions_json=? WHERE id=?').run(JSON.stringify(legacy),id);
   await ok(display,'POST','/api/v1/device/pair/claim',{confirm_transition:true});await ok(display,'POST','/api/v1/device/launch',{});
   await ok(admin,'PATCH',`/api/v1/devices/${id}`,{revision:d.prepare('SELECT revision FROM household_devices WHERE id=?').get(id).revision,permissions:{capabilities:{'device_notes.view':'allow','device_notes.create':'allow','device_notes.edit':'none','device_notes.delete':'none'}}});
   await ok(display,'GET','/api/v1/device/context');return {display,id};
@@ -156,7 +160,7 @@ test('generic HTTP idempotency cannot replay an old group board after access is 
   assert.equal(retry.status, 404); assert.ok(!JSON.stringify(retry.body).includes('group source'));
   assert.equal(d.prepare("SELECT COUNT(*) n FROM idempotency_keys WHERE key='group-access-check'").get().n, 0);
 });
-test('devices need both view and edit, retain member scope, and audit as the device', async () => {
+test('legacy devices need view and inherited edit, retain member scope, and audit as the device', async () => {
   const { display, id } = await pair();
   const made = await createPair();
   const snapshot = await board(display);

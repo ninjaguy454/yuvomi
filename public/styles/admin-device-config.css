@@ -1,0 +1,34 @@
+/* Device administrator editor only; no shared modal or Notes selectors. */
+.device-config { display: grid; gap: 1rem; min-width: 0; }
+.device-config__section { min-width: 0; margin: 0; border: 1px solid var(--color-border-subtle); border-radius: var(--radius-lg); background: var(--color-surface); }
+.device-config__section > h3,
+.device-config__section > summary { display: flex; align-items: center; gap: .625rem; margin: 0; padding: 1rem; font-size: 1rem; font-weight: 600; line-height: 1.4; min-height: 48px; }
+.device-config__section > summary { cursor: pointer; list-style: none; }
+.device-config__section > summary::-webkit-details-marker { display: none; }
+.device-config__section > summary > span { flex: 1; min-width: 0; }
+.device-config__section > summary > svg:last-child { transition: transform .15s; }
+.device-config__section[open] > summary > svg:last-child { transform: rotate(180deg); }
+.device-config__section > h3 svg,
+.device-config__section > summary svg { width: 1.125rem; height: 1.125rem; flex: 0 0 auto; color: var(--color-text-secondary); }
+.device-config__section-body { display: grid; gap: .875rem; min-width: 0; padding: 0 1rem 1rem; }
+.device-config__hint { margin: 0; font-size: .875rem; line-height: 1.5; color: var(--color-text-secondary); }
+.device-config__fields,
+.device-config__choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: .5rem 1rem; min-width: 0; }
+.device-config__choice { display: flex; gap: .75rem; align-items: flex-start; min-width: 0; min-height: 48px; padding: .625rem 0; cursor: pointer; }
+.device-config__choice > input { width: 1.125rem; height: 1.125rem; flex: 0 0 auto; margin-top: .15rem; accent-color: var(--color-accent); }
+.device-config__choice > span { min-width: 0; }
+.device-config__choice-label { display: block; line-height: 1.4; }
+.device-config__choice small { display: block; margin-top: .25rem; color: var(--color-text-secondary); font-size: .8125rem; line-height: 1.5; }
+.device-config .label { display: grid; gap: .375rem; min-width: 0; margin: 0; }
+.device-config .input { min-width: 0; width: 100%; min-height: 48px; }
+.device-config__widgets { display: grid; gap: .875rem; }
+.device-config__widget { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 6rem) minmax(0, 8rem); align-items: end; gap: .75rem; padding-bottom: .875rem; border-bottom: 1px solid var(--color-border-subtle); }
+.device-config__widget:last-child { border-bottom: 0; padding-bottom: 0; }
+.device-config__footer [data-device-form-error] { flex-basis: 100%; margin: 0; color: var(--color-danger); overflow-wrap: anywhere; }
+.device-config__footer [data-device-form-error]:empty { display: none; }
+.device-config__footer .btn { min-height: 48px; }
+.device-config :is(input, select, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+@media (max-width: 600px) {
+  .device-config__widget { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .device-config__widget > .device-config__choice { grid-column: 1 / -1; }
+}

@@ -1,16 +1,15 @@
-import { memberLabel } from '/utils/member-label.js';
+import { deviceConfigContent } from './admin-device-config.js';
 import { api } from '/api.js';
 import { esc } from '/utils/html.js';
 import { openModal, closeModal, confirmModal } from '/components/modal.js';
 
-const option=(value,current,label=value)=>`<option value="${esc(value)}"${value===current?' selected':''}>${esc(label)}</option>`;
 const modules=['tasks','calendar','meals','shopping','rewards'];
-const noteActions={view:'View notes',create:'Create notes',edit:'Edit notes (including pins and checklist items)',delete:'Delete notes'};
+const noteActions={view:'View notes',create:'Create notes',edit:'Edit content, checklist and Dashboard visibility',delete:'Delete notes'};
 const actions={complete:'Complete existing independent steps',reopen:'Reopen completed steps',reset:'Reset existing progress',claim:'Accept eligible unassigned Tasks for an explicit member',accept_with_helpers:'Add co-assignees and allocate unassigned subtasks during initial acceptance (requires Claim; does not grant reassignment)'};
 const definitions={'tasks.create':'Create plain Tasks','tasks.edit_others':'Edit plain Task titles and descriptions','tasks.change_assignment':'Choose a Task assignee','tasks.reassign':'Reassign existing Tasks','tasks.change_dates':'Change Start and Due windows','tasks.change_points':'Set or change Task point values'};
 export async function render(container) {
   let model, disposed=false;
-  const css=document.createElement('link');css.rel='stylesheet';css.href='/styles/device.css';document.head.append(css);
+  const styles=['/styles/device.css','/styles/admin-device-config.css'].map(href=>{const link=document.createElement('link');link.rel='stylesheet';link.href=href;document.head.append(link);return link;});
   const error=message=>{const target=container.querySelector('[data-devices-error]');if(target)target.textContent=message;};
   async function refresh(){
     try{
@@ -35,18 +34,19 @@ export async function render(container) {
   }
   function edit(device){
     const prefs=structuredClone(device.preferences),permissions=structuredClone(device.permissions),scope=structuredClone(device.scope);
-    openModal({title:`Configure ${device.name}`,size:'xl',content:`<form data-device-config><label class="label">Display name<input name="name" class="input" value="${esc(device.name)}" maxlength="80" required></label><h3>Content scope</h3><p>Only household/shared content is available. These permissions are enforced on the server independently of layout.</p><div class="device-settings-grid">${modules.map(key=>`<label class="device-setting"><input type="checkbox" name="module:${key}" ${permissions.modules[key]!=='none'?'checked':''}>${key[0].toUpperCase()+key.slice(1)}</label>`).join('')}<label class="device-setting"><input type="checkbox" name="rotations" ${permissions.capabilities['rotations.view']==='allow'?'checked':''}>Shared shower/rotation order</label><label class="device-setting"><input type="checkbox" name="points" ${scope.show_points?'checked':''}>Permitted point totals</label></div><label class="label">Members shown<select name="members" class="input" multiple size="5">${(model.members||[]).map(member=>`<option value="${member.id}"${scope.member_ids.includes(member.id)?' selected':''}>${esc(memberLabel(member))}</option>`).join('')}</select></label><p class="form-hint">No selection includes all household members. Private content remains excluded.</p><h3>Actions</h3><p>Anyone using this display can complete the permitted Tasks shown here.</p>${Object.entries(actions).map(([key,label])=>`<label class="device-setting"><input type="checkbox" name="action:${key}" ${permissions.capabilities[`device_tasks.${key}`]==='allow'?'checked':''}>${label}</label>`).join('')}<p>Task creation and definition edits are off by default and can be enabled below for plain Tasks. Templates, Workflows, ledger changes, reward prices, redemption and administration require personal access. Protected supervision actions require an authenticated qualified person’s approval.</p><h3>View and appearance</h3><p>This display uses the normal application screens, filtered by its permissions. Its appearance and layout stay separate from personal accounts.</p><div class="device-settings-grid"><label>Default view<select name="default_view" class="input">${Object.entries({wall:'Dashboard',list:'Tasks · List',kanban:'Tasks · Board'}).map(([value,label])=>option(value,prefs.default_view,label)).join('')}</select></label>${Object.entries({theme:['system','light','dark'],palette:['neutral','warm','cool'],font:['default','serif'],density:['comfortable','compact']}).map(([key,values])=>`<label>${key}<select name="${key}" class="input">${values.map(value=>option(value,prefs.appearance[key])).join('')}</select></label>`).join('')}</div><h3>Dashboard widgets</h3>${prefs.widgets.map(widget=>`<div class="device-settings-grid" data-device-widget="${esc(widget.id)}"><label class="device-setting"><input type="checkbox" name="widget:${esc(widget.id)}" ${widget.visible?'checked':''}>${esc(widget.id)}</label><label>Order<input class="input" type="number" name="order:${esc(widget.id)}" min="0" max="50" value="${widget.order}"></label><label>Size<select class="input" name="size:${esc(widget.id)}">${['small','medium','large'].map(value=>option(value,widget.size)).join('')}</select></label></div>`).join('')}<h3>Temporary administrator access</h3><div class="device-settings-grid"><label>Idle timeout (seconds)<input class="input" name="idle" type="number" min="30" max="300" required value="${device.idle_seconds}"></label><label>Maximum duration (seconds)<input class="input" name="maximum" type="number" min="60" max="1800" required value="${device.maximum_seconds}"></label></div><p>Personal access also ends when the application restarts, the temporary page is hidden, or connectivity is lost. Fully Kiosk controls device sleep, brightness and Android lockdown.</p><p role="alert" data-device-form-error></p><div class="modal-panel__footer"><button type="button" class="btn btn--secondary" data-action="close-modal">Cancel</button><button type="submit" class="btn btn--primary" data-device-save>Save device</button></div></form>`,onSave(panel){
-      const definitionBox=document.createElement('section');
-      definitionBox.innerHTML=`<h3>Optional Task definition permissions</h3><p>These are off in the family checklist preset. Enabling creation together with points permits anyone at the display to create rewarded work. Templates, Workflows, reward prices, ledger changes and administration still require personal authentication.</p>${Object.entries(definitions).map(([key,label])=>`<label class="device-setting"><input type="checkbox" name="definition:${key}" ${permissions.capabilities[key]==='allow'?'checked':''}>${label}</label>`).join('')}`;
-      panel.querySelector('[data-device-form-error]').before(definitionBox);
-      const notesBox=document.createElement('section');
-      notesBox.innerHTML=`<h3>Notes permissions</h3><p>These four permissions are independent and off by default. View shares Everyone notes with anyone using this display. Private and Selected members notes require personal sign-in and remain hidden from the device. The member filter above does not limit Everyone notes.</p><p>For children, enable View and Create and leave Edit and Delete off. Creating a note never grants permission to edit or delete it.</p>${Object.entries(noteActions).map(([key,label])=>`<label class="device-setting"><input type="checkbox" name="note:${key}" ${permissions.capabilities[`device_notes.${key}`]==='allow'?'checked':''}>${label}</label>`).join('')}`;
-      panel.querySelector('[data-device-form-error]').before(notesBox);
+    openModal({title:`Configure ${device.name}`,size:'xl',content:deviceConfigContent(device,model,{modules,actions,definitions,noteActions}),onSave(panel){
+      window.lucide?.createIcons({el:panel});
+      panel.querySelector('form').addEventListener('invalid',event=>{const details=event.target.closest('details');if(details)details.open=true;},true);
       panel.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target),submit=event.submitter||panel.querySelector('[data-device-save]');submit.disabled=true;
         for(const key of modules)permissions.modules[key]=form.has(`module:${key}`)?'read':'none';
         for(const key of Object.keys(actions))permissions.capabilities[`device_tasks.${key}`]=form.has(`action:${key}`)?'allow':'none';
         for(const key of Object.keys(definitions))permissions.capabilities[key]=form.has(`definition:${key}`)?'allow':'none';
         for(const key of Object.keys(noteActions))permissions.capabilities[`device_notes.${key}`]=form.has(`note:${key}`)?'allow':'none';
+        for(const key of ['move','pin','group','ungroup']){
+          const value=form.get(`note:${key}`);
+          if(value==='legacy')delete permissions.capabilities[`device_notes.${key}`];
+          else permissions.capabilities[`device_notes.${key}`]=value;
+        }
         permissions.capabilities['rotations.view']=form.has('rotations')?'allow':'none';
         scope.member_ids=form.getAll('members').map(Number);scope.show_points=form.has('points');
         prefs.default_view=form.get('default_view');for(const key of ['theme','palette','font','density'])prefs.appearance[key]=form.get(key);
@@ -55,5 +55,5 @@ export async function render(container) {
       };
     }});
   }
-  await refresh();return()=>{disposed=true;css.remove();};
+  await refresh();return()=>{disposed=true;styles.forEach(link=>link.remove());};
 }

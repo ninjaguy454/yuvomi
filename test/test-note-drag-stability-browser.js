@@ -10,7 +10,7 @@ import {toggleChecklistLine} from '../public/utils/markdown-checklist.js';
 const app=express();app.use(express.json());app.use(express.static(fileURLToPath(new URL('../public',import.meta.url))));
 const links='<link rel="stylesheet" href="/styles/notes.css">'+[...readFileSync(new URL('../public/index.html',import.meta.url),'utf8').matchAll(/<link rel="stylesheet" href="([^"]+)"\s*\/>/g)].map(m=>`<link rel="stylesheet" href="${m[1]}">`).join('');
 app.get('/drag-test',(_req,res)=>res.send(`<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">${links}<script src="/lucide.min.js"></script><style>html,body{height:100%;margin:0}#main-content{height:100vh;padding:16px}</style></head><body><main id="main-content"></main></body></html>`));
-let notes,writes,mode,releaseSave,checkWrites,checkMode,holdCheck,releaseCheck,browser,server,base;
+let notes,groups,writes,mode,releaseSave,checkWrites,checkMode,holdCheck,releaseCheck,browser,server,base;
 let holdRead=false,readMode='success',releaseReads=[];
 app.use('/api/v1',async(req,res)=>{
   if(req.path==='/auth/me')return res.json({csrfToken:'synthetic'});
@@ -19,7 +19,7 @@ app.use('/api/v1',async(req,res)=>{
   if(req.path==='/notes/board'){
     if(holdRead)await new Promise(resolve=>releaseReads.push(resolve));
     if(readMode==='failed')return res.status(503).json({error:'Synthetic read unavailable'});
-    return res.json({data:{notes,groups:[]}});
+    return res.json({data:{notes,groups}});
   }
   if(req.path==='/notes/1/check'&&req.method==='PATCH'){
     checkWrites.push(structuredClone(req.body));
@@ -35,18 +35,21 @@ app.use('/api/v1',async(req,res)=>{
     if(mode==='conflict'){notes[0].layout={...notes[0].layout,x:notes[0].layout.x+1,revision:notes[0].layout.revision+1};return res.status(409).json({error:'Changed elsewhere',code:409});}
     if(mode==='failed')return res.status(403).json({error:'Layout no longer allowed',code:403});
     if(mode==='unknown'){mode='success';return res.type('json').send('{"data":');}
-    const result=arrangeNotesFixture(notes,req.body);return res.status(result.status).json(result.body);
+    const result=arrangeNotesFixture(notes,req.body);
+    if(result.status===200)result.body.data.board.groups=structuredClone(groups);
+    return res.status(result.status).json(result.body);
   }
   return res.json({data:[]});
 });
 test.before(async()=>{server=app.listen(0,'127.0.0.1');await new Promise(r=>server.once('listening',r));base=`http://127.0.0.1:${server.address().port}`;browser=await puppeteer.launch({headless:true,executablePath:process.env.PUPPETEER_EXECUTABLE_PATH||'/usr/bin/chromium',args:['--disable-dev-shm-usage']});});
 test.after(async()=>{releaseSave?.();releaseCheck?.();releaseReads.splice(0).forEach(release=>release());await browser?.close();server.closeAllConnections();await new Promise(r=>server.close(r));});
 const card='.note-card[data-id="1"]';
-async function mount({reduced=false,touch=false,checklist=false,adjacent=false}={}){
+async function mount({reduced=false,touch=false,checklist=false,adjacent=false,grouped=false}={}){
   writes=[];checkWrites=[];mode='success';checkMode='success';releaseSave=null;holdCheck=false;releaseCheck=null;
-  holdRead=false;readMode='success';releaseReads=[];
+  holdRead=false;readMode='success';releaseReads=[];groups=[];
   notes=Array.from({length:5},(_,i)=>({id:i+1,title:`Synthetic ${i+1}`,content:'A plain paragraph to drag.\n\n'+Array.from({length:20},(_,j)=>`Preview line ${j}`).join('\n\n'),color:'#C7DED9',created_by:1,creator_name:'Synthetic Parent',visibility:'all',revision:4,permissions:{view:true,edit:true,arrange:true,delete:true,manage_visibility:true},layout:{x:i?8:2,y:i?20+i*8:2,width:4,height:6,revision:2}}));
   if(adjacent){notes.splice(2);notes[1].layout={...notes[1].layout,x:7,y:2};}
+  if(grouped){notes.splice(3);groups=[{id:1,revision:1,member_ids:[2,3],can_manage:true,layout:{x:7,y:2,width:4,height:6,position_locked:false,always_on_top:false}}];}
   if(checklist)notes[0].content='- [ ] Synthetic checklist\n\n'+notes[0].content;
   const page=await browser.newPage();page.setDefaultTimeout(5000);await page.setViewport({width:1280,height:1000,hasTouch:touch});
   await page.emulateMediaFeatures([{name:'prefers-reduced-motion',value:reduced?'reduce':'no-preference'}]);
@@ -71,6 +74,9 @@ async function waitForRead(){for(let i=0;i<100&&!releaseReads.length;i++)await n
 for(const ackWhileHeld of [false,true])test(`another card cannot begin an uncommittable drag while saving (ack while held: ${ackWhileHeld})`,async()=>{
   const page=await mount({adjacent:true});try{
     await drag(page,35,10);const before=await secondPosition(page);
+    await page.$eval(secondCard+' [data-board-action="top"]',button=>button.click());
+    await page.$eval(secondCard+' [data-board-action="adjust"]',button=>button.click());
+    assert.equal(await page.$('[data-layout-editor]'),null,'numeric editing uses the same admission gate');assert.equal(writes.length,1);
     const point=await beginSecondDrag(page);
     assert.deepEqual(await secondPosition(page),before,'busy gestures must not move and then snap back');
     assert.equal(await page.$eval('#notes-grid',node=>node.getAttribute('aria-busy')),'true','the board exposes save progress');
@@ -114,9 +120,19 @@ test('uncertain outcome and failed Reload keep layout gestures blocked until a s
     await beginSecondDrag(page);assert.deepEqual(await secondPosition(page),before,'Reload retains the gate while fetching current revisions');await page.mouse.up();
     readMode='failed';await unblockReads();await page.waitForSelector('[data-group-reload]');
     await beginSecondDrag(page);assert.deepEqual(await secondPosition(page),before,'failed recovery does not admit stale commands');await page.mouse.up();
-    readMode='success';await page.click('[data-group-reload]');await page.waitForFunction(()=>!document.querySelector('[data-group-reload]'));
+    readMode='success';await page.click('[data-group-reload]');await page.waitForFunction(()=>!document.querySelector('[data-group-reload]')&&!document.querySelector('#notes-grid').dataset.layoutWrite);
     await beginSecondDrag(page);await page.mouse.up();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');await finish(page);assert.equal(writes.length,2);
   }finally{releaseSave?.();await unblockReads();await page.mouse.up().catch(()=>{});await page.close();}
+});
+test('pending layout save permits local group paging but blocks the mutating overview until acknowledgment',async()=>{
+  const page=await mount({grouped:true});try{
+    await drag(page);await page.click('[data-board-key="group:1"] [data-group-page="next"]');
+    assert.equal(await page.$eval('[data-board-key="group:1"]',node=>node.dataset.id),'3','reading another page remains local');
+    await page.click('[data-board-key="group:1"] [data-group-page="overview"]');
+    assert.equal(await page.$('.note-group-overview'),null,'do not open an editor that cannot submit');assert.equal(writes.length,1);
+    await finish(page);await page.click('[data-board-key="group:1"] [data-group-page="overview"]');await page.waitForSelector('.note-group-overview');
+    assert.equal(writes.length,1);
+  }finally{releaseSave?.();await page.close();}
 });
 test('slow saves preserve the dropped rectangle, card, focus, preview scroll and toolbar across repeated drags',async()=>{
   const page=await mount();try{
@@ -360,7 +376,7 @@ test('pending placement survives a responsive controller replacement and rolls b
     await page.setViewport({width:390,height:1000});await page.waitForSelector('#notes-grid[data-board-view="list"]');
     await page.setViewport({width:1280,height:1000});await page.waitForSelector('#notes-grid[data-board-view="canvas"]');
     const returned=await snapshot(page);assert.ok(Math.abs(returned.x-pending.x)<1);assert.ok(Math.abs(returned.y-pending.y)<1);
-    releaseSave();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent!=='Saving layout...');
+    releaseSave();await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Layout no longer allowed');
     const denied=await snapshot(page);assert.ok(Math.abs(denied.x-before.x)<1);assert.ok(Math.abs(denied.y-before.y)<1);
   }finally{releaseSave?.();await page.close();}
 });

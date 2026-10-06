@@ -6,6 +6,9 @@ import {noteItemAllows} from '/utils/note-permissions.js';
 // Cards survive a successful save's controller replacement. Their visual
 // transitions and hit protection must survive with them, until actually done.
 const settlingCards = new WeakMap();
+// A save can replace the controller while a rejected mouse press is held.
+// Keep only that pointer's click suppression with the retained board element.
+const blockedLayoutPointers = new WeakMap();
 
 /** Keep the active content card's note identity distinct from its geometry owner. */
 export function renderNoteGroupFrame(item, cardHtml) {
@@ -270,6 +273,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     frame = requestAnimationFrame(autoscroll);
   }
   function down(event) {
+    if (blockedLayoutPointers.get(grid)?.pointer === event.pointerId) blockedLayoutPointers.delete(grid);
     const inViewport = viewport.contains(event.target);
     if (event.pointerType === 'touch' && inViewport && !narrow) touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (touches.size >= 2) {
@@ -307,6 +311,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     const item = itemFor(card), note = item?.note;
     if (!editable(item)) return;
     if (!canStartLayout() || pending.has(item.key)) {
+      blockedLayoutPointers.set(grid,{pointer:event.pointerId,x:event.clientX,y:event.clientY,moved:false});
       excludedPointer = { id:event.pointerId, x:event.clientX, y:event.clientY }; return;
     }
     const rect = card.getBoundingClientRect();
@@ -356,6 +361,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     gesture.dirty = false;
   }
   function move(event) {
+    const blocked=blockedLayoutPointers.get(grid);
+    if (blocked?.pointer===event.pointerId && Math.hypot(event.clientX-blocked.x,event.clientY-blocked.y)>=7) {
+      blocked.moved=true; suppressClick=true;
+    }
     if (touches.has(event.pointerId)) touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (navigation?.kind === 'pinch') {
       if (touches.size >= 2) {
@@ -444,6 +453,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     frame = requestAnimationFrame(autoscroll);
   }
   async function up(event) {
+    const blocked=blockedLayoutPointers.get(grid);
+    if (blocked?.pointer===event.pointerId) {
+      suppressClick ||= blocked.moved; blockedLayoutPointers.delete(grid);
+    }
     const currentSession=gesture || adopted;
     if (currentSession && (currentSession.viewportWidth!==viewportWidth() || currentSession.viewportHeight!==viewport.clientHeight)) { cancel(); refresh(); return; }
     touches.delete(event.pointerId);
@@ -507,7 +520,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     const page=button.dataset.groupPage;
     if (page && item.kind === 'group') {
       event.preventDefault(); event.stopImmediatePropagation(); cancel();
-      if (page === 'overview') { onGroupAction('overview',item); return; }
+      if (page === 'overview') { if(canStartLayout())onGroupAction('overview',item); return; }
       const index=item.member_ids.indexOf(item.note.id)+(page==='previous'?-1:1);
       if (index < 0 || index >= item.member_ids.length) return;
       if (activePages instanceof Map) activePages.set(item.id,item.member_ids[index]); else activePages[item.id]=item.member_ids[index];
@@ -540,7 +553,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     const delta = { ArrowLeft:[-80,0], ArrowRight:[80,0], ArrowUp:[0,-80], ArrowDown:[0,80] }[event.key];
     if (delta) { event.preventDefault(); viewport.scrollBy(...delta); }
   }
-  function pointerCancel(event) { touches.delete(event.pointerId); navigation = null; cancel(); }
+  function pointerCancel(event) { blockedLayoutPointers.delete(grid); touches.delete(event.pointerId); navigation = null; cancel(); }
   function touchMove(event) {
     // Native preview scroll remains available until a hold deliberately arms a
     // move/resize, or our canvas navigation takes ownership of the touch.
@@ -613,6 +626,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     resetView() { cancel(); viewState.zoom = 1; refresh(); viewport.scrollLeft = 0; viewport.scrollTop = 0; },
     busy: () => !!gesture || !!navigation || !!adopted || waitingForBridge || pending.size > 0,
     destroy({ preserveReveal = false } = {}) {
+      if (!preserveReveal) blockedLayoutPointers.delete(grid);
       if (revealStrip?.contains(document.activeElement)) viewState.revealFocus = Number(document.activeElement.dataset.noteReveal);
       if (!narrow) { viewState.left = viewport.scrollLeft; viewState.top = viewport.scrollTop; }
       cancel(); disposed = true; observer.disconnect();

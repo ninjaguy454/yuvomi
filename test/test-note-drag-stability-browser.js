@@ -171,8 +171,8 @@ test('horizontal speed controls the lean and release smoothly levels only the vi
       const after=card.getBoundingClientRect().toJSON(),releasing=getComputedStyle(content).rotate;
       return{slow,fast,left,vertical,before,after,angle,releasing,outerRotate,settling:content.getAnimations().some(animation=>animation.transitionProperty==='rotate')};
     },p);
-    assert.ok(result.slow>0&&result.fast>result.slow*2,JSON.stringify(result));
-    assert.ok(result.left<0&&Math.abs(result.fast)<=.9&&Math.abs(result.left)<=.9);
+    assert.ok(result.slow>0&&result.slow<.2&&result.fast>2,JSON.stringify(result));
+    assert.ok(result.left< -2&&Math.abs(result.fast)<=4&&Math.abs(result.left)<=4);
     assert.ok(Math.abs(result.vertical)<.02,'vertical-only motion does not sustain a sideways lean');
     assert.ok(result.outerRotate==='none'||parseFloat(result.outerRotate)===0);
     for(const field of ['x','y','width','height'])assert.ok(Math.abs(result.before[field]-result.after[field])<1,field);

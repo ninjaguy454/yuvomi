@@ -10,11 +10,17 @@ import { taskCompletionPoints } from '/utils/task-fields.js';
 /** A task projection beside Notes, with independent permission and lifecycle. */
 export function mountOpenTaskBoard(container, { user } = {}) {
   const authentication = authenticationSnapshot();
-  let active = true, tasks = [], stopLive = null;
+  let active = true, tasks = [], stopLive = null, renderedProjection = null;
   const valid = () => active && container.isConnected && sameAuthentication(authentication);
   const allowed = () => moduleAccess('tasks') !== 'none';
   function render(error = '') {
     if (!valid()) return;
+    // Routine revalidation must retain focused and pending offer controls.
+    // Compare the complete projection, including authority, so changed or
+    // removed offers still detach their controls and cancel stale inspections.
+    const projection = JSON.stringify([moduleAccess('tasks'), error, tasks]);
+    if (projection === renderedProjection) return;
+    renderedProjection = projection;
     container.replaceChildren(); container.hidden = !allowed();
     if (!allowed()) return;
     container.insertAdjacentHTML('beforeend', `<section class="open-task-board" aria-label="${esc(t('tasks.bountyTasks'))}"><div class="open-task-board__header"><h2>${esc(t('tasks.bountyTasks'))}</h2><a href="/tasks?offers=1&view=list">${esc(t('tasks.openTasksAll'))}</a></div><p class="open-task-board__description text-muted">${esc(t('tasks.bountyTasksDescription'))}</p><div class="open-task-board__list">${error ? `<p role="alert">${esc(error)}</p>` : tasks.length ? tasks.map(task => `<button type="button" class="open-task-board__card" data-open-task="${Number(task.id)}"><strong>${esc(task.title)}</strong><span class="open-task-board__meta"><span class="text-muted">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>${renderTaskCountdown(task, { className: 'text-muted' })}</span></button>`).join('') : `<p>${esc(t('tasks.openTasksEmpty'))}</p>`}</div></section>`);
@@ -48,7 +54,7 @@ export function mountOpenTaskBoard(container, { user } = {}) {
   const stopCountdowns = bindTaskCountdowns(container);
   function stop() {
     if (!active) return;
-    active = false; loader.dispose(); starts.dispose(); stopLive?.(); stopCountdowns(); tasks = []; container.replaceChildren();
+    active = false; loader.dispose(); starts.dispose(); stopLive?.(); stopCountdowns(); tasks = []; renderedProjection = null; container.replaceChildren();
     for (const name of ['auth:context-ending', 'auth:expired', 'auth:context-rejected']) window.removeEventListener(name, stop);
   }
   for (const name of ['auth:context-ending', 'auth:expired', 'auth:context-rejected']) window.addEventListener(name, stop);

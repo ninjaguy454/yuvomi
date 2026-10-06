@@ -89,9 +89,13 @@ async function revalidate(page) {
   });
 }
 
-test('an unchanged refresh preserves the focused pending offer and completes its single inspection', { timeout: 15000 }, async () => {
+test('an unchanged refresh preserves offer focus and completes a pending single inspection', { timeout: 15000 }, async () => {
   const f = await fixture();
   try {
+    await ready(f.page); await f.page.focus('[data-open-task="7"]');
+    await f.page.evaluate(() => { window.focusedOffer = document.activeElement; });
+    await revalidate(f.page);
+    assert.equal(await f.page.evaluate(() => focusedOffer.isConnected && document.activeElement === focusedOffer), true);
     await holdClick(f);
     await f.page.evaluate(() => { window.pendingOffer = document.querySelector('[data-open-task="7"]'); });
     await revalidate(f.page);

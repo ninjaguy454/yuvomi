@@ -77,6 +77,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   let activePointer = null, highlightedTarget = null, proxy = null, footer = null, dragAnchor = null, nativeSource = null;
   let selectionMode = selected.size > 0, placing = false, writeState = {}, nativeExitTimer = null, nativeOutside = false;
   let backdropPress = null, nativeFinishTimer = null, gestureFocus = null, dragOrigin = null, dragMoved = false;
+  let pendingOrder = null, dropScrollTop = null;
   const feedbackControls = new Map();
   const cardNotes = new WeakMap();
   const overlay = document.createElement('div'); overlay.className = 'note-group-overview';
@@ -146,13 +147,16 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     highlightedTarget = host.querySelector(`[data-board-key="note:${id}"]`);
     highlightedTarget?.classList.add('is-note-group-target');
   }
-  function renderPages() {
-    const focused = document.activeElement, previousScroll = grid.scrollTop;
+  function scrollAnchor() {
     const bounds = grid.getBoundingClientRect();
     const anchor = [...grid.querySelectorAll('[data-group-page]')].find(card => !card.hidden && card.getBoundingClientRect().bottom > bounds.top);
-    const anchorOffset = anchor?.getBoundingClientRect().top - bounds.top;
+    return { anchor, anchorOffset: anchor?.getBoundingClientRect().top - bounds.top, previousScroll: grid.scrollTop };
+  }
+  function renderPages(position = scrollAnchor()) {
+    const focused = document.activeElement;
+    const { anchor, anchorOffset, previousScroll } = position;
     const cards = new Map([...grid.querySelectorAll('[data-group-page]')].map(card => [Number(card.dataset.groupPage), card]));
-    const ids = currentGroup.member_ids.filter(id => noteById.has(id));
+    const ids = (pendingOrder?.groupId === currentGroup.id ? pendingOrder.ids : currentGroup.member_ids).filter(id => noteById.has(id));
     for (const [id, card] of cards) if (!ids.includes(id)) {
       if (dragging && card === dragAnchor) { card.hidden = true; card.inert = true; }
       else card.remove();
@@ -307,10 +311,17 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function submit(kind, fields) {
     if (!current() || !manageable || busy || !canStartLayout()) return;
     try {
-      if (kind === 'reorder' && moveSelectionBefore(source.member_ids, fields.selected_ids, fields.before_note_id).every((id, index) => id === source.member_ids[index])) {
+      const reordered = kind === 'reorder' ? moveSelectionBefore(source.member_ids, fields.selected_ids, fields.before_note_id) : null;
+      if (reordered?.every((id, index) => id === source.member_ids[index])) {
+        dropScrollTop = null;
         clearTools(); renderPages(); return;
       }
       const command = freezeNoteGroupCommand(draft, kind, fields);
+      // Keep the chosen placement visible without changing canonical revision
+      // evidence. Only the page's authorized reconciliation settles this view.
+      if (reordered) pendingOrder = { groupId: source.id, ids: reordered, operationId: command.operation_id };
+      const position = reordered && dropScrollTop !== null ? { previousScroll: dropScrollTop } : scrollAnchor();
+      dropScrollTop = null;
       const destination = fields.target_group_id && snapshot.groups.find(item => item.id === fields.target_group_id);
       if (destination) {
         source = currentGroup = destination;
@@ -319,11 +330,14 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         standaloneIds = [];
       }
       busy = true;
-      insertion.clear(); clearTools(); overlay.hidden = false; renderPages();
+      insertion.clear(); clearTools(); overlay.hidden = false; renderPages(position);
       // The page reconciles its latest authorized projection. A delayed result
       // body must not independently overwrite that newer view here.
       Promise.resolve(onCommand(command)).catch(onError).finally(() => {
-        if (current()) { busy = !!writeState.phase; renderPages(); }
+        if (current()) {
+          if (pendingOrder?.operationId === command.operation_id) pendingOrder = null;
+          busy = !!writeState.phase; renderPages();
+        }
       });
     } catch (error) { if (!closed) announce(error.message); else onError(error); }
   }
@@ -341,6 +355,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (!overlay.hidden) finishNative();
   }
   function invalidateDraft() {
+    pendingOrder = null; dropScrollTop = null;
     gesture.pointerCancel('context-change');
     if (dragPreview) finishNative();
     insertion.clear(); clearProxy(); stopScroll();
@@ -433,6 +448,9 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   }
   function paintPreview({ state, session, target }) {
     if (!current()) return;
+    // A reorder keeps the same grid tracks. Preserve its scroll offset before
+    // removing gaps, rather than anchoring to a neighbor still in a FLIP move.
+    if (state === 'submitting') dropScrollTop = grid.scrollTop;
     highlightTarget(state === 'target-ready' && target?.kind === 'note' ? target.id : null);
     if (state === 'holding') { activePointer = session.pointerId; dragOrigin = { x: session.clientX, y: session.clientY }; dragMoved = false; }
     if (state === 'dragging' && !dragging) {
@@ -470,7 +488,9 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     lastPoint = { x: session.clientX, y: session.clientY }; if (scrollFrame) return;
     const step = () => {
       scrollFrame = 0;
-      if (closed || (!dragging && !dragPreview)) return;
+      // Native canvas drags retain their original owner outside the portal.
+      // Only an internal group drag needs this loop to scroll the canvas.
+      if (closed || (!dragging && !dragPreview) || (dragPreview && overlay.hidden)) return;
       const scroller = overlay.hidden ? host.querySelector('.notes-scroll') : grid;
       if (!scroller) return;
       const bounds = scroller.getBoundingClientRect(), edge = 36, speed = 12;
@@ -501,6 +521,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         : { source_group_id: source.id, target_group_id: targetId, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null });
     },
     onCancel() {
+      dropScrollTop = null;
       suppressClick = true; activePointer = null; dragging = false; canvasDrag = false; exit.hidden = true; insertion.clear(); clearProxy(); stopScroll(); highlightTarget(null);
       if (!closed) {
         overlay.dataset.gestureState = 'idle'; overlay.hidden = false;
@@ -669,7 +690,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     else if (initialAction === 'move' || initialAction === 'add') moveSelection();
     else if (initialAction === 'remove') extractionChoices();
   }
-  return { close, dispose, dragTarget, containsPoint, updateContext, invalidateDraft, setWriteState, finishNative, releaseNativeTarget };
+  function ownsNativeDrag(session) {
+    return current() && !overlay.hidden && dragPreview?.pointerId === session.pointerId
+      && dragPreview?.item.key === session.item?.key;
+  }
+  return { close, dispose, dragTarget, containsPoint, ownsNativeDrag, updateContext, invalidateDraft, setWriteState, finishNative, releaseNativeTarget };
 }
 
 /** A page-owned view with renewable command authority. Native drags keep their board owner. */
@@ -809,5 +834,6 @@ export function createNoteGroupInteractions(context) {
   }
   function setWriteState(value = {}) { writeState = value; (preview || overview)?.setWriteState(value); }
   viewAuthentication.signal?.addEventListener('abort', dispose, { once: true });
-  return { onGroupAction, groupDragBridge: { hoverTarget, leaveTarget, dropTarget, targetAt }, update, invalidateDraft, setWriteState, dispose };
+  const ownsNativeDrag = session => !!(preview || overview)?.ownsNativeDrag(session);
+  return { onGroupAction, groupDragBridge: { hoverTarget, leaveTarget, dropTarget, targetAt, ownsNativeDrag }, update, invalidateDraft, setWriteState, dispose };
 }

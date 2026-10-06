@@ -339,8 +339,13 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     suppressClick = false;
     if (gesture.edges || event.pointerType === 'touch') gesture.timer = setTimeout(activate, 450);
   }
+  function groupOwnsDrag() {
+    return gesture && !gesture.edges && groupDragBridge?.ownsNativeDrag?.({ item: gesture.item, pointerId: gesture.pointer });
+  }
   function update() {
-    if (!gesture?.active) return;
+    // Capture stays on the canvas source, but its geometry belongs to the
+    // canvas only after the visible group yields this pointer back.
+    if (!gesture?.active || groupOwnsDrag()) return;
     const { start, edges, scroller } = gesture;
     const worldX = (gesture.lastX - gesture.x + viewport.scrollLeft - gesture.scrollX) / (gesture.pitch * gesture.scale);
     const worldY = (gesture.lastY - gesture.y + scroller.scrollTop - gesture.scrollY) / (NOTE_ROW_HEIGHT * gesture.scale);
@@ -438,18 +443,20 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (!gesture?.active || disposed) return;
     if (!canStartLayout()) { rejectLayoutGesture(); return; }
     if (!gesture.card.hasPointerCapture(gesture.pointer)) { cancel(); return; }
-    const scroller = gesture.scroller;
-    const rect = scroller === document.scrollingElement ? { top: 0, bottom: innerHeight } : scroller.getBoundingClientRect();
-    const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
-    const speed = gesture.lastY > bottom - 48 ? Math.min(18, (gesture.lastY - bottom + 48) / 3)
-      : gesture.lastY < top + 48 ? -Math.min(18, (top + 48 - gesture.lastY) / 3) : 0;
-    if (speed) { scroller.scrollTop += speed; gesture.dirty = true; }
-    // Short page-flow layouts scroll vertically in the shell, but world X
-    // always belongs to the canvas viewport.
-    const bounds = viewport.getBoundingClientRect();
-    const speedX = gesture.lastX > bounds.right - 48 ? Math.min(18,(gesture.lastX-bounds.right+48)/3)
-      : gesture.lastX < bounds.left + 48 ? -Math.min(18,(bounds.left+48-gesture.lastX)/3) : 0;
-    if (speedX) { viewport.scrollLeft += speedX; gesture.dirty = true; }
+    if (!groupOwnsDrag()) {
+      const scroller = gesture.scroller;
+      const rect = scroller === document.scrollingElement ? { top: 0, bottom: innerHeight } : scroller.getBoundingClientRect();
+      const top = Math.max(0, rect.top), bottom = Math.min(innerHeight, rect.bottom);
+      const speed = gesture.lastY > bottom - 48 ? Math.min(18, (gesture.lastY - bottom + 48) / 3)
+        : gesture.lastY < top + 48 ? -Math.min(18, (top + 48 - gesture.lastY) / 3) : 0;
+      if (speed) { scroller.scrollTop += speed; gesture.dirty = true; }
+      // Short page-flow layouts scroll vertically in the shell, but world X
+      // always belongs to the canvas viewport.
+      const bounds = viewport.getBoundingClientRect();
+      const speedX = gesture.lastX > bounds.right - 48 ? Math.min(18,(gesture.lastX-bounds.right+48)/3)
+        : gesture.lastX < bounds.left + 48 ? -Math.min(18,(bounds.left+48-gesture.lastX)/3) : 0;
+      if (speedX) { viewport.scrollLeft += speedX; gesture.dirty = true; }
+    }
     if (gesture.dirty) {
       update();
       if (!gesture.edges) trackTarget({clientX:gesture.lastX,clientY:gesture.lastY}, {item:gesture.item,pointerId:gesture.pointer});

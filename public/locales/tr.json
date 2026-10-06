@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} seçili",
             "selectionMode": "Notları seç",
             "actions": "İşlemler",
-            "exitDrag": "Çıkış",
+            "exitDrag": "Çıkarmak için burada tutun",
             "exitDwell": "1 sn",
             "dragCount": "{{count}} not",
             "placeCount": "{{count}} notu yerleştir",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Başa ekle",
+            "addEnd": "Sona ekle",
+            "selectionPosition": "Seçim {{position}}"
         },
         "groupPages": "Grup sayfaları",
         "groupPrevious": "Önceki not",

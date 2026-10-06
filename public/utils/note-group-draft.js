@@ -28,9 +28,9 @@ function exactFields(value, names) {
 }
 
 export function orderedSelection(memberIds, selectedIds) {
-  const selected = new Set(ids(selectedIds));
-  if ([...selected].some(id => !memberIds.includes(id))) throw new TypeError('Selection is no longer available.');
-  return memberIds.filter(id => selected.has(id));
+  const selected = ids(selectedIds);
+  if (selected.some(id => !memberIds.includes(id))) throw new TypeError('Selection is no longer available.');
+  return selected;
 }
 
 export function moveSelectionBefore(memberIds, selectedIds, beforeId) {

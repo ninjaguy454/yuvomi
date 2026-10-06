@@ -1433,7 +1433,7 @@
             "selectedCount": "Выбрано: {{count}}",
             "selectionMode": "Выбрать заметки",
             "actions": "Действия",
-            "exitDrag": "Выход",
+            "exitDrag": "Удерживайте здесь, чтобы извлечь",
             "exitDwell": "1 с",
             "dragCount": "Заметок: {{count}}",
             "placeCount": "Разместить заметки: {{count}}",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Добавить в начало",
+            "addEnd": "Добавить в конец",
+            "selectionPosition": "Выбор {{position}}"
         },
         "groupPages": "Страницы группы",
         "groupPrevious": "Предыдущая заметка",

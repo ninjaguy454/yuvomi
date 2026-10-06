@@ -1433,7 +1433,7 @@
             "selectedCount": "تم تحديد {{count}}",
             "selectionMode": "تحديد الملاحظات",
             "actions": "إجراءات",
-            "exitDrag": "خروج",
+            "exitDrag": "اضغط هنا مطولًا للإزالة",
             "exitDwell": "١ ث",
             "dragCount": "{{count}} ملاحظات",
             "placeCount": "وضع {{count}} ملاحظات",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "أضف إلى البداية",
+            "addEnd": "أضف إلى النهاية",
+            "selectionPosition": "الاختيار {{position}}"
         },
         "groupPages": "صفحات المجموعة",
         "groupPrevious": "الملاحظة السابقة",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "لوحة الملاحظات",
+        "title": "ملاحظات",
         "newNote": "ملاحظة جديدة",
         "editNote": "تعديل الملاحظة",
         "viewNote": "ملاحظة",

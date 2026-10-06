@@ -1445,7 +1445,7 @@
             "selectedCount": "{{count}} مورد انتخاب‌شده",
             "selectionMode": "انتخاب یادداشت‌ها",
             "actions": "کارها",
-            "exitDrag": "خروج",
+            "exitDrag": "برای خارج کردن اینجا نگه دارید",
             "exitDwell": "۱ ثانیه",
             "dragCount": "{{count}} یادداشت",
             "placeCount": "قرار دادن {{count}} یادداشت",
@@ -1468,7 +1468,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "افزودن به ابتدا",
+            "addEnd": "افزودن به انتها",
+            "selectionPosition": "انتخاب {{position}}"
         },
         "groupPages": "صفحه‌های گروه",
         "groupPrevious": "یادداشت قبلی",

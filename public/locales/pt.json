@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} selecionadas",
             "selectionMode": "Selecionar notas",
             "actions": "Ações",
-            "exitDrag": "Sair",
+            "exitDrag": "Segure aqui para retirar",
             "exitDwell": "1 s",
             "dragCount": "{{count}} notas",
             "placeCount": "Posicionar {{count}} notas",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Adicionar ao início",
+            "addEnd": "Adicionar ao fim",
+            "selectionPosition": "Seleção {{position}}"
         },
         "groupPages": "Páginas do grupo",
         "groupPrevious": "Nota anterior",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Quadro de notas",
+        "title": "Notas",
         "newNote": "Nova nota",
         "editNote": "Editar nota",
         "viewNote": "Nota",

@@ -19,12 +19,17 @@ test('create takes target geometry, preserves records, retries fresh projection,
     const receipts=JSON.stringify(d.prepare('SELECT * FROM note_board_group_receipts WHERE owner_key=\'human:1\'').all());for(const forbidden of ['PRIVATE BODY','access_user_ids','visibility','creator_name'])assert.equal(receipts.includes(forbidden),false);
   }finally{d.close();}
 });
-test('selected block reorders canonically, stable group ID and no-op clocks/revisions',()=>{
+test('selected block follows click order, keeps its group ID and preserves no-op clocks/revisions',()=>{
   const {d,group}=fixture();try{
     const id=group([1,2,3,4,5,6,7,8,9,10]);const c=command(d,'reorder',{group_id:id,selected_ids:[9,2,7,5],before_note_id:4},[1,2,3,4,5,6,7,8,9,10],[id]);
-    const r=apply(d,1,c);assert.deepEqual(r.board.groups[0].member_ids,[1,3,2,5,7,9,4,6,8,10]);assert.equal(r.board.groups[0].id,id);assert.equal(r.board.groups[0].revision,2);
-    const b=state(d);apply(d,1,command(d,'reorder',{group_id:id,selected_ids:[2,5,7,9],before_note_id:4},[1,2,3,4,5,6,7,8,9,10],[id]));
+    const r=apply(d,1,c);assert.deepEqual(r.board.groups[0].member_ids,[1,3,9,2,7,5,4,6,8,10]);assert.equal(r.board.groups[0].id,id);assert.equal(r.board.groups[0].revision,2);
+    const b=state(d);assert.equal(apply(d,1,c).replayed,true);assert.deepEqual(state(d),b);
+    const noOp=command(d,'reorder',{group_id:id,selected_ids:[9,2,7,5],before_note_id:4},[1,2,3,4,5,6,7,8,9,10],[id]);apply(d,1,noOp);
     const a=state(d);delete a.note_board_group_receipts;delete b.note_board_group_receipts;assert.deepEqual(a,b);
+    const unchanged=state(d);assert.equal(apply(d,1,noOp).replayed,true);assert.deepEqual(state(d),unchanged);
+    apply(d,1,command(d,'undo',{undo_operation_id:noOp.operation_id},[]));assert.deepEqual(readGroupMembers(d,'human:1',id),[1,3,9,2,7,5,4,6,8,10]);
+    const afterNoOpUndo=state(d);delete afterNoOpUndo.note_board_group_receipts;assert.deepEqual(afterNoOpUndo,a);
+    apply(d,1,command(d,'undo',{undo_operation_id:c.operation_id},[]));assert.deepEqual(readGroupMembers(d,'human:1',id),[1,2,3,4,5,6,7,8,9,10]);
   }finally{d.close();}
 });
 for(const result of ['group','individual'])test(`extract ${result} ignores obsolete member pins, unlocks results, dissolves singleton at source anchor`,()=>{
@@ -33,22 +38,22 @@ for(const result of ['group','individual'])test(`extract ${result} ignores obsol
     const r=apply(d,1,command(d,'extract',{source_group_id:id,selected_ids:[2,1],result,placements},[1,2,3],[id]));
     assert.equal(d.prepare('SELECT id FROM note_board_groups WHERE owner_key=\'human:1\' AND id=?').get(id),undefined);
     assert.deepEqual({...r.board.notes.find(n=>n.id===3).layout,revision:undefined},{...rect({position_locked:true}),revision:undefined});
-    if(result==='group'){assert.deepEqual(r.board.groups[0].member_ids,[1,2]);assert.deepEqual(r.board.groups[0].layout,placement);}
-    else {assert.equal(r.board.groups.length,0);for(const n of r.board.notes.filter(n=>n.id!==3))assert.equal(n.layout.position_locked,false);}
+    if(result==='group'){assert.deepEqual(r.board.groups[0].member_ids,[2,1]);assert.deepEqual(r.board.groups[0].layout,placement);}
+    else {assert.equal(r.board.groups.length,0);for(const [index,id] of [2,1].entries())assert.deepEqual({...r.board.notes.find(n=>n.id===id).layout,revision:undefined},{...placements[index],revision:undefined});}
     assert.deepEqual(d.prepare('SELECT note_id,revision FROM note_board_note_layouts WHERE owner_key=\'human:1\' ORDER BY note_id').all(),[{note_id:1,revision:2},{note_id:2,revision:1},{note_id:3,revision:1}],'membership and geometry share exactly one revision increment');
   }finally{d.close();}
 });
 test('atomic selected extraction onto pinned target and empty source removal',()=>{
   const {d,group,pin}=fixture(4);try{
     pin(4);const id=group([1,2,3]);const r=apply(d,1,command(d,'create',{source_group_id:id,selected_ids:[3,1,2],target_note_id:4},[1,2,3,4],[id]));
-    assert.equal(r.board.groups.length,1);assert.deepEqual(r.board.groups[0].member_ids,[4,1,2,3]);assert.notEqual(r.board.groups[0].id,id);
+    assert.equal(r.board.groups.length,1);assert.deepEqual(r.board.groups[0].member_ids,[4,3,1,2]);assert.notEqual(r.board.groups[0].id,id);
   }finally{d.close();}
 });
 test('join and transfer normalize memberships once; same-group transfer is a reorder',()=>{
   const {d,group}=fixture(6);try{
     const a=group([1,2]),b=group([3,4]);apply(d,1,command(d,'join',{target_group_id:a,note_ids:[5,6],before_note_id:2},[1,2,5,6],[a]));assert.deepEqual(readGroupMembers(d,'human:1',a),[1,5,6,2]);
-    apply(d,1,command(d,'transfer',{source_group_id:a,target_group_id:b,selected_ids:[2,6,5],before_note_id:4},[1,2,3,4,5,6],[a,b]));assert.deepEqual(readGroupMembers(d,'human:1',b),[3,5,6,2,4]);assert.equal(d.prepare('SELECT revision FROM note_board_groups WHERE owner_key=\'human:1\' AND id=?').get(b).revision,2);assert.equal(d.prepare('SELECT id FROM note_board_groups WHERE owner_key=\'human:1\' AND id=?').get(a),undefined);
-    apply(d,1,command(d,'transfer',{source_group_id:b,target_group_id:b,selected_ids:[4],before_note_id:3},[2,3,4,5,6],[b]));assert.deepEqual(readGroupMembers(d,'human:1',b),[4,3,5,6,2]);
+    apply(d,1,command(d,'transfer',{source_group_id:a,target_group_id:b,selected_ids:[2,6,5],before_note_id:4},[1,2,3,4,5,6],[a,b]));assert.deepEqual(readGroupMembers(d,'human:1',b),[3,2,6,5,4]);assert.equal(d.prepare('SELECT revision FROM note_board_groups WHERE owner_key=\'human:1\' AND id=?').get(b).revision,2);assert.equal(d.prepare('SELECT id FROM note_board_groups WHERE owner_key=\'human:1\' AND id=?').get(a),undefined);
+    apply(d,1,command(d,'transfer',{source_group_id:b,target_group_id:b,selected_ids:[4,6],before_note_id:3},[2,3,4,5,6],[b]));assert.deepEqual(readGroupMembers(d,'human:1',b),[4,6,3,2,5]);
   }finally{d.close();}
 });
 test('source lock, unpinned target and group member legacy writes reject atomically',()=>{
@@ -134,8 +139,11 @@ test('recovery switch blocks new commands, replay and undo but allows ordinary c
 for(const kind of ['transfer','extract','create'])test(`undo ${kind} restores exact order and anchor with newer surviving/recreated revisions`,()=>{
   const {d,group,pin}=fixture(6);try{
     const a=group([1,2,3]),b=group([4,5]);pin(6);
-    const fields=kind==='transfer'?{source_group_id:a,target_group_id:b,selected_ids:[1,2],before_note_id:5}:kind==='extract'?{source_group_id:a,selected_ids:[1,2],result:'group',placements:[rect({x:70,y:80})]}:{source_group_id:a,selected_ids:[1,2],target_note_id:6};
-    const ns=kind==='transfer'?[1,2,3,4,5]:kind==='create'?[1,2,3,6]:[1,2,3],gs=kind==='transfer'?[a,b]:[a],c=command(d,kind,fields,ns,gs);apply(d,1,c);
+    const fields=kind==='transfer'?{source_group_id:a,target_group_id:b,selected_ids:[2,1],before_note_id:5}:kind==='extract'?{source_group_id:a,selected_ids:[2,1],result:'group',placements:[rect({x:70,y:80})]}:{source_group_id:a,selected_ids:[2,1],target_note_id:6};
+    const ns=kind==='transfer'?[1,2,3,4,5]:kind==='create'?[1,2,3,6]:[1,2,3],gs=kind==='transfer'?[a,b]:[a],c=command(d,kind,fields,ns,gs),applied=apply(d,1,c);
+    assert.deepEqual(applied.board.groups.find(g=>g.member_ids.includes(2)).member_ids,kind==='transfer'?[4,2,1,5]:kind==='extract'?[2,1]:[6,2,1]);
+    const snapshot=state(d);assert.equal(apply(d,1,c).replayed,true);assert.deepEqual(state(d),snapshot);
+    rejects(d,1,{...c,selected_ids:[1,2]},409);
     const result=apply(d,1,command(d,'undo',{undo_operation_id:c.operation_id},[]));assert.deepEqual(readGroupMembers(d,'human:1',a),[1,2,3]);assert.deepEqual(readGroupMembers(d,'human:1',b),[4,5]);assert.equal(result.board.groups.length,2);assert.ok(result.board.groups.find(g=>g.id===a).revision>1);assert.deepEqual(result.board.groups.find(g=>g.id===a).layout,rect({position_locked:true}));
     const before=state(d);rejects(d,1,command(d,'undo',{undo_operation_id:c.operation_id},[]),409);assert.deepEqual(state(d),before);
   }finally{d.close();}
@@ -180,6 +188,31 @@ test('device receipt identity is isolated across credential contexts and device 
     const p=devicePrincipal(d.prepare('SELECT * FROM household_devices WHERE id=99').get()),req=context=>({devicePrincipal:p,headers:{cookie:'vidamia.device=synthetic-context-token','x-auth-context':context}}),id=group([1,2],rect({position_locked:true}),p),c=command(d,'reorder',{group_id:id,selected_ids:[2],before_note_id:1},[1,2],[id],undefined,p);apply(d,req('a'),c);
     d.exec("UPDATE device_credentials SET context_key='b' WHERE id=7");rejects(d,req('b'),c,409);
     d.exec("UPDATE device_credentials SET context_key='a' WHERE id=7; UPDATE household_devices SET revision=revision+1 WHERE id=99");rejects(d,req('a'),c,409);
+  }finally{d.close();}
+});
+
+for(const kind of ['reorder','transfer'])test(`${kind} changes a contiguous block when click order differs and rejects retry order changes`,()=>{
+  const {d,group}=fixture(4);try{
+    const id=group([1,2,3,4]),scope=kind==='reorder'?{group_id:id}:{source_group_id:id,target_group_id:id};
+    const c=command(d,kind,{...scope,selected_ids:[2,1],before_note_id:3},[1,2,3,4],[id]);
+    const result=apply(d,1,c);assert.deepEqual(result.board.groups[0].member_ids,[2,1,3,4]);assert.equal(result.board.groups[0].revision,2);assert.equal(result.undo_available,true);
+    const snapshot=state(d);assert.equal(apply(d,1,c).replayed,true);assert.deepEqual(state(d),snapshot);
+    rejects(d,1,{...c,selected_ids:[1,2]},409);
+    const undo=command(d,'undo',{undo_operation_id:c.operation_id},[]);apply(d,1,undo);assert.deepEqual(readGroupMembers(d,'human:1',id),[1,2,3,4]);
+    const undone=state(d);assert.equal(apply(d,1,undo).replayed,true);assert.deepEqual(state(d),undone);
+  }finally{d.close();}
+});
+
+test('individual extraction binds placements to click order across retry and Undo',()=>{
+  const {d,group}=fixture(4);try{
+    const id=group([1,2,3,4]),placements=[rect({x:120,y:30}),rect({x:20,y:230})];
+    const c=command(d,'extract',{source_group_id:id,selected_ids:[4,2],result:'individual',placements},[1,2,3,4],[id]);
+    const result=apply(d,1,c);assert.deepEqual(readGroupMembers(d,'human:1',id),[1,3]);
+    for(const [index,noteId] of [4,2].entries())assert.deepEqual({...result.board.notes.find(n=>n.id===noteId).layout,revision:undefined},{...placements[index],revision:undefined});
+    const snapshot=state(d);assert.equal(apply(d,1,c).replayed,true);assert.deepEqual(state(d),snapshot);
+    rejects(d,1,{...c,selected_ids:[2,4]},409);
+    const undo=command(d,'undo',{undo_operation_id:c.operation_id},[]);apply(d,1,undo);assert.deepEqual(readGroupMembers(d,'human:1',id),[1,2,3,4]);
+    const undone=state(d);assert.equal(apply(d,1,undo).replayed,true);assert.deepEqual(state(d),undone);
   }finally{d.close();}
 });
 

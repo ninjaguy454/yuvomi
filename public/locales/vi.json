@@ -1433,7 +1433,7 @@
             "selectedCount": "Đã chọn {{count}}",
             "selectionMode": "Chọn ghi chú",
             "actions": "Thao tác",
-            "exitDrag": "Thoát",
+            "exitDrag": "Giữ ở đây để lấy ra",
             "exitDwell": "1 giây",
             "dragCount": "{{count}} ghi chú",
             "placeCount": "Đặt {{count}} ghi chú",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Thêm vào đầu",
+            "addEnd": "Thêm vào cuối",
+            "selectionPosition": "Lựa chọn {{position}}"
         },
         "groupPages": "Các trang nhóm",
         "groupPrevious": "Ghi chú trước",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Bảng ghi chú",
+        "title": "Ghi chú",
         "newNote": "Ghi chú mới",
         "editNote": "Sửa ghi chú",
         "viewNote": "Ghi chú",

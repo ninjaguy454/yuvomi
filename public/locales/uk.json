@@ -1433,7 +1433,7 @@
             "selectedCount": "Вибрано: {{count}}",
             "selectionMode": "Вибрати нотатки",
             "actions": "Дії",
-            "exitDrag": "Вихід",
+            "exitDrag": "Утримуйте тут, щоб витягти",
             "exitDwell": "1 с",
             "dragCount": "Нотаток: {{count}}",
             "placeCount": "Розмістити нотатки: {{count}}",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Додати на початок",
+            "addEnd": "Додати в кінець",
+            "selectionPosition": "Вибір {{position}}"
         },
         "groupPages": "Сторінки групи",
         "groupPrevious": "Попередня нотатка",

@@ -1445,7 +1445,7 @@
             "selectedCount": "{{count}} ausgewählt",
             "selectionMode": "Notizen auswählen",
             "actions": "Aktionen",
-            "exitDrag": "Verlassen",
+            "exitDrag": "Hier halten zum Entfernen",
             "exitDwell": "1 s",
             "dragCount": "{{count}} Notizen",
             "placeCount": "{{count}} Notizen platzieren",
@@ -1468,7 +1468,10 @@
             "individual": "Einzelne Notizen",
             "horizontal": "Horizontale Position",
             "vertical": "Vertikale Position",
-            "noPlacement": "Hier ist kein Platz. Andere Position wählen oder Liste nutzen."
+            "noPlacement": "Hier ist kein Platz. Andere Position wählen oder Liste nutzen.",
+            "addBeginning": "Am Anfang hinzufügen",
+            "addEnd": "Am Ende hinzufügen",
+            "selectionPosition": "Auswahl {{position}}"
         },
         "groupPages": "Gruppenseiten",
         "groupPrevious": "Vorherige Notiz",

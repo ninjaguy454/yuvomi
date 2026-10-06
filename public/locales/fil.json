@@ -1445,7 +1445,7 @@
             "selectedCount": "{{count}} ang napili",
             "selectionMode": "Pumili ng mga tala",
             "actions": "Mga aksyon",
-            "exitDrag": "Lumabas",
+            "exitDrag": "I-hold dito para alisin",
             "exitDwell": "1 s",
             "dragCount": "{{count}} tala",
             "placeCount": "Ilagay ang {{count}} tala",
@@ -1468,7 +1468,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Idagdag sa simula",
+            "addEnd": "Idagdag sa dulo",
+            "selectionPosition": "Pinili {{position}}"
         },
         "groupPages": "Mga pahina ng grupo",
         "groupPrevious": "Nakaraang tala",
@@ -1526,7 +1529,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Board",
+        "title": "Mga tala",
         "newNote": "Bagong Tala",
         "editNote": "I-edit ang Tala",
         "viewNote": "Tala",

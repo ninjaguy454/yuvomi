@@ -140,7 +140,9 @@ async function assertProxy(page, ids) {
   });
   assert.deepEqual(proxy.ids, ids); assert.match(proxy.text, new RegExp(String(ids.length)));
   assert.equal(proxy.hiddenFromAT, 'true'); assert.equal(proxy.pointerEvents, 'none');
-  assert.ok(proxy.opacity > 0 && proxy.visibility === 'visible' && proxy.width > 0 && proxy.height > 0 && proxy.left >= 0 && proxy.right <= proxy.viewportWidth + 1 && proxy.top >= 0 && proxy.bottom <= proxy.viewportHeight + 1, JSON.stringify(proxy));
+  // A full-size card retains its grabbed offset while crossing an edge; it
+  // remains visible without shrinking or jumping to fit entirely on screen.
+  assert.ok(proxy.opacity > 0 && proxy.visibility === 'visible' && proxy.width > 0 && proxy.height > 0 && proxy.right > 0 && proxy.left < proxy.viewportWidth && proxy.bottom > 0 && proxy.top < proxy.viewportHeight, JSON.stringify(proxy));
 }
 async function contrast(page, selector) {
   return page.$eval(selector, element => {
@@ -198,9 +200,9 @@ test('scene2 puts structural actions in a secondary menu and preserves the exact
     await page.select('[data-group-before]', '4'); await page.click('[data-group-confirm]');
     await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
     assert.equal(writes.length, 1); const command = writes[0].body;
-    assert.equal(command.kind, 'reorder'); assert.deepEqual(command.selected_ids, [2,5,7,9]); assert.equal(command.before_note_id, 4);
+    assert.equal(command.kind, 'reorder'); assert.deepEqual(command.selected_ids, [9,2,7,5]); assert.equal(command.before_note_id, 4);
     const ordered = [1,3,4,6,8,10]; ordered.splice(ordered.indexOf(command.before_note_id), 0, ...command.selected_ids);
-    assert.deepEqual(ordered, [1,3,2,5,7,9,4,6,8,10]);
+    assert.deepEqual(ordered, [1,3,9,2,7,5,4,6,8,10]);
   } finally { await page.close(); }
 });
 
@@ -225,6 +227,7 @@ test('scene2/3 dark selected controls and moving-block labels retain readable co
     await move(page, await margin(page, 'top')); await page.waitForFunction(() => document.querySelector('.note-group-overview')?.dataset.gestureState === 'exit-dwell');
     samples.push({ name: 'active exit cue', minimum: 4.5, ...await contrast(page, '[data-group-exit]') });
     await page.keyboard.press('Escape'); await page.mouse.up();
+    await page.keyboard.press('Escape'); // The first Escape cancels the drag; the second closes the overview.
     await page.click(`${group} [data-group-page="overview"]`); await page.waitForSelector(overview);
     await select(page, [2,5]); await action(page, 'remove');
     samples.push({ name: 'selected result choice', minimum: 4.5, ...await contrast(page, '.note-group-overview__choices label:has(:checked)') });
@@ -267,9 +270,9 @@ test('scene3 a gap inside the page grid remains a reorder target instead of an e
 test('scene3 selected block proxy remains visible after exit and Cancel restores selection without writes', async () => {
   const page = await mount({ width: 752, height: 835, theme: 'dark' }); try {
     await select(page, [9,2,7,5]); const pointer = await hold(page);
-    assert.equal(await visible(page, '[data-group-drag-proxy]'), 1); await assertProxy(page, [2,5,7,9]);
+    assert.equal(await visible(page, '[data-group-drag-proxy]'), 1); await assertProxy(page, [9,2,7,5]);
     await exitToCanvas(page, { capture: true });
-    assert.equal(await visible(page, '[data-group-drag-proxy]'), 1); await assertProxy(page, [2,5,7,9]); await screenshot(page, '752-dark-after-exit-proxy');
+    assert.equal(await visible(page, '[data-group-drag-proxy]'), 1); await assertProxy(page, [9,2,7,5]); await screenshot(page, '752-dark-after-exit-proxy');
     assert.equal(await page.$eval('[data-group-drag-proxy]', element => getComputedStyle(element).pointerEvents), 'none');
     assert.equal(await page.evaluate(pointer => document.querySelector('.notes-page').hasPointerCapture(pointer), pointer), true);
     await move(page, await dropPoint(page)); await page.mouse.up();
@@ -301,7 +304,7 @@ for (const result of ['group', 'individual']) test(`scene3 compact ${result} cho
     await assertControlsInside(page, '[data-group-confirm],[data-group-cancel]');
     await page.click('[data-group-confirm]'); await page.waitForFunction(() => !document.querySelector('.note-group-overview'));
     assert.equal(writes.length, 1); assert.equal(writes[0].body.kind, 'extract'); assert.equal(writes[0].body.result, result);
-    assert.deepEqual(writes[0].body.selected_ids, [2,5]); assert.deepEqual(writes[0].body.placements, preview);
+    assert.deepEqual(writes[0].body.selected_ids, [5,2]); assert.deepEqual(writes[0].body.placements, preview);
   } finally { await page.close(); }
 });
 

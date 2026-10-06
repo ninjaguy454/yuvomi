@@ -1445,7 +1445,7 @@
             "selectedCount": "{{count}} dipilih",
             "selectionMode": "Pilih catatan",
             "actions": "Tindakan",
-            "exitDrag": "Keluar",
+            "exitDrag": "Tahan di sini untuk mengeluarkan",
             "exitDwell": "1 dtk",
             "dragCount": "{{count}} catatan",
             "placeCount": "Tempatkan {{count}} catatan",
@@ -1468,7 +1468,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Tambahkan di awal",
+            "addEnd": "Tambahkan di akhir",
+            "selectionPosition": "Pilihan {{position}}"
         },
         "groupPages": "Halaman grup",
         "groupPrevious": "Catatan sebelumnya",

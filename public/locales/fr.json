@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} sélectionnées",
             "selectionMode": "Sélectionner des notes",
             "actions": "Actions",
-            "exitDrag": "Sortir",
+            "exitDrag": "Maintenir ici pour retirer",
             "exitDwell": "1 s",
             "dragCount": "{{count}} notes",
             "placeCount": "Placer {{count}} notes",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Ajouter au début",
+            "addEnd": "Ajouter à la fin",
+            "selectionPosition": "Sélection {{position}}"
         },
         "groupPages": "Pages du groupe",
         "groupPrevious": "Note précédente",

@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} geselecteerd",
             "selectionMode": "Notities selecteren",
             "actions": "Acties",
-            "exitDrag": "Verlaten",
+            "exitDrag": "Houd hier vast om te verwijderen",
             "exitDwell": "1 s",
             "dragCount": "{{count}} notities",
             "placeCount": "{{count}} notities plaatsen",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Aan begin toevoegen",
+            "addEnd": "Aan einde toevoegen",
+            "selectionPosition": "Selectie {{position}}"
         },
         "groupPages": "Groepspagina’s",
         "groupPrevious": "Vorige notitie",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Bord",
+        "title": "Notities",
         "newNote": "Nieuwe notitie",
         "editNote": "Notitie bewerken",
         "viewNote": "Notitie",

@@ -1,6 +1,7 @@
 import { t } from '../i18n.js';
 import { createNoteGroupDraft, freezeNoteGroupCommand, orderedSelection, moveSelectionBefore, newNoteGroupOperationId } from '../utils/note-group-draft.js';
 import { createNoteGroupGesture } from '../utils/note-group-gesture.js';
+import { createNoteDragPreview } from '../utils/note-drag-motion.js';
 import { normalizeNoteLayout, organizeNoteLayouts, NOTE_MAX_POSITION } from '../utils/note-board-layout.js';
 import { pushOverlay, dropOverlay } from '../utils/overlay-history.js';
 import { renderMarkdownLight } from '../utils/html.js';
@@ -11,16 +12,18 @@ const noteAllows=(note,action)=>noteItemAllows({kind:'note',note,can_manage:note
 
 const text = (key, fallback, values) => { const value = t(`notes.groups.${key}`, values); return value === `notes.groups.${key}` ? fallback : value; };
 const overlaps = (a, b) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-function previewText(content) {
-  const template = document.createElement('template'); template.innerHTML = renderMarkdownLight(content);
+function previewContent(content) {
+  const container = document.createElement('div'); container.insertAdjacentHTML('beforeend', renderMarkdownLight(content));
   // Preview-only underscore emphasis; identifiers and literal code stay intact.
-  const nodes = document.createTreeWalker(template.content, NodeFilter.SHOW_TEXT);
+  const nodes = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
   for (let node = nodes.nextNode(); node; node = nodes.nextNode()) {
     if (!node.parentElement?.closest('code')) node.textContent = node.textContent.replace(/(^|[^\p{L}\p{N}_])(__?)(?=\S)([^_\n]*?\S)\2(?=$|[^\p{L}\p{N}_])/gu, '$1$3');
   }
-  template.content.querySelectorAll('br').forEach(element => element.replaceWith('\n'));
-  template.content.querySelectorAll('p,li,blockquote,div').forEach(element => element.append('\n'));
-  return template.content.textContent.trim();
+  // The whole preview is an activation control. Keep formatting, but avoid
+  // nested interactive links and live checklist controls in this browse view.
+  container.querySelectorAll('a').forEach(element => { const span = document.createElement('span'); span.append(...element.childNodes); element.replaceWith(span); });
+  container.querySelectorAll('input').forEach(element => { element.disabled = true; element.tabIndex = -1; });
+  return [...container.childNodes];
 }
 
 /** Compact grid packing near an explicit anchor. Failure keeps the placement draft local. */
@@ -70,9 +73,10 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   const restoreFocus = document.activeElement, subscriptions = [];
   let closed = false, busy = false, suppressClick = false, dragging = false, canvasDrag = false;
   let currentGroup = source, placement = null, action = null, lastPoint = null, scrollFrame = 0, overlayToken;
-  let activePointer = null, highlightedTarget = null, proxy = null, footer = null;
+  let activePointer = null, highlightedTarget = null, proxy = null, footer = null, dragAnchor = null, nativeSource = null;
   let selectionMode = selected.size > 0, placing = false;
   const overlay = document.createElement('div'); overlay.className = 'note-group-overview';
+  const stage = document.createElement('div'); stage.className = 'note-group-overview__stage';
   const dialog = document.createElement('section'); dialog.className = 'note-group-overview__panel';
   dialog.setAttribute('role', 'dialog'); dialog.setAttribute('aria-modal', 'true'); dialog.setAttribute('aria-label', text('overview', 'Group overview')); dialog.tabIndex = -1;
   const header = document.createElement('header'); header.className = 'note-group-overview__header';
@@ -86,14 +90,13 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   if (manageable && !dragPreview && !standaloneIds.length) header.append(count, mode, menu);
   header.append(closeButton);
   const exit = document.createElement('div'); exit.className = 'note-group-overview__exit'; exit.dataset.groupExit = '';
-  const exitLabel = document.createElement('span'), exitTime = document.createElement('span');
-  exitLabel.textContent = text('exitDrag', 'Exit'); exitTime.textContent = text('exitDwell', '1 s'); exit.append(exitLabel, exitTime); exit.hidden = true;
+  exit.textContent = text('exitDrag', 'Hold here to remove'); exit.hidden = true;
   const toolbar = document.createElement('div'); toolbar.className = 'note-group-overview__toolbar';
   menu.append(toolbar);
   const grid = document.createElement('div'); grid.className = 'note-group-overview__grid';
   const tools = document.createElement('div'); tools.className = 'note-group-overview__tools';
   const status = document.createElement('div'); status.className = 'note-group-overview__status'; status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  dialog.append(header, grid, tools, status); overlay.append(dialog, exit); document.body.append(overlay);
+  dialog.append(header, grid, tools, status); stage.append(dialog, exit); overlay.append(stage); document.body.append(overlay);
   const draft = createNoteGroupDraft(snapshot, newNoteGroupOperationId());
 
   function button(label, data = {}, ariaLabel) {
@@ -108,7 +111,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     if (authentication.signal?.aborted || authentication.isCurrent?.() === false) { dispose(); return false; }
     return true;
   }
-  function selection() { return source.member_ids.filter(id => selected.has(id)); }
+  function selection() { return [...selected]; }
   function announce(message) { status.textContent = message; }
   function updateHeader() {
     title.textContent = placing ? text('placeCount', `Place ${selected.size} notes`, { count: selected.size }) : text('overviewTitle', 'Notes');
@@ -119,14 +122,13 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     menu.style.visibility = selected.size ? '' : 'hidden'; menu.inert = !selected.size;
     if (placing || !selected.size) menu.open = false;
   }
-  function clearProxy() { proxy?.remove(); proxy = null; }
+  function clearProxy() { proxy?.dispose(); proxy = null; nativeSource?.classList.remove('note-card--drag-source'); nativeSource = null; }
   function paintProxy(session) {
-    if (!proxy) { proxy = document.createElement('div'); proxy.className = 'note-group-drag-proxy'; proxy.dataset.groupDragProxy = ''; proxy.setAttribute('aria-hidden', 'true'); document.body.append(proxy); }
-    proxy.dataset.selectedIds = JSON.stringify(session.selected_ids);
-    proxy.textContent = session.selected_ids.length === 1 ? noteById.get(session.selected_ids[0])?.title || text('untitled', 'Untitled note') : text('dragCount', `${session.selected_ids.length} notes`, { count: session.selected_ids.length });
-    const rect = proxy.getBoundingClientRect();
-    proxy.style.left = `${Math.max(8, Math.min(innerWidth - rect.width - 8, session.clientX + 18))}px`;
-    proxy.style.top = `${Math.max(8, Math.min(innerHeight - rect.height - 8, session.clientY - rect.height - 20))}px`;
+    if (!proxy) {
+      const cards = session.selected_ids.map(id => grid.querySelector(`[data-group-page="${id}"]`)).filter(Boolean);
+      proxy = createNoteDragPreview(cards, { ...session, selectedIds: session.selected_ids, anchor: dragAnchor || cards[0] });
+    }
+    proxy?.move(session);
   }
   function stopScroll() { if (scrollFrame) cancelAnimationFrame(scrollFrame); scrollFrame = 0; }
   function highlightTarget(id) {
@@ -138,19 +140,30 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     highlightedTarget?.classList.add('is-note-group-target');
   }
   function renderPages() {
-    grid.replaceChildren();
+    if (dragging && dragAnchor?.parentElement === grid) {
+      // Chrome keeps native touch events on their original target even after
+      // pointer capture. Retain that connected subtree through destination
+      // switches so touchmove can still prevent native scrolling mid-drag.
+      for (const child of [...grid.children]) if (child !== dragAnchor) child.remove();
+      dragAnchor.hidden = true; dragAnchor.inert = true;
+      for (const node of [dragAnchor, ...dragAnchor.querySelectorAll('[data-group-activate],[data-group-select]')]) {
+        for (const name of ['data-group-page', 'data-group-activate', 'data-group-select']) node.removeAttribute(name);
+      }
+    } else grid.replaceChildren();
     for (const id of currentGroup.member_ids.filter(id => noteById.has(id))) {
       const note = noteById.get(id), card = document.createElement('article');
-      card.className = 'note-group-overview__page'; card.dataset.groupPage = String(id); card.classList.toggle('is-selected', selected.has(id));
+      card.className = 'note-card note-group-overview__page'; card.dataset.groupPage = String(id); card.classList.toggle('is-selected', selected.has(id));
       if (typeof note.color === 'string' && CSS.supports('color', note.color)) card.style.setProperty('--note-color', note.color);
-      const activate = button('', { groupActivate: String(id) }); activate.className = 'note-group-overview__activate';
+      const activate = button('', { groupActivate: String(id) }); activate.className = 'note-card__surface note-group-overview__activate';
       activate.setAttribute('aria-label', note.title?.trim() || text('untitled', 'Untitled note'));
       if (id === activeId && currentGroup.id === source.id) activate.setAttribute('aria-current', 'page');
-      const heading = document.createElement('strong'); heading.textContent = note.title?.trim() || text('untitled', 'Untitled note');
-      const preview = document.createElement('span'); preview.className = 'note-group-overview__excerpt'; preview.textContent = previewText(note.content);
+      const heading = document.createElement('strong'); heading.className = 'note-card__title'; heading.textContent = note.title?.trim() || text('untitled', 'Untitled note');
+      const preview = document.createElement('span'); preview.className = 'note-card__content note-group-overview__excerpt'; preview.replaceChildren(...previewContent(note.content));
       activate.append(heading, preview); card.append(activate);
       if (manageable && currentGroup.id === source.id && !dragPreview) {
-        const toggle = button(selected.has(id) ? '✓' : '○', { groupSelect: String(id) }, text('selectNote', `Select ${note.title || id}`, { title: note.title || String(id) }));
+        const toggle = button('', { groupSelect: String(id) }, text('selectNote', `Select ${note.title || id}`, { title: note.title || String(id) }));
+        toggle.textContent = selected.has(id) ? String(selection().indexOf(id) + 1) : '';
+        if (selected.has(id)) toggle.setAttribute('aria-description', text('selectionPosition', `Selection ${selection().indexOf(id) + 1}`, { position: selection().indexOf(id) + 1 }));
         toggle.className = 'note-group-overview__select'; toggle.hidden = !selectionMode; toggle.setAttribute('aria-pressed', String(selected.has(id))); card.append(toggle);
       }
       grid.append(card);
@@ -177,10 +190,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   function field(labelText, control, parent = tools) { const label = document.createElement('label'); label.textContent = labelText; label.append(control); parent.append(label); return control; }
   function insertionControl(targetGroup, selectionIds) {
     const control = document.createElement('select'); control.dataset.groupBefore = '';
-    for (const id of targetGroup.member_ids.filter(id => noteById.has(id) && !selectionIds.includes(id))) {
-      const option = document.createElement('option'); option.value = String(id); option.textContent = text('beforeNote', `Before ${noteById.get(id).title || id}`, { title: noteById.get(id).title || String(id) }); control.append(option);
+    const remaining = targetGroup.member_ids.filter(id => noteById.has(id) && !selectionIds.includes(id));
+    for (const id of action === 'join' ? remaining.slice(0, 1) : remaining) {
+      const option = document.createElement('option'); option.value = String(id); option.textContent = action === 'join' ? text('addBeginning', 'Add to beginning') : text('beforeNote', `Before ${noteById.get(id).title || id}`, { title: noteById.get(id).title || String(id) }); control.append(option);
     }
-    const append = document.createElement('option'); append.value = ''; append.textContent = text('last', 'Last'); control.append(append);
+    const append = document.createElement('option'); append.value = ''; append.textContent = action === 'join' ? text('addEnd', 'Add to end') : text('last', 'Last'); control.append(append);
     return field(text('position', 'Position'), control);
   }
   function confirmControls(label = text('place', 'Place')) {
@@ -199,7 +213,8 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const destination = document.createElement('select'); destination.dataset.groupDestination = '';
     for (const item of snapshot.groups.filter(item => groupAllows(item,'group') && item.id !== source.id)) {
       const option = document.createElement('option'); option.value = String(item.id);
-      option.textContent = item.member_ids.map(id => noteById.get(id)?.title).filter(Boolean).join(' · '); destination.append(option);
+      const label = noteById.get(item.member_ids[0])?.title?.trim() || text('untitled', 'Untitled note');
+      option.textContent = `${label.length > 60 ? `${label.slice(0, 59)}…` : label} · ${text('dragCount', `${item.member_ids.length} notes`, { count: item.member_ids.length })}`; destination.append(option);
       destinations.set(option.value, { kind: 'group', ...item });
     }
     const grouped = new Set(snapshot.groups.flatMap(item => item.member_ids));
@@ -300,7 +315,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       if (card) return { kind: 'overview', group_id: currentGroup.id, before_note_id: Number(card.dataset.groupPage), valid };
       if (grid.contains(element)) return { kind: 'overview', group_id: currentGroup.id, before_note_id: null, valid };
       if (element.closest('button,input,select,summary,a')) return null;
-      if (dragging && (element === overlay || element.closest('[data-group-exit]') || session.clientY < grid.getBoundingClientRect().top)) return { kind: 'exit' };
+      if (dragging && (element === overlay || element === stage || element.closest('[data-group-exit]') || session.clientY < grid.getBoundingClientRect().top)) return { kind: 'exit' };
       return null;
     }
     if (canvasHitTest) {const target=canvasHitTest(session);return target?{...target,valid:target.valid&&allows('ungroup')&&(target.kind==='canvas'||allows('group'))}:null;}
@@ -317,7 +332,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         const checked = selected.has(Number(card.dataset.groupPage));
         card.classList.toggle('is-selected', checked);
         const toggle = card.querySelector('[data-group-select]');
-        if (toggle) { toggle.hidden = false; toggle.setAttribute('aria-pressed', String(checked)); toggle.textContent = checked ? '\u2713' : '\u25cb'; }
+        if (toggle) {
+          const position = selection().indexOf(Number(card.dataset.groupPage)) + 1;
+          toggle.hidden = false; toggle.setAttribute('aria-pressed', String(checked)); toggle.textContent = checked ? String(position) : '';
+          if (checked) toggle.setAttribute('aria-description', text('selectionPosition', `Selection ${position}`, { position })); else toggle.removeAttribute('aria-description');
+        }
       });
       toolbar.querySelectorAll('button').forEach(control => { control.disabled = !selected.size || busy; });
       updateHeader();
@@ -339,12 +358,12 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     lastPoint = { x: session.clientX, y: session.clientY }; if (scrollFrame) return;
     const step = () => {
       scrollFrame = 0;
-      if (closed || !dragging) return;
+      if (closed || (!dragging && !dragPreview)) return;
       const scroller = overlay.hidden ? host.querySelector('.notes-scroll') : grid;
       if (!scroller) return;
       const bounds = scroller.getBoundingClientRect(), edge = 36, speed = 12;
       const delta = (value, start, end) => value < start + edge ? -speed : value > end - edge ? speed : 0;
-      scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth, scroller.scrollLeft + delta(lastPoint.x, Math.max(0, bounds.left), Math.min(innerWidth, bounds.right))));
+      if (overlay.hidden) scroller.scrollLeft = Math.max(0, Math.min(scroller.scrollWidth - scroller.clientWidth, scroller.scrollLeft + delta(lastPoint.x, Math.max(0, bounds.left), Math.min(innerWidth, bounds.right))));
       scroller.scrollTop = Math.max(0, Math.min(scroller.scrollHeight - scroller.clientHeight, scroller.scrollTop + delta(lastPoint.y, Math.max(0, bounds.top), Math.min(innerHeight, bounds.bottom))));
       scrollFrame = requestAnimationFrame(step);
     };
@@ -368,7 +387,19 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         ? { group_id: source.id, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null }
         : { source_group_id: source.id, target_group_id: targetId, selected_ids: session.selected_ids, before_note_id: target.before_note_id ?? null });
     },
-    onCancel() { activePointer = null; dragging = false; canvasDrag = false; exit.hidden = true; clearProxy(); stopScroll(); highlightTarget(null); if (!closed) { overlay.dataset.gestureState = 'idle'; currentGroup = source; overlay.hidden = false; renderPages(); } },
+    onCancel() {
+      suppressClick = true; activePointer = null; dragging = false; canvasDrag = false; exit.hidden = true; clearProxy(); stopScroll(); highlightTarget(null);
+      if (!closed) {
+        overlay.dataset.gestureState = 'idle'; overlay.hidden = false;
+        if (currentGroup.id !== source.id) { currentGroup = source; renderPages(); }
+        else {
+          // A pre-hold swipe belongs to the original scrollable body. Keep its
+          // DOM target and scroll offset alive when pointer arbitration yields.
+          grid.querySelectorAll('.is-placeholder').forEach(card => card.classList.remove('is-placeholder'));
+          updateHeader();
+        }
+      }
+    },
   });
   function pointerDown(event) {
     if (!current() || busy || dragPreview || standaloneIds.length) return;
@@ -382,6 +413,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     // Keep the pressed DOM target alive until the browser has dispatched its
     // click; a short tap must still activate this page.
     const dragIds = selected.has(id) ? selection() : [id];
+    dragAnchor = activate.closest('[data-group-page]');
     let expected;
     try { expected = freezeNoteGroupCommand(draft, 'reorder', { group_id: source.id, selected_ids: dragIds, before_note_id: null }).expected; }
     catch (error) { announce(error.message); return; }
@@ -415,7 +447,8 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       // The board remains the owner of a native drag and must receive Escape
       // after its destination preview closes.
       if (!dragPreview) event.stopPropagation();
-      if (menu.open) { menu.open = false; menuToggle.focus(); }
+      if (activePointer != null) { suppressClick = true; gesture.pointerCancel('escape'); closeButton.focus(); }
+      else if (menu.open) { menu.open = false; menuToggle.focus(); }
       else if (action) { clearTools(); closeButton.focus(); } else close();
       return;
     }
@@ -443,7 +476,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     return current() && !overlay.hidden && dialog.contains(document.elementFromPoint(clientX, clientY));
   }
   listen(window, 'pointerdown', pointerDown, true);
-  listen(window, 'pointermove', event => { if (current()) gesture.pointerMove(event); }, { passive: false });
+  listen(window, 'pointermove', event => {
+    if (!current()) return;
+    if (dragPreview && event.pointerId === dragPreview.pointerId) { proxy?.move(event); startScroll(event); }
+    else gesture.pointerMove(event);
+  }, { passive: false });
   listen(window, 'pointerup', event => { if (gesture.pointerUp(event)) suppressClick = true; if (activePointer === event.pointerId) activePointer = null; }, true);
   listen(window, 'pointercancel', event => gesture.pointerCancel(event));
   listen(host, 'lostpointercapture', event => gesture.pointerCancel(event));
@@ -466,6 +503,13 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
   if (authentication.signal) listen(authentication.signal, 'abort', dispose, { once: true });
   overlayToken = pushOverlay(() => { close(); return true; });
   renderPages(); closeButton.focus({ preventScroll: true });
+  if (dragPreview) {
+    nativeSource = [...host.querySelectorAll('[data-board-key]')].find(card => card.dataset.boardKey === dragPreview.item.key);
+    const ids = dragPreview.item.kind === 'group' ? snapshot.groups.find(item => item.id === dragPreview.item.id)?.member_ids || [] : [dragPreview.item.id];
+    proxy = createNoteDragPreview(nativeSource ? [nativeSource] : [], { ...dragPreview, selectedIds: ids, anchor: nativeSource });
+    if (proxy) nativeSource.classList.add('note-card--drag-source');
+    startScroll(dragPreview);
+  }
   if (current() && manageable) {
     if (initialAction === 'order') orderSelection();
     else if (initialAction === 'move' || initialAction === 'add') moveSelection();
@@ -546,7 +590,7 @@ export function createNoteGroupInteractions({ host, board, onCommand, onActivate
         return;
       }
       const group = snapshot.groups.find(group => group.id === item.id);
-      preview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes, group, activeId: group.member_ids[0], dragPreview: session,
+      preview = openNoteGroupOverview({ host, board: snapshot, notes: snapshot.notes, group, activeId: group.member_ids[0], dragPreview: expectedHover.session,
         authentication, onError, onClose: () => { preview = null; } });
     }, 400);
   }

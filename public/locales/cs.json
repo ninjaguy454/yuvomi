@@ -1433,7 +1433,7 @@
             "selectedCount": "Vybráno: {{count}}",
             "selectionMode": "Vybrat poznámky",
             "actions": "Akce",
-            "exitDrag": "Opustit",
+            "exitDrag": "Podržením zde odeberete",
             "exitDwell": "1 s",
             "dragCount": "{{count}} poznámek",
             "placeCount": "Umístit {{count}} poznámek",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Přidat na začátek",
+            "addEnd": "Přidat na konec",
+            "selectionPosition": "Výběr {{position}}"
         },
         "groupPages": "Stránky skupiny",
         "groupPrevious": "Předchozí poznámka",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Nástěnka",
+        "title": "Poznámky",
         "newNote": "Nová poznámka",
         "editNote": "Upravit poznámku",
         "viewNote": "Poznámka",

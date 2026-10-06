@@ -1445,7 +1445,7 @@
             "selectedCount": "{{count}}개 선택됨",
             "selectionMode": "메모 선택",
             "actions": "작업",
-            "exitDrag": "나가기",
+            "exitDrag": "빼려면 여기를 길게 누르세요",
             "exitDwell": "1초",
             "dragCount": "메모 {{count}}개",
             "placeCount": "메모 {{count}}개 배치",
@@ -1468,7 +1468,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "맨 앞에 추가",
+            "addEnd": "맨 뒤에 추가",
+            "selectionPosition": "선택 {{position}}"
         },
         "groupPages": "그룹 페이지",
         "groupPrevious": "이전 메모",

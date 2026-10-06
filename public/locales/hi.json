@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} चुने गए",
             "selectionMode": "नोट्स चुनें",
             "actions": "कार्रवाइयाँ",
-            "exitDrag": "बाहर निकलें",
+            "exitDrag": "हटाने के लिए यहाँ दबाए रखें",
             "exitDwell": "1 सेकंड",
             "dragCount": "{{count}} नोट्स",
             "placeCount": "{{count}} नोट्स रखें",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "शुरुआत में जोड़ें",
+            "addEnd": "अंत में जोड़ें",
+            "selectionPosition": "चयन {{position}}"
         },
         "groupPages": "समूह के पृष्ठ",
         "groupPrevious": "पिछला नोट",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "नोट बोर्ड",
+        "title": "नोट्स",
         "newNote": "नया नोट",
         "editNote": "नोट संपादित करें",
         "viewNote": "नोट",

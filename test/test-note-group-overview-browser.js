@@ -61,15 +61,15 @@ test('overview presents authorized pages in canonical row-major order with acces
   } finally { await page.close(); }
 });
 
-test('selecting 2/5/7/9 and keyboard order position 3 preserves canonical block order', async () => {
+test('selecting 9/2/7/5 and keyboard order position 3 preserves click order', async () => {
   const page = await mount(); try {
     await select(page, [9,2,7,5]); await actions(page); await page.focus('[data-group-action="order"]'); await page.keyboard.press('Enter');
     await page.select('[data-group-before]', '4'); await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
     const command = await page.evaluate(() => window.commands[0]);
-    assert.equal(command.kind, 'reorder'); assert.deepEqual(command.selected_ids, [2,5,7,9]); assert.equal(command.before_note_id, 4);
+    assert.equal(command.kind, 'reorder'); assert.deepEqual(command.selected_ids, [9,2,7,5]); assert.equal(command.before_note_id, 4);
     const remaining = [1,2,3,4,5,6,7,8,9,10].filter(id => !command.selected_ids.includes(id));
     const at = remaining.indexOf(command.before_note_id); remaining.splice(at, 0, ...command.selected_ids);
-    assert.deepEqual(remaining, [1,3,2,5,7,9,4,6,8,10]); assert.equal(command.expected.notes.length, 10);
+    assert.deepEqual(remaining, [1,3,9,2,7,5,4,6,8,10]); assert.equal(command.expected.notes.length, 10);
   } finally { await page.close(); }
 });
 
@@ -113,7 +113,7 @@ test('keyboard destination and insertion controls create one atomic transfer com
     await select(page, [5,2]); await action(page, 'move');
     await page.select('[data-group-destination]', '20'); await page.select('[data-group-before]', '12'); await page.click('[data-group-confirm]');
     const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
-    assert.equal(commands[0].kind, 'transfer'); assert.deepEqual(commands[0].selected_ids, [2,5]);
+    assert.equal(commands[0].kind, 'transfer'); assert.deepEqual(commands[0].selected_ids, [5,2]);
     assert.equal(commands[0].source_group_id, 10); assert.equal(commands[0].target_group_id, 20); assert.equal(commands[0].before_note_id, 12);
   } finally { await page.close(); }
 });
@@ -129,12 +129,12 @@ test('multiple extraction offers exact bounded preview and Cancel writes nothing
   } finally { await page.close(); }
 });
 
-test('final Place saves exactly previewed unpinned rectangles in canonical selected order', async () => {
+test('final Place saves exactly previewed unpinned rectangles in selection click order', async () => {
   const page = await mount(); try {
     await select(page, [5,2]); await action(page, 'remove'); await page.click('[data-group-extract-choice="individual"]');
     const preview = await page.$$eval('[data-group-placement]', els => els.map(el => JSON.parse(el.dataset.groupPlacement)));
     await page.click('[data-group-confirm]'); const command = await page.evaluate(() => window.commands[0]);
-    assert.equal(command.kind, 'extract'); assert.deepEqual(command.selected_ids, [2,5]); assert.deepEqual(command.placements, preview);
+    assert.equal(command.kind, 'extract'); assert.deepEqual(command.selected_ids, [5,2]); assert.deepEqual(command.placements, preview);
     assert.ok(preview.every(rect => !rect.position_locked && rect.always_on_top && rect.width === 4 && rect.height === 6 && rect.x >= 0 && rect.x <= 10000 && rect.y >= 0 && rect.y <= 10000));
     const [a,b] = preview; assert.ok(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y);
   } finally { await page.close(); }
@@ -154,7 +154,7 @@ for (const result of ['individual', 'group']) test(`bulk ${result} preview prese
     assert.deepEqual(await page.$$eval('[data-group-x],[data-group-y]', fields => fields.map(field => [field.step,field.validity.valid])), [['any',true],['any',true]]);
     assert.equal(await page.evaluate(() => window.commands.length),0);
     await page.click('[data-group-confirm]'); const command=await page.evaluate(() => window.commands[0]);
-    assert.deepEqual(command.placements,preview); assert.deepEqual(command.selected_ids,[2,5]); assert.equal(command.result,result);
+    assert.deepEqual(command.placements,preview); assert.deepEqual(command.selected_ids,[5,2]); assert.equal(command.result,result);
   } finally { await page.close(); }
 });
 
@@ -338,10 +338,10 @@ test('standalone Add to group has a keyboard destination and order equivalent', 
   const page = await mount(); try {
     assert.equal(await prepareInteractions(page), true, 'canvas interaction factory exists');
     await page.evaluate(() => window.interactions.onGroupAction('add', window.nativeSource));
-    await page.select('[data-group-destination]', '20'); await page.select('[data-group-before]', '12');
+    await page.select('[data-group-destination]', '20'); await page.select('[data-group-before]', '11');
     await page.focus('[data-group-confirm]'); await page.keyboard.press('Enter');
     const commands = await page.evaluate(() => window.commands); assert.equal(commands.length, 1);
-    assert.equal(commands[0].kind, 'join'); assert.equal(commands[0].target_group_id, 20); assert.deepEqual(commands[0].note_ids, [13]); assert.equal(commands[0].before_note_id, 12);
+    assert.equal(commands[0].kind, 'join'); assert.equal(commands[0].target_group_id, 20); assert.deepEqual(commands[0].note_ids, [13]); assert.equal(commands[0].before_note_id, 11);
   } finally { await page.close(); }
 });
 

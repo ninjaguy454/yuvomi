@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}}件選択中",
             "selectionMode": "ノートを選択",
             "actions": "操作",
-            "exitDrag": "外に出す",
+            "exitDrag": "ここで長押しして取り出す",
             "exitDwell": "1秒",
             "dragCount": "{{count}}件のノート",
             "placeCount": "{{count}}件のノートを配置",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "先頭に追加",
+            "addEnd": "末尾に追加",
+            "selectionPosition": "選択 {{position}}"
         },
         "groupPages": "グループのページ",
         "groupPrevious": "前のメモ",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "メモボード",
+        "title": "ノート",
         "newNote": "新しいメモ",
         "editNote": "メモを編集",
         "viewNote": "メモ",

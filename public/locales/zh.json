@@ -1433,7 +1433,7 @@
             "selectedCount": "已选择 {{count}} 项",
             "selectionMode": "选择便笺",
             "actions": "操作",
-            "exitDrag": "移出",
+            "exitDrag": "在此按住以移出",
             "exitDwell": "1 秒",
             "dragCount": "{{count}} 张便笺",
             "placeCount": "放置 {{count}} 张便笺",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "添加到开头",
+            "addEnd": "添加到末尾",
+            "selectionPosition": "选择 {{position}}"
         },
         "groupPages": "分组页面",
         "groupPrevious": "上一条笔记",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "便签板",
+        "title": "便笺",
         "newNote": "新建便签",
         "editNote": "编辑便签",
         "viewNote": "笔记",

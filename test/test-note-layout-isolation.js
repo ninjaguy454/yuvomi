@@ -156,15 +156,15 @@ test('join, transfer and both extractions preserve other memberships and indepen
       const second=local('create',{source_note_id:6,target_note_id:8}).groups.find(group=>group.id!==71);
       assert.deepEqual(second.member_ids,[8,6]);
       local('transfer',{source_group_id:71,target_group_id:second.id,selected_ids:[5,4],before_note_id:6});
-      assert.deepEqual(board(d,actor).groups.find(group=>group.id===second.id).member_ids,[8,4,5,6]);
+      assert.deepEqual(board(d,actor).groups.find(group=>group.id===second.id).member_ids,[8,5,4,6]);
       const extracted=local('extract',{source_group_id:71,selected_ids:[2,1],result:'group',placements:[rectangle({x:123.125,y:234.375,always_on_top:true})]});
       assert.ok(!extracted.groups.some(group=>group.id===71));
-      assert.deepEqual(extracted.groups.find(group=>group.id!==second.id).member_ids,[1,2]);
+      assert.deepEqual(extracted.groups.find(group=>group.id!==second.id).member_ids,[2,1]);
       assert.deepEqual(shape(readNote(d,actor,3).layout),rectangle({x:83.125,y:97.875,position_locked:true,always_on_top:true}));
       local('extract',{source_group_id:second.id,selected_ids:[5,4],result:'individual',placements:[rectangle({x:321.125,width:6,height:8,always_on_top:true}),rectangle({x:432.25,width:6,height:8,always_on_top:true})]});
       assert.deepEqual(board(d,actor).groups.find(group=>group.id===second.id).member_ids,[8,6]);
-      assert.equal(readNote(d,actor,4).layout.x,321.125);
-      assert.equal(readNote(d,actor,5).layout.x,432.25);
+      assert.equal(readNote(d,actor,5).layout.x,321.125);
+      assert.equal(readNote(d,actor,4).layout.x,432.25);
       assert.equal(readNote(d,actor,4).layout.position_locked,false);
     }
     assert.deepEqual(content(d),originalContent);assert.deepEqual(seed(d),originalSeed);

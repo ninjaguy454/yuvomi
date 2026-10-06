@@ -1433,7 +1433,7 @@
             "selectedCount": "Επιλεγμένες: {{count}}",
             "selectionMode": "Επιλογή σημειώσεων",
             "actions": "Ενέργειες",
-            "exitDrag": "Έξοδος",
+            "exitDrag": "Κρατήστε εδώ για αφαίρεση",
             "exitDwell": "1 δ.",
             "dragCount": "{{count}} σημειώσεις",
             "placeCount": "Τοποθέτηση {{count}} σημειώσεων",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Προσθήκη στην αρχή",
+            "addEnd": "Προσθήκη στο τέλος",
+            "selectionPosition": "Επιλογή {{position}}"
         },
         "groupPages": "Σελίδες ομάδας",
         "groupPrevious": "Προηγούμενη σημείωση",

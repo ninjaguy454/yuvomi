@@ -125,7 +125,7 @@ function expectedMatches(d,ownerKey,c,noteIds,groups){
   const expected={groups:sort([...groups.values()].map(g=>({id:g.id,revision:g.revision}))),notes:sort([...noteIds].map(id=>({id,revision:d.prepare('SELECT revision FROM notes WHERE id=?').get(id).revision,layout_revision:readNoteOwnerLayout(d,ownerKey,id)?.revision??0})))};
   if(!equal(expected,{groups:sort(c.expected.groups).map(({id,revision})=>({id,revision})),notes:sort(c.expected.notes).map(({id,revision,layout_revision})=>({id,revision,layout_revision}))}))throw conflict();
 }
-function orderedSelection(group,selected){if(selected.some(id=>!group.member_ids.includes(id)))throw invalid();return group.member_ids.filter(id=>selected.includes(id));}
+function orderedSelection(group,selected){if(selected.some(id=>!group.member_ids.includes(id)))throw invalid();return [...selected];}
 function insertBefore(members,selected,before){const rest=members.filter(id=>!selected.includes(id)),index=before===null?rest.length:rest.indexOf(before);if(index<0)throw invalid();return [...rest.slice(0,index),...selected,...rest.slice(index)];}
 function persistGroups(d,ownerKey,before,groups){
   const changed=[...groups.values()].filter(g=>{

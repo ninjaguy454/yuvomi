@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} selezionate",
             "selectionMode": "Seleziona note",
             "actions": "Azioni",
-            "exitDrag": "Esci",
+            "exitDrag": "Tieni qui per rimuovere",
             "exitDwell": "1 s",
             "dragCount": "{{count}} note",
             "placeCount": "Posiziona {{count}} note",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Aggiungi all’inizio",
+            "addEnd": "Aggiungi alla fine",
+            "selectionPosition": "Selezione {{position}}"
         },
         "groupPages": "Pagine del gruppo",
         "groupPrevious": "Nota precedente",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Bacheca",
+        "title": "Note",
         "newNote": "Nuova nota",
         "editNote": "Modifica nota",
         "viewNote": "Nota",

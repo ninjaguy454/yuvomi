@@ -1433,7 +1433,7 @@
             "selectedCount": "{{count}} kiválasztva",
             "selectionMode": "Jegyzetek kiválasztása",
             "actions": "Műveletek",
-            "exitDrag": "Kilépés",
+            "exitDrag": "Eltávolításhoz tartsa itt",
             "exitDwell": "1 mp",
             "dragCount": "{{count}} jegyzet",
             "placeCount": "{{count}} jegyzet elhelyezése",
@@ -1456,7 +1456,10 @@
             "individual": "Individual notes",
             "horizontal": "Horizontal position",
             "vertical": "Vertical position",
-            "noPlacement": "No room here. Choose another position or use List."
+            "noPlacement": "No room here. Choose another position or use List.",
+            "addBeginning": "Hozzáadás az elejére",
+            "addEnd": "Hozzáadás a végére",
+            "selectionPosition": "{{position}}. kijelölés"
         },
         "groupPages": "Csoport oldalai",
         "groupPrevious": "Előző jegyzet",
@@ -1514,7 +1517,7 @@
             "width": "Width (3-12 columns)",
             "height": "Height (4-100 rows)"
         },
-        "title": "Tábla",
+        "title": "Jegyzetek",
         "newNote": "Új jegyzet",
         "editNote": "Jegyzet szerkesztése",
         "viewNote": "Jegyzet",

@@ -87,6 +87,14 @@ test('authorized data photos render in the grid; remote URLs and richer cached p
   }finally{await page.close();}
 });
 
+for(const allocation of [false,true])test(`Enter from a selected helper invokes the visible action (allocation ${allocation})`,async()=>{
+  const page=await mount({children:allocation});try{
+    await page.focus('[data-acceptance-helper="2"]');await page.keyboard.press('Space');await page.keyboard.press('Enter');
+    if(allocation){await page.waitForSelector('[data-acceptance-allocation]');assert.equal(writes.length,0);await page.click('[data-acceptance-cancel]');}
+    else{await page.waitForSelector('[data-task-acceptance]',{hidden:true});assert.equal(writes.length,1);assert.deepEqual(writes[0].coassignee_ids,[2]);}
+  }finally{await page.close();}
+});
+
 test('duplicate member labels remain distinct through paired acceptance without changing initials or IDs',async()=>{
   const page=await mount({device:true,duplicateNames:true});try{
     assert.deepEqual(await page.$$eval('[data-acceptance-primary]',els=>els.map(el=>[el.value,el.closest('label').querySelector('.task-acceptance__member-name').textContent])),[['1','Alex (alex.parent)'],['2','Alex (12)'],['3','Sam']]);

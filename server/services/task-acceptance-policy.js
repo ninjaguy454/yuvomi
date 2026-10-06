@@ -70,8 +70,8 @@ export function acceptanceOptions(d,principal,id,primaryUserId){
   if(!device&&primaryUserId!==undefined&&Number(primaryUserId)!==me)throw acceptanceError('Accept this Task as your signed-in account.',403,'primary_not_self');
   const primary=device?(primaryUserId===undefined?null:Number(primaryUserId)):me;
   if(primary!==null)assertAcceptanceMember(d,p,task,primary);
-  // Match the existing /auth/users profile boundary: signed-in people can see
-  // photos; anonymous paired displays receive only scoped names and colors.
+  // Match existing human Tasks metadata (including scoped task tokens): it
+  // exposes photos; anonymous paired displays receive only names and colors.
   // Add presentation only after acceptance eligibility has filtered the IDs.
   const appearance=d.prepare(device?'SELECT avatar_color FROM users WHERE id=?':'SELECT avatar_color,avatar_data FROM users WHERE id=?');
   const memberView=member=>({id:member.id,display_name:member.display_name,...appearance.get(member.id)});

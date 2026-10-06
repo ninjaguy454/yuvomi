@@ -102,6 +102,10 @@ export async function acceptOpenTask(task) {
     const allocationNeeded = needsAcceptanceAllocation(draft);
     next.hidden = !allocationNeeded || selectingPrimary !== null;
     confirm.hidden = allocationNeeded && selectingPrimary === null;
+    // The shared modal's Enter shortcut targets its primary action. A hidden
+    // step must not intercept Enter when this screen can confirm directly.
+    next.classList.toggle('btn--primary', !next.hidden);
+    confirm.classList.toggle('btn--primary', !confirm.hidden);
     confirm.disabled = busy || !draft.primary || selectingPrimary !== null;
   }
   function clearAllocation() {

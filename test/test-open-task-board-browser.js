@@ -101,7 +101,7 @@ for(const width of [390,1440])test(`Notes and ordinary offers share the page at 
     assert.ok(geometry.scroll<=geometry.width+1);
     if(process.env.OPEN_TASK_SCREENSHOTS){mkdirSync(process.env.OPEN_TASK_SCREENSHOTS,{recursive:true});await page.screenshot({path:`${process.env.OPEN_TASK_SCREENSHOTS}/notes-open-tasks-${width}.png`});}
     await page.click('[data-open-task="7"]');await page.waitForSelector('#task-detail-claim');assert.ok(await page.$('.detail-view__pane'));
-    await page.click('#task-detail-claim');await page.waitForSelector('[data-acceptance-helper-unavailable]');await page.click('[data-acceptance-next]');await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.equal(writes.length,1);
+    await page.click('#task-detail-claim');await page.waitForSelector('[data-acceptance-helper-unavailable]');assert.equal(await page.$eval('[data-acceptance-next]',el=>el.hidden),true);await page.click('[data-acceptance-confirm]');await page.waitForFunction(()=>!document.querySelector('[data-task-acceptance]'));assert.equal(writes.length,1);
     assert.ok(!reads.some(path=>path.includes('/notes/')&&path.includes('layout')));
   }finally{await page.close();}
 });

@@ -1,6 +1,6 @@
 import { NOTE_COLUMNS, NOTE_ROW_HEIGHT, NOTE_MAX_POSITION, normalizeNoteLayout, projectNoteLayouts, noteCanvasExtent, noteGroupArrangeItem } from '/utils/note-board-layout.js';
 import { t } from '/i18n.js';
-import { advanceNoteDragTilt } from '/utils/note-drag-motion.js';
+import { advanceNoteDragTilt, noteBadgeHaloTarget, noteBadgeUnderlyingMenu } from '/utils/note-drag-motion.js';
 import {noteItemAllows} from '/utils/note-permissions.js';
 
 // Cards survive a successful save's controller replacement. Their visual
@@ -177,10 +177,12 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     // An auto-height page must not feed its growing world extent back into
     // the minimum viewport height on every drag update.
     const visibleHeight = pageFlow() ? Math.min(innerHeight, viewport.clientHeight) : viewport.clientHeight;
-    const value = noteCanvasExtent(layouts, canvasWidth(), Math.max(320, visibleHeight - 12) / zoom());
-    value.width = Math.max(value.width, viewportWidth() / zoom());
-    Object.assign(grid.style, { width: `${value.width}px`, minHeight: `${value.height}px`, transform: `scale(${zoom()})` });
-    Object.assign(space.style, { width: `${value.width * zoom()}px`, height: `${value.height * zoom() + (grid.classList.contains('notes-board--groups') ? 48 : 0)}px` });
+    const top = grid.classList.contains('notes-board--groups') ? 76 : 24;
+    const value = noteCanvasExtent(layouts, canvasWidth(), Math.max(320, visibleHeight - top - 24 - 12) / zoom());
+    // Edge gutters use the existing blank margin rather than moving the overflow boundary.
+    value.width = Math.max(value.width, viewportWidth() / zoom()) - 48 / zoom();
+    Object.assign(grid.style, { left: '24px', top: `${top}px`, width: `${value.width}px`, minHeight: `${value.height}px`, transform: `scale(${zoom()})` });
+    Object.assign(space.style, { width: `${value.width * zoom() + 48}px`, height: `${value.height * zoom() + top + 24}px` });
     const label = viewport.closest('.notes-page')?.querySelector('#notes-zoom-value');
     if (label) label.textContent = `${Math.round(zoom() * 100)}%`;
   }
@@ -195,7 +197,7 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     viewport.classList.toggle('notes-scroll--canvas', !narrow);
     space.classList.toggle('notes-canvas-space--active', !narrow);
     grid.tabIndex = narrow ? -1 : 0;
-    if (narrow) { space.style.width = ''; space.style.height = ''; grid.style.width = ''; grid.style.transform = ''; grid.style.minHeight = ''; }
+    if (narrow) { space.style.width = ''; space.style.height = ''; grid.style.left = ''; grid.style.top = ''; grid.style.width = ''; grid.style.transform = ''; grid.style.minHeight = ''; }
     const projected = items();
     grid.classList.toggle('notes-board--groups', projected.some(item => item.kind === 'group' && item.member_ids.length > 1));
     for (const item of projected) {
@@ -295,9 +297,10 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (gesture) { if (gesture.pointer !== event.pointerId) cancel(); return; }
     suppressClick = false;
     if (event.button !== 0 || narrow || !inViewport) return;
-    const selected = event.target.closest('.note-card');
+    const coveredMenu = noteBadgeUnderlyingMenu(event);
+    const selected = coveredMenu ? null : event.target.closest('.note-card');
     if (selected) layerCards(itemFor(selected)?.key);
-    if (event.target.closest('a,button,input,select,textarea,summary,details,[role="checkbox"],[contenteditable="true"]')) {
+    if (coveredMenu || (!noteBadgeHaloTarget(event) && event.target.closest('a,button,input,select,textarea,summary,details,[role="checkbox"],[contenteditable="true"]'))) {
       if (grid.contains(event.target)) excludedPointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
       return;
     }
@@ -529,6 +532,11 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   }
   async function click(event) {
     if (suppressClick) { event.preventDefault(); event.stopImmediatePropagation(); return; }
+    const coveredMenu = event.detail ? noteBadgeUnderlyingMenu(event) : null;
+    if (coveredMenu && grid.contains(coveredMenu)) {
+      event.preventDefault(); event.stopImmediatePropagation();
+      coveredMenu.focus({preventScroll:true}); coveredMenu.click(); return;
+    }
     const button=event.target.closest('[data-group-page],[data-group-action],[data-board-action="lock"],[data-board-action="top"]');
     if (!button || !grid.contains(button)) return;
     const item=itemFor(button.closest('.note-card'));

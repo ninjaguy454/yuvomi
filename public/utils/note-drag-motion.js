@@ -6,11 +6,34 @@ export function advanceNoteDragTilt(previous, deltaX, elapsedMs) {
   return previous + (target - previous) * (1 - Math.exp(-duration / 60));
 }
 
+/** Corner padding can start a card gesture; the visible artwork remains a control. */
+export function noteBadgeHaloTarget(event) {
+  const control = event.target.closest('.note-card__lock,.note-group-overview__select');
+  const art = control?.querySelector('.note-card__badge-art');
+  if (!art || control.disabled) return null;
+  const rect = art.getBoundingClientRect();
+  return event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom ? control : null;
+}
+
+/** A transparent corner target must not cover another card's visible menu. */
+export function noteBadgeUnderlyingMenu(event) {
+  const halo = noteBadgeHaloTarget(event), card = halo?.closest('.note-card');
+  if (!card) return null;
+  const rect = card.getBoundingClientRect();
+  if (event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom) return null;
+  for (const element of halo.ownerDocument.elementsFromPoint(event.clientX, event.clientY)) {
+    if (element === halo || halo.contains(element) || element.contains(halo)) continue;
+    return element.closest('.note-card__menu summary,.note-card__menu button');
+  }
+  return null;
+}
+
 /** Visual copies only: the original, connected card remains the pointer owner. */
 export function createNoteDragPreview(cards, { clientX, clientY, selectedIds, anchor = cards[0] } = {}) {
   if (!anchor || !cards.length) return null;
   const rect = anchor.getBoundingClientRect();
   const offset = { x: clientX - rect.left, y: clientY - rect.top };
+  const sourceScale = anchor.offsetWidth ? rect.width / anchor.offsetWidth : 1;
   const layer = document.createElement('div');
   layer.className = 'note-group-drag-proxy notes-board';
   layer.dataset.groupDragProxy = '';
@@ -18,6 +41,7 @@ export function createNoteDragPreview(cards, { clientX, clientY, selectedIds, an
   layer.dataset.selectedIds = JSON.stringify(selectedIds);
   layer.setAttribute('aria-hidden', 'true'); layer.inert = true;
   Object.assign(layer.style, { width: `${rect.width}px`, height: `${rect.height}px` });
+  layer.style.setProperty('--note-drag-source-scale', String(sourceScale));
   for (const name of ['--module-accent', '--note-group-ui-scale']) {
     layer.style.setProperty(name, getComputedStyle(anchor).getPropertyValue(name));
   }

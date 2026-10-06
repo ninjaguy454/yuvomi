@@ -1,9 +1,9 @@
 /* Paging belongs to the group rectangle; the canvas reserves room at y=0. */
-.notes-canvas-space--active > .notes-grid.notes-board--groups { top: 48px; }
+.notes-canvas-space--active > .notes-grid.notes-board--groups { top: 76px; }
 .notes-board > .note-card.note-card--group { overflow: visible; }
 .note-group-pages {
   position: absolute;
-  top: calc(-46px * var(--note-group-ui-scale, 1));
+  top: calc(-72px * var(--note-group-ui-scale, 1));
   left: 0;
   display: flex;
   gap: 2px;
@@ -123,8 +123,10 @@
   grid-template-columns: repeat(auto-fill, min(320px, 100%));
   align-content: start;
   gap: 16px;
+  row-gap: 28px;
   min-height: 0;
-  padding: 4px;
+  padding: 24px 4px;
+  scroll-padding-block: 24px;
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
@@ -155,23 +157,24 @@
 .note-group-overview__page.is-selected { border-color: var(--group-accent-ink); }
 .note-group-overview__page.is-placeholder { opacity: .35; border-style: dashed; }
 .note-card.is-note-group-target { outline: 3px solid var(--color-primary, #236a62); outline-offset: 4px; }
+.note-group-overview__page > .note-card__surface { padding: 0; overflow: visible; }
 .note-group-overview__page .note-group-overview__activate {
   display: flex; flex-direction: column; gap: 10px; width: 100%; height: 100%; text-align: start;
   overflow: hidden; touch-action: pan-y; padding: 16px; color: inherit; font: inherit;
   border: 1px solid var(--color-border, #cfcfcf); border-radius: inherit;
   background: color-mix(in srgb, var(--note-color, #efe3be) var(--tint-surface, 30%), var(--color-surface, #fff));
 }
-.note-group-overview__page .note-group-overview__activate > .note-card__title { align-self: stretch; flex-shrink: 0; min-width: 0; min-height: 0; margin: 0; padding: 0; padding-inline-end: 28px; box-sizing: border-box; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
+.note-group-overview__page .note-group-overview__activate > .note-card__title { align-self: stretch; flex-shrink: 0; min-width: 0; min-height: 0; margin: 0; padding: 0; box-sizing: border-box; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.4; }
 .note-group-overview__page .note-group-overview__excerpt { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: anywhere; white-space: normal; font-size: .9em; line-height: 1.5; overscroll-behavior: auto; }
 .note-group-overview__excerpt > :first-child { margin-block-start: 0; }
-.note-group-overview .note-group-overview__select {
-  position: absolute; inset-block-start: 0; inset-inline-end: 0; padding: 0;
+:is(.note-group-overview,.note-group-drag-proxy) .note-group-overview__select {
+  position: absolute; top: -2px; right: 20px; padding: 0; transform: translate(50%, -50%); z-index: 2;
   display: grid; place-items: center;
-  width: 44px; height: 44px; border: 0; background: transparent; font-size: .8rem; font-weight: 700; isolation: isolate;
+  width: calc(44px * var(--note-group-ui-scale, 1)); height: calc(44px * var(--note-group-ui-scale, 1)); min-width: 0; min-height: 0; border: 0; background: transparent; font-size: .8rem; font-weight: 700;
 }
-.note-group-overview__select::before { content: ''; position: absolute; z-index: -1; width: 24px; height: 24px; border: 1px solid currentColor; border-radius: 6px; }
+.note-group-overview__select .note-card__badge-art { width: max-content; min-width: 24px; height: 24px; padding: 0 4px; box-sizing: border-box; border: 1px solid currentColor; border-radius: 999px; }
 .note-group-overview__select[aria-pressed="true"] { color: var(--color-surface, #fff); }
-.note-group-overview__select[aria-pressed="true"]::before { background: var(--group-accent-ink); border-color: var(--group-accent-ink); }
+.note-group-overview__select[aria-pressed="true"] .note-card__badge-art { background: var(--group-accent-ink); border-color: var(--group-accent-ink); }
 .note-group-overview__tools { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; min-height: 0; max-height: 45dvh; overflow: auto; padding: 8px 4px; flex: 0 1 auto; }
 .note-group-overview__tools:empty { display: none; }
 .note-group-overview__tools label { display: flex; flex-direction: column; gap: 4px; max-width: 100%; }
@@ -198,15 +201,15 @@
 }
 .note-group-drag-proxy, .note-group-drag-proxy * { pointer-events: none !important; }
 .note-group-drag-proxy > .note-card { position: absolute; transition: none; }
-.note-group-drag-proxy .note-group-overview__select { display: none; }
+.note-group-drag-proxy .note-group-overview__select { opacity: 1; }
 .note-group-drag-proxy .note-group-overview__activate { opacity: 1; }
-.note-group-drag-proxy.notes-board[data-board-view="canvas"] > .note-group-overview__page .note-card__title { margin: 0; min-height: 0; padding: 0; padding-inline-end: 28px; }
-.note-group-drag-proxy__count { position: absolute; z-index: 4; inset-inline-end: -8px; top: -8px; min-width: 24px; height: 24px; padding: 2px 6px; display: grid; place-items: center; border-radius: 6px; background: var(--group-accent-ink); color: var(--color-surface, #fff); font-size: .8rem; font-weight: 700; }
+.note-group-drag-proxy.notes-board[data-board-view="canvas"] > .note-group-overview__page .note-card__title { margin: 0; min-height: 0; padding: 0; }
+.note-group-drag-proxy__count { position: absolute; z-index: 4; right: calc(22px * var(--note-drag-source-scale, 1)); top: 0; min-width: 24px; height: 24px; box-sizing: border-box; padding: 0 4px; display: grid; place-items: center; border-radius: 999px; transform: translate(50%, -50%) scale(var(--note-drag-source-scale, 1)); background: var(--group-accent-ink); color: var(--color-surface, #fff); font-size: .8rem; font-weight: 700; }
 .note-card--drag-source { opacity: 0 !important; }
 @media (max-width: 640px) {
   .note-group-overview { padding-block: 64px 8px; }
   .note-group-overview__panel { max-height: calc(100dvh - 72px); }
-  .note-group-overview__grid { gap: 12px; }
+  .note-group-overview__grid { gap: 28px 12px; }
   .note-group-overview__header { flex-wrap: wrap; gap: 4px; }
   .note-group-overview__count { order: 5; flex-basis: 100%; min-height: 1.2em; text-align: end; }
 }

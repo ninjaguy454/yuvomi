@@ -600,7 +600,7 @@
   border-radius: inherit;
   background: color-mix(in srgb, var(--note-color, transparent) var(--tint-surface), var(--color-surface));
   box-shadow: var(--shadow-sm);
-  overflow: hidden;
+  overflow: visible;
 }
 .note-card:hover > .note-card__surface { box-shadow: var(--shadow-md); }
 .note-card--pinned > .note-card__surface { box-shadow: var(--shadow-md), 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent); }
@@ -683,9 +683,10 @@
 
 /* Small glyphs, usable transparent targets; title is the keyboard reader entry. */
 .notes-board .note-card__title { border: 0; background: transparent; color: inherit; text-align: start; font-family: inherit; cursor: pointer; }
-.notes-board[data-board-view="canvas"] > .note-card .note-card__title { padding-inline: 0; margin-inline: 44px; margin-left: calc(60px * max(1, var(--note-group-ui-scale, 1))); margin-block-end: calc(44px * max(1, var(--note-group-ui-scale, 1)) - 40px); min-height: 40px; }
+.notes-board[data-board-view="canvas"] > .note-card .note-card__title { padding-inline: 0 var(--target-base); margin: 0; min-height: 0; }
 .note-card__lock { position: absolute; top: 8px; left: 16px; display: grid; place-items: center; width: 44px; height: 44px; border: 0; background: transparent; color: var(--color-text-secondary); cursor: pointer; border-radius: var(--radius-md); }
-.notes-board[data-board-view="canvas"] .note-card__lock { top: calc(8px * max(1, var(--note-group-ui-scale, 1))); left: calc(16px * max(1, var(--note-group-ui-scale, 1))); transform: scale(max(1, var(--note-group-ui-scale, 1))); transform-origin: top left; }
+.note-card__badge-art { display: grid; place-items: center; width: 16px; height: 16px; pointer-events: none; }
+.notes-board[data-board-view="canvas"] .note-card__lock { top: 0; left: 22px; z-index: 2; width: calc(44px * var(--note-group-ui-scale, 1)); height: calc(44px * var(--note-group-ui-scale, 1)); min-width: 0; min-height: 0; padding: 0; transform: translate(-50%, -50%); }
 .note-card__lock[aria-pressed="true"] { color: var(--color-text-primary); }
 .note-card__lock[aria-pressed="true"] svg { fill: currentColor; }
 .note-card__lock:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -3px; }

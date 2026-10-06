@@ -1,7 +1,7 @@
 import { t } from '../i18n.js';
 import { createNoteGroupDraft, freezeNoteGroupCommand, orderedSelection, moveSelectionBefore, newNoteGroupOperationId } from '../utils/note-group-draft.js';
 import { createNoteGroupGesture } from '../utils/note-group-gesture.js';
-import { createNoteDragPreview, createNoteGroupInsertionPreview } from '../utils/note-drag-motion.js';
+import { createNoteDragPreview, createNoteGroupInsertionPreview, noteBadgeHaloTarget } from '../utils/note-drag-motion.js';
 import { normalizeNoteLayout, organizeNoteLayouts, NOTE_MAX_POSITION } from '../utils/note-board-layout.js';
 import { pushOverlay, dropOverlay } from '../utils/overlay-history.js';
 import { renderMarkdownLight } from '../utils/html.js';
@@ -110,6 +110,11 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     const element = document.createElement('button'); element.type = 'button'; element.textContent = label;
     Object.assign(element.dataset, data); if (ariaLabel) element.setAttribute('aria-label', ariaLabel); return element;
   }
+  function selectionArt(control, value) {
+    const art = control.querySelector('.note-card__badge-art') || document.createElement('span');
+    art.className = 'note-card__badge-art'; art.setAttribute('aria-hidden', 'true'); art.textContent = value;
+    if (!art.parentElement) control.append(art);
+  }
   function listen(target, name, listener, options) {
     target.addEventListener(name, listener, options); subscriptions.push(() => target.removeEventListener(name, listener, options));
   }
@@ -168,7 +173,9 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       card.className = 'note-card note-group-overview__page'; card.dataset.groupPage = String(id); card.classList.toggle('is-selected', selected.has(id));
       if (typeof note.color === 'string' && CSS.supports('color', note.color)) card.style.setProperty('--note-color', note.color);
       else card.style.removeProperty('--note-color');
-      const activate = card.querySelector('[data-group-activate]') || button('', { groupActivate: String(id) }); activate.className = 'note-card__surface note-group-overview__activate';
+      const surface = card.querySelector(':scope > div.note-card__surface') || document.createElement('div'); surface.className = 'note-card__surface';
+      if (!surface.parentElement) card.append(surface);
+      const activate = card.querySelector('[data-group-activate]') || button('', { groupActivate: String(id) }); activate.className = 'note-group-overview__activate';
       activate.setAttribute('aria-label', note.title?.trim() || text('untitled', 'Untitled note'));
       if (id === activeId && currentGroup.id === source.id) activate.setAttribute('aria-current', 'page');
       else activate.removeAttribute('aria-current');
@@ -176,14 +183,14 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
       const preview = activate.querySelector('.note-card__content') || document.createElement('span'); preview.className = 'note-card__content note-group-overview__excerpt';
       if (!previous || previous.content !== note.content) { const top = preview.scrollTop; preview.replaceChildren(...previewContent(note.content)); preview.scrollTop = top; }
       if (!heading.parentElement) activate.append(heading, preview);
-      if (!activate.parentElement) card.append(activate);
+      if (activate.parentElement !== surface) surface.append(activate);
       if (manageable && currentGroup.id === source.id && !dragPreview) {
         const toggle = card.querySelector('[data-group-select]') || button('', { groupSelect: String(id) });
         toggle.setAttribute('aria-label', text('selectNote', `Select ${note.title || id}`, { title: note.title || String(id) }));
-        toggle.textContent = selected.has(id) ? String(selection().indexOf(id) + 1) : '';
+        selectionArt(toggle, selected.has(id) ? String(selection().indexOf(id) + 1) : '');
         if (selected.has(id)) toggle.setAttribute('aria-description', text('selectionPosition', `Selection ${selection().indexOf(id) + 1}`, { position: selection().indexOf(id) + 1 }));
         else toggle.removeAttribute('aria-description');
-        toggle.className = 'note-group-overview__select'; toggle.hidden = !selectionMode; toggle.disabled = busy; toggle.setAttribute('aria-pressed', String(selected.has(id))); if (!toggle.parentElement) card.append(toggle);
+        toggle.className = 'note-group-overview__select'; toggle.hidden = !selectionMode; toggle.disabled = busy; toggle.setAttribute('aria-pressed', String(selected.has(id))); if (toggle.parentElement !== surface) surface.append(toggle);
       } else card.querySelector('[data-group-select]')?.remove();
       cardNotes.set(card, note);
       const at = [...grid.children].filter(child => child !== dragAnchor || ids.includes(Number(child.dataset.groupPage)))[index];
@@ -463,7 +470,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
         const toggle = card.querySelector('[data-group-select]');
         if (toggle) {
           const position = selection().indexOf(Number(card.dataset.groupPage)) + 1;
-          toggle.hidden = false; toggle.setAttribute('aria-pressed', String(checked)); toggle.textContent = checked ? String(position) : '';
+          toggle.hidden = false; toggle.setAttribute('aria-pressed', String(checked)); selectionArt(toggle, checked ? String(position) : '');
           if (checked) toggle.setAttribute('aria-description', text('selectionPosition', `Selection ${position}`, { position })); else toggle.removeAttribute('aria-description');
         }
       });
@@ -548,7 +555,7 @@ export function openNoteGroupOverview({ host, group, notes, activeId, onActivate
     // A new physical press is a new intent. The compatibility click belonging
     // to the previous released drag may have targeted the capture host instead.
     suppressClick = false;
-    const activate = event.target.closest('[data-group-activate]');
+    const activate = event.target.closest('[data-group-activate]') || noteBadgeHaloTarget(event)?.closest('[data-group-page]')?.querySelector('[data-group-activate]');
     if (!activate || !overlay.contains(activate) || !(allows('move')||allows('ungroup')) || action || !canStartLayout()) return;
     const id = Number(activate.dataset.groupActivate);
     // Keep the pressed DOM target alive until the browser has dispatched its

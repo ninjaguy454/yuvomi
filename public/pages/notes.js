@@ -695,7 +695,7 @@ function renderBoardMenu(note, item) {
 }
 
 function renderPositionControls(note, item) {
-  return `${canArrangeItem(note,item,'pin')?`<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!(item?.layout || note.layout)?.position_locked}"><i data-lucide="pin" class="icon-sm" aria-hidden="true"></i></button>`:''}
+  return `${canArrangeItem(note,item,'pin')?`<button type="button" class="note-card__lock" data-board-action="lock" aria-label="${t('notes.positionLock')}" aria-pressed="${!!(item?.layout || note.layout)?.position_locked}"><span class="note-card__badge-art" aria-hidden="true"><i data-lucide="pin" class="icon-sm"></i></span></button>`:''}
     ${canArrangeItem(note,item,'move')?`<button type="button" class="note-card__adjust" data-board-action="adjust">${t('notes.adjustCard')}</button>`:''}`;
 }
 

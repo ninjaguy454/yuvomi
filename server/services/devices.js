@@ -9,7 +9,7 @@ import { NOTE_LAYOUT_ACTIONS } from '../../public/utils/note-permissions.js';
 export const DEVICE_COOKIE = 'vidamia.device';
 export const DEVICE_ACTIONS = ['complete','reopen','reset','claim','accept_with_helpers'];
 export const DEVICE_NOTE_ACTIONS = ['view','create','edit','delete',...NOTE_LAYOUT_ACTIONS];
-export const DEVICE_WIDGETS = ['tasks','calendar','meals','shopping','points','rewards','rotations'];
+export const DEVICE_WIDGETS = ['tasks','calendar','meals','shopping','points','rewards','rotations','weather'];
 export const DEVICE_DEFINITION_CAPABILITIES = ['tasks.create','tasks.edit_others','tasks.change_assignment','tasks.reassign','tasks.change_dates','tasks.change_points'];
 const json = value => JSON.stringify(value);
 const random = () => crypto.randomBytes(32).toString('hex');
@@ -31,6 +31,9 @@ const allowedModules=new Set(['dashboard','tasks','calendar','meals','shopping',
 export function normalizeDevicePermissions(input=devicePreset()) {
   if(!input||typeof input!=='object'||Array.isArray(input))throw deviceError('Invalid device permissions.');
   const result=devicePreset();
+  const weather=input.widgets?.weather??result.widgets.weather;
+  if(!['allow','none'].includes(weather))throw deviceError('Choose whether household Weather is allowed.');
+  result.widgets.weather=weather;
   for(const key of Object.keys(input.modules||{}))if(!(key in result.modules))throw deviceError('Unknown display module.');
   for(const key of Object.keys(input.capabilities||{}))if(!(key in result.capabilities))throw deviceError('Unknown display action.');
   for(const key of Object.keys(result.modules)) {
@@ -62,7 +65,7 @@ export function normalizeDeviceScope(d,input={}) {
 export function normalizeDevicePreferences(d,input) {
   const seed=input??wallConfig(d);
   if(!seed||typeof seed!=='object'||Array.isArray(seed))throw deviceError('Invalid display preferences.');
-  const supplied=input?.widgets??DEVICE_WIDGETS.map((id,order)=>({id,visible:true,size:id==='tasks'?'large':'medium',order}));
+  const supplied=input?.widgets??DEVICE_WIDGETS.map((id,order)=>({id,visible:id!=='weather',size:id==='tasks'?'large':'medium',order}));
   if(!Array.isArray(supplied)||supplied.length>DEVICE_WIDGETS.length||new Set(supplied.map(row=>row?.id)).size!==supplied.length||supplied.some(row=>!row||!DEVICE_WIDGETS.includes(row.id)))
     throw deviceError('Choose supported display widgets without duplicates.');
   // Reuse Wall appearance and widget validation; Rotation is the device's extra
@@ -102,7 +105,7 @@ export function updateDevice(d,id,input,actor) {
     if(!Number.isInteger(idle)||idle<30||idle>300||!Number.isInteger(max)||max<60||max<idle||max>1800)throw deviceError('Choose an idle timeout of 30–300 seconds and a maximum of 60–1800 seconds, at least as long as the idle timeout.');
     const priorPermissions=JSON.parse(row.permissions_json), supplied=input.permissions||{};
     const permissions=normalizeDevicePermissions({...priorPermissions,...supplied,
-      modules:{...priorPermissions.modules,...supplied.modules},capabilities:{...priorPermissions.capabilities,...supplied.capabilities}});
+      modules:{...priorPermissions.modules,...supplied.modules},widgets:{...priorPermissions.widgets,...supplied.widgets},capabilities:{...priorPermissions.capabilities,...supplied.capabilities}});
     const scope=normalizeDeviceScope(d,{...JSON.parse(row.scope_json),...input.scope}),preferences=normalizeDevicePreferences(d,input.preferences??JSON.parse(row.preferences_json));
     d.prepare('UPDATE household_devices SET name=?,permissions_json=?,scope_json=?,preferences_json=?,idle_seconds=?,maximum_seconds=?,revision=revision+1 WHERE id=?')
       .run(name,json(permissions),json(scope),json(preferences),idle,max,id);

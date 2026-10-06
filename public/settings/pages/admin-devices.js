@@ -33,12 +33,15 @@ export async function render(container) {
     }});
   }
   function edit(device){
+    // Older devices have no Weather layout entry. Offer it without enabling it.
+    if(!device.preferences.widgets.some(widget=>widget.id==='weather'))device={...device,preferences:{...device.preferences,widgets:[...device.preferences.widgets,{id:'weather',visible:false,size:'medium',order:device.preferences.widgets.length}]}};
     const prefs=structuredClone(device.preferences),permissions=structuredClone(device.permissions),scope=structuredClone(device.scope);
     openModal({title:`Configure ${device.name}`,size:'xl',content:deviceConfigContent(device,model,{modules,actions,definitions,noteActions}),onSave(panel){
       window.lucide?.createIcons({el:panel});
       panel.querySelector('form').addEventListener('invalid',event=>{const details=event.target.closest('details');if(details)details.open=true;},true);
       panel.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target),submit=event.submitter||panel.querySelector('[data-device-save]');submit.disabled=true;
         for(const key of modules)permissions.modules[key]=form.has(`module:${key}`)?'read':'none';
+        permissions.widgets.weather=form.has('weather')?'allow':'none';
         for(const key of Object.keys(actions))permissions.capabilities[`device_tasks.${key}`]=form.has(`action:${key}`)?'allow':'none';
         for(const key of Object.keys(definitions))permissions.capabilities[key]=form.has(`definition:${key}`)?'allow':'none';
         for(const key of Object.keys(noteActions))permissions.capabilities[`device_notes.${key}`]=form.has(`note:${key}`)?'allow':'none';

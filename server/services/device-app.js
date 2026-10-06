@@ -17,6 +17,7 @@ import { occurrenceFeed,seriesRootOf } from './task-completions.js';
 import { assertDeviceModule,deviceMembers,deviceCalendar,deviceMeals,deviceShopping,deviceRewards,deviceSharedRotations,deviceDateRange } from './device-content.js';
 import { normalizeDevicePreferences,deviceRequestStillValid } from './devices.js';
 import { householdTimeZone,todayKey } from '../utils/timezone.js';
+import { deviceWeather } from './device-weather.js';
 
 const pick=(row,keys)=>Object.fromEntries(keys.filter(key=>row?.[key]!==undefined).map(key=>[key,row[key]]));
 const fail=(message='This action requires personal sign-in.',status=403)=>{throw Object.assign(new Error(message),{status});};
@@ -40,7 +41,8 @@ export function deviceAppPreferences(d,p) {
   const widgets=new Map();
   for(const row of value.widgets){
     const id=row.id==='points'?'rewards':row.id;
-    const allowed=id==='rotations'?p.permissions?.capabilities?.['rotations.view']==='allow':['read','write'].includes(p.permissions?.modules?.[id]);
+    const allowed=id==='weather'?p.permissions?.widgets?.weather==='allow'&&['read','write'].includes(p.permissions?.modules?.dashboard)
+      :id==='rotations'?p.permissions?.capabilities?.['rotations.view']==='allow':['read','write'].includes(p.permissions?.modules?.[id]);
     if(!widgets.has(id)||row.visible)widgets.set(id,{...row,id,visible:row.visible&&allowed,options:{}});
   }
   return {family_name:setting('family_name',''),timezone:householdTimeZone(d),language:setting('language','en'),date_format:setting('date_format','locale'),
@@ -115,6 +117,7 @@ export function deviceAppMiddleware(req,res,next) {
   res.set('Cache-Control','private, no-store');
   try {
     if(!deviceAppRouteSupported(method,path))fail();
+    if(path==='/weather')return deviceWeather(req,res);
     if(path==='/notes'||path.startsWith('/notes/')) {
       if(path==='/notes/changes')return changes(req,res,'note_change_clock',(database,principal)=>assertNoteAction(database,principal,null,'view'));
       if(path==='/notes/board'||path==='/notes/group-operations') {

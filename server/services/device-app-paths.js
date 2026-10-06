@@ -1,7 +1,7 @@
 /** Explicit normal-application route boundary for a non-human device principal. */
 export const canonicalPath=path=>String(path||'').split('?')[0].replace(/^\/api\/v1(?=\/|$)/,'').replace(/\/+$/,'')||'/';
 const reads=new Set(['/notes','/notes/board','/notes/changes','/tasks','/tasks/meta/options','/tasks/categories','/tasks/tags','/tasks/completions',
-  '/tasks/changes','/tasks/sync-targets','/dashboard','/preferences','/auth/users','/auth/member-labels','/module-counts',
+  '/tasks/changes','/tasks/sync-targets','/dashboard','/weather','/preferences','/auth/users','/auth/member-labels','/module-counts',
   '/calendar','/calendar/holidays','/calendar/search','/calendar/sync-targets',
   '/meals','/meals/week-model','/meals/status','/meals/planning','/meals/selection-requests',
   '/shopping','/shopping/categories','/rewards/overview','/rewards/catalog','/rewards/redemptions','/rewards/changes',

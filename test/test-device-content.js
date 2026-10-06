@@ -109,13 +109,13 @@ test('human or revoked principals cannot use the device projection boundary',()=
  }finally{d.close();}
 });
 
-test('device widgets default to the seven supported surfaces and customization stays separate from household and human preferences',()=>{
+test('device widgets keep Weather off by default and customization separate from household and human preferences',()=>{
  const d=fixture();try{
   d.prepare('INSERT OR REPLACE INTO sync_config(key,value) VALUES(?,?)').run('wall_dashboard_v1',JSON.stringify({appearance:{theme:'light',font:'serif',density:'compact'},widgets:[{id:'tasks',visible:true,size:'small'}]}));
   const before=d.prepare('SELECT * FROM sync_config ORDER BY key').all();
   let device=createDevice(d,{name:'Kitchen Wall'},1);
   assert.deepEqual(device.preferences.widgets.map(row=>row.id),DEVICE_WIDGETS);
-  assert.ok(device.preferences.widgets.every(row=>row.visible));
+  assert.ok(device.preferences.widgets.every(row=>row.visible===(row.id!=='weather')));
   assert.equal(device.preferences.appearance.theme,'light');assert.equal(device.preferences.appearance.font,'serif');
   const widgets=[...device.preferences.widgets].reverse().map((row,index)=>({...row,order:index,visible:row.id!=='shopping',size:row.id==='rotations'?'large':'small'}));
   device=updateDevice(d,device.id,{revision:device.revision,preferences:{...device.preferences,widgets,default_view:'list',appearance:{theme:'dark',font:'default',density:'comfortable'}}},1);

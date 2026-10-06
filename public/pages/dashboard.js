@@ -2782,6 +2782,14 @@ function weatherDescText(weather, desc) {
 }
 
 function weatherIconHtml(weather, icon, cls, size, desc) {
+  // Device images cannot carry the required authentication-context header.
+  // Render legacy provider conditions locally instead of widening image access.
+  if (isDevicePrincipal() && weather?.provider === 'openweathermap') {
+    const code = String(icon || '');
+    const glyph = { '01': code.endsWith('n') ? 'moon' : 'sun', '02': code.endsWith('n') ? 'cloud-moon' : 'cloud-sun',
+      '03': 'cloud', '04': 'cloud', '09': 'cloud-drizzle', '10': 'cloud-rain', '11': 'cloud-lightning', '13': 'cloud-snow', '50': 'cloud-fog' }[code.slice(0, 2)] || 'cloud';
+    return `<i data-lucide="${glyph}" class="${cls}" aria-hidden="true"></i>`;
+  }
   if (weather?.provider === 'open-meteo') {
     return `<i data-lucide="${esc(icon)}" class="${cls}" aria-hidden="true"></i>`;
   }

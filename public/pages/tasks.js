@@ -612,6 +612,8 @@ function renderActivitySubtasks(task, expanded) {
   const { done, total, optionalTotal, optionalDone } = completionCounts(task);
   const rows = subtasks.map((subtask) => {
     const assignees = subtaskParticipants(subtask);
+    const points = taskCompletionPoints(subtask);
+    const label = subtask.title + (subtask.is_optional ? ' · Optional' : '') + (subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : '');
     return `<div class="subtask-item ${subtask.status === 'done' ? 'subtask-item--done' : ''}" data-subtask-id="${subtask.id}">
       <button type="button" class="subtask-item__checkbox ${subtask.status === 'done' ? 'subtask-item__checkbox--done' : ''}"
         data-action="toggle-subtask" data-id="${subtask.id}" data-status="${subtask.status}" ${canToggleCardSubtask(task, subtask) ? '' : 'disabled'}
@@ -619,10 +621,10 @@ function renderActivitySubtasks(task, expanded) {
         aria-label="${esc(t('tasks.subtaskMarkDone', { title: subtask.title }))}">
         <svg class="subtask-item__checkbox-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${subtask.status === 'done' ? 'm20 6-11 11-5-5' : ''}"></path></svg>
       </button>
-      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}">${esc(subtask.title)}${subtask.is_optional ? ' · Optional' : ''}${subtask.is_supervision_projection && subtask.supervision_action?.execution_mode === 'delegated' ? ' · You perform this action' : ''}</button>
+      <button type="button" class="subtask-item__title" data-action="open-task" data-id="${subtask.id}" aria-label="${esc(label)}" title="${esc(label)}">${esc(label)}</button>
       <div class="subtask-item__metadata">
       ${canApproveDeviceTask(subtask) ? `<button type="button" class="btn btn--secondary btn--icon subtask-item__approval" data-action="approve-device-task" data-id="${subtask.id}" aria-label="${esc(t('tasks.supervisorApprovalFor', { title: subtask.title }))}" title="${esc(t('tasks.supervisorApproval'))}"><i data-lucide="shield" class="icon-md" aria-hidden="true"></i></button>` : ''}
-      <span class="subtask-item__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(subtask) }))}</span>
+      <span class="subtask-item__points" role="img" aria-label="${esc(t('tasks.pointsSummary', { count: points }))}" title="${esc(t('tasks.pointsSummary', { count: points }))}">${points}</span>
       ${assignees.length ? `<span class="subtask-item__assignees">${assignees.slice(0, 2).map((participant) => renderProfileAvatarButton(participant, 26)).join('')}
         ${assignees.length > 2 ? `<span class="avatar-stack__item avatar-stack__overflow" title="${assignees.length - 2} ${esc(t('userMultiSelect.moreUsers'))}">+${assignees.length - 2}</span>` : ''}</span>` : ''}
       </div>
@@ -662,10 +664,13 @@ function renderTaskCard(task, opts = {}) {
   const blocked = !isExpired(task) && ['needed', 'excluded'].includes(task.supervision?.state);
   const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
   const waiting = helperWaitingLabel(task, state.currentUserId);
+  const points = taskCompletionPoints(task);
   const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired' })[task.status] || task.status;
 
-  return `<article class="task-card activity-card${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
+  return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
       data-task-id="${task.id}">
+    <span class="activity-card__points" role="img" aria-label="${esc(t('tasks.pointsSummary', { count: points }))}" title="${esc(t('tasks.pointsSummary', { count: points }))}">${points}</span>
+    <div class="activity-card__surface">
     <div class="activity-card__summary">
       <span class="activity-card__leading">
         ${showCheckbox ? `<label class="task-bulk-select-target"><input type="checkbox" class="task-bulk-checkbox" data-task-id="${task.id}" ${isChecked ? 'checked' : ''}
@@ -676,13 +681,12 @@ function renderTaskCard(task, opts = {}) {
         </button>` : '<span class="activity-card__leading-spacer" aria-hidden="true"></span>'}
       </span>
       <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}"${!board ? ' aria-keyshortcuts="Shift+Space" aria-describedby="task-selection-hint" title="Open Task. Hold to select, or press Shift+Space."' : ''}>
-        <span class="activity-card__title u-card-title u-compact">${esc(task.title)}</span>
+        <span class="activity-card__title u-card-title u-compact"><span class="activity-card__title-text">${esc(task.title)}</span></span>
         <span class="activity-card__when">
           ${countdown ? `<span class="due-date"><i data-lucide="hourglass" class="icon-sm" aria-hidden="true"></i>${countdown}</span>` : due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i>${esc(due.label)}</span>` : (renderStartDateBadge(task.start_date) || '')}
           ${location ? `<span class="due-date activity-card__location" title="${esc(task.location?.address || location)}"><i data-lucide="map-pin" class="icon-sm" aria-hidden="true"></i>${esc(location)}</span>` : ''}
         </span>
       </button>
-      <span class="activity-card__points">${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>
     </div>
 
     <div class="activity-card__metadata">
@@ -696,7 +700,7 @@ function renderTaskCard(task, opts = {}) {
           ${task.locked ? `<span class="due-date" title="${esc(t('tasks.lockedBadge'))}"><i data-lucide="lock" class="icon-sm" aria-hidden="true"></i><span class="sr-only">${esc(t('tasks.lockedBadge'))}</span></span>` : ''}
           ${renderVisibilityBadge(task.visibility)}
         </div>
-        ${names ? `<span class="activity-card__assignee">${esc(names)}</span>` : ''}
+        ${names ? `<span class="activity-card__assignee sr-only">${esc(names)}</span>` : ''}
       </div>
       <div class="activity-card__controls">
         <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
@@ -717,6 +721,7 @@ function renderTaskCard(task, opts = {}) {
 
     ${renderResponsiveTagBadges(task)}
     ${renderActivitySubtasks(task, expandedSubtasks)}
+    </div>
   </article>`;
 }
 
@@ -1485,6 +1490,14 @@ function taskSnapshot(id) {
   return state.tasks.flatMap(task => [task, ...(task.subtasks || [])]).find(task => Number(task.id) === Number(id));
 }
 
+function patchTaskPointsBadge(badge, points) {
+  if (!badge) return;
+  const label = t('tasks.pointsSummary', { count: points });
+  badge.textContent = String(points);
+  badge.setAttribute('aria-label', label);
+  badge.title = label;
+}
+
 // Only operational nodes change before acknowledgement. Keep the existing card,
 // scrollports, expansion controls and metadata in place while siblings queue.
 function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}) {
@@ -1517,7 +1530,7 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
         saving.appendChild(check); row.appendChild(saving);
       } else if (!intent?.uncertain) saving?.remove();
       const points = row.querySelector('.subtask-item__points');
-      if (points) points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(child) });
+      patchTaskPointsBadge(points, taskCompletionPoints(child));
     }
     const counter = card.querySelector('.activity-card__subtasks-progress');
     if (counter) {
@@ -1551,7 +1564,9 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
       drag.draggable = !drag.disabled;
     }
     const points = card.querySelector('.activity-card__points');
-    if (points) points.textContent = t('tasks.pointsSummary', { count: taskCompletionPoints(task) });
+    const count = taskCompletionPoints(task);
+    patchTaskPointsBadge(points, count);
+    card.classList.toggle('activity-card--large-points', String(count).length > 3);
   }
   if (!queue.busy) {
     const saved = taskCardPendingFocus.get(list)?.get(Number(task.id));

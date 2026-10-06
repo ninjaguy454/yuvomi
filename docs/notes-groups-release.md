@@ -14,7 +14,7 @@ Notes stay in their existing records. Grouping adds a persisted rectangle and or
 
 Migration 10053 adds independent layouts and group membership. An ordinary or temporarily signed-in person uses `human:<user id>`; an anonymous paired display uses `device:<household device id>`. The server derives that owner from the effective authenticated principal. Returning from temporary sign-in restores the display arrangement. Credential rotation and permission changes do not create another layout.
 
-Geometry, canvas lock, stacking, group membership/order and their revisions are independent. Note content, audience, creator, content revision and **Show on Dashboard** remain shared. Existing View plus Edit permissions still govern arrangement; no device or Wall Calendar grant is added.
+Geometry, canvas lock, stacking, group membership/order and their revisions are independent. Note content, audience, creator, content revision and **Show on Dashboard** remain shared. Human arrangement still requires Notes write authority. Device arrangement requires View plus its independent Move, Pin, Group or Ungroup grants; absent new keys explicitly retain the legacy Edit fallback described in `notes-device-permissions.md`. No live device or Wall Calendar grant is added.
 
 The original `note_layouts`, `note_groups` and `note_group_members` remain the initial arrangement. Reads do not write. Each owner's first authorized structural change atomically copies that seed, preserving fractional coordinates, flags, group IDs, order and revisions. Later owners receive the preserved seed, not someone else's changes. Shared note deletion is the necessary exception: it repairs affected containers in the seed and every initialized layout, including each singleton survivor's own anchor.
 
@@ -32,7 +32,7 @@ P3 `deploy/build-open-tasks-fallback.mjs` additionally pauses new task acceptanc
 
 Cache identities are allocated separately: P2 `vidamia.60`, P2 recovery `vidamia.60-notes-compact`, combined P3 `vidamia.61`, P3 recovery `vidamia.61-acceptance-paused`. Every browser module and stylesheet introduced by these releases must be precached. Recovery verification supplies the corresponding exact cache identity to `test-sw-upgrade.js` through `VIDAMIA_TEST_SW_CACHE_VERSION`.
 
-The Notes touch cleanup and independent-layout release advanced the forward cache to `vidamia.62`; the Kitchen member-filter correction followed in `vidamia.63`. The Notes drag/save refinement now uses `vidamia.64`, with the matching acceptance-paused recovery cache `vidamia.64-acceptance-paused`. This stages the refined frontend assets separately while retaining the Kitchen correction, independent layouts and shared-device privacy cache.
+The Notes touch cleanup and independent-layout release advanced the forward cache to `vidamia.62`; the Kitchen member-filter correction followed in `vidamia.63`, then Notes drag/save refinement in `vidamia.64`. The combined device configuration, granular Notes permissions, stronger velocity tilt and deferred offer styles candidate uses `vidamia.65`, with matching recovery `vidamia.65-acceptance-paused`. All new configuration modules, permission helpers and styles are precached. Kitchen, independent layouts, sidebar/avatar behavior and the shared-device privacy cache are retained. Router and queued Tasks navigation behavior are unchanged.
 
 ## Evidence and ordered release
 

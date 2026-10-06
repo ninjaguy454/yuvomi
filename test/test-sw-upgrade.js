@@ -8,7 +8,7 @@ const REGISTER_SOURCE = readFileSync(new URL('../public/sw-register.js', import.
   .replace('export function clearApiCache()', 'function clearApiCache()');
 const ORIGIN = 'https://upgrade.test';
 // Recovery-image verification supplies its separately allocated exact identity.
-const EXPECTED_CACHE_VERSION = process.env.VIDAMIA_TEST_SW_CACHE_VERSION || '2.54.0-kitchen.5-vidamia.64';
+const EXPECTED_CACHE_VERSION = process.env.VIDAMIA_TEST_SW_CACHE_VERSION || '2.54.0-kitchen.5-vidamia.65';
 
 const keyOf = (input) => {
   const raw = typeof input === 'string' ? input : input.url;
@@ -174,7 +174,7 @@ test('Vidamia updates the deployed branding assets without losing shared-device 
 test('older releases and the previous refinement candidate upgrade to fresh Meal and Task modules', async () => {
   const env = loadWorker();
   const oldReleases = ['2.54.0', '2.54.0-kitchen.1', '2.54.0-kitchen.2', '2.54.0-kitchen.3', '2.54.0-kitchen.4',
-    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5', '2.54.0-kitchen.5-vidamia.7', '2.54.0-kitchen.5-vidamia.8', '2.54.0-kitchen.5-vidamia.9', '2.54.0-kitchen.5-vidamia.10', '2.54.0-kitchen.5-vidamia.61', '2.54.0-kitchen.5-vidamia.62'];
+    '2.54.0-kitchen.5-refinement.1', '2.54.0-kitchen.5-vidamia.1', '2.54.0-kitchen.5-vidamia.5', '2.54.0-kitchen.5-vidamia.7', '2.54.0-kitchen.5-vidamia.8', '2.54.0-kitchen.5-vidamia.9', '2.54.0-kitchen.5-vidamia.10', '2.54.0-kitchen.5-vidamia.61', '2.54.0-kitchen.5-vidamia.62', '2.54.0-kitchen.5-vidamia.63', '2.54.0-kitchen.5-vidamia.64'];
   const oldCaches = oldReleases.flatMap((release) => [
     `yuvomi-shell-${release}`,
     `yuvomi-pages-${release}`,
@@ -233,10 +233,12 @@ test('same Kitchen .5 baseline caches receive refinement imports and fresh modul
     '/components/modal.js', '/components/activity-automation.js', '/utils/wall-mode.js',
     '/styles/tokens.css', '/styles/typography.css', '/styles/reminders.css'];
   const pagePaths = ['/pages/tasks.js', '/pages/calendar.js', '/pages/meals.js', '/pages/shopping.js',
-    '/settings/pages/personal-appearance.js', '/settings/pages/notifications.js', '/settings/member-name-fields.js'];
+    '/settings/pages/personal-appearance.js', '/settings/pages/notifications.js', '/settings/member-name-fields.js',
+    '/settings/pages/admin-devices.js', '/settings/pages/admin-device-config.js', '/pages/notes.js'];
   const newImports = ['/notification-center.js', '/utils/appearance-preferences.js', '/utils/html-escape.js',
     '/utils/session-lifecycle.js', '/components/variable-expression-editor.js', '/utils/variable-expressions.js',
-    '/styles/variable-expressions.css'];
+    '/styles/variable-expressions.css', '/utils/note-permissions.js', '/styles/admin-device-config.css',
+    '/utils/note-drag-motion.js', '/components/open-task-board.js', '/styles/notes.css', '/styles/tasks.css'];
   for (const path of shellPaths) await shell.put(path, new MockResponse(`baseline:${path}`));
   for (const path of pagePaths) await pages.put(path, new MockResponse(`baseline:${path}`));
   await locales.put('/locales/en.json', new MockResponse('baseline:locale'));

@@ -17,8 +17,8 @@
 
 const APP_RELEASE   = '2.54.0-kitchen.5';
 
-// Stage the Notes drag/save refinement while retaining the Kitchen correction.
-const CACHE_VERSION = `${APP_RELEASE}-vidamia.64`;
+// Stage device Notes permissions, stronger drag tilt and deferred offer styles.
+const CACHE_VERSION = `${APP_RELEASE}-vidamia.65`;
 const SHELL_CACHE   = `yuvomi-shell-${CACHE_VERSION}`;
 const PAGES_CACHE   = `yuvomi-pages-${CACHE_VERSION}`;
 const LOCALES_CACHE = `yuvomi-locales-${CACHE_VERSION}`;
@@ -138,6 +138,7 @@ const APP_SHELL = [
   '/styles/markdown-toolbar.css',
   '/styles/notes.css',
   '/styles/note-groups.css',
+  '/styles/admin-device-config.css',
   '/styles/contacts.css',
   '/styles/birthdays.css',
   '/styles/budget.css',
@@ -213,6 +214,7 @@ const APP_SHELL = [
   '/components/note-group-overview.js',
   '/utils/note-board-layout.js',
   '/utils/note-drag-motion.js',
+  '/utils/note-permissions.js',
   '/utils/note-group-draft.js',
   '/utils/note-group-gesture.js',
   '/utils/note-live.js',
@@ -328,6 +330,7 @@ const PAGE_MODULES = [
   '/pages/login.js',
   '/pages/device-pair.js',
   '/settings/pages/admin-devices.js',
+  '/settings/pages/admin-device-config.js',
   '/pages/recipes.js',
   '/pages/pantry.js',
   '/pages/inventory.js',

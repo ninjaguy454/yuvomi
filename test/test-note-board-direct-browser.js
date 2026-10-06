@@ -350,13 +350,19 @@ test('phone transition hides reveal controls while retaining all locked note pos
   }finally{await page.close();}
 });
 
-for (const input of ['pointer', 'keyboard']) test(`open note menu stays reachable above overlapping cards and restores its tier on close (${input})`, async () => {
+for (const input of ['pointer', 'touch', 'keyboard']) test(`open note menu stays reachable above overlapping cards and restores its tier on close (${input})`, async () => {
   const page = await mount({ fixture: 'menu-overlap' });
   try {
     const tiers = () => page.$$eval('.note-card', nodes => nodes.map(n => Number(getComputedStyle(n).zIndex)));
     const initial = await tiers(); assert.ok(initial[0] < initial[1]);
     if (input === 'keyboard') { await page.focus(`${card} summary`); await page.keyboard.press('Enter'); }
-    else await page.click(`${card} summary`);
+    else if (input === 'touch') {
+      const point = await page.$eval(`${card} summary`, element => { const r=element.getBoundingClientRect(); return { x:r.left+r.width/2,y:r.top+r.height/2 }; });
+      const input = await page.createCDPSession();
+      await input.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{id:1,...point}]});
+      await input.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+      await input.detach();
+    } else await page.click(`${card} summary`);
     await page.waitForSelector(`${card} details[open]`);
     await page.waitForFunction(() => {
       const cards = [...document.querySelectorAll('.note-card')];

@@ -236,13 +236,13 @@ test('refinement selection badges show click order at top-right and append desel
     await select(page, selectionOrder); await screenshot(page, 'selection-click-order');
     async function badges() {
       return page.$$eval('[data-group-select][aria-pressed="true"]', elements => elements.map(element => {
-        const card = element.closest('[data-group-page]').getBoundingClientRect(), rect = element.getBoundingClientRect();
-        return { id: Number(element.dataset.groupSelect), number: element.textContent.trim(), top: rect.top - card.top, right: card.right - rect.right, width: rect.width, height: rect.height };
+        const card = element.closest('[data-group-page]').getBoundingClientRect(), rect = element.getBoundingClientRect(), art = element.querySelector('.note-card__badge-art').getBoundingClientRect();
+        return { id: Number(element.dataset.groupSelect), number: element.textContent.trim(), top: art.top + art.height / 2 - card.top, right: card.right - art.left - art.width / 2, width: rect.width, height: rect.height, artWidth: art.width, artHeight: art.height };
       }).sort((a, b) => Number(a.number) - Number(b.number)));
     }
     let actual = await badges();
     assert.deepEqual(actual.map(item => [item.id, item.number]), selectionOrder.map((id, index) => [id, String(index + 1)]));
-    assert.ok(actual.every(item => item.top >= -1 && item.top <= 12 && item.right >= -1 && item.right <= 12 && item.width >= 44 && item.height >= 44), JSON.stringify(actual));
+    assert.ok(actual.every(item => Math.abs(item.top) <= 1 && Math.abs(item.right - 22) <= 1 && item.width >= 44 && item.height >= 44 && item.artWidth === 24 && item.artHeight === 24), JSON.stringify(actual));
     await page.click('[data-group-select="2"]');
     assert.deepEqual((await badges()).map(item => [item.id, item.number]), [[9, '1'], [7, '2'], [5, '3']]);
     await page.click('[data-group-select="2"]');
@@ -358,13 +358,13 @@ for (const theme of ['light', 'dark']) for (const { zoom, rtl = false } of [{ zo
       const title = element.closest('.note-card').querySelector('.note-card__title').getBoundingClientRect();
       const glyph = icon?.getBoundingClientRect(), body = element.closest('.note-card').querySelector('.note-card__content').getBoundingClientRect();
       return { pressed: element.getAttribute('aria-pressed'), width: rect.width, height: rect.height, background: style.backgroundColor, shadow: style.boxShadow,
-        overlap: Math.max(0, Math.min(rect.right, title.right) - Math.max(rect.left, title.left)) * Math.max(0, Math.min(rect.bottom, title.bottom) - Math.max(rect.top, title.top)),
+        overlap: glyph ? Math.max(0, Math.min(glyph.right, title.right) - Math.max(glyph.left, title.left)) * Math.max(0, Math.min(glyph.bottom, title.bottom) - Math.max(glyph.top, title.top)) : null,
         bodyOverlap: glyph ? Math.max(0, Math.min(glyph.right, body.right) - Math.max(glyph.left, body.left)) * Math.max(0, Math.min(glyph.bottom, body.bottom) - Math.max(glyph.top, body.top)) : null,
         beforeBackground: getComputedStyle(element, '::before').backgroundColor, afterBackground: getComputedStyle(element, '::after').backgroundColor,
         fill: icon ? getComputedStyle(icon).fill : null, pathFills: [...element.querySelectorAll('svg path')].map(path => getComputedStyle(path).fill) };
     });
     assert.equal(pin.pressed, 'true'); assert.ok(pin.width >= 43.9 && pin.height >= 43.9, JSON.stringify(pin));
-    assert.ok(pin.overlap <= 1, `pin hit target must not overlap the title hit target: ${JSON.stringify(pin)}`);
+    assert.ok(pin.overlap != null && pin.overlap <= 1, `visible pin artwork must not overlap the readable title: ${JSON.stringify(pin)}`);
     assert.ok(pin.bodyOverlap != null && pin.bodyOverlap <= 1, `pin glyph must not overlap the readable note body: ${JSON.stringify(pin)}`);
     assert.ok(pin.fill && pin.fill !== 'none' || pin.pathFills.some(fill => fill !== 'none' && fill !== 'rgba(0, 0, 0, 0)'), `locked pin visibly filled: ${JSON.stringify(pin)}`);
     assert.equal(pin.background, 'rgba(0, 0, 0, 0)'); assert.equal(pin.shadow, 'none');
@@ -558,7 +558,7 @@ for (const kind of ['note', 'group']) for (const touch of [false, true]) test(`r
     await frame(page);
     await traceDragEvents(page, selector);
     const before = await page.$eval('.notes-scroll', element => ({ width: element.clientWidth, height: element.clientHeight, scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight }));
-    assert.ok(before.scrollWidth <= before.width + 1, 'the initial canvas fits without a horizontal scrollbar');
+    assert.ok(before.scrollWidth <= before.width + 1, `the initial canvas fits without a horizontal scrollbar: ${JSON.stringify(before)}`);
     const start = await beginNative(page, cdp, selector);
     const samples = [];
     for (let step = 2; step <= 8; step++) {

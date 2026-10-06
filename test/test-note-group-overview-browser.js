@@ -462,6 +462,8 @@ test('cancelling placement before changing selected notes discards its preview b
 test('the first intentional choice after a real multi-note canvas drop is not swallowed', async () => {
   const page = await mount(); try {
     await select(page, [2,5]);
+    await page.$eval('[data-group-activate="2"]', element => element.scrollIntoView({block:'nearest'}));
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     const start = await page.$eval('[data-group-activate="2"]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
     await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.waitForFunction(() => document.querySelector('.note-group-overview').dataset.gestureState === 'dragging');
     const exit = await page.$eval('[data-group-exit]', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });

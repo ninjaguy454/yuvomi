@@ -207,7 +207,12 @@ test('horizontal speed tilts the complete card surface and release leaves logica
 test('a zoomed card menu remains reachable after dragging and settling near the viewport edge',async()=>{
   const page=await mount();try{
     await page.click('#notes-zoom-in');await page.click(card+' summary');
-    const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
+    const p=await page.$eval(card,e=>{
+      const r=e.getBoundingClientRect(),point={x:r.x+30,y:r.bottom-55};
+      const target=document.elementFromPoint(point.x,point.y);
+      return{...point,body:e.contains(target)&&!target.closest('button,a,summary,details,[role="checkbox"]')};
+    });
+    assert.equal(p.body,true,'start on exposed note body beside the open menu');
     await page.mouse.move(p.x,p.y);await page.mouse.down();
     const angle=await page.evaluate(async p=>{
       let x=p.x,time=await new Promise(requestAnimationFrame),elapsed=0;
@@ -217,7 +222,7 @@ test('a zoomed card menu remains reachable after dragging and settling near the 
       const angle=parseFloat(getComputedStyle(document.querySelector('.note-card__surface')).rotate);
       window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,pointerType:'mouse',clientX:x,clientY:p.y}));return angle;
     },p);
-    assert.ok(angle>2);await page.waitForFunction(()=>!document.querySelector('.note-card--settling'));
+    assert.ok(angle>2,`expected active tilt, got ${angle}`);await page.waitForFunction(()=>!document.querySelector('.note-card--settling'));
     const menu=await page.$eval(card,e=>{
       const menu=e.querySelector('.note-card__menu-items'),r=menu.getBoundingClientRect(),v=e.closest('.notes-scroll').getBoundingClientRect();
       const action=menu.querySelector('button'),a=action.getBoundingClientRect();

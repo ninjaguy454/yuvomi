@@ -191,6 +191,7 @@ test('horizontal speed tilts the complete card surface and release leaves logica
     assert.equal(result.frame.unified,true,'title, preview, footer and controls share one visual surface');
     assert.equal(result.frame.contentRotation,'none','content does not rotate a second time');
     assert.notEqual(result.frame.background,'rgba(0, 0, 0, 0)');assert.notEqual(result.frame.shadow,'none');
+    assert.match(result.frame.shadow,/12px 24px/,'the lifted shadow stays on the rotating surface even while hovered');
     assert.equal(result.frame.outerBackground,'rgba(0, 0, 0, 0)');assert.equal(result.frame.outerShadow,'none','no stationary frame shadow remains');
     assert.deepEqual(result.hit,{outside:true,moving:false,controlsDisabled:true,settling:false},'visual protrusions never change the logical hit target');
     for(const field of ['x','y','width','height'])assert.ok(Math.abs(result.before[field]-result.after[field])<1,field);
@@ -200,6 +201,65 @@ test('horizontal speed tilts the complete card surface and release leaves logica
     assert.notEqual(await page.$eval(card+' .note-card__title',node=>getComputedStyle(node).pointerEvents),'none','controls recover after settling');
     await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
     await finish(page);assert.equal(writes.length,1);
+  }finally{releaseSave?.();await page.mouse.up();await page.close();}
+});
+
+test('a zoomed card menu remains reachable after dragging and settling near the viewport edge',async()=>{
+  const page=await mount();try{
+    await page.click('#notes-zoom-in');await page.click(card+' summary');
+    const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
+    await page.mouse.move(p.x,p.y);await page.mouse.down();
+    const angle=await page.evaluate(async p=>{
+      let x=p.x,time=await new Promise(requestAnimationFrame),elapsed=0;
+      while(elapsed<320){const now=await new Promise(requestAnimationFrame),dt=now-time;time=now;elapsed+=dt;x+=dt*.8;
+        window.dispatchEvent(new PointerEvent('pointermove',{pointerId:1,pointerType:'mouse',buttons:1,clientX:x,clientY:p.y}));}
+      await new Promise(requestAnimationFrame);
+      const angle=parseFloat(getComputedStyle(document.querySelector('.note-card__surface')).rotate);
+      window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,pointerType:'mouse',clientX:x,clientY:p.y}));return angle;
+    },p);
+    assert.ok(angle>2);await page.waitForFunction(()=>!document.querySelector('.note-card--settling'));
+    const menu=await page.$eval(card,e=>{
+      const menu=e.querySelector('.note-card__menu-items'),r=menu.getBoundingClientRect(),v=e.closest('.notes-scroll').getBoundingClientRect();
+      const action=menu.querySelector('button'),a=action.getBoundingClientRect();
+      return{open:e.querySelector('details').open,overflow:getComputedStyle(e.querySelector('.note-card__surface')).overflow,
+        left:r.left,right:r.right,top:r.top,bottom:r.bottom,viewport:v.toJSON(),hit:action.contains(document.elementFromPoint(a.left+a.width/2,a.top+a.height/2))};
+    });
+    assert.equal(menu.open,true);assert.equal(menu.overflow,'visible');assert.equal(menu.hit,true);
+    assert.ok(menu.left>=menu.viewport.left+3&&menu.right<=menu.viewport.right-3,JSON.stringify(menu));
+    assert.ok(menu.top>=menu.viewport.top+3&&menu.bottom<=menu.viewport.bottom-3,JSON.stringify(menu));
+    await finish(page);assert.equal(writes.length,1);
+  }finally{releaseSave?.();await page.mouse.up();await page.close();}
+});
+
+test('a fast save acknowledgment retains settling protection across controller replacement',async()=>{
+  const page=await mount();try{
+    // Stretch only release timing to reliably sample both sides of the HTTP
+    // acknowledgment, including under a slow CI browser. Drag motion is real.
+    await page.addStyleTag({content:'.note-card:not(.note-card--moving) > .note-card__surface {transition-duration:800ms}'});
+    const p=await page.$eval(card,e=>{const r=e.getBoundingClientRect();return{x:r.x+r.width/2,y:r.bottom-55};});
+    await page.mouse.move(p.x,p.y);await page.mouse.down();
+    await page.evaluate(async p=>{
+      let x=p.x,time=await new Promise(requestAnimationFrame),elapsed=0;
+      while(elapsed<240){const now=await new Promise(requestAnimationFrame),dt=now-time;time=now;elapsed+=dt;x+=dt*.8;
+        window.dispatchEvent(new PointerEvent('pointermove',{pointerId:1,pointerType:'mouse',buttons:1,clientX:x,clientY:p.y}));}
+      await new Promise(requestAnimationFrame);
+      const card=document.querySelector('.note-card[data-id="1"]'),surface=card.querySelector('.note-card__surface');
+      window.dispatchEvent(new PointerEvent('pointerup',{pointerId:1,pointerType:'mouse',clientX:x,clientY:p.y}));
+      window.settleSamples=[];window.settleDone=false;
+      function sample(){
+        const angle=parseFloat(getComputedStyle(surface).rotate)||0;
+        settleSamples.push({angle,saved:document.querySelector('#notes-board-status').textContent==='Layout saved',
+          protected:card.classList.contains('note-card--settling')&&[...card.querySelectorAll('button,summary')].every(node=>getComputedStyle(node).pointerEvents==='none'),same:card===document.querySelector('.note-card[data-id="1"]')});
+        if(angle>.001)requestAnimationFrame(sample);else window.settleDone=true;
+      }
+      requestAnimationFrame(sample);
+    },p);
+    await page.waitForFunction(()=>document.querySelector('#notes-board-status').textContent==='Saving layout...');
+    await finish(page);await page.waitForFunction(()=>window.settleDone);
+    const samples=await page.evaluate(()=>settleSamples);
+    assert.ok(samples.some(sample=>sample.saved&&sample.angle>.2),'save response arrives before leveling finishes');
+    assert.ok(samples.every(sample=>sample.same&&(sample.angle<=.001||sample.protected)),JSON.stringify(samples));
+    assert.equal(await page.$('.note-card--settling'),null);assert.equal(writes.length,1);
   }finally{releaseSave?.();await page.mouse.up();await page.close();}
 });
 

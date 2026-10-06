@@ -146,7 +146,7 @@ test('touch intent: deliberate body hold visibly lifts before moving and submits
     await input.start(point.x, point.y); await sleep(100);
     assert.equal(await page.$('.note-card--moving'), null, 'a new touch is not a move yet');
     await page.waitForSelector('.note-card--moving');
-    assert.notEqual(await page.$eval(card, element => getComputedStyle(element).boxShadow), 'none');
+    assert.notEqual(await page.$eval(card+' .note-card__surface', element => getComputedStyle(element).boxShadow), 'none');
     assert.deepEqual(await box(page), before, 'arming lifts without changing placement');
     for (let step = 1; step <= 8; step++) await input.move(point.x + step * 12, point.y + step * 10);
     await input.end(); await saved(page);

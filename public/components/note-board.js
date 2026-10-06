@@ -3,6 +3,10 @@ import { t } from '/i18n.js';
 import { advanceNoteDragTilt } from '/utils/note-drag-motion.js';
 import {noteItemAllows} from '/utils/note-permissions.js';
 
+// Cards survive a successful save's controller replacement. Their visual
+// transitions and hit protection must survive with them, until actually done.
+const settlingCards = new WeakMap();
+
 /** Keep the active content card's note identity distinct from its geometry owner. */
 export function renderNoteGroupFrame(item, cardHtml) {
   const template = document.createElement('template');
@@ -56,7 +60,6 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
   const canvasWidth = () => Math.max(640, viewportWidth());
   const responsiveWidth = () => getResponsiveWidth ? getResponsiveWidth() : viewportWidth();
   let disposed = false, gesture = null, narrow = compact || responsiveWidth() < 640;
-  const settlingCards = new Map();
   let suppressClick = false, frame = 0, excludedPointer = null;
   let navigation = null;
   const touches = new Map();
@@ -191,6 +194,8 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     for (const item of projected) {
       const card = cardFor(item);
       if (card) {
+        const settling = settlingCards.get(card);
+        if (settling) settling.onSettled = positionMenus;
         if (narrow) for (const name of ['left', 'top', 'width', 'height']) card.style[name] = '';
         else paint(card, !filtered && pending.get(item.key) || item.layout);
       }
@@ -218,14 +223,14 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
     if (surface && current.active && !current.edges) {
       // Rotated corners must not become new hit targets while leveling out.
       // Follow the actual transition, including reduced motion/cancellation.
-      const token = {};
+      const token = { onSettled: positionMenus };
       settlingCards.set(current.card, token);
       current.card.classList.add('note-card--settling');
       const transitions = surface.getAnimations().filter(animation => animation.transitionProperty === 'rotate');
       Promise.allSettled(transitions.map(animation => animation.finished)).then(() => {
         if (settlingCards.get(current.card) !== token) return;
         clearSettling(current.card);
-        positionMenus();
+        token.onSettled();
       });
     }
     if (current.card.hasPointerCapture?.(current.pointer)) current.card.releasePointerCapture(current.pointer);
@@ -603,7 +608,6 @@ export function wireNoteBoard(grid, { getNotes = () => [], canEdit = () => true,
       if (revealStrip?.contains(document.activeElement)) viewState.revealFocus = Number(document.activeElement.dataset.noteReveal);
       if (!narrow) { viewState.left = viewport.scrollLeft; viewState.top = viewport.scrollTop; }
       cancel(); disposed = true; observer.disconnect();
-      for (const card of settlingCards.keys()) clearSettling(card);
       window.removeEventListener('pointerdown', down); window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up); window.removeEventListener('pointercancel', pointerCancel);
       window.removeEventListener('touchmove', touchMove);

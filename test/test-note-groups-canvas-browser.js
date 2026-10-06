@@ -119,6 +119,10 @@ for (const snap of [false, true]) for (const scale of [1, 1.5]) test(`freeform g
 test('paging is local, stops at both ends and retains group geometry and note identity',async()=>{
  const page=await mount();try{await requireFeature(page);const group='[data-board-key="group:1"]';
   assert.equal(await page.$$eval('.note-card',n=>n.length),2);
+  assert.equal(await page.$eval(group,node=>{
+    const surface=node.querySelector('.note-card__surface');
+    return surface.contains(node.querySelector('.note-group-pages'))&&getComputedStyle(surface).overflow==='visible';
+  }),true,'the pager belongs to the complete card surface and remains unclipped');
   assert.equal(await page.$eval(`${group} [data-group-page="previous"]`,n=>n.disabled),true);
   const before=await page.$eval(group,n=>[n.style.left,n.style.top,n.style.width,n.style.height]);
   await page.focus(`${group} [data-group-page="next"]`);await page.keyboard.press('Enter');

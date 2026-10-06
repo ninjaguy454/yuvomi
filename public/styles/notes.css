@@ -604,8 +604,8 @@
 }
 .note-card:hover > .note-card__surface { box-shadow: var(--shadow-md); }
 .note-card--pinned > .note-card__surface { box-shadow: var(--shadow-md), 0 0 0 2px color-mix(in srgb, currentColor 22%, transparent); }
-.note-card--moving > .note-card__surface { box-shadow: var(--shadow-lg), 0 12px 24px rgb(0 0 0 / .22); }
-.note-card--resizing > .note-card__surface { box-shadow: var(--shadow-lg); }
+.notes-board > .note-card--moving > .note-card__surface { box-shadow: var(--shadow-lg), 0 12px 24px rgb(0 0 0 / .22); }
+.notes-board > .note-card--resizing > .note-card__surface { box-shadow: var(--shadow-lg); }
 .note-card--group > .note-card__surface,
 .note-card:has(.note-card__menu[open]) > .note-card__surface { overflow: visible; }
 /* Descendants with their own pointer-events rules must also stay on the

@@ -80,6 +80,7 @@ for (const [width, height, expected] of [[320, 740, 'list'], [360, 840, 'list'],
     const page = await mount(width, height);
     try {
       await view(page, expected);
+      assert.equal(await page.$$eval('.note-card__surface',nodes=>nodes.length),expected==='list'?0:3,'canvas tilt does not wrap list rows');
       assert.equal(await page.$eval('#notes-compact-view', el => el.hidden), expected === 'list');
       assert.equal(await page.$eval('#notes-compact-view', el => el.getAttribute('aria-label')), expected === 'list' ? 'Canvas view' : 'List view');
       assert.ok(await page.$(`#notes-compact-view [data-lucide="${expected === 'list' ? 'panels-top-left' : 'list'}"]`));

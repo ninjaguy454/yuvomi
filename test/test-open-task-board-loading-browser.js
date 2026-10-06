@@ -40,6 +40,7 @@ async function fixture({ hold = false } = {}) {
     if (['http:', 'https:'].includes(url.protocol) && url.origin !== base) return request.abort();
     if (url.pathname === '/components/task-detail.js' && gate.hold) { gate.request = request; return; }
     if (url.pathname === '/api/v1/tasks' && gate.removeOffer) return request.respond({ status: 200, contentType: 'application/json', body: '{"data":[]}' });
+    if (url.pathname === '/api/v1/tasks' && gate.changedOffer) return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [{ ...task, revision: 5, permissions: { view: true, accept: false } }] }) });
     if (url.pathname === '/api/v1/tasks/7' && gate.failRead) return request.respond({ status: 503, contentType: 'application/json', body: '{"error":"Synthetic retryable failure"}' });
     return request.continue();
   });
@@ -68,6 +69,52 @@ async function holdClick(f) {
   await f.page.click('[data-open-task="7"]'); await imported; await read;
   assert.ok(f.gate.request && !f.gate.request.isInterceptResolutionHandled());
 }
+
+async function revalidate(page) {
+  await page.evaluate(async () => {
+    const { api } = await import('/api.js'), get = api.get;
+    await new Promise(resolve => {
+      api.get = async (...args) => {
+        try { return await get(...args); }
+        finally {
+          if (args[0] === '/tasks?offers=1') {
+            api.get = get;
+            // Let the loader's promise continuation apply this response first.
+            setTimeout(resolve, 0);
+          }
+        }
+      };
+      window.dispatchEvent(new Event('task-data-changed'));
+    });
+  });
+}
+
+test('an unchanged refresh preserves the focused pending offer and completes its single inspection', { timeout: 15000 }, async () => {
+  const f = await fixture();
+  try {
+    await holdClick(f);
+    await f.page.evaluate(() => { window.pendingOffer = document.querySelector('[data-open-task="7"]'); });
+    await revalidate(f.page);
+    assert.equal(await f.page.evaluate(() => pendingOffer === document.querySelector('[data-open-task="7"]')), true, 'an identical projection must retain the pending control');
+    assert.equal(await f.page.$eval('[data-open-task="7"]', button => button.disabled), true);
+    await f.page.click('[data-open-task="7"]');
+    await f.gate.request.continue(); await f.page.waitForSelector('.detail-view__pane');
+    assert.equal(f.seen.filter(r => r.path === '/api/v1/tasks/7').length, 1);
+    assert.deepEqual(f.errors, []);
+  } finally { await f.close(); }
+});
+
+test('changed authority on a retained offer ID cancels its pending inspection', { timeout: 15000 }, async () => {
+  const f = await fixture();
+  try {
+    await holdClick(f); f.gate.changedOffer = true; await revalidate(f.page);
+    await f.gate.request.continue();
+    await f.page.evaluate(async () => { await import('/components/task-detail.js'); await new Promise(resolve => setTimeout(resolve, 0)); });
+    assert.equal(await f.page.$('.detail-view__pane'), null);
+    assert.deepEqual(await f.page.evaluate(() => window.toasts), []);
+    assert.deepEqual(f.errors, []);
+  } finally { await f.close(); }
+});
 
 test('the board renders without requesting the task-detail graph', { timeout: 15000 }, async () => {
   const f = await fixture({ hold: true });

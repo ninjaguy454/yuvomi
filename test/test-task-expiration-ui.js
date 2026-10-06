@@ -40,7 +40,7 @@ test('expired stays a distinct historical status across archive and due grouping
 test('expired cards show zero points and history but offer no completion or child toggle', () => {
   const card = ui.renderTaskCard(morning(), { expandedSubtasks: true, board: true });
   assert.match(card, /activity-card__status-label--expired">Expired/);
-  assert.match(card, /activity-card__points">tasks.pointsSummary\{&quot;count&quot;:0\}/);
+  assert.match(card, /activity-card__points" role="img" aria-label="tasks.pointsSummary\{&quot;count&quot;:0\}"[^>]*>0<\/span>/);
   assert.doesNotMatch(card, /due-date--overdue|data-task-drag-handle|Helper needed|Supervision needed/);
   assert.match(card, /data-action="toggle-status"[^>]+disabled/);
   assert.match(card, /data-action="toggle-subtask" data-id="2"[^>]+disabled/);

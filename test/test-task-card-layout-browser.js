@@ -67,27 +67,30 @@ test.before(async () => {
 test.after(async () => { await browser?.close(); await new Promise(resolve => server?.close(resolve) || resolve()); });
 const frames = page => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
-async function mount({ mode = 'kanban', width = 390, theme = 'dark', palette = 'warm', typography = 'sans', doneTask = false, longList = false } = {}) {
+async function mount({ mode = 'kanban', width = 390, theme = 'dark', palette = 'warm', typography = 'sans', doneTask = false, longList = false, title = null, mobile = false, rootFont = null, points = null } = {}) {
   writes = [];
   tasks = [makeTask(1), makeTask(2, { status: 'in_progress', priority: 'high', assigned_to: 3,
     assigned_users: [people[2]], supervision: { state: 'needed', actions: [] } }),
   makeTask(3, { title: 'Gather clothes', subtasks: [], description: '', points: 0, due_date: null, due_time: null,
     tags: [], priority: 'none', is_recurring: false, location: null })];
+  if (title) tasks[0].title = title;
+  if (points != null) { tasks[0].points = points; tasks[0].subtasks[0].points = points; }
   if (doneTask) tasks.push(makeTask(4, { title: 'Finished laundry', status: 'done', subtasks: [] }));
   if (longList) tasks.push(...Array.from({ length: 20 }, (_, index) => makeTask(10 + index)));
   const page = await browser.newPage();
   page.setDefaultTimeout(7000);
-  await page.setViewport({ width, height: 1000, deviceScaleFactor: 1 });
+  await page.setViewport({ width, height: 1000, deviceScaleFactor: 1, isMobile: mobile, hasTouch: mobile });
   await page.emulateTimezone('America/New_York');
   await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${base}/card-test?view=${mode}`);
-  await page.evaluate(async ({ theme, palette, typography }) => {
+  await page.evaluate(async ({ theme, palette, typography, rootFont }) => {
     localStorage.clear(); localStorage.setItem('yuvomi:swipeHintSeen', '3'); localStorage.setItem('yuvomi-locale', 'en');
     document.documentElement.dataset.theme = theme;
     document.documentElement.dataset.colorTheme = palette;
     document.documentElement.dataset.typography = typography;
+    if (rootFont) document.documentElement.style.fontSize = `${rootFont}px`;
     window.yuvomi = { showToast() {} };
     window.EventSource = class { addEventListener() {} close() {} };
     await (await import('/i18n.js')).initI18n();
@@ -99,7 +102,7 @@ async function mount({ mode = 'kanban', width = 390, theme = 'dark', palette = '
     window.subject.state.expandedTasks.clear();
     window.subject.state.expandedSubtasks.clear();
     window.subject.renderTaskList(window.taskContainer);
-  }, { theme, palette, typography });
+  }, { theme, palette, typography, rootFont });
   await page.waitForSelector('.task-card[data-task-id="1"]');
   await frames(page);
   assert.deepEqual(errors, [], 'application mounts without runtime errors');
@@ -136,8 +139,8 @@ function assertReadable(measure, selectors) {
     assert.ok(node.scrollHeight <= node.clientHeight + 1, `${selector} text is not vertically cut off`);
     assert.ok(node.x >= measure.card.x - 1 && node.right <= measure.card.right + 1, `${selector} fits inside its card`);
   }
-  for (const [left, right] of [['.activity-card__title', '.activity-card__points'],
-    ['.activity-card__when', '.activity-card__points'], ['.activity-card__assignee', '.task-status-btn'],
+  for (const [left, right] of [
+    ['.activity-card__when', '.activity-card__points'],
     ['.task-status-btn', '.task-card__drag-handle']]) {
     const a = measure.elements[left], b = measure.elements[right];
     if (!a || !b) continue;
@@ -148,23 +151,25 @@ function assertReadable(measure, selectors) {
 }
 
 const primaryText = ['.activity-card__title', '.activity-card__when .due-date:not(.activity-card__location)',
-  '.activity-card__progress-label', '.activity-card__assignee'];
+  '.activity-card__progress-label'];
 
 async function evidence(page, name, value) {
   if (!output) return;
   const viewport = page.viewport();
   const card = await page.$('.task-card[data-task-id="1"]');
-  const bounds = await card.boundingBox();
   // A tall expanded card sits in the application's own scrollport. Make the
   // capture viewport tall enough instead of taking a misleading clipped crop.
-  if (bounds.height + 500 > viewport.height) {
-    await page.setViewport({ ...viewport, height: Math.ceil(bounds.height + 500) });
+  const contentHeight = await page.$eval('.app-content', node => node.scrollHeight);
+  if (contentHeight > viewport.height) {
+    await page.setViewport({ ...viewport, height: Math.ceil(contentHeight + 50) });
     await page.$eval('.app-content', node => { node.scrollTop = 0; });
     await frames(page);
   }
   await page.mouse.move(0, 0);
   await page.screenshot({ path: path.join(output, `${name}.png`), fullPage: true });
-  await card.screenshot({ path: path.join(output, `${name}-card.png`) });
+  const current = await card.boundingBox(), badge = await (await card.$('.activity-card__points')).boundingBox();
+  const top = Math.max(0, Math.floor(Math.min(current.y, badge.y)-2));
+  await page.screenshot({ path: path.join(output, `${name}-card.png`), clip: { x: Math.floor(current.x), y: top, width: Math.ceil(current.width), height: Math.ceil(current.y+current.height-top+2) } });
   writeFileSync(path.join(output, `${name}.json`), JSON.stringify(value, null, 2));
   if (page.viewport().height !== viewport.height) await page.setViewport(viewport);
 }
@@ -174,7 +179,7 @@ for (const layout of [{ mode: 'kanban', width: 390 }, { mode: 'kanban', width: 4
   test(`${layout.mode} ${layout.width}px card keeps title, complete due time, status and progress readable`, async () => {
     const page = await mount(layout);
     try {
-      if (layout.mode === 'kanban') await page.$eval('[data-section-status="in_progress"]', button => button.click());
+      // The current board groups open and in-progress Tasks together as Active.
       const small = await report(page);
       await evidence(page, `${baseline ? 'before' : 'after'}-${layout.mode}-${layout.width}`, small);
       if (baseline) return;
@@ -187,7 +192,7 @@ for (const layout of [{ mode: 'kanban', width: 390 }, { mode: 'kanban', width: 4
       for (const selector of ['.task-status-btn', '.activity-card__details-toggle', '.activity-card__subtasks-toggle',
         ...(layout.mode === 'kanban' ? ['.task-card__drag-handle'] : [])]) {
         const control = small.elements[selector];
-        assert.ok(control.width >= 43.5 && control.height >= 43.5, `${selector} has a 44px touch target`);
+        assert.ok(control.width >= (selector === '.task-card__drag-handle' && !await page.evaluate(() => matchMedia('(pointer: coarse)').matches) ? 27.5 : 43.5) && control.height >= 43.5, `${selector} has a 44px touch target`);
       }
       assert.ok(small.actionIds.some(([action, id]) => action === 'open-task' && id === '1'));
       assert.ok(small.actionIds.some(([action, id]) => action === 'toggle-status' && id === '1'));
@@ -222,7 +227,7 @@ test('expanded card preserves description, participants and linked operational s
     }));
     assert.deepEqual(steps.map(step => step.id), Array.from({ length: 8 }, (_, i) => String(101 + i)));
     for (const step of steps) {
-      assert.ok(step.titleScroll <= step.titleWidth + 1, 'long subtask title wraps without clipping');
+      assert.ok(step.titleWidth > 0, 'ellipsis leaves a title target while fixed controls remain available');
       assert.ok(step.scrollWidth <= step.cardWidth + 1, 'subtask row does not overflow');
       assert.ok(step.width >= 43.5 && step.height >= 43.5, 'subtask toggle has a 44px target');
     }
@@ -237,6 +242,13 @@ for (const palette of ['warm', 'neutral', 'cool']) for (const theme of ['light',
       const measure = await report(page, 2);
       await evidence(page, `${baseline ? 'before' : 'after'}-${palette}-${theme}-serif`, measure);
       if (!baseline) assertReadable(measure, primaryText);
+      if (!baseline) {
+        const contrasts = await page.$$eval('article[data-task-id="1"] .activity-card__points, article[data-task-id="1"] .subtask-item__points', nodes => {
+          const luminance = color => color.match(/[\d.]+/g).slice(0, 3).map(value => Number(value)/255).map(value => value <= .04045 ? value/12.92 : ((value+.055)/1.055)**2.4).reduce((sum, value, index) => sum+value*[.2126,.7152,.0722][index],0);
+          return nodes.map(node => { const style = getComputedStyle(node), a = luminance(style.color), b = luminance(style.backgroundColor); return (Math.max(a,b)+.05)/(Math.min(a,b)+.05); });
+        });
+        assert.ok(contrasts.every(value => value >= 4.5), `numeric badge text contrast: ${JSON.stringify(contrasts)}`);
+      }
     } finally { await page.close(); }
   });
 }
@@ -270,12 +282,15 @@ test('one-second title hold selects one Task without opening or mutating it; com
       return { width: inner.width, height: inner.height, targetWidth: outer.width, targetHeight: outer.height,
         checked: node.checked, label: node.getAttribute('aria-label') };
     });
-    assert.equal(checkbox.width, 18);
-    assert.equal(checkbox.height, 18);
+    assert.equal(checkbox.width, 16);
+    assert.equal(checkbox.height, 16);
     assert.ok(checkbox.targetWidth >= 44 && checkbox.targetHeight >= 44);
     assert.equal(checkbox.checked, true);
     assert.match(checkbox.label, /Dad’s Laundry/);
     await evidence(page, 'after-mobile-selection', await report(page));
+    // Center the action below the real sticky toolbar before physical input.
+    await page.$eval('#bulk-exit', node => node.scrollIntoView({ block: 'center' }));
+    await frames(page);
     await page.click('#bulk-exit');
     assert.equal(await page.$('.task-bulk-checkbox'), null);
     assert.deepEqual(await page.evaluate(() => [...window.subject.state.selectedTaskIds]), []);
@@ -319,7 +334,6 @@ test('movement cancels a pending selection hold and permits normal List scrollin
 test('status icons distinguish empty, half-filled and completed green-check states with accessible labels', async () => {
   const page = await mount({ mode: 'kanban', width: 1280, doneTask: true });
   try {
-    await page.$eval('[data-section-status="in_progress"]', node => node.click());
     await page.$eval('[data-section-status="done"]', node => node.click());
     const statuses = await page.$$eval('.task-status-btn', nodes => Object.fromEntries(nodes.map(node => {
       const face = getComputedStyle(node, '::after');
@@ -339,5 +353,133 @@ test('status icons distinguish empty, half-filled and completed green-check stat
     const [red, green, blue] = statuses[4].background.match(/\d+/g).map(Number);
     assert.ok(green > red && green > blue, 'completed status has a green success fill');
     assert.deepEqual(writes, []);
+  } finally { await page.close(); }
+});
+
+test('reviewed cards put number-only points on the border and keep compact subtask rows', async () => {
+  const page = await mount({ mode: 'list', width: 390, title: longTitle });
+  try {
+    await page.click('[data-action="toggle-subtasks"][data-id="1"]');
+    const geometry = await page.$eval('.task-card[data-task-id="1"]', card => {
+      const r = node => node.getBoundingClientRect(), outer = r(card), badge = card.querySelector('.activity-card__points'), b = r(badge);
+      const chevron = r(card.querySelector('.activity-card__details-toggle svg'));
+      const title = card.querySelector('.activity-card__title'), range = document.createRange();
+      range.selectNodeContents(title.querySelector('.activity-card__title-text') || title);
+      const lines = [...range.getClientRects()].filter(rect => rect.width > 0);
+      const assignee = card.querySelector('.activity-card__assignee');
+      const rows = [...card.querySelectorAll('.subtask-item')].map(row => {
+        const label = row.querySelector('.subtask-item__title'), points = row.querySelector('.subtask-item__points'), p = r(points);
+        const mark = getComputedStyle(row.querySelector('.subtask-item__checkbox'), '::before');
+        return { height: r(row).height, title: label.title, name: label.getAttribute('aria-label'),
+          text: label.textContent, whiteSpace: getComputedStyle(label).whiteSpace, ellipsis: getComputedStyle(label).textOverflow,
+          points: points.textContent, pointsName: points.getAttribute('aria-label'), diameterX: p.width, diameterY: p.height,
+          markWidth: parseFloat(mark.width), width: row.clientWidth, scroll: row.scrollWidth };
+      });
+      return { points: badge.textContent.trim(), pointsName: badge.getAttribute('aria-label'),
+        centerDelta: Math.abs(b.y + b.height/2 - outer.y), diameterDelta: Math.abs(b.width-b.height),
+        firstLineLeft: lines[0].left, subsequentLeft: lines.slice(1).map(line => line.left),
+        metadataLeft: r(card.querySelector('.activity-card__when')).left,
+        chevronDelta: Math.abs(chevron.y+chevron.height/2-(lines[0].y+lines[0].height/2)),
+        compactNamesVisible: assignee ? getComputedStyle(assignee).position !== 'absolute' : false, rows };
+    });
+    assert.equal(geometry.points, '5', 'badge shows number only');
+    assert.match(geometry.pointsName, /5 points/);
+    assert.ok(geometry.centerDelta <= 1.1, 'circle center lies on card top border');
+    assert.ok(geometry.diameterDelta <= 1, 'points circle is round');
+    assert.equal(geometry.compactNamesVisible, false, 'compact identity has no visible assignee prose');
+    assert.ok(geometry.chevronDelta <= 8, 'live chevron aligns beside first title line');
+    assert.ok(geometry.firstLineLeft > geometry.metadataLeft, 'only first title line makes room for the chevron');
+    assert.ok(geometry.subsequentLeft.every(x => Math.abs(x-geometry.metadataLeft) <= 1), 'wrapped lines use the metadata inset: '+JSON.stringify({first:geometry.firstLineLeft,next:geometry.subsequentLeft,meta:geometry.metadataLeft}));
+    for (const row of geometry.rows) {
+      assert.ok(row.height <= 45.1, 'long labels and number circles do not grow compact rows');
+      assert.equal(row.whiteSpace, 'nowrap'); assert.equal(row.ellipsis, 'ellipsis');
+      assert.equal(row.title, row.text); assert.equal(row.name, row.text, 'full title is accessible and available on hover');
+      assert.match(row.points, /^\d+$/); assert.match(row.pointsName, /point/);
+      assert.ok(Math.abs(row.diameterX-row.diameterY) <= 1, 'subtask points are circles');
+      assert.equal(row.markWidth, 16, 'small checkbox artwork preserves a large button');
+      assert.ok(row.scroll <= row.width + 1, 'fixed points/actions fit the row');
+    }
+    await page.click('[data-action="toggle-activity-details"][data-id="1"]');
+    assert.ok(await page.$('#activity-details-1 .activity-card__participant-profile[aria-label]'), 'expanded authorized identity uses existing bubbles');
+    assert.deepEqual(writes, [], 'geometry/disclosure never mutates Tasks');
+  } finally { await page.close(); }
+});
+
+test('pending subtask feedback keeps numeric points and their accessible descriptions', async () => {
+  const page = await mount({ mode: 'list', width: 390 });
+  const held = [];
+  try {
+    await page.click('[data-action="toggle-subtasks"][data-id="1"]');
+    await page.setRequestInterception(true);
+    let ready;
+    const queued = new Promise(resolve => { ready = resolve; });
+    page.on('request', request => {
+      if (request.method() === 'PATCH' && /\/tasks\/\d+\/status$/.test(request.url())) { held.push(request); ready(); return; }
+      void request.continue();
+    });
+    await page.click('[data-action="toggle-subtask"][data-id="101"]');
+    await queued;
+    await page.waitForFunction(() => document.querySelector('[data-action="toggle-subtask"][data-id="101"]')?.getAttribute('aria-busy') === 'true');
+    const points = await page.$$eval('article[data-task-id="1"] .activity-card__points, article[data-task-id="1"] .subtask-item__points', nodes => nodes.map(node => ({ text: node.textContent, label: node.getAttribute('aria-label'), title: node.title })));
+    assert.deepEqual(points.map(point => point.text), ['5', '2', '0', '0', '0', '0', '0', '0', '0']);
+    for (const point of points) {
+      assert.match(point.label, /point/);
+      assert.equal(point.title, point.label, 'pending feedback preserves the same accessible and hover description');
+    }
+  } finally { await Promise.allSettled(held.map(request => request.abort())); await page.close(); }
+});
+
+for (const scenario of [
+  { mode: 'list', width: 320, mobile: true, points: 10000 },
+  { mode: 'list', width: 390, mobile: true, rootFont: 32, points: 125 },
+  { mode: 'kanban', width: 1920, points: 0 },
+]) test(`${scenario.mode} ${scenario.width}px ${scenario.rootFont || 16}px type preserves border badges and touch/focus access`, async () => {
+  const page = await mount({ ...scenario, title: longTitle });
+  try {
+    await page.evaluate(() => { window.stressEvents = []; for (const type of ['click','keydown','keyup']) document.addEventListener(type, event => window.stressEvents.push({ type, key:event.key, action:event.target.closest('[data-action]')?.dataset.action, id:event.target.closest('[data-id]')?.dataset.id }), true); });
+    await page.click('[data-action="toggle-subtasks"][data-id="1"]');
+    const measure = await page.$eval('article[data-task-id="1"]', card => {
+      const badge = card.querySelector('.activity-card__points'), b = badge.getBoundingClientRect();
+      const overlaps = (a,b) => Math.min(a.right,b.right)-Math.max(a.left,b.left) > 1 && Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top) > 1;
+      const titleRange = document.createRange(); titleRange.selectNodeContents(card.querySelector('.activity-card__title-text'));
+      const heading = card.querySelector('.activity-card__subtasks-toggle');
+      const clippedAncestors = [];
+      for (let node = card.parentElement; node && node !== document.body; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (['hidden', 'clip'].includes(style.overflowY)) { const r = node.getBoundingClientRect(); clippedAncestors.push({ top:r.top, bottom:r.bottom }); }
+      }
+      const targets = [...card.querySelectorAll('.activity-card__details-toggle, .task-status-btn, .subtask-item__checkbox, .subtask-item__title, .activity-card__participant-profile, .task-card__drag-handle')].map(node => {
+        const r = node.getBoundingClientRect(); return { width:r.width, height:r.height, drag:node.matches('.task-card__drag-handle') };
+      });
+      return { top:b.top, bottom:b.bottom, textFits:badge.scrollWidth <= badge.clientWidth && badge.scrollHeight <= badge.clientHeight,
+        titleBadgeOverlap:[...titleRange.getClientRects()].some(r => overlaps(r,b)),
+        headingOverlap:overlaps(heading.querySelector('span').getBoundingClientRect(), heading.querySelector('.activity-card__subtasks-progress').getBoundingClientRect()),
+        circles:[...card.querySelectorAll('.activity-card__points, .subtask-item__points')].map(node => { const r = node.getBoundingClientRect(); return Math.abs(r.width-r.height); }),
+        width:card.clientWidth, scroll:card.scrollWidth, targets, coarse:matchMedia('(pointer: coarse), (any-pointer: coarse)').matches, clippedAncestors };
+    });
+    assert.equal(measure.textFits, true, 'large point count fits the main circle');
+    assert.equal(measure.titleBadgeOverlap, false, 'larger type stays clear of the protruding circle');
+    assert.equal(measure.headingOverlap, false, 'Subtasks label and progress never overlap');
+    assert.ok(measure.circles.every(delta => delta <= 1), 'large and zero rewards retain circular badges');
+    assert.ok(measure.scroll <= measure.width + 1, 'larger type does not create concealed card overflow');
+    assert.ok(measure.clippedAncestors.every(r => measure.top >= r.top-1 && measure.bottom <= r.bottom+1), 'protruding badge stays inside clipping carriers');
+    for (const target of measure.targets) assert.ok(target.width >= (target.drag && !measure.coarse ? 28 : 44)-.5 && target.height >= 43.5, 'actions retain usable input targets');
+    await page.keyboard.press('Tab');
+    const profile = 'article[data-task-id="1"] .subtask-item__assignees .activity-card__participant-profile';
+    await page.focus(profile);
+    const focus = await page.$eval(profile, node => {
+      const style = getComputedStyle(node), parent = getComputedStyle(node.parentElement);
+      const a = node.getBoundingClientRect(), b = node.parentElement.getBoundingClientRect();
+      const outset = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+      return { visible:node.matches(':focus-visible'), ring:parseFloat(style.outlineWidth), clipped:['auto','hidden','scroll'].includes(parent.overflowX),
+        fits:a.left-outset >= b.left-.5 && a.right+outset <= b.right+.5 && a.top-outset >= b.top-.5 && a.bottom+outset <= b.bottom+.5 };
+    });
+    assert.ok(focus.visible && focus.ring > 0 && (!focus.clipped || focus.fits), `keyboard profile focus ring remains visible: ${JSON.stringify(focus)}`);
+    await page.focus('[data-action="toggle-activity-details"][data-id="1"]');
+    assert.equal(await page.$eval('[data-action="toggle-activity-details"][data-id="1"]', node => node.matches(':focus-visible')), true);
+    await page.keyboard.press('Enter');
+    assert.equal(await page.$eval('[data-action="toggle-activity-details"][data-id="1"]', node => node.getAttribute('aria-expanded')), 'true');
+    await evidence(page, `after-stress-${scenario.mode}-${scenario.width}-${scenario.rootFont || 16}`, measure);
+    assert.deepEqual(writes, [], JSON.stringify(await page.evaluate(() => window.stressEvents)));
   } finally { await page.close(); }
 });

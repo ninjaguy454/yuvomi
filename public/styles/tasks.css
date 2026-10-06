@@ -2430,10 +2430,17 @@
  * repeat that card under multiple people, but data-task-id always remains the
  * one backing Task ID. */
 .activity-card {
+  --task-points-size: 2.25rem;
+  --task-details-inset: 0px;
+  --task-selection-inset: 0px;
+  --task-summary-top: max(var(--space-3), calc(var(--task-points-size) / 2));
+  position: relative;
   min-width: 0;
-  /* The shared sections own their padding; legacy Kanban padding doubled it. */
   padding: 0;
-  overflow: hidden;
+  /* The badge crosses the card border but remains inside clipped swipe and
+   * board carriers. Its clearance travels with the same Task surface. */
+  margin-block-start: calc(var(--task-points-size) / 2 + var(--space-1));
+  overflow: visible;
   border: var(--space-px) solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   background: var(--color-surface);
@@ -2441,7 +2448,10 @@
   transition: background-color var(--transition-fast), border-color var(--transition-fast),
               box-shadow var(--transition-fast), opacity var(--transition-base);
 }
-
+.activity-card--large-points { --task-points-size: 3rem; }
+.activity-card--has-details { --task-details-inset: 32px; }
+.activity-card--selecting { --task-selection-inset: 44px; }
+.activity-card__surface { overflow: hidden; border-radius: inherit; }
 .activity-card:hover {
   border-color: var(--color-border);
   background: var(--color-surface-hover);
@@ -2449,24 +2459,19 @@
 }
 
 .activity-card__summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: var(--space-2);
+  position: relative;
   min-height: var(--target-lg);
-  padding: var(--space-3);
+  padding: var(--task-summary-top) var(--space-3) var(--space-3);
 }
-
 .activity-card__leading {
+  position: absolute;
+  inset-inline-start: 0;
+  top: var(--task-summary-top);
+  z-index: 1;
   display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
+  align-items: start;
 }
-
-.activity-card__leading .task-bulk-checkbox {
-  margin: 0;
-}
-
+.activity-card__leading .task-bulk-checkbox { width: 16px; height: 16px; min-width: 16px; min-height: 16px; margin: 0; }
 .activity-card__details-toggle,
 .activity-card__subtasks-toggle {
   border: 0;
@@ -2475,28 +2480,16 @@
   font: inherit;
   cursor: pointer;
 }
-
-.activity-card__details-toggle,
-.activity-card__leading-spacer {
+.activity-card__details-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: var(--target-base);
+  width: 44px;
+  height: 44px;
+  padding: 0;
 }
-
-.activity-card__details-toggle {
-  width: var(--target-base);
-  margin-inline: calc(var(--space-3) * -1);
-}
-
-.activity-card__leading-spacer {
-  width: calc(var(--target-base) - var(--space-6));
-}
-
-.activity-card__leading .task-bulk-select-target + .activity-card__details-toggle {
-  margin-inline-start: 0;
-}
-
+.activity-card__details-toggle:focus-visible { outline-offset: -3px; }
+.activity-card__leading-spacer { display: none; }
 .activity-card__chevron {
   width: var(--space-4);
   height: var(--space-4);
@@ -2525,12 +2518,14 @@
 }
 
 .activity-card__title {
+  display: block;
   color: var(--color-text-primary);
   white-space: normal;
   overflow-wrap: anywhere;
   line-height: 1.35;
+  text-indent: calc(var(--task-details-inset) + var(--task-selection-inset));
 }
-
+.activity-card__title::first-line { line-height: 44px; }
 .activity-card__when {
   display: flex;
   flex-wrap: wrap;
@@ -2549,26 +2544,35 @@
 .activity-card__when svg { flex-shrink: 0; align-self: center; }
 
 .activity-card__points {
-  color: var(--color-text-secondary);
-  max-width: 5rem;
-  padding-top: var(--space-0h);
-  font-size: var(--text-xs);
-  font-weight: var(--font-weight-medium);
+  position: absolute;
+  inset-inline-end: var(--space-3);
+  top: 0;
+  z-index: 2;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: var(--task-points-size);
+  height: var(--task-points-size);
+  border: 2px solid var(--color-surface);
+  border-radius: var(--radius-full);
+  color: var(--color-ink-on-vivid);
+  background: var(--module-accent, var(--color-accent));
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-bold);
   font-variant-numeric: tabular-nums;
-  line-height: 1.5;
-  text-align: end;
-  overflow-wrap: anywhere;
+  line-height: 1;
+  pointer-events: none;
 }
-
-.activity-card .task-status-btn {
-  margin: 0;
-  min-width: 44px;
-  min-height: 44px;
-}
+.activity-card .task-status-btn { margin: 0; min-width: 44px; min-height: 44px; }
+.activity-card .task-status-btn::after { width: 18px; height: 18px; }
 .activity-card .task-status-btn--in_progress::after {
   background: linear-gradient(to right, var(--color-warning) 50%, transparent 50%);
 }
-
+.activity-card .task-card__drag-handle { width: 28px; flex-basis: 28px; margin: 0; }
+.activity-card .task-card__drag-handle svg { width: 10px; height: 18px; }
+@media (pointer: coarse), (any-pointer: coarse) {
+  .activity-card .task-card__drag-handle { width: 44px; flex-basis: 44px; }
+}
 .activity-card__details {
   display: grid;
   gap: var(--space-3);
@@ -2606,6 +2610,10 @@
 
 .activity-card__participant-profile {
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-full);
@@ -2692,26 +2700,33 @@
 }
 
 .activity-card__subtasks-toggle {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
   width: 100%;
   min-height: var(--target-base);
-  padding: var(--space-2) var(--space-3);
+  padding: 0 var(--space-3);
   text-align: start;
+}
+.activity-card__subtasks-toggle > span:not(.activity-card__subtasks-progress) {
+  flex: 1 0 auto;
+  max-width: calc(100% - var(--space-4) - var(--space-2));
+  overflow-wrap: anywhere;
 }
 
 .activity-card__subtasks-progress {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+  max-width: 100%;
+  margin-inline-start: auto;
   gap: 0 var(--space-2);
   color: var(--color-text-tertiary);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
 }
-.activity-card__subtasks-progress > span { white-space: nowrap; }
+.activity-card__subtasks-progress > span { min-width: 0; white-space: normal; }
 .activity-card__progress-percent { color: var(--color-text-secondary); }
 
 .activity-card .subtask-list {
@@ -2722,35 +2737,23 @@
 
 .activity-card .subtask-item {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
-  gap: var(--space-1) var(--space-2);
-}
-
-/* Card width, not viewport width: family board columns are narrow even on a
- * wall display. Give the label its own reading line before wrapping metadata. */
-.activity-card .subtask-item__metadata {
-  grid-column: 2;
-  display: flex;
-  flex-wrap: wrap;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-1) var(--space-2);
+  gap: 0 2px;
+  min-height: 44px;
+  padding: 0;
+}
+.activity-card .subtask-item__metadata {
+  grid-column: 3;
+  grid-row: 1;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-1);
   min-width: 0;
 }
-
-.activity-card .subtask-item__approval {
-  min-height: 44px;
-  max-width: 100%;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
+.activity-card .subtask-item__approval { min-width: 44px; min-height: 44px; }
 .activity-card .subtask-item__pending { grid-column: 2 / -1; }
-
-@container (min-width: 36rem) {
-  .activity-card .subtask-item { grid-template-columns: 44px minmax(0, 1fr) auto; }
-  .activity-card .subtask-item__metadata { grid-column: 3; grid-row: 1; justify-content: flex-end; }
-}
-
 .activity-card .subtask-item__checkbox {
   touch-action: manipulation;
   width: 44px;
@@ -2760,23 +2763,55 @@
   background: transparent;
 }
 .activity-card .subtask-item__checkbox::before {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   inset: auto;
   border: 1.5px solid var(--color-text-tertiary);
   border-radius: var(--radius-xs);
 }
 .activity-card .subtask-item__checkbox--done::before { background: var(--color-success); border-color: var(--color-success); }
 .activity-card .subtask-item__checkbox-icon { z-index: 1; }
-.activity-card .subtask-item__title { min-height: 44px; font-size: var(--text-sm); line-height: 1.5; overflow-wrap: anywhere; }
-
-.activity-card .subtask-item__points {
-  color: var(--color-text-tertiary);
-  font-size: var(--text-xs);
+.activity-card .subtask-item__title {
+  display: block;
+  min-width: 0;
+  min-height: 44px;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+  overflow: hidden;
   white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.activity-card .subtask-item__points {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  min-height: 24px;
+  aspect-ratio: 1;
+  padding: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full);
+  background: var(--color-surface-2);
+  color: var(--color-text-primary);
+  font-size: var(--text-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .activity-card .subtask-item__assignees { justify-content: flex-end; }
-
+.activity-card .subtask-item__assignees .activity-card__participant-profile:focus-visible { outline-offset: -3px; }
+@container (max-width: 20rem) {
+  /* All supplied people stay reachable by native scrolling/focus while the
+   * compact row keeps space for its title, points and approval target. */
+  .activity-card .subtask-item__assignees {
+    max-width: 44px;
+    justify-content: flex-start;
+    gap: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .activity-card .subtask-item__assignees > * { flex-shrink: 0; }
+}
 .subtask-item__assignees {
   display: inline-flex;
   align-items: center;

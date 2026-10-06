@@ -304,8 +304,8 @@ test('UX cleanup: expiration guidance follows the selected policy and preserves 
   } finally { await page.close(); }
 });
 
-// Regression: the approval action must not consume the title's reading width,
-// whether the containing card is narrow on a phone or on the family wall board.
+// Compact labels retain full-title access and reachable operational controls on
+// phones and the family wall board.
 for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [320, 360, 390, 1100] : [1024, 1920])) for (const theme of ['light', 'dark']) {
   test(`approval layout ${mode} ${width}px ${theme}: readable steps and reachable actions`, async () => {
     const page = await mounted(mode, { width, height: 950, isMobile: width < 640, hasTouch: width < 640 });
@@ -342,10 +342,10 @@ for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [3
       const rows = await page.$$eval('.task-card[data-task-id="1"] .subtask-item', nodes => nodes.map(row => {
         const rect = node => { const r = node.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
         const title = row.querySelector('.subtask-item__title');
-        return { row: rect(row), title: rect(title), text: title.textContent,
+        return { row: rect(row), title: rect(title), text: title.textContent, label: title.getAttribute('aria-label'), tooltip: title.title,
           children: [...row.querySelectorAll(':scope > button, :scope > span, .subtask-item__metadata > *')].map(rect),
           approval: row.querySelector('[data-action="approve-device-task"]') ? rect(row.querySelector('[data-action="approve-device-task"]')) : null,
-          clipped: title.scrollWidth > title.clientWidth + 1 || title.scrollHeight > title.clientHeight + 1 };
+          ellipsis: getComputedStyle(title).textOverflow, nowrap: getComputedStyle(title).whiteSpace };
       }));
       if (process.env.TASK_LAYOUT_EVIDENCE) {
         mkdirSync(process.env.TASK_LAYOUT_EVIDENCE, { recursive: true });
@@ -353,8 +353,11 @@ for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [3
       }
       assert.equal(rows.length, 3);
       for (const row of rows) {
-        assert.ok(row.title.width >= Math.min(140, row.row.width * .55), `useful title width: ${JSON.stringify(row)}`);
-        assert.equal(row.clipped, false, 'complete step label remains readable');
+        assert.ok(row.title.width >= 44 && row.title.height >= 44, `full-title action retains a touch target: ${JSON.stringify(row)}`);
+        assert.equal(row.label, row.text, 'complete step label remains accessible');
+        assert.equal(row.tooltip, row.text, 'complete step label remains available on hover');
+        assert.equal(row.ellipsis, 'ellipsis');
+        assert.equal(row.nowrap, 'nowrap');
         for (const child of row.children) {
           assert.ok(child.x >= row.row.x - 1 && child.right <= row.row.right + 1, `content stays inside card: ${JSON.stringify(row)}`);
         }
@@ -362,6 +365,14 @@ for (const mode of ['list', 'kanban']) for (const width of (mode === 'list' ? [3
       }
       assert.ok(rows[0].title.height <= 48, 'short label does not become a vertical stack');
       assert.equal(rows[2].approval, null, 'ordinary step keeps its existing permission behavior');
+      const profiles = '.task-card[data-task-id="1"] [data-subtask-id="101"] .activity-card__participant-profile';
+      assert.equal(await page.$$eval(profiles, nodes => nodes.length), 2, 'supplied people remain reachable');
+      await page.focus(profiles);
+      await page.keyboard.press('Tab');
+      assert.ok(await page.$$eval(profiles, nodes => {
+        const second = nodes[1], r = second.getBoundingClientRect(), clip = second.parentElement.getBoundingClientRect();
+        return document.activeElement === second && !!second.getAttribute('aria-label') && r.left >= clip.left-.5 && r.right <= clip.right+.5;
+      }), 'Tab reveals the second authorized person inside the compact avatar scroller');
       const approval = '.task-card[data-task-id="1"] [data-action="approve-device-task"][data-id="101"]';
       await page.focus(approval);
       assert.equal(await page.$eval(approval, node => node === document.activeElement), true);

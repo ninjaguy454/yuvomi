@@ -1,4 +1,5 @@
 import { hasCapability } from '../permissions.js';
+import { taskUnskippedWhere } from '../services/task-window.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
 import { APP_NAME } from '../utils/brand.js';
 import express from 'express';
@@ -142,6 +143,7 @@ function tasksFor(database, userId) {
            COALESCE(p.external_place_id, tl.external_place_id) AS google_place_id
       FROM tasks t LEFT JOIN task_locations tl ON tl.task_id = t.id LEFT JOIN places p ON p.id = tl.place_id
      WHERE (t.parent_task_id IS NULL OR EXISTS (SELECT 1 FROM task_activity_support_tasks ss WHERE ss.task_id = t.id)) AND t.archived_at IS NULL AND t.status NOT IN ('done', 'expired', 'skipped')
+       AND ${taskUnskippedWhere(database)}
        AND ${taskVisibilityWhere(database, userId, 't')}
      ORDER BY CASE WHEN t.due_date IS NULL THEN 1 ELSE 0 END, t.due_date, t.due_time, t.priority, t.id
      LIMIT 100

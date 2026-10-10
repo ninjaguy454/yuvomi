@@ -5,6 +5,7 @@ import { resolvePermissions } from '../permissions.js';
 import { taskCapabilities, taskVisibilityWhere } from './task-access.js';
 import { getUpcomingEvents } from './calendar-events.js';
 import { taskScopeWhere, taskStartProjection } from './task-scope.js';
+import { taskUnskippedWhere } from './task-window.js';
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
 import { evaluateAvailability, isPlaceWithin } from './presence.js';
 import { listNotificationInbox } from './notification-inbox.js';
@@ -139,6 +140,7 @@ export function wallDashboard(d,hostId,hydrateTask) {
   if(allows('tasks')) {
     const starts=taskStartProjection(d);
     const rows=d.prepare(`SELECT t.* FROM tasks t WHERE t.status NOT IN ('done','expired','skipped') AND t.archived_at IS NULL
+      AND ${taskUnskippedWhere(d)}
       AND ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})} AND ${starts.where('t')}
       AND ${taskVisibilityWhere(d,hostId,'t','@me')} AND ${taskVisibilityWhere(d,null,'t','0')}
       ORDER BY t.due_date IS NULL,t.due_date,t.due_time,t.id LIMIT 24`).all({today,me:hostId});

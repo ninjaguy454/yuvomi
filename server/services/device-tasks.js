@@ -8,11 +8,12 @@ import { claimTask } from './assignment-responsibilities.js';
 import { flushOutbound } from './caldav-todo-outbound.js';
 import { taskScopeWhere, taskStartProjection } from './task-scope.js';
 import {listTaskOffers,taskOfferState} from './task-offers.js';
+import { taskWindowAncestors } from './task-window.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
 const keys = ['id','title','description','status','priority','points','category','start_date','start_time','due_date','due_time','countdown',
-  'revision','parent_task_id','assigned_to','is_optional','sort_order','is_recurring','expiration_policy','expired_at',
+  'revision','parent_task_id','assigned_to','is_optional','sort_order','is_recurring','expiration_policy','expired_at','skipped_at',
   'created_at','updated_at','completed_at','locked','recurrence_rule','recurrence_from_completion'];
 const member = row => pick(row,['id','display_name','avatar_color']);
 function requireTask(d, principal, id) {
@@ -68,7 +69,7 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
         AND NOT EXISTS(SELECT 1 FROM split_expense_guest_users g WHERE g.user_id=u.id) ORDER BY u.display_name`).all().filter(member=>!allowed.length||allowed.includes(member.id));
     }else out.permissions.claim=false;
   }else out.permissions.claim=false;
-  if(blocked || optional || ['expired'].includes(row.status) || !out.assigned_users.length) {
+  if(blocked || optional || ['expired','skipped'].includes(row.status) || !out.assigned_users.length) {
     out.permissions.complete=false;out.permissions.reopen=false;out.permissions.reset=false;
     if(blocked)out.execution_notice='A qualified person must approve this supervised or helper-owned action.';
   }
@@ -114,8 +115,9 @@ export function deviceTaskList(d,principal,{query=null,withVisibility=false}={})
   const candidates = d.prepare(`SELECT t.* FROM tasks t WHERE ${taskScopeWhere('t',{includeFuture:true,includeSupervision:true})}
     AND t.archived_at IS NULL ORDER BY t.status='done',t.due_date IS NULL,t.due_date,t.due_time,t.id`).all()
     .filter(row=>deviceTaskVisible(d,principal,row) && (query
-      ? (!statuses.length?row.status!=='expired':statuses.includes(row.status))
+      ? (!statuses.length?!['expired','skipped'].includes(row.status):statuses.includes(row.status))
       : !['done','expired','skipped'].includes(row.status)))
+    .filter(row=>statuses.some(status=>['expired','skipped','done'].includes(status)) || !taskWindowAncestors(d,row.id).some(source=>source.status==='skipped'))
     .filter(row=>(!priorities.length||priorities.includes(row.priority))&&(!categories.length||categories.includes(row.category))
       &&(!assigned.length||assignees(d,row).some(member=>assigned.includes(member.id)))
       && (!tags.length||tags.every(tag=>d.prepare('SELECT 1 FROM task_tags WHERE task_id=? AND LOWER(tag)=?').get(row.id,tag))))

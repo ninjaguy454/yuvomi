@@ -17,6 +17,8 @@ const {callTool}=await import('../server/mcp/tools.js');
 const {default:dashboardRouter}=await import('../server/routes/dashboard.js');
 const {default:readerRouter}=await import('../server/routes/reader.js');
 const {claimTask,overrideTaskAssignment,obligationInbox}=await import('../server/services/assignment-responsibilities.js');
+const {createDevice}=await import('../server/services/devices.js');
+const {deviceTaskList,deviceTaskDetail}=await import('../server/services/device-tasks.js');
 await import('../server/routes/tasks.js');
 let d,actor,server,base;
 
@@ -92,5 +94,48 @@ test('skipped assignment requests are not actionable even before a stale obligat
   assert.deepEqual(obligationInbox(d,actor),[]);
   assert.throws(()=>claimTask(d,id,actor),/skipped|active/);
   assert.throws(()=>overrideTaskAssignment(d,id,actor,actor),/skipped|active/);
+});
+
+// Catches the ordinary device query branch and separately projected action permissions.
+test('ordinary device queries hide skipped work and explicit history has no progress controls',()=>{
+  const id=task('Skipped device routine','skipped'),p={kind:'device',...createDevice(d,{name:'Synthetic wall'},actor)};
+  assert.ok(!deviceTaskList(d,p,{query:{}}).some(row=>row.id===id));
+  const detail=deviceTaskDetail(d,p,id);assert.equal(detail.status,'skipped');
+  for(const permission of ['complete','reopen','reset','claim'])assert.equal(detail.permissions[permission],false,permission);
+  assert.ok(deviceTaskList(d,p,{query:{status:'skipped'}}).some(row=>row.id===id));
+});
+
+// Catches retained/restored helper work escaping through a nonstructural source link.
+test('restored helpers under skipped source stay out of active counts, device, wall, reader and notifications',async()=>{
+  const source=task('Skipped source','skipped'),helper=task('Restored helper active title');
+  d.prepare("INSERT INTO task_activity_support_tasks(source_task_id,task_id,role) VALUES(?,?,'supervisor')").run(source,helper);
+  const p={kind:'device',...createDevice(d,{name:'Synthetic wall'},actor)};
+  assert.ok(!deviceTaskList(d,p).some(row=>row.id===helper));
+  const dashboard=await(await fetch(`${base}/dashboard`)).json(),result=dashboard.data||dashboard;
+  assert.equal(result.openTaskCount,0);assert.equal(result.overdueTaskCount,0);assert.ok(!result.urgentTasks.some(row=>row.id===helper));
+  assert.ok(!wallDashboard(d,actor,row=>row).urgentTasks.some(row=>row.id===helper));
+  assert.ok(!(await(await fetch(`${base}/reader?view=tasks`)).text()).includes('Restored helper active title'));
+  const receipt=enqueueNotification(d,{userId:actor,sourceKey:'reminder:restored-helper',category:'tasks',entityType:'task',entityId:helper,title:'Synthetic reminder',body:'Previously queued'});
+  assert.equal(isNotificationDeliveryCurrent(d,receipt),false);
+  d.prepare("INSERT INTO reminders(entity_type,entity_id,remind_at,created_by) VALUES('task',?,'2026-09-14T09:00:00Z',?)").run(helper,actor);
+  await processDueNotifications({database:d,now:new Date('2026-09-15T12:00:00Z'),pushService:{sendToUser:async()=>{throw new Error('Skipped helper must not send');}}});
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM notification_inbox WHERE reminder_id IS NOT NULL').get().n,0);
+});
+
+test('nonstructural skipped source suppresses both queued and unsent helper reminders',async()=>{
+  const source=task('Skipped source','skipped'),helper=task('Preserved helper');
+  d.prepare("INSERT INTO task_activity_support_tasks(source_task_id,task_id,role) VALUES(?,?,'supervisor')").run(source,helper);
+  const receipt=enqueueNotification(d,{userId:actor,sourceKey:'reminder:preserved-helper',category:'tasks',entityType:'task',entityId:helper,title:'Synthetic reminder',body:'Queued'});
+  assert.equal(isNotificationDeliveryCurrent(d,receipt),false);
+  d.prepare("INSERT INTO reminders(entity_type,entity_id,remind_at,created_by) VALUES('task',?,'2026-09-14T09:00:00Z',?)").run(helper,actor);
+  await processDueNotifications({database:d,now:new Date('2026-09-15T12:00:00Z'),pushService:{sendToUser:async()=>{throw new Error('Skipped helper must not send');}}});
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM notification_inbox WHERE reminder_id IS NOT NULL').get().n,0);
+  const nested=task('Child under linked helper','open',helper);
+  const nestedReceipt=enqueueNotification(d,{userId:actor,sourceKey:'reminder:nested-helper',category:'tasks',entityType:'task',entityId:nested,title:'Synthetic reminder',body:'Queued'});
+  assert.equal(isNotificationDeliveryCurrent(d,nestedReceipt),false);
+  d.prepare("INSERT INTO planning_obligations(entity_type,entity_id,task_id,logical_key,role,status,responsible_user_id) VALUES('task',?,?,'nested-skipped','primary','pending',?)").run(nested,nested,actor);
+  assert.deepEqual(obligationInbox(d,actor),[]);
+  assert.throws(()=>overrideTaskAssignment(d,nested,actor,actor),/skipped|active/);
+  assert.ok(!getCountdowns(d,{userId:actor,todayKey:'2026-09-15'}).items.some(row=>row.source==='task'&&row.id===nested));
 });
 

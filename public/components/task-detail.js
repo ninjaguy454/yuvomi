@@ -1385,7 +1385,7 @@ function supervisionNode(task, ctx) {
     }
   }
   if (isClosedOccurrence(task)) {
-    const ended = document.createElement('p'); ended.textContent = 'This occurrence expired. Remaining supervision and helper work is no longer actionable; saved history is retained.'; wrap.appendChild(ended);
+    const ended = document.createElement('p'); ended.textContent = `${task.status==='skipped'?'This occurrence was skipped.':'This occurrence expired.'} Remaining supervision and helper work is no longer actionable; saved history is retained.`; wrap.appendChild(ended);
   }
   const remaining = isClosedOccurrence(task) ? [] : actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
   if (remaining.length) {
@@ -2218,4 +2218,4 @@ function seriesHistoryNode(task, ctx = {}) {
   return list;
 }
 
-export const __test = { activityNode, seriesHistoryNode };
+export const __test = { activityNode, seriesHistoryNode, supervisionNode };

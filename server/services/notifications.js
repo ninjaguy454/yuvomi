@@ -19,6 +19,7 @@ import { warrantyEndDate } from './inventory-deadlines.js';
 import { syncAllPantryExpiryReminders } from './pantry-reminders.js';
 import { enqueueNotification, canReceiveNotification, getNotificationPreferences } from './notification-inbox.js';
 import { isNotificationDeliveryCurrent } from './notification-events.js';
+import { taskWindowAncestors } from './task-window.js';
 
 const log = createLogger('Notifications');
 
@@ -383,6 +384,8 @@ async function runDueNotifications({
   const locale = resolveHouseholdLocale(activeDb);
 
   for (const reminder of due) {
+    if(reminder.entity_type==='task' && taskWindowAncestors(activeDb,reminder.entity_id)
+      .some(row=>['expired','skipped'].includes(row.status)))continue;
     const payload = reminderPayload(reminder, locale);
     const notification = enqueueNotification(activeDb, {
       userId: reminder.created_by,

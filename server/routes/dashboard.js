@@ -12,6 +12,7 @@ import * as db from '../db.js';
 import { hydrateBirthday } from '../services/birthdays.js';
 import { getUpcomingEvents } from '../services/calendar-events.js';
 import { taskScopeWhere, taskStartProjection, taskCategoryWhere, categoryBindings, normalizeCategoryFilter } from '../services/task-scope.js';
+import { taskUnskippedWhere } from '../services/task-window.js';
 import { getCountdowns } from '../services/countdowns.js';
 import { listQuickLinksFor } from './quick-links.js';
 import { visibilityWhere } from '../services/visibility.js';
@@ -255,6 +256,7 @@ router.get('/', (req, res) => {
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
       WHERE t.status NOT IN ('done', 'expired', 'skipped')
+        AND ${taskUnskippedWhere(d)}
         -- Abgelegtes gehört nicht in „Heute auf einen Blick" (#688): eine
         -- archivierte Aufgabe ist aus dem Lauf genommen, und wer sie von hier aus
         -- öffnete, fand sie in der Liste nicht wieder.
@@ -287,6 +289,7 @@ router.get('/', (req, res) => {
     result.openTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
       WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+        AND ${taskUnskippedWhere(d)}
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
     `).get({ me: userId, today: todayLocalKey, ...taskCategoryBinds }).n;
@@ -301,6 +304,7 @@ router.get('/', (req, res) => {
     result.overdueTaskCount = d.prepare(`
       SELECT COUNT(*) AS n FROM tasks t
       WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+        AND ${taskUnskippedWhere(d)}
         AND t.due_date IS NOT NULL AND t.due_date < @today
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
@@ -698,6 +702,7 @@ router.get('/', (req, res) => {
       SELECT ta.user_id AS user_id, COUNT(*) AS open_count
       FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
       WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+        AND ${taskUnskippedWhere(d)}
         AND t.due_date IS NOT NULL AND t.due_date <= @today
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}

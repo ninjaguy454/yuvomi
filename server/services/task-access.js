@@ -102,9 +102,10 @@ export function deviceTaskCapabilities(d, principal, task) {
   const view = deviceTaskVisible(d, principal, task), allow = key => deviceAllows(principal, `device_tasks.${key}`);
   const stored=task?.id?d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id):task;
   const locked=stored?.locked || stored?.parent_task_id && d.prepare('SELECT locked FROM tasks WHERE id=?').get(stored.parent_task_id)?.locked;
-  const definition=view&&!locked&&!['done','expired'].includes(stored?.status);
-  return {view, own:false, create:deviceAllows(principal,'tasks.create'), edit:definition&&deviceAllows(principal,'tasks.edit_others'), complete:view && allow('complete'), reopen:view && allow('reopen'),
-    reset:view && allow('reset'), claim:view && allow('claim'), comment:false,
+  const skipped=stored?.id&&taskWindowAncestors(d,stored.id).some(row=>row.status==='skipped');
+  const definition=view&&!locked&&!skipped&&!['done','expired','skipped'].includes(stored?.status);
+  return {view, own:false, create:deviceAllows(principal,'tasks.create'), edit:definition&&deviceAllows(principal,'tasks.edit_others'), complete:view && !skipped && allow('complete'), reopen:view && !skipped && allow('reopen'),
+    reset:view && !skipped && allow('reset'), claim:view && !skipped && allow('claim'), comment:false,
     ...Object.fromEntries(['delete_archive','change_assignment','reassign','change_priority','change_points','change_category_tags','change_dates','change_required_skills'].map(key=>[key,key==='delete_archive'?false:definition&&deviceAllows(principal,`tasks.${key}`)]))};
 }
 function ownSql(alias, me, projectionGuard = '') {

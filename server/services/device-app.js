@@ -144,7 +144,7 @@ export function deviceAppMiddleware(req,res,next) {
         return res.status(201).json({data:result.data});
       }
       if(path==='/tasks/changes')return changes(req,res,'task_change_clock',(_d,p)=>requireTaskRead(p));
-      if(path==='/tasks/meta/options')return res.json({users:deviceMembers(d,p),categories:categoryRows(d),tags:visibleTags(d,p),priorities:['low','medium','high','urgent'],statuses:['open','in_progress','done','expired'],default_points:0});
+      if(path==='/tasks/meta/options')return res.json({users:deviceMembers(d,p),categories:categoryRows(d),tags:visibleTags(d,p),priorities:['low','medium','high','urgent'],statuses:['open','in_progress','done','expired','skipped'],default_points:0});
       if(path==='/tasks/categories')return res.json({data:categoryRows(d)});
       if(path==='/tasks/tags')return res.json({data:visibleTags(d,p)});
       if(path==='/tasks/sync-targets')return res.json({data:{caldav:[]}});

@@ -27,6 +27,7 @@ import { buildOpenApiSpec } from '../openapi.js';
 import { tokenAllows } from '../scopes.js';
 import { moduleAccessVerdict, MODULE_ACCESS_ALLOW } from '../permissions.js';
 import { taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
+import { taskUnskippedWhere } from '../services/task-window.js';
 import { visibilityWhere } from '../services/visibility.js';
 import { assertTaskMutation, taskVisibilityWhere } from '../services/task-access.js';
 import { loadTagsFor, normalizeTags, setTags, tagKey } from '../utils/task-tags.js';
@@ -79,6 +80,7 @@ function listTasks(db, actorId, args) {
   } else {
     sql += " AND t.archived_at IS NULL AND t.status NOT IN ('expired','skipped')";
   }
+  if(!['done','expired','skipped','archived'].includes(args.status))sql+=` AND ${taskUnskippedWhere(db)}`;
   // Tag-Filter, gleiche Semantik wie GET /api/v1/tasks: mehrere Tags engen
   // UND-verknüpft ein, die Schreibweise zählt nicht.
   //

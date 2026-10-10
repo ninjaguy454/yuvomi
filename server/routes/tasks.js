@@ -37,6 +37,7 @@ import {
 } from '../services/task-activity-bindings.js';
 import { occurrenceFeed, occurrenceHistory, syncTaskCompletion } from '../services/task-completions.js';
 import { normalizeCategoryFilter, taskCategoryWhere, taskStartProjection, taskScopeWhere } from '../services/task-scope.js';
+import { taskUnskippedWhere } from '../services/task-window.js';
 import { normalizeRotationBindings, parseRotationBindings, rotationBindingsEqual, assertRotationBindingsChange, bindTaskRotations, taskRotationContexts } from '../services/task-rotation.js';
 import { householdMembers } from '../services/activity-eligibility.js';
 import { initializeTaskRotationRendering, applyTaskRotationRendering, refreshTaskRotationRendering } from '../services/task-rotation-rendering.js';
@@ -1395,6 +1396,7 @@ router.get('/', (req, res) => {
     }
 
     if(!rawStatuses.length && !archiveQuery)sql += " AND t.status NOT IN ('expired','skipped')";
+    if(!archiveQuery&&!rawStatuses.some(status=>['done','expired','skipped'].includes(status)))sql+=` AND ${taskUnskippedWhere(db.get())}`;
 
     const priorities = asList(priority);
     if (priorities.length) {

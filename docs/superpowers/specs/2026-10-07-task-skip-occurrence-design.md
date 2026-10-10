@@ -1,6 +1,6 @@
 # Skip this occurrence design
 
-Status: Draft for design review. The user confirmed that skipping applies to the whole occurrence. Preparing this design does not authorize product implementation, live Task changes, permission grants, publication, or deployment.
+Status: Approved by Duane on October 10, 2026 for implementation and testing of the first calendar-only version, without Undo. Skipping applies to the whole materialized occurrence. Live Task changes, live permission grants, publication, and deployment remain unauthorized.
 
 ## Intent and confirmed behavior
 

@@ -1,4 +1,5 @@
 import { todayKey, householdTimeZone } from '../utils/timezone.js';
+import { taskWindowAncestors, taskUnskippedWhere } from './task-window.js';
 import { readTaskActivityDefinition } from './task-activity-snapshot.js';
 import { activityPresenceWindow, evaluateAvailability, availabilityInstantMs } from './presence.js';
 import { assertTaskMemberSkills } from './task-skills.js';
@@ -307,7 +308,7 @@ export function listTaskResponsibilities(d, taskIds) {
 
 export function claimTask(d, taskId, userId, {actorId=userId,sourceDevice=null}={}) {
   return d.transaction(() => {
-    if (d.prepare("SELECT 1 FROM tasks WHERE id=? AND status IN ('expired','skipped')").get(taskId)) throw new Error('This Task is expired or skipped; assignments are closed.');
+    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) throw new Error('This Task is expired or skipped; assignments are closed.');
     const context = d.prepare("SELECT * FROM task_assignment_context WHERE task_id = ? AND strategy = 'open_claimable'").get(taskId);
     if (!context) throw new Error('This task is not claimable.');
     if (!['open', 'unavailable'].includes(context.state)) throw new Error('This task has already been claimed.');
@@ -362,7 +363,7 @@ export function claimTask(d, taskId, userId, {actorId=userId,sourceDevice=null}=
 
 export function overrideTaskAssignment(d, taskId, targetUserId, actorUserId) {
   return d.transaction(() => {
-    if (d.prepare("SELECT 1 FROM tasks WHERE id=? AND status IN ('expired','skipped')").get(taskId)) throw new Error('This Task is expired or skipped; assignments are closed.');
+    if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) throw new Error('This Task is expired or skipped; assignments are closed.');
     const context = d.prepare('SELECT * FROM task_assignment_context WHERE task_id = ?').get(taskId);
     if (!context) throw new Error('This task is not managed by an assignment policy.');
     if (!context.override_allowed) throw new Error('Assignment overrides are disabled for this activity.');
@@ -410,7 +411,8 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
     if (!obligation) throw new Error('Assignment request not found.');
     if (!['pending', 'accepted'].includes(obligation.status)) throw new Error('This assignment request is already closed.');
     const source = d.prepare('SELECT assigned_to,status,archived_at FROM tasks WHERE id=?').get(obligation.task_id);
-    if (!source || ['done', 'expired', 'skipped'].includes(source.status) || source.archived_at != null) throw new Error('This Task is no longer active.');
+    if (!source || ['done', 'expired', 'skipped'].includes(source.status) || source.archived_at != null
+      || taskWindowAncestors(d,source.id).some(row=>row.status==='skipped')) throw new Error('This Task is no longer active.');
     if (obligation.role === 'primary' && Number(source.assigned_to) !== Number(obligation.responsible_user_id)) {
       throw new Error('This assignment request is no longer current.');
     }
@@ -559,6 +561,7 @@ export function reconcileOverdueTaskObligations(d, { nowAt = new Date().toISOStr
     SELECT o.* FROM planning_obligations o JOIN tasks t ON t.id=o.task_id
      WHERE o.entity_type = 'task' AND o.status = 'pending'
        AND t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
+       AND ${taskUnskippedWhere(d)}
        AND o.response_deadline IS NOT NULL
      ORDER BY o.id
   `).all().filter(row => {
@@ -597,7 +600,7 @@ export function obligationInbox(d, userId, { includeAll = false } = {}) {
       LEFT JOIN meals m ON o.entity_type = 'meal' AND m.id = o.entity_id
       LEFT JOIN users u ON u.id = o.responsible_user_id
      WHERE o.status IN ('pending', 'accepted') ${where}
-       AND (o.entity_type != 'task' OR t.status NOT IN ('expired','skipped'))
+       AND (o.entity_type != 'task' OR (t.status NOT IN ('expired','skipped') AND ${taskUnskippedWhere(d)}))
      ORDER BY COALESCE(o.response_deadline, o.due_at, '9999-12-31'), o.id
   `).all(...(includeAll ? [] : [userId]));
 }

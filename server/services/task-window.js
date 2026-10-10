@@ -20,10 +20,22 @@ export function taskExpirationDue(d, task, now = new Date()) {
 }
 /** Include structural ancestors and authoritative sources of helper projections. */
 export function taskWindowAncestors(d, taskId) {
-  return d.prepare(`WITH RECURSIVE roots(id) AS (
-      SELECT ? UNION SELECT source_task_id FROM task_activity_support_tasks WHERE task_id=?
-      UNION SELECT source_task_id FROM task_supervision_actions WHERE counterpart_task_id=? OR action_task_id=?
-    ), ancestry(id) AS (SELECT id FROM roots UNION SELECT t.parent_task_id FROM tasks t JOIN ancestry a ON t.id=a.id
-      WHERE t.parent_task_id IS NOT NULL)
-    SELECT t.* FROM tasks t JOIN ancestry a ON a.id=t.id`).all(taskId,taskId,taskId,taskId);
+  return d.prepare(`${ancestrySql(d,'?')}
+    SELECT t.* FROM tasks t JOIN ancestry a ON a.id=t.id`).all(taskId);
+}
+
+// Follow source edges at every level, including children of a retained helper.
+// UNION deduplicates cycles. Small legacy reader fixtures may lack helper tables.
+function ancestrySql(d, seed) {
+  const exists=name=>!!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name);
+  return `WITH RECURSIVE ancestry(id) AS (SELECT ${seed}
+    UNION SELECT t.parent_task_id FROM tasks t JOIN ancestry a ON t.id=a.id WHERE t.parent_task_id IS NOT NULL
+    ${exists('task_activity_support_tasks')?'UNION SELECT s.source_task_id FROM task_activity_support_tasks s JOIN ancestry a ON s.task_id=a.id':''}
+    ${exists('task_supervision_actions')?'UNION SELECT s.source_task_id FROM task_supervision_actions s JOIN ancestry a ON s.counterpart_task_id=a.id OR s.action_task_id=a.id':''})`;
+}
+
+/** Active projections must also respect the outcome of their canonical source. */
+export function taskUnskippedWhere(d, alias='t') {
+  if(!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(alias))throw new TypeError('Invalid Task SQL alias.');
+  return `NOT EXISTS (${ancestrySql(d,`${alias}.id`)} SELECT 1 FROM tasks source JOIN ancestry a ON source.id=a.id WHERE source.status='skipped')`;
 }

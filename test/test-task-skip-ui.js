@@ -6,6 +6,7 @@ import {taskCompletionPoints,FILTER_STATUSES} from '../public/utils/task-fields.
 globalThis.HTMLElement??=class {};
 globalThis.customElements??={define(){},get(){}};
 const {__test:ui}=await import('../public/pages/tasks.js');
+const {__test:detail}=await import('../public/components/task-detail.js');
 const task=()=>({id:1,title:'Synthetic routine',status:'skipped',points:5,revision:4,priority:'none',category:'misc',
   start_date:'2026-11-01',due_date:'2026-11-01',skipped_at:'2026-10-10T12:00:00Z',is_recurring:1,
   permissions:{complete:true},subtasks:[{id:2,title:'Earned step',status:'done',points:2},{id:3,title:'Excused step',status:'skipped',points:3}]});
@@ -23,6 +24,21 @@ test('skipped history identifies human excusal and zero new points',()=>{
   const html=ui.renderHistoryEntry({id:-10,task_id:1,event_type:'skipped',title:'Synthetic routine',user_name:'Parent',skipped_at:'2026-10-10T12:00:00Z'});
   assert.match(html,/Skipped/);assert.match(html,/No new completion points/);assert.match(html,/Parent/);
   assert.match(html,/datetime="2026-10-10T12:00:00Z"/);
+});
+
+test('skipped helper panel describes excusal rather than expiry',()=>{
+  const saved=globalThis.document;
+  class Node {
+    children=[]; ownText='';
+    set textContent(value){this.ownText=String(value);this.children=[];}
+    get textContent(){return this.ownText+this.children.map(child=>child.textContent).join('');}
+    appendChild(child){this.children.push(child);return child;}
+  }
+  try {
+    globalThis.document={createElement:()=>new Node()};
+    const html=detail.supervisionNode({...task(),supervision:{state:'not_required',actions:[]}},{}).textContent;
+    assert.match(html,/This occurrence was skipped/);assert.doesNotMatch(html,/occurrence expired/);
+  }finally{globalThis.document=saved;}
 });
 // Catches writes on Cancel and new operation IDs after an unknown network result.
 test('confirmation states date and whole scope; Cancel writes nothing and unknown failure retries exactly',async()=>{

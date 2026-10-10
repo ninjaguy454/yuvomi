@@ -2,17 +2,15 @@
 import { randomUUID } from 'node:crypto';
 import { enqueueNotification } from './notification-inbox.js';
 import { inspectTaskSupervision, taskSupervisionNotificationKey } from './task-supervision.js';
+import { taskWindowAncestors } from './task-window.js';
 
 // A resolved request remains useful history, but should not be delivered as a
 // new request after somebody has already answered it on another device.
 export function isNotificationDeliveryCurrent(database, notification) {
   // Expiration can commit after a reminder or assignment notification was
   // queued. Include ancestors: a completed child keeps its historical status.
-  if (notification.entity_type === 'task' && database.prepare(`
-    WITH RECURSIVE ancestry(id,parent_task_id,status) AS (
-      SELECT id,parent_task_id,status FROM tasks WHERE id=?
-      UNION SELECT t.id,t.parent_task_id,t.status FROM tasks t JOIN ancestry a ON t.id=a.parent_task_id
-    ) SELECT 1 FROM ancestry WHERE status IN ('expired','skipped') LIMIT 1`).get(notification.entity_id)) return false;
+  if (notification.entity_type === 'task' && taskWindowAncestors(database,notification.entity_id)
+    .some(row=>['expired','skipped'].includes(row.status))) return false;
   const scope = /^task-supervision-scope:(\d+):[a-f0-9]+$/.exec(notification.source_key || '');
   if (scope) {
     const view = inspectTaskSupervision(database, Number(scope[1]));

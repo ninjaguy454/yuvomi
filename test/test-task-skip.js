@@ -12,6 +12,8 @@ const {inspectTaskSupervision,reconcileTaskSupervision,supervisionProjectionUpda
 const {refreshExistingTaskSupervision}=await import('../server/services/task-supervision-refresh.js');
 const {reconcileTaskExpirations}=await import('../server/services/task-expiration.js');
 const {getCountdowns}=await import('../server/services/countdowns.js');
+const {replaceSubjectPermissions}=await import('../server/permissions.js');
+const {skipTaskOccurrence}=await import('../server/services/task-skip.js');
 let d,admin,child,other,actor,server,base;
 test.before(async()=>{
   d=new Database(':memory:');d.pragma('foreign_keys=ON');
@@ -143,4 +145,30 @@ test('independently archived child stays preserved and its later restore does no
   assert.equal(expireTask(d,id,{now:new Date('2026-11-03T15:00:00Z')}).expired,false);
   assert.ok(!getCountdowns(d,{userId:admin,todayKey:'2026-11-01'}).items.some(row=>row.source==='task'&&row.id===id));
   assert.throws(()=>changeTaskStatus(d,id,'done',{actorId:admin,requireRevision:false,now:new Date('2026-11-01T12:30:00Z')}),error=>error.details?.reason==='task_skipped');
+});
+
+// Authority is explicit and remains fresh on receipt replay; private work is atomic scope.
+test('explicit manager capability honors locks/private closure and revocation, while device principals are denied',async()=>{
+  const t=await fixture(),body=request(t);
+  replaceSubjectPermissions(d,'user',other,{capabilities:{'tasks.skip_occurrence':'allow'}});actor=other;
+  d.prepare('UPDATE tasks SET locked=1 WHERE id=?').run(t.id);
+  assert.equal((await skip(t,request(t))).status,403);assert.equal(read(t.id).status,'open');
+  d.prepare('UPDATE tasks SET locked=0 WHERE id=?').run(t.id);
+  d.prepare("UPDATE tasks SET visibility='private',created_by=? WHERE id=?").run(child,t.subtasks[1].id);
+  assert.equal((await skip(t,request(t))).status,404);assert.equal(read(t.id).status,'open');
+  d.prepare("UPDATE tasks SET visibility='all' WHERE id=?").run(t.subtasks[1].id);
+  const valid=request(t);assert.equal((await skip(t,valid)).status,200);
+  replaceSubjectPermissions(d,'user',other,{capabilities:{'tasks.skip_occurrence':'none'}});
+  assert.equal((await skip(t,valid)).status,403);
+  assert.throws(()=>skipTaskOccurrence(d,t.id,{principal:{kind:'device',id:1},body}),{status:403});
+});
+
+test('ended calendar rule has no successor and a relative Due offset retains its nominal Start cadence',async()=>{
+  const ended=await fixture({recurrence_rule:'FREQ=DAILY;UNTIL=20261101'});
+  assert.equal((await skip(ended)).status,200);
+  assert.equal(rows('SELECT * FROM tasks WHERE recurrence_origin_id=?',ended.id).length,0);
+  const relative=await fixture({due_date_offset_days:2,due_date:'2026-11-03'});
+  assert.equal((await skip(relative)).status,200);
+  const next=rows('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL',relative.id);
+  assert.equal(next.length,1);assert.equal(next[0].start_date,'2026-11-02');assert.equal(next[0].due_date,'2026-11-04');
 });

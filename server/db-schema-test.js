@@ -1079,3 +1079,6 @@ const NOTE_LAYOUT_OWNER_SCHEMA_SQL = `
     PRIMARY KEY(owner_key,principal_key,operation_id));`;
 
 export { MIGRATIONS_SQL, NOTE_LAYOUTS_SCHEMA_SQL, NOTE_GROUPS_SCHEMA_SQL, NOTE_LAYOUT_OWNER_SCHEMA_SQL };
+// A constraint rebuild cannot be represented by an ALTER-only SQL excerpt.
+// Consumers opt into the complete append-only migration with FKs disabled.
+export {addTaskSkipSchema as TASK_SKIP_SCHEMA_UPGRADE} from './services/task-skip-schema.js';

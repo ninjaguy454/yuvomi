@@ -13,7 +13,7 @@ export function tasksPaths() {
         description: 'Several tags narrow the result: a task must carry all of them. Tag matching ignores case, including non-ASCII letters. Archived tasks are omitted unless asked for. Rows also carry flattened Activity Template/subject/assignment metadata, responsibility records, rotation members, first-class subtasks and a normalized saved, Google, or manual `location` with navigation URL.',
         params: [
           { name: 'offers', in: 'query', required: false, schema: { type: 'string', enum: ['1'] }, description: 'Show currently visible unassigned regular root Tasks eligible to appear on the Open tasks board. Existing visibility, assignment policy, start and expiration rules still apply. This does not create a new Task type.' },
-          { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'archived'] }, description: 'Repeatable; several values are OR-ed. Expired occurrences are historical and excluded by default. "archived" is the separate archive axis and behaves like the `archived` parameter.' },
+          { name: 'status',      in: 'query', required: false, schema: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'skipped', 'archived'] }, description: 'Repeatable; several values are OR-ed. Expired occurrences are historical and excluded by default. "archived" is the separate archive axis and behaves like the `archived` parameter.' },
           { name: 'archived',    in: 'query', required: false, schema: { type: 'string', enum: ['1', 'only'] }, description: 'Archived tasks are hidden by default. `1` includes them, `only` returns just the archive. A task keeps its own status while archived.' },
           { name: 'priority',    in: 'query', required: false, schema: { type: 'string', enum: ['none', 'low', 'medium', 'high', 'urgent'] } },
           { name: 'assigned_to', in: 'query', required: false, schema: { type: 'integer' }, description: 'Family member ID.' },
@@ -40,7 +40,7 @@ export function tasksPaths() {
     },
     '/api/v1/tasks/completions': {
       get: op({
-        summary: 'List completed and expired Task occurrences, newest first',
+        summary: 'List completed, expired and skipped Task occurrences, newest first',
         tag: 'Tasks',
         description: 'The household occurrence history includes successful completion and expired incomplete work. Each row carries `event_type` (`completed` or `expired`) and UTC `occurred_at`. A completion has `completed_at` and a null `expired_at`; an expiration has a null `completed_at`, its deadline in `expired_at`, no completing user, and `points: 0`. Expiration rows come from Task activity events and never create task-completion earns or completion records. Archive remains independent: authorized history preserves archived expired occurrences. Only Tasks currently visible to the caller are returned. Subtask progress stays in Task activity instead of becoming separate top-level occurrence history. Use the returned cursor unchanged; expiration event IDs may be negative.',
         params: [
@@ -123,6 +123,11 @@ export function tasksPaths() {
     '/api/v1/tasks/{id}/reopen': {
       post: op({summary:'Reopen an expired Task',tag:'Tasks',params:[idParam()],stateChanging:true,requestBody:jsonBody(null),
         description:'Requires the current lifecycle edit permission and expected_revision (plus expected_parent_revision for a subtask). Provide a future due_date/due_time or expiration_policy: keep_overdue. Preserves completed subtasks, history, and any existing recurrence successor. Archived occurrences must be restored first. Expiration itself never awards completion points.'}),
+    },
+    '/api/v1/tasks/{id}/skip': {
+      post:op({summary:'Skip this recurring occurrence',tag:'Tasks',params:[idParam()],stateChanging:true,
+        requestBody:jsonBody({type:'object',additionalProperties:false,required:['operation_id','expected_revision'],properties:{operation_id:{type:'string',minLength:1,maxLength:128},expected_revision:{type:'integer',minimum:1}}}),
+        description:'Requires an authenticated human with tasks.skip_occurrence (default denied, subject to visibility and lock authority over the whole occurrence). Supports materialized top-level local calendar recurrence only. Closes unfinished work for all assignees without new awards, preserves earnings/history and nominal future recurrence. Completed, archived, completion-relative, rotation, Workflow and integrated work reject. No reason, assignee selection or Undo. Exact retries reuse the same operation_id and revision and recheck current authority. recurrence_pending means excusal committed but successor generation awaits automatic retry.'}),
     },
     '/api/v1/tasks/{id}/archive': {
       patch: op({ summary: 'Archive or restore a task', tag: 'Tasks', params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Archives the task by default. Send `{ "archived": false }` to bring it back. The status is left untouched: a task that was done stays done, and no reward booking changes. Filing a task removes it from everyone\'s view, so on a locked task this is the creator and administrators only.' }),

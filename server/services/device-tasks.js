@@ -55,7 +55,7 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
   out.is_supervision_projection=supervision.support_task_id===row.id||action?.counterpart_task_id===row.id;
   out.is_delegated_action=action?.execution_mode==='delegated'&&action?.action_task_id===row.id;
   const protectedLeaf=supervision.actions.some(action=>(action.action_task_id===row.id||action.counterpart_task_id===row.id)&&action.state!=='not_required'&&!action.completed);
-  out.approval_required=Boolean(protectedLeaf && out.permissions.complete && !optional && !['done','expired'].includes(row.status));
+  out.approval_required=Boolean(protectedLeaf && out.permissions.complete && !optional && !['done','expired','skipped'].includes(row.status));
   out.supervisor_approval=out.approval_required;
   out.permissions.supervisor_approval=out.approval_required;
   const assignment=d.prepare('SELECT strategy,state FROM task_assignment_context WHERE task_id=?').get(row.id);
@@ -115,7 +115,7 @@ export function deviceTaskList(d,principal,{query=null,withVisibility=false}={})
     AND t.archived_at IS NULL ORDER BY t.status='done',t.due_date IS NULL,t.due_date,t.due_time,t.id`).all()
     .filter(row=>deviceTaskVisible(d,principal,row) && (query
       ? (!statuses.length?row.status!=='expired':statuses.includes(row.status))
-      : !['done','expired'].includes(row.status)))
+      : !['done','expired','skipped'].includes(row.status)))
     .filter(row=>(!priorities.length||priorities.includes(row.priority))&&(!categories.length||categories.includes(row.category))
       &&(!assigned.length||assignees(d,row).some(member=>assigned.includes(member.id)))
       && (!tags.length||tags.every(tag=>d.prepare('SELECT 1 FROM task_tags WHERE task_id=? AND LOWER(tag)=?').get(row.id,tag))))

@@ -120,7 +120,7 @@ export function runSearch(database, q, userId, { hiddenModules = null } = {}) {
       AND t.parent_task_id IS NULL
       AND t.archived_at IS NULL
       AND ${taskVisibilityWhere(database, userId, 't', '@userId')}
-    ORDER BY CASE WHEN t.status IN ('done', 'expired') THEN 1 ELSE 0 END,
+    ORDER BY CASE WHEN t.status IN ('done', 'expired', 'skipped') THEN 1 ELSE 0 END,
              t.due_date ASC NULLS LAST
     LIMIT @limit
   `).all({ match, userId, limit });

@@ -258,7 +258,7 @@ function upsertTaskLocked(todo, accountId, createdBy, objectUrl = null) {
 
   // A provider status refresh is not an authorized lifecycle reopen. Preserve
   // the missed occurrence until an editor explicitly reactivates it locally.
-  if (existing?.status === 'expired') return existing.id;
+  if (['expired','skipped'].includes(existing?.status)) return existing.id;
   // Check the original local deadline before importing a provider's changed
   // due date; otherwise a late provider completion could move its own gate.
   if (existing) assertTaskWindowAction(db.get(),existing.id);

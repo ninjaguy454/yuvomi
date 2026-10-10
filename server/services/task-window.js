@@ -15,7 +15,8 @@ export function taskStartMs(d, task, timeZone = householdTimeZone(d)) {
 export function taskExpirationDue(d, task, now = new Date()) {
   const deadline = taskDeadlineMs(d, task);
   return task?.expiration_policy === 'expire_incomplete' && !task.archived_at
-    && ['open','in_progress'].includes(task.status) && deadline != null && Number(now) >= deadline;
+    && ['open','in_progress'].includes(task.status) && deadline != null && Number(now) >= deadline
+    && !taskWindowAncestors(d,task.id).some(row=>row.status==='skipped');
 }
 /** Include structural ancestors and authoritative sources of helper projections. */
 export function taskWindowAncestors(d, taskId) {

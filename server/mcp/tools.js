@@ -68,7 +68,7 @@ function listTasks(db, actorId, args) {
   // unverändert „zeig mir die Ablage" - nur wird jetzt die Ablage gefragt und
   // nicht das Statusfeld, das es dort nie sauber ausdrücken konnte.
   if (args.status) {
-    const s = v.oneOf(args.status, ['open', 'in_progress', 'done', 'expired', 'archived'], 'status');
+    const s = v.oneOf(args.status, ['open', 'in_progress', 'done', 'expired', 'skipped', 'archived'], 'status');
     if (s.error) throw new ToolError(s.error);
     if (args.status === 'archived') {
       sql += ' AND t.archived_at IS NOT NULL';
@@ -77,7 +77,7 @@ function listTasks(db, actorId, args) {
       params.status = args.status;
     }
   } else {
-    sql += " AND t.archived_at IS NULL AND t.status != 'expired'";
+    sql += " AND t.archived_at IS NULL AND t.status NOT IN ('expired','skipped')";
   }
   // Tag-Filter, gleiche Semantik wie GET /api/v1/tasks: mehrere Tags engen
   // UND-verknüpft ein, die Schreibweise zählt nicht.
@@ -515,7 +515,7 @@ const CORE_TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
-        status: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'archived'], description: 'Filter by task status. Expired occurrences are historical and excluded by default. "archived" is the separate archive: it lists filed-away tasks with whatever status they carry.' },
+        status: { type: 'string', enum: ['open', 'in_progress', 'done', 'expired', 'skipped', 'archived'], description: 'Filter by task status. Expired occurrences are historical and excluded by default. "archived" is the separate archive: it lists filed-away tasks with whatever status they carry.' },
         include_future: { type: 'boolean', description: 'Include tasks before their household-local start date and time. Left out by default, matching the normal app board. Missing Start Time means midnight.' },
         tag: {
           type: 'array',

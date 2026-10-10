@@ -374,7 +374,7 @@ async function runDueNotifications({
         WITH RECURSIVE ancestry(id,parent_task_id,status) AS (
           SELECT id,parent_task_id,status FROM tasks WHERE id=r.entity_id
           UNION SELECT t.id,t.parent_task_id,t.status FROM tasks t JOIN ancestry a ON t.id=a.parent_task_id
-        ) SELECT 1 FROM ancestry WHERE status='expired'))
+        ) SELECT 1 FROM ancestry WHERE status IN ('expired','skipped')))
     ORDER BY r.remind_at ASC
   `).all(nowIso);
 

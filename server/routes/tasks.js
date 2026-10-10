@@ -2,6 +2,7 @@ import {setTaskAssignments as setAssignments} from '../services/task-assignments
 import {listTaskOffers,taskOfferState} from '../services/task-offers.js';
 import {acceptanceOptions} from '../services/task-acceptance-policy.js';
 import {acceptTask} from '../services/task-acceptance.js';
+import {skipTaskOccurrence,taskSkipUnsupportedReason} from '../services/task-skip.js';
 /**
  * Modul: Aufgaben (Tasks)
  * Zweck: REST-API-Routen für Aufgaben und Teilaufgaben (max. 2 Ebenen)
@@ -152,7 +153,7 @@ router.param('id',(req,res,next,value)=>{
     return res.status(404).json({error:'Task not found.',code:404});
   if (!['POST','PUT','PATCH','DELETE'].includes(req.method)) return next();
   const route=req.route.path;
-  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept') return next();
+  if (route==='/:id/supervisor' || route==='/:id/location/promote' || route==='/:id/rotation/reconcile' || route==='/:id/accept' || route==='/:id/skip') return next();
   try {
     const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(value));
     if (!task) return res.status(404).json({error:'Task not found.',code:404});
@@ -421,7 +422,7 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
       item.isOptional ??= child.is_optional || 0;
       if(!definitionOnly)assertOptionalityEdit(child,item.isOptional);
       const assignments=item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers};
-      if(!definitionOnly && item.assignedUsers!==undefined && ['done','expired'].includes(child.status)
+      if(!definitionOnly && item.assignedUsers!==undefined && ['done','expired','skipped'].includes(child.status)
         && !sameIdOrder(item.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id)))
         throw new TaskStateError('Completed subtask assignments are historical. Reopen that action before changing its assignee.');
       assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds,is_optional:item.isOptional,...assignments},{operation:'update'});
@@ -857,6 +858,9 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
     row.rotation_bindings_json=undefined;
   }
   task.permissions.edit_series=!!task.recurrence_series_id&&task.permissions.edit&&task.permissions.change_dates;
+  task.can_skip_occurrence=Boolean(task.permissions.skip_occurrence && !task.archived_at
+    && ['open','in_progress','expired'].includes(task.status) && !task.parent_task_id && task.is_recurring
+    && !taskSkipUnsupportedReason(db.get(),task));
   for(const row of [task,...task.subtasks])if(row.supervision) {
     // A shared parent does not expose a separately private child's title.
     let actions=row.supervision.actions.filter(action=>mayAccessTask(
@@ -886,7 +890,7 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   const structural=task.subtasks.filter(child=>!child.archived_at&&(isSupport||!child.is_supervision_projection));
   const operational=structural.filter(child=>!child.is_optional&&(isSupport||!child.is_delegated_action));
   task.subtask_total=operational.length;task.subtask_done=operational.filter(child=>child.status==='done').length;
-  task.waiting_on_helper=!isSupport && !['done','expired'].includes(task.status)
+  task.waiting_on_helper=!isSupport && !['done','expired','skipped'].includes(task.status)
     && operational.every(child=>child.status==='done')
     && (structural.some(child=>!child.is_optional&&child.is_delegated_action&&child.status!=='done')
       || task.supervision_action?.action_task_id===task.id && task.supervision_action?.state!=='not_required');
@@ -1390,7 +1394,7 @@ router.get('/', (req, res) => {
       else if (!archiveQuery)                      sql += ' AND t.archived_at IS NULL';
     }
 
-    if(!rawStatuses.length && !archiveQuery)sql += " AND t.status!='expired'";
+    if(!rawStatuses.length && !archiveQuery)sql += " AND t.status NOT IN ('expired','skipped')";
 
     const priorities = asList(priority);
     if (priorities.length) {
@@ -1827,7 +1831,7 @@ export function updateTaskDefinition(req, res) {
     assertRotationBindingsChange(db.get(),req,task.rotation_bindings_json,rotationBindings);
     if(rotationsChanged && !taskCapabilities(db.get(),req,task).edit) return res.status(403).json({error:'Your household permissions do not allow editing this Activity.',code:403});
     if (task.parent_task_id && rotationsChanged) return res.status(400).json({error:'Configure shared rotations on the parent Activity. Its subtasks inherit the same occurrence.',code:400});
-    const historical=!!task.archived_at||['done','expired'].includes(task.status);
+    const historical=!!task.archived_at||['done','expired','skipped'].includes(task.status);
     const historicalSeriesOnly=editScope==='future'&&historical;
     if(!historicalSeriesOnly)assertTaskWindowAction(db.get(),task.id);
     const errors = validateTaskInput(req.body, false, task.recurrence_rule);
@@ -2697,7 +2701,7 @@ function resumePendingSeriesRotations(taskId,{all=false}={}) {
   const occurrence=registerRecurrenceOccurrence(db.get(),taskId);
   if(!occurrence)return [];
   const candidates=db.get().prepare(`SELECT o.* FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
-    WHERE o.series_id=? AND o.state='materialized' AND o.generation>=? AND t.archived_at IS NULL AND t.status NOT IN ('done','expired')
+    WHERE o.series_id=? AND o.state='materialized' AND o.generation>=? AND t.archived_at IS NULL AND t.status NOT IN ('done','expired','skipped')
     AND EXISTS(SELECT 1 FROM json_each(t.rotation_bindings_json) purpose WHERE NOT EXISTS(
       SELECT 1 FROM task_rotation_occurrences link WHERE link.task_id=t.id AND link.retired_at IS NULL
       AND link.purpose_key=json_extract(purpose.value,'$.purpose_key'))) ORDER BY o.generation,o.task_id`)
@@ -2780,6 +2784,14 @@ export function reconcileTaskRecurrence(taskId) {
 // Response: { data: { id, status, archived_at } }
 // 'archived' legt die Aufgabe ab, ohne ihren Status anzufassen (#688).
 // --------------------------------------------------------
+router.post('/:id/skip', (req,res)=>{
+  try {
+    const result=skipTaskOccurrence(db.get(),Number(req.params.id),{principal:req,body:req.body});
+    if(result.recurrenceError)log.warn('Skipped occurrence awaits recurrence recovery:',result.recurrenceError.message);
+    res.json({data:hydrateTask(result.task,req.authUserId||req.session.userId),replayed:result.replayed,recurrence_pending:result.recurrencePending});
+  } catch(error) {res.status(error.status||500).json({error:error.message,code:error.status||500,...error.details});}
+});
+
 router.post('/:id/reopen', (req,res)=>{
   try {
     const errors=validateTaskInput(req.body,false);
@@ -3070,7 +3082,7 @@ router.post('/:id/rotation/reconcile',(req,res)=>{
     if(!task||!mayAccessTask(task,me))return res.status(404).json({error:'Task not found.',code:404});
     assertCapability(db.get(),req,'rotations.configure');
     if(!taskCapabilities(db.get(),req,task).edit)return res.status(403).json({error:'Your household permissions do not allow editing this Activity.',code:403});
-    if(task.archived_at||['done','expired'].includes(task.status))return res.status(409).json({error:'Historical rotation evidence is preserved. Resolve a current occurrence instead.',code:409});
+    if(task.archived_at||['done','expired','skipped'].includes(task.status))return res.status(409).json({error:'Historical rotation evidence is preserved. Resolve a current occurrence instead.',code:409});
     const result=db.get().transaction(()=>{
       assertTaskRevision(db.get(),task,req.body,{required:true});
       const result=bindTaskRotations(db.get(),task.id,{actorId:me});

@@ -121,7 +121,7 @@ export function applyTaskRotationRendering(d,taskId,plan) {
   const saved=snapshot(d,taskId);if(!saved)return;
   const ownPlan=plan===undefined;plan??=saved.activity.rotation_rendering;if(!plan)return;
   const task=row(d,taskId),bindings=effectiveBindings(d,task),rotations=taskRotationContexts(d,task);
-  if(ownPlan&&(task.archived_at||['done','expired'].includes(task.status)))return;
+  if(ownPlan&&(task.archived_at||['done','expired','skipped'].includes(task.status)))return;
   const keyed=new Map([['root',task],...d.prepare(`SELECT t.*,COALESCE(a.action_key,'action:'||t.id) AS action_key FROM tasks t
     LEFT JOIN task_recurrence_actions a ON a.task_id=t.id
     WHERE (t.parent_task_id=? OR a.occurrence_task_id=?) AND t.id!=? AND t.archived_at IS NULL`)
@@ -132,7 +132,7 @@ export function applyTaskRotationRendering(d,taskId,plan) {
     if(!['title','description'].includes(target.field))continue;
     const concrete=keyed.get(target.action_key);if(!concrete)continue;
     if(ownPlan&&!same(concrete[target.field],target.last_value))continue;
-    if(ownPlan&&['done','expired'].includes(concrete.status)){next.targets.push({...target});continue;}
+    if(ownPlan&&['done','expired','skipped'].includes(concrete.status)){next.targets.push({...target});continue;}
     const subjectUserId=concrete.id===taskId?saved.binding.subject_user_id||task.assigned_to:concrete.assigned_to||saved.binding.subject_user_id||task.assigned_to;
     let value;
     try {value=render(d,concrete,target,{activity:saved.activity,bindings,rotations,subjectUserId,inputs:target.inputs,definitions:target.definitions}).values[0];}
@@ -152,7 +152,7 @@ export function applyTaskRotationRendering(d,taskId,plan) {
  * completed child evidence keep their original rendered values. */
 export function refreshRotationTaskRendering(d,occurrenceId) {
   const owners=d.prepare(`SELECT DISTINCT t.id FROM task_rotation_occurrences link JOIN tasks t ON t.id=link.owner_task_id
-    WHERE link.occurrence_id=? AND link.retired_at IS NULL AND t.archived_at IS NULL AND t.status NOT IN ('done','expired')`).all(occurrenceId);
+    WHERE link.occurrence_id=? AND link.retired_at IS NULL AND t.archived_at IS NULL AND t.status NOT IN ('done','expired','skipped')`).all(occurrenceId);
   for(const owner of owners)refreshTaskRotationRendering(d,owner.id);
 }
 

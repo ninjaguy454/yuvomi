@@ -2,6 +2,7 @@
 import { actorId, actorPermissions, PermissionError } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
 import { taskOptionalContext } from './task-optional.js';
+import { taskWindowAncestors } from './task-window.js';
 
 // Only synchronous response hydration opts into this scope. It never survives
 // a request, contains no lifecycle decisions, and is suspended for mutations.
@@ -171,6 +172,7 @@ export function taskCapabilities(d, actor, sourceTask) {
   for (const key of ['delete_archive', 'change_assignment', 'reassign', 'change_priority', 'change_points', 'change_category_tags', 'change_dates', 'change_required_skills']) result[key] = definition && allow(key);
   result.comment = view && allow('comment');
   result.claim = view && !projection && allow('claim');
+  result.skip_occurrence = definition && allow('skip_occurrence');
   // Missing/draft Tasks retain their existing input-based fallback. Two such
   // inputs need not mean the same thing, so only persisted records are cached.
   if (scope && stored) scope.capabilities.set(id, {...result});
@@ -179,6 +181,9 @@ export function taskCapabilities(d, actor, sourceTask) {
 export function attachTaskCapabilities(d, actor, tasks) {
   for (const task of tasks) {
     task.permissions = taskCapabilities(d, actor, task);
+    if(taskWindowAncestors(d,task.id).some(row=>row.status==='skipped')) {
+      task.permissions.complete=false;task.permissions.claim=false;
+    }
     // A closed optional branch is a lifecycle restriction, not a change to the
     // member's permissions. Hide its progress controls while retaining the
     // explicit parent-reopening error for attempted mutations.
@@ -258,6 +263,7 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   if (!c.view) throw new PermissionError('Task not found.', 404);
   const requireAction = key => { if (!c[key]) throw new PermissionError('Your household permissions do not allow this Task action.'); };
   if (operation === 'reopen') { requireAction('edit'); return requireAction('change_dates'); }
+  if (operation === 'skip') return requireAction('skip_occurrence');
   if (['status', 'check'].includes(operation)) return requireAction('complete');
   if (['delete', 'archive'].includes(operation)) return requireAction('delete_archive');
   if (operation === 'comment') return requireAction('comment');

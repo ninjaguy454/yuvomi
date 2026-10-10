@@ -29,6 +29,7 @@ import {addNoteLayoutOwnerSchema} from './services/note-layout-owner-schema.js';
 import Database from 'better-sqlite3-multiple-ciphers';
 import {installDeviceWriteLease} from './services/device-write-context.js';
 import { addTaskExpirationSchema } from './services/task-expiration-schema.js';
+import { addTaskSkipSchema } from './services/task-skip-schema.js';
 import { RECURRENCE_PROVENANCE_SQL, backfillRecurrenceProvenance, backfillRecurrenceAwardProvenance } from './services/task-recurrence-frontier.js';
 import { TASK_SERIES_SCHEMA_SQL, initializeTaskSeries } from './services/task-series.js';
 import { ROTATION_SCHEMA_SQL, installRotationChangeTriggers } from './services/rotation-schema.js';
@@ -9113,6 +9114,7 @@ FORK_MIGRATIONS.push({version:10050, description:'Tasks: context-bound atomic ac
 FORK_MIGRATIONS.push({version:10051, description:'Notes: persistent position locks, layers and expanding canvas bounds', up:addNoteLayoutStateSchema});
 FORK_MIGRATIONS.push({version:10052, description:'Notes: independent groups, ordered membership and structural receipts', up:addNoteGroupSchema});
 FORK_MIGRATIONS.push({version:10053, description:'Notes: independent personal and paired-device layout owners', up:addNoteLayoutOwnerSchema});
+FORK_MIGRATIONS.push({version:10054, description:'Tasks: durable whole-occurrence calendar excusal', foreignKeysOff:true, up:addTaskSkipSchema});
 
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 

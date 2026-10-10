@@ -12,7 +12,7 @@ export function isNotificationDeliveryCurrent(database, notification) {
     WITH RECURSIVE ancestry(id,parent_task_id,status) AS (
       SELECT id,parent_task_id,status FROM tasks WHERE id=?
       UNION SELECT t.id,t.parent_task_id,t.status FROM tasks t JOIN ancestry a ON t.id=a.parent_task_id
-    ) SELECT 1 FROM ancestry WHERE status='expired' LIMIT 1`).get(notification.entity_id)) return false;
+    ) SELECT 1 FROM ancestry WHERE status IN ('expired','skipped') LIMIT 1`).get(notification.entity_id)) return false;
   const scope = /^task-supervision-scope:(\d+):[a-f0-9]+$/.exec(notification.source_key || '');
   if (scope) {
     const view = inspectTaskSupervision(database, Number(scope[1]));
@@ -27,7 +27,7 @@ export function isNotificationDeliveryCurrent(database, notification) {
     if (action && database.prepare("SELECT 1 FROM notification_inbox WHERE entity_type='task' AND entity_id=? AND source_key LIKE ? LIMIT 1")
       .get(action.source_task_id,`task-supervision-scope:${action.source_task_id}:%`)) return false;
     const view = action ? inspectTaskSupervision(database, action.source_task_id) : null;
-    return !!action && action.revision === Number(supervision[2]) && !['done', 'expired'].includes(action.task_status)
+    return !!action && action.revision === Number(supervision[2]) && !['done', 'expired', 'skipped'].includes(action.task_status)
       && (['unresolved','excluded'].includes(action.state)
         || (view?.state === 'assigned' && Number(view.supervisor_user_id) === Number(notification.user_id)));
   }
@@ -49,7 +49,7 @@ export function isNotificationDeliveryCurrent(database, notification) {
   if (/^task:\d+:assigned:/.test(notification.source_key || '')) {
     if (delegatedLearner(database, notification.entity_id) === Number(notification.user_id)) return false;
     return Boolean(database.prepare(`SELECT 1 FROM task_assignments a JOIN tasks t ON t.id = a.task_id
-      WHERE a.task_id = @task AND a.user_id = @user AND t.status NOT IN ('done', 'expired') AND t.archived_at IS NULL
+      WHERE a.task_id = @task AND a.user_id = @user AND t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM notification_inbox newer
           WHERE newer.user_id = @user AND newer.entity_type = 'task' AND newer.entity_id = @task
             AND newer.id > @receipt AND newer.source_key LIKE @assignmentPrefix)`)

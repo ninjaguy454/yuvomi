@@ -155,7 +155,7 @@ function treeState(d,id) {
 }
 
 export function seriesOccurrencePreservationReason(d,occurrence,task) {
-  if(task.archived_at||['done','expired'].includes(task.status))return 'historical';
+  if(task.archived_at||['done','expired','skipped'].includes(task.status))return 'historical';
   if(task.status!=='open')return 'activity';
   if(occurrence.exception_reason)return 'manual_edit';
   if(!occurrence.materialized_state_json)return 'unverified_legacy_occurrence';
@@ -240,7 +240,7 @@ export function reconcileSeriesFuture(d,state,{actor,definition=state.definition
   const updated=[],preserved=[],pending_rotations=[];
   let previous={...state.occurrence};
   const selected=read(d,state.occurrence.task_id);
-  if(!selected.archived_at&&!['done','expired'].includes(selected.status))
+  if(!selected.archived_at&&!['done','expired','skipped'].includes(selected.status))
     previous={...previous,definition_id:definition.id};
   const future=d.prepare(`SELECT o.* FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
     WHERE o.series_id=? AND o.generation>? AND o.state='materialized' ORDER BY o.generation,o.task_id`).all(state.series_id,state.occurrence.generation);

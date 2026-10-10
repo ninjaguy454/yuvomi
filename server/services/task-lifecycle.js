@@ -67,6 +67,8 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
 /** Shared by REST and compatibility writers, including changes to child actions. */
 export function assertTaskWindowAction(d, taskId, now = new Date(), {optionalReopenScope=null}={}) {
   for (const task of taskWindowAncestors(d,taskId)) {
+    if (task.status === 'skipped')
+      throw new TaskStateError('This occurrence was skipped and cannot be reopened or completed.',{reason:'task_skipped',task_id:task.id});
     if (task.status === 'expired' || taskExpirationDue(d,task,now))
       throw new TaskStateError('This Task has expired. An authorized editor must explicitly reopen it before progress can change.',
         {reason:'task_expired',task_id:task.id});
@@ -364,7 +366,7 @@ export function expireTask(d, taskId, {now=new Date()}={}) {
 export function resumeExpiredTaskRecurrence(d,taskId) {
   const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
   const recurrence=task?authoritativeTaskRecurrence(d,task):null;
-  if(task?.status!=='expired'||!recurrence.is_recurring||recurrence.recurrence_from_completion||task.parent_task_id)return;
+  if(!['expired','skipped'].includes(task?.status)||!recurrence.is_recurring||recurrence.recurrence_from_completion||task.parent_task_id)return;
   if(!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
   return recurrenceHooks.spawn(task);
 }

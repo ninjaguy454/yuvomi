@@ -82,11 +82,11 @@ function completions(d,p,{taskId=null,query={}}={}) {
   // Apply canonical device visibility before paging. A scan-limit cursor over
   // hidden rows would disclose their existence, IDs and completion dates.
   const taskIds=d.prepare(`SELECT task_id FROM task_completions UNION
-    SELECT action_task_id FROM task_activity_events WHERE event_type='expired'`).all()
+    SELECT action_task_id FROM task_activity_events WHERE event_type IN ('expired','skipped')`).all()
     .map(row=>row.task_id).filter(id=>deviceTaskVisible(d,p,id));
   const result=occurrenceFeed(d,{me:null,limit,taskIds,userId:query.user_id?Number(query.user_id):null,
     beforeAt:query.before_at||null,beforeId:query.before_id||null,seriesId:taskId?seriesRootOf(d,Number(taskId)):null});
-  const entries=result.entries.map(row=>({...pick(row,['id','task_id','series_id','completed_at','expired_at','occurred_at','event_type','title','category','points','is_recurring','source_device_id','source_device_name']),
+  const entries=result.entries.map(row=>({...pick(row,['id','task_id','series_id','completed_at','expired_at','skipped_at','occurred_at','event_type','title','category','points','is_recurring','source_device_id','source_device_name']),
     user_id:ids.has(row.user_id)?row.user_id:null,user_name:ids.has(row.user_id)?row.user_name:row.user_id?'Household member':null,user_color:ids.has(row.user_id)?row.user_color:null}));
   const last=entries.at(-1);
   return {data:entries,has_more:result.hasMore,next_cursor:result.hasMore&&last?{before_at:last.occurred_at,before_id:last.id}:null};

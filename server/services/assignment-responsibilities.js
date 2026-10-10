@@ -412,7 +412,7 @@ export function respondToTaskObligation(d, obligationId, action, actorUserId, no
     if (!['pending', 'accepted'].includes(obligation.status)) throw new Error('This assignment request is already closed.');
     const source = d.prepare('SELECT assigned_to,status,archived_at FROM tasks WHERE id=?').get(obligation.task_id);
     if (!source || ['done', 'expired', 'skipped'].includes(source.status) || source.archived_at != null
-      || taskWindowAncestors(d,source.id).some(row=>row.status==='skipped')) throw new Error('This Task is no longer active.');
+      || taskWindowAncestors(d,obligation.task_id).some(row=>row.status==='skipped')) throw new Error('This Task is no longer active.');
     if (obligation.role === 'primary' && Number(source.assigned_to) !== Number(obligation.responsible_user_id)) {
       throw new Error('This assignment request is no longer current.');
     }

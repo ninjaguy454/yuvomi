@@ -16,7 +16,7 @@ const {upsertTask}=await import('../server/services/caldav-reminders-sync.js');
 const {callTool}=await import('../server/mcp/tools.js');
 const {default:dashboardRouter}=await import('../server/routes/dashboard.js');
 const {default:readerRouter}=await import('../server/routes/reader.js');
-const {claimTask,overrideTaskAssignment,obligationInbox}=await import('../server/services/assignment-responsibilities.js');
+const {claimTask,overrideTaskAssignment,obligationInbox,respondToTaskObligation}=await import('../server/services/assignment-responsibilities.js');
 const {createDevice}=await import('../server/services/devices.js');
 const {deviceTaskList,deviceTaskDetail}=await import('../server/services/device-tasks.js');
 await import('../server/routes/tasks.js');
@@ -136,6 +136,9 @@ test('nonstructural skipped source suppresses both queued and unsent helper remi
   d.prepare("INSERT INTO planning_obligations(entity_type,entity_id,task_id,logical_key,role,status,responsible_user_id) VALUES('task',?,?,'nested-skipped','primary','pending',?)").run(nested,nested,actor);
   assert.deepEqual(obligationInbox(d,actor),[]);
   assert.throws(()=>overrideTaskAssignment(d,nested,actor,actor),/skipped|active/);
+  const obligation=d.prepare("SELECT id FROM planning_obligations WHERE logical_key='nested-skipped'").get();
+  for(const response of ['accept','decline','timeout'])assert.throws(()=>respondToTaskObligation(d,obligation.id,response,actor),/active/);
+  assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(obligation.id).status,'pending');
   assert.ok(!getCountdowns(d,{userId:actor,todayKey:'2026-09-15'}).items.some(row=>row.source==='task'&&row.id===nested));
 });
 

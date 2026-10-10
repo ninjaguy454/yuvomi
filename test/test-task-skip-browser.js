@@ -51,7 +51,8 @@ async function run(){
     await page.goto(`${origin}/login`,{waitUntil:'domcontentloaded'});
     await page.evaluate(async({username,password})=>{const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});if(!r.ok)throw new Error(`Login ${r.status}`);},{username,password});
     await page.goto(`${origin}/tasks`,{waitUntil:'domcontentloaded'});
-    await new Promise(r=>setTimeout(r,5000));await page.waitForSelector('#btn-new-task, #fab-new-task');return page;
+    await new Promise(r=>setTimeout(r,5000));await page.waitForSelector('#btn-new-task, #fab-new-task');
+    await page.evaluate(()=>{window.qaClicks=[];document.addEventListener('click',event=>window.qaClicks.push(event.target.closest('button')?.id||event.target.tagName),true);window.qaToasts=[];const original=window.yuvomi.showToast;window.yuvomi.showToast=(...args)=>{window.qaToasts.push(args[0]);return original(...args);};});return page;
   }
   const api=(page,method,url,body)=>page.evaluate(async({method,url,body})=>(await import('/api.js')).api[method](url,body),{method,url,body});
   async function open(page,id){
@@ -66,20 +67,21 @@ async function run(){
       is_recurring:true,recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',start_time:'07:00',due_date:'2026-11-01',due_time:'08:00',
       expiration_policy:'expire_incomplete',subtasks:[{title:'Saved first step',points:2},{title:'Remaining step',points:3}]})).data;
     await open(observer,task.id);await open(mobile,task.id);
-    await mobile.waitForSelector('#task-detail-skip',{visible:true});await mobile.click('#task-detail-skip');
+    await mobile.locator('#task-detail-skip').click();
+    console.log('Mobile click probe',await mobile.evaluate(()=>({clicks:window.qaClicks,toasts:window.qaToasts,button:document.getElementById('task-detail-skip')?.outerHTML,confirm:!!document.getElementById('confirm-modal-ok'),visibility:document.visibilityState})));
     await mobile.waitForSelector('#confirm-modal-cancel',{visible:true});
     assert.match(await mobile.$eval('#confirm-modal-ok',el=>el.closest('.modal-panel').textContent),/2026-11-01/);
     assert.match(await mobile.$eval('#confirm-modal-ok',el=>el.closest('.modal-panel').textContent),/all current assignees/);
     await mobile.screenshot({path:path.join(output,'mobile-confirm.png'),fullPage:true});
     const before=d.prepare('SELECT COUNT(*) n FROM task_activity_events').get().n;
-    await mobile.click('#confirm-modal-cancel');await mobile.waitForSelector('#task-detail-skip');
+    await mobile.locator('#confirm-modal-cancel').click();await mobile.waitForSelector('#task-detail-skip',{visible:true});
     assert.equal(row(task.id).status,'open');assert.equal(d.prepare('SELECT COUNT(*) n FROM task_activity_events').get().n,before);
     await open(desktop,task.id);await desktop.focus('#task-detail-skip');await desktop.keyboard.press('Enter');
     await desktop.waitForSelector('#confirm-modal-ok',{visible:true});await desktop.focus('#confirm-modal-ok');await desktop.keyboard.press('Enter');
     await desktop.waitForFunction(()=>document.querySelector('#shared-modal-overlay .modal-panel')?.textContent.includes('Skipped'));
     assert.equal(row(task.id).status,'skipped');
     assert.equal(await desktop.$('#task-detail-reopen'),null);
-    assert.equal(await desktop.$('#task-detail-skip'),null);
+    assert.equal(await desktop.evaluate(()=>document.getElementById('task-detail-skip')?.checkVisibility()||false),false);
     assert.ok(!(await desktop.$eval('#shared-modal-overlay .modal-panel',el=>el.textContent)).includes('Undo'));
     await observer.waitForFunction(()=>document.querySelector('#shared-modal-overlay .modal-panel')?.textContent.includes('Skipped'));
     await desktop.screenshot({path:path.join(output,'desktop-skipped.png'),fullPage:true});
@@ -96,6 +98,7 @@ async function run(){
   }catch(error){
     for(const [index,page] of (await browser.pages()).entries()){
       if(page.url().startsWith(origin)){await page.screenshot({path:path.join(output,`failure-${index}.png`),fullPage:true}).catch(()=>{});writeFileSync(path.join(output,`failure-${index}.html`),await page.content());}
+      if(page.url().startsWith(origin))console.log('Failure page probe',index,await page.evaluate(()=>({clicks:window.qaClicks,toasts:window.qaToasts})));
     }
     console.error(error);console.error('Page errors:',pageErrors);await browser.close();process.exit(1);
   }

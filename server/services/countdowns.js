@@ -1,4 +1,5 @@
 import { taskVisibilityWhere } from './task-access.js';
+import {taskWindowAncestors} from './task-window.js';
 /**
  * Modul: Countdowns (#647)
  * Zweck: Die als Countdown markierten Termine und Aufgaben zu EINER nach
@@ -349,6 +350,7 @@ function taskCountdowns(d, userId, todayKey) {
 
   const out = [];
   for (const row of rows) {
+    if(taskWindowAncestors(d,row.id).some(task=>task.status==='skipped'))continue;
     const days = daysBetween(todayKey, row.due_date);
     if (days === null || days < -OVERDUE_GRACE_DAYS) continue;
     out.push({

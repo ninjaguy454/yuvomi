@@ -42,6 +42,7 @@ export const STATUSES = () => [
   { value: 'in_progress', label: t('tasks.statusInProgress') },
   { value: 'done',        label: t('tasks.statusDone')       },
   { value: 'expired',     label: 'Expired'                  },
+  { value: 'skipped',     label: 'Skipped'                  },
 ];
 
 // In der Filterleiste bleibt das Archiv ein Wert neben den Status - dort ist es
@@ -65,10 +66,12 @@ export function isArchived(task) {
 export function isExpired(task) {
   return task?.status === 'expired';
 }
+export function isSkipped(task) { return task?.status === 'skipped'; }
+export function isClosedOccurrence(task) { return isExpired(task)||isSkipped(task); }
 
 /** Keep the configured reward intact for the next occurrence or an explicit reopen. */
 export function taskCompletionPoints(task) {
-  return isExpired(task) ? 0 : Number(task?.points || 0);
+  return isClosedOccurrence(task) ? 0 : Number(task?.points || 0);
 }
 
 /**

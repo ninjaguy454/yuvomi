@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {actorId} from '../permissions.js';
 import {assertTaskMutation,taskDevicePrincipal} from './task-access.js';
 import {assertTaskRevision,recordTaskActivity,resumeExpiredTaskRecurrence,TaskStateError} from './task-lifecycle.js';
-import {authoritativeTaskRecurrence,ensureSeriesDefinition} from './task-series.js';
+import {authoritativeTaskRecurrence,ensureSeriesDefinition,taskSeriesState,seriesDefinitionForGeneration,planSeriesOccurrence} from './task-series.js';
 import {retiredRecurrenceOccurrence} from './task-recurrence-frontier.js';
 
 export function taskSkipScope(d,taskId) {
@@ -21,7 +21,7 @@ export function taskSkipUnsupportedReason(d,task,rows=taskSkipScope(d,task.id)) 
   if(retiredRecurrenceOccurrence(d,task.id))return 'This occurrence is no longer materialized.';
   for(const row of rows) {
     if(row.assignment_mode==='round_robin'||row.rotation_group||row.rotation_bindings_json&&JSON.parse(row.rotation_bindings_json).length
-      ||d.prepare('SELECT 1 FROM task_rotation_occurrences WHERE task_id=?').get(row.id))return 'Rotation work cannot be skipped here.';
+      ||d.prepare('SELECT 1 FROM task_rotation_occurrences WHERE task_id=? UNION SELECT 1 FROM task_rotation_periods WHERE task_id=?').get(row.id,row.id))return 'Rotation work cannot be skipped here.';
     if(row.external_source&&row.external_source!=='local'||row.target_caldav_account_id||row.target_caldav_list_url||row.external_account_id||row.external_uid)return 'Synced or pending-export work cannot be skipped.';
     if(d.prepare(`SELECT 1 FROM workflow_instance_tasks WHERE task_id=? UNION SELECT 1 FROM workflow_instances WHERE parent_task_id=?
       UNION SELECT 1 FROM workflow_task_dependencies WHERE task_id=? OR depends_on_task_id=?`).get(row.id,row.id,row.id,row.id))return 'Workflow work cannot be skipped here.';
@@ -38,6 +38,12 @@ function authorize(d,principal,task,rows) {
     if(!projection)assertTaskMutation(d,principal,row,{}, {operation:'skip'});
   }
 }
+function recurrencePending(d,taskId) {
+  const state=taskSeriesState(d,taskId);if(!state||state.occurrence.state!=='materialized')return false;
+  if(d.prepare("SELECT 1 FROM task_recurrence_occurrences WHERE series_id=? AND generation>? AND state='materialized'").get(state.series_id,state.occurrence.generation))return false;
+  const definition=seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1);
+  return Boolean(planSeriesOccurrence(d,definition,state.occurrence,{withoutCompletion:true}));
+}
 export function skipTaskOccurrence(d,taskId,{principal,body={},now=new Date()}={}) {
   if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!['operation_id','expected_revision'].includes(k))
     ||typeof body.operation_id!=='string'||!body.operation_id.length||body.operation_id.length>128||/[^A-Za-z0-9_.:-]/.test(body.operation_id))
@@ -49,7 +55,7 @@ export function skipTaskOccurrence(d,taskId,{principal,body={},now=new Date()}={
     const rows=taskSkipScope(d,taskId);authorize(d,principal,task,rows);
     const key=`user:${actorId(principal)}`,hash=createHash('sha256').update(JSON.stringify({task_id:taskId,expected_revision:body.expected_revision})).digest('hex');
     const receipt=d.prepare('SELECT * FROM task_skip_receipts WHERE principal_key=? AND operation_id=?').get(key,body.operation_id);
-    if(receipt){if(receipt.request_hash!==hash)throw new TaskStateError('This operation ID was used for a different request.');return {task,replayed:true,recurrencePending:false};}
+    if(receipt){if(receipt.request_hash!==hash)throw new TaskStateError('This operation ID was used for a different request.');return {task,replayed:true,recurrencePending:recurrencePending(d,taskId)};}
     assertTaskRevision(d,task,body,{required:true});
     const unsupported=taskSkipUnsupportedReason(d,task,rows);if(unsupported)throw new TaskStateError(unsupported,{reason:'skip_unsupported'});
     if(task.archived_at)throw new TaskStateError('Restore this occurrence from the archive before skipping it.');

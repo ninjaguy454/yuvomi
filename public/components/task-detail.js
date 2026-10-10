@@ -49,7 +49,7 @@ import { splitMentions, applyMention } from '/utils/mentions.js';
 import { refresh as refreshReminders } from '/reminders.js';
 import { parseRemindAtAsUtc } from '/utils/reminder-offset.js';
 import { canTask, canCapability, moduleAccess } from '/permissions.js';
-import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, taskRevision } from '/utils/task-state.js';
+import { actionableSubtasks, changeTaskStatus, reopenExpiredTask, skipTaskOccurrence, taskRevision } from '/utils/task-state.js';
 import { helperWaitingLabel } from '/utils/task-progress.js';
 import { watchTaskChanges, latestTaskLoader } from '/utils/task-live.js';
 import { createSubtaskQueue } from '/utils/task-subtask-queue.js';
@@ -57,7 +57,7 @@ import { zonedDateKey } from '/utils/timezone.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
   FALLBACK_CATEGORY, PRIORITY_LABELS, STATUS_LABELS,
-  isArchived, isExpired, taskCompletionPoints, canEditTaskDefinition, catLabel, normalizeTagList,
+  isArchived, isExpired, isClosedOccurrence, taskCompletionPoints, canEditTaskDefinition, catLabel, normalizeTagList,
   docMime, docHref, docIcon, formatDueDate,
   normalizeParticipant, taskParticipants, subtaskParticipants, completionCounts, taskLocationLabel,
 } from '/utils/task-fields.js';
@@ -569,7 +569,7 @@ function subtaskSupervision(task, subtask) {
 
 function subtaskPermitted(task, subtask, ctx) {
   const supervision = subtaskSupervision(task, subtask);
-  return !ctx.busy && !ctx.refreshRequired && !isArchived(task) && !isExpired(task) && !isExpired(subtask)
+  return !ctx.busy && !ctx.refreshRequired && !isArchived(task) && !isClosedOccurrence(task) && !isClosedOccurrence(subtask)
     && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, isDevicePrincipal() && subtask.status === 'done' ? 'reopen' : 'complete')
     && !(supervision && (typeof supervision.can_complete === 'boolean' ? !supervision.can_complete
       : supervision.state !== 'not_required' && (supervision.state !== 'assigned' || Number(supervision.supervisor_user_id) !== Number(ctx.currentUserId))));
@@ -678,7 +678,7 @@ function patchTaskDetailNode(current, fresh) {
 
 function pendingParentStatus(task, ctx) {
   const pending = ctx.pendingSubtasks;
-  if (!pending?.size || isArchived(task) || isExpired(task) || task.is_supervision_projection) return task.status;
+  if (!pending?.size || isArchived(task) || isClosedOccurrence(task) || task.is_supervision_projection) return task.status;
   const required = actionableSubtasks(task).filter(child => !child.is_optional);
   const changed = required.filter(child => pending.has(Number(child.id)));
   // The read projection does not expose a complete Workflow dependency graph.
@@ -711,7 +711,7 @@ function updateTaskOperationState(pane, task, ctx) {
     } else if (!pending) saving?.remove();
     if (pending && saving) saving.textContent = pending.uncertain ? 'Checking status…' : 'Saving…';
   }
-  for (const id of ['detail-view-edit', 'task-detail-delete', 'task-detail-archive', 'task-detail-claim']) {
+  for (const id of ['detail-view-edit', 'task-detail-delete', 'task-detail-archive', 'task-detail-claim','task-detail-skip']) {
     const control = document.getElementById(id);
     if (control) control.disabled = !!ctx.busy || !!ctx.queue?.busy;
   }
@@ -1235,12 +1235,12 @@ function statusSummaryNode(task, ctx) {
     option.value = value; option.textContent = text;
     select.appendChild(option);
   }
-  if (isExpired(task)) {
-    const option = document.createElement('option'); option.value = 'expired'; option.textContent = 'Expired'; select.appendChild(option);
+  if (isClosedOccurrence(task)) {
+    const option = document.createElement('option'); option.value = task.status; option.textContent = task.status==='skipped'?'Skipped':'Expired'; select.appendChild(option);
   }
   select.value = pendingParentStatus(task, ctx);
   select.setAttribute('aria-busy', String(!!ctx.pendingSubtasks?.size));
-  select.disabled = !!ctx.busy || !!ctx.queue?.busy || !!ctx.refreshRequired || isArchived(task) || isExpired(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
+  select.disabled = !!ctx.busy || !!ctx.queue?.busy || !!ctx.refreshRequired || isArchived(task) || isClosedOccurrence(task) || !canTask(task, 'complete') || task.supervision_action?.can_complete === false;
   select.addEventListener('change', async () => {
     const requested = select.value;
     select.value = task.status;
@@ -1277,12 +1277,13 @@ function statusSummaryNode(task, ctx) {
   const progress = progressNode(task, ctx);
   if (progress) metrics.appendChild(progress);
   summary.appendChild(metrics);
-  if (isExpired(task)) {
+  if (isClosedOccurrence(task)) {
     const expired = document.createElement('span');
     expired.className = 'task-detail-expiration';
-    expired.textContent = `Expired incomplete${task.expired_at ? ` · ${formatDate(task.expired_at)} ${formatTime(task.expired_at)}` : ''} · No completion points awarded`;
+    const when=task.status==='skipped'?task.skipped_at:task.expired_at;
+    expired.textContent = `${task.status==='skipped'?'Skipped':'Expired incomplete'}${when ? ` · ${formatDate(when)} ${formatTime(when)}` : ''} · No new completion points awarded`;
     summary.appendChild(expired);
-    if (!isArchived(task) && canTask(task, 'edit') && canTask(task, 'change_dates')) {
+    if (isExpired(task) && !isArchived(task) && canTask(task, 'edit') && canTask(task, 'change_dates')) {
       const reopen = document.createElement('button'); reopen.type = 'button'; reopen.className = 'btn btn--secondary btn--sm';
       reopen.textContent = 'Reopen Task'; reopen.dataset.taskOperation = ''; reopen.dataset.focusKey = 'reopen';
       reopen.disabled = !!ctx.busy || !!ctx.refreshRequired;
@@ -1324,7 +1325,7 @@ function statusSummaryNode(task, ctx) {
 function metadataNode(task, ctx, reminders) {
   const grid = document.createElement('div');
   grid.className = 'task-detail-metadata';
-  const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task) || isExpired(task));
+  const due = formatDueDate(task.due_date, task.due_time, task.status === 'done' || isArchived(task) || isClosedOccurrence(task));
   const recurrence = recurrenceRow(task.recurrence_rule, { fromCompletion: !!task.recurrence_from_completion });
   function entry(label, value, className = '') {
     if (!value) return null;
@@ -1383,10 +1384,10 @@ function supervisionNode(task, ctx) {
       scopeDetails.appendChild(reason);
     }
   }
-  if (isExpired(task)) {
+  if (isClosedOccurrence(task)) {
     const ended = document.createElement('p'); ended.textContent = 'This occurrence expired. Remaining supervision and helper work is no longer actionable; saved history is retained.'; wrap.appendChild(ended);
   }
-  const remaining = isExpired(task) ? [] : actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
+  const remaining = isClosedOccurrence(task) ? [] : actions.filter(requirement => !requirement.completed && requirement.state !== 'not_required');
   if (remaining.length) {
     const summary = document.createElement('p');
     summary.textContent = remaining.some(requirement => requirement.state === 'excluded' && requirement.execution_mode !== 'delegated')
@@ -1476,7 +1477,7 @@ function activityNode(task, ctx) {
   const status = document.createElement('p'); status.className = 'form-hint'; status.textContent = t('common.loading');
   wrap.appendChild(status);
   const labels = { created: 'Created', assigned: 'Assigned', reassigned: 'Reassigned', supervisor_assigned: 'Supervisor assigned',
-    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Task expired · 0 completion points', reopened: 'Reopened', edited: 'Edited', occurrence_edited: 'This occurrence edited', series_edited: 'This and future occurrences edited', status_changed: 'Status changed' };
+    action_delegated: 'Action transferred to helper', started: 'Started', subtask_completed: 'Subtask completed', subtask_reopened: 'Subtask reopened', reset: 'Progress reset', completed: 'Completed', expired: 'Task expired · 0 completion points', skipped:'Skipped · No new completion points', reopened: 'Reopened', edited: 'Edited', occurrence_edited: 'This occurrence edited', series_edited: 'This and future occurrences edited', status_changed: 'Status changed' };
   ctx.activityRequest = api.get(`/tasks/${task.id}/activity`);
   ctx.activityRequest.then((response) => {
     if (ctx.closed || !wrap.isConnected) return;
@@ -1518,7 +1519,7 @@ function rotationContextNode(task, ctx) {
       details.open = ctx.disclosures?.get(key) || false;
       details.addEventListener('toggle', () => { if (details.isConnected) { ctx.disclosures ??= new Map(); ctx.disclosures.set(key, details.open); } });
     });
-    const workflow=!isArchived(task)&&!isExpired(task)&&task.status!=='done'&&task.workflow_rotation_operations;
+    const workflow=!isArchived(task)&&!isClosedOccurrence(task)&&task.status!=='done'&&task.workflow_rotation_operations;
     if(workflow)for(const purpose of workflow.purposes)for(const operation of purpose.operations) {
       const context=task.rotations.find(value=>value.purpose_key===purpose.purpose_key);
       if(operation!=='resolve'&&context?.occurrence.status!=='resolved')continue;
@@ -1539,7 +1540,7 @@ function rotationContextNode(task, ctx) {
         finally{button.disabled=false;}
       });rotations.append(button);
     }
-    if(task.rotations.some(value=>value.pending&&value.owner_task_id===task.id) && canCapability('rotations.configure') && canTask(task,'edit') && !isArchived(task) && !isExpired(task) && task.status!=='done') {
+    if(task.rotations.some(value=>value.pending&&value.owner_task_id===task.id) && canCapability('rotations.configure') && canTask(task,'edit') && !isArchived(task) && !isClosedOccurrence(task) && task.status!=='done') {
       const retry=document.createElement('button');retry.type='button';retry.className='btn btn--secondary btn--sm';retry.textContent='Resolve rotation';
       retry.addEventListener('click',async()=>{
         retry.disabled=true;
@@ -1830,7 +1831,7 @@ export function openTaskDetail({
   // Gesperrte Aufgabe (#830): der Weiterschalt-Knopf bleibt, Loeschen, Ablegen
   // und Bearbeiten fallen weg. Die Detailansicht ist der zweite Einstieg neben
   // der Zeile - blendete nur die Zeile aus, waere die Sperre hier zu umgehen.
-  const historicalSeries = task.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || archived);
+  const historicalSeries = task.recurrence_series_id != null && (task.status === 'done' || isClosedOccurrence(task) || archived);
   const canEdit = historicalSeries ? canTask(task, 'edit_series')
     : canTask(task, 'edit') && canEditTaskDefinition(task, null, ctx);
 
@@ -1849,7 +1850,7 @@ export function openTaskDetail({
     },
   }] : [];
 
-  if (!archived && !isExpired(task) && (task.is_offer === true ? canTask(task, 'accept') : canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable'))) {
+  if (!archived && !isClosedOccurrence(task) && (task.is_offer === true ? canTask(task, 'accept') : canTask(task, 'claim') && (task.activity_assignment_state === 'open' || task.activity_assignment_state === 'unavailable'))) {
     actions.push({
       id: 'task-detail-claim',
       label: t(task.is_offer === true ? 'tasks.acceptTitle' : 'tasks.claimTask'),
@@ -1857,6 +1858,17 @@ export function openTaskDetail({
       icon: 'hand',
       onClick: ({ button }) => claimOpenTask(task, button, ctx),
     });
+  }
+
+  if (task.can_skip_occurrence && canTask(task,'skip_occurrence')) {
+    actions.push({id:'task-detail-skip',label:'Skip this occurrence',variant:'ghost',icon:'skip-forward',
+      onClick:({button})=>ctx.runMutation(button,async()=>{
+        const result=await skipTaskOccurrence(task);
+        if(!result)return null;
+        ctx.acceptSnapshot(result.data,'ack');
+        toast(result.recurrence_pending?'Occurrence skipped. Next occurrence is awaiting automatic recovery.':'Occurrence skipped. No new completion points awarded.','success');
+        return result;
+      })});
   }
 
   // Ablegen und Zurückholen sind derselbe Schalter - was er tut, hängt daran, wo
@@ -1886,7 +1898,7 @@ export function openTaskDetail({
   // Expired occurrences stay historical. A permitted series edit can change
   // their future definition without reopening or rewriting this occurrence.
   const editControl = document.getElementById('detail-view-edit');
-  if (editControl) editControl.hidden = isExpired(task) && !(task.recurrence_series_id != null && canTask(task, 'edit_series'));
+  if (editControl) editControl.hidden = isClosedOccurrence(task) && !(task.recurrence_series_id != null && canTask(task, 'edit_series'));
   for (const child of actionableSubtasks(task)) ctx.childRenderKeys.set(Number(child.id), subtaskRenderKey(task, child));
   // Pending feedback changes existing controls without layout reads, icon scans,
   // Activity reads or rebuilding any subtask/skill disclosure.
@@ -1963,9 +1975,11 @@ export function openTaskDetail({
     }
     for (const [id, permission] of [['detail-view-edit', 'edit'], ['task-detail-delete', 'delete_archive'], ['task-detail-archive', 'delete_archive'], ['task-detail-claim', task.is_offer === true ? 'accept' : 'claim']]) {
       const control = document.getElementById(id);
-      if (control) control.hidden = id === 'detail-view-edit' && task.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task))
-        ? !canTask(task, 'edit_series') : !canTask(task, permission) || (id === 'detail-view-edit' || id === 'task-detail-claim') && isExpired(task);
+      if (control) control.hidden = id === 'detail-view-edit' && task.recurrence_series_id != null && (task.status === 'done' || isClosedOccurrence(task) || isArchived(task))
+        ? !canTask(task, 'edit_series') : !canTask(task, permission) || (id === 'detail-view-edit' || id === 'task-detail-claim') && isClosedOccurrence(task);
     }
+    const skipControl=document.getElementById('task-detail-skip');
+    if(skipControl)skipControl.hidden=!task.can_skip_occurrence||!canTask(task,'skip_occurrence');
     const editing = document.querySelector('.detail-view__form');
     if (!editing || editing.hidden) {
       const title = pane?.closest('.modal-panel')?.querySelector('.modal-panel__title');
@@ -2061,7 +2075,7 @@ function openTaskOfferInspection({ task, reminder, users, skills, currentUserId,
   const ctx = { task, users, skills, currentUserId, isAdmin, categories, onChanged, offerInspection: true,
     personCardController: new AbortController() };
   const valid = () => !ctx.closed && sameAuthentication(authentication);
-  const acceptable = () => valid() && moduleAccess('tasks') !== 'none' && canTask(task, 'view') && task.is_offer === true && canTask(task, 'accept') && !isArchived(task) && !isExpired(task) && ['open','in_progress'].includes(task.status);
+  const acceptable = () => valid() && moduleAccess('tasks') !== 'none' && canTask(task, 'view') && task.is_offer === true && canTask(task, 'accept') && !isArchived(task) && !isClosedOccurrence(task) && ['open','in_progress'].includes(task.status);
   const endEvents = ['auth:context-ending','auth:expired','auth:context-rejected'];
   function stop() {
     ctx.closed = true; ctx.personCardController.abort(); ctx.loader?.dispose(); ctx.stopLive?.();
@@ -2170,7 +2184,7 @@ function seriesHistoryNode(task, ctx = {}) {
     if (!entries.length) {
       const none = document.createElement('p');
       none.className = 'detail-history__empty';
-      const terminal = activity?.data?.find(entry => ['completed', 'expired'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
+      const terminal = activity?.data?.find(entry => ['completed', 'expired','skipped'].includes(entry.event_type) && Number(entry.action_task_id) === Number(task.id));
       none.textContent = terminal
         ? [`${formatDate(terminal.created_at)} ${formatTime(terminal.created_at)}`, terminal.event_type === 'expired' ? null : terminal.details?.source_device?.name ? [memberLabel({ id: terminal.actor_user_id, display_name: terminal.actor_name }), `From ${terminal.details.source_device.name}`].filter(Boolean).join(' · ') : memberLabel({ id: terminal.actor_user_id, display_name: terminal.actor_name }),
           terminal.event_type === 'expired' ? 'Task expired · 0 completion points · History retained in Activity.' : 'Historical completion retained in Activity.'].filter(Boolean).join(' · ')
@@ -2179,7 +2193,7 @@ function seriesHistoryNode(task, ctx = {}) {
       return;
     }
     for (const entry of entries) {
-      const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
+      const occurredAt = entry.occurred_at || entry.skipped_at || entry.expired_at || entry.completed_at;
       const row = document.createElement('p');
       row.className = 'detail-history__row';
       const when = document.createElement('span');
@@ -2187,7 +2201,7 @@ function seriesHistoryNode(task, ctx = {}) {
       when.textContent = `${historyDayLabel(zonedDateKey(occurredAt))}, ${formatTime(occurredAt)}`;
       const who = document.createElement('span');
       who.className = 'detail-history__who';
-      who.textContent = entry.event_type === 'expired'
+      who.textContent = entry.event_type === 'skipped' ? ['Skipped · No new completion points',entry.user_name].filter(Boolean).join(' · ') : entry.event_type === 'expired'
         ? 'Task expired · 0 completion points'
         : ['Completed', entry.source_device_name ? [entry.user_name, `From ${entry.source_device_name}`].filter(Boolean).join(' · ') : entry.user_name || t('tasks.historyUnknownMember')].join(' · ');
       row.append(when, who);

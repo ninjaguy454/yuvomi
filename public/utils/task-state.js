@@ -46,6 +46,8 @@ export function taskStatusConfirmation(task, status) {
 }
 
 export async function changeTaskStatus(task, status, { confirm: requestConfirmation = confirmOverModal, beforeRequest = () => {} } = {}) {
+  if (task.status === 'skipped') throw new Error('This occurrence was skipped and cannot be reopened or completed.');
+  if (status === 'skipped') throw new Error('Use Skip this occurrence from Task details.');
   if (task.status === 'expired') throw new Error('Reopen this expired Task before changing its status.');
   if (status === 'expired') throw new Error('Tasks expire automatically at their deadline.');
   const confirmation = taskStatusConfirmation(task, status);
@@ -72,4 +74,21 @@ export async function reopenExpiredTask(task, { confirm: requestConfirmation = c
   });
   if (!confirmed) return null;
   return api.post(`/tasks/${task.id}/reopen`, body);
+}
+
+const pendingSkips=new Map();
+/** Reuse the exact request after an unknown network outcome. No optimistic excusal. */
+export async function skipTaskOccurrence(task,{confirm:requestConfirmation=confirmOverModal}={}) {
+  if(!task.can_skip_occurrence||!task.permissions?.skip_occurrence||task.archived_at||task.parent_task_id)
+    throw new Error('You cannot skip this occurrence.');
+  const date=task.due_date||task.start_date;
+  if(!await requestConfirmation(`Skip this occurrence on ${date}?`,{
+    detail:'Its unfinished work will be excused for all current assignees. No new completion points are awarded; previously earned points remain. Future occurrences keep their schedule.',
+    confirmLabel:'Skip this occurrence',closeOnConfirm:false,
+  }))return null;
+  const key=`${task.id}:${task.revision}`;
+  const body=pendingSkips.get(key)||{expected_revision:task.revision,operation_id:globalThis.crypto.randomUUID()};
+  pendingSkips.set(key,body);
+  try {const result=await api.post(`/tasks/${task.id}/skip`,body);pendingSkips.delete(key);return result;}
+  catch(error){if([400,403,404,409,428].includes(error.status||error.code))pendingSkips.delete(key);throw error;}
 }

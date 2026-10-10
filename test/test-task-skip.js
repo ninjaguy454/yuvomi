@@ -10,6 +10,8 @@ const {changeTaskStatus,expireTask}=await import('../server/services/task-lifecy
 const {awardForCompletion}=await import('../server/services/rewards.js');
 const {inspectTaskSupervision,reconcileTaskSupervision,supervisionProjectionUpdates}=await import('../server/services/task-supervision.js');
 const {refreshExistingTaskSupervision}=await import('../server/services/task-supervision-refresh.js');
+const {reconcileTaskExpirations}=await import('../server/services/task-expiration.js');
+const {getCountdowns}=await import('../server/services/countdowns.js');
 let d,admin,child,other,actor,server,base;
 test.before(async()=>{
   d=new Database(':memory:');d.pragma('foreign_keys=ON');
@@ -114,4 +116,31 @@ test('linked unfinished helpers remain skipped through reads and supervisor refr
   assert.deepEqual(supervisionProjectionUpdates(d,t.id).map(x=>x.status),['skipped','skipped']);
   reconcileTaskSupervision(d,t.id);assert.equal(refreshExistingTaskSupervision(d).failed,0);
   assert.deepEqual(rows('SELECT * FROM tasks WHERE id IN (?,?) ORDER BY id',helper,counterpart),before);
+});
+
+// Catches rollback of durable excusal, false replay success, and duplicate recovery slots.
+test('generation failure commits excusal and receipt, reports pending on replay and recovers one nominal successor',async()=>{
+  const t=await fixture(),body=request(t);
+  d.exec(`CREATE TRIGGER synthetic_generation_failure BEFORE INSERT ON tasks WHEN NEW.recurrence_origin_id=${t.id}
+    BEGIN SELECT RAISE(ABORT,'Synthetic materialization failure'); END;`);
+  const r=await skip(t,body);assert.equal(r.status,200,JSON.stringify(r));assert.equal(r.recurrence_pending,true);assert.equal(read(t.id).status,'skipped');
+  assert.equal(rows('SELECT * FROM task_skip_receipts WHERE task_id=?',t.id).length,1);
+  assert.equal((await skip(t,body)).recurrence_pending,true);
+  d.exec('DROP TRIGGER synthetic_generation_failure');
+  assert.equal(reconcileTaskExpirations(d,{now:new Date('2026-10-10T12:00:00Z'),onError:error=>{throw error;}}).failed,0);
+  const successor=rows('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL',t.id);
+  assert.equal(successor.length,1);assert.equal(successor[0].due_date,'2026-11-02');
+  assert.equal((await skip(t,body)).recurrence_pending,false);
+  assert.equal(rows("SELECT * FROM task_activity_events WHERE task_id=? AND event_type='skipped'",t.id).length,1);
+});
+
+// Catches a restored historical child becoming an active countdown or expiring independently.
+test('independently archived child stays preserved and its later restore does not reopen occurrence work',async()=>{
+  const t=await fixture(),id=t.subtasks[1].id;
+  d.prepare("UPDATE tasks SET archived_at='2026-10-10T12:00:00Z',due_date='2026-11-01',countdown=1 WHERE id=?").run(id);
+  assert.equal((await skip(t)).status,200);assert.equal(read(id).status,'open');assert.ok(read(id).archived_at);
+  const r=await call('PATCH',`/${id}/archive`,{archived:false,expected_revision:read(id).revision,expected_parent_revision:read(t.id).revision});assert.equal(r.status,200,JSON.stringify(r));
+  assert.equal(expireTask(d,id,{now:new Date('2026-11-03T15:00:00Z')}).expired,false);
+  assert.ok(!getCountdowns(d,{userId:admin,todayKey:'2026-11-01'}).items.some(row=>row.source==='task'&&row.id===id));
+  assert.throws(()=>changeTaskStatus(d,id,'done',{actorId:admin,requireRevision:false,now:new Date('2026-11-01T12:30:00Z')}),error=>error.details?.reason==='task_skipped');
 });

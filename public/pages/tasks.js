@@ -55,7 +55,7 @@ import { isWallModeEnabled } from '/utils/wall-mode.js';
 import { historyDayLabel } from '/utils/day-label.js';
 import {
   PRIORITIES, PRIO_ORDER, STATUSES, FILTER_STATUSES, PRIORITY_LABELS, STATUS_LABELS,
-  FALLBACK_CATEGORY, isArchived, isExpired, taskCompletionPoints, formatDueDate, normalizeTagList,
+  FALLBACK_CATEGORY, isArchived, isExpired, isClosedOccurrence, taskCompletionPoints, formatDueDate, normalizeTagList,
   normalizeParticipant, taskParticipants, subtaskParticipants,
   completionCounts, taskLocationLabel,
   catLabel as catLabelOf, catSortIndex as catSortIndexOf,
@@ -82,7 +82,7 @@ function viewer() {
 }
 
 function canEditTaskDefinition(task, parent = null) {
-  return !isExpired(task) && !isExpired(parent) && canTask(task, 'edit') && canEditTaskDefinitionFor(task, parent, viewer());
+  return !isClosedOccurrence(task) && !isClosedOccurrence(parent) && canTask(task, 'edit') && canEditTaskDefinitionFor(task, parent, viewer());
 }
 
 function catLabel(key, categories = state.categories) {
@@ -212,7 +212,7 @@ function sortedTasks(tasks, bucketKey = null) {
 }
 
 function canCheckAndClaim(task) {
-  if (isExpired(task)) return false;
+  if (isClosedOccurrence(task)) return false;
   if (task.is_offer === true) return canTask(task, 'accept');
   const strategy = task.activity_assignment_policy || task.activity_assignment_strategy;
   return task.activity_assignment_state === 'open'
@@ -358,7 +358,7 @@ function groupBy(tasks, mode, categories = state.categories) {
 
   for (const task of tasks) {
     let key;
-    if (isExpired(task))                 key = 'Expired';
+    if (isClosedOccurrence(task))                 key = task.status==='skipped'?'Skipped':'Expired';
     else if (!task.due_date)             key = groupNoDate;
     else {
       // Beide Seiten als KALENDERTAG rechnen, nicht als Instant.
@@ -389,6 +389,7 @@ function groupBy(tasks, mode, categories = state.categories) {
     ['later',    groupLater],
     ['noDate',   groupNoDate],
     ['expired', 'Expired'],
+    ['skipped', 'Skipped'],
   ];
   return order
     .filter(([, label]) => groups[label])
@@ -423,7 +424,7 @@ function renderStartDateBadge(startDateStr) {
 }
 
 function renderSwipeRow(task, innerHtml) {
-  if (isExpired(task)) return innerHtml;
+  if (isClosedOccurrence(task)) return innerHtml;
   const isDone = task.status === 'done';
   return `
     <div class="swipe-row" data-swipe-id="${task.id}" data-swipe-status="${task.status}">
@@ -601,7 +602,7 @@ function renderParticipantStrip(task, participants) {
 function canToggleTask(task) { return canTask(task, isDevicePrincipal() && task?.status === 'done' ? 'reopen' : 'complete'); }
 
 function canToggleCardSubtask(task, subtask) {
-  return !isArchived(task) && !isArchived(subtask) && !isExpired(task) && !isExpired(subtask)
+  return !isArchived(task) && !isArchived(subtask) && !isClosedOccurrence(task) && !isClosedOccurrence(subtask)
     && !(task.status === 'done' && subtask.is_optional) && canTask(subtask, isDevicePrincipal() && subtask.status === 'done' ? 'reopen' : 'complete')
     && subtask.supervision_action?.can_complete !== false;
 }
@@ -657,15 +658,15 @@ function renderTaskCard(task, opts = {}) {
   const participants = taskParticipants(task);
   const detailsExpanded = state.expandedTasks.has(Number(task.id));
   const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
-  const due = formatDueDate(task.due_date, task.due_time, isDone || archived || isExpired(task));
+  const due = formatDueDate(task.due_date, task.due_time, isDone || archived || isClosedOccurrence(task));
   const countdown = renderTaskCountdown(task);
   const location = taskLocationLabel(task);
   const names = (task.assigned_users || []).map(person => memberLabel(person)).filter(Boolean).join(', ') || memberLabel({ id: task.assigned_to, display_name: task.assigned_name });
-  const blocked = !isExpired(task) && ['needed', 'excluded'].includes(task.supervision?.state);
+  const blocked = !isClosedOccurrence(task) && ['needed', 'excluded'].includes(task.supervision?.state);
   const delegated = task.supervision?.actions?.some(action => action.execution_mode === 'delegated' && action.state !== 'not_required' && !action.completed);
   const waiting = helperWaitingLabel(task, state.currentUserId);
   const points = taskCompletionPoints(task);
-  const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired' })[task.status] || task.status;
+  const statusLabel = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[task.status] || task.status;
 
   return `<article class="task-card activity-card${hasDetails ? ' activity-card--has-details' : ''}${showCheckbox ? ' activity-card--selecting' : ''}${String(points).length > 3 ? ' activity-card--large-points' : ''}${board ? ' kanban-card' : ''}${isDone ? ' task-card--done kanban-card--done' : ''}${archived ? ' task-card--archived' : ''}"
       data-task-id="${task.id}">
@@ -692,7 +693,7 @@ function renderTaskCard(task, opts = {}) {
     <div class="activity-card__metadata">
       <div class="activity-card__context">
         <div class="activity-card__state">
-          ${isExpired(task) ? '<span class="activity-card__status-label activity-card__status-label--expired">Expired</span>' : ''}
+          ${isClosedOccurrence(task) ? `<span class="activity-card__status-label activity-card__status-label--expired">${task.status==='skipped'?'Skipped':'Expired'}</span>` : ''}
           ${waiting ? `<span class="activity-card__status-label activity-card__status-label--waiting">${esc(waiting)}</span>` : ''}
           ${renderPriorityBadge(task.priority)}
           ${showCategory && task.category !== FALLBACK_CATEGORY ? `<span class="due-date activity-card__category">${esc(catLabel(task.category))}</span>` : ''}
@@ -703,11 +704,11 @@ function renderTaskCard(task, opts = {}) {
         ${names ? `<span class="activity-card__assignee sr-only">${esc(names)}</span>` : ''}
       </div>
       <div class="activity-card__controls">
-        <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
-          title="${esc(statusLabel)}" aria-label="${esc(isExpired(task) ? 'Expired. Reopen from Task details to resume.' : `${statusLabel}. ${isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`)}">
-          <i data-lucide="${isExpired(task) ? 'clock-alert' : 'check'}" class="task-status-btn__check" aria-hidden="true"></i>
+        <button type="button" class="task-status-btn task-status-btn--${task.status}" data-action="toggle-status" data-id="${task.id}" data-status="${task.status}" ${isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false ? 'disabled' : ''}
+          title="${esc(statusLabel)}" aria-label="${esc(isClosedOccurrence(task) ? task.status==='skipped'?'Skipped. No new completion points awarded.':'Expired. Reopen from Task details to resume.' : `${statusLabel}. ${isDone ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`)}">
+          <i data-lucide="${isClosedOccurrence(task) ? 'clock-alert' : 'check'}" class="task-status-btn__check" aria-hidden="true"></i>
         </button>
-        ${board && !isExpired(task) && canToggleTask(task) && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
+        ${board && !isClosedOccurrence(task) && canToggleTask(task) && task.supervision_action?.can_complete !== false ? `<button type="button" class="task-card__drag-handle" data-task-drag-handle draggable="true"
           data-action="open-task" data-id="${task.id}" aria-label="${esc(`Move Task: ${task.title}`)}" title="Hold to drag. Tap or press Enter for Task status."><i data-lucide="grip-vertical" class="icon-sm" aria-hidden="true"></i></button>` : ''}
       </div>
     </div>
@@ -1005,7 +1006,7 @@ function wireTagBadgeFilter(container) {
 function renderModalContent({ task = null, users = [], reminder = null, presetActivityTemplate = null, presetDates = null, occurrenceStartDate = null } = {}) {
   const isEdit = !!task;
   const existingTask = task;
-  const historicalSeriesEdit = task?.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task));
+  const historicalSeriesEdit = task?.recurrence_series_id != null && (task.status === 'done' || isClosedOccurrence(task) || isArchived(task));
   task = task || createManualTaskDraft({ template: presetActivityTemplate, places: state.places, defaultPoints: state.defaultPoints, presetDates, occurrenceStartDate });
   const presetStartDate = task.start_date;
   const presetDueDate = task.due_date;
@@ -1179,8 +1180,8 @@ function renderModalContent({ task = null, users = [], reminder = null, presetAc
       ${isEdit ? `
         <div class="form-group">
           <label class="label" for="task-status">${t('tasks.statusLabel')}</label>
-          <select class="input" id="task-status" name="status" ${isExpired(task) ? 'disabled' : ''}>
-            ${STATUSES().filter(s => s.value !== 'expired' || isExpired(task)).map((s) =>
+          <select class="input" id="task-status" name="status" ${isClosedOccurrence(task) ? 'disabled' : ''}>
+            ${STATUSES().filter(s => !['expired','skipped'].includes(s.value) || s.value===task?.status).map((s) =>
               `<option value="${s.value}" ${task.status === s.value ? 'selected' : ''}>${s.label}</option>`
             ).join('')}
           </select>
@@ -1551,16 +1552,16 @@ function patchCardSubtaskFeedback(list, task, pending, queue, recheck = () => {}
     const status = projected.status;
     const statusButton = card.querySelector('[data-action="toggle-status"]');
     if (statusButton) {
-      for (const value of ['open', 'in_progress', 'done', 'expired']) statusButton.classList.toggle(`task-status-btn--${value}`, value === status);
+      for (const value of ['open', 'in_progress', 'done', 'expired','skipped']) statusButton.classList.toggle(`task-status-btn--${value}`, value === status);
       statusButton.dataset.status = task.status;
-      statusButton.title = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired' })[status];
+      statusButton.title = ({ open: 'Not Started', in_progress: 'In Progress', done: 'Completed', expired: 'Expired', skipped:'Skipped' })[status];
       statusButton.setAttribute('aria-label', `${statusButton.title}. ${status === 'done' ? t('tasks.markOpen', { title: task.title }) : t('tasks.markDone', { title: task.title })}`);
       statusButton.setAttribute('aria-busy', String(queue.busy));
-      statusButton.disabled = queue.busy || isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
+      statusButton.disabled = queue.busy || isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
     }
     const drag = card.querySelector('[data-task-drag-handle]');
     if (drag) {
-      drag.disabled = queue.busy || isArchived(task) || isExpired(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
+      drag.disabled = queue.busy || isArchived(task) || isClosedOccurrence(task) || !canToggleTask(task) || task.supervision_action?.can_complete === false;
       drag.draggable = !drag.disabled;
     }
     const points = card.querySelector('.activity-card__points');
@@ -2343,7 +2344,7 @@ function applyTaskFormPermissions(panel, task, controls) {
     for (const field of panel.querySelectorAll('#task-status, #task-assignment-mode, #task-activity-template, #task-location-fieldset input, #task-location-fieldset select, #task-location-fieldset textarea, #task-visibility, #task-locked, #task-countdown, #task-sync-target, .reminder-section input, .reminder-section select, .reminder-section button')) field.disabled = true;
     for (const element of panel.querySelectorAll('[data-doc-attach], .reminder-section')) element.hidden = true;
   }
-  if (task?.recurrence_series_id != null && (task.status === 'done' || isExpired(task) || isArchived(task))) {
+  if (task?.recurrence_series_id != null && (task.status === 'done' || isClosedOccurrence(task) || isArchived(task))) {
     for (const field of panel.querySelectorAll('#task-status, #task-sync-target, .reminder-section input, .reminder-section select, .reminder-section button, [data-doc-attach] input, [data-doc-attach] button')) {
       field.disabled = true;
       field.setAttribute('aria-describedby', 'task-historical-edit-hint');
@@ -2554,7 +2555,7 @@ function readTaskEditState(form, controls) {
 
 async function chooseTaskEditScope(submitButton, task) {
   let selection = null;
-  const historical = task.status === 'done' || isExpired(task) || isArchived(task);
+  const historical = task.status === 'done' || isClosedOccurrence(task) || isArchived(task);
   const child = openChildModal({
     title: 'Apply changes', size: 'sm',
     content: `<form id="task-edit-scope-form"><p id="task-edit-scope-question">Where would you like these changes to apply?</p>
@@ -2741,7 +2742,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   body.start_time = startTime || null;
   if (startTime && !body.start_date) { resetSubmit('Choose a start date for this start time.'); return; }
   if (body.expiration_policy === 'expire_incomplete' && !body.due_date) { resetSubmit('Choose a due date for automatic expiration.'); return; }
-  if (form.status && !isExpired(controls?.originalTask)) body.status = form.status.value;
+  if (form.status && !isClosedOccurrence(controls?.originalTask)) body.status = form.status.value;
   if (taskId && controls?.originalTask) {
     Object.assign(body, taskRevision(controls.originalTask));
     if (body.status && body.status !== controls.originalTask.status) {
@@ -2822,7 +2823,7 @@ async function handleFormSubmit(e, { container = null, onChanged = () => loadTas
   let documentIds = null;
   try {
     const historicalFuture = body.edit_scope === 'future' && (controls?.originalTask?.status === 'done'
-      || isExpired(controls?.originalTask) || isArchived(controls?.originalTask));
+      || isClosedOccurrence(controls?.originalTask) || isArchived(controls?.originalTask));
     documentIds = !isDevicePrincipal() && !historicalFuture && taskDocuments ? await taskDocuments.commit() : null;
   } catch (err) {
     resetSubmit(err.message || t('common.errorGeneric'));
@@ -2905,6 +2906,7 @@ const KANBAN_SECTIONS = () => [
   { value: 'active', label: 'Active' },
   { value: 'done', label: t('tasks.kanbanDone') },
   { value: 'expired', label: 'Expired' },
+  { value: 'skipped', label: 'Skipped' },
   { value: 'archived', label: t('tasks.kanbanArchived') },
 ];
 
@@ -2920,7 +2922,7 @@ function kanbanSectionOf(task) {
 }
 
 function statusForBoardDrop(task, section) {
-  if (isExpired(task) && section !== 'archived') return 'expired';
+  if (isClosedOccurrence(task) && section !== 'archived') return task.status;
   if (section !== 'active') return section;
   // Restoring archived work retains its status. Reopening completed work uses
   // the existing In Progress transition so it does not reset checklist progress.
@@ -2937,8 +2939,8 @@ function statusForBoardDrop(task, section) {
  * Aufgabe kam als offene zurück (#688).
  */
 async function moveTaskToColumn(before, column) {
-  if (column === 'expired' && !isExpired(before)) throw new Error('Tasks expire automatically at their deadline.');
-  if (isExpired(before) && column !== 'expired' && column !== 'archived') throw new Error('Reopen this expired Task from its details.');
+  if (['expired','skipped'].includes(column) && column!==before.status) throw new Error('Use the authorized lifecycle action from Task details.');
+  if (isClosedOccurrence(before) && column !== before.status && column !== 'archived') throw new Error('This historical occurrence cannot be moved to active work.');
   const nextStatus = statusForBoardDrop(before, column);
   // `before` ist der Stand VOR dem optimistischen Update - der State ist zu
   // diesem Zeitpunkt schon umgeschrieben, und die Entscheidung, ob überhaupt ein
@@ -3051,7 +3053,7 @@ function renderKanban(container) {
       const bucketKey = `${state.boardScope}:${state.groupMode}:${bucket.id}`;
       const bucketSort = state.bucketSorts.get(bucketKey);
       const byStatus = new Map([
-        ['active', []], ['done', []], ['expired', []], ['archived', []],
+        ['active', []], ['done', []], ['expired', []], ['skipped', []], ['archived', []],
       ]);
       bucket.tasks.forEach((task) => (byStatus.get(kanbanSectionOf(task)) || byStatus.get('active')).push(task));
       return `<section class="kanban-col task-board__bucket" data-view-key="bucket:${esc(bucketKey)}" data-bucket-key="${esc(bucketKey)}">
@@ -3068,7 +3070,7 @@ function renderKanban(container) {
           </button>
         </header>
         <div class="task-board__bucket-scroll">
-          ${KANBAN_SECTIONS().filter(({ value }) => state.groupMode === 'status' ? value === bucket.id : !['archived', 'expired'].includes(value) || byStatus.get(value).length)
+          ${KANBAN_SECTIONS().filter(({ value }) => state.groupMode === 'status' ? value === bucket.id : !['archived', 'expired','skipped'].includes(value) || byStatus.get(value).length)
             .map(({ value }) => renderBoardStatusSection(bucketKey, value, byStatus.get(value))).join('')}
         </div>
       </section>`;
@@ -3249,7 +3251,7 @@ function groupHistoryByDay(entries) {
   const groups = [];
   const index = new Map();
   for (const entry of entries) {
-    const day = zonedDateKey(entry.occurred_at || entry.expired_at || entry.completed_at);
+    const day = zonedDateKey(entry.occurred_at || entry.skipped_at || entry.expired_at || entry.completed_at);
     if (!index.has(day)) {
       index.set(day, { day, entries: [] });
       groups.push(index.get(day));
@@ -3271,7 +3273,8 @@ function groupHistoryByDay(entries) {
  */
 function renderHistoryEntry(entry) {
   const expired = entry.event_type === 'expired';
-  const occurredAt = entry.occurred_at || entry.expired_at || entry.completed_at;
+  const skipped = entry.event_type === 'skipped';
+  const occurredAt = entry.occurred_at || entry.skipped_at || entry.expired_at || entry.completed_at;
   // Expiration is automatic; a missing actor is not a removed household member.
   const name = expired ? '' : entry.source_device_name ? [memberLabel({ id: entry.user_id, display_name: entry.user_name }), `From ${entry.source_device_name}`].filter(Boolean).join(' · ') : memberLabel({ id: entry.user_id, display_name: entry.user_name }) || t('tasks.historyUnknownMember');
   const avatar = expired ? '<i data-lucide="clock" aria-hidden="true"></i>' : entry.source_device_name ? '<i data-lucide="monitor" aria-hidden="true"></i>' : renderAvatarStack(
@@ -3287,7 +3290,7 @@ function renderHistoryEntry(entry) {
       <span class="list-row__main history-row__main">
         <span class="list-row__name">${esc(entry.title)}</span>
         <span class="list-row__meta">
-          ${expired ? 'Task expired · 0 completion points' : esc(name)}${entry.is_recurring
+          ${skipped ? `Skipped · No new completion points · ${esc(name)}` : expired ? 'Task expired · 0 completion points' : esc(name)}${entry.is_recurring
             ? ` <i data-lucide="repeat" class="icon-sm" aria-hidden="true"></i>` : ''}
         </span>
       </span>
@@ -3534,9 +3537,9 @@ function renderTaskCalendarChip(task) {
     ? `<span class="priority-dot priority-dot--${esc(task.priority)}" aria-hidden="true"></span>`
     : '';
   return `<button type="button" class="task-calendar-chip${countdown ? ' task-calendar-chip--countdown' : ''}" data-action="open-task" data-id="${task.id}"
-      title="${esc(task.title)}${isExpired(task) ? ' · Expired · 0 completion points' : ''}${time ? ` - ${esc(time)}` : ''}">
+      title="${esc(task.title)}${isClosedOccurrence(task) ? task.status==='skipped'?' · Skipped · No new completion points':' · Expired · 0 completion points' : ''}${time ? ` - ${esc(time)}` : ''}">
     ${priority}<span class="task-calendar-chip__title">${esc(task.title)}</span>
-    ${isExpired(task) ? '<span class="task-calendar-chip__time">Expired</span>' : ''}
+    ${isClosedOccurrence(task) ? `<span class="task-calendar-chip__time">${task.status==='skipped'?'Skipped':'Expired'}</span>` : ''}
     ${countdown || (time ? `<span class="task-calendar-chip__time">${esc(time)}</span>` : '')}
   </button>`;
 }
@@ -3596,7 +3599,7 @@ function renderTaskCalendarAgendaRow(task) {
       <span class="task-calendar-agenda-task__title">${esc(task.title)}</span>
       <span class="task-calendar-agenda-task__facts">
         ${countdown || (time ? `<span>${esc(time)}</span>` : '')}
-        ${isExpired(task) ? '<span>Expired · 0 completion points</span>' : taskCompletionPoints(task) > 0 ? `<span>${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>` : ''}
+        ${isClosedOccurrence(task) ? `<span>${task.status==='skipped'?'Skipped · No new completion points':'Expired · 0 completion points'}</span>` : taskCompletionPoints(task) > 0 ? `<span>${esc(t('tasks.pointsSummary', { count: taskCompletionPoints(task) }))}</span>` : ''}
       </span>
       ${rule ? `<span class="task-calendar-agenda-task__rule"><i data-lucide="repeat-2" class="icon-sm" aria-hidden="true"></i>${esc(rule)}</span>` : ''}
     </span>

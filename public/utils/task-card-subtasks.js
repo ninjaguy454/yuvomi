@@ -93,7 +93,7 @@ export function createTaskCardSubtasks({ children, canComplete, send, invalidate
 export function taskCardPendingProjection(task, pending, children) {
   const required = children(task).filter(child => !child.is_optional);
   let status = task.status;
-  if (pending.size && !task.archived_at && task.status !== 'expired' && !task.is_supervision_projection) {
+  if (pending.size && !task.archived_at && !['expired','skipped'].includes(task.status) && !task.is_supervision_projection) {
     const changed = required.filter(child => pending.has(Number(child.id)));
     if (status === 'open' && changed.some(child => {
       const supervision = child.supervision_action || task.supervision?.actions?.find(action => Number(action.action_task_id) === Number(child.id));

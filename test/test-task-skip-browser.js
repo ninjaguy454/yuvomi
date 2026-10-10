@@ -52,7 +52,7 @@ async function run(){
     await page.evaluate(async({username,password})=>{const r=await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});if(!r.ok)throw new Error(`Login ${r.status}`);},{username,password});
     await page.goto(`${origin}/tasks`,{waitUntil:'domcontentloaded'});
     await new Promise(r=>setTimeout(r,5000));await page.waitForSelector('#btn-new-task, #fab-new-task');
-    await page.evaluate(()=>{window.qaClicks=[];document.addEventListener('click',event=>window.qaClicks.push(event.target.closest('button')?.id||event.target.tagName),true);window.qaToasts=[];const original=window.yuvomi.showToast;window.yuvomi.showToast=(...args)=>{window.qaToasts.push(args[0]);return original(...args);};});return page;
+    await page.evaluate(()=>{window.qaClicks=[];document.addEventListener('click',event=>window.qaClicks.push({target:event.target.outerHTML.slice(0,180),x:event.clientX,y:event.clientY}),true);window.qaToasts=[];const original=window.yuvomi.showToast;window.yuvomi.showToast=(...args)=>{window.qaToasts.push(args[0]);return original(...args);};});return page;
   }
   const api=(page,method,url,body)=>page.evaluate(async({method,url,body})=>(await import('/api.js')).api[method](url,body),{method,url,body});
   async function open(page,id){
@@ -67,6 +67,10 @@ async function run(){
       is_recurring:true,recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',start_time:'07:00',due_date:'2026-11-01',due_time:'08:00',
       expiration_policy:'expire_incomplete',subtasks:[{title:'Saved first step',points:2},{title:'Remaining step',points:3}]})).data;
     await open(observer,task.id);await open(mobile,task.id);
+    console.log('Mobile geometry before click',await mobile.$eval('#task-detail-skip',el=>{const r=el.getBoundingClientRect();return {rect:{x:r.x,y:r.y,w:r.width,h:r.height},hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,180),style:window.getComputedStyle(el).pointerEvents};}));
+    // A first-install service-worker update notice can temporarily cover the
+    // existing footer. Let that real notice expire before testing a user tap.
+    await mobile.waitForFunction(()=>{const el=document.getElementById('task-detail-skip');if(!el)return false;const r=el.getBoundingClientRect();return document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('button')===el;},{timeout:30000});
     await mobile.locator('#task-detail-skip').click();
     console.log('Mobile click probe',await mobile.evaluate(()=>({clicks:window.qaClicks,toasts:window.qaToasts,button:document.getElementById('task-detail-skip')?.outerHTML,confirm:!!document.getElementById('confirm-modal-ok'),visibility:document.visibilityState})));
     await mobile.waitForSelector('#confirm-modal-cancel',{visible:true});
@@ -80,7 +84,7 @@ async function run(){
     await desktop.waitForSelector('#confirm-modal-ok',{visible:true});await desktop.focus('#confirm-modal-ok');await desktop.keyboard.press('Enter');
     await desktop.waitForFunction(()=>document.querySelector('#shared-modal-overlay .modal-panel')?.textContent.includes('Skipped'));
     assert.equal(row(task.id).status,'skipped');
-    assert.equal(await desktop.$('#task-detail-reopen'),null);
+    assert.equal(await desktop.$('[data-focus-key="reopen"]'),null);
     assert.equal(await desktop.evaluate(()=>document.getElementById('task-detail-skip')?.checkVisibility()||false),false);
     assert.ok(!(await desktop.$eval('#shared-modal-overlay .modal-panel',el=>el.textContent)).includes('Undo'));
     await observer.waitForFunction(()=>document.querySelector('#shared-modal-overlay .modal-panel')?.textContent.includes('Skipped'));

@@ -120,9 +120,9 @@ The read-only baseline lifecycle run passed 46 of 47 checks across expiration, r
 
 Key source evidence: `server/services/task-lifecycle.js` (`expireTask`, revision and window guards), `task-recurrence-frontier.js` (identity/frontier/award provenance), `task-series.js` (authoritative definitions and nominal planner), `task-expiration.js` (durable recovery), `task-supervision.js` and `task-supervision-refresh.js` (helper closure), `rewards.js` and `task-completions.js` (awards/history), `server/permissions.js` and `server/task-capabilities.js` (default authority), `server/routes/tasks.js` (canonical writers/deletion/generation), and `public/components/task-detail.js` (actions and History).
 
-## Remaining material decisions
+## Settled first-release decisions
 
-1. **Initial supported scope.** Recommend materialized, top-level local calendar routines first, with the listed integration guards. Expanding the first release to Repeat from completion requires choosing its no-completion anchor policy; rotation, Workflow and provider-linked support also needs explicit continuation/dependency rules. Do not silently pause a mode that is promised to continue normally.
-2. **Undo.** Recommend omitting it initially. Including it now requires approval of a dedicated reopening policy and its deadline restrictions, rather than reusing Delete Undo or expired Reopen.
+1. **Initial supported scope.** Approved October 10: materialized, top-level local calendar routines, with the listed integration guards. Repeat from completion, rotation, Workflow and provider-linked support remain excluded until their continuation/dependency rules are designed.
+2. **Undo.** Approved October 10: omit it from this release. A later addition requires a dedicated reopening policy and deadline restrictions.
 
-Whole-occurrence scope is settled. Individual exceptions remain in existing assignment editing. No further person-level excusal decision is pending. Written-design review precedes an implementation plan or product changes.
+Whole-occurrence scope is settled. Individual exceptions remain in existing assignment editing. No further design approval is pending for this implementation. Deployment remains outside the authorization.

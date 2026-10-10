@@ -172,3 +172,24 @@ test('ended calendar rule has no successor and a relative Due offset retains its
   const next=rows('SELECT * FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL',relative.id);
   assert.equal(next.length,1);assert.equal(next[0].start_date,'2026-11-02');assert.equal(next[0].due_date,'2026-11-04');
 });
+
+test('restart catch-up skips only the chosen date and expires later missed calendar occurrences across DST',()=>{
+  const q=new Database(':memory:');q.pragma('foreign_keys=ON');
+  try {
+    for(const m of ALL_MIGRATIONS){if(m.foreignKeysOff)q.pragma('foreign_keys=OFF');q.transaction(()=>{typeof m.up==='function'?m.up(q):q.exec(m.up);m.afterUp?.(q);})();if(m.foreignKeysOff)q.pragma('foreign_keys=ON');}
+    const manager=Number(q.prepare("INSERT INTO users(username,display_name,password_hash,role) VALUES('catchup','Synthetic manager','x','admin')").run().lastInsertRowid);
+    q.exec("INSERT OR REPLACE INTO sync_config(key,value) VALUES('household_timezone','America/New_York')");
+    const id=Number(q.prepare(`INSERT INTO tasks(title,created_by,assigned_to,is_recurring,recurrence_rule,start_date,due_date,due_time,expiration_policy)
+      VALUES('Synthetic daily routine',?,?,1,'FREQ=DAILY','2026-11-01','2026-11-01','08:00','expire_incomplete')`).run(manager,manager).lastInsertRowid);
+    const revision=q.prepare('SELECT revision FROM tasks WHERE id=?').get(id).revision;
+    _setTestDatabase(q); // The registered canonical recurrence adapter uses db.get().
+    skipTaskOccurrence(q,id,{principal:manager,body:{operation_id:'catchup-once',expected_revision:revision},now:new Date('2026-11-01T12:30:00Z')});
+    const result=reconcileTaskExpirations(q,{now:new Date('2026-11-04T12:30:00Z'),onError:error=>{throw error;}});
+    assert.equal(result.expired,2);assert.equal(result.failed,0);
+    assert.deepEqual(q.prepare('SELECT due_date,status FROM tasks ORDER BY due_date').all(),[
+      {due_date:'2026-11-01',status:'skipped'},{due_date:'2026-11-02',status:'expired'},
+      {due_date:'2026-11-03',status:'expired'},{due_date:'2026-11-04',status:'open'}]);
+    assert.equal(q.prepare("SELECT COUNT(*) n FROM task_activity_events WHERE event_type='skipped'").get().n,1);
+    assert.equal(q.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);
+  }finally{_setTestDatabase(d);q.close();}
+});

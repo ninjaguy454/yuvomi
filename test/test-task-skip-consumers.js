@@ -141,4 +141,3 @@ test('nonstructural skipped source suppresses both queued and unsent helper remi
   assert.equal(d.prepare('SELECT status FROM planning_obligations WHERE id=?').get(obligation.id).status,'pending');
   assert.ok(!getCountdowns(d,{userId:actor,todayKey:'2026-09-15'}).items.some(row=>row.source==='task'&&row.id===nested));
 });
-

@@ -26,8 +26,8 @@ function legacy(d){
 async function owner(){assert.ok(migration,'append-only migration 10053 must exist');return import('../server/services/note-layout-owner.js');}
 function fresh(){const d=new Database(':memory:');legacy(d);assert.ok(migration,'append-only migration 10053 must exist');apply(d,migration);return d;}
 
-test('migration 10053 is appended with five owner tables and a matching latest-only mirror',()=>{
-  assert.ok(migration,'append-only migration 10053 must exist');assert.equal(ALL_MIGRATIONS.at(-1).version,10053);
+test('migration 10053 remains registered with five owner tables and a matching owner schema mirror',()=>{
+  assert.ok(migration,'append-only migration 10053 must exist');assert.equal(ALL_MIGRATIONS.filter(m=>m.version===10053).length,1);
   const d=fresh(),f=new Database(':memory:');try{
     assert.equal(typeof mirror.NOTE_LAYOUT_OWNER_SCHEMA_SQL,'string');f.exec('CREATE TABLE notes(id INTEGER PRIMARY KEY);');f.exec(mirror.NOTE_LAYOUT_OWNER_SCHEMA_SQL);
     for(const table of tables)for(const pragma of ['table_info','foreign_key_list','index_list'])assert.deepEqual(f.pragma(`${pragma}(${table})`),d.pragma(`${pragma}(${table})`),`${table} ${pragma}`);
@@ -129,7 +129,7 @@ test('actual encrypted startup adds missing owner migration and a missing versio
   const o=await owner(),folder=mkdtempSync(join(tmpdir(),'note-owner-startup-')),file=join(folder,'synthetic.db');let d;
   const open=()=>{const db=new Database(file);db.pragma("cipher='sqlcipher'");db.pragma(`key="x'${Buffer.from('synthetic-owner-startup-key','utf8').toString('hex')}'"`);db.pragma('foreign_keys=ON');return db;};
   const startup=()=>{
-    const launched=spawnSync(process.execPath,['--input-type=module','-e',`const {get,currentVersion}=await import(${JSON.stringify(new URL('../server/db.js',import.meta.url).href)});if(currentVersion()!==10053)throw new Error('owner migration not recorded');get().close();`],{env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:'synthetic-owner-startup-key',LOG_LEVEL:'error'},encoding:'utf8',timeout:30000});
+    const launched=spawnSync(process.execPath,['--input-type=module','-e',`const {get,currentVersion}=await import(${JSON.stringify(new URL('../server/db.js',import.meta.url).href)});if(currentVersion()!==${ALL_MIGRATIONS.at(-1).version})throw new Error('latest migration not recorded');get().close();`],{env:{...process.env,DB_PATH:file,DB_ENCRYPTION_KEY:'synthetic-owner-startup-key',LOG_LEVEL:'error'},encoding:'utf8',timeout:30000});
     assert.equal(launched.status,0,launched.stderr||launched.stdout||String(launched.error));
   };
   try{

@@ -2,7 +2,7 @@ import {setTaskAssignments as setAssignments} from '../services/task-assignments
 import {listTaskOffers,taskOfferState} from '../services/task-offers.js';
 import {acceptanceOptions} from '../services/task-acceptance-policy.js';
 import {acceptTask} from '../services/task-acceptance.js';
-import {skipTaskOccurrence,taskSkipUnsupportedReason} from '../services/task-skip.js';
+import {skipTaskOccurrence,taskSkipUnsupportedReason,taskSkipHasRotationScope} from '../services/task-skip.js';
 /**
  * Modul: Aufgaben (Tasks)
  * Zweck: REST-API-Routen für Aufgaben und Teilaufgaben (max. 2 Ebenen)
@@ -2651,7 +2651,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
         activitySnapshot:taskActivityBinding.snapshot,
         allowInactive:true,materializeChecklist:false,
         supportOriginTaskId:activitySupportTasks(db.get(),sourceTask.id).find(row=>row.role==='supervisor')?.id??sourceTask.id,
-        commitRotation: true,
+        commitRotation: sourceTask.status!=='skipped'||!taskSkipHasRotationScope(db.get(),sourceTask),
         dateKey: nextDate,
       });
     }
@@ -2666,7 +2666,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       db.get().prepare('INSERT INTO task_planning_context(task_id,place_id,presence_policy,presence_window,source) VALUES(?,?,?,?,?)')
         .run(newTask.lastInsertRowid,planning.place_id,planning.presence_policy,planning.presence_window,planning.source);
     }
-    bindTaskRotations(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by});
+    bindTaskRotations(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by,sharedPreviewOnly:sourceTask.status==='skipped'});
     applyTaskRotationRendering(db.get(),Number(newTask.lastInsertRowid),definition.rotation_rendering);
     reconcileTaskSupervision(db.get(),Number(newTask.lastInsertRowid),{actorId:task.created_by});
     notifyTaskAssignments(db.get(), Number(newTask.lastInsertRowid));
@@ -2737,8 +2737,12 @@ function resumePendingSeriesRotations(taskId,{all=false}={}) {
 function spawnRecurrenceFollowupLocked(taskId) {
   const source=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
   if(!source||!isTerminalRecurrenceOccurrence(source))return;
-  resumePendingSeriesRotations(source.id);
+  if(source.status!=='skipped')resumePendingSeriesRotations(source.id);
   if(!isRecurrenceFrontier(db.get(),source.id))return;
+  if(source.status==='skipped') {
+    const unsupported=taskSkipUnsupportedReason(db.get(),source);
+    if(unsupported)throw new TaskStateError(unsupported,{reason:'skip_unsupported'});
+  }
   const task=recurringCohortMember(source);
   if (!task?.rotation_group) return spawnRecurrenceFollowupSingle(task);
 

@@ -58,14 +58,15 @@ function retirePeriod(d,taskId,purpose) {
   d.prepare("UPDATE task_rotation_periods SET retired_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE task_id=? AND purpose_key=? AND retired_at IS NULL").run(taskId,purpose);
 }
 const unscheduledPeriod = dateKey => ({id:0,revision:0,status:'preview',state:'not_scheduled',period_date:dateKey,provisional:true,order:[],member_ids:[],selected_member:null,explanation:'This Group has no scheduled rotation on this evening.'});
-function bindSharedTaskPurpose(d,task,binding,existing,{actorId,now,consumer}={}) {
+function bindSharedTaskPurpose(d,task,binding,existing,{actorId,now,consumer,sharedPreviewOnly=false}={}) {
   const dateKey=sharedTaskPeriodDate(d,task,binding);
   const config=sharedGroupConfiguration(d,binding.group_id,dateKey||undefined);
   if(!config)return null;
   if(!dateKey)throw invalid('Choose a Start Date for this shared rotation occurrence.');
   const previous=d.prepare('SELECT * FROM task_rotation_periods WHERE task_id=? AND purpose_key=? AND retired_at IS NULL').get(task.id,binding.purpose_key);
   if(previous&&(previous.group_id!==binding.group_id||previous.period_date!==dateKey))retirePeriod(d,task.id,binding.purpose_key);
-  const occurrence=resolveSharedRotation(d,binding.group_id,{dateKey,actorId,now})||unscheduledPeriod(dateKey);
+  const occurrence=(sharedPreviewOnly?previewSharedRotation(d,binding.group_id,{dateKey,now})
+    :resolveSharedRotation(d,binding.group_id,{dateKey,actorId,now}))||unscheduledPeriod(dateKey);
   if(existing&&existing.occurrence_id!==occurrence.id) {
     d.prepare("UPDATE task_rotation_occurrences SET retired_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND retired_at IS NULL").run(existing.id);
     const priorTrack=d.prepare('SELECT group_id,consumer_type FROM rotation_tracks WHERE id=?').get(existing.track_id);
@@ -94,7 +95,7 @@ export function taskRotationContext(d, task) {
 /** Caller has already authorized the consumer write and owns its transaction.
  * Retired links preserve the series' original decision when an occurrence gets
  * a one-off binding. Both are settled once by the owning Task's lifecycle. */
-export function bindTaskRotations(d, taskId, { config, previousConfig, actorId = null, scope = 'materialize', consumer = null, occurrenceKey = null, onlyMissing = false, purposeKeys = null, now } = {}) {
+export function bindTaskRotations(d, taskId, { config, previousConfig, actorId = null, scope = 'materialize', consumer = null, occurrenceKey = null, onlyMissing = false, purposeKeys = null, now, sharedPreviewOnly = false } = {}) {
   const task = d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
   if (!task) throw invalid('Task not found.');
   const bindings = config === undefined ? parseRotationBindings(task.rotation_bindings_json) : normalizeRotationBindings(d, config);
@@ -119,7 +120,11 @@ export function bindTaskRotations(d, taskId, { config, previousConfig, actorId =
     const unchangedBinding=json(comparableBinding(previousBinding))===json(comparableBinding(binding));
     if(scope==='occurrence'&&previousConfig!==undefined&&!unchangedBinding)
       identityOwner={consumer_type:'task_exception',consumer_id:`${task.id}:${createHash('sha256').update(json(binding)).digest('hex').slice(0,24)}`};
-    const shared=bindSharedTaskPurpose(d,task,binding,existing,{actorId,now,consumer:identityOwner});
+    // Skip materialization never activates a period or falls through to an
+    // independent Track after a scheduled mode boundary/configuration edit.
+    if(sharedPreviewOnly&&!sharedGroupConfiguration(d,binding.group_id,sharedTaskPeriodDate(d,task,binding)))
+      throw invalid('Rotation work cannot be skipped here.');
+    const shared=bindSharedTaskPurpose(d,task,binding,existing,{actorId,now,consumer:identityOwner,sharedPreviewOnly});
     if(shared){(shared.occurrence_id?resolved:pending).push(shared);continue;}
     retirePeriod(d,task.id,binding.purpose_key);
     if(periodReference&&existing){retire(existing);existing=null;}

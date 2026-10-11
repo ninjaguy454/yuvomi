@@ -207,26 +207,40 @@ export function authoritativeTaskRecurrence(d,task) {
   return definition?.data.task||task;
 }
 
+export function completionRelativeSkipUnsupportedReason(configuration,anchorDate) {
+  if(!configuration.recurrence_from_completion)return null;
+  if(parseRRule(configuration.recurrence_rule)?.count)return 'Tasks with a limited number of repeats after completion cannot be skipped.';
+  if(!anchorDate)return 'This occurrence needs a scheduled date before it can be skipped.';
+  return null;
+}
+
 /** The existing generator calls this plan; occurrence-only dates and rule
  * edits never become the next definition or its fixed calendar anchor. */
 export function seriesMaterializationPlan(d,task,{completedOn,expirationAnchor=false}={}) {
   const state=ensureSeriesDefinition(d,task.id);if(!state)return null;
   const definition=seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1);
-  const window=planSeriesOccurrence(d,definition,state.occurrence,{completedOn,withoutCompletion:['expired','skipped'].includes(task.status)||expirationAnchor});
+  const window=planSeriesOccurrence(d,definition,state.occurrence,{completedOn,skipped:task.status==='skipped',withoutCompletion:['expired','skipped'].includes(task.status)||expirationAnchor});
   return window?{state,definition,...window}:null;
 }
 
 /** Plan the successor of the supplied nominal occurrence, without inserting
  * or editing anything. Callers can chain returned dates to reconcile existing
  * untouched future occurrences under one selected definition. */
-export function planSeriesOccurrence(d,definition,occurrence,{anchorStartDate,anchorDueDate,completedOn=null,expired=false,withoutCompletion=expired}={}) {
+export function planSeriesOccurrence(d,definition,occurrence,{anchorStartDate,anchorDueDate,completedOn=null,expired=false,withoutCompletion=expired,skipped=false}={}) {
   const configuration=definition?.data.task;if(!configuration?.is_recurring||!configuration.recurrence_rule)return null;
   const relative=configuration.due_date_offset_days!=null;
   const previousAnchor=relative?(anchorStartDate??occurrence.planned_start_date):(anchorDueDate??occurrence.planned_due_date);
   const definitionAnchor=relative?configuration.start_date:configuration.due_date;
   let nextAnchor;
   if(configuration.recurrence_from_completion) {
-    nextAnchor=withoutCompletion?null:nextDueAfterCompletion({anchorDate:previousAnchor,rule:configuration.recurrence_rule,completedOn,fromCompletion:true});
+    if(skipped) {
+      const unsupported=completionRelativeSkipUnsupportedReason(configuration,previousAnchor||definitionAnchor);
+      if(unsupported)throw new Error(unsupported);
+    }
+    // An explicit Skip consumes one nominal slot, even if its successor is
+    // overdue. Automatic expiry still supplies no completion-relative anchor.
+    nextAnchor=skipped?nextDueAfterExpiration({anchorDate:previousAnchor||definitionAnchor,rule:configuration.recurrence_rule})
+      :withoutCompletion?null:nextDueAfterCompletion({anchorDate:previousAnchor,rule:configuration.recurrence_rule,completedOn,fromCompletion:true});
   } else if(definition.id!==occurrence.definition_id && definitionAnchor && previousAnchor) {
     // A preserved exception may still have the previous schedule. Resume the
     // newest definition's phase after that nominal slot, not its edited dates.
@@ -241,7 +255,7 @@ export function planSeriesOccurrence(d,definition,occurrence,{anchorStartDate,an
   // slot of its new rule while retaining its durable nominal/award identity.
   // That slot is already represented by this Task. Skip it only with proof of
   // a this-and-future cadence change; one-off date overrides keep their anchor.
-  if(nextAnchor && !configuration.recurrence_from_completion
+  if(nextAnchor && (skipped||!configuration.recurrence_from_completion)
     && occurrence.definition_id===definition.id && !occurrence.exception_reason
     && definition.source_task_id===occurrence.task_id && definition.effective_generation===occurrence.generation) {
     const selected=d.prepare('SELECT start_date,due_date FROM tasks WHERE id=?').get(occurrence.task_id);

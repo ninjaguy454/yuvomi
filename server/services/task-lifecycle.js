@@ -366,7 +366,8 @@ export function expireTask(d, taskId, {now=new Date()}={}) {
 export function resumeExpiredTaskRecurrence(d,taskId) {
   const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
   const recurrence=task?authoritativeTaskRecurrence(d,task):null;
-  if(!['expired','skipped'].includes(task?.status)||!recurrence.is_recurring||recurrence.recurrence_from_completion||task.parent_task_id)return;
+  if(!['expired','skipped'].includes(task?.status)||!recurrence.is_recurring
+    ||(recurrence.recurrence_from_completion&&task.status!=='skipped')||task.parent_task_id)return;
   if(!recurrenceHooks)throw new TaskStateError('Recurring Task actions are temporarily unavailable.',{},503);
   return recurrenceHooks.spawn(task);
 }

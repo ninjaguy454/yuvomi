@@ -93,8 +93,8 @@ test('expired correction retains original evidence and existing successor',async
   assert.equal(history.data[0].points,0);assert.equal(history.data[0].user_name,'Parent');
 });
 // Catches accidental support for recurrence modes without a defined excusal contract.
-test('completion-relative, plain, child, completed and pending-export targets reject',async()=>{
-  for(const extra of [{recurrence_from_completion:true},{is_recurring:false,recurrence_rule:null},{assignment_mode:'round_robin',rotation_user_ids:[child,other]}]){
+test('plain, rotation, child, completed and pending-export targets reject',async()=>{
+  for(const extra of [{is_recurring:false,recurrence_rule:null},{assignment_mode:'round_robin',rotation_user_ids:[child,other]}]){
     const t=await fixture(extra),r=await skip(t);assert.equal(r.status,409,JSON.stringify(r));assert.equal(read(t.id).status,'open');
   }
   const t=await fixture();const r=await call('POST',`/${t.subtasks[0].id}/skip`,request(t.subtasks[0],`child-${t.id}`));assert.equal(r.status,409,JSON.stringify(r));

@@ -54,3 +54,19 @@ test('confirmation states date and whole scope; Cancel writes nothing and unknow
     assert.deepEqual(Object.keys(calls[0].body).sort(),['expected_revision','operation_id']);
   } finally {api.post=saved;}
 });
+
+test('Skip confirmation explains one scheduled successor even when it is overdue',async()=>{
+  const routine={...task(),status:'in_progress',recurrence_from_completion:1,can_skip_occurrence:true,permissions:{skip_occurrence:true}};
+  const result=await state.skipTaskOccurrence(routine,{confirm:async(_message,options)=>{
+    assert.match(options.detail,/next scheduled occurrence/i);assert.match(options.detail,/already overdue/i);return false;
+  }});
+  assert.equal(result,null);
+});
+
+test('Skip confirmation for cleared concrete dates omits the date while preserving its scope',async()=>{
+  const routine={...task(),status:'open',start_date:null,due_date:null,can_skip_occurrence:true,permissions:{skip_occurrence:true}};
+  assert.equal(await state.skipTaskOccurrence(routine,{confirm:async(message,options)=>{
+    assert.equal(message,'Skip this occurrence?');assert.match(options.detail,/all current assignees/);
+    assert.match(options.detail,/next scheduled occurrence/);return false;
+  }}),null);
+});

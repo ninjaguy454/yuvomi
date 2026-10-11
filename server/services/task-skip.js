@@ -3,7 +3,7 @@ import {createHash} from 'node:crypto';
 import {actorId} from '../permissions.js';
 import {assertTaskMutation,taskDevicePrincipal} from './task-access.js';
 import {assertTaskRevision,recordTaskActivity,resumeExpiredTaskRecurrence,TaskStateError} from './task-lifecycle.js';
-import {authoritativeTaskRecurrence,ensureSeriesDefinition,taskSeriesState,seriesDefinitionForGeneration,planSeriesOccurrence} from './task-series.js';
+import {authoritativeTaskRecurrence,completionRelativeSkipUnsupportedReason,ensureSeriesDefinition,taskSeriesState,seriesDefinitionForGeneration,planSeriesOccurrence} from './task-series.js';
 import {retiredRecurrenceOccurrence} from './task-recurrence-frontier.js';
 
 export function taskSkipScope(d,taskId) {
@@ -17,7 +17,12 @@ export function taskSkipScope(d,taskId) {
 export function taskSkipUnsupportedReason(d,task,rows=taskSkipScope(d,task.id)) {
   if(task.parent_task_id || d.prepare('SELECT 1 FROM task_activity_support_tasks WHERE task_id=? UNION SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=?').get(task.id,task.id))return 'Only a whole recurring occurrence can be skipped.';
   const recurrence=authoritativeTaskRecurrence(d,task);
-  if(!recurrence?.is_recurring||!recurrence.recurrence_rule||recurrence.recurrence_from_completion)return 'Only materialized calendar-based recurring Tasks can be skipped.';
+  if(!recurrence?.is_recurring||!recurrence.recurrence_rule)return 'Only materialized recurring Tasks can be skipped.';
+  if(recurrence.recurrence_from_completion) {
+    const nominal=taskSeriesState(d,task.id)?.occurrence;
+    const anchor=recurrence.due_date_offset_days!=null?nominal?.planned_start_date||recurrence.start_date:nominal?.planned_due_date||recurrence.due_date;
+    const unsupported=completionRelativeSkipUnsupportedReason(recurrence,anchor);if(unsupported)return unsupported;
+  }
   if(retiredRecurrenceOccurrence(d,task.id))return 'This occurrence is no longer materialized.';
   for(const row of rows) {
     if(row.assignment_mode==='round_robin'||row.rotation_group||row.rotation_bindings_json&&JSON.parse(row.rotation_bindings_json).length
@@ -42,7 +47,8 @@ function recurrencePending(d,taskId) {
   const state=taskSeriesState(d,taskId);if(!state||state.occurrence.state!=='materialized')return false;
   if(d.prepare("SELECT 1 FROM task_recurrence_occurrences WHERE series_id=? AND generation>? AND state='materialized'").get(state.series_id,state.occurrence.generation))return false;
   const definition=seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1);
-  return Boolean(planSeriesOccurrence(d,definition,state.occurrence,{withoutCompletion:true}));
+  try{return Boolean(planSeriesOccurrence(d,definition,state.occurrence,{withoutCompletion:true,skipped:true}));}
+  catch{return true;} // A committed Skip remains retryable when current settings cannot produce its successor.
 }
 export function skipTaskOccurrence(d,taskId,{principal,body={},now=new Date()}={}) {
   if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!['operation_id','expected_revision'].includes(k))

@@ -82,8 +82,8 @@ export async function skipTaskOccurrence(task,{confirm:requestConfirmation=confi
   if(!task.can_skip_occurrence||!task.permissions?.skip_occurrence||task.archived_at||task.parent_task_id)
     throw new Error('You cannot skip this occurrence.');
   const date=task.due_date||task.start_date;
-  if(!await requestConfirmation(`Skip this occurrence on ${date}?`,{
-    detail:'Its unfinished work will be excused for all current assignees. No new completion points are awarded; previously earned points remain. Future occurrences keep their schedule.',
+  if(!await requestConfirmation(date?`Skip this occurrence on ${date}?`:'Skip this occurrence?',{
+    detail:'Its unfinished work will be excused for all current assignees. No new completion points are awarded; previously earned points remain. Future occurrences keep their schedule. If one remains, the next scheduled occurrence is generated even if already overdue.',
     confirmLabel:'Skip this occurrence',closeOnConfirm:false,
   }))return null;
   const key=`${task.id}:${task.revision}`;

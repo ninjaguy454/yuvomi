@@ -50,3 +50,33 @@ test('deadline sweep and skip cannot overwrite each other or duplicate the succe
   assert.equal(count('SELECT COUNT(*) n FROM reward_ledger'),0);assert.equal(count('SELECT COUNT(*) n FROM task_completions'),0);oneNext();
   if(status==='expired')assert.equal(outcomes[0].error.details.reason,'stale_revision');else assert.equal(outcomes[1].value.expired,false);
 });
+
+function useCompletionRelativeRecurrence(){
+  d.prepare('UPDATE tasks SET recurrence_from_completion=1 WHERE id=?').run(taskId);
+  revision=d.prepare('SELECT revision FROM tasks WHERE id=?').get(taskId).revision;
+}
+
+test('completion-relative same-operation writers create one receipt and one nominal successor',async()=>{
+  useCompletionRelativeRecurrence();
+  const outcomes=await race(['skip','skip'],'2026-11-01T12:30:00Z');assert.ok(outcomes.every(row=>row.ok),JSON.stringify(outcomes));
+  assert.equal(outcomes.filter(row=>row.value.replayed).length,1);assert.equal(count('SELECT COUNT(*) n FROM task_skip_receipts'),1);
+  assert.equal(count('SELECT COUNT(*) n FROM reward_ledger'),0);oneNext();
+});
+
+test('completion-relative completion and Skip serialize without duplicate dates or invalid earnings',async()=>{
+  useCompletionRelativeRecurrence();
+  const outcomes=await race(['skip','complete'],'2026-11-01T12:30:00Z');const status=d.prepare('SELECT status FROM tasks WHERE id=?').get(taskId).status;
+  assert.ok(['done','skipped'].includes(status),JSON.stringify(outcomes));assert.equal(outcomes.filter(row=>row.ok).length,1);
+  assert.equal(count("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'",taskId),status==='done'?1:0);oneNext();
+});
+
+test('completion-relative expiry stays paused if it wins against Skip',async()=>{
+  useCompletionRelativeRecurrence();
+  const outcomes=await race(['skip','expire'],'2026-11-01T13:00:00Z');const status=d.prepare('SELECT status FROM tasks WHERE id=?').get(taskId).status;
+  assert.ok(['expired','skipped'].includes(status),JSON.stringify(outcomes));assert.equal(count('SELECT COUNT(*) n FROM reward_ledger'),0);
+  assert.equal(count('SELECT COUNT(*) n FROM task_completions'),0);
+  if(status==='expired'){
+    assert.equal(count('SELECT COUNT(*) n FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL',taskId),0);
+    assert.equal(outcomes[0].error.details.reason,'stale_revision');
+  }else{assert.equal(outcomes[1].value.expired,false);oneNext();}
+});

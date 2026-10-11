@@ -10,13 +10,13 @@ import puppeteer from 'puppeteer';
 
 const repo=fileURLToPath(new URL('..',import.meta.url));
 if(process.env.TASK_SKIP_BROWSER_CHILD==='1')await run();
-else test('real Task Details: keyboard/mobile confirmation, Cancel, history, permissions and second-client refresh',{timeout:180000},()=>{
+else for(const mode of ['calendar','completion-relative'])test(`real Task Details (${mode}): keyboard/mobile confirmation, Cancel, history, permissions and second-client refresh`,{timeout:180000},()=>{
   const temporary=!process.env.TASK_SKIP_QA_OUTPUT;
-  const output=process.env.TASK_SKIP_QA_OUTPUT||mkdtempSync(path.join(tmpdir(),'task-skip-browser-'));
+  const output=process.env.TASK_SKIP_QA_OUTPUT?path.join(process.env.TASK_SKIP_QA_OUTPUT,mode):mkdtempSync(path.join(tmpdir(),'task-skip-browser-'));
   mkdirSync(output,{recursive:true});
   try {
     const child=spawnSync(process.execPath,[fileURLToPath(import.meta.url)],{encoding:'utf8',timeout:170000,maxBuffer:8*1024*1024,
-      env:{...process.env,TASK_SKIP_BROWSER_CHILD:'1',TASK_SKIP_QA_OUTPUT:output}});
+      env:{...process.env,TASK_SKIP_BROWSER_CHILD:'1',TASK_SKIP_QA_OUTPUT:output,TASK_SKIP_QA_MODE:mode}});
     writeFileSync(path.join(output,'browser-child.log'),`${child.stdout}\n${child.stderr}`);
     assert.equal(child.status,0,`${child.error||''}\n${child.stdout}\n${child.stderr}`);
     assert.deepEqual(JSON.parse(readFileSync(path.join(output,'results.json'),'utf8')),
@@ -64,7 +64,7 @@ async function run(){
   try {
     const desktop=await client(1366),mobile=await client(390),observer=await client(1366);
     const task=(await api(desktop,'post','/tasks',{title:'Synthetic shared daily routine',assigned_to:[child,other],points:5,
-      is_recurring:true,recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',start_time:'07:00',due_date:'2026-11-01',due_time:'08:00',
+      is_recurring:true,recurrence_from_completion:process.env.TASK_SKIP_QA_MODE==='completion-relative',recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',start_time:'07:00',due_date:'2026-11-01',due_time:'08:00',
       expiration_policy:'expire_incomplete',subtasks:[{title:'Saved first step',points:2},{title:'Remaining step',points:3}]})).data;
     await open(observer,task.id);await open(mobile,task.id);
     console.log('Mobile geometry before click',await mobile.$eval('#task-detail-skip',el=>{const r=el.getBoundingClientRect();return {rect:{x:r.x,y:r.y,w:r.width,h:r.height},hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,180),style:window.getComputedStyle(el).pointerEvents};}));
@@ -76,6 +76,7 @@ async function run(){
     await mobile.waitForSelector('#confirm-modal-cancel',{visible:true});
     assert.match(await mobile.$eval('#confirm-modal-ok',el=>el.closest('.modal-panel').textContent),/2026-11-01/);
     assert.match(await mobile.$eval('#confirm-modal-ok',el=>el.closest('.modal-panel').textContent),/all current assignees/);
+    assert.match(await mobile.$eval('#confirm-modal-ok',el=>el.closest('.modal-panel').textContent),/next scheduled occurrence/i);
     await mobile.screenshot({path:path.join(output,'mobile-confirm.png'),fullPage:true});
     const before=d.prepare('SELECT COUNT(*) n FROM task_activity_events').get().n;
     await mobile.locator('#confirm-modal-cancel').click();await mobile.waitForSelector('#task-detail-skip',{visible:true});

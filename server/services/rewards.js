@@ -9,6 +9,7 @@ import { taskWindowAncestors } from './task-window.js';
  */
 
 import { rewardOccurrenceProvenance } from './task-recurrence-frontier.js';
+import {taskRewardDefinition,recordTaskScoringSettlement,assertTaskScoringAward} from './task-scoring.js';
 
 const REWARD_TX = `
   INSERT INTO reward_ledger (user_id, delta, type, reason, task_id, redemption_id, created_by)
@@ -19,13 +20,6 @@ const REWARD_TX = `
 export function getBalance(d, userId) {
   const row = d.prepare('SELECT COALESCE(SUM(delta), 0) AS bal FROM reward_ledger WHERE user_id = ?').get(userId);
   return row?.bal ?? 0;
-}
-
-/** IDs aller aktiv teilnehmenden Mitglieder. */
-function enrolledIds(d) {
-  return new Set(
-    d.prepare('SELECT user_id FROM reward_participants WHERE enabled = 1').all().map((r) => r.user_id),
-  );
 }
 
 /** Nimmt ein Mitglied aktiv am Punkte-System teil? */
@@ -41,40 +35,7 @@ export function isEnrolled(d, userId) {
  * — sofern selbst teilnehmend. Jedes zuständige Mitglied erhält den vollen Wert.
  */
 export function rewardTargets(d, taskId, actingUserId) {
-  const enrolled = enrolledIds(d);
-  const hasSupervision = !!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_supervision_actions'").get();
-  let action = null;
-  if (hasSupervision) {
-    // Generated helper rows are views of the original action, not additional
-    // point-bearing work. This also protects legacy rows with nonzero points.
-    if (d.prepare(`SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=?
-      UNION ALL SELECT 1 FROM task_activity_support_tasks WHERE task_id=? LIMIT 1`).get(taskId, taskId)) return [];
-    action = d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(taskId);
-    if (action?.execution_mode === 'delegated' && action.state !== 'not_required') {
-      // A helper performs this action themselves. A stale structural learner
-      // assignment must never credit the learner for prohibited work. A parent
-      // occurrence's reward is not transferred to its helper by this projection.
-      if (action.action_task_id === action.source_task_id) return [];
-      return enrolled.has(action.supervisor_user_id) ? [action.supervisor_user_id] : [];
-    }
-  }
-  const assignees = d.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?')
-    .all(taskId).map((r) => r.user_id);
-  const targets = assignees.filter((id) => enrolled.has(id));
-  if (targets.length) return targets;
-  // A supervisor records completion for the learner. Checklist rows can
-  // inherit that learner without a legacy assignment join of their own.
-  if (hasSupervision) {
-    const learner = action?.learner_user_id;
-    if (learner) return enrolled.has(learner) ? [learner] : [];
-    // Legacy parent occurrences may have assigned_to without the assignment
-    // join. Finishing the helper's final action must not give it that reward.
-    const source = d.prepare(`SELECT t.assigned_to FROM tasks t WHERE t.id=?
-      AND EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.source_task_id=t.id)`).get(taskId);
-    if (source?.assigned_to) return enrolled.has(source.assigned_to) ? [source.assigned_to] : [];
-  }
-  if (actingUserId && enrolled.has(actingUserId)) return [actingUserId];
-  return [];
+  return taskRewardDefinition(d,taskId,{actingUserId})?.targets||[];
 }
 
 /** One award per occurrence, with the recipients frozen at the first award.
@@ -83,18 +44,24 @@ export function rewardTargets(d, taskId, actingUserId) {
  * series/date/action claim; reopening, deletion and retries cannot award twice. */
 export function awardForCompletion(d, taskId, actingUserId) {
   return d.transaction(() => {
-    const task = d.prepare('SELECT id, points, title FROM tasks WHERE id = ?').get(taskId);
-    if (!task || !Number.isInteger(task.points) || task.points <= 0) return false;
+    const task = d.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!task || !Number.isInteger(task.points) || task.points < 0) return false;
     if (taskWindowAncestors(d,taskId).some(row=>['expired','skipped'].includes(row.status))) return false;
-    const targets = rewardTargets(d, taskId, actingUserId);
-    if (!targets.length) return false;
     const provenance=rewardOccurrenceProvenance(d,taskId);
     if(provenance.retired)return false;
+    if(d.prepare(`SELECT 1 FROM task_scoring_settlements s WHERE logical_key=?
+      AND NOT EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id)`).get(provenance.logicalKey))return false;
+    const definition=taskRewardDefinition(d,task,{actingUserId});
+    assertTaskScoringAward(d,definition);
+    if(definition.outcome!=='earned'){
+      recordTaskScoringSettlement(d,definition,provenance.logicalKey);return false;
+    }
     const claim = d.prepare('INSERT OR IGNORE INTO reward_task_awards(task_id,logical_key) VALUES (?,?)').run(taskId,provenance.logicalKey);
     if (!claim.changes) return false;
+    if(!recordTaskScoringSettlement(d,definition,provenance.logicalKey).changes)return false;
     const ins = d.prepare(`INSERT INTO reward_ledger (user_id, delta, type, reason, task_id, created_by)
       VALUES (?, ?, 'earn', ?, ?, ?)`);
-    for (const uid of targets) ins.run(uid, task.points, task.title || null, taskId, actingUserId || null);
+    for (const uid of definition.targets) ins.run(uid, definition.points, task.title || null, taskId, actingUserId || null);
     return true;
   }).immediate();
 }

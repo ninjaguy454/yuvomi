@@ -8,6 +8,7 @@ import {addNoteLayoutStateSchema} from './services/note-layout-state-schema.js';
 import {addTaskAcceptanceSchema} from './services/task-acceptance-schema.js';
 import {addNoteGroupSchema} from './services/note-group-schema.js';
 import {addNoteLayoutOwnerSchema} from './services/note-layout-owner-schema.js';
+import {addTaskScoringSchema} from './services/task-scoring-schema.js';
 /**
  * Modul: Datenbank (Database)
  * Zweck: SQLite/SQLCipher Verbindung, Schema-Migration (versioniert) und Query-Helfer
@@ -9117,6 +9118,7 @@ FORK_MIGRATIONS.push({version:10051, description:'Notes: persistent position loc
 FORK_MIGRATIONS.push({version:10052, description:'Notes: independent groups, ordered membership and structural receipts', up:addNoteGroupSchema});
 FORK_MIGRATIONS.push({version:10053, description:'Notes: independent personal and paired-device layout owners', up:addNoteLayoutOwnerSchema});
 FORK_MIGRATIONS.push({version:10054, description:'Tasks: durable whole-occurrence calendar excusal', foreignKeysOff:true, up:addTaskSkipSchema});
+FORK_MIGRATIONS.push({version:10055, description:'Tasks: exclusive scoring modes and immutable completion settlements', up:addTaskScoringSchema});
 FORK_MIGRATIONS.push({version:10056, description:'Trips: ordinary parent Tasks and durable preparation steps', up:addTripTaskSchema});
 FORK_MIGRATIONS.push({version:10057, description:'Rewards: parent prize delivery Tasks and audited Undo', up:addRewardFulfillmentSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

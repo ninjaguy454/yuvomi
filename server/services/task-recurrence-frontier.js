@@ -134,6 +134,39 @@ export function rewardOccurrenceProvenance(d,taskId) {
   return {logicalKey:JSON.stringify(['recurrence',occurrence.series_id,occurrence.occurrence_key,action.action_key]),retired:occurrence.state==='retired'};
 }
 
+/** The identical earning identity for pure previews, including a regenerated
+ * action whose predecessor was deleted. Never register provenance on a read. */
+export function peekRewardOccurrenceProvenance(d,taskId) {
+  const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(taskId);
+  const fallback={logicalKey:JSON.stringify(['task',taskId]),retired:false};
+  if(!task)return fallback;
+  const existing=d.prepare('SELECT * FROM task_recurrence_actions WHERE task_id=?').get(taskId);
+  if(existing){const occurrence=read(d,existing.occurrence_task_id);if(occurrence)return {logicalKey:JSON.stringify(['recurrence',occurrence.series_id,occurrence.occurrence_key,existing.action_key]),retired:occurrence.state==='retired'};}
+  if(d.prepare(`SELECT 1 FROM task_activity_support_tasks WHERE task_id=? UNION ALL SELECT 1 FROM task_supervision_actions WHERE counterpart_task_id=? LIMIT 1`).get(taskId,taskId))return fallback;
+  let root=task;const ancestors=new Set();
+  while(root.parent_task_id&&!ancestors.has(root.id)){ancestors.add(root.id);root=d.prepare('SELECT * FROM tasks WHERE id=?').get(root.parent_task_id);if(!root)return fallback;}
+  if(root.parent_task_id)return fallback;
+  let occurrence=read(d,root.id);
+  if(!occurrence){
+    if(!root.is_recurring&&!root.recurrence_origin_id)return fallback;
+    let prior=root,seriesId=root.id;const seen=new Set();
+    while(prior?.recurrence_origin_id&&!seen.has(prior.id)){
+      seen.add(prior.id);seriesId=Math.min(seriesId,prior.recurrence_origin_id);const stored=read(d,prior.recurrence_origin_id);
+      if(stored){seriesId=stored.series_id;break;}prior=d.prepare('SELECT * FROM tasks WHERE id=?').get(prior.recurrence_origin_id);
+    }
+    occurrence={series_id:seriesId,occurrence_key:occurrenceKey(root),state:'materialized'};
+  }
+  let actionKey='root';
+  if(task.id!==root.id){
+    let prior=task;actionKey=`action:${task.id}`;const seen=new Set();
+    while(prior?.recurrence_origin_id&&!seen.has(prior.id)){
+      seen.add(prior.id);const stored=d.prepare('SELECT * FROM task_recurrence_actions WHERE task_id=?').get(prior.recurrence_origin_id);
+      if(stored){actionKey=stored.action_key;break;}prior=d.prepare('SELECT * FROM tasks WHERE id=?').get(prior.recurrence_origin_id);if(prior)actionKey=`action:${prior.id}`;
+    }
+  }
+  return {logicalKey:JSON.stringify(['recurrence',occurrence.series_id,occurrence.occurrence_key,actionKey]),retired:occurrence.state==='retired'};
+}
+
 export function backfillRecurrenceAwardProvenance(d) {
   for(const row of d.prepare('SELECT id FROM tasks ORDER BY id').all())registerRecurrenceAction(d,row.id);
   for(const row of d.prepare('SELECT task_id FROM reward_task_awards WHERE logical_key IS NULL ORDER BY task_id').all()) {
@@ -164,6 +197,11 @@ export function releaseCorrectedRetiredAwards(d,taskIds,{actorId,reason}={}) {
           if(Number(earn.delta)+Number(correction.delta)!==0)throw new Error(`Earning ${earn.id} must be fully offset by a linked adjustment before a replacement can earn points.`);
         }
         d.prepare("UPDATE reward_task_awards SET retired_at=strftime('%Y-%m-%dT%H:%M:%SZ','now'),retirement_reason=? WHERE task_id=?").run(reason,receipt.task_id);
+        if(d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='task_scoring_settlement_releases'").get())d.prepare(`
+          INSERT OR IGNORE INTO task_scoring_settlement_releases(settlement_id,logical_key,actor_user_id,reason,released_at)
+          SELECT s.id,s.logical_key,?,?,strftime('%Y-%m-%dT%H:%M:%fZ','now') FROM task_scoring_settlements s
+          WHERE s.task_id=? AND NOT EXISTS(SELECT 1 FROM task_scoring_settlement_releases r WHERE r.settlement_id=s.id)`)
+          .run(actorId,reason,receipt.task_id);
         released.push(receipt.task_id);
       }
       if(receipts.length)d.prepare(`INSERT INTO task_activity_events(task_id,action_task_id,actor_user_id,event_type,details_json)

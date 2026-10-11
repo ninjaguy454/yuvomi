@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Child prize requests now create one private, zero-point delivery Task for the household's eligible parents. Delivery remains pending until a parent completes it, including when purchase approval is off. Parents and administrators can undo accidental redemptions from the record, refunding points once while preserving delivery history. A separate device redemption permission starts off; shared-device spending still requires an identity policy.
 - **Task acceptance supports avatar-based subtask assignment.** Choose a recipient from a step's target or drag a participant avatar onto it; tap or long-press an avatar to view their Task person card. Assigning none or some steps remains optional, and choices are saved together only after confirming acceptance.
 - **Reader mode is interactive on older e-readers.** The no-JavaScript `/reader` interface now has a navigable month Calendar, selectable event details, a compact Task creation form, and recipe list/detail pages in addition to the existing Today, Tasks, and Meals views.
 - **Places now has a visible address-book entry point.** Administrators can open saved Places directly from Tasks, enter ordinary addresses manually, or use a deliberate Google search from the Places catalog when the integration is configured.

@@ -71,7 +71,7 @@ function delegatedLearner(database, taskId) {
   return action?.execution_mode === 'delegated' && action.state !== 'not_required' ? Number(action.learner_user_id) : null;
 }
 
-export function notifyTaskAssignments(database, taskId, previousIds = [], { managed = false, role = null } = {}) {
+export function notifyTaskAssignments(database, taskId, previousIds = [], { managed = false, role = null, sourceKey = null } = {}) {
   const task = database.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   if (!task || task.status === 'expired') return;
   // Policy-managed requests carry an obligation ID, so they use the adapter
@@ -80,7 +80,7 @@ export function notifyTaskAssignments(database, taskId, previousIds = [], { mana
   const before = new Set(previousIds.map(Number));
   const recipients = database.prepare('SELECT user_id FROM task_assignments WHERE task_id = ?').all(taskId);
   const excludedLearner = delegatedLearner(database, taskId);
-  const eventKey = `task:${taskId}:assigned:${randomUUID()}`;
+  const eventKey = sourceKey || `task:${taskId}:assigned:${randomUUID()}`;
   for (const { user_id: userId } of recipients) {
     if (before.has(Number(userId)) || Number(userId) === excludedLearner) continue;
     enqueueNotification(database, {

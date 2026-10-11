@@ -1,6 +1,7 @@
 /** One operational transition for REST and compatibility writers. */
 import { syncTaskRewards } from './rewards.js';
 import {assertTripTaskActive} from './trip-task-state.js';
+import { prizeTaskTransition } from './reward-fulfillment-transitions.js';
 import { retiredRecurrenceOccurrence, registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { calendarDayOffset } from './activity-schedule.js';
 import { authoritativeTaskRecurrence, ensureSeriesDefinition } from './task-series.js';
@@ -19,6 +20,7 @@ let recurrenceHooks = null;
 const transitionGuards=new Map();
 /** Domain guards run for every real transition, including bulk/parent projections. */
 export function registerTaskTransitionGuard(name,guard) { transitionGuards.set(name,guard); }
+registerTaskTransitionGuard('reward-fulfillment',prizeTaskTransition);
 /** Internal domain cancellation: only a durably superseded Kitchen link may
  * invoke it. Completed work and its reward/completion ledgers remain intact. */
 export function archiveSupersededCycleTask(d,taskId,{now=new Date().toISOString()}={}) {
@@ -136,7 +138,10 @@ function deviceResponsibilitySnapshot(d, task) {
 }
 
 function applyTransition(d, task, status, actorId, effects, {preserveFollowup=false,now=new Date(),optionalReopenScope=null}={}) {
-  if (task.status === status) return;
+  if (task.status === status) {
+    prizeTaskTransition(d,task,status,{actorId,principal:effects.authorizationActor});
+    return;
+  }
   for(const guard of transitionGuards.values())guard(d,task,status,{actorId,principal:effects.authorizationActor});
   assertTaskWindowAction(d,task.id,now,{optionalReopenScope});
   if (status === 'done') {

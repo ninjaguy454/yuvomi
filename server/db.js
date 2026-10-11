@@ -43,6 +43,7 @@ import path from 'path';
 import fs from 'node:fs/promises';
 import { mkdirSync, existsSync, renameSync, rmSync, copyFileSync, openSync, readSync, closeSync } from 'node:fs';
 import { createLogger } from './logger.js';
+import { addRewardFulfillmentSchema } from './services/reward-fulfillment-schema.js';
 import { decodeHtmlEntities } from './utils/html-entities.js';
 import { toE164, defaultCountryFromConfig } from './utils/phone.js';
 
@@ -9116,6 +9117,7 @@ FORK_MIGRATIONS.push({version:10051, description:'Notes: persistent position loc
 FORK_MIGRATIONS.push({version:10052, description:'Notes: independent groups, ordered membership and structural receipts', up:addNoteGroupSchema});
 FORK_MIGRATIONS.push({version:10053, description:'Notes: independent personal and paired-device layout owners', up:addNoteLayoutOwnerSchema});
 FORK_MIGRATIONS.push({version:10054, description:'Tasks: durable whole-occurrence calendar excusal', foreignKeysOff:true, up:addTaskSkipSchema});
+FORK_MIGRATIONS.push({version:10057, description:'Rewards: parent prize delivery Tasks and audited Undo', up:addRewardFulfillmentSchema});
 
 FORK_MIGRATIONS.push({version:10056, description:'Trips: ordinary parent Tasks and durable preparation steps', up:addTripTaskSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];

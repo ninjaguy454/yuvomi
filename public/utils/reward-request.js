@@ -66,7 +66,9 @@ export function pendingPointAdjustment(userId,storage) {
 
 export function rewardRequest(userId, body, storage) {
   const {cache,mergeStored,write}=requestStore(userId,storage);
-  const intent = body.operation==='adjustment'
+  const intent = body.operation==='undo'
+    ? JSON.stringify(['undo',body.redemption_id,body.expected_status,body.confirm_delivered,body.reason])
+    : body.operation==='adjustment'
     ? JSON.stringify(['adjustment',body.user_id,body.delta,body.reason,body.related_task_id || null,body.related_reward_id || null,body.related_ledger_id || null])
     : JSON.stringify([body.catalog_id, body.user_id, body.note || '']);
   let request = [...cache.pending.values()].find(item => item.intent === intent);
@@ -80,4 +82,18 @@ export function rewardRequest(userId, body, storage) {
     cache.pending.delete(request.key);
     write();
   } };
+}
+
+/** Reconcile the submitted Undo after reload, using its original confirmation. */
+export function pendingPrizeUndo(userId,redemptionId,storage) {
+  const {cache}=requestStore(userId,storage);
+  for(const request of cache.pending.values()) {
+    let value;try{value=JSON.parse(request.intent);}catch{continue;}
+    if(!Array.isArray(value)||value.length!==5||value[0]!=='undo')continue;
+    const [,redemption_id,expected_status,confirm_delivered,reason]=value;
+    if(redemption_id!==redemptionId||!['pending','fulfilled'].includes(expected_status)
+      ||typeof confirm_delivered!=='boolean'||typeof reason!=='string')continue;
+    return {key:request.key,body:{operation:'undo',redemption_id,expected_status,confirm_delivered,reason}};
+  }
+  return null;
 }

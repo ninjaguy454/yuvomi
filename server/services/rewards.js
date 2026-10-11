@@ -196,7 +196,7 @@ export function createPointAdjustment(d, {actorId, userId, delta, reason, taskId
 
 /** Check the current balance while holding SQLite's write reservation, then
  * atomically persist the intent, redemption and its one deduction. */
-export function createRedemption(d, {actorId, userId, catalogId, note = null, requestKey}) {
+export function createRedemption(d, {actorId, userId, catalogId, note = null, requestKey, pendingDelivery = false}) {
   const key = validateRedemptionKey(requestKey);
   const fingerprint = JSON.stringify([userId, catalogId, note]);
   return d.transaction(() => {
@@ -213,7 +213,7 @@ export function createRedemption(d, {actorId, userId, catalogId, note = null, re
     if (!item) throw new RewardError('Reward not found.', 404);
     if (!isEnrolled(d, userId)) throw new RewardError('User does not participate in the reward system.');
     if (getBalance(d, userId) < item.cost) throw new RewardError('Insufficient points.');
-    const autoFulfill = d.prepare("SELECT value FROM sync_config WHERE key='rewards_require_approval'").get()?.value === '0';
+    const autoFulfill = !pendingDelivery && d.prepare("SELECT value FROM sync_config WHERE key='rewards_require_approval'").get()?.value === '0';
     const result = d.prepare(`INSERT INTO reward_redemptions
       (user_id,catalog_id,reward_name,reward_icon,cost,note,requested_by,status,decided_by,decided_at)
       VALUES (?,?,?,?,?,?,?, ?,?, CASE WHEN ? THEN strftime('%Y-%m-%dT%H:%M:%SZ','now') ELSE NULL END)`)
@@ -236,6 +236,20 @@ export function decideRedemption(d, {actorId, isAdmin, redemptionId, action}) {
     if (!row) throw new RewardError('Redemption not found.',404);
     if ((action==='fulfill'||action==='reject')&&!isAdmin) throw new RewardError('Admin access required.',403);
     if (action==='cancel'&&!isAdmin&&row.user_id!==actorId) throw new RewardError('Not allowed.',403);
+    if(d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reward_fulfillment_task_links'").get()
+      &&d.prepare('SELECT 1 FROM reward_fulfillment_task_links WHERE redemption_id=?').get(redemptionId))
+      throw new RewardError('Use the parent prize fulfillment action for this redemption.',409);
+    return applyRedemptionDecision(d,{actorId,redemptionId,action});
+  }).immediate();
+}
+
+/** Internal state writer. Public adapters must authorize before calling it;
+ * linked delivery must also coordinate the Task in the same outer transaction. */
+export function applyRedemptionDecision(d,{actorId,redemptionId,action}) {
+  if(!['fulfill','reject','cancel'].includes(action))throw new RewardError('Invalid action.');
+  return d.transaction(()=>{
+    const row=d.prepare('SELECT * FROM reward_redemptions WHERE id=?').get(redemptionId);
+    if(!row)throw new RewardError('Redemption not found.',404);
     const status = action==='fulfill'?'fulfilled':action==='reject'?'rejected':'cancelled';
     if (row.status===status) return row;
     if (row.status!=='pending') throw new RewardError('Redemption already decided.',409);

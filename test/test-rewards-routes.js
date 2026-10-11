@@ -302,10 +302,11 @@ test('POST /redemptions — Admin kann stellvertretend einlösen', async () => {
   assert.equal(getBalance(db, kid.id), 90);
 });
 
-test('POST /redemptions — ohne Freigabe: sofortiges autoFulfill', async () => {
+test('POST /redemptions — non-child purchases retain immediate autoFulfill without approval', async () => {
   db.prepare("INSERT INTO sync_config (key, value) VALUES ('rewards_require_approval','0') ON CONFLICT(key) DO UPDATE SET value='0'").run();
   try {
     const kid = freshKid(100);
+    db.prepare("UPDATE users SET family_role='parent' WHERE id=?").run(kid.id);
     const res = await call('POST', '/redemptions', { actor: kid, body: { catalog_id: EIS } });
     assert.equal(res.status, 201);
     assert.equal(res.body.data.status, 'fulfilled', 'ohne Freigabe direkt erfüllt');

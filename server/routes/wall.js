@@ -9,7 +9,7 @@ import { hydrateTask } from './tasks.js';
 import { assertTaskMutation } from '../services/task-access.js';
 import { actionableSubtasks, assertTaskRevision, changeTaskStatus } from '../services/task-lifecycle.js';
 import { claimTask } from '../services/assignment-responsibilities.js';
-import { createRedemption } from '../services/rewards.js';
+import { createParentPrizeRedemption as createRedemption } from '../services/reward-fulfillment.js';
 import { flushOutbound } from '../services/caldav-todo-outbound.js';
 import weatherRouter from './weather.js';
 import { WALL_EXIT_VERIFIED } from '../services/wall-session.js';

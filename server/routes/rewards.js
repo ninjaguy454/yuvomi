@@ -9,7 +9,9 @@
 import express from 'express';
 import * as db from '../db.js';
 import { createLogger } from '../logger.js';
-import { createPointAdjustment, createRedemption, decideRedemption, RewardError } from '../services/rewards.js';
+import { createPointAdjustment, RewardError } from '../services/rewards.js';
+import { createParentPrizeRedemption, decideParentPrizeRedemption, undoPrizeRedemption, redemptionRecord } from '../services/reward-fulfillment.js';
+import {canViewHouseholdRedemptions} from '../services/reward-fulfillment-access.js';
 import { taskCapabilities, taskVisibilityWhere } from '../services/task-access.js';
 import { tokenAllows } from '../scopes.js';
 import { actorPermissions } from '../permissions.js';
@@ -93,6 +95,7 @@ router.get('/overview', (req, res) => {
     res.json({ data: {
       balances, catalog, pendingCount: pending,
       isAdmin: req.authRole === 'admin', me: actingUser(req),
+      householdRedemptions:canViewHouseholdRedemptions(d,req),
       setup: { participantCount, catalogCount, pointedTaskCount },
     } });
   } catch (err) {
@@ -306,9 +309,13 @@ router.get('/ledger', (req, res) => {
 // --------------------------------------------------------
 router.get('/redemptions', (req, res) => {
   try {
+    const d=db.get(),history=req.query.history==='1',household=canViewHouseholdRedemptions(d,req);
+    const before=req.query.before_id==null?null:Number(req.query.before_id);
+    if(history&&before!==null&&(!Number.isSafeInteger(before)||before<1))
+      return res.status(400).json({error:'Invalid redemption history cursor.',code:400});
     const status = ['pending', 'fulfilled', 'rejected', 'cancelled'].includes(req.query.status)
       ? req.query.status : null;
-    const rows = db.get().prepare(`
+    const rows = d.prepare(`
       SELECT r.id, r.user_id, r.catalog_id, r.reward_name, r.reward_icon, r.cost, r.status,
              r.note, r.decided_at, r.created_at,
              u.display_name AS user_name, u.avatar_color AS user_color, u.avatar_data AS user_avatar,
@@ -316,11 +323,14 @@ router.get('/redemptions', (req, res) => {
       FROM reward_redemptions r
       JOIN users u ON u.id = r.user_id
       LEFT JOIN users dec ON dec.id = r.decided_by
-      ${status ? 'WHERE r.status = @status' : ''}
-      ORDER BY CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.created_at DESC, r.id DESC
-      LIMIT 300
-    `).all({ status });
-    res.json({ data: rows });
+      WHERE (@status IS NULL OR r.status=@status)
+        AND (@household=1 OR r.user_id=@me)
+        AND (@before IS NULL OR r.id<@before)
+      ORDER BY ${history?'r.id DESC':"CASE r.status WHEN 'pending' THEN 0 ELSE 1 END, r.created_at DESC, r.id DESC"}
+      LIMIT ${history?301:300}
+    `).all({status,household:household?1:0,me:actingUser(req),before:history?before:null});
+    const more=history&&rows.length>300;if(more)rows.pop();
+    res.json({data:rows.map(row=>redemptionRecord(d,row,req)),...(history?{next_cursor:more?rows.at(-1).id:null}:{})});
   } catch (err) {
     log.error('GET /redemptions error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
@@ -343,12 +353,12 @@ router.post('/redemptions', (req, res) => {
     const headerKey = req.get('Idempotency-Key');
     if (headerKey && req.body?.request_id && headerKey !== req.body.request_id)
       throw new RewardError('Request ID and Idempotency-Key must match.');
-    const {row,replayed} = createRedemption(d, {actorId:me,userId:targetId,
+    const {row,replayed} = createParentPrizeRedemption(d, {actorId:me,userId:targetId,principal:req,
       catalogId:toInt(req.body?.catalog_id),note,requestKey:req.body?.request_id ?? headerKey});
     if(replayed)res.set('Idempotent-Replayed','true');
-    res.status(replayed?200:201).json({data:row});
+    res.status(replayed?200:201).json({data:redemptionRecord(d,row,req)});
   } catch (err) {
-    if(err instanceof RewardError)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason});
+    if(err.status)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason||err.details?.reason});
     log.error('POST /redemptions error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
   }
@@ -364,13 +374,28 @@ router.patch('/redemptions/:id', (req, res) => {
     const d = db.get();
     const me = actingUser(req);
     const action = req.body?.action;
-    const updated = decideRedemption(d,{actorId:me,isAdmin:req.authRole==='admin',
+    const updated = decideParentPrizeRedemption(d,{actorId:me,principal:req,
       redemptionId:toInt(req.params.id),action});
-    res.json({data:updated});
+    res.json({data:redemptionRecord(d,updated,req)});
   } catch (err) {
-    if(err instanceof RewardError)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason});
+    if(err.status)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason||err.details?.reason});
     log.error('PATCH /redemptions/:id error:', err);
     res.status(500).json({ error: 'Internal server error.', code: 500 });
+  }
+});
+
+router.post('/redemptions/:id/undo',(req,res)=>{
+  try {
+    const d=db.get(),headerKey=req.get('Idempotency-Key');
+    if(headerKey&&req.body?.request_id&&headerKey!==req.body.request_id)throw new RewardError('Request ID and Idempotency-Key must match.');
+    const result=undoPrizeRedemption(d,{actorId:actingUser(req),principal:req,redemptionId:Number(req.params.id),
+      requestKey:req.body?.request_id??headerKey,expectedStatus:req.body?.expected_status,
+      confirmDelivered:req.body?.confirm_delivered??false,reason:req.body?.reason??'Accidental redemption'});
+    if(result.replayed)res.set('Idempotent-Replayed','true');
+    res.json({data:redemptionRecord(d,result.row,req),outcome:result.outcome});
+  }catch(err) {
+    if(err.status)return res.status(err.status).json({error:err.message,code:err.status,reason:err.reason||err.details?.reason});
+    log.error('Undo redemption error:',err);res.status(500).json({error:'Internal server error.',code:500});
   }
 });
 

@@ -1,5 +1,6 @@
 import { memberLabel } from '/utils/member-label.js';
 import { esc } from '/utils/html.js';
+import {t} from '/i18n.js';
 
 const title = value => value[0].toUpperCase() + value.slice(1);
 const icon = name => `<i data-lucide="${name}" aria-hidden="true"></i>`;
@@ -28,6 +29,7 @@ export function deviceConfigContent(device, model, { modules, actions, definitio
       <p id="device-members-hint" class="device-config__hint">No selection includes all household members. Private content remains excluded.</p>`)}
     ${section('Task actions', 'list-checks', `<p class="device-config__hint">Anyone using this display can perform the actions allowed here. Supervised work still requires an authenticated qualified person's approval.</p>
       <div class="device-config__choices">${Object.keys(actions).map(key => check(`action:${key}`, taskLabels[key], allows(`device_tasks.${key}`), taskHints[key])).join('')}</div>`)}
+    ${section(esc(t('rewards.deviceRedeemLabel')), 'gift', `<div class="device-config__choices">${check('reward:redeem',t('rewards.deviceRedeemLabel'),allows('device_rewards.redeem'),t('rewards.deviceRedeemHint'))}</div>`)}
     ${section('Notes permissions', 'sticky-note', `<p class="device-config__hint">View shares Everyone notes with anyone at this display. Private and Selected members notes stay hidden. The member filter does not limit Everyone notes.</p>
       <div class="device-config__choices">${Object.entries(noteActions).map(([key, label]) => check(`note:${key}`, label, allows(`device_notes.${key}`))).join('')}</div>
       <div class="device-config__fields">${Object.entries(layoutActions).map(layoutControl).join('')}</div>

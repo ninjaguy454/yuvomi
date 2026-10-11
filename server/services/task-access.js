@@ -3,6 +3,7 @@ import { actorId, actorPermissions, PermissionError } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
 import { taskOptionalContext } from './task-optional.js';
 import { taskWindowAncestors } from './task-window.js';
+import { assertRewardTaskMutation, rewardTaskCapabilities } from './reward-fulfillment-access.js';
 
 // Only synchronous response hydration opts into this scope. It never survives
 // a request, contains no lifecycle decisions, and is suspended for mutations.
@@ -176,6 +177,7 @@ export function taskCapabilities(d, actor, sourceTask) {
   result.skip_occurrence = definition && allow('skip_occurrence');
   // Missing/draft Tasks retain their existing input-based fallback. Two such
   // inputs need not mean the same thing, so only persisted records are cached.
+  rewardTaskCapabilities(d,actor,task,result);
   if (scope && stored) scope.capabilities.set(id, {...result});
   return result;
 }
@@ -212,6 +214,7 @@ export function assertTaskMutation(d, actor, task, body = {}, { operation = task
   finally { if (previous) readProjections.set(d, previous); }
 }
 function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
+  assertRewardTaskMutation(d,actor,task,body,operation);
   const device = taskDevicePrincipal(actor);
   if (device) {
     const requireKey=key=>{if(!deviceAllows(device,`tasks.${key}`))throw new PermissionError('This display does not permit this Task setting.');};

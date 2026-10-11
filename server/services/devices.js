@@ -24,6 +24,7 @@ export function devicePreset() {
     modules:Object.fromEntries(PERMISSION_MODULES.map(m=>[m.key,['dashboard','tasks','calendar','meals','shopping','rewards'].includes(m.key)?'read':'none'])),
     widgets:Object.fromEntries(PERMISSION_WIDGETS.map(w=>[w.id,['tasks','calendar','meals','shopping','rewards','clock'].includes(w.id)?'allow':'none'])),
     capabilities:{...Object.fromEntries(PERMISSION_CAPABILITIES.map(c=>[c.key,['tasks.view_household','rotations.view'].includes(c.key)?'allow':'none'])),
+      'device_rewards.redeem':'none',
       ...Object.fromEntries(DEVICE_NOTE_ACTIONS.map(a=>[`device_notes.${a}`,'none'])),
       ...Object.fromEntries(DEVICE_ACTIONS.map(a=>[`device_tasks.${a}`,a==='complete'?'allow':'none']))}};
 }
@@ -46,7 +47,7 @@ export function normalizeDevicePermissions(input=devicePreset()) {
     if(NOTE_LAYOUT_ACTIONS.some(action=>key===`device_notes.${action}`)&&!Object.hasOwn(input.capabilities||{},key)){delete result.capabilities[key];continue;}
     const value=input.capabilities?.[key]??result.capabilities[key];
     if(!['allow','none'].includes(value))throw deviceError('Choose Allow or Not allowed.');
-    if(value==='allow'&&!['tasks.view_household','rotations.view',...DEVICE_DEFINITION_CAPABILITIES,...DEVICE_ACTIONS.map(a=>`device_tasks.${a}`),...DEVICE_NOTE_ACTIONS.map(a=>`device_notes.${a}`)].includes(key))
+    if(value==='allow'&&!['tasks.view_household','rotations.view','device_rewards.redeem',...DEVICE_DEFINITION_CAPABILITIES,...DEVICE_ACTIONS.map(a=>`device_tasks.${a}`),...DEVICE_NOTE_ACTIONS.map(a=>`device_notes.${a}`)].includes(key))
       throw deviceError('This action requires authenticated personal access.');
     result.capabilities[key]=value;
   }

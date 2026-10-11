@@ -18,7 +18,7 @@ import { wireScrollFade } from '/utils/ux.js';
 import { renderSkeletonList } from '/utils/skeleton.js';
 import { emptyStateHTML, mountLoadError } from '/utils/empty-state.js';
 import { openEmojiPicker } from '/components/emoji-picker.js';
-import { rewardRequest } from '/utils/reward-request.js';
+import { rewardRequest, pendingPrizeUndo } from '/utils/reward-request.js';
 import { watchRewardChanges } from '/utils/reward-live.js';
 import { openPointAdjustment } from '/components/point-adjustment.js';
 
@@ -30,7 +30,10 @@ let state = {
   overview: null,      // { balances, catalog, pendingCount, isAdmin, me }
   catalog: [],
   ledger: [],
-  redemptions: [],     // pending requests (admin) or own requests
+  redemptions: [],
+  pendingRedemptions: [],
+  historyCursor: null,
+  historyOpen: false,
   participants: [],    // admin only
   ledgerFilter: null,  // user_id | null
   prevBalances: new Map(), // für Count-up: Salden vor dem letzten Neuladen
@@ -207,16 +210,19 @@ async function renderCurrentTab(container, { quiet = false } = {}) {
     // admin's all-items catalog and nondeterministically hide archived rewards.
     const admin = isAdmin();
     const filter = state.ledgerFilter ? `?user_id=${encodeURIComponent(state.ledgerFilter)}` : '';
-    const [overview, redemptions, extra] = await Promise.all([
+    const [overview, redemptions, pending, extra] = await Promise.all([
       api.get('/rewards/overview'),
-      api.get(`/rewards/redemptions${admin ? '?status=pending' : ''}`),
+      api.get('/rewards/redemptions?history=1'),
+      api.get('/rewards/redemptions?status=pending'),
       tab === 'catalog' ? api.get(`/rewards/catalog${admin ? '?all=1' : ''}`)
         : tab === 'ledger' ? api.get(`/rewards/ledger${filter}`) : null,
     ]);
     if (generation !== renderGeneration || !el.isConnected || tab !== state.tab) return;
     state.prevBalances = new Map((state.overview?.balances || []).map(member => [member.id, member.balance]));
     state.overview = overview.data;
-    state.redemptions = (redemptions.data || []).filter(row => admin || (row.user_id === state.overview.me && row.status === 'pending'));
+    state.redemptions = redemptions.data || [];
+    state.pendingRedemptions = pending.data || [];
+    state.historyCursor = redemptions.next_cursor;
     state.catalog = tab === 'catalog' ? extra.data || [] : overview.data.catalog || [];
     if (tab === 'ledger') state.ledger = extra.data || [];
     if (tab === 'overview') renderOverview(el);
@@ -353,36 +359,83 @@ function renderSetupHints() {
     </section>`;
 }
 
+function undoStorage() {
+  try{return window.localStorage;}catch{return null;}
+}
+function undoArea() {return `${state.user.id}:undo`;}
+function renderRedemptionRow(r) {
+  const pendingIntent=pendingPrizeUndo(undoArea(),r.id,undoStorage());
+  const label=r.display_status==='undone'?t('rewards.undone')
+    :r.status==='pending'?(r.requires_delivery?t('rewards.pendingDelivery'):t('rewards.pendingApprovals'))
+    :r.status==='fulfilled'?t('rewards.delivered'):t(r.status==='rejected'?'rewards.toastRejected':'rewards.toastCancelled');
+  const audit=r.undo?`<p class="rw-pending__meta">${esc(t('rewards.undoAudit',{actor:r.undo.actor_name,date:formatDate(r.undo.created_at),points:fmtPoints(r.cost)}))}</p>
+    <p class="rw-pending__meta">${esc(r.undo.reason)}</p>${r.undo.prior_status==='fulfilled'?`<p class="rw-pending__meta">${esc(t('rewards.priorDelivery',{date:formatDate(r.undo.prior_decided_at)}))}</p>`:''}`:'';
+  return `<li class="rw-pending" data-redemption="${r.id}">
+    ${avatar(r,32)}<div class="rw-pending__text">
+      <p class="rw-pending__title">${esc(r.reward_icon?`${r.reward_icon} `:'')}${esc(r.reward_name)}</p>
+      <p class="rw-pending__meta">${esc(memberLabel({id:r.user_id,display_name:r.user_name}))} · ${esc(pointsLabel(r.cost))} · ${esc(label)}</p>
+      <p class="rw-pending__meta">#${r.id} · ${esc(formatDate(r.created_at))}${r.note?` · ${esc(r.note)}`:''}</p>${audit}
+    </div><div class="rw-pending__actions">
+      ${r.can_fulfill?`<button class="btn btn--primary btn--sm" type="button" data-decide="fulfill" data-id="${r.id}">${esc(t(r.requires_delivery?'rewards.markDelivered':'rewards.approve'))}</button>`:''}
+      ${r.can_reject?`<button class="btn btn--ghost btn--sm" type="button" data-decide="reject" data-id="${r.id}">${esc(t('rewards.reject'))}</button>`:''}
+      ${r.can_cancel&&!r.can_reject?`<button class="btn btn--ghost btn--sm" type="button" data-decide="cancel" data-id="${r.id}">${esc(t('common.cancel'))}</button>`:''}
+      ${r.can_undo||pendingIntent?`<button class="btn btn--secondary btn--sm" type="button" data-rw-undo="${r.id}">${esc(t(pendingIntent?'rewards.checkUndo':'rewards.undoRedemption'))}</button>`:''}
+    </div></li>`;
+}
 function renderPendingPanel() {
-  if (!state.redemptions.length) return '';
-  const heading = isAdmin() ? t('rewards.pendingApprovals') : t('rewards.yourPending');
-  const rows = state.redemptions.map((r) => `
-    <li class="rw-pending" data-redemption="${r.id}">
-      ${avatar(r, 32)}
-      <div class="rw-pending__text">
-        <p class="rw-pending__title">${esc(r.reward_icon ? `${r.reward_icon} ` : '')}${esc(r.reward_name)}</p>
-        <p class="rw-pending__meta">${esc(isAdmin() ? memberLabel({ id: r.user_id, display_name: r.user_name }) : '')}${isAdmin() ? ' · ' : ''}${esc(pointsLabel(r.cost))}${r.note ? ` · „${esc(r.note)}“` : ''}</p>
-      </div>
-      <div class="rw-pending__actions">
-        ${isAdmin() ? `
-          <button class="btn btn--primary btn--sm" type="button" data-decide="fulfill" data-id="${r.id}">${esc(t('rewards.approve'))}</button>
-          <button class="btn btn--ghost btn--sm" type="button" data-decide="reject" data-id="${r.id}">${esc(t('rewards.reject'))}</button>
-        ` : `
-          <button class="btn btn--ghost btn--sm" type="button" data-decide="cancel" data-id="${r.id}">${esc(t('common.cancel'))}</button>
-        `}
-      </div>
-    </li>`).join('');
-  /* DER KOPF STEHT AUF DEM GRUND, NICHT IM TRAEGER (Zeilenlisten-Regel), und
-   * die Dringlichkeit steht als ZAHL daneben statt als Farbfeld darunter.
-   * `.rw-pending-panel` war die vollflaechig getoente Karte der Seite: der
-   * lauteste Kanal der App fuer die Aussage "eine Anfrage wartet", und sie
-   * zwang den violetten Primaerknopf auf einen gruenen Grund. Der Zaehler ist
-   * dasselbe Vokabular, das die Zeilengruppen schon fuehren. */
-  return `
-    <section class="rw-section">
-      <h2 class="rw-section__title"><i data-lucide="hourglass" aria-hidden="true"></i>${esc(heading)}<span class="list-group__count">${state.redemptions.length}</span></h2>
-      <ul class="rw-pending-list rw-pending-panel">${rows}</ul>
-    </section>`;
+  const pending=state.pendingRedemptions;
+  const history=state.redemptions.filter(r=>r.status!=='pending');
+  return `${pending.length?`<section class="rw-section">
+    <h2 class="rw-section__title"><i data-lucide="hourglass" aria-hidden="true"></i>${esc(t('rewards.pendingDelivery'))}<span class="list-group__count">${pending.length}</span></h2>
+    <ul class="rw-pending-list rw-pending-panel">${pending.map(renderRedemptionRow).join('')}</ul></section>`:''}
+    <details class="rw-section" data-rw-history${state.historyOpen?' open':''}>
+      <summary class="rw-section__title"><i data-lucide="chevron-down" aria-hidden="true"></i>${esc(t('rewards.recordHistory'))}</summary>
+      <ul class="rw-pending-list rw-pending-panel">${history.map(renderRedemptionRow).join('')}</ul>
+      ${state.historyCursor?`<button class="btn btn--secondary btn--sm" type="button" data-rw-older>${esc(t('rewards.loadOlder'))}</button>`:''}
+    </details>`;
+}
+
+async function undoRedemption(id,btn) {
+  const record=[...state.pendingRedemptions,...state.redemptions].find(r=>r.id===id);
+  if(!record)return;
+  const area=undoArea(),storage=undoStorage(),pending=pendingPrizeUndo(area,id,storage);
+  // A lost response is reconciled with the original submitted confirmation.
+  if(pending){await submitPrizeUndo(pending.body,btn);return;}
+  if(!record.can_undo)return;
+  const delivered=record.status==='fulfilled';
+  openModal({title:t('rewards.undoRedemption'),size:'sm',content:`
+    <form data-rw-undo-form>
+      <p>${esc(t(delivered?'rewards.undoDeliveredConfirm':'rewards.undoPendingConfirm',{points:fmtPoints(record.cost)}))}</p>
+      <div class="form-group"><label class="label" for="rw-undo-reason">${esc(t('rewards.undoReason'))}</label>
+        <input class="input" id="rw-undo-reason" maxlength="200" required value="${esc(t('rewards.accidentalRedemption'))}"></div>
+      ${delivered?`<label class="form-check"><input type="checkbox" data-rw-delivered-confirm required><span>${esc(t('rewards.undoDeliveredAcknowledgement'))}</span></label>`:''}
+      <p class="form-error" data-rw-undo-error hidden></p>
+      <div class="modal-panel__footer modal-panel__footer--plain"><button type="submit" class="btn btn--primary" data-rw-undo-submit>${esc(t('rewards.undoRedemption'))}</button></div>
+    </form>`,onSave(panel){let submitted=null;panel.querySelector('form').addEventListener('submit',async event=>{
+      event.preventDefault();const submit=panel.querySelector('[data-rw-undo-submit]');if(submit.disabled)return;
+      const body=submitted||{operation:'undo',redemption_id:id,expected_status:record.status,confirm_delivered:delivered,
+        reason:panel.querySelector('#rw-undo-reason').value.trim()};
+      if(!body.reason)return;
+      submitted=body;panel.querySelector('#rw-undo-reason').disabled=true;
+      const confirmation=panel.querySelector('[data-rw-delivered-confirm]');if(confirmation)confirmation.disabled=true;
+      await submitPrizeUndo(body,submit,panel);
+    });}});
+}
+async function submitPrizeUndo(body,btn,panel=null) {
+  const attempt=rewardRequest(undoArea(),body,undoStorage());if(btn)btn.disabled=true;
+  const errorEl=panel?.querySelector('[data-rw-undo-error]');if(errorEl)errorEl.hidden=true;
+  try {
+    const {operation,redemption_id,...input}=body;
+    await api.post(`/rewards/redemptions/${redemption_id}/undo`,{...input,request_id:attempt.key},{headers:{'Idempotency-Key':attempt.key}});
+    attempt.finish();if(panel)await closeModal({force:true});toast(t('rewards.undoSuccess'));await refreshActiveTab();
+  }catch(err){
+    // A definitive denial cannot debit/refund. Unknown outcomes retain intent.
+    if(err.outcome==='rejected'&&err.data?.reason!=='auth_context_changed')attempt.finish();
+    if(['redemption_status_changed','delivered_confirmation_required'].includes(err.data?.reason)) {
+      if(panel)await closeModal({force:true});toast(err.message,'error');await refreshActiveTab();
+    }else if(errorEl){errorEl.textContent=err.message;errorEl.hidden=false;}
+    else toast(err.message||t('common.error'),'error');
+  }finally{if(btn?.isConnected)btn.disabled=false;}
 }
 
 function renderOverview(el) {
@@ -393,7 +446,7 @@ function renderOverview(el) {
       ? { label: t('rewards.manageParticipants'), icon: 'user-plus', className: 'rw-manage-participants' }
       : null;
     el.insertAdjacentHTML('beforeend',
-      `<div class="rewards-content__inner">${emptyState('trophy', t('rewards.emptyOverviewTitle'), isAdmin() ? t('rewards.emptyOverviewAdmin') : t('rewards.emptyOverviewMember'), action)}</div>`);
+      `<div class="rewards-content__inner">${renderPendingPanel()}${emptyState('trophy', t('rewards.emptyOverviewTitle'), isAdmin() ? t('rewards.emptyOverviewAdmin') : t('rewards.emptyOverviewMember'), action)}</div>`);
     wireOverview(el);
     icons(el);
     return;
@@ -418,6 +471,16 @@ function renderOverview(el) {
 }
 
 function wireOverview(el) {
+  el.querySelector('[data-rw-history]')?.addEventListener('toggle',event=>{state.historyOpen=event.target.open;});
+  el.querySelectorAll('[data-rw-undo]').forEach(btn=>btn.addEventListener('click',()=>undoRedemption(Number(btn.dataset.rwUndo),btn)));
+  el.querySelector('[data-rw-older]')?.addEventListener('click',async event=>{
+    const btn=event.currentTarget,generation=renderGeneration;btn.disabled=true;
+    try{const page=await api.get(`/rewards/redemptions?history=1&before_id=${state.historyCursor}`);
+      if(generation!==renderGeneration||!el.isConnected)return;
+      const ids=new Set(state.redemptions.map(r=>r.id));state.redemptions.push(...page.data.filter(r=>!ids.has(r.id)));
+      state.historyCursor=page.next_cursor;state.historyOpen=true;renderOverview(el);
+    }catch(err){toast(err.message,'error');if(btn.isConnected)btn.disabled=false;}
+  });
   el.querySelector('.rw-manage-participants')?.addEventListener('click', openParticipantsModal);
   el.querySelectorAll('.rw-redeem-open').forEach((btn) => {
     btn.addEventListener('click', () => openRedeemModal(Number(btn.dataset.member)));
@@ -664,10 +727,10 @@ async function openRedeemModal(memberId, presetItemId = null) {
         attempt ||= rewardRequest(state.user.id, body);
         memberEl.disabled = true; itemEl.disabled = true; panel.querySelector('#rw-redeem-note').disabled = true;
         try {
-          await api.post('/rewards/redemptions', { ...body, request_id: attempt.key }, { headers: { 'Idempotency-Key': attempt.key } });
+          const result=await api.post('/rewards/redemptions', { ...body, request_id: attempt.key }, { headers: { 'Idempotency-Key': attempt.key } });
           attempt.finish();
           await closeModal({ force: true });
-          toast(isAdmin() ? t('rewards.toastRedeemed') : t('rewards.toastRequested'));
+          toast(result.data.requires_delivery?t('rewards.deliveryRequested'):result.data.status==='fulfilled'?t('rewards.toastRedeemed'):t('rewards.toastRequested'));
           await refreshActiveTab();
         } catch (err) {
           errEl.textContent = err?.message || t('rewards.redeemError');
@@ -915,7 +978,7 @@ async function refreshActiveTab() {
 
 export async function render(container, { user } = {}) {
   if (state.user?.id !== user?.id) {
-    state.tab = 'overview'; state.overview = null; state.catalog = []; state.ledger = []; state.redemptions = []; state.ledgerFilter = null;
+    state.tab = 'overview'; state.overview = null; state.catalog = []; state.ledger = []; state.redemptions = []; state.pendingRedemptions=[];state.historyCursor=null;state.historyOpen=false; state.ledgerFilter = null;
   }
   state.user = user || null;
   const params = new URLSearchParams(location.search);

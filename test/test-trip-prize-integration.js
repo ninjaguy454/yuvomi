@@ -6,6 +6,7 @@ process.env.LOG_LEVEL='error';
 process.env.SESSION_SECRET='synthetic-trip-prize-integration';
 const {ALL_MIGRATIONS,_setTestDatabase}=await import('../server/db.js');
 const {saveTrip}=await import('../server/services/trips.js');
+const {tripReminderActive}=await import('../server/services/trip-task-state.js');
 const {changeTaskStatus}=await import('../server/services/task-lifecycle.js');
 const {taskCapabilities}=await import('../server/services/task-access.js');
 const {createRedemption,postLedger,getBalance}=await import('../server/services/rewards.js');
@@ -34,6 +35,11 @@ test('independent Trip and prize declare10056 then10057 and leave scoring10055 r
  for(const m of ALL_MIGRATIONS)apply(m);
  assert.equal(d.prepare("SELECT 1 FROM sqlite_master WHERE name='task_scoring_settlements'").get(),undefined);
  assert.ok(!d.pragma('table_info(tasks)').some(c=>c.name==='scoring_mode'));
+});
+
+test('ordinary reminders without Trip metadata do not require Trip-specific Task columns',()=>{
+ d.exec("CREATE TABLE tasks(id INTEGER PRIMARY KEY,status TEXT);INSERT INTO tasks VALUES(1,'open')");
+ assert.equal(tripReminderActive(d,1),true);
 });
 
 test('both metadata migrations preserve a legacy Trip, historical redemption and earned rows without backfill',()=>{

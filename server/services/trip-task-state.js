@@ -17,9 +17,9 @@ export function assertTripTaskActive(d,id) {
   throw Object.assign(new Error('This Trip work was cancelled or retired. Review the Trip before changing its progress.'),{status:409,code:409,details:{reason:'trip_work_retired'}});
 }
 export function tripReminderActive(d,id) {
- const task=d.prepare('SELECT status,archived_at FROM tasks WHERE id=?').get(id);
  const state=tripTaskState(d,id);
  if(!state)return true;
+ const task=d.prepare('SELECT status,archived_at FROM tasks WHERE id=?').get(id);
  const retired=d.prepare(`WITH RECURSIVE ancestry AS (SELECT id,parent_task_id,status,archived_at FROM tasks WHERE id=?
    UNION SELECT t.id,t.parent_task_id,t.status,t.archived_at FROM tasks t JOIN ancestry a ON t.id=a.parent_task_id)
    SELECT 1 FROM ancestry WHERE archived_at IS NOT NULL OR status IN ('done','expired','skipped') LIMIT 1`).get(id);

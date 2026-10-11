@@ -93,6 +93,24 @@ test('Task and parent revision changes, expiry and canonical start-window reject
   begin();assert.throws(()=>completeDeviceApproval(d,req,{id:1}),/start time/);assert.equal(row(step).status,'open');assert.equal(count('reward_ledger'),0);
 });
 
+test('scoring owner policy and assignment edits stale an approval while preserving its pending claim',()=>{
+  begin();d.prepare("UPDATE tasks SET scoring_mode='whole_task',scoring_review_required=0 WHERE id=?").run(root);
+  assert.throws(()=>completeDeviceApproval(d,req,{id:1}),/changed/);assert.equal(row(step).status,'open');
+  begin();d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,3)').run(root);
+  assert.throws(()=>completeDeviceApproval(d,req,{id:1}),/changed/);assert.equal(row(step).status,'open');
+  assert.equal(d.prepare('SELECT status FROM device_task_approvals ORDER BY created_at DESC,id DESC LIMIT 1').get().status,'pending');assert.equal(count('reward_ledger'),0);
+});
+
+test('ambiguous positive legacy approval with no recipients rolls back proof, child progress and completion history',()=>{
+  d.prepare("UPDATE tasks SET scoring_mode='legacy',scoring_review_required=1 WHERE id=?").run(root);
+  d.prepare('UPDATE reward_participants SET enabled=0').run();begin();
+  const before=JSON.stringify(d.prepare('SELECT * FROM task_activity_events').all());
+  assert.throws(()=>completeDeviceApproval(d,req,{id:1}),/review|scoring|cannot currently/i);
+  assert.equal(row(step).status,'open');assert.equal(row(root).status,'open');assert.equal(count('task_completions'),0);assert.equal(count('reward_ledger'),0);
+  assert.equal(d.prepare("SELECT status FROM device_task_approvals WHERE id=?").get(req.session.deviceApprovalIntent.id).status,'pending');
+  assert.equal(JSON.stringify(d.prepare('SELECT * FROM task_activity_events').all()),before);
+});
+
 test('cancel and supersession invalidate previous authentication proofs and clear pending 2FA/OIDC',()=>{
   const first=begin();req.session.pendingTwoFactor={userId:1};req.session.oidc={state:'old-proof'};
   const second=begin();assert.notEqual(first.approval.id,second.approval.id);

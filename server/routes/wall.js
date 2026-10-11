@@ -6,7 +6,8 @@ import { isPasswordLoginEnabled } from '../auth.js';
 import { verifyPassword } from '../utils/password.js';
 import * as twoFactor from '../services/two-factor.js';
 import { hydrateTask } from './tasks.js';
-import { assertTaskMutation } from '../services/task-access.js';
+import { assertTaskMutation,withTaskReadSnapshot } from '../services/task-access.js';
+import { taskScoringSummary } from '../services/task-scoring.js';
 import { actionableSubtasks, assertTaskRevision, changeTaskStatus } from '../services/task-lifecycle.js';
 import { claimTask } from '../services/assignment-responsibilities.js';
 import { createParentPrizeRedemption as createRedemption } from '../services/reward-fulfillment.js';
@@ -80,7 +81,10 @@ router.post('/identify',identifyLimit,guarded(async(req,res)=>{
   res.json({data:{actor_token,member:publicMember(user),isAdmin:wallPermissions(d,user.id).admin,expires_in:WALL_IDENTITY_SECONDS}});
 }));
 router.post('/forget',guarded((req,res)=>{forgetWallActor(actorToken(req));res.json({data:{forgotten:true}});}));
-router.get('/dashboard',guarded((req,res)=>res.json({data:wallDashboard(db.get(),host(req),hydrateTask)})));
+router.get('/dashboard',guarded((req,res)=>res.json({data:withTaskReadSnapshot(db.get(),host(req),()=>{
+  const data=wallDashboard(db.get(),host(req),hydrateTask);
+  data.urgentTasks=data.urgentTasks.map(task=>sharedScoring(task));return data;
+})})));
 router.get('/weather',guarded((req,res,next)=>{
   assertWallModule(db.get(),host(req),'weather');
   if(!wallConfig(db.get()).widgets.some(w=>w.id==='weather'&&w.visible))return res.json({data:null});
@@ -95,8 +99,18 @@ function taskFor(req,userId=null) {
   return task;
 }
 function projectedTask(req,id,userId=null) {
-  const row=wallTaskVisible(db.get(),id,host(req),userId);
-  return row?publicTaskProjection(db.get(),hydrateTask(row,userId||host(req)),host(req),userId):null;
+  return withTaskReadSnapshot(db.get(),userId||host(req),()=>{
+    const row=wallTaskVisible(db.get(),id,host(req),userId);
+    return row?sharedScoring(publicTaskProjection(db.get(),hydrateTask(row,userId||host(req)),host(req),userId),userId):null;
+  });
+}
+function sharedScoring(task,viewerId=null) {
+  task.subtasks=(task.subtasks||[]).map(child=>sharedScoring(child,viewerId));
+  try {task.scoring=taskScoringSummary(db.get(),task.id,{viewerId:null,authorizedTaskIds:[task.id,...task.subtasks.map(child=>child.id)],includeHistoricalSettlements:!task.parent_task_id});
+    if(viewerId)task.scoring.personal_total=[...task.scoring.earned,...task.scoring.potential].filter(row=>row.user_id===viewerId).reduce((sum,row)=>sum+row.points,0);
+    task.scoring_mode=task.scoring.mode;}
+  catch(error){if(error.status===404)task.scoring=null;else throw error;}
+  return task;
 }
 router.get('/tasks/:id',guarded((req,res)=>{
   const userId=actorToken(req)?actor(req).id:null;

@@ -37,7 +37,7 @@ export const TASK_SERIES_SCHEMA_SQL = `
 
 const TASK_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id'];
+  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','is_optional','sort_order','activity_template_checklist_item_id','scoring_mode','scoring_review_required'];
 const selectedTask = row => Object.fromEntries(TASK_FIELDS.map(key => [key, row[key] ?? (key==='rotation_bindings_json'?'[]':null)]));
 const parseDefinition = row => row ? { ...row, data: JSON.parse(row.definition_json) } : null;
 const occurrenceRow = (d,taskId) => d.prepare('SELECT * FROM task_recurrence_occurrences WHERE task_id=?').get(taskId) || null;
@@ -47,6 +47,39 @@ export function seriesDefinitionForGeneration(d,seriesId,generation) {
   // effective generation superseding a previously authored later definition.
   return parseDefinition(d.prepare(`SELECT * FROM task_recurrence_definitions
     WHERE series_id=? AND effective_generation<=? ORDER BY id DESC LIMIT 1`).get(seriesId,generation));
+}
+
+/** Old JSON predates scoring. Reads preserve the demonstrated source policy;
+ * an authorized mode edit freezes this projection before changing its source. */
+export function effectiveSeriesScoringDefinition(d,definition) {
+  if(!definition)return null;
+  const value={...definition,data:structuredClone(definition.data)};
+  if(!['whole_task','subtasks','legacy'].includes(value.data.task.scoring_mode)) {
+    const source=d.prepare('SELECT * FROM tasks WHERE id=?').get(definition.source_task_id??null);
+    const parentPositive=value.data.task.points>0,childPositive=value.data.subtasks.some(action=>action.task.points>0);
+    const children=source?d.prepare(`SELECT t.id,t.points FROM tasks t WHERE t.parent_task_id=? AND t.archived_at IS NULL
+      AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
+      AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=t.id)`).all(source.id):[];
+    const demonstrated=source&&source.points===value.data.task.points&&children.length===value.data.subtasks.length
+      &&value.data.subtasks.every(action=>children.some(row=>row.id===action.source_task_id&&row.points===action.task.points));
+    // An old pending shape may predate a one-off source exception. Only an
+    // unchanged demonstrated configuration can carry an explicit source mode.
+    const sourceMode=demonstrated&&['whole_task','subtasks'].includes(source.scoring_mode)?source.scoring_mode:null;
+    const mode=source?.scoring_review_required?'legacy':sourceMode||(parentPositive&&childPositive?'legacy':childPositive?'subtasks':'whole_task');
+    value.data.task.scoring_mode=mode;
+    value.data.task.scoring_review_required=mode==='legacy'?1:0;
+  } else if(value.data.task.scoring_review_required==null) {
+    value.data.task.scoring_review_required=value.data.task.scoring_mode==='legacy'?1:0;
+  }
+  return value;
+}
+
+/** Read authorization is independent of scalar/inherited reward recipients. */
+export function seriesActionAuthorization(d,action) {
+  if(action.authorization)return structuredClone(action.authorization);
+  const source=d.prepare('SELECT created_by FROM tasks WHERE id=?').get(action.source_task_id??null);
+  return source?{created_by:source.created_by,assigned_user_ids:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(action.source_task_id).map(row=>row.user_id)}
+    :{created_by:null,assigned_user_ids:[]};
 }
 
 export function taskSeriesState(d,taskId) {
@@ -139,14 +172,14 @@ export function captureSeriesDefinition(d,taskId) {
   const binding=captureTaskActivityBindingDefinition(d,taskId,{seriesId:occurrenceRow(d,taskId)?.series_id??null});
   const location=d.prepare('SELECT * FROM task_locations WHERE task_id=?').get(taskId);
   const planning=d.prepare('SELECT place_id,presence_policy,presence_window,source FROM task_planning_context WHERE task_id=?').get(taskId);
-  return {task:selectedTask(root),...extras(d,taskId),
+  return {task:selectedTask(root),...extras(d,taskId),authorization:seriesActionAuthorization(d,{source_task_id:taskId}),
     rotation_user_ids:d.prepare('SELECT user_id FROM task_rotation_members WHERE task_id=? ORDER BY sort_order').all(taskId).map(row=>row.user_id),
     binding:binding||null,
     rotation_rendering:captureTaskRotationRendering(d,root,binding,children),
     location:location?Object.fromEntries(Object.entries(location).filter(([key])=>!['task_id','created_at','updated_at','created_by'].includes(key))):null,
     planning:planning||null,
     subtasks:children.map(child=>({action_key:registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`,
-      source_task_id:child.id,task:selectedTask(child),...extras(d,child.id)})),
+      source_task_id:child.id,task:selectedTask(child),...extras(d,child.id),authorization:seriesActionAuthorization(d,{source_task_id:child.id})})),
   };
 }
 
@@ -204,7 +237,7 @@ export function appendSeriesDefinition(d,taskId,{expectedRevision,actorId=null,d
 export function authoritativeTaskRecurrence(d,task) {
   const occurrence=occurrenceRow(d,task?.id);
   const definition=occurrence?seriesDefinitionForGeneration(d,occurrence.series_id,occurrence.generation+1):null;
-  return definition?.data.task||task;
+  return effectiveSeriesScoringDefinition(d,definition)?.data.task||task;
 }
 
 export function completionRelativeSkipUnsupportedReason(configuration,anchorDate) {
@@ -218,7 +251,7 @@ export function completionRelativeSkipUnsupportedReason(configuration,anchorDate
  * edits never become the next definition or its fixed calendar anchor. */
 export function seriesMaterializationPlan(d,task,{completedOn,expirationAnchor=false}={}) {
   const state=ensureSeriesDefinition(d,task.id);if(!state)return null;
-  const definition=seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1);
+  const definition=effectiveSeriesScoringDefinition(d,seriesDefinitionForGeneration(d,state.series_id,state.occurrence.generation+1));
   const window=planSeriesOccurrence(d,definition,state.occurrence,{completedOn,skipped:task.status==='skipped',withoutCompletion:['expired','skipped'].includes(task.status)||expirationAnchor});
   return window?{state,definition,...window}:null;
 }

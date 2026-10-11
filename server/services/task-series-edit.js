@@ -1,7 +1,8 @@
 /** Transactional reconciliation of already materialized series occurrences.
  * The existing recurrence generator remains the only generator. */
 import { randomUUID } from 'node:crypto';
-import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition } from './task-series.js';
+import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition, seriesActionAuthorization } from './task-series.js';
+import { assertTaskScoringMutation, taskScoringIdentity } from './task-scoring.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
 import { actorPermissions } from '../permissions.js';
 import { TaskStateError } from './task-lifecycle.js';
@@ -16,12 +17,85 @@ import { applyTaskRotationRendering } from './task-rotation-rendering.js';
 
 const ROOT_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','assignment_mode',
-  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy'];
+  'rotation_group','rotation_slot','rotation_bindings_json','points','visibility','countdown','locked','expiration_policy','scoring_mode','scoring_review_required'];
 const ACTION_FIELDS = ['title','description','category','priority','start_date','start_time','due_date','due_time',
   'points','visibility','locked','expiration_policy','is_optional','sort_order'];
 const actorId = actor => typeof actor === 'number' ? actor : actor.authUserId || actor.session?.userId;
 const read = (d,id) => d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const clone = value => JSON.parse(JSON.stringify(value));
+
+export function futureActionCapabilities(d,actor,root,action) {
+  const auth=seriesActionAuthorization(d,action);
+  return taskCapabilities(d,actor,{...action.task,created_by:auth.created_by,
+    assigned_to:auth.assigned_user_ids,parent_task_id:root.id});
+}
+export function futureRootCapabilities(d,actor,root,definition) {
+  const auth=seriesActionAuthorization(d,{authorization:definition.authorization,source_task_id:root.id});
+  return taskCapabilities(d,actor,{...definition.task,created_by:auth.created_by,
+    assigned_to:auth.assigned_user_ids,parent_task_id:null});
+}
+
+/** Pure sparse operations on the canonical future base, shared by preview/save. */
+export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{validateFields=()=>{}}={}) {
+  const bad=(message='Choose valid future definition changes.',status=400)=>{throw new TaskStateError(message,{},status);};
+  const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
+  if(!object(patch)||Object.keys(patch).some(key=>!['fields','actions'].includes(key)))bad();
+  const after=clone(before),fields=patch.fields??{},operations=patch.actions??{};
+  if(!object(fields)||!object(operations)||Object.keys(operations).some(key=>!['update','add','remove','order'].includes(key)))bad();
+  const rootAllowed=ROOT_FIELDS.filter(key=>!['scoring_review_required','rotation_bindings_json'].includes(key)).concat(['assigned_to','rotation_user_ids','skill_ids','tags','location','rotation_bindings']);
+  const actionAllowed=ACTION_FIELDS.filter(key=>key!=='sort_order').concat(['assigned_user_ids','skill_ids','tags']);
+  const apply=(target,input,allowed)=>{
+    if(!object(input)||Object.keys(input).some(key=>!allowed.includes(key)))bad();input=validateFields(input)||input;
+    for(const [key,value] of Object.entries(input)) {
+      if(key==='assigned_to'||key==='assigned_user_ids'){target.assigned_user_ids=[...value];target.authorization={...target.authorization,assigned_user_ids:[...value]};}
+      else if(['rotation_user_ids','skill_ids','tags','location'].includes(key))target[key]=clone(value);
+      else if(key==='rotation_bindings')target.task.rotation_bindings_json=JSON.stringify(value);
+      else target.task[key]=key==='title'?value.trim():key==='points'?Number(value):value;
+    }
+    if(Object.hasOwn(input,'scoring_mode'))target.task.scoring_review_required=0;
+  };
+  apply(after,fields,rootAllowed);
+  const seen=new Set(),available=new Map(before.subtasks.map(a=>[a.action_key,a]));
+  const requireAction=key=>{
+    const action=available.get(key);
+    if(typeof key!=='string'||!action||!futureActionCapabilities(d,actor,root,action).view)bad('This future action is unavailable.',404);
+    return action;
+  };
+  for(const name of ['update','add','remove','order'])if(operations[name]!==undefined&&(!Array.isArray(operations[name])||operations[name].length>50))bad();
+  for(const key of operations.remove||[]) {
+    const action=requireAction(key);if(seen.has(key))bad();seen.add(key);
+    if(!futureActionCapabilities(d,actor,root,action).delete_archive)bad('Your permissions do not allow removing this future action.',403);
+    after.subtasks=after.subtasks.filter(a=>a.action_key!==key);
+  }
+  for(const update of operations.update||[]) {
+    if(!object(update)||Object.keys(update).some(key=>!['action_key','fields'].includes(key)))bad();
+    const old=requireAction(update.action_key);if(seen.has(update.action_key))bad();seen.add(update.action_key);
+    if(!futureActionCapabilities(d,actor,root,old).edit)bad('Your permissions do not allow editing this future action.',403);
+    apply(after.subtasks.find(a=>a.action_key===old.action_key),update.fields,actionAllowed);
+  }
+  for(const added of operations.add||[]) {
+    if(!object(added)||Object.keys(added).some(key=>!['client_key','fields'].includes(key))||typeof added.client_key!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(added.client_key))bad();
+    const key=`new:${added.client_key}`;if(seen.has(key)||available.has(key))bad();seen.add(key);
+    if(!taskCapabilities(d,actor,root).create)bad('Your permissions do not allow adding future actions.',403);
+    const row={action_key:key,source_task_id:null,task:{...after.task,title:'',points:0,visibility:after.task.visibility,is_optional:0,locked:0},assigned_user_ids:[],skill_ids:[],tags:[],authorization:{created_by:actorId(actor),assigned_user_ids:[]}};
+    row.task=Object.fromEntries(ACTION_FIELDS.map(key=>[key,row.task[key]??null]));
+    apply(row,added.fields,actionAllowed);if(!row.task.title)bad('Give each future action a title.');after.subtasks.push(row);
+  }
+  if(after.subtasks.length>50)bad('A Task can contain at most 50 subtasks.');
+  if(operations.order) {
+    if(new Set(operations.order).size!==operations.order.length)bad();
+    for(const key of operations.order) {
+      if(available.has(key))requireAction(key);else if(!seen.has(key)||!key.startsWith('new:'))bad();
+      if(!after.subtasks.some(a=>a.action_key===key))bad();
+    }
+    const order=new Set(operations.order),slots=after.subtasks.map((a,i)=>order.has(a.action_key)?i:null).filter(i=>i!==null);
+    const byKey=new Map(after.subtasks.map(a=>[a.action_key,a]));slots.forEach((slot,i)=>{after.subtasks[slot]=byKey.get(operations.order[i]);});
+  }
+  if(operations.order||operations.add?.length)after.subtasks.forEach((action,i)=>{
+    if(action.action_key.startsWith('new:')||operations.order?.includes(action.action_key))action.task.sort_order=i;
+  });
+  return after;
+}
 
 export function proposedSeriesDefinition(before, { fields, editedSubtasks, assigned, rotation, skills, tags, binding, location }) {
   const after=clone(before);
@@ -40,7 +114,7 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
         due_date:fields.due_date,due_time:fields.due_time,points:0,visibility:fields.visibility,locked:0,
         expiration_policy:'keep_overdue',is_recurring:0,recurrence_rule:null,recurrence_from_completion:0,
         assignment_mode:'fixed',rotation_group:null,rotation_slot:0,countdown:0,due_date_offset_days:null},
-      assigned_user_ids:[],tags:[]};
+      assigned_user_ids:[],tags:[],authorization:{created_by:null,assigned_user_ids:[]}};
     Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points});
     if(step.assignedUsers!==undefined)row.assigned_user_ids=[...step.assignedUsers];
     row.skill_ids=[...step.skillIds];return row;
@@ -66,22 +140,22 @@ export function assertSeriesEdit(d,actor,task,state,expectedRevision) {
 /** An occurrence may contain an authorized one-off exception. Promoting that
  * exception also changes the durable policy, even if the submitted field is
  * unchanged on the selected occurrence. Check both boundaries explicitly. */
-export function assertSeriesDefinitionMutation(d,actor,task,before,after) {
+export function assertSeriesDefinitionMutation(d,actor,task,before,after,{futureOnly=false}={}) {
   assertRotationBindingsChange(d, actor, before.task.rotation_bindings_json, after.task.rotation_bindings_json);
   const previous=normalizeSeriesDefinition(before),next=normalizeSeriesDefinition(after);
-  const rootCapabilities=taskCapabilities(d,actor,task);
+  const rootCapabilities=futureOnly?futureRootCapabilities(d,actor,task,before):taskCapabilities(d,actor,task);
   const same=(left,right)=>JSON.stringify(left??null)===JSON.stringify(right??null);
   const assertCanonicalLock=(locked,concrete)=>{
     if(locked&&!actorPermissions(d,actor).admin&&Number(concrete.created_by)!==Number(actorId(actor)))
       throw new TaskStateError('This recurring Activity definition is locked. Only its creator or a household administrator can change it.',
         {reason:'series_definition_locked'},403);
   };
-  assertCanonicalLock(previous.task.locked,task);
+  assertCanonicalLock(previous.task.locked,futureOnly?{created_by:seriesActionAuthorization(d,{authorization:before.authorization,source_task_id:task.id}).created_by}:task);
   const requireCapability=(capabilities,key)=>{
     if(!capabilities[key])throw new TaskStateError('Your household permissions do not allow changing this recurring Activity setting.',
       {reason:'series_definition_permission',capability:`tasks.${key}`},403);
   };
-  const fields={change_points:['points'],change_priority:['priority'],change_category_tags:['category'],
+  const fields={change_points:['points','scoring_mode'],change_priority:['priority'],change_category_tags:['category'],
     change_dates:['calendar_lead_days','due_date_offset_days','start_time','due_time','expiration_policy','is_recurring','recurrence_rule','recurrence_from_completion'],
     change_assignment:['assignment_mode','rotation_group','rotation_slot']};
   const assertConfiguration=(old,newValue,capabilities)=>{
@@ -117,8 +191,9 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after) {
   for(const action of previous.subtasks)if(!newKeys.has(action.action_key)) {
     const concrete=d.prepare(`SELECT t.* FROM task_recurrence_actions a JOIN tasks t ON t.id=a.task_id
       WHERE a.occurrence_task_id=? AND a.action_key=?`).get(task.id,action.action_key);
-    assertCanonicalLock(action.task.locked,concrete||task);
-    requireCapability(concrete?taskCapabilities(d,actor,concrete):rootCapabilities,'delete_archive');
+    const owner=futureOnly?{created_by:seriesActionAuthorization(d,action).created_by}:concrete||task;
+    assertCanonicalLock(action.task.locked,owner);
+    requireCapability(futureOnly?futureActionCapabilities(d,actor,task,action):concrete?taskCapabilities(d,actor,concrete):rootCapabilities,'delete_archive');
   }
   for(const action of next.subtasks) {
     const old=oldActions.get(action.action_key);
@@ -131,8 +206,8 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after) {
     }
     const concrete=d.prepare(`SELECT t.* FROM task_recurrence_actions a JOIN tasks t ON t.id=a.task_id
       WHERE a.occurrence_task_id=? AND a.action_key=?`).get(task.id,action.action_key);
-    if(!same(old,action))assertCanonicalLock(old.task.locked,concrete||task);
-    assertConfiguration(old,action,concrete?taskCapabilities(d,actor,concrete):rootCapabilities);
+    if(!same(old,action))assertCanonicalLock(old.task.locked,futureOnly?{created_by:seriesActionAuthorization(d,old).created_by}:concrete||task);
+    assertConfiguration(old,action,futureOnly?futureActionCapabilities(d,actor,task,old):concrete?taskCapabilities(d,actor,concrete):futureActionCapabilities(d,actor,task,old));
   }
 }
 
@@ -162,6 +237,7 @@ export function seriesOccurrencePreservationReason(d,occurrence,task) {
   const current=treeState(d,task.id),saved=JSON.parse(occurrence.materialized_state_json);
   if(JSON.stringify(current)!==JSON.stringify(saved.tasks))return 'activity';
   const ids=current.map(row=>row.id),marks=ids.map(()=>'?').join(',');
+  if(d.prepare(`SELECT 1 FROM task_scoring_settlements WHERE root_logical_key=? OR task_id IN (${marks}) LIMIT 1`).get(taskScoringIdentity(d,task.id),...ids))return 'settled_rewards';
   if(current.some(row=>row.status!=='open'&&!row.archived_at))return 'progress';
   for(const table of ['task_comments','task_documents','task_completions','reward_task_awards'])
     if(d.prepare(`SELECT 1 FROM ${table} WHERE task_id IN (${marks}) LIMIT 1`).get(...ids))return 'activity';
@@ -187,14 +263,18 @@ function reconcileOccurrence(d,task,definition,window,actor) {
   if(!capabilities.edit||!capabilities.change_dates)throw new TaskStateError('This future occurrence cannot be edited with your permissions.',{},403);
   if(!data.binding)assertTaskSkillAssignments(d,data.skill_ids,assigned,window.due_date);
   assertTaskAssignmentAvailability(d,task.id,assigned,{task:fields});
+  const children=d.prepare(`SELECT t.*,a.action_key FROM tasks t LEFT JOIN task_recurrence_actions a ON a.task_id=t.id
+    WHERE t.parent_task_id=? AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
+    AND NOT EXISTS(SELECT 1 FROM task_supervision_actions s WHERE s.counterpart_task_id=t.id)`).all(task.id);
+  assertTaskScoringMutation(d,task.id,{points:fields.points,assigned_to:assigned,
+    ...(['whole_task','subtasks'].includes(fields.scoring_mode)?{scoring_mode:fields.scoring_mode}:{}),
+    subtasks:data.subtasks.map(action=>{const existing=children.find(row=>row.action_key===action.action_key&&!row.archived_at);
+      return {...(existing?{id:existing.id}:{}),title:action.task.title,points:action.task.points,assigned_user_ids:action.assigned_user_ids};})});
   d.prepare(`UPDATE tasks SET ${ROOT_FIELDS.map(key=>`${key}=?`).join(',')} WHERE id=?`)
     .run(...ROOT_FIELDS.map(key=>fields[key]??null),task.id);
   assignments(d,task.id,assigned);setTaskSkills(d,task.id,data.skill_ids);setTags(d,task.id,data.tags);
   d.prepare('DELETE FROM task_rotation_members WHERE task_id=?').run(task.id);
   data.rotation_user_ids.forEach((id,order)=>d.prepare('INSERT INTO task_rotation_members(task_id,user_id,sort_order) VALUES(?,?,?)').run(task.id,id,order));
-  const children=d.prepare(`SELECT t.*,a.action_key FROM tasks t LEFT JOIN task_recurrence_actions a ON a.task_id=t.id
-    WHERE t.parent_task_id=? AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=t.id)
-    AND NOT EXISTS(SELECT 1 FROM task_supervision_actions s WHERE s.counterpart_task_id=t.id)`).all(task.id);
   const wanted=new Set(data.subtasks.map(child=>child.action_key));
   for(const child of children.filter(row=>!row.archived_at&&!wanted.has(row.action_key))) {
     assertTaskMutation(d,actor,child,{}, {operation:'delete'});
@@ -210,9 +290,11 @@ function reconcileOccurrence(d,task,definition,window,actor) {
       {operation:existing?'update':'create'});
     assertTaskSkillAssignments(d,action.skill_ids,action.assigned_user_ids,value.due_date,{allowDelegation:true});
     let id=existing?.id;
+    const originalCreator=seriesActionAuthorization(d,action).created_by;
+    const creator=originalCreator==null?null:d.prepare('SELECT id FROM users WHERE id=?').get(originalCreator)?.id??null;
     if(id)d.prepare(`UPDATE tasks SET ${ACTION_FIELDS.map(key=>`${key}=?`).join(',')} WHERE id=?`).run(...ACTION_FIELDS.map(key=>value[key]??null),id);
     else id=Number(d.prepare(`INSERT INTO tasks(${ACTION_FIELDS.join(',')},status,parent_task_id,created_by)
-      VALUES(${ACTION_FIELDS.map(()=>'?').join(',')},'open',?,?)`).run(...ACTION_FIELDS.map(key=>value[key]??null),task.id,actorId(actor)).lastInsertRowid);
+      VALUES(${ACTION_FIELDS.map(()=>'?').join(',')},'open',?,?)`).run(...ACTION_FIELDS.map(key=>value[key]??null),task.id,creator).lastInsertRowid);
     registerSeriesAction(d,id,task.id,action.action_key);
     assignments(d,id,action.assigned_user_ids);setTaskSkills(d,id,action.skill_ids);setTags(d,id,action.tags);
   }
@@ -236,11 +318,11 @@ function reconcileOccurrence(d,task,definition,window,actor) {
 
 /** Caller owns an IMMEDIATE transaction covering the selected Task, series CAS
  * and all these writes. A future exception rolls back only its own savepoint. */
-export function reconcileSeriesFuture(d,state,{actor,definition=state.definition}={}) {
+export function reconcileSeriesFuture(d,state,{actor,definition=state.definition,scope='future'}={}) {
   const updated=[],preserved=[],pending_rotations=[];
   let previous={...state.occurrence};
   const selected=read(d,state.occurrence.task_id);
-  if(!selected.archived_at&&!['done','expired','skipped'].includes(selected.status))
+  if(scope!=='future_only'&&!selected.archived_at&&!['done','expired','skipped'].includes(selected.status))
     previous={...previous,definition_id:definition.id};
   const future=d.prepare(`SELECT o.* FROM task_recurrence_occurrences o JOIN tasks t ON t.id=o.task_id
     WHERE o.series_id=? AND o.generation>? AND o.state='materialized' ORDER BY o.generation,o.task_id`).all(state.series_id,state.occurrence.generation);
@@ -276,5 +358,5 @@ export function reconcileSeriesFuture(d,state,{actor,definition=state.definition
       preserve(error.details?.reason==='rotation_snapshot'?'rotation_snapshot':'eligibility_or_permission');
     }
   }
-  return {scope:'future',series_id:state.series_id,revision:state.revision,updated,preserved,pending_rotations};
+  return {scope,series_id:state.series_id,revision:state.revision,updated,preserved,pending_rotations,...(scope==='future_only'?{current_preserved:true}:{})};
 }

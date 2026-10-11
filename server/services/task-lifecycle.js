@@ -2,6 +2,7 @@
 import { syncTaskRewards } from './rewards.js';
 import {assertTripTaskActive} from './trip-task-state.js';
 import { prizeTaskTransition } from './reward-fulfillment-transitions.js';
+import { assertTaskScoringMutation,taskScoringRoot } from './task-scoring.js';
 import { retiredRecurrenceOccurrence, registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { calendarDayOffset } from './activity-schedule.js';
 import { authoritativeTaskRecurrence, ensureSeriesDefinition } from './task-series.js';
@@ -145,6 +146,9 @@ function applyTransition(d, task, status, actorId, effects, {preserveFollowup=fa
   for(const guard of transitionGuards.values())guard(d,task,status,{actorId,principal:effects.authorizationActor});
   assertTaskWindowAction(d,task.id,now,{optionalReopenScope});
   if (status === 'done') {
+    // Review ambiguous positive policy before any progress, including suppressed
+    // and no-recipient work. Award-time validation alone cannot cover those.
+    assertTaskScoringMutation(d,taskScoringRoot(d,task.id)?.id??task.id,{});
     assertRecurringCompletionStarted(d,task.id,now);
     const dependencies = unresolvedDependencies(d, task.id);
     if (dependencies.length) throw new TaskStateError('Complete required earlier activities first.',

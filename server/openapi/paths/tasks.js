@@ -1,7 +1,7 @@
 import { op, jsonBody, idParam, stringPathParam } from '../helpers.js';
 
 export function tasksPaths() {
-  return {
+  const paths = {
     '/api/v1/tasks': {
       // Die Filter stehen als echte Parameter da, nicht nur im Fließtext: ein
       // generierter Client und die MCP-Brücke (get_api_operation) lesen die
@@ -93,6 +93,10 @@ export function tasksPaths() {
     '/api/v1/tasks/{id}/acceptance': {
       get: op({ summary: 'Read authorized Task acceptance options and revision snapshot', tag: 'Tasks', params: [idParam(), { name:'primary_user_id', in:'query', required:false, schema:{type:'integer'}, description:'Paired-display recipient preview only; never signs in as this member. Personal users may only select themselves.' }], description:'Returns current task projection, permitted primary/co-assignee candidates, helper authority, and authorized subtask revisions and allocation eligibility. This read has no assignment side effects.' }),
     },
+    '/api/v1/tasks/{id}/scoring-preview': {
+      post:op({summary:'Preview authorized Task scoring changes without saving',tag:'Tasks',params:[idParam()],requestBody:jsonBody(null),
+        description:'Requires Task visibility, edit and change_points plus assignment/series authority for the proposed changes. Public scoring_mode values are whole_task and subtasks; raw points accept integers or numeric strings 0..10000. Returns {data:{mode,mode_locked,review_required,earned,before,after,before_units,after_units,settlements,warnings,valid,scope,current_preserved}}. Member totals and work-unit recipients use the central reward resolver; settlements are immutable known or unknown historical terms. Unit refs are authorized current {kind:task,task_id}, ordinary new {kind:draft,draft_key}, or prospective {kind:action,action_key}; never transient/template Task IDs. Default edit_scope is occurrence. Existing future includes the selected occurrence; future_only compares the effective stored next-generation policy to a sparse future_patch. Future requests require expected_series_revision. include_edit_definition:true with future_only adds a sanitized effective BEFORE definition, per-action/root permissions and task/parent/series revision tokens. This is editor input, not a replacement-list save payload. Preview never advances revisions, captures definitions, allocates recurrence identities, completes work or awards points.'}),
+    },
     '/api/v1/tasks/{id}/accept': {
       post: op({ summary: 'Atomically accept an open Task with optional co-assignees and subtask allocation', tag:'Tasks', params:[idParam(), {name:'Idempotency-Key',in:'header',required:false,schema:{type:'string'},description:'Not used by this operation. Supply operation_id in the request body for context-bound retry protection.'}], stateChanging:true,
         requestBody:jsonBody(null,'Required: operation_id, expected_revision, coassignee_ids, subtask_snapshot [{id,revision}], subtask_assignments [{id,user_id}]. Device requests supply primary_user_id. Empty allocation arrays are valid; null user_id leaves an ordinary subtask without explicit assignment.'),
@@ -168,4 +172,10 @@ export function tasksPaths() {
       delete: op({ summary: 'Delete a comment', tag: 'Tasks', params: [idParam(), idParam('commentId', 'Comment ID')], stateChanging: true, description: 'The author, or an admin moderating.' }),
     },
   };
+  const scoring=' Task points remain raw configured values; scoring_mode is whole_task or subtasks, and scoring is the authorized earned/potential summary with mode_locked, review_required and personal_total (null on an identity-free shared display). Public creation requires an explicit mode or unambiguous compatible inference; conflicting positive parent/child sources without a mode reject. Values accept integer numbers or numeric strings 0..10000; invalid raw values reject atomically. Mode belongs to the canonical executable root and requires edit plus change_points. Settled current amounts and modes after earnings are immutable; reopened responsibility changes never redistribute historical credit. Scoring edits must be saved separately from progress transitions.';
+  paths['/api/v1/tasks'].post.description+=scoring;
+  paths['/api/v1/tasks'].get.description+=scoring;
+  paths['/api/v1/tasks/{id}'].get.description+=scoring;
+  paths['/api/v1/tasks/{id}'].put.description+=scoring+' edit_scope defaults to occurrence; future retains this-and-future compatibility. future_only preserves the selected occurrence and accepts only revision tokens plus future_patch:{fields?,actions?:{update?:[{action_key,fields}],add?:[{client_key,fields}],remove?:[action_key],order?:[action_key]}}. Omitted terms/actions retain the actual next-generation definition, including hidden work. New client_key values use 1..80 letters, numbers, underscore or hyphen; order references new:<client_key> within the request. Action fields exclude status, progress, documents, helpers and scoring_mode; root fields exclude current-only uploads, documents, sync targets and status. Unknown/hidden action keys return a generic 404. Save checks expected_revision, expected_parent_revision when relevant, and expected_series_revision inside one transaction. Effective scope starts at selected generation+1, reports series_edit.current_preserved, updated/preserved exceptions and created_actions [{client_key,action_key}]. Old definition JSON may require a one-time authorized series policy snapshot before an occurrence-only mode edit; absent series authority/CAS rejects rather than silently changing the future policy.';
+  return paths;
 }

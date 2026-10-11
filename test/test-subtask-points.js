@@ -30,7 +30,7 @@ async function edit(task,body){const r=await call('PUT','/tasks/'+task.id,body);
 const children=task=>task.subtasks.map(({id,title,points})=>({id,title,points}));
 const noAwards=()=>{assert.equal(d.prepare('SELECT COUNT(*) n FROM task_completions').get().n,0);assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);};
 test('inline create persists independent zero, nonzero and omitted points without household defaults or awards',async()=>{
- const task=await create({points:5,subtasks:[{title:'Zero',points:0},{title:'Seven',points:7},{title:'Omitted'}]});
+ const task=await create({points:5,scoring_mode:'subtasks',subtasks:[{title:'Zero',points:0},{title:'Seven',points:7},{title:'Omitted'}]});
  assert.deepEqual(task.subtasks.map(s=>s.points),[0,7,0]);assert.equal(row(task.id).points,5);noAwards();
 });
 test('inline edit persists points-only changes, explicit zero, repeated add/remove/reorder and stable IDs',async()=>{
@@ -74,14 +74,15 @@ test('historical future points edits preserve completed occurrence and prior awa
  const next=d.prepare('SELECT id FROM tasks WHERE recurrence_origin_id=? AND parent_task_id IS NULL').get(task.id);assert.equal((await call('GET','/tasks/'+next.id)).data.subtasks[0].points,6);
 });
 
-test('editing a completed leaf changes its definition without changing progress or prior awards',async()=>{
+test('editing settled leaf points rejects without changing progress or prior awards',async()=>{
  d.prepare('INSERT INTO reward_participants(user_id,enabled) VALUES(1,1)').run();
  let task=await create({assigned_to:[1],subtasks:[{title:'Earned',points:3},{title:'Remaining',points:0}]});const leaf=task.subtasks[0].id;
  await edit({id:leaf},{assigned_to:[1]});
  assert.equal((await call('PATCH','/tasks/'+leaf+'/status',{status:'done'})).status,200);
  const before=JSON.stringify({ledger:d.prepare('SELECT * FROM reward_ledger').all(),awards:d.prepare('SELECT * FROM reward_task_awards').all(),completions:d.prepare('SELECT * FROM task_completions').all()});
  assert.ok(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n>0);
- task=await edit(task,{subtasks:[{id:leaf,title:'Earned',points:9},{id:task.subtasks[1].id,title:'Remaining',points:0}]});
- assert.equal(row(leaf).status,'done');assert.equal(row(leaf).points,9);
+ const rejected=await call('PUT','/tasks/'+task.id,{subtasks:[{id:leaf,title:'Earned',points:9},{id:task.subtasks[1].id,title:'Remaining',points:0}]});
+ assert.equal(rejected.status,409);assert.equal(rejected.reason,'settled_rewards');
+ assert.equal(row(leaf).status,'done');assert.equal(row(leaf).points,3);
  assert.equal(JSON.stringify({ledger:d.prepare('SELECT * FROM reward_ledger').all(),awards:d.prepare('SELECT * FROM reward_task_awards').all(),completions:d.prepare('SELECT * FROM task_completions').all()}),before);
 });

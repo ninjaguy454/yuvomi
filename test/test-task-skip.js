@@ -33,7 +33,7 @@ const read=id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
 const rows=(sql,...args)=>d.prepare(sql).all(...args);
 async function call(method,path='',body){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const text=await r.text();let data;try{data=JSON.parse(text);}catch{data={error:text};}return {status:r.status,...data};}
 async function fixture(extra={}){
-  actor=admin;const r=await call('POST','',{title:'Synthetic routine',assigned_to:[child,other],points:5,is_recurring:true,recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',due_date:'2026-11-01',due_time:'08:00',expiration_policy:'expire_incomplete',subtasks:[{title:'First',points:2},{title:'Second',points:3}],...extra});
+  actor=admin;const r=await call('POST','',{title:'Synthetic routine',assigned_to:[child,other],points:5,scoring_mode:'subtasks',is_recurring:true,recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',due_date:'2026-11-01',due_time:'08:00',expiration_policy:'expire_incomplete',subtasks:[{title:'First',points:2},{title:'Second',points:3}],...extra});
   assert.equal(r.status,201,JSON.stringify(r));return r.data;
 }
 function request(task,operation_id=`skip-${task.id}`,extra={}){return {operation_id,expected_revision:read(task.id).revision,...extra};}

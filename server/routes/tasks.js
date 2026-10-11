@@ -13,6 +13,7 @@ import {skipTaskOccurrence,taskSkipUnsupportedReason,taskSkipHasRotationScope} f
  */
 
 import { createLogger } from '../logger.js';
+import { randomUUID } from 'node:crypto';
 import express from 'express';
 import * as db from '../db.js';
 import { documentVisibleSql } from '../services/document-access.js';
@@ -21,8 +22,9 @@ import { addCalendarDays, calendarDayOffset, resolveActivitySchedule } from '../
 import { registerRecurrenceOccurrence, registerRecurrenceAction, recurrenceFrontier, isRecurrenceFrontier, isTerminalRecurrenceOccurrence } from '../services/task-recurrence-frontier.js';
 import { ensureSeriesDefinition, seriesMaterializationPlan, recordOccurrenceDefinition, registerSeriesAction, authoritativeTaskRecurrence,
   seriesMetadata, taskSeriesState, captureSeriesDefinition, appendSeriesDefinition, definitionEqual, seriesDefinitionForGeneration,
-  normalizeSeriesSchedule } from '../services/task-series.js';
-import { proposedSeriesDefinition, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
+  normalizeSeriesSchedule, effectiveSeriesScoringDefinition, seriesActionAuthorization } from '../services/task-series.js';
+import { proposedSeriesDefinition, proposedFutureSeriesDefinition, futureActionCapabilities, futureRootCapabilities, assertSeriesEdit, assertSeriesDefinitionMutation, reconcileSeriesFuture, seriesOccurrencePreservationReason } from '../services/task-series-edit.js';
+import {taskScoringSummary,previewTaskScoring,assertTaskScoringMutation,taskScoringRoot,taskScoringRows,taskScoringIdentity} from '../services/task-scoring.js';
 import { readTaskActivityDefinition, updateTaskActivitySnapshotSkills, captureActivityTemplateDefinition } from '../services/task-activity-snapshot.js';
 import { syncTaskRewards } from '../services/rewards.js';
 import { unresolvedDependencies, syncWorkflowInstanceForTask, resolveActivityTemplate } from '../services/activity-workflows.js';
@@ -200,6 +202,146 @@ const VALID_STATUSES = [...REAL_STATUSES, ARCHIVE_STATUS];
 const MAX_POINTS = 10000;
 const FALLBACK_CATEGORY = 'misc';
 
+function validateScoringInput(body) {
+  if(Object.hasOwn(body,'scoring_mode')&&!['whole_task','subtasks'].includes(body.scoring_mode))
+    throw new TaskStateError('Choose Whole task or Each subtask.',{reason:'invalid_scoring_mode'},400);
+  for(const row of [body,...(Array.isArray(body.subtasks)?body.subtasks:[])])if(row&&Object.hasOwn(row,'points')) {
+    const value=row.points;
+    if(!['number','string'].includes(typeof value)||String(value).trim()===''||!Number.isInteger(Number(value))||Number(value)<0||Number(value)>MAX_POINTS)
+      throw new TaskStateError(`${row===body?'Points':'Subtask points'} must be a whole number from 0 to 10000.`,{reason:'invalid_points'},400);
+  }
+}
+function assertScoringOwner(task,body) {
+  if(body.scoring_mode!==undefined&&taskScoringRoot(db.get(),task.id)?.id!==task.id)
+    throw new TaskStateError('Choose the scoring mode on the original executable Task.',{reason:'scoring_owner_required'},400);
+}
+function scoringMutationWire(body,edited) {
+  const value=Object.fromEntries(['scoring_mode','points','assigned_to'].filter(key=>body[key]!==undefined).map(key=>[key,body[key]]));
+  if(value.assigned_to!==undefined)value.assigned_to=parseAssignedTo(value.assigned_to);
+  if(edited)value.subtasks=edited.next.map(row=>({...(row.id?{id:row.id}:{}),title:row.title,points:row.points,...(row.assignedUsers===undefined?{}:{assigned_user_ids:row.assignedUsers})}));
+  return value;
+}
+function attachScoring(task,viewerId,authorizedTaskIds,includeHistoricalSettlements=false) {
+  try {
+    const allowed=includeHistoricalSettlements?authorizedScoringHistoryIds(task,viewerId,authorizedTaskIds):authorizedTaskIds;
+    task.scoring=taskScoringSummary(db.get(),task.id,{viewerId,authorizedTaskIds:allowed});
+    task.scoring_mode=task.scoring.mode;
+  } catch(error) {if(error.status!==404)throw error;task.scoring=null;}
+  return task;
+}
+function authorizedScoringHistoryIds(task,viewerId,ids) {
+  if(taskScoringRoot(db.get(),task.id)?.id!==task.id)return ids;
+  const allowed=new Set(ids);
+  for(const settlement of db.get().prepare('SELECT task_id,visibility_json FROM task_scoring_settlements WHERE root_task_id=? OR root_logical_key=?').all(task.id,taskScoringIdentity(db.get(),task.id))) {
+    const extant=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(settlement.task_id);
+    const snapshot=JSON.parse(settlement.visibility_json);
+    const historical=extant||{visibility:snapshot.visibility,created_by:snapshot.created_by,assigned_to:snapshot.assigned};
+    if(taskCapabilities(db.get(),viewerId,historical).view)allowed.add(settlement.task_id);
+  }
+  return [...allowed];
+}
+function futureEditContext(req,task) {
+  const allowed=['edit_scope','expected_revision','expected_parent_revision','expected_series_revision','future_patch','include_edit_definition'];
+  if(Object.keys(req.body||{}).some(key=>!allowed.includes(key)))throw new TaskStateError('Future edits accept only future_patch. Save progress and occurrence settings separately.',{reason:'future_patch_required'},400);
+  if(req.body.include_edit_definition!==undefined&&typeof req.body.include_edit_definition!=='boolean')throw new TaskStateError('include_edit_definition must be a boolean.',{},400);
+  const state=taskSeriesState(db.get(),task.id);
+  assertSeriesEdit(db.get(),req,task,state,req.body.expected_series_revision);
+  const stored=seriesDefinitionForGeneration(db.get(),state.series_id,state.occurrence.generation+1);
+  const before=effectiveSeriesScoringDefinition(db.get(),stored).data;
+  const futurePermissions=futureRootCapabilities(db.get(),req,task,before);
+  if(!futurePermissions.view)throw new TaskStateError('This future definition is unavailable.',{},404);
+  if(!futurePermissions.edit)throw new TaskStateError('Your permissions do not allow editing this future definition.',{},403);
+  const validateFields=fields=>{
+    fields={...fields};
+    validateScoringInput(fields);
+    const errors=validateTaskInput(fields,false,before.task.recurrence_rule);if(errors.length)throw new TaskStateError(errors.join(' '),{},400);
+    if(fields.title!==undefined&&(typeof fields.title!=='string'||!fields.title.trim()))throw new TaskStateError('Give the Task a title.',{},400);
+    for(const name of ['assigned_to','assigned_user_ids','rotation_user_ids'])if(fields[name]!==undefined) {
+      if(!Array.isArray(fields[name])||fields[name].some(id=>!Number.isSafeInteger(id)||id<1)||new Set(fields[name]).size!==fields[name].length
+        ||fields[name].some(id=>!householdMembers(db.get()).some(member=>member.id===id)))throw new TaskStateError('Choose valid household members.',{reason:'invalid_assignment'},400);
+    }
+    if(fields.skill_ids!==undefined)fields.skill_ids=normalizeSkillIds(db.get(),fields.skill_ids);
+    if(fields.rotation_bindings!==undefined)fields.rotation_bindings=normalizeRotationBindings(db.get(),fields.rotation_bindings);
+    if(fields.tags!==undefined)fields.tags=normalizeTags(fields.tags);
+    for(const name of ['is_optional','is_recurring','recurrence_from_completion','locked','countdown'])if(fields[name]!==undefined){
+      if(![true,false,0,1].includes(fields[name]))throw new TaskStateError('Choose a valid enabled or disabled setting.',{},400);
+      fields[name]=Number(!!fields[name]);
+    }
+    if(fields.location!==undefined)throw new TaskStateError('Change future locations through the existing series editor.',{},400);
+    if(fields.visibility!==undefined&&!['all','private','assignees'].includes(fields.visibility))throw new TaskStateError('Choose valid visibility.',{},400);
+    return fields;
+  };
+  const definition=proposedFutureSeriesDefinition(db.get(),req,task,before,req.body.future_patch??{}, {validateFields});
+  if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
+  assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
+  const error=validateTaskWindow(definition.task);if(error)throw new TaskStateError(error,{},400);
+  return {state,stored,before,definition};
+}
+function futureScoringWires(req,task,before,after) {
+  const visible=definition=>definition.subtasks.filter(action=>futureActionCapabilities(db.get(),req,task,action).view);
+  const old=visible(before),next=visible(after),keys=[...new Set([...old,...next].map(a=>a.action_key))].sort();
+  const maximum=Math.max(...taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).map(row=>row.id));
+  const ids=new Map(keys.map((key,i)=>[key,maximum+i+1]));
+  const wire=(definition,actions)=>({scoring_mode:definition.task.scoring_mode,points:definition.task.points,
+    assigned_to:definition.assigned_user_ids,subtasks:actions.map(action=>({id:ids.get(action.action_key),title:action.task.title,points:action.task.points,assigned_user_ids:action.assigned_user_ids}))});
+  return {before:wire(before,old),after:wire(after,next),ids,old,next};
+}
+function futureReviewRequired(definition) {
+  return definition.task.scoring_mode==='legacy'&&!!definition.task.scoring_review_required
+    &&[definition.task,...definition.subtasks.map(a=>a.task)].some(row=>row.points>0);
+}
+function decorateScoringUnits(preview,before,after,{futureIds=null,drafts=[]}={}) {
+  const decorate=(units,metadata)=>units?.map(unit=>{
+    let ref=unit.ref,row;
+    if(futureIds&&ref.kind==='definition_root'){ref={kind:'action',action_key:'root'};row=metadata.get('root');}
+    else if(futureIds&&ref.kind==='template'){
+      const key=futureIds.get(ref.template_id);row=metadata.get(key);ref={kind:'action',action_key:key};
+    }else if(!futureIds&&ref.kind==='task')row=metadata.get(ref.task_id);
+    else if(!futureIds&&ref.kind==='draft'){
+      row=drafts[ref.draft_index];ref={kind:'draft',draft_key:row?.client_key??`draft:${ref.draft_index}`};
+    }
+    if(!row)throw new TaskStateError('The scoring preview changed. Refresh before trying again.',{reason:'scoring_projection_unavailable'});
+    return {...unit,ref,title:row.title,is_optional:!!row.is_optional};
+  });
+  if(preview.before_units)preview.before_units=decorate(preview.before_units,before);
+  if(preview.after_units)preview.after_units=decorate(preview.after_units,after);
+  return preview;
+}
+function futureEditProjection(req,task,definition,state) {
+  const fields=Object.fromEntries(['title','description','points','scoring_mode','visibility','priority','category','start_date','start_time','due_date','due_time','due_date_offset_days','is_recurring','recurrence_rule','recurrence_from_completion','expiration_policy','locked','countdown','assignment_mode','rotation_group','rotation_slot'].map(key=>[key,definition.task[key]]));
+  fields.assigned_to=definition.assigned_user_ids;fields.skill_ids=definition.skill_ids;fields.tags=definition.tags;
+  fields.rotation_user_ids=definition.rotation_user_ids;fields.rotation_bindings=parseRotationBindings(definition.task.rotation_bindings_json);
+  return {task_id:task.id,effective_generation:state.occurrence.generation+1,review_required:!!definition.task.scoring_review_required,permissions:futureRootCapabilities(db.get(),req,task,definition),fields,
+    actions:definition.subtasks.filter(a=>futureActionCapabilities(db.get(),req,task,a).view).map(action=>({action_key:action.action_key,
+    fields:{...Object.fromEntries(['title','description','category','priority','start_date','start_time','due_date','due_time','points','visibility','locked','expiration_policy','is_optional'].map(key=>[key,action.task[key]])),assigned_user_ids:action.assigned_user_ids,skill_ids:action.skill_ids,tags:action.tags},permissions:futureActionCapabilities(db.get(),req,task,action)})),
+    revisions:{expected_revision:task.revision,...(task.parent_task_id?{expected_parent_revision:db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(task.parent_task_id)?.revision}:{}),expected_series_revision:state.revision}};
+}
+function saveFutureTaskDefinition(req,res,task) {
+  let updated,seriesEdit,unchanged=false;
+  db.get().transaction(()=>{
+    const current=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
+    assertTaskRevision(db.get(),current,req.body,{required:true,requireParent:true});
+    const {state,before,definition}=futureEditContext(req,current);
+    if(futureReviewRequired(definition))throw new TaskStateError('Choose a scoring mode for future work before saving.',{reason:'scoring_review_required'});
+    const full={points:definition.task.points,assigned_to:definition.assigned_user_ids,subtasks:definition.subtasks.map((a,i)=>({id:i+1,title:a.task.title,points:a.task.points,assigned_user_ids:a.assigned_user_ids})),
+      ...(['whole_task','subtasks'].includes(definition.task.scoring_mode)?{scoring_mode:definition.task.scoring_mode}:{})};
+    assertTaskScoringMutation(db.get(),current.id,full,{scope:'future_only'});
+    // UUID allocation is confined to this authorized save transaction.
+    const createdActions=[];
+    for(const action of definition.subtasks)if(action.action_key.startsWith('new:')){
+      const client_key=action.action_key.slice(4);action.action_key=`series-action:${randomUUID()}`;createdActions.push({client_key,action_key:action.action_key});
+    }
+    const revised=appendSeriesDefinition(db.get(),current.id,{expectedRevision:req.body.expected_series_revision,
+      actorId:req.authUserId||req.session.userId,definition,effectiveGeneration:state.occurrence.generation+1});
+    unchanged=!revised.changed;
+    seriesEdit=revised.changed?reconcileSeriesFuture(db.get(),revised,{actor:req,scope:'future_only'})
+      :{scope:'future_only',series_id:state.series_id,revision:state.revision,current_preserved:true,updated:[],preserved:[]};
+    if(createdActions.length)seriesEdit.created_actions=createdActions;
+    updated=current;
+  }).immediate();
+  return res.json({data:hydrateTask(updated,req.authUserId||req.session.userId),series_edit:seriesEdit,...(unchanged?{unchanged:true}:{})});
+}
+
 /** Zeitstempel im Format der übrigen Spalten (UTC, sekundengenau). */
 function nowStamp() {
   return new Date().toISOString().slice(0, 19) + 'Z';
@@ -277,11 +419,11 @@ function defaultTaskPoints() {
 const REBASE_EXCLUDED_STATUS = 'done';
 
 /** Nicht erledigte Hauptaufgaben, die exakt auf einem Punktwert stehen. */
-function countRebasableTasks(points) {
-  return db.get().prepare(`
-    SELECT COUNT(*) AS n FROM tasks
-    WHERE points = ? AND parent_task_id IS NULL AND status != ?
-  `).get(points, REBASE_EXCLUDED_STATUS).n;
+function rebasableTasks(points,actor) {
+  return db.get().prepare(`SELECT t.* FROM tasks t
+    WHERE t.points=? AND t.parent_task_id IS NULL AND t.status!=?
+      AND t.scoring_review_required=0 AND NOT EXISTS(SELECT 1 FROM task_scoring_settlements s WHERE s.task_id=t.id)`)
+    .all(points,REBASE_EXCLUDED_STATUS).filter(task=>{const caps=taskCapabilities(db.get(),actor,task);return caps.edit&&caps.change_points;});
 }
 
 // --------------------------------------------------------
@@ -915,6 +1057,9 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   task.offer_reason=offer.reason;
   task.permissions.accept=offer.claimable;
   attachTripTaskProjection(db.get(),task,me);
+  const scoringIds=[task.id,...task.subtasks.filter(row=>!row.is_supervision_projection).map(row=>row.id)];
+  attachScoring(task,me,scoringIds,true);
+  for(const child of task.subtasks)attachScoring(child,me,[child.id]);
   return task;
 }
 
@@ -1577,6 +1722,8 @@ router.post('/:id/location/promote', requireAdmin, (req, res) => {
 // --------------------------------------------------------
 export function createTaskDefinition(req, res) {
   try {
+    validateScoringInput(req.body);
+    if(req.body.parent_task_id&&req.body.scoring_mode!==undefined)throw new TaskStateError('Choose the scoring mode on the original executable Task.',{reason:'scoring_owner_required'},400);
     const bindingRequest = parseTaskActivityBinding(req.body);
     if (bindingRequest.error) return res.status(400).json({ error: bindingRequest.error, code: 400 });
     const activityBinding = bindingRequest.binding;
@@ -1725,6 +1872,9 @@ export function createTaskDefinition(req, res) {
       const authoredRotationFields = new Map();
       req.validateDeviceDefinition?.({points,assigned_to:userIds,start_date,start_time,due_date,due_time,expiration_policy,is_recurring,recurrence_rule,recurrence_from_completion});
       if(parent_task_id){
+        const parent=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(parent_task_id));
+        assertTaskRevision(db.get(),parent,{expected_revision:req.body.expected_parent_revision},{required:true});
+        assertTaskMutation(db.get(),req,parent,{subtasks:[]},{operation:'update'});
         assertTaskWindowAction(db.get(),Number(parent_task_id));
         if(taskWindowAncestors(db.get(),Number(parent_task_id)).some(row=>row.status==='done'))
           throw new TaskStateError('Reopen the completed parent Task before adding checklist steps.',{reason:'optional_parent_completed'});
@@ -1780,6 +1930,16 @@ export function createTaskDefinition(req, res) {
           }
         }
       }
+      if(!parent_task_id) {
+        const source=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(result.lastInsertRowid);
+        const children=ordinaryActivitySubtasks(db.get(),Number(result.lastInsertRowid));
+        const childPositive=children.some(child=>child.points>0);
+        if(req.body.scoring_mode===undefined&&source.points>0&&childPositive)
+          throw new TaskStateError('Choose a scoring mode when both task and subtask amounts are configured.',{reason:'scoring_mode_required'},400);
+        const mode=req.body.scoring_mode??(childPositive?'subtasks':'whole_task');
+        assertTaskMutation(db.get(),req,null,{...req.body,points:source.points},{operation:'create'});
+        db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=0 WHERE id=?').run(mode,result.lastInsertRowid);
+      }
       if (syncTarget) {
         db.get().prepare(
           'UPDATE tasks SET target_caldav_account_id = ?, target_caldav_list_url = ? WHERE id = ?'
@@ -1825,6 +1985,51 @@ export function createTaskDefinition(req, res) {
 }
 router.post('/',createTaskDefinition);
 
+router.post('/:id/scoring-preview',(req,res)=>{
+  try {
+    const data=withTaskReadSnapshot(db.get(),req,()=>{
+      const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(Number(req.params.id));
+      if(!task)throw new TaskStateError('Task not found.',{},404);
+      const capabilities=taskCapabilities(db.get(),req,task);
+      if(!capabilities.view)throw new TaskStateError('Task not found.',{},404);
+      if(!capabilities.edit||!capabilities.change_points)throw new TaskStateError('Your permissions do not allow previewing scoring changes.',{},403);
+      validateScoringInput(req.body);assertScoringOwner(task,req.body);
+      const scope=req.body.edit_scope??'occurrence';
+      if(!['occurrence','future','future_only'].includes(scope))throw new TaskStateError('Choose where to apply these changes.',{},400);
+      const viewerId=req.authUserId||req.session.userId,hydrated=hydrateTask(task,viewerId),authorizedTaskIds=authorizedScoringHistoryIds(task,viewerId,[task.id,...hydrated.subtasks.filter(row=>!row.is_supervision_projection).map(row=>row.id)]);
+      let preview;
+      if(scope==='future_only') {
+        const {state,before,definition}=futureEditContext(req,task),wires=futureScoringWires(req,task,before,definition);
+        const proposal={...wires.after};if(proposal.scoring_mode==='legacy')delete proposal.scoring_mode;
+        preview=previewTaskScoring(db.get(),task.id,proposal,{scope,viewerId,beforeDefinition:wires.before,authorizedTaskIds,authorizedTemplateIds:[...wires.ids.values()],includeUnits:true});
+        const metadata=(definition,actions)=>new Map([['root',definition.task],...actions.map(action=>[action.action_key,action.task])]);
+        decorateScoringUnits(preview,metadata(before,wires.old),metadata(definition,wires.next),{futureIds:new Map([...wires.ids].map(([key,id])=>[id,key]))});
+        preview.review_required=!!definition.task.scoring_review_required;
+        if(futureReviewRequired(definition)){preview.valid=false;preview.warnings=[{reason:'scoring_review_required',message:'Choose a scoring mode for future work.'}];}
+        if(req.body.include_edit_definition)preview.edit_definition=futureEditProjection(req,task,before,state);
+      } else {
+        const errors=validateTaskInput(req.body,false,task.recurrence_rule);if(errors.length)throw new TaskStateError(errors.join(' '),{},400);
+        assertTaskMutation(db.get(),req,task,req.body,{operation:'update'});
+        if(scope==='future')assertSeriesEdit(db.get(),req,task,taskSeriesState(db.get(),task.id),req.body.expected_series_revision);
+        const edited=editedSubtasksInput(task,req.body,req),wire=scoringMutationWire(req.body,edited);
+        preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true});
+        const rows=taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).filter(row=>authorizedTaskIds.includes(row.id));
+        const before=new Map(rows.map(row=>[row.id,row])),after=new Map(before);
+        for(const child of edited?.next||[])if(child.id)after.set(child.id,{title:child.title,is_optional:child.isOptional});
+        const drafts=(edited?.next||[]).map((child,index)=>{
+          const key=req.body.subtasks[index]?.client_key;
+          if(key!==undefined&&(typeof key!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(key)))throw new TaskStateError('Choose a valid draft work key.',{},400);
+          return {title:child.title,is_optional:child.isOptional,client_key:key};
+        });
+        if(req.body.title!==undefined)after.set(task.id,{...task,title:req.body.title});
+        decorateScoringUnits(preview,before,after,{drafts});
+      }
+      if(!preview.settlements)preview.settlements=hydrated.scoring?.settlements??[];
+      return preview;
+    });res.json({data});
+  }catch(error){const status=error.status||(error instanceof TaskSkillError?400:500);res.status(status).json({error:error.message,code:status,...(error.reason?{reason:error.reason}:{}),...error.details});}
+});
+
 // --------------------------------------------------------
 // PUT /api/v1/tasks/:id
 // Aufgabe vollständig aktualisieren.
@@ -1843,7 +2048,9 @@ export function updateTaskDefinition(req, res) {
     }
 
     const editScope=req.body.edit_scope??'occurrence';
-    if(!['occurrence','future'].includes(editScope))return res.status(400).json({error:'Choose where to apply these changes.',code:400});
+    if(!['occurrence','future','future_only'].includes(editScope))return res.status(400).json({error:'Choose where to apply these changes.',code:400});
+    validateScoringInput(req.body);assertScoringOwner(task,req.body);
+    if(editScope==='future_only')return saveFutureTaskDefinition(req,res,task);
     const rotationBindings = req.body.rotation_bindings === undefined ? parseRotationBindings(task.rotation_bindings_json)
       : normalizeRotationBindings(db.get(),req.body.rotation_bindings);
     const rotationBindingsJson = JSON.stringify(rotationBindings);
@@ -1887,7 +2094,8 @@ export function updateTaskDefinition(req, res) {
       ? editScope==='future'&&calendarDayOffset(start_date,due_date)!==calendarDayOffset(task.start_date,task.due_date)
         ? calendarDayOffset(start_date,due_date) : null
       : calendarDayOffset(start_date, due_date);
-    const points = req.body.points !== undefined ? clampPoints(req.body.points) : task.points;
+    const points = req.body.points !== undefined ? Number(req.body.points) : task.points;
+    const scoringMode=req.body.scoring_mode??task.scoring_mode;
     const visibility = req.body.visibility !== undefined
       ? normalizeVisibility(req.body.visibility, task.visibility)
       : task.visibility;
@@ -2067,7 +2275,7 @@ export function updateTaskDefinition(req, res) {
         recurrence_from_completion: recurrence_from_completion ? 1 : 0,
         assignment_mode: assignmentMode,
         rotation_group: rotationGroup, rotation_slot: rotationSlot || 0,
-        countdown: countdown ? 1 : 0, points, visibility, rotation_bindings_json: rotationBindingsJson,
+        countdown: countdown ? 1 : 0, points, scoring_mode:scoringMode, visibility, rotation_bindings_json: rotationBindingsJson,
       };
       let touchesDefinition = Object.keys(wanted).some((k) => !sameFieldValue(wanted[k], task[k]));
 
@@ -2109,7 +2317,8 @@ export function updateTaskDefinition(req, res) {
     const definitionFields={title:title.trim(),description,category,priority,start_date,start_time,due_date,due_time,
       due_date_offset_days:dueDateOffset,is_recurring:is_recurring?1:0,recurrence_rule,
       recurrence_from_completion:recurrence_from_completion?1:0,assignment_mode:assignmentMode,
-      rotation_group:rotationGroup,rotation_slot:rotationSlot||0,rotation_bindings_json:rotationBindingsJson,points,visibility,countdown:countdown?1:0,locked,expiration_policy,is_optional:is_optional?1:0};
+      rotation_group:rotationGroup,rotation_slot:rotationSlot||0,rotation_bindings_json:rotationBindingsJson,points,scoring_mode:scoringMode,
+      scoring_review_required:req.body.scoring_mode===undefined?task.scoring_review_required:0,visibility,countdown:countdown?1:0,locked,expiration_policy,is_optional:is_optional?1:0};
     const currentChildren=editedSubtasks?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):null;
     const childrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.length!==currentChildren.length
       ||editedSubtasks.next.some((child,index)=>child.id!==currentChildren[index]?.id||child.title!==currentChildren[index]?.title
@@ -2125,6 +2334,13 @@ export function updateTaskDefinition(req, res) {
     const syncChanged=syncTarget!==undefined&&(!sameFieldValue(syncTarget?.accountId,task.target_caldav_account_id)
       ||!sameFieldValue(syncTarget?.listUrl,task.target_caldav_list_url));
     const noOccurrenceChange=!definitionChanged&&status===task.status&&!(archiveRequested&&!task.archived_at)&&!syncChanged;
+    const scoringChildrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.some(child=>{
+      const old=currentChildren.find(row=>row.id===child.id);
+      return !old||child.points!==Number(old.points||0)||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,
+        db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id));
+    }));
+    const scoringChanged=scoringMode!==task.scoring_mode||points!==task.points||performersChanged||scoringChildrenChanged;
+    if(scoringChanged&&status!==task.status)throw new TaskStateError('Save scoring settings first, then change progress separately.',{reason:'scoring_progress_separate'});
     if(noOccurrenceChange&&editScope!=='future')
       return res.json({data:hydrateTask(task,req.authUserId||req.session.userId),unchanged:true});
     if(historical&&editScope!=='future'&&definitionChanged&&taskSeriesState(db.get(),task.id))
@@ -2175,6 +2391,17 @@ export function updateTaskDefinition(req, res) {
             updated_count:seriesEdit.updated.length,preserved_count:seriesEdit.preserved.length,current_preserved:true});
         updated=current;return;
       }
+      if(series&&editScope==='occurrence'&&scoringMode!==current.scoring_mode) {
+        const oldFuture=seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1);
+        if(!['whole_task','subtasks','legacy'].includes(oldFuture?.data.task.scoring_mode)) {
+          assertSeriesEdit(db.get(),req,current,series,req.body.expected_series_revision);
+          const enriched=effectiveSeriesScoringDefinition(db.get(),oldFuture).data;
+          assertSeriesDefinitionMutation(db.get(),req,current,oldFuture.data,enriched);
+          appendSeriesDefinition(db.get(),current.id,{expectedRevision:req.body.expected_series_revision,actorId:req.authUserId||req.session.userId,
+            definition:enriched,effectiveGeneration:series.occurrence.generation+1});
+        }
+      }
+      assertTaskScoringMutation(db.get(),current.id,scoringMutationWire(req.body,editedSubtasks),{scope:editScope});
       assertTaskWindowAction(db.get(),current.id);
       if(tripTaskState(db.get(),current.id)&&(is_recurring||desiredActivityBinding||rotationBindings.length))
         throw new TaskStateError('Trip work uses an ordinary one-off Task. Manage its schedule in Trips.',{},400);
@@ -2196,6 +2423,7 @@ export function updateTaskDefinition(req, res) {
              is_recurring ? 1 : 0, recurrence_rule, recurrence_from_completion ? 1 : 0,
              assignmentMode, rotationIndex, rotationGroup, rotationSlot || 0, rotationCycle,
              points, visibility, countdown ? 1 : 0, locked, start_time, expiration_policy, is_optional ? 1 : 0, dueDateOffset, req.params.id);
+      if(req.body.scoring_mode!==undefined)db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=0 WHERE id=?').run(scoringMode,current.id);
       applyEditedSubtasks({...task,start_date,start_time,due_date,due_time},editedSubtasks,req.authUserId||req.session.userId);
       if(rotationsChanged)db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(rotationBindingsJson,task.id);
       setAssignments(db.get(), task.id, userIds);
@@ -2321,7 +2549,7 @@ export function updateTaskDefinition(req, res) {
 
     if (pending || undone || syncTarget) pushToCalDAV('Änderung');
   } catch (err) {
-    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
+    if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...(err.reason?{reason:err.reason}:{}), ...err.details });
     if (err instanceof TaskActivityBindingError || err instanceof TaskLocationError || err instanceof TaskSkillError || err instanceof TaskAssignmentAvailabilityError) {
       return res.status(400).json({ error: err.message, code: 400 });
     }
@@ -2619,6 +2847,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
     );
     if(task.source_device_id||task.source_device_name) db.get().prepare('UPDATE tasks SET source_device_id=?,source_device_name=? WHERE id=?')
       .run(task.source_device_id??null,task.source_device_name??null,newTask.lastInsertRowid);
+    db.get().prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=? WHERE id=?')
+      .run(task.scoring_mode,Number(!!task.scoring_review_required),newTask.lastInsertRowid);
     registerRecurrenceOccurrence(db.get(),Number(newTask.lastInsertRowid),{predecessorId:task.id});
     db.get().prepare('UPDATE tasks SET rotation_bindings_json=? WHERE id=?').run(task.rotation_bindings_json||'[]',newTask.lastInsertRowid);
     setAssignments(db.get(), newTask.lastInsertRowid, followupAssignments);
@@ -2640,6 +2870,8 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
       const originId=priorAction?.id??(db.get().prepare('SELECT id FROM tasks WHERE id=?').get(savedSub.source_task_id??null)?.id??null);
       const checklistItemId=sub.activity_template_checklist_item_id
         && db.get().prepare('SELECT id FROM activity_template_checklist_items WHERE id=?').get(sub.activity_template_checklist_item_id)?.id||null;
+      const originalCreator=seriesActionAuthorization(db.get(),savedSub).created_by;
+      const creator=originalCreator==null?null:db.get().prepare('SELECT id FROM users WHERE id=?').get(originalCreator)?.id??null;
 
       const newSub = db.get().prepare(`
         INSERT INTO tasks (title, description, category, priority, status,
@@ -2650,7 +2882,7 @@ function spawnRecurrenceFollowupSingle(task, {expirationAnchor=false}={}) {
         sub.title, sub.description, sub.category, sub.priority,
         shiftedStartDate(sub.start_date, subAnchorDate, subNextAnchor) ?? sub.start_date,
         subDueDate,
-        sub.due_time, subAssignedTo, sourceTask.created_by, newTask.lastInsertRowid,
+        sub.due_time, subAssignedTo, creator, newTask.lastInsertRowid,
         sub.points, sub.visibility, originId, checklistItemId, sub.start_time, sub.expiration_policy || 'keep_overdue', sub.is_optional || 0,sub.sort_order||0,sub.locked||0
       );
       registerSeriesAction(db.get(),Number(newSub.lastInsertRowid),Number(newTask.lastInsertRowid),savedSub.action_key);
@@ -2870,7 +3102,7 @@ router.patch('/:id/status', (req,res) => {
     res.json({data:task});
     if(result.pending||result.undone)pushToCalDAV('Statuswechsel');
   } catch(err) {
-    if(err.status||err.code===409)return res.status(err.status||409).json({error:err.message,code:err.status||409,...err.details});
+    if(err.status||err.code===409)return res.status(err.status||409).json({error:err.message,code:err.status||409,...(err.reason?{reason:err.reason}:{}),...err.details});
     log.error('PATCH /:id/status error:',err);
     res.status(500).json({error:'Internal server error.',code:500});
   }
@@ -3438,7 +3670,7 @@ router.get('/points/affected', (req, res) => {
     if (!Number.isInteger(points) || points < 0 || points > MAX_POINTS) {
       return res.status(400).json({ error: `points must be an integer between 0 and ${MAX_POINTS}`, code: 400 });
     }
-    res.json({ data: { count: countRebasableTasks(points) } });
+    res.json({ data: { count: rebasableTasks(points,req).length } });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('GET /points/affected error:', err);
@@ -3459,6 +3691,7 @@ router.post('/points/rebase', (req, res) => {
     }
     const from = Number(req.body.from);
     const to   = Number(req.body.to);
+    validateScoringInput({points:req.body.from});validateScoringInput({points:req.body.to});
     const inRange = (n) => Number.isInteger(n) && n >= 0 && n <= MAX_POINTS;
     if (!inRange(from) || !inRange(to)) {
       return res.status(400).json({ error: `from and to must be integers between 0 and ${MAX_POINTS}`, code: 400 });
@@ -3470,12 +3703,12 @@ router.post('/points/rebase', (req, res) => {
     }
     if (from === to) return res.json({ data: { updated: 0 } });
 
-    const result = db.get().prepare(`
-      UPDATE tasks SET points = ?
-      WHERE points = ? AND parent_task_id IS NULL AND status != ?
-    `).run(to, from, REBASE_EXCLUDED_STATUS);
-
-    res.json({ data: { updated: result.changes } });
+    const updated=db.get().transaction(()=>{
+      const targets=rebasableTasks(from,req);
+      for(const task of targets){assertTaskScoringMutation(db.get(),task.id,{points:to});db.get().prepare('UPDATE tasks SET points=? WHERE id=?').run(to,task.id);}
+      return targets.length;
+    }).immediate();
+    res.json({ data: { updated } });
   } catch (err) {
     if (err.status && typeof res !== 'undefined') return res.status(err.status).json({ error: err.message, code: err.status, ...err.details });
     log.error('POST /points/rebase error:', err);

@@ -9,6 +9,7 @@ import { flushOutbound } from './caldav-todo-outbound.js';
 import { taskScopeWhere, taskStartProjection } from './task-scope.js';
 import {listTaskOffers,taskOfferState} from './task-offers.js';
 import { taskWindowAncestors } from './task-window.js';
+import { taskScoringSummary } from './task-scoring.js';
 
 const fail = (message, status=403) => {throw Object.assign(new Error(message),{status,code:status});};
 const pick = (value, keys) => Object.fromEntries(keys.filter(key=>value[key]!==undefined).map(key=>[key,value[key]]));
@@ -93,6 +94,9 @@ function project(d,principal,row,cache=new Map(),seen=new Set()) {
         selected_member:context.occurrence.selected_member?member(context.occurrence.selected_member):null}})) : [];
   const offer=taskOfferState(d,principal,row);
   out.is_offer=offer.visible;out.offer_reason=offer.reason;out.permissions.accept=offer.claimable;
+  const authorizedTaskIds=[row.id,...out.subtasks.map(child=>child.id)];
+  try {out.scoring=taskScoringSummary(d,row.id,{viewerId:null,authorizedTaskIds,includeHistoricalSettlements:!row.parent_task_id&&!principal.scope?.member_ids?.length});out.scoring_mode=out.scoring.mode;}
+  catch(error){if(error.status===404)out.scoring=null;else throw error;}
   return out;
 }
 export function deviceTaskList(d,principal,{query=null,withVisibility=false}={}) {
@@ -128,7 +132,7 @@ export function deviceTaskList(d,principal,{query=null,withVisibility=false}={})
   return withVisibility?{data,visibility:startProjection.metadata([...candidates,...projected],{includeFuture})}:data;
   });
 }
-export function deviceTaskDetail(d,principal,id) {return project(d,principal,requireTask(d,principal,id));}
+export function deviceTaskDetail(d,principal,id) {return withTaskReadSnapshot(d,null,()=>project(d,principal,requireTask(d,principal,id)));}
 export function deviceTaskStatus(d,principal,id,body={}) {
   const result=d.transaction(()=>{
     const task=requireTask(d,principal,id);

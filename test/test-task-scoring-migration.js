@@ -41,6 +41,32 @@ test('mode updates participate in Task and ancestor revisions',()=>{
 test('durable historic claims keep the mode locked after recipient ledger evidence disappeared',()=>{
  const root=task(0);d.prepare('INSERT INTO reward_task_awards(task_id,logical_key) VALUES(?,?)').run(root,JSON.stringify(['task',root]));upgrade();assert.equal(scoring.taskScoringSummary(d,root).mode_locked,true);
 });
+test('fix I2 parent claim conflicts with child-positive configuration and freezes no invented amount',()=>{
+ const root=task(0),child=task(4,root);d.prepare('INSERT INTO reward_task_awards(task_id,logical_key) VALUES(?,?)').run(root,JSON.stringify(['task',root]));
+ const claims=JSON.stringify(d.prepare('SELECT * FROM reward_task_awards').all());upgrade();
+ assert.equal(row(root).scoring_mode,'legacy');assert.equal(row(root).scoring_review_required,1);
+ const settlement=d.prepare('SELECT * FROM task_scoring_settlements WHERE task_id=?').get(root);assert.equal(settlement.points,null);assert.equal(settlement.earned_once,1);assert.deepEqual(JSON.parse(settlement.recipients_json),[]);
+ assert.equal(scoring.taskScoringSummary(d,root).mode_locked,true);assert.equal(JSON.stringify(d.prepare('SELECT * FROM reward_task_awards').all()),claims);assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_ledger').get().n,0);assert.equal(d.prepare('SELECT COUNT(*) n FROM task_scoring_settlements WHERE task_id=?').get(child).n,0);
+});
+test('fix I2 child claim conflicts with parent-positive configuration and preserves empty historical credit',()=>{
+ const root=task(9),child=task(0,root);d.prepare('INSERT INTO reward_task_awards(task_id,logical_key) VALUES(?,?)').run(child,JSON.stringify(['task',child]));upgrade();
+ assert.equal(row(root).scoring_mode,'legacy');assert.equal(row(root).scoring_review_required,1);assert.equal(d.prepare('SELECT points FROM task_scoring_settlements WHERE task_id=?').get(child).points,null);assert.deepEqual(scoring.taskScoringSummary(d,root).earned,[]);assert.equal(scoring.taskScoringSummary(d,root).mode_locked,true);
+});
+test('fix I2 claim without reconstructable ledger stays review-required even when current configured source agrees',()=>{
+ const root=task(7);d.prepare('INSERT INTO reward_task_awards(task_id,logical_key) VALUES(?,?)').run(root,JSON.stringify(['task',root]));const migration=upgrade();
+ assert.equal(row(root).scoring_mode,'legacy');assert.equal(row(root).scoring_review_required,1);assert.equal(d.prepare('SELECT points FROM task_scoring_settlements WHERE task_id=?').get(root).points,null);
+ const settlements=JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all());d.transaction(()=>migration.up(d))();assert.equal(JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all()),settlements);
+});
+test('fix I2 recipient deletion preserves claims and unknown amounts without guessing today\'s reward terms',()=>{
+ d.exec("INSERT INTO users(id,username,display_name,password_hash) VALUES(2,'Former member','Former member','x');INSERT INTO reward_participants(user_id,enabled) VALUES(2,1)");
+ const root=task(5,null,'done');d.prepare("INSERT INTO reward_ledger(user_id,delta,type,task_id,created_by,created_at) VALUES(2,5,'earn',?,1,'2024-01-02T03:04:05Z')").run(root);d.prepare("INSERT INTO reward_task_awards(task_id,logical_key,awarded_at) VALUES(?,?,'2024-01-02T03:04:05Z')").run(root,JSON.stringify(['task',root]));
+ d.prepare('UPDATE tasks SET points=0 WHERE id=?').run(root);task(4,root);d.prepare('DELETE FROM users WHERE id=2').run();
+ const ledger=JSON.stringify(d.prepare('SELECT * FROM reward_ledger').all()),claims=JSON.stringify(d.prepare('SELECT * FROM reward_task_awards').all());assert.equal(ledger,'[]');const migration=upgrade();
+ assert.equal(row(root).scoring_mode,'legacy');assert.equal(row(root).scoring_review_required,1);
+ const settlement=d.prepare('SELECT * FROM task_scoring_settlements WHERE task_id=?').get(root);assert.equal(settlement.points,null);assert.equal(settlement.outcome,'historical_claim');assert.equal(settlement.earned_once,1);assert.equal(settlement.settled_at,'2024-01-02T03:04:05Z');assert.deepEqual(JSON.parse(settlement.recipients_json),[]);
+ assert.equal(scoring.taskScoringSummary(d,root).mode_locked,true);assert.equal(awardForCompletion(d,root,1),false);d.transaction(()=>migration.up(d))();assert.equal(JSON.stringify(d.prepare('SELECT * FROM reward_ledger').all()),ledger);assert.equal(JSON.stringify(d.prepare('SELECT * FROM reward_task_awards').all()),claims);
+ assert.deepEqual(d.pragma('foreign_key_check'),[]);assert.equal(d.pragma('integrity_check',{simple:true}),'ok');
+});
 test('deleted recurring child claims retain their original occurrence root without rewriting detached ledger rows',()=>{
  const root=task(0),child=task(4,root,'done');d.prepare("UPDATE tasks SET is_recurring=1,due_date='2026-10-11' WHERE id=?").run(root);const provenance=rewardOccurrenceProvenance(d,child);
  d.prepare('INSERT INTO reward_task_awards(task_id,logical_key) VALUES(?,?)').run(child,provenance.logicalKey);d.prepare("INSERT INTO reward_ledger(user_id,delta,type,task_id) VALUES(1,4,'earn',?)").run(child);d.prepare('DELETE FROM tasks WHERE id=?').run(child);const before=JSON.stringify(d.prepare('SELECT * FROM reward_ledger').all());upgrade();

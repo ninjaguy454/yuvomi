@@ -33,8 +33,13 @@ export function addTaskScoringSchema(d){
     const container=!!d.prepare('SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(root.id);
     const nested=children.some(row=>row.parent_task_id!==root.id),parentPositive=root.points>0,childPositive=children.some(row=>row.points>0);
     let mode=parentPositive&&childPositive||nested||container?'legacy':childPositive?'subtasks':'whole_task';
-    const history=rows.flatMap(row=>d.prepare("SELECT task_id FROM reward_ledger WHERE task_id=? AND type='earn' AND delta>0").all(row.id));
-    if(history.some(row=>mode==='whole_task'&&row.task_id!==root.id||mode==='subtasks'&&row.task_id===root.id))mode='legacy';
+    const evidence=rows.map(row=>({task_id:row.id,
+      earns:d.prepare("SELECT task_id FROM reward_ledger WHERE task_id=? AND type='earn' AND delta>0").all(row.id),
+      claimed:!!d.prepare('SELECT 1 FROM reward_task_awards WHERE task_id=?').get(row.id)}));
+    // A durable claim proves an award source even after recipient deletion
+    // removes its ledger. Missing original terms require conservative review.
+    const history=evidence.filter(row=>row.claimed||row.earns.length);
+    if(evidence.some(row=>row.claimed&&!row.earns.length)||history.some(row=>mode==='whole_task'&&row.task_id!==root.id||mode==='subtasks'&&row.task_id===root.id))mode='legacy';
     d.prepare('UPDATE tasks SET scoring_mode=?,scoring_review_required=? WHERE id=?').run(mode,mode==='legacy'?1:0,root.id);
   }
   for(const task of tasks){
@@ -46,7 +51,7 @@ export function addTaskScoringSchema(d){
     if(!history.length&&!claim&&!completed)continue;
     const definition=taskRewardDefinition(d,task,{root}),amounts=[...new Set(history.map(row=>row.delta))];
     const settledAt=history[0]?.created_at||claim?.awarded_at||d.prepare('SELECT completed_at FROM task_completions WHERE task_id=? ORDER BY completed_at LIMIT 1').get(task.id)?.completed_at||task.updated_at||task.created_at;
-    recordTaskScoringSettlement(d,{...definition,points:history.length?(amounts.length===1?amounts[0]:null):task.points},claim?.logical_key||taskScoringIdentity(d,task.id),
+    recordTaskScoringSettlement(d,{...definition,points:history.length?(amounts.length===1?amounts[0]:null):claim?null:task.points},claim?.logical_key||taskScoringIdentity(d,task.id),
       {outcome:history.length?'earned':claim?'historical_claim':'historical_unrewarded',awardedRecipients:history.map(row=>({user_id:row.user_id,points:row.delta})),settledAt,earnedOnce:!!claim||history.some(row=>row.delta>0),claimKey:JSON.stringify(['history',task.id])});
   }
   // The ledger's old Task FK may already have detached a deleted work unit.

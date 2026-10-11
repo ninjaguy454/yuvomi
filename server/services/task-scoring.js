@@ -12,6 +12,12 @@ export function taskScoringAssignments(d,task){
   const ids=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(r=>r.user_id);
   return ids.length?ids:task.assigned_to?[task.assigned_to]:[];
 }
+function taskVisibilitySnapshot(d,task){
+  // Visibility follows the Task creator and actual assignment joins. Reward
+  // recipients may use scalar/inherited fallbacks that confer no read access.
+  return {visibility:task.visibility||'all',created_by:task.created_by,
+    assigned:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id)};
+}
 function workflowOwner(d,id){return table(d,'workflow_instance_tasks')&&!!d.prepare("SELECT 1 FROM workflow_instance_tasks WHERE task_id=? AND role='primary'").get(id);}
 function workflowContainer(d,id){return table(d,'workflow_instances')&&!!d.prepare('SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(id);}
 export function taskScoringProjection(d,id){
@@ -144,11 +150,15 @@ function proposedContext(d,ctx,taskId,proposed,{fresh=false,allowLegacy=false}={
   if(edited.id===root.id)root={...root,...edited,scoring_mode:root.scoring_mode,scoring_review_required:root.scoring_review_required};
   if(Object.hasOwn(proposed,'subtasks')){
     if(!Array.isArray(proposed.subtasks))throw new TaskScoringError('Subtasks must be an array.');
-    const children=rows.filter(row=>row.parent_task_id===edited.id),existing=new Map(children.map(row=>[row.id,row])),seen=new Set();
-    const next=proposed.subtasks.map((child,index)=>{
-      const given=child.id==null?null:Number(child.id),id=given==null||fresh&&!existing.has(given)?-(index+1):given;
-      if(given!=null&&(!fresh&&!existing.has(given)||seen.has(given)))throw new TaskScoringError('Review scoring within one original work scope.',409,'scoring_review_required');seen.add(given??id);
-      const row=existing.has(id)?{...existing.get(id)}:{...edited,id,parent_task_id:edited.id,points:0,status:'open',archived_at:null,assigned_to:null,_assigned:[]};
+    const children=rows.filter(row=>row.parent_task_id===edited.id),existing=new Map(children.map(row=>[row._template_id??row.id,row])),seen=new Set();
+    // Keep external future-template identity across both normalization passes.
+    // New transient work gets an unused ID and never borrows a positional row.
+    let transient=rows.reduce((lowest,row)=>Math.min(lowest,row.id),0)-1;
+    const next=proposed.subtasks.map(child=>{
+      const given=child.id==null?null:Number(child.id);
+      if(given!=null&&(!Number.isSafeInteger(given)||given<=0||!fresh&&!existing.has(given)||seen.has(given)))throw new TaskScoringError('Review scoring within one original work scope.',409,'scoring_review_required');
+      const prior=given==null?null:existing.get(given),id=prior?.id??transient--;seen.add(given??id);
+      const row=prior?{...prior}:{...edited,id,_template_id:given,parent_task_id:edited.id,points:0,status:'open',archived_at:null,assigned_to:null,_assigned:[]};
       if(Object.hasOwn(child,'points'))row.points=points(child.points);
       const value=child.assigned_user_ids??child.assigned_to;
       if(value!==undefined)row._assigned=assignmentIds(value);
@@ -201,7 +211,7 @@ export function recordTaskScoringSettlement(d,definition,logicalKey,{outcome=def
   if(claimKey==null){const release=d.prepare('SELECT settlement_id FROM task_scoring_settlement_releases WHERE logical_key=? ORDER BY settlement_id DESC LIMIT 1').get(logicalKey);claimKey=release?JSON.stringify(['replacement',logicalKey,release.settlement_id]):logicalKey;}
   return d.prepare(`INSERT OR IGNORE INTO task_scoring_settlements(logical_key,claim_key,task_id,root_task_id,root_logical_key,mode,points,recipients_json,outcome,settled_at,visibility_json,earned_once)
     VALUES(?,?,?,?,?,?,?,?,?,COALESCE(?,strftime('%Y-%m-%dT%H:%M:%fZ','now')),?,?)`).run(logicalKey,claimKey,task.id,root.id,taskScoringIdentity(d,root.id),mode,points,JSON.stringify(frozen),outcome,settledAt,
-      JSON.stringify({visibility:task.visibility||'all',created_by:task.created_by,assigned:taskScoringAssignments(d,task)}),earnedOnce?1:0);
+      JSON.stringify(taskVisibilitySnapshot(d,task)),earnedOnce?1:0);
 }
 export function assertTaskScoringAward(d,definition){
   if(definition.root.scoring_review_required&&definition.mode==='legacy'&&definition.points>0&&definition.outcome==='earned'&&!everEarned(scopeSettlements(d,definition.root)))throw new TaskScoringError('Review this legacy scoring definition before earning new points.',409,'scoring_review_required');

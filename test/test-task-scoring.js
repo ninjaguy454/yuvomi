@@ -173,6 +173,30 @@ test('root hydration may retain visible deleted settlements while leaf filters a
  const result=api('taskScoringSummary',d,root,{viewerId:2,authorizedTaskIds:[root,remaining],includeHistoricalSettlements:true});assert.deepEqual(result.earned,[{user_id:2,points:7}]);assert.equal(result.personal_total,10);assert.deepEqual(result.settled_task_ids,[deleted]);
  assert.deepEqual(api('taskScoringSummary',d,remaining,{viewerId:2,authorizedTaskIds:[remaining]}).earned,[]);
 });
+test('fix I1 deleted assignees work keeps scalar and inherited reward recipients separate from visibility',()=>{
+ for(const scalar of [true,false]){
+  const root=task(0,{mode:'subtasks',assigned:[2]}),child=task(7,{parent:root});
+  d.prepare("UPDATE tasks SET visibility='assignees',assigned_to=? WHERE id=?").run(scalar?2:null,child);complete(child);
+  const options={viewerId:2,authorizedTaskIds:[root],includeHistoricalSettlements:true};
+  assert.deepEqual(api('taskScoringSummary',d,root,options).earned,[]);
+  d.prepare('DELETE FROM tasks WHERE id=?').run(child);
+  const result=api('taskScoringSummary',d,root,options);
+  assert.equal(result.mode_locked,true);assert.deepEqual(result.earned,[]);assert.deepEqual(result.settled_task_ids,[]);assert.deepEqual(result.settlements,[]);
+  assert.deepEqual(api('taskScoringSummary',d,root,{...options,viewerId:1}).settled_task_ids,[child]);
+  assert.deepEqual(JSON.parse(d.prepare('SELECT visibility_json FROM task_scoring_settlements WHERE task_id=?').get(child).visibility_json).assigned,[]);
+ }
+});
+test('fix I1 deleted visibility snapshots retain actual joins and private creator access',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),joined=task(7,{parent:root,assigned:[3]}),privateChild=task(11,{parent:root,assigned:[3]});
+ d.prepare("UPDATE tasks SET visibility='assignees',assigned_to=2 WHERE id=?").run(joined);d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(privateChild);complete(joined);complete(privateChild);
+ d.prepare('DELETE FROM tasks WHERE id IN (?,?)').run(joined,privateChild);
+ const options={authorizedTaskIds:[root],includeHistoricalSettlements:true};
+ assert.deepEqual(api('taskScoringSummary',d,root,{...options,viewerId:3}).earned,[{user_id:3,points:7}]);
+ assert.deepEqual(api('taskScoringSummary',d,root,{...options,viewerId:3}).settled_task_ids,[joined]);
+ assert.deepEqual(api('taskScoringSummary',d,root,{...options,viewerId:2}).settlements,[]);
+ assert.deepEqual(api('taskScoringSummary',d,root,{...options,viewerId:1}).settled_task_ids,[joined,privateChild]);
+ assert.equal(api('taskScoringSummary',d,root,{...options,viewerId:2}).mode_locked,true);
+});
 test('root historical hydration retains archived visible earnings while archived private work remains hidden',()=>{
  const root=task(0,{mode:'subtasks',assigned:[2]}),archived=task(7,{parent:root}),hidden=task(11,{parent:root}),remaining=task(3,{parent:root});d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(hidden);complete(archived);complete(hidden);d.prepare("UPDATE tasks SET archived_at='2026-10-11T00:00:00Z' WHERE id IN (?,?)").run(archived,hidden);
  const result=api('taskScoringSummary',d,root,{viewerId:2,authorizedTaskIds:[root,remaining],includeHistoricalSettlements:true});assert.deepEqual(result.earned,[{user_id:2,points:7}]);assert.equal(result.personal_total,10);assert.deepEqual(result.settled_task_ids,[archived]);assert.deepEqual(api('taskScoringSummary',d,remaining,{viewerId:2,authorizedTaskIds:[remaining]}).earned,[]);
@@ -183,6 +207,43 @@ test('legacy previews apply proposed assignments to remaining legacy work',()=>{
 });
 test('new child preview includes inherited potential in a personal context',()=>{
  const root=task(0,{mode:'subtasks',assigned:[2]});assert.deepEqual(preview(root,{subtasks:[{title:'New',points:4}]},2).after,[{user_id:2,points:4}]);
+});
+function futureTemplate(root,proposed,beforeDefinition={scoring_mode:'subtasks',assigned_to:[2],subtasks:[{id:654,points:5,assigned_user_ids:[3]},{id:655,points:9,assigned_user_ids:[2]}]}){
+ return api('previewTaskScoring',d,root,proposed,{scope:'future_only',beforeDefinition});
+}
+test('fix I3 reordered partial future templates retain omitted points and recipients by external identity',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]});
+ const before=d.prepare('SELECT total_changes() n').get().n;
+ const result=futureTemplate(root,{subtasks:[{id:655,points:10},{id:654}]});
+ assert.equal(result.valid,true);assert.deepEqual(result.before,[{user_id:2,points:9},{user_id:3,points:5}]);assert.deepEqual(result.after,[{user_id:2,points:10},{user_id:3,points:5}]);
+ const reassigned=futureTemplate(root,{subtasks:[{id:655,assigned_to:[3]},{id:654,assigned_user_ids:[2]}]});
+ assert.equal(reassigned.valid,true);assert.deepEqual(reassigned.after,[{user_id:2,points:5},{user_id:3,points:9}]);
+ assert.equal(d.prepare('SELECT total_changes() n').get().n,before);
+});
+test('fix I3 new future units never copy omitted terms from an existing position',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]});
+ for(const fresh of [{id:876,points:7},{points:7}]){
+  const result=futureTemplate(root,{subtasks:[fresh,{id:654}]});
+  assert.equal(result.valid,true);assert.deepEqual(result.after,[{user_id:2,points:7},{user_id:3,points:5}]);
+ }
+ assert.deepEqual(futureTemplate(root,{subtasks:[{id:876},{id:655}]}).after,[{user_id:2,points:9}]);
+});
+test('fix I3 template add remove and readd forecasts use only the effective definition and stay pure',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]});
+ const original={scoring_mode:'subtasks',assigned_to:[2],subtasks:[{id:654,points:5,assigned_user_ids:[3]},{id:655,points:9,assigned_user_ids:[2]}]};
+ const removed={...original,subtasks:[{id:655,points:9,assigned_user_ids:[2]}]},added={...removed,subtasks:[{id:876,points:7,assigned_user_ids:[3]},...removed.subtasks]};
+ const frozen=JSON.stringify({original,removed,added}),changes=d.prepare('SELECT total_changes() n').get().n;
+ assert.deepEqual(futureTemplate(root,{subtasks:[{id:655}]},original).after,[{user_id:2,points:9}]);
+ assert.deepEqual(futureTemplate(root,{subtasks:added.subtasks},removed).after,[{user_id:2,points:9},{user_id:3,points:7}]);
+ assert.deepEqual(futureTemplate(root,{subtasks:[{id:655},{id:654,points:5,assigned_user_ids:[3]}]},added).after,[{user_id:2,points:9},{user_id:3,points:5}]);
+ assert.deepEqual(futureTemplate(root,{subtasks:[{id:654},{id:655}]},removed).after,[{user_id:2,points:9}]);
+ assert.equal(JSON.stringify({original,removed,added}),frozen);assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
+});
+test('fix I3 duplicate external template IDs reject both stored definitions and proposed drafts without writes',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),changes=d.prepare('SELECT total_changes() n').get().n;
+ const result=futureTemplate(root,{subtasks:[{id:654},{id:654,points:8}]});assert.equal(result.valid,false);assert.equal(result.warnings[0].reason,'scoring_review_required');
+ assert.throws(()=>futureTemplate(root,{}, {scoring_mode:'subtasks',subtasks:[{id:654,points:5},{id:654,points:9}]}),reason('scoring_review_required'));
+ assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
 });
 test('explicit fully linked correction appends one release and one replacement while original settlement stays immutable',()=>{
  const root=task(5,{mode:'whole_task',assigned:[2]});d.prepare("UPDATE tasks SET is_recurring=1,due_date='2026-10-11' WHERE id=?").run(root);complete(root);const original=JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all());

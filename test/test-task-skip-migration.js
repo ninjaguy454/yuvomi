@@ -33,6 +33,7 @@ test('encrypted 10053 upgrade preserves Task rows, references, triggers, indexes
     d.close();d=null;
     assert.notEqual(readFileSync(databasePath).subarray(0,16).toString(),'SQLite format 3\0');
     const boot=()=>{const r=spawnSync(process.execPath,['--input-type=module','-e',"const db=await import('./server/db.js'); console.log('SCHEMA',db.currentVersion());db.get().close();"],{cwd:new URL('..',import.meta.url),encoding:'utf8',timeout:60000,env:{...process.env,LOG_LEVEL:'info',DB_PATH:databasePath,DB_ENCRYPTION_KEY:key,NODE_ENV:'test'}});assert.equal(r.status,0,r.stdout+r.stderr);return r.stdout+r.stderr;};
+    // Every appended migration runs once; preserve Skip as the first upgrade.
     const expectedUpgrade=ALL_MIGRATIONS.filter(m=>m.version>10053).map(m=>m.version);
     assert.equal(expectedUpgrade[0],10054,'Skip remains the first upgrade from 10053');
     assert.deepEqual([...boot().matchAll(/Migration (\d+) applied:/g)].map(m=>Number(m[1])),expectedUpgrade);

@@ -5,7 +5,7 @@ import * as db from '../db.js';
 import { isPasswordLoginEnabled } from '../auth.js';
 import { verifyPassword } from '../utils/password.js';
 import * as twoFactor from '../services/two-factor.js';
-import { hydrateTask } from './tasks.js';
+import { hydrateTask,authorizedScoringHistoryIds } from './tasks.js';
 import { assertTaskMutation,withTaskReadSnapshot } from '../services/task-access.js';
 import { taskScoringSummary } from '../services/task-scoring.js';
 import { actionableSubtasks, assertTaskRevision, changeTaskStatus } from '../services/task-lifecycle.js';
@@ -83,7 +83,7 @@ router.post('/identify',identifyLimit,guarded(async(req,res)=>{
 router.post('/forget',guarded((req,res)=>{forgetWallActor(actorToken(req));res.json({data:{forgotten:true}});}));
 router.get('/dashboard',guarded((req,res)=>res.json({data:withTaskReadSnapshot(db.get(),host(req),()=>{
   const data=wallDashboard(db.get(),host(req),hydrateTask);
-  data.urgentTasks=data.urgentTasks.map(task=>sharedScoring(task));return data;
+  data.urgentTasks=data.urgentTasks.map(task=>sharedScoring(task,host(req)));return data;
 })})));
 router.get('/weather',guarded((req,res,next)=>{
   assertWallModule(db.get(),host(req),'weather');
@@ -101,12 +101,14 @@ function taskFor(req,userId=null) {
 function projectedTask(req,id,userId=null) {
   return withTaskReadSnapshot(db.get(),userId||host(req),()=>{
     const row=wallTaskVisible(db.get(),id,host(req),userId);
-    return row?sharedScoring(publicTaskProjection(db.get(),hydrateTask(row,userId||host(req)),host(req),userId),userId):null;
+    return row?sharedScoring(publicTaskProjection(db.get(),hydrateTask(row,userId||host(req)),host(req),userId),host(req),userId):null;
   });
 }
-function sharedScoring(task,viewerId=null) {
-  task.subtasks=(task.subtasks||[]).map(child=>sharedScoring(child,viewerId));
-  try {task.scoring=taskScoringSummary(db.get(),task.id,{viewerId:null,authorizedTaskIds:[task.id,...task.subtasks.map(child=>child.id)],includeHistoricalSettlements:!task.parent_task_id});
+function sharedScoring(task,hostId,viewerId=null) {
+  task.subtasks=(task.subtasks||[]).map(child=>sharedScoring(child,hostId,viewerId));
+  try {const live=[task.id,...task.subtasks.map(child=>child.id)];
+    const allowed=authorizedScoringHistoryIds(task,viewerId?[hostId,viewerId]:hostId,live,{publicOnly:true});
+    task.scoring=taskScoringSummary(db.get(),task.id,{viewerId:null,authorizedTaskIds:allowed});
     if(viewerId)task.scoring.personal_total=[...task.scoring.earned,...task.scoring.potential].filter(row=>row.user_id===viewerId).reduce((sum,row)=>sum+row.points,0);
     task.scoring_mode=task.scoring.mode;}
   catch(error){if(error.status===404)task.scoring=null;else throw error;}

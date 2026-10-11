@@ -39,7 +39,7 @@ async function call(method,path='',body){
   return {status:response.status,...await response.json()};
 }
 async function fixture(extra={}){
-  const result=await call('POST','',{title:'Routine A',assigned_to:[child,other],points:5,is_recurring:true,
+  const result=await call('POST','',{title:'Routine A',assigned_to:[child,other],points:5,scoring_mode:'subtasks',is_recurring:true,
     recurrence_from_completion:true,recurrence_rule:'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR',
     start_date:'2026-10-06',start_time:'06:00',due_date:'2026-10-06',due_time:'07:20',expiration_policy:'keep_overdue',
     subtasks:[{title:'Action A',points:2},{title:'Action B',points:3}],...extra});

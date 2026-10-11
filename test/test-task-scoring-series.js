@@ -50,7 +50,7 @@ test('old policy bootstrap requires series CAS/authority and rolls back after se
  const s=taskSeriesState(f.d,r.data.id),old=structuredClone(s.definition.data);delete old.task.scoring_mode;delete old.task.scoring_review_required;
  f.d.prepare('UPDATE task_recurrence_definitions SET definition_json=? WHERE id=?').run(JSON.stringify(old),s.definition.id);
  let before=f.snapshot();assert.equal((await f.edit(r.data.id,{scoring_mode:'subtasks',expected_series_revision:undefined})).status,428);assert.equal(f.snapshot(),before);
- f.grant('change_dates','none');assert.equal((await f.edit(r.data.id,{scoring_mode:'subtasks'},2)).status,403);assert.equal(f.snapshot(),before);
+ f.grant('change_dates','none');before=f.snapshot();assert.equal((await f.edit(r.data.id,{scoring_mode:'subtasks'},2)).status,403);assert.equal(f.snapshot(),before);
  await f.finish(r.data.id);await f.call('PATCH','/tasks/'+r.data.id+'/status',{status:'open',reset_progress:true});before=f.snapshot();
  const failed=await f.edit(r.data.id,{scoring_mode:'subtasks'});assert.equal(failed.status,409);assert.equal(failed.reason,'scoring_mode_locked');assert.equal(f.snapshot(),before);
 });

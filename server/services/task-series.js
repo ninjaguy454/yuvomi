@@ -1,7 +1,7 @@
 /** Authoritative recurring definitions. No database singleton or lifecycle
  * imports: migration and explicit writes share these helpers; reads never
  * bootstrap or advance an occurrence. */
-import { backfillRecurrenceProvenance, registerRecurrenceOccurrence, registerRecurrenceAction } from './task-recurrence-frontier.js';
+import { backfillRecurrenceProvenance, registerRecurrenceOccurrence, registerRecurrenceAction,peekRewardOccurrenceProvenance } from './task-recurrence-frontier.js';
 import { addCalendarDays } from './activity-schedule.js';
 import { nextDueAfterCompletion, nextDueAfterExpiration, nextOccurrenceAfter, parseRRule } from './recurrence.js';
 import { captureTaskActivityBindingDefinition } from './task-activity-snapshot.js';
@@ -162,7 +162,7 @@ function extras(d,id) {
 
 /** Captures definition only: no status, progress, points receipts, comments or
  * documents. Archived removed actions remain historical rows, not new work. */
-export function captureSeriesDefinition(d,taskId) {
+export function captureSeriesDefinition(d,taskId,{registerActions=true}={}) {
   const root=d.prepare('SELECT * FROM tasks WHERE id=? AND parent_task_id IS NULL').get(taskId);
   if(!root)throw new Error('Choose a top-level recurring Task.');
   const children=d.prepare(`SELECT t.* FROM tasks t WHERE t.parent_task_id=? AND t.archived_at IS NULL
@@ -178,7 +178,8 @@ export function captureSeriesDefinition(d,taskId) {
     rotation_rendering:captureTaskRotationRendering(d,root,binding,children),
     location:location?Object.fromEntries(Object.entries(location).filter(([key])=>!['task_id','created_at','updated_at','created_by'].includes(key))):null,
     planning:planning||null,
-    subtasks:children.map(child=>({action_key:registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`,
+    subtasks:children.map(child=>({action_key:registerActions?registerRecurrenceAction(d,child.id)?.action_key||`action:${child.id}`
+      : (()=>{const identity=JSON.parse(peekRewardOccurrenceProvenance(d,child.id).logicalKey);return identity[0]==='recurrence'?identity[3]:`action:${child.id}`;})(),
       source_task_id:child.id,task:selectedTask(child),...extras(d,child.id),authorization:seriesActionAuthorization(d,{source_task_id:child.id})})),
   };
 }

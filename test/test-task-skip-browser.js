@@ -63,7 +63,7 @@ async function run(){
   const row=id=>d.prepare('SELECT * FROM tasks WHERE id=?').get(id);
   try {
     const desktop=await client(1366),mobile=await client(390),observer=await client(1366);
-    const task=(await api(desktop,'post','/tasks',{title:'Synthetic shared daily routine',assigned_to:[child,other],points:5,
+    const task=(await api(desktop,'post','/tasks',{title:'Synthetic shared daily routine',assigned_to:[child,other],points:5,scoring_mode:'subtasks',
       is_recurring:true,recurrence_from_completion:process.env.TASK_SKIP_QA_MODE==='completion-relative',recurrence_rule:'FREQ=DAILY',start_date:'2026-11-01',start_time:'07:00',due_date:'2026-11-01',due_time:'08:00',
       expiration_policy:'expire_incomplete',subtasks:[{title:'Saved first step',points:2},{title:'Remaining step',points:3}]})).data;
     await open(observer,task.id);await open(mobile,task.id);

@@ -229,14 +229,16 @@ function attachScoring(task,viewerId,authorizedTaskIds,includeHistoricalSettleme
   } catch(error) {if(error.status!==404)throw error;task.scoring=null;}
   return task;
 }
-function authorizedScoringHistoryIds(task,viewerId,ids) {
+export function authorizedScoringHistoryIds(task,viewerId,ids,{publicOnly=false}={}) {
   if(taskScoringRoot(db.get(),task.id)?.id!==task.id)return ids;
   const allowed=new Set(ids);
   for(const settlement of db.get().prepare('SELECT task_id,visibility_json FROM task_scoring_settlements WHERE root_task_id=? OR root_logical_key=?').all(task.id,taskScoringIdentity(db.get(),task.id))) {
     const extant=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(settlement.task_id);
     const snapshot=JSON.parse(settlement.visibility_json);
     const historical=extant||{visibility:snapshot.visibility,created_by:snapshot.created_by,assigned_to:snapshot.assigned};
-    if(taskCapabilities(db.get(),viewerId,historical).view)allowed.add(settlement.task_id);
+    const actors=Array.isArray(viewerId)?viewerId:[viewerId];
+    const publicVisible=!publicOnly||(historical.visibility==='all'&&(!extant||taskWindowAncestors(db.get(),extant.id).every(row=>!row.visibility||row.visibility==='all')));
+    if(publicVisible&&actors.every(actor=>taskCapabilities(db.get(),actor,historical).view))allowed.add(settlement.task_id);
   }
   return [...allowed];
 }
@@ -274,7 +276,7 @@ function futureEditContext(req,task) {
   const definition=proposedFutureSeriesDefinition(db.get(),req,task,before,req.body.future_patch??{}, {validateFields});
   if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
   assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
-  const error=validateTaskWindow(definition.task);if(error)throw new TaskStateError(error,{},400);
+  validateFutureDefinitionWindows(req,task,definition);
   return {state,stored,before,definition};
 }
 function futureScoringWires(req,task,before,after) {
@@ -289,6 +291,151 @@ function futureScoringWires(req,task,before,after) {
 function futureReviewRequired(definition) {
   return definition.task.scoring_mode==='legacy'&&!!definition.task.scoring_review_required
     &&[definition.task,...definition.subtasks.map(a=>a.task)].some(row=>row.points>0);
+}
+function scoringAssignmentIntent(task,body) {
+  const assigned=db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(row=>row.user_id);
+  const binding=parseTaskActivityBinding(body,getTaskActivityBinding(db.get(),task.id));
+  if(binding.error)throw new TaskStateError(binding.error,{},400);
+  if(binding.binding)return {assigned,changed:false};
+  const mode=body.assignment_mode??task.assignment_mode??'fixed';
+  let next=body.assigned_to===undefined?assigned:parseAssignedTo(body.assigned_to);
+  if(mode==='round_robin') {
+    const rotation=body.rotation_user_ids===undefined?loadRotationUserIds(db.get(),task.id):parseRotationUserIds(body.rotation_user_ids);
+    const group=normalizeRotationGroup(body.rotation_group??task.rotation_group);
+    const slot=group?body.rotation_slot===undefined?Number(task.rotation_slot||0):parseRotationSlot(body.rotation_slot):0;
+    const position=rotation.indexOf(Number(task.assigned_to));
+    const index=group?currentRotationGroupState(db.get(),group,task.rotation_group?task.id:null).rotationIndex
+      :task.assignment_mode==='round_robin'&&position>=0?position:0;
+    next=[rotation[(index+slot)%rotation.length]];
+  }
+  const primary=body.assigned_to===undefined&&mode==='fixed'?task.assigned_to:next[0]??null;
+  return {assigned:next,changed:!sameIdOrder(next,assigned)||primary!==task.assigned_to};
+}
+function assertScoringProgressIntent(task,body,edited,{performersChanged=scoringAssignmentIntent(task,body).changed}={}) {
+  const status=body.status===undefined||body.status===ARCHIVE_STATUS?task.status:body.status;
+  const children=edited?ordinaryActivitySubtasks(db.get(),task.id).filter(row=>!row.archived_at):[];
+  const changed=body.scoring_mode!==undefined&&body.scoring_mode!==task.scoring_mode
+    ||body.points!==undefined&&Number(body.points)!==task.points
+    ||performersChanged
+    ||edited&&(edited.remove.length||edited.next.some(child=>{
+      const old=children.find(row=>row.id===child.id);
+      return !old||child.points!==Number(old.points||0)||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,
+        db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(child.id).map(row=>row.user_id));
+    }));
+  if(changed&&status!==task.status)throw new TaskStateError('Save scoring settings first, then change progress separately.',{reason:'scoring_progress_separate'});
+}
+function finalizeFutureActionKeys(definition) {
+  const created=[];
+  for(const action of definition.subtasks)if(action.action_key.startsWith('new:')) {
+    const client_key=action.action_key.slice(4);action.action_key=`series-action:${randomUUID()}`;
+    created.push({client_key,action_key:action.action_key});
+  }
+  return created;
+}
+function assertCompatibleFutureDefinition(req,task,series,definition) {
+  const before=effectiveSeriesScoringDefinition(db.get(),seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)).data;
+  assertSeriesDefinitionMutation(db.get(),req,task,before,definition,{futureOnly:true});
+  if(!futureRootCapabilities(db.get(),req,task,definition).view)throw new TaskStateError('This future definition is unavailable.',{},404);
+  validateFutureDefinitionWindows(req,task,definition);
+  if(futureReviewRequired(definition))throw new TaskStateError('Choose a scoring mode for future work before saving.',{reason:'scoring_review_required'});
+  return before;
+}
+/** Pure full-body compatibility proposal; the historical save and preview share
+ * this intent rather than forecasting settled selected work. */
+function compatibleFutureDefinition(req,task,series,before,edited,{normalizeSchedule=true}={}) {
+  const body=req.body,fields={...before.task};
+  for(const key of ['title','description','category','priority','start_date','start_time','due_date','due_time','is_recurring','recurrence_rule',
+    'recurrence_from_completion','points','scoring_mode','visibility','countdown','locked','expiration_policy','is_optional'])if(body[key]!==undefined)fields[key]=body[key];
+  if(typeof fields.title!=='string'||!fields.title.trim())throw new TaskStateError('Give the Task a title.',{},400);
+  fields.title=fields.title.trim();fields.points=Number(fields.points);
+  for(const key of ['is_recurring','recurrence_from_completion','is_optional','countdown','locked'])fields[key]=Number(!!fields[key]);
+  fields.scoring_review_required=body.scoring_mode===undefined?task.scoring_review_required:0;
+  fields.visibility=body.visibility===undefined?task.visibility:normalizeVisibility(body.visibility,task.visibility);
+  fields.due_date_offset_days=task.due_date_offset_days==null&&calendarDayOffset(fields.start_date,fields.due_date)===calendarDayOffset(task.start_date,task.due_date)
+    ?null:calendarDayOffset(fields.start_date,fields.due_date);
+  fields.rotation_bindings_json=body.rotation_bindings===undefined?task.rotation_bindings_json:JSON.stringify(normalizeRotationBindings(db.get(),body.rotation_bindings));
+  const existing=getTaskActivityBinding(db.get(),task.id),request=parseTaskActivityBinding(body,existing);
+  if(request.error)throw new TaskStateError(request.error,{},400);
+  const desired=request.binding,skills=taskSkillInput(body,task.id,desired?.activityTemplateId);
+  let binding=null;
+  if(desired)binding={activity_template_id:desired.activityTemplateId,subject_user_id:desired.subjectUserId,
+    assignment_override_user_id:desired.assignmentOverrideUserId,snapshot:before.binding?.activity_template_id===desired.activityTemplateId
+      ?structuredClone(before.binding.snapshot):captureActivityTemplateDefinition(db.get(),desired.activityTemplateId)};
+  if(desired&&!sameTaskActivityBinding(desired,existing)) {
+    if(task.rotation_group)throw new TaskStateError('Remove this task from its rotation group before attaching an Activity Template.',{},409);
+    const error=validateTaskActivityBindingRequest(desired,fields.due_date||todayInHouseholdZone(),{
+      task:fields,activitySnapshot:existing?.activity_template_id===desired.activityTemplateId?{...readTaskActivityDefinition(db.get(),task.id),required_skill_ids:skills}:null});
+    if(error)throw new TaskStateError(error,{},400);
+  }
+  fields.assignment_mode=desired?'fixed':body.assignment_mode??task.assignment_mode??'fixed';
+  const rotation=desired?[]:body.rotation_user_ids===undefined?before.rotation_user_ids:parseRotationUserIds(body.rotation_user_ids);
+  fields.rotation_group=fields.assignment_mode==='round_robin'?normalizeRotationGroup(body.rotation_group??task.rotation_group):null;
+  fields.rotation_slot=fields.rotation_group?body.rotation_slot===undefined?Number(task.rotation_slot||0):parseRotationSlot(body.rotation_slot):0;
+  const error=roundRobinConfigError(db.get(),{assignmentMode:fields.assignment_mode,isRecurring:!!fields.is_recurring,
+    recurrenceRule:fields.recurrence_rule,parentTaskId:task.parent_task_id,rotationUserIds:rotation});
+  if(error)throw new TaskStateError(error,{},400);
+  if(task.rotation_group&&fields.rotation_group&&task.rotation_group.localeCompare(fields.rotation_group,undefined,{sensitivity:'accent'})!==0)
+    throw new TaskStateError('Move a grouped task by removing it from the group first.',{},400);
+  const group=currentRotationGroupState(db.get(),fields.rotation_group,task.rotation_group?task.id:null);
+  const groupError=rotationGroupConfigError(db.get(),{taskId:task.rotation_group?task.id:null,
+    joining:!!fields.rotation_group&&!task.rotation_group,assignmentMode:fields.assignment_mode,
+    rotationGroup:fields.rotation_group,rotationSlot:fields.rotation_slot,rotationUserIds:rotation,
+    recurrenceRule:fields.recurrence_rule,recurrenceFromCompletion:fields.recurrence_from_completion,
+    dueDate:fields.due_date,dueTime:fields.due_time,startDate:fields.start_date,dueDateOffset:fields.due_date_offset_days});
+  if(groupError)throw new TaskStateError(groupError,{},400);
+  if(task.rotation_group&&Number(task.rotation_slot||0)!==fields.rotation_slot&&group.peers.some(peer=>peer.status!=='open'))
+    throw new TaskStateError('Cannot change a rotation-group position after its current cycle has started.',{},409);
+  const previous=db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=?').all(task.id).map(row=>row.user_id);
+  let assigned=desired?previous:body.assigned_to===undefined?previous:parseAssignedTo(body.assigned_to);
+  if(fields.assignment_mode==='round_robin') {
+    const position=rotation.indexOf(Number(task.assigned_to));
+    const index=fields.rotation_group?group.rotationIndex:task.assignment_mode==='round_robin'&&position>=0?position:0;
+    assigned=[rotation[(index+fields.rotation_slot)%rotation.length]];
+  }
+  const primary=body.assigned_to===undefined&&fields.assignment_mode==='fixed'?task.assigned_to:assigned[0];
+  assigned=primary?[primary,...assigned.filter(id=>id!==primary)]:assigned;
+  const location=body.location===undefined?undefined:normalizeTaskLocation(db.get(),body.location);
+  const proposed=proposedSeriesDefinition(before,{fields,editedSubtasks:edited,assigned,rotation,skills,
+    tags:body.tags===undefined?undefined:normalizeTags(body.tags),binding,
+    location:location===undefined?undefined:location?{kind:location.kind,place_id:location.placeId??null,
+      external_provider:location.provider??null,external_place_id:location.externalPlaceId??null,user_label:location.userLabel??null,
+      manual_address:location.manualAddress??null,latitude:location.latitude??null,longitude:location.longitude??null}:null,
+    authorId:req.authUserId||req.session.userId,assignmentExplicit:body.assigned_to!==undefined&&!desired});
+  return normalizeSchedule?normalizeSeriesSchedule(proposed,series.occurrence):proposed;
+}
+function compatiblePreviewNoop(task,body,series,current,proposed) {
+  const status=body.status===undefined||body.status===ARCHIVE_STATUS?task.status:body.status;
+  return status===task.status&&!(body.status===ARCHIVE_STATUS&&!task.archived_at)
+    &&body.sync_target===undefined
+    &&['start_date','due_date'].every(key=>sameFieldValue(current.task[key],proposed.task[key]))
+    &&definitionEqual(current,proposed)&&definitionEqual(series.definition.data,current);
+}
+function validateFutureDefinitionWindows(req,task,definition) {
+  for(const [index,row] of [definition.task,...definition.subtasks.map(action=>action.task)].entries()) {
+    const error=validateTaskWindow(row);
+    if(error)throw new TaskStateError(index&& !futureActionCapabilities(db.get(),req,task,definition.subtasks[index-1]).view
+      ? 'The future definition has an invalid schedule. Review it with its creator.' : error,{},400);
+  }
+}
+function previewFutureDefinitions(req,task,before,definition,{viewerId,authorizedTaskIds,scope='future_only'}) {
+  const wires=futureScoringWires(req,task,before,definition),proposal={...wires.after};
+  if(proposal.scoring_mode==='legacy')delete proposal.scoring_mode;
+  const preview=previewTaskScoring(db.get(),task.id,proposal,{scope:'future_only',viewerId,beforeDefinition:wires.before,
+    authorizedTaskIds,authorizedTemplateIds:[...wires.ids.values()],includeUnits:true});
+  const metadata=(value,actions)=>new Map([['root',value.task],...actions.map(action=>[action.action_key,action.task])]);
+  decorateScoringUnits(preview,metadata(before,wires.old),metadata(definition,wires.next),{futureIds:new Map([...wires.ids].map(([key,id])=>[id,key]))});
+  preview.scope=scope;preview.review_required=!!definition.task.scoring_review_required;
+  if(futureReviewRequired(definition)){preview.valid=false;preview.warnings=[{reason:'scoring_review_required',message:'Choose a scoring mode for future work.'}];}
+  return preview;
+}
+function decorateScoringSettlements(preview,actor) {
+  if(!preview.settlements)return;
+  preview.settlements=preview.settlements.map(settlement=>{
+    const task=db.get().prepare('SELECT * FROM tasks WHERE id=?').get(settlement.task_id);
+    const frozen=db.get().prepare('SELECT logical_key FROM task_scoring_settlements WHERE id=?').get(settlement.settlement_id);
+    const matching=task&&frozen?.logical_key===taskScoringIdentity(db.get(),task.id)&&taskCapabilities(db.get(),actor,task).view;
+    return {...settlement,title:matching?task.title:task?'Historical work':'Removed work',...(matching?{is_optional:!!task.is_optional}:{})};
+  });
 }
 function decorateScoringUnits(preview,before,after,{futureIds=null,drafts=[]}={}) {
   const decorate=(units,metadata)=>units?.map(unit=>{
@@ -327,10 +474,7 @@ function saveFutureTaskDefinition(req,res,task) {
       ...(['whole_task','subtasks'].includes(definition.task.scoring_mode)?{scoring_mode:definition.task.scoring_mode}:{})};
     assertTaskScoringMutation(db.get(),current.id,full,{scope:'future_only'});
     // UUID allocation is confined to this authorized save transaction.
-    const createdActions=[];
-    for(const action of definition.subtasks)if(action.action_key.startsWith('new:')){
-      const client_key=action.action_key.slice(4);action.action_key=`series-action:${randomUUID()}`;createdActions.push({client_key,action_key:action.action_key});
-    }
+    const createdActions=finalizeFutureActionKeys(definition);
     const revised=appendSeriesDefinition(db.get(),current.id,{expectedRevision:req.body.expected_series_revision,
       actorId:req.authUserId||req.session.userId,definition,effectiveGeneration:state.occurrence.generation+1});
     unchanged=!revised.changed;
@@ -559,8 +703,12 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
   if(task.parent_task_id)throw new TaskSkillError('Edit subtasks on the original Task.');
   const normalized=initialSubtasksInput(body,{preserveProvenance:true,allowAssignments:parseRotationBindings(body.rotation_bindings).length>0 || parseRotationBindings(task.rotation_bindings_json).length>0});
   const existing=ordinaryActivitySubtasks(db.get(),task.id).filter(child=>!child.archived_at);
-  const seen=new Set();
+  const seen=new Set(),draftKeys=new Set();
   const next=normalized.map((item,index)=>{
+    const clientKey=body.subtasks[index].client_key;
+    if(clientKey!==undefined&&(typeof clientKey!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(clientKey)||draftKeys.has(clientKey)))
+      throw new TaskSkillError('Choose a unique valid draft work key.');
+    if(clientKey!==undefined)draftKeys.add(clientKey);
     let id=body.subtasks[index].id;
     // Idempotent retry from an older create form without child IDs.
     if(id==null && normalized.length===existing.length
@@ -584,7 +732,7 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
       if(task.status==='done'&&!definitionOnly)throw new TaskStateError('Reopen the completed parent Task before adding checklist steps.',{reason:'optional_parent_completed'});
       assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,points:item.points,skill_ids:item.skillIds,is_optional:item.isOptional,...(item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers})},{operation:'create'});
     }
-    return {...item,points:item.points ?? 0,isOptional:item.isOptional ?? 0,id};
+    return {...item,points:item.points ?? 0,isOptional:item.isOptional ?? 0,id,clientKey};
   });
   for(const child of existing.filter(row=>!seen.has(row.id)))
     assertTaskMutation(db.get(),actor,child,{}, {operation:'delete'});
@@ -1999,19 +2147,32 @@ router.post('/:id/scoring-preview',(req,res)=>{
       const viewerId=req.authUserId||req.session.userId,hydrated=hydrateTask(task,viewerId),authorizedTaskIds=authorizedScoringHistoryIds(task,viewerId,[task.id,...hydrated.subtasks.filter(row=>!row.is_supervision_projection).map(row=>row.id)]);
       let preview;
       if(scope==='future_only') {
-        const {state,before,definition}=futureEditContext(req,task),wires=futureScoringWires(req,task,before,definition);
-        const proposal={...wires.after};if(proposal.scoring_mode==='legacy')delete proposal.scoring_mode;
-        preview=previewTaskScoring(db.get(),task.id,proposal,{scope,viewerId,beforeDefinition:wires.before,authorizedTaskIds,authorizedTemplateIds:[...wires.ids.values()],includeUnits:true});
-        const metadata=(definition,actions)=>new Map([['root',definition.task],...actions.map(action=>[action.action_key,action.task])]);
-        decorateScoringUnits(preview,metadata(before,wires.old),metadata(definition,wires.next),{futureIds:new Map([...wires.ids].map(([key,id])=>[id,key]))});
-        preview.review_required=!!definition.task.scoring_review_required;
-        if(futureReviewRequired(definition)){preview.valid=false;preview.warnings=[{reason:'scoring_review_required',message:'Choose a scoring mode for future work.'}];}
+        const {state,before,definition}=futureEditContext(req,task);
+        preview=previewFutureDefinitions(req,task,before,definition,{scope,viewerId,authorizedTaskIds});
         if(req.body.include_edit_definition)preview.edit_definition=futureEditProjection(req,task,before,state);
       } else {
         const errors=validateTaskInput(req.body,false,task.recurrence_rule);if(errors.length)throw new TaskStateError(errors.join(' '),{},400);
         assertTaskMutation(db.get(),req,task,req.body,{operation:'update'});
-        if(scope==='future')assertSeriesEdit(db.get(),req,task,taskSeriesState(db.get(),task.id),req.body.expected_series_revision);
-        const edited=editedSubtasksInput(task,req.body,req),wire=scoringMutationWire(req.body,edited);
+        const historical=scope==='future'&&(!!task.archived_at||['done','expired','skipped'].includes(task.status));
+        const series=scope==='future'?taskSeriesState(db.get(),task.id):null;
+        if(series)assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
+        else if(scope==='future')assertSeriesEdit(db.get(),req,task,series,req.body.expected_series_revision);
+        const edited=editedSubtasksInput(task,req.body,req,{definitionOnly:historical});
+        assertScoringProgressIntent(task,req.body,edited);
+        let proposed;
+        if(series){
+          const currentDefinition=captureSeriesDefinition(db.get(),task.id,{registerActions:false});
+          const intent=compatibleFutureDefinition(req,task,series,currentDefinition,edited,{normalizeSchedule:false});
+          proposed=compatiblePreviewNoop(task,req.body,series,currentDefinition,intent)
+            ?effectiveSeriesScoringDefinition(db.get(),seriesDefinitionForGeneration(db.get(),series.series_id,series.occurrence.generation+1)).data
+            :normalizeSeriesSchedule(intent,series.occurrence);
+          const before=assertCompatibleFutureDefinition(req,task,series,proposed);
+          if(historical)preview=previewFutureDefinitions(req,task,before,proposed,{scope,viewerId,authorizedTaskIds});
+        }
+        if(!historical){
+        const wire=scoringMutationWire(req.body,edited);
+        const assignment=scoringAssignmentIntent(task,req.body);
+        if(assignment.changed)wire.assigned_to=assignment.assigned;
         preview=previewTaskScoring(db.get(),task.id,wire,{scope,viewerId,authorizedTaskIds,includeUnits:true});
         const rows=taskScoringRows(db.get(),taskScoringRoot(db.get(),task.id)).filter(row=>authorizedTaskIds.includes(row.id));
         const before=new Map(rows.map(row=>[row.id,row])),after=new Map(before);
@@ -2021,10 +2182,12 @@ router.post('/:id/scoring-preview',(req,res)=>{
           if(key!==undefined&&(typeof key!=='string'||!/^[A-Za-z0-9_-]{1,80}$/.test(key)))throw new TaskStateError('Choose a valid draft work key.',{},400);
           return {title:child.title,is_optional:child.isOptional,client_key:key};
         });
-        if(req.body.title!==undefined)after.set(task.id,{...task,title:req.body.title});
+        after.set(task.id,{...task,title:req.body.title===undefined?task.title:String(req.body.title).trim(),is_optional:req.body.is_optional===undefined?task.is_optional:Number(!!req.body.is_optional)});
         decorateScoringUnits(preview,before,after,{drafts});
+        }
       }
       if(!preview.settlements)preview.settlements=hydrated.scoring?.settlements??[];
+      decorateScoringSettlements(preview,req);
       return preview;
     });res.json({data});
   }catch(error){const status=error.status||(error instanceof TaskSkillError?400:500);res.status(status).json({error:error.message,code:status,...(error.reason?{reason:error.reason}:{}),...error.details});}
@@ -2334,13 +2497,7 @@ export function updateTaskDefinition(req, res) {
     const syncChanged=syncTarget!==undefined&&(!sameFieldValue(syncTarget?.accountId,task.target_caldav_account_id)
       ||!sameFieldValue(syncTarget?.listUrl,task.target_caldav_list_url));
     const noOccurrenceChange=!definitionChanged&&status===task.status&&!(archiveRequested&&!task.archived_at)&&!syncChanged;
-    const scoringChildrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.some(child=>{
-      const old=currentChildren.find(row=>row.id===child.id);
-      return !old||child.points!==Number(old.points||0)||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,
-        db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id));
-    }));
-    const scoringChanged=scoringMode!==task.scoring_mode||points!==task.points||performersChanged||scoringChildrenChanged;
-    if(scoringChanged&&status!==task.status)throw new TaskStateError('Save scoring settings first, then change progress separately.',{reason:'scoring_progress_separate'});
+    assertScoringProgressIntent(task,req.body,editedSubtasks,{performersChanged});
     if(noOccurrenceChange&&editScope!=='future')
       return res.json({data:hydrateTask(task,req.authUserId||req.session.userId),unchanged:true});
     if(historical&&editScope!=='future'&&definitionChanged&&taskSeriesState(db.get(),task.id))
@@ -2368,24 +2525,14 @@ export function updateTaskDefinition(req, res) {
         updated=current;unchanged=true;return;
       }
       if(historicalSeriesOnly) {
-        let binding=beforeDefinition.binding;
-        if(desiredActivityBinding)binding={activity_template_id:desiredActivityBinding.activityTemplateId,
-          subject_user_id:desiredActivityBinding.subjectUserId,assignment_override_user_id:desiredActivityBinding.assignmentOverrideUserId,
-          snapshot:binding?.activity_template_id===desiredActivityBinding.activityTemplateId ? binding.snapshot
-            : captureActivityTemplateDefinition(db.get(),desiredActivityBinding.activityTemplateId)};
-        else binding=null;
-        const proposed=proposedSeriesDefinition(beforeDefinition,{fields:definitionFields,editedSubtasks,
-          assigned:firstUid?[firstUid,...userIds.filter(id=>id!==firstUid)]:userIds,
-          rotation:rotationUserIds,skills:skillIds,tags:req.body.tags===undefined?undefined:normalizeTags(req.body.tags),binding,
-          location:taskLocation===undefined?undefined:taskLocation?{kind:taskLocation.kind,place_id:taskLocation.placeId??null,
-            external_provider:taskLocation.provider??null,external_place_id:taskLocation.externalPlaceId??null,user_label:taskLocation.userLabel??null,
-            manual_address:taskLocation.manualAddress??null,latitude:taskLocation.latitude??null,longitude:taskLocation.longitude??null}:null});
-        const definition=normalizeSeriesSchedule(proposed,series.occurrence);
-        assertSeriesDefinitionMutation(db.get(),req,current,series.definition.data,definition);
+        const definition=compatibleFutureDefinition(req,current,series,beforeDefinition,editedSubtasks);
+        assertCompatibleFutureDefinition(req,current,series,definition);
+        const createdActions=finalizeFutureActionKeys(definition);
         const revised=appendSeriesDefinition(db.get(),current.id,{expectedRevision:req.body.expected_series_revision,
           actorId:req.authUserId||req.session.userId,definition});
         if(!revised.changed){updated=current;unchanged=true;return;}
         seriesEdit={...reconcileSeriesFuture(db.get(),revised,{actor:req}),current_preserved:true};
+        if(createdActions.length)seriesEdit.created_actions=createdActions;
         if(revised.changed)recordTaskActivity(db.get(),current.id,'series_edited',req.authUserId||req.session.userId,
           {title:definitionFields.title,series_id:revised.series_id,series_revision:revised.revision,
             updated_count:seriesEdit.updated.length,preserved_count:seriesEdit.preserved.length,current_preserved:true});
@@ -2489,7 +2636,7 @@ export function updateTaskDefinition(req, res) {
       if(series) {
         if(editScope==='future') {
           const definition=normalizeSeriesSchedule(captureSeriesDefinition(db.get(),task.id),series.occurrence);
-          assertSeriesDefinitionMutation(db.get(),req,current,series.definition.data,definition);
+          assertCompatibleFutureDefinition(req,current,series,definition);
           const revised=appendSeriesDefinition(db.get(),task.id,{expectedRevision:req.body.expected_series_revision,
             actorId:req.authUserId||req.session.userId,definition});
           const occurrence=recordOccurrenceDefinition(db.get(),task.id,{definitionId:revised.definition.id,

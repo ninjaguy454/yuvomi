@@ -1,6 +1,5 @@
 /** Transactional reconciliation of already materialized series occurrences.
  * The existing recurrence generator remains the only generator. */
-import { randomUUID } from 'node:crypto';
 import { planSeriesOccurrence, recordOccurrenceDefinition, registerSeriesAction, normalizeSeriesDefinition, seriesActionAuthorization } from './task-series.js';
 import { assertTaskScoringMutation, taskScoringIdentity } from './task-scoring.js';
 import { assertTaskMutation, taskCapabilities } from './task-access.js';
@@ -97,26 +96,27 @@ export function proposedFutureSeriesDefinition(d,actor,root,before,patch,{valida
   return after;
 }
 
-export function proposedSeriesDefinition(before, { fields, editedSubtasks, assigned, rotation, skills, tags, binding, location }) {
+export function proposedSeriesDefinition(before, { fields, editedSubtasks, assigned, rotation, skills, tags, binding, location, authorId=null, assignmentExplicit=false }) {
   const after=clone(before);
   Object.assign(after.task, fields);
   after.assigned_user_ids=[...assigned];after.rotation_user_ids=[...rotation];after.skill_ids=[...skills];
+  if(assignmentExplicit)after.authorization={...(before.authorization||{created_by:null}),assigned_user_ids:[...assigned]};
   if(tags!==undefined)after.tags=[...tags];
-  if(binding!==undefined)after.binding=binding;
-  if(location!==undefined)after.location=location;
+  if(binding!==undefined)after.binding=binding?clone(binding):null;
+  if(location!==undefined)after.location=location?clone(location):null;
   if(after.binding?.snapshot) {
     after.binding.snapshot.required_skill_ids=[...skills];
   }
   if(editedSubtasks)after.subtasks=editedSubtasks.next.map((step,order)=>{
     const existing=before.subtasks.find(child=>child.source_task_id===step.id);
-    const row=existing?clone(existing):{action_key:`series-action:${randomUUID()}`,source_task_id:null,
-      task:{description:null,category:fields.category,priority:'none',start_date:fields.start_date,start_time:fields.start_time,
-        due_date:fields.due_date,due_time:fields.due_time,points:0,visibility:fields.visibility,locked:0,
+    const row=existing?clone(existing):{action_key:`new:${step.clientKey??`draft_${order}`}`,source_task_id:null,
+      task:{description:null,category:after.task.category,priority:'none',start_date:after.task.start_date,start_time:after.task.start_time,
+        due_date:after.task.due_date,due_time:after.task.due_time,points:0,visibility:after.task.visibility,locked:0,
         expiration_policy:'keep_overdue',is_recurring:0,recurrence_rule:null,recurrence_from_completion:0,
         assignment_mode:'fixed',rotation_group:null,rotation_slot:0,countdown:0,due_date_offset_days:null},
-      assigned_user_ids:[],tags:[],authorization:{created_by:null,assigned_user_ids:[]}};
+      assigned_user_ids:[],tags:[],authorization:{created_by:authorId,assigned_user_ids:[]}};
     Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points});
-    if(step.assignedUsers!==undefined)row.assigned_user_ids=[...step.assignedUsers];
+    if(step.assignedUsers!==undefined){row.assigned_user_ids=[...step.assignedUsers];row.authorization={...(row.authorization||{created_by:null}),assigned_user_ids:[...step.assignedUsers]};}
     row.skill_ids=[...step.skillIds];return row;
   });
   if(after.rotation_rendering)after.rotation_rendering.targets=after.rotation_rendering.targets.filter(target=>{
@@ -145,12 +145,14 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
   const previous=normalizeSeriesDefinition(before),next=normalizeSeriesDefinition(after);
   const rootCapabilities=futureOnly?futureRootCapabilities(d,actor,task,before):taskCapabilities(d,actor,task);
   const same=(left,right)=>JSON.stringify(left??null)===JSON.stringify(right??null);
+  if(futureOnly&&!rootCapabilities.view)throw new TaskStateError('This future definition is unavailable.',{},404);
   const assertCanonicalLock=(locked,concrete)=>{
     if(locked&&!actorPermissions(d,actor).admin&&Number(concrete.created_by)!==Number(actorId(actor)))
       throw new TaskStateError('This recurring Activity definition is locked. Only its creator or a household administrator can change it.',
         {reason:'series_definition_locked'},403);
   };
   assertCanonicalLock(previous.task.locked,futureOnly?{created_by:seriesActionAuthorization(d,{authorization:before.authorization,source_task_id:task.id}).created_by}:task);
+  if(futureOnly&&!same(previous,next)&&!rootCapabilities.edit)throw new TaskStateError('Your permissions do not allow editing this future definition.',{},403);
   const requireCapability=(capabilities,key)=>{
     if(!capabilities[key])throw new TaskStateError('Your household permissions do not allow changing this recurring Activity setting.',
       {reason:'series_definition_permission',capability:`tasks.${key}`},403);
@@ -189,6 +191,7 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
   const oldActions=new Map(previous.subtasks.map(action=>[action.action_key,action]));
   const newKeys=new Set(next.subtasks.map(action=>action.action_key));
   for(const action of previous.subtasks)if(!newKeys.has(action.action_key)) {
+    if(futureOnly&&!futureActionCapabilities(d,actor,task,action).view)throw new TaskStateError('This future definition contains unavailable work.',{},404);
     const concrete=d.prepare(`SELECT t.* FROM task_recurrence_actions a JOIN tasks t ON t.id=a.task_id
       WHERE a.occurrence_task_id=? AND a.action_key=?`).get(task.id,action.action_key);
     const owner=futureOnly?{created_by:seriesActionAuthorization(d,action).created_by}:concrete||task;
@@ -203,6 +206,11 @@ export function assertSeriesDefinitionMutation(d,actor,task,before,after,{future
       if(action.assigned_user_ids?.length){requireCapability(rootCapabilities,'change_assignment');requireCapability(rootCapabilities,'reassign');}
       if(action.task.points)requireCapability(rootCapabilities,'change_points');
       continue;
+    }
+    if(futureOnly&&!same(old,action)) {
+      const permissions=futureActionCapabilities(d,actor,task,old);
+      if(!permissions.view)throw new TaskStateError('This future definition contains unavailable work.',{},404);
+      if(!permissions.edit)throw new TaskStateError('Your permissions do not allow changing this future work.',{},403);
     }
     const concrete=d.prepare(`SELECT t.* FROM task_recurrence_actions a JOIN tasks t ON t.id=a.task_id
       WHERE a.occurrence_task_id=? AND a.action_key=?`).get(task.id,action.action_key);

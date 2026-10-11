@@ -44,9 +44,8 @@ async function fixture(extra={}){
     start_date:'2026-10-06',start_time:'06:00',due_date:'2026-10-06',due_time:'07:20',expiration_policy:'keep_overdue',
     subtasks:[{title:'Action A',points:2},{title:'Action B',points:3}],...extra});
   assert.equal(result.status,201,JSON.stringify(result));
-  // Seed the reusable rewardable-step definition independently of Task form
-  // serialization, which is being changed by the separate points work.
-  for(const [index,task] of result.data.subtasks.entries())d.prepare('UPDATE tasks SET points=? WHERE id=?').run(index===0?2:3,task.id);
+  // The integrated input fix must preserve real API-created step points.
+  assert.deepEqual(result.data.subtasks.map(task=>task.points),[2,3]);
   if(extra.due_date_offset_days!=null)d.prepare('UPDATE tasks SET due_date_offset_days=? WHERE id=?').run(extra.due_date_offset_days,result.data.id);
   ensureSeriesDefinition(d,result.data.id);appendSeriesDefinition(d,result.data.id,{actorId:admin});return result.data;
 }

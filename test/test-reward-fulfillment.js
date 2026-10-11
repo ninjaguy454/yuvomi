@@ -119,6 +119,18 @@ test('Fulfill from the redemption record closes the same Task',async()=>{
   assert.equal(d.prepare('SELECT status FROM reward_redemptions WHERE id=?').get(id).status,'fulfilled');
 });
 
+test('an assigned parent can retry consistent done delivery without another completion or reward',async()=>{
+  const f=purchaseFixture(),purchase=await redeem(f),id=purchase.body.data.id,task=linkedTask(id);
+  assert.equal((await call('PATCH',`/tasks/${task.id}/status`,{status:'done',expected_revision:task.revision},{actor:mom})).status,200);
+  const done=d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
+  const completion=d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(task.id);
+  const replay=await call('PATCH',`/tasks/${task.id}/status`,{status:'done',expected_revision:done.revision},{actor:mom});
+  assert.equal(replay.status,200);assert.deepEqual(d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(task.id),completion);
+  assert.equal(d.prepare("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'").get(task.id).n,0);
+  assert.equal((await call('PATCH',`/tasks/${task.id}/status`,{status:'open',expected_revision:done.revision},{actor:mom})).status,409);
+  assert.equal((await call('PATCH',`/tasks/${task.id}/status`,{status:'done',expected_revision:done.revision},{actor:mom,scopes:['tasks:write','rewards:read']})).status,403);
+});
+
 test('linked Task cannot gain points, detach, be deleted, or receive child steps',async()=>{
   const f=purchaseFixture(),purchase=await redeem(f),task=linkedTask(purchase.body.data.id);
   for(const fields of [{points:5},{assigned_to:[f.child]},{is_recurring:1,recurrence_rule:'FREQ=DAILY'}])

@@ -69,12 +69,26 @@ function cancelDelivery(d,row,{actorId,event='archived',details={}}) {
   const task=d.prepare('SELECT * FROM tasks WHERE id=?').get(link.task_id);
   if(!task)throw new RewardError('The prize delivery Task is unavailable.',409);
   if(task.status!=='done') {
-    d.prepare("UPDATE tasks SET archived_at=COALESCE(archived_at,strftime('%Y-%m-%dT%H:%M:%SZ','now')) WHERE id=?").run(task.id);
+    d.prepare("UPDATE tasks SET archived_at=COALESCE(archived_at,strftime('%Y-%m-%dT%H:%M:%SZ','now')),revision=revision+1 WHERE id=?").run(task.id);
     d.prepare("UPDATE planning_obligations SET status='cancelled',updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE task_id=? AND status IN ('pending','accepted')").run(task.id);
     d.prepare("UPDATE task_responsibilities SET status='cancelled' WHERE task_id=? AND status='active'").run(task.id);
     d.prepare("UPDATE task_assignment_context SET state='cancelled' WHERE task_id=? AND state!='fulfilled'").run(task.id);
   }else d.prepare('UPDATE tasks SET revision=revision+1 WHERE id=?').run(task.id);
   recordTaskActivity(d,task.id,event,actorId,{redemption_id:row.id,from_status:task.status,points_awarded:0,...details});
+}
+
+/** Called only within the existing authorized account-delete transaction.
+ * Recipient-owned points/records follow its existing cascade; retained parent
+ * Tasks and immutable Undo audits are history, not outstanding delivery work. */
+export function cancelRewardDeliveriesForMemberDeletion(d,userId,{actorId}) {
+  if(!d.inTransaction)throw new RewardError('Member deletion must be coordinated.',409);
+  if(!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reward_fulfillment_task_links'").get())return;
+  const rows=d.prepare(`SELECT r.* FROM reward_redemptions r JOIN reward_fulfillment_task_links l
+    ON l.redemption_id=r.id WHERE r.user_id=? AND r.status='pending'`).all(userId);
+  for(const row of rows){
+    const cancelled=applyRedemptionDecision(d,{actorId,redemptionId:row.id,action:'cancel'});
+    cancelDelivery(d,cancelled,{actorId,details:{reason:'Household member deleted'}});
+  }
 }
 
 export function decideParentPrizeRedemption(d,{actorId,redemptionId,action,principal=actorId}) {

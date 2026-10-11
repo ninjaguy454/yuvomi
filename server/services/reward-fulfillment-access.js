@@ -12,8 +12,8 @@ export function rewardHouseholdUser(d,id) {
 export function rewardFulfillmentLink(d,taskId) {
   if(!Number.isSafeInteger(Number(taskId))||Number(taskId)<=0)return null;
   if(!d.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='reward_fulfillment_task_links'").get())return null;
-  return d.prepare(`SELECT l.*,r.status AS redemption_status FROM reward_fulfillment_task_links l
-    JOIN reward_redemptions r ON r.id=l.redemption_id WHERE l.task_id=?`).get(taskId);
+  return d.prepare(`SELECT l.*,COALESCE(r.status,'cancelled') AS redemption_status FROM reward_fulfillment_task_links l
+    LEFT JOIN reward_redemptions r ON r.id=l.redemption_id WHERE l.task_id=?`).get(taskId);
 }
 
 export function assertRewardTaskMutation(d,principal,task,body={},operation='update') {
@@ -43,7 +43,8 @@ export function rewardTaskCapabilities(d,principal,task,result) {
   result.delete_archive=Boolean(result.delete_archive&&task.status==='done');
   try{assertRewardParent(d,principal,{taskId:task.id});}
   catch{result.complete=false;}
-  if(link.redemption_status!=='pending'||task.archived_at)result.complete=false;
+  const completedReplay=link.redemption_status==='fulfilled'&&task.status==='done';
+  if((link.redemption_status!=='pending'&&!completedReplay)||task.archived_at)result.complete=false;
   return result;
 }
 export function eligibleRewardParents(d) {

@@ -41,6 +41,7 @@ import { validateDeviceApproval, completeDeviceApproval } from './services/devic
 import { deviceAppRouteSupported } from './services/device-app-paths.js';
 import { deviceMembers } from './services/device-content.js';
 import { householdMemberPresentation } from './services/member-presentation.js';
+import {cancelRewardDeliveriesForMemberDeletion} from './services/reward-fulfillment.js';
 
 // A proof for one displayed Task must never establish a personal session. Bind
 // every async authentication step to its original durable intent, not whatever
@@ -2844,6 +2845,7 @@ router.delete('/users/:id', requireAuth, requireAdmin, csrfMiddleware, (req, res
     if (ssoAdminError) return res.status(400).json({ error: ssoAdminError, code: 400 });
 
     const result = db.transaction(() => {
+      cancelRewardDeliveriesForMemberDeletion(db.get(),userId,{actorId:req.authUserId});
       const birthday = db.get().prepare('SELECT * FROM birthdays WHERE family_user_id = ?').get(userId);
       if (birthday) deleteBirthdayArtifacts(db.get(), birthday);
       // Standard-Zuweisungen von Sync-Zielen lösen (kein FK auf diesen Spalten, #459).

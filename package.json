@@ -70,7 +70,7 @@
     "test:phone": "DB_PATH=:memory: node --experimental-sqlite --test test/test-phone.js",
     "test:rewards": "DB_PATH=:memory: node --experimental-sqlite test/test-rewards.js",
     "test:rewards-routes": "node --experimental-sqlite --test test/test-rewards-routes.js",
-    "test:prize-fulfillment": "node --test test/test-reward-fulfillment.js test/test-prize-request.js test/test-prize-device-setting.js",
+    "test:prize-fulfillment": "node --test test/test-reward-fulfillment.js test/test-prize-request.js test/test-prize-device-setting.js test/test-prize-member-delete.js",
     "test:prize-fulfillment-browser": "node --test --test-force-exit test/test-prize-fulfillment-browser.js",
     "test:reward-icon-null-migration": "node --experimental-sqlite --test test/test-reward-icon-null-migration.js",
     "test:shopping": "node --experimental-sqlite test/test-shopping.js",

@@ -87,6 +87,14 @@ test('authenticated parent sees prize record Undo and pending delivery on the re
     await dad.click('[data-device-save]');await dad.waitForSelector('[data-device-config]',{hidden:true});
     assert.equal(JSON.parse(d.prepare('SELECT permissions_json FROM household_devices WHERE id=?').get(device.id).permissions_json).capabilities['device_rewards.redeem'],'none');
     evidence.steps.push({deviceDefaultOff:true,unrelatedSavePreservesOff:true});
+    const last=await dad.evaluate(async()=>{const {api}=await import('/api.js');const row=(await api.post('/rewards/redemptions',{user_id:3,catalog_id:1,request_id:crypto.randomUUID()})).data;
+      await api.delete('/auth/users/3');return row;});
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM users WHERE id=3').get().n,0);
+    const cancelledTask=d.prepare('SELECT t.* FROM reward_fulfillment_task_links l JOIN tasks t ON t.id=l.task_id WHERE l.redemption_id=?').get(last.id);
+    assert.ok(cancelledTask.archived_at);assert.equal(cancelledTask.status,'open');
+    assert.deepEqual(d.prepare('SELECT * FROM task_completions WHERE task_id=?').get(task),completion);
+    assert.equal(d.prepare('SELECT COUNT(*) n FROM reward_redemption_undos WHERE redemption_id=?').get(delivered.id).n,1);
+    evidence.steps.push({authenticatedMemberDeletion:true,unfinishedDeliveryCancelled:true,immutableHistoryRetained:true});
     assert.deepEqual(evidence.errors,[]);
   }catch(error){evidence.failure=error.stack;if(page)await page.screenshot({path:join(output,'failure.png')});throw error;}finally{await context.close();await dadContext.close();}
 });

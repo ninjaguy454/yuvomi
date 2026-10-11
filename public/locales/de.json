@@ -4802,7 +4802,7 @@
         "undoAudit": "{{actor}} hat am {{date}} {{points}} Punkte zurückgebucht.",
         "priorDelivery": "Die Ausgabe wurde am {{date}} erfasst.",
         "deviceRedeemLabel": "Prämien am Gerät einlösen",
-        "deviceRedeemHint": "Anfangs ausgeschaltet. Zum Einlösen ist derzeit eine persönliche Anmeldung erforderlich; Einlösen über ein gemeinsam genutztes Gerät ist noch nicht verfügbar.",
+        "deviceRedeemHint": "Am gemeinsam genutzten Display nicht verfügbar. Zum Einlösen persönlich anmelden.",
         "title": "Belohnungen",
         "tabOverview": "Übersicht",
         "tabCatalog": "Prämien",

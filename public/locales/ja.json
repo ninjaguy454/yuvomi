@@ -4802,7 +4802,7 @@
         "undoAudit": "{{actor}} returned {{points}} points on {{date}}.",
         "priorDelivery": "Delivery was recorded on {{date}}.",
         "deviceRedeemLabel": "Device prize redemption",
-        "deviceRedeemHint": "Starts off. Personal sign-in is currently required to redeem prizes; shared-device redemption is not yet available.",
+        "deviceRedeemHint": "Unavailable on shared displays. Sign in personally to redeem prizes.",
         "title": "ごほうび",
         "tabOverview": "概要",
         "tabCatalog": "景品",

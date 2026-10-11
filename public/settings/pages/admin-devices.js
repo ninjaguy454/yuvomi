@@ -42,7 +42,7 @@ export async function render(container) {
       panel.querySelector('form').onsubmit=async event=>{event.preventDefault();const form=new FormData(event.target),submit=event.submitter||panel.querySelector('[data-device-save]');submit.disabled=true;
         for(const key of modules)permissions.modules[key]=form.has(`module:${key}`)?'read':'none';
         permissions.widgets.weather=form.has('weather')?'allow':'none';
-        permissions.capabilities['device_rewards.redeem']=form.has('reward:redeem')?'allow':'none';
+        // The unavailable redemption control never changes its saved flag.
         for(const key of Object.keys(actions))permissions.capabilities[`device_tasks.${key}`]=form.has(`action:${key}`)?'allow':'none';
         for(const key of Object.keys(definitions))permissions.capabilities[key]=form.has(`definition:${key}`)?'allow':'none';
         for(const key of Object.keys(noteActions))permissions.capabilities[`device_notes.${key}`]=form.has(`note:${key}`)?'allow':'none';

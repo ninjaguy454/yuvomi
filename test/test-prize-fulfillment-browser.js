@@ -10,9 +10,9 @@ mkdirSync(output,{recursive:true});
 process.env.DB_PATH=join(folder,'synthetic.db');delete process.env.DB_ENCRYPTION_KEY;
 Object.assign(process.env,{SESSION_SECRET:'synthetic-prize-browser',SESSION_SECURE:'false',BACKUP_ENABLED:'false',NODE_ENV:'development',LOG_LEVEL:'error'});
 const {get}=await import('../server/db.js'),{hashPassword}=await import('../server/utils/password.js');
-const {createDevice}=await import('../server/services/devices.js');
+const {createDevice,devicePreset}=await import('../server/services/devices.js');
 const d=get(),password='Synthetic-Prize-Only-2026!',evidence={scope:'Disposable synthetic household, real app/auth, loopback browser, no live data',steps:[],errors:[]};
-let browser,server,origin,device,log='';
+let browser,server,origin,device,savedFlagDevice,log='';
 test.before(async()=>{
   const hash=await hashPassword(password,4),insert=d.prepare(`INSERT INTO users(id,username,display_name,password_hash,role,family_role,onboarding_version)
     VALUES(?,?,?,?,?,?,1)`);
@@ -23,6 +23,10 @@ test.before(async()=>{
   d.prepare("INSERT INTO reward_catalog(id,name,cost) VALUES(1,'Synthetic movie',10)").run();
   d.prepare("INSERT OR REPLACE INTO sync_config(key,value) VALUES('rewards_require_approval','0')").run();
   device=createDevice(d,{name:'Synthetic wall'},1);
+  const savedPermissions=devicePreset();savedPermissions.capabilities['device_rewards.redeem']='allow';
+  savedPermissions.capabilities['device_tasks.reopen']='allow';savedPermissions.modules.shopping='none';
+  const savedPreferences=structuredClone(device.preferences);savedPreferences.appearance.palette='warm';savedPreferences.appearance.density='compact';
+  savedFlagDevice=createDevice(d,{name:'Synthetic reserved setting',permissions:savedPermissions,scope:{member_ids:[2],show_points:false},preferences:savedPreferences},1);
   server=fork(new URL('./helpers/task-card-full-app-server.mjs',import.meta.url),[],{env:{...process.env,PORT:'0',TASK_CARD_BROWSER_SERVER_CHILD:'1'},stdio:['ignore','pipe','pipe','ipc']});
   server.stdout.on('data',data=>{log+=data;});server.stderr.on('data',data=>{log+=data;});
   origin=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('Synthetic app startup timed out: '+log)),30000);
@@ -41,6 +45,39 @@ async function pageFor(context,username,width){const page=await context.newPage(
   assert.equal(await page.evaluate(async ({username,password})=>(await fetch('/api/v1/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})})).status,{username,password}),200);
   return page;
 }
+test('unavailable device prize control preserves saved settings on open, cancel and unchanged Save',{timeout:60000},async()=>{
+  const context=await browser.createBrowserContext();
+  try {
+    const page=await pageFor(context,'Prize Dad',1280),writes=[];
+    page.on('request',request=>{if(request.method()==='PATCH'&&new URL(request.url()).pathname.startsWith('/api/v1/devices/'))writes.push(request);});
+    const snapshot=id=>{const row=d.prepare('SELECT name,permissions_json,scope_json,preferences_json,idle_seconds,maximum_seconds FROM household_devices WHERE id=?').get(id);
+      return {...row,permissions_json:JSON.parse(row.permissions_json),scope_json:JSON.parse(row.scope_json),preferences_json:JSON.parse(row.preferences_json)};};
+    for(const [item,width,flag] of [[device,1280,'none'],[savedFlagDevice,390,'allow']]) {
+      const before=snapshot(item.id),revision=d.prepare('SELECT revision FROM household_devices WHERE id=?').get(item.id).revision,writeCount=writes.length;
+      await page.setViewport({width,height:844,isMobile:width<500,hasTouch:width<500});
+      await page.goto(origin+'/settings/admin/devices');await page.waitForSelector('[data-device-edit="'+item.id+'"]');
+      await page.click('[data-device-edit="'+item.id+'"]');await page.waitForSelector('[name="reward:redeem"]');
+      assert.deepEqual(await page.$eval('[name="reward:redeem"]',el=>({disabled:el.disabled,checked:el.checked})),{disabled:true,checked:false});
+      assert.match(await page.$eval('[name="reward:redeem"]',el=>el.closest('label').textContent),/unavailable|not yet available/i);
+      assert.deepEqual(snapshot(item.id),before,'opening the configuration must not change saved settings');assert.equal(writes.length,writeCount);
+      await page.click('.device-config__footer [data-action="close-modal"]');await page.waitForSelector('[data-device-config]',{hidden:true});
+      assert.deepEqual(snapshot(item.id),before,'cancel must not change saved settings');assert.equal(writes.length,writeCount);
+      assert.equal(d.prepare('SELECT revision FROM household_devices WHERE id=?').get(item.id).revision,revision);
+      await page.click('[data-device-edit="'+item.id+'"]');await page.waitForSelector('[name="reward:redeem"]');
+      await page.$eval('[name="reward:redeem"]',el=>el.closest('section').scrollIntoView({block:'center'}));
+      await page.waitForFunction(()=>{const r=document.querySelector('[name="reward:redeem"]').getBoundingClientRect();return r.top>0&&r.bottom<innerHeight;});
+      const unavailableSection=await page.$('section.device-config__section:has([name="reward:redeem"])');
+      await unavailableSection.screenshot({path:join(output,'device-unavailable-'+flag+'-'+width+'.png')});
+      const saved=page.waitForResponse(r=>r.request().method()==='PATCH'&&r.url().endsWith('/devices/'+item.id));
+      await page.click('[data-device-save]');assert.equal((await saved).status(),200);await page.waitForSelector('[data-device-config]',{hidden:true});
+      assert.deepEqual(snapshot(item.id),before,'unchanged Save must preserve saved permissions, scope, preferences and timeouts');
+      assert.equal(snapshot(item.id).permissions_json.capabilities['device_rewards.redeem'],flag);
+      assert.equal(writes.length,writeCount+1);assert.equal(d.prepare('SELECT revision FROM household_devices WHERE id=?').get(item.id).revision,revision+1);
+      evidence.steps.push({deviceUnavailable:true,width,savedFlag:flag,openAndCancelNoWrites:true,unchangedSavePreservesAllSettings:true});
+    }
+  }finally{await context.close();}
+});
+
 test('authenticated parent sees prize record Undo and pending delivery on the real Rewards page',{timeout:90000},async()=>{
   const context=await browser.createBrowserContext(),dadContext=await browser.createBrowserContext();let page;
   try{
@@ -105,8 +142,9 @@ test('authenticated parent sees prize record Undo and pending delivery on the re
     assert.doesNotMatch(deliveredHistory,/\{(?:actor|points|date)\}/);
     await page.screenshot({path:join(output,'parent-undone-390.png')});assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
     evidence.steps.push({width:390,strongDeliveredConfirmation:true,completionHistoryPreserved:true,noHorizontalOverflow:true});
-    await dad.goto(origin+'/settings/admin/devices');await dad.waitForSelector('[data-device-edit]');await dad.click('[data-device-edit]');await dad.waitForSelector('[name="reward:redeem"]');
+    await dad.goto(origin+'/settings/admin/devices');await dad.waitForSelector('[data-device-edit="'+device.id+'"]');await dad.click('[data-device-edit="'+device.id+'"]');await dad.waitForSelector('[name="reward:redeem"]');
     assert.equal(await dad.$eval('[name="reward:redeem"]',el=>el.checked),false);
+    assert.equal(await dad.$eval('[name="reward:redeem"]',el=>el.disabled),true);
     await dad.click('[data-device-save]');await dad.waitForSelector('[data-device-config]',{hidden:true});
     assert.equal(JSON.parse(d.prepare('SELECT permissions_json FROM household_devices WHERE id=?').get(device.id).permissions_json).capabilities['device_rewards.redeem'],'none');
     evidence.steps.push({deviceDefaultOff:true,unrelatedSavePreservesOff:true});

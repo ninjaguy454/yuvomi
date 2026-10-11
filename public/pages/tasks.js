@@ -1,5 +1,6 @@
 import { memberLabel } from '/utils/member-label.js';
 import { renderTaskCountdown, bindTaskCountdowns } from '/utils/task-countdown.js';
+import { tripTaskDeadline } from '/utils/trip-task-deadline.js';
 import {renderCycleReturn} from '/utils/meal-cycle-state.js';
 import { claimTask } from '/components/device-task-claim.js';
 import { approveDeviceTask, canApproveDeviceTask } from '/components/device-approval.js';
@@ -358,8 +359,9 @@ function groupBy(tasks, mode, categories = state.categories) {
 
   for (const task of tasks) {
     let key;
+    const dueDate=task.trip_group?task.display_due_date:task.due_date;
     if (isClosedOccurrence(task))                 key = task.status==='skipped'?'Skipped':'Expired';
-    else if (!task.due_date)             key = groupNoDate;
+    else if (!dueDate)             key = groupNoDate;
     else {
       // Beide Seiten als KALENDERTAG rechnen, nicht als Instant.
       //
@@ -370,7 +372,7 @@ function groupBy(tasks, mode, categories = state.categories) {
       // Kiritimati ebenso). Der Kalendertag kommt jetzt aus `todayKey()` und
       // folgt damit derselben Zone wie der Rest der App (#829).
       const diff = Math.round(
-        (parseLocalDateKey(task.due_date) - parseLocalDateKey(todayKey())) / 86400000,
+        (parseLocalDateKey(dueDate) - parseLocalDateKey(todayKey())) / 86400000,
       );
       if (diff < 0)       key = groupOverdue;
       else if (diff === 0) key = groupToday;
@@ -646,6 +648,7 @@ function renderActivitySubtasks(task, expanded) {
 }
 
 function renderTaskCard(task, opts = {}) {
+  task = tripTaskDeadline(task);
   const {
     expandedSubtasks = isSubtasksExpanded(task.id),
     showCheckbox = false,
@@ -658,7 +661,7 @@ function renderTaskCard(task, opts = {}) {
   const participants = taskParticipants(task);
   const detailsExpanded = state.expandedTasks.has(Number(task.id));
   const hasDetails = !!String(task.description || '').trim() || participants.length > 0;
-  const due = formatDueDate(task.due_date, task.due_time, isDone || archived || isClosedOccurrence(task));
+  const due = formatDueDate(task.trip_group?task.display_due_date:task.due_date, task.trip_group?task.display_due_time:task.due_time, isDone || archived || isClosedOccurrence(task));
   const countdown = renderTaskCountdown(task);
   const location = taskLocationLabel(task);
   const names = (task.assigned_users || []).map(person => memberLabel(person)).filter(Boolean).join(', ') || memberLabel({ id: task.assigned_to, display_name: task.assigned_name });
@@ -684,6 +687,7 @@ function renderTaskCard(task, opts = {}) {
       <button type="button" class="activity-card__open" data-action="open-task" data-id="${task.id}"${!board ? ' aria-keyshortcuts="Shift+Space" aria-describedby="task-selection-hint" title="Open Task. Hold to select, or press Shift+Space."' : ''}>
         <span class="activity-card__title u-card-title u-compact"><span class="activity-card__title-text">${esc(task.title)}</span></span>
         <span class="activity-card__when">
+          ${task.next_trip_step?`<span class="due-date">Next: ${esc(task.next_trip_step.title)}</span>`:''}
           ${countdown ? `<span class="due-date"><i data-lucide="hourglass" class="icon-sm" aria-hidden="true"></i>${countdown}</span>` : due ? `<span class="due-date ${due.cls}"><i data-lucide="clock" class="icon-sm" aria-hidden="true"></i>${esc(due.label)}</span>` : (renderStartDateBadge(task.start_date) || '')}
           ${location ? `<span class="due-date activity-card__location" title="${esc(task.location?.address || location)}"><i data-lucide="map-pin" class="icon-sm" aria-hidden="true"></i>${esc(location)}</span>` : ''}
         </span>
@@ -770,10 +774,9 @@ function wireResponsiveTaskTags(root) {
 }
 
 function effectiveDue(task) {
-  if (!task.due_date) return null;
-  return task.due_time
-    ? new Date(`${task.due_date}T${task.due_time}`)
-    : new Date(`${task.due_date}T23:59:59`);
+  const date=task.trip_group?task.display_due_date:task.due_date,time=task.trip_group?task.display_due_time:task.due_time;
+  if (!date) return null;
+  return time ? new Date(`${date}T${time}`) : new Date(`${date}T23:59:59`);
 }
 
 // Einheitliche Sortierung: überfällig zuerst → Datum/Zeit ASC → Prio als Tiebreaker
@@ -3479,7 +3482,7 @@ async function loadHistory(container, { append = false } = {}) {
  * deadline (or on start_date when it has no deadline). It is not an event bar.
  */
 function taskCalendarDate(task) {
-  return task?.due_date || task?.start_date || null;
+  return (task?.trip_group?task.display_due_date:task?.due_date) || task?.start_date || null;
 }
 
 function normalizeTaskCalendarRange(first, last = first) {
@@ -3532,6 +3535,7 @@ function taskCalendarRangeContains(dateKey) {
 }
 
 function renderTaskCalendarChip(task) {
+  task = tripTaskDeadline(task);
   const time = task.due_time ? task.due_time.slice(0, 5) : '';
   const countdown = renderTaskCountdown(task, { className: 'task-calendar-chip__countdown', compact: true });
   const priority = task.priority && task.priority !== 'none'
@@ -3591,6 +3595,7 @@ function taskCalendarRule(task) {
 }
 
 function renderTaskCalendarAgendaRow(task) {
+  task = tripTaskDeadline(task);
   const rule = taskCalendarRule(task);
   const time = task.due_time ? task.due_time.slice(0, 5) : '';
   const countdown = renderTaskCountdown(task);
@@ -5797,6 +5802,8 @@ export async function render(container, { user }) {
 // Testfläche: nur reine Funktionen, deren Vertrag außerhalb dieser Datei zählt.
 export const __test = {
   renderTaskCard,
+  renderTaskCalendarChip,
+  renderTaskCalendarAgendaRow,
   renderModalContent,
   renderHistoryEntry,
   groupHistoryByDay,

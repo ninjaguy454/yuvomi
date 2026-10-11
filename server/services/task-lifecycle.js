@@ -1,5 +1,6 @@
 /** One operational transition for REST and compatibility writers. */
 import { syncTaskRewards } from './rewards.js';
+import {assertTripTaskActive} from './trip-task-state.js';
 import { retiredRecurrenceOccurrence, registerRecurrenceOccurrence } from './task-recurrence-frontier.js';
 import { calendarDayOffset } from './activity-schedule.js';
 import { authoritativeTaskRecurrence, ensureSeriesDefinition } from './task-series.js';
@@ -66,6 +67,7 @@ export function assertRecurringCompletionStarted(d, taskId, now = new Date()) {
 
 /** Shared by REST and compatibility writers, including changes to child actions. */
 export function assertTaskWindowAction(d, taskId, now = new Date(), {optionalReopenScope=null}={}) {
+  assertTripTaskActive(d,taskId);
   for (const task of taskWindowAncestors(d,taskId)) {
     if (task.status === 'skipped')
       throw new TaskStateError('This occurrence was skipped and cannot be reopened or completed.',{reason:'task_skipped',task_id:task.id});

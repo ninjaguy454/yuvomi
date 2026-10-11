@@ -819,7 +819,7 @@ function buildTodayProgram(data, { includeTasks = true, includeCalendar = true, 
   }
 
   if (includeTasks) {
-    const tasks = Array.isArray(data?.urgentTasks) ? data.urgentTasks : Array.isArray(data?.tasks) ? data.tasks : [];
+    const tasks = (Array.isArray(data?.urgentTasks) ? data.urgentTasks : Array.isArray(data?.tasks) ? data.tasks : []).map(task=>task.trip_group?{...task,due_date:task.display_due_date,due_time:task.display_due_time}:task);
     for (const task of tasks) {
       if (!task.due_date || task.due_date > todayKey) continue;
       const overdue = task.due_date < todayKey;
@@ -869,7 +869,7 @@ function buildTodayProgram(data, { includeTasks = true, includeCalendar = true, 
   // sortiert - der erste Eintrag eines späteren Tages ist die nächste Frist.
   // Ohne sie verspräche die Fläche abends „nichts mehr", während der
   // Schulausflug-Zettel morgen früh abgegeben werden muss.
-  const allTasks = Array.isArray(data?.urgentTasks) ? data.urgentTasks : Array.isArray(data?.tasks) ? data.tasks : [];
+  const allTasks = (Array.isArray(data?.urgentTasks) ? data.urgentTasks : Array.isArray(data?.tasks) ? data.tasks : []).map(task=>task.trip_group?{...task,due_date:task.display_due_date,due_time:task.display_due_time}:task);
   const nextDueTask = allTasks.find((task) => task.due_date && task.due_date > todayKey) ?? null;
 
   return {
@@ -902,6 +902,7 @@ function skeletonWidget(lines = 3) {
 // --------------------------------------------------------
 
 function renderUrgentTasks(tasks) {
+  tasks=tasks.map(task=>task.trip_group?{...task,due_date:task.display_due_date,due_time:task.display_due_time}:task);
   if (!tasks.length) {
     return `<div class="widget widget--tasks">
       ${widgetHeader('tasks', t('nav.tasks'), 0, '/tasks')}
@@ -921,6 +922,7 @@ function renderUrgentTasks(tasks) {
         <span class="sr-only">${PRIORITY_LABELS()[t.priority] ?? t.priority}</span>
         <div class="task-item__content">
           <div class="task-item__title">${esc(t.title)}</div>
+          ${t.next_trip_step?`<div class="task-item__meta">Next: ${esc(t.next_trip_step.title)}</div>`:''}
           ${due ? `<div class="task-item__meta ${!countdown && due.overdue ? 'task-item__meta--overdue' : ''} ${!countdown && due.soon ? 'task-item__meta--soon' : ''}">${countdown || due.text}</div>` : ''}
         </div>
         ${renderAvatarStack(t.assigned_users ?? [], { size: 28 })}

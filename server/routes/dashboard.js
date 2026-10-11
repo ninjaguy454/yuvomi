@@ -1,4 +1,5 @@
 import { taskVisibilityWhere } from '../services/task-access.js';
+import {tripDisplayDueSql,attachTripTaskProjection} from '../services/trip-task-projection.js';
 import { noteVisibleSql } from '../services/note-access.js';
 /**
  * Modul: Dashboard
@@ -247,11 +248,12 @@ router.get('/', (req, res) => {
     // die Grenze „überfällig" um den Zonen-Offset.
     const nowIso = `${todayLocalKey}T${householdWall?.time
       ?? `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`}`;
+    const tripDueDate=tripDisplayDueSql(d,userId),tripDueTime=tripDisplayDueSql(d,userId,'t','due_time');
     result.urgentTasks = d.prepare(`
       SELECT t.*, u.display_name AS assigned_name, u.avatar_color AS assigned_color,
         ${ASSIGNED_USERS_SQL},
-        CASE WHEN t.due_date IS NULL THEN NULL
-             ELSE t.due_date || 'T' || COALESCE(t.due_time, '23:59:59')
+        CASE WHEN (${tripDueDate}) IS NULL THEN NULL
+             ELSE (${tripDueDate}) || 'T' || COALESCE((${tripDueTime}), '23:59:59')
         END AS __due_sort
       FROM tasks t
       LEFT JOIN users u ON t.assigned_to = u.id
@@ -272,7 +274,7 @@ router.get('/', (req, res) => {
           WHEN 'low' THEN 3 ELSE 4
         END ASC
       LIMIT 5
-    `).all({ now: nowIso, me: userId, today: todayLocalKey, ...taskCategoryBinds }).map(({ __due_sort, ...task }) => addAssignedUsers(task));
+    `).all({ now: nowIso, me: userId, today: todayLocalKey, ...taskCategoryBinds }).map(({ __due_sort, ...task }) => attachTripTaskProjection(d,addAssignedUsers(task),userId));
   } catch (err) {
     log.error('urgentTasks error:', err.message);
     result.urgentTasks = [];
@@ -305,7 +307,7 @@ router.get('/', (req, res) => {
       SELECT COUNT(*) AS n FROM tasks t
       WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
         AND ${taskUnskippedWhere(d)}
-        AND t.due_date IS NOT NULL AND t.due_date < @today
+        AND (${tripDisplayDueSql(d,userId)}) IS NOT NULL AND (${tripDisplayDueSql(d,userId)}) < @today
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
     `).get({ today: todayLocalKey, me: userId, ...taskCategoryBinds }).n;
@@ -703,7 +705,7 @@ router.get('/', (req, res) => {
       FROM tasks t JOIN task_assignments ta ON ta.task_id = t.id
       WHERE t.status NOT IN ('done', 'expired', 'skipped') AND t.archived_at IS NULL
         AND ${taskUnskippedWhere(d)}
-        AND t.due_date IS NOT NULL AND t.due_date <= @today
+        AND (${tripDisplayDueSql(d,userId)}) IS NOT NULL AND (${tripDisplayDueSql(d,userId)}) <= @today
         AND ${taskScopeWhere('t', { includeFuture: true, includeSupervision })} AND ${taskStarts.where('t')}
         AND ${taskVisibilityWhere(db.get(), userId, 't', '@me')}${taskCategoryAnd}
       GROUP BY ta.user_id

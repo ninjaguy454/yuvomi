@@ -13,6 +13,7 @@ import { renderVariableValueEditor, bindVariableValueEditor, variableReferenceOp
 import { renameExpressionReference } from '/utils/variable-expressions.js';
 import { renderRotationBindings, bindRotationBindings, renderRotationContext } from '/components/rotation-bindings.js';
 import { renderRotationGroups } from '/components/rotation-groups.js';
+import {TRIP_STEPS,tripStepRow,bindTripStepRows,readTripSteps} from '/components/trip-checklist.js';
 
 const h = (value) => esc(String(value ?? ''));
 
@@ -867,31 +868,6 @@ function placeMapsUrl(place) {
   return `https://www.google.com/maps/search/?${params.toString()}`;
 }
 
-const TRIP_TASKS = [
-  ['before_departure', 'Pack clothing'], ['before_departure', 'Pack medications'],
-  ['before_departure', 'Charge devices'], ['departure', 'Load the vehicle'],
-  ['departure', 'Lock up and set the thermostat'], ['during_trip', 'Check in'],
-  ['during_trip', "Review today's itinerary"], ['during_trip', 'Prepare for the next day'],
-  ['before_return', 'Pack the lodging'], ['before_return', 'Check for forgotten items'],
-  ['post_trip', 'Unpack'], ['post_trip', 'Start travel laundry'],
-];
-
-const TRIP_PHASE_LABELS = [
-  ['before_departure', 'Before departure'], ['departure', 'Departure'],
-  ['during_trip', 'During trip'], ['before_return', 'Before return'],
-  ['post_trip', 'After the trip'],
-];
-
-function customTripTaskRow() {
-  return `<div class="automation-trip-task-row" data-custom-trip-task>
-    <select class="input" name="custom_trip_task_phase" aria-label="Task phase">
-      ${TRIP_PHASE_LABELS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}
-    </select>
-    <input class="input" name="custom_trip_task_title" maxlength="200" placeholder="Task name" aria-label="Task name">
-    <button class="btn btn--ghost btn--icon" type="button" data-remove-trip-task aria-label="Remove task"><i data-lucide="trash-2"></i></button>
-  </div>`;
-}
-
 export async function renderTripsManager(body, manager, { openTripId = null } = {}) {
   const [tripsResponse, context] = await Promise.all([api.get('/planning/trips'), api.get('/planning/admin/context')]);
   const trips = tripsResponse.data || [];
@@ -902,7 +878,7 @@ export async function renderTripsManager(body, manager, { openTripId = null } = 
   body.querySelectorAll('[data-edit-trip]').forEach((button) => button.addEventListener('click', () => openTripForm(trips.find((trip) => Number(trip.id) === Number(button.dataset.editTrip)), context, manager)));
   body.querySelectorAll('[data-delete-trip]').forEach((button) => button.addEventListener('click', async () => {
     const trip = trips.find((item) => Number(item.id) === Number(button.dataset.deleteTrip));
-    if (!trip || !await confirmOverModal(`Delete ${trip.name}?`, { danger: true, confirmLabel: 'Delete trip', detail: t('settings.tripDeleteConfirmDetail') })) return;
+    if (!trip || !await confirmOverModal(`Delete ${trip.name}?`, { danger: true, confirmLabel: 'Delete trip', detail:trip.task_structure==='grouped'?'The Trip and its Away periods are removed. Unfinished checklist work is retired and its reminders stop. Completed Task history remains.':t('settings.tripDeleteConfirmDetail') })) return;
     try { await api.delete(`/planning/admin/trips/${trip.id}`); toast('Trip deleted.'); await refreshAutomationManager(manager, 'trips'); }
     catch (error) { toast(error.message, 'danger'); }
   }));
@@ -946,8 +922,16 @@ export async function renderTripsManager(body, manager, { openTripId = null } = 
   }
 }
 
-function openTripForm(trip, context, manager) {
+export function openTripForm(trip, context, manager) {
   const members = context.members || []; const places = context.places || [];
+  const grouped=!trip||trip.task_structure==='grouped';
+  const requestKey=crypto.randomUUID();
+  const coordinator=trip?.coordinator_id||trip?.participant_ids?.[0]||members[0]?.id;
+  const savedSteps=(trip?.tasks||[]).filter(task=>['active','cancelled'].includes(task.generation_state));
+  const selectedKeys=new Set(savedSteps.map(task=>task.step_key));
+  const retiredKeys=new Set((trip?.tasks||[]).filter(t=>['removed','deleted'].includes(t.generation_state)).map(t=>t.step_key));
+  const recipes=[...TRIP_STEPS.filter(recipe=>!selectedKeys.has(recipe.step_key)&&!retiredKeys.has(recipe.step_key)),...savedSteps.map(task=>({...task.trip_recipe,title:task.title,assigned_user_ids:task.assigned_user_ids,task_id:task.id,
+    ...(task.trip_overrides?.some(key=>['due_date','due_time'].includes(key))?{due_mode:'fixed',due_date:task.due_date,due_time:task.due_time}:{})}))];
   const selected = new Set((trip?.participant_ids || []).map(Number));
   const content = `<form id="automation-trip-form">
     ${inputRow('Trip name', `<input class="input" name="name" required maxlength="120" value="${h(trip?.name || '')}" placeholder="Summer vacation">`)}
@@ -957,32 +941,32 @@ function openTripForm(trip, context, manager) {
     <div class="automation-workflow-condition">${inputRow('Departure', `<input class="input" type="datetime-local" name="starts_at" required value="${h(localDateTimeValue(trip?.starts_at, context.timezone))}">`)}${inputRow('Return', `<input class="input" type="datetime-local" name="ends_at" required value="${h(localDateTimeValue(trip?.ends_at, context.timezone))}">`)}</div>
     ${inputRow('Notes', `<textarea class="input" name="notes" rows="3">${h(trip?.notes || '')}</textarea>`)}
     <label class="automation-check-row"><input type="checkbox" name="create_away_periods" ${trip?.create_away_periods !== 0 ? 'checked' : ''}> Create matching Away periods for travelers</label>
-    <fieldset class="automation-fieldset"><legend class="label">Create optional trip Tasks</legend><p class="form-hint">Tasks are dated relative to the trip phase and linked to the relevant saved Place.</p>${TRIP_TASKS.map(([phase,title], index) => `<label class="automation-check-row"><input type="checkbox" name="trip_task" value="${index}">${h(title)} <small class="form-hint">(${h(phase.replaceAll('_',' '))})</small></label>`).join('')}<div data-custom-trip-tasks></div><button class="btn btn--ghost" type="button" data-add-trip-task>+ Add task</button></fieldset>
+    ${grouped?`${inputRow('Trip coordinator',`<select class="input" name="coordinator_id">${members.map(member=>`<option value="${member.id}" ${Number(coordinator)===Number(member.id)?'selected':''}>${h(memberLabel(member))}</option>`).join('')}</select>`)}
+    <fieldset class="automation-fieldset"><legend class="label">Trip checklist</legend><p class="form-hint">One Trip Task holds the selected preparation steps as subtasks. Each responsible person can complete their own steps. The shared meal-plan Task stays separate.</p>
+    ${trip?.parent_task?`<p><a href="/tasks?open=${trip.parent_task.id}">Open ${h(trip.parent_task.title)}</a></p>`:''}
+    ${trip?.task_group_state==='deleted'?'<p class="form-hint">The Trip Task was deleted. Saving this Trip will not recreate it.</p>':`<div data-trip-steps>${recipes.map(recipe=>tripStepRow(recipe,members,{selected:selectedKeys.has(recipe.step_key),history:savedSteps.some(task=>task.step_key===recipe.step_key&&task.status==='done'),custom:!TRIP_STEPS.some(s=>s.step_key===recipe.step_key)})).join('')}</div><button class="btn btn--ghost" type="button" data-add-trip-step>+ Add step</button>`}
+    <p class="form-hint" data-cancel-impact ${trip?.status==='cancelled'?'':'hidden'}>Cancellation retires unfinished work and stops its reminders. Completed steps and delivered reminder receipts remain.</p>
+    ${trip?.task_group_state==='cancelled'?'<label class="automation-check-row"><input type="checkbox" name="restore_remaining">Restore unfinished steps when reactivating this Trip. Completed steps remain completed; past reminders will not be replayed.</label>':''}
+    </fieldset>`:`<p class="form-hint">This existing Trip keeps its individual Tasks. Close them from Tasks when you are ready.</p>${(trip?.tasks||[]).map(task=>`<p><a href="/tasks?open=${task.id}">${h(task.title)}</a> · ${h(task.status)}</p>`).join('')}`}
     ${footer(trip ? 'Save trip' : 'Create trip')}
   </form>`;
   openModal({ title: trip ? 'Edit trip' : 'Plan a trip', content, size: 'lg', onSave(panel) {
-    const customTasks = panel.querySelector('[data-custom-trip-tasks]');
-    panel.querySelector('[data-add-trip-task]')?.addEventListener('click', () => {
-      customTasks?.insertAdjacentHTML('beforeend', customTripTaskRow());
-      const row = customTasks?.lastElementChild;
-      row?.querySelector('[name="custom_trip_task_title"]')?.focus();
-      if (window.lucide && row) window.lucide.createIcons({ el: row });
+    bindTripStepRows(panel);
+    panel.querySelector('[data-add-trip-step]')?.addEventListener('click',()=>{
+      const host=panel.querySelector('[data-trip-steps]');
+      host.insertAdjacentHTML('beforeend',tripStepRow({step_key:`custom-${crypto.randomUUID()}`,title:'New preparation step',phase:'before_departure'},members,{selected:true,custom:true}));
+      const row=host.lastElementChild;bindTripStepRows(row.parentElement);row.querySelector('[data-step-title]').focus();
     });
-    customTasks?.addEventListener('click', (event) => {
-      const remove = event.target.closest('[data-remove-trip-task]');
-      if (remove) remove.closest('[data-custom-trip-task]')?.remove();
-    });
+    panel.querySelector('[name="status"]')?.addEventListener('change',event=>{const impact=panel.querySelector('[data-cancel-impact]');if(impact)impact.hidden=event.target.value!=='cancelled';});
     panel.querySelector('#automation-trip-form')?.addEventListener('submit', async (event) => {
       event.preventDefault(); const data = new FormData(event.currentTarget);
-      const tasks = data.getAll('trip_task').map((index) => ({ phase: TRIP_TASKS[Number(index)][0], title: TRIP_TASKS[Number(index)][1] }));
-      panel.querySelectorAll('[data-custom-trip-task]').forEach((row) => {
-        const title = row.querySelector('[name="custom_trip_task_title"]')?.value.trim();
-        const phase = row.querySelector('[name="custom_trip_task_phase"]')?.value;
-        if (title) tasks.push({ phase, title });
-      });
-      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: preservePlanningInstant(data.get('starts_at'), trip?.starts_at, context.timezone), ends_at: preservePlanningInstant(data.get('ends_at'), trip?.ends_at, context.timezone), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'), tasks };
+      const payload = { name: data.get('name'), trip_type: data.get('trip_type'), status: data.get('status'), participant_ids: data.getAll('participant_id').map(Number), destination_place_id: Number(data.get('destination_place_id')) || null, lodging_place_id: Number(data.get('lodging_place_id')) || null, starts_at: preservePlanningInstant(data.get('starts_at'), trip?.starts_at, context.timezone), ends_at: preservePlanningInstant(data.get('ends_at'), trip?.ends_at, context.timezone), notes: data.get('notes'), create_away_periods: data.has('create_away_periods'),
+        ...(grouped?{tasks:readTripSteps(panel,savedSteps),coordinator_id:Number(data.get('coordinator_id')),restore_remaining:data.has('restore_remaining')}:{}),
+        ...(trip?{expected_revision:trip.task_group_revision,expected_parent_revision:trip.parent_task?.revision}:{request_key:requestKey}) };
+      const submit=event.submitter||panel.querySelector('[type="submit"]');if(submit.disabled)return;submit.disabled=true;
       try { if (trip) await api.put(`/planning/admin/trips/${trip.id}`, payload); else await api.post('/planning/admin/trips', payload); toast('Trip saved.'); await refreshAutomationManager(manager, 'trips'); }
       catch (error) { toast(error.message, 'danger'); }
+      finally {submit.disabled=false;}
     });
   }});
 }

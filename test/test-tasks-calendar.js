@@ -13,6 +13,20 @@ globalThis.customElements = globalThis.customElements ?? { define() {}, get() {}
 
 const { __test: tasks } = await import('../public/pages/tasks.js');
 
+test('Trip calendar times and card countdowns use the visible next-step deadline',()=>{
+  const task={id:1,title:'Trip: Beach',status:'open',priority:'none',points:0,
+    trip_group:{id:1},due_date:'2031-07-15',due_time:'18:00',
+    display_due_date:'2031-07-09',display_due_time:'10:30',assigned_users:[]};
+  assert.match(tasks.renderTaskCalendarChip(task),/10:30/);
+  assert.match(tasks.renderTaskCalendarAgendaRow(task),/10:30/);
+  for(const markup of [tasks.renderTaskCard({...task,countdown:1}),tasks.renderTaskCalendarChip({...task,countdown:1}),tasks.renderTaskCalendarAgendaRow({...task,countdown:1})]){
+    assert.match(markup,/data-due-date="2031-07-09"/);
+    assert.match(markup,/data-due-time="10:30"/);
+    assert.doesNotMatch(markup,/data-due-date="2031-07-15"/);
+  }
+  assert.equal(task.due_date,'2031-07-15','presentation does not mutate the editable deadline');
+});
+
 test('changing the picker year stays open after replacing the clicked button and retains keyboard focus', () => {
   const originalYear = tasks.state.calendarPickerYear;
   const originalCursor = tasks.state.calendarCursor;

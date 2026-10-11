@@ -114,11 +114,11 @@ export function planningPaths() {
       post: op({ summary: 'Explicitly resolve an overlapping planning-context claim', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Body resolution is `keep_first` or `keep_second`. The selected context keeps the member and the other releases them; distinct overlapping contexts can never both claim the same person, and Vidamia never chooses silently.' }),
     },
     '/api/v1/planning/admin/trips': {
-      post: op({ summary: 'Create a Trip with stages and participants', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null) }),
+      post: op({ summary: 'Create a Trip with stages, participants and a Task checklist', tag: 'Planning', admin: true, stateChanging: true, requestBody: jsonBody(null), description: 'New Trips create one ordinary zero-point parent Task and selected preparation subtasks. Supply request_key for retry-safe creation and coordinator_id for the parent. Each tasks entry has stable step_key, title, phase, assigned_user_ids, due_mode (phase or fixed), optional due_date/due_time, offset_minutes, reminder_offset_minutes and is_optional. Phase offsets use household wall time. The shared travel meal-plan Task stays separate.' }),
     },
     '/api/v1/planning/admin/trips/{id}': {
-      put: op({ summary: 'Update a Trip, stages and participants', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null) }),
-      delete: op({ summary: 'Delete a Trip', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true }),
+      put: op({ summary: 'Update a Trip, stages and participants', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, requestBody: jsonBody(null), description: 'Grouped Trips require expected_revision from task_group_revision and expected_parent_revision from parent_task.revision (428 if missing; 409 if stale). Stable step keys reconcile unfinished generated work while retaining completed history and manual Task overrides. Omitted private steps are preserved. Cancellation retires unfinished work and stops reminders; reactivation requires restore_remaining:true. Legacy Trips retain individual Tasks and have no conversion option.' }),
+      delete: op({ summary: 'Delete a Trip', tag: 'Planning', admin: true, params: [idParam()], stateChanging: true, description: 'For grouped Trips, retire unfinished generated work and retain Task history. Legacy linked Tasks remain unchanged. Neither deletion nor a later save regenerates deleted generated Tasks.' }),
     },
     '/api/v1/planning/trips/{id}/itinerary': {
       get: op({ summary: 'Get the dated itinerary for a Trip', tag: 'Planning', params: [idParam()] }),

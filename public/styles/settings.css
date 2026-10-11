@@ -1088,6 +1088,15 @@
   margin-bottom: var(--space-2);
 }
 
+.trip-step { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3); margin-block: var(--space-2); min-width: 0; }
+.trip-step__header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.trip-step__header .automation-check-row { flex: 1; min-height: 44px; }
+.trip-step summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--color-text-secondary); }
+.trip-step__fields { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: var(--space-3); }
+.trip-step-field { display: grid; gap: var(--space-1); min-width: 0; }
+.trip-step-field .input { min-height: 44px; width: 100%; min-width: 0; }
+@media (max-width: 600px) { .trip-step__fields { grid-template-columns: minmax(0,1fr); } .trip-step__header { flex-wrap: wrap; } }
+
 .automation-trip-task-row input[type="datetime-local"],
 #automation-trip-form input[type="datetime-local"] {
   color-scheme: dark;

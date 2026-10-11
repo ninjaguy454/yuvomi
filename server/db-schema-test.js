@@ -1082,3 +1082,4 @@ export { MIGRATIONS_SQL, NOTE_LAYOUTS_SCHEMA_SQL, NOTE_GROUPS_SCHEMA_SQL, NOTE_L
 // A constraint rebuild cannot be represented by an ALTER-only SQL excerpt.
 // Consumers opt into the complete append-only migration with FKs disabled.
 export {addTaskSkipSchema as TASK_SKIP_SCHEMA_UPGRADE} from './services/task-skip-schema.js';
+export {addTripTaskSchema as TRIP_TASK_SCHEMA_UPGRADE} from './services/trip-task-schema.js';

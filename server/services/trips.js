@@ -1,4 +1,5 @@
 import { expandRecurringEvents, loadEventExceptions } from './calendar-events.js';
+import {createTripTaskGroup,reconcileTripTasks,tripTaskGroup,replayTripRequest,rememberTripRequest,retireDeletedTrip} from './trip-tasks.js';
 import { saveCalendarTravelProjection } from './calendar-travel.js';
 import {
   attachPlanningContextSource,
@@ -199,9 +200,10 @@ export function getTrip(database, id) {
   if (!trip) return null;
   const participants = database.prepare(`SELECT t.*, u.display_name, u.avatar_color FROM trip_participants t JOIN users u ON u.id = t.user_id WHERE t.trip_id = ? ORDER BY u.display_name`).all(id);
   const stages = database.prepare(`SELECT s.*, p.name AS place_name FROM trip_stages s LEFT JOIN places p ON p.id = s.place_id WHERE s.trip_id = ? ORDER BY s.starts_at, s.sort_order, s.id`).all(id);
-  const tasks = database.prepare(`SELECT tt.phase, t.* FROM trip_tasks tt JOIN tasks t ON t.id = tt.task_id WHERE tt.trip_id = ? ORDER BY t.due_date, t.id`).all(id);
+  const tasks = database.prepare(`SELECT tt.phase, t.*, s.step_key, s.recipe_json, s.overrides_json, s.state AS generation_state FROM trip_tasks tt JOIN tasks t ON t.id = tt.task_id LEFT JOIN trip_task_steps s ON s.task_id=t.id WHERE tt.trip_id = ? ORDER BY t.due_date, t.id`).all(id).map(({recipe_json,overrides_json,...task})=>({...task,assigned_user_ids:database.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(r=>r.user_id),...(recipe_json?{trip_recipe:JSON.parse(recipe_json),trip_overrides:JSON.parse(overrides_json)}:{})}));
   return {
     ...trip,
+    ...tripTaskGroup(database,id),
     participant_ids: participants.map((row) => Number(row.user_id)),
     participants,
     stages,
@@ -231,6 +233,8 @@ export function listTrips(database, { from = null, to = null } = {}) {
 }
 
 export function saveTrip(database, body, actorId, id = null) {
+  return database.transaction(() => {
+  if(!id){const replay=replayTripRequest(database,body,actorId);if(replay)return getTrip(database,replay);}
   const existingRow = id ? database.prepare('SELECT * FROM trip_plans WHERE id = ?').get(id) : null;
   const existing = existingRow ? {
     ...existingRow,
@@ -291,7 +295,10 @@ export function saveTrip(database, body, actorId, id = null) {
     }, { allowMove: Boolean(previousContextId && previousContextId !== planningContextId) });
     replaceParticipants(database, tripId, input, actorId, planningContextId);
     replaceStages(database, tripId, input);
-    createTasks(database, tripId, input, actorId);
+    const generationTrip={...database.prepare('SELECT * FROM trip_plans WHERE id=?').get(tripId),participant_ids:input.participantIds};
+    if(!existing)createTripTaskGroup(database,generationTrip,actorId,body.coordinator_id||input.participantIds[0]);
+    if(database.prepare('SELECT 1 FROM trip_task_groups WHERE trip_id=?').get(tripId))reconcileTripTasks(database,generationTrip,body,actorId);
+    else createTasks(database, tripId, input, actorId);
     if (input.calendarEventId) {
       saveCalendarTravelProjection(database, input.calendarEventId, {
         planning_context_id: planningContextId,
@@ -304,8 +311,10 @@ export function saveTrip(database, body, actorId, id = null) {
     if (previousContextId && previousContextId !== planningContextId) {
       reconcileTravelPlanningContext(database, previousContextId, actorId);
     }
+    if(!existing)rememberTripRequest(database,body,actorId,tripId);
   })();
   return getTrip(database, tripId);
+  }).immediate();
 }
 
 export function deleteTrip(database, id) {
@@ -317,6 +326,7 @@ export function deleteTrip(database, id) {
      WHERE tp.trip_id = ?
   `).all(id);
   return database.transaction(() => {
+    retireDeletedTrip(database,id,trip?.created_by);
     detachPlanningContextSource(database, { sourceType: 'trip', sourceKey: `trip:${id}` });
     const result = database.prepare('DELETE FROM trip_plans WHERE id = ?').run(id);
     for (const row of participants) {

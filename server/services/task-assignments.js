@@ -1,5 +1,14 @@
 /** Canonical assignment relations and child-to-parent participation. */
 export function setTaskAssignments(d, taskId, userIds) {
+  // Trip step owners participate in the ordinary parent even when its
+  // coordinator or direct assignees are edited separately.
+  if (d.prepare("SELECT 1 FROM sqlite_master WHERE name='trip_task_groups' AND type='table'").get()
+      && d.prepare('SELECT 1 FROM trip_task_groups WHERE parent_task_id=?').get(taskId)) {
+    const childOwners = d.prepare(`SELECT DISTINCT ta.user_id FROM tasks child
+      JOIN task_assignments ta ON ta.task_id=child.id
+      WHERE child.parent_task_id=? AND child.archived_at IS NULL`).all(taskId).map(row=>row.user_id);
+    userIds = [...new Set([...userIds,...childOwners])];
+  }
   d.prepare('DELETE FROM task_assignments WHERE task_id = ?').run(taskId);
   const ins = d.prepare('INSERT OR IGNORE INTO task_assignments (task_id, user_id) VALUES (?, ?)');
   for (const uid of userIds) ins.run(taskId, uid);

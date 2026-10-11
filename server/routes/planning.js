@@ -522,7 +522,9 @@ router.delete('/admin/periods/:id', requireCapability('availability.manage'), (r
 });
 
 function visibleTripTasks(req, trip) {
-  return { ...trip, tasks: (trip.tasks || []).filter(task => tokenAllows(req.authScopes, 'tasks', 'read') && taskCapabilities(db.get(), req, task).view) };
+  const visible=task=>task&&tokenAllows(req.authScopes,'tasks','read')&&taskCapabilities(db.get(),req,task).view;
+  return {...trip,tasks:(trip.tasks||[]).filter(visible),parent_task:visible(trip.parent_task)?trip.parent_task:null,
+    travel_meal_plan_task:visible(trip.travel_meal_plan_task)?trip.travel_meal_plan_task:null};
 }
 
 router.get('/trips', (req, res) => {
@@ -613,12 +615,18 @@ router.post('/admin/context-conflicts/:id/resolve', requireAdmin, (req, res) => 
 
 router.post('/admin/trips', requireAdmin, (req, res) => {
   try { res.status(201).json({ data: visibleTripTasks(req, saveTrip(db.get(), req.body, currentUserId(req))) }); }
-  catch (error) { res.status(400).json({ error: error.message, code: 400 }); }
+  catch (error) { const status=error.status||400;res.status(status).json({error:error.message,code:status,...error.details}); }
 });
 
 router.put('/admin/trips/:id', requireAdmin, (req, res) => {
-  try { res.json({ data: visibleTripTasks(req, saveTrip(db.get(), req.body, currentUserId(req), integer(req.params.id, { required: true }))) }); }
-  catch (error) { res.status(/not found/i.test(error.message) ? 404 : 400).json({ error: error.message, code: /not found/i.test(error.message) ? 404 : 400 }); }
+  try {
+    const id=integer(req.params.id,{required:true});
+    const group=db.get().prepare('SELECT * FROM trip_task_groups WHERE trip_id=?').get(id);
+    if(group&&(!Number.isSafeInteger(req.body.expected_revision)||group.parent_task_id&&!Number.isSafeInteger(req.body.expected_parent_revision)))
+      return res.status(428).json({error:'Reload the Trip before saving. Trip and parent Task revisions are required.',code:428,reason:'trip_revision_required'});
+    res.json({data:visibleTripTasks(req,saveTrip(db.get(),req.body,currentUserId(req),id))});
+  }
+  catch (error) { const status=error.status||(/not found/i.test(error.message)?404:400);res.status(status).json({error:error.message,code:status,...error.details}); }
 });
 
 router.delete('/admin/trips/:id', requireAdmin, (req, res) => {

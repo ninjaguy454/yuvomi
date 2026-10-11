@@ -1,4 +1,5 @@
 import { taskVisibilityWhere } from './task-access.js';
+import { tripReminderActive } from './trip-task-state.js';
 /** User-owned notification receipts. Domain records remain the source of truth. */
 import { resolvePermissions } from '../permissions.js';
 import { visibilityWhere } from './visibility.js';
@@ -59,6 +60,7 @@ function accessWhere(database, userId) {
 }
 
 export function canReceiveNotification(database, notification) {
+  if(notification?.entity_type==='task'&&!tripReminderActive(database,notification.entity_id))return false;
   const userId = Number(notification?.user_id);
   if (!Number.isSafeInteger(userId) || userId <= 0) return false;
   const where = accessWhere(database, userId);

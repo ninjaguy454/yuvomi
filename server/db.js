@@ -1,3 +1,4 @@
+import {addTripTaskSchema} from './services/trip-task-schema.js';
 import {addMealCycleFinalizationSchema} from './services/meal-cycle-finalization-schema.js';
 import {addMealCycleReconciliationSchema} from './services/meal-cycle-reconciliation-schema.js';
 import {addMealCycleAdjustmentSchema} from './services/meal-cycle-adjustment-schema.js';
@@ -9116,6 +9117,7 @@ FORK_MIGRATIONS.push({version:10052, description:'Notes: independent groups, ord
 FORK_MIGRATIONS.push({version:10053, description:'Notes: independent personal and paired-device layout owners', up:addNoteLayoutOwnerSchema});
 FORK_MIGRATIONS.push({version:10054, description:'Tasks: durable whole-occurrence calendar excusal', foreignKeysOff:true, up:addTaskSkipSchema});
 
+FORK_MIGRATIONS.push({version:10056, description:'Trips: ordinary parent Tasks and durable preparation steps', up:addTripTaskSchema});
 const ALL_MIGRATIONS = [...MIGRATIONS, ...FORK_MIGRATIONS];
 
 const FORK_MIGRATION_REMAPS = [

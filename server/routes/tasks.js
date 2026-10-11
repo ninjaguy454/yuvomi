@@ -1,4 +1,7 @@
 import {setTaskAssignments as setAssignments} from '../services/task-assignments.js';
+import {isTripStep,tripTaskState,markTripTaskOverrides} from '../services/trip-task-state.js';
+import {attachTripTaskProjection} from '../services/trip-task-projection.js';
+import {retireTripTask,refreshTripStepReminders} from '../services/trip-tasks.js';
 import {listTaskOffers,taskOfferState} from '../services/task-offers.js';
 import {acceptanceOptions} from '../services/task-acceptance-policy.js';
 import {acceptTask} from '../services/task-acceptance.js';
@@ -452,7 +455,10 @@ function applyEditedSubtasks(task, edited, actorId) {
   for(const child of edited.remove) {
     recordTaskActivity(db.get(),task.id,'subtask_removed',actorId,{title:child.title},child.id);
     queueTodoDeletion('tasks',child);
-    if(recurring) {
+    if(isTripStep(db.get(),child.id)) {
+      retireTripTask(db.get(),child.id,actorId,'Trip step removed in Task editor');
+      db.get().prepare("UPDATE trip_task_steps SET state='removed' WHERE task_id=?").run(child.id);
+    } else if(recurring) {
       // An action removed from an occurrence stops being actionable, while its
       // original ID, progress, documents, comments, awards and helper evidence
       // remain available as history. Supervision reconciliation retires work.
@@ -843,6 +849,8 @@ function loadSubtasks(taskId, me, supervisionViews) {
   const parentRevision = db.get().prepare('SELECT revision FROM tasks WHERE id=?').get(taskId)?.revision;
   for (const row of rows) row.parent_revision = parentRevision;
   attachTaskCapabilities(db.get(),me,rows);
+  attachTaskLocations(db.get(),rows);
+  for(const row of rows)attachTripTaskProjection(db.get(),row,me);
   attachTaskSupervision(db.get(),rows,me,supervisionViews);
   return attachTags(rows);
 }
@@ -906,6 +914,7 @@ export function hydrateTask(task, me, supervisionViews = new Map()) {
   task.is_offer=offer.visible;
   task.offer_reason=offer.reason;
   task.permissions.accept=offer.claimable;
+  attachTripTaskProjection(db.get(),task,me);
   return task;
 }
 
@@ -1885,7 +1894,7 @@ export function updateTaskDefinition(req, res) {
     const taskLocation = req.body.location === undefined
       ? undefined
       : normalizeTaskLocation(db.get(), req.body.location);
-    if (taskLocation !== undefined && task.parent_task_id) {
+    if (taskLocation !== undefined && task.parent_task_id && !isTripStep(db.get(),task.id)) {
       return res.status(400).json({ error: 'Locations can only be attached to top-level tasks.', code: 400 });
     }
 
@@ -2167,7 +2176,13 @@ export function updateTaskDefinition(req, res) {
         updated=current;return;
       }
       assertTaskWindowAction(db.get(),current.id);
+      if(tripTaskState(db.get(),current.id)&&(is_recurring||desiredActivityBinding||rotationBindings.length))
+        throw new TaskStateError('Trip work uses an ordinary one-off Task. Manage its schedule in Trips.',{},400);
       assertOptionalityEdit(current,is_optional);
+      const tripChangedFields=Object.keys(req.body).filter(key=>['title','description','priority','due_date','due_time','is_optional'].includes(key)&&req.body[key]!==current[key]);
+      if(performersChanged)tripChangedFields.push('assigned_to');
+      if(taskLocation!==undefined)tripChangedFields.push('location');
+      markTripTaskOverrides(db.get(),current.id,tripChangedFields);
       db.get().prepare(`
         UPDATE tasks SET
           title = ?, description = ?, category = ?, priority = ?,
@@ -2196,6 +2211,7 @@ export function updateTaskDefinition(req, res) {
           due_date=CASE WHEN due_date IS ? THEN ? ELSE due_date END,
           due_time=CASE WHEN due_time IS ? THEN ? ELSE due_time END
           WHERE parent_task_id=? AND archived_at IS NULL
+            AND NOT EXISTS(SELECT 1 FROM trip_task_steps s WHERE s.task_id=tasks.id)
             AND NOT EXISTS(SELECT 1 FROM task_activity_support_tasks s WHERE s.task_id=tasks.id)
             AND NOT EXISTS(SELECT 1 FROM task_supervision_actions a WHERE a.counterpart_task_id=tasks.id)`)
           .run(task.start_time,start_time,task.start_date,start_date,task.due_date,due_date,task.due_time,due_time,task.id);
@@ -2232,6 +2248,7 @@ export function updateTaskDefinition(req, res) {
       if (taskLocation !== undefined) {
         setTaskLocation(db.get(), task.id, taskLocation, req.authUserId || req.session.userId);
       }
+      if(isTripStep(db.get(),task.id))refreshTripStepReminders(db.get(),task.id);
 
       reconcileTaskSupervision(db.get(),task.id,{actorId:req.authUserId||req.session.userId});
       const sharedWindowChanged=taskWindowChanged&&parseRotationBindings(rotationBindingsJson).length>0;

@@ -384,6 +384,7 @@ async function runDueNotifications({
   const locale = resolveHouseholdLocale(activeDb);
 
   for (const reminder of due) {
+    if(reminder.entity_type==='task'&&!tripReminderActive(activeDb,reminder.entity_id))continue;
     if(reminder.entity_type==='task' && taskWindowAncestors(activeDb,reminder.entity_id)
       .some(row=>['expired','skipped'].includes(row.status)))continue;
     const payload = reminderPayload(reminder, locale);
@@ -507,3 +508,4 @@ async function runDueNotifications({
 }
 
 export const notificationService = createNotificationService();
+import { tripReminderActive } from './trip-task-state.js';

@@ -168,7 +168,7 @@ router.get('/pending', (req, res) => {
       ORDER BY r.remind_at ASC
     `).all(userId, now, ...origins);
 
-    res.json({ data: rows });
+    res.json({ data: rows.filter(row=>row.entity_type!=='task'||tripReminderActive(db.get(),row.entity_id)) });
   } catch (err) {
     log.error('Error loading due reminders:', err.message);
     res.status(500).json({ error: 'Internal error.', code: 500 });
@@ -490,3 +490,4 @@ router.delete('/', (req, res) => {
 });
 
 export default router;
+import {tripReminderActive} from '../services/trip-task-state.js';

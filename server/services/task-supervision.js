@@ -7,7 +7,9 @@ import { syncWorkflowInstanceForTask } from './activity-workflows.js';
 import { taskCapabilities, taskSupervisionManagementAllowed } from './task-access.js';
 import { createHash } from 'node:crypto';
 import { createTaskOptionalContextReader } from './task-optional.js';
-import { taskActivitySnapshot, activitySnapshotSkills } from './task-activity-snapshot.js';
+import { taskActivitySnapshot, activitySnapshotSkills, parseTaskActivitySnapshot } from './task-activity-snapshot.js';
+import { previewTaskActivityBinding } from './task-activity-bindings.js';
+import { assertTaskSkillAssignments } from './task-skills.js';
 
 const NOW = "strftime('%Y-%m-%dT%H:%M:%SZ','now')";
 // Request-local presentation data; never serialized as an aggregate of private siblings.
@@ -147,19 +149,7 @@ export function assertTaskSupervisionAssignee(d, taskId, userId) {
   // canonical skill policy before this resolved-assignee boundary.
 }
 
-/** Pure read: profile and Availability changes expose stale supervision without rewriting assignments. */
-export function inspectTaskSupervision(d, taskId) {
-  const sourceId = taskSupervisionRootId(d, taskId), source = task(d, sourceId);
-  const empty = { source_task_id: sourceId, state: 'none', reason: null, support_task_id: null, actions: [],
-    supervisor_user_id: null, supervisor_name: null, eligible_supervisors: [], qualified_supervisor_count: 0,
-    supervisor_explanations: [], blocked_requirements: [] };
-  if (!supported(d) || !source) return empty;
-  const members = householdMembers(d), byId = new Map(members.map(m => [Number(m.id), m]));
-  const saved = d.prepare('SELECT * FROM task_supervision_actions WHERE source_task_id = ?').all(sourceId);
-  const rows = ordinaryTaskScope(d, sourceId);
-  const optionalContextFor = createTaskOptionalContextReader(d, rows);
-  const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);
-  const actions = [], skillEligibility = new Map(), actionWindows = new Map();
+function eligibilityReaders(d) {
   // This inspection is synchronous and read-only. Sibling actions commonly
   // share the same skills and inherited completion window. Resolve those facts
   // once here; every later inspection (including after a mutation) starts fresh.
@@ -175,6 +165,89 @@ export function inspectTaskSupervision(d, taskId) {
     if (!availabilityResults.has(key)) availabilityResults.set(key, availability(d, userId, presence));
     return availabilityResults.get(key);
   };
+  return { proficiencyFor, availabilityFor };
+}
+
+// Fresh operational assessment is shared by SQL inspection and virtual plans.
+function assessTaskSupervisionAction({ row, sourceId, learnerId, learner, skills, assessed, excluded, required, prior, members, byId, dateKey, presence, proficiencyFor, availabilityFor, skillEligibility, previousSupervisorFor, counterpartRevisionFor }) {
+    const executionMode = excluded.length ? 'delegated' : 'supervised';
+    // A person doing the action themselves must cover ALL its explicit skills,
+    // including any skills the learner happens to know independently.
+    const requiredSkills = !learner || excluded.length ? skills : required;
+    const qualified = learner && requiredSkills.length ? members.filter(candidate => Number(candidate.id) !== Number(learnerId)
+      && requiredSkills.every(skill => proficiencyFor(skill, candidate, dateKey).proficiency === 'normal')) : [];
+    // Ignored Availability cannot influence this decision. A delegated action
+    // is performed by its helper, so it does not need a shared learner window.
+    const learnerAvailability = learner && presence.policy !== 'ignore' && executionMode !== 'delegated'
+      ? availabilityFor(learner.id, presence) : null;
+    const candidateAvailability = new Map();
+    const eligible = qualified.filter(candidate => {
+      if (presence.policy === 'ignore') return true;
+      const own = availabilityFor(candidate.id, presence);
+      candidateAvailability.set(candidate.id, own);
+      return own.eligible && (executionMode === 'delegated'
+        || learnerAvailability?.eligible && sharedEligibleInterval([learnerAvailability, own], presence.requiredDurationMinutes));
+    });
+    const previousSupervisor = previousSupervisorFor();
+    const assignedValid = eligible.some(candidate => Number(candidate.id) === Number(previousSupervisor));
+    let state = 'not_required', reason = `${memberName(learner)} can perform this action independently.`;
+    if (!learner && skills.length) { state = 'unresolved'; reason = 'Choose an assignee before supervision can be evaluated.'; }
+    else if (requiredSkills.length) {
+      state = assignedValid ? 'assigned' : 'unresolved';
+      const names = requiredSkills.map(skill => skill.name).join(', ');
+      if (assignedValid) reason = `${memberName(learner)} requires supervision for ${names}. ${byId.get(Number(previousSupervisor)).display_name} will supervise this action.`;
+      else if (!qualified.length) reason = `${memberName(learner)} requires supervision for ${names}, but no qualified supervisor exists in the household.`;
+      else if (!eligible.length) {
+        reason = `${memberName(learner)} requires supervision for ${names}, but no qualified supervisor shares an eligible time in the Task's completion window.`;
+        if (executionMode !== 'delegated' && learnerAvailability?.eligible === false && learnerAvailability.reason) reason += ` ${memberName(learner)}: ${learnerAvailability.reason}`;
+        else {
+          const blocked = qualified.find(candidate => candidateAvailability.get(candidate.id)?.eligible === false);
+          if (blocked && candidateAvailability.get(blocked.id)?.reason) reason += ` ${blocked.display_name}: ${candidateAvailability.get(blocked.id).reason}`;
+        }
+      }
+      else if (previousSupervisor) reason = `The assigned supervisor can no longer supervise ${memberName(learner)} for ${names}. Assign an eligible supervisor.`;
+      else reason = `${memberName(learner)} requires supervision for ${names}. Assign an eligible supervisor.`;
+      if (executionMode === 'delegated') {
+        reason = `${memberName(learner)} must not perform ${names}, even with supervision. The helper must perform this action instead.`;
+        if (!qualified.length) reason += ' No independently qualified helper exists in the household.';
+        else if (!eligible.length) reason += ' No qualified helper is available during the Task’s completion window.'
+          + qualified.map(candidate => ` ${candidate.display_name}: ${candidateAvailability.get(candidate.id)?.reason || 'No eligible time.'}`).join('');
+      }
+    }
+    const action = { id: prior?.id || null, source_task_id: sourceId, action_task_id: row.id, action_title: row.title,
+      counterpart_task_id: prior?.counterpart_task_id || null, learner_user_id: learnerId || null, learner_name: learner?.display_name || null,
+      supervisor_user_id: previousSupervisor, supervisor_name: byId.get(Number(previousSupervisor))?.display_name || null,
+      required_skills: requiredSkills.map(skill => ({ id: skill.id, name: skill.name })), execution_mode: executionMode, state, reason,
+      skill_eligibility: skillEligibility, display_reason: `${row.title}: ${reason}`,
+      revision: prior?.revision || 0, task_revision: row.revision, counterpart_revision: counterpartRevisionFor(),
+      eligible_supervisors: eligible.map(({ id, display_name }) => ({ id, display_name })),
+      supervisor_explanations: qualified.map(({id,display_name})=>{
+        const canSupervise=eligible.some(candidate=>candidate.id===id), own=candidateAvailability.get(id);
+        const explanation=presence.policy==='ignore'?'This Task does not restrict Availability or Presence.'
+          : executionMode!=='delegated'&&learnerAvailability?.eligible===false?`${memberName(learner)}: ${learnerAvailability.reason}`
+            : own?.eligible===false?own.reason
+              : !canSupervise?'No shared eligible time with the learner.':own?.reason;
+        return {user_id:id,name:display_name,eligible:canSupervise,reason:explanation};
+      }),
+      qualified_supervisor_count: qualified.length, completed: false, status: row.status };
+    action.qualified_supervisor_ids = qualified.map(candidate => candidate.id);
+    return action;
+}
+
+/** Pure read: profile and Availability changes expose stale supervision without rewriting assignments. */
+export function inspectTaskSupervision(d, taskId) {
+  const sourceId = taskSupervisionRootId(d, taskId), source = task(d, sourceId);
+  const empty = { source_task_id: sourceId, state: 'none', reason: null, support_task_id: null, actions: [],
+    supervisor_user_id: null, supervisor_name: null, eligible_supervisors: [], qualified_supervisor_count: 0,
+    supervisor_explanations: [], blocked_requirements: [] };
+  if (!supported(d) || !source) return empty;
+  const members = householdMembers(d), byId = new Map(members.map(m => [Number(m.id), m]));
+  const saved = d.prepare('SELECT * FROM task_supervision_actions WHERE source_task_id = ?').all(sourceId);
+  const rows = ordinaryTaskScope(d, sourceId);
+  const optionalContextFor = createTaskOptionalContextReader(d, rows);
+  const support = d.prepare('SELECT task_id FROM task_activity_support_tasks WHERE source_task_id = ?').get(sourceId);
+  const actions = [], skillEligibility = new Map(), actionWindows = new Map();
+  const { proficiencyFor, availabilityFor } = eligibilityReaders(d);
   for (const row of rows) {
     const prior = saved.find(item => Number(item.action_task_id) === Number(row.id))
       || d.prepare('SELECT * FROM task_supervision_actions WHERE action_task_id=?').get(row.id);
@@ -229,68 +302,11 @@ export function inspectTaskSupervision(d, taskId) {
         counterpart_revision: prior.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null });
       continue;
     }
-    const executionMode = excluded.length ? 'delegated' : 'supervised';
-    // A person doing the action themselves must cover ALL its explicit skills,
-    // including any skills the learner happens to know independently.
-    const requiredSkills = !learner || excluded.length ? skills : required;
-    const qualified = learner && requiredSkills.length ? members.filter(candidate => Number(candidate.id) !== Number(learnerId)
-      && requiredSkills.every(skill => proficiencyFor(skill, candidate, dateKey).proficiency === 'normal')) : [];
-    // Ignored Availability cannot influence this decision. A delegated action
-    // is performed by its helper, so it does not need a shared learner window.
-    const learnerAvailability = learner && presence.policy !== 'ignore' && executionMode !== 'delegated'
-      ? availabilityFor(learner.id, presence) : null;
-    const candidateAvailability = new Map();
-    const eligible = qualified.filter(candidate => {
-      if (presence.policy === 'ignore') return true;
-      const own = availabilityFor(candidate.id, presence);
-      candidateAvailability.set(candidate.id, own);
-      return own.eligible && (executionMode === 'delegated'
-        || learnerAvailability?.eligible && sharedEligibleInterval([learnerAvailability, own], presence.requiredDurationMinutes));
-    });
-    const previousSupervisor = prior ? prior.supervisor_user_id : d.prepare(`SELECT user_id FROM task_responsibilities
-      WHERE task_id = ? AND role = 'supervisor' AND status = 'active' ORDER BY user_id LIMIT 1`).get(sourceId)?.user_id ?? null;
-    const assignedValid = eligible.some(candidate => Number(candidate.id) === Number(previousSupervisor));
-    let state = 'not_required', reason = `${memberName(learner)} can perform this action independently.`;
-    if (!learner && skills.length) { state = 'unresolved'; reason = 'Choose an assignee before supervision can be evaluated.'; }
-    else if (requiredSkills.length) {
-      state = assignedValid ? 'assigned' : 'unresolved';
-      const names = requiredSkills.map(skill => skill.name).join(', ');
-      if (assignedValid) reason = `${memberName(learner)} requires supervision for ${names}. ${byId.get(Number(previousSupervisor)).display_name} will supervise this action.`;
-      else if (!qualified.length) reason = `${memberName(learner)} requires supervision for ${names}, but no qualified supervisor exists in the household.`;
-      else if (!eligible.length) {
-        reason = `${memberName(learner)} requires supervision for ${names}, but no qualified supervisor shares an eligible time in the Task's completion window.`;
-        if (executionMode !== 'delegated' && learnerAvailability?.eligible === false && learnerAvailability.reason) reason += ` ${memberName(learner)}: ${learnerAvailability.reason}`;
-        else {
-          const blocked = qualified.find(candidate => candidateAvailability.get(candidate.id)?.eligible === false);
-          if (blocked && candidateAvailability.get(blocked.id)?.reason) reason += ` ${blocked.display_name}: ${candidateAvailability.get(blocked.id).reason}`;
-        }
-      }
-      else if (previousSupervisor) reason = `The assigned supervisor can no longer supervise ${memberName(learner)} for ${names}. Assign an eligible supervisor.`;
-      else reason = `${memberName(learner)} requires supervision for ${names}. Assign an eligible supervisor.`;
-      if (executionMode === 'delegated') {
-        reason = `${memberName(learner)} must not perform ${names}, even with supervision. The helper must perform this action instead.`;
-        if (!qualified.length) reason += ' No independently qualified helper exists in the household.';
-        else if (!eligible.length) reason += ' No qualified helper is available during the Task’s completion window.'
-          + qualified.map(candidate => ` ${candidate.display_name}: ${candidateAvailability.get(candidate.id)?.reason || 'No eligible time.'}`).join('');
-      }
-    }
-    actions.push({ id: prior?.id || null, source_task_id: sourceId, action_task_id: row.id, action_title: row.title,
-      counterpart_task_id: prior?.counterpart_task_id || null, learner_user_id: learnerId || null, learner_name: learner?.display_name || null,
-      supervisor_user_id: previousSupervisor, supervisor_name: byId.get(Number(previousSupervisor))?.display_name || null,
-      required_skills: requiredSkills.map(skill => ({ id: skill.id, name: skill.name })), execution_mode: executionMode, state, reason,
-      skill_eligibility: skillEligibility.get(row.id) || [], display_reason: `${row.title}: ${reason}`,
-      revision: prior?.revision || 0, task_revision: row.revision, counterpart_revision: prior?.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null,
-      eligible_supervisors: eligible.map(({ id, display_name }) => ({ id, display_name })),
-      supervisor_explanations: qualified.map(({id,display_name})=>{
-        const canSupervise=eligible.some(candidate=>candidate.id===id), own=candidateAvailability.get(id);
-        const explanation=presence.policy==='ignore'?'This Task does not restrict Availability or Presence.'
-          : executionMode!=='delegated'&&learnerAvailability?.eligible===false?`${memberName(learner)}: ${learnerAvailability.reason}`
-            : own?.eligible===false?own.reason
-              : !canSupervise?'No shared eligible time with the learner.':own?.reason;
-        return {user_id:id,name:display_name,eligible:canSupervise,reason:explanation};
-      }),
-      qualified_supervisor_count: qualified.length, completed: false, status: row.status });
-    actions[actions.length - 1].qualified_supervisor_ids = qualified.map(candidate => candidate.id);
+    actions.push(assessTaskSupervisionAction({ row, sourceId, learnerId, learner, skills, assessed, excluded, required, prior, members, byId, dateKey, presence,
+      proficiencyFor, availabilityFor, skillEligibility: skillEligibility.get(row.id) || [],
+      previousSupervisorFor: () => prior ? prior.supervisor_user_id : d.prepare(`SELECT user_id FROM task_responsibilities
+        WHERE task_id = ? AND role = 'supervisor' AND status = 'active' ORDER BY user_id LIMIT 1`).get(sourceId)?.user_id ?? null,
+      counterpartRevisionFor: () => prior?.counterpart_task_id ? task(d, prior.counterpart_task_id)?.revision : null }));
   }
   for(const action of actions)action.is_optional=optionalContextFor(action.action_task_id).is_optional;
   const activeSupervisorIds = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'")
@@ -362,6 +378,145 @@ function singleSupervisorScope(actions, members, activeSupervisorIds = []) {
   return { state, reason, supervisor_user_id: selected?.id || null, supervisor_name: selected?.display_name || null,
     eligible_supervisors: eligible.map(({ id, display_name }) => ({ id, display_name })),
     qualified_supervisor_count: qualified.length, supervisor_explanations: explanations, blocked_requirements: blockedRequirements };
+}
+
+// Reconciliation and prospective plans use the same fresh choice order.
+function selectTaskSupervisor(view, { requestedSupervisor, currentIds = [], attempted = new Set() } = {}) {
+  const currentEligible = currentIds.length === 1 && !attempted.has(currentIds[0])
+    ? view.eligible_supervisors.find(member => member.id === currentIds[0]) : null;
+  const selectedId = requestedSupervisor !== undefined ? requestedSupervisor
+    : view.supervisor_user_id || currentEligible?.id || view.eligible_supervisors.find(member => !attempted.has(member.id))?.id || null;
+  return view.eligible_supervisors.find(member => member.id === Number(selectedId));
+}
+
+function projectionUnavailable() {
+  const error = new Error('The prospective execution context cannot be prepared safely.');
+  error.status = 409; error.reason = 'scoring_projection_unavailable'; return error;
+}
+const positiveId = value => Number.isSafeInteger(value) && value > 0;
+const referenceKey = ref => ref?.kind === 'definition_root' && Object.keys(ref).length === 1 ? 'root'
+  : ref?.kind === 'template' && Object.keys(ref).length === 2 && positiveId(ref.template_id) ? `template:${ref.template_id}` : null;
+function preparedIds(values, allowed) {
+  if (!Array.isArray(values) || values.some(id => !positiveId(id) || !allowed.has(id)) || new Set(values).size !== values.length) throw projectionUnavailable();
+  return [...values];
+}
+function preparationContext(value) {
+  const date = input => typeof input === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(input) && !Number.isNaN(Date.parse(input));
+  if (value?.kind !== 'next_occurrence' || !Number.isSafeInteger(value.generation) || value.generation < 1 || !date(value.as_of_date)
+    || value.assumed_completion_date != null && !date(value.assumed_completion_date)
+    || !['fresh','existing_untouched'].includes(value.preparation) || !Array.isArray(value.conditions)
+    || value.conditions.some(condition => typeof condition !== 'string')) throw projectionUnavailable();
+  return { kind: value.kind, generation: value.generation, as_of_date: value.as_of_date,
+    assumed_completion_date: value.assumed_completion_date ?? null, preparation: value.preparation, conditions: [...value.conditions] };
+}
+
+/** Private, read-only execution facts for a complete canonical next occurrence.
+ * Operational assignments here never replace the definition's read joins.
+ * References are definition identities; no Task lookup or helper projection is
+ * created. Callers authorize and project the resulting facts separately. */
+export function prepareProspectiveTaskExecution(d, input) {
+  try {
+    const ctx = preparationContext(input?.context), members = householdMembers(d), byId = new Map(members.map(member => [member.id, member]));
+    const skillIds = new Set(d.prepare('SELECT id FROM skills').all().map(row => row.id));
+    if (!Array.isArray(input.actions) || referenceKey(input.root?.ref) !== 'root') throw projectionUnavailable();
+    const keys = new Set(), nodes = [input.root, ...input.actions].map((node, index) => {
+      const key = referenceKey(node?.ref);
+      if (!key || keys.has(key) || index > 0 && key === 'root' || !['source_root','source_action','helper_projection','container'].includes(node.role)
+        || index === 0 && node.role === 'source_action' || index > 0 && node.role === 'source_root'
+        || !node.task || Object.hasOwn(node.task,'id') || Object.hasOwn(node.task,'parent_task_id') || node.task.status !== 'open' || node.task.archived_at != null
+        || typeof node.is_optional !== 'boolean' || !node.window || typeof node.window !== 'object'
+        || !Object.hasOwn(node,'primary_user_id') || node.primary_user_id !== null && (!positiveId(node.primary_user_id) || !byId.has(node.primary_user_id))) throw projectionUnavailable();
+      keys.add(key);
+      const assigned = preparedIds(node.assigned_user_ids, byId), required = preparedIds(node.skill_ids, skillIds);
+      if (node.primary_user_id != null && assigned.length && !assigned.includes(node.primary_user_id)) throw projectionUnavailable();
+      return { ...node, ref: structuredClone(node.ref), key, assigned, required, id: -index-1,
+        task: { ...node.task, ...node.window, id: -index-1, revision: 0 } };
+    });
+    const root = nodes[0], selection = input.selection ?? {};
+    if (!selection || typeof selection !== 'object' || Array.isArray(selection)
+      || Object.hasOwn(selection,'preferred_supervisor_user_ids') && !Array.isArray(selection.preferred_supervisor_user_ids)
+      || Object.hasOwn(selection,'attempted_supervisor_user_ids') && !Array.isArray(selection.attempted_supervisor_user_ids)
+      || Object.hasOwn(selection,'prior_units') && !Array.isArray(selection.prior_units)) throw projectionUnavailable();
+    const selectedIds = preparedIds(selection.preferred_supervisor_user_ids || [], byId);
+    const attempted = new Set(preparedIds(selection.attempted_supervisor_user_ids || [], byId));
+    if (selection.requested_supervisor_user_id != null && !byId.has(selection.requested_supervisor_user_id)) throw projectionUnavailable();
+    if (ctx.preparation === 'fresh' && (selectedIds.length || attempted.size || Object.hasOwn(selection,'requested_supervisor_user_id') || selection.prior_units?.length)) throw projectionUnavailable();
+    if (ctx.preparation === 'existing_untouched' && (!Object.hasOwn(selection,'preferred_supervisor_user_ids')
+      || !Object.hasOwn(selection,'attempted_supervisor_user_ids') || !Array.isArray(selection.prior_units))) throw projectionUnavailable();
+    const priors = new Map();
+    for (const prior of selection.prior_units || []) {
+      const key = referenceKey(prior.ref);
+      if (!keys.has(key) || priors.has(key) || prior.learner_user_id != null && !byId.has(prior.learner_user_id)
+        || prior.supervisor_user_id != null && !byId.has(prior.supervisor_user_id)) throw projectionUnavailable();
+      priors.set(key, prior);
+    }
+    let rootSkills = root.required, planning = root.planning || {}, freshPreferred = [];
+    if (root.binding) {
+      const binding = root.binding;
+      if (!positiveId(binding.activity_template_id) || !binding.snapshot) throw projectionUnavailable();
+      let activity = parseTaskActivitySnapshot(binding.snapshot);
+      if (Number(activity.id) !== binding.activity_template_id) throw projectionUnavailable();
+      if (ctx.preparation === 'fresh') {
+        // Random assignment is a condition, not a deterministic next recipient.
+        if (!binding.assignment_override_user_id && ['eligible_random','random'].includes(activity.assignment_policy || activity.assignment_strategy)) throw projectionUnavailable();
+        const planned = previewTaskActivityBinding(d, { activityTemplateId: binding.activity_template_id, subjectUserId: binding.subject_user_id,
+          assignmentOverrideUserId: binding.assignment_override_user_id, activitySnapshot: activity,
+          task: root.task, dateKey: root.task.due_date || root.task.start_date || ctx.as_of_date });
+        activity = planned.activity;
+        if ((planned.resolution.primary?.id ?? null) !== root.primary_user_id) throw projectionUnavailable();
+        // Binding-owned participants are distinct from a helper and from extra
+        // explicit child owners prepared by the Task participant service.
+        const participants = planned.resolution.participants?.length ? planned.resolution.participants : planned.resolution.primary ? [planned.resolution.primary] : [];
+        if (participants.some(member => !root.assigned.includes(member.id))) throw projectionUnavailable();
+        freshPreferred = planned.resolution.supervisor?.id ? [planned.resolution.supervisor.id] : [];
+      }
+      // An untouched target already owns its operational assignment. Its
+      // frozen requirements/presence remain live eligibility inputs, without
+      // consuming or re-resolving the next-generation assignment cursor.
+      rootSkills = activitySnapshotSkills(d, activity).map(skill => skill.id);
+      planning = { place_id: activity.location_mode === 'fixed' ? activity.place_id : null,
+        presence_policy: activity.presence_policy, presence_window: activity.presence_window };
+    }
+    if (ctx.preparation === 'fresh' && !root.binding && !['container','helper_projection'].includes(root.role)) assertTaskSkillAssignments(d,rootSkills,root.assigned,
+      root.task.due_date || root.task.start_date || ctx.as_of_date);
+    const { proficiencyFor, availabilityFor } = eligibilityReaders(d), actions = [], facts = [];
+    for (const node of nodes) {
+      const fact = { ref: node.ref, role: node.role, assigned_user_ids: [...node.assigned], supervision: null }; facts.push(fact);
+      if (['container','helper_projection'].includes(root.role) || ['container','helper_projection'].includes(node.role)) continue;
+      const learnerId = node.primary_user_id ?? root.primary_user_id ?? null, learner = byId.get(learnerId);
+      const occurrence = { ...root.task, ...node.task };
+      for (const field of ['start_date','start_time','due_date','due_time']) occurrence[field] = node.task[field] || root.task[field] || null;
+      const dateKey = occurrence.due_date || occurrence.start_date || ctx.as_of_date, pc = node.planning || planning;
+      const presence = { policy: pc.presence_policy || 'ignore', targetPlaceId: pc.place_id || null,
+        ...activityPresenceWindow(d, { task: occurrence, dateKey, windowMode: pc.presence_window || 'due' }) };
+      const skills = (node === root ? rootSkills : node.required).map(id => d.prepare('SELECT * FROM skills WHERE id=?').get(id));
+      if (!learner) continue; // Unassigned work has the existing assignment-needed semantics.
+      const assessed = skills.map(skill => ({ skill, ...proficiencyFor(skill, learner, dateKey) }));
+      const excluded = assessed.filter(item => item.proficiency === 'excluded'), required = assessed.filter(item => item.proficiency === 'supervised').map(item => item.skill);
+      const prior = priors.get(node.key);
+      if (!prior && !excluded.length && !required.length) continue;
+      const action = assessTaskSupervisionAction({ row: node.task, sourceId: root.id, learnerId, learner, skills, assessed, excluded, required,
+        prior, members, byId, dateKey, presence, proficiencyFor, availabilityFor, skillEligibility: [],
+        previousSupervisorFor: () => prior?.supervisor_user_id ?? freshPreferred[0] ?? null, counterpartRevisionFor: () => null });
+      action.is_optional = node.is_optional; action.fact = fact; actions.push(action);
+    }
+    const currentIds = ctx.preparation === 'fresh' ? freshPreferred : selectedIds;
+    const scope = singleSupervisorScope(actions, members, currentIds), view = { ...scope, actions };
+    const requestedSupervisor = Object.hasOwn(selection,'requested_supervisor_user_id') ? selection.requested_supervisor_user_id : undefined;
+    if (requestedSupervisor != null && !view.eligible_supervisors.some(member => member.id === requestedSupervisor)) throw projectionUnavailable();
+    const selected = selectTaskSupervisor(view, { requestedSupervisor, currentIds, attempted });
+    for (const action of actions) {
+      const helper = selected && (!action.is_optional || action.eligible_supervisors.some(member => member.id === selected.id)) ? selected : null;
+      action.fact.supervision = { execution_mode: action.execution_mode,
+        state: action.state === 'not_required' ? 'not_required' : helper ? 'assigned' : 'unresolved',
+        learner_user_id: action.learner_user_id, supervisor_user_id: action.state === 'not_required' ? null : helper?.id ?? null };
+    }
+    const unresolved = facts.some(fact => fact.supervision?.state === 'unresolved');
+    return { context: ctx, units: facts, warnings: unresolved ? [{ reason: 'prospective_supervision_unresolved', message: 'The prospective occurrence requires supervision that is not currently resolved.' }] : [] };
+  } catch (error) {
+    if (error.reason === 'scoring_projection_unavailable') throw error;
+    throw projectionUnavailable();
+  }
 }
 
 function insertProjection(d, source, title, parentId, assignedTo) {
@@ -483,11 +638,7 @@ export function reconcileTaskSupervision(d, taskId, { actorId = null, supervisor
       AND status IN ('declined','timed_out')`).all(source.id).map(row => row.responsible_user_id));
     const currentIds = d.prepare("SELECT user_id FROM task_responsibilities WHERE task_id=? AND role='supervisor' AND status='active'")
       .all(source.id).map(row => row.user_id);
-    const currentEligible = currentIds.length === 1 && !attempted.has(currentIds[0])
-      ? view.eligible_supervisors.find(member => member.id === currentIds[0]) : null;
-    const selectedId = requestedSupervisor !== undefined ? requestedSupervisor
-      : view.supervisor_user_id || currentEligible?.id || view.eligible_supervisors.find(member => !attempted.has(member.id))?.id || null;
-    const selected = view.eligible_supervisors.find(member => member.id === Number(selectedId));
+    const selected = selectTaskSupervisor(view, { requestedSupervisor, currentIds, attempted });
     let changedScope = false;
     let supportId = view.support_task_id;
     const needsWork = view.actions.some(action => action.state !== 'not_required' && !action.completed);

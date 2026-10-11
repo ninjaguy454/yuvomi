@@ -64,6 +64,7 @@ test('unavailable device prize control preserves saved settings on open, cancel 
       assert.deepEqual(snapshot(item.id),before,'cancel must not change saved settings');assert.equal(writes.length,writeCount);
       assert.equal(d.prepare('SELECT revision FROM household_devices WHERE id=?').get(item.id).revision,revision);
       await page.click('[data-device-edit="'+item.id+'"]');await page.waitForSelector('[name="reward:redeem"]');
+      await page.focus('.device-config__footer [data-action="close-modal"]');
       await page.$eval('[name="reward:redeem"]',el=>el.closest('section').scrollIntoView({block:'center'}));
       await page.waitForFunction(()=>{const r=document.querySelector('[name="reward:redeem"]').getBoundingClientRect();return r.top>0&&r.bottom<innerHeight;});
       const unavailableSection=await page.$('section.device-config__section:has([name="reward:redeem"])');

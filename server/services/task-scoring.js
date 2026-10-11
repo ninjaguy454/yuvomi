@@ -210,6 +210,7 @@ function phaseExecutionFacts(d,ctx,prepared){
   const memberIds=new Set(d.prepare('SELECT id FROM users').all().map(row=>row.id)),safeMember=id=>Number.isSafeInteger(id)&&id>0&&memberIds.has(id);
   const expected=new Set(ctx.rows.map(task=>executionRefKey(scoringUnitRef(task,ctx.root,true)))),facts=new Map();
   for(const unit of prepared.units){
+    if(!unit||typeof unit!=='object'||Array.isArray(unit))throw projectionUnavailable();
     const key=executionRefKey(unit.ref);
     if(!expected.has(key)||facts.has(key)||Object.keys(unit).some(field=>!['ref','role','assigned_user_ids','supervision'].includes(field))
       ||!['source_root','source_action','helper_projection','container'].includes(unit.role)||key==='root'&&unit.role==='source_action'||key!=='root'&&unit.role==='source_root'

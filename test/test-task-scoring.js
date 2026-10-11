@@ -464,6 +464,11 @@ test('prospective execution scope warnings survive private fact projection and r
 test('prospective execution malformed self-supervision cannot masquerade as delegated eligibility',()=>{
  const root=task(0,{mode:'subtasks',assigned:[2]}),definition={scoring_mode:'subtasks',assigned_to:[2],subtasks:[{id:654,points:5,assigned_user_ids:[2]}]},facts=executionContext([executionUnit({kind:'definition_root'},'source_root',[2]),executionUnit(templateRef(654),'source_action',[2],{...delegatedFact,supervisor_user_id:2})]);assert.throws(()=>executionPreview(root,definition,facts),error=>error.status===409&&error.reason==='scoring_projection_unavailable');
 });
+for(const phase of ['before','after'])test(`prospective execution fix PE-M1 rejects malformed ${phase} unit shapes generically`,()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),definition={scoring_mode:'subtasks',points:0,assigned_to:[2],subtasks:[{id:654,points:5,assigned_user_ids:[2]}]},valid=executionContext([executionUnit({kind:'definition_root'},'source_root',[2]),executionUnit(templateRef(654),'source_action',[2])]);
+ for(const [index,value] of [[0,null],[1,null],[1,undefined],[1,42],[1,'invalid'],[1,[]],[1,Object.assign([],valid.units[1])]]){const malformed=structuredClone(valid);malformed.units[index]=value;assert.throws(()=>executionPreview(root,definition,phase==='before'?malformed:valid,phase==='after'?malformed:valid),error=>error.status===409&&error.reason==='scoring_projection_unavailable'&&error.message==='The prospective execution context cannot be prepared safely.');}
+ assert.deepEqual(executionPreview(root,definition,valid).after,[{user_id:2,points:5}]);
+});
 
 test('simultaneous SQLite writers atomically settle an inherited work unit once',async()=>{
  assert.ok(ALL_MIGRATIONS.some(m=>m.version===10055),'scoring settlement migration is available');

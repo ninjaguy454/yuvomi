@@ -445,9 +445,11 @@ export function prepareProspectiveTaskExecution(d, input) {
       || !Object.hasOwn(selection,'attempted_supervisor_user_ids') || !Array.isArray(selection.prior_units))) throw projectionUnavailable();
     const priors = new Map();
     for (const prior of selection.prior_units || []) {
+      if (!prior || typeof prior !== 'object' || Array.isArray(prior)
+        || !Object.hasOwn(prior,'learner_user_id') || !Object.hasOwn(prior,'supervisor_user_id')) throw projectionUnavailable();
       const key = referenceKey(prior.ref);
-      if (!keys.has(key) || priors.has(key) || prior.learner_user_id != null && !byId.has(prior.learner_user_id)
-        || prior.supervisor_user_id != null && !byId.has(prior.supervisor_user_id)) throw projectionUnavailable();
+      if (!keys.has(key) || priors.has(key) || prior.learner_user_id !== null && (!positiveId(prior.learner_user_id) || !byId.has(prior.learner_user_id))
+        || prior.supervisor_user_id !== null && (!positiveId(prior.supervisor_user_id) || !byId.has(prior.supervisor_user_id))) throw projectionUnavailable();
       priors.set(key, prior);
     }
     let rootSkills = root.required, planning = root.planning || {}, freshPreferred = [];

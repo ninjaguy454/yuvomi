@@ -214,7 +214,7 @@ export function assertTaskMutation(d, actor, task, body = {}, { operation = task
   finally { if (previous) readProjections.set(d, previous); }
 }
 function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
-  assertRewardTaskMutation(d,actor,task,body,operation);
+  const rewardCompletionReplay=assertRewardTaskMutation(d,actor,task,body,operation)===true;
   const device = taskDevicePrincipal(actor);
   if (device) {
     const requireKey=key=>{if(!deviceAllows(device,`tasks.${key}`))throw new PermissionError('This display does not permit this Task setting.');};
@@ -268,7 +268,12 @@ function assertCurrentTaskMutation(d, actor, task, body, {operation}) {
   const requireAction = key => { if (!c[key]) throw new PermissionError('Your household permissions do not allow this Task action.'); };
   if (operation === 'reopen') { requireAction('edit'); return requireAction('change_dates'); }
   if (operation === 'skip') return requireAction('skip_occurrence');
-  if (['status', 'check'].includes(operation)) return requireAction('complete');
+  if (['status', 'check'].includes(operation)) {
+    // The prize guard freshly authorizes this exact no-op. Keep it separate
+    // from the displayed ability to change a completed delivery's status.
+    if(rewardCompletionReplay)return;
+    return requireAction('complete');
+  }
   if (['delete', 'archive'].includes(operation)) return requireAction('delete_archive');
   if (operation === 'comment') return requireAction('comment');
   if (operation === 'claim') return requireAction('claim');

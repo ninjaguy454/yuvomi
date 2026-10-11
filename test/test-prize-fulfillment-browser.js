@@ -85,6 +85,10 @@ test('authenticated parent sees prize record Undo and pending delivery on the re
     assert.equal(d.prepare("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'").get(task).n,0);
     await page.screenshot({path:join(output,'parent-task-delivered-1280.png')});
     evidence.steps.push({parentTaskUICompletion:true,redemptionFulfilledTogether:true,noPointsAwarded:true});
+    await page.goto(origin+'/tasks?open='+task);
+    await page.waitForSelector('select[aria-label="Task status"]');
+    assert.equal(await page.$eval('select[aria-label="Task status"]',el=>el.disabled),true,'delivered Task must not offer a status reset');
+    evidence.steps.push({deliveredTaskStatusControlDisabled:true});
     const completion=d.prepare('SELECT * FROM task_completions WHERE task_id=?').get(task);
     await page.setViewport({width:390,height:844,isMobile:true,hasTouch:true});await page.goto(origin+'/rewards');await page.waitForSelector('[data-rw-history]');await page.click('[data-rw-history] > summary');
     await page.click('[data-rw-undo="'+delivered.id+'"]');await page.waitForSelector('[data-rw-delivered-confirm]');

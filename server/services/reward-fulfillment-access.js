@@ -28,7 +28,9 @@ export function assertRewardTaskMutation(d,principal,task,body={},operation='upd
   if(operation==='archive'&&task.status==='done')return;
   if(['status','check'].includes(operation)) {
     assertRewardParent(d,principal,{taskId:task.id});
-    if(link.redemption_status==='fulfilled'&&task.status==='done'&&body.status==='done')return;
+    // A consistent retry may pass mutation authorization, while the public
+    // capability remains disabled so the UI cannot offer status resets.
+    if(link.redemption_status==='fulfilled'&&task.status==='done'&&body.status==='done')return true;
     if(link.redemption_status==='pending'&&!task.archived_at&&task.status!=='done')return;
     throw new PermissionError('This prize is already decided. Its delivery history cannot be reset.',409);
   }
@@ -43,8 +45,7 @@ export function rewardTaskCapabilities(d,principal,task,result) {
   result.delete_archive=Boolean(result.delete_archive&&task.status==='done');
   try{assertRewardParent(d,principal,{taskId:task.id});}
   catch{result.complete=false;}
-  const completedReplay=link.redemption_status==='fulfilled'&&task.status==='done';
-  if((link.redemption_status!=='pending'&&!completedReplay)||task.archived_at)result.complete=false;
+  if(link.redemption_status!=='pending'||task.archived_at)result.complete=false;
   return result;
 }
 export function eligibleRewardParents(d) {

@@ -124,6 +124,8 @@ test('an assigned parent can retry consistent done delivery without another comp
   assert.equal((await call('PATCH',`/tasks/${task.id}/status`,{status:'done',expected_revision:task.revision},{actor:mom})).status,200);
   const done=d.prepare('SELECT * FROM tasks WHERE id=?').get(task.id);
   const completion=d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(task.id);
+  const detail=await call('GET',`/tasks/${task.id}`,undefined,{actor:mom});
+  assert.equal(detail.status,200);assert.equal(detail.body.data.permissions.complete,false,'delivered Task UI must not offer resetting its status');
   const replay=await call('PATCH',`/tasks/${task.id}/status`,{status:'done',expected_revision:done.revision},{actor:mom});
   assert.equal(replay.status,200);assert.deepEqual(d.prepare('SELECT * FROM task_completions WHERE task_id=?').all(task.id),completion);
   assert.equal(d.prepare("SELECT COUNT(*) n FROM reward_ledger WHERE task_id=? AND type='earn'").get(task.id).n,0);

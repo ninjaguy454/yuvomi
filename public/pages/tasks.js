@@ -2266,6 +2266,7 @@ function wireTaskForm(panel, {
   };
   const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
   const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, users:state.users,
+    canChangePoints: task ? canTask(task, 'change_points') : canCapability('tasks.change_points'),
     canAssign:task?canTask(task,'change_assignment'):canCapability('tasks.change_assignment'), onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
   const rotations = bindRotationBindings(form, {skills:state.skills,places:state.places,readOnly:!canCapability('rotations.configure') || !!task && !canTask(task,'edit')});
   const updateParticipantAssignments=()=>subtasks?.setAssignmentsEnabled(rotations.getValue().length>0);

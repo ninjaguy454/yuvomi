@@ -377,6 +377,13 @@ function initialSubtasksInput(body, {allowAssignments=false,preserveProvenance=f
     if (item.is_optional !== undefined && ![true,false,0,1].includes(item.is_optional)) throw new TaskSkillError('Subtask optional must be true or false.');
     let assignedUsers;
     let templateItemId=null;
+    let points;
+    if (item.points !== undefined) {
+      if (item.points !== null && !['number', 'string'].includes(typeof item.points)
+        || !Number.isInteger(Number(item.points)) || Number(item.points) < 0 || Number(item.points) > MAX_POINTS)
+        throw new TaskSkillError('Subtask points must be a whole number from 0 to 10000.');
+      points = clampPoints(item.points);
+    }
     if(item.activity_template_checklist_item_id!=null && !preserveProvenance) {
       const source=db.get().prepare('SELECT activity_template_id FROM activity_template_checklist_items WHERE id=?').get(item.activity_template_checklist_item_id);
       if(!source || Number(source.activity_template_id)!==Number(body.activity_template_id))throw new TaskSkillError('Choose a subtask from this Activity Template.');
@@ -391,7 +398,7 @@ function initialSubtasksInput(body, {allowAssignments=false,preserveProvenance=f
       if(item.assigned_user_ids.some(id=>!members.has(id)))throw new TaskSkillError('Choose an existing household member for each subtask.');
       assignedUsers=[...item.assigned_user_ids];
     }
-    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids), assignedUsers,templateItemId,
+    return { title: item.title.trim(), skillIds: normalizeSkillIds(db.get(), item.skill_ids), points, assignedUsers,templateItemId,
       isOptional: item.is_optional === undefined ? undefined : item.is_optional ? 1 : 0 };
   });
 }
@@ -420,18 +427,19 @@ function editedSubtasksInput(task, body, actor, { definitionOnly = false } = {})
       if(!child)throw new TaskSkillError('Only existing editable subtasks from this Task can be selected.');
       if(seen.has(id))throw new TaskSkillError('Choose each existing subtask only once.');
       seen.add(id);
+      item.points ??= child.points || 0;
       item.isOptional ??= child.is_optional || 0;
       if(!definitionOnly)assertOptionalityEdit(child,item.isOptional);
       const assignments=item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers};
       if(!definitionOnly && item.assignedUsers!==undefined && ['done','expired','skipped'].includes(child.status)
         && !sameIdOrder(item.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id)))
         throw new TaskStateError('Completed subtask assignments are historical. Reopen that action before changing its assignee.');
-      assertTaskMutation(db.get(),actor,child,{title:item.title,skill_ids:item.skillIds,is_optional:item.isOptional,...assignments},{operation:'update'});
+      assertTaskMutation(db.get(),actor,child,{title:item.title,points:item.points,skill_ids:item.skillIds,is_optional:item.isOptional,...assignments},{operation:'update'});
     } else {
       if(task.status==='done'&&!definitionOnly)throw new TaskStateError('Reopen the completed parent Task before adding checklist steps.',{reason:'optional_parent_completed'});
-      assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,skill_ids:item.skillIds,is_optional:item.isOptional,...(item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers})},{operation:'create'});
+      assertTaskMutation(db.get(),actor,null,{parent_task_id:task.id,points:item.points,skill_ids:item.skillIds,is_optional:item.isOptional,...(item.assignedUsers===undefined?{}:{assigned_to:item.assignedUsers})},{operation:'create'});
     }
-    return {...item,isOptional:item.isOptional ?? 0,id};
+    return {...item,points:item.points ?? 0,isOptional:item.isOptional ?? 0,id};
   });
   for(const child of existing.filter(row=>!seen.has(row.id)))
     assertTaskMutation(db.get(),actor,child,{}, {operation:'delete'});
@@ -459,11 +467,11 @@ function applyEditedSubtasks(task, edited, actorId) {
     let id=child.id;
     if(id) {
       assertOptionalityEdit(db.get().prepare('SELECT * FROM tasks WHERE id=?').get(id),child.isOptional);
-      db.get().prepare('UPDATE tasks SET title=?,sort_order=?,is_optional=? WHERE id=?').run(child.title,order,child.isOptional,id);
+      db.get().prepare('UPDATE tasks SET title=?,sort_order=?,is_optional=?,points=? WHERE id=?').run(child.title,order,child.isOptional,child.points,id);
     }
     else id=Number(db.get().prepare(`INSERT INTO tasks(title,category,status,start_date,due_date,due_time,
-      parent_task_id,created_by,visibility,sort_order,start_time,is_optional) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?)`)
-      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional).lastInsertRowid);
+      parent_task_id,created_by,visibility,sort_order,start_time,is_optional,points) VALUES(?,?,'open',?,?,?,?,?,?,?,?,?,?)`)
+      .run(child.title,task.category,task.start_date,task.due_date,task.due_time,task.id,actorId,task.visibility,order,task.start_time,child.isOptional,child.points).lastInsertRowid);
     if(!sameIdOrder(loadTaskSkillIds(db.get(),id),child.skillIds))setTaskSkills(db.get(),id,child.skillIds);
     if(child.assignedUsers!==undefined) {
       assertTaskSkillAssignments(db.get(),child.skillIds,child.assignedUsers,task.due_date||todayInHouseholdZone(),{allowDelegation:true});
@@ -1616,6 +1624,7 @@ export function createTaskDefinition(req, res) {
 
     const skillIds = taskSkillInput(req.body, null, activityBinding?.activityTemplateId);
     const initialSubtasks = initialSubtasksInput(req.body,{allowAssignments:rotationBindings.length>0});
+    for (const child of initialSubtasks || []) assertTaskMutation(db.get(), req, null, {points:child.points}, {operation:'create'});
     if (activityBinding && parent_task_id) {
       return res.status(400).json({ error: 'Activity templates can only be attached to top-level tasks.', code: 400 });
     }
@@ -1745,11 +1754,11 @@ export function createTaskDefinition(req, res) {
       }
       if (initialSubtasks !== undefined) {
         const insertChild = db.get().prepare(`INSERT INTO tasks
-          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility, start_time, is_optional)
-          VALUES (?,?,?,?,?,?,?,?,?,?)`);
+          (title, category, created_by, parent_task_id, start_date, due_date, due_time, visibility, start_time, is_optional, points)
+          VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
         for (const child of initialSubtasks) {
           const childId = Number(insertChild.run(child.title, category, req.authUserId || req.session.userId,
-            result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0).lastInsertRowid);
+            result.lastInsertRowid, start_date, due_date, due_time, visibility, start_time, child.isOptional ?? 0, child.points ?? 0).lastInsertRowid);
           authoredRotationFields.set(childId,{title:child.title});
           setTaskSkills(db.get(), childId, child.skillIds);
           if(child.templateItemId)db.get().prepare('UPDATE tasks SET activity_template_checklist_item_id=? WHERE id=?').run(child.templateItemId,childId);
@@ -2096,6 +2105,7 @@ export function updateTaskDefinition(req, res) {
     const childrenChanged=editedSubtasks&&(editedSubtasks.remove.length||editedSubtasks.next.length!==currentChildren.length
       ||editedSubtasks.next.some((child,index)=>child.id!==currentChildren[index]?.id||child.title!==currentChildren[index]?.title
         ||child.isOptional!==Number(currentChildren[index]?.is_optional||0)
+        ||child.points!==Number(currentChildren[index]?.points||0)
         ||child.assignedUsers!==undefined&&!sameIdOrder(child.assignedUsers,db.get().prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(child.id).map(row=>row.user_id))
         ||!sameIdOrder(child.skillIds,loadTaskSkillIds(db.get(),child.id))));
     const definitionChanged=Object.entries(definitionFields).some(([key,value])=>!sameFieldValue(value,task[key]))

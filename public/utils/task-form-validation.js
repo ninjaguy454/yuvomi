@@ -1,5 +1,7 @@
 import { parseDateInput, isDateInputValid, parseTimeInput } from '/i18n.js';
 
+let pointsFieldId = 0;
+
 /** Validate the live draft without changing its values or dirty snapshot. */
 export function taskFormErrors(form) {
   const value = id => form.querySelector(`#${id}`)?.value?.trim() || '';
@@ -27,6 +29,14 @@ export function taskFormErrors(form) {
   for(const row of form.querySelectorAll('[data-rotation-binding]')) {
     if(!row.querySelector('[data-rotation-label]')?.value.trim())add('task-rotations','Give each rotation purpose a name.');
     if(!row.querySelector('[data-rotation-group]')?.value)add('task-rotations','Choose a Rotation Group.');
+  }
+  for (const field of form.querySelectorAll('[data-task-subtask-points]')) {
+    if (field.disabled || !field.closest('[data-task-subtask-row]')?.querySelector('[data-task-subtask-title]')?.value.trim()) continue;
+    const points = Number(field.value);
+    if (field.validity?.badInput || !Number.isInteger(points) || points < 0 || points > 10000) {
+      field.id ||= `task-subtask-points-${++pointsFieldId}`;
+      add(field.id, 'Subtask points must be a whole number from 0 to 10000.');
+    }
   }
   return errors;
 }

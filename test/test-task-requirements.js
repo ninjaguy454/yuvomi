@@ -62,7 +62,7 @@ async function mounted(kind = 'subtasks', options = {}, viewport = { width: 768,
       window.editor = ui.bindSkillPicker(fixture, { onChange: (value) => window.changes.push(value) });
     } else {
       fixture.innerHTML = ui.renderSubtaskEditor({ skills, ...options });
-      window.editor = ui.bindSubtaskEditor(fixture, { skills, template: options.template, onChange: (value) => window.changes.push(value) });
+      window.editor = ui.bindSubtaskEditor(fixture, { skills, template: options.template, canChangePoints: options.canChangePoints, onChange: (value) => window.changes.push(value) });
     }
   }, { kind, options });
   return page;
@@ -76,6 +76,7 @@ test('rendered requirements escape titles and names and preserve template mentio
   assert.match(subtasks, /data-variable-mentions="activity-title"/);
   assert.match(subtasks, /maxlength="200"/);
   assert.match(subtasks, /&quot;door&quot; &lt;secure&gt;/);
+  assert.doesNotMatch(subtasks, /data-task-subtask-points/);
 });
 
 test('skill selection returns stable IDs, supports rename-independent presets and read-only state', async () => {
@@ -107,23 +108,23 @@ test('subtask editor adds, edits, assigns skills, reorders and removes rows with
     await page.click('.task-subtask-editor__actions summary');
     await page.click('[data-task-subtask-action="down"]');
     assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [
-      { title: 'Wash', skill_ids: [1], is_optional: 0 }, { title: 'Chop', skill_ids: [2], is_optional: 0 },
+      { title: 'Wash', skill_ids: [1], points: 0, is_optional: 0 }, { title: 'Chop', skill_ids: [2], points: 0, is_optional: 0 },
     ]);
     await page.click('[data-task-subtask-add]');
     await page.type('[data-task-subtask-row]:last-child [data-task-subtask-title]', 'Serve');
     await page.click('[data-task-subtask-row]:last-child .task-skill-picker summary');
     await page.click('[data-task-subtask-row]:last-child [data-task-skill-id][value="1"]');
-    assert.deepEqual((await page.evaluate(() => window.editor.getValue())).at(-1), { title: 'Serve', skill_ids: [1], is_optional: 0 });
+    assert.deepEqual((await page.evaluate(() => window.editor.getValue())).at(-1), { title: 'Serve', skill_ids: [1], points: 0, is_optional: 0 });
     await page.click('.task-subtask-editor__actions summary');
     await page.click('[data-task-subtask-action="remove"]');
     assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [
-      { title: 'Chop', skill_ids: [2], is_optional: 0 }, { title: 'Serve', skill_ids: [1], is_optional: 0 },
+      { title: 'Chop', skill_ids: [2], points: 0, is_optional: 0 }, { title: 'Serve', skill_ids: [1], points: 0, is_optional: 0 },
     ]);
     assert.equal(await page.$eval('[data-task-subtask-title]', (el) => el.getAttribute('aria-label')), 'Subtask 1');
     const changeCount = await page.evaluate(() => window.changes.length);
     assert.ok(changeCount > 3);
     await page.evaluate(() => window.editor.setValue([{ title_template: 'Fresh template', skill_ids: [2] }]));
-    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title_template: 'Fresh template', title: 'Fresh template', skill_ids: [2], is_optional: 0 }]);
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title_template: 'Fresh template', title: 'Fresh template', skill_ids: [2], points: 0, is_optional: 0 }]);
     assert.equal(await page.evaluate(() => window.changes.length), changeCount, 'programmatic reset is silent');
     await page.evaluate(() => window.editor.setValue([]));
     assert.deepEqual(await page.evaluate(() => window.editor.getValue()), []);
@@ -135,10 +136,12 @@ test('subtask editor keeps read-only drafts unchanged and disposal removes event
   try {
     await page.evaluate(() => window.editor.setReadOnly(true));
     assert.equal(await page.$eval('[data-task-subtask-title]', (el) => el.disabled), true);
+    assert.equal(await page.$eval('[data-task-subtask-points]', (el) => el.disabled), true);
     await page.click('[data-task-subtask-add]');
     await page.evaluate(() => document.querySelector('[data-task-subtask-action="remove"]').click());
-    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title: 'Rest', skill_ids: [1], is_optional: 0 }]);
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ title: 'Rest', skill_ids: [1], points: 0, is_optional: 0 }]);
     await page.evaluate(() => window.editor.setReadOnly(false));
+    assert.equal(await page.$eval('[data-task-subtask-points]', (el) => el.disabled), false);
     await page.click('[data-task-subtask-add]');
     assert.equal((await page.evaluate(() => window.editor.getValue())).length, 2);
     await page.evaluate(() => window.editor.dispose());
@@ -277,15 +280,15 @@ test('subtask definitions and nested Skill creation live under Edit and preserve
     await page.focus('#shared-modal-overlay [type="submit"]'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => !document.querySelector('#automation-skill-form'));
     await page.waitForFunction(() => document.querySelector('[data-task-skill-id][value="7"]')?.checked);
-    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ id: 4, title: 'Measure ingredients', skill_ids: [7], is_optional: 0 }]);
+    assert.deepEqual(await page.evaluate(() => window.editor.getValue()), [{ id: 4, title: 'Measure ingredients', skill_ids: [7], points: 0, is_optional: 0 }]);
   } finally { await page.close(); }
 });
 
 test('real mouse drag preserves complete subtask objects and Optional after moving a completed row', async () => {
   const models = [
-    { id: 11, title: 'Brush teeth', status: 'done', is_optional: 0, skill_ids: [1], extra: { keep: 'history' } },
-    { id: 12, title: 'Stretch', status: 'open', is_optional: 1, skill_ids: [2] },
-    { id: 13, title: 'Pack bag', status: 'open', is_optional: 0, skill_ids: [] },
+    { id: 11, title: 'Brush teeth', status: 'done', points: 7, is_optional: 0, skill_ids: [1], extra: { keep: 'history' } },
+    { id: 12, title: 'Stretch', status: 'open', points: 0, is_optional: 1, skill_ids: [2] },
+    { id: 13, title: 'Pack bag', status: 'open', points: 3, is_optional: 0, skill_ids: [] },
   ];
   const page = await mounted('subtasks', { subtasks: models });
   try {

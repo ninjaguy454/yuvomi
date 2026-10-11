@@ -10,7 +10,7 @@ export function taskEditDefinition(value) {
     category: value.category || 'misc', priority: value.priority || 'none',
     points: Number(value.points) || 0, tags: [...new Set((value.tags || []).map(text).filter(Boolean))].sort(),
     subtasks: (value.subtasks || []).filter(step => text(step.title)).map(step => ({
-      id: Number(step.id) || null, title: text(step.title), is_optional: !!step.is_optional, skill_ids: ids(step.skill_ids),
+      id: Number(step.id) || null, title: text(step.title), points: Number(step.points) || 0, is_optional: !!step.is_optional, skill_ids: ids(step.skill_ids),
       ...(step.assigned_user_ids===undefined?{}:{assigned_user_ids:ids(step.assigned_user_ids)}),
     })),
     skill_ids: ids(value.skill_ids), assigned_to: ids(value.assigned_to),

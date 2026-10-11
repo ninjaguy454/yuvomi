@@ -41,7 +41,7 @@ export function proposedSeriesDefinition(before, { fields, editedSubtasks, assig
         expiration_policy:'keep_overdue',is_recurring:0,recurrence_rule:null,recurrence_from_completion:0,
         assignment_mode:'fixed',rotation_group:null,rotation_slot:0,countdown:0,due_date_offset_days:null},
       assigned_user_ids:[],tags:[]};
-    Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional});
+    Object.assign(row.task,{title:step.title,sort_order:order,is_optional:step.isOptional,points:step.points});
     if(step.assignedUsers!==undefined)row.assigned_user_ids=[...step.assignedUsers];
     row.skill_ids=[...step.skillIds];return row;
   });

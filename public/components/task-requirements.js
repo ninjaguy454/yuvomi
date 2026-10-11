@@ -118,6 +118,9 @@ function subtaskRow(subtask, skills, template, index, canCreateSkill = false, us
       <input class="input" data-task-subtask-title ${template ? 'data-variable-mentions="activity-title"' : ''}
         aria-label="Subtask ${index + 1}" maxlength="200" placeholder="Subtask name"
         value="${esc(subtask.title ?? subtask.title_template ?? '')}">
+      ${!template ? `<label class="task-subtask-editor__points">Points<input class="input" type="number" name="subtask_points" data-task-subtask-points
+        aria-label="Subtask ${index + 1} points" inputmode="numeric" min="0" max="10000" step="1"
+        value="${esc(subtask.points ?? 0)}"></label>` : ''}
       <label class="task-subtask-editor__optional"><input type="checkbox" data-task-subtask-optional ${subtask.is_optional === true || Number(subtask.is_optional) === 1 ? 'checked' : ''}> Optional</label>
       <details class="task-subtask-editor__actions">
         <summary aria-label="Subtask ${index + 1} actions" title="Subtask actions">⋯</summary>
@@ -141,7 +144,7 @@ export function renderSubtaskEditor({ subtasks = [], skills = [], template = fal
   </div>`;
 }
 
-export function bindSubtaskEditor(root, { skills = [], template = false, onChange = null, onCreateSkill = null, users = [], assignmentsEnabled = false, canAssign = true } = {}) {
+export function bindSubtaskEditor(root, { skills = [], template = false, onChange = null, onCreateSkill = null, users = [], assignmentsEnabled = false, canAssign = true, canChangePoints = true } = {}) {
   const editor = componentRoot(root, '[data-task-subtask-editor]');
   if (!editor) throw new Error('Subtask editor is not mounted.');
   const rows = editor.querySelector('[data-task-subtask-rows]');
@@ -157,6 +160,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     ...(row.dataset.subtaskId ? { id: Number(row.dataset.subtaskId) } : {}),
     title: row.querySelector('[data-task-subtask-title]').value,
     ...(template ? { title_template: row.querySelector('[data-task-subtask-title]').value } : {}),
+    ...(!template ? { points: Number(row.querySelector('[data-task-subtask-points]').value) } : {}),
     skill_ids: pickers.get(row).getValue(),
     is_optional: row.querySelector('[data-task-subtask-optional]').checked ? 1 : 0,
     ...(assignmentsEnabled && row.querySelector('[data-task-subtask-assignee]') ? {assigned_user_ids: selected===Number(original.assigned_to||previous[0]||0) ? previous : selected?[selected]:[]} : {}),
@@ -167,6 +171,8 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
       row.querySelector('[data-task-subtask-title]').setAttribute('aria-label', `Subtask ${index + 1}`);
       row.querySelector('[data-task-subtask-title]').disabled = readOnly;
       row.querySelector('[data-task-subtask-optional]').disabled = readOnly;
+      const points = row.querySelector('[data-task-subtask-points]');
+      if (points) { points.disabled = readOnly || !canChangePoints; points.setAttribute('aria-label', `Subtask ${index + 1} points`); }
       const assignee=row.querySelector('[data-task-subtask-assignee]');
       if(assignee){assignee.closest('[data-task-subtask-assignment]').hidden=!assignmentsEnabled;assignee.disabled=readOnly||!canAssign;}
       const menu = row.querySelector('.task-subtask-editor__actions');
@@ -233,7 +239,7 @@ export function bindSubtaskEditor(root, { skills = [], template = false, onChang
     refresh();
     changed();
   };
-  const input = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-title]')) changed(); };
+  const input = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-title], [data-task-subtask-points]')) changed(); };
   const change = (event) => { if (!readOnly && event.target.matches('[data-task-subtask-optional], [data-task-subtask-assignee]')) changed(); };
   const keydown = (event) => {
     const menu = event.target.closest('.task-subtask-editor__actions');

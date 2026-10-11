@@ -668,7 +668,7 @@ for (const width of [1366, 390]) {
         assert.equal(body.start_date, '2026-09-21'); assert.equal(body.due_date, '2026-09-23');
         assert.deepEqual(body.subtasks.map(step => step.id), [71, 72, 73]);
         assert.equal(new Set(body.subtasks.map(step => step.id)).size, body.subtasks.length);
-        assert.deepEqual(body.subtasks, fixture.subtasks.slice(0, 3), 'scheduling changes preserve source IDs, optional state, skills and completed progress');
+        assert.deepEqual(body.subtasks, fixture.subtasks.slice(0, 3).map(step => ({ ...step, points: step.points ?? 0 })), 'scheduling changes preserve source IDs, optional state, skills and completed progress');
         assert.deepEqual(page.fixtureErrors || [], []);
       } finally { await page.dispose(); }
     });

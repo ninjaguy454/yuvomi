@@ -116,7 +116,7 @@ function potential(d,ctx,{fresh=false,viewerId=null,authorizedTaskIds=null}={}){
   }
   return aggregate(members);
 }
-function publicSettlements(d,ctx,viewerId,authorizedTaskIds,includeHistoricalSettlements){
+function publicSettlements(d,ctx,viewerId,authorizedTaskIds,includeHistoricalSettlements,includeIds=false){
   return ctx.settlements.filter(row=>{
     const task=readTask(d,row.task_id);
     if(authorizedTaskIds&&!authorizedTaskIds.has(row.task_id)&&!(includeHistoricalSettlements&&(!task||task.archived_at)))return false;
@@ -124,7 +124,7 @@ function publicSettlements(d,ctx,viewerId,authorizedTaskIds,includeHistoricalSet
     const snapshot=JSON.parse(row.visibility_json);
     if(viewerId==null)return authorizedTaskIds?snapshot.visibility==='all':true;
     return snapshot.visibility==='all'||snapshot.created_by===viewerId||snapshot.visibility==='assignees'&&snapshot.assigned.includes(viewerId);
-  }).map(row=>({task_id:row.task_id,points:row.points,recipients:recipients(row),mode:row.mode,outcome:row.outcome,settled_at:row.settled_at}));
+  }).map(row=>({...(includeIds?{settlement_id:row.id}:{}),task_id:row.task_id,points:row.points,recipients:recipients(row),mode:row.mode,outcome:row.outcome,settled_at:row.settled_at}));
 }
 export function taskScoringSummary(d,taskId,{viewerId=null,authorizedTaskIds=null,includeHistoricalSettlements=false}={}){
   const authorized=authorizedTaskIds==null?null:new Set(authorizedTaskIds);
@@ -138,7 +138,7 @@ function points(value){
 function assignmentIds(value){
   if(!Array.isArray(value)||value.some(id=>!Number.isSafeInteger(Number(id))||Number(id)<=0))throw new TaskScoringError('Assignments must contain valid member IDs.',400,'invalid_assignment');return unique(value.map(Number));
 }
-function proposedContext(d,ctx,taskId,proposed,{fresh=false,allowLegacy=false}={}){
+function proposedContext(d,ctx,taskId,proposed,{fresh=false,allowLegacy=false,childNamespace='task'}={}){
   let root={...ctx.root},rows=ctx.rows.map(row=>({...row}));
   if(Object.hasOwn(proposed,'scoring_mode')){
     if(!['whole_task','subtasks',...(allowLegacy?['legacy']:[])].includes(proposed.scoring_mode))throw new TaskScoringError('Choose Whole task or Each subtask.',400,'invalid_scoring_mode');root.scoring_mode=proposed.scoring_mode;root.scoring_review_required=0;
@@ -150,15 +150,16 @@ function proposedContext(d,ctx,taskId,proposed,{fresh=false,allowLegacy=false}={
   if(edited.id===root.id)root={...root,...edited,scoring_mode:root.scoring_mode,scoring_review_required:root.scoring_review_required};
   if(Object.hasOwn(proposed,'subtasks')){
     if(!Array.isArray(proposed.subtasks))throw new TaskScoringError('Subtasks must be an array.');
-    const children=rows.filter(row=>row.parent_task_id===edited.id),existing=new Map(children.map(row=>[row._template_id??row.id,row])),seen=new Set();
+    const children=rows.filter(row=>row.parent_task_id===edited.id&&(childNamespace!=='template'||row._template_id!=null)),existing=new Map(children.map(row=>[row._template_id??row.id,row])),seen=new Set();
     // Keep external future-template identity across both normalization passes.
     // New transient work gets an unused ID and never borrows a positional row.
     let transient=rows.reduce((lowest,row)=>Math.min(lowest,row.id),0)-1;
-    const next=proposed.subtasks.map(child=>{
+    const next=proposed.subtasks.map((child,index)=>{
       const given=child.id==null?null:Number(child.id);
       if(given!=null&&(!Number.isSafeInteger(given)||given<=0||!fresh&&!existing.has(given)||seen.has(given)))throw new TaskScoringError('Review scoring within one original work scope.',409,'scoring_review_required');
       const prior=given==null?null:existing.get(given),id=prior?.id??transient--;seen.add(given??id);
       const row=prior?{...prior}:{...edited,id,_template_id:given,parent_task_id:edited.id,points:0,status:'open',archived_at:null,assigned_to:null,_assigned:[]};
+      row._draft_index=index;
       if(Object.hasOwn(child,'points'))row.points=points(child.points);
       const value=child.assigned_user_ids??child.assigned_to;
       if(value!==undefined)row._assigned=assignmentIds(value);
@@ -168,18 +169,30 @@ function proposedContext(d,ctx,taskId,proposed,{fresh=false,allowLegacy=false}={
   }
   return {...ctx,root,rows};
 }
+function prospectiveTemplateId(task,root){return task.id===root.id?null:task._template_id??(task.id>0?task.id:null);}
+function scoringUnitRef(task,root,fresh){
+  if(fresh){
+    if(task.id===root.id)return {kind:'definition_root'};
+    const templateId=prospectiveTemplateId(task,root);if(templateId!=null)return {kind:'template',template_id:templateId};
+  }else if(task.id>0)return {kind:'task',task_id:task.id};
+  return {kind:'draft',draft_index:task._draft_index};
+}
 function proposedPotential(d,ctx,options){
   // Resolve proposed assignments through the same recipient rules as awards.
-  const settled=new Set(ctx.settlements.filter(row=>!row.released).map(row=>row.logical_key)),members=[];
-  if(workflowContainer(d,ctx.root.id)||!options.fresh&&blockedWindow(d,ctx.root.id))return [];
+  const settled=new Set(ctx.settlements.filter(row=>!row.released).map(row=>row.logical_key)),members=[],units=[];
+  if(workflowContainer(d,ctx.root.id)||!options.fresh&&blockedWindow(d,ctx.root.id))return {totals:[],units};
   for(const task of ctx.rows){
     if(options.authorizedTaskIds&&!options.authorizedTaskIds.has(task.id)&&!(task.id<0&&options.authorizedTaskIds.has(task.parent_task_id)))continue;
+    if(options.fresh&&task.id!==ctx.root.id&&options.authorizedTemplateIds&&!options.authorizedTemplateIds.has(prospectiveTemplateId(task,ctx.root)))continue;
     if(!visible(d,task,options.viewerId))continue;
     if(!options.fresh&&task.id>0&&(settled.has(taskScoringIdentity(d,task.id))||task.status==='done'||task.archived_at||blockedWindow(d,task.id)))continue;
     const definition=taskRewardDefinition(d,task,{root:ctx.root,assigned:task._assigned,parentAssigned:ctx.root._assigned,actingUserId:options.viewerId});
-    if(definition.outcome==='earned')members.push(...definition.targets.map(user_id=>({user_id,points:definition.points})));
+    if(definition.outcome==='suppressed')continue;
+    const recipients=definition.targets.map(user_id=>({user_id,points:definition.points}));
+    if(definition.outcome==='earned')members.push(...recipients);
+    if(options.includeUnits)units.push({ref:scoringUnitRef(task,ctx.root,options.fresh),points:definition.points,recipients,outcome:definition.outcome});
   }
-  return aggregate(members);
+  return {totals:aggregate(members),units};
 }
 function validateMutation(d,ctx,next,proposed,scope){
   const changedMode=next.root.scoring_mode!==ctx.root.scoring_mode;
@@ -196,11 +209,17 @@ function validateMutation(d,ctx,next,proposed,scope){
 export function assertTaskScoringMutation(d,taskId,proposed={}, {scope='occurrence'}={}){
   const ctx=context(d,taskId),next=proposedContext(d,ctx,taskId,proposed,{fresh:scope==='future_only'});validateMutation(d,ctx,next,proposed,scope);return true;
 }
-export function previewTaskScoring(d,taskId,proposed={}, {viewerId=null,scope='occurrence',beforeDefinition=null,authorizedTaskIds=null,includeHistoricalSettlements=false}={}){
-  const ctx=context(d,taskId,viewerId),summary=taskScoringSummary(d,taskId,{viewerId,authorizedTaskIds,includeHistoricalSettlements}),fresh=scope==='future_only',authorized=authorizedTaskIds==null?null:new Set(authorizedTaskIds),options={fresh,viewerId,authorizedTaskIds:authorized};
-  const base=fresh&&beforeDefinition?proposedContext(d,ctx,taskId,beforeDefinition,{fresh:true,allowLegacy:true}):ctx,before=proposedPotential(d,base,options);
-  let next=base,warnings=[],valid=true;try{next=proposedContext(d,base,taskId,proposed,{fresh});validateMutation(d,ctx,next,proposed,scope);}catch(error){if(!(error instanceof TaskScoringError))throw error;warnings=[{reason:error.reason,message:error.message}];valid=false;}
-  return {mode:next.root.scoring_mode||'legacy',mode_locked:ctx.mode_locked,review_required:!!next.root.scoring_review_required,earned:summary.earned,before,after:proposedPotential(d,next,options),warnings,valid,scope,current_preserved:fresh};
+export function previewTaskScoring(d,taskId,proposed={}, {viewerId=null,scope='occurrence',beforeDefinition=null,authorizedTaskIds=null,includeHistoricalSettlements=false,includeUnits=false,authorizedTemplateIds=null}={}){
+  const ctx=context(d,taskId,viewerId),fresh=scope==='future_only',authorized=authorizedTaskIds==null?null:new Set(authorizedTaskIds),templates=authorizedTemplateIds==null?null:new Set(authorizedTemplateIds),options={fresh,viewerId,authorizedTaskIds:authorized,authorizedTemplateIds:templates,includeUnits};
+  const settlements=publicSettlements(d,ctx,viewerId,authorized,includeHistoricalSettlements,includeUnits),earned=aggregate(settlements.flatMap(row=>row.recipients));
+  // Canonical template IDs are independent of current Task IDs. Only the
+  // normalized template rows may supply omitted terms on the proposal pass.
+  const childNamespace=fresh&&beforeDefinition?'template':'task';
+  const base=fresh&&beforeDefinition?proposedContext(d,ctx,taskId,beforeDefinition,{fresh:true,allowLegacy:true,childNamespace}):ctx,before=proposedPotential(d,base,options);
+  let next=base,warnings=[],valid=true;try{next=proposedContext(d,base,taskId,proposed,{fresh,childNamespace});validateMutation(d,ctx,next,proposed,scope);}catch(error){if(!(error instanceof TaskScoringError))throw error;warnings=[{reason:error.reason,message:error.message}];valid=false;}
+  const after=proposedPotential(d,next,options);
+  return {mode:next.root.scoring_mode||'legacy',mode_locked:ctx.mode_locked,review_required:!!next.root.scoring_review_required,earned,before:before.totals,after:after.totals,warnings,valid,scope,current_preserved:fresh,
+    ...(includeUnits?{settlements,before_units:before.units,after_units:after.units}:{})};
 }
 
 /** Historical rows have no Task/User foreign keys. Deleting operational rows

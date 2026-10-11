@@ -34,6 +34,11 @@ const mutate=(id,proposed,scope='occurrence')=>api('assertTaskScoringMutation',d
 function complete(id,actor=1){d.prepare("UPDATE tasks SET status='done' WHERE id=?").run(id);return awardForCompletion(d,id,actor);}
 function assignment(id,ids){d.prepare('DELETE FROM task_assignments WHERE task_id=?').run(id);d.prepare('UPDATE tasks SET assigned_to=? WHERE id=?').run(ids[0]??null,id);for(const uid of ids)d.prepare('INSERT INTO task_assignments(task_id,user_id) VALUES(?,?)').run(id,uid);}
 const reason=value=>error=>error.status===409&&error.reason===value;
+const unitPreview=(id,proposed={},options={})=>api('previewTaskScoring',d,id,proposed,{includeUnits:true,...options});
+const unit=(ref,points,ids=[],outcome=points===0?'zero':ids.length?'earned':'no_recipients')=>({ref,points,recipients:ids.map(user_id=>({user_id,points})),outcome});
+const taskRef=task_id=>({kind:'task',task_id});
+const templateRef=template_id=>({kind:'template',template_id});
+function unitTotals(units){const totals=new Map();for(const row of units)for(const {user_id,points} of row.recipients)if(points>0)totals.set(user_id,(totals.get(user_id)||0)+points);return [...totals].sort(([a],[b])=>a-b).map(([user_id,points])=>({user_id,points}));}
 
 test('whole task pays the parent once and suppresses positive checklist points',()=>{
  const root=task(9,{mode:'whole_task',assigned:[2,3]}),child=task(7,{parent:root,assigned:[2]});
@@ -257,6 +262,96 @@ test('explicit fully linked correction appends one release and one replacement w
 test('retired claim flag alone never authorizes releasing an original settlement',()=>{
  const root=task(5,{mode:'whole_task',assigned:[2]});d.prepare("UPDATE tasks SET is_recurring=1,due_date='2026-10-11' WHERE id=?").run(root);complete(root);retireRecurrenceOccurrences(d,[root],{actorId:1,reason:'Synthetic retirement'});d.prepare("UPDATE reward_task_awards SET retired_at='2026-10-11T00:00:00Z' WHERE task_id=?").run(root);
  const replacement=task(5,{mode:'whole_task',assigned:[2]});d.prepare("UPDATE tasks SET is_recurring=1,recurrence_origin_id=?,due_date='2026-10-11' WHERE id=?").run(root,replacement);assert.equal(complete(replacement),false);assert.equal(summary(replacement).mode_locked,true);
+});
+test('unit projection preserves the default contract and exposes only the selected payable source',()=>{
+ const root=task(8,{mode:'whole_task',assigned:[2,3]}),child=task(19,{parent:root,assigned:[2]});
+ const plain=preview(root),result=unitPreview(root);
+ assert.deepEqual(Object.keys(plain),['mode','mode_locked','review_required','earned','before','after','warnings','valid','scope','current_preserved']);
+ assert.deepEqual(result.before_units,[unit(taskRef(root),8,[2,3])]);assert.deepEqual(result.after_units,result.before_units);assert.deepEqual(result.settlements,[]);
+ const {before_units,after_units,settlements,...original}=result;assert.deepEqual(original,plain);
+ assert.deepEqual(unitTotals(before_units),result.before);assert.deepEqual(unitTotals(after_units),result.after);assert.ok(before_units.every(row=>row.ref.task_id!==child));
+});
+test('unit projection shows available zero and no-recipient child outcomes and original draft indices',()=>{
+ const root=task(90,{mode:'subtasks',assigned:[2]}),zero=task(0,{parent:root}),none=task(6,{parent:root,assigned:[4]});
+ const result=unitPreview(root,{subtasks:[{id:zero},{title:'New optional work',points:4,is_optional:true},{id:none},{title:'Unenrolled work',points:7,assigned_user_ids:[4]}]},{viewerId:3,authorizedTaskIds:[root,zero,none]});
+ assert.deepEqual(result.before_units,[unit(taskRef(zero),0,[2]),unit(taskRef(none),6)]);
+ assert.deepEqual(result.after_units,[unit(taskRef(zero),0,[2]),unit({kind:'draft',draft_index:1},4,[2]),unit(taskRef(none),6),unit({kind:'draft',draft_index:3},7)]);
+ assert.deepEqual(result.before,[]);assert.deepEqual(result.after,[{user_id:2,points:4}]);assert.deepEqual(unitTotals(result.after_units),result.after);assert.ok(result.after_units.every(row=>!Object.hasOwn(row,'title')&&!Object.hasOwn(row,'is_optional')));
+});
+test('unit projection separates frozen settlements from available remainder and invalid settled edits',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),done=task(3,{parent:root}),remaining=task(4,{parent:root});complete(done);
+ const result=unitPreview(root,{subtasks:[{id:done},{id:remaining,points:8}]},{viewerId:2});
+ assert.equal(result.valid,true);assert.deepEqual(result.earned,[{user_id:2,points:3}]);assert.deepEqual(result.before_units,[unit(taskRef(remaining),4,[2])]);assert.deepEqual(result.after_units,[unit(taskRef(remaining),8,[2])]);
+ assert.equal(result.settlements.length,1);assert.equal(result.settlements[0].task_id,done);assert.ok(Number.isSafeInteger(result.settlements[0].settlement_id));assert.equal(result.settlements[0].points,3);assert.deepEqual(result.settlements[0].recipients,[{user_id:2,points:3}]);
+ const invalid=unitPreview(root,{subtasks:[{id:done,points:7},{id:remaining}]});assert.equal(invalid.valid,false);assert.equal(invalid.warnings[0].reason,'settled_rewards');assert.deepEqual(invalid.settlements,result.settlements);assert.deepEqual(invalid.after_units,[unit(taskRef(remaining),4,[2])]);
+});
+test('unit projection omits current done archived skipped and expired work from remaining units',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),active=task(2,{parent:root});
+ for(const status of ['done','skipped','expired'])task(9,{parent:root,status});const archived=task(9,{parent:root});d.prepare("UPDATE tasks SET archived_at='2026-10-11T00:00:00Z' WHERE id=?").run(archived);
+ assert.deepEqual(unitPreview(root).before_units,[unit(taskRef(active),2,[2])]);d.prepare("UPDATE tasks SET status='expired' WHERE id=?").run(root);assert.deepEqual(unitPreview(root).before_units,[]);
+});
+test('unit projection uses the shared supervision resolver and excludes helper and Workflow containers',()=>{
+ const root=task(11,{mode:'subtasks',assigned:[2]}),delegated=task(5,{parent:root}),supervised=task(4,{parent:root}),helper=task(99,{parent:root,assigned:[3]}),counterpart=task(99,{parent:helper,assigned:[3]});
+ d.prepare('INSERT INTO task_activity_support_tasks(source_task_id,task_id) VALUES(?,?)').run(root,helper);
+ d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,counterpart_task_id,learner_user_id,supervisor_user_id,state,execution_mode) VALUES(?,?,?,?,?,'assigned','delegated')").run(root,delegated,counterpart,2,3);
+ d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,learner_user_id,supervisor_user_id,state,execution_mode) VALUES(?,?,2,3,'assigned','supervised')").run(root,supervised);
+ const result=unitPreview(root,{}, {viewerId:3});assert.deepEqual(result.before_units,[unit(taskRef(delegated),5,[3]),unit(taskRef(supervised),4,[2])]);assert.deepEqual(unitTotals(result.before_units),result.before);
+ const source=task(8,{mode:'whole_task',assigned:[2]});d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,learner_user_id,supervisor_user_id,state,execution_mode) VALUES(?,?,2,3,'assigned','delegated')").run(source,source);assert.deepEqual(unitPreview(source).before_units,[unit(taskRef(source),8)]);
+ const container=task(99),activity=task(7,{parent:container,mode:'whole_task',assigned:[2]});task(3,{parent:activity});const instance=Number(d.prepare('INSERT INTO workflow_instances(parent_task_id,created_by) VALUES(?,1)').run(container).lastInsertRowid);d.prepare('INSERT INTO workflow_instance_tasks(workflow_instance_id,task_id) VALUES(?,?)').run(instance,activity);
+ assert.deepEqual(unitPreview(container).before_units,[]);assert.deepEqual(unitPreview(activity).before_units,[unit(taskRef(activity),7,[2])]);
+});
+test('unit projection retains unknown and heterogeneous frozen amounts without inventing credit',()=>{
+ const root=task(8,{mode:'whole_task',assigned:[2]}),definition=api('taskRewardDefinition',d,root);
+ api('recordTaskScoringSettlement',d,{...definition,points:null},api('taskScoringIdentity',d,root),{outcome:'historical_claim',awardedRecipients:[],earnedOnce:true});
+ const result=unitPreview(root);assert.equal(result.settlements[0].points,null);assert.equal(result.settlements[0].outcome,'historical_claim');assert.deepEqual(result.settlements[0].recipients,[]);assert.deepEqual(result.earned,[]);assert.equal(result.mode_locked,true);assert.deepEqual(result.before_units,[]);
+ assignment(root,[3]);d.prepare('UPDATE tasks SET points=100 WHERE id=?').run(root);d.prepare('UPDATE reward_participants SET enabled=0 WHERE user_id=2').run();assert.deepEqual(unitPreview(root).settlements,result.settlements);
+ const other=task(0),child=task(9,{parent:other});const historical=api('taskRewardDefinition',d,child);api('recordTaskScoringSettlement',d,{...historical,points:null},api('taskScoringIdentity',d,child),{awardedRecipients:[{user_id:2,points:5},{user_id:3,points:7}],outcome:'earned'});
+ const mixed=unitPreview(other);assert.equal(mixed.settlements[0].points,null);assert.deepEqual(mixed.settlements[0].recipients,[{user_id:2,points:5},{user_id:3,points:7}]);assert.deepEqual(mixed.earned,mixed.settlements[0].recipients);
+});
+test('unit projection preserves separate immutable correction settlements and gross earning history',()=>{
+ const root=task(5,{mode:'whole_task',assigned:[2]});d.prepare("UPDATE tasks SET is_recurring=1,due_date='2026-10-11' WHERE id=?").run(root);complete(root);const original=unitPreview(root).settlements[0];retireRecurrenceOccurrences(d,[root],{actorId:1,reason:'Synthetic correction'});
+ const ledger=d.prepare("SELECT id FROM reward_ledger WHERE task_id=? AND type='earn'").get(root);createPointAdjustment(d,{actorId:1,userId:2,delta:-5,reason:'Synthetic offset',taskId:root,ledgerId:ledger.id,requestKey:'unit-projection-correction'});releaseCorrectedRetiredAwards(d,[root],{actorId:1,reason:'Synthetic offset'});
+ const replacement=task(5,{mode:'whole_task',assigned:[2]});d.prepare("UPDATE tasks SET is_recurring=1,recurrence_origin_id=?,due_date='2026-10-11' WHERE id=?").run(root,replacement);complete(replacement);
+ const result=unitPreview(replacement);assert.equal(result.settlements.length,2);assert.equal(new Set(result.settlements.map(row=>row.settlement_id)).size,2);assert.deepEqual(result.settlements[0],original);assert.deepEqual(result.earned,[{user_id:2,points:10}]);assert.equal(d.prepare('SELECT SUM(delta) total FROM reward_ledger WHERE user_id=2').get().total,5);assert.deepEqual(result.before_units,[]);
+});
+test('unit projection keeps deleted archived and leaf history permission filters separate from the global lock',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),archived=task(7,{parent:root}),deleted=task(5,{parent:root,assigned:[2]}),privateWork=task(11,{parent:root}),scalarOnly=task(9,{parent:root}),remaining=task(3,{parent:root});
+ d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(privateWork);d.prepare("UPDATE tasks SET visibility='assignees' WHERE id=?").run(deleted);d.prepare("UPDATE tasks SET visibility='assignees',assigned_to=2 WHERE id=?").run(scalarOnly);
+ for(const id of [archived,deleted,privateWork,scalarOnly])complete(id);d.prepare("UPDATE tasks SET archived_at='2026-10-11T00:00:00Z' WHERE id IN (?,?)").run(archived,privateWork);d.prepare('DELETE FROM tasks WHERE id IN (?,?)').run(deleted,scalarOnly);
+ const result=unitPreview(root,{}, {viewerId:2,authorizedTaskIds:[root,remaining],includeHistoricalSettlements:true});assert.equal(result.mode_locked,true);assert.deepEqual(result.earned,[{user_id:2,points:12}]);assert.deepEqual(result.settlements.map(row=>row.task_id),[archived,deleted]);assert.deepEqual(result.before_units,[unit(taskRef(remaining),3,[2])]);
+ const leaf=unitPreview(remaining,{}, {viewerId:2,authorizedTaskIds:[remaining]});assert.equal(leaf.mode_locked,true);assert.deepEqual(leaf.settlements,[]);assert.deepEqual(leaf.earned,[]);assert.deepEqual(leaf.before_units,[unit(taskRef(remaining),3,[2])]);
+});
+test('unit projection preserves external future identities across reorder add remove and root mode choice',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]});task(19,{parent:root});const beforeDefinition={scoring_mode:'subtasks',points:0,assigned_to:[2],subtasks:[{id:654,points:5,assigned_user_ids:[3]},{id:655,points:9,assigned_user_ids:[2]}]},options={scope:'future_only',beforeDefinition,authorizedTaskIds:[root],authorizedTemplateIds:[654,655,876]};
+ const result=unitPreview(root,{subtasks:[{id:655,points:10},{id:654}]},options);assert.deepEqual(result.before_units,[unit(templateRef(654),5,[3]),unit(templateRef(655),9,[2])]);assert.deepEqual(result.after_units,[unit(templateRef(655),10,[2]),unit(templateRef(654),5,[3])]);assert.deepEqual(unitTotals(result.after_units),result.after);
+ const added=unitPreview(root,{subtasks:[{id:876,points:7},{id:654}]},options);assert.deepEqual(added.after_units,[unit(templateRef(876),7,[2]),unit(templateRef(654),5,[3])]);
+ const removed={...beforeDefinition,subtasks:[beforeDefinition.subtasks[1]]};assert.deepEqual(unitPreview(root,{subtasks:[{id:654},{id:655}]},{...options,beforeDefinition:removed}).after_units,[unit(templateRef(654),0,[2]),unit(templateRef(655),9,[2])]);
+ const whole=unitPreview(root,{scoring_mode:'whole_task',points:6},options);assert.deepEqual(whole.after_units,[unit({kind:'definition_root'},6,[2])]);
+ const duplicate=unitPreview(root,{subtasks:[{id:654},{id:654}]},options);assert.equal(duplicate.valid,false);assert.equal(duplicate.warnings[0].reason,'scoring_review_required');assert.deepEqual(duplicate.after_units,duplicate.before_units);
+});
+for(const hidden of [true,false])test('unit projection canonical template collision ignores current '+(hidden?'private visibility':'delegated supervision'),()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),child=task(11,{parent:root,assigned:[3]});if(hidden)d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(child);
+ d.prepare("INSERT INTO task_supervision_actions(source_task_id,action_task_id,learner_user_id,supervisor_user_id,state,execution_mode) VALUES(?,?,2,3,'assigned','delegated')").run(root,child);complete(child,3);
+ const beforeDefinition={scoring_mode:'subtasks',points:0,assigned_to:[2],subtasks:[{id:child,points:7,assigned_user_ids:[2],visibility:'all'}]},proposed={subtasks:[{id:child,points:9}]},options={scope:'future_only',viewerId:2,beforeDefinition,authorizedTaskIds:hidden?[root]:[root,child],authorizedTemplateIds:[child],includeHistoricalSettlements:true};
+ const frozen=JSON.stringify({beforeDefinition,proposed,options}),settlements=JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all()),changes=d.prepare('SELECT total_changes() n').get().n;
+ const result=unitPreview(root,proposed,options);assert.deepEqual(result.before,[{user_id:2,points:7}]);assert.deepEqual(result.after,[{user_id:2,points:9}]);assert.deepEqual(result.before_units,[unit(templateRef(child),7,[2])]);assert.deepEqual(result.after_units,[unit(templateRef(child),9,[2])]);assert.equal(result.mode_locked,true);assert.equal(result.valid,true);assert.equal(result.current_preserved,true);
+ assert.deepEqual(result.earned,hidden?[]:[{user_id:3,points:11}]);assert.equal(result.settlements.length,hidden?0:1);assert.equal(JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all()),settlements);assert.equal(JSON.stringify({beforeDefinition,proposed,options}),frozen);assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
+ const compatibility=unitPreview(root,{}, {...options,beforeDefinition:null});assert.deepEqual(compatibility.before,hidden?[]:[{user_id:3,points:11}]);assert.deepEqual(compatibility.before_units,hidden?[]:[unit(templateRef(child),11,[3])]);
+});
+test('unit projection template authorization filters both totals and detail without unioning current IDs',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),beforeDefinition={scoring_mode:'subtasks',points:0,assigned_to:[2],subtasks:[{id:100,points:5,assigned_user_ids:[2]},{id:200,points:8,assigned_user_ids:[3]}]},options={scope:'future_only',viewerId:2,beforeDefinition,authorizedTaskIds:[root],authorizedTemplateIds:[100]};
+ const proposal={subtasks:[{id:200,points:99},{id:100}]},result=unitPreview(root,proposal,options);assert.deepEqual(result.before,[{user_id:2,points:5}]);assert.deepEqual(result.after,result.before);assert.deepEqual(result.before_units,[unit(templateRef(100),5,[2])]);assert.deepEqual(result.after_units,result.before_units);
+ const plain=api('previewTaskScoring',d,root,proposal,options);assert.deepEqual(plain.before,result.before);assert.deepEqual(plain.after,result.after);assert.equal(Object.hasOwn(plain,'before_units'),false);
+ const empty={...options,authorizedTemplateIds:[]};assert.deepEqual(unitPreview(root,{subtasks:[{points:99}]},empty).after_units,[]);assert.deepEqual(unitPreview(root,{},empty).before,[]);
+ const whole=unitPreview(root,{scoring_mode:'whole_task',points:6},empty);assert.deepEqual(whole.after_units,[unit({kind:'definition_root'},6,[2])]);assert.deepEqual(unitPreview(root,{scoring_mode:'whole_task',points:6},{...empty,authorizedTaskIds:[]}).after,[]);
+ const phases=unitPreview(root,{subtasks:[beforeDefinition.subtasks[1]]},{...options,beforeDefinition:{...beforeDefinition,subtasks:[beforeDefinition.subtasks[0]]},authorizedTemplateIds:[100,200]});assert.deepEqual(phases.before_units,[unit(templateRef(100),5,[2])]);assert.deepEqual(phases.after_units,[unit(templateRef(200),8,[3])]);
+});
+test('unit projection enrichment is pure and reuses the same eligibility and historical query passes',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[2]}),done=task(3,{parent:root}),remaining=task(4,{parent:root});complete(done);const proposed={subtasks:[{id:done},{id:remaining,points:8}]},options={viewerId:2,authorizedTaskIds:[root,done,remaining]};
+ let calls=[];const probe=new Proxy(d,{get(target,key){const value=Reflect.get(target,key);if(key==='prepare')return(...args)=>{calls.push(args[0]);return value.apply(target,args);};return typeof value==='function'?value.bind(target):value;}});
+ const frozen=JSON.stringify({proposed,options}),changes=d.prepare('SELECT total_changes() n').get().n,plain=api('previewTaskScoring',probe,root,proposed,options),plainCalls=calls;calls=[];
+ const enriched=api('previewTaskScoring',probe,root,proposed,{...options,includeUnits:true});assert.ok(Array.isArray(enriched.before_units));assert.deepEqual(calls,plainCalls);assert.ok(calls.filter(sql=>sql.includes('reward_participants WHERE enabled=1')).length>0);
+ const {before_units,after_units,settlements,...original}=enriched;assert.deepEqual(original,plain);assert.equal(JSON.stringify({proposed,options}),frozen);assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
 });
 test('simultaneous SQLite writers atomically settle an inherited work unit once',async()=>{
  assert.ok(ALL_MIGRATIONS.some(m=>m.version===10055),'scoring settlement migration is available');

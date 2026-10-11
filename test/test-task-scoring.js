@@ -353,6 +353,62 @@ test('unit projection enrichment is pure and reuses the same eligibility and his
  const enriched=api('previewTaskScoring',probe,root,proposed,{...options,includeUnits:true});assert.ok(Array.isArray(enriched.before_units));assert.deepEqual(calls,plainCalls);assert.ok(calls.filter(sql=>sql.includes('reward_participants WHERE enabled=1')).length>0);
  const {before_units,after_units,settlements,...original}=enriched;assert.deepEqual(original,plain);assert.equal(JSON.stringify({proposed,options}),frozen);assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
 });
+const frozenVisibility=id=>JSON.parse(d.prepare('SELECT visibility_json FROM task_scoring_settlements WHERE task_id=?').get(id).visibility_json);
+const sharedHistory=(root,ids=[root],options={})=>api('taskScoringSummary',d,root,{viewerId:null,authorizedTaskIds:ids,includeHistoricalSettlements:true,...options});
+function oldHistory(root,id,visibility,amount=7){
+ // Insert a synthetic append-only prior-format row once; never UPDATE an
+ // immutable settlement to manufacture an old snapshot.
+ d.prepare(`INSERT INTO task_scoring_settlements(logical_key,claim_key,task_id,root_task_id,root_logical_key,mode,points,recipients_json,earned_once,outcome,settled_at,visibility_json)
+ VALUES(?,?,?,?,?,'legacy',?,?,1,?,'2024-01-02T03:04:05Z',?)`).run(api('taskScoringIdentity',d,id),JSON.stringify(['old-format',id]),id,root,api('taskScoringIdentity',d,root),amount,JSON.stringify(amount==null?[]:[{user_id:3,points:amount}]),amount==null?'historical_claim':'earned',JSON.stringify(visibility));
+}
+test('historical ancestry live settlement stays private on shared history after cascade deletion',()=>{
+ const root=task(),middle=task(0,{parent:root}),leaf=task(37,{parent:middle,assigned:[3]});d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(middle);assert.equal(complete(leaf),true);
+ const frozen=JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all());assert.deepEqual(summary(root,2).earned,[{user_id:3,points:37}]);assert.deepEqual(sharedHistory(root).earned,[]);
+ d.prepare('DELETE FROM tasks WHERE id=?').run(middle);const result=sharedHistory(root);assert.deepEqual(result.earned,[]);assert.deepEqual(result.settlements,[]);assert.deepEqual(result.settled_task_ids,[]);assert.equal(result.mode_locked,true);
+ assert.deepEqual(summary(root,2).earned,[{user_id:3,points:37}]);assert.equal(frozenVisibility(leaf).public_ancestry,false);assert.deepEqual(frozenVisibility(leaf).assigned,[3]);assert.equal(JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all()),frozen);
+});
+test('historical ancestry explicit deleted IDs cannot authorize shared summary or enriched settlement detail',()=>{
+ const root=task(),middle=task(0,{parent:root}),leaf=task(37,{parent:middle,assigned:[3]});d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(middle);complete(leaf);d.prepare('DELETE FROM tasks WHERE id=?').run(middle);
+ const options={viewerId:null,authorizedTaskIds:[root,leaf]},result=api('taskScoringSummary',d,root,options),enriched=unitPreview(root,{},options);
+ assert.deepEqual(result.earned,[]);assert.deepEqual(result.settlements,[]);assert.deepEqual(result.settled_task_ids,[]);assert.deepEqual(enriched.earned,[]);assert.deepEqual(enriched.settlements,[]);assert.equal(result.mode_locked,true);assert.equal(enriched.mode_locked,true);
+ assert.equal(JSON.stringify({result,enriched}).includes('public_ancestry'),false);
+});
+test('historical ancestry retains new flat and nested public earnings while private and assignees ancestors stay shared-hidden',()=>{
+ const root=task(),flat=task(11,{parent:root,assigned:[3]}),publicMiddle=task(0,{parent:root}),publicLeaf=task(13,{parent:publicMiddle,assigned:[3]}),privateMiddle=task(0,{parent:root}),privateLeaf=task(17,{parent:privateMiddle,assigned:[3]}),assignedMiddle=task(0,{parent:root,assigned:[3]}),assignedLeaf=task(19,{parent:assignedMiddle,assigned:[3]});
+ d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(privateMiddle);d.prepare("UPDATE tasks SET visibility='assignees' WHERE id=?").run(assignedMiddle);for(const id of [flat,publicLeaf,privateLeaf,assignedLeaf])complete(id);
+ d.prepare('DELETE FROM tasks WHERE id IN (?,?,?,?)').run(flat,publicMiddle,privateMiddle,assignedMiddle);const result=sharedHistory(root);assert.deepEqual(result.earned,[{user_id:3,points:24}]);assert.deepEqual(result.settled_task_ids,[flat,publicLeaf]);assert.equal(result.mode_locked,true);
+ for(const id of [flat,publicLeaf])assert.equal(frozenVisibility(id).public_ancestry,true);for(const id of [privateLeaf,assignedLeaf])assert.equal(frozenVisibility(id).public_ancestry,false);assert.deepEqual(summary(root,3).earned,[{user_id:3,points:60}]);assert.equal(JSON.stringify(result).includes('public_ancestry'),false);
+});
+test('historical ancestry shared archived history checks the extant chain and preserves current visibility semantics',()=>{
+ const root=task(),middle=task(0,{parent:root}),privateBranch=task(17,{parent:middle,assigned:[3]}),flat=task(11,{parent:root,assigned:[3]});d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(middle);complete(privateBranch);complete(flat);d.prepare("UPDATE tasks SET archived_at='2026-10-11T00:00:00Z' WHERE id IN (?,?)").run(privateBranch,flat);
+ assert.deepEqual(sharedHistory(root).earned,[{user_id:3,points:11}]);assert.deepEqual(sharedHistory(root,[root,privateBranch,flat]).earned,[{user_id:3,points:11}]);assert.deepEqual(summary(root,2).earned,[{user_id:3,points:28}]);
+ d.prepare("UPDATE tasks SET visibility='all' WHERE id=?").run(middle);assert.deepEqual(sharedHistory(root).earned,[{user_id:3,points:28}]);assert.equal(frozenVisibility(privateBranch).public_ancestry,false);
+ d.prepare('DELETE FROM tasks WHERE id=?').run(middle);assert.deepEqual(sharedHistory(root).earned,[{user_id:3,points:11}]);assert.equal(sharedHistory(root).mode_locked,true);
+});
+test('historical ancestry old missing null and malformed frozen proofs are denied only when shared ancestry is absent',()=>{
+ const root=task(),ids=[];for(const proof of [undefined,null,false,'true',1,[],true]){const id=task(7,{parent:root,assigned:[3]});ids.push(id);oldHistory(root,id,{visibility:'all',created_by:1,assigned:[3],...(proof===undefined?{}:{public_ancestry:proof})});}
+ const unknown=task(0,{parent:root});ids.push(unknown);oldHistory(root,unknown,{visibility:'all',created_by:1,assigned:[],public_ancestry:null},null);
+ assert.deepEqual(sharedHistory(root,[root,...ids]).earned,[{user_id:3,points:49}]);d.prepare('DELETE FROM tasks WHERE parent_task_id=?').run(root);const frozen=JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all()),changes=d.prepare('SELECT total_changes() n').get().n;
+ for(const result of [sharedHistory(root),sharedHistory(root,[root,...ids]),unitPreview(root,{}, {viewerId:null,authorizedTaskIds:[root,...ids]})]){assert.deepEqual(result.earned,[{user_id:3,points:7}]);assert.deepEqual(result.settlements.map(row=>row.task_id),[ids[6]]);assert.equal(result.mode_locked,true);}
+ assert.deepEqual(summary(root,2).earned,[{user_id:3,points:49}]);assert.equal(summary(root,2).settlements.find(row=>row.task_id===unknown).points,null);assert.equal(JSON.stringify(d.prepare('SELECT * FROM task_scoring_settlements').all()),frozen);assert.equal(d.prepare('SELECT total_changes() n').get().n,changes);
+});
+for(const malformed of ['missing parent','cycle'])test('historical ancestry synthetic '+malformed+' read cannot manufacture complete public proof',()=>{
+ const root=task(),leaf=task(5,{parent:root,assigned:[3]}),definition=api('taskRewardDefinition',d,leaf);
+ // Deliberately inject malformed read evidence. Persisted Tasks stay a valid
+ // flat tree; no cyclic Task is created through SQL, lifecycle or public API.
+ const probe=new Proxy(d,{get(target,key){const value=Reflect.get(target,key);if(key==='prepare')return sql=>{const statement=value.call(target,sql);if(sql!=='SELECT * FROM tasks WHERE id=?')return statement;return new Proxy(statement,{get(stmt,method){const fn=Reflect.get(stmt,method);if(method==='get')return id=>{const row=fn.call(stmt,id);return id===leaf?{...row,parent_task_id:malformed==='cycle'?leaf:999999}:row;};return typeof fn==='function'?fn.bind(stmt):fn;}});};return typeof value==='function'?value.bind(target):value;}});
+ api('recordTaskScoringSettlement',probe,definition,api('taskScoringIdentity',d,leaf));assert.equal(d.prepare('SELECT parent_task_id FROM tasks WHERE id=?').get(leaf).parent_task_id,root);d.prepare('DELETE FROM tasks WHERE id=?').run(leaf);
+ assert.deepEqual(sharedHistory(root).earned,[]);assert.equal(frozenVisibility(leaf).public_ancestry,null);assert.deepEqual(summary(root,2).earned,[{user_id:3,points:5}]);assert.equal(sharedHistory(root).mode_locked,true);
+});
+test('historical ancestry captures structural parents above an independent bound Activity owner',()=>{
+ const container=task(),activity=task(7,{parent:container,mode:'whole_task',assigned:[3]}),instance=Number(d.prepare('INSERT INTO workflow_instances(parent_task_id,created_by) VALUES(?,1)').run(container).lastInsertRowid);d.prepare('INSERT INTO workflow_instance_tasks(workflow_instance_id,task_id) VALUES(?,?)').run(instance,activity);d.prepare("UPDATE tasks SET visibility='private' WHERE id=?").run(container);
+ assert.equal(complete(activity),true);assert.equal(api('taskScoringRoot',d,activity).id,activity);assert.deepEqual(sharedHistory(activity,[activity]).earned,[]);assert.equal(frozenVisibility(activity).public_ancestry,false);assert.deepEqual(summary(activity,3).earned,[{user_id:3,points:7}]);assert.equal(sharedHistory(activity,[activity]).mode_locked,true);
+});
+test('historical ancestry proof never turns scalar or inherited reward recipients into frozen visibility joins',()=>{
+ const root=task(0,{mode:'subtasks',assigned:[3]}),joined=task(7,{parent:root,assigned:[3]}),scalar=task(4,{parent:root});d.prepare("UPDATE tasks SET visibility='assignees' WHERE id IN (?,?)").run(joined,scalar);d.prepare('UPDATE tasks SET assigned_to=3 WHERE id=?').run(scalar);complete(joined);complete(scalar);d.prepare('DELETE FROM tasks WHERE parent_task_id=?').run(root);
+ assert.deepEqual(summary(root,3).earned,[{user_id:3,points:7}]);assert.deepEqual(summary(root,1).earned,[{user_id:3,points:11}]);assert.deepEqual(frozenVisibility(joined).assigned,[3]);assert.deepEqual(frozenVisibility(scalar).assigned,[]);assert.equal(frozenVisibility(joined).public_ancestry,false);assert.equal(frozenVisibility(scalar).public_ancestry,false);assert.deepEqual(sharedHistory(root).settlements,[]);
+});
+
 test('simultaneous SQLite writers atomically settle an inherited work unit once',async()=>{
  assert.ok(ALL_MIGRATIONS.some(m=>m.version===10055),'scoring settlement migration is available');
  const directory=mkdtempSync(join(tmpdir(),'vidamia-scoring-race-')),path=join(directory,'synthetic.db');let db;const workers=[];

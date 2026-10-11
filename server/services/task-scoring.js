@@ -12,11 +12,23 @@ export function taskScoringAssignments(d,task){
   const ids=d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(r=>r.user_id);
   return ids.length?ids:task.assigned_to?[task.assigned_to]:[];
 }
+function publicTaskAncestry(d,task){
+  // Shared displays require the entire structural chain, including parents
+  // above an independent Activity owner. Missing/cyclic evidence is unknown.
+  let row=readTask(d,task.id);const seen=new Set();
+  while(row){
+    if(seen.has(row.id))return null;seen.add(row.id);
+    if(row.visibility!=='all')return ['private','assignees'].includes(row.visibility)?false:null;
+    if(row.parent_task_id==null)return true;
+    row=readTask(d,row.parent_task_id);
+  }
+  return null;
+}
 function taskVisibilitySnapshot(d,task){
   // Visibility follows the Task creator and actual assignment joins. Reward
   // recipients may use scalar/inherited fallbacks that confer no read access.
   return {visibility:task.visibility||'all',created_by:task.created_by,
-    assigned:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id)};
+    assigned:d.prepare('SELECT user_id FROM task_assignments WHERE task_id=? ORDER BY user_id').all(task.id).map(row=>row.user_id),public_ancestry:publicTaskAncestry(d,task)};
 }
 function workflowOwner(d,id){return table(d,'workflow_instance_tasks')&&!!d.prepare("SELECT 1 FROM workflow_instance_tasks WHERE task_id=? AND role='primary'").get(id);}
 function workflowContainer(d,id){return table(d,'workflow_instances')&&!!d.prepare('SELECT 1 FROM workflow_instances WHERE parent_task_id=?').get(id);}
@@ -120,9 +132,14 @@ function publicSettlements(d,ctx,viewerId,authorizedTaskIds,includeHistoricalSet
   return ctx.settlements.filter(row=>{
     const task=readTask(d,row.task_id);
     if(authorizedTaskIds&&!authorizedTaskIds.has(row.task_id)&&!(includeHistoricalSettlements&&(!task||task.archived_at)))return false;
-    if(task)return viewerId==null&&authorizedTaskIds&&!authorizedTaskIds.has(task.id)?task.visibility==='all':visible(d,task,viewerId);
+    if(task){
+      if(viewerId==null&&authorizedTaskIds&&publicTaskAncestry(d,task)!==true)return false;
+      return viewerId==null&&authorizedTaskIds&&!authorizedTaskIds.has(task.id)?task.visibility==='all':visible(d,task,viewerId);
+    }
     const snapshot=JSON.parse(row.visibility_json);
-    if(viewerId==null)return authorizedTaskIds?snapshot.visibility==='all':true;
+    // An explicit historical ID does not prove the deleted ancestor chain.
+    // Old leaf-only snapshots remain unknown for shared reads, never repaired.
+    if(viewerId==null)return authorizedTaskIds?snapshot.visibility==='all'&&snapshot.public_ancestry===true:true;
     return snapshot.visibility==='all'||snapshot.created_by===viewerId||snapshot.visibility==='assignees'&&snapshot.assigned.includes(viewerId);
   }).map(row=>({...(includeIds?{settlement_id:row.id}:{}),task_id:row.task_id,points:row.points,recipients:recipients(row),mode:row.mode,outcome:row.outcome,settled_at:row.settled_at}));
 }

@@ -98,6 +98,75 @@ test('invalid inactive amount stays in the local draft and is omitted from a val
 const futureFields={title:'Canonical future',description:null,category:'misc',priority:'none',scoring_mode:'subtasks',points:11,assigned_to:[2],skill_ids:[],tags:[],assignment_mode:'fixed',rotation_user_ids:[],rotation_group:null,rotation_slot:0,start_date:null,start_time:null,due_date:'2026-11-02',due_time:null,is_recurring:1,recurrence_rule:'FREQ=DAILY',recurrence_from_completion:0,visibility:'all',countdown:0,locked:0,expiration_policy:'keep_overdue'};
 const futureTask={...task,is_recurring:1,recurrence_rule:'FREQ=DAILY',recurrence_series_id:40,recurrence_series_revision:8,permissions:Object.fromEntries(['edit','edit_series','change_points','change_dates','change_assignment','change_required_skills','change_priority','change_category_tags','complete'].map(key=>[key,true]))};
 function futurePreview(){return {mode:'subtasks',mode_locked:true,review_required:false,valid:true,scope:'future_only',current_preserved:true,earned:[{user_id:1,points:4}],before:[{user_id:3,points:7}],after:[{user_id:3,points:7}],warnings:[],settlements:[],before_units:[{ref:{kind:'action',action_key:'a'},title:'Future action',is_optional:false,points:7,recipients:[{user_id:3,points:7}],outcome:'earned'}],after_units:[{ref:{kind:'action',action_key:'a'},title:'Future action',is_optional:false,points:7,recipients:[{user_id:3,points:7}],outcome:'earned'}],forecast_context:{kind:'next_occurrence',effective_generation:1,as_of_date:'2026-11-01',before:{due_date:'2026-11-02',preparation:'fresh'},after:{due_date:'2026-11-02',preparation:'fresh'},conditions:[]},edit_definition:{task_id:70,effective_generation:1,review_required:false,permissions:futureTask.permissions,fields:futureFields,actions:[{action_key:'a',fields:{title:'Future action',points:7,is_optional:false,skill_ids:[],assigned_user_ids:[]},permissions:futureTask.permissions}],revisions:{expected_revision:4,expected_series_revision:8}}};}
+
+function twoActionPreview(){
+  const value=futurePreview();value.edit_definition.actions.push({action_key:'b',fields:{title:'Second action',points:5,is_optional:true,skill_ids:[7],assigned_user_ids:[]},permissions:futureTask.permissions});
+  for(const phase of ['before','after'])value[`${phase}_units`].push({ref:{kind:'action',action_key:'b'},title:'Second action',is_optional:true,points:5,recipients:[{user_id:3,points:5}],outcome:'earned'});
+  return value;
+}
+async function enterFuture(page){await page.click('#task-scoring-edit');await page.waitForFunction(()=>document.querySelector('#task-title')?.value==='Canonical future');}
+async function submitPreview(page){const sent=page.waitForRequest(req=>req.method()==='POST'&&req.url().endsWith('/tasks/70/scoring-preview'));await page.$eval('#task-submit-btn',el=>el.click());await sent;}
+async function waitPreviewResult(page){await page.waitForFunction(()=>document.querySelector('#task-scoring-confirm')||document.querySelector('#task-form-error')?.textContent.includes('draft changed'));}
+const rowSelector=key=>`[data-task-subtask-row][data-action-key="${key}"]`;
+
+for(const mutation of ['remove','reorder'])test(`round1 delayed ${mutation} rejects the old patch and saves only fresh stable-key intent`,async()=>{
+  preview=twoActionPreview();previewError=null;previewDelay=0;const page=await mounted({task:futureTask});try{
+    await enterFuture(page);await set(page,`${rowSelector('a')} [data-task-subtask-points]`,'8');previewDelay=500;await submitPreview(page);
+    await page.$eval(`${rowSelector('b')} [data-task-subtask-action="${mutation==='remove'?'remove':'up'}"]`,el=>el.click());
+    const order=await page.$$eval('[data-task-subtask-row]',rows=>rows.map(row=>row.dataset.actionKey));assert.deepEqual(order,mutation==='remove'?['a']:['b','a']);await waitPreviewResult(page);
+    const state=await page.evaluate(()=>({confirmation:!!document.querySelector('#task-scoring-confirm'),enabled:document.querySelector('#task-scoring-confirm')?.disabled===false,error:document.querySelector('#task-form-error')?.textContent}));
+    console.log('SCORING_ROUND1_DELAYED',JSON.stringify({mutation,order,state,old_patch:requests.filter(row=>row.path.endsWith('/scoring-preview')).at(-1).body.future_patch}));assert.equal(state.confirmation,false,'an old structural preview cannot be confirmed');assert.match(state.error,/draft changed/);assert.equal(requests.some(row=>row.method==='PUT'),false);
+    previewDelay=0;await page.waitForFunction(()=>!document.querySelector('#task-submit-btn').disabled);await submitPreview(page);await page.waitForSelector('#task-scoring-confirm');assert.equal(await page.$eval('#task-scoring-confirm',el=>el.disabled),false);
+    const fresh=requests.filter(row=>row.path.endsWith('/scoring-preview')).at(-1).body;assert.deepEqual(fresh.future_patch,{actions:{update:[{action_key:'a',fields:{points:8}}],...(mutation==='remove'?{remove:['b']}:{ }),order}});
+    await page.focus('#task-scoring-confirm');await page.keyboard.press('Enter');await page.waitForFunction(()=>!document.querySelector('#task-form'));const saves=requests.filter(row=>row.method==='PUT');assert.equal(saves.length,1);assert.deepEqual(saves[0].body,fresh);
+  }finally{previewDelay=0;await page.dispose();}
+});
+
+test('round1 button-only addition and optional changes invalidate delayed preview without losing client keys',async()=>{
+  for(const mutation of ['add','optional']){
+    preview=twoActionPreview();previewError=null;previewDelay=0;const page=await mounted({task:futureTask});try{
+      await enterFuture(page);await set(page,`${rowSelector('a')} [data-task-subtask-points]`,'8');previewDelay=500;await submitPreview(page);
+      if(mutation==='add')await page.$eval('[data-task-subtask-add]',el=>el.click());else await page.$eval(`${rowSelector('b')} [data-task-subtask-optional]`,el=>el.click());await waitPreviewResult(page);assert.equal(await page.$('#task-scoring-confirm'),null);assert.equal(requests.some(row=>row.method==='PUT'),false);
+      if(mutation==='add'){
+        await set(page,'[data-task-subtask-row]:last-child [data-task-subtask-title]','Extra action');await set(page,'[data-task-subtask-row]:last-child [data-task-subtask-points]','0');previewDelay=0;await submitPreview(page);await page.waitForSelector('#task-scoring-confirm');const intent=requests.filter(row=>row.path.endsWith('/scoring-preview')).at(-1).body.future_patch;const key=intent.actions.add[0].client_key;assert.equal(intent.actions.add[0].fields.points,0);assert.deepEqual(intent.actions.order,['a','b',`new:${key}`]);await page.$eval('[data-scoring-cancel]',el=>el.click());await page.waitForFunction(()=>!document.querySelector('#task-scoring-preview-form'));assert.equal(await page.$eval('[data-task-subtask-row]:last-child',el=>el.dataset.clientKey),key);assert.equal(await page.$eval('#task-submit-btn',el=>el===document.activeElement),true);assert.equal(requests.some(row=>row.method==='PUT'),false);
+      }
+    }finally{previewDelay=0;await page.dispose();}
+  }
+});
+
+test('round1 already-open preview rejects a programmatic structural control activation safeguard',async()=>{
+  // The parent form is inert under a child modal. This deliberately invokes its
+  // semantic handler; it is not evidence of reachable background pointer input.
+  preview=twoActionPreview();previewError=null;previewDelay=0;const page=await mounted({task:futureTask});try{
+    await enterFuture(page);await set(page,`${rowSelector('a')} [data-task-subtask-points]`,'8');await submitPreview(page);await page.waitForSelector('#task-scoring-confirm');await page.$eval(`${rowSelector('b')} [data-task-subtask-action="remove"]`,el=>el.click());assert.equal(await page.$eval('#task-scoring-confirm',el=>el.disabled),true);await page.$eval('#task-scoring-preview-form',el=>el.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true})));assert.equal(requests.some(row=>row.method==='PUT'),false);await page.$eval('[data-scoring-cancel]',el=>el.click());await page.waitForFunction(()=>!document.querySelector('#task-scoring-preview-form'));assert.equal(await page.$eval(`${rowSelector('a')} [data-task-subtask-points]`,el=>el.value),'8');assert.equal(await page.$(rowSelector('b')),null);
+  }finally{await page.dispose();}
+});
+
+test('round1 actual GET suppressed history uses neutral wording and preserves outcome opposites',async()=>{
+  const rows=[{task_id:2,points:4,recipients:[{user_id:2,points:4}],mode:'subtasks',outcome:'earned',settled_at:'2026-10-12T04:50:51.395Z'},{task_id:3,points:0,recipients:[],mode:'subtasks',outcome:'zero',settled_at:'2026-10-12T04:50:51.439Z'},{task_id:1,points:0,recipients:[],mode:'subtasks',outcome:'suppressed',settled_at:'2026-10-12T04:50:51.447Z'},{task_id:1,points:5,recipients:[],mode:'whole_task',outcome:'no_recipients'},{task_id:1,points:null,recipients:[],mode:'legacy',outcome:'earned'}];
+  const page=await mounted();try{
+    const result=await page.evaluate(async({rows,members})=>{
+      const {renderTaskScoringHistory}=await import('/utils/task-fields.js');const doc=new DOMParser().parseFromString(renderTaskScoringHistory({scoring:{settlements:rows}},members),'text/html');
+      return {heading:doc.querySelector('summary').textContent,items:[...doc.querySelectorAll('li')].map(row=>row.textContent),identities:doc.querySelectorAll('[data-scoring-settlement]').length};
+    },{rows,members});console.log('SCORING_ROUND1_HISTORY',JSON.stringify(result));
+    assert.equal(result.items.length,5);assert.equal(result.identities,0);assert.match(result.items[2],/: 0.*No points awarded/);assert.doesNotMatch(result.items[2],/Known earned|eligible|expired|skipped/i);assert.equal(result.heading,'Points history');
+    assert.match(result.items[0],/Eleanor: 4/);assert.match(result.items[1],/Zero points/);assert.match(result.items[3],/No eligible recipient/);assert.match(result.items[4],/Original amount unavailable/);assert.doesNotMatch(result.items[4],/Known earned|No eligible recipient/);
+  }finally{await page.dispose();}
+});
+
+test('round1 canonical rebase and scope restore keep sparse intent empty and matching confirmation usable',async()=>{
+  preview=twoActionPreview();previewError=null;previewDelay=0;const page=await mounted({task:futureTask});try{
+    await enterFuture(page);await submitPreview(page);await page.waitForSelector('#task-scoring-confirm');assert.deepEqual(requests.filter(row=>row.path.endsWith('/scoring-preview')).at(-1).body.future_patch,{});assert.equal(await page.$eval('#task-scoring-confirm',el=>el.disabled),false);await page.$eval('[data-scoring-cancel]',el=>el.click());await page.waitForFunction(()=>!document.querySelector('#task-scoring-preview-form')&&!document.querySelector('#task-submit-btn').disabled);
+    await page.select('#task-scoring-scope','occurrence');await page.select('#task-scoring-scope','future_only');await page.waitForFunction(()=>document.querySelector('#task-title')?.value==='Canonical future');assert.deepEqual(await page.$$eval('[data-task-subtask-row]',rows=>rows.map(row=>row.dataset.actionKey)),['a','b']);await submitPreview(page);await page.waitForSelector('#task-scoring-confirm');assert.deepEqual(requests.filter(row=>row.path.endsWith('/scoring-preview')).at(-1).body.future_patch,{});assert.equal(await page.$eval('#task-scoring-confirm',el=>el.disabled),false);await page.$eval('[data-scoring-cancel]',el=>el.click());await page.waitForFunction(()=>!document.querySelector('#task-scoring-preview-form'));assert.equal(requests.some(row=>row.method==='PUT'),false);
+  }finally{await page.dispose();}
+});
+
+test('round1 current occurrence structural changes reject a delayed scoring preview too',async()=>{
+  const current={...task,points:11,permissions:futureTask.permissions,scoring:{...scoring,mode:'subtasks'},subtasks:[{id:71,title:'First current action',status:'open',points:7,skill_ids:[],permissions:futureTask.permissions},{id:72,title:'Second current action',status:'open',points:5,skill_ids:[7],is_optional:true,permissions:futureTask.permissions}]};
+  preview={...twoActionPreview(),scope:'occurrence',forecast_context:undefined,edit_definition:undefined};previewError=null;previewDelay=0;const page=await mounted({task:current});try{
+    await set(page,'#task-form [data-subtask-id="71"] [data-task-subtask-points]','8');previewDelay=500;await submitPreview(page);await page.$eval('#task-form [data-subtask-id="72"] [data-task-subtask-action="remove"]',el=>el.click());await waitPreviewResult(page);assert.equal(await page.$('#task-scoring-confirm'),null);assert.match(await page.$eval('#task-form-error',el=>el.textContent),/draft changed/);assert.equal(requests.some(row=>row.method==='PUT'),false);assert.equal(await page.$('#task-form [data-subtask-id="72"]'),null);assert.equal(await page.$eval('#task-form [data-subtask-id="71"] [data-task-subtask-points]',el=>el.value),'8');
+  }finally{previewDelay=0;await page.dispose();}
+});
 test('future-only loads canonical fields and absent-current actions then previews and saves identical sparse intent',async()=>{
   preview=futurePreview();previewError=null;previewDelay=0;
   const page=await mounted({task:futureTask});try{

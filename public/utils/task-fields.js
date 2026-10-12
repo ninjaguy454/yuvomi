@@ -110,7 +110,7 @@ export function renderTaskScoringHistory(task, users = []) {
     const identity=row.settlement_id==null?'':` data-scoring-settlement="${esc(row.settlement_id)}"`;
     const amount=row.points===null?esc(t('tasks.scoringUnknown')):row.points;
     const recipients=(row.recipients || []).map(recipient=>`${esc(label(recipient.user_id))}: ${recipient.points}`).join(' · ');
-    const outcome=row.points===null?'':esc(t(row.outcome==='zero'?'tasks.scoringZero':row.outcome==='no_recipients'?'tasks.scoringNoRecipients':'tasks.scoringEarned'));
+    const outcome=row.points===null?'':esc(t(row.outcome==='suppressed'?'tasks.scoringNoAward':row.outcome==='zero'?'tasks.scoringZero':row.outcome==='no_recipients'?'tasks.scoringNoRecipients':'tasks.scoringEarned'));
     return `<li${identity}>${esc(row.title || t('tasks.scoringHistory'))}: ${amount}${row.is_optional?` · ${esc(t('tasks.scoringOptional'))}`:''}${row.settled_at?` · ${esc(formatDate(row.settled_at))}`:''}<div>${recipients || outcome}</div></li>`;
   }).join('');
   return `<details class="task-detail-scoring-history"><summary>${esc(t('tasks.scoringHistory'))}</summary><ul>${items}</ul></details>`;

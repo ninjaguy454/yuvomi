@@ -2287,6 +2287,13 @@ function wireTaskForm(panel, {
   };
   const skills = bindSkillPicker(panel.querySelector('#task-root-skills'), { onCreateSkill: canCapability('skills.manage') ? createSkill : null });
   const subtasks = form.querySelector('[data-task-subtask-editor]') ? bindSubtaskEditor(form, { skills: state.skills, users:state.users,
+    onChange: () => {
+      const controls = taskFormControls.get(form);
+      if (!form.isConnected || !controls || controls.rebasing || controls.scoringLoading) return;
+      // Structural edits share numeric/native draft freshness and preview
+      // invalidation without creating root field intent or replacing row keys.
+      form.dispatchEvent(new Event('change', { bubbles: true }));
+    },
     canChangePoints: task ? canTask(task, 'change_points') : canCapability('tasks.change_points'),
     canAssign:task?canTask(task,'change_assignment'):canCapability('tasks.change_assignment'), onCreateSkill: canCapability('skills.manage') ? createSkill : null }) : null;
   const rotations = bindRotationBindings(form, {skills:state.skills,places:state.places,readOnly:!canCapability('rotations.configure') || !!task && !canTask(task,'edit')});

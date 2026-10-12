@@ -429,10 +429,20 @@ export function prepareProspectiveTaskExecution(d, input) {
       keys.add(key);
       const assigned = preparedIds(node.assigned_user_ids, byId), required = preparedIds(node.skill_ids, skillIds);
       if (node.primary_user_id != null && assigned.length && !assigned.includes(node.primary_user_id)) throw projectionUnavailable();
-      return { ...node, ref: structuredClone(node.ref), key, assigned, required, id: -index-1,
+      const hasSkillAssignees = Object.hasOwn(node,'skill_assignee_user_ids');
+      if (hasSkillAssignees && (index !== 0 || ctx.preparation !== 'fresh' || node.role !== 'source_root' || node.binding != null)) throw projectionUnavailable();
+      const skillAssigned = hasSkillAssignees ? preparedIds(node.skill_assignee_user_ids, byId) : assigned;
+      return { ...node, ref: structuredClone(node.ref), key, assigned, required, skillAssigned, id: -index-1,
         task: { ...node.task, ...node.window, id: -index-1, revision: 0 } };
     });
     const root = nodes[0], selection = input.selection ?? {};
+    if (Object.hasOwn(root,'skill_assignee_user_ids')) {
+      const independent = new Set(root.skillAssigned), childParticipants = new Set(nodes.slice(1)
+        .filter(node => node.role === 'source_action').flatMap(node => node.assigned));
+      if (root.skillAssigned.some(id => !root.assigned.includes(id))
+        || root.primary_user_id !== null && !independent.has(root.primary_user_id)
+        || root.assigned.some(id => !independent.has(id) && !childParticipants.has(id))) throw projectionUnavailable();
+    }
     if (!selection || typeof selection !== 'object' || Array.isArray(selection)
       || Object.hasOwn(selection,'preferred_supervisor_user_ids') && !Array.isArray(selection.preferred_supervisor_user_ids)
       || Object.hasOwn(selection,'attempted_supervisor_user_ids') && !Array.isArray(selection.attempted_supervisor_user_ids)
@@ -479,7 +489,7 @@ export function prepareProspectiveTaskExecution(d, input) {
       planning = { place_id: activity.location_mode === 'fixed' ? activity.place_id : null,
         presence_policy: activity.presence_policy, presence_window: activity.presence_window };
     }
-    if (ctx.preparation === 'fresh' && !root.binding && !['container','helper_projection'].includes(root.role)) assertTaskSkillAssignments(d,rootSkills,root.assigned,
+    if (ctx.preparation === 'fresh' && !root.binding && !['container','helper_projection'].includes(root.role)) assertTaskSkillAssignments(d,rootSkills,root.skillAssigned,
       root.task.due_date || root.task.start_date || ctx.as_of_date);
     const { proficiencyFor, availabilityFor } = eligibilityReaders(d), actions = [], facts = [];
     for (const node of nodes) {
